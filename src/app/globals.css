@@ -50,6 +50,13 @@
   --color-background: #FDF8F0;
   --color-foreground: #1D4420;
 
+  /* Dark mode palette */
+  --color-dark-bg: #0D1F0F;
+  --color-dark-bg-alt: #141810;
+  --color-dark-surface: #162618;
+  --color-dark-surface-light: #1E3220;
+  --color-dark-border: rgba(196, 154, 60, 0.15);
+
   --font-display: var(--font-cormorant-garant), "Georgia", serif;
   --font-body: var(--font-quicksand), system-ui, sans-serif;
   /* Legacy font alias */
@@ -71,9 +78,23 @@ body {
   overflow-x: hidden;
 }
 
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: var(--color-dark-bg);
+    color: var(--color-cream);
+  }
+}
+
 ::selection {
   background-color: var(--color-soft-gold);
   color: var(--color-forest-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  ::selection {
+    background-color: var(--color-soft-gold);
+    color: var(--color-dark-bg);
+  }
 }
 
 /* ========================================
@@ -97,6 +118,18 @@ body {
   background: var(--color-sage-dark);
 }
 
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-track {
+    background: var(--color-dark-bg-alt);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-sage-dark);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-sage);
+  }
+}
+
 /* ========================================
    SOFT CARD STYLES
    ======================================== */
@@ -109,6 +142,16 @@ body {
   box-shadow:
     0 4px 20px rgba(29, 68, 32, 0.06),
     0 1px 4px rgba(29, 68, 32, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  .soft-card {
+    background: rgba(22, 38, 24, 0.85);
+    border: 1px solid rgba(196, 154, 60, 0.15);
+    box-shadow:
+      0 4px 20px rgba(0, 0, 0, 0.2),
+      0 1px 4px rgba(0, 0, 0, 0.15);
+  }
 }
 
 .soft-card-dark {
@@ -126,6 +169,13 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(253, 248, 240, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .frosted-glass {
+    background: rgba(22, 38, 24, 0.6);
+    border: 1px solid rgba(196, 154, 60, 0.12);
+  }
 }
 
 /* Legacy pixel-border aliases for backward compat */
@@ -297,6 +347,18 @@ body {
     radial-gradient(circle at 70% 80%, rgba(184, 169, 201, 0.05) 0%, transparent 45%),
     radial-gradient(circle at 10% 50%, rgba(196, 154, 60, 0.04) 0%, transparent 30%),
     radial-gradient(circle at 90% 50%, rgba(196, 154, 60, 0.04) 0%, transparent 30%);
+}
+
+@media (prefers-color-scheme: dark) {
+  .enchanted-bg {
+    background-color: var(--color-dark-bg);
+    background-image:
+      radial-gradient(circle at 15% 85%, rgba(196, 154, 60, 0.06) 0%, transparent 50%),
+      radial-gradient(circle at 85% 15%, rgba(92, 122, 74, 0.05) 0%, transparent 50%),
+      radial-gradient(circle at 50% 50%, rgba(196, 154, 60, 0.03) 0%, transparent 60%),
+      radial-gradient(circle at 30% 20%, rgba(122, 153, 102, 0.04) 0%, transparent 40%),
+      radial-gradient(circle at 70% 80%, rgba(122, 153, 102, 0.03) 0%, transparent 45%);
+  }
 }
 
 /* Legacy alias */
@@ -749,6 +811,14 @@ body {
     0 4px 8px rgba(29, 68, 32, 0.06);
 }
 
+@media (prefers-color-scheme: dark) {
+  .game-card-hover:hover {
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.3),
+      0 4px 8px rgba(196, 154, 60, 0.08);
+  }
+}
+
 /* ========================================
    SOFT FORM INPUTS
    ======================================== */
@@ -773,4 +843,22 @@ body {
 
 .enchanted-input::placeholder {
   color: rgba(29, 68, 32, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .enchanted-input {
+    background: var(--color-dark-surface);
+    border: 1px solid rgba(196, 154, 60, 0.2);
+    color: var(--color-cream);
+  }
+
+  .enchanted-input:focus {
+    border-color: var(--color-soft-gold);
+    box-shadow: 0 0 0 3px rgba(196, 154, 60, 0.2);
+    background: var(--color-dark-surface-light);
+  }
+
+  .enchanted-input::placeholder {
+    color: rgba(253, 248, 240, 0.3);
+  }
 }
