@@ -46,7 +46,7 @@ export const metadata: Metadata = {
       "We got married! Join us June 27, 2026 for a wedding celebration on the farm.",
   },
   icons: {
-    icon: "/favicon.ico",
+    icon: "/favicon.svg",
   },
 };
 
