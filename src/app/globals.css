@@ -3,50 +3,52 @@
 @theme inline {
   /* ========================================
      ENCHANTED FOREST PALETTE
+     Deep greens, warm golds, fairy-tale twilight
      ======================================== */
-  --color-sage: #9CAF88;
-  --color-sage-light: #B5C4A3;
-  --color-sage-dark: #7A9066;
+  --color-sage: #5C7A4A;
+  --color-sage-light: #7A9966;
+  --color-sage-dark: #3E5A30;
   --color-lavender: #B8A9C9;
   --color-lavender-light: #CFC3DD;
   --color-lavender-dark: #9A88B0;
-  --color-blush: #F2D7D5;
-  --color-blush-light: #F8E8E7;
-  --color-blush-dark: #E4B8B5;
+  --color-blush: #E8C8B8;
+  --color-blush-light: #F0DDD2;
+  --color-blush-dark: #D4A894;
   --color-cream: #FDF8F0;
   --color-cream-dark: #F5EDDF;
-  --color-soft-gold: #D4A574;
-  --color-soft-gold-light: #E0BA90;
-  --color-soft-gold-dark: #B88A58;
-  --color-forest: #2D5016;
-  --color-forest-light: #3D6B20;
-  --color-forest-dark: #1E3A0E;
-  --color-warm-white: #FEFEFA;
-  --color-deep-plum: #4A2040;
-  --color-deep-plum-light: #6B3060;
-  --color-moss: #6B7B3A;
-  --color-moss-light: #8A9E50;
+  --color-soft-gold: #C49A3C;
+  --color-soft-gold-light: #D4AE56;
+  --color-soft-gold-dark: #A67E28;
+  --color-gold-dark: #8B6914;
+  --color-forest: #1D4420;
+  --color-forest-light: #2D5A2F;
+  --color-forest-dark: #0F2E12;
+  --color-warm-white: #FEFEF8;
+  --color-deep-plum: #4A1A2A;
+  --color-deep-plum-light: #6B2A42;
+  --color-moss: #4A6230;
+  --color-moss-light: #6B8448;
 
   /* Legacy color aliases for backward compat with other pages */
   --color-barn-red: #9B6B7A;
   --color-barn-red-light: #B8849A;
   --color-barn-red-dark: #7A5060;
-  --color-hay-gold: #D4A574;
-  --color-hay-gold-light: #E0BA90;
-  --color-hay-gold-dark: #B88A58;
-  --color-grass-green: #6B7B3A;
-  --color-grass-green-light: #8A9E50;
-  --color-grass-green-dark: #4A5828;
-  --color-sky-blue: #9CAF88;
-  --color-sky-blue-light: #B5C4A3;
-  --color-sky-blue-dark: #7A9066;
-  --color-earth: #4A2040;
-  --color-earth-light: #6B3060;
-  --color-earth-dark: #2E1228;
-  --color-dark-earth: #3A1830;
+  --color-hay-gold: #C49A3C;
+  --color-hay-gold-light: #D4AE56;
+  --color-hay-gold-dark: #A67E28;
+  --color-grass-green: #4A6230;
+  --color-grass-green-light: #6B8448;
+  --color-grass-green-dark: #344820;
+  --color-sky-blue: #5C7A4A;
+  --color-sky-blue-light: #7A9966;
+  --color-sky-blue-dark: #3E5A30;
+  --color-earth: #4A1A2A;
+  --color-earth-light: #6B2A42;
+  --color-earth-dark: #2E0E18;
+  --color-dark-earth: #3A1220;
 
   --color-background: #FDF8F0;
-  --color-foreground: #4A2040;
+  --color-foreground: #1D4420;
 
   --font-display: var(--font-cormorant-garant), "Georgia", serif;
   --font-body: var(--font-quicksand), system-ui, sans-serif;
@@ -64,14 +66,14 @@ html {
 
 body {
   background-color: var(--color-cream);
-  color: var(--color-deep-plum);
+  color: var(--color-forest);
   font-family: var(--font-body);
   overflow-x: hidden;
 }
 
 ::selection {
-  background-color: var(--color-lavender);
-  color: var(--color-deep-plum);
+  background-color: var(--color-soft-gold);
+  color: var(--color-forest-dark);
 }
 
 /* ========================================
@@ -102,17 +104,17 @@ body {
 .soft-card {
   background: rgba(253, 248, 240, 0.85);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(184, 169, 201, 0.25);
+  border: 1px solid rgba(92, 122, 74, 0.2);
   border-radius: 16px;
   box-shadow:
-    0 4px 20px rgba(74, 32, 64, 0.06),
-    0 1px 4px rgba(74, 32, 64, 0.04);
+    0 4px 20px rgba(29, 68, 32, 0.06),
+    0 1px 4px rgba(29, 68, 32, 0.04);
 }
 
 .soft-card-dark {
-  background: rgba(74, 32, 64, 0.85);
+  background: rgba(29, 68, 32, 0.88);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(212, 165, 116, 0.2);
+  border: 1px solid rgba(196, 154, 60, 0.25);
   border-radius: 16px;
   box-shadow:
     0 4px 20px rgba(0, 0, 0, 0.15),
@@ -128,9 +130,9 @@ body {
 
 /* Legacy pixel-border aliases for backward compat */
 .pixel-border {
-  background: rgba(74, 32, 64, 0.85);
+  background: rgba(29, 68, 32, 0.88);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(212, 165, 116, 0.2);
+  border: 1px solid rgba(196, 154, 60, 0.25);
   border-radius: 16px;
   box-shadow:
     0 4px 20px rgba(0, 0, 0, 0.15),
@@ -138,17 +140,17 @@ body {
 }
 
 .pixel-border-sm {
-  background: rgba(74, 32, 64, 0.75);
-  border: 1px solid rgba(212, 165, 116, 0.15);
+  background: rgba(29, 68, 32, 0.78);
+  border: 1px solid rgba(196, 154, 60, 0.2);
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
 }
 
 .pixel-border-gold {
-  border: 1px solid rgba(212, 165, 116, 0.4);
+  border: 1px solid rgba(196, 154, 60, 0.45);
   border-radius: 16px;
   box-shadow:
-    0 4px 20px rgba(212, 165, 116, 0.1),
+    0 4px 20px rgba(196, 154, 60, 0.12),
     0 1px 4px rgba(0, 0, 0, 0.05);
 }
 
@@ -181,9 +183,9 @@ body {
 }
 
 .arcade-screen {
-  background: rgba(74, 32, 64, 0.85);
+  background: rgba(29, 68, 32, 0.88);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(212, 165, 116, 0.2);
+  border: 1px solid rgba(196, 154, 60, 0.25);
   border-radius: 16px;
   box-shadow:
     0 4px 20px rgba(0, 0, 0, 0.15),
@@ -262,7 +264,7 @@ body {
   width: 100%;
   padding: 0.75rem 1rem;
   background: rgba(253, 248, 240, 0.1);
-  border: 1px solid rgba(212, 165, 116, 0.3);
+  border: 1px solid rgba(196, 154, 60, 0.3);
   border-radius: 12px;
   color: var(--color-cream);
   font-family: var(--font-body);
@@ -273,7 +275,7 @@ body {
 .pixel-input:focus {
   outline: none;
   border-color: var(--color-soft-gold);
-  box-shadow: 0 0 0 3px rgba(212, 165, 116, 0.15);
+  box-shadow: 0 0 0 3px rgba(196, 154, 60, 0.2);
   background: rgba(253, 248, 240, 0.15);
 }
 
@@ -288,18 +290,18 @@ body {
 .enchanted-bg {
   background-color: var(--color-cream);
   background-image:
-    radial-gradient(circle at 15% 85%, rgba(156, 175, 136, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 85% 15%, rgba(184, 169, 201, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 50% 50%, rgba(242, 215, 213, 0.06) 0%, transparent 60%);
+    radial-gradient(circle at 15% 85%, rgba(29, 68, 32, 0.07) 0%, transparent 50%),
+    radial-gradient(circle at 85% 15%, rgba(196, 154, 60, 0.06) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(92, 122, 74, 0.05) 0%, transparent 60%);
 }
 
 /* Legacy alias */
 .farm-bg-pattern {
   background-color: var(--color-cream);
   background-image:
-    radial-gradient(circle at 15% 85%, rgba(156, 175, 136, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 85% 15%, rgba(184, 169, 201, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 50% 50%, rgba(242, 215, 213, 0.06) 0%, transparent 60%);
+    radial-gradient(circle at 15% 85%, rgba(29, 68, 32, 0.07) 0%, transparent 50%),
+    radial-gradient(circle at 85% 15%, rgba(196, 154, 60, 0.06) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(92, 122, 74, 0.05) 0%, transparent 60%);
 }
 
 /* ========================================
@@ -475,8 +477,8 @@ body {
 }
 
 @keyframes sun-pulse {
-  0%, 100% { filter: drop-shadow(0 0 20px rgba(212, 165, 116, 0.4)); }
-  50% { filter: drop-shadow(0 0 35px rgba(212, 165, 116, 0.7)); }
+  0%, 100% { filter: drop-shadow(0 0 20px rgba(196, 154, 60, 0.4)); }
+  50% { filter: drop-shadow(0 0 35px rgba(196, 154, 60, 0.7)); }
 }
 
 @keyframes peck {
@@ -504,10 +506,10 @@ body {
 
 @keyframes pulse-glow {
   0%, 100% {
-    box-shadow: 0 0 8px rgba(212, 165, 116, 0.3);
+    box-shadow: 0 0 8px rgba(196, 154, 60, 0.3);
   }
   50% {
-    box-shadow: 0 0 16px rgba(212, 165, 116, 0.5);
+    box-shadow: 0 0 16px rgba(196, 154, 60, 0.5);
   }
 }
 
@@ -620,8 +622,8 @@ body {
 .game-card-hover:hover {
   transform: translateY(-6px);
   box-shadow:
-    0 12px 32px rgba(74, 32, 64, 0.1),
-    0 4px 8px rgba(74, 32, 64, 0.06);
+    0 12px 32px rgba(29, 68, 32, 0.1),
+    0 4px 8px rgba(29, 68, 32, 0.06);
 }
 
 /* ========================================
@@ -632,9 +634,9 @@ body {
   width: 100%;
   padding: 0.75rem 1rem;
   background: var(--color-warm-white);
-  border: 1px solid rgba(184, 169, 201, 0.3);
+  border: 1px solid rgba(92, 122, 74, 0.25);
   border-radius: 12px;
-  color: var(--color-deep-plum);
+  color: var(--color-forest);
   font-family: var(--font-body);
   font-size: 0.95rem;
   transition: all 0.3s ease;
@@ -642,10 +644,10 @@ body {
 
 .enchanted-input:focus {
   outline: none;
-  border-color: var(--color-lavender);
-  box-shadow: 0 0 0 3px rgba(184, 169, 201, 0.15);
+  border-color: var(--color-soft-gold);
+  box-shadow: 0 0 0 3px rgba(196, 154, 60, 0.15);
 }
 
 .enchanted-input::placeholder {
-  color: rgba(74, 32, 64, 0.3);
+  color: rgba(29, 68, 32, 0.3);
 }
