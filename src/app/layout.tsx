@@ -20,7 +20,7 @@ const quicksand = Quicksand({
 export const metadata: Metadata = {
   title: "Matt & Brittany's Wedding",
   description:
-    "Matt & Brittany got married! Join the Brookers for a wedding celebration on the farm, June 27, 2026. RSVP, play fun games, and get all the details for our big party.",
+    "Matt & Brittany got married! Join the Brookers for a wedding celebration on our farm, June 27, 2026. RSVP, play fun games, and get all the details for our big party.",
   keywords: [
     "wedding",
     "farm wedding",
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Matt & Brittany's Wedding",
     description:
-      "We got married! Now come celebrate with us on the farm, June 27, 2026. Food, games, and good company.",
+      "We got married! Now come celebrate with us on our farm, June 27, 2026. Food, games, and good company.",
     type: "website",
     locale: "en_US",
     siteName: "Brooker Wedding",
@@ -43,7 +43,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Matt & Brittany's Wedding",
     description:
-      "We got married! Join us June 27, 2026 for a wedding celebration on the farm.",
+      "We got married! Join us June 27, 2026 for a wedding celebration on our farm.",
   },
   icons: {
     icon: "/favicon.svg",
