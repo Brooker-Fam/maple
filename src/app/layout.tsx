@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Cormorant_Garamond, Quicksand } from "next/font/google";
 import Navigation from "@/components/Navigation";
+import ThemeProvider from "@/components/ThemeProvider";
 import "./globals.css";
 
 const cormorantGaramond = Cormorant_Garamond({
@@ -59,10 +60,20 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${cormorantGaramond.variable} ${quicksand.variable}`}
+      suppressHydrationWarning
     >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("theme");if(t==="dark"||(t!=="light"&&matchMedia("(prefers-color-scheme:dark)").matches))document.documentElement.classList.add("dark")}catch(e){}})()`,
+          }}
+        />
+      </head>
       <body className="enchanted-bg min-h-screen font-[family-name:var(--font-quicksand)] antialiased">
-        <Navigation />
-        <main>{children}</main>
+        <ThemeProvider>
+          <Navigation />
+          <main>{children}</main>
+        </ThemeProvider>
       </body>
     </html>
   );

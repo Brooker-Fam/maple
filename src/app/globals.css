@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme inline {
   /* ========================================
      ENCHANTED FOREST PALETTE
@@ -78,11 +80,9 @@ body {
   overflow-x: hidden;
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: var(--color-dark-bg);
-    color: var(--color-cream);
-  }
+.dark body {
+  background-color: var(--color-dark-bg);
+  color: var(--color-cream);
 }
 
 ::selection {
@@ -90,11 +90,9 @@ body {
   color: var(--color-forest-dark);
 }
 
-@media (prefers-color-scheme: dark) {
-  ::selection {
-    background-color: var(--color-soft-gold);
-    color: var(--color-dark-bg);
-  }
+.dark ::selection {
+  background-color: var(--color-soft-gold);
+  color: var(--color-dark-bg);
 }
 
 /* ========================================
@@ -118,16 +116,14 @@ body {
   background: var(--color-sage-dark);
 }
 
-@media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar-track {
-    background: var(--color-dark-bg-alt);
-  }
-  ::-webkit-scrollbar-thumb {
-    background: var(--color-sage-dark);
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: var(--color-sage);
-  }
+.dark ::-webkit-scrollbar-track {
+  background: var(--color-dark-bg-alt);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: var(--color-sage-dark);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-sage);
 }
 
 /* ========================================
@@ -144,14 +140,12 @@ body {
     0 1px 4px rgba(29, 68, 32, 0.04);
 }
 
-@media (prefers-color-scheme: dark) {
-  .soft-card {
-    background: rgba(22, 38, 24, 0.85);
-    border: 1px solid rgba(196, 154, 60, 0.15);
-    box-shadow:
-      0 4px 20px rgba(0, 0, 0, 0.2),
-      0 1px 4px rgba(0, 0, 0, 0.15);
-  }
+.dark .soft-card {
+  background: rgba(22, 38, 24, 0.85);
+  border: 1px solid rgba(196, 154, 60, 0.15);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.2),
+    0 1px 4px rgba(0, 0, 0, 0.15);
 }
 
 .soft-card-dark {
@@ -171,11 +165,9 @@ body {
   border: 1px solid rgba(253, 248, 240, 0.3);
 }
 
-@media (prefers-color-scheme: dark) {
-  .frosted-glass {
-    background: rgba(22, 38, 24, 0.6);
-    border: 1px solid rgba(196, 154, 60, 0.12);
-  }
+.dark .frosted-glass {
+  background: rgba(22, 38, 24, 0.6);
+  border: 1px solid rgba(196, 154, 60, 0.12);
 }
 
 /* Legacy pixel-border aliases for backward compat */
@@ -349,16 +341,14 @@ body {
     radial-gradient(circle at 90% 50%, rgba(196, 154, 60, 0.04) 0%, transparent 30%);
 }
 
-@media (prefers-color-scheme: dark) {
-  .enchanted-bg {
-    background-color: var(--color-dark-bg);
-    background-image:
-      radial-gradient(circle at 15% 85%, rgba(196, 154, 60, 0.06) 0%, transparent 50%),
-      radial-gradient(circle at 85% 15%, rgba(92, 122, 74, 0.05) 0%, transparent 50%),
-      radial-gradient(circle at 50% 50%, rgba(196, 154, 60, 0.03) 0%, transparent 60%),
-      radial-gradient(circle at 30% 20%, rgba(122, 153, 102, 0.04) 0%, transparent 40%),
-      radial-gradient(circle at 70% 80%, rgba(122, 153, 102, 0.03) 0%, transparent 45%);
-  }
+.dark .enchanted-bg {
+  background-color: var(--color-dark-bg);
+  background-image:
+    radial-gradient(circle at 15% 85%, rgba(196, 154, 60, 0.06) 0%, transparent 50%),
+    radial-gradient(circle at 85% 15%, rgba(92, 122, 74, 0.05) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(196, 154, 60, 0.03) 0%, transparent 60%),
+    radial-gradient(circle at 30% 20%, rgba(122, 153, 102, 0.04) 0%, transparent 40%),
+    radial-gradient(circle at 70% 80%, rgba(122, 153, 102, 0.03) 0%, transparent 45%);
 }
 
 /* Legacy alias */
@@ -811,12 +801,10 @@ body {
     0 4px 8px rgba(29, 68, 32, 0.06);
 }
 
-@media (prefers-color-scheme: dark) {
-  .game-card-hover:hover {
-    box-shadow:
-      0 12px 32px rgba(0, 0, 0, 0.3),
-      0 4px 8px rgba(196, 154, 60, 0.08);
-  }
+.dark .game-card-hover:hover {
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.3),
+    0 4px 8px rgba(196, 154, 60, 0.08);
 }
 
 /* ========================================
@@ -845,20 +833,18 @@ body {
   color: rgba(29, 68, 32, 0.3);
 }
 
-@media (prefers-color-scheme: dark) {
-  .enchanted-input {
-    background: var(--color-dark-surface);
-    border: 1px solid rgba(196, 154, 60, 0.2);
-    color: var(--color-cream);
-  }
+.dark .enchanted-input {
+  background: var(--color-dark-surface);
+  border: 1px solid rgba(196, 154, 60, 0.2);
+  color: var(--color-cream);
+}
 
-  .enchanted-input:focus {
-    border-color: var(--color-soft-gold);
-    box-shadow: 0 0 0 3px rgba(196, 154, 60, 0.2);
-    background: var(--color-dark-surface-light);
-  }
+.dark .enchanted-input:focus {
+  border-color: var(--color-soft-gold);
+  box-shadow: 0 0 0 3px rgba(196, 154, 60, 0.2);
+  background: var(--color-dark-surface-light);
+}
 
-  .enchanted-input::placeholder {
-    color: rgba(253, 248, 240, 0.3);
-  }
+.dark .enchanted-input::placeholder {
+  color: rgba(253, 248, 240, 0.3);
 }
