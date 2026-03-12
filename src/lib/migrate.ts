@@ -42,6 +42,9 @@ async function migrate() {
   await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`;
   await sql`CREATE INDEX IF NOT EXISTS idx_rsvps_email ON rsvps(email)`;
 
+  // Phone number for SMS (E.164 format)
+  await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`;
+
   console.log("Migrations complete.");
 }
 
