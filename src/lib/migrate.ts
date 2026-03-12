@@ -37,6 +37,11 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_game_scores_game_id ON game_scores(game_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_game_scores_score ON game_scores(game_id, score DESC)`;
 
+  // RSVP enhancements: public display opt-in, edit tracking, email lookup
+  await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS public_display BOOLEAN DEFAULT false`;
+  await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_rsvps_email ON rsvps(email)`;
+
   console.log("Migrations complete.");
 }
 
