@@ -44,6 +44,8 @@ async function migrate() {
 
   // Phone number for SMS (E.164 format)
   await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`;
+  await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS mailing_address TEXT`;
+  await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS attendee_names TEXT`;
 
   // Split guest count into adults and children
   await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS adult_count INTEGER DEFAULT 1`;
