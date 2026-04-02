@@ -846,5 +846,5 @@ body {
 }
 
 .dark .enchanted-input::placeholder {
-  color: rgba(253, 248, 240, 0.3);
+  color: rgba(253, 248, 240, 0.45);
 }
