@@ -59,7 +59,7 @@
   --color-dark-surface-light: #1E3220;
   --color-dark-border: rgba(196, 154, 60, 0.15);
 
-  --font-display: var(--font-cormorant-garant), "Georgia", serif;
+  --font-display: var(--font-cormorant-garamond), "Georgia", serif;
   --font-body: var(--font-quicksand), system-ui, sans-serif;
   /* Legacy font alias */
   --font-pixel: var(--font-display);
