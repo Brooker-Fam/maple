@@ -80,6 +80,9 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_song_requests_track_id ON song_requests(itunes_track_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_song_votes_song_id ON song_votes(song_request_id)`;
 
+  // Cache Spotify URIs to avoid re-searching
+  await sql`ALTER TABLE song_requests ADD COLUMN IF NOT EXISTS spotify_uri TEXT`;
+
   // Admin: pin songs to top of playlist, custom ordering
   await sql`ALTER TABLE song_requests ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT false`;
   await sql`ALTER TABLE song_requests ADD COLUMN IF NOT EXISTS sort_position INTEGER`;
