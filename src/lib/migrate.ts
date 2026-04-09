@@ -84,6 +84,15 @@ async function migrate() {
   await sql`ALTER TABLE song_requests ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT false`;
   await sql`ALTER TABLE song_requests ADD COLUMN IF NOT EXISTS sort_position INTEGER`;
 
+  // Spotify integration config (encrypted tokens)
+  await sql`
+    CREATE TABLE IF NOT EXISTS spotify_config (
+      key VARCHAR(100) PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
   console.log("Migrations complete.");
 }
 
