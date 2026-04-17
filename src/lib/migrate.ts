@@ -167,6 +167,90 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_completions_date ON task_completions(completed_date)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_completions_task_date ON task_completions(task_id, completed_date)`;
 
+  // ========================================
+  // GOOGLE CALENDAR INTEGRATION
+  // ========================================
+
+  // Key-value store for OAuth tokens (mirrors spotify_config pattern).
+  await sql`
+    CREATE TABLE IF NOT EXISTS google_config (
+      key VARCHAR(100) PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
+  // Calendars available on the connected Google account. One row per calendar.
+  await sql`
+    CREATE TABLE IF NOT EXISTS google_calendars (
+      id SERIAL PRIMARY KEY,
+      household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+      google_calendar_id VARCHAR(500) NOT NULL,
+      summary VARCHAR(500) NOT NULL,
+      color VARCHAR(7),
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      assigned_to INTEGER REFERENCES family_members(id) ON DELETE SET NULL,
+      sync_token TEXT,
+      last_synced_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (household_id, google_calendar_id)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_google_calendars_household ON google_calendars(household_id)`;
+
+  // Events mirrored from Google. One row per expanded instance (singleEvents=true).
+  await sql`
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id SERIAL PRIMARY KEY,
+      household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+      google_calendar_id VARCHAR(500) NOT NULL,
+      google_event_id VARCHAR(500) NOT NULL,
+      ical_uid VARCHAR(500),
+      etag VARCHAR(255),
+      title VARCHAR(500) NOT NULL,
+      description TEXT,
+      location TEXT,
+      start_at TIMESTAMPTZ NOT NULL,
+      end_at TIMESTAMPTZ NOT NULL,
+      all_day BOOLEAN NOT NULL DEFAULT FALSE,
+      timezone VARCHAR(64),
+      recurrence_rule TEXT,
+      recurring_event_id VARCHAR(500),
+      original_start_at TIMESTAMPTZ,
+      assigned_to INTEGER REFERENCES family_members(id) ON DELETE SET NULL,
+      color_override VARCHAR(7),
+      points INTEGER NOT NULL DEFAULT 0,
+      auto_award BOOLEAN NOT NULL DEFAULT FALSE,
+      status VARCHAR(20) NOT NULL DEFAULT 'confirmed',
+      html_link TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (google_calendar_id, google_event_id)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_calendar_events_household_start ON calendar_events(household_id, start_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_calendar_events_assigned ON calendar_events(assigned_to)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_calendar_events_status ON calendar_events(status)`;
+
+  // Event attendance — parallel to task_completions, feeds the same scoreboard.
+  await sql`
+    CREATE TABLE IF NOT EXISTS event_completions (
+      id SERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL REFERENCES calendar_events(id) ON DELETE CASCADE,
+      completed_by INTEGER NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+      completed_date DATE NOT NULL,
+      points_earned INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (event_id, completed_by)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_completions_event ON event_completions(event_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_completions_member_date ON event_completions(completed_by, completed_date)`;
+
   console.log("Migrations complete.");
 }
 
