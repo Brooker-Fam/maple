@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Cormorant_Garamond, Quicksand } from "next/font/google";
 import Navigation from "@/components/Navigation";
 import ThemeProvider from "@/components/ThemeProvider";
+import PostHogProvider from "@/components/PostHogProvider";
 import "./globals.css";
 
 const cormorantGaramond = Cormorant_Garamond({
@@ -70,10 +71,12 @@ export default function RootLayout({
         />
       </head>
       <body className="enchanted-bg min-h-screen font-[family-name:var(--font-quicksand)] antialiased">
-        <ThemeProvider>
-          <Navigation />
-          <main>{children}</main>
-        </ThemeProvider>
+        <PostHogProvider>
+          <ThemeProvider>
+            <Navigation />
+            <main>{children}</main>
+          </ThemeProvider>
+        </PostHogProvider>
       </body>
     </html>
   );
