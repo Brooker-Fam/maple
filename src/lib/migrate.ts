@@ -51,6 +51,31 @@ async function migrate() {
   await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS adult_count INTEGER DEFAULT 1`;
   await sql`ALTER TABLE rsvps ADD COLUMN IF NOT EXISTS child_count INTEGER DEFAULT 0`;
 
+  // Mailing lists for printing address labels (bridal shower, thank-yous, etc.)
+  await sql`
+    CREATE TABLE IF NOT EXISTS mailing_lists (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      description TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS mailing_list_entries (
+      id SERIAL PRIMARY KEY,
+      list_id INTEGER NOT NULL REFERENCES mailing_lists(id) ON DELETE CASCADE,
+      rsvp_id INTEGER NOT NULL REFERENCES rsvps(id) ON DELETE CASCADE,
+      addressee TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (list_id, rsvp_id)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_mailing_list_entries_list ON mailing_list_entries(list_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_mailing_list_entries_rsvp ON mailing_list_entries(rsvp_id)`;
+
   // Song requests and voting
   await sql`
     CREATE TABLE IF NOT EXISTS song_requests (
