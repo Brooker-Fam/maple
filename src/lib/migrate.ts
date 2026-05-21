@@ -276,6 +276,30 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_event_completions_event ON event_completions(event_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_completions_member_date ON event_completions(completed_by, completed_date)`;
 
+  // ========================================
+  // SAPPHIRE'S BIRTHDAY RSVP
+  // Standalone party RSVP (separate from wedding rsvps table)
+  // ========================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS birthday_rsvps (
+      id SERIAL PRIMARY KEY,
+      parent_name VARCHAR(255) NOT NULL,
+      child_names VARCHAR(500),
+      email VARCHAR(255),
+      phone VARCHAR(20),
+      attending BOOLEAN DEFAULT true,
+      kid_count INTEGER DEFAULT 1,
+      adult_count INTEGER DEFAULT 1,
+      allergies TEXT,
+      birthday_wish TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_birthday_rsvps_email ON birthday_rsvps(email)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_birthday_rsvps_phone ON birthday_rsvps(phone)`;
+
   console.log("Migrations complete.");
 }
 
