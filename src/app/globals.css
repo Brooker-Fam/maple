@@ -66,6 +66,30 @@
 }
 
 /* ========================================
+   HOUSEHOLD BULLETIN BOARD TOKENS
+   Shared semantic tokens for the calendar / scoreboard / admin re-skin.
+   See docs/plans/themed-admin-scoreboard.md.
+   ======================================== */
+
+:root {
+  --board-bg: #FDF8F0;          /* cream */
+  --board-grain: #E8C8B8;       /* blush, used at low opacity for wood grain */
+  --board-ink: #1D4420;         /* forest green, primary text */
+  --board-accent: #C49A3C;      /* warm gold, points + highlights */
+  --board-muted: #5C7A4A;       /* sage, secondary text */
+  --board-rule: rgba(92, 122, 74, 0.18);
+}
+
+.dark {
+  --board-bg: #0F1F12;
+  --board-grain: #1D4420;
+  --board-ink: #FDF8F0;
+  --board-accent: #C49A3C;
+  --board-muted: #B8A9C9;
+  --board-rule: rgba(196, 154, 60, 0.22);
+}
+
+/* ========================================
    BASE STYLES
    ======================================== */
 
@@ -847,4 +871,208 @@ body {
 
 .dark .enchanted-input::placeholder {
   color: rgba(253, 248, 240, 0.45);
+}
+
+/* ========================================
+   BULLETIN BOARD SURFACES
+   Wood-grained corkboard metaphor for calendar admin / scoreboard / display.
+   ======================================== */
+
+.bulletin-board {
+  background-color: var(--board-bg);
+  background-image:
+    radial-gradient(circle at 18% 22%, rgba(232, 200, 184, 0.18) 0%, transparent 45%),
+    radial-gradient(circle at 82% 30%, rgba(232, 200, 184, 0.12) 0%, transparent 50%),
+    radial-gradient(circle at 30% 82%, rgba(232, 200, 184, 0.16) 0%, transparent 55%),
+    repeating-linear-gradient(
+      95deg,
+      transparent 0 32px,
+      rgba(196, 154, 60, 0.04) 32px 33px
+    );
+}
+
+.dark .bulletin-board {
+  background-color: var(--board-bg);
+  background-image:
+    radial-gradient(circle at 18% 22%, rgba(196, 154, 60, 0.08) 0%, transparent 45%),
+    radial-gradient(circle at 82% 30%, rgba(92, 122, 74, 0.10) 0%, transparent 55%),
+    radial-gradient(circle at 30% 82%, rgba(122, 153, 102, 0.08) 0%, transparent 60%),
+    repeating-linear-gradient(
+      95deg,
+      transparent 0 32px,
+      rgba(196, 154, 60, 0.04) 32px 33px
+    );
+}
+
+.bulletin-day {
+  border-right: 1px solid var(--board-rule);
+}
+
+.bulletin-day:last-child {
+  border-right: none;
+}
+
+.bulletin-day-label {
+  font-family: var(--font-body);
+  font-variant: small-caps;
+  letter-spacing: 0.12em;
+  color: var(--board-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+
+.bulletin-day-label.is-today {
+  color: var(--board-accent);
+}
+
+.bulletin-card {
+  position: relative;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(253, 248, 240, 0.95) 0%,
+      rgba(232, 200, 184, 0.20) 100%
+    );
+  border-left: 4px solid var(--board-accent);
+  border-radius: 12px;
+  box-shadow:
+    0 4px 12px rgba(29, 68, 32, 0.08),
+    0 1px 2px rgba(29, 68, 32, 0.05);
+  transition: box-shadow 0.2s ease;
+}
+
+.dark .bulletin-card {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(29, 68, 32, 0.55) 0%,
+      rgba(15, 31, 18, 0.85) 100%
+    );
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.35),
+    0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.bulletin-card:hover {
+  box-shadow:
+    0 8px 22px rgba(29, 68, 32, 0.14),
+    0 2px 4px rgba(29, 68, 32, 0.08);
+}
+
+.dark .bulletin-card:hover {
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.5),
+    0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.bulletin-card--completed {
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+.bulletin-card--event::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 26px;
+  height: 26px;
+  background: var(--color-deep-plum);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+  opacity: 0.55;
+  border-top-right-radius: 12px;
+  pointer-events: none;
+}
+
+.dark .bulletin-card--event::after {
+  background: var(--color-lavender);
+  opacity: 0.4;
+}
+
+.bulletin-pin {
+  position: absolute;
+  top: 7px;
+  left: 9px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 30% 30%,
+    #F0D78B 0%,
+    var(--board-accent) 70%,
+    #8B6914 100%
+  );
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.bulletin-header h1 {
+  font-family: var(--font-display);
+  color: var(--board-ink);
+  position: relative;
+}
+
+.bulletin-header h1::after {
+  content: "";
+  display: block;
+  height: 2px;
+  width: 56px;
+  margin-top: 0.35rem;
+  background: linear-gradient(
+    to right,
+    var(--board-accent) 0%,
+    rgba(196, 154, 60, 0) 100%
+  );
+  border-radius: 2px;
+}
+
+.bulletin-subtitle {
+  color: var(--board-muted);
+  font-style: italic;
+}
+
+.bulletin-button {
+  background: rgba(253, 248, 240, 0.55);
+  color: var(--board-ink);
+  border: 1px solid color-mix(in srgb, var(--board-accent) 35%, transparent);
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.dark .bulletin-button {
+  background: rgba(22, 38, 24, 0.7);
+  border-color: color-mix(in srgb, var(--board-accent) 25%, transparent);
+}
+
+.bulletin-button:hover {
+  background: var(--board-ink);
+  color: var(--board-bg);
+  border-color: var(--board-ink);
+}
+
+.dark .bulletin-button:hover {
+  background: var(--board-accent);
+  color: var(--color-dark-bg);
+  border-color: var(--board-accent);
+}
+
+.bulletin-button--active,
+.bulletin-button[aria-pressed="true"] {
+  background: var(--board-ink);
+  color: var(--board-bg);
+  border-color: var(--board-ink);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.dark .bulletin-button--active,
+.dark .bulletin-button[aria-pressed="true"] {
+  background: var(--board-accent);
+  color: var(--color-dark-bg);
+  border-color: var(--board-accent);
 }
