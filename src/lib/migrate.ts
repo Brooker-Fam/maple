@@ -300,6 +300,17 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_birthday_rsvps_email ON birthday_rsvps(email)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_birthday_rsvps_phone ON birthday_rsvps(phone)`;
 
+  // child_names now holds one kid name per line (broken-out kid rows). Widen and
+  // backfill legacy free-text ("Lily & Max", "Eli and Ronen") into newline-delimited form.
+  await sql`ALTER TABLE birthday_rsvps ALTER COLUMN child_names TYPE TEXT`;
+  await sql`
+    UPDATE birthday_rsvps
+    SET child_names = regexp_replace(child_names, '\\s*&\\s*|\\s*,\\s*|\\s+and\\s+', chr(10), 'gi')
+    WHERE child_names IS NOT NULL
+      AND position(chr(10) in child_names) = 0
+      AND child_names ~* '&|,|\\sand\\s'
+  `;
+
   console.log("Migrations complete.");
 }
 
