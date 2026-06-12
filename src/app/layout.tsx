@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Cormorant_Garamond, Quicksand } from "next/font/google";
+import { Cormorant_Garamond, Source_Sans_3 } from "next/font/google";
 import Navigation from "@/components/Navigation";
 import ThemeProvider from "@/components/ThemeProvider";
 import PostHogProvider from "@/components/PostHogProvider";
@@ -12,40 +12,41 @@ const cormorantGaramond = Cormorant_Garamond({
   display: "swap",
 });
 
-const quicksand = Quicksand({
-  variable: "--font-quicksand",
+const sourceSans = Source_Sans_3({
+  variable: "--font-source-sans",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Matt & Brittany's Wedding",
+  title: "Creekside Fields",
   description:
-    "Matt & Brittany got married! Join the Brookers for a wedding celebration on our farm, June 27, 2026. RSVP, play fun games, and get all the details for our big party.",
+    "Creekside Fields is a whimsical, mossy, grounded farm raising heritage pigs on pasture with love and care in Greenwich, New York.",
   keywords: [
-    "wedding",
-    "farm wedding",
-    "Matt Brooker",
-    "Brittany Brooker",
-    "June 2026",
-    "enchanted wedding",
-    "wedding celebration",
+    "pasture raised pork",
+    "heritage pigs",
+    "Creekside Fields",
+    "Greenwich NY farm",
+    "small farm pork",
+    "pastured pork",
+    "mossy farm",
+    "heritage pork",
   ],
-  authors: [{ name: "Matt & Brittany Brooker" }],
+  authors: [{ name: "Creekside Fields" }],
   openGraph: {
-    title: "Matt & Brittany's Wedding",
+    title: "Creekside Fields",
     description:
-      "We got married! Now come celebrate with us on our farm, June 27, 2026. Food, games, and good company.",
+      "A whimsical, mossy, grounded farm raising heritage pigs on pasture with love and care.",
     type: "website",
     locale: "en_US",
-    siteName: "Brooker Wedding",
+    siteName: "Creekside Fields",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Matt & Brittany's Wedding",
+    title: "Creekside Fields",
     description:
-      "We got married! Join us June 27, 2026 for a wedding celebration on our farm.",
+      "A whimsical, mossy, grounded farm raising heritage pigs on pasture with love and care.",
   },
   icons: {
     icon: "/favicon.svg",
@@ -54,7 +55,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    title: "Brooker",
+    title: "Creekside Fields",
     statusBarStyle: "black-translucent",
   },
 };
@@ -71,7 +72,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${cormorantGaramond.variable} ${quicksand.variable}`}
+      className={`${cormorantGaramond.variable} ${sourceSans.variable}`}
       suppressHydrationWarning
     >
       <head>
@@ -82,7 +83,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="enchanted-bg min-h-screen font-[family-name:var(--font-quicksand)] antialiased">
+      <body className="enchanted-bg min-h-screen font-[family-name:var(--font-source-sans)] antialiased">
         <PostHogProvider>
           <ThemeProvider>
             <Navigation />
