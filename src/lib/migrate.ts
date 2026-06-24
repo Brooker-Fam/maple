@@ -311,6 +311,23 @@ async function migrate() {
       AND child_names ~* '&|,|\\sand\\s'
   `;
 
+  // ========================================
+  // SEATING CHART
+  // Single-document store for the reception seating planner.
+  // The whole chart (tables, groups, per-guest assignments) is saved as one
+  // JSON blob keyed by 'chart', mirroring the spotify_config / google_config
+  // key-value pattern. Guests are derived live from the rsvps table, so the
+  // assignments only reference guest keys -- no per-guest rows to keep in sync.
+  // ========================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS seating_config (
+      key VARCHAR(100) PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
   console.log("Migrations complete.");
 }
 
