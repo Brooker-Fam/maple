@@ -357,6 +357,11 @@ async function migrate() {
   // Never selected by the public GET, so other guests can't see it.
   await sql`ALTER TABLE photos ADD COLUMN IF NOT EXISTS delete_token VARCHAR(64)`;
 
+  // Small (~512px) grid thumbnail uploaded alongside the full image, so the
+  // gallery grid doesn't pull full-resolution JPEGs for every tile. Null for
+  // videos (grid uses a video poster) and for images we couldn't re-encode.
+  await sql`ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb_url TEXT`;
+
   // Fixed-hourly-window counter keyed by hashed IP — caps how many upload tokens
   // one source can mint, so a stranger who finds the URL can't burn Blob storage.
   await sql`
