@@ -362,6 +362,10 @@ async function migrate() {
   // videos (grid uses a video poster) and for images we couldn't re-encode.
   await sql`ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb_url TEXT`;
 
+  // A guest tapped "report": the photo is hidden (approved=FALSE) immediately
+  // and flagged for the admin to restore or delete on /photos/manage.
+  await sql`ALTER TABLE photos ADD COLUMN IF NOT EXISTS reported BOOLEAN NOT NULL DEFAULT FALSE`;
+
   // Fixed-hourly-window counter keyed by hashed IP — caps how many upload tokens
   // one source can mint, so a stranger who finds the URL can't burn Blob storage.
   await sql`
