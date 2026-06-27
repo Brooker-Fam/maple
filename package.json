@@ -8,7 +8,8 @@
     "build": "npm run migrate && next build",
     "start": "next start",
     "lint": "eslint",
-    "gen:invite-pdf": "node scripts/gen-invite-pdf.js"
+    "gen:invite-pdf": "node scripts/gen-invite-pdf.js",
+    "gen:photos-qr": "node scripts/gen-photos-qr-pdf.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
