@@ -328,6 +328,30 @@ async function migrate() {
     )
   `;
 
+  // ========================================
+  // GUEST PHOTO GALLERY
+  // Photos/videos guests upload at the party. Files live in Vercel Blob;
+  // this table only stores the public URL + metadata. Newest-first display.
+  // ========================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS photos (
+      id SERIAL PRIMARY KEY,
+      url TEXT NOT NULL,
+      content_type VARCHAR(100),
+      media_type VARCHAR(10) NOT NULL DEFAULT 'image',
+      uploader_name VARCHAR(255),
+      width INTEGER,
+      height INTEGER,
+      size_bytes BIGINT,
+      approved BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_photos_created ON photos(created_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_photos_approved ON photos(approved, created_at DESC)`;
+
   console.log("Migrations complete.");
 }
 
