@@ -352,6 +352,22 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_photos_created ON photos(created_at DESC)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_photos_approved ON photos(approved, created_at DESC)`;
 
+  // Per-upload secret. Returned to the uploader once (POST response) and stored
+  // in their browser, so a guest can delete their own photo without an account.
+  // Never selected by the public GET, so other guests can't see it.
+  await sql`ALTER TABLE photos ADD COLUMN IF NOT EXISTS delete_token VARCHAR(64)`;
+
+  // Fixed-hourly-window counter keyed by hashed IP — caps how many upload tokens
+  // one source can mint, so a stranger who finds the URL can't burn Blob storage.
+  await sql`
+    CREATE TABLE IF NOT EXISTS upload_rate_limit (
+      ip_hash VARCHAR(64) NOT NULL,
+      window_start TIMESTAMP NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (ip_hash, window_start)
+    )
+  `;
+
   console.log("Migrations complete.");
 }
 
