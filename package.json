@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "gen:invite-pdf": "node scripts/gen-invite-pdf.js",
-    "gen:photos-qr": "node scripts/gen-photos-qr-pdf.js"
+    "gen:photos-qr": "node scripts/gen-photos-qr-pdf.js",
+    "export:photos": "node scripts/export-photos.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
