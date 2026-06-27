@@ -1,12 +1,20 @@
 import { createHash } from "crypto";
 import { query } from "@/lib/db";
 
-const UPLOADS_PER_HOUR = 200;
+// Generous on purpose: at the party most guests share one venue-WiFi / carrier
+// IP, so this hourly cap is effectively collective. It only needs to stop a
+// stranger scripting the endpoint — not a real crowd uploading their camera rolls.
+const UPLOADS_PER_HOUR = 1500;
 
 function clientIp(req: Request): string {
+  // Prefer x-real-ip: Vercel sets it to the actual connecting client and
+  // overwrites any client-supplied value, so (unlike the left-most
+  // x-forwarded-for hop) it can't be spoofed to mint a fresh bucket per request.
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp) return realIp.trim();
   const xff = req.headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") || "unknown";
+  return "unknown";
 }
 
 // Throttles upload-token minting per source. IPs are hashed (we never store the
