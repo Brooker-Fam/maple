@@ -94,15 +94,19 @@ function getCredentials() {
   return { clientId, clientSecret };
 }
 
-function getRedirectUri(): string {
-  const base =
+export function getAppBaseUrl(): string {
+  return (
     process.env.NEXT_PUBLIC_BASE_URL ||
     (process.env.VERCEL_PROJECT_PRODUCTION_URL
       ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
       : null) ||
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-    "http://localhost:3000";
-  return `${base}/api/calendar/google/callback`;
+    "http://localhost:3000"
+  );
+}
+
+function getRedirectUri(): string {
+  return `${getAppBaseUrl()}/api/calendar/google/callback`;
 }
 
 export function getAuthorizeUrl(state: string): string {
