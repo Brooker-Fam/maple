@@ -377,6 +377,49 @@ async function migrate() {
     )
   `;
 
+  // ========================================
+  // BACKPACKING TRIP 2026 (/backpacking-2026)
+  // Shared gear checklist + group decision votes. Seed rows are keyed by slug
+  // so re-running migrate never clobbers claims/edits made on the site.
+  // ========================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS gear_items (
+      id SERIAL PRIMARY KEY,
+      slug VARCHAR(80) UNIQUE,
+      name VARCHAR(255) NOT NULL,
+      category VARCHAR(50) NOT NULL,
+      qty VARCHAR(60),
+      notes TEXT,
+      claimed_by TEXT,
+      packed BOOLEAN DEFAULT false,
+      sort INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS trip_votes (
+      id SERIAL PRIMARY KEY,
+      question_id VARCHAR(50) NOT NULL,
+      person VARCHAR(40) NOT NULL,
+      choice VARCHAR(120) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (question_id, person)
+    )
+  `;
+
+  const { DEFAULT_GEAR } = await import("./backpacking-gear");
+  for (const item of DEFAULT_GEAR) {
+    await sql`
+      INSERT INTO gear_items (slug, name, category, qty, notes, claimed_by, sort)
+      VALUES (${item.slug}, ${item.name}, ${item.category}, ${item.qty ?? null}, ${item.notes ?? null}, ${item.claimedBy ?? null}, ${item.sort})
+      ON CONFLICT (slug) DO NOTHING
+    `;
+  }
+
   console.log("Migrations complete.");
 }
 
