@@ -19,6 +19,7 @@
     "fflate": "^0.8.3",
     "framer-motion": "^12.34.3",
     "googleapis": "^171.4.0",
+    "leaflet": "^1.9.4",
     "mcp-handler": "^1.1.0",
     "next": "16.1.6",
     "posthog-js": "^1.369.1",
@@ -29,6 +30,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^20",
     "@types/pdfkit": "^0.17.6",
     "@types/qrcode": "^1.5.6",
