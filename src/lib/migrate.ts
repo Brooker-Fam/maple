@@ -420,6 +420,43 @@ async function migrate() {
     `;
   }
 
+  // Aug 2026: Dan is out and we settled on a single bear can. The seed above
+  // only ever inserts, so dropping these from DEFAULT_GEAR isn't enough —
+  // already-seeded rows have to be deleted by slug. Idempotent.
+  await sql`
+    DELETE FROM gear_items
+    WHERE slug IN ('sleeping-bag-dan', 'pack-dan', 'bear-can-2', 'cash')
+  `;
+  // Rename/renote the surviving can and the spare bottle for the 2-person,
+  // 1-can reality. Targeted by slug so hand-edits elsewhere survive.
+  await sql`
+    UPDATE gear_items
+    SET name = 'Bear canister (the only one)',
+        notes = 'Required in the Eastern High Peaks — ALL food, trash + toiletries go in. Two people, two days, ONE can: everything gets repackaged out of its box and the eggs get eaten first'
+    WHERE slug = 'bear-can-1'
+  `;
+  await sql`
+    UPDATE gear_items
+    SET name = 'Spare bottle', qty = '1 each'
+    WHERE slug = 'bottles'
+  `;
+  // Drop Dan's claims and votes so the board doesn't show a ghost participant.
+  await sql`
+    UPDATE gear_items SET claimed_by = NULL
+    WHERE claimed_by IS NOT NULL AND btrim(claimed_by) = 'Dan'
+  `;
+  // "Matt, Dan" -> "Matt" (and "Dan, Matt" -> "Matt"): drop the name, then trim
+  // any comma/space left dangling at either end.
+  await sql`
+    UPDATE gear_items
+    SET claimed_by = NULLIF(
+      btrim(regexp_replace(claimed_by, '\\mDan\\M\\s*,?', '', 'g'), ', '),
+      ''
+    )
+    WHERE claimed_by ~ '\\mDan\\M'
+  `;
+  await sql`DELETE FROM trip_votes WHERE person = 'Dan' OR question_id = 'dan'`;
+
   console.log("Migrations complete.");
 }
 
