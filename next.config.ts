@@ -14,6 +14,10 @@ const nextConfig: NextConfig = {
   // The /ingest/* paths are proxied to PostHog's ingestion endpoints.
   async rewrites() {
     return [
+      // Standalone offline labor-support tool. Static file in public/, no
+      // React, no build step -- see public/birth.html.
+      { source: "/birth", destination: "/birth.html" },
+      { source: "/birth/", destination: "/birth.html" },
       {
         source: "/ingest/static/:path*",
         destination: "https://us-assets.i.posthog.com/static/:path*",
