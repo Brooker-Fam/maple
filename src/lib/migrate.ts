@@ -471,6 +471,27 @@ async function migrate() {
     )
   `;
 
+  // Birth plan membership. Replaces the URL-key scheme: a plan is reached by
+  // being a member of it, not by holding a secret link.
+  await sql`
+    CREATE TABLE IF NOT EXISTS birth_plan (
+      id SERIAL PRIMARY KEY,
+      doc JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS birth_plan_members (
+      plan_id INTEGER NOT NULL REFERENCES birth_plan(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      added_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (plan_id, email)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_birth_plan_members_email ON birth_plan_members(email)`;
+
   console.log("Migrations complete.");
 }
 

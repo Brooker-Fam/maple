@@ -12,6 +12,11 @@ function getEncryptionKey(): Buffer {
   return crypto.createHash("sha256").update(secret).digest();
 }
 
+// Exported so other features (the birth plan's session cookie) can reuse this
+// key derivation rather than standing up a fourth copy of AES-256-GCM.
+export function encryptSecret(plaintext: string): string { return encrypt(plaintext); }
+export function decryptSecret(ciphertext: string): string { return decrypt(ciphertext); }
+
 function encrypt(plaintext: string): string {
   const key = getEncryptionKey();
   const iv = crypto.randomBytes(12);
