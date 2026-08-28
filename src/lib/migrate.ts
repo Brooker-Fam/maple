@@ -457,6 +457,20 @@ async function migrate() {
   `;
   await sql`DELETE FROM trip_votes WHERE person = 'Dan' OR question_id = 'dan'`;
 
+  // Birth plan + labor comfort tool (/birth). One row per private key;
+  // the key itself never lands in the DB, only its SHA-256, so a dump of
+  // this table can't be used to open anyone's plan. `doc` is a
+  // last-write-wins map -- {section: {field: {v, t}}} -- merged server
+  // side so two phones editing offline both converge.
+  await sql`
+    CREATE TABLE IF NOT EXISTS birth_plans (
+      key_hash CHAR(64) PRIMARY KEY,
+      doc JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
   console.log("Migrations complete.");
 }
 
