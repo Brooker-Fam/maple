@@ -21,32 +21,22 @@ const quicksand = Quicksand({
 });
 
 export const metadata: Metadata = {
-  title: "Matt & Brittany's Wedding",
+  title: "Matt & Brittany",
   description:
-    "Matt & Brittany got married! Join the Brookers for a wedding celebration on our farm, June 27, 2026. RSVP, play fun games, and get all the details for our big party.",
-  keywords: [
-    "wedding",
-    "farm wedding",
-    "Matt Brooker",
-    "Brittany Brooker",
-    "June 2026",
-    "enchanted wedding",
-    "wedding celebration",
-  ],
+    "Thank you for celebrating with us on our farm on June 27, 2026. The photos, the playlist, and the party games are all here.",
   authors: [{ name: "Matt & Brittany Brooker" }],
   openGraph: {
-    title: "Matt & Brittany's Wedding",
+    title: "Matt & Brittany",
     description:
-      "We got married! Now come celebrate with us on our farm, June 27, 2026. Food, games, and good company.",
+      "Thank you for celebrating with us on our farm on June 27, 2026. The photos, the playlist, and the party games are all here.",
     type: "website",
     locale: "en_US",
-    siteName: "Brooker Wedding",
+    siteName: "Matt & Brittany",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Matt & Brittany's Wedding",
-    description:
-      "We got married! Join us June 27, 2026 for a wedding celebration on our farm.",
+    title: "Matt & Brittany",
+    description: "Thank you for celebrating with us on our farm on June 27, 2026.",
   },
   icons: {
     icon: "/favicon.svg",

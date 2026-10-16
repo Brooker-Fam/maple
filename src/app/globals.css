@@ -1076,3 +1076,121 @@ body {
   color: var(--color-dark-bg);
   border-color: var(--board-accent);
 }
+
+/* ========================================
+   KEEPSAKE PRINTS
+   Home page: guest photos as polaroids around a thank-you card
+   ======================================== */
+
+.thank-you-card {
+  position: relative;
+  padding: 2.75rem 1.75rem 2.25rem;
+  text-align: center;
+  background: #FFFDF7;
+  border-radius: 3px;
+  box-shadow:
+    0 1px 2px rgba(29, 68, 32, 0.08),
+    0 18px 40px -18px rgba(29, 68, 32, 0.35);
+}
+
+.thank-you-card::before {
+  content: "";
+  position: absolute;
+  inset: 0.625rem;
+  border: 1px solid rgba(196, 154, 60, 0.45);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+@media (min-width: 640px) {
+  .thank-you-card {
+    padding: 3.5rem 3rem 3rem;
+  }
+}
+
+.dark .thank-you-card {
+  background: #ECE5D5;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 22px 48px -20px rgba(0, 0, 0, 0.85);
+}
+
+/* No display here: unlayered CSS would beat Tailwind's hidden/sm:block. */
+.print {
+  position: relative;
+  padding: 0.5rem 0.5rem 1.9rem;
+  background: #FFFDF7;
+  border-radius: 2px;
+  box-shadow:
+    0 1px 2px rgba(29, 68, 32, 0.12),
+    0 12px 24px -12px rgba(29, 68, 32, 0.4);
+  transform: rotate(var(--tilt));
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  animation: print-settle 0.75s cubic-bezier(0.2, 0.75, 0.25, 1) var(--delay) backwards;
+}
+
+.print:hover {
+  z-index: 1;
+  transform: rotate(0deg) scale(1.05);
+  box-shadow:
+    0 2px 4px rgba(29, 68, 32, 0.12),
+    0 22px 36px -14px rgba(29, 68, 32, 0.45);
+}
+
+.dark .print {
+  background: #ECE5D5;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 14px 28px -12px rgba(0, 0, 0, 0.85);
+}
+
+.print img {
+  display: block;
+  width: 100%;
+  object-fit: cover;
+  background: rgba(92, 122, 74, 0.15);
+}
+
+.print-tape {
+  position: absolute;
+  top: -0.6rem;
+  left: 50%;
+  width: 3.75rem;
+  height: 1.15rem;
+  transform: translateX(-50%) rotate(var(--tape-tilt));
+  clip-path: polygon(0 10%, 5% 0, 95% 8%, 100% 0, 100% 90%, 95% 100%, 5% 92%, 0 100%);
+}
+
+.print-tape--gold {
+  background: rgba(212, 174, 86, 0.55);
+}
+
+.print-tape--blush {
+  background: rgba(232, 200, 184, 0.8);
+}
+
+.print-tape--lavender {
+  background: rgba(184, 169, 201, 0.7);
+}
+
+.print-tape--sage {
+  background: rgba(122, 153, 102, 0.5);
+}
+
+@keyframes print-settle {
+  from {
+    opacity: 0;
+    transform: translateY(-1.25rem) rotate(calc(var(--tilt) * 3)) scale(1.08);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(var(--tilt));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .print {
+    animation: none;
+    transition: none;
+  }
+}
