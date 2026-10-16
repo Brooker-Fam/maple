@@ -366,6 +366,10 @@ async function migrate() {
   // and flagged for the admin to restore or delete on /photos/manage.
   await sql`ALTER TABLE photos ADD COLUMN IF NOT EXISTS reported BOOLEAN NOT NULL DEFAULT FALSE`;
 
+  // Starred on /photos/manage: the home page puts these on the table first and
+  // fills the rest with random album photos.
+  await sql`ALTER TABLE photos ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT FALSE`;
+
   // Fixed-hourly-window counter keyed by hashed IP — caps how many upload tokens
   // one source can mint, so a stranger who finds the URL can't burn Blob storage.
   await sql`
