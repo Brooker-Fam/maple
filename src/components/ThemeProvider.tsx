@@ -38,7 +38,14 @@ export default function ThemeProvider({ children }: { children: React.ReactNode 
   }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem("theme") as Theme | null;
+    // Browser storage can be blocked (Safari "Block all cookies", Firefox with storage off),
+    // and then merely touching localStorage throws: fall back to the system theme.
+    let stored: Theme | null = null;
+    try {
+      stored = localStorage.getItem("theme") as Theme | null;
+    } catch {
+      /* storage unavailable */
+    }
     const initial = stored || "system";
     setThemeState(initial);
     applyTheme(initial);
@@ -54,7 +61,11 @@ export default function ThemeProvider({ children }: { children: React.ReactNode 
 
   const setTheme = (t: Theme) => {
     setThemeState(t);
-    localStorage.setItem("theme", t);
+    try {
+      localStorage.setItem("theme", t);
+    } catch {
+      /* storage unavailable: the choice lasts for this visit */
+    }
     applyTheme(t);
   };
 

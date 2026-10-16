@@ -3,6 +3,7 @@ import { Cormorant_Garamond, Quicksand } from "next/font/google";
 import Navigation from "@/components/Navigation";
 import ThemeProvider from "@/components/ThemeProvider";
 import PostHogProvider from "@/components/PostHogProvider";
+import MainLandmark from "./MainLandmark";
 import "./globals.css";
 
 const cormorantGaramond = Cormorant_Garamond({
@@ -71,6 +72,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      data-scroll-behavior="smooth"
       className={`${cormorantGaramond.variable} ${quicksand.variable}`}
       suppressHydrationWarning
     >
@@ -86,7 +88,7 @@ export default function RootLayout({
         <PostHogProvider>
           <ThemeProvider>
             <Navigation />
-            <main>{children}</main>
+            <MainLandmark>{children}</MainLandmark>
           </ThemeProvider>
         </PostHogProvider>
       </body>
