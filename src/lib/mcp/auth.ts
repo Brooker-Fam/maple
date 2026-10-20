@@ -86,6 +86,10 @@ export interface AuthCodePayload {
   code_challenge_method: "S256" | "plain";
   scope: string;
   sub: string;
+  /** RFC 8707 resource the code was issued for (Maple binds it; others omit it). */
+  resource?: string;
+  /** Which assistant is connecting ("claude" | "chatgpt" | "mcp"), for attribution. */
+  via?: string;
 }
 
 export function mintAuthCode(payload: AuthCodePayload): string {
@@ -102,16 +106,83 @@ export interface AccessTokenPayload {
   sub: string;
   scope: string;
   client_id: string;
+  /** Audience: the MCP URL this token was minted for, when the client sent one. */
+  resource?: string;
+  /** "claude" | "chatgpt" | "mcp", stamped by /oauth/token from the redirect host. */
+  via?: string;
 }
 
 export const ACCESS_TOKEN_TTL = 60 * 60 * 24 * 30; // 30 days
 
 export function mintAccessToken(payload: AccessTokenPayload): string {
-  return pack(payload, ACCESS_TOKEN_TTL, "mcpat");
+  const body = payload.sub === "admin" ? { ...payload, pf: adminPassFingerprint() } : payload;
+  return pack(body, ACCESS_TOKEN_TTL, "mcpat");
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload | null {
-  return unpack<AccessTokenPayload>(token, "mcpat");
+  const p = unpack<AccessTokenPayload & { pf?: string }>(token, "mcpat");
+  if (!p) return null;
+  // Changing ADMIN_PASS revokes admin tokens. Tokens issued before
+  // fingerprints existed (no pf) stay valid until their 30-day expiry.
+  if (p.sub === "admin" && p.pf !== undefined && p.pf !== adminPassFingerprint()) return null;
+  const { pf: _pf, ...rest } = p;
+  void _pf;
+  return rest;
+}
+
+// ---------- Refresh tokens ----------
+
+/**
+ * Stateless, like everything else here: the refresh token carries the grant.
+ * /oauth/token rotates it on every use (a fresh one comes back each time) and
+ * re-checks Maple membership, so removing someone from the family list ends
+ * their connector at the next refresh even though old tokens still verify.
+ */
+export interface RefreshTokenPayload {
+  sub: string;
+  scope: string;
+  client_id: string;
+  resource?: string;
+  via?: string;
+}
+
+export const REFRESH_TOKEN_TTL = 60 * 60 * 24 * 365; // 365 days
+
+/**
+ * Admin grants are tied to the current ADMIN_PASS: changing the password
+ * revokes every admin refresh token (members are re-checked on refresh).
+ */
+function adminPassFingerprint(): string {
+  return crypto.createHash("sha256").update(`mcp-admin:${process.env.ADMIN_PASS ?? ""}`).digest("hex").slice(0, 16);
+}
+
+export function mintRefreshToken(payload: RefreshTokenPayload): string {
+  const body = payload.sub === "admin" ? { ...payload, pf: adminPassFingerprint() } : payload;
+  return pack(body, REFRESH_TOKEN_TTL, "mcprt");
+}
+
+export function verifyRefreshToken(token: string): RefreshTokenPayload | null {
+  const p = unpack<RefreshTokenPayload & { pf?: string }>(token, "mcprt");
+  if (!p) return null;
+  if (p.sub === "admin" && p.pf !== adminPassFingerprint()) return null;
+  const { pf: _pf, ...rest } = p;
+  void _pf;
+  return rest;
+}
+
+/**
+ * Which assistant a redirect_uri belongs to, so entries can say "via Claude".
+ * Loopback redirects (Claude Code, Inspector, other local apps) are "mcp".
+ */
+export function viaForRedirect(redirectUri: string): "claude" | "chatgpt" | "mcp" {
+  try {
+    const host = new URL(redirectUri).hostname.toLowerCase();
+    if (host === "claude.ai" || host === "claude.com") return "claude";
+    if (host === "chatgpt.com" || host === "chat.openai.com") return "chatgpt";
+  } catch {
+    // fall through
+  }
+  return "mcp";
 }
 
 // ---------- PKCE ----------
@@ -166,4 +237,23 @@ export function publicOrigin(req: Request): string {
   }
   const url = new URL(req.url);
   return url.origin;
+}
+
+// ---------- Maple's Log protected-resource metadata (RFC 9728) ----------
+
+/**
+ * Served at /.well-known/oauth-protected-resource/api/maple/mcp (the RFC 9728
+ * path-insertion URL the MCP route's 401 points at) and the /maple alias.
+ * `resource` must equal the URL people paste exactly; authorization_servers[0]
+ * must equal the issuer (the bare origin).
+ */
+export function mapleResourceMetadata(origin: string) {
+  return {
+    resource: `${origin}/api/maple/mcp`,
+    authorization_servers: [origin],
+    scopes_supported: ["maple"],
+    bearer_methods_supported: ["header"],
+    resource_name: "Maple's Log",
+    resource_documentation: `${origin}/maple/connect`,
+  };
 }

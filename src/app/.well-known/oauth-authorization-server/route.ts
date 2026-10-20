@@ -15,10 +15,12 @@ export async function GET(req: Request) {
       token_endpoint: `${origin}/oauth/token`,
       registration_endpoint: `${origin}/oauth/register`,
       response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256", "plain"],
       token_endpoint_auth_methods_supported: ["none"],
-      scopes_supported: ["calendar"],
+      // No offline_access: Claude only asks for it when it's advertised.
+      // Refresh tokens are issued for Maple (/api/maple/mcp) grants only.
+      scopes_supported: ["calendar", "rsvp", "maple"],
     },
     {
       headers: {

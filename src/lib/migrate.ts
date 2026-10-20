@@ -496,6 +496,127 @@ async function migrate() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_birth_plan_members_email ON birth_plan_members(email)`;
 
+  // ========================================
+  // MAPLE'S LOG (/maple)
+  // Newborn tracker: feeds, diapers, sleep, growth, temps, photos. One row per
+  // event in maple_entries (kind + JSONB data, metric units); running timers
+  // are rows with active = TRUE. Reached by membership (Google sign-in), and
+  // from Claude/ChatGPT through the MCP server at /api/maple/mcp.
+  // ========================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_babies (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      nickname TEXT,
+      sex TEXT,
+      due_date DATE,
+      born_at TIMESTAMPTZ,
+      birth_weight_g INTEGER,
+      birth_length_cm NUMERIC(5,1),
+      birth_head_cm NUMERIC(5,1),
+      timezone TEXT NOT NULL DEFAULT 'America/New_York',
+      settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+  await sql`
+    INSERT INTO maple_babies (name, nickname, sex, due_date)
+    SELECT 'Maple Jane', 'Maple', 'female', DATE '2026-10-20'
+    WHERE NOT EXISTS (SELECT 1 FROM maple_babies)
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_members (
+      email TEXT PRIMARY KEY,
+      role TEXT NOT NULL DEFAULT 'member',
+      display_name TEXT,
+      emoji TEXT,
+      color TEXT,
+      added_by TEXT,
+      added_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_entries (
+      id BIGSERIAL PRIMARY KEY,
+      baby_id INTEGER NOT NULL REFERENCES maple_babies(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL,
+      ended_at TIMESTAMPTZ,
+      active BOOLEAN NOT NULL DEFAULT FALSE,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      note TEXT,
+      created_by TEXT,
+      updated_by TEXT,
+      source TEXT NOT NULL DEFAULT 'web',
+      -- Client-generated id: retries (flaky hospital Wi-Fi, an assistant
+      -- re-sending a tool call) return the first save instead of a duplicate.
+      client_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_entries_time ON maple_entries(baby_id, started_at DESC) WHERE deleted_at IS NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_entries_kind ON maple_entries(baby_id, kind, started_at DESC) WHERE deleted_at IS NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_entries_updated ON maple_entries(baby_id, updated_at DESC)`;
+  // Columns added while the feature was in development: keep databases built
+  // from an earlier draft of these tables in step.
+  await sql`ALTER TABLE maple_entries ADD COLUMN IF NOT EXISTS updated_by TEXT`;
+  await sql`ALTER TABLE maple_entries ADD COLUMN IF NOT EXISTS client_id TEXT`;
+  await sql`ALTER TABLE maple_members ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`;
+  await sql`DROP INDEX IF EXISTS idx_maple_entries_active`;
+
+  // One running timer per kind, even when both phones tap Start at once.
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_entries_running ON maple_entries(baby_id, kind) WHERE active AND deleted_at IS NULL`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_entries_client ON maple_entries(client_id) WHERE client_id IS NOT NULL`;
+
+  // People an owner removed. Keeps an allowlisted address (MAPLE_ALLOWED_EMAILS)
+  // from rejoining by just signing in again; inviting them again clears it.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_removed (
+      email TEXT PRIMARY KEY,
+      removed_by TEXT,
+      removed_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  // One-time invite links for family who'd rather not use Google (grandparents).
+  // Only the SHA-256 of the token is stored.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_invites (
+      id SERIAL PRIMARY KEY,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      role TEXT NOT NULL DEFAULT 'member',
+      display_name TEXT,
+      emoji TEXT,
+      created_by TEXT,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      used_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  // Personal tokens for hands-free logging (iOS Shortcuts / "Hey Siri, Maple
+  // pee"). Hashed; shown to the member once.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_tokens (
+      id SERIAL PRIMARY KEY,
+      member TEXT NOT NULL,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      label TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    )
+  `;
+
   console.log("Migrations complete.");
 }
 

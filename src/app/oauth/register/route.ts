@@ -25,16 +25,23 @@ export async function POST(request: NextRequest) {
       ? (body.redirect_uris as string[])
       : [];
 
+  // Echo a requested scope back; the scope actually granted is decided at
+  // /oauth/authorize (e.g. "maple" for Maple's Log).
+  const scope =
+    typeof body.scope === "string" && body.scope.trim()
+      ? body.scope.trim().slice(0, 200)
+      : undefined;
+
   return NextResponse.json(
     {
       client_id: clientId,
       client_id_issued_at: now,
       redirect_uris: redirectUris,
-      grant_types: ["authorization_code"],
+      grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
       client_name: (body.client_name as string) ?? "MCP Client",
-      scope: "calendar",
+      ...(scope ? { scope } : {}),
     },
     {
       status: 201,
