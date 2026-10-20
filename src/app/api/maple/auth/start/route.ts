@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getAppBaseUrl } from "@/lib/google";
-import { authorizeUrl, isGoogleConfigured, safeReturnPath, STATE_COOKIE } from "@/lib/maple/auth";
+import {
+  authorizeUrl,
+  isGoogleConfigured,
+  MAPLE_STATE_PREFIX,
+  safeReturnPath,
+  STATE_COOKIE,
+  STATE_COOKIE_PATH,
+} from "@/lib/maple/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -16,14 +23,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${base}/maple?auth=not_configured`);
   }
   const back = safeReturnPath(new URL(request.url).searchParams.get("return"));
-  const state = randomUUID();
+  const state = `${MAPLE_STATE_PREFIX}${randomUUID()}`;
   const res = NextResponse.redirect(authorizeUrl(state));
   res.cookies.set(STATE_COOKIE, JSON.stringify({ state, back }), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     maxAge: 600,
-    path: "/api/maple/auth",
+    path: STATE_COOKIE_PATH,
   });
   return res;
 }

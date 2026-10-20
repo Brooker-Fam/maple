@@ -6,9 +6,7 @@ It's a family side project: unlinked from the public site and `noindex`.
 
 ## Setup checklist (production)
 
-1. **Google sign-in redirect URI.** In Google Cloud Console → the OAuth client used for calendar/photos/birth → *Authorized redirect URIs*, add
-   `https://brooker.family/api/maple/auth/callback`.
-   Until then, sign in with the site admin username/password on the sign-in screen (you'll appear as "Admin"; rename yourself in Family).
+1. **Google sign-in: nothing to set up.** Maple reuses the OAuth client the calendar, photos and `/birth` already use, and signs in through `/birth`'s redirect URI (`/api/birth/auth/callback`), which is already registered. That callback hands any sign-in whose `state` starts with `maple.` to `handleMapleGoogleCallback` in `src/lib/maple/google-callback.ts`. The site admin username/password also works on the sign-in screen (you'll appear as "Admin"; rename yourself in Family).
 2. **Who can join.** The first Google account to sign in becomes the owner. To be explicit, set `MAPLE_ALLOWED_EMAILS` (comma-separated). If it's unset, `BIRTH_ALLOWED_EMAILS` is used. Owners can also invite by Google email or with a one-time link (no Google needed) from the Family tab.
 3. **Private photo storage (recommended).** Vercel → Storage → create a Blob store with **Private** access (e.g. `maple-private`). Copy its read-write token into a new env var `MAPLE_BLOB_READ_WRITE_TOKEN`. Don't connect it with the default `BLOB_*` names, or it will shadow the guest-photo store.
    Without it, photos go to the existing public store under `maple/…` with random names. They're still only ever served through the signed-in proxy (`/api/maple/photo`), but the underlying files aren't access-controlled.

@@ -12,18 +12,23 @@ import type { Member, Role } from "./types";
  * just who you are. What you can reach comes from maple_members, so nothing
  * secret ever travels in a URL.
  *
- * The cookie lives at path "/" (not /api/maple) because /oauth/authorize reads
- * it too: connecting Claude or ChatGPT to Maple signs in the same way.
+ * The cookie is set on /api/maple and /oauth/authorize (SESSION_PATHS): the
+ * consent page reads it too, so connecting Claude or ChatGPT to Maple signs in
+ * the same way.
  *
  * Fallback: the site admin login (ADMIN_USER/ADMIN_PASS) signs in as the
  * pseudo-member "admin", so the log works before Google is set up.
  *
- * Reuses GOOGLE_CLIENT_ID/SECRET. Add {BASE_URL}/api/maple/auth/callback to the
- * OAuth client's authorized redirect URIs.
+ * Reuses GOOGLE_CLIENT_ID/SECRET and the /birth sign-in's redirect URI, which
+ * is already registered with Google, so there's nothing to set up.
  */
 
 export const SESSION_COOKIE = "maple_session";
 export const STATE_COOKIE = "maple_oauth_state";
+/** Where Google sends people back, so where the state cookie must reach. */
+export const STATE_COOKIE_PATH = "/api/birth/auth/callback";
+/** Marks a sign-in as Maple's, so the shared callback hands it to Maple. */
+export const MAPLE_STATE_PREFIX = "maple.";
 const SESSION_DAYS = 180;
 export const ADMIN_ID = "admin";
 
@@ -37,8 +42,10 @@ export function isPasswordConfigured(): boolean {
   return !!(process.env.ADMIN_USER && process.env.ADMIN_PASS && process.env.GOOGLE_CLIENT_SECRET);
 }
 
+// Google only redirects to URIs registered on the OAuth client. The /birth
+// sign-in's callback already is, so Maple shares it (handleMapleGoogleCallback).
 function redirectUri(): string {
-  return `${getAppBaseUrl()}/api/maple/auth/callback`;
+  return `${getAppBaseUrl()}${STATE_COOKIE_PATH}`;
 }
 
 function client() {

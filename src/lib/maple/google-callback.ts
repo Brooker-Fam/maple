@@ -6,10 +6,9 @@ import {
   safeReturnPath,
   setSessionCookies,
   STATE_COOKIE,
+  STATE_COOKIE_PATH,
 } from "@/lib/maple/auth";
 import { captureServerException } from "@/lib/posthog-server";
-
-export const dynamic = "force-dynamic";
 
 function withAuthParam(base: string, path: string, value: string): string {
   const url = new URL(path, base);
@@ -18,7 +17,12 @@ function withAuthParam(base: string, path: string, value: string): string {
   return url.toString();
 }
 
-export async function GET(request: NextRequest) {
+/**
+ * Google's redirect back after Maple sign-in. It arrives at the /birth
+ * callback (the URI already registered with Google; see redirectUri in
+ * auth.ts), which hands it here when the state carries MAPLE_STATE_PREFIX.
+ */
+export async function handleMapleGoogleCallback(request: NextRequest): Promise<NextResponse> {
   const base = getAppBaseUrl();
   const { searchParams } = new URL(request.url);
 
@@ -37,7 +41,7 @@ export async function GET(request: NextRequest) {
 
   const fail = (why: string) => {
     const res = NextResponse.redirect(withAuthParam(base, back.startsWith("/maple") ? back : "/maple", why));
-    res.cookies.set(STATE_COOKIE, "", { path: "/api/maple/auth", maxAge: 0 });
+    res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
     return res;
   };
 
@@ -59,12 +63,12 @@ export async function GET(request: NextRequest) {
     const res = NextResponse.redirect(withAuthParam(base, back, "ok"));
     // res.cookies.* rewrites every Set-Cookie header, so it must run before
     // setSessionCookies appends the session's raw headers.
-    res.cookies.set(STATE_COOKIE, "", { path: "/api/maple/auth", maxAge: 0 });
+    res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
     setSessionCookies(res, member.email);
     return res;
   } catch (error) {
     console.error("Maple auth callback error:", error);
-    await captureServerException(error, { route: "GET /api/maple/auth/callback" });
+    await captureServerException(error, { route: "GET /api/birth/auth/callback (maple)" });
     return fail("failed");
   }
 }
