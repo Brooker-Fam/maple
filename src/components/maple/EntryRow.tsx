@@ -3,7 +3,7 @@
 import { describeEntry } from "@/lib/maple/describe";
 import { formatRelative, formatTime } from "@/lib/maple/time";
 import type { Entry } from "@/lib/maple/types";
-import { KindBadge } from "./icons";
+import { Icon, KindBadge } from "./icons";
 import { Avatar, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
@@ -52,7 +52,7 @@ export default function EntryRow({
         // eslint-disable-next-line @next/next/no-img-element
         <img src={photoUrl(entry.id, 0)} alt="" className="h-9 w-9 shrink-0 rounded-[10px] object-cover" loading="lazy" />
       ) : (
-        <KindBadge entry={entry} className={cx(entry.active && "animate-pulse")} />
+        <KindBadge entry={entry} className={cx(entry.active && "animate-pulse motion-reduce:animate-none [.maple-night_&]:animate-none")} />
       )}
       <span className="min-w-0 flex-1">
         <span className={cx(tone.body, "block truncate text-[15px] font-medium")}>{d.title}</span>
@@ -64,7 +64,11 @@ export default function EntryRow({
       </span>
       <span className="flex shrink-0 flex-col items-end gap-0.5">
         <span className={cx(tone.body, "text-sm tabular-nums")}>
-          {entry.id < 0 && <span className={cx(tone.faint, "mr-1 text-xs")} title="Saving…" aria-label="Not synced yet">⋯</span>}
+          {entry.id < 0 && (
+            <span title="Saving…" className="mr-1 inline-flex align-[-1px] text-mp-ink-3">
+              <Icon name="refresh-cw" size={12} label="Not synced yet" />
+            </span>
+          )}
           {formatTime(entry.started_at, tz)}
         </span>
         <span className={cx(tone.faint, "flex items-center gap-1 text-[11px]")}>

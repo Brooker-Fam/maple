@@ -6,7 +6,8 @@ import { ageInDays, curves, percentileFor, type Measure, type Percentile } from 
 import { dayKey, formatDayLabel } from "@/lib/maple/time";
 import { CM_PER_IN, G_PER_LB, formatLength, formatWeight } from "@/lib/maple/units";
 import type { Baby, Entry, EntryOf, UnitSystem } from "@/lib/maple/types";
-import { Button, Segmented, cx, tone } from "./ui";
+import { Icon } from "./icons";
+import { Button, EmptyState, Segmented, cx, tone } from "./ui";
 
 /**
  * Her measurements on the WHO girls' growth standards (3rd–97th percentile
@@ -44,12 +45,18 @@ const ORD: Record<number, string> = { 3: "3rd", 15: "15th", 50: "50th", 85: "85t
 /**
  * Validated against the card surfaces (≥ 3:1, chroma ≥ 0.10): gold for her,
  * sage washes for the WHO bands, which sit well below her marks in weight.
+ * The chrome (surface, grid, axis) is the mp-* tokens, so it follows dark
+ * mode and the night look; at night her gold dims a little and the bands and
+ * birth line turn amber, like the Patterns charts.
  */
 const VARS =
-  "[--g-her:#B78C24] [--g-surface:#FEFCF8] [--g-outer:rgba(92,122,74,0.10)] [--g-inner:rgba(92,122,74,0.20)] [--g-mid:#5C7A4A] [--g-grid:rgba(29,68,32,0.09)] [--g-axis:rgba(29,68,32,0.30)] [--g-birth:#8A6A1F] " +
-  "dark:[--g-her:#C9A04A] dark:[--g-surface:#112418] dark:[--g-outer:rgba(169,192,143,0.09)] dark:[--g-inner:rgba(169,192,143,0.18)] dark:[--g-mid:#A9C08F] dark:[--g-grid:rgba(245,237,223,0.08)] dark:[--g-axis:rgba(245,237,223,0.26)] dark:[--g-birth:#E0C27A]";
+  "[--g-surface:var(--mp-surface)] [--g-grid:var(--mp-line)] [--g-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] " +
+  "[--g-her:#B78C24] [--g-outer:rgba(92,122,74,0.10)] [--g-inner:rgba(92,122,74,0.20)] [--g-mid:#5C7A4A] [--g-birth:#8A6A1F] " +
+  "dark:[--g-her:#C9A04A] dark:[--g-outer:rgba(169,192,143,0.09)] dark:[--g-inner:rgba(169,192,143,0.18)] dark:[--g-mid:#A9C08F] dark:[--g-birth:#E0C27A] " +
+  "[.maple-night_&]:[--g-her:color-mix(in_srgb,#C9A04A_85%,#13170F)] [.maple-night_&]:[--g-outer:rgb(224_169_59/0.06)] [.maple-night_&]:[--g-inner:rgb(224_169_59/0.12)] " +
+  "[.maple-night_&]:[--g-mid:rgb(224_169_59/0.55)] [.maple-night_&]:[--g-birth:rgb(224_169_59/0.7)]";
 
-const AXIS_TEXT = "fill-[#5C6B57] text-[10px] tabular-nums dark:fill-[#B9B39C]";
+const AXIS_TEXT = "fill-mp-ink-3 text-[10px] tabular-nums";
 
 function ageLabel(d: number, birth: boolean): string {
   if (birth) return "at birth";
@@ -124,24 +131,29 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
 
   if (!bornAt) {
     return (
-      <div className={VARS}>
-        <p className={cx(tone.muted, "py-6 text-center text-sm")}>
-          🌱 Once she&apos;s here, her measurements will sit on the WHO growth curves.
-        </p>
+      <div className={cx(VARS, "px-4 py-8 text-center")}>
+        <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-3">
+          <Icon name="sprout" size={24} />
+        </span>
+        <p className={cx(tone.muted, "mx-auto max-w-[20rem] text-[15px]")}>Once she&apos;s here, her measurements will sit on the WHO growth curves.</p>
       </div>
     );
   }
 
   if (!hasAny) {
     return (
-      <div className={cx(VARS, "py-6 text-center")}>
-        <p className={cx(tone.heading, "text-lg")}>No weigh-ins yet</p>
-        <p className={cx(tone.muted, "mt-1 text-sm")}>Add her birth stats or numbers from the next checkup.</p>
-        {onAdd && (
-          <Button className="mt-3" variant="soft" onClick={onAdd}>
-            📏 Add a measurement
-          </Button>
-        )}
+      <div className={VARS}>
+        <EmptyState icon="ruler" title="No weigh-ins yet">
+          Add her birth stats or numbers from the next checkup.
+          {onAdd && (
+            <span className="mt-4 block">
+              <Button variant="soft" onClick={onAdd}>
+                <Icon name="plus" size={18} />
+                Add a measurement
+              </Button>
+            </span>
+          )}
+        </EmptyState>
       </div>
     );
   }
@@ -164,16 +176,17 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
           <PointsTable measure={measure} points={points} units={units} birthWeight={baby.birth_weight_g} tz={baby.timezone} todayKey={todayKey} onEdit={onEdit} />
         </>
       ) : (
-        <div className="py-6 text-center">
-          <p className={cx(tone.muted, "text-sm")}>No {NOUN[measure]} measurements yet.</p>
+        <div className="py-8 text-center">
+          <p className={cx(tone.muted, "text-[15px]")}>No {NOUN[measure]} measurements yet.</p>
           {onAdd && (
             <Button className="mt-3" variant="soft" size="sm" onClick={onAdd}>
-              📏 Add one
+              <Icon name="plus" size={16} />
+              Add one
             </Button>
           )}
         </div>
       )}
-      <div className={cx(tone.muted, "mt-3 space-y-1.5 text-xs leading-snug")}>
+      <div className={cx(tone.muted, "mt-4 space-y-2 text-[13px] leading-snug")}>
         <p>
           Shaded bands are the WHO growth standards for girls: the wide band spans the 3rd to 97th percentile, the deeper, narrower one
           the 15th to 85th, and the dashed line is the 50th. Percentiles describe where she sits among healthy girls her age; they aren&apos;t
@@ -257,76 +270,115 @@ function Plot({ measure, points, units, birthValue }: { measure: Measure; points
     .join("; ")}`;
 
   return (
-    <div ref={setRefs} className="relative" style={{ height: H_ }}>
-      {W > 0 && (
-        <svg
-          width={W}
-          height={H_}
-          role="img"
-          aria-label={ariaLabel}
-          tabIndex={0}
-          className="block touch-pan-y rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#C49A3C]/60"
-          onFocus={() => setActive((a) => a ?? points.length - 1)}
-          onBlur={() => setActive(null)}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowLeft") setActive((a) => Math.max(0, (a ?? points.length) - 1));
-            else if (e.key === "ArrowRight") setActive((a) => Math.min(points.length - 1, (a ?? -1) + 1));
-            else if (e.key === "Escape") setActive(null);
-            else return;
-            e.preventDefault();
-          }}
-        >
-          {yTicks.map((v) => {
-            const yy = y(u.from(v));
-            return (
-              <g key={v}>
-                <line x1={LEFT} x2={W - RIGHT} y1={yy} y2={yy} stroke="var(--g-grid)" />
-                <text x={LEFT - 5} y={yy} dy="0.32em" textAnchor="end" className={AXIS_TEXT}>
-                  {u.label(v)}
+    <div>
+      <p className={cx(tone.muted, "mb-1 flex gap-3.5 px-1 text-xs font-medium")} aria-hidden>
+        <span className="inline-flex items-center gap-1.5">
+          <svg width="10" height="10">
+            <circle cx="5" cy="5" r="4" fill="var(--g-her)" />
+          </svg>
+          At the doctor&apos;s
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <svg width="10" height="10">
+            <circle cx="5" cy="5" r="3.2" fill="none" stroke="var(--g-her)" strokeWidth="1.6" />
+          </svg>
+          At home
+        </span>
+      </p>
+      <div ref={setRefs} className="relative" style={{ height: H_ }}>
+        {W > 0 && (
+          <svg
+            width={W}
+            height={H_}
+            role="img"
+            aria-label={ariaLabel}
+            tabIndex={0}
+            className="block touch-pan-y rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60"
+            onFocus={() => setActive((a) => a ?? points.length - 1)}
+            onBlur={() => setActive(null)}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowLeft") setActive((a) => Math.max(0, (a ?? points.length) - 1));
+              else if (e.key === "ArrowRight") setActive((a) => Math.min(points.length - 1, (a ?? -1) + 1));
+              else if (e.key === "Escape") setActive(null);
+              else return;
+              e.preventDefault();
+            }}
+          >
+            {yTicks.map((v) => {
+              const yy = y(u.from(v));
+              return (
+                <g key={v}>
+                  <line x1={LEFT} x2={W - RIGHT} y1={yy} y2={yy} stroke="var(--g-grid)" />
+                  <text x={LEFT - 5} y={yy} dy="0.32em" textAnchor="end" className={AXIS_TEXT}>
+                    {u.label(v)}
+                  </text>
+                </g>
+              );
+            })}
+            {xTicks.map((t) => (
+              <g key={t.d}>
+                <line x1={x(t.d)} x2={x(t.d)} y1={TOP} y2={H_ - BOTTOM} stroke="var(--g-grid)" />
+                <text x={x(t.d)} y={H_ - 6} textAnchor={t.d === 0 ? "start" : "middle"} className={AXIS_TEXT}>
+                  {t.label}
                 </text>
               </g>
-            );
-          })}
-          {xTicks.map((t) => (
-            <g key={t.d}>
-              <line x1={x(t.d)} x2={x(t.d)} y1={TOP} y2={H_ - BOTTOM} stroke="var(--g-grid)" />
-              <text x={x(t.d)} y={H_ - 6} textAnchor={t.d === 0 ? "start" : "middle"} className={AXIS_TEXT}>
-                {t.label}
+            ))}
+            <line x1={LEFT} x2={W - RIGHT} y1={H_ - BOTTOM} y2={H_ - BOTTOM} stroke="var(--g-axis)" />
+
+            <path d={area(bands[4].points, bands[0].points)} fill="var(--g-outer)" />
+            <path d={area(bands[3].points, bands[1].points)} fill="var(--g-inner)" />
+            <path d={line(bands[2].points)} fill="none" stroke="var(--g-mid)" strokeWidth={1.25} strokeDasharray="4 4" opacity={0.75} />
+            {edge.map((e) => (
+              <text key={e.p} x={W - RIGHT + 4} y={e.y} dy="0.32em" className={AXIS_TEXT}>
+                {ORD[e.p]}
               </text>
-            </g>
-          ))}
-          <line x1={LEFT} x2={W - RIGHT} y1={H_ - BOTTOM} y2={H_ - BOTTOM} stroke="var(--g-axis)" />
+            ))}
 
-          <path d={area(bands[4].points, bands[0].points)} fill="var(--g-outer)" />
-          <path d={area(bands[3].points, bands[1].points)} fill="var(--g-inner)" />
-          <path d={line(bands[2].points)} fill="none" stroke="var(--g-mid)" strokeWidth={1.25} strokeDasharray="4 4" opacity={0.75} />
-          {edge.map((e) => (
-            <text key={e.p} x={W - RIGHT + 4} y={e.y} dy="0.32em" className={AXIS_TEXT}>
-              {ORD[e.p]}
-            </text>
-          ))}
+            {measure === "weight" && birthValue != null && (
+              <g>
+                <line x1={LEFT} x2={W - RIGHT} y1={y(birthValue)} y2={y(birthValue)} stroke="var(--g-birth)" strokeWidth={1} strokeDasharray="3 3" opacity={0.7} />
+                <text x={W - RIGHT - 4} y={y(birthValue) + 12} textAnchor="end" fill="var(--g-birth)" className="text-[10px] font-semibold">
+                  birth weight
+                </text>
+              </g>
+            )}
 
-          {measure === "weight" && birthValue != null && (
-            <g>
-              <line x1={LEFT} x2={W - RIGHT} y1={y(birthValue)} y2={y(birthValue)} stroke="var(--g-birth)" strokeWidth={1} strokeDasharray="3 3" opacity={0.7} />
-              <text x={W - RIGHT - 4} y={y(birthValue) + 12} textAnchor="end" className="fill-[#7A5A12] text-[10px] font-semibold dark:fill-[#E0C27A]">
-                birth weight
-              </text>
-            </g>
-          )}
-
-          {her.length > 1 && <path d={line(her)} fill="none" stroke="var(--g-her)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
-          {points.map((p, i) => {
-            const cx = x(p.ageDays);
-            const cy = y(p.value);
-            const hollow = p.where === "home";
-            if (p.pct?.implausible) {
+            {her.length > 1 && <path d={line(her)} fill="none" stroke="var(--g-her)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
+            {points.map((p, i) => {
+              const cx = x(p.ageDays);
+              const cy = y(p.value);
+              const hollow = p.where === "home";
+              if (p.pct?.implausible) {
+                return (
+                  <g key={p.key}>
+                    <circle cx={cx} cy={cy} r={6} fill="var(--g-surface)" stroke="var(--g-birth)" strokeWidth={1.5} strokeDasharray="2 2" />
+                    <text x={cx} y={cy} dy="0.35em" textAnchor="middle" fill="var(--g-birth)" className="text-[9px] font-bold">
+                      ?
+                    </text>
+                    <circle
+                      cx={cx}
+                      cy={cy}
+                      r={14}
+                      fill="transparent"
+                      onPointerEnter={(e) => e.pointerType === "mouse" && setActive(i)}
+                      onPointerLeave={(e) => e.pointerType === "mouse" && setActive(null)}
+                      onPointerDown={() => setActive((a) => (a === i ? null : i))}
+                    />
+                  </g>
+                );
+              }
               return (
                 <g key={p.key}>
-                  <circle cx={cx} cy={cy} r={6} fill="var(--g-surface)" stroke="var(--g-birth)" strokeWidth={1.5} strokeDasharray="2 2" />
-                  <text x={cx} y={cy} dy="0.35em" textAnchor="middle" className="fill-[#7A5A12] text-[9px] font-bold dark:fill-[#E0C27A]">
-                    ?
-                  </text>
+                  <circle cx={cx} cy={cy} r={6.5} fill="var(--g-surface)" />
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={hollow ? 3.75 : 4.5}
+                    fill={hollow ? "var(--g-surface)" : "var(--g-her)"}
+                    stroke={hollow ? "var(--g-her)" : "none"}
+                    strokeWidth={hollow ? 2 : 0}
+                  />
+                  {active === i && <circle cx={cx} cy={cy} r={8.5} fill="none" stroke="var(--g-her)" strokeWidth={1.5} />}
                   <circle
                     cx={cx}
                     cy={cy}
@@ -338,67 +390,30 @@ function Plot({ measure, points, units, birthValue }: { measure: Measure; points
                   />
                 </g>
               );
-            }
-            return (
-              <g key={p.key}>
-                <circle cx={cx} cy={cy} r={6.5} fill="var(--g-surface)" />
-                <circle
-                  cx={cx}
-                  cy={cy}
-                  r={hollow ? 3.75 : 4.5}
-                  fill={hollow ? "var(--g-surface)" : "var(--g-her)"}
-                  stroke={hollow ? "var(--g-her)" : "none"}
-                  strokeWidth={hollow ? 2 : 0}
-                />
-                {active === i && <circle cx={cx} cy={cy} r={8.5} fill="none" stroke="var(--g-her)" strokeWidth={1.5} />}
-                <circle
-                  cx={cx}
-                  cy={cy}
-                  r={14}
-                  fill="transparent"
-                  onPointerEnter={(e) => e.pointerType === "mouse" && setActive(i)}
-                  onPointerLeave={(e) => e.pointerType === "mouse" && setActive(null)}
-                  onPointerDown={() => setActive((a) => (a === i ? null : i))}
-                />
-              </g>
-            );
-          })}
-        </svg>
-      )}
-      {tip && W > 0 && (
-        <div
-          role="status"
-          className="pointer-events-none absolute z-20 w-max max-w-[230px] rounded-xl bg-[#1D4420] px-3 py-2 text-xs text-[#FDF8F0] shadow-lg dark:bg-[#F5EDDF] dark:text-[#14210F]"
-          style={{
-            left: tipX,
-            bottom: H_ - y(tip.value) + 12,
-            transform: tipX < 100 ? "translateX(-12px)" : tipX > W - 100 ? "translateX(calc(-100% + 12px))" : "translateX(-50%)",
-          }}
-        >
-          <strong className="block text-sm">{formatValue(measure, tip.value, units)}</strong>
-          <span className="block opacity-90">
-            {ageLabel(tip.ageDays, tip.where === "birth")}
-            {tip.where === "doctor" ? (measure === "weight" ? " · doctor's scale" : " · at the doctor's") : ""}
-            {tip.where === "home" ? (measure === "weight" ? " · home scale" : " · measured at home") : ""}
-          </span>
-          {tip.pct && !tip.pct.implausible && <span className="block opacity-90">about the {tip.pct.label} percentile</span>}
-          {tip.pct?.implausible && <span className="block opacity-90">far outside the usual range: worth a double-check</span>}
-        </div>
-      )}
-      <p className={cx(tone.muted, "pointer-events-none absolute top-0 right-0 flex gap-3 text-[10px] font-medium")} aria-hidden>
-        <span className="inline-flex items-center gap-1">
-          <svg width="10" height="10">
-            <circle cx="5" cy="5" r="4" fill="var(--g-her)" />
+            })}
           </svg>
-          doctor
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <svg width="10" height="10">
-            <circle cx="5" cy="5" r="3.2" fill="none" stroke="var(--g-her)" strokeWidth="1.6" />
-          </svg>
-          home
-        </span>
-      </p>
+        )}
+        {tip && W > 0 && (
+          <div
+            role="status"
+            className="pointer-events-none absolute z-20 w-max max-w-[230px] rounded-xl bg-mp-toast px-3 py-2 text-xs text-mp-on-toast shadow-[0_8px_24px_rgba(0,0,0,0.18)] [.maple-night_&]:ring-1 [.maple-night_&]:ring-mp-line"
+            style={{
+              left: tipX,
+              bottom: H_ - y(tip.value) + 12,
+              transform: tipX < 100 ? "translateX(-12px)" : tipX > W - 100 ? "translateX(calc(-100% + 12px))" : "translateX(-50%)",
+            }}
+          >
+            <strong className="block text-sm font-semibold tabular-nums">{formatValue(measure, tip.value, units)}</strong>
+            <span className="block opacity-90">
+              {ageLabel(tip.ageDays, tip.where === "birth")}
+              {tip.where === "doctor" ? (measure === "weight" ? " · doctor's scale" : " · at the doctor's") : ""}
+              {tip.where === "home" ? (measure === "weight" ? " · home scale" : " · measured at home") : ""}
+            </span>
+            {tip.pct && !tip.pct.implausible && <span className="block opacity-90">about the {tip.pct.label} percentile</span>}
+            {tip.pct?.implausible && <span className="block opacity-90">far outside the usual range: worth a double-check</span>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -421,12 +436,12 @@ function PointsTable({
   onEdit?: (e: Entry) => void;
 }) {
   const rows = [...points].reverse();
-  const th = "px-1.5 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-[#5C7A4A] dark:text-[#A9C08F]";
+  const th = cx(tone.faint, "px-1.5 pt-1 pb-2 text-left text-xs font-medium");
   return (
-    <table className="mt-3 w-full text-sm">
+    <table className="mt-4 w-full text-sm">
       <caption className="sr-only">Her {NOUN[measure]} measurements</caption>
       <thead>
-        <tr className="border-b border-[#1D4420]/10 dark:border-[#F5EDDF]/10">
+        <tr className="border-b border-mp-line">
           <th scope="col" className={th}>
             When
           </th>
@@ -453,9 +468,9 @@ function PointsTable({
             <tr
               key={p.key}
               onClick={editable ? () => onEdit!(p.entry!) : undefined}
-              className={cx("border-b border-[#1D4420]/5 align-top last:border-0 dark:border-[#F5EDDF]/5", editable && "cursor-pointer hover:bg-[#1D4420]/[0.03] dark:hover:bg-[#F5EDDF]/[0.04]")}
+              className={cx("border-b border-mp-line align-top last:border-0", editable && "cursor-pointer transition hover:bg-mp-ink/[0.03] active:bg-mp-ink/[0.05]")}
             >
-              <th scope="row" className={cx(tone.body, "px-1.5 py-2 text-left font-semibold")}>
+              <th scope="row" className={cx(tone.body, "px-1.5 py-2.5 text-left font-medium")}>
                 {editable ? (
                   <button
                     type="button"
@@ -470,27 +485,29 @@ function PointsTable({
                 ) : (
                   when
                 )}
-                <span className={cx(tone.muted, "block text-[11px] font-normal")}>
+                <span className={cx(tone.faint, "block text-xs font-normal")}>
                   {ageLabel(p.ageDays, p.where === "birth")}
                   {p.where === "home" ? " · home" : p.where === "doctor" ? " · doctor" : ""}
                 </span>
               </th>
-              <td className={cx(tone.body, "px-1.5 py-2 whitespace-nowrap tabular-nums")}>{formatValue(measure, p.value, units)}</td>
-              <td className={cx(tone.body, "px-1.5 py-2 tabular-nums")}>
+              <td className={cx(tone.body, "px-1.5 py-2.5 whitespace-nowrap tabular-nums")}>{formatValue(measure, p.value, units)}</td>
+              <td className={cx(tone.body, "px-1.5 py-2.5 tabular-nums")}>
                 {p.pct?.implausible ? (
                   <span
-                    className="inline-block rounded-full bg-[#C49A3C]/20 px-2 py-0.5 text-[11px] font-semibold text-[#6B4A10] dark:text-[#E8CF9A]"
+                    className="inline-flex items-start gap-1 rounded-md bg-mp-danger/10 px-1.5 py-0.5 text-xs leading-snug font-semibold text-mp-danger"
                     title="Far outside the usual range, which often means a typo or a lb/kg mix-up."
                   >
-                    ⚠️ double-check
+                    <Icon name="circle-alert" size={13} strokeWidth={2} className="mt-px shrink-0" />
+                    {/* Wraps at the hyphen on a phone, so the row never pushes the table wider than the card. */}
+                    <span>Double-check</span>
                   </span>
                 ) : (
-                  p.pct?.label ?? "—"
+                  p.pct?.label ?? <span className={tone.faint}>—</span>
                 )}
               </td>
               {measure === "weight" && (
-                <td className={cx(tone.body, "px-1.5 py-2 text-right tabular-nums")}>
-                  {change == null ? "—" : `${change > 0 ? "+" : change < 0 ? "−" : "±"}${Math.abs(change)}%`}
+                <td className={cx(tone.body, "px-1.5 py-2.5 text-right tabular-nums")}>
+                  {change == null ? <span className={tone.faint}>—</span> : `${change > 0 ? "+" : change < 0 ? "−" : "±"}${Math.abs(change)}%`}
                 </td>
               )}
             </tr>

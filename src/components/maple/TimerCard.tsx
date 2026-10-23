@@ -6,10 +6,10 @@ import { tick } from "@/components/atlas/haptics";
 import { feedTotals, openSegment, other, suggestNextSide } from "@/lib/maple/feed";
 import { addDays, dayKey, DEFAULT_TZ, formatClock, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Entry, FeedData, Side, TimerKind } from "@/lib/maple/types";
+import { Icon, KindBadge, type IconName } from "./icons";
 import Lantern from "./Lantern";
-import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
-import { cx, tone } from "./ui";
+import { Avatar, Button, Chip, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -28,8 +28,6 @@ export const SIDE_COLOR: Record<Side, string> = { L: "#B5452B", R: "#E0A93B" };
 export const SWITCH_STYLE: Record<Side, { bg: string; fg: string }> = { L: { bg: "#B5452B", fg: "#FFFFFF" }, R: { bg: "#E0A93B", fg: "#2A1A08" } };
 
 const KIND_TITLE: Record<TimerKind, string> = { feed: "Nursing", sleep: "Asleep", tummy: "Tummy time", pump: "Pumping" };
-const KIND_ICON: Record<TimerKind, string> = { feed: "🤱", sleep: "🌙", tummy: "🐢", pump: "🫙" };
-const KIND_ACCENT: Record<TimerKind, string> = { feed: "#D9772B", sleep: "#8E7CB0", tummy: "#6B8448", pump: "#C98E78" };
 
 /** UX defaults (not health rules): when a running timer asks "still going?". Family settings can override. */
 const CHECK_AFTER_MIN: Record<TimerKind, number> = { feed: 60, sleep: 300, tummy: 30, pump: 60 };
@@ -38,7 +36,10 @@ const SNOOZE_KEY = "maple-timer-snooze";
 
 const mins = (sec: number) => Math.max(0, Math.round(sec / 60));
 
-/** "Nursed 18m (L 11 · R 7) · Right next time" and friends, for the Done toast. */
+/**
+ * "Nursed 18m (L 11 · R 7) · Right next time" and friends, for the Done toast.
+ * The emoji is kept for callers that still want one; the app's toasts don't show it.
+ */
 export function doneText(e: Entry, now: Date): { text: string; emoji: string } {
   const dur = e.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / 1000 : 0;
   if (e.kind === "feed" && e.data.method === "breast") {
@@ -111,7 +112,6 @@ export function useTimerActions() {
       if (!saved || saved.active || (saved.updated_by && saved.updated_by !== me)) return saved;
       const d = doneText(saved, now());
       toast(at ? `${d.text} · ended ${formatTime(saved.ended_at ?? at, tz)}` : d.text, {
-        emoji: d.emoji,
         undo: () => void reopen(saved),
         actions: [{ label: "Edit", onClick: () => open({ kind: saved.kind, entry: saved }) }],
       });
@@ -125,7 +125,6 @@ export function useTimerActions() {
       const saved = await timer({ action: "adjust", id: e.id, at: at.toISOString() });
       if (saved?.active) {
         toast(`Start moved to ${formatTime(saved.started_at, tz)}`, {
-          emoji: "🕰️",
           undo: () => void timer({ action: "adjust", id: e.id, at: e.started_at }),
         });
       }
@@ -135,11 +134,10 @@ export function useTimerActions() {
 
   /** Right after a start: one tap if she'd actually started a few minutes earlier. */
   const offerEarlier = useCallback(
-    (e: Entry, what: string, emoji: string) => {
+    (e: Entry, what: string) => {
       if (!e.active || e.id < 0) return;
       const from = Date.parse(e.started_at);
       toast(`${what} · started earlier?`, {
-        emoji,
         actions: [5, 10].map((m) => ({ label: `${m} min ago`, onClick: () => void adjust(e, new Date(from - m * 60_000)) })),
       });
     },
@@ -154,14 +152,13 @@ export function useTimerActions() {
         const s = await timer({ action: "stop", id: nap.id });
         if (s && !s.active && s.ended_at) {
           toast(`Nap ended (${formatDuration((Date.parse(s.ended_at) - Date.parse(s.started_at)) / 1000)})`, {
-            emoji: "😴",
             undo: () => void reopen(s),
           });
         }
       }
       const wasRunning = !!running("feed");
       const s = await timer({ action: "start", kind: "feed", side });
-      if (s && !wasRunning) offerEarlier(s, `${SIDE_NAME[side]} side`, "🤱");
+      if (s && !wasRunning) offerEarlier(s, `${SIDE_NAME[side]} side`);
       return s;
     },
     [offerEarlier, reopen, running, timer, toast]
@@ -175,14 +172,13 @@ export function useTimerActions() {
       const s = await timer({ action: "start", kind });
       if (feed && feed.id > 0 && s) {
         toast("Stop the feed too?", {
-          emoji: "🌙",
           actions: [
             { label: "Yes, she fell asleep", onClick: () => void stop(feed, new Date(s.started_at)) },
             { label: "Keep both", onClick: () => {} },
           ],
         });
       } else if (s && !wasRunning) {
-        offerEarlier(s, KIND_TITLE[kind], KIND_ICON[kind]);
+        offerEarlier(s, KIND_TITLE[kind]);
       }
       return s;
     },
@@ -202,7 +198,6 @@ export function useTimerActions() {
       }
       const d = doneText(stopped, now());
       toast(`${d.text} · sleep timer on`, {
-        emoji: "🌙",
         undo: async () => {
           if (s) await timer({ action: "discard", id: s.id });
           await reopen(stopped);
@@ -234,13 +229,11 @@ export function useTimerActions() {
     [timer]
   );
 
-
   const discard = useCallback(
     async (e: Entry) => {
       const gone = await timer({ action: "discard", id: e.id });
       if (!gone) return;
       toast(`${KIND_TITLE[e.kind as TimerKind] ?? "Timer"} discarded`, {
-        emoji: "🍂",
         // A discarded timer comes back running (or stopped, with its own toast,
         // if another one started meanwhile), so there's nothing to reopen.
         undo: () => void restore(e.id),
@@ -283,11 +276,25 @@ export function timerNumbers(e: Entry, now: Date) {
   return { elapsed: wallSec, wallSec, left: 0, right: 0, side: null as Side | null, paused: false, pausedSec: 0, lastSegStart: Date.parse(e.started_at) };
 }
 
+/** A side's letter on a dot of its color: which breast, at a glance. */
+function SideMark({ side, size = 32 }: { side: Side; size?: number }) {
+  return (
+    <span
+      aria-hidden
+      className="mp-kind-fill inline-flex shrink-0 items-center justify-center rounded-full font-bold"
+      style={{ width: size, height: size, fontSize: size * 0.42, backgroundColor: SIDE_COLOR[side], color: SWITCH_STYLE[side].fg }}
+    >
+      {side}
+    </span>
+  );
+}
+
+const ICON_BTN = "flex h-11 w-11 items-center justify-center rounded-full text-mp-ink-2 transition active:scale-95 disabled:opacity-40";
+
 export default function TimerCard({ entry }: { entry: Entry }) {
   const { state, memberName, member, isNight, readOnly } = useMaple();
   const now = useNow(1000);
   const actions = useTimerActions();
-  const night = useNightActive();
   // Viewers just watch the clock. And until the server answers a start, the
   // timer has a temporary id the API can't act on, so its controls wait.
   const pending = entry.id < 0;
@@ -296,7 +303,6 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   const kind = entry.kind as TimerKind;
   const n = timerNumbers(entry, now);
   const isFeed = kind === "feed";
-  const accent = isFeed ? SIDE_COLOR[n.side ?? "L"] : KIND_ACCENT[kind];
   const [menu, setMenu] = useState<null | "menu" | "adjust">(null);
   const [lantern, setLantern] = useState(false);
   const [snoozes, setSnoozes] = useState<Record<string, number>>({});
@@ -327,6 +333,10 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   const target = n.side ? other(n.side) : "L";
   const title = isFeed ? `Nursing · ${SIDE_NAME[n.side ?? "L"]}` : KIND_TITLE[kind];
   const canLantern = kind === "feed" || kind === "sleep";
+  // The dock repeats the feed and sleep controls (Switch, Resume, Done, Woke
+  // up) as its bright buttons, so here they stay quiet: one loud Done on
+  // screen, not two. Tummy time and pumping have only this card's Done.
+  const mirrored = kind === "feed" || kind === "sleep";
 
   return (
     <motion.section
@@ -335,38 +345,22 @@ export default function TimerCard({ entry }: { entry: Entry }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97 }}
       aria-label={`${title} timer`}
-      className={cx(tone.card, "relative overflow-hidden p-4 [.maple-night_&]:border-[#E0A93B]/10 [.maple-night_&]:bg-[#11140F]")}
+      className={cx(tone.card, "p-4")}
     >
-      <span aria-hidden className="absolute inset-y-0 left-0 w-1.5 [.maple-night_&]:opacity-50" style={{ backgroundColor: accent }} />
-      <div className="flex items-start justify-between gap-2 pl-1">
-        <div className="min-w-0">
-          <p className={cx(tone.label, "flex items-center gap-1.5 [.maple-night_&]:text-[#E0A93B]/70")}>
-            <span aria-hidden className="text-base leading-none">
-              {KIND_ICON[kind]}
-            </span>
-            {title}
-            {isFeed && (
-              <span
-                aria-hidden
-                className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold text-white [.maple-night_&]:opacity-60"
-                style={{ backgroundColor: SIDE_COLOR[n.side ?? "L"] }}
-              >
-                {n.side}
-              </span>
-            )}
-          </p>
-        </div>
+      <div className="flex items-center gap-3">
+        {isFeed ? <SideMark side={n.side ?? "L"} /> : <KindBadge kind={kind} size={32} />}
+        <p className="min-w-0 flex-1 truncate text-[15px] font-semibold text-mp-ink">{title}</p>
         {controls && (
-          <div className="-mt-1.5 -mr-1.5 flex shrink-0 items-center">
+          <div className="-my-2 -mr-2 flex shrink-0 items-center">
             {canLantern && (
               <button
                 type="button"
                 disabled={pending}
                 onClick={() => setLantern(true)}
                 aria-label="Lantern: dim full-screen timer that keeps the screen on"
-                className="flex h-11 w-11 items-center justify-center rounded-full text-xl transition hover:bg-[#1D4420]/5 active:scale-95 disabled:opacity-40 dark:hover:bg-[#F5EDDF]/10"
+                className={ICON_BTN}
               >
-                🏮
+                <Icon name="lamp" size={21} />
               </button>
             )}
             <button
@@ -375,13 +369,9 @@ export default function TimerCard({ entry }: { entry: Entry }) {
               onClick={() => setMenu((m) => (m ? null : "menu"))}
               aria-expanded={!!menu}
               aria-label="More timer options"
-              className={cx(
-                "flex h-11 w-11 items-center justify-center rounded-full text-xl font-bold tracking-tight transition active:scale-95 disabled:opacity-40",
-                menu ? "bg-[#1D4420]/10 dark:bg-[#F5EDDF]/15" : "hover:bg-[#1D4420]/5 dark:hover:bg-[#F5EDDF]/10",
-                tone.body
-              )}
+              className={cx(ICON_BTN, menu && "bg-mp-sunken text-mp-ink")}
             >
-              ⋯
+              <Icon name="ellipsis" size={22} strokeWidth={2.25} />
             </button>
           </div>
         )}
@@ -395,46 +385,44 @@ export default function TimerCard({ entry }: { entry: Entry }) {
         <ForgottenPrompt entry={entry} n={n} now={now} tz={tz} ending={ending} setEnding={setEnding} onSnooze={snooze} actions={actions} />
       ) : (
         <>
-          <div className={cx("pl-1", controls ? "mt-1" : "mt-3")}>
-            <p
-              className={cx(
-                "font-[family-name:var(--font-display)] text-[48px] leading-none font-semibold tracking-tight lining-nums tabular-nums transition-opacity",
-                "text-[#1D4420] dark:text-[#F5EDDF] [.maple-night_&]:text-[#E0A93B]/85",
-                n.paused && "opacity-50"
+          <div className="mt-3">
+            <div className="flex items-end justify-between gap-3">
+              <p
+                className={cx(
+                  "text-[56px] leading-none font-semibold tracking-[-0.03em] text-mp-ink tabular-nums transition-opacity",
+                  // The one live number on screen gets a soft amber glow at night (never by day).
+                  n.paused ? "opacity-45" : "[.maple-night_&]:[text-shadow:0_0_22px_rgb(224_169_59/0.3)]"
+                )}
+              >
+                {formatClock(n.elapsed)}
+              </p>
+              {isFeed && !n.paused && controls && (
+                // Pause is secondary: most feeds just switch and finish.
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void actions.pause(entry)}
+                  className="-mr-2 mb-0.5 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
+                >
+                  <Icon name="pause" size={15} />
+                  Pause
+                </button>
               )}
-            >
-              {formatClock(n.elapsed)}
-            </p>
+            </div>
             {n.paused && (
-              <p className="mt-1 text-sm font-semibold text-[#9A6B12] tabular-nums dark:text-[#E0C27A] [.maple-night_&]:text-[#E0A93B]/70">
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-semibold text-mp-ink-2 tabular-nums">
+                <Icon name="pause" size={13} />
                 Paused {formatClock(n.pausedSec)}
               </p>
             )}
             {isFeed && (
-              <div className="mt-1.5 flex items-center justify-between gap-2">
-                <p className={cx(tone.body, "text-[15px] tabular-nums [.maple-night_&]:text-[#E0A93B]/70")}>
-                  <span className={cx(n.side === "L" && !n.paused ? "font-bold" : "opacity-75")}>L {formatClock(n.left)}</span>
-                  <span className="mx-1.5 opacity-50">·</span>
-                  <span className={cx(n.side === "R" && !n.paused ? "font-bold" : "opacity-75")}>R {formatClock(n.right)}</span>
-                </p>
-                {!n.paused && controls && (
-                  // Pause is secondary: most feeds just switch and finish.
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => void actions.pause(entry)}
-                    className={cx(tone.muted, "-my-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-3 text-sm font-semibold hover:bg-[#1D4420]/5 disabled:opacity-40 dark:hover:bg-[#F5EDDF]/10")}
-                  >
-                    <span aria-hidden className="inline-flex gap-[3px]">
-                      <i className="h-3 w-[3px] rounded-sm bg-current" />
-                      <i className="h-3 w-[3px] rounded-sm bg-current" />
-                    </span>
-                    Pause
-                  </button>
-                )}
-              </div>
+              <p className="mt-2 text-[15px] tabular-nums">
+                <span className={n.side === "L" && !n.paused ? "font-semibold text-mp-ink" : "text-mp-ink-2"}>L {formatClock(n.left)}</span>
+                <span className="mx-2 text-mp-ink-3">·</span>
+                <span className={n.side === "R" && !n.paused ? "font-semibold text-mp-ink" : "text-mp-ink-2"}>R {formatClock(n.right)}</span>
+              </p>
             )}
-            <p className={cx(tone.muted, "mt-1 flex items-center gap-1 text-[13px] [.maple-night_&]:text-[#E0A93B]/55")}>
+            <p className="mt-1 flex flex-wrap items-center gap-x-1 text-[13px] text-mp-ink-2">
               {controls && !pending ? (
                 // Tap to fix the start ("she'd started five minutes before I tapped").
                 <button
@@ -442,79 +430,50 @@ export default function TimerCard({ entry }: { entry: Entry }) {
                   onClick={() => setMenu((m) => (m === "adjust" ? null : "adjust"))}
                   aria-expanded={menu === "adjust"}
                   aria-label={`Started ${formatTime(entry.started_at, tz)}. Change the start time`}
-                  className="-my-2 -ml-1.5 inline-flex min-h-[44px] items-center gap-1 rounded-full px-1.5 underline decoration-dotted underline-offset-4 hover:bg-[#1D4420]/5 dark:hover:bg-[#F5EDDF]/10"
+                  className="-my-3 -ml-2 inline-flex min-h-[44px] items-center gap-1 rounded-lg pr-1 pl-2 active:bg-mp-ink/5"
                 >
                   since {formatTime(entry.started_at, tz)}
-                  <span aria-hidden className="text-[11px] no-underline">
-                    ✎
-                  </span>
+                  <Icon name="pencil" size={12} className="text-mp-ink-3" />
                 </button>
               ) : (
                 <>since {formatTime(entry.started_at, tz)}</>
-              )}{" "}
-              · {startedBy}
-              {who?.emoji && <span aria-hidden>{who.emoji}</span>}
-              {pending && <span className="ml-1 italic opacity-80">· starting…</span>}
+              )}
+              <span aria-hidden>·</span>
+              <span>{startedBy}</span>
+              {who?.emoji && <Avatar member={who} size={16} />}
+              {pending && <span className="text-mp-ink-3">· starting…</span>}
             </p>
           </div>
 
           {controls && (
             <fieldset disabled={pending} className={cx("mt-4 flex min-w-0 gap-2 transition-opacity", pending && "opacity-50")}>
               {isFeed && !n.paused && (
-                <button
-                  type="button"
-                  onClick={() => void actions.switchSide(entry, target)}
-                  className="flex min-h-[52px] flex-[2] items-center justify-center gap-2 rounded-2xl px-3 text-[15px] font-semibold whitespace-nowrap shadow-sm transition active:scale-[0.97]"
-                  style={
-                    night
-                      ? { backgroundColor: `${SWITCH_STYLE[target].bg}40`, color: "#E8A23F" }
-                      : { backgroundColor: SWITCH_STYLE[target].bg, color: SWITCH_STYLE[target].fg }
-                  }
-                >
-                  <span aria-hidden>⇄</span> Switch to {SIDE_NAME[target]}
-                </button>
+                <Button variant="soft" size="lg" onClick={() => void actions.switchSide(entry, target)} className="flex-[2] whitespace-nowrap">
+                  <SideMark side={target} size={22} />
+                  Switch to {SIDE_NAME[target]}
+                </Button>
               )}
-              {isFeed && n.paused && (
-                <>
-                  {(["L", "R"] as Side[]).map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      aria-label={`Resume ${SIDE_NAME[s]}`}
-                      onClick={() => void actions.resume(entry, s)}
-                      className="flex min-h-[52px] flex-1 flex-col items-center justify-center rounded-2xl px-2 leading-tight transition active:scale-[0.97]"
-                      style={{ backgroundColor: `${SIDE_COLOR[s]}22`, boxShadow: `inset 0 0 0 1.5px ${SIDE_COLOR[s]}88` }}
-                    >
-                      <span className={cx(tone.muted, "text-[11px] font-semibold tracking-wide uppercase")}>Resume</span>
-                      <span className={cx(tone.body, "text-[15px] font-semibold")}>
-                        <span aria-hidden className="mr-1 text-[11px]">
-                          ▶
-                        </span>
-                        {SIDE_NAME[s]}
-                      </span>
-                    </button>
-                  ))}
-                </>
-              )}
-              <button
-                type="button"
-                onClick={() => void actions.stop(entry)}
-                className={cx(
-                  "flex min-h-[52px] items-center justify-center gap-1.5 rounded-2xl px-4 text-[15px] font-semibold transition active:scale-[0.97]",
-                  "bg-[#1D4420] text-[#FDF8F0] dark:bg-[#C49A3C] dark:text-[#14210F] [.maple-night_&]:bg-[#E0A93B]/80",
-                  isFeed ? "flex-1" : "flex-[2]"
-                )}
-              >
-                {kind === "sleep" ? (
-                  <>
-                    Woke up <span aria-hidden>☀️</span>
-                  </>
-                ) : (
-                  <>
-                    Done <span aria-hidden>✓</span>
-                  </>
-                )}
-              </button>
+              {isFeed &&
+                n.paused &&
+                (["L", "R"] as Side[]).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    aria-label={`Resume ${SIDE_NAME[s]}`}
+                    onClick={() => void actions.resume(entry, s)}
+                    className="flex min-h-[52px] flex-1 items-center justify-center gap-2 rounded-[14px] border border-mp-line bg-mp-surface px-2 transition active:scale-[0.98]"
+                  >
+                    <SideMark side={s} size={22} />
+                    <span className="text-left leading-tight">
+                      <span className="block text-[15px] font-semibold text-mp-ink">{SIDE_NAME[s]}</span>
+                      <span className="block text-[11px] text-mp-ink-2">Resume</span>
+                    </span>
+                  </button>
+                ))}
+              <Button variant={mirrored ? "soft" : "primary"} size="lg" onClick={() => void actions.stop(entry)} className={isFeed ? "flex-1" : "flex-[2]"}>
+                <Icon name={kind === "sleep" ? "sun" : "check"} size={19} strokeWidth={2.1} />
+                {kind === "sleep" ? "Woke up" : "Done"}
+              </Button>
             </fieldset>
           )}
         </>
@@ -559,13 +518,13 @@ function TimerMenu({
       exit={{ height: 0, opacity: 0 }}
       className="overflow-hidden"
     >
-      <div className={cx(tone.inset, "mt-2 space-y-1 p-2 [.maple-night_&]:bg-[#0B0F0A]")}>
+      <div className={cx("mt-3 overflow-hidden rounded-2xl border border-mp-line", view === "menu" && tone.divide)}>
         {view === "menu" ? (
           <>
-            <MenuItem icon="🕰️" label="Adjust start" sub="Forgot to tap at the start" onClick={() => setView("adjust")} />
+            <MenuItem icon="clock-3" label="Adjust start" sub="Forgot to tap at the start" onClick={() => setView("adjust")} />
             {entry.kind === "feed" && (
               <MenuItem
-                icon="😴"
+                icon="moon"
                 label="Fell asleep"
                 sub="Stop the feed and start sleep now"
                 onClick={() => {
@@ -575,7 +534,7 @@ function TimerMenu({
               />
             )}
             <MenuItem
-              icon="🍂"
+              icon="trash-2"
               label="Discard"
               sub="Oops, didn't mean to start"
               danger
@@ -586,27 +545,18 @@ function TimerMenu({
             />
           </>
         ) : (
-          <div className="p-1">
+          <div className="p-3">
             <p className={cx(tone.label, "mb-2")}>Started earlier? · now {formatTime(start, tz)}</p>
             <div className="flex flex-wrap gap-2">
               {[2, 5, 10, 15].map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => move(m)}
-                  className="min-h-[44px] min-w-[56px] rounded-full border border-[#1D4420]/15 bg-white/70 px-3 text-sm font-semibold text-[#1D4420] active:scale-95 dark:border-[#F5EDDF]/15 dark:bg-transparent dark:text-[#E8DCC0]"
-                >
+                <Chip key={m} onClick={() => move(m)} className="min-h-[44px]! min-w-[56px] justify-center tabular-nums">
                   −{m}m
-                </button>
+                </Chip>
               ))}
-              <button
-                type="button"
-                onClick={() => setPick((p) => !p)}
-                aria-pressed={pick}
-                className="min-h-[44px] rounded-full border border-[#1D4420]/15 bg-white/70 px-3 text-sm font-semibold text-[#1D4420] active:scale-95 dark:border-[#F5EDDF]/15 dark:bg-transparent dark:text-[#E8DCC0]"
-              >
+              <Chip selected={pick} onClick={() => setPick((p) => !p)} className="min-h-[44px]!">
+                <Icon name="clock-3" size={16} />
                 Pick…
-              </button>
+              </Chip>
             </div>
             {pick && (
               <div className="mt-2 flex gap-2">
@@ -617,18 +567,17 @@ function TimerMenu({
                   onChange={(e) => setPicked(e.target.value)}
                   className={cx(tone.input, "min-w-0 flex-1")}
                 />
-                <button
-                  type="button"
+                <Button
                   disabled={!pickedAt}
                   onClick={() => {
                     if (!pickedAt) return;
                     void actions.adjust(entry, pickedAt);
                     setView(null);
                   }}
-                  className="min-h-[48px] shrink-0 rounded-2xl bg-[#1D4420] px-5 text-[15px] font-semibold text-[#FDF8F0] active:scale-[0.97] disabled:opacity-40 dark:bg-[#C49A3C] dark:text-[#14210F]"
+                  className="min-h-[48px] shrink-0"
                 >
                   Set {pickedAt ? formatTime(pickedAt, tz) : ""}
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -638,19 +587,13 @@ function TimerMenu({
   );
 }
 
-function MenuItem({ icon, label, sub, onClick, danger }: { icon: string; label: string; sub: string; onClick: () => void; danger?: boolean }) {
+function MenuItem({ icon, label, sub, onClick, danger }: { icon: IconName; label: string; sub: string; onClick: () => void; danger?: boolean }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex min-h-[52px] w-full items-center gap-3 rounded-xl px-2 text-left transition hover:bg-[#1D4420]/5 active:scale-[0.99] dark:hover:bg-[#F5EDDF]/5"
-    >
-      <span aria-hidden className="text-xl">
-        {icon}
-      </span>
+    <button type="button" onClick={onClick} className={cx(tone.row, "min-h-[56px] py-2.5")}>
+      <Icon name={icon} size={20} className={cx("shrink-0", danger ? "text-mp-danger" : "text-mp-ink-2")} />
       <span className="min-w-0">
-        <span className={cx("block text-[15px] font-semibold", danger ? "text-[#9A3A24] dark:text-[#F4A68F]" : tone.body)}>{label}</span>
-        <span className={cx(tone.muted, "block text-xs")}>{sub}</span>
+        <span className={cx("block text-[15px] font-semibold", danger ? "text-mp-danger" : "text-mp-ink")}>{label}</span>
+        <span className="block text-[13px] text-mp-ink-2">{sub}</span>
       </span>
     </button>
   );
@@ -690,67 +633,44 @@ function ForgottenPrompt({
   ].filter((o) => o.at.getTime() > floor);
 
   return (
-    <div className="mt-1 pl-1">
-      <p className={cx(tone.heading, "text-2xl [.maple-night_&]:text-[#E0A93B]/85")}>{question}</p>
-      <p className={cx(tone.muted, "mt-0.5 text-sm tabular-nums [.maple-night_&]:text-[#E0A93B]/55")}>
+    <div className="mt-3">
+      <p className={cx(tone.heading, "text-[22px] leading-tight")}>{question}</p>
+      <p className="mt-1 text-sm text-mp-ink-2 tabular-nums">
         The timer says {formatDuration(n.wallSec)}, since {formatTime(entry.started_at, tz)}.
       </p>
       {!ending ? (
-        <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            onClick={onSnooze}
-            className="min-h-[52px] flex-1 rounded-2xl bg-[#1D4420]/[0.07] px-3 text-[15px] font-semibold text-[#1D4420] active:scale-[0.97] dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]"
-          >
+        <div className="mt-4 flex gap-2">
+          <Button variant="soft" size="lg" onClick={onSnooze} className="flex-1">
             Still going
-          </button>
-          <button
-            type="button"
-            onClick={() => setEnding(true)}
-            className="min-h-[52px] flex-1 rounded-2xl bg-[#1D4420] px-3 text-[15px] font-semibold text-[#FDF8F0] active:scale-[0.97] dark:bg-[#C49A3C] dark:text-[#14210F] [.maple-night_&]:bg-[#E0A93B]/80"
-          >
+          </Button>
+          <Button size="lg" onClick={() => setEnding(true)} className="flex-1">
             Ended earlier…
-          </button>
+          </Button>
         </div>
       ) : (
-        <div className="mt-3">
+        <div className="mt-4">
           <p className={cx(tone.label, "mb-2")}>When did it end?</p>
           <div className="flex flex-wrap gap-2">
             {options.map((o) => {
-              const selected = !pick && choice && Math.abs(choice.getTime() - o.at.getTime()) < 30_000;
+              const selected = !pick && !!choice && Math.abs(choice.getTime() - o.at.getTime()) < 30_000;
               return (
-                <button
+                <Chip
                   key={o.key}
-                  type="button"
-                  aria-pressed={!!selected}
+                  selected={selected}
                   onClick={() => {
                     setPick(false);
                     setChoice(o.at);
                   }}
-                  className={cx(
-                    "min-h-[44px] rounded-full border px-3.5 text-sm font-semibold transition active:scale-95",
-                    selected
-                      ? "border-[#1D4420] bg-[#1D4420] text-[#FDF8F0] dark:border-[#C49A3C] dark:bg-[#C49A3C] dark:text-[#14210F]"
-                      : "border-[#1D4420]/15 bg-white/70 text-[#1D4420] dark:border-[#F5EDDF]/15 dark:bg-transparent dark:text-[#E8DCC0]"
-                  )}
+                  className="min-h-[44px]!"
                 >
                   {o.key === "s" ? `${o.label} · likely` : o.label}
-                </button>
+                </Chip>
               );
             })}
-            <button
-              type="button"
-              aria-pressed={pick}
-              onClick={() => setPick(true)}
-              className={cx(
-                "min-h-[44px] rounded-full border px-3.5 text-sm font-semibold transition active:scale-95",
-                pick
-                  ? "border-[#1D4420] bg-[#1D4420] text-[#FDF8F0] dark:border-[#C49A3C] dark:bg-[#C49A3C] dark:text-[#14210F]"
-                  : "border-[#1D4420]/15 bg-white/70 text-[#1D4420] dark:border-[#F5EDDF]/15 dark:bg-transparent dark:text-[#E8DCC0]"
-              )}
-            >
+            <Chip selected={pick} onClick={() => setPick(true)} className="min-h-[44px]!">
+              <Icon name="clock-3" size={16} />
               Pick…
-            </button>
+            </Chip>
           </div>
           {pick && (
             <input
@@ -762,21 +682,12 @@ function ForgottenPrompt({
             />
           )}
           <div className="mt-3 flex gap-2">
-            <button
-              type="button"
-              onClick={() => setEnding(false)}
-              className={cx(tone.body, "min-h-[52px] rounded-2xl px-4 text-sm font-semibold opacity-80 active:scale-[0.97]")}
-            >
+            <Button variant="ghost" size="lg" onClick={() => setEnding(false)}>
               Back
-            </button>
-            <button
-              type="button"
-              disabled={!choice}
-              onClick={() => choice && void actions.stop(entry, choice)}
-              className="min-h-[52px] flex-1 rounded-2xl bg-[#1D4420] px-3 text-[15px] font-semibold text-[#FDF8F0] transition active:scale-[0.97] disabled:opacity-40 dark:bg-[#C49A3C] dark:text-[#14210F] [.maple-night_&]:bg-[#E0A93B]/80"
-            >
+            </Button>
+            <Button size="lg" disabled={!choice} onClick={() => choice && void actions.stop(entry, choice)} className="flex-1">
               {choice ? `Save · ended ${formatTime(choice, tz)}` : "Pick a time"}
-            </button>
+            </Button>
           </div>
         </div>
       )}

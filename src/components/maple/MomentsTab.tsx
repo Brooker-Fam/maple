@@ -1,10 +1,10 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { statsFor } from "@/lib/maple/insights";
-import { MILESTONES, milestoneEmoji, milestoneLabel, monthlyId, monthlyNumber } from "@/lib/maple/milestones";
+import { MILESTONES, milestoneLabel, monthlyId, monthlyNumber } from "@/lib/maple/milestones";
 import {
   addDays,
   babyAge,
@@ -19,38 +19,47 @@ import {
 } from "@/lib/maple/time";
 import type { Entry, EntryOf, Member } from "@/lib/maple/types";
 import { photoUrl } from "./EntryRow";
+import { MAPLE_LEAF_PATH } from "./Hero";
+import { Icon, KindBadge } from "./icons";
+import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
-import { Avatar, Button, cx, tone } from "./ui";
+import { Avatar, Button, Chip, EmptyState, SectionTitle, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
- * Moments: Maple's keepsake. A "Firsts" shelf (found vs still to come), her
- * monthly photos lined up under "Growing up", and a scrapbook of polaroids
- * grouped by week of age, newest first, that open into a lightbox.
+ * Moments: Maple's keepsake. "Firsts" (found, then still to come), her
+ * monthly photos lined up under "Growing up", and a scrapbook of moment
+ * cards grouped by week of age, newest first, that open into a lightbox.
+ * The photos carry the color; the frames stay plain.
  *
  * Photos only ever load through the family-only proxy (/api/maple/photo), by
- * position; a photo that can't load turns into a leaf instead of a broken
- * image. The whole tab is kept out of session replays (ph-no-capture).
+ * position; a photo that can't load turns into a quiet placeholder instead of
+ * a broken image. The whole tab is kept out of session replays (ph-no-capture).
  */
 
 type Moment = EntryOf<"moment">;
 type Slide = { entry: Moment; photo: number | null };
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const TAPES = ["gold", "blush", "lavender", "sage"] as const;
 /** The shell adds .maple-night 8pm–7am: photos dim so they don't glare at 3am. */
 const NIGHT_DIM = "[.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]";
+/** Placeholder shimmer, still under reduced motion and at night. */
+const PULSE = "animate-pulse motion-reduce:animate-none [.maple-night_&]:animate-none";
 const SHELF_COLLAPSED = 8;
 
 const isMoment = (e: Entry): e is Moment => e.kind === "moment";
 const photoCount = (m: Moment) => (m.id > 0 ? m.data.photos?.length ?? 0 : 0);
 const captionOf = (m: Moment) => m.data.title || milestoneLabel(m.data.milestone) || m.note || "A little moment";
-
-/** Stable pseudo-random 0..1 from an id, so a print keeps its tilt. */
-function seeded(id: number, salt: number): number {
-  const x = Math.sin(id * 12.9898 + salt * 78.233) * 43758.5453;
-  return x - Math.floor(x);
-}
+/** The note, when it says something the caption doesn't. */
+const extraNote = (m: Moment) => (m.note && captionOf(m) !== m.note ? m.note : null);
+/**
+ * A photo-less slide in the lightbox shows a short note as its picture. A
+ * long one would be cut off there, so it goes in the caption, in full.
+ */
+const pictureNote = (s: Slide) => {
+  const note = s.photo == null ? extraNote(s.entry) : null;
+  return note && note.length <= 120 && !note.includes("\n") ? note : null;
+};
 
 function shortDate(key: string, withYear = false): string {
   const { year, month, day } = parseDayKey(key);
@@ -75,12 +84,12 @@ function ageAt(bornAt: string | null, at: string, tz: string): string | null {
   return `${age.label} old`;
 }
 
-/** Compact age for the shelf: "day 3", "2w 3d", "3mo". */
+/** Compact age for the Firsts list: "Day 3", "2w 3d", "3mo". */
 function ageShort(bornAt: string | null, at: string, tz: string): string | null {
   if (!bornAt) return null;
-  if (Date.parse(at) < Date.parse(bornAt)) return "before birth";
+  if (Date.parse(at) < Date.parse(bornAt)) return "Before birth";
   const age = babyAge(bornAt, new Date(at), tz);
-  return age.days < 14 ? `day ${age.dayOfLife}` : age.short;
+  return age.days < 14 ? `Day ${age.dayOfLife}` : age.short;
 }
 
 /** Her n-month day as a day key (clamped to the month's last day: Jan 31 → Feb 28). */
@@ -116,6 +125,15 @@ function groupByWeek(moments: Moment[], bornAt: string | null, tz: string): Week
   }
   // Moments arrive newest first, so pages do too ("before" lands last).
   return [...weeks.values()];
+}
+
+/** Maple's leaf: the mark for a memory kept in words rather than a photo. */
+function LeafMark({ size = 22, className }: { size?: number; className?: string }) {
+  return (
+    <svg viewBox="-11 -11 22 22" width={size} height={size} className={cx("shrink-0 text-mp-maple", className)} aria-hidden focusable="false">
+      <path d={MAPLE_LEAF_PATH} fill="currentColor" />
+    </svg>
+  );
 }
 
 export default function MomentsTab() {
@@ -188,46 +206,50 @@ export default function MomentsTab() {
 
   return (
     <div className="ph-no-capture overflow-x-clip px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
-      <header className="mb-4">
-        <h1 className={cx(tone.heading, "text-[34px] leading-tight")}>Moments</h1>
-        <p className={cx(tone.muted, "text-sm")}>Little leaves for {babyName}&apos;s someday-book 🍂</p>
+      <header className="mb-5">
+        <div className="flex min-h-[44px] items-center justify-between gap-3">
+          <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Moments</h1>
+          {/* The empty scrapbook has its own "Add a photo"; one invitation is enough. */}
+          {!viewer && moments?.length !== 0 && (
+            <Button className="shrink-0" onClick={() => add()} aria-label="Add a moment">
+              <Icon name="plus" size={18} strokeWidth={2.25} />
+              Add
+            </Button>
+          )}
+        </div>
+        <p className={cx(tone.muted, "mt-1 text-[15px] leading-snug")}>Little leaves for {babyName}&apos;s someday-book</p>
       </header>
 
-      {/* The empty scrapbook has its own "Add a photo"; one invitation is enough. */}
-      {!viewer && moments?.length !== 0 && (
-        <Button variant="gold" size="lg" className="mb-5 w-full text-[17px]" onClick={() => add()}>
-          <span aria-hidden>📷</span> Add a moment
-        </Button>
-      )}
+      <div className="space-y-6">
+        {!viewer && bornAt && (
+          <MonthlyPrompt bornAt={bornAt} tz={tz} now={n} moments={moments} name={babyName} onTake={add} />
+        )}
 
-      {!viewer && bornAt && (
-        <MonthlyPrompt bornAt={bornAt} tz={tz} now={n} moments={moments} name={babyName} onTake={add} />
-      )}
+        {error && !moments && (
+          <div className={cx(tone.card, "p-4 text-center")}>
+            <p className={cx(tone.body, "text-[15px]")}>Couldn&apos;t reach the scrapbook. {error}</p>
+            <Button variant="soft" size="sm" className="mt-3" onClick={() => void load()}>
+              Try again
+            </Button>
+          </div>
+        )}
 
-      {error && !moments && (
-        <div className={cx(tone.card, "mb-5 p-4 text-center")}>
-          <p className={cx(tone.body, "text-sm")}>Couldn&apos;t reach the scrapbook. {error}</p>
-          <Button variant="soft" size="sm" className="mt-2" onClick={() => void load()}>
-            Try again
-          </Button>
-        </div>
-      )}
+        {!moments && !error && <LoadingCards />}
 
-      {!moments && !error && <LoadingPrints />}
+        {moments && moments.length === 0 && <EmptyScrapbook viewer={viewer} onAdd={() => add()} />}
 
-      {moments && moments.length === 0 && <EmptyScrapbook viewer={viewer} onAdd={() => add()} />}
+        {moments && (
+          <FirstsShelf moments={moments} bornAt={bornAt} tz={tz} viewer={viewer} onOpen={show} onAdd={(id) => add({ milestone: id })} />
+        )}
 
-      {moments && (
-        <FirstsShelf moments={moments} bornAt={bornAt} tz={tz} viewer={viewer} onOpen={show} onAdd={(id) => add({ milestone: id })} />
-      )}
+        {moments && bornAt && (
+          <GrowingUp moments={moments} bornAt={bornAt} tz={tz} now={n} viewer={viewer} onOpen={show} onAdd={add} />
+        )}
 
-      {moments && bornAt && (
-        <GrowingUp moments={moments} bornAt={bornAt} tz={tz} now={n} viewer={viewer} onOpen={show} onAdd={add} />
-      )}
-
-      {moments && moments.length > 0 && (
-        <Scrapbook moments={moments} bornAt={bornAt} tz={tz} todayKey={todayKey} rev={rev ?? ""} onOpen={show} />
-      )}
+        {moments && moments.length > 0 && (
+          <Scrapbook moments={moments} bornAt={bornAt} tz={tz} todayKey={todayKey} rev={rev ?? ""} onOpen={show} />
+        )}
+      </div>
 
       <Lightbox
         slides={slides}
@@ -294,46 +316,39 @@ function MonthlyPrompt({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cx(tone.card, "relative mb-5 flex gap-3 overflow-hidden p-4 pr-11")}
-    >
-      <span className="text-4xl leading-none" aria-hidden>
-        🧸
-      </span>
+    <div className={cx(tone.card, "relative flex gap-3 p-4 pr-12")}>
+      <KindBadge kind="moment" size={40} />
       <div className="min-w-0 flex-1">
-        <p className={cx(tone.heading, "text-lg leading-snug lining-nums")}>
-          {since === 0 ? "Today" : "This week"} is {name}&apos;s {months}-month day!
+        <p className={cx(tone.heading, "text-[17px] leading-snug lining-nums")}>
+          {since === 0 ? "Today" : "This week"} is {name}&apos;s <span className="whitespace-nowrap">{months}-month day</span>
         </p>
-        <p className={cx(tone.muted, "mt-0.5 text-sm")}>
+        <p className={cx(tone.muted, "mt-0.5 text-sm leading-snug")}>
           Take her monthly photo? Same spot, same blanket, and she lines up under “Growing up.”
         </p>
         <Button
-          variant="primary"
           size="sm"
-          className="mt-2.5"
-          onClick={() =>
-            onTake({ title: `${months} month${months === 1 ? "" : "s"} old`, milestone: monthlyId(months) })
-          }
+          className="mt-3"
+          onClick={() => onTake({ title: `${months} month${months === 1 ? "" : "s"} old`, milestone: monthlyId(months) })}
         >
-          📷 Month {months} photo
+          <Icon name="camera" size={16} />
+          Month {months} photo
         </Button>
       </div>
       <button
         type="button"
         onClick={skip}
         aria-label="Not this month"
-        className={cx(tone.muted, "absolute top-1.5 right-1.5 flex h-11 w-11 items-center justify-center rounded-full text-base")}
+        className="absolute top-1.5 right-1.5 flex h-11 w-11 items-center justify-center rounded-full text-mp-ink-3"
       >
-        ✕
+        <Icon name="x" size={18} />
       </button>
-    </motion.div>
+    </div>
   );
 }
 
-// ── Firsts shelf ─────────────────────────────────────────────────────────
+// ── Firsts ───────────────────────────────────────────────────────────────
 
+/** Shorter names for the "still to come" chips (the found list has room for the full label). */
 const SHORT: Record<string, string> = {
   "met-bruce": "Bruce (eventually)",
   "emmett-held": "Emmett held her",
@@ -370,73 +385,82 @@ function FirstsShelf({
   const upcoming = MILESTONES.filter((p) => !found.has(p.id));
   const ordered = [...achieved, ...upcoming];
   const shown = all ? ordered : ordered.slice(0, SHELF_COLLAPSED);
+  // Found ones as a list (with when), the rest as light chips to tap and add.
+  const shownFound = shown.filter((p) => found.has(p.id));
+  const shownToCome = shown.filter((p) => !found.has(p.id));
 
   return (
-    <section className={cx(tone.card, "mb-6 p-4")} aria-label="Firsts">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className={cx(tone.heading, "text-xl")}>Firsts</h2>
-        <span className={cx(tone.muted, "text-xs")}>
-          {achieved.length ? `${achieved.length} of ${MILESTONES.length} found` : "all still to come"}
-        </span>
+    <section aria-label="Firsts">
+      <SectionTitle
+        action={
+          <span className={cx(tone.faint, "text-[13px]")}>
+            {achieved.length ? `${achieved.length} of ${MILESTONES.length} found` : "All still to come"}
+          </span>
+        }
+      >
+        Firsts
+      </SectionTitle>
+      <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
+        {shownFound.length > 0 && (
+          <ul className={tone.divide}>
+            {shownFound.map((p) => {
+              const m = found.get(p.id)!;
+              return (
+                <li key={p.id}>
+                  <button type="button" className={cx(tone.row, "min-h-[52px] py-2.5")} onClick={() => onOpen(m)} aria-label={`${p.label}: open the moment`}>
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-mp-accent text-mp-on-accent" aria-hidden>
+                      <Icon name="check" size={14} strokeWidth={2.75} />
+                    </span>
+                    <span className={cx(tone.body, "min-w-0 flex-1 text-[15px] leading-snug font-medium")}>{p.label}</span>
+                    <span className={cx(tone.muted, "shrink-0 text-[13px] tabular-nums")}>
+                      {ageShort(bornAt, m.started_at, tz) ?? shortDate(dayKey(new Date(m.started_at), tz))}
+                    </span>
+                    <Icon name="chevron-right" size={18} className="-mr-1 shrink-0 text-mp-ink-3" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {shownToCome.length > 0 && (
+          <div className="px-4 pt-3.5 pb-4">
+            {achieved.length > 0 && <p className={cx(tone.label, "mb-2.5")}>Still to come</p>}
+            <ul className="flex flex-wrap gap-2">
+              {shownToCome.map((p) => {
+                const label = SHORT[p.id] ?? p.label;
+                return (
+                  <li key={p.id}>
+                    {viewer ? (
+                      // Not a button for viewers, so an outline rather than a tappable-looking chip.
+                      <span className="inline-flex min-h-[40px] items-center rounded-full border border-dashed border-mp-ink-3/40 px-3.5 text-sm font-medium text-mp-ink-2">
+                        <span aria-hidden>{label}</span>
+                        <span className="sr-only">{p.label}: still to come</span>
+                      </span>
+                    ) : (
+                      <Chip onClick={() => onAdd(p.id)} className="pl-3">
+                        <Icon name="plus" size={15} className="text-mp-ink-3" />
+                        <span aria-hidden>{label}</span>
+                        <span className="sr-only">{p.label}: add it</span>
+                      </Chip>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+        {ordered.length > SHELF_COLLAPSED && (
+          <button
+            type="button"
+            onClick={() => setAll((v) => !v)}
+            aria-expanded={all}
+            className="flex min-h-[48px] w-full items-center justify-center gap-1 text-[15px] font-medium text-mp-accent-fg"
+          >
+            {all ? "Show fewer" : `Show all ${ordered.length} firsts`}
+            <Icon name={all ? "chevron-up" : "chevron-down"} size={16} />
+          </button>
+        )}
       </div>
-      <ul className="mt-3 grid grid-cols-4 gap-x-1.5 gap-y-3">
-        {shown.map((p) => {
-          const m = found.get(p.id);
-          const label = SHORT[p.id] ?? p.label;
-          const content = (
-            <>
-              <span
-                className={cx(
-                  "relative flex h-14 w-14 items-center justify-center rounded-full text-[26px] transition",
-                  m
-                    ? "bg-[#C49A3C]/20 shadow-[inset_0_0_0_2px_rgba(196,154,60,0.8)] dark:bg-[#C49A3C]/25"
-                    : "border-2 border-dashed border-[#5C7A4A]/35 opacity-55 grayscale-[70%] dark:border-[#A9C08F]/30"
-                )}
-                aria-hidden
-              >
-                {p.emoji}
-                {m && (
-                  <span className="absolute -right-0.5 -bottom-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-[#1D4420] text-[10px] font-bold text-white dark:bg-[#C49A3C] dark:text-[#14210F]">
-                    ✓
-                  </span>
-                )}
-              </span>
-              <span className={cx(m ? tone.body : tone.muted, "line-clamp-2 text-[11px] leading-tight font-semibold")}>{label}</span>
-              <span className={cx(tone.muted, "text-[10px] leading-none")}>
-                {m ? ageShort(bornAt, m.started_at, tz) ?? shortDate(dayKey(new Date(m.started_at), tz)) : "someday"}
-              </span>
-            </>
-          );
-          const cls = "flex w-full flex-col items-center gap-1 rounded-2xl px-0.5 py-1 text-center";
-          return (
-            <li key={p.id}>
-              {m ? (
-                <button type="button" className={cx(cls, "active:scale-95")} onClick={() => onOpen(m)} aria-label={`${p.label}: open the moment`}>
-                  {content}
-                </button>
-              ) : viewer ? (
-                <div className={cls} aria-label={`${p.label}: still to come`}>
-                  {content}
-                </div>
-              ) : (
-                <button type="button" className={cx(cls, "active:scale-95")} onClick={() => onAdd(p.id)} aria-label={`${p.label}: add it`}>
-                  {content}
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      {ordered.length > SHELF_COLLAPSED && (
-        <button
-          type="button"
-          onClick={() => setAll((v) => !v)}
-          aria-expanded={all}
-          className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-full text-sm font-semibold text-[#1D4420] dark:text-[#E0C27A]"
-        >
-          {all ? "Show fewer" : `Show all ${ordered.length} firsts`} <span aria-hidden className="ml-1">{all ? "▴" : "▾"}</span>
-        </button>
-      )}
     </section>
   );
 }
@@ -469,71 +493,60 @@ function GrowingUp({
   }
 
   return (
-    <section className="mb-7" aria-label="Growing up">
-      <div className="mb-2 flex items-baseline justify-between px-1">
-        <h2 className={cx(tone.heading, "text-xl")}>Growing up</h2>
-        <span className={cx(tone.muted, "text-xs")}>a photo each month-day</span>
-      </div>
-      <div className="-mx-4 overflow-x-auto px-4 pt-1 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <ol className="flex w-max gap-3">
+    <section aria-label="Growing up">
+      <SectionTitle action={<span className={cx(tone.faint, "text-[13px]")}>A photo each month-day</span>}>Growing up</SectionTitle>
+      <div className="-mx-4 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <ol className="flex w-max gap-2.5">
           {Array.from({ length: 12 }, (_, i) => i + 1).map((k) => {
             const m = byMonth.get(k);
             const due = k <= months;
+            const canAdd = due && !viewer;
             const date = shortDate(monthDayKey(bornAt, k, tz));
-            const face = m ? (
-              photoCount(m) ? (
-                <SafeImg src={photoUrl(m.id, 0)} className="h-[68px] w-full object-cover" />
-              ) : (
-                <span className="flex h-[68px] items-center justify-center bg-[#E8C8B8]/40 text-2xl" aria-hidden>
-                  🧸
-                </span>
-              )
-            ) : (
-              <span
-                className={cx(
-                  "flex h-[68px] items-center justify-center border-2 border-dashed text-lg",
-                  due ? "border-[#C49A3C]/70 text-[#8A6A1F]" : "border-[#5C7A4A]/25 text-[#5C7A4A]/50"
-                )}
-                aria-hidden
-              >
-                {due && !viewer ? "+" : "🍃"}
-              </span>
-            );
-            const polaroid = (
+            const tile = (
               <>
                 <span
                   className={cx(
-                    "block w-[76px] rounded-[3px] bg-[#FFFDF7] p-1 pb-0 shadow-[0_1px_2px_rgba(29,68,32,0.12),0_8px_16px_-10px_rgba(29,68,32,0.5)] dark:bg-[#ECE5D5]",
-                    NIGHT_DIM
+                    "flex h-[76px] w-[76px] items-center justify-center overflow-hidden rounded-[14px]",
+                    m
+                      ? "border border-mp-line bg-mp-surface"
+                      : canAdd
+                        ? "border-[1.5px] border-dashed border-mp-accent-fg/45 text-mp-accent-fg"
+                        : "bg-mp-sunken text-mp-ink-3"
                   )}
-                  style={{ transform: `rotate(${(seeded(k, 3) * 4 - 2).toFixed(1)}deg)` }}
+                  aria-hidden
                 >
-                  {face}
-                  <span className="block py-0.5 text-center font-[family-name:var(--font-display)] text-base leading-tight font-semibold text-[#1D4420] italic lining-nums">
-                    {k}
-                  </span>
+                  {m ? (
+                    photoCount(m) ? (
+                      <SafeImg src={photoUrl(m.id, 0)} className="h-full w-full object-cover" />
+                    ) : (
+                      <LeafMark size={22} />
+                    )
+                  ) : canAdd ? (
+                    <Icon name="plus" size={22} />
+                  ) : null}
                 </span>
-                <span className={cx(tone.muted, "mt-1.5 block text-center text-[10px]")}>{date}</span>
+                <span className={cx(m || due ? tone.body : tone.muted, "mt-1.5 block text-center text-[12px] font-medium")}>Month {k}</span>
+                <span className={cx(tone.faint, "block text-center text-[11px]")}>{date}</span>
               </>
             );
             const label = `Month ${k}, ${date}`;
             return (
-              <li key={k} className={cx(!m && !due && "opacity-60")}>
+              <li key={k}>
                 {m ? (
-                  <button type="button" onClick={() => onOpen(m)} aria-label={`${label}: open`} className="block">
-                    {polaroid}
+                  <button type="button" onClick={() => onOpen(m)} aria-label={`${label}: open`} className="block active:scale-[0.97]">
+                    {tile}
                   </button>
-                ) : due && !viewer ? (
+                ) : canAdd ? (
                   <button
                     type="button"
                     onClick={() => onAdd({ title: `${k} month${k === 1 ? "" : "s"} old`, milestone: monthlyId(k) })}
                     aria-label={`${label}: add her month ${k} photo`}
-                    className="block"
+                    className="block active:scale-[0.97]"
                   >
-                    {polaroid}
+                    {tile}
                   </button>
                 ) : (
-                  <div aria-label={`${label}: not yet`}>{polaroid}</div>
+                  <div aria-label={`${label}: not yet`}>{tile}</div>
                 )}
               </li>
             );
@@ -563,22 +576,22 @@ function Scrapbook({
 }) {
   const weeks = useMemo(() => groupByWeek(moments, bornAt, tz), [moments, bornAt, tz]);
   return (
-    <div className="space-y-9">
+    <div className="space-y-6">
       {weeks.map((w) => (
         <section key={w.id} aria-label={w.n ? `Week ${w.n}` : "Before she arrived"}>
-          <div className="mb-1 flex items-baseline gap-2 border-b border-dashed border-[#1D4420]/15 px-1 pb-1.5 dark:border-[#F5EDDF]/15">
-            <h2 className={cx(tone.heading, "text-[22px] lining-nums")}>{w.n ? `Week ${w.n}` : "Before she arrived"}</h2>
-            {w.startKey && w.endKey && <span className={cx(tone.muted, "text-sm")}>· {rangeLabel(w.startKey, w.endKey, todayKey)}</span>}
+          <div className="mb-2.5 px-1">
+            <div className="flex items-baseline gap-2">
+              <h2 className={cx(tone.heading, "text-[17px]")}>{w.n ? `Week ${w.n}` : "Before she arrived"}</h2>
+              {w.startKey && w.endKey && <span className={cx(tone.faint, "text-[13px]")}>{rangeLabel(w.startKey, w.endKey, todayKey)}</span>}
+            </div>
+            {w.n && w.startKey && w.endKey && (
+              <WeekStats n={w.n} startKey={w.startKey} endKey={w.endKey} tz={tz} current={w.endKey >= todayKey} rev={rev} />
+            )}
           </div>
-          {w.n && w.startKey && w.endKey ? (
-            <WeekStats n={w.n} startKey={w.startKey} endKey={w.endKey} tz={tz} current={w.endKey >= todayKey} rev={rev} />
-          ) : (
-            <div className="h-3" />
-          )}
-          <ul className="mt-4 grid grid-cols-2 items-start gap-x-4 gap-y-7 px-1">
-            {w.moments.map((m, i) => (
+          <ul className="grid grid-cols-2 items-start gap-3">
+            {w.moments.map((m) => (
               <li key={m.id}>
-                <Print moment={m} index={i} bornAt={bornAt} tz={tz} todayKey={todayKey} onOpen={() => onOpen(m)} />
+                <MomentCard moment={m} bornAt={bornAt} tz={tz} todayKey={todayKey} onOpen={() => onOpen(m)} />
               </li>
             ))}
           </ul>
@@ -652,22 +665,24 @@ function WeekStats({
   }, [api, cacheKey, current, endKey, n, now, startKey, tz, visible]);
 
   return (
-    <p ref={ref} className={cx(tone.muted, "min-h-[1.25rem] px-1 font-[family-name:var(--font-display)] text-[15px] italic")}>
+    <p ref={ref} className={cx(tone.muted, "mt-0.5 min-h-[1.25rem] text-[13px] tabular-nums")}>
       {line}
     </p>
   );
 }
 
-function Print({
+/**
+ * One moment in the scrapbook: the photo edge to edge on a plain card with
+ * the caption under it, or, with no photo, the words themselves.
+ */
+function MomentCard({
   moment: m,
-  index,
   bornAt,
   tz,
   todayKey,
   onOpen,
 }: {
   moment: Moment;
-  index: number;
   bornAt: string | null;
   tz: string;
   todayKey: string;
@@ -680,131 +695,100 @@ function Print({
   const aspect = landscape ? "aspect-[5/4]" : "aspect-[4/5]";
   const caption = captionOf(m);
   const meta = ageAt(bornAt, m.started_at, tz) ?? formatDayLabel(dayKey(new Date(m.started_at), tz), todayKey);
-  const style = {
-    "--tilt": `${(seeded(Math.abs(m.id), 1) * 6 - 3).toFixed(2)}deg`,
-    "--delay": `${Math.min(index, 6) * 70}ms`,
-    "--tape-tilt": `${(seeded(Math.abs(m.id), 2) * 8 - 4).toFixed(1)}deg`,
-    padding: "0.5rem 0.5rem 0.75rem",
-  } as CSSProperties;
-  const tape = TAPES[Math.abs(m.id) % TAPES.length];
+  // A first (or a monthly photo, a kept celebration) is named above the
+  // caption, as in the lightbox, unless the caption already is its name.
+  const first = milestoneLabel(m.data.milestone);
+  const tag = first && first !== caption ? first : null;
+  const note = count ? null : extraNote(m);
+  const photosOnTheWay = saving && !!m.data.photos?.length;
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      style={style}
       aria-label={`${caption}, ${meta}${count > 1 ? `, ${count} photos` : ""}`}
       className={cx(
-        "print block w-full text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#C49A3C]",
-        NIGHT_DIM
+        tone.card,
+        "block w-full overflow-hidden text-left transition active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mp-focus"
       )}
     >
-      <span className={`print-tape print-tape--${tape}`} aria-hidden />
-      <span className="relative block">
-        {count ? (
-          <SafeImg src={photoUrl(m.id, 0)} className={aspect} />
-        ) : (
-          <NoteFace moment={m} saving={saving} aspect={saving && m.data.photos?.length ? aspect : "aspect-square"} />
-        )}
-        {count > 1 && (
-          <span className="absolute top-1.5 right-1.5 rounded-full bg-[#0B1A0D]/60 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur-sm">
-            📷 {count}
-          </span>
-        )}
-      </span>
-      <span className="mt-2 block px-0.5">
-        <span className="line-clamp-2 block font-[family-name:var(--font-display)] text-[17px] leading-[1.15] font-semibold text-[#1D4420] italic">
-          {caption}
+      {count > 0 && (
+        // Flex, so the photo sits flush (no inline-image gap) and a broken one centers its placeholder.
+        <span className="relative flex">
+          <SafeImg src={photoUrl(m.id, 0)} className={cx("w-full bg-mp-sunken object-cover", aspect)} />
+          {count > 1 && (
+            <span className="absolute top-2 right-2 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-white tabular-nums [.maple-night_&]:text-mp-ink">
+              <Icon name="images" size={12} strokeWidth={2} />
+              {count}
+            </span>
+          )}
         </span>
-        <span className="mt-1 block text-[11px] font-medium text-[#5C6B57]">{meta}</span>
+      )}
+      {photosOnTheWay && (
+        <span className={cx("flex w-full flex-col items-center justify-center gap-1.5 bg-mp-sunken text-mp-ink-3", aspect, PULSE)}>
+          <Icon name="image" size={24} />
+          <span className="text-[12px] font-medium">Saving…</span>
+        </span>
+      )}
+      <span className="block px-3 pt-2.5 pb-3">
+        {!count && !photosOnTheWay && <LeafMark size={16} className="mb-2" />}
+        {tag && <span className="mb-0.5 block text-[12px] leading-snug font-semibold text-mp-accent-fg">{tag}</span>}
+        <span className={cx(tone.body, "line-clamp-2 block text-[15px] leading-snug font-semibold")}>{caption}</span>
+        {note && (
+          <span className={cx(tone.muted, "mt-1 line-clamp-4 block text-[14px] leading-snug")}>“{note}”</span>
+        )}
+        <span className={cx(tone.faint, "mt-1.5 block text-[12px]")}>
+          {meta}
+          {saving && !photosOnTheWay && " · Saving…"}
+        </span>
       </span>
     </button>
   );
 }
 
-/** A moment with no photo: a pressed-leaf card with its emoji and a line of the note. */
-function NoteFace({ moment: m, saving, aspect }: { moment: Moment; saving: boolean; aspect: string }) {
-  const emoji = saving && m.data.photos?.length ? "🍃" : milestoneEmoji(m.data.milestone) ?? "✨";
-  return (
-    <span
-      className={cx(
-        "flex w-full flex-col items-center justify-center gap-1.5 bg-[radial-gradient(circle_at_30%_20%,#F6E9DC,#E9EFE0_70%)] p-3 text-center",
-        aspect,
-        saving && "animate-pulse"
-      )}
-    >
-      <span className="text-4xl" aria-hidden>
-        {emoji}
-      </span>
-      {saving ? (
-        <span className="text-[11px] font-medium text-[#5C6B57]">Saving…</span>
-      ) : (
-        m.note &&
-        captionOf(m) !== m.note && (
-          <span className="line-clamp-3 font-[family-name:var(--font-display)] text-[13px] leading-snug text-[#3D4A39] italic">
-            “{m.note}”
-          </span>
-        )
-      )}
-    </span>
-  );
-}
-
-/** An image that becomes a soft leaf if the proxy can't serve it. */
+/** An image that becomes a quiet placeholder if the proxy can't serve it. */
 function SafeImg({ src, className, alt = "" }: { src: string; className?: string; alt?: string }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [src]);
   if (broken) {
     return (
-      <span
-        role="img"
-        aria-label="Photo unavailable"
-        className={cx(
-          "flex w-full items-center justify-center bg-[linear-gradient(160deg,#E4ECD9,#F3E6D8)] text-3xl",
-          className
-        )}
-      >
-        <span aria-hidden>🍃</span>
+      <span role="img" aria-label="Photo unavailable" className={cx("flex w-full items-center justify-center bg-mp-sunken text-mp-ink-3", className)}>
+        <Icon name="image" size={22} />
       </span>
     );
   }
   // eslint-disable-next-line @next/next/no-img-element -- private photo via the auth proxy, not the image optimizer
-  return <img src={src} alt={alt} loading="lazy" decoding="async" onError={() => setBroken(true)} className={className} />;
+  return <img src={src} alt={alt} loading="lazy" decoding="async" onError={() => setBroken(true)} className={cx(className, NIGHT_DIM)} />;
 }
 
 // ── Empty & loading ──────────────────────────────────────────────────────
 
 function EmptyScrapbook({ viewer, onAdd }: { viewer: boolean; onAdd: () => void }) {
   return (
-    <div className="mb-8 flex flex-col items-center px-4 pt-2 text-center">
-      <div
-        className="print w-40"
-        style={{ "--tilt": "-3deg", "--delay": "80ms", "--tape-tilt": "-4deg", padding: "0.5rem 0.5rem 0.75rem" } as CSSProperties}
-        aria-hidden
-      >
-        <span className="print-tape print-tape--blush" />
-        <span className="flex aspect-[4/5] items-center justify-center border-2 border-dashed border-[#5C7A4A]/30 bg-[#F3EFE4] text-4xl">
-          🌱
-        </span>
-        <span className="mt-2 block font-[family-name:var(--font-display)] text-[15px] text-[#5C6B57] italic">her first photo</span>
-      </div>
-      <p className={cx(tone.heading, "mt-6 text-2xl")}>No moments yet.</p>
-      <p className={cx(tone.muted, "mt-1 text-[15px]")}>Her first photo goes here. Tiny toes count.</p>
-      {!viewer && (
-        <Button variant="primary" className="mt-4" onClick={onAdd}>
-          📷 Add a photo
-        </Button>
-      )}
+    <div className={tone.card}>
+      <EmptyState icon="camera" title="No moments yet">
+        <p>Her first photo goes here. Tiny toes count.</p>
+        {!viewer && (
+          <Button className="mt-4" onClick={onAdd}>
+            <Icon name="camera" size={18} />
+            Add a photo
+          </Button>
+        )}
+      </EmptyState>
     </div>
   );
 }
 
-function LoadingPrints() {
+function LoadingCards() {
   return (
-    <div className="mb-8 grid grid-cols-2 gap-x-4 gap-y-7 px-1" aria-label="Loading moments">
+    <div className="grid grid-cols-2 items-start gap-3" role="status" aria-label="Loading moments">
       {[0, 1].map((i) => (
-        <div key={i} className="print animate-pulse" style={{ "--tilt": i ? "2deg" : "-2deg", "--delay": "0ms", "--tape-tilt": "0deg" } as CSSProperties}>
-          <span className="block aspect-[4/5] bg-[#5C7A4A]/15" />
+        <div key={i} className={cx(tone.card, "overflow-hidden", PULSE)}>
+          <span className="block aspect-[4/5] bg-mp-sunken" />
+          <span className="block space-y-2 p-3">
+            <span className="block h-3 w-3/4 rounded-full bg-mp-sunken" />
+            <span className="block h-2.5 w-1/3 rounded-full bg-mp-sunken" />
+          </span>
         </div>
       ))}
     </div>
@@ -834,7 +818,7 @@ function Lightbox({
   const reduce = useReducedMotion();
   const openNow = index >= 0;
   const [dir, setDir] = useState(0);
-  const [night, setNight] = useState(false);
+  const night = useNightActive();
   const closeRef = useRef<HTMLButtonElement>(null);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -851,8 +835,6 @@ function Lightbox({
 
   useEffect(() => {
     if (!openNow) return;
-    // Portaled to <body>, so look for the night class on the page instead of an ancestor.
-    setNight(!!document.querySelector(".maple-night"));
     const back = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     const prev = document.body.style.overflow;
@@ -894,33 +876,33 @@ function Lightbox({
           role="dialog"
           aria-modal="true"
           aria-label="Moment"
-          className="ph-no-capture fixed inset-0 z-[85] flex flex-col bg-[#070F08] text-[#F5EDDF]"
+          // Photos are viewed on near-black whatever the theme: the .dark class
+          // gives this layer the dark tokens. At night the page's own night
+          // tokens (on <html>) already are that, in amber.
+          className={cx("ph-no-capture fixed inset-0 z-[85] flex flex-col bg-mp-bg text-mp-ink", !night && "dark")}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: reduce ? 0 : 0.2 }}
         >
-          <div className="flex shrink-0 items-center gap-2 px-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
-            <span className="flex-1 pl-3 text-sm font-semibold tabular-nums opacity-70">
-              {index + 1} / {slides.length}
+          <div className="flex shrink-0 items-center gap-1 px-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+            <span className={cx(tone.muted, "flex-1 pl-3 text-[13px] font-medium tabular-nums")}>
+              {index + 1} of {slides.length}
             </span>
             {onEdit && slide.entry.id > 0 && (
               <button
                 type="button"
                 onClick={() => onEdit(slide.entry)}
-                className="flex min-h-[44px] items-center gap-1.5 rounded-full px-4 text-sm font-semibold hover:bg-white/10"
+                className="flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink transition hover:bg-mp-ink/10"
               >
-                ✎ Edit
+                <Icon name="pencil" size={17} />
+                Edit
               </button>
             )}
-            <button
-              ref={closeRef}
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="flex h-11 w-11 items-center justify-center rounded-full text-xl hover:bg-white/10"
-            >
-              ✕
+            <button ref={closeRef} type="button" onClick={onClose} aria-label="Close" className="flex h-11 w-11 items-center justify-center rounded-full">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2">
+                <Icon name="x" size={18} strokeWidth={2.25} />
+              </span>
             </button>
           </div>
 
@@ -945,12 +927,11 @@ function Lightbox({
                 {slide.photo != null ? (
                   <FullPhoto entryId={slide.entry.id} index={slide.photo} dim={night} />
                 ) : (
-                  <div className="flex aspect-square w-full max-w-xs flex-col items-center justify-center gap-3 rounded-[4px] bg-[#ECE5D5] p-6 text-center text-[#1D4420]">
-                    <span className="text-6xl" aria-hidden>
-                      {milestoneEmoji(slide.entry.data.milestone) ?? "✨"}
-                    </span>
-                    <span className="font-[family-name:var(--font-display)] text-2xl leading-tight font-semibold italic">
-                      {captionOf(slide.entry)}
+                  // No photo: the words are the picture (the caption below skips a note shown here).
+                  <div className="flex aspect-square max-h-full w-full max-w-xs flex-col items-center justify-center gap-4 overflow-hidden rounded-[20px] border border-mp-line bg-mp-surface p-7 text-center">
+                    <LeafMark size={30} />
+                    <span className={cx(tone.display, "line-clamp-6 text-[24px] leading-tight lining-nums")}>
+                      {pictureNote(slide) ? `“${pictureNote(slide)}”` : captionOf(slide.entry)}
                     </span>
                   </div>
                 )}
@@ -975,11 +956,11 @@ function NavArrow({ side, onClick }: { side: "left" | "right"; onClick: () => vo
       onClick={onClick}
       aria-label={side === "left" ? "Previous photo" : "Next photo"}
       className={cx(
-        "absolute top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/35 text-xl text-white/90 backdrop-blur-sm hover:bg-black/50",
+        "absolute top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-mp-surface/80 text-mp-ink ring-1 ring-mp-line transition hover:bg-mp-surface",
         side === "left" ? "left-2" : "right-2"
       )}
     >
-      {side === "left" ? "‹" : "›"}
+      <Icon name={side === "left" ? "chevron-left" : "chevron-right"} size={22} />
     </button>
   );
 }
@@ -988,14 +969,14 @@ function NavArrow({ side, onClick }: { side: "left" | "right"; onClick: () => vo
 function FullPhoto({ entryId, index, dim }: { entryId: number; index: number; dim: boolean }) {
   const [full, setFull] = useState<"loading" | "ok" | "broken">("loading");
   const [thumbBroken, setThumbBroken] = useState(false);
-  const cls = cx("max-h-full max-w-full rounded-[3px] object-contain select-none", dim && "brightness-[.55] saturate-[.8]");
+  const cls = cx("max-h-full max-w-full rounded-[4px] object-contain select-none", dim && "brightness-[.55] saturate-[.8]");
   if (full === "broken" && thumbBroken) {
     return (
-      <div className="flex aspect-[4/5] w-full max-w-xs flex-col items-center justify-center gap-2 rounded-[4px] bg-[linear-gradient(160deg,#2A3B25,#3A2E26)] text-center">
-        <span className="text-5xl" aria-hidden>
-          🍃
+      <div className="flex aspect-[4/5] w-full max-w-xs flex-col items-center justify-center gap-3 rounded-[20px] border border-mp-line bg-mp-surface p-6 text-center">
+        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-3">
+          <Icon name="image" size={24} />
         </span>
-        <span className="text-sm text-[#E8DCC0]/80">This photo is resting. Try again later.</span>
+        <span className={cx(tone.muted, "text-sm")}>This photo is resting. Try again later.</span>
       </div>
     );
   }
@@ -1040,21 +1021,19 @@ function Caption({
   const age = ageAt(bornAt, m.started_at, tz);
   const milestone = m.data.milestone ? milestoneLabel(m.data.milestone) : null;
   const title = captionOf(m);
+  // A photo-less slide may already show its (short) note as the picture.
+  const showNote = m.note && m.note !== title && !pictureNote(slide);
   const via = m.source === "claude" ? " via Claude" : m.source === "chatgpt" ? " via ChatGPT" : m.source === "mcp" ? " via AI" : "";
   return (
     <div className="max-h-[42%] shrink-0 overflow-y-auto px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-      {milestone && milestone !== title && (
-        <span className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-[#C49A3C]/25 px-2.5 py-0.5 text-xs font-semibold text-[#F1D58F]">
-          <span aria-hidden>{milestoneEmoji(m.data.milestone) ?? "✨"}</span> {milestone}
-        </span>
-      )}
-      <p className="font-[family-name:var(--font-display)] text-[26px] leading-tight font-semibold italic">{title}</p>
-      {m.note && m.note !== title && <p className="mt-1.5 text-[15px] leading-relaxed whitespace-pre-line text-[#E8DCC0]">{m.note}</p>}
-      <p className="mt-2 text-[13px] text-[#E8DCC0]/75">
+      {milestone && milestone !== title && <p className="mb-1 text-[13px] font-semibold text-mp-accent-fg">{milestone}</p>}
+      <p className={cx(tone.display, "text-[26px] leading-tight lining-nums")}>{title}</p>
+      {showNote && <p className={cx(tone.muted, "mt-1.5 text-[15px] leading-relaxed whitespace-pre-line")}>{m.note}</p>}
+      <p className={cx(tone.faint, "mt-2.5 text-[13px]")}>
         {formatDayLabel(dayKey(at, tz), dayKey(now, tz))} · {formatTime(at, tz)}
         {age && <> · {age.charAt(0).toLowerCase() + age.slice(1)}</>}
       </p>
-      <p className="mt-1 flex items-center gap-1.5 text-[13px] text-[#E8DCC0]/75">
+      <p className={cx(tone.faint, "mt-1 flex items-center gap-1.5 text-[13px]")}>
         <Avatar member={avatar} size={20} /> Added by {who}
         {via}
       </p>

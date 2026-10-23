@@ -1,10 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { DISCLAIMER, EMERGENCY_SIGNS, TIER_LABEL, VITAMIN_D_DEFAULT, type AlertTier } from "@/lib/maple/guidelines";
 import type { Alert } from "@/lib/maple/insights";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
+import { Icon, type IconName } from "./icons";
 import type { TabId } from "./MapleApp";
 import { useSheets } from "./sheets";
 import { Sheet, cx, tone } from "./ui";
@@ -13,7 +14,7 @@ import { useMaple } from "./useMaple";
 /**
  * Pediatric alerts on Today. Plain and calm, always saying who to call. The
  * urgent tiers (911 / call now / call today) stay until someone taps "We
- * called ✓", which marks it handled for the whole family and notes the call in
+ * called", which marks it handled for the whole family and notes the call in
  * the log. Softer tiers can be dismissed. There is never an "all clear" card:
  * no alerts renders nothing.
  */
@@ -21,33 +22,92 @@ import { useMaple } from "./useMaple";
 const URGENT: AlertTier[] = ["emergency", "now", "today"];
 const NUDGE_KEY = "maple-nudges-dismissed";
 
-const STYLE: Record<AlertTier, { card: string; pill: string; icon: string }> = {
+/**
+ * 911 red: solid in every look, night included (dimmed, never folded into
+ * the amber), so an emergency never reads like anything else on the page.
+ */
+const EMERGENCY_FILL = "bg-[#9B2419] text-white [.maple-night_&]:bg-[#6E1A12] [.maple-night_&]:text-[#F6CBBE]";
+
+/**
+ * Each tier looks unmistakably different, loudest first: 911 is a solid red
+ * card, "call now" a red wash, "call today" an amber wash, and the two soft
+ * tiers are plain cards with a colored mark. Tier colors are information, so
+ * "today" carries its own amber for dark and night (no token for it).
+ */
+const STYLE: Record<
+  AlertTier,
+  {
+    icon: IconName;
+    card: string;
+    /** The tier label and its icon. */
+    mark: string;
+    /** Title and body text. */
+    ink: string;
+    body: string;
+    /** The main action (call, log). */
+    solid: string;
+    /** Everything else (after-hours, we called, got it). */
+    soft: string;
+  }
+> = {
   emergency: {
-    card: "bg-[#7A1F1A] text-white border-[#7A1F1A] shadow-[0_6px_24px_rgba(122,31,26,0.35)]",
-    pill: "bg-white text-[#7A1F1A]",
-    icon: "🚨",
+    icon: "siren",
+    card: cx("border-transparent", EMERGENCY_FILL),
+    mark: "",
+    ink: "",
+    body: "opacity-90",
+    solid: "bg-white text-[#8A1F15] [.maple-night_&]:bg-[#E9A898] [.maple-night_&]:text-[#4A0F0A]",
+    soft: "bg-white/15 hover:bg-white/20 [.maple-night_&]:bg-[#F6CBBE]/15",
   },
   now: {
-    card: "bg-[#FBEDE8] border-[#B5452B]/60 text-[#5A1E12] dark:bg-[#3A1A14] dark:border-[#E07A5F]/50 dark:text-[#F8DCD3]",
-    pill: "bg-[#B5452B] text-white",
-    icon: "📞",
+    icon: "phone",
+    // Washes are mixed into the card surface (not see-through) so they stay clean on the paper.
+    card: cx(
+      "border-mp-danger/40 bg-[color-mix(in_srgb,var(--mp-danger)_9%,var(--mp-surface))] dark:bg-[color-mix(in_srgb,var(--mp-danger)_13%,var(--mp-surface))]",
+      // At night the amber "today" sits close by, so "now" leans harder on its red.
+      "[.maple-night_&]:border-mp-danger/55 [.maple-night_&]:bg-[color-mix(in_srgb,var(--mp-danger)_15%,var(--mp-surface))]"
+    ),
+    mark: "text-mp-danger",
+    ink: "text-mp-ink",
+    body: "text-mp-ink",
+    solid: "bg-mp-danger text-mp-surface [.maple-night_&]:bg-mp-danger/20 [.maple-night_&]:text-mp-danger",
+    soft: "bg-mp-ink/[0.06] text-mp-ink hover:bg-mp-ink/10",
   },
   today: {
-    card: "bg-[#FCF1E4] border-[#D9772B]/50 text-[#5A3210] dark:bg-[#33240F] dark:border-[#D9772B]/45 dark:text-[#F5E2C8]",
-    pill: "bg-[#D9772B] text-white",
-    icon: "📞",
+    icon: "calendar-clock",
+    card: cx(
+      "border-[#D9822B]/45 bg-[color-mix(in_srgb,#D9822B_10%,var(--mp-surface))]",
+      "dark:border-[#EBA35C]/35 dark:bg-[color-mix(in_srgb,#EBA35C_12%,var(--mp-surface))]",
+      "[.maple-night_&]:border-[#E0A93B]/30 [.maple-night_&]:bg-[color-mix(in_srgb,#E0A93B_7%,var(--mp-surface))]"
+    ),
+    mark: "text-[#A35A0C] dark:text-[#EBA35C] [.maple-night_&]:text-[#E8A23F]",
+    ink: "text-mp-ink",
+    body: "text-mp-ink",
+    solid: "bg-mp-accent text-mp-on-accent",
+    soft: "bg-mp-ink/[0.06] text-mp-ink hover:bg-mp-ink/10",
   },
   mention: {
-    card: "bg-[#EEF3E8] border-[#5C7A4A]/35 text-[#24361C] dark:bg-[#18281A] dark:border-[#A9C08F]/30 dark:text-[#DDE8D0]",
-    pill: "bg-[#5C7A4A]/15 text-[#2E4A22] dark:bg-[#A9C08F]/20 dark:text-[#CFE0BC]",
-    icon: "🩺",
+    icon: "stethoscope",
+    card: "border-mp-line bg-mp-surface",
+    mark: "text-mp-accent-fg",
+    ink: "text-mp-ink",
+    body: "text-mp-ink-2",
+    solid: "bg-mp-accent text-mp-on-accent",
+    soft: "bg-mp-sunken text-mp-ink hover:bg-mp-ink/10",
   },
   nudge: {
-    card: "bg-[#FBF5E6] border-[#C49A3C]/35 text-[#4A3A12] dark:bg-[#2A2410] dark:border-[#C49A3C]/30 dark:text-[#F0E3C0]",
-    pill: "bg-[#C49A3C]/20 text-[#6E5210] dark:bg-[#C49A3C]/25 dark:text-[#E9CF8C]",
-    icon: "🍂",
+    icon: "bell",
+    card: "border-mp-line bg-mp-surface",
+    mark: "text-mp-ink-2",
+    ink: "text-mp-ink",
+    body: "text-mp-ink-2",
+    solid: "bg-mp-accent text-mp-on-accent",
+    soft: "bg-mp-sunken text-mp-ink hover:bg-mp-ink/10",
   },
 };
+
+const BTN =
+  "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-semibold transition active:scale-[0.98]";
 
 function readNudges(): Record<string, number> {
   try {
@@ -151,7 +211,7 @@ function AlertCard({
           { kind: "note", data: { tag: "other" }, note: `${emergency ? "Called 911" : "Called the pediatrician"} about: ${alert.title}` },
           { silent: true }
         );
-        toast("Marked as handled and noted in the log", { emoji: "✓" });
+        toast("Marked as handled and noted in the log");
       }
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
@@ -160,75 +220,109 @@ function AlertCard({
     }
   };
 
-  const btn = "inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-full px-4 text-[15px] font-semibold transition active:scale-[0.97]";
-  const solid = emergency ? "bg-white text-[#7A1F1A]" : "bg-[#1D4420] text-[#FDF8F0] dark:bg-[#F5EDDF] dark:text-[#14210F]";
-  const soft = emergency ? "bg-white/15 text-white" : "bg-black/[0.06] dark:bg-white/10";
+  // The call gets its own full-width row; the rest line up beneath it ("See the entry" sits up top).
+  const call: { href: string; label: string } | null = emergency
+    ? { href: "tel:911", label: "Call 911" }
+    : urgent && phones.pediatrician
+      ? { href: telHref(phones.pediatrician), label: "Call pediatrician" }
+      : null;
+
+  const rest: ReactNode[] = [];
+  if (urgent && phones.afterHours) {
+    rest.push(
+      <a key="after" href={telHref(phones.afterHours)} className={cx(BTN, st.soft)}>
+        <Icon name="phone" size={17} />
+        After-hours line
+      </a>
+    );
+  }
+  if (urgent && !readOnly) {
+    rest.push(
+      <button key="called" type="button" onClick={() => void ack(true)} className={cx(BTN, st.soft)}>
+        <Icon name="check" size={18} strokeWidth={2.25} />
+        We called
+      </button>
+    );
+  }
+  if (alertKind(alert.id) === "vitamin-d" && !readOnly) {
+    rest.push(
+      <button
+        key="vitd"
+        type="button"
+        onClick={() => void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops logged" })}
+        className={cx(BTN, st.solid)}
+      >
+        Log Vitamin D
+      </button>
+    );
+  }
+  if (alert.tier === "mention" && !readOnly) {
+    rest.push(
+      <button key="ok" type="button" onClick={() => void ack(false)} className={cx(BTN, st.soft)}>
+        Got it
+      </button>
+    );
+  }
+  if (alert.tier === "nudge") {
+    rest.push(
+      <button key="ok" type="button" onClick={onDismissNudge} className={cx(BTN, st.soft)}>
+        Got it
+      </button>
+    );
+  }
 
   return (
     <motion.section
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, height: 0, marginTop: 0 }}
+      // The stack's gap is each card's bottom margin (Tailwind v4 space-y), so fold that and the padding away too.
+      exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0 }}
       role={urgent ? "alert" : "status"}
-      className={cx("overflow-hidden rounded-3xl border p-4", st.card)}
+      className={cx("overflow-hidden rounded-[20px] border p-4", st.card)}
     >
-      <span className={cx("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide uppercase", st.pill)}>
-        <span aria-hidden>{st.icon}</span>
-        {TIER_LABEL[alert.tier]}
-      </span>
-      <h3 className="mt-2 text-[17px] leading-snug font-bold">{alert.title}</h3>
-      <p className="mt-1 text-[15px] leading-relaxed opacity-90">{alert.body}</p>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        {emergency && (
-          <a href="tel:911" className={cx(btn, solid)}>
-            📞 Call 911
-          </a>
-        )}
-        {urgent && !emergency && phones.pediatrician && (
-          <a href={telHref(phones.pediatrician)} className={cx(btn, solid)}>
-            📞 Call pediatrician
-          </a>
-        )}
-        {urgent && phones.afterHours && (
-          <a href={telHref(phones.afterHours)} className={cx(btn, soft)}>
-            After-hours line
-          </a>
-        )}
-        {urgent && !readOnly && (
-          <button type="button" onClick={() => void ack(true)} className={cx(btn, soft)}>
-            We called ✓
-          </button>
-        )}
-        {alertKind(alert.id) === "vitamin-d" && !readOnly && (
+      <div className="flex items-center justify-between gap-2">
+        <p className={cx("flex min-w-0 items-center gap-1.5 text-[13px] font-semibold", st.mark)}>
+          <Icon name={st.icon} size={16} strokeWidth={2} className="shrink-0" />
+          {TIER_LABEL[alert.tier]}
+        </p>
+        {entry && !readOnly && (
           <button
             type="button"
-            onClick={() => void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops ✓", emoji: "☀️" })}
-            className={cx(btn, solid)}
+            onClick={() => open({ kind: entry.kind, entry })}
+            className={cx("-my-3 -mr-2 inline-flex min-h-[44px] shrink-0 items-center gap-0.5 px-2 text-[13px] font-semibold", emergency ? "opacity-90" : "text-mp-accent-fg")}
           >
-            Log Vitamin D
-          </button>
-        )}
-        {alert.tier === "mention" && !readOnly && (
-          <button type="button" onClick={() => void ack(false)} className={cx(btn, soft)}>
-            Got it
-          </button>
-        )}
-        {alert.tier === "nudge" && (
-          <button type="button" onClick={onDismissNudge} className={cx(btn, soft)}>
-            Got it
-          </button>
-        )}
-        {entry && !readOnly && (
-          <button type="button" onClick={() => open({ kind: entry.kind, entry })} className={cx(btn, "px-3 underline-offset-2 opacity-80 hover:underline")}>
             See the entry
+            <Icon name="chevron-right" size={14} />
           </button>
         )}
       </div>
+      <h3 className={cx("mt-1.5 text-[17px] leading-snug font-semibold", st.ink)}>{alert.title}</h3>
+      <p className={cx("mt-1 text-[15px] leading-relaxed", st.body)}>{alert.body}</p>
+
+      {(call || rest.length > 0) && (
+        <div className="mt-3.5 space-y-2">
+          {call && (
+            <a href={call.href} className={cx(BTN, "min-h-[48px] w-full", st.solid)}>
+              <Icon name="phone" size={18} />
+              {call.label}
+            </a>
+          )}
+          {rest.length > 0 && <div className="flex flex-wrap gap-2">{rest}</div>}
+        </div>
+      )}
       {urgent && !emergency && !phones.pediatrician && (
-        <button type="button" onClick={() => onNavigate("family")} className="mt-2 text-[13px] font-semibold underline underline-offset-2 opacity-80">
-          Add your pediatrician&apos;s number for one-tap calling
+        <button
+          type="button"
+          onClick={() => onNavigate("family")}
+          className="-mb-2 mt-1 min-h-[44px] py-2.5 text-left text-[13px] font-semibold text-mp-accent-fg"
+        >
+          Add your pediatrician&apos;s number for one-tap{" "}
+          {/* The chevron stays with the last word rather than wrapping on its own. */}
+          <span className="whitespace-nowrap">
+            calling
+            <Icon name="chevron-right" size={14} className="ml-0.5 inline align-[-2px]" />
+          </span>
         </button>
       )}
     </motion.section>
@@ -239,40 +333,47 @@ function AlertCard({
 export function EmergencyHelp() {
   const [open, setOpen] = useState(false);
   const phones = usePhones();
+  const numbers = [
+    phones.pediatrician && { label: "Pediatrician", phone: phones.pediatrician },
+    phones.afterHours && { label: "After hours", phone: phones.afterHours },
+  ].filter((n): n is { label: string; phone: string } => !!n);
+
+  // One wrapper, so the (fixed) sheet never picks up the page's space-y margins,
+  // and the sheet outside the centered footer so its text stays left-aligned.
   return (
-    <div className="px-2 text-center">
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-4 text-sm font-semibold text-[#9A3A24] underline-offset-2 hover:underline dark:text-[#F4A68F]"
-      >
-        <span aria-hidden>🚑</span> When to call 911
-      </button>
-      <p className={cx(tone.muted, "mx-auto max-w-xs text-[12px] leading-snug")}>{DISCLAIMER}</p>
-      <Sheet open={open} onClose={() => setOpen(false)} title="When to call 911" emoji="🚑">
-        <p className={cx(tone.body, "text-[16px] leading-relaxed")}>{EMERGENCY_SIGNS}</p>
-        <div className="flex flex-col gap-2">
-          <a href="tel:911" className="flex min-h-[56px] items-center justify-center gap-2 rounded-full bg-[#7A1F1A] text-lg font-bold text-white active:scale-[0.98]">
-            📞 Call 911
-          </a>
-          {phones.pediatrician && (
-            <a
-              href={telHref(phones.pediatrician)}
-              className="flex min-h-[52px] items-center justify-center gap-2 rounded-full bg-[#1D4420]/[0.08] text-base font-semibold text-[#1D4420] dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]"
-            >
-              📞 Pediatrician · {phones.pediatrician}
-            </a>
-          )}
-          {phones.afterHours && (
-            <a
-              href={telHref(phones.afterHours)}
-              className="flex min-h-[52px] items-center justify-center gap-2 rounded-full bg-[#1D4420]/[0.08] text-base font-semibold text-[#1D4420] dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]"
-            >
-              📞 After hours · {phones.afterHours}
-            </a>
-          )}
-        </div>
-        <p className={cx(tone.muted, "text-sm")}>For anything else that worries you, call your pediatrician. {DISCLAIMER}</p>
+    <div>
+      <div className="px-2 text-center">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-danger"
+        >
+          <Icon name="siren" size={18} />
+          When to call 911
+        </button>
+        <p className={cx(tone.faint, "mx-auto max-w-xs text-[12px] leading-snug")}>{DISCLAIMER}</p>
+      </div>
+      <Sheet open={open} onClose={() => setOpen(false)} title="When to call 911">
+        <p className={cx(tone.body, "text-[17px] leading-relaxed")}>{EMERGENCY_SIGNS}</p>
+        <a
+          href="tel:911"
+          className={cx("flex min-h-[56px] items-center justify-center gap-2 rounded-[14px] text-[17px] font-semibold active:scale-[0.98]", EMERGENCY_FILL)}
+        >
+          <Icon name="phone" size={20} />
+          Call 911
+        </a>
+        {numbers.length > 0 && (
+          <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
+            {numbers.map((n) => (
+              <a key={n.label} href={telHref(n.phone)} className={cx(tone.row, "min-h-[56px] py-2.5")}>
+                <Icon name="phone" size={20} className="shrink-0 text-mp-accent-fg" />
+                <span className={cx(tone.body, "flex-1 text-[15px] font-medium")}>{n.label}</span>
+                <span className={cx(tone.muted, "text-[15px] tabular-nums")}>{n.phone}</span>
+              </a>
+            ))}
+          </div>
+        )}
+        <p className={cx(tone.faint, "px-1 text-[13px] leading-snug")}>For anything else that worries you, call your pediatrician. {DISCLAIMER}</p>
       </Sheet>
     </div>
   );

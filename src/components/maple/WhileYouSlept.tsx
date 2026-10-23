@@ -5,8 +5,9 @@ import { useEffect, useState } from "react";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
 import { photoUrl } from "./EntryRow";
+import { Icon, type IconName } from "./icons";
 import { SIDE_NAME } from "./TimerCard";
-import { cx, tone } from "./ui";
+import { Avatar, Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
@@ -61,34 +62,46 @@ export default function WhileYouSlept() {
   const photo = moments.find((e) => e.kind === "moment" && e.data.photos?.length);
   const who = [...new Set(fresh.map((e) => e.created_by).filter((x): x is string => !!x))];
 
-  const bits: string[] = [];
+  // One short line per kind of thing, so the night reads at a glance.
+  const bits: { icon: IconName; text: string }[] = [];
   if (feeds.length) {
     const next = summary.nextSide && !summary.active.some((e) => e.kind === "feed") ? `, ${SIDE_NAME[summary.nextSide]} next` : "";
-    bits.push(`${feeds.length} feed${feeds.length === 1 ? "" : "s"} (last ${formatTime(feeds[0].started_at, tz)}${next})`);
+    bits.push({ icon: "baby", text: `${feeds.length} feed${feeds.length === 1 ? "" : "s"} (last ${formatTime(feeds[0].started_at, tz)}${next})` });
   }
   if (diapers.length) {
     const parts = [wet && `${wet} wet`, dirty && `${dirty} dirty`].filter(Boolean).join(", ");
-    bits.push(`${diapers.length} diaper${diapers.length === 1 ? "" : "s"}${parts ? ` (${parts})` : ""}`);
+    bits.push({ icon: "diaper", text: `${diapers.length} diaper${diapers.length === 1 ? "" : "s"}${parts ? ` (${parts})` : ""}` });
   }
   const napping = sleeps.some((e) => e.active);
   if (done.length > 3) {
     // A long shift: total and longest, not a list of every stretch.
     const secs = sleeps.filter((e) => !e.active && e.ended_at).map((e) => (Date.parse(e.ended_at!) - Date.parse(e.started_at)) / 1000);
     const total = secs.reduce((a, b) => a + b, 0);
-    bits.push(`slept ${formatDuration(total)} in ${secs.length} stretches (longest ${formatDuration(Math.max(...secs))})${napping ? " + asleep now" : ""}`);
+    bits.push({
+      icon: "moon",
+      text: `Slept ${formatDuration(total)} in ${secs.length} stretches (longest ${formatDuration(Math.max(...secs))})${napping ? " + asleep now" : ""}`,
+    });
   } else if (done.length || napping) {
-    bits.push(`slept ${done.join(" + ")}${napping ? `${done.length ? " + " : ""}asleep now` : ""}`);
+    bits.push({ icon: "moon", text: done.length ? `Slept ${done.join(" + ")}${napping ? " + asleep now" : ""}` : "Asleep now" });
   }
-  if (vitD) bits.push("Vitamin D ✓");
+  if (vitD) bits.push({ icon: "sun", text: "Vitamin D given" });
 
   const extra: string[] = [];
   const urgent = summary.alerts.filter((a) => a.tier === "emergency" || a.tier === "now" || a.tier === "today");
   if (urgent.length) extra.push(`${urgent.length} alert${urgent.length === 1 ? "" : "s"} to look at below`);
   const reached = summary.celebrations.filter((c) => Date.parse(c.reachedAt) >= since);
-  if (reached.length) extra.push(reached.map((c) => `${c.emoji} ${c.title}`).join(" · "));
+  if (reached.length) extra.push(reached.map((c) => c.title).join(" · "));
   if (moments.length) extra.push(`${moments.length} new moment${moments.length === 1 ? "" : "s"}`);
 
-  const title = overlapsNight(since, nowMs, tz) ? "While you slept 🌙" : `Since you checked in at ${formatTime(since, tz)}`;
+  const overnight = overlapsNight(since, nowMs, tz);
+  // Keep "9:12 AM" together when the title wraps.
+  const title = overnight ? (
+    "While you slept"
+  ) : (
+    <>
+      Since you checked in at <span className="whitespace-nowrap">{formatTime(since, tz)}</span>
+    </>
+  );
   const gotIt = () => {
     setDismissed(seenAt);
     try {
@@ -99,42 +112,43 @@ export default function WhileYouSlept() {
   };
 
   return (
-    <motion.section
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      aria-labelledby="wys"
-      className={cx(tone.card, "border-[#8E7CB0]/30 bg-[#F3EFF8]/90 p-4 dark:border-[#B8A9C9]/20 dark:bg-[#1B1A2A]/85 [.maple-night_&]:bg-[#11140F]")}
-    >
+    <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} aria-labelledby="wys" className={cx(tone.card, "p-4")}>
       <div className="flex items-start justify-between gap-3">
-        <h2 id="wys" className={cx(tone.heading, "text-xl leading-tight [.maple-night_&]:text-[#E0A93B]/85")}>
-          {title}
+        <h2 id="wys" className={cx(tone.heading, "flex min-w-0 items-center gap-2 text-[17px] leading-snug")}>
+          <Icon name={overnight ? "moon-star" : "history"} size={19} className="shrink-0 text-mp-ink-2" />
+          <span className="min-w-0">{title}</span>
         </h2>
-        <div className="flex shrink-0 -space-x-1.5 pt-0.5" aria-label={`Logged by ${who.map((w) => memberName(w)).join(", ")}`}>
+        <div role="img" className="flex shrink-0 -space-x-1.5" aria-label={`Logged by ${who.map((w) => memberName(w)).join(", ")}`}>
           {who.slice(0, 4).map((w) => (
-            <span key={w} title={memberName(w)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-sm ring-2 ring-[#F3EFF8] dark:bg-[#2A2840] dark:ring-[#1B1A2A]">
-              {member(w)?.emoji ?? "🍁"}
+            <span key={w} title={memberName(w)} className="rounded-full ring-2 ring-mp-surface">
+              <Avatar member={member(w) ?? { email: w, display_name: memberName(w), role: "member", emoji: null, color: null }} size={26} />
             </span>
           ))}
         </div>
       </div>
-      {bits.length > 0 && <p className={cx(tone.body, "mt-1.5 text-[15px] leading-relaxed [.maple-night_&]:text-[#E0A93B]/80")}>{bits.join(" · ")}</p>}
+      {bits.length > 0 && (
+        <ul className="mt-2.5 space-y-1.5">
+          {bits.map((b) => (
+            <li key={b.icon} className="flex items-start gap-2.5 text-[15px] leading-snug text-mp-ink">
+              <Icon name={b.icon} size={17} className="mt-0.5 shrink-0 text-mp-ink-3" />
+              {b.text}
+            </li>
+          ))}
+        </ul>
+      )}
       {(extra.length > 0 || photo) && (
-        <div className="mt-2 flex items-center gap-2">
+        <div className="mt-3 flex items-center gap-2.5">
           {photo && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={photoUrl(photo.id, 0)} alt="" className="h-10 w-10 shrink-0 rounded-xl object-cover [.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]" />
+            <img src={photoUrl(photo.id, 0)} alt="" className="h-10 w-10 shrink-0 rounded-[10px] object-cover [.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]" />
           )}
-          <p className={cx(tone.muted, "text-sm")}>{extra.join(" · ")}</p>
+          <p className="text-sm text-mp-ink-2">{extra.join(" · ")}</p>
         </div>
       )}
       <div className="mt-3 flex justify-end">
-        <button
-          type="button"
-          onClick={gotIt}
-          className="min-h-[44px] rounded-full bg-[#8E7CB0]/15 px-5 text-[15px] font-semibold text-[#4A3A6A] active:scale-[0.97] dark:bg-[#B8A9C9]/15 dark:text-[#D4C8E0]"
-        >
+        <Button variant="soft" onClick={gotIt}>
           Got it
-        </button>
+        </Button>
       </div>
     </motion.section>
   );

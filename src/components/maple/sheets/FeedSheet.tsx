@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { feedTotals, other, retimeBreast } from "@/lib/maple/feed";
 import { BOTTLE_CUES, typicalBottle } from "@/lib/maple/guidelines";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
@@ -18,6 +18,7 @@ import {
   NoteField,
   RunningNote,
   SheetFooter,
+  SideLabel,
   presetStart,
   pnum,
   pstr,
@@ -173,7 +174,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       const at = when ?? now();
       void log(
         { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk }, note: note.trim() || null },
-        { toast: `${amountLabel ? `${amountLabel} bottle` : "Bottle"} · ${clock(at)}`, emoji: "🍼" }
+        { toast: `${amountLabel ? `${amountLabel} bottle` : "Bottle"} · ${clock(at)}` }
       );
       return;
     }
@@ -195,7 +196,6 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           l + r > 0
             ? `Nursed ${l + r}m (L ${l} · R ${r}) · ${next === "L" ? "Left" : "Right"} next`
             : `Nursed · ${clock(s)} · ${next === "L" ? "Left" : "Right"} next`,
-        emoji: "🤱",
       }
     );
   };
@@ -242,7 +242,6 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const title = e ? (running ? "Nursing now" : describeEntry(e).title) : "Feed";
-  const emoji = e ? entryEmoji(e) : method === "bottle" ? "🍼" : "🤱";
   const primary = e ? "Save" : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
 
   return (
@@ -250,7 +249,6 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={title}
-      emoji={emoji}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -292,16 +290,16 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           {method === "breast" ? (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <MiniStepper key="left" label="Left" unit="min" ariaLabel="minutes on the left" value={shownL} onChange={(v) => typeMinutes(v, shownR)} max={240} onInvalid={checks.watch("left")} />
-                <MiniStepper key="right" label="Right" unit="min" ariaLabel="minutes on the right" value={shownR} onChange={(v) => typeMinutes(shownL, v)} max={240} onInvalid={checks.watch("right")} />
+                <MiniStepper key="left" label={<SideLabel side="L" />} unit="min" ariaLabel="minutes on the left" value={shownL} onChange={(v) => typeMinutes(v, shownR)} max={240} onInvalid={checks.watch("left")} />
+                <MiniStepper key="right" label={<SideLabel side="R" />} unit="min" ariaLabel="minutes on the right" value={shownR} onChange={(v) => typeMinutes(shownL, v)} max={240} onInvalid={checks.watch("right")} />
               </div>
               {timed && !minutesTyped && (
-                <p className={cx(tone.muted, "-mt-1 px-1 text-xs leading-snug")}>
+                <p className={cx(tone.muted, "-mt-1 text-xs leading-snug")}>
                   Started earlier or ended sooner? Move the times below and the first or last side follows.
                 </p>
               )}
-              <div>
-                <Label>Started on</Label>
+              <div className="flex items-center justify-between gap-4">
+                <Label className="mb-0">Started on</Label>
                 <Segmented<Side>
                   value={first}
                   onChange={setFirst}
@@ -309,6 +307,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     { value: "L", label: "Left" },
                     { value: "R", label: "Right" },
                   ]}
+                  className="w-[11.5rem] shrink-0"
                 />
               </div>
               <TimeRange
@@ -381,7 +380,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   </div>
                 </div>
               </MoreDetails>
-              <ContextNote emoji="🍼">
+              <ContextNote>
                 {age ? <>Typical at her age: {typicalBottle(ageDays)}. </> : null}
                 {BOTTLE_CUES}
               </ContextNote>

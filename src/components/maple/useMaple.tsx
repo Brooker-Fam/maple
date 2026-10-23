@@ -50,6 +50,7 @@ export type Toast = {
   id: number;
   text: string;
   tone: "ok" | "error" | "info";
+  /** @deprecated Ignored: toasts show an icon for their tone, never emoji. */
   emoji?: string;
   undo?: () => void;
   /** Extra inline buttons (e.g. stool-color swatches after "Poop"). */
@@ -84,7 +85,13 @@ export type MapleContextValue = {
   /** Log an entry. Resolves to the saved entry (or the pending optimistic one when offline; null on failure). */
   log: (
     input: CreateEntryInput,
-    opts?: { toast?: string; emoji?: string; silent?: boolean; actions?: (entry: Entry) => ToastAction[] }
+    opts?: {
+      toast?: string;
+      /** @deprecated Ignored: toasts don't show emoji. */
+      emoji?: string;
+      silent?: boolean;
+      actions?: (entry: Entry) => ToastAction[];
+    }
   ) => Promise<Entry | null>;
   update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string }) => Promise<Entry | null>;
   remove: (id: number, opts?: { toast?: string }) => Promise<void>;
@@ -463,12 +470,9 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         );
         upsert(entry);
         if (stopped_at) {
-          toast(`Restored, but stopped at ${formatTime(stopped_at, tzRef.current)}: another timer is running now`, {
-            emoji: "🍁",
-            tone: "info",
-          });
+          toast(`Restored, but stopped at ${formatTime(stopped_at, tzRef.current)}: another timer is running now`, { tone: "info" });
         } else {
-          toast("Restored", { emoji: "🍁" });
+          toast("Restored");
         }
         return entry;
       } catch (e) {
@@ -487,19 +491,19 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       const queued = outboxRef.current.find((i) => i.entry.id === id);
       // Still being saved (temporary id, not queued): nothing to delete yet.
       if (id < 0 && !queued) {
-        toast("One sec, that's still saving", { emoji: "⏳", tone: "info" });
+        toast("One sec, that's still saving", { tone: "info" });
         return;
       }
       if (queued) {
         setQueue(outboxRef.current.filter((i) => i.client_id !== queued.client_id));
         dropEntry(id);
-        toast(opts.toast ?? "Removed", { emoji: "🍂" });
+        toast(opts.toast ?? "Removed");
         return;
       }
       const rollback = patchEntries((es) => es.filter((e) => e.id !== id));
       try {
         await withInflight(() => fetchJson(`/api/maple/entries?id=${id}`, { method: "DELETE" }));
-        toast(opts.toast ?? "Deleted", { emoji: "🍂", undo: () => void restore(id) });
+        toast(opts.toast ?? "Deleted", { undo: () => void restore(id) });
       } catch (e) {
         rollback();
         toast(e instanceof Error ? e.message : "Couldn't delete", { tone: "error" });
@@ -539,7 +543,6 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         upsert(entry, id);
         if (!opts.silent) {
           toast(opts.toast ?? "Logged", {
-            emoji: opts.emoji,
             undo: () => void remove(entry.id, { toast: "Undone" }),
             actions: opts.actions?.(entry),
           });
@@ -550,7 +553,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           // Keep it: it'll sync when the connection is back.
           setQueue([...outboxRef.current, { client_id, input: body, entry: optimistic, tries: 1 }]);
           setOnline(false);
-          toast("Saved on this phone · will sync when you're back online", { emoji: "🍂", tone: "info" });
+          toast("Saved on this phone · will sync when you're back online", { tone: "info" });
           return optimistic;
         }
         dropEntry(id);
@@ -570,7 +573,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         // into the queued save; otherwise it's mid-save, so ask for a moment.
         const queued = outboxRef.current.find((i) => i.entry.id === id);
         if (!queued) {
-          toast("One sec, that's still saving", { emoji: "⏳", tone: "info" });
+          toast("One sec, that's still saving", { tone: "info" });
           return null;
         }
         const input: CreateEntryInput = {
@@ -589,7 +592,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         } as Entry;
         setQueue(outboxRef.current.map((i) => (i.client_id === queued.client_id ? { ...i, input, entry } : i)));
         upsert(entry);
-        if (opts.toast !== "") toast(opts.toast ?? "Saved on this phone", { emoji: "🍂" });
+        if (opts.toast !== "") toast(opts.toast ?? "Saved on this phone");
         return entry;
       }
       try {
@@ -597,7 +600,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           fetchJson<{ entry: Entry }>(`/api/maple/entries?id=${id}`, { method: "PATCH", body: JSON.stringify(patch) })
         );
         upsert(entry);
-        if (opts.toast !== "") toast(opts.toast ?? "Saved", { emoji: "🍁" });
+        if (opts.toast !== "") toast(opts.toast ?? "Saved");
         return entry;
       } catch (e) {
         toast(e instanceof Error ? e.message : "Couldn't save", { tone: "error" });
@@ -616,7 +619,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       // A timer that hasn't reached the server yet has a temporary id; acting
       // on it would 400 and lose the tap.
       if (input.id != null && input.id < 0) {
-        toast("One sec, that timer is still starting", { emoji: "⏳", tone: "info" });
+        toast("One sec, that timer is still starting", { tone: "info" });
         return null;
       }
       // Optimistic: reflect the change immediately; the server answer replaces it.
@@ -688,12 +691,12 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           const cur = body?.entry;
           if (cur) upsert(cur);
           if (body?.reason === "changed" || cur?.active) {
-            toast("Someone else just changed that timer. Have another look.", { emoji: "🍃", tone: "info" });
+            toast("Someone else just changed that timer. Have another look.", { tone: "info" });
             return null;
           }
           const who = cur?.updated_by && cur.updated_by !== state?.me.email ? memberName(cur.updated_by) : null;
           const when = cur?.ended_at ? ` at ${formatTime(cur.ended_at, tzRef.current)}` : "";
-          toast(who ? `${who} already stopped it${when}` : `Already stopped${when}`, { emoji: "🍃", tone: "info" });
+          toast(who ? `${who} already stopped it${when}` : `Already stopped${when}`, { tone: "info" });
           // null: the action didn't happen (callers must not toast success or offer Undo).
           return null;
         }

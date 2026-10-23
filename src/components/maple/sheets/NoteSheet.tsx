@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { NOTE_TAG_LABELS, describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { NOTE_TAG_LABELS, describeEntry } from "@/lib/maple/describe";
 import { NOTE_TAGS, type NoteData, type NoteTag } from "@/lib/maple/types";
+import { Icon } from "../icons";
 import { Chip, Segmented, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import { Label, LoggedBy, SheetFooter, pbool, presetStart, pstr, useOpenCount, useSheetBase, withNulls } from "./parts";
@@ -64,8 +65,8 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
     void log(
       { kind: "note", started_at: doctor ? undefined : when?.toISOString(), data: clean, note: words || null },
       doctor
-        ? { toast: "Saved for her next visit", emoji: "🩺" }
-        : { toast: `${label} · ${clock(when ?? now())}`, emoji: tag ? NOTE_TAG_LABELS[tag].emoji : "📝" }
+        ? { toast: "Saved for her next visit" }
+        : { toast: `${label} · ${clock(when ?? now())}` }
     );
   };
 
@@ -80,7 +81,6 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? describeEntry(e).title : doctor ? "Question for the doctor" : "Note"}
-      emoji={e ? entryEmoji(e) : doctor ? "🩺" : "📝"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -111,7 +111,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
                   onChange={(v) => setDone(v === "done")}
                   options={[
                     { value: "open", label: "Not yet" },
-                    { value: "done", label: "Asked ✓" },
+                    { value: "done", label: "Asked" },
                   ]}
                 />
               </div>
@@ -127,9 +127,10 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
           <div>
             <Label>What</Label>
             <div className="flex flex-wrap gap-2">
+              {/* Labels only: the app keeps lib's tag emoji out of its chrome. */}
               {NOTE_TAGS.map((t) => (
                 <Chip key={t} selected={tag === t} onClick={() => setTag(tag === t ? undefined : t)}>
-                  <span aria-hidden>{NOTE_TAG_LABELS[t].emoji}</span> {NOTE_TAG_LABELS[t].label}
+                  {NOTE_TAG_LABELS[t].label}
                 </Chip>
               ))}
             </div>
@@ -150,9 +151,15 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
           </div>
           <WhenField value={when} onChange={setWhen} tz={tz} />
           {!e && (
-            <Chip selected={false} onClick={() => setDoctor(true)}>
-              <span aria-hidden>🩺</span> Make it a question for the doctor
-            </Chip>
+            <button
+              type="button"
+              onClick={() => setDoctor(true)}
+              className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
+            >
+              <Icon name="stethoscope" size={20} className="shrink-0 text-mp-ink-2" />
+              <span className={cx(tone.body, "flex-1 text-[15px] font-medium")}>Make it a question for the doctor</span>
+              <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
+            </button>
           )}
         </>
       )}

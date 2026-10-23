@@ -9,14 +9,15 @@ import {
   uploadPhoto,
   type EncodedPhoto,
 } from "@/lib/maple/image";
-import { MILESTONES, milestoneEmoji, milestoneLabel, milestonePreset } from "@/lib/maple/milestones";
+import { MILESTONES, milestoneLabel, milestonePreset } from "@/lib/maple/milestones";
 import { dayKey, formatDayLabel, formatTime, zonedTimeToUtc } from "@/lib/maple/time";
 import type { MomentData, PhotoRef } from "@/lib/maple/types";
 import { photoUrl } from "../EntryRow";
-import { Chip, Field, Sheet, TextArea, WhenField, cx, tone } from "../ui";
+import { Icon } from "../icons";
+import { Button, Chip, Field, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { useSheets, type SheetProps } from "./index";
-import { LoggedBy, SheetFooter, useOpenCount } from "./parts";
+import { Label, LoggedBy, SheetFooter, useOpenCount } from "./parts";
 
 /**
  * Log or edit a moment: photos, a title, an optional "first" (milestone),
@@ -31,6 +32,8 @@ import { LoggedBy, SheetFooter, useOpenCount } from "./parts";
 
 const MAX_PHOTOS = 12;
 const COLLAPSED_CHIPS = 8;
+/** The shell adds .maple-night 8pm–7am: photos dim so they don't glare at 3am. */
+const NIGHT_DIM = "[.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]";
 
 type Item = {
   id: string;
@@ -219,7 +222,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const addFiles = (files: FileList | null) => {
     const room = MAX_PHOTOS - itemsRef.current.length;
     const list = Array.from(files ?? []);
-    if (list.length > room) toast(`Up to ${MAX_PHOTOS} photos per moment`, { tone: "info", emoji: "📸" });
+    if (list.length > room) toast(`Up to ${MAX_PHOTOS} photos per moment`, { tone: "info" });
     const fresh: Item[] = list.slice(0, Math.max(0, room)).map((file) => ({
       id: `p${nextId++}`,
       file,
@@ -289,10 +292,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
       saved.current = true;
       const res = await log(
         { kind: "moment", started_at: when?.toISOString(), data: data as Record<string, unknown>, note: n || null },
-        {
-          toast: count ? `Moment saved · ${count} photo${count === 1 ? "" : "s"}` : "Moment saved",
-          emoji: milestoneEmoji(milestone) ?? (count ? "📸" : "✨"),
-        }
+        { toast: count ? `Moment saved · ${count} photo${count === 1 ? "" : "s"}` : "Moment saved" }
       );
       if (res) onClose();
       else {
@@ -339,20 +339,16 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
     const label = milestoneLabel(moment?.data.milestone);
     const heading = moment?.data.title || label || "A little moment";
     return (
-      <Sheet open={open} onClose={onClose} title="Moment" emoji="✨" footer={footer}>
+      <Sheet open={open} onClose={onClose} title="Moment" footer={footer}>
         {moment ? (
           <>
             <LoggedBy entry={moment} />
             <ExistingPhotos entryId={moment.id} count={moment.data.photos?.length ?? 0} />
             <div>
-              {label && label !== heading && (
-                <span className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-[#C49A3C]/20 px-2.5 py-0.5 text-xs font-semibold text-[#7A5A12] dark:text-[#F1D58F]">
-                  <span aria-hidden>{milestoneEmoji(moment.data.milestone) ?? "✨"}</span> {label}
-                </span>
-              )}
-              <p className={cx(tone.heading, "text-2xl italic")}>{heading}</p>
-              {moment.note && <p className={cx(tone.body, "mt-1.5 text-[15px] whitespace-pre-line")}>{moment.note}</p>}
-              <p className={cx(tone.muted, "mt-2 text-[13px]")}>
+              {label && label !== heading && <p className="mb-1 text-[13px] font-semibold text-mp-accent-fg">{label}</p>}
+              <p className={cx(tone.heading, "text-[22px] leading-snug")}>{heading}</p>
+              {moment.note && <p className={cx(tone.body, "mt-1.5 text-[15px] leading-relaxed whitespace-pre-line")}>{moment.note}</p>}
+              <p className={cx(tone.faint, "mt-2.5 text-[13px]")}>
                 {formatDayLabel(dayKey(new Date(moment.started_at), tz), dayKey(now(), tz))} · {formatTime(moment.started_at, tz)}
               </p>
             </div>
@@ -365,7 +361,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title={isEdit ? "Edit moment" : "New moment"} emoji={isEdit ? "✨" : "📸"} footer={footer}>
+    <Sheet open={open} onClose={onClose} title={isEdit ? "Edit moment" : "New moment"} footer={footer}>
       {moment && <LoggedBy entry={moment} />}
       {/* Photos */}
       {moment ? (
@@ -376,16 +372,16 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
         />
       ) : (
         <section aria-label="Photos" className="ph-no-capture">
-          <span className={cx(tone.label, "mb-1.5 block")}>Photos</span>
+          <Label>Photos</Label>
           {items.length > 0 && (
-            <ul className="mb-3 grid grid-cols-3 gap-2.5">
+            <ul className="mb-3 grid grid-cols-3 gap-2">
               {items.map((it) => (
                 <PhotoTile key={it.id} item={it} onRemove={() => removeItem(it.id)} onRetry={() => retryItem(it.id)} />
               ))}
             </ul>
           )}
           {items.some((it) => it.status === "error") && (
-            <ul className="mb-3 space-y-1 text-[13px] leading-snug text-[#9A3A24] dark:text-[#F4A68F]" aria-live="polite">
+            <ul className="mb-3 space-y-1 text-[13px] leading-snug text-mp-danger" aria-live="polite">
               {items
                 .filter((it) => it.status === "error")
                 .map((it) => (
@@ -396,21 +392,25 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
             </ul>
           )}
           {storage === "off" || storage === "error" ? (
-            <p className={cx(tone.muted, "rounded-2xl bg-[#5C7A4A]/10 px-4 py-3 text-sm dark:bg-[#F5EDDF]/[0.06]")}>
-              {storage === "off"
-                ? "🍃 Photo storage isn't set up yet, so this moment will be words only for now."
-                : "🍃 Couldn't reach photo storage. You can still save the words, or close and try again."}
+            <p className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-sm leading-snug")}>
+              <Icon name="cloud-off" size={18} className="mt-px shrink-0 text-mp-ink-3" />
+              <span>
+                {storage === "off"
+                  ? "Photo storage isn't set up yet, so this moment will be words only for now."
+                  : "Couldn't reach photo storage. You can still save the words, or close and try again."}
+              </span>
             </p>
           ) : (
             items.length < MAX_PHOTOS && (
-              <div className="grid grid-cols-2 gap-2.5">
-                <PickButton emoji="📷" label="Take a photo" disabled={storage !== "ready"} onClick={() => cameraRef.current?.click()} />
-                <PickButton
-                  emoji="🖼️"
-                  label={items.length ? "Add more" : "Choose photos"}
-                  disabled={storage !== "ready"}
-                  onClick={() => libraryRef.current?.click()}
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="soft" size="lg" disabled={storage !== "ready"} onClick={() => cameraRef.current?.click()}>
+                  <Icon name="camera" size={20} />
+                  Take a photo
+                </Button>
+                <Button variant="soft" size="lg" disabled={storage !== "ready"} onClick={() => libraryRef.current?.click()}>
+                  <Icon name={items.length ? "image-plus" : "images"} size={20} />
+                  {items.length ? "Add more" : "Choose photos"}
+                </Button>
               </div>
             )
           )}
@@ -430,24 +430,29 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
       </Field>
 
       <div>
-        <span className={cx(tone.label, "mb-1.5 block")}>
-          A first? <span className="font-medium tracking-normal normal-case opacity-70">(optional)</span>
-        </span>
+        <Label optional>A first?</Label>
         <div className="flex flex-wrap gap-2">
           {custom && (
+            // Not on the shelf, so it can't be picked again: the x says tapping removes it.
             <Chip selected onClick={() => setMilestone("")}>
-              <span aria-hidden>{milestoneEmoji(custom) ?? "✨"}</span> {milestoneLabel(custom)}
+              {milestoneLabel(custom)}
+              <Icon name="x" size={14} strokeWidth={2.25} label="Remove" />
             </Chip>
           )}
           {chips.map((m) => (
             <Chip key={m.id} selected={milestone === m.id} onClick={() => setMilestone(milestone === m.id ? "" : m.id)}>
-              <span aria-hidden>{m.emoji}</span> {m.label}
+              {m.label}
             </Chip>
           ))}
           {!showAllChips && (
-            <Chip onClick={() => setShowAllChips(true)}>
-              More firsts… <span aria-hidden>🌱</span>
-            </Chip>
+            <button
+              type="button"
+              onClick={() => setShowAllChips(true)}
+              className="inline-flex min-h-[40px] items-center gap-1 px-2 text-sm font-medium text-mp-accent-fg"
+            >
+              More firsts
+              <Icon name="chevron-down" size={16} />
+            </button>
           )}
         </div>
       </div>
@@ -467,64 +472,51 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
           tz={tz}
           offsets={[30, 60, 180]}
         />
-        {whenFromPhoto && <p className={cx(tone.muted, "mt-1 text-xs")}>🕰️ Set from when the photo was taken.</p>}
+        {whenFromPhoto && (
+          <p className={cx(tone.muted, "mt-1.5 flex items-center gap-1.5 text-xs")}>
+            <Icon name="camera" size={14} className="shrink-0 text-mp-ink-3" />
+            Set from when the photo was taken.
+          </p>
+        )}
       </div>
     </Sheet>
-  );
-}
-
-function PickButton({ emoji, label, onClick, disabled }: { emoji: string; label: string; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="flex min-h-[88px] flex-col items-center justify-center gap-1 rounded-3xl border-2 border-dashed border-[#5C7A4A]/35 bg-white/60 text-[15px] font-semibold text-[#1D4420] transition active:scale-[0.98] disabled:opacity-50 dark:border-[#A9C08F]/30 dark:bg-[#0E1E12] dark:text-[#F5EDDF]"
-    >
-      <span className="text-2xl" aria-hidden>
-        {emoji}
-      </span>
-      {label}
-    </button>
   );
 }
 
 function PhotoTile({ item, onRemove, onRetry }: { item: Item; onRemove: () => void; onRetry: () => void }) {
   const busy = item.status === "preparing" || item.status === "uploading";
   return (
-    <li className="relative aspect-square overflow-hidden rounded-2xl bg-[#5C7A4A]/15 dark:bg-[#A9C08F]/10">
+    <li className="relative aspect-square overflow-hidden rounded-[14px] bg-mp-sunken">
       {item.preview ? (
         // eslint-disable-next-line @next/next/no-img-element -- a local object URL
-        <img src={item.preview} alt="" className={cx("h-full w-full object-cover transition", busy && "opacity-70")} />
+        <img src={item.preview} alt="" className={cx("h-full w-full object-cover transition", busy && "opacity-70", NIGHT_DIM)} />
       ) : (
-        <span className="flex h-full w-full animate-pulse items-center justify-center text-2xl" aria-hidden>
-          🍃
+        <span className="flex h-full w-full animate-pulse items-center justify-center text-mp-ink-3 motion-reduce:animate-none [.maple-night_&]:animate-none" aria-hidden>
+          <Icon name="image" size={22} />
         </span>
       )}
       {busy && (
-        <span className="absolute inset-x-2 bottom-2 h-1.5 overflow-hidden rounded-full bg-white/70" role="progressbar" aria-valuenow={item.progress} aria-valuemin={0} aria-valuemax={100} aria-label="Uploading">
-          <span className="block h-full rounded-full bg-[#C49A3C] transition-[width] duration-300" style={{ width: `${Math.max(4, item.progress)}%` }} />
+        <span className="absolute inset-x-2 bottom-2 h-1.5 overflow-hidden rounded-full bg-mp-surface/80" role="progressbar" aria-valuenow={item.progress} aria-valuemin={0} aria-valuemax={100} aria-label="Uploading">
+          <span className="block h-full rounded-full bg-mp-accent-fg transition-[width] duration-300" style={{ width: `${Math.max(4, item.progress)}%` }} />
         </span>
       )}
       {item.status === "done" && (
-        <span className="absolute bottom-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#1D4420] text-xs text-white" aria-label="Uploaded">
-          ✓
+        <span className="absolute bottom-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-mp-accent text-mp-on-accent" role="img" aria-label="Uploaded">
+          <Icon name="check" size={14} strokeWidth={2.75} />
         </span>
       )}
       {item.status === "error" && (
-        <span className="absolute inset-0 flex flex-col items-center justify-end gap-1.5 bg-[#7A2E1E]/80 p-2 pt-11 text-center text-xs leading-tight font-semibold text-white">
+        <span className="absolute inset-0 flex flex-col items-center justify-end gap-1.5 bg-mp-surface/90 p-2 pt-11 text-center text-xs leading-tight font-semibold text-mp-danger">
           {item.retryable ? (
             <>
               <span>Didn&apos;t upload</span>
-              <button type="button" onClick={onRetry} className="min-h-[36px] w-full rounded-full bg-white/20 px-3 text-xs font-bold">
+              <button type="button" onClick={onRetry} className="min-h-[36px] w-full rounded-[10px] bg-mp-sunken px-3 text-xs font-semibold text-mp-ink">
                 Retry
               </button>
             </>
           ) : (
-            <span className="pb-2">
-              <span className="mb-0.5 block text-lg" aria-hidden>
-                🍂
-              </span>
+            <span className="flex flex-col items-center gap-1 pb-2">
+              <Icon name="ban" size={18} />
               Can&apos;t add this one
             </span>
           )}
@@ -536,7 +528,9 @@ function PhotoTile({ item, onRemove, onRetry }: { item: Item; onRemove: () => vo
         aria-label="Remove photo"
         className="absolute top-0 right-0 flex h-11 w-11 items-start justify-end p-1.5"
       >
-        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#0B1A0D]/60 text-sm text-white backdrop-blur-sm">✕</span>
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-mp-surface/90 text-mp-ink shadow-[0_1px_3px_rgba(0,0,0,0.2)]">
+          <Icon name="x" size={15} strokeWidth={2.25} />
+        </span>
       </button>
     </li>
   );
@@ -548,20 +542,20 @@ function ExistingPhotos({ entryId, count, onNew }: { entryId: number; count: num
       {count > 0 && (
         <ul className="mb-2 flex gap-2 overflow-x-auto pb-1">
           {Array.from({ length: count }, (_, i) => (
-            <li key={i} className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-[#5C7A4A]/15">
+            <li key={i} className="h-20 w-20 shrink-0 overflow-hidden rounded-[14px] bg-mp-sunken">
               <FallbackImg src={photoUrl(entryId, i)} />
             </li>
           ))}
         </ul>
       )}
       {onNew && (
-        <p className={cx(tone.muted, "text-sm")}>
+        <p className={cx(tone.muted, "text-[13px] leading-snug")}>
           {count > 0 ? "Photos stay just as they were saved. " : "This moment was saved without photos. "}
           To add more, start a{" "}
-          <button type="button" onClick={onNew} className="font-semibold text-[#1D4420] underline decoration-[#C49A3C] underline-offset-2 dark:text-[#E0C27A]">
+          <button type="button" onClick={onNew} className="font-medium text-mp-accent-fg">
             new moment
-          </button>{" "}
-          🍃
+          </button>
+          .
         </p>
       )}
     </section>
@@ -573,16 +567,16 @@ function shortName(name: string): string {
   return name.length > 24 ? `${name.slice(0, 12)}…${name.slice(-9)}` : name;
 }
 
-/** An image that turns into a soft leaf if it can't load. */
+/** An image that turns into a quiet placeholder if it can't load. */
 function FallbackImg({ src }: { src: string }) {
   const [broken, setBroken] = useState(false);
   if (broken) {
     return (
-      <span className="flex h-full w-full items-center justify-center text-2xl" role="img" aria-label="Photo unavailable">
-        🍃
+      <span className="flex h-full w-full items-center justify-center text-mp-ink-3" role="img" aria-label="Photo unavailable">
+        <Icon name="image" size={20} />
       </span>
     );
   }
   // eslint-disable-next-line @next/next/no-img-element -- private photo via the auth proxy
-  return <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} className="h-full w-full object-cover" />;
+  return <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} className={cx("h-full w-full object-cover", NIGHT_DIM)} />;
 }

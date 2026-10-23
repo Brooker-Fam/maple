@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { TUMMY_NOTE, tummyGoalMinutes } from "@/lib/maple/guidelines";
 import { formatDuration } from "@/lib/maple/time";
+import { KIND_COLOR } from "../palette";
 import { Chip, Sheet, TimeRange, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import { ContextNote, Label, LoggedBy, NoteField, RunningNote, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase } from "./parts";
@@ -58,7 +59,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
     onClose();
     void log(
       { kind: "tummy", started_at: start.toISOString(), ended_at: end.toISOString(), data: {}, note: noteVal },
-      { toast: `Tummy time ${formatDuration((end.getTime() - start.getTime()) / 1000)}`, emoji: "🐢" }
+      { toast: `Tummy time ${formatDuration((end.getTime() - start.getTime()) / 1000)}` }
     );
   };
 
@@ -73,7 +74,6 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title="Tummy time"
-      emoji="🐢"
       footer={
         <SheetFooter
           onClose={onClose}
@@ -93,14 +93,8 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
         <TimeRange start={start} end={end} tz={tz} durations={[3, 5, 10, 15, 20, 30]} onChange={(s, en) => setRange([s, en])} />
       )}
       <NoteField value={note} onChange={setNote} />
-      {age && (
-        <p className={cx(tone.body, "text-sm")}>
-          <span aria-hidden>🐢 </span>
-          Today so far: <span className="font-semibold tabular-nums">{soFar} min</span>
-          <span className={tone.muted}> · goal about {goal} min a day at her age</span>
-        </p>
-      )}
-      <ContextNote emoji="🌿">{TUMMY_NOTE}</ContextNote>
+      {age && <TummyProgress soFar={soFar} goal={goal} />}
+      <ContextNote>{TUMMY_NOTE}</ContextNote>
     </Sheet>
   );
 }
@@ -141,7 +135,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
     onClose();
     void log(
       { kind: "bath", started_at: start.toISOString(), ended_at: end?.toISOString(), data: {}, note: noteVal },
-      { toast: `Bath${minutes ? ` ${minutes}m` : ""} · ${clock(start)}`, emoji: "🛁" }
+      { toast: `Bath${minutes ? ` ${minutes}m` : ""} · ${clock(start)}` }
     );
   };
 
@@ -156,7 +150,6 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title="Bath"
-      emoji="🛁"
       footer={
         <SheetFooter
           onClose={onClose}
@@ -165,6 +158,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
           label={e ? "Save" : "Log it"}
           busy={busy}
           disabled={!!e && e.id < 0}
+          hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
         />
       }
     >
@@ -180,12 +174,28 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
           ))}
         </div>
         {end && (
-          <p className={cx(tone.muted, "mt-1.5 text-xs")}>
+          <p className={cx(tone.muted, "mt-1.5 text-xs tabular-nums")}>
             {clock(start)} – {clock(end)}
           </p>
         )}
       </div>
       <NoteField value={note} onChange={setNote} placeholder="Sponge bath, first tub bath, hair wash…" />
     </Sheet>
+  );
+}
+
+/** Today's tummy time against her daily goal: a plain sentence over a thin bar in the kind's color. */
+function TummyProgress({ soFar, goal }: { soFar: number; goal: number }) {
+  const pct = goal > 0 ? Math.min(100, (soFar / goal) * 100) : 0;
+  return (
+    <div>
+      <p className={cx(tone.body, "text-[15px]")}>
+        Today so far: <span className="font-semibold tabular-nums">{soFar} min</span>
+      </p>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-mp-sunken" aria-hidden>
+        <div className="mp-kind-fill h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: KIND_COLOR.tummy }} />
+      </div>
+      <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>Goal about {goal} min a day at her age</p>
+    </div>
   );
 }

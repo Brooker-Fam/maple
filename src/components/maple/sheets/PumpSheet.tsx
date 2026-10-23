@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { formatDuration } from "@/lib/maple/time";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
 import { Segmented, Sheet, TimeRange } from "../ui";
@@ -13,6 +13,7 @@ import {
   NoteField,
   RunningNote,
   SheetFooter,
+  SideLabel,
   presetStart,
   pnum,
   pstr,
@@ -102,7 +103,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     const mins = formatDuration((end.getTime() - start.getTime()) / 1000);
     void log(
       { kind: "pump", started_at: start.toISOString(), ended_at: end.toISOString(), data: clean, note: noteVal },
-      { toast: `Pumped ${sum > 0 ? `${formatVolume(sum, units)} · ` : ""}${mins}`, emoji: "🫙" }
+      { toast: `Pumped ${sum > 0 ? `${formatVolume(sum, units)} · ` : ""}${mins}` }
     );
   };
 
@@ -117,7 +118,6 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Pump"}
-      emoji={e ? entryEmoji(e) : "🫙"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -144,8 +144,8 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
           />
           {mode === "sides" ? (
             <div className="grid grid-cols-2 gap-3">
-              <MiniStepper key="left" label="Left" unit={unit} ariaLabel={`left, ${unit}`} value={left} onChange={edit("left_ml", setLeft)} onInvalid={checks.watch("left")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
-              <MiniStepper key="right" label="Right" unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
+              <MiniStepper key="left" label={<SideLabel side="L" />} unit={unit} ariaLabel={`left, ${unit}`} value={left} onChange={edit("left_ml", setLeft)} onInvalid={checks.watch("left")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
+              <MiniStepper key="right" label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
             </div>
           ) : (
             <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={edit("total_ml", setTotal)} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />

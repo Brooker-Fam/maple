@@ -29,9 +29,11 @@ import {
 import { formatTempBoth, formatVolume, formatWeightBoth, formatLengthBoth, mlToOz } from "@/lib/maple/units";
 import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/maple/types";
 import type { TabId } from "./MapleApp";
+import { Icon, KindBadge } from "./icons";
 import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
+import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
-import { Button, Card, EmptyState, Segmented, cx, tone } from "./ui";
+import { Button, Card, EmptyState, SectionTitle, Segmented, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -59,14 +61,25 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  * honey is the one sub-3:1 mark in light mode, so every chart has a table).
  * Ribbon lanes (feeds on top, sleep/tummy middle, diapers bottom) separate
  * classes by position as well as hue.
+ *
+ * The chrome (grid, track, axis, the halo around diaper dots) comes from the
+ * mp-* tokens, so it follows dark mode and the night look on its own. The
+ * series keep their dark-mode hues at night, like the day dial, so a legend
+ * still matches its marks, but dimmed toward the night surface the way
+ * photos are; the chrome-like marks (band, target ticks, dot edges) turn
+ * amber there.
  */
 const VIZ_VARS =
+  "[--v-grid:var(--mp-line)] [--v-track:var(--mp-sunken)] [--v-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] [--v-surface:var(--mp-surface)] " +
   "[--v-sleep:#9077BC] [--v-nurse:#C55F1D] [--v-bottle:#E0A93B] [--v-pee:#389EC1] [--v-poop:#905718] [--v-tummy:#69863E] [--v-pump:#CA805D] " +
-  "[--v-grid:rgba(29,68,32,0.09)] [--v-axis:rgba(29,68,32,0.30)] [--v-surface:#FEFCF8] [--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
+  "[--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
   "dark:[--v-sleep:#9E85CB] dark:[--v-nurse:#BF4213] dark:[--v-bottle:#B88C06] dark:[--v-pee:#3CA1C4] dark:[--v-poop:#985E22] dark:[--v-pump:#C97E5B] " +
-  "dark:[--v-grid:rgba(245,237,223,0.08)] dark:[--v-axis:rgba(245,237,223,0.26)] dark:[--v-surface:#112418] dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B]";
+  "dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
+  "[.maple-night_&]:[--v-sleep:color-mix(in_srgb,#9E85CB_72%,#13170F)] [.maple-night_&]:[--v-nurse:color-mix(in_srgb,#BF4213_85%,#13170F)] [.maple-night_&]:[--v-bottle:color-mix(in_srgb,#B88C06_85%,#13170F)] " +
+  "[.maple-night_&]:[--v-pee:color-mix(in_srgb,#3CA1C4_72%,#13170F)] [.maple-night_&]:[--v-poop:color-mix(in_srgb,#985E22_85%,#13170F)] [.maple-night_&]:[--v-tummy:color-mix(in_srgb,#69863E_80%,#13170F)] [.maple-night_&]:[--v-pump:color-mix(in_srgb,#C97E5B_80%,#13170F)] " +
+  "[.maple-night_&]:[--v-band:rgb(224_169_59/0.08)] [.maple-night_&]:[--v-target:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-dot-edge:rgb(224_169_59/0.3)] [.maple-night_&]:[--v-now:#D9772B]";
 
-const AXIS_TEXT = "fill-[#5C6B57] text-[10px] tabular-nums dark:fill-[#B9B39C]";
+const AXIS_TEXT = "fill-mp-ink-3 text-[10px] tabular-nums";
 
 type Range = "7" | "14" | "30" | "all";
 type RibbonMode = "days" | "nights";
@@ -112,14 +125,13 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
 
   return (
     <div className={cx("px-4 pt-[max(1.25rem,env(safe-area-inset-top))]", VIZ_VARS)}>
-      <header className="mb-3">
-        <p className={tone.label}>Rhythms &amp; growth</p>
-        <h1 className={cx(tone.heading, "text-[34px] leading-tight")}>Patterns</h1>
-        <p className={cx(tone.muted, "mt-0.5 text-sm")}>What the days have looked like, for you and her pediatrician.</p>
+      <header className="mb-4">
+        <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Patterns</h1>
+        <p className={cx(tone.muted, "mt-1 text-[15px] leading-snug")}>What the days have looked like, for you and her pediatrician.</p>
       </header>
 
       <Segmented
-        className="mb-4"
+        className="mb-6"
         value={range}
         onChange={setRange}
         options={[
@@ -132,23 +144,26 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
 
       <div className={cx("space-y-6 transition-opacity", !ready && loaded && "opacity-60")} aria-busy={!ready}>
         {!loaded ? (
-          <EmptyState emoji="🍂" title="Gathering the pages…" />
+          <EmptyState icon="leaf" title="Gathering the pages…" />
         ) : (
           <>
             {loggedDays < 2 && ready && (
               <Card>
-                <EmptyState emoji="🐈‍⬛" title="Patterns need a few days to grow">
+                <EmptyState icon="cat" title="Patterns need a few days to grow">
                   Bruce is keeping count ({Math.min(loggedDays, 2)} of 2 days). Keep logging and her rhythms will show up here.
                 </EmptyState>
               </Card>
             )}
             {loggedDays >= 2 && <Insights days={chartDays} entries={entries} todayKey={todayKey} tz={tz} />}
 
-            {!ready && <p className={cx(tone.muted, "px-1 text-xs")}>Gathering earlier days…</p>}
+            {!ready && <p className={cx(tone.faint, "px-1 text-xs")}>Gathering earlier days…</p>}
             {partialDays.length > 0 && (
-              <p className={cx(tone.muted, "rounded-2xl bg-[#C49A3C]/10 px-4 py-2.5 text-sm")} role="status">
-                {partialDays.map((k) => formatDayLabel(k, todayKey)).join(", ")} had more entries than we can load at once, so the
-                counts for {partialDays.length === 1 ? "that day" : "those days"} only include the most recent ones.
+              <p className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-[13px] leading-snug")} role="status">
+                <Icon name="info" size={16} className="mt-px shrink-0 text-mp-ink-3" />
+                <span>
+                  {partialDays.map((k) => formatDayLabel(k, todayKey)).join(", ")} had more entries than we can load at once, so the
+                  counts for {partialDays.length === 1 ? "that day" : "those days"} only include the most recent ones.
+                </span>
               </p>
             )}
             {loggedDays >= 1 && (
@@ -173,9 +188,9 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
         )}
 
         <section aria-labelledby="maple-growth">
-          <h2 id="maple-growth" className={cx(tone.heading, "mb-2 px-1 text-2xl")}>
-            Growth
-          </h2>
+          <SectionTitle>
+            <span id="maple-growth">Growth</span>
+          </SectionTitle>
           <Card>
             <GrowthChart
               baby={state.baby}
@@ -190,7 +205,7 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
 
         <VisitSummary state={state} todayKey={todayKey} tz={tz} now={now} />
 
-        <p className={cx(tone.muted, "px-2 pb-4 text-center text-xs")}>{DISCLAIMER}</p>
+        <p className={cx(tone.muted, "px-2 pb-4 text-center text-xs leading-snug")}>{DISCLAIMER}</p>
       </div>
     </div>
   );
@@ -268,20 +283,16 @@ function Insights({ days, entries, todayKey, tz }: { days: DayStats[]; entries: 
   }, [days, entries, todayKey, tz]);
 
   if (!lines.length) return null;
+  // The first line is the headline; the rest read on as one short paragraph.
+  const [lead, ...rest] = lines;
   return (
-    <Card>
-      <p className={cx(tone.label, "mb-1.5")}>Lately</p>
-      <ul className="space-y-1">
-        {lines.map((l) => (
-          <li key={l} className={cx(tone.body, "flex gap-2 text-[15px] leading-snug")}>
-            <span aria-hidden className="text-[#C49A3C]">
-              ✦
-            </span>
-            {l}
-          </li>
-        ))}
-      </ul>
-    </Card>
+    <section aria-labelledby="maple-lately" className="px-1">
+      <h2 id="maple-lately" className={tone.label}>
+        Lately
+      </h2>
+      <p className="mt-1 text-[20px] leading-[1.3] font-semibold tracking-[-0.01em] text-mp-ink">{lead}</p>
+      {rest.length > 0 && <p className={cx(tone.muted, "mt-1.5 text-[17px] leading-snug")}>{rest.join(" ")}</p>}
+    </section>
   );
 }
 
@@ -511,33 +522,31 @@ function Ribbons({
 
   return (
     <section aria-labelledby="maple-ribbons">
-      <div className="mb-2 flex items-end justify-between gap-3 px-1">
-        <div>
-          <h2 id="maple-ribbons" className={cx(tone.heading, "text-2xl")}>
-            Day ribbons
-          </h2>
-          <p className={cx(tone.muted, "text-xs")}>Each row is one {mode === "days" ? "day, midnight to midnight" : "night, noon to noon"}.</p>
-        </div>
-        <Segmented
-          className="w-[164px] shrink-0"
-          value={mode}
-          onChange={onMode}
-          options={[
-            { value: "days", label: "Days" },
-            { value: "nights", label: "Nights" },
-          ]}
-        />
-      </div>
+      <SectionTitle
+        action={
+          <Segmented
+            className="w-[152px] shrink-0"
+            value={mode}
+            onChange={onMode}
+            options={[
+              { value: "days", label: "Days" },
+              { value: "nights", label: "Nights" },
+            ]}
+          />
+        }
+      >
+        <span id="maple-ribbons">Day ribbons</span>
+      </SectionTitle>
 
       <div className={cx(tone.card, "px-3 pb-3")}>
         <RibbonLegend />
         {/* Sticky clock: stays put while the rows scroll under it. */}
-        <div className="sticky top-[env(safe-area-inset-top)] z-10 -mx-3 bg-[#FEFCF8]/95 px-3 pt-1.5 pb-1 backdrop-blur-sm dark:bg-[#112418]/95">
+        <div className="sticky top-[env(safe-area-inset-top)] z-10 -mx-3 bg-mp-surface px-3 pt-1.5 pb-1">
           <div className="relative h-4" aria-hidden>
             {ticks.map((t, i) => (
               <span
                 key={i}
-                className={cx(tone.muted, "absolute top-0 text-[10px] font-semibold tabular-nums")}
+                className={cx(tone.faint, "absolute top-0 text-[10px] font-semibold tabular-nums")}
                 style={{
                   left: `${(i / 4) * 100}%`,
                   transform: i === 0 ? "none" : i === 4 ? "translateX(-100%)" : "translateX(-50%)",
@@ -557,12 +566,15 @@ function Ribbons({
         </div>
         {rows.length > shown.length && (
           <div className="pt-3 text-center">
-            <Button variant="soft" size="sm" onClick={() => setShowAll(true)}>
+            <Button variant="soft" onClick={() => setShowAll(true)}>
               Show all {rows.length} {mode}
             </Button>
           </div>
         )}
-        {onPickDay && <p className={cx(tone.muted, "pt-2 text-center text-[11px]")}>Tap a row to open that day in the Timeline.</p>}
+        <p className={cx(tone.faint, "px-2 pt-3 text-center text-xs leading-snug")}>
+          Each row is one {mode === "days" ? "day, midnight to midnight" : "night, noon to noon"}.
+          {onPickDay && " Tap a row to open that day in the Timeline."}
+        </p>
       </div>
     </section>
   );
@@ -610,12 +622,17 @@ function RibbonRowView({ row, W, units, onPick }: { row: RibbonRow; W: number; u
       <span className="flex flex-wrap items-baseline justify-between gap-x-2 pt-2 pb-1">
         <span className={cx(tone.body, "text-[13px] font-semibold")}>
           {row.label}
-          {row.dst && <span className="ml-1.5 text-[11px] font-semibold text-[#8A5A2B] dark:text-[#E0C27A]">🕰️ {row.dst}</span>}
+          {row.dst && (
+            <span className="ml-1.5 inline-flex items-center gap-1 align-[-1px] text-[11px] font-semibold text-mp-maple">
+              <Icon name="clock-3" size={12} strokeWidth={2} />
+              {row.dst}
+            </span>
+          )}
         </span>
         <span className={cx(tone.muted, "text-[11px] tabular-nums")}>{summary}</span>
       </span>
       <svg width={W} height={ROW_H} className="block overflow-visible" aria-hidden>
-        <rect x={0} y={7} width={W} height={16} rx={4} fill="var(--v-grid)" />
+        <rect x={0} y={7} width={W} height={16} rx={4} fill="var(--v-track)" />
         {[1, 2, 3].map((q) => (
           <line key={q} x1={x(q / 4)} x2={x(q / 4)} y1={0} y2={ROW_H} stroke="var(--v-grid)" strokeWidth={1} />
         ))}
@@ -683,7 +700,7 @@ function RibbonRowView({ row, W, units, onPick }: { row: RibbonRow; W: number; u
 
   if (!onPick) {
     return (
-      <div role="img" aria-label={aria} className="block border-b border-[#1D4420]/[0.06] pb-1 last:border-0 dark:border-[#F5EDDF]/[0.06]">
+      <div role="img" aria-label={aria} className="block border-b border-mp-line pb-1 last:border-0">
         {body}
       </div>
     );
@@ -693,7 +710,7 @@ function RibbonRowView({ row, W, units, onPick }: { row: RibbonRow; W: number; u
       type="button"
       onClick={onPick}
       aria-label={`${aria}. Open in the Timeline`}
-      className="-mx-1 block w-[calc(100%+0.5rem)] rounded-xl border-b border-[#1D4420]/[0.06] px-1 pb-1 text-left transition last:border-0 hover:bg-[#1D4420]/[0.03] active:scale-[0.995] dark:border-[#F5EDDF]/[0.06] dark:hover:bg-[#F5EDDF]/[0.04]"
+      className="-mx-1 block w-[calc(100%+0.5rem)] border-b border-mp-line px-1 pb-1 text-left transition last:border-0 hover:bg-mp-ink/[0.03] active:bg-mp-ink/[0.05]"
     >
       {body}
     </button>
@@ -821,7 +838,7 @@ function ChartFrame({
           role="img"
           aria-label={ariaLabel}
           tabIndex={0}
-          className="block touch-pan-y rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#C49A3C]/60"
+          className="block touch-pan-y overflow-visible rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60"
           onPointerLeave={(e) => e.pointerType === "mouse" && setActive(null)}
           onFocus={() => setActive((a) => a ?? n - 1)}
           onBlur={() => setActive(null)}
@@ -872,7 +889,7 @@ function ChartFrame({
       {active != null && W > 0 && (
         <div
           role="status"
-          className="pointer-events-none absolute bottom-[calc(100%-4px)] z-20 w-max max-w-[240px] rounded-xl bg-[#1D4420] px-3 py-2 text-xs text-[#FDF8F0] shadow-lg dark:bg-[#F5EDDF] dark:text-[#14210F]"
+          className="pointer-events-none absolute bottom-[calc(100%-4px)] z-20 w-max max-w-[240px] rounded-xl bg-mp-toast px-3 py-2 text-xs text-mp-on-toast shadow-[0_8px_24px_rgba(0,0,0,0.18)] [.maple-night_&]:ring-1 [.maple-night_&]:ring-mp-line"
           style={{
             left: tipX,
             transform: tipX < 90 ? "translateX(-12px)" : tipX > W - 90 ? "translateX(calc(-100% + 12px))" : "translateX(-50%)",
@@ -892,7 +909,7 @@ function TipRow({ color, value, label, dot }: { color: string; value: string; la
       <svg width="12" height="8" aria-hidden className="shrink-0">
         {dot ? <circle cx="6" cy="4" r="3.5" fill={color} /> : <line x1="0" x2="12" y1="4" y2="4" stroke={color} strokeWidth="3" strokeLinecap="round" />}
       </svg>
-      <strong className="font-bold tabular-nums">{value}</strong>
+      <strong className="font-semibold tabular-nums">{value}</strong>
       <span className="opacity-80">{label}</span>
     </span>
   );
@@ -907,22 +924,21 @@ function ChartCard({
 }: {
   title: string;
   subtitle?: ReactNode;
-  legend?: { color: string; label: string; dot?: boolean }[];
+  /** Series colors are the --v-* variables, so the dots follow the night look with the marks. */
+  legend?: { color: string; label: string }[];
   note?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <figure className={cx(tone.card, "px-3 pt-3 pb-2")}>
-      <figcaption className="mb-2 px-1">
-        <h3 className={cx(tone.body, "text-[15px] font-semibold")}>{title}</h3>
-        {subtitle && <p className={cx(tone.muted, "text-xs leading-snug")}>{subtitle}</p>}
+    <figure className={cx(tone.card, "px-3 pt-4 pb-3")}>
+      <figcaption className="mb-3 px-1">
+        <h3 className={cx(tone.heading, "text-[15px]")}>{title}</h3>
+        {subtitle && <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>{subtitle}</p>}
         {legend && legend.length > 1 && (
-          <p className={cx(tone.muted, "mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] font-medium")}>
+          <p className={cx(tone.muted, "mt-2 flex flex-wrap gap-x-3.5 gap-y-1 text-xs font-medium")}>
             {legend.map((l) => (
               <span key={l.label} className="inline-flex items-center gap-1.5">
-                <svg width="10" height="10" aria-hidden>
-                  {l.dot ? <circle cx="5" cy="5" r="4" fill={l.color} /> : <rect width="10" height="10" rx="2.5" fill={l.color} />}
-                </svg>
+                <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: l.color }} />
                 {l.label}
               </span>
             ))}
@@ -930,7 +946,7 @@ function ChartCard({
         )}
       </figcaption>
       {children}
-      {note && <p className={cx(tone.muted, "mt-1.5 px-1 text-[11px] leading-snug")}>{note}</p>}
+      {note && <p className={cx(tone.muted, "mt-2 px-1 text-xs leading-snug")}>{note}</p>}
     </figure>
   );
 }
@@ -1003,7 +1019,7 @@ function Columns({
               x={Math.min(s.cx(last), s.W - 2 - valueLabel(totals[last]).length * 2.9)}
               y={s.y(totals[last]) - 4}
               textAnchor="middle"
-              className={cx(AXIS_TEXT, "font-semibold")}
+              className="fill-mp-ink-2 text-[10px] font-semibold tabular-nums"
             >
               {valueLabel(totals[last])}
             </text>
@@ -1126,14 +1142,20 @@ function DailyCharts({
 
   return (
     <section aria-labelledby="maple-daily" className="space-y-3">
-      <div className="flex items-end justify-between gap-3 px-1">
-        <h2 id="maple-daily" className={cx(tone.heading, "text-2xl")}>
-          Day by day
-        </h2>
-        <Button variant="ghost" size="sm" onClick={() => setAsTable((x) => !x)} aria-pressed={asTable}>
-          {asTable ? "📊 Charts" : "🧾 Table"}
-        </Button>
-      </div>
+      <SectionTitle
+        action={
+          <button
+            type="button"
+            onClick={() => setAsTable((x) => !x)}
+            className="-my-2 inline-flex min-h-[44px] items-center gap-1.5 px-1 text-[15px] font-medium text-mp-accent-fg"
+          >
+            <Icon name={asTable ? "chart-column" : "table"} size={18} />
+            {asTable ? "Charts" : "Table"}
+          </button>
+        }
+      >
+        <span id="maple-daily">Day by day</span>
+      </SectionTitle>
 
       {asTable ? (
         <DailyTable days={days} todayKey={todayKey} units={units} />
@@ -1311,7 +1333,7 @@ function DailyCharts({
               />
             </ChartCard>
           )}
-          <p className={cx(tone.muted, "px-2 text-[11px] leading-snug")}>
+          <p className={cx(tone.faint, "px-2 text-xs leading-snug")}>
             Tap or hover a day for its numbers. Counts come from what was logged, so a missed entry makes a day look light.
           </p>
         </>
@@ -1323,14 +1345,28 @@ function DailyCharts({
 /** The charts' accessible twin: every number, one row per day. */
 function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: string; units: UnitSystem }) {
   const anyBottle = days.some((d) => d.bottleMl > 0);
-  const th = cx(tone.label, "px-2 py-2 text-left font-semibold whitespace-nowrap");
-  const td = cx(tone.body, "px-2 py-2 tabular-nums whitespace-nowrap");
+  // The table scrolls sideways on a phone; the day column stays put, with a
+  // hairline (an inset shadow, so it travels with the sticky cell) to show
+  // the other columns slide under it.
+  const sticky = "first:sticky first:left-0 first:bg-mp-surface first:pl-4 first:shadow-[inset_-1px_0_0_var(--mp-line)] last:pr-4";
+  const th = cx(tone.faint, "px-2.5 pt-3 pb-2 text-left text-xs font-medium whitespace-nowrap", sticky);
+  const td = cx(tone.body, "px-2.5 py-2.5 tabular-nums whitespace-nowrap", sticky);
   return (
-    <div className={cx(tone.card, "overflow-x-auto p-2")}>
+    <div
+      className={cx(tone.card, "overflow-x-auto")}
+      // A soft edge on the right while more columns are off-screen: the cover
+      // scrolls with the content and hides the edge once you reach the end.
+      style={{
+        background:
+          "linear-gradient(var(--mp-surface), var(--mp-surface)) right / 16px 100% no-repeat local, " +
+          "linear-gradient(to left, color-mix(in srgb, var(--mp-ink) 9%, transparent), transparent) right / 14px 100% no-repeat scroll, " +
+          "var(--mp-surface)",
+      }}
+    >
       <table className="w-full text-sm">
         <caption className="sr-only">Daily totals</caption>
         <thead>
-          <tr className="border-b border-[#1D4420]/10 dark:border-[#F5EDDF]/10">
+          <tr className="border-b border-mp-line">
             <th scope="col" className={th}>Day</th>
             <th scope="col" className={th}>Feeds</th>
             <th scope="col" className={th}>Nursing L / R</th>
@@ -1342,15 +1378,15 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
         </thead>
         <tbody>
           {[...days].reverse().map((d) => (
-            <tr key={d.key} className="border-b border-[#1D4420]/5 last:border-0 dark:border-[#F5EDDF]/5">
-              <th scope="row" className={cx(td, "text-left font-semibold")}>
+            <tr key={d.key} className="border-b border-mp-line last:border-0">
+              <th scope="row" className={cx(td, "text-left font-medium")}>
                 {formatDayLabel(d.key, todayKey)}
               </th>
               <td className={td}>{d.feeds}</td>
               <td className={td}>
                 {formatDuration(d.leftSec)} / {formatDuration(d.rightSec)}
               </td>
-              {anyBottle && <td className={td}>{d.bottleMl ? formatVolume(d.bottleMl, units) : "—"}</td>}
+              {anyBottle && <td className={td}>{d.bottleMl ? formatVolume(d.bottleMl, units) : <span className={tone.faint}>—</span>}</td>}
               <td className={td}>{d.wet}</td>
               <td className={td}>{d.dirty}</td>
               <td className={td}>{formatDuration(d.sleepSec)}</td>
@@ -1540,7 +1576,7 @@ function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; todayKe
         await navigator.clipboard.writeText(summary);
         setCopied(true);
         setFallback(false);
-        toast("Visit summary copied. Paste it into a message or the patient portal.", { emoji: "📋" });
+        toast("Visit summary copied. Paste it into a message or the patient portal.");
       } catch {
         setFallback(true);
       }
@@ -1553,43 +1589,47 @@ function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; todayKe
 
   return (
     <section aria-labelledby="maple-visit">
-      <h2 id="maple-visit" className={cx(tone.heading, "mb-2 px-1 text-2xl")}>
-        For her pediatrician
-      </h2>
+      <SectionTitle>
+        <span id="maple-visit">For her pediatrician</span>
+      </SectionTitle>
       <Card>
         <div className="flex gap-3">
-          <span aria-hidden className="text-3xl">
-            🩺
-          </span>
+          <KindBadge icon="stethoscope" color={KIND_COLOR.vitals} />
           <div className="min-w-0">
-            <p className={cx(tone.body, "text-[15px] font-semibold")}>Visit summary</p>
-            <p className={cx(tone.muted, "text-sm leading-snug")}>
+            <p className={cx(tone.heading, "text-[15px]")}>Visit summary</p>
+            <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>
               The last 7 days in plain text: doctor questions, feeds, wet and dirty diapers, poop colors, sleep, temperatures, vitamin D and weights.
             </p>
           </div>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button onClick={() => void build()} disabled={busy} className="flex-1">
-            {busy ? "Gathering…" : copied ? "Copied ✓" : "📋 Copy summary"}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button onClick={() => void build()} disabled={busy} className="flex-1 whitespace-nowrap">
+            <Icon name={copied && !busy ? "check" : "copy"} size={18} />
+            {busy ? "Gathering…" : copied ? "Copied" : "Copy summary"}
           </Button>
+          {/* A real link so the browser downloads it; styled as Button's "soft" variant. */}
           <a
             href="/api/maple/export"
             download
-            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full bg-[#1D4420]/[0.07] px-4 text-[15px] font-semibold text-[#1D4420] transition hover:bg-[#1D4420]/[0.12] active:scale-[0.97] dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF] dark:hover:bg-[#F5EDDF]/15"
+            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-mp-sunken px-4 text-[15px] font-semibold text-mp-ink transition hover:bg-mp-ink/10 active:scale-[0.98]"
           >
-            <span aria-hidden>⬇️</span> CSV
+            <Icon name="download" size={18} />
+            CSV
             <span className="sr-only">: download every entry as a spreadsheet</span>
           </a>
         </div>
         {text && fallback && (
           <div className="mt-3">
-            <p className={cx(tone.muted, "mb-1 text-xs")}>Your browser blocked copying. Select all and copy:</p>
+            <p className={cx(tone.muted, "mb-1.5 text-xs")}>Your browser blocked copying. Select all and copy:</p>
             <textarea ref={area} readOnly value={text} rows={10} className={cx(tone.input, "font-mono text-xs leading-snug")} onFocus={(e) => e.currentTarget.select()} />
           </div>
         )}
         {text && !fallback && (
-          <details className="mt-3">
-            <summary className={cx(tone.muted, "cursor-pointer text-sm font-semibold")}>Preview</summary>
+          <details className="group mt-2">
+            <summary className="-mb-2 inline-flex min-h-[44px] cursor-pointer list-none items-center gap-1 text-sm font-medium text-mp-accent-fg [&::-webkit-details-marker]:hidden">
+              Preview
+              <Icon name="chevron-down" size={16} className="transition group-open:rotate-180" />
+            </summary>
             <pre className={cx(tone.inset, tone.body, "mt-2 max-h-72 overflow-auto p-3 text-xs leading-snug whitespace-pre-wrap")}>{text}</pre>
           </details>
         )}

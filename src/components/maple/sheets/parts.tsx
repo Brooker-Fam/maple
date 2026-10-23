@@ -4,9 +4,10 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TIER_LABEL, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
-import type { Entry, EntryKind, Source } from "@/lib/maple/types";
+import type { Entry, EntryKind, Side, Source } from "@/lib/maple/types";
 import { Icon, type IconName } from "../icons";
-import { Button, NumberProblem, RepeatButton, TextArea, cx, parseTypedNumber, tone, useTypedNumber } from "../ui";
+import { MAPLE } from "../palette";
+import { Avatar, Button, NumberProblem, RepeatButton, TextArea, cx, parseTypedNumber, tone, useTypedNumber } from "../ui";
 import { useMaple } from "../useMaple";
 
 /**
@@ -67,7 +68,7 @@ const VIA: Partial<Record<Source, string>> = {
   shortcut: "Siri",
 };
 
-/** "Logged by Matt 🌲 via Claude · 3:12 AM · edited by Brittany", under the sheet title. */
+/** "[avatar] Logged by Matt via Claude · 3:12 AM · edited by Brittany", under the sheet title. */
 export function LoggedBy({ entry }: { entry: Entry }) {
   const { member, memberName, now, tz } = useSheetBase();
   const who = member(entry.created_by);
@@ -82,19 +83,22 @@ export function LoggedBy({ entry }: { entry: Entry }) {
       : `edited by ${memberName(entry.updated_by)}`
     : null;
   return (
-    <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-      Logged by {name}
-      {who?.emoji ? ` ${who.emoji}` : ""}
-      {via ? ` via ${via}` : ""} · {when}
-      {editor ? ` · ${editor}` : ""}
-      {entry.id < 0 && " · waiting to sync"}
+    <p className={cx(tone.muted, "flex items-start gap-2 text-[13px] leading-snug")}>
+      {/* Their own emoji (or initial), the same mark the lists use. */}
+      {who && <Avatar member={who} size={18} />}
+      <span>
+        Logged by {name}
+        {via ? ` via ${via}` : ""} · {when}
+        {editor ? ` · ${editor}` : ""}
+        {entry.id < 0 && " · waiting to sync"}
+      </span>
     </p>
   );
 }
 
 /**
- * The sticky footer: [Delete] (danger ghost, editing only) on the left and
- * the primary action on the right. Viewers just get Close.
+ * The sticky footer: [Delete] (quiet danger text, editing only) on the left
+ * and the primary action on the right. Viewers just get Close.
  */
 export function SheetFooter({
   onDelete,
@@ -118,7 +122,10 @@ export function SheetFooter({
   if (readOnly) {
     return (
       <div className="flex items-center gap-3">
-        <p className={cx(tone.muted, "flex-1 text-sm")}>View only. Ask Matt or Brittany to change this.</p>
+        <p className={cx(tone.muted, "flex flex-1 items-center gap-2 text-sm")}>
+          <Icon name="lock" size={16} className="shrink-0 text-mp-ink-3" />
+          View only. Ask Matt or Brittany to change this.
+        </p>
         <Button variant="soft" size="lg" onClick={onClose}>
           Close
         </Button>
@@ -133,7 +140,7 @@ export function SheetFooter({
           <button
             type="button"
             onClick={onDelete}
-            className="min-h-[56px] rounded-full px-4 text-base font-semibold text-[#9A3A24] transition hover:bg-[#B5452B]/10 active:scale-[0.97] dark:text-[#F4A68F] dark:hover:bg-[#E07A5F]/15"
+            className="-ml-2 min-h-[52px] rounded-[14px] px-3 text-base font-semibold text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97]"
           >
             Delete
           </button>
@@ -146,22 +153,24 @@ export function SheetFooter({
   );
 }
 
-/** Closed by default: the fields most people skip at 3am. */
+/**
+ * Closed by default: the fields most people skip at 3am. A settings-style
+ * row (label, what's set, chevron) on a card, so the chips and steppers
+ * inside keep their contrast.
+ */
 export function MoreDetails({ summary, children, label = "More details" }: { summary?: string; children: ReactNode; label?: string }) {
   const [open, setOpen] = useState(false);
   const reduce = useReducedMotion();
   return (
-    <div className={cx(tone.inset, "border border-[#1D4420]/[0.08] dark:border-[#F5EDDF]/[0.08]")}>
+    <div className={cx(tone.card, "overflow-hidden")}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex min-h-[48px] w-full items-center justify-between gap-3 px-4 text-left"
+        className="flex min-h-[52px] w-full items-center gap-3 px-4 text-left"
       >
-        <span className="min-w-0">
-          <span className={cx(tone.body, "text-[15px] font-semibold")}>{label}</span>
-          {summary && <span className={cx(tone.muted, "ml-2 truncate text-sm")}>· {summary}</span>}
-        </span>
+        <span className={cx(tone.body, "shrink-0 text-[15px] font-medium")}>{label}</span>
+        <span className={cx(tone.muted, "min-w-0 flex-1 truncate text-right text-sm")}>{summary}</span>
         <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", open && "rotate-180")} />
       </button>
       <AnimatePresence initial={false}>
@@ -172,7 +181,7 @@ export function MoreDetails({ summary, children, label = "More details" }: { sum
             exit={reduce ? undefined : { height: 0, opacity: 0 }}
             className="overflow-hidden"
           >
-            <div className="space-y-4 px-4 pt-1 pb-4">{children}</div>
+            <div className="space-y-4 border-t border-mp-line px-4 pt-3.5 pb-4">{children}</div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -214,17 +223,59 @@ export function Label({ children, optional, className }: { children: ReactNode; 
   return (
     <span className={cx(tone.label, "block", className ?? "mb-1.5")}>
       {children}
-      {optional && <span className="ml-1 font-medium tracking-normal normal-case opacity-70">(optional)</span>}
+      {optional && <span className="ml-1 font-normal text-mp-ink-3">(optional)</span>}
     </span>
   );
 }
 
-const TIER_STYLE: Record<AlertTier, string> = {
-  emergency: "bg-[#8E1B12] text-white border-[#8E1B12]",
-  now: "bg-[#B5452B]/[0.09] border-[#B5452B] text-[#5E1F12] dark:bg-[#B5452B]/20 dark:text-[#F7D3C6]",
-  today: "bg-[#D9772B]/[0.10] border-[#D9772B] text-[#5A3210] dark:bg-[#D9772B]/15 dark:text-[#F6DDBF]",
-  mention: "bg-[#5C7A4A]/10 border-[#5C7A4A] text-[#22381A] dark:bg-[#5C7A4A]/20 dark:text-[#D7E4C8]",
-  nudge: "bg-[#C49A3C]/12 border-[#C49A3C] text-[#4A3A12] dark:bg-[#C49A3C]/15 dark:text-[#EFE0B8]",
+/**
+ * The dock's side colors (TimerCard's SIDE_COLOR), taken from the palette
+ * because TimerCard imports the sheets.
+ */
+const SIDE_DOT: Record<Side, string> = { L: MAPLE.rust, R: MAPLE.honey };
+
+/** "● Left" / "● Right" for a field label: the side's dot, as on the dock. */
+export function SideLabel({ side }: { side: Side }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span aria-hidden className="mp-kind-fill h-2 w-2 rounded-full" style={{ backgroundColor: SIDE_DOT[side] }} />
+      {side === "L" ? "Left" : "Right"}
+    </span>
+  );
+}
+
+/**
+ * Alert tiers are information, so they keep their own colors in every look,
+ * night included (the night amber would make them all the same): a left
+ * rule and a soft tint, with the tier in its color above the guidance.
+ * Emergency is solid red with white type, by day and at 3am alike.
+ */
+const TIER_STYLE: Record<AlertTier, { card: string; label: string; icon: IconName }> = {
+  emergency: {
+    card: "border-[#7A1A13] bg-[#A3241B] [.maple-night_&]:border-[#5A120D] [.maple-night_&]:bg-[#8A1D15]",
+    label: "text-white/90",
+    icon: "siren",
+  },
+  now: {
+    card: "border-[#B5452B] bg-[#B5452B]/[0.09] [.maple-night_&]:border-[#D4492F] [.maple-night_&]:bg-[#D4492F]/[0.14]",
+    label: "text-[#A3361F] dark:text-[#F29A85] [.maple-night_&]:text-[#EE6B4F]",
+    icon: "phone",
+  },
+  today: {
+    card: "border-[#D9772B] bg-[#D9772B]/[0.10] [.maple-night_&]:border-[#E0812E] [.maple-night_&]:bg-[#E0812E]/[0.12]",
+    label: "text-[#97500F] dark:text-[#F2B077] [.maple-night_&]:text-[#E98D3E]",
+    icon: "phone",
+  },
+  mention: {
+    card: "border-[#5C7A4A] bg-[#5C7A4A]/[0.10] [.maple-night_&]:border-[#6E9455] [.maple-night_&]:bg-[#6E9455]/[0.12]",
+    label: "text-[#3F5A30] dark:text-[#B3CB98] [.maple-night_&]:text-[#8DB274]",
+    icon: "stethoscope",
+  },
+  nudge: {
+    card: "border-[#C49A3C] bg-[#C49A3C]/[0.12] [.maple-night_&]:border-[#A88A45] [.maple-night_&]:bg-[#A88A45]/[0.10]",
+    label: "text-[#765811] dark:text-[#E3C27A] [.maple-night_&]:text-[#CFAE62]",
+    icon: "lightbulb",
+  },
 };
 
 /** Calm card for guidance from guidelines.ts: who to call, plainly, with tap-to-call for urgent tiers. */
@@ -235,17 +286,21 @@ export function AssessmentCard({ a, className }: { a: Assessment; className?: st
   const after = typeof settings.after_hours_phone === "string" ? settings.after_hours_phone : null;
   const urgent = a.tier === "emergency" || a.tier === "now" || a.tier === "today";
   const solid = a.tier === "emergency";
+  const style = TIER_STYLE[a.tier];
   const link = cx(
-    "inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-4 text-sm font-semibold",
-    solid ? "bg-white text-[#8E1B12]" : "bg-[#1D4420] text-[#FDF8F0] dark:bg-[#F5EDDF] dark:text-[#14210F]"
+    "inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3.5 text-sm font-semibold transition active:scale-[0.97]",
+    solid ? "bg-white text-[#8E1B12] [.maple-night_&]:bg-white/90" : "bg-mp-accent text-mp-on-accent"
   );
   return (
-    <div role="status" className={cx("rounded-2xl border-l-4 px-4 py-3", TIER_STYLE[a.tier], className)}>
-      <p className={cx("text-[11px] font-bold tracking-[0.12em] uppercase", solid ? "text-white/85" : "opacity-80")}>{TIER_LABEL[a.tier]}</p>
-      <p className="mt-0.5 text-[15px] leading-snug font-semibold">{a.title}</p>
-      <p className={cx("mt-1 text-sm leading-relaxed", solid ? "text-white/90" : "opacity-90")}>{a.body}</p>
+    <div role="status" className={cx("rounded-xl border-l-[3px] px-4 py-3", style.card, className)}>
+      <p className={cx("flex items-center gap-1.5 text-[13px] font-semibold", style.label)}>
+        <Icon name={style.icon} size={15} strokeWidth={2} className="shrink-0" />
+        {TIER_LABEL[a.tier]}
+      </p>
+      <p className={cx("mt-1 text-[15px] leading-snug font-semibold", solid ? "text-white" : "text-mp-ink")}>{a.title}</p>
+      <p className={cx("mt-1 text-sm leading-relaxed", solid ? "text-white/90" : "text-mp-ink")}>{a.body}</p>
       {urgent && (
-        <div className="mt-2.5 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           {a.tier === "emergency" && (
             <a href="tel:911" className={link}>
               <Icon name="phone" size={16} />
@@ -331,14 +386,14 @@ export function MiniStepper({
     latest.current = next;
     onChange(next);
   };
-  const btn =
-    "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#1D4420]/[0.07] text-xl font-semibold text-[#1D4420] dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]";
+  // The same round wells as ui.tsx's Stepper, a size down so two fit abreast.
+  const btn = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink";
   return (
     <div className="min-w-0">
       <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
       <div className="flex items-center gap-1">
         <RepeatButton ariaLabel={`Less ${ariaLabel}`} onStep={() => bump(-step)} disabled={(value ?? 0) <= min} className={btn}>
-          −
+          <Icon name="minus" size={20} />
         </RepeatButton>
         <span className="relative min-w-0 flex-1">
           <input
@@ -352,17 +407,16 @@ export function MiniStepper({
               onChange(parseTypedNumber(t, max).value);
             }}
             className={cx(
-              "w-full rounded-2xl border bg-white py-2.5 text-center text-xl font-semibold text-[#1D4420] tabular-nums outline-none focus:ring-2 dark:bg-[#0E1E12] dark:text-[#F5EDDF]",
-              invalid
-                ? "border-[#B5452B] ring-2 ring-[#B5452B]/30 focus:ring-[#B5452B]/30"
-                : "border-[#1D4420]/15 focus:border-[#C49A3C] focus:ring-[#C49A3C]/30 dark:border-[#C49A3C]/20",
-              unit ? "pr-7 pl-1" : "px-1"
+              "w-full rounded-xl border bg-mp-surface py-3 text-center text-lg font-semibold text-mp-ink tabular-nums outline-none transition focus:ring-2",
+              invalid ? "border-mp-danger ring-2 ring-mp-danger/25 focus:ring-mp-danger/25" : "border-mp-line focus:border-mp-focus focus:ring-mp-focus/25",
+              // Two abreast leave ~70px for the number, so "0.25" plus "oz" must fit.
+              unit ? "pr-6 pl-1" : "px-1"
             )}
           />
           {unit && <span className={cx(tone.muted, "pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs")}>{unit}</span>}
         </span>
         <RepeatButton ariaLabel={`More ${ariaLabel}`} onStep={() => bump(step)} disabled={(value ?? 0) >= max} className={btn}>
-          +
+          <Icon name="plus" size={20} />
         </RepeatButton>
       </div>
       <NumberProblem show={invalid} />

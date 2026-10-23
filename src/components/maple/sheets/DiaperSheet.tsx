@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { LATE_BLACK_STOOL, PALE_STOOL, RED_STOOL, STOOL_COLOR_INFO, STOOL_TIMELINE } from "@/lib/maple/guidelines";
 import { DIAPER_SIZES, STOOL_TEXTURES, type DiaperData, type DiaperSize, type StoolColor, type StoolTexture } from "@/lib/maple/types";
+import { Icon } from "../icons";
+import { DETAIL_COLOR } from "../palette";
 import { Chip, Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -32,11 +34,13 @@ import {
 type Type = "pee" | "poop" | "both" | "dry";
 
 const TYPE_LABEL: Record<Type, string> = { pee: "Pee", poop: "Poop", both: "Both", dry: "Dry" };
-const TYPE_TOAST: Record<Type, { text: string; emoji: string }> = {
-  pee: { text: "Wet diaper", emoji: "💧" },
-  poop: { text: "Dirty diaper", emoji: "💩" },
-  both: { text: "Wet + dirty diaper", emoji: "💧💩" },
-  dry: { text: "Dry diaper", emoji: "🧷" },
+/** The dock's diaper dots, so the picker reads like the buttons that opened it. */
+const TYPE_DOTS: Record<Type, string[]> = { pee: [DETAIL_COLOR.pee], poop: [DETAIL_COLOR.poop], both: [DETAIL_COLOR.pee, DETAIL_COLOR.poop], dry: [] };
+const TYPE_TOAST: Record<Type, string> = {
+  pee: "Wet diaper",
+  poop: "Dirty diaper",
+  both: "Wet + dirty diaper",
+  dry: "Dry diaper",
 };
 
 const GROUPS: { id: "normal" | "early" | "pale" | "red"; label: string }[] = [
@@ -124,17 +128,16 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
           started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
           note: note.trim() || null,
         },
-        { toast: `${TYPE_TOAST[type].text} updated` }
+        { toast: `${TYPE_TOAST[type]} updated` }
       );
       setBusy(false);
       if (res) onClose();
       return;
     }
-    const t = TYPE_TOAST[type];
     onClose();
     void log(
       { kind: "diaper", started_at: when?.toISOString(), data: compact(data), note: note.trim() || null },
-      { toast: `${t.text} · ${clock(when ?? now())}`, emoji: t.emoji }
+      { toast: `${TYPE_TOAST[type]} · ${clock(when ?? now())}` }
     );
   };
 
@@ -149,7 +152,6 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Diaper"}
-      emoji={e ? entryEmoji(e) : "🧷"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -167,20 +169,31 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
       <Segmented<Type>
         value={type}
         onChange={setType}
-        options={(["pee", "poop", "both", "dry"] as Type[]).map((t) => ({ value: t, label: TYPE_LABEL[t] }))}
+        options={(["pee", "poop", "both", "dry"] as Type[]).map((t) => ({
+          value: t,
+          label: (
+            <span className="inline-flex items-center gap-1.5">
+              {TYPE_DOTS[t].map((c) => (
+                <span key={c} aria-hidden className="mp-kind-fill h-2 w-2 rounded-full" style={{ backgroundColor: c }} />
+              ))}
+              {TYPE_LABEL[t]}
+            </span>
+          ),
+        }))}
         className="[&>button]:min-h-[48px] [&>button]:text-[15px]"
       />
 
       {poop && (
         <section aria-label="Poop color">
           <Label optional>Color</Label>
-          <div className="space-y-3">
+          {/* Like a hospital stool card: the usual shades on top, the ones to watch below, each group apart. */}
+          <div className={cx(tone.card, "divide-y divide-mp-line")}>
             {GROUPS.filter((g) => g.id === "normal").map((g) => (
-              <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} />
+              <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} className="px-3 pt-2.5 pb-2" />
             ))}
-            <div className="flex flex-wrap gap-x-3 gap-y-3">
+            <div className="flex divide-x divide-mp-line">
               {GROUPS.filter((g) => g.id !== "normal").map((g) => (
-                <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} />
+                <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} className="px-2 pt-2.5 pb-2 first:pl-3 last:pr-3" />
               ))}
             </div>
           </div>
@@ -218,7 +231,6 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
             {DIAPER_SIZES.map((s) => (
               <Chip key={s} selected={size === s} onClick={() => setSize(size === s ? undefined : s)}>
                 {SIZE_LABEL[s]}
-                {s === "blowout" && <span aria-hidden> 💥</span>}
               </Chip>
             ))}
           </div>
@@ -241,19 +253,23 @@ function SwatchGroup({
   colors,
   value,
   onChange,
+  className,
 }: {
   label: string;
   colors: StoolColor[];
   value: StoolColor | undefined;
   onChange: (c: StoolColor | undefined) => void;
+  className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label}>
-      <p className={cx(tone.muted, "mb-1 text-[11px] font-semibold")}>{label}</p>
-      <div className="flex gap-1">
+    // min-w-0: on a narrow phone the swatches shrink to fit instead of pushing Red out of the card.
+    <div role="radiogroup" aria-label={label} className={cx("min-w-0", className)}>
+      <p className={cx(tone.faint, "mb-1 px-0.5 text-xs font-medium")}>{label}</p>
+      <div className="flex gap-0.5">
         {colors.map((c) => {
           const info = STOOL_COLOR_INFO[c];
           const on = value === c;
+          const light = ["white", "pale_yellow", "gray", "yellow"].includes(c);
           return (
             <button
               key={c}
@@ -262,21 +278,20 @@ function SwatchGroup({
               aria-checked={on}
               aria-label={info.label}
               onClick={() => onChange(on ? undefined : c)}
-              className="flex w-[56px] flex-col items-center gap-1 rounded-2xl py-1 transition active:scale-95"
+              className="flex w-[54px] flex-col items-center gap-1 rounded-xl py-1 transition active:scale-95"
             >
+              {/* The real shades, even at night (dimmed, not folded into amber): matching the diaper to them is the point. */}
               <span
                 className={cx(
-                  "flex h-11 w-11 items-center justify-center rounded-full text-sm font-bold shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
-                  on && "ring-[3px] ring-[#C49A3C] ring-offset-2 ring-offset-[#FDF8F0] dark:ring-offset-[#10221A]"
+                  "flex h-10 w-10 items-center justify-center rounded-full ring-1 ring-mp-ink/15 ring-inset [.maple-night_&]:brightness-[0.7]",
+                  on && "outline-2 outline-offset-2 outline-mp-ink"
                 )}
-                style={{ backgroundColor: info.hex, color: ["white", "pale_yellow", "gray", "yellow"].includes(c) ? "#3A3020" : "#FFFFFF" }}
+                style={{ backgroundColor: info.hex, color: light ? "#3A3020" : "#FFFFFF" }}
                 aria-hidden
               >
-                {on ? "✓" : ""}
+                {on && <Icon name="check" size={18} strokeWidth={2.5} />}
               </span>
-              <span className={cx(on ? tone.body : tone.muted, "text-center text-[11px] leading-tight", on && "font-semibold")}>
-                {SHORT[c]}
-              </span>
+              <span className={cx("text-center text-[11px] leading-tight", on ? "font-semibold text-mp-ink" : "text-mp-ink-2")}>{SHORT[c]}</span>
             </button>
           );
         })}

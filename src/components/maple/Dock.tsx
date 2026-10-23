@@ -111,7 +111,7 @@ export default function Dock() {
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
   const showHint = !summary.age || summary.age.dayOfLife <= 3;
 
-  /** Show ✓ on the tile for 1.2s and ignore repeat taps meanwhile. Returns false if it's cooling down. */
+  /** Show a check on the tile for 1.2s and ignore repeat taps meanwhile. Returns false if it's cooling down. */
   const flash = (id: string) => {
     if (done[id]) return false;
     setDone((d) => ({ ...d, [id]: true }));
@@ -219,7 +219,7 @@ export default function Dock() {
               <>
                 <Tile
                   id="switch"
-                  className="col-span-2"
+                  wide
                   label={`Switch to ${SIDE_NAME[feedN.side === "L" ? "R" : "L"]}`}
                   sub={`on ${SIDE_NAME[feedN.side ?? "L"]} · ${formatClock(feedN.side === "L" ? feedN.left : feedN.right)}`}
                   icon="arrow-left-right"
@@ -345,7 +345,7 @@ function Tile({
   accent,
   ink,
   disabled,
-  className,
+  wide,
 }: {
   id: string;
   label: string;
@@ -368,13 +368,18 @@ function Tile({
   ink?: string;
   /** Not tappable yet (a timer still starting). */
   disabled?: boolean;
-  className?: string;
+  /** Two columns wide (Switch), with room for the icon and label on one line. */
+  wide?: boolean;
 }) {
   const press = usePress(onTap, onHold);
-  // At night a filled tile glows softly instead of blazing.
+  // At night a filled tile glows softly instead of blazing, in the amber like
+  // every other kind color (a violet "Woke up" or a rust "Switch to Left" would
+  // be the only cool or red patch on the 3am screen).
   const night = useNightActive();
   const filled = strong || accent;
-  const fill = strong && color ? (night ? `${color}40` : color) : undefined;
+  // Icon and label share a line when there's room (a side letter, Done, the wide Switch); "Woke up" stacks.
+  const inline = !!letter || accent || (strong && wide);
+  const fill = strong && color ? (night ? "rgb(224 169 59 / 0.25)" : color) : undefined;
   return (
     <button
       type="button"
@@ -391,7 +396,7 @@ function Tile({
             : next
               ? "border-mp-accent-fg/70 bg-mp-surface text-mp-ink"
               : "border-mp-line bg-mp-surface text-mp-ink",
-        className
+        wide && "col-span-2"
       )}
       style={{
         backgroundColor: fill,
@@ -411,8 +416,8 @@ function Tile({
               {letter && (
                 <span
                   aria-hidden
-                  className="mp-kind-fill inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                  style={{ backgroundColor: color }}
+                  className="mp-kind-fill inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
+                  style={{ backgroundColor: color, color: SWITCH_STYLE[letter].fg }}
                 >
                   {letter}
                 </span>
@@ -421,9 +426,9 @@ function Tile({
               {dots?.map((c) => (
                 <span key={c} aria-hidden className="mp-kind-fill h-2.5 w-2.5 rounded-full" style={{ backgroundColor: c }} />
               ))}
-              {(filled || letter) && <span className="text-[15px] leading-tight font-semibold">{label}</span>}
+              {inline && <span className="text-[15px] leading-tight font-semibold">{label}</span>}
             </span>
-            {!filled && !letter && <span className="text-[14px] leading-tight font-semibold">{label}</span>}
+            {!inline && <span className={cx("leading-tight font-semibold", filled ? "text-[15px]" : "text-[14px]")}>{label}</span>}
             {sub && (
               <span className={cx("text-[11px] leading-tight tabular-nums", filled ? "opacity-85" : next ? "font-semibold text-mp-accent-fg" : "text-mp-ink-3")}>
                 {sub}

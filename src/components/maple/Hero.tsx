@@ -9,6 +9,7 @@ import { useMaple, useNow } from "./useMaple";
  * Today's hero: a maple sapling that grows a leaf for every week of Maple's
  * life and follows the real seasons (rust in October, bare with fairy lights
  * in winter, buds in spring, green in summer, red again on her birthday).
+ * It stands still (no ambient motion); `sway` is there for a page that wants it.
  * Zoe naps at its roots at night and pricks up an ear while a timer runs.
  */
 
@@ -115,7 +116,7 @@ export function Sapling({
           )}
           {bare &&
             ANCHORS.slice(0, 7).map(([x, y], i) => (
-              <circle key={i} cx={x} cy={y + 3} r="1.6" fill="#F3D27A" className="animate-fairy-light-twinkle motion-reduce:animate-none [.maple-night_&]:animate-none" style={{ animationDelay: `${i * 0.4}s` }} />
+              <circle key={i} cx={x} cy={y + 3} r="1.6" fill="#F3D27A" />
             ))}
           {season === "spring" &&
             spots.map(([x, y], i) => <circle key={i} cx={x} cy={y} r={2.4 * size} fill="#A9C98A" stroke="#6B8448" strokeWidth="0.6" />)}
@@ -219,7 +220,8 @@ export default function Hero() {
         )}
       </div>
       <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} leaves, one for each week`} className="relative shrink-0 rounded-2xl active:scale-[0.98]">
-        <Sapling leaves={leaves} season={season} gnome={monthDay} sway={!night} className="h-[72px] w-[66px]" />
+        {/* Still, not swaying: nothing on Today moves unless something happened. */}
+        <Sapling leaves={leaves} season={season} gnome={monthDay} className="h-[72px] w-[66px]" />
         {night && <Zoe alert={timerRunning} className="absolute bottom-[1px] left-0 h-[20px] w-[33px]" />}
       </button>
     </header>

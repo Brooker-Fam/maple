@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { statsFor, type DayStats } from "@/lib/maple/insights";
 import {
   DEFAULT_TZ,
@@ -18,8 +18,10 @@ import {
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, EntryKind, MapleState, UnitSystem } from "@/lib/maple/types";
 import EntryRow from "./EntryRow";
+import { Icon, KIND_ICON, KindBadge } from "./icons";
+import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
-import { Button, Chip, EmptyState, cx, tone } from "./ui";
+import { Button, Chip, EmptyState, SectionTitle, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -43,13 +45,13 @@ const LIVE_WINDOW_MS = 72 * H;
 
 export type KindGroup = "all" | "feeds" | "diapers" | "sleep" | "health" | "other";
 
-export const KIND_GROUPS: { id: KindGroup; label: string; emoji: string }[] = [
-  { id: "all", label: "All", emoji: "🍁" },
-  { id: "feeds", label: "Feeds", emoji: "🍼" },
-  { id: "diapers", label: "Diapers", emoji: "🧷" },
-  { id: "sleep", label: "Sleep", emoji: "🌙" },
-  { id: "health", label: "Health", emoji: "🌡️" },
-  { id: "other", label: "Other", emoji: "✨" },
+export const KIND_GROUPS: { id: KindGroup; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "feeds", label: "Feeds" },
+  { id: "diapers", label: "Diapers" },
+  { id: "sleep", label: "Sleep" },
+  { id: "health", label: "Health" },
+  { id: "other", label: "Other" },
 ];
 
 const GROUP_OF: Partial<Record<EntryKind, KindGroup>> = {
@@ -430,18 +432,19 @@ export default function LogTab() {
 
   return (
     <div className="px-4 pt-[max(1.25rem,env(safe-area-inset-top))]">
-      <header className="mb-3 flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <p className={tone.label}>Maple&apos;s story so far</p>
-          <h1 className={cx(tone.heading, "text-[34px] leading-tight")}>Timeline</h1>
-        </div>
+      <header className="mb-4 flex min-h-[44px] items-center justify-between gap-3">
+        <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Timeline</h1>
         <JumpToDate todayKey={todayKey} minKey={hasPreBirth ? undefined : bornKey ?? undefined} onJump={jumpTo} />
       </header>
 
-      <div className="-mx-4 mb-3 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="toolbar" aria-label="Show">
+      {/* Six chips don't fit at phone width; the right edge fades so "Other" reads as a scroll away. */}
+      <div
+        className="-mx-4 mb-5 flex gap-2 overflow-x-auto px-4 [mask-image:linear-gradient(to_right,#000_calc(100%-24px),transparent)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        role="toolbar"
+        aria-label="Show"
+      >
         {KIND_GROUPS.map((g) => (
           <Chip key={g.id} selected={group === g.id} onClick={() => setGroup(g.id)} className="shrink-0">
-            <span aria-hidden>{g.emoji}</span>
             {g.label}
           </Chip>
         ))}
@@ -451,14 +454,18 @@ export default function LogTab() {
       <RunningNow entries={running} />
 
       {partialDays.length > 0 && (
-        <p className={cx(tone.muted, "mb-4 rounded-2xl bg-[#C49A3C]/10 px-4 py-2.5 text-sm")} role="status">
-          {partialDays.map((k) => formatDayLabel(k, todayKey)).join(", ")} had more entries than we can load at once, so
-          {partialDays.length === 1 ? " that day shows" : " those days show"} the most recent ones.
+        <p className={cx(tone.inset, tone.muted, "mb-5 flex gap-2.5 px-4 py-3 text-[13px] leading-snug")} role="status">
+          <Icon name="info" size={16} className="mt-px shrink-0 text-mp-ink-3" />
+          <span>
+            {partialDays.map((k) => formatDayLabel(k, todayKey)).join(", ")} had more entries than we can load at once, so
+            {partialDays.length === 1 ? " that day shows" : " those days show"} the most recent ones.
+          </span>
         </p>
       )}
 
       {error && !ready && (
-        <div className="mb-4 flex items-center gap-3 rounded-2xl bg-[#B5452B]/10 px-4 py-2.5" role="status">
+        <div className={cx(tone.card, "mb-5 flex items-center gap-3 py-2.5 pr-2.5 pl-4")} role="status">
+          <Icon name="cloud-off" size={20} className="shrink-0 text-mp-ink-3" />
           <p className={cx(tone.body, "flex-1 text-sm")}>Couldn&apos;t reach the forest for older pages just now. Recent entries are below.</p>
           <Button size="sm" variant="soft" onClick={reload}>
             Try again
@@ -468,13 +475,13 @@ export default function LogTab() {
 
       {nothingAtAll && !running.length ? (
         <div className="mt-6">
-          <EmptyState emoji="🍃" title="The first page is waiting">
+          <EmptyState icon="leaf" title="The first page is waiting">
             Feeds, changes and naps will gather here like fallen leaves, newest on top. Zoe is keeping the page warm.
           </EmptyState>
           {!readOnly && <QuickLog />}
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-5">
           {days.map((d) => (
             <DaySection
               key={d.key}
@@ -496,17 +503,17 @@ export default function LogTab() {
         </div>
       )}
 
-      <div ref={sentinel} className="py-6 text-center">
+      <div ref={sentinel} className="py-8 text-center">
         {canLoadEarlier ? (
           <Button variant="soft" onClick={loadEarlier} disabled={!ready}>
             {ready ? "Show earlier days" : "Gathering earlier pages…"}
           </Button>
         ) : (
           !nothingAtAll && (
-            <p className={cx(tone.muted, "text-sm")}>
-              🌱{" "}
+            <p className={cx(tone.faint, "flex flex-col items-center gap-1.5 text-[13px]")}>
+              <Icon name="sprout" size={22} className="text-mp-accent-fg" />
               {bornKey && reachedBirth
-                ? `${formatDayLabel(bornKey, todayKey)}: Day 1. Maple's story starts here.`
+                ? `${formatDayLabel(bornKey, todayKey)} · Day 1 · Maple's story starts here`
                 : "That's the very first page."}
             </p>
           )
@@ -552,35 +559,64 @@ function DaySection({
   const { open } = useSheets();
   const label = formatDayLabel(key, todayKey, { long: false });
   const dst = dstNote(key, tz);
-  const summary = total ? daySummaryParts(stats, units).join(" · ") : null;
+  const summary = total ? daySummaryParts(stats, units) : null;
   const groupLabel = KIND_GROUPS.find((g) => g.id === group)?.label.toLowerCase();
 
   return (
     <section id={`maple-day-${key}`} aria-label={label} className="scroll-mt-[env(safe-area-inset-top)]">
+      {/* Opaque so rows scroll cleanly under it; a jumped-to day's header warms for a moment. */}
       <div
         className={cx(
-          "sticky top-[env(safe-area-inset-top)] z-10 -mx-4 mb-1.5 px-5 py-2 backdrop-blur-md transition-colors duration-700",
-          highlighted ? "bg-[#F3E3BF]/95 dark:bg-[#2A2A12]/95" : "bg-[#FDF8F0]/92 dark:bg-[#0D1F0F]/92"
+          "sticky top-[env(safe-area-inset-top)] z-10 -mx-4 mb-1 px-5 pt-2 pb-2 transition-colors duration-700",
+          highlighted ? "bg-mp-sunken" : "bg-mp-bg"
         )}
       >
         <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-          <h2 className={cx(tone.heading, "text-xl")}>{label}</h2>
-          {dst && <span className="text-[11px] font-semibold text-[#8A5A2B] dark:text-[#E0C27A]">🕰️ {dst}</span>}
+          <h2 className={cx(tone.heading, "text-[17px]")}>{label}</h2>
+          {dst && (
+            <span className={cx(tone.muted, "inline-flex items-center gap-1 text-xs")}>
+              <Icon name="clock-3" size={12} className="self-center" />
+              {dst}
+            </span>
+          )}
         </div>
-        {summary && <p className={cx(tone.muted, "text-xs leading-snug")}>{summary}</p>}
+        {summary && (
+          // Each figure stays whole ("6h 34m sleep"); lines break between them.
+          <p className={cx(tone.faint, "mt-0.5 text-[13px] leading-snug")}>
+            {summary.map((part, i) => (
+              <span key={i}>
+                <span className="whitespace-nowrap">
+                  {part}
+                  {i < summary.length - 1 && " ·"}
+                </span>{" "}
+              </span>
+            ))}
+          </p>
+        )}
       </div>
 
       {rows.length ? (
-        <div className={cx(tone.card, "p-1.5")}>
-          {rows.map((e) => (
-            <div
+        <ol className={cx(tone.card, "overflow-hidden")}>
+          {rows.map((e, i) => (
+            <li
               key={e.id}
               data-entry-id={e.id}
-              className={cx(
-                "rounded-2xl transition-[background-color,box-shadow] duration-700",
-                glow.has(e.id) && "bg-[#C49A3C]/15 shadow-[0_0_0_2px_rgba(196,154,60,0.55)]"
-              )}
+              className={cx("relative transition-colors duration-700", glow.has(e.id) && "bg-mp-focus/20")}
             >
+              {/*
+                The day as one line: a hairline threads EntryRow's badges (36px, inset 16px)
+                from one row to the next, stopping short of each badge. Dividers start at
+                the text so the thread reads unbroken.
+              */}
+              {i > 0 && (
+                <>
+                  <span aria-hidden className="pointer-events-none absolute top-0 right-0 left-16 h-px bg-mp-line" />
+                  <span aria-hidden className="pointer-events-none absolute top-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />
+                </>
+              )}
+              {i < rows.length - 1 && (
+                <span aria-hidden className="pointer-events-none absolute bottom-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />
+              )}
               <EntryRow
                 entry={e}
                 now={now}
@@ -589,11 +625,11 @@ function DaySection({
                   open({ kind: e.kind, entry: e });
                 }}
               />
-            </div>
+            </li>
           ))}
-        </div>
+        </ol>
       ) : (
-        <div className={cx(tone.card, "px-4 py-4 text-center")}>
+        <div className={cx(tone.card, "p-4 text-center")}>
           <p className={cx(tone.muted, "text-sm")}>
             {total && groupLabel
               ? `No ${groupLabel} logged ${key === todayKey ? "yet today" : "this day"}.`
@@ -608,19 +644,28 @@ function DaySection({
   );
 }
 
+const QUICK: { kind: EntryKind; label: string }[] = [
+  { kind: "feed", label: "Feed" },
+  { kind: "diaper", label: "Diaper" },
+  { kind: "sleep", label: "Sleep" },
+];
+
 /** "Log an earlier one": open a sheet (each has its own time picker). */
 function QuickLog({ compact }: { compact?: boolean }) {
   const { open } = useSheets();
   return (
     <div role="group" aria-label="Log an earlier one" className={cx("flex flex-wrap justify-center gap-2", compact ? "mt-3" : "mt-1")}>
       {!compact && (
-        <p aria-hidden className={cx(tone.muted, "w-full text-center text-xs")}>
+        <p aria-hidden className={cx(tone.faint, "mb-1 w-full text-center text-[13px]")}>
           Log an earlier one:
         </p>
       )}
-      <Chip onClick={() => open({ kind: "feed" })}>🤱 Feed</Chip>
-      <Chip onClick={() => open({ kind: "diaper" })}>🧷 Diaper</Chip>
-      <Chip onClick={() => open({ kind: "sleep" })}>🌙 Sleep</Chip>
+      {QUICK.map((q) => (
+        <Chip key={q.kind} onClick={() => open({ kind: q.kind })}>
+          <Icon name={KIND_ICON[q.kind]} size={16} className="mp-kind-ink" style={{ color: KIND_COLOR[q.kind] }} />
+          {q.label}
+        </Chip>
+      ))}
     </div>
   );
 }
@@ -630,9 +675,9 @@ function RunningNow({ entries }: { entries: Entry[] }) {
   const { open } = useSheets();
   if (!entries.length) return null;
   return (
-    <section aria-label="Happening now" className="mb-4">
-      <p className={cx(tone.label, "mb-1.5 px-1")}>Happening now</p>
-      <div className={cx(tone.card, "p-1.5 ring-1 ring-[#C49A3C]/40")}>
+    <section aria-label="Happening now" className="mb-5">
+      <SectionTitle>Happening now</SectionTitle>
+      <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
         {entries.map((e) => (
           <EntryRow key={e.id} entry={e} now={now} onClick={() => open({ kind: e.kind, entry: e })} />
         ))}
@@ -648,6 +693,7 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
   const [items, setItems] = useState<Entry[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
+  const reduceMotion = useReducedMotion();
   const rev = state?.rev;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
 
@@ -678,41 +724,38 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
     setBusy(null);
   };
 
+  // Folded away by default, like MoreDetails: it's a safety net, not part of the day.
   return (
-    <section className="mb-4" aria-label="Recently removed">
+    <section className={cx(tone.card, "mb-5 overflow-hidden")} aria-label="Recently removed">
       <button
         type="button"
         onClick={() => setExpanded((x) => !x)}
         aria-expanded={expanded}
-        className="flex min-h-[44px] w-full items-center justify-between gap-2 rounded-2xl bg-[#8A5A2B]/[0.08] px-4 text-left text-sm font-semibold text-[#6B4520] dark:bg-[#E0A93B]/10 dark:text-[#E8CF9A]"
+        className="flex min-h-[52px] w-full items-center gap-3 px-4 text-left"
       >
-        <span>
-          🍂 Recently removed <span className="font-normal opacity-80">({items.length})</span>
-        </span>
-        <span aria-hidden className={cx("transition", expanded && "rotate-180")}>
-          ▾
-        </span>
+        <Icon name="trash-2" size={18} className="shrink-0 text-mp-ink-3" />
+        <span className={cx(tone.body, "flex-1 text-[15px] font-medium")}>Recently removed</span>
+        <span className={cx(tone.faint, "text-sm tabular-nums")}>({items.length})</span>
+        <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", expanded && "rotate-180")} />
       </button>
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.ul
-            initial={{ height: 0, opacity: 0 }}
+            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden"
+            exit={reduceMotion ? undefined : { height: 0, opacity: 0 }}
+            className={cx(tone.divide, "overflow-hidden border-t border-mp-line")}
           >
             {items.map((e) => {
               const d = describeEntry(e, { units, now });
               return (
-                <li key={e.id} className="flex items-center gap-3 px-2 py-2.5">
-                  <span aria-hidden className="w-8 text-center text-xl opacity-70">
-                    {entryEmoji(e)}
-                  </span>
+                <li key={e.id} className="flex items-center gap-3 py-2.5 pr-3 pl-4">
+                  <KindBadge entry={e} className="opacity-60" />
                   <span className="min-w-0 flex-1">
-                    <span className={cx(tone.body, "block truncate text-[15px] font-semibold line-through decoration-[#8A5A2B]/40")}>
+                    <span className={cx(tone.muted, "block truncate text-[15px] font-medium line-through decoration-mp-ink-3")}>
                       {d.title}
                     </span>
-                    <span className={cx(tone.muted, "block truncate text-xs")}>
+                    <span className={cx(tone.faint, "block text-[13px] leading-snug")}>
                       {formatDayLabel(dayKey(Date.parse(e.started_at), tz), dayKey(now, tz))} {formatTime(e.started_at, tz)} · removed by{" "}
                       {memberName(e.updated_by ?? e.created_by)} {formatRelative(e.updated_at, now)}
                     </span>
@@ -760,7 +803,7 @@ function JumpToDate({ todayKey, minKey, onJump }: { todayKey: string; minKey?: s
               setOpenPicker(false);
             }
           }}
-          className={cx(tone.input, "h-11 w-[9.5rem] px-3 py-0 text-base")}
+          className={cx(tone.input, "h-11 w-[9.5rem] px-3 py-0 text-base [&::-webkit-calendar-picker-indicator]:opacity-50")}
         />
       )}
       {openPicker && (
@@ -768,14 +811,18 @@ function JumpToDate({ todayKey, minKey, onJump }: { todayKey: string; minKey?: s
           type="button"
           onClick={() => setOpenPicker(false)}
           aria-label="Close date picker"
-          className={cx(tone.muted, "flex h-11 w-11 items-center justify-center rounded-full text-lg hover:bg-[#1D4420]/5 dark:hover:bg-[#F5EDDF]/10")}
+          className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full"
         >
-          ✕
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2">
+            <Icon name="x" size={18} strokeWidth={2.25} />
+          </span>
         </button>
       )}
+      {/* Small to look at; the ::after pads the hit area out to 44px. */}
       {!openPicker && (
-        <Button variant="soft" size="md" onClick={() => setOpenPicker(true)} aria-label="Jump to a day">
-          <span aria-hidden>📅</span> Jump
+        <Button variant="soft" size="sm" onClick={() => setOpenPicker(true)} aria-label="Jump to a day" className="relative after:absolute after:-inset-1 after:content-['']">
+          <Icon name="calendar-days" size={17} className="text-mp-ink-2" />
+          Jump
         </Button>
       )}
     </div>
@@ -863,17 +910,18 @@ function NewArrivalsPill({ pill, onDismiss }: { pill: Pill | null; onDismiss: ()
       {pill && (
         <motion.button
           type="button"
-          initial={{ opacity: 0, y: -12 }}
+          initial={{ opacity: 0, y: reduceMotion ? 0 : -12 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -12 }}
+          exit={{ opacity: 0, y: reduceMotion ? 0 : -12 }}
           onClick={() => {
             const el = document.querySelector(`[data-entry-id="${pill.ids[0]}"]`);
             el?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
             onDismiss();
           }}
-          className="fixed top-[calc(env(safe-area-inset-top)+12px)] left-1/2 z-40 min-h-[40px] -translate-x-1/2 rounded-full bg-[#1D4420] px-4 text-sm font-semibold text-[#FDF8F0] shadow-lg dark:bg-[#E0C27A] dark:text-[#14210F]"
+          className="fixed top-[calc(env(safe-area-inset-top)+12px)] left-1/2 z-40 inline-flex min-h-[40px] -translate-x-1/2 items-center gap-1.5 rounded-full bg-mp-accent pr-3.5 pl-4 text-sm font-semibold whitespace-nowrap text-mp-on-accent shadow-[0_8px_30px_rgba(0,0,0,0.18)] ring-1 ring-mp-line"
         >
-          {pill.text} ↑
+          {pill.text}
+          <Icon name="chevron-up" size={16} strokeWidth={2.25} />
         </motion.button>
       )}
     </AnimatePresence>

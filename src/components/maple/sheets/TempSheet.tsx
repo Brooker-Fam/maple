@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { EMERGENCY_SIGNS, assessTemperature, assessVitals, earThermometerOk } from "@/lib/maple/guidelines";
 import { cToF, fToC, formatTemp } from "@/lib/maple/units";
 import { TEMP_METHODS, type EntryOf, type TempMethod } from "@/lib/maple/types";
+import { Icon } from "../icons";
 import { Chip, Segmented, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -127,11 +128,11 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
     const at = (when ?? now()).toISOString();
     void log(
       { kind: "temp", started_at: at, data: method ? data : { temp_c }, note: noteVal },
-      { toast: `Temperature ${shown} · ${clock(at)}`, emoji: "🌡️" }
+      { toast: `Temperature ${shown} · ${clock(at)}` }
     );
     if (hasVitals) {
       const clean = Object.fromEntries(Object.entries(vitals).filter(([, v]) => v != null));
-      void log({ kind: "vitals", started_at: at, data: clean }, { toast: "Other readings saved", emoji: "💓" });
+      void log({ kind: "vitals", started_at: at, data: clean }, { toast: "Other readings saved" });
     }
   };
 
@@ -146,7 +147,6 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Temperature"}
-      emoji={e ? entryEmoji(e) : "🌡️"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -191,11 +191,16 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
           ariaLabel={`temperature in degrees ${unit === "F" ? "Fahrenheit" : "Celsius"}`}
         />
         {looksLikeC && (
-          <button type="button" onClick={() => {
+          <button
+            type="button"
+            onClick={() => {
               // The number typed is already °C: relabel it, don't convert it.
               touch("reading");
               setUnit("C");
-            }} className="mt-2 min-h-[40px] text-sm font-semibold text-[#1D4420] underline decoration-[#C49A3C] underline-offset-4 dark:text-[#E0C27A]">
+            }}
+            className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-mp-accent-fg"
+          >
+            <Icon name="arrow-left-right" size={16} />
             That looks like °C. Switch to °C?
           </button>
         )}
@@ -236,7 +241,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
           {vitalNotes.map((a) => (
             <AssessmentCard key={a.title} a={a} />
           ))}
-          <ContextNote emoji="🚑">{EMERGENCY_SIGNS}</ContextNote>
+          <ContextNote icon="siren">{EMERGENCY_SIGNS}</ContextNote>
         </MoreDetails>
       )}
     </Sheet>

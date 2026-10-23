@@ -1,24 +1,30 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { describeEntry } from "@/lib/maple/describe";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { statsFor } from "@/lib/maple/insights";
 import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts } from "@/lib/maple/time";
 import type { Entry, FeedData } from "@/lib/maple/types";
 import { MAPLE_LEAF_PATH } from "./Hero";
+import { Icon, KindBadge } from "./icons";
+import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
-import { cx, tone } from "./ui";
+import { SectionTitle, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
  * The Day Dial: a 24-hour clock face (midnight at the top, clockwise) showing
  * the last 24 hours ending now, so at 3am you see last night and yesterday
  * evening instead of an empty dial. Sleep is the outer ring, feeds the middle
- * (rust = left, honey = right, cream = bottle), diapers are dots (pee dew-blue,
- * poop in its logged color). Older marks fade. Tap anywhere on the ring to see
- * what happened around then and edit it.
+ * (rust = left, honey = right, a hollow gold pill = bottle), diapers are dots
+ * (pee dew-blue, poop in its logged color). Older marks fade. Tap anywhere on
+ * the ring to see what happened around then and edit it.
+ *
+ * It's Today's hero, so it sits on the page without a card. The face and its
+ * chrome come from the mp-* tokens; the marks keep their colors at night
+ * (so the legend still matches), a little dimmer and with a soft amber glow.
  */
 
 const C = 160;
@@ -27,7 +33,7 @@ const COLORS = {
   sleep: "#B8A9C9",
   left: "#B5452B",
   right: "#E0A93B",
-  bottleFill: "#FDF8F0",
+  // The bottle pill is hollow: its inside is the face color (stroke-mp-surface), so it never glares white at night.
   bottleEdge: "#C49A3C",
   pee: "#7FA7B5",
   poop: "#8B5A2B",
@@ -115,11 +121,14 @@ export default function DayDial() {
   const { state, summary, api, units, readOnly } = useMaple();
   const { open } = useSheets();
   const now = useNow(30_000);
+  const night = useNightActive();
+  const glowId = `maple-dial-glow-${useId().replace(/[^\w-]/g, "")}`;
   const [view, setView] = useState<View>("rolling");
   const [fetched, setFetched] = useState<{ key: string; entries: Entry[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [pop, setPop] = useState<{ x: number; y: number; w: number; t: number; items: Entry[] } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const todayKey = dayKey(now, tz);
   const yesterday = addDays(todayKey, -1);
@@ -140,6 +149,22 @@ export default function DayDial() {
       cancelled = true;
     };
   }, [api, fetched?.key, needsFetch, view]);
+
+  // The popover closes with Escape or a tap anywhere outside the dial.
+  const popOpen = !!pop;
+  useEffect(() => {
+    if (!popOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPop(null);
+    const onDown = (e: PointerEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setPop(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown);
+    };
+  }, [popOpen]);
 
   const nowMs = now.getTime();
   const [lo, hi] = useMemo(() => {
@@ -215,68 +240,93 @@ export default function DayDial() {
     [70, 144],
   ];
 
+  // The center readout: the time (or the day), her day of life, then the counts.
+  const lines = dayOfLife != null ? { main: C - 16, day: C + 8, counts: C + 25 } : { main: C - 8, day: 0, counts: C + 16 };
+  // Wide enough for a title and its detail, never wider than the dial.
+  const popW = pop ? Math.min(296, pop.w) : 0;
+
   return (
     <section aria-labelledby="day-dial">
-      <div className="mb-2 flex items-end justify-between px-1">
-        <h2 id="day-dial" className={cx(tone.heading, "text-xl [.maple-night_&]:text-[#E0A93B]/85")}>
+      <SectionTitle action={<span className={cx(tone.faint, "pb-px text-right text-[13px] leading-snug")}>Tap the ring to see what happened</span>}>
+        <span id="day-dial" className="whitespace-nowrap">
           Day dial
-        </h2>
-        <span className={cx(tone.muted, "text-xs")}>Tap the ring to see what happened</span>
-      </div>
-      <div className={cx(tone.card, "relative px-2 pt-3 pb-3 [.maple-night_&]:border-[#E0A93B]/10 [.maple-night_&]:bg-[#11140F]")}>
-        <div className="relative mx-auto w-full max-w-[340px]">
-          <svg
-            ref={svgRef}
-            viewBox="-14 -14 348 348"
-            role="img"
-            aria-label={label}
-            onClick={onTap}
-            className="block h-auto w-full cursor-pointer select-none"
-          >
-            <style>{`
-              @keyframes maple-dial-dash { to { stroke-dashoffset: -24; } }
-              .maple-dial-live { animation: maple-dial-dash 2.4s linear infinite; }
-              @media (prefers-reduced-motion: reduce) { .maple-dial-live { animation: none; } }
-              .maple-night .maple-dial-live { animation: none; }
-            `}</style>
-            {/* face */}
-            <circle cx={C} cy={C} r={R.night} className="fill-[#FDF8F0] dark:fill-[#0E1E12] [.maple-night_&]:fill-[#0B0F0A]" />
-            <path d={sectorPath(R.night, nightStart, nightSpan)} className="fill-[#4B4F8F]/[0.09] dark:fill-[#9AA0E0]/[0.08]" />
-            {stars.map(([a, r], i) => {
-              const [x, y] = pt(r, a);
-              return <path key={i} d={`M${f(x)},${f(y - 2.2)} L${f(x + 0.6)},${f(y - 0.6)} L${f(x + 2.2)},${f(y)} L${f(x + 0.6)},${f(y + 0.6)} L${f(x)},${f(y + 2.2)} L${f(x - 0.6)},${f(y + 0.6)} L${f(x - 2.2)},${f(y)} L${f(x - 0.6)},${f(y - 0.6)} Z`} className="fill-[#8C86C0] dark:fill-[#C8C2F0]" opacity={0.7} />;
-            })}
-            {/* lanes */}
-            <circle cx={C} cy={C} r={R.sleep} fill="none" strokeWidth={16} className="stroke-[#1D4420]/[0.05] dark:stroke-[#F5EDDF]/[0.05]" />
-            <circle cx={C} cy={C} r={R.feed} fill="none" strokeWidth={14} className="stroke-[#1D4420]/[0.05] dark:stroke-[#F5EDDF]/[0.05]" />
-            <circle cx={C} cy={C} r={R.diaper} fill="none" strokeWidth={1} strokeDasharray="1 4" className="stroke-[#1D4420]/20 dark:stroke-[#F5EDDF]/20" />
-            {/* ticks every 3 hours, labels every 6 */}
-            {Array.from({ length: 8 }, (_, i) => {
-              const a = i * 45;
-              const [x0, y0] = pt(143, a);
-              const [x1, y1] = pt(i % 2 ? 147 : 150, a);
-              return <line key={i} x1={f(x0)} y1={f(y0)} x2={f(x1)} y2={f(y1)} strokeWidth={1.4} strokeLinecap="round" className="stroke-[#1D4420]/30 dark:stroke-[#F5EDDF]/30" />;
-            })}
-            {[
-              ["12a", 0],
-              ["6a", 90],
-              ["12p", 180],
-              ["6p", 270],
-            ].map(([t, a]) => {
-              const [x, y] = pt(R.label, a as number);
-              return (
-                <text key={t} x={f(x)} y={f(y)} textAnchor="middle" dominantBaseline="central" fontSize="11" fontWeight="600" className="fill-[#5C6B57] dark:fill-[#B9B39C] [.maple-night_&]:fill-[#E0A93B]/50">
-                  {t}
-                </text>
-              );
-            })}
+        </span>
+      </SectionTitle>
 
+      <div ref={boxRef} className="relative mx-auto w-full max-w-[380px]">
+        <svg
+          ref={svgRef}
+          viewBox="-14 -14 348 348"
+          role="img"
+          aria-label={label}
+          onClick={onTap}
+          className="block h-auto w-full cursor-pointer select-none"
+        >
+          <style>{`
+            @keyframes maple-dial-dash { to { stroke-dashoffset: -24; } }
+            .maple-dial-live { animation: maple-dial-dash 2.4s linear infinite; }
+            @media (prefers-reduced-motion: reduce) { .maple-dial-live { animation: none; } }
+            .maple-night .maple-dial-live { animation: none; }
+          `}</style>
+          <defs>
+            {/* Night only: the marks carry a soft amber glow, the one place anything glows. */}
+            <filter id={glowId} x="-10%" y="-10%" width="120%" height="120%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="2.5" result="blur" />
+              <feFlood floodColor="#E0A93B" floodOpacity="0.4" />
+              <feComposite in2="blur" operator="in" result="glow" />
+              <feMerge>
+                <feMergeNode in="glow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          {/* face, with the night hours (8pm–7am) shaded */}
+          <circle cx={C} cy={C} r={R.night} strokeWidth={1} className="fill-mp-surface stroke-mp-line" />
+          <path d={sectorPath(R.night, nightStart, nightSpan)} className="fill-[#4B4F8F]/[0.07] dark:fill-[#9AA0E0]/[0.07] [.maple-night_&]:fill-mp-ink/[0.05]" />
+          {stars.map(([a, r], i) => {
+            const [x, y] = pt(r, a);
+            return (
+              <path
+                key={i}
+                d={`M${f(x)},${f(y - 2.2)} L${f(x + 0.6)},${f(y - 0.6)} L${f(x + 2.2)},${f(y)} L${f(x + 0.6)},${f(y + 0.6)} L${f(x)},${f(y + 2.2)} L${f(x - 0.6)},${f(y + 0.6)} L${f(x - 2.2)},${f(y)} L${f(x - 0.6)},${f(y - 0.6)} Z`}
+                className="fill-[#8C86C0] dark:fill-[#C8C2F0] [.maple-night_&]:fill-mp-ink-3"
+                opacity={0.7}
+              />
+            );
+          })}
+          {/* lanes */}
+          <circle cx={C} cy={C} r={R.sleep} fill="none" strokeWidth={16} className="stroke-mp-ink/[0.05]" />
+          <circle cx={C} cy={C} r={R.feed} fill="none" strokeWidth={14} className="stroke-mp-ink/[0.05]" />
+          <circle cx={C} cy={C} r={R.diaper} fill="none" strokeWidth={1} strokeDasharray="1 4" className="stroke-mp-ink/20" />
+          {/* ticks every 3 hours, labels every 6 */}
+          {Array.from({ length: 8 }, (_, i) => {
+            const a = i * 45;
+            const [x0, y0] = pt(143, a);
+            const [x1, y1] = pt(i % 2 ? 147 : 150, a);
+            return <line key={i} x1={f(x0)} y1={f(y0)} x2={f(x1)} y2={f(y1)} strokeWidth={1.4} strokeLinecap="round" className="stroke-mp-ink/25" />;
+          })}
+          {[
+            ["12a", 0],
+            ["6a", 90],
+            ["12p", 180],
+            ["6p", 270],
+          ].map(([t, a]) => {
+            const [x, y] = pt(R.label, a as number);
+            return (
+              <text key={t} x={f(x)} y={f(y)} textAnchor="middle" dominantBaseline="central" fontSize="11" fontWeight="500" className="fill-mp-ink-3">
+                {t}
+              </text>
+            );
+          })}
+
+          <g filter={night ? `url(#${glowId})` : undefined} className="[.maple-night_&]:opacity-80">
             {/* sleep + feeds */}
             {arcs.map((a) =>
               a.bottle ? (
                 <g key={a.key} opacity={a.opacity}>
                   <path d={arcPath(a.r, a.a0, a.span)} fill="none" stroke={COLORS.bottleEdge} strokeWidth={a.width} strokeLinecap="round" />
-                  <path d={arcPath(a.r, a.a0, a.span)} fill="none" stroke={COLORS.bottleFill} strokeWidth={a.width - 5} strokeLinecap="round" />
+                  <path d={arcPath(a.r, a.a0, a.span)} fill="none" strokeWidth={a.width - 5} strokeLinecap="round" className="stroke-mp-surface" />
                 </g>
               ) : (
                 <path
@@ -292,7 +342,7 @@ export default function DayDial() {
                 />
               )
             )}
-            {/* diapers */}
+            {/* diapers, each ringed in the face color so neighbors stay apart */}
             {dots.map((d) => {
               const [x, y] = pt(R.diaper, d.a);
               if (d.pee && d.poop) {
@@ -300,62 +350,79 @@ export default function DayDial() {
                   <g key={d.key} opacity={d.opacity} transform={`translate(${f(x)} ${f(y)}) rotate(${f(d.a)})`}>
                     <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill={COLORS.pee} />
                     <path d="M0,-5.5 A5.5,5.5 0 0 1 0,5.5 Z" fill={d.color} />
-                    <circle r="5.5" fill="none" strokeWidth="1" className="stroke-white/80 dark:stroke-black/40" />
+                    <circle r="5.5" fill="none" strokeWidth="1" className="stroke-mp-surface" />
                   </g>
                 );
               }
-              return <circle key={d.key} cx={f(x)} cy={f(y)} r={5.5} fill={d.color} opacity={d.opacity} strokeWidth="1" className="stroke-white/80 dark:stroke-black/40" />;
+              return <circle key={d.key} cx={f(x)} cy={f(y)} r={5.5} fill={d.color} opacity={d.opacity} strokeWidth="1" className="stroke-mp-surface" />;
             })}
+          </g>
 
-            {/* now hand (rolling view only) */}
-            {rolling && (
-              <g>
-                <line x1={C} y1={C} x2={f(pt(156, nowDeg)[0])} y2={f(pt(156, nowDeg)[1])} strokeWidth={0.8} className="stroke-[#1D4420]/25 dark:stroke-[#F5EDDF]/25" />
-                <line
-                  x1={f(pt(R.handIn, nowDeg)[0])}
-                  y1={f(pt(R.handIn, nowDeg)[1])}
-                  x2={f(pt(R.handOut - 8, nowDeg)[0])}
-                  y2={f(pt(R.handOut - 8, nowDeg)[1])}
-                  stroke={COLORS.hand}
-                  strokeWidth={2.6}
-                  strokeLinecap="round"
-                />
-                <path d={MAPLE_LEAF_PATH} transform={`translate(${f(pt(R.handOut - 2, nowDeg)[0])} ${f(pt(R.handOut - 2, nowDeg)[1])}) rotate(${f(nowDeg)}) scale(0.62)`} fill={COLORS.hand} />
-              </g>
-            )}
+          {/* now hand (rolling view only) */}
+          {rolling && (
+            <g>
+              <line x1={C} y1={C} x2={f(pt(156, nowDeg)[0])} y2={f(pt(156, nowDeg)[1])} strokeWidth={0.8} className="stroke-mp-ink/25" />
+              <line
+                x1={f(pt(R.handIn, nowDeg)[0])}
+                y1={f(pt(R.handIn, nowDeg)[1])}
+                x2={f(pt(R.handOut - 8, nowDeg)[0])}
+                y2={f(pt(R.handOut - 8, nowDeg)[1])}
+                stroke={COLORS.hand}
+                strokeWidth={2.6}
+                strokeLinecap="round"
+              />
+              <path d={MAPLE_LEAF_PATH} transform={`translate(${f(pt(R.handOut - 2, nowDeg)[0])} ${f(pt(R.handOut - 2, nowDeg)[1])}) rotate(${f(nowDeg)}) scale(0.62)`} fill={COLORS.hand} />
+            </g>
+          )}
 
-            {/* center */}
-            <circle cx={C} cy={C} r={66} className="fill-[#FDF8F0] dark:fill-[#0E1E12] [.maple-night_&]:fill-[#0B0F0A]" />
-            <text x={C} y={C - 12} textAnchor="middle" fontSize={rolling ? 22 : 16} fontWeight="700" className="fill-[#1D4420] font-[family-name:var(--font-display)] lining-nums dark:fill-[#F5EDDF] [.maple-night_&]:fill-[#E0A93B]/85">
-              {rolling ? formatTime(nowMs, tz) : formatDayLabel(view, todayKey)}
+          {/* center */}
+          <circle cx={C} cy={C} r={66} className="fill-mp-surface" />
+          <text
+            x={C}
+            y={lines.main}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fontSize={rolling ? 28 : 18}
+            fontWeight="600"
+            letterSpacing="-0.02em"
+            className="fill-mp-ink tabular-nums"
+          >
+            {rolling ? formatTime(nowMs, tz) : formatDayLabel(view, todayKey)}
+          </text>
+          {dayOfLife != null && (
+            <text x={C} y={lines.day} textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="600" className="fill-mp-maple">
+              Day {dayOfLife}
             </text>
-            {dayOfLife != null && (
-              <text x={C} y={C + 8} textAnchor="middle" fontSize="12" fontWeight="600" className="fill-[#B5452B] dark:fill-[#E0A93B]">
-                Day {dayOfLife}
-              </text>
-            )}
-            <text x={C} y={C + (dayOfLife != null ? 25 : 10)} textAnchor="middle" fontSize="11" className="fill-[#5C6B57] dark:fill-[#B9B39C] [.maple-night_&]:fill-[#E0A93B]/55">
-              {loading ? "Loading…" : `${stats.feeds} feed${stats.feeds === 1 ? "" : "s"} · ${stats.wet}💧 ${stats.dirty}💩`}
-            </text>
-          </svg>
+          )}
+          <text x={C} y={lines.counts} textAnchor="middle" dominantBaseline="central" fontSize="11" className="fill-mp-ink-2 tabular-nums">
+            {loading ? "Loading…" : `${stats.feeds} feed${stats.feeds === 1 ? "" : "s"} · ${stats.wet} wet · ${stats.dirty} dirty`}
+          </text>
+        </svg>
 
-          <AnimatePresence>
-            {pop && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0 }}
-                className="absolute z-10 w-[230px] rounded-2xl border border-[#1D4420]/10 bg-[#FDF8F0] p-2 shadow-xl dark:border-[#C49A3C]/20 dark:bg-[#14281A] [.maple-night_&]:bg-[#11140F]"
-                style={{ left: Math.max(0, Math.min(pop.x - 115, pop.w - 230)), top: pop.y > pop.w * 0.55 ? pop.y - 12 : pop.y + 12, y: pop.y > pop.w * 0.55 ? "-100%" : 0 }}
-              >
-                <div className="flex items-center justify-between px-1.5 pb-1">
-                  <p className={cx(tone.label)}>Around {formatTime(pop.t, tz)}</p>
-                  <button type="button" onClick={() => setPop(null)} aria-label="Close" className={cx(tone.muted, "flex h-8 w-8 items-center justify-center rounded-full text-sm")}>
-                    ✕
-                  </button>
-                </div>
-                {pop.items.length ? (
-                  pop.items.map((e) => {
+        <AnimatePresence>
+          {pop && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="absolute z-10 overflow-hidden rounded-2xl border border-mp-line bg-mp-surface shadow-[0_10px_30px_rgba(0,0,0,0.16)] [.maple-night_&]:shadow-none"
+              style={{
+                width: popW,
+                left: Math.max(0, Math.min(pop.x - popW / 2, pop.w - popW)),
+                top: pop.y > pop.w * 0.55 ? pop.y - 12 : pop.y + 12,
+                y: pop.y > pop.w * 0.55 ? "-100%" : 0,
+              }}
+            >
+              <div className="flex items-center justify-between pl-3.5">
+                <p className={tone.label}>Around {formatTime(pop.t, tz)}</p>
+                <button type="button" onClick={() => setPop(null)} aria-label="Close" className="flex h-11 w-11 items-center justify-center text-mp-ink-3">
+                  <Icon name="x" size={18} />
+                </button>
+              </div>
+              {pop.items.length ? (
+                <div className={cx(tone.divide, "border-t border-mp-line")}>
+                  {pop.items.map((e) => {
                     const d = describeEntry(e, { units, now });
                     return (
                       <button
@@ -366,111 +433,103 @@ export default function DayDial() {
                           setPop(null);
                           open({ kind: e.kind, entry: e });
                         }}
-                        className="flex min-h-[44px] w-full items-center gap-2 rounded-xl px-1.5 text-left hover:bg-[#1D4420]/5 dark:hover:bg-[#F5EDDF]/5"
+                        className="flex min-h-[52px] w-full items-center gap-2.5 px-3.5 py-2 text-left transition enabled:active:bg-mp-ink/[0.04]"
                       >
-                        <span aria-hidden className="w-7 text-center">
-                          {entryEmoji(e)}
-                        </span>
+                        <KindBadge entry={e} size={30} />
                         <span className="min-w-0 flex-1">
-                          <span className={cx(tone.body, "block truncate text-sm font-semibold")}>{d.title}</span>
-                          {d.detail && <span className={cx(tone.muted, "block truncate text-xs")}>{d.detail}</span>}
+                          <span className={cx(tone.body, "block truncate text-[15px] font-medium")}>{d.title}</span>
+                          {d.detail && <span className={cx(tone.muted, "block truncate text-[13px]")}>{d.detail}</span>}
                         </span>
-                        <span className={cx(tone.muted, "text-xs tabular-nums")}>{formatTime(e.started_at, tz)}</span>
+                        <span className={cx(tone.muted, "shrink-0 text-[13px] tabular-nums")}>{formatTime(e.started_at, tz)}</span>
                       </button>
                     );
-                  })
-                ) : (
-                  <p className={cx(tone.muted, "px-1.5 pb-1.5 text-sm")}>Nothing logged around then.</p>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        <ul className="sr-only">
-          {plotted.map((e) => (
-            <li key={e.id}>
-              {formatTime(e.started_at, tz)}: {describeEntry(e, { units, now }).text}
-            </li>
-          ))}
-        </ul>
-
-        <Legend />
-
-        <div className="mt-3 flex items-center justify-center gap-2">
-          <button
-            type="button"
-            onClick={() => step(-1)}
-            disabled={!rolling && view <= oldest}
-            aria-label="Earlier day"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1D4420]/[0.07] text-lg text-[#1D4420] disabled:opacity-30 dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]"
-          >
-            ◀
-          </button>
-          <div className="flex rounded-full bg-[#1D4420]/[0.07] p-1 dark:bg-[#F5EDDF]/10" role="radiogroup" aria-label="Which day">
-            {(["rolling", yesterday] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                role="radio"
-                aria-checked={view === v}
-                onClick={() => {
-                  setPop(null);
-                  setView(v);
-                }}
-                className={cx(
-                  "min-h-[36px] rounded-full px-3 text-sm font-semibold transition",
-                  view === v ? "bg-white text-[#1D4420] shadow-sm dark:bg-[#C49A3C] dark:text-[#14210F]" : "text-[#1D4420]/70 dark:text-[#E8DCC0]/80"
-                )}
-              >
-                {v === "rolling" ? "Last 24h" : "Yesterday"}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => step(1)}
-            disabled={rolling}
-            aria-label="Later day"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1D4420]/[0.07] text-lg text-[#1D4420] disabled:opacity-30 dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]"
-          >
-            ▶
-          </button>
-        </div>
-        {!rolling && view !== yesterday && (
-          <p className={cx(tone.muted, "mt-1 text-center text-sm font-semibold")}>{formatDayLabel(view, todayKey, { long: true })}</p>
-        )}
+                  })}
+                </div>
+              ) : (
+                <p className={cx(tone.muted, "px-3.5 pb-3.5 text-sm")}>Nothing logged around then.</p>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
+
+      <ul className="sr-only">
+        {plotted.map((e) => (
+          <li key={e.id}>
+            {formatTime(e.started_at, tz)}: {describeEntry(e, { units, now }).text}
+          </li>
+        ))}
+      </ul>
+
+      <Legend />
+
+      <div className="mt-3 flex items-center justify-center gap-1">
+        <button
+          type="button"
+          onClick={() => step(-1)}
+          disabled={!rolling && view <= oldest}
+          aria-label="Earlier day"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-30"
+        >
+          <Icon name="chevron-left" size={22} />
+        </button>
+        {/* Segmented's look, plus a name for the group. */}
+        <div className="flex w-[200px] rounded-xl bg-mp-sunken p-[3px]" role="radiogroup" aria-label="Which day">
+          {(["rolling", yesterday] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={view === v}
+              onClick={() => {
+                setPop(null);
+                setView(v);
+              }}
+              className={cx(
+                "min-h-[38px] flex-1 rounded-[10px] px-3 text-sm transition",
+                view === v ? "bg-mp-surface font-semibold text-mp-ink shadow-[0_1px_3px_rgba(0,0,0,0.12)]" : "font-medium text-mp-ink-2"
+              )}
+            >
+              {v === "rolling" ? "Last 24h" : "Yesterday"}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => step(1)}
+          disabled={rolling}
+          aria-label="Later day"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-30"
+        >
+          <Icon name="chevron-right" size={22} />
+        </button>
+      </div>
+      {!rolling && view !== yesterday && (
+        <p className={cx(tone.muted, "mt-1 text-center text-[13px] font-medium")}>{formatDayLabel(view, todayKey, { long: true })}</p>
+      )}
     </section>
   );
 }
 
+/** What the marks mean: small swatches in the marks' own colors (dimmed with them at night). */
 function Legend() {
-  const item = "inline-flex items-center gap-1.5";
+  const dot = "h-2 w-2";
+  const items: { label: string; style: React.CSSProperties; className: string }[] = [
+    { label: "Left", style: { backgroundColor: COLORS.left }, className: dot },
+    { label: "Right", style: { backgroundColor: COLORS.right }, className: dot },
+    { label: "Bottle", style: { borderColor: COLORS.bottleEdge }, className: "h-2.5 w-2.5 border-2 bg-mp-surface" },
+    { label: "Sleep", style: { backgroundColor: COLORS.sleep }, className: dot },
+    { label: "Pee", style: { backgroundColor: COLORS.pee }, className: dot },
+    { label: "Poop", style: { backgroundColor: COLORS.poop }, className: dot },
+  ];
   return (
-    <div className={cx(tone.muted, "mt-1 flex flex-wrap justify-center gap-x-3 gap-y-1 px-2 text-[11px] font-medium")} aria-hidden>
-      <span className={item}>
-        <i className="h-1.5 w-4 rounded-full" style={{ backgroundColor: COLORS.left }} />L
-      </span>
-      <span className={item}>
-        <i className="h-1.5 w-4 rounded-full" style={{ backgroundColor: COLORS.right }} />R
-      </span>
-      <span className={item}>
-        <i className="h-2 w-4 rounded-full border-2" style={{ borderColor: COLORS.bottleEdge, backgroundColor: COLORS.bottleFill }} />
-        Bottle
-      </span>
-      <span className={item}>
-        <i className="h-1.5 w-4 rounded-full" style={{ backgroundColor: COLORS.sleep }} />
-        Sleep
-      </span>
-      <span className={item}>
-        <i className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COLORS.pee }} />
-        Pee
-      </span>
-      <span className={item}>
-        <i className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COLORS.poop }} />
-        Poop
-      </span>
+    <div className={cx(tone.muted, "mt-2 flex flex-wrap justify-center gap-x-3.5 gap-y-1 px-2 text-xs font-medium")} aria-hidden>
+      {items.map((it) => (
+        <span key={it.label} className="inline-flex items-center gap-1.5">
+          <i className={cx("shrink-0 rounded-full [.maple-night_&]:opacity-80", it.className)} style={it.style} />
+          {it.label}
+        </span>
+      ))}
     </div>
   );
 }

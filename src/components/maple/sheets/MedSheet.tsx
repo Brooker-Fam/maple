@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { VITAMIN_D_DEFAULT, VITAMIN_D_NOTE } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import type { EntryOf } from "@/lib/maple/types";
+import { Icon } from "../icons";
 import { Chip, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import { ContextNote, Label, LoggedBy, NoteField, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase, withNulls } from "./parts";
@@ -83,8 +84,8 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
     void log(
       { kind: "med", started_at: when?.toISOString(), data: data.dose ? data : { name: n }, note: noteVal },
       isVitaminD(n)
-        ? { toast: when ? `Vitamin D drops ✓ · ${clock(when)}` : "Vitamin D drops ✓", emoji: "☀️" }
-        : { toast: `${n}${data.dose ? ` ${data.dose}` : ""} · ${clock(when ?? now())}`, emoji: "💊" }
+        ? { toast: when ? `Vitamin D drops logged · ${clock(when)}` : "Vitamin D drops logged" }
+        : { toast: `${n}${data.dose ? ` ${data.dose}` : ""} · ${clock(when ?? now())}` }
     );
   };
 
@@ -99,7 +100,6 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? describeEntry(e).title : vitD ? "Vitamin D" : "Medicine"}
-      emoji={e ? entryEmoji(e) : vitD ? "☀️" : "💊"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -117,18 +117,14 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
       <div>
         <Label>What</Label>
         <div className="flex flex-wrap gap-2">
-          <Chip selected={vitD} onClick={() => pickName(VITAMIN_D_DEFAULT.name)} className="min-h-[52px] py-1.5">
-            <span aria-hidden className="text-lg">
-              ☀️
-            </span>
-            <span className="flex flex-col items-start leading-tight">
-              <span className="font-semibold">Vitamin D</span>
-              <span className="text-[11px] font-normal opacity-80">sunshine drops</span>
-            </span>
+          <Chip selected={vitD} onClick={() => pickName(VITAMIN_D_DEFAULT.name)}>
+            <Icon name="sun" size={16} />
+            Vitamin D
           </Chip>
           {recent.map((r) => (
-            <Chip key={r} selected={name.trim().toLowerCase() === r.toLowerCase()} onClick={() => pickName(r)} className="min-h-[52px]">
-              <span aria-hidden>💊</span> {r}
+            <Chip key={r} selected={name.trim().toLowerCase() === r.toLowerCase()} onClick={() => pickName(r)}>
+              <Icon name="pill" size={16} />
+              {r}
             </Chip>
           ))}
         </div>
@@ -143,10 +139,13 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
       </div>
 
       {givenToday && (
-        <p className="rounded-2xl bg-[#C49A3C]/15 px-3.5 py-2.5 text-sm leading-relaxed text-[#4A3A12] dark:bg-[#C49A3C]/15 dark:text-[#EFE0B8]">
-          <span aria-hidden>☀️ </span>
-          Already logged today at {clock(givenToday.givenAt)}
-          {givenToday.by ? ` by ${memberName(givenToday.by)}` : ""}. It&apos;s once a day, so check before giving another.
+        // A heads-up, not an alarm: two caregivers shouldn't both give the day's drops.
+        <p className={cx(tone.inset, tone.body, "flex gap-2.5 px-3.5 py-3 text-sm leading-relaxed")}>
+          <Icon name="circle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
+          <span>
+            Already logged today at {clock(givenToday.givenAt)}
+            {givenToday.by ? ` by ${memberName(givenToday.by)}` : ""}. It&apos;s once a day, so check before giving another.
+          </span>
         </p>
       )}
 
@@ -160,20 +159,23 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
           aria-label="Dose"
           className={tone.input}
         />
-        {!vitD && <p className={cx(tone.muted, "mt-1 text-xs")}>Follow the label or your pediatrician&apos;s instructions.</p>}
+        {!vitD && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Follow the label or your pediatrician&apos;s instructions.</p>}
       </div>
 
       {feverCaution && (
-        <p className="rounded-2xl border-l-4 border-[#D9772B] bg-[#D9772B]/10 px-3.5 py-2.5 text-sm leading-relaxed text-[#5A3210] dark:bg-[#D9772B]/15 dark:text-[#F6DDBF]">
-          {ageMonths < 3
-            ? "At her age, fever medicine only if her pediatrician says so. If she has a fever, call them first."
-            : "Ibuprofen isn't recommended under 6 months without your pediatrician's OK."}
+        <p role="status" className={cx(tone.body, "flex gap-2.5 rounded-xl border-l-[3px] border-mp-maple bg-mp-maple/[0.08] px-4 py-3 text-sm leading-relaxed")}>
+          <Icon name="triangle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
+          <span>
+            {ageMonths < 3
+              ? "At her age, fever medicine only if her pediatrician says so. If she has a fever, call them first."
+              : "Ibuprofen isn't recommended under 6 months without your pediatrician's OK."}
+          </span>
         </p>
       )}
 
       <WhenField value={when} onChange={setWhen} tz={tz} />
       <NoteField value={note} onChange={setNote} />
-      {vitD && <ContextNote emoji="☀️">{VITAMIN_D_NOTE}</ContextNote>}
+      {vitD && <ContextNote icon="sun">{VITAMIN_D_NOTE}</ContextNote>}
     </Sheet>
   );
 }

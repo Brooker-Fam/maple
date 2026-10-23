@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { useTheme } from "@/components/ThemeProvider";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
 import { adminActsAs, alertsOn } from "@/lib/maple/insights";
@@ -9,8 +9,9 @@ import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/
 import { formatLength, formatWeight } from "@/lib/maple/units";
 import type { Entry, EntryOf, Member, Role } from "@/lib/maple/types";
 import BirthSheet from "./BirthSheet";
+import { Icon, type IconName } from "./icons";
 import { useNightPref, type NightPref } from "./nightLook";
-import { Avatar, Button, Card, Field, Segmented, SectionTitle, Sheet, TextArea, cx, tone } from "./ui";
+import { Avatar, Button, Field, Segmented, SectionTitle, Sheet, TextArea, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
@@ -18,6 +19,10 @@ import { useMaple } from "./useMaple";
  * doctor, questions for the next checkup, this phone's preferences,
  * connecting Claude/ChatGPT and Siri, and the CSV export. Viewers get a
  * read-only version.
+ *
+ * Laid out like iOS Settings: one card per group, rows with the label on the
+ * left and the control or value on the right, hairlines between rows, and
+ * explanations as small notes rather than more boxes.
  */
 
 type Invite = {
@@ -34,6 +39,7 @@ type PersonalToken = { id: number; label: string | null; created_at: string; las
 
 type Question = EntryOf<"note">;
 
+// Avatar choices. Members pick their own mark, so these stay emoji.
 const EMOJIS = ["🌲", "🌸", "🦊", "🍄", "🦉", "🐻", "🐿️", "🦔", "🌻", "🐝", "🦌", "🐞", "🌼", "🌙", "⭐", "🐸", "🪺", "🍂", "🌰", "🍁"];
 
 const ROLE_LINE: Record<Role, string> = {
@@ -44,15 +50,135 @@ const ROLE_LINE: Record<Role, string> = {
 
 const MCP_URL = "https://brooker.family/api/maple/mcp";
 
+const EXAMPLES = ["“Log a wet diaper.”", "“Start a feed on the right.”", "“Which side next?”", "“How did last night go?”", "“Add a question for the doctor.”"];
+
 // ── Small pieces ─────────────────────────────────────────────────────────
 
-function Section({ title, sub, children, action }: { title: string; sub?: string; children: ReactNode; action?: ReactNode }) {
+/** A list card: rows separated by hairlines. */
+const GROUP = cx(tone.card, tone.divide, "overflow-hidden");
+
+/** A borderless input that sits on the right of a row (iOS-style). 16px so iOS doesn't zoom on focus. */
+const INLINE_INPUT =
+  "min-h-[44px] bg-transparent py-2 text-right text-base text-mp-ink outline-none placeholder:text-mp-ink-3 [&::-webkit-date-and-time-value]:text-right [&::-webkit-datetime-edit]:text-right";
+
+/**
+ * Chromium's date-picker glyph ignores the theme (black in dark mode, white at
+ * night), so it's redrawn as the calendar line icon in ink-3 via a mask. iOS
+ * has no glyph; the picker opens from the field itself.
+ */
+const DATE_PICKER_ICON =
+  "[&::-webkit-calendar-picker-indicator]:bg-none [&::-webkit-calendar-picker-indicator]:bg-mp-ink-3 [&::-webkit-calendar-picker-indicator]:[mask:url(data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.75%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M8%202v3M16%202v3M3%209h18%22%2F%3E%3Crect%20x%3D%223%22%20y%3D%223%22%20width%3D%2218%22%20height%3D%2218%22%20rx%3D%222%22%2F%3E%3C%2Fsvg%3E)_center/18px_no-repeat]";
+
+/** Quiet destructive text action at the end of a row (Revoke, Sign out, Delete). */
+const DANGER_TEXT =
+  "-mr-2 min-h-[44px] shrink-0 rounded-[10px] px-2 text-[15px] font-medium text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97] disabled:opacity-40";
+
+function Section({ title, footnote, children, action }: { title: string; footnote?: ReactNode; children: ReactNode; action?: ReactNode }) {
   return (
     <section>
       <SectionTitle action={action}>{title}</SectionTitle>
-      {sub && <p className={cx(tone.muted, "-mt-1 mb-2 px-1 text-sm")}>{sub}</p>}
       {children}
+      {footnote && <Footnote>{footnote}</Footnote>}
     </section>
+  );
+}
+
+function Footnote({ children }: { children: ReactNode }) {
+  return <p className={cx(tone.faint, "mt-2 px-1 text-[13px] leading-snug")}>{children}</p>;
+}
+
+/** One settings row: label (and an optional note) on the left, the control on the right. */
+function Row({ label, note, children, className }: { label: ReactNode; note?: ReactNode; children?: ReactNode; className?: string }) {
+  return (
+    <div className={cx("flex min-h-[52px] items-center gap-3 px-4 py-2.5", className)}>
+      <div className="min-w-0 flex-1">
+        <div className={cx(tone.body, "text-[15px]")}>{label}</div>
+        {note && <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>{note}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A text field as a row: the label on the left, the value typed on the right.
+ * With a note, the label and note take the room and the field is short.
+ * `after` sits outside the <label> (a link inside a label is invalid).
+ */
+function InputRow({
+  label,
+  note,
+  after,
+  className,
+  ...input
+}: { label: string; note?: ReactNode; after?: ReactNode } & InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <div className="flex items-center gap-1 pr-4 transition focus-within:bg-mp-ink/[0.03]">
+      <label className="flex min-h-[52px] min-w-0 flex-1 items-center gap-3 py-1 pl-4">
+        <span className={cx("min-w-0", note ? "flex-1 py-1.5" : "shrink-0")}>
+          <span className={cx(tone.body, "block text-[15px]")}>{label}</span>
+          {note && <span className={cx(tone.muted, "mt-0.5 block text-[13px] leading-snug")}>{note}</span>}
+        </span>
+        <input
+          {...input}
+          // A date field sizes to its content and sits right (Chromium won't right-align inside it).
+          className={cx(INLINE_INPUT, note ? "w-20 shrink-0" : input.type === "date" ? cx("ml-auto min-w-0", DATE_PICKER_ICON) : "w-full min-w-0 flex-1", className)}
+        />
+      </label>
+      {after}
+    </div>
+  );
+}
+
+/** A tappable row that does something: an icon, accent text, an optional note, and a chevron when it goes somewhere. */
+function ActionRow({
+  icon,
+  label,
+  note,
+  chevron,
+  onClick,
+}: {
+  icon: IconName;
+  label: string;
+  note?: string;
+  chevron?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} className={cx(tone.row, "min-h-[52px] py-2.5")}>
+      <Icon name={icon} size={20} className="shrink-0 text-mp-accent-fg" />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[15px] font-medium text-mp-accent-fg">{label}</span>
+        {note && <span className={cx(tone.muted, "block text-[13px] leading-snug")}>{note}</span>}
+      </span>
+      {chevron && <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />}
+    </button>
+  );
+}
+
+/** A row that opens and closes the content under it. */
+function Disclosure({
+  label,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  summary?: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <button type="button" onClick={onToggle} aria-expanded={open} className={cx(tone.row, "min-h-[52px]")}>
+        <span className={cx(tone.body, "shrink-0 text-[15px] font-medium")}>{label}</span>
+        <span className={cx(tone.muted, "min-w-0 flex-1 truncate text-right text-sm")}>{summary}</span>
+        <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", open && "rotate-180")} />
+      </button>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </div>
   );
 }
 
@@ -91,7 +217,16 @@ function CopyButton({ text, label = "Copy", className }: { text: string; label?:
         setTimeout(() => setState("idle"), 1600);
       }}
     >
-      {state === "done" ? "Copied ✓" : state === "fail" ? "Press and hold to copy" : label}
+      {state === "done" ? (
+        <>
+          <Icon name="check" size={16} strokeWidth={2.25} />
+          Copied
+        </>
+      ) : state === "fail" ? (
+        "Press and hold to copy"
+      ) : (
+        label
+      )}
     </Button>
   );
 }
@@ -100,44 +235,47 @@ function Code({ children }: { children: ReactNode }) {
   // Short tokens (`speak`, `pee`) stay whole; long URLs and keys may break anywhere.
   const long = typeof children === "string" ? children.length > 24 : true;
   return (
-    <code
-      className={cx(
-        "rounded-md bg-[#1D4420]/[0.06] px-1.5 py-0.5 font-mono text-[13px] text-[#1D4420] dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]",
-        long ? "break-all" : "whitespace-nowrap"
-      )}
-    >
+    <code className={cx("rounded-md bg-mp-sunken px-1.5 py-0.5 font-mono text-[13px] text-mp-ink", long ? "break-all" : "whitespace-nowrap")}>
       {children}
     </code>
   );
 }
 
-function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
+/** An iOS-style switch. The button is a 44px target around the 51×31 track. */
+function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
-    <div className="flex min-h-[56px] items-center gap-3 py-2">
-      <div className="min-w-0 flex-1">
-        <p className={cx(tone.body, "text-[15px] font-semibold")}>{label}</p>
-        {hint && <p className={cx(tone.muted, "text-xs leading-snug")}>{hint}</p>}
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="-my-1.5 flex h-11 shrink-0 items-center disabled:opacity-40"
+    >
+      <span
         className={cx(
-          "relative h-8 w-14 shrink-0 rounded-full transition disabled:opacity-40",
-          checked ? "bg-[#1D4420] dark:bg-[#C49A3C]" : "bg-[#1D4420]/15 dark:bg-[#F5EDDF]/20"
+          "relative block h-[31px] w-[51px] rounded-full transition-colors",
+          checked ? "bg-mp-accent" : "bg-mp-sunken ring-1 ring-mp-line ring-inset"
         )}
       >
+        {/* White knob by day and in dark mode; amber at night, bright when on, dim when off. */}
         <span
           className={cx(
-            "absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform dark:bg-[#FDF8F0]",
-            checked && "translate-x-6"
+            "absolute top-[2px] left-[2px] h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.18)] transition-transform",
+            checked ? "translate-x-5 [.maple-night_&]:bg-mp-on-accent" : "[.maple-night_&]:bg-mp-ink-3"
           )}
         />
-      </button>
-    </div>
+      </span>
+    </button>
+  );
+}
+
+function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
+  return (
+    <Row label={label} note={hint}>
+      <Switch checked={checked} onChange={onChange} label={label} disabled={disabled} />
+    </Row>
   );
 }
 
@@ -154,12 +292,26 @@ function EmojiPicker({ value, onChange }: { value: string; onChange: (e: string)
           onClick={() => onChange(e)}
           className={cx(
             "flex h-11 w-11 items-center justify-center rounded-full text-xl transition active:scale-95",
-            value === e ? "bg-[#C49A3C]/25 ring-2 ring-[#C49A3C]" : "bg-[#1D4420]/[0.05] dark:bg-[#F5EDDF]/[0.07]"
+            value === e ? "bg-mp-accent/10 ring-2 ring-mp-accent-fg" : "bg-mp-sunken"
           )}
         >
           {e}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Save / Cancel under a card once something in it has changed. */
+function SaveBar({ busy, onSave, onCancel }: { busy: boolean; onSave: () => void; onCancel: () => void }) {
+  return (
+    <div className="mt-3 flex gap-2">
+      <Button className="flex-1" disabled={busy} onClick={onSave}>
+        Save changes
+      </Button>
+      <Button variant="ghost" onClick={onCancel}>
+        Cancel
+      </Button>
     </div>
   );
 }
@@ -176,10 +328,10 @@ export default function FamilyTab() {
   const { state, readOnly } = useMaple();
   if (!state) return null;
   return (
-    <div className="space-y-8 px-4 pt-[calc(env(safe-area-inset-top)+20px)] pb-8">
+    <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
       <header className="px-1">
-        <h1 className={cx(tone.heading, "text-[34px] leading-tight")}>Family</h1>
-        <p className={cx(tone.muted, "mt-0.5 text-[15px]")}>Everyone helping Maple grow, and how the log works for you.</p>
+        <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Family</h1>
+        <p className={cx(tone.muted, "mt-1 text-[15px]")}>Everyone helping Maple grow, and how the log works for you.</p>
       </header>
       <People />
       <BabyDetails />
@@ -188,7 +340,7 @@ export default function FamilyTab() {
       {!readOnly && <ConnectAI />}
       {!readOnly && <HandsFree />}
       <DataAndAccount />
-      <p className={cx(tone.muted, "px-2 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
+      <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
     </div>
   );
 }
@@ -221,7 +373,7 @@ function People() {
     try {
       const r = await api<{ invites: Invite[] }>(`/api/maple/invites?id=${inv.id}`, { method: "DELETE" });
       setInvites(r.invites);
-      toast(`Invite for ${inv.display_name ?? "them"} revoked`, { emoji: "🍂" });
+      toast(`Invite for ${inv.display_name ?? "them"} revoked`);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't revoke that", { tone: "error" });
     }
@@ -230,63 +382,55 @@ function People() {
   const daysLeft = (iso: string) => Math.max(0, Math.ceil((Date.parse(iso) - now().getTime()) / 864e5));
 
   return (
-    <Section title="Maple's people">
-      <Card className="p-0">
-        <ul className="divide-y divide-[#1D4420]/[0.07] dark:divide-[#F5EDDF]/[0.08]">
+    <>
+      <Section
+        title="Maple's people"
+        footnote={members.length === 1 ? "It's just you so far. Invite Brittany, grandparents, or anyone helping out." : undefined}
+      >
+        <ul className={GROUP}>
           {members.map((m) => (
             <MemberRow key={m.email} m={m} me={me} owner={owner} />
           ))}
+          {/* Invite links not used yet sit with the people they're for. */}
+          {owner &&
+            invites.map((inv) => {
+              const d = daysLeft(inv.expires_at);
+              return (
+                <li key={`invite-${inv.id}`} className="flex min-h-[60px] items-center gap-3 px-4 py-2.5">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-[22px] text-mp-ink-2" aria-hidden>
+                    {inv.emoji ?? <Icon name="link" size={18} />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className={cx(tone.body, "truncate text-[15px] font-medium")}>{inv.display_name ?? "Someone"}</p>
+                    <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+                      Invite link waiting · {inv.role === "viewer" ? "View only" : "Can log"} · expires {d <= 1 ? "within a day" : `in ${d} days`}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => void revoke(inv)} className={DANGER_TEXT}>
+                    Revoke
+                  </button>
+                </li>
+              );
+            })}
         </ul>
+      </Section>
 
-        {members.length === 1 && (
-          <p className={cx(tone.muted, "border-t border-[#1D4420]/[0.07] px-4 py-4 text-center text-[15px] leading-relaxed dark:border-[#F5EDDF]/[0.08]")}>
-            It&apos;s just you so far. Invite Brittany, grandparents, or anyone helping out.
-          </p>
-        )}
-
-        {owner && invites.length > 0 && (
-          <div className="border-t border-[#1D4420]/[0.07] px-4 py-3 dark:border-[#F5EDDF]/[0.08]">
-            <p className={cx(tone.label, "mb-1")}>Invite links waiting</p>
-            <ul>
-              {invites.map((inv) => {
-                const d = daysLeft(inv.expires_at);
-                return (
-                  <li key={inv.id} className="flex min-h-[52px] items-center gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#C49A3C]/15 text-lg" aria-hidden>
-                      {inv.emoji ?? "🔗"}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className={cx(tone.body, "truncate text-[15px] font-semibold")}>{inv.display_name ?? "Someone"}</p>
-                      <p className={cx(tone.muted, "text-xs")}>
-                        {inv.role === "viewer" ? "View only" : "Can log"} · link expires {d <= 1 ? "within a day" : `in ${d} days`}
-                      </p>
-                    </div>
-                    <Button variant="ghost" size="sm" onClick={() => void revoke(inv)}>
-                      Revoke
-                    </Button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-
-        {owner && (
-          <div className="space-y-4 border-t border-[#1D4420]/[0.07] px-4 py-4 dark:border-[#F5EDDF]/[0.08]">
+      {owner && (
+        <Section title="Invite someone">
+          <div className={GROUP}>
             <InviteByEmail />
-            <div>
-              <Button variant="soft" className="w-full" onClick={() => setLinkOpen(true)}>
-                🔗 Invite someone without Google
-              </Button>
-              <p className={cx(tone.muted, "mt-1.5 px-2 text-center text-xs leading-snug")}>
-                A one-time link for grandparents or a helper. No account needed.
-              </p>
-            </div>
+            <ActionRow
+              icon="link"
+              label="Invite someone without Google"
+              note="A one-time link for grandparents or a helper. No account needed."
+              chevron
+              onClick={() => setLinkOpen(true)}
+            />
           </div>
-        )}
-      </Card>
-      {owner && <InviteLinkSheet open={linkOpen} onClose={() => setLinkOpen(false)} onCreated={() => void loadInvites()} />}
-    </Section>
+          <InviteLinkSheet open={linkOpen} onClose={() => setLinkOpen(false)} onCreated={() => void loadInvites()} />
+        </Section>
+      )}
+    </>
   );
 }
 
@@ -310,7 +454,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
     try {
       await api("/api/maple/members", { method: "PATCH", body: JSON.stringify(body) });
       await refresh();
-      toast(done, { emoji: "🍁" });
+      toast(done);
       return true;
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
@@ -325,38 +469,50 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
     try {
       await api(`/api/maple/members?email=${encodeURIComponent(m.email)}`, { method: "DELETE" });
       await refresh();
-      toast(`${memberName(m.email)} removed`, { emoji: "🍂" });
+      toast(`${memberName(m.email)} removed`);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't remove them", { tone: "error" });
       setBusy(false);
     }
   };
 
+  const confirmRow = (question: string, yes: string) => (
+    <div className="flex items-center gap-2">
+      <p className={cx(tone.body, "flex-1 text-sm")}>{question}</p>
+      <Button variant="danger" size="sm" disabled={busy} onClick={() => void removeMember()}>
+        {yes}
+      </Button>
+      <Button variant="ghost" size="sm" onClick={() => setConfirmRemove(false)}>
+        Keep
+      </Button>
+    </div>
+  );
+
   return (
-    <li className="px-4 py-3">
-      <div className="flex items-center gap-3">
-        <Avatar member={m} size={44} />
+    <li className="px-4 py-2.5">
+      <div className="flex min-h-[40px] items-center gap-3">
+        <Avatar member={m} size={40} />
         <div className="min-w-0 flex-1">
-          <p className={cx(tone.body, "truncate text-base font-semibold")}>
+          <p className={cx(tone.body, "truncate text-[15px] font-medium")}>
             {memberName(m.email)}
-            {isMe && <span className={cx(tone.muted, "ml-1.5 text-sm font-normal")}>(you)</span>}
+            {isMe && <span className={cx(tone.muted, "ml-1.5 font-normal")}>(you)</span>}
           </p>
-          <p className={cx(tone.muted, "truncate text-xs")}>{sub}</p>
+          <p className={cx(tone.muted, "text-[13px] leading-snug break-words")}>{sub}</p>
         </div>
         {isMe && !editing && (
-          <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
+          <Button variant="ghost" size="sm" className="-mr-3" onClick={() => setEditing(true)}>
             Edit
           </Button>
         )}
         {owner && !isMe && (m.role !== "owner" || isAdminLogin) && (
-          <Button variant="ghost" size="sm" onClick={() => setManaging((v) => !v)} aria-label={`Manage ${memberName(m.email)}`}>
+          <Button variant="ghost" size="sm" className="-mr-3" onClick={() => setManaging((v) => !v)} aria-label={`Manage ${memberName(m.email)}`}>
             {managing ? "Done" : "Manage"}
           </Button>
         )}
       </div>
 
       {editing && (
-        <div className="mt-3 space-y-3">
+        <div className="mt-3 space-y-4 pb-1.5">
           <Field label="Your name">
             <input className={tone.input} value={name} maxLength={40} placeholder="What should the log call you?" onChange={(e) => setName(e.target.value)} />
           </Field>
@@ -389,8 +545,8 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
       )}
 
       {managing && isAdminLogin && (
-        <div className="mt-3 space-y-2">
-          <p className={cx(tone.muted, "text-xs")}>
+        <div className="mt-3 space-y-3 pb-1.5">
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>
             This is the site&apos;s admin password. Turning it off here means it no longer opens Maple&apos;s Log (or connects
             Claude/ChatGPT to it); the rest of brooker.family is unaffected. Google sign-in keeps working for everyone else.
           </p>
@@ -399,21 +555,13 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
               Turn off admin login
             </Button>
           ) : (
-            <div className="flex items-center gap-2">
-              <p className={cx(tone.body, "flex-1 text-sm")}>Turn off the admin login for Maple?</p>
-              <Button variant="danger" size="sm" disabled={busy} onClick={() => void removeMember()}>
-                Turn off
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setConfirmRemove(false)}>
-                Keep
-              </Button>
-            </div>
+            confirmRow("Turn off the admin login for Maple?", "Turn off")
           )}
         </div>
       )}
 
       {managing && !isAdminLogin && (
-        <div className="mt-3 space-y-3">
+        <div className="mt-3 space-y-3 pb-1.5">
           <Segmented
             value={m.role === "viewer" ? "viewer" : "member"}
             onChange={(r) => void patch({ email: m.email, role: r }, r === "viewer" ? "Now view only" : "Can log now")}
@@ -427,15 +575,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
               Remove from Maple&apos;s Log
             </Button>
           ) : (
-            <div className="flex items-center gap-2">
-              <p className={cx(tone.body, "flex-1 text-sm")}>Remove {memberName(m.email)}?</p>
-              <Button variant="danger" size="sm" disabled={busy} onClick={() => void removeMember()}>
-                Remove
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setConfirmRemove(false)}>
-                Keep
-              </Button>
-            </div>
+            confirmRow(`Remove ${memberName(m.email)}?`, "Remove")
           )}
         </div>
       )}
@@ -456,7 +596,7 @@ function InviteByEmail() {
     try {
       await api("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role }) });
       await refresh();
-      toast(`Added ${email.trim()}. They can sign in with Google at brooker.family/maple`, { emoji: "🍁", duration: 6000 });
+      toast(`Added ${email.trim()}. They can sign in with Google at brooker.family/maple`, { duration: 6000 });
       setEmail("");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't add them", { tone: "error" });
@@ -471,7 +611,7 @@ function InviteByEmail() {
         e.preventDefault();
         void add();
       }}
-      className="space-y-2"
+      className="space-y-2.5 px-4 pt-3 pb-3.5"
     >
       <span className={cx(tone.label, "block")}>Invite with a Google account</span>
       <input
@@ -562,7 +702,6 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
       open={open}
       onClose={onClose}
       title={url ? "Link ready" : "Invite without Google"}
-      emoji="🔗"
       footer={
         url ? (
           <Button size="lg" className="w-full" onClick={onClose}>
@@ -594,7 +733,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
                 { value: "viewer", label: "Viewer · can see" },
               ]}
             />
-            <p className={cx(tone.muted, "mt-1.5 text-xs leading-snug")}>
+            <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>
               {role === "viewer"
                 ? "Viewers see Maple's day and her moments, but can't log or change anything."
                 : "Members can log feeds, diapers and sleep, just like you."}
@@ -604,16 +743,17 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
       ) : (
         <>
           <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
-            Send this to {name.trim() || "them"}. It works <strong>once</strong>, for <strong>7 days</strong>, and signs them in on whichever phone
+            Send this to {name.trim() || "them"}. It works <strong className="font-semibold">once</strong>, for <strong className="font-semibold">7 days</strong>, and signs them in on whichever phone
             opens it. You won&apos;t see this link again.
           </p>
           <div className={cx(tone.inset, "p-3")}>
-            <p className="font-mono text-[13px] leading-relaxed break-all text-[#1D4420] select-all dark:text-[#F5EDDF]">{url}</p>
+            <p className="font-mono text-[13px] leading-relaxed break-all text-mp-ink select-all">{url}</p>
           </div>
           <div className="flex gap-2">
             <CopyButton text={url} label="Copy link" className="min-h-[48px] flex-1 text-[15px]" />
             {canShare && (
-              <Button variant="gold" className="min-h-[48px] flex-1" onClick={() => void share()}>
+              <Button className="min-h-[48px] flex-1" onClick={() => void share()}>
+                <Icon name="share" size={18} />
                 Share…
               </Button>
             )}
@@ -686,7 +826,7 @@ function BabyDetails() {
       await refresh();
       if (which === "profile") setPEdits({});
       else setDEdits({});
-      toast("Saved", { emoji: "🍁" });
+      toast("Saved");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't save", { tone: "error" });
     } finally {
@@ -717,19 +857,16 @@ function BabyDetails() {
     baby.birth_head_cm ? `head ${formatLength(baby.birth_head_cm, units)}` : null,
   ].filter(Boolean);
 
-  const birthCard = (
-    <div className={cx(tone.inset, "flex items-center gap-3 px-4 py-3")}>
-      <span className="text-2xl" aria-hidden>
-        {born ? "🍁" : "🌱"}
-      </span>
+  const birthRow = (
+    <div className="flex min-h-[60px] items-center gap-3 px-4 py-2.5">
       <div className="min-w-0 flex-1">
-        <p className={cx(tone.body, "text-[15px] font-semibold")}>{bornLine ?? "Not born yet"}</p>
-        <p className={cx(tone.muted, "text-xs")}>
+        <p className={cx(tone.body, "text-[15px]")}>{bornLine ?? "Not born yet"}</p>
+        <p className={cx(tone.muted, "text-[13px] tabular-nums")}>
           {born ? (stats.length ? stats.join(" · ") : "Weight and length not added yet") : baby.due_date ? `Due ${formatDayLabel(baby.due_date, dayKey(now(), tz), { long: true })}` : "Any day now"}
         </p>
       </div>
       {!readOnly && (
-        <Button variant={born ? "ghost" : "gold"} size="sm" onClick={() => setBirthOpen(true)}>
+        <Button variant={born ? "ghost" : "primary"} size="sm" className={born ? "-mr-3" : undefined} onClick={() => setBirthOpen(true)}>
           {born ? "Edit" : "She's here!"}
         </Button>
       )}
@@ -740,90 +877,73 @@ function BabyDetails() {
     const phone = doctorSrc.pedPhone;
     return (
       <Section title="Maple">
-        <Card className="space-y-3">
-          <p className={cx(tone.heading, "text-2xl")}>
-            {baby.name}
-            {baby.nickname && <span className={cx(tone.muted, "ml-2 font-[family-name:var(--font-body)] text-sm font-normal")}>“{baby.nickname}”</span>}
+        <div className={GROUP}>
+          <p className="flex flex-wrap items-baseline gap-x-2 px-4 py-3.5">
+            <span className={cx(tone.display, "text-[24px] leading-tight")}>{baby.name}</span>
+            {baby.nickname && <span className={cx(tone.muted, "text-sm")}>“{baby.nickname}”</span>}
           </p>
-          {birthCard}
+          {birthRow}
           {phone && (
-            <a href={telHref(phone)} className={cx(tone.body, "flex min-h-[44px] items-center gap-2 text-[15px] font-semibold underline decoration-[#C49A3C]/50 underline-offset-4")}>
-              📞 Pediatrician · {phone}
+            <a href={telHref(phone)} className={cx(tone.row, "min-h-[52px]")}>
+              <Icon name="phone" size={20} className="shrink-0 text-mp-accent-fg" />
+              <span className={cx(tone.body, "flex-1 text-[15px]")}>Pediatrician</span>
+              <span className="text-[15px] font-medium text-mp-accent-fg tabular-nums">{phone}</span>
             </a>
           )}
-        </Card>
+        </div>
       </Section>
     );
   }
 
   return (
-    <Section title="Maple" sub="Her details, and her doctor's numbers for the middle of the night.">
-      <div className="space-y-3">
-        <Card className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Name">
-              <input className={tone.input} value={p.name} maxLength={80} onChange={(e) => setPEdits((x) => ({ ...x, name: e.target.value }))} />
-            </Field>
-            <Field label="Nickname">
-              <input className={tone.input} value={p.nickname} maxLength={40} placeholder="Maple" onChange={(e) => setPEdits((x) => ({ ...x, nickname: e.target.value }))} />
-            </Field>
-          </div>
-          <Field label="Due date">
-            <input type="date" className={cx(tone.input, "min-h-[50px]")} value={p.due} onChange={(e) => setPEdits((x) => ({ ...x, due: e.target.value }))} />
-          </Field>
-          {birthCard}
-          {pDirty && (
-            <div className="flex gap-2">
-              <Button className="flex-1" disabled={busy === "profile"} onClick={() => void save("profile")}>
-                Save changes
-              </Button>
-              <Button variant="ghost" onClick={() => setPEdits({})}>
-                Cancel
-              </Button>
-            </div>
-          )}
-        </Card>
+    <>
+      <Section title="Maple">
+        <div className={GROUP}>
+          <InputRow label="Name" value={p.name} maxLength={80} onChange={(e) => setPEdits((x) => ({ ...x, name: e.target.value }))} />
+          <InputRow
+            label="Nickname"
+            value={p.nickname}
+            maxLength={40}
+            placeholder="Maple"
+            onChange={(e) => setPEdits((x) => ({ ...x, nickname: e.target.value }))}
+          />
+          <InputRow label="Due date" type="date" value={p.due} onChange={(e) => setPEdits((x) => ({ ...x, due: e.target.value }))} />
+          {birthRow}
+        </div>
+        {pDirty && <SaveBar busy={busy === "profile"} onSave={() => void save("profile")} onCancel={() => setPEdits({})} />}
+      </Section>
 
-        <Card className="space-y-4">
-          <p className={cx(tone.heading, "text-lg")}>Her doctor</p>
-          <PhoneField label="Pediatrician" value={d.pedPhone} saved={doctorSrc.pedPhone} onChange={(v) => setDEdits((x) => ({ ...x, pedPhone: v }))} />
-          <PhoneField label="After-hours line" value={d.afterHours} saved={doctorSrc.afterHours} onChange={(v) => setDEdits((x) => ({ ...x, afterHours: v }))} />
+      <Section title="Her doctor" footnote="Her doctor's numbers, for the middle of the night.">
+        <div className={GROUP}>
+          <PhoneRow label="Pediatrician" value={d.pedPhone} saved={doctorSrc.pedPhone} onChange={(v) => setDEdits((x) => ({ ...x, pedPhone: v }))} />
+          <PhoneRow label="After-hours line" value={d.afterHours} saved={doctorSrc.afterHours} onChange={(v) => setDEdits((x) => ({ ...x, afterHours: v }))} />
           {/* These only tune the reminders. */}
           {warnings && (
             <>
-              <Field label="Weeks at birth" hint="Born before 37 weeks or under 5½ lb? Maple's reminders step back and defer to your pediatrician's plan.">
-                <input
-                  className={tone.input}
-                  inputMode="numeric"
-                  placeholder="e.g. 39"
-                  value={d.gaWeeks}
-                  onChange={(e) => setDEdits((x) => ({ ...x, gaWeeks: e.target.value.replace(/[^\d.]/g, "") }))}
-                />
-              </Field>
-              <Field label="Feed every … hours (optional)" hint="Only if her pediatrician gave you a number. It replaces the built-in feeding reminders.">
-                <input
-                  className={tone.input}
-                  inputMode="decimal"
-                  placeholder="e.g. 3"
-                  value={d.feedHours}
-                  onChange={(e) => setDEdits((x) => ({ ...x, feedHours: e.target.value.replace(/[^\d.]/g, "") }))}
-                />
-              </Field>
+              <InputRow
+                label="Weeks at birth"
+                note="Born before 37 weeks or under 5½ lb? Maple's reminders step back and defer to your pediatrician's plan."
+                inputMode="numeric"
+                placeholder="e.g. 39"
+                value={d.gaWeeks}
+                onChange={(e) => setDEdits((x) => ({ ...x, gaWeeks: e.target.value.replace(/[^\d.]/g, "") }))}
+              />
+              <InputRow
+                label="Feed every … hours (optional)"
+                note="Only if her pediatrician gave you a number. It replaces the built-in feeding reminders."
+                inputMode="decimal"
+                placeholder="e.g. 3"
+                value={d.feedHours}
+                onChange={(e) => setDEdits((x) => ({ ...x, feedHours: e.target.value.replace(/[^\d.]/g, "") }))}
+              />
             </>
           )}
-          {dDirty && (
-            <div className="flex gap-2">
-              <Button className="flex-1" disabled={busy === "doctor"} onClick={() => void save("doctor")}>
-                Save changes
-              </Button>
-              <Button variant="ghost" onClick={() => setDEdits({})}>
-                Cancel
-              </Button>
-            </div>
-          )}
-        </Card>
+        </div>
+        {dDirty && <SaveBar busy={busy === "doctor"} onSave={() => void save("doctor")} onCancel={() => setDEdits({})} />}
+      </Section>
 
-        <Card className="divide-y divide-[#1D4420]/[0.07] py-1 dark:divide-[#F5EDDF]/[0.08]">
+      <Section title="On Today">
+        <div className={GROUP}>
           <Toggle
             label="Warnings & reminders"
             hint="Feed gaps, diaper counts, weight, vitamin D and checkups. They only make sense when everything gets logged. A temperature, oxygen reading or poop color is still checked as you enter it."
@@ -833,7 +953,7 @@ function BabyDetails() {
           {warnings && (
             <Toggle
               label="Vitamin D reminder"
-              hint="A gentle evening nudge if no sunshine drops are logged that day."
+              hint="A gentle evening nudge if no vitamin D drops are logged that day."
               checked={flag("vitamin_d_reminder")}
               onChange={(v) => void setSetting("vitamin_d_reminder", v)}
             />
@@ -844,39 +964,36 @@ function BabyDetails() {
             checked={flag("show_brigade")}
             onChange={(v) => void setSetting("show_brigade", v)}
           />
-        </Card>
-      </div>
+        </div>
+      </Section>
       <BirthSheet open={birthOpen} onClose={() => setBirthOpen(false)} mode={born ? "edit" : "birth"} />
-    </Section>
+    </>
   );
 }
 
-function PhoneField({ label, value, saved, onChange }: { label: string; value: string; saved: string; onChange: (v: string) => void }) {
+function PhoneRow({ label, value, saved, onChange }: { label: string; value: string; saved: string; onChange: (v: string) => void }) {
   return (
-    <div>
-      <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
-      <div className="flex items-center gap-2">
-        <input
-          className={tone.input}
-          type="tel"
-          inputMode="tel"
-          autoComplete="off"
-          placeholder="(518) 555-0123"
-          aria-label={`${label} phone`}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-        {saved && (
-          <a
-            href={telHref(saved)}
-            aria-label={`Call ${label}`}
-            className="flex min-h-[50px] shrink-0 items-center rounded-full bg-[#1D4420] px-4 text-sm font-semibold text-[#FDF8F0] dark:bg-[#C49A3C] dark:text-[#14210F]"
-          >
-            📞 Call
+    <InputRow
+      label={label}
+      type="tel"
+      inputMode="tel"
+      autoComplete="off"
+      // Not a sample number: borderless, it would read like a saved one at 3am.
+      placeholder="Add number"
+      aria-label={`${label} phone`}
+      className="tabular-nums"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      after={
+        saved ? (
+          <a href={telHref(saved)} aria-label={`Call ${label}`} className="-mr-1.5 flex h-11 w-11 shrink-0 items-center justify-center">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mp-accent text-mp-on-accent">
+              <Icon name="phone" size={16} strokeWidth={2} />
+            </span>
           </a>
-        )}
-      </div>
-    </div>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -918,7 +1035,7 @@ function DoctorQuestions() {
     const t = text.trim();
     if (!t) return;
     setText("");
-    await log({ kind: "note", data: { for_doctor: true }, note: t }, { toast: "Added to the list for the doctor", emoji: "🩺" });
+    await log({ kind: "note", data: { for_doctor: true }, note: t }, { toast: "Added to the list for the doctor" });
   };
 
   const patchLocal = (saved: Entry | null) => {
@@ -928,37 +1045,38 @@ function DoctorQuestions() {
   return (
     <Section
       title="Questions for the doctor"
-      sub={readOnly ? "What the family plans to ask at her next checkup." : "Jot them down as they come up; tick them off at her checkup."}
+      footnote={readOnly ? "What the family plans to ask at her next checkup." : "Jot them down as they come up; tick them off at her checkup."}
     >
-      <Card className="space-y-3">
+      <div className={GROUP}>
         {!readOnly && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
               void add();
             }}
-            className="flex gap-2"
+            className="flex items-center gap-1 py-1.5 pr-2 pl-1.5"
           >
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center text-mp-accent-fg" aria-hidden>
+              <Icon name="plus" size={20} strokeWidth={2} />
+            </span>
             <input
-              className={tone.input}
+              className="min-h-[44px] min-w-0 flex-1 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
               value={text}
               maxLength={300}
               placeholder="Is her cheek rash okay?"
               aria-label="New question for the doctor"
               onChange={(e) => setText(e.target.value)}
             />
-            <Button type="submit" disabled={!text.trim()}>
+            <Button type="submit" size="sm" disabled={!text.trim()}>
               Add
             </Button>
           </form>
         )}
 
         {open.length === 0 ? (
-          <p className={cx(tone.muted, "py-2 text-center text-sm leading-relaxed")}>
-            {done.length ? "All asked. Nice work." : "No questions yet."}
-          </p>
+          <p className={cx(tone.muted, "px-4 py-4 text-center text-sm")}>{done.length ? "All asked. Nice work." : "No questions yet."}</p>
         ) : (
-          <ul className="space-y-1">
+          <ul className={tone.divide}>
             {open.map((q) => (
               <QuestionRow
                 key={q.id}
@@ -975,34 +1093,36 @@ function DoctorQuestions() {
         )}
 
         {done.length > 0 && (
-          <div className="border-t border-[#1D4420]/[0.07] pt-2 dark:border-[#F5EDDF]/[0.08]">
-            <button type="button" onClick={() => setShowDone((v) => !v)} className={cx(tone.muted, "min-h-[44px] w-full text-left text-sm font-semibold")} aria-expanded={showDone}>
-              {showDone ? "▾" : "▸"} Asked ({done.length})
-            </button>
-            {showDone && (
-              <ul className="space-y-2 pb-1">
-                {done.map((q) => (
-                  <li key={q.id} className="flex items-start gap-3">
-                    <button
-                      type="button"
-                      disabled={readOnly}
-                      onClick={async () => patchLocal(await update(q.id, { data: { done: false } }, { toast: "Back on the list" }))}
-                      aria-label="Put back on the list"
-                      className="flex h-11 w-11 shrink-0 items-center justify-center"
-                    >
-                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#5C7A4A] text-xs text-white dark:bg-[#A9C08F] dark:text-[#14210F]">✓</span>
-                    </button>
-                    <div className="min-w-0 flex-1 py-2.5">
-                      <p className={cx(tone.muted, "text-[15px] leading-snug line-through decoration-[#5C7A4A]/40")}>{q.note}</p>
-                      {q.data.answer && <p className={cx(tone.body, "mt-1 text-sm leading-snug")}>🩺 {q.data.answer}</p>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <Disclosure label="Asked" summary={done.length} open={showDone} onToggle={() => setShowDone((v) => !v)}>
+            <ul className="-ml-2.5 space-y-1">
+              {done.map((q) => (
+                <li key={q.id} className="flex items-start gap-1">
+                  <button
+                    type="button"
+                    disabled={readOnly}
+                    onClick={async () => patchLocal(await update(q.id, { data: { done: false } }, { toast: "Back on the list" }))}
+                    aria-label="Put back on the list"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center"
+                  >
+                    <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-mp-accent text-mp-on-accent">
+                      <Icon name="check" size={14} strokeWidth={2.75} />
+                    </span>
+                  </button>
+                  <div className="min-w-0 flex-1 py-2.5">
+                    <p className={cx(tone.muted, "text-[15px] leading-snug line-through decoration-mp-ink-3/60")}>{q.note}</p>
+                    {q.data.answer && (
+                      <p className={cx(tone.body, "mt-1 flex gap-1.5 text-sm leading-snug")}>
+                        <Icon name="stethoscope" size={15} className="mt-[2px] shrink-0 text-mp-ink-3" label="Doctor's answer" />
+                        <span>{q.data.answer}</span>
+                      </p>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </Disclosure>
         )}
-      </Card>
+      </div>
     </Section>
   );
 }
@@ -1024,7 +1144,7 @@ function QuestionRow({
   const [answer, setAnswer] = useState("");
   return (
     <li>
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-1 pr-4 pl-1.5">
         <button
           type="button"
           disabled={readOnly}
@@ -1033,26 +1153,32 @@ function QuestionRow({
           aria-expanded={open}
           className="flex h-11 w-11 shrink-0 items-center justify-center"
         >
-          <span className={cx("h-6 w-6 rounded-full border-2 transition", open ? "border-[#5C7A4A] bg-[#5C7A4A]/15" : "border-[#1D4420]/30 dark:border-[#F5EDDF]/35")} />
+          <span
+            className={cx(
+              "h-[22px] w-[22px] rounded-full border-[1.5px] transition",
+              open ? "border-mp-accent-fg bg-mp-accent/10" : "border-mp-ink-3"
+            )}
+          />
         </button>
         <div className="min-w-0 flex-1 py-2.5">
           <p className={cx(tone.body, "text-[15px] leading-snug")}>{q.note || "(no text)"}</p>
-          <p className={cx(tone.muted, "mt-0.5 text-xs")}>{by}</p>
+          <p className={cx(tone.faint, "mt-0.5 text-xs")}>{by}</p>
         </div>
       </div>
       {open && (
-        <div className="mb-2 ml-14 space-y-2">
+        <div className="mr-4 mb-3 ml-[54px] space-y-2">
           <TextArea value={answer} onChange={setAnswer} placeholder="What did the doctor say? (optional)" />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" onClick={() => void onDone(answer.trim())}>
-              Asked ✓
+              <Icon name="check" size={16} strokeWidth={2.25} />
+              Asked
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
               Not yet
             </Button>
-            <Button size="sm" variant="ghost" className="ml-auto" onClick={onRemove}>
+            <button type="button" onClick={onRemove} className={cx(DANGER_TEXT, "ml-auto text-sm")}>
               Delete
-            </Button>
+            </button>
           </div>
         </div>
       )}
@@ -1061,6 +1187,19 @@ function QuestionRow({
 }
 
 // ── Preferences ──────────────────────────────────────────────────────────
+
+/** A label on the left and a segmented control on the right; it wraps under on a very narrow phone. */
+function SegmentRow({ label, note, children }: { label: string; note?: string; children: ReactNode }) {
+  return (
+    <div className="px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <span className={cx(tone.body, "text-[15px]")}>{label}</span>
+        <div className="ml-auto w-[13.5rem] max-w-full">{children}</div>
+      </div>
+      {note && <p className={cx(tone.muted, "mt-2 text-[13px] leading-snug")}>{note}</p>}
+    </div>
+  );
+}
 
 function Preferences() {
   const { units, setUnits } = useMaple();
@@ -1074,9 +1213,8 @@ function Preferences() {
 
   return (
     <Section title="On this phone">
-      <Card className="space-y-5">
-        <div>
-          <span className={cx(tone.label, "mb-1.5 block")}>Units</span>
+      <div className={GROUP}>
+        <SegmentRow label="Units">
           <Segmented
             value={units}
             onChange={setUnits}
@@ -1085,9 +1223,17 @@ function Preferences() {
               { value: "metric", label: "kg · ml · °C" },
             ]}
           />
-        </div>
-        <div>
-          <span className={cx(tone.label, "mb-1.5 block")}>Night look</span>
+        </SegmentRow>
+        <SegmentRow
+          label="Night look"
+          note={
+            night === "auto"
+              ? "Dim amber from 8pm to 7am, easy on sleepy eyes."
+              : night === "always"
+                ? "Dim amber all the time."
+                : "Follows the light or dark theme below."
+          }
+        >
           <Segmented<NightPref>
             value={night}
             onChange={setNight}
@@ -1097,16 +1243,8 @@ function Preferences() {
               { value: "off", label: "Off" },
             ]}
           />
-          <p className={cx(tone.muted, "mt-1.5 text-xs leading-snug")}>
-            {night === "auto"
-              ? "Dim amber from 8pm to 7am, easy on sleepy eyes."
-              : night === "always"
-                ? "Dim amber all the time."
-                : "Follows the light or dark theme below."}
-          </p>
-        </div>
-        <div>
-          <span className={cx(tone.label, "mb-1.5 block")}>Theme</span>
+        </SegmentRow>
+        <SegmentRow label="Theme" note="Same setting as the rest of brooker.family.">
           <Segmented
             value={theme}
             onChange={setTheme}
@@ -1116,20 +1254,18 @@ function Preferences() {
               { value: "dark", label: "Dark" },
             ]}
           />
-          <p className={cx(tone.muted, "mt-1.5 text-xs leading-snug")}>Same setting as the rest of brooker.family.</p>
-        </div>
+        </SegmentRow>
         {!standalone && (
-          <div className={cx(tone.inset, "flex gap-3 px-4 py-3")}>
-            <span className="text-2xl" aria-hidden>
-              📲
-            </span>
-            <p className={cx(tone.body, "text-sm leading-relaxed")}>
-              <strong>Add Maple&apos;s Log to your Home Screen</strong> for one-tap logging. On iPhone, open this page in Safari, tap{" "}
-              <strong>Share</strong>, then <strong>Add to Home Screen</strong>.
+          <div className="flex gap-3 px-4 py-3.5">
+            <Icon name="share" size={20} className="mt-0.5 shrink-0 text-mp-accent-fg" />
+            <p className={cx(tone.muted, "text-sm leading-relaxed")}>
+              <strong className="font-semibold text-mp-ink">Add Maple&apos;s Log to your Home Screen</strong> for one-tap logging. On iPhone, open
+              this page in Safari, tap <strong className="font-semibold text-mp-ink">Share</strong>, then{" "}
+              <strong className="font-semibold text-mp-ink">Add to Home Screen</strong>.
             </p>
           </div>
         )}
-      </Card>
+      </div>
     </Section>
   );
 }
@@ -1137,44 +1273,48 @@ function Preferences() {
 // ── Claude / ChatGPT ─────────────────────────────────────────────────────
 
 function ConnectAI() {
+  const [manual, setManual] = useState(false);
   return (
     <Section title="Talk to Maple's Log">
-      <Card className="space-y-4">
-        <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
-          Connect Claude or ChatGPT and just say what happened. It lands here with your name on it, and you can ask questions too.
-        </p>
-        <ul className="flex flex-wrap gap-1.5">
-          {["“Log a wet diaper.”", "“Start a feed on the right.”", "“Which side next?”", "“How did last night go?”", "“Add a question for the doctor.”"].map((s) => (
-            <li key={s} className="rounded-full bg-[#B8A9C9]/20 px-3 py-1.5 text-sm text-[#4A1A2A] dark:bg-[#B8A9C9]/15 dark:text-[#E2D8EC]">
-              {s}
-            </li>
-          ))}
-        </ul>
-        <dl className="space-y-2 text-sm">
-          <div>
-            <dt className={cx(tone.body, "font-semibold")}>Claude (web, desktop, phone)</dt>
-            <dd className={tone.muted}>Settings → Connectors → Add custom connector, then sign in with Google.</dd>
-          </div>
-          <div>
-            <dt className={cx(tone.body, "font-semibold")}>ChatGPT</dt>
-            <dd className={tone.muted}>Settings → Connectors, with developer mode on.</dd>
-          </div>
-          <div>
-            <dt className={cx(tone.body, "font-semibold")}>Claude Code</dt>
-            <dd className={cx(tone.muted, "mt-1 flex items-start gap-2")}>
-              <Code>claude mcp add --transport http maple {MCP_URL}</Code>
-              <CopyButton text={`claude mcp add --transport http maple ${MCP_URL}`} />
-            </dd>
-          </div>
-        </dl>
-        <Link
-          href="/maple/connect"
-          className="flex min-h-[48px] items-center justify-center rounded-full bg-[#1D4420] px-5 text-[15px] font-semibold text-[#FDF8F0] transition active:scale-[0.98] dark:bg-[#C49A3C] dark:text-[#14210F]"
-        >
-          Step-by-step setup →
+      <div className={GROUP}>
+        <div className="space-y-3 px-4 py-3.5">
+          <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
+            Connect Claude or ChatGPT and just say what happened. It lands here with your name on it, and you can ask questions too.
+          </p>
+          <ul className="space-y-1 border-l-2 border-mp-line pl-3" aria-label="Things you can say">
+            {EXAMPLES.map((s) => (
+              <li key={s} className={cx(tone.muted, "text-[15px] leading-snug")}>
+                {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <Link href="/maple/connect" className={cx(tone.row, "min-h-[52px]")}>
+          <Icon name="list-checks" size={20} className="shrink-0 text-mp-accent-fg" />
+          <span className="flex-1 text-[15px] font-medium text-mp-accent-fg">Step-by-step setup</span>
+          <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
         </Link>
+        <Disclosure label="Where to add it" summary="Claude, ChatGPT" open={manual} onToggle={() => setManual((v) => !v)}>
+          <dl className="space-y-3 text-sm">
+            <div>
+              <dt className={cx(tone.body, "font-semibold")}>Claude (web, desktop, phone)</dt>
+              <dd className={tone.muted}>Settings → Connectors → Add custom connector, then sign in with Google.</dd>
+            </div>
+            <div>
+              <dt className={cx(tone.body, "font-semibold")}>ChatGPT</dt>
+              <dd className={tone.muted}>Settings → Connectors, with developer mode on.</dd>
+            </div>
+            <div>
+              <dt className={cx(tone.body, "font-semibold")}>Claude Code</dt>
+              <dd className={cx(tone.muted, "mt-1 flex items-start gap-2")}>
+                <Code>claude mcp add --transport http maple {MCP_URL}</Code>
+                <CopyButton text={`claude mcp add --transport http maple ${MCP_URL}`} />
+              </dd>
+            </div>
+          </dl>
+        </Disclosure>
         <CalendarConnectorAsMe />
-      </Card>
+      </div>
     </Section>
   );
 }
@@ -1199,7 +1339,7 @@ function CalendarConnectorAsMe() {
     try {
       await api("/api/maple/baby", { method: "PATCH", body: JSON.stringify({ settings: { admin_as: on ? me.email : null } }) });
       await refresh();
-      toast(on ? "The calendar connector logs as you now" : "The calendar connector logs as Admin", { emoji: "🍁" });
+      toast(on ? "The calendar connector logs as you now" : "The calendar connector logs as Admin");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
     } finally {
@@ -1208,17 +1348,15 @@ function CalendarConnectorAsMe() {
   };
 
   return (
-    <div className="border-t border-[#1D4420]/[0.07] pt-2 dark:border-[#F5EDDF]/[0.08]">
-      <Toggle
-        label="Calendar connector logs as me"
-        hint={`The Brooker Family Calendar connector (the site's admin login) can log Maple too. ${
-          someoneElse ? `Right now it logs as ${memberName(someoneElse)}.` : "Turn this on so what it logs counts as you, not “Admin”."
-        }`}
-        checked={stored === me.email}
-        disabled={busy}
-        onChange={(v) => void set(v)}
-      />
-    </div>
+    <Toggle
+      label="Calendar connector logs as me"
+      hint={`The Brooker Family Calendar connector (the site's admin login) can log Maple too. ${
+        someoneElse ? `Right now it logs as ${memberName(someoneElse)}.` : "Turn this on so what it logs counts as you, not “Admin”."
+      }`}
+      checked={stored === me.email}
+      disabled={busy}
+      onChange={(v) => void set(v)}
+    />
   );
 }
 
@@ -1236,6 +1374,8 @@ const SHORTCUTS: [string, string][] = [
   ["Maple awake", "wake"],
   ["Maple status", "status"],
 ];
+
+const KEY_MARK = "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2";
 
 function HandsFree() {
   const { api, toast, now } = useMaple();
@@ -1276,7 +1416,7 @@ function HandsFree() {
     try {
       const r = await api<{ tokens: PersonalToken[] }>(`/api/maple/tokens?id=${t.id}`, { method: "DELETE" });
       setTokens(r.tokens);
-      toast("Key revoked. Shortcuts using it stop working.", { emoji: "🍂" });
+      toast("Key revoked. Shortcuts using it stop working.");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't revoke", { tone: "error" });
     }
@@ -1284,138 +1424,137 @@ function HandsFree() {
 
   const url = `${origin}/api/maple/quick`;
   const header = `Bearer ${fresh ?? "<your key>"}`;
+  const strong = "font-semibold text-mp-ink";
 
   return (
     <Section title="Hands-free with Siri">
-      <Card className="space-y-4">
-        <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
-          Say <strong>“Hey Siri, Maple pee”</strong> and it&apos;s logged, no unlocking or tapping. Works with the Action Button and Back Tap too. Each
-          grown-up makes their own key, so entries carry their name.
+      <div className={GROUP}>
+        <p className={cx(tone.body, "px-4 py-3.5 text-[15px] leading-relaxed")}>
+          Say <strong className="font-semibold">“Hey Siri, Maple pee”</strong> and it&apos;s logged, no unlocking or tapping. Works with the Action
+          Button and Back Tap too. Each grown-up makes their own key, so entries carry their name.
         </p>
 
-        {fresh ? (
-          <div className="space-y-2 rounded-2xl border border-[#C49A3C]/40 bg-[#C49A3C]/10 p-3 dark:border-[#C49A3C]/30">
-            <p className={cx(tone.label)}>Your new key · shown once</p>
-            <p className="font-mono text-[13px] break-all text-[#1D4420] select-all dark:text-[#F5EDDF]">{fresh}</p>
-            <div className="flex items-center gap-2">
-              <CopyButton text={fresh} label="Copy key" />
-              <p className={cx(tone.muted, "text-xs leading-snug")}>Keep it private: anyone with it can log as you.</p>
+        {tokens &&
+          tokens.map((t) => (
+            <div key={t.id} className="flex min-h-[56px] items-center gap-3 px-4 py-2">
+              <span className={KEY_MARK} aria-hidden>
+                <Icon name="key-round" size={18} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className={cx(tone.body, "truncate text-[15px] font-medium")}>{t.label || "iPhone Shortcuts"}</p>
+                <p className={cx(tone.muted, "text-[13px]")}>{t.last_used_at ? `Last used ${formatRelative(t.last_used_at, now())}` : "Not used yet"}</p>
+              </div>
+              <button type="button" onClick={() => void revoke(t)} className={DANGER_TEXT}>
+                Revoke
+              </button>
             </div>
+          ))}
+
+        {fresh ? (
+          <div className="space-y-2.5 px-4 py-3.5">
+            <p className={tone.label}>Your new key · shown once</p>
+            <div className={cx(tone.inset, "px-3 py-2.5")}>
+              <p className="font-mono text-[13px] break-all text-mp-ink select-all">{fresh}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <CopyButton text={fresh} label="Copy key" />
+              {/* Dismisses this key (it was shown once) and brings back the form for another. */}
+              <Button variant="ghost" size="sm" onClick={() => setFresh(null)}>
+                <Icon name="plus" size={16} strokeWidth={2} />
+                Make another key
+              </Button>
+            </div>
+            <p className={cx(tone.muted, "text-[13px] leading-snug")}>Keep it private: anyone with it can log as you.</p>
           </div>
         ) : (
-          <div className="flex gap-2">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void create();
+            }}
+            className="flex items-center gap-1 py-1.5 pr-2 pl-1.5"
+          >
+            {/* The same "add" mark as a new doctor question, so it doesn't read as one of the keys. */}
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center text-mp-accent-fg" aria-hidden>
+              <Icon name="plus" size={20} strokeWidth={2} />
+            </span>
             <input
-              className={tone.input}
+              className="min-h-[44px] min-w-0 flex-1 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
               value={label}
               maxLength={40}
               placeholder="Matt's iPhone"
               aria-label="Key name"
               onChange={(e) => setLabel(e.target.value)}
             />
-            <Button disabled={busy} onClick={() => void create()} className="shrink-0">
+            <Button type="submit" size="sm" disabled={busy} className="shrink-0">
               Make a key
             </Button>
-          </div>
+          </form>
         )}
 
-        <div>
-          <button
-            type="button"
-            onClick={() => setHowTo((v) => !v)}
-            aria-expanded={howTo}
-            className={cx(tone.body, "flex min-h-[44px] w-full items-center justify-between text-left text-[15px] font-semibold")}
-          >
-            Set up the shortcut
-            <span aria-hidden className={tone.muted}>
-              {howTo ? "▾" : "▸"}
-            </span>
-          </button>
-          {howTo && (
-            <ol className={cx(tone.body, "mt-1 list-decimal space-y-3 pl-5 text-sm leading-relaxed marker:font-semibold marker:text-[#C49A3C]")}>
-              <li>
-                Open the <strong>Shortcuts</strong> app, tap <strong>＋</strong>, and name the shortcut <strong>Maple pee</strong>.
-              </li>
-              <li>
-                Add the action <strong>Get Contents of URL</strong> and set the URL to
-                <span className="mt-1.5 flex items-center gap-2">
-                  <Code>{url}</Code>
-                  <CopyButton text={url} />
-                </span>
-              </li>
-              <li>
-                Tap <strong>›</strong> to show more. Set <strong>Method</strong> to <strong>POST</strong>.
-              </li>
-              <li>
-                Under <strong>Headers</strong>, add <Code>Authorization</Code> with the value
-                <span className="mt-1.5 flex items-center gap-2">
-                  <Code>{header}</Code>
-                  {fresh && <CopyButton text={header} />}
-                </span>
-                {!fresh && <span className={cx(tone.muted, "mt-1 block text-xs")}>Make a key above to fill this in.</span>}
-              </li>
-              <li>
-                Set <strong>Request Body</strong> to <strong>JSON</strong> and add a Text field: key <Code>action</Code>, value <Code>pee</Code>.
-              </li>
-              <li>
-                Add <strong>Get Dictionary Value</strong>: get the value for <Code>speak</Code> in <strong>Contents of URL</strong>.
-              </li>
-              <li>
-                Add <strong>Speak Text</strong> with that <strong>Dictionary Value</strong>, so Siri tells you what was logged.
-              </li>
-              <li>
-                Try it: <strong>“Hey Siri, Maple pee.”</strong> For one-press logging, choose the shortcut under Settings → Action Button, or Settings →
-                Accessibility → Touch → Back Tap.
-              </li>
-              <li>
-                Duplicate it for the rest, changing the name and the <Code>action</Code>:
-                <table className="mt-2 w-full text-left text-[13px]">
-                  <tbody>
-                    {SHORTCUTS.map(([name, action]) => (
-                      <tr key={action} className="border-b border-[#1D4420]/[0.06] last:border-0 dark:border-[#F5EDDF]/[0.06]">
-                        <td className="py-1.5 pr-2 font-semibold">{name}</td>
-                        <td className="py-1.5">
-                          <Code>{action}</Code>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <span className={cx(tone.muted, "mt-2 block text-xs leading-snug")}>
-                  Also: <Code>vitamin_d</Code>, and <Code>bottle</Code> (add a Number field <Code>amount_oz</Code>). “Maple status” reads back when she last
-                  ate and which side is next.
-                </span>
-              </li>
-            </ol>
-          )}
-        </div>
-
-        {tokens && tokens.length > 0 && (
-          <div className="border-t border-[#1D4420]/[0.07] pt-3 dark:border-[#F5EDDF]/[0.08]">
-            <p className={cx(tone.label, "mb-1")}>Your keys</p>
-            <ul>
-              {tokens.map((t) => (
-                <li key={t.id} className="flex min-h-[52px] items-center gap-3">
-                  <span className="text-lg" aria-hidden>
-                    🗝️
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className={cx(tone.body, "truncate text-[15px] font-semibold")}>{t.label || "iPhone Shortcuts"}</p>
-                    <p className={cx(tone.muted, "text-xs")}>{t.last_used_at ? `Last used ${formatRelative(t.last_used_at, now())}` : "Not used yet"}</p>
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={() => void revoke(t)}>
-                    Revoke
-                  </Button>
-                </li>
-              ))}
-            </ul>
-            {fresh && (
-              <Button variant="ghost" size="sm" className="mt-1" onClick={() => setFresh(null)}>
-                ＋ Make another key
-              </Button>
-            )}
-          </div>
-        )}
-      </Card>
+        <Disclosure label="Set up the shortcut" open={howTo} onToggle={() => setHowTo((v) => !v)}>
+          <ol className={cx(tone.body, "list-decimal space-y-3 pl-5 text-sm leading-relaxed marker:font-semibold marker:text-mp-ink-3")}>
+            <li>
+              Open the <strong className={strong}>Shortcuts</strong> app, tap <strong className={strong}>+</strong>, and name the shortcut{" "}
+              <strong className={strong}>Maple pee</strong>.
+            </li>
+            <li>
+              Add the action <strong className={strong}>Get Contents of URL</strong> and set the URL to
+              <span className="mt-1.5 flex items-center gap-2">
+                <Code>{url}</Code>
+                <CopyButton text={url} />
+              </span>
+            </li>
+            <li>
+              Tap <strong className={strong}>›</strong> to show more. Set <strong className={strong}>Method</strong> to{" "}
+              <strong className={strong}>POST</strong>.
+            </li>
+            <li>
+              Under <strong className={strong}>Headers</strong>, add <Code>Authorization</Code> with the value
+              <span className="mt-1.5 flex items-center gap-2">
+                <Code>{header}</Code>
+                {fresh && <CopyButton text={header} />}
+              </span>
+              {!fresh && <span className={cx(tone.muted, "mt-1 block text-xs")}>Make a key above to fill this in.</span>}
+            </li>
+            <li>
+              Set <strong className={strong}>Request Body</strong> to <strong className={strong}>JSON</strong> and add a Text field: key{" "}
+              <Code>action</Code>, value <Code>pee</Code>.
+            </li>
+            <li>
+              Add <strong className={strong}>Get Dictionary Value</strong>: get the value for <Code>speak</Code> in{" "}
+              <strong className={strong}>Contents of URL</strong>.
+            </li>
+            <li>
+              Add <strong className={strong}>Speak Text</strong> with that <strong className={strong}>Dictionary Value</strong>, so Siri tells you
+              what was logged.
+            </li>
+            <li>
+              Try it: <strong className={strong}>“Hey Siri, Maple pee.”</strong> For one-press logging, choose the shortcut under Settings → Action
+              Button, or Settings → Accessibility → Touch → Back Tap.
+            </li>
+            <li>
+              Duplicate it for the rest, changing the name and the <Code>action</Code>:
+              <table className="mt-2 w-full text-left text-[13px]">
+                <tbody className={tone.divide}>
+                  {SHORTCUTS.map(([name, action]) => (
+                    <tr key={action}>
+                      <td className="py-1.5 pr-2 font-medium">{name}</td>
+                      <td className="py-1.5">
+                        <Code>{action}</Code>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <span className={cx(tone.muted, "mt-2 block text-xs leading-snug")}>
+                Also: <Code>vitamin_d</Code>, and <Code>bottle</Code> (add a Number field <Code>amount_oz</Code>). “Maple status” reads back when she last
+                ate and which side is next.
+              </span>
+            </li>
+          </ol>
+        </Disclosure>
+      </div>
     </Section>
   );
 }
@@ -1436,23 +1575,21 @@ function DataAndAccount() {
     setBusy(false);
   };
   return (
-    <Section title="Data">
-      <Card className="space-y-3">
-        <a
-          href="/api/maple/export"
-          download
-          className="flex min-h-[48px] items-center justify-center gap-2 rounded-full bg-[#1D4420]/[0.07] px-5 text-[15px] font-semibold text-[#1D4420] dark:bg-[#F5EDDF]/10 dark:text-[#F5EDDF]"
-        >
-          ⬇️ Download everything (CSV)
+    <Section title="Data & account">
+      <div className={GROUP}>
+        <a href="/api/maple/export" download className={cx(tone.row, "min-h-[52px] py-2.5")}>
+          <Icon name="download" size={20} className="shrink-0 text-mp-accent-fg" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-medium text-mp-accent-fg">Download everything (CSV)</span>
+            <span className={cx(tone.muted, "block text-[13px] leading-snug")}>Every entry, for a spreadsheet or her pediatrician.</span>
+          </span>
         </a>
-        <p className={cx(tone.muted, "text-center text-xs")}>Every entry, for a spreadsheet or her pediatrician.</p>
-        <div className="flex items-center justify-between border-t border-[#1D4420]/[0.07] pt-3 dark:border-[#F5EDDF]/[0.08]">
-          <p className={cx(tone.muted, "min-w-0 truncate text-sm")}>Signed in as {memberName(state!.me.email)}</p>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void signOut()}>
+        <Row label={<span className="block truncate">Signed in as {memberName(state!.me.email)}</span>}>
+          <button type="button" disabled={busy} onClick={() => void signOut()} className={DANGER_TEXT}>
             Sign out
-          </Button>
-        </div>
-      </Card>
+          </button>
+        </Row>
+      </div>
     </Section>
   );
 }

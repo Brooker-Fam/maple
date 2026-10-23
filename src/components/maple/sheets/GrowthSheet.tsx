@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { WEIGHT_GAIN_NOTE } from "@/lib/maple/guidelines";
 import { cmToIn, formatLength, formatWeight, gramsToLbOz, inToCm, lbOzToGrams } from "@/lib/maple/units";
 import type { GrowthData, UnitSystem } from "@/lib/maple/types";
+import { Icon } from "../icons";
 import { Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -163,7 +164,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
     onClose();
     void log(
       { kind: "growth", started_at: when?.toISOString(), data: Object.fromEntries(Object.entries(data).filter(([, v]) => v != null)), note: noteVal },
-      { toast: `${bits.join(" · ")}${pLine} · ${clock(t)}`, emoji: "📏" }
+      { toast: `${bits.join(" · ")}${pLine} · ${clock(t)}` }
     );
   };
 
@@ -180,7 +181,6 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Growth"}
-      emoji={e ? entryEmoji(e) : "📏"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -203,23 +203,21 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
     >
       {e && <LoggedBy entry={e} />}
 
-      <div>
-        <Label>Weighed at</Label>
-        <Segmented<"home" | "doctor">
-          value={at}
-          onChange={setAt}
-          options={[
-            { value: "doctor", label: "Doctor" },
-            { value: "home", label: "Home" },
-          ]}
-        />
-      </div>
-
-      <section aria-label="Weight">
-        <div className="mb-1.5 flex items-center justify-between gap-3">
-          <Label optional className="mb-0">
-            Weight
-          </Label>
+      {/* Where and which units, side by side: both set how the numbers below read. */}
+      <div className="flex gap-3">
+        <div className="min-w-0 flex-1">
+          <Label>Weighed at</Label>
+          <Segmented<"home" | "doctor">
+            value={at}
+            onChange={setAt}
+            options={[
+              { value: "doctor", label: "Doctor" },
+              { value: "home", label: "Home" },
+            ]}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <Label>Units</Label>
           <Segmented<UnitSystem>
             value={sys}
             onChange={switchUnits}
@@ -227,16 +225,22 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
               { value: "us", label: "lb · in" },
               { value: "metric", label: "kg · cm" },
             ]}
-            className="w-[10rem] shrink-0"
           />
         </div>
+      </div>
+
+      <section aria-label="Weight">
+        {/* One label; the units sit in the fields, so lb + oz read like the scale ("7 lb 2.6 oz"). */}
+        <Label optional className="mb-0">
+          Weight
+        </Label>
         {us ? (
           <div className="grid grid-cols-2 gap-3">
-            <MiniStepper key="lb" label="lb" ariaLabel="pounds" value={lb} onChange={edit("weight", setLb)} max={40} onInvalid={checks.watch("lb")} />
-            <MiniStepper key="oz" label="oz" ariaLabel="ounces" value={oz} onChange={edit("weight", setOz)} step={0.1} decimals={1} max={15.9} onInvalid={checks.watch("oz")} />
+            <MiniStepper key="lb" label={null} unit="lb" ariaLabel="pounds" value={lb} onChange={edit("weight", setLb)} max={40} onInvalid={checks.watch("lb")} />
+            <MiniStepper key="oz" label={null} unit="oz" ariaLabel="ounces" value={oz} onChange={edit("weight", setOz)} step={0.1} decimals={1} max={15.9} onInvalid={checks.watch("oz")} />
           </div>
         ) : (
-          <MiniStepper key="grams" label="grams" unit="g" ariaLabel="grams" value={grams} onChange={edit("weight", setGrams)} step={10} max={30000} onInvalid={checks.watch("grams")} />
+          <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={edit("weight", setGrams)} step={10} max={30000} onInvalid={checks.watch("grams")} />
         )}
         <Reading p={pW} warn={off("weight", weightG, pW)} extra={!us && weightG ? `${(weightG / 1000).toFixed(2)} kg` : undefined} />
       </section>
@@ -254,8 +258,8 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
 
       <WhenField value={when} onChange={setWhen} tz={tz} offsets={[30, 60, 120, 240]} />
       <NoteField value={note} onChange={setNote} placeholder="Anything the doctor said?" />
-      {!bornAt && <ContextNote emoji="🌱">Percentiles show up once her birth time is added.</ContextNote>}
-      <ContextNote emoji="⚖️">{WEIGHT_GAIN_NOTE}</ContextNote>
+      {!bornAt && <ContextNote>Percentiles show up once her birth time is added.</ContextNote>}
+      <ContextNote icon="scale">{WEIGHT_GAIN_NOTE}</ContextNote>
     </Sheet>
   );
 }
@@ -273,9 +277,11 @@ function Reading({
   compact?: boolean;
 }) {
   if (warn) {
+    // Colored like NumberProblem's "Check this number": a number to look at again, not an alert.
     return (
-      <p className="mt-1.5 rounded-xl bg-[#C49A3C]/15 px-2.5 py-1.5 text-xs leading-snug font-medium text-[#5A4410] dark:bg-[#C49A3C]/15 dark:text-[#EFD9A0]">
-        Double-check this one. Maybe lb vs kg, or in vs cm?
+      <p className="mt-1.5 flex gap-1.5 text-xs leading-snug font-medium text-mp-danger">
+        <Icon name="circle-alert" size={14} className="mt-px shrink-0" />
+        <span>Double-check this one. Maybe lb vs kg, or in vs cm?</span>
       </p>
     );
   }

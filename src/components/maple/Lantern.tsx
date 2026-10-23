@@ -7,6 +7,7 @@ import { tick } from "@/components/atlas/haptics";
 import { other } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatTime } from "@/lib/maple/time";
 import type { Entry, Side } from "@/lib/maple/types";
+import { Icon } from "./icons";
 import { SIDE_NAME, timerNumbers, useTimerActions } from "./TimerCard";
 import { useMaple, useNow } from "./useMaple";
 
@@ -120,14 +121,14 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       }}
     >
       <div className="flex items-center justify-between px-4 pt-[max(12px,env(safe-area-inset-top))]">
-        <p className="text-xs tracking-[0.2em] uppercase opacity-40">Lantern · swipe down to close</p>
+        <p className="text-[13px] opacity-40">Lantern · swipe down to close</p>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close lantern"
-          className="flex h-12 w-12 items-center justify-center rounded-full text-2xl opacity-50 active:opacity-80"
+          className="-mr-2 flex h-12 w-12 items-center justify-center rounded-full opacity-50 active:opacity-80"
         >
-          ✕
+          <Icon name="x" size={26} />
         </button>
       </div>
 
@@ -136,7 +137,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         onClick={() => showHint(isFeed && !n.paused ? "Hold to switch, or hold Done" : "Hold a button to use it")}
       >
         <p
-          className="font-[family-name:var(--font-display)] text-[72px] leading-none font-semibold lining-nums tabular-nums"
+          className="text-[80px] leading-none font-semibold tracking-[-0.03em] tabular-nums"
           style={{ opacity: n.paused ? 0.35 : dim ? 0.55 : 0.6 }}
           aria-live="off"
         >

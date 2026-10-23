@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { EMERGENCY_SIGNS, JAUNDICE_HOWTO, JAUNDICE_LABEL, assessJaundice, assessVitals } from "@/lib/maple/guidelines";
 import { JAUNDICE_LEVELS, type EntryOf, type JaundiceLevel, type VitalsData } from "@/lib/maple/types";
+import { Icon } from "../icons";
 import { Chip, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -109,7 +110,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
     onClose();
     void log(
       { kind: "vitals", started_at: when?.toISOString(), data: Object.fromEntries(Object.entries(data).filter(([, v]) => v != null)), note: noteVal },
-      { toast: `${what} · ${bits.join(" · ")} · ${clock(t)}`, emoji: !hasVitals ? "🌼" : "💓" }
+      { toast: `${what} · ${bits.join(" · ")} · ${clock(t)}` }
     );
   };
 
@@ -140,12 +141,10 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
     </>
   );
 
+  // The question first, then what it means, then how to look (the how-to is for reading once, not every time).
   const skin = (
     <>
       <div>
-        <ContextNote emoji="☀️" className="mb-2.5">
-          {JAUNDICE_HOWTO}
-        </ContextNote>
         <Label>Any yellow?</Label>
         <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="How far the yellow has spread">
           {JAUNDICE_LEVELS.map((l) => (
@@ -157,8 +156,9 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
       </div>
       {skinNote && <AssessmentCard a={skinNote} />}
       {!bornAt && level && level !== "none" && (
-        <ContextNote emoji="🌱">Add her birth time so the app can tell whether this is her first day (yellow in the first 24 hours needs a call right away).</ContextNote>
+        <ContextNote>Add her birth time so the app can tell whether this is her first day (yellow in the first 24 hours needs a call right away).</ContextNote>
       )}
+      <ContextNote icon="sun">{JAUNDICE_HOWTO}</ContextNote>
     </>
   );
 
@@ -170,7 +170,6 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? (skinMode ? "Skin check" : describeEntry(e).title) : skinMode ? "Skin check" : "Vitals"}
-      emoji={e && !skinMode ? entryEmoji(e) : skinMode ? "🌼" : "💓"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -201,9 +200,10 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
       )}
       <WhenField value={when} onChange={setWhen} tz={tz} />
       <NoteField value={note} onChange={setNote} placeholder="How is she acting?" />
-      <p className={cx(tone.muted, "rounded-2xl border border-[#B5452B]/20 px-3.5 py-2.5 text-[13px] leading-relaxed dark:border-[#E07A5F]/25")}>
-        <span aria-hidden>🚑 </span>
-        {EMERGENCY_SIGNS}
+      {/* Always on this sheet, so it stays quiet: a hairline in the danger color, not a filled alert. */}
+      <p className={cx(tone.muted, "flex gap-2.5 rounded-xl border border-mp-danger/25 px-3.5 py-3 text-[13px] leading-relaxed")}>
+        <Icon name="siren" size={16} className="mt-[2px] shrink-0 text-mp-danger" />
+        <span>{EMERGENCY_SIGNS}</span>
       </p>
     </Sheet>
   );

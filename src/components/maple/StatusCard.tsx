@@ -3,14 +3,15 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { tick } from "@/components/atlas/haptics";
-import { feedTotals, openSegment } from "@/lib/maple/feed";
 import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { alertsOn, type DayStats } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime, localParts } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
-import type { Entry, FeedData } from "@/lib/maple/types";
-import { SIDE_NAME } from "./TimerCard";
-import { Segmented, cx, tone } from "./ui";
+import type { Entry, FeedData, Side } from "@/lib/maple/types";
+import { Icon, KindBadge, type IconName } from "./icons";
+import { DETAIL_COLOR, KIND_COLOR } from "./palette";
+import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE } from "./TimerCard";
+import { Avatar, Segmented, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -46,21 +47,49 @@ function typicalGapMin(entries: Entry[], now: Date): number | null {
   return Math.round(gaps[Math.floor(gaps.length / 2)]);
 }
 
-function Row({ icon, children, sub, right }: { icon: string; children: React.ReactNode; sub?: React.ReactNode; right?: React.ReactNode }) {
+/** A small colored dot, matching the dock's diaper buttons and the day dial. */
+function Dot({ color }: { color: string }) {
+  return <span aria-hidden className="mp-kind-fill h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />;
+}
+
+/** One of the three "how long since" numbers: the value, with its label underneath. */
+function Since({ label, value, mark }: { label: string; value: string | null; mark: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-3 py-2">
-      <span aria-hidden className="mt-px w-6 shrink-0 text-center text-lg leading-6">
-        {icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className={cx(tone.body, "text-[15px] leading-6 [.maple-night_&]:text-[#E0A93B]/85")}>{children}</div>
-        {sub && <div className={cx(tone.muted, "text-[13px] leading-5 [.maple-night_&]:text-[#E0A93B]/55")}>{sub}</div>}
-      </div>
-      {right}
+    <div className="min-w-0 px-3 py-3 first:pl-4">
+      <p className="truncate text-[16px] leading-tight font-semibold tracking-[-0.01em] text-mp-ink tabular-nums">{value ?? "—"}</p>
+      <p className="mt-1 flex items-center gap-1.5 text-[12px] font-medium text-mp-ink-2">
+        {mark}
+        <span className="truncate">{label}</span>
+      </p>
     </div>
   );
 }
 
+/** The side to offer next: its letter in the side's color, and the name. */
+function NextSide({ side }: { side: Side }) {
+  return (
+    <div className="flex shrink-0 items-center gap-2 rounded-2xl bg-mp-sunken py-2 pr-3.5 pl-2">
+      <span
+        aria-hidden
+        // At night the next-side cue is one of the few things allowed a soft amber glow.
+        className="mp-kind-fill inline-flex h-7 w-7 items-center justify-center rounded-full text-[13px] font-bold [.maple-night_&]:shadow-[0_0_14px_rgb(224_169_59/0.4)]"
+        style={{ backgroundColor: SIDE_COLOR[side], color: SWITCH_STYLE[side].fg }}
+      >
+        {side}
+      </span>
+      <span className="leading-tight">
+        <span className="block text-[15px] font-semibold text-mp-ink">{SIDE_NAME[side]}</span>
+        <span className="block text-[11px] text-mp-ink-2">next side</span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The "Right now" card. While she nurses, the timer card above it already has
+ * the side, the start and the running clock, so the feed block steps aside
+ * and this card keeps only what the timer doesn't say.
+ */
 export default function StatusCard() {
   const { state, summary, log, memberName, readOnly, units, isNight } = useMaple();
   const now = useNow(20_000);
@@ -77,20 +106,9 @@ export default function StatusCard() {
 
   if (!hasAnything) return null;
 
-  // The big answer: how long since she last ate (or that she's nursing now).
-  let feedLabel = "Last fed";
-  let feedBig: React.ReactNode = <span className={cx(tone.muted, "text-base font-normal")}>No feeds logged yet</span>;
+  // The big answer: how long since she last ate.
   let feedSub: string | null = null;
-  if (nursing) {
-    // The timer card has the live clock; here, just which side and how long so far.
-    const d = nursing.data as FeedData;
-    const side = openSegment(d.segments)?.side ?? d.last_side ?? "L";
-    const sofar = feedTotals(d, now).total;
-    feedLabel = "Nursing now";
-    feedBig = `${SIDE_NAME[side]} side`;
-    feedSub = `started ${formatTime(nursing.started_at, tz)} · ${sofar < 60 ? "just started" : `${formatDuration(sofar)} so far`}`;
-  } else if (last) {
-    feedBig = formatRelative(last.started_at, now);
+  if (!nursing && last) {
     const bits = [`started ${formatTime(last.started_at, tz)}`];
     if (last.data.method === "bottle") {
       bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
@@ -105,129 +123,110 @@ export default function StatusCard() {
 
   const next = !nursing ? summary.nextSide : null;
 
-  const cell = (icon: string, label: string, value: string | null) => (
-    <div className="min-w-0 py-2.5">
-      <p className={cx(tone.muted, "flex items-center gap-1 text-[12px] font-medium [.maple-night_&]:text-[#E0A93B]/55")}>
-        <span aria-hidden className="text-[13px]">
-          {icon}
-        </span>
-        {label}
-      </p>
-      <p className={cx(tone.body, "mt-0.5 truncate text-[15px] font-semibold tabular-nums [.maple-night_&]:text-[#E0A93B]/85")}>{value ?? "—"}</p>
-    </div>
-  );
-
   const logVitD = () => {
     tick();
-    void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops ✓", emoji: "☀️" });
+    void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops logged" });
   };
 
-  return (
-    <section aria-labelledby="right-now" className={cx(tone.card, "px-4 pt-3 pb-1.5 [.maple-night_&]:border-[#E0A93B]/10 [.maple-night_&]:bg-[#11140F]")}>
-      <h2 id="right-now" className={cx(tone.label, "[.maple-night_&]:text-[#E0A93B]/60")}>
-        Right now
-      </h2>
+  // Drops not given yet is a daytime thing; at 3am it's just clutter (More → Vitamin D still works).
+  const showVitD = summary.born && (summary.vitaminD || (!isNight() && alertsOn(state.baby)));
+  const vitD = summary.vitaminD;
+  const vitDText = (
+    <span className="min-w-0 flex-1">
+      <span className="block text-[15px] font-medium text-mp-ink">Vitamin D</span>
+      <span className="block text-[13px] text-mp-ink-2">
+        {vitD ? `Given ${formatTime(vitD.givenAt, tz)} · ${memberName(vitD.by)}` : "Not yet today"}
+      </span>
+    </span>
+  );
 
+  return (
+    <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
       {/* Feeding: the most-asked question at 3am, and which side is next. */}
-      <div className="pt-2 pb-3">
-        <div className="flex items-center gap-3">
-          <span aria-hidden className="w-6 shrink-0 text-center text-xl">
-            {last?.data.method === "bottle" && !nursing ? "🍼" : "🤱"}
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className={cx(tone.muted, "text-[13px] font-medium [.maple-night_&]:text-[#E0A93B]/55")}>{feedLabel}</p>
-            <p className="font-[family-name:var(--font-display)] text-[28px] leading-[1.05] font-semibold text-[#1D4420] lining-nums tabular-nums dark:text-[#F5EDDF] [.maple-night_&]:text-[#E0A93B]/85">
-              {feedBig}
-            </p>
+      {!nursing && (
+        <div className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className={tone.label}>Last fed</p>
+              {last ? (
+                <p className="mt-0.5 text-[28px] leading-tight font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">
+                  {formatRelative(last.started_at, now)}
+                </p>
+              ) : (
+                <p className="mt-0.5 text-[17px] text-mp-ink-2">No feeds logged yet</p>
+              )}
+            </div>
+            {next && <NextSide side={next} />}
           </div>
-          {next && (
-            <span
-              className="inline-flex shrink-0 flex-col items-center rounded-2xl px-3 py-1.5 text-center leading-tight text-[#3A1A0E] shadow-sm [.maple-night_&]:bg-[#D9772B]/20! [.maple-night_&]:text-[#E8A23F]"
-              style={{ backgroundColor: next === "L" ? "#F0B6A6" : "#F3D58F" }}
-            >
-              <span className="text-[15px] font-bold whitespace-nowrap">
-                <span aria-hidden>🍁 </span>
-                {SIDE_NAME[next]} side
-              </span>
-              <span className="text-[11px] font-semibold tracking-wide uppercase opacity-75">next</span>
-            </span>
-          )}
-        </div>
-        {feedSub && (
-          <p className={cx(tone.muted, "mt-1 flex flex-wrap items-center pl-9 text-[13px] [.maple-night_&]:text-[#E0A93B]/55")}>
-            {feedSub}
-            {!nursing && (
+          {feedSub && (
+            <p className="mt-0.5 flex flex-wrap items-center text-[13px] text-mp-ink-2">
+              {feedSub}
               <button
                 type="button"
                 onClick={() => setInfo((v) => !v)}
                 aria-expanded={info}
                 aria-label="How this is counted"
-                className="-my-2 ml-0.5 inline-flex h-9 w-9 items-center justify-center rounded-full text-[13px] hover:bg-[#1D4420]/5"
+                className="-my-3 -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-full text-mp-ink-3 active:text-mp-ink-2"
               >
-                ⓘ
+                <Icon name="info" size={15} />
               </button>
-            )}
-          </p>
-        )}
-        <AnimatePresence>
-          {info && (
-            <motion.p
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className={cx(tone.muted, "overflow-hidden pl-9 text-[13px] italic")}
-            >
-              Counted from when she started eating, the usual way feeds are timed.
-            </motion.p>
+            </p>
           )}
-        </AnimatePresence>
-      </div>
+          <AnimatePresence>
+            {info && (
+              <motion.p
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden text-[13px] text-mp-ink-3"
+              >
+                Counted from when she started eating, the usual way feeds are timed.
+              </motion.p>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
 
       {/* Diapers and sleep, side by side. */}
-      <div className="grid grid-cols-3 gap-2 border-t border-[#1D4420]/[0.07] pl-9 dark:border-[#F5EDDF]/[0.07]">
-        {cell("💧", "Last wet", summary.lastPee ? formatRelative(summary.lastPee.started_at, now) : null)}
-        {cell("💩", "Last dirty", summary.lastPoop ? formatRelative(summary.lastPoop.started_at, now) : null)}
-        {sleeping
-          ? cell("🌙", "Asleep", since((now.getTime() - ts(sleeping)) / 1000))
-          : cell("😴", "Awake", lastSleepEnd ? since((now.getTime() - Date.parse(lastSleepEnd)) / 1000) : null)}
-      </div>
-
-      <div className="divide-y divide-[#1D4420]/[0.07] border-t border-[#1D4420]/[0.07] dark:divide-[#F5EDDF]/[0.07] dark:border-[#F5EDDF]/[0.07]">
-        {/* Drops not given yet is a daytime thing; at 3am it's just clutter (More → Vitamin D still works). */}
-        {summary.born &&
-          (summary.vitaminD || (!isNight() && alertsOn(state.baby))) &&
-          (summary.vitaminD ? (
-            <Row icon="☀️" sub="sunshine drops">
-              Vitamin D ✓ {formatTime(summary.vitaminD.givenAt, tz)} ({memberName(summary.vitaminD.by)})
-            </Row>
-          ) : readOnly ? (
-            <Row icon="☀️" sub="sunshine drops">
-              Vitamin D · not yet today
-            </Row>
-          ) : (
-            <button type="button" onClick={logVitD} className="block w-full rounded-xl text-left transition hover:bg-[#1D4420]/[0.03] active:scale-[0.99] dark:hover:bg-[#F5EDDF]/[0.04]">
-              <Row
-                icon="☀️"
-                sub="sunshine drops · tap when given"
-                right={
-                  <span className="mt-0.5 shrink-0 rounded-full bg-[#C49A3C]/20 px-3.5 py-1.5 text-sm font-semibold text-[#7A5A12] dark:text-[#E0C27A]">
-                    Log
-                  </span>
-                }
-              >
-                Vitamin D · not yet today
-              </Row>
-            </button>
-          ))}
-        {gap != null && (
-          <Row icon="🍂">
-            <span className={tone.muted}>
-              Lately: about every {formatDuration(gap * 60)} <span className="whitespace-nowrap">(start to start)</span>
-            </span>
-          </Row>
+      <div className="grid grid-cols-3 divide-x divide-mp-line">
+        {/* All three are "how long since", so they share one form (and fit a third of a phone). */}
+        <Since label="Since pee" mark={<Dot color={DETAIL_COLOR.pee} />} value={summary.lastPee ? since((now.getTime() - ts(summary.lastPee)) / 1000) : null} />
+        <Since label="Since poop" mark={<Dot color={DETAIL_COLOR.poop} />} value={summary.lastPoop ? since((now.getTime() - ts(summary.lastPoop)) / 1000) : null} />
+        {sleeping ? (
+          <Since label="Asleep" mark={<Icon name="moon" size={13} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.sleep }} />} value={since((now.getTime() - ts(sleeping)) / 1000)} />
+        ) : (
+          <Since
+            label="Awake"
+            mark={<Icon name="sun" size={13} className="mp-kind-ink shrink-0" style={{ color: KIND_COLOR.med }} />}
+            value={lastSleepEnd ? since((now.getTime() - Date.parse(lastSleepEnd)) / 1000) : null}
+          />
         )}
       </div>
-    </section>
+
+      {showVitD &&
+        (vitD || readOnly ? (
+          <div className="flex items-center gap-3 px-4 py-3">
+            <KindBadge icon="sun" color={KIND_COLOR.med} size={32} />
+            {vitDText}
+          </div>
+        ) : (
+          <button type="button" onClick={logVitD} aria-label="Vitamin D not given yet today. Log it now" className={cx(tone.row, "py-3")}>
+            <KindBadge icon="sun" color={KIND_COLOR.med} size={32} />
+            {vitDText}
+            <span className="inline-flex min-h-[36px] shrink-0 items-center rounded-[10px] bg-mp-sunken px-3.5 text-sm font-semibold text-mp-ink">Log</span>
+          </button>
+        ))}
+      {gap != null && (
+        <div className="flex items-center gap-3 px-4 py-3">
+          <span aria-hidden className="flex w-8 shrink-0 justify-center text-mp-ink-3">
+            <Icon name="history" size={19} />
+          </span>
+          <p className="text-[14px] text-mp-ink-2">
+            Lately: about every {formatDuration(gap * 60)} <span className="whitespace-nowrap">(start to start)</span>
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -245,52 +244,48 @@ export function Tallies() {
   const t = summary.targets;
   const nursingSplit = s.leftSec + s.rightSec > 0 ? Math.round((s.leftSec / (s.leftSec + s.rightSec)) * 100) : null;
 
-  const tiles: { key: string; label: string; emoji: string; value: string; goal: number | null; have: number; color: string }[] = [
-    {
-      key: "feeds",
-      label: "Feeds",
-      emoji: "🤱",
-      value: String(s.feeds),
-      have: s.feeds,
-      goal: t ? t.feeds[0] : null,
-      color: "#D9772B",
-    },
-    { key: "wet", label: "Wet", emoji: "💧", value: String(s.wet), have: s.wet, goal: t?.wet ?? null, color: "#7FA7B5" },
-    {
-      key: "dirty",
-      label: "Dirty",
-      emoji: "💩",
-      value: String(s.dirty),
-      have: s.dirty,
-      goal: t?.dirty ?? null,
-      color: "#8A5A2B",
-    },
+  // Each count's bar fills toward the usual number for her day of life (the footnote says what that is).
+  const tiles: { key: string; label: string; value: string; goal: number | null; have: number; color: string }[] = [
+    { key: "feeds", label: "Feeds", value: String(s.feeds), have: s.feeds, goal: t ? t.feeds[0] : null, color: DETAIL_COLOR.nursing },
+    { key: "wet", label: "Wet", value: String(s.wet), have: s.wet, goal: t?.wet ?? null, color: DETAIL_COLOR.pee },
+    { key: "dirty", label: "Dirty", value: String(s.dirty), have: s.dirty, goal: t?.dirty ?? null, color: DETAIL_COLOR.poop },
     {
       key: "tummy",
       label: "Tummy",
-      emoji: "🐢",
       value: `${Math.round(s.tummySec / 60)}m`,
       have: s.tummySec / 60,
       goal: t?.tummyMin ?? null,
-      color: "#6B8448",
+      color: DETAIL_COLOR.tummy,
     },
   ];
 
   const extras = [
-    s.sleepSec > 0 && `😴 ${formatDuration(s.sleepSec)} asleep${s.longestSleepSec >= 1800 ? ` · longest ${formatDuration(s.longestSleepSec)}` : ""}`,
-    s.nursingSec > 0 && `🤱 ${formatDuration(s.nursingSec)} nursing${nursingSplit != null ? ` (L ${nursingSplit}% · R ${100 - nursingSplit}%)` : ""}`,
-    s.bottleMl > 0 && `🍼 ${formatVolume(s.bottleMl, units)} by bottle`,
-    s.pumpMl > 0 && `🫙 ${formatVolume(s.pumpMl, units)} pumped`,
-  ].filter(Boolean) as string[];
+    s.sleepSec > 0 && {
+      icon: "moon",
+      color: DETAIL_COLOR.sleep,
+      label: "Asleep",
+      detail: s.longestSleepSec >= 1800 ? `longest ${formatDuration(s.longestSleepSec)}` : null,
+      value: formatDuration(s.sleepSec),
+    },
+    s.nursingSec > 0 && {
+      icon: "baby",
+      color: DETAIL_COLOR.nursing,
+      label: "Nursing",
+      detail: nursingSplit != null ? `L ${nursingSplit}% · R ${100 - nursingSplit}%` : null,
+      value: formatDuration(s.nursingSec),
+    },
+    s.bottleMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: null, value: formatVolume(s.bottleMl, units) },
+    s.pumpMl > 0 && { icon: "milk", color: KIND_COLOR.pump, label: "Pumped", detail: null, value: formatVolume(s.pumpMl, units) },
+  ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; value: string }[];
 
   return (
     <section aria-labelledby="day-so-far">
-      <div className="mb-2 flex items-end justify-between gap-2 px-1">
-        <h2 id="day-so-far" className={cx(tone.heading, "text-xl [.maple-night_&]:text-[#E0A93B]/85")}>
+      <div className="mb-2 flex items-end justify-between gap-3 px-1">
+        <h2 id="day-so-far" className={cx(tone.heading, "text-[17px]")}>
           The day so far
         </h2>
         <Segmented
-          className="w-[172px] shrink-0 scale-95"
+          className="w-[176px] shrink-0"
           value={mode}
           onChange={(v) => setChoice(v)}
           options={[
@@ -299,41 +294,46 @@ export function Tallies() {
           ]}
         />
       </div>
-      <div className={cx(tone.card, "p-3 [.maple-night_&]:border-[#E0A93B]/10 [.maple-night_&]:bg-[#11140F]")}>
-        <div className="grid grid-cols-4 gap-2">
+      <div className={cx(tone.card, "overflow-hidden")}>
+        <div className="grid grid-cols-4 divide-x divide-mp-line">
           {tiles.map((x) => {
             const pct = x.goal ? Math.min(1, x.have / x.goal) : 0;
             return (
-              <div key={x.key} className={cx(tone.inset, "flex flex-col items-center px-1 pt-2 pb-2 text-center [.maple-night_&]:bg-[#0B0F0A]")}>
-                <span aria-hidden className="text-base leading-none">
-                  {x.emoji}
-                </span>
-                <span className="mt-1 font-[family-name:var(--font-display)] text-[28px] leading-none font-semibold text-[#1D4420] lining-nums tabular-nums dark:text-[#F5EDDF] [.maple-night_&]:text-[#E0A93B]/85">
-                  {x.value}
-                </span>
-                <span className={cx(tone.muted, "mt-0.5 text-[12px] font-semibold")}>{x.label}</span>
+              <div key={x.key} className="flex flex-col items-center px-1 pt-3.5 pb-3 text-center">
+                <span className="text-[28px] leading-none font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">{x.value}</span>
+                <span className="mt-1.5 text-[12px] font-medium text-mp-ink-2">{x.label}</span>
                 {x.goal ? (
-                  <span className="mt-1.5 h-1.5 w-full max-w-[56px] overflow-hidden rounded-full bg-[#1D4420]/10 dark:bg-[#F5EDDF]/10" aria-hidden>
-                    <span className="block h-full rounded-full transition-[width] duration-500" style={{ width: `${Math.max(pct * 100, 4)}%`, backgroundColor: x.color }} />
+                  <span className="mt-2 h-1 w-10 overflow-hidden rounded-full bg-mp-sunken" aria-hidden>
+                    <span
+                      className="mp-kind-fill block h-full rounded-full transition-[width] duration-500"
+                      style={{ width: `${Math.max(pct * 100, 4)}%`, backgroundColor: x.color }}
+                    />
                   </span>
                 ) : null}
               </div>
             );
           })}
         </div>
-        {t && (
-          <p className={cx(tone.muted, "mt-2 px-1 text-[12px] leading-snug")}>
-            For Day {summary.age?.dayOfLife}: usually {t.feeds[0]}–{t.feeds[1]} feeds, {t.wet}+ wet{t.dirty ? `, ${t.dirty}+ dirty` : ""} and about {t.tummyMin} min of tummy time a day.
-          </p>
-        )}
         {extras.length > 0 && (
-          <ul className={cx(tone.body, "mt-2 space-y-0.5 px-1 text-[13px] [.maple-night_&]:text-[#E0A93B]/70")}>
+          <ul className="divide-y divide-mp-line border-t border-mp-line">
             {extras.map((x) => (
-              <li key={x}>{x}</li>
+              <li key={x.label} className="flex items-center gap-3 px-4 py-2.5 text-[14px]">
+                <Icon name={x.icon} size={17} className="mp-kind-ink shrink-0" style={{ color: x.color }} />
+                <span className="min-w-0 flex-1 truncate text-mp-ink">
+                  {x.label}
+                  {x.detail && <span className="text-mp-ink-3"> · {x.detail}</span>}
+                </span>
+                <span className="shrink-0 font-semibold text-mp-ink tabular-nums">{x.value}</span>
+              </li>
             ))}
           </ul>
         )}
       </div>
+      {t && (
+        <p className="mt-2 px-1 text-[13px] leading-snug text-mp-ink-3">
+          For Day {summary.age?.dayOfLife}: usually {t.feeds[0]}–{t.feeds[1]} feeds, {t.wet}+ wet{t.dirty ? `, ${t.dirty}+ dirty` : ""} and about {t.tummyMin} min of tummy time a day.
+        </p>
+      )}
     </section>
   );
 }
@@ -355,7 +355,7 @@ export function DiaperBrigade() {
     const hit = byName.get(d.who);
     return {
       ...d,
-      emoji: hit?.m.emoji ?? "🍁",
+      member: hit?.m ?? null,
       color: hit?.m.color ?? MEMBER_COLORS[(hit?.i ?? i) % MEMBER_COLORS.length],
       title: TITLES[(week + (hit?.i ?? i)) % TITLES.length],
     };
@@ -364,32 +364,30 @@ export function DiaperBrigade() {
   const others = summary.teamDiapers - credited;
 
   return (
-    <section aria-labelledby="brigade" className={cx(tone.card, "p-4 [.maple-night_&]:border-[#E0A93B]/10 [.maple-night_&]:bg-[#11140F]")}>
-      <h2 id="brigade" className={cx(tone.heading, "text-lg leading-tight [.maple-night_&]:text-[#E0A93B]/85")}>
+    <section aria-labelledby="brigade" className={cx(tone.card, "p-4")}>
+      <h2 id="brigade" className={cx(tone.heading, "text-[17px] leading-tight")}>
         Diaper brigade this week
       </h2>
-      <p className={cx(tone.muted, "text-sm")}>
+      <p className="mt-0.5 text-[13px] text-mp-ink-2">
         {summary.teamDiapers} change{summary.teamDiapers === 1 ? "" : "s"} together
       </p>
-      <div className="mt-3 flex h-3 w-full overflow-hidden rounded-full bg-[#1D4420]/10 dark:bg-[#F5EDDF]/10" role="img" aria-label={people.map((p) => `${p.who} ${p.diapers}`).join(", ")}>
+      <div className="mt-3 flex h-2 w-full gap-0.5 overflow-hidden rounded-full bg-mp-sunken" role="img" aria-label={people.map((p) => `${p.who} ${p.diapers}`).join(", ")}>
         {people.map((p) => (
-          <span key={p.who} style={{ width: `${(p.diapers / summary.teamDiapers) * 100}%`, backgroundColor: p.color }} className="h-full first:rounded-l-full last:rounded-r-full" />
+          <span key={p.who} style={{ width: `${(p.diapers / summary.teamDiapers) * 100}%`, backgroundColor: p.color }} className="mp-kind-fill h-full" />
         ))}
-        {others > 0 && <span style={{ width: `${(others / summary.teamDiapers) * 100}%` }} className="h-full bg-[#9AA58F]" />}
+        {others > 0 && <span style={{ width: `${(others / summary.teamDiapers) * 100}%` }} className="h-full bg-mp-ink/15" />}
       </div>
-      <ul className="mt-2.5 space-y-1">
+      <ul className="mt-3 space-y-2">
         {people.map((p) => (
-          <li key={p.who} className="flex items-center gap-2 text-[13px]">
-            <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
-            <span className={cx(tone.body, "font-semibold")}>
-              {p.who} {p.emoji}
-            </span>
-            <span className={cx(tone.body, "tabular-nums")}>{p.diapers}</span>
-            <span className={cx(tone.muted, "min-w-0 truncate italic")}>· {p.title}</span>
+          <li key={p.who} className="flex items-center gap-2.5 text-[14px]">
+            <span aria-hidden className="mp-kind-fill h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
+            <span className="shrink-0 font-semibold text-mp-ink">{p.who}</span>
+            {p.member?.emoji && <Avatar member={p.member} size={18} />}
+            <span className="min-w-0 flex-1 truncate text-[13px] text-mp-ink-3">{p.title}</span>
+            <span className="shrink-0 font-semibold text-mp-ink tabular-nums">{p.diapers}</span>
           </li>
         ))}
       </ul>
     </section>
   );
 }
-

@@ -4,16 +4,18 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
 import type { Celebration } from "@/lib/maple/insights";
 import { MAPLE_LEAF_PATH } from "./Hero";
+import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
-import { cx, tone } from "./ui";
+import { Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
  * Milestones ("One whole week of Maple", "Diaper #100") once each, per person.
  * A milestone reached at 3am waits for the morning: celebrations only show by
- * day, with a short fall of maple leaves (a still card under reduced motion or
- * the night look). "Keep as a moment" turns it into a keepsake.
+ * day, with a few maple leaves drifting down inside the card (a still card
+ * under reduced motion or the night look). "Keep as a moment" turns it into a
+ * keepsake.
  */
 
 const LEAF_COLORS = ["#B5452B", "#D9772B", "#E0A93B", "#C49A3C"];
@@ -21,6 +23,21 @@ const seenKey = (me: string) => `maple-celebrated:${me}`;
 
 /** The milestone id a kept moment carries (see milestones.ts): "monthly-2" stays, otherwise the celebration id. */
 const milestoneId = (c: Celebration) => (c.milestone && /^[a-z0-9-]+$/.test(c.milestone) ? c.milestone : c.id);
+
+/** An icon for each kind of milestone (the ids come from milestonesReached in insights.ts). */
+function celebrationIcon(c: Celebration): IconName {
+  const id = c.id;
+  if (id === "born") return "baby";
+  if (id.startsWith("week-")) return "sprout";
+  if (id.startsWith("month-")) return "cake";
+  if (id === "day-100") return "award";
+  if (id === "first-poop" || id.startsWith("diaper-")) return "diaper";
+  if (id === "first-bath") return "bath";
+  if (id === "first-tummy") return "tummy";
+  if (id.startsWith("regained-")) return "scale";
+  if (id.startsWith("feed-")) return "bottle";
+  return "party-popper";
+}
 
 function readSeen(me: string): string[] {
   try {
@@ -37,29 +54,27 @@ const rand = (i: number, salt: number) => {
   return x - Math.floor(x);
 };
 
-function LeafFall({ onDone }: { onDone: () => void }) {
+/** A handful of leaves falling once through the card (clipped to it), then gone. */
+function CardLeaves({ onDone }: { onDone: () => void }) {
   useEffect(() => {
-    const t = window.setTimeout(onDone, 3200);
+    const t = window.setTimeout(onDone, 3000);
     return () => window.clearTimeout(t);
   }, [onDone]);
   return (
-    <div aria-hidden className="pointer-events-none fixed inset-0 z-[95] overflow-hidden [.maple-night_&]:hidden">
-      {Array.from({ length: 18 }, (_, i) => {
-        const left = rand(i, 1) * 100;
-        const drift = (rand(i, 2) - 0.5) * 120;
-        const size = 14 + rand(i, 3) * 14;
-        const spin = (rand(i, 4) - 0.5) * 540;
+    <div aria-hidden className="pointer-events-none absolute inset-0">
+      {Array.from({ length: 8 }, (_, i) => {
+        const size = 12 + rand(i, 3) * 8;
         return (
           <motion.svg
             key={i}
             viewBox="-11 -11 22 22"
             width={size}
             height={size}
-            className="absolute -top-8"
-            style={{ left: `${left}%` }}
-            initial={{ y: -40, x: 0, rotate: 0, opacity: 0 }}
-            animate={{ y: "105vh", x: drift, rotate: spin, opacity: [0, 1, 1, 0.8] }}
-            transition={{ duration: 2.5, delay: rand(i, 5) * 0.6, ease: "easeIn" }}
+            className="absolute -top-5"
+            style={{ left: `${6 + rand(i, 1) * 88}%` }}
+            initial={{ y: 0, x: 0, rotate: 0, opacity: 0 }}
+            animate={{ y: 230, x: (rand(i, 2) - 0.5) * 50, rotate: (rand(i, 4) - 0.5) * 360, opacity: [0, 0.85, 0.85, 0] }}
+            transition={{ duration: 2.2, delay: rand(i, 5) * 0.5, ease: "easeIn" }}
           >
             <path d={MAPLE_LEAF_PATH} fill={LEAF_COLORS[i % LEAF_COLORS.length]} />
           </motion.svg>
@@ -109,58 +124,49 @@ export default function Celebrations() {
   };
 
   return (
-    <>
-      <AnimatePresence>
-        {current && (
-          <motion.section
-            key={current.id}
-            initial={{ opacity: 0, y: 10, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, height: 0, marginTop: 0, paddingTop: 0, paddingBottom: 0 }}
-            aria-live="polite"
-            className={cx(
-              tone.card,
-              "relative overflow-hidden border-[#C49A3C]/35 bg-gradient-to-br from-[#FFF6E5] to-[#FBE9DA] p-4 dark:from-[#2A2214] dark:to-[#2A1A14]"
-            )}
-          >
-            <svg aria-hidden viewBox="-11 -11 22 22" className="pointer-events-none absolute -top-3 -right-3 h-20 w-20 rotate-12 opacity-15">
-              <path d={MAPLE_LEAF_PATH} fill="#B5452B" />
-            </svg>
-            <div className="relative flex items-start gap-3">
-              <span aria-hidden className="text-3xl leading-none">
-                {current.emoji}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className={cx(tone.label, "text-[#B5452B] dark:text-[#E0A93B]")}>A little celebration</p>
-                <h2 className={cx(tone.heading, "mt-0.5 text-[22px] leading-tight")}>{current.title}</h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => markSeen(current.id)}
-                aria-label="Dismiss"
-                className={cx(tone.muted, "-mt-1 -mr-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-lg hover:bg-[#1D4420]/5")}
-              >
-                ✕
-              </button>
+    <AnimatePresence>
+      {current && (
+        <motion.section
+          key={current.id}
+          initial={{ opacity: 0, y: 10, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, height: 0, marginTop: 0, paddingTop: 0, paddingBottom: 0 }}
+          aria-live="polite"
+          className={cx(tone.card, "relative overflow-hidden p-4")}
+        >
+          {falling === current.id && <CardLeaves key={falling} onDone={endFall} />}
+          <div className="relative flex items-start gap-3">
+            <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-mp-maple/10 text-mp-maple">
+              <Icon name={celebrationIcon(current)} size={22} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-medium text-mp-maple">A little celebration</p>
+              <h2 className={cx(tone.heading, "mt-0.5 text-[20px] leading-snug")}>{current.title}</h2>
             </div>
-            {!readOnly && (
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    markSeen(current.id);
-                    open({ kind: "moment", preset: { title: current.title, milestone: milestoneId(current) } });
-                  }}
-                  className="min-h-[44px] rounded-full bg-[#B5452B] px-4 text-[15px] font-semibold text-white active:scale-[0.97] dark:bg-[#E0A93B] dark:text-[#2A1A0A]"
-                >
-                  📷 Keep as a moment
-                </button>
-              </div>
-            )}
-          </motion.section>
-        )}
-      </AnimatePresence>
-      {falling && <LeafFall key={falling} onDone={endFall} />}
-    </>
+            <button
+              type="button"
+              onClick={() => markSeen(current.id)}
+              aria-label="Dismiss"
+              className="-mt-2 -mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mp-ink-3 active:bg-mp-ink/5"
+            >
+              <Icon name="x" size={20} />
+            </button>
+          </div>
+          {!readOnly && (
+            <div className="relative mt-3 pl-[52px]">
+              <Button
+                onClick={() => {
+                  markSeen(current.id);
+                  open({ kind: "moment", preset: { title: current.title, milestone: milestoneId(current) } });
+                }}
+              >
+                <Icon name="camera" size={18} />
+                Keep as a moment
+              </Button>
+            </div>
+          )}
+        </motion.section>
+      )}
+    </AnimatePresence>
   );
 }

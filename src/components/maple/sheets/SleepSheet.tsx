@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { describeEntry, entryEmoji } from "@/lib/maple/describe";
+import { describeEntry } from "@/lib/maple/describe";
 import { SAFE_SLEEP_TIPS, SLEEP_TOTAL_NOTE } from "@/lib/maple/guidelines";
 import { formatDuration } from "@/lib/maple/time";
 import { SLEEP_PLACES, type SleepPlace } from "@/lib/maple/types";
-import { Chip, Sheet, TimeRange, cx, tone } from "../ui";
+import { Chip, Sheet, TimeRange } from "../ui";
 import type { SheetProps } from "./index";
 import {
   ContextNote,
@@ -29,14 +29,14 @@ import {
  * No "longest stretch" anything: at this age long sleeps aren't a goal.
  */
 
-const PLACE: Record<SleepPlace, { label: string; emoji: string }> = {
-  bassinet: { label: "Bassinet", emoji: "🧺" },
-  crib: { label: "Crib", emoji: "🛏️" },
-  arms: { label: "In arms", emoji: "🤗" },
-  carrier: { label: "Carrier", emoji: "🎒" },
-  stroller: { label: "Stroller", emoji: "🌳" },
-  car: { label: "Car seat", emoji: "🚗" },
-  bed: { label: "Grown-up bed", emoji: "🛌" },
+const PLACE: Record<SleepPlace, string> = {
+  bassinet: "Bassinet",
+  crib: "Crib",
+  arms: "In arms",
+  carrier: "Carrier",
+  stroller: "Stroller",
+  car: "Car seat",
+  bed: "Grown-up bed",
 };
 
 const H = 3_600_000;
@@ -87,7 +87,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
     onClose();
     void log(
       { kind: "sleep", started_at: start.toISOString(), ended_at: end.toISOString(), data: place ? { place } : {}, note: noteVal },
-      { toast: `Slept ${formatDuration((end.getTime() - start.getTime()) / 1000)}`, emoji: "😴" }
+      { toast: `Slept ${formatDuration((end.getTime() - start.getTime()) / 1000)}` }
     );
   };
 
@@ -102,7 +102,6 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Sleep"}
-      emoji={e ? entryEmoji(e) : "🌙"}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -123,23 +122,27 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
       )}
 
       {!running && (
-        <MoreDetails summary={place ? PLACE[place].label : undefined}>
+        <MoreDetails summary={place ? PLACE[place] : undefined}>
           <div>
             <Label>Where</Label>
             <div className="flex flex-wrap gap-2">
               {SLEEP_PLACES.map((p) => (
                 <Chip key={p} selected={place === p} onClick={() => setPlace(place === p ? undefined : p)}>
-                  <span aria-hidden>{PLACE[p].emoji}</span> {PLACE[p].label}
+                  {PLACE[p]}
                 </Chip>
               ))}
             </div>
-            {tip && <p className={cx(tone.muted, "mt-2.5 rounded-2xl bg-[#B8A9C9]/15 px-3.5 py-2.5 text-[13px] leading-relaxed dark:bg-[#B8A9C9]/10")}>🌙 {tip}</p>}
+            {tip && (
+              <ContextNote icon="moon" className="mt-3">
+                {tip}
+              </ContextNote>
+            )}
           </div>
         </MoreDetails>
       )}
 
       <NoteField value={note} onChange={setNote} />
-      <ContextNote emoji="🌙">{SLEEP_TOTAL_NOTE}</ContextNote>
+      <ContextNote>{SLEEP_TOTAL_NOTE}</ContextNote>
     </Sheet>
   );
 }

@@ -5,9 +5,11 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { formatTime } from "@/lib/maple/time";
 import { cmToIn, formatLength, formatWeight, gramsToLbOz, inToCm, lbOzToGrams } from "@/lib/maple/units";
 import type { UnitSystem } from "@/lib/maple/types";
-import { FallingLeaves, MapleLeaf, useStill } from "./art";
+import { MapleLeaf, useStill } from "./art";
+import { Icon } from "./icons";
 import { useSheets } from "./sheets";
-import { Button, Sheet, Stepper, WhenField, cx, tone } from "./ui";
+import { MiniStepper } from "./sheets/parts";
+import { Button, Sheet, WhenField, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
@@ -122,7 +124,7 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
     if (mode === "edit") {
       setSaving(false);
       onClose();
-      toast("Birth details saved", { emoji: "🍁" });
+      toast("Birth details saved");
       void refresh();
       return;
     }
@@ -154,89 +156,103 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
     void refresh();
   };
 
+  // The growth form's steppers: pounds beside ounces; length and head get full
+  // rows, since "13.58 in" doesn't fit a half-width field.
   const statInput = (
-    label: string,
+    key: string,
+    label: string | null,
+    ariaLabel: string,
     value: number | null,
     set: (v: number | null) => void,
-    opts: { step: number; decimals: number; suffix: string; max: number }
+    opts: { step: number; decimals: number; unit: string; max: number }
   ) => (
-    <div>
-      <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
-      <Stepper
-        value={value}
-        onChange={set}
-        step={opts.step}
-        decimals={opts.decimals}
-        suffix={opts.suffix}
-        max={opts.max}
-        ariaLabel={label.toLowerCase()}
-        onInvalid={(bad) => setInvalid((cur) => ({ ...cur, [label]: bad }))}
-      />
-    </div>
+    <MiniStepper
+      key={key}
+      label={label}
+      ariaLabel={ariaLabel}
+      value={value}
+      onChange={set}
+      step={opts.step}
+      decimals={opts.decimals}
+      unit={opts.unit}
+      max={opts.max}
+      onInvalid={(bad) => setInvalid((cur) => ({ ...cur, [key]: bad }))}
+    />
   );
+  const lenUnit = units === "us" ? "inches" : "centimetres";
 
+  // A box-less wrapper: Family drops this sheet into a space-y list, whose
+  // bottom margin would otherwise lift the (fixed) sheet off the screen's
+  // bottom edge and let the tab bar show through under its footer.
   return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title={mode === "birth" ? "She's here!" : "Birth details"}
-      emoji="🍁"
-      footer={
-        <Button size="lg" className="w-full" onClick={() => void submit()} disabled={saving || hasInvalid}>
-          {saving ? "Saving…" : mode === "birth" ? `Welcome ${firstName} 🍁` : "Save"}
-        </Button>
-      }
-    >
-      {mode === "birth" && (
-        <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
-          Congratulations! Just her birth time for now. Everything else can wait.
-        </p>
-      )}
+    <div className="contents">
+      <Sheet
+        open={open}
+        onClose={onClose}
+        title={mode === "birth" ? "She's here!" : "Birth details"}
+        footer={
+          <Button size="lg" className="w-full" onClick={() => void submit()} disabled={saving || hasInvalid}>
+            {saving ? "Saving…" : mode === "birth" ? `Welcome ${firstName}` : "Save"}
+          </Button>
+        }
+      >
+        {mode === "birth" && (
+          <p className={cx(tone.muted, "text-[15px] leading-relaxed")}>
+            Congratulations! Just her birth time for now. Everything else can wait.
+          </p>
+        )}
 
-      <WhenField label="Born" value={when} onChange={setWhen} tz={tz} offsets={[15, 60, 180, 360]} />
+        <WhenField label="Born" value={when} onChange={setWhen} tz={tz} offsets={[15, 60, 180, 360]} />
 
-      {showStats ? (
-        <div className="space-y-4">
-          <div className="flex items-end justify-between">
-            <p className={cx(tone.heading, "text-lg")}>
-              Birth stats <span className={cx(tone.muted, "font-[family-name:var(--font-body)] text-sm font-normal")}>· optional</span>
-            </p>
-            {mode === "birth" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setShowStats(false);
-                  setProblem(null);
-                }}
-              >
-                Add later
-              </Button>
-            )}
-          </div>
-          {units === "us" ? (
-            <div className="grid gap-3">
-              {statInput("Weight · pounds", lb, setLb, { step: 1, decimals: 0, suffix: "lb", max: 15 })}
-              {statInput("Weight · ounces", oz, setOz, { step: 1, decimals: 1, suffix: "oz", max: 15.9 })}
+        {showStats ? (
+          <section aria-labelledby="birth-stats" className="space-y-4">
+            <div className="mb-1.5 flex min-h-[36px] items-center justify-between gap-3">
+              <h3 id="birth-stats" className={cx(tone.heading, "text-[17px]")}>
+                Birth stats <span className="ml-1 text-[13px] font-normal text-mp-ink-3">Optional</span>
+              </h3>
+              {mode === "birth" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-mr-3"
+                  onClick={() => {
+                    setShowStats(false);
+                    setProblem(null);
+                  }}
+                >
+                  Add later
+                </Button>
+              )}
             </div>
-          ) : (
-            statInput("Weight", grams, setGrams, { step: 10, decimals: 0, suffix: "g", max: 7000 })
-          )}
-          {statInput("Length", length, setLength, units === "us" ? { step: 0.25, decimals: 2, suffix: "in", max: 26 } : { step: 0.5, decimals: 1, suffix: "cm", max: 65 })}
-          {statInput("Head", head, setHead, units === "us" ? { step: 0.25, decimals: 2, suffix: "in", max: 18 } : { step: 0.5, decimals: 1, suffix: "cm", max: 45 })}
-        </div>
-      ) : (
-        <Button variant="soft" className="w-full" onClick={() => setShowStats(true)}>
-          ＋ Add weight, length & head
-        </Button>
-      )}
+            {units === "us" ? (
+              <div>
+                <span className={cx(tone.label, "block")}>Weight</span>
+                <div className="grid grid-cols-2 gap-3">
+                  {statInput("lb", null, "weight in pounds", lb, setLb, { step: 1, decimals: 0, unit: "lb", max: 15 })}
+                  {statInput("oz", null, "weight in ounces", oz, setOz, { step: 1, decimals: 1, unit: "oz", max: 15.9 })}
+                </div>
+              </div>
+            ) : (
+              statInput("grams", "Weight", "weight in grams", grams, setGrams, { step: 10, decimals: 0, unit: "g", max: 7000 })
+            )}
+            {statInput("length", "Length", `length in ${lenUnit}`, length, setLength, units === "us" ? { step: 0.25, decimals: 2, unit: "in", max: 26 } : { step: 0.5, decimals: 1, unit: "cm", max: 65 })}
+            {statInput("head", "Head", `head in ${lenUnit}`, head, setHead, units === "us" ? { step: 0.25, decimals: 2, unit: "in", max: 18 } : { step: 0.5, decimals: 1, unit: "cm", max: 45 })}
+          </section>
+        ) : (
+          <Button variant="soft" className="w-full" onClick={() => setShowStats(true)}>
+            <Icon name="plus" size={18} />
+            Add weight, length & head
+          </Button>
+        )}
 
-      {problem && (
-        <p role="alert" className="rounded-2xl bg-[#B5452B]/10 px-4 py-3 text-sm font-medium text-[#9A3A24] dark:bg-[#E07A5F]/15 dark:text-[#F4A68F]">
-          {problem}
-        </p>
-      )}
-    </Sheet>
+        {problem && (
+          <p role="alert" className="flex gap-2 rounded-2xl bg-mp-danger/10 px-4 py-3 text-sm font-medium text-mp-danger">
+            <Icon name="circle-alert" size={18} className="mt-px shrink-0" />
+            {problem}
+          </p>
+        )}
+      </Sheet>
+    </div>
   );
 }
 
@@ -292,34 +308,34 @@ export function WelcomeHost() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="maple-welcome-title"
-          className="fixed inset-0 z-[85] flex items-center justify-center overflow-hidden bg-[radial-gradient(ellipse_at_50%_35%,#FFF1D6_0%,#FDF8F0_55%,#F6E7D6_100%)] px-6 dark:bg-[radial-gradient(ellipse_at_50%_35%,#1E3A22_0%,#11261A_55%,#0B170D_100%)] [.maple-night_&]:bg-[#0B0F0A] [.maple-night_&]:bg-none"
+          className="fixed inset-0 z-[85] flex items-center justify-center overflow-hidden bg-mp-bg px-6"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: still ? 0.15 : 0.5 }}
         >
-          <FallingLeaves count={22} />
           <motion.div
             className="relative w-full max-w-sm text-center"
             initial={still ? false : { y: 24, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.25, duration: 0.6, ease: "easeOut" }}
           >
+            {/* The one bit of celebration: her leaf springs in (held still at night). */}
             <motion.div
-              className="mx-auto mb-4 w-fit"
+              className="mx-auto mb-5 w-fit"
               initial={still ? false : { scale: 0.4, rotate: -40 }}
               animate={{ scale: 1, rotate: 0 }}
               transition={{ type: "spring", damping: 12, stiffness: 120, delay: 0.35 }}
             >
-              <MapleLeaf size={92} />
+              <MapleLeaf size={88} className="[.maple-night_&]:opacity-70" />
             </motion.div>
-            <p className={cx(tone.heading, "text-[26px] font-medium italic")}>Welcome to the world,</p>
-            <h2 id="maple-welcome-title" className={cx(tone.heading, "mt-1 text-[52px] leading-[1.05]")}>
+            <p className={cx(tone.muted, "text-[20px]")}>Welcome to the world,</p>
+            <h2 id="maple-welcome-title" className={cx(tone.display, "mt-1 text-[44px] leading-[1.05]")}>
               {w.name}
             </h2>
-            <p className={cx(tone.body, "mt-4 text-[15px] font-semibold")}>{w.when}</p>
-            {w.stats && <p className={cx(tone.body, "mt-1 text-[15px]")}>{w.stats}</p>}
-            <p className={cx(tone.muted, "mt-3 text-sm")}>The whole forest is glad you&apos;re here.</p>
+            <p className={cx(tone.body, "mt-5 text-[15px] font-semibold tabular-nums")}>{w.when}</p>
+            {w.stats && <p className={cx(tone.muted, "mt-0.5 text-[15px] tabular-nums")}>{w.stats}</p>}
+            <p className={cx(tone.muted, "mt-4 text-[15px]")}>The whole forest is glad you&apos;re here.</p>
             <div ref={actions} className="mt-8 grid gap-2">
               <Button
                 size="lg"
@@ -329,7 +345,8 @@ export function WelcomeHost() {
                   open({ kind: "moment", preset: { title: "First photo" } });
                 }}
               >
-                📷 Add her first photo
+                <Icon name="camera" size={20} />
+                Add her first photo
               </Button>
               <Button variant="ghost" className="w-full" onClick={closeWelcome}>
                 Later

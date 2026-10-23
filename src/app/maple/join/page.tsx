@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Fireflies, MapleLeaf } from "@/components/maple/art";
-import { cx, tone } from "@/components/maple/ui";
+import { MapleLeaf } from "@/components/maple/art";
+import { Icon } from "@/components/maple/icons";
+import { Button, cx, tone } from "@/components/maple/ui";
 
 /**
  * /maple/join#<token> — where a one-time invite link lands (for grandparents
  * and helpers without Google). The token rides in the #fragment, so it never
  * reaches server logs; we post it to /api/maple/auth/join, which redeems it
  * and sets the session cookie, then hop into the app. Robots noindex comes
- * from the /maple layout.
+ * from the /maple layout. Looks like the sign-in page: the app's leaf on a
+ * plain tile, one title, one action.
  */
 
 type Phase =
@@ -22,6 +24,8 @@ type Phase =
 
 // Redeem once per token, even if React runs the effect twice (dev Strict Mode).
 const attempts = new Map<string, Promise<Response>>();
+
+const TITLE = cx(tone.display, "mt-6 text-[32px] leading-[1.08] text-balance");
 
 export default function JoinPage() {
   const [phase, setPhase] = useState<Phase>({ kind: "working" });
@@ -97,16 +101,15 @@ export default function JoinPage() {
   };
 
   return (
-    <div className="relative flex min-h-[100dvh] flex-col items-center justify-center overflow-hidden px-6 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] text-center">
-      <Fireflies count={5} />
-      <div className="relative w-full max-w-sm">
-        <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-[28px] bg-[#FDF8F0] shadow-[0_8px_30px_rgba(196,154,60,0.25)] ring-1 ring-[#C49A3C]/20 dark:bg-[#12261A] dark:shadow-none">
-          <MapleLeaf size={72} />
+    <div className="flex min-h-[100dvh] flex-col items-center justify-center px-6 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] text-center">
+      <div className="w-full max-w-sm">
+        <div className="mx-auto flex h-[88px] w-[88px] items-center justify-center rounded-[24px] border border-mp-line bg-mp-surface">
+          <MapleLeaf size={60} className="[.maple-night_&]:opacity-70" />
         </div>
 
         {phase.kind === "working" && (
           <>
-            <h1 className={cx(tone.heading, "mt-6 text-[34px] leading-tight")}>Opening the gate…</h1>
+            <h1 className={TITLE}>Opening the gate…</h1>
             <p className={cx(tone.muted, "mt-2 text-[15px]")} aria-live="polite">
               Checking your invite to Maple&apos;s Log.
             </p>
@@ -115,20 +118,24 @@ export default function JoinPage() {
 
         {phase.kind === "welcome" && (
           <>
-            <h1 className={cx(tone.heading, "mt-6 text-[34px] leading-tight")}>Welcome{phase.name ? `, ${phase.name}` : ""}!</h1>
-            <p className={cx(tone.body, "mt-2 text-[15px] leading-relaxed")} aria-live="polite">
+            <h1 className={TITLE}>Welcome{phase.name ? `, ${phase.name}` : ""}!</h1>
+            <p className={cx(tone.muted, "mt-2 text-[15px] leading-relaxed")} aria-live="polite">
               You&apos;re in. Taking you to Maple&apos;s Log…
             </p>
-            <a href="/maple" className="mt-6 inline-flex min-h-[48px] items-center rounded-full bg-[#1D4420] px-6 font-semibold text-[#FDF8F0] dark:bg-[#C49A3C] dark:text-[#14210F]">
+            <a
+              href="/maple"
+              className="mt-8 flex min-h-[52px] w-full items-center justify-center gap-2 rounded-[14px] bg-mp-accent px-5 text-base font-semibold text-mp-on-accent transition hover:opacity-90 active:scale-[0.98]"
+            >
               Go to Maple&apos;s Log
+              <Icon name="arrow-right" size={18} />
             </a>
           </>
         )}
 
         {phase.kind === "missing" && (
           <Stuck title="This link is missing its key">
-            Invite links look like <span className="font-mono text-[13px]">brooker.family/maple/join#…</span> with a long code at the end. Try
-            copying the whole link again, or ask Matt or Brittany to send a fresh one.
+            Invite links look like <span className="rounded-md bg-mp-sunken px-1.5 py-0.5 font-mono text-[13px]">brooker.family/maple/join#…</span> with a long
+            code at the end. Try copying the whole link again, or ask Matt or Brittany to send a fresh one.
           </Stuck>
         )}
 
@@ -155,12 +162,13 @@ export default function JoinPage() {
 function Stuck({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <>
-      <h1 className={cx(tone.heading, "mt-6 text-[32px] leading-tight")}>{title}</h1>
-      <div role="alert" className={cx(tone.body, "mt-3 text-[15px] leading-relaxed")}>
+      <h1 className={TITLE}>{title}</h1>
+      <div role="alert" className={cx(tone.muted, "mt-3 text-[15px] leading-relaxed")}>
         {children}
       </div>
-      <a href="/maple" className={cx(tone.muted, "mt-6 inline-flex min-h-[44px] items-center text-sm underline decoration-[#C49A3C]/50 underline-offset-4")}>
+      <a href="/maple" className="mt-6 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-medium text-mp-accent-fg">
         Already signed in? Go to Maple&apos;s Log
+        <Icon name="chevron-right" size={16} />
       </a>
     </>
   );
@@ -168,14 +176,11 @@ function Stuck({ title, children }: { title: string; children: React.ReactNode }
 
 function RetryButton({ onClick }: { onClick: () => void }) {
   return (
-    <span className="mt-5 block">
-      <button
-        type="button"
-        onClick={onClick}
-        className="inline-flex min-h-[48px] items-center rounded-full bg-[#1D4420] px-6 font-semibold text-[#FDF8F0] dark:bg-[#C49A3C] dark:text-[#14210F]"
-      >
+    <span className="mt-6 block">
+      <Button size="lg" onClick={onClick} className="w-full">
+        <Icon name="refresh-cw" size={18} />
         Try again
-      </button>
+      </Button>
     </span>
   );
 }
