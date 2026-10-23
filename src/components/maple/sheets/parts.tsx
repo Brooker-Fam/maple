@@ -205,8 +205,6 @@ export function ContextNote({
   className,
 }: {
   icon?: IconName;
-  /** @deprecated Ignored: pass an icon. */
-  emoji?: string;
   children: ReactNode;
   className?: string;
 }) {

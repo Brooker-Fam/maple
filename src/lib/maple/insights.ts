@@ -264,7 +264,7 @@ export function memberName(id: string | null | undefined, members: Member[]): st
 /**
  * Warnings and reminders (feed gaps, diaper counts, weight, vitamin D,
  * checkups) need consistent logging to mean anything, so they're off unless
- * the family switches them on in Family → Warnings & reminders. A reading
+ * the family switches them on in Family → On Today → Warnings & reminders. A reading
  * entered in a sheet or through an assistant is still checked as it's logged.
  */
 export function alertsOn(baby: Baby): boolean {

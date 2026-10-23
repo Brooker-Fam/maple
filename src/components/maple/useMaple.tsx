@@ -50,8 +50,6 @@ export type Toast = {
   id: number;
   text: string;
   tone: "ok" | "error" | "info";
-  /** @deprecated Ignored: toasts show an icon for their tone, never emoji. */
-  emoji?: string;
   undo?: () => void;
   /** Extra inline buttons (e.g. stool-color swatches after "Poop"). */
   actions?: ToastAction[];
@@ -87,8 +85,6 @@ export type MapleContextValue = {
     input: CreateEntryInput,
     opts?: {
       toast?: string;
-      /** @deprecated Ignored: toasts don't show emoji. */
-      emoji?: string;
       silent?: boolean;
       actions?: (entry: Entry) => ToastAction[];
     }

@@ -63,11 +63,12 @@ Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `
   - `mcp-tools.ts` has the MCP tools.
 - **Client** in `src/components/maple/`:
   - `useMaple.tsx` handles polling every 10s, optimistic writes, the offline outbox, and undo toasts.
-  - `ui.tsx` holds the small UI kit.
+  - `ui.tsx` holds the small UI kit, and `icons.tsx` the line icons (Lucide paths plus custom bottle, diaper and tummy glyphs).
   - `sheets/` holds the log and edit forms.
   - There's one component per tab.
+- **Look:** calm and native-feeling. Colors are semantic `mp-*` tokens (`bg-mp-surface`, `text-mp-ink-2`, `border-mp-line`, `bg-mp-accent`…), registered in `globals.css` and given values in `src/app/maple/maple.css` for day, dark mode and the night look, so components need no `dark:` variants. Kind colors (`palette.ts`) mark what an entry is; anything colored by kind carries `mp-kind`, `mp-kind-ink` or `mp-kind-fill` so it folds into the amber at night. No emoji in the app's chrome: icons, colored dots or words instead. Members' own avatar emoji and anything the family types are the exceptions. The system font for the UI, with the display serif only for page titles and her name.
 - **Medical guidance** in `guidelines.ts` was checked against AAP/HealthyChildren, CDC, NIH, WHO, ABM and children's hospital triage guides. It's tuned for a healthy full-term baby.
-  - **Warnings and reminders are off by default** (`settings.show_alerts`, Family → Baby → Warnings & reminders). Feed gaps, diaper counts, weight trends, vitamin D and checkup notes only mean something when every feed and diaper gets logged, and the family doesn't log that consistently. With them off, Today, Siri and Claude/ChatGPT show none. A reading is still checked as it's entered (temperature, oxygen/heart/breathing, poop color, medicine for her age), in the sheet and in the assistant's reply.
+  - **Warnings and reminders are off by default** (`settings.show_alerts`, Family → On Today → Warnings & reminders). Feed gaps, diaper counts, weight trends, vitamin D and checkup notes only mean something when every feed and diaper gets logged, and the family doesn't log that consistently. With them off, Today, Siri and Claude/ChatGPT show none. A reading is still checked as it's entered (temperature, oxygen/heart/breathing, poop color, medicine for her age), in the sheet and in the assistant's reply.
   - Alerts always say who to call: 911, the pediatrician now, today, or mention it at the next visit.
   - The app never suggests a medicine dose.
-  - If Maple's pediatrician gives different targets (feed interval, preterm plan), set them under Family → Baby.
+  - If Maple's pediatrician gives different targets (feed interval, preterm plan), set them under Family → Her doctor.

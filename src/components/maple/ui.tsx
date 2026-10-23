@@ -62,6 +62,9 @@ type ButtonProps = {
   disabled?: boolean;
   className?: string;
   "aria-label"?: string;
+  "aria-pressed"?: boolean;
+  "aria-expanded"?: boolean;
+  "aria-controls"?: string;
 };
 
 export function Button({ children, onClick, variant = "primary", size = "md", type = "button", disabled, className, ...rest }: ButtonProps) {
@@ -84,6 +87,9 @@ export function Button({ children, onClick, variant = "primary", size = "md", ty
       onClick={onClick}
       disabled={disabled}
       aria-label={rest["aria-label"]}
+      aria-pressed={rest["aria-pressed"]}
+      aria-expanded={rest["aria-expanded"]}
+      aria-controls={rest["aria-controls"]}
       className={cx(
         "inline-flex items-center justify-center gap-2 font-semibold transition active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100",
         v,
@@ -101,26 +107,36 @@ export function Chip({
   selected,
   onClick,
   color,
+  raised,
   className,
+  "aria-label": ariaLabel,
 }: {
   children: ReactNode;
   selected?: boolean;
   onClick?: () => void;
   /** Accent hex for the selected state. */
   color?: string;
+  /** Sitting on a sunken well (the time scrubber): give it a surface so it still reads as a chip. */
+  raised?: boolean;
   className?: string;
+  "aria-label"?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
+      aria-label={ariaLabel}
       style={selected && color ? { backgroundColor: color, borderColor: color } : undefined}
       className={cx(
         "inline-flex min-h-[40px] items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition active:scale-[0.97]",
         selected
-          ? cx("text-white", color ? "mp-kind-fill" : "border-mp-accent bg-mp-accent text-mp-on-accent")
-          : "border-transparent bg-mp-sunken text-mp-ink hover:bg-mp-ink/10",
+          ? color
+            ? "mp-kind-fill text-white"
+            : "border-mp-accent bg-mp-accent text-mp-on-accent"
+          : raised
+            ? "border-mp-line bg-mp-raised text-mp-ink hover:bg-mp-ink/5"
+            : "border-transparent bg-mp-sunken text-mp-ink hover:bg-mp-ink/10",
         className
       )}
     >
@@ -134,14 +150,16 @@ export function Segmented<T extends string>({
   value,
   onChange,
   className,
+  "aria-label": ariaLabel,
 }: {
   options: { value: T; label: ReactNode }[];
   value: T;
   onChange: (v: T) => void;
   className?: string;
+  "aria-label"?: string;
 }) {
   return (
-    <div className={cx("flex rounded-xl bg-mp-sunken p-[3px]", className)} role="radiogroup">
+    <div className={cx("flex rounded-xl bg-mp-sunken p-[3px]", className)} role="radiogroup" aria-label={ariaLabel}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -152,7 +170,7 @@ export function Segmented<T extends string>({
           className={cx(
             "min-h-[38px] flex-1 rounded-[10px] px-3 text-sm transition",
             value === o.value
-              ? "bg-mp-surface font-semibold text-mp-ink shadow-[0_1px_3px_rgba(0,0,0,0.12)]"
+              ? "bg-mp-raised font-semibold text-mp-ink shadow-[0_1px_3px_rgba(0,0,0,0.12)]"
               : "font-medium text-mp-ink-2"
           )}
         >
@@ -540,7 +558,7 @@ export function TimeScrubber({
             onStep={() => step(d)}
             disabled={d < 0 ? atMin : atMax}
             ariaLabel={`${Math.abs(d)} minute${Math.abs(d) === 1 ? "" : "s"} ${d < 0 ? "earlier" : "later"}`}
-            className="h-[52px] rounded-xl border border-mp-line bg-mp-surface text-lg font-semibold text-mp-ink tabular-nums"
+            className="h-[52px] rounded-xl border border-mp-line bg-mp-raised text-lg font-semibold text-mp-ink tabular-nums"
           >
             {d < 0 ? "−" : "+"}
             {Math.abs(d)}
@@ -553,6 +571,7 @@ export function TimeScrubber({
           {quick.map((m, i) => (
             <Chip
               key={m}
+              raised
               selected={chip?.m === m && chip.at === t}
               onClick={() => setChip({ m, at: set(nowFn().getTime() - m * MIN_MS) })}
             >
@@ -672,8 +691,6 @@ export function Sheet({
   open: boolean;
   onClose: () => void;
   title: string;
-  /** @deprecated Ignored: sheets don't show emoji. */
-  emoji?: string;
   children: ReactNode;
   footer?: ReactNode;
 }) {
@@ -695,7 +712,8 @@ export function Sheet({
   return (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
+        // m-0!: a sheet rendered inside a space-y list mustn't pick up its margin and float off the bottom.
+        <div className="fixed inset-0 z-[80] m-0! flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
           <motion.div
             className="absolute inset-0 bg-black/40"
             initial={{ opacity: 0 }}
@@ -769,7 +787,11 @@ export function Avatar({ member, size = 28 }: { member: Member | null; size?: nu
   return (
     <span
       title={name}
-      className={cx("inline-flex shrink-0 items-center justify-center rounded-full font-semibold", member?.emoji ? "bg-mp-sunken" : "mp-kind-fill text-white")}
+      className={cx(
+        "inline-flex shrink-0 items-center justify-center rounded-full font-semibold",
+        // Emoji keep their own colors, so they're dimmed at night like photos.
+        member?.emoji ? "bg-mp-sunken [.maple-night_&]:opacity-60 [.maple-night_&]:grayscale-[40%]" : "mp-kind-fill text-white"
+      )}
       style={{
         width: size,
         height: size,
@@ -789,8 +811,6 @@ export function EmptyState({
   children,
 }: {
   icon?: IconName;
-  /** @deprecated Ignored: pass an icon. */
-  emoji?: string;
   title: string;
   children?: ReactNode;
 }) {

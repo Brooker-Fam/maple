@@ -38,9 +38,8 @@ const mins = (sec: number) => Math.max(0, Math.round(sec / 60));
 
 /**
  * "Nursed 18m (L 11 · R 7) · Right next time" and friends, for the Done toast.
- * The emoji is kept for callers that still want one; the app's toasts don't show it.
  */
-export function doneText(e: Entry, now: Date): { text: string; emoji: string } {
+export function doneText(e: Entry, now: Date): { text: string } {
   const dur = e.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / 1000 : 0;
   if (e.kind === "feed" && e.data.method === "breast") {
     const t = feedTotals(e.data, now);
@@ -48,13 +47,12 @@ export function doneText(e: Entry, now: Date): { text: string; emoji: string } {
     const next = suggestNextSide(e.data);
     return {
       text: `Nursed ${formatDuration(t.total)}${sides ? ` (${sides})` : ""}${next ? ` · ${SIDE_NAME[next]} next time` : ""}`,
-      emoji: "🤱",
     };
   }
-  if (e.kind === "sleep") return { text: `Slept ${formatDuration(dur)}`, emoji: "😴" };
-  if (e.kind === "tummy") return { text: `Tummy time ${formatDuration(dur)}`, emoji: "🐢" };
-  if (e.kind === "pump") return { text: `Pumped ${formatDuration(dur)}`, emoji: "🫙" };
-  return { text: "Saved", emoji: "🍁" };
+  if (e.kind === "sleep") return { text: `Slept ${formatDuration(dur)}` };
+  if (e.kind === "tummy") return { text: `Tummy time ${formatDuration(dur)}` };
+  if (e.kind === "pump") return { text: `Pumped ${formatDuration(dur)}` };
+  return { text: "Saved" };
 }
 
 /** A clock time typed into <input type="time">, as the most recent such moment (today, or yesterday if that's still ahead). */

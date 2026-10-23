@@ -22,8 +22,8 @@ import { useMaple, useNow } from "./useMaple";
 /**
  * Today: the screen parents use one-handed at 3am. Top to bottom: who she is
  * (or the waiting hero), anything urgent, the "while you slept" hand-off,
- * "Right now" (running timers, then the 3am answers), gentler alerts and
- * celebrations, the day dial, tallies, and the last few entries. Logging
+ * "Right now" (running timers, then the 3am answers), gentler alerts, the
+ * day dial, celebrations, tallies, and the last few entries. Logging
  * lives in the dock pinned above the tab bar, so nothing here needs a scroll
  * to reach.
  */
@@ -68,11 +68,12 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: TabId) => voi
       )}
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
-      <Celebrations />
 
+      {/* The dial is the day at a glance, so it leads; one-off celebrations follow it. */}
+      {!nothingYet && <DayDial />}
+      <Celebrations />
       {!nothingYet && (
         <>
-          <DayDial />
           <Tallies />
           <DiaperBrigade />
         </>

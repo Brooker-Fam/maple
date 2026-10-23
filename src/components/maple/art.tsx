@@ -1,15 +1,14 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { useId, useMemo } from "react";
+import { useId } from "react";
 import { useNightActive } from "./nightLook";
 
 /**
  * Illustrations for Maple's Log: the sugar-maple leaf (same shape as the app
  * icon: sign-in, the birth welcome, the join and connect pages, the birth
- * banner) and the waiting sapling. Fireflies is kept for a future
- * celebration but nothing shows it now (no ambient motion). The app's chrome
- * uses line icons (./icons); these are the few drawn marks. Motion is gentle
+ * banner) and the waiting sapling. The app's chrome uses line icons
+ * (./icons); these are the few drawn marks. Motion is gentle
  * and switches off under prefers-reduced-motion and the night look.
  */
 
@@ -56,51 +55,11 @@ export function MapleLeaf({
   );
 }
 
-/** Deterministic 0–1 noise so layouts don't jump between renders. */
-const rand = (i: number, salt: number) => {
-  const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
-  return x - Math.floor(x);
-};
-
 /** True when the art should hold still. */
 export function useStill(): boolean {
   const reduced = useReducedMotion();
   const night = useNightActive();
   return !!reduced || night;
-}
-
-/** Glowing dots drifting in the dusk. At night: one slow firefly, or none when still. */
-export function Fireflies({ count = 7, className }: { count?: number; className?: string }) {
-  const reduced = useReducedMotion();
-  const night = useNightActive();
-  const n = reduced ? 0 : night ? Math.min(1, count) : count;
-  const flies = useMemo(
-    () =>
-      Array.from({ length: n }, (_, i) => ({
-        left: 8 + rand(i, 1) * 84,
-        top: 10 + rand(i, 2) * 70,
-        dx: (rand(i, 3) - 0.5) * 40,
-        dy: (rand(i, 4) - 0.5) * 30,
-        dur: (night ? 9 : 4) + rand(i, 5) * 4,
-        delay: rand(i, 6) * 3,
-        size: 4 + rand(i, 7) * 3,
-      })),
-    [n, night]
-  );
-  if (!n) return null;
-  return (
-    <div className={`pointer-events-none absolute inset-0 overflow-hidden ${className ?? ""}`} aria-hidden>
-      {flies.map((f, i) => (
-        <motion.span
-          key={i}
-          className="absolute rounded-full bg-[#F4D27A] shadow-[0_0_10px_3px_rgba(244,210,122,0.55)]"
-          style={{ left: `${f.left}%`, top: `${f.top}%`, width: f.size, height: f.size }}
-          animate={{ x: [0, f.dx, 0], y: [0, f.dy, 0], opacity: [0, 0.9, 0.2, 0.85, 0] }}
-          transition={{ duration: f.dur, delay: f.delay, repeat: Infinity, ease: "easeInOut" }}
-        />
-      ))}
-    </div>
-  );
 }
 
 /** A little maple sapling on a mossy mound, with a toadstool keeping it company. */

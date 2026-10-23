@@ -5,7 +5,8 @@
  * (MapleApp) puts .maple-ui on <html> while the app is mounted.
  *
  *   bg        page background            surface    cards, inputs, rows
- *   sunken    tracks, chips, wells       line       hairlines and borders
+ *   sunken    tracks, chips, wells       raised     a selected thumb or chip on a well
+ *   line      hairlines and borders
  *   ink       primary text               ink-2/3    secondary / tertiary text
  *   accent    primary fills              on-accent  text on an accent fill
  *   accent-fg accent-colored text/icons  maple      the one warm highlight
@@ -18,6 +19,7 @@
   --mp-bg: #f6f3ec;
   --mp-surface: #ffffff;
   --mp-sunken: #eeeae1;
+  --mp-raised: #ffffff;
   --mp-ink: #1c2619;
   --mp-ink-2: #5b6356;
   --mp-ink-3: #8a8f84;
@@ -36,13 +38,15 @@
   --mp-bg: #0e1310;
   --mp-surface: #171d18;
   --mp-sunken: #222a23;
+  --mp-raised: #333d35;
   --mp-ink: #ece7dc;
   --mp-ink-2: #a7aba0;
   --mp-ink-3: #737a70;
   --mp-line: rgb(236 231 220 / 0.09);
-  --mp-accent: #d9b76a;
-  --mp-on-accent: #17200f;
-  --mp-accent-fg: #d9b76a;
+  /* Sage, not gold: gold would read as the honey "Right" side next to it. */
+  --mp-accent: #b4cc96;
+  --mp-on-accent: #16210f;
+  --mp-accent-fg: #b9d29c;
   --mp-maple: #e5895e;
   --mp-danger: #f09a80;
   --mp-focus: #d9b76a;
@@ -54,6 +58,7 @@ html.maple-night {
   --mp-bg: #0b0f0a;
   --mp-surface: #13170f;
   --mp-sunken: #1b1d12;
+  --mp-raised: #2b2515;
   --mp-ink: rgb(224 169 59 / 0.85);
   --mp-ink-2: rgb(224 169 59 / 0.58);
   --mp-ink-3: rgb(224 169 59 / 0.4);
@@ -68,7 +73,9 @@ html.maple-night {
   --mp-on-toast: rgb(224 169 59 / 0.9);
 }
 
-html.maple-ui body {
+/* body.enchanted-bg too: the site's `.dark .enchanted-bg` would otherwise win in dark mode. */
+html.maple-ui body,
+html.maple-ui body.enchanted-bg {
   font-family: var(--mp-font);
   background: var(--mp-bg);
   color: var(--mp-ink);
@@ -98,193 +105,27 @@ html.maple-ui body {
 }
 
 /*
- * Maple's Log night look. The shell puts .maple-night (and .dark) on <html>
- * from 8pm–7am (Family → Preferences → Night look: Auto / Always / Off).
- *
- * Dim amber on near-black for 3am feeds: background #0B0F0A, text warm amber
- * #E0A93B at 85% (primary) / 55% (secondary), ember accents, borders at 8%
- * amber, no white anywhere, dimmed photos, and almost no motion.
- *
- * Pure color overrides keyed off the dark-mode utility classes the maple
- * components already use, so nothing here adds a filter or transform to an
- * ancestor (position:fixed sheets, dock and tab bar keep working). These
- * rules are unlayered, so they beat Tailwind's utilities layer. Components
- * can add their own touches with arbitrary variants, e.g.
- * `[.maple-night_&]:opacity-60`.
+ * The night look. The shell puts .maple-night (and .dark) on <html> from
+ * 8pm–7am (Family → On this phone → Night look: Auto / Always / Off): dim
+ * amber on near-black for 3am feeds. Colors come from the tokens above;
+ * these rules only cover what tokens can't. Nothing here adds a filter or
+ * transform to an ancestor, so position:fixed sheets, the dock and the tab
+ * bar keep working. Components add their own touches with arbitrary
+ * variants, e.g. `[.maple-night_&]:opacity-60`.
  */
 
 html.maple-night {
-  --night-bg: #0b0f0a;
-  --night-surface: #13170f;
-  --night-raised: #1c1a11;
-  --night-inset: #0e120c;
-  --night-text: rgb(224 169 59 / 0.85);
-  --night-text-2: rgb(224 169 59 / 0.55);
-  --night-ember: #d9772b;
-  --night-ember-soft: rgb(217 119 43 / 0.2);
-  --night-tint: rgb(224 169 59 / 0.08);
-  --night-line: rgb(224 169 59 / 0.08);
   color-scheme: dark;
-  background-color: var(--night-bg);
+  background-color: var(--mp-bg);
 }
 
-html.maple-night body,
-html.maple-night body.enchanted-bg {
-  background: var(--night-bg);
-  color: var(--night-text);
-}
-
-/* ── Text ───────────────────────────────────────────────────────────── */
-
-/* Cream, parchment and pale gold/sage text → amber. */
-.maple-night [class*="dark:text-[#F5EDDF]"],
-.maple-night [class*="dark:text-[#FDF8F0]"],
-.maple-night [class*="dark:text-[#E8DCC0]"],
-.maple-night [class*="dark:text-[#F0DDB0]"],
-.maple-night [class*="dark:text-[#E0C27A]"],
-.maple-night [class*="dark:text-[#F0E3C0]"],
-.maple-night [class*="dark:text-[#EFE0B8]"],
-.maple-night [class*="dark:text-[#F5E2C8]"],
-.maple-night [class*="dark:text-[#F6DDBF]"],
-.maple-night [class*="dark:text-[#E8CF9A]"],
-.maple-night [class*="dark:text-[#E9CF8C]"],
-.maple-night [class*="dark:text-[#ECE5D5]"],
-.maple-night [class*="dark:text-[#DDE8D0]"],
-.maple-night [class*="dark:text-[#D7E4C8]"],
-.maple-night [class*="dark:text-[#D4E2C4]"],
-.maple-night [class*="dark:text-[#CFE0BC]"],
-.maple-night [class*="dark:text-[#C0D4A8]"],
-.maple-night [class*="dark:text-[#E2D8EC]"],
-.maple-night [class*="dark:text-[#D4C8E0]"],
-.maple-night [class*="dark:text-white"] {
-  color: var(--night-text);
-}
-
-/* Muted text, and any of the above at reduced opacity → secondary amber. */
-.maple-night [class*="dark:text-[#B9B39C]"],
-.maple-night [class*="dark:text-[#A9C08F]"],
-.maple-night [class*="dark:text-[#F5EDDF]/"],
-.maple-night [class*="dark:text-[#FDF8F0]/"],
-.maple-night [class*="dark:text-[#E8DCC0]/"],
-.maple-night [class*="dark:text-[#F0DDB0]/"],
-.maple-night [class*="dark:text-[#E0C27A]/"],
-.maple-night [class*="dark:text-[#E8C8B8]/"] {
-  color: var(--night-text-2);
-}
-
-.maple-night [class*="dark:fill-[#B9B39C]"] {
-  fill: var(--night-text-2);
-}
-.maple-night [class*="dark:fill-[#E0C27A]"] {
-  fill: var(--night-text);
-}
-
-/* Dark text meant for gold/cream buttons: those buttons go dark below, so the text goes amber. */
-.maple-night [class*="dark:text-[#14210F]"],
-.maple-night [class*="dark:text-[#1D2A12]"] {
-  color: #e8a23f;
-}
-
-/* ── Surfaces ───────────────────────────────────────────────────────── */
-
-.maple-night [class*="dark:bg-[#12261A]"],
-.maple-night [class*="dark:bg-[#10221A]"],
-.maple-night [class*="dark:bg-[#162618]"] {
-  background-color: var(--night-surface);
-}
-.maple-night [class*="dark:bg-[#0E1E12]"],
-.maple-night [class*="dark:bg-[#0F1B11]"],
-.maple-night [class*="dark:bg-[#14210F]"] {
-  background-color: var(--night-inset);
-}
-.maple-night [class*="dark:bg-[#0D1F0F]"] {
-  background-color: rgb(11 15 10 / 0.94);
-}
-
-/* Bright fills (toasts, cream buttons, honey/ember chips) → a raised dark amber surface. */
-.maple-night [class*="dark:bg-[#F5EDDF]"],
-.maple-night [class*="dark:bg-[#FDF8F0]"],
-.maple-night [class*="dark:bg-[#ECE5D5]"],
-.maple-night [class*="dark:bg-[#E0C27A]"],
-.maple-night [class*="dark:bg-[#E0A93B]"],
-.maple-night [class*="dark:bg-[#E8C8B8]"],
-.maple-night [class*="dark:bg-[#B8A9C9]"],
-.maple-night [class*="dark:bg-[#A9C08F]"] {
-  background-color: var(--night-raised);
-  color: var(--night-text);
-  box-shadow: inset 0 0 0 1px rgb(224 169 59 / 0.18);
-}
-
-/* Primary and selected (gold by dark) → a soft ember glow with amber text. */
-.maple-night [class*="dark:bg-[#C49A3C]"],
-.maple-night [class*="dark:bg-[#D9772B]"] {
-  background-color: var(--night-ember-soft);
-  color: #e8a23f;
-  box-shadow: inset 0 0 0 1px rgb(217 119 43 / 0.35);
-}
-
-/* The gold button variant (ui.tsx Button "gold") has no dark: class of its own. */
-.maple-night [class*="bg-[#C49A3C] text-[#1D2A12]"] {
-  background-color: var(--night-ember-soft);
-  color: #e8a23f;
-  box-shadow: inset 0 0 0 1px rgb(217 119 43 / 0.35);
-}
-
-/* Translucent tints of any of those stay tints, in amber. */
-.maple-night [class*="dark:bg-[#F5EDDF]/"],
-.maple-night [class*="dark:bg-[#FDF8F0]/"],
-.maple-night [class*="dark:bg-[#C49A3C]/"],
-.maple-night [class*="dark:bg-[#E8C8B8]/"],
-.maple-night [class*="dark:bg-[#B8A9C9]/"],
-.maple-night [class*="dark:bg-[#A9C08F]/"],
-.maple-night [class*="dark:bg-[#5C7A4A]/"],
-.maple-night [class*="dark:bg-[#E0C27A]/"] {
-  background-color: var(--night-tint);
-  color: inherit;
-  box-shadow: none;
-}
-.maple-night [class*="dark:bg-[#12261A]/"] {
-  background-color: rgb(19 23 15 / 0.9);
-}
-
-/* Gradients built from the forest greens. */
-.maple-night [class*="dark:from-[#"] {
-  --tw-gradient-from: var(--night-surface);
-}
-.maple-night [class*="dark:via-[#"] {
-  --tw-gradient-via: var(--night-surface);
-}
-.maple-night [class*="dark:to-[#"] {
-  --tw-gradient-to: var(--night-inset);
-}
-
-/* ── Lines ──────────────────────────────────────────────────────────── */
-
-.maple-night [class*="dark:border-[#C49A3C]"],
-.maple-night [class*="dark:border-[#F5EDDF]"],
-.maple-night [class*="dark:border-[#FDF8F0]"],
-.maple-night [class*="dark:border-[#A9C08F]"],
-.maple-night [class*="dark:border-[#5C7A4A]"],
-.maple-night [class*="dark:border-[#B8A9C9]"],
-.maple-night [class*="dark:border-[#E8C8B8]"],
-.maple-night [class*="dark:divide-[#F5EDDF]"] > * + * {
-  border-color: var(--night-line);
-}
-.maple-night [class*="dark:ring-[#C49A3C]"] {
-  --tw-ring-color: rgb(224 169 59 / 0.18);
-}
-.maple-night [class*="shadow-["] {
-  --tw-shadow-color: transparent;
-}
-
-/* ── Photos and motion ──────────────────────────────────────────────── */
-
+/* Photos dim, so a bright picture never lights up a dark room. */
 .maple-night img,
 .maple-night video {
   filter: brightness(0.55) saturate(0.8);
 }
 
-/* CSS keyframe animations (site utilities like animate-firefly) rest at night. */
+/* CSS keyframe animations rest at night. */
 .maple-night [class*="animate-"] {
   animation: none !important;
 }

@@ -11,7 +11,7 @@ import { MAPLE_LEAF_PATH } from "./Hero";
 import { Icon, KindBadge } from "./icons";
 import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
-import { SectionTitle, cx, tone } from "./ui";
+import { SectionTitle, Segmented, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -473,27 +473,19 @@ export default function DayDial() {
         >
           <Icon name="chevron-left" size={22} />
         </button>
-        {/* Segmented's look, plus a name for the group. */}
-        <div className="flex w-[200px] rounded-xl bg-mp-sunken p-[3px]" role="radiogroup" aria-label="Which day">
-          {(["rolling", yesterday] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              role="radio"
-              aria-checked={view === v}
-              onClick={() => {
-                setPop(null);
-                setView(v);
-              }}
-              className={cx(
-                "min-h-[38px] flex-1 rounded-[10px] px-3 text-sm transition",
-                view === v ? "bg-mp-surface font-semibold text-mp-ink shadow-[0_1px_3px_rgba(0,0,0,0.12)]" : "font-medium text-mp-ink-2"
-              )}
-            >
-              {v === "rolling" ? "Last 24h" : "Yesterday"}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          aria-label="Which day"
+          className="w-[200px]"
+          value={view}
+          onChange={(v) => {
+            setPop(null);
+            setView(v);
+          }}
+          options={[
+            { value: "rolling", label: "Last 24h" },
+            { value: yesterday, label: "Yesterday" },
+          ]}
+        />
         <button
           type="button"
           onClick={() => step(1)}
