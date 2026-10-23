@@ -1,5 +1,5 @@
 import { query } from "@/lib/db";
-import { finalizeBreast, pause as pauseFeed, startBreast, switchTo } from "./feed";
+import { finalizeBreast, pause as pauseFeed, retimeBreast, startBreast, switchTo } from "./feed";
 import { cleanData } from "./validate";
 import type {
   Baby,
@@ -10,7 +10,6 @@ import type {
   Member,
   MomentData,
   Role,
-  Segment,
   Side,
   Source,
   TimerKind,
@@ -331,13 +330,19 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string): P
     delete mergedData.segments;
   }
   const startedAt = patch.startedAt ?? new Date(cur.started_at);
-  // Moving the start of a timed nursing session moves its first segment too.
-  if (cur.kind === "feed" && patch.startedAt && Array.isArray(mergedData.segments) && mergedData.segments.length) {
-    const segs = (mergedData.segments as Segment[]).map((x) => ({ ...x }));
-    const firstEnd = segs[0].end ? Date.parse(segs[0].end) : Date.now();
-    if (startedAt.getTime() > firstEnd) throw new Error("Start time is after the first side ended");
-    segs[0].start = startedAt.toISOString();
-    mergedData.segments = segs;
+  // Moving the start (or, once finished, the end) of a timed nursing session
+  // moves its first (or last) side too, so the side minutes follow.
+  const newEnd = !cur.active && patch.endedAt ? patch.endedAt : undefined;
+  if (cur.kind === "feed" && (patch.startedAt || newEnd) && Array.isArray(mergedData.segments) && mergedData.segments.length) {
+    if (cur.active && patch.startedAt && patch.startedAt.getTime() > Date.now()) throw new Error("Start time can't be in the future");
+    mergedData = {
+      ...mergedData,
+      ...retimeBreast(mergedData as FeedData, {
+        start: patch.startedAt,
+        end: newEnd,
+        prevEnd: cur.ended_at ? new Date(cur.ended_at) : null,
+      }),
+    };
   }
   const data = cleanData(cur.kind, mergedData);
 

@@ -51,7 +51,7 @@ Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `
 - **Shared logic** in `src/lib/maple/` is pure TypeScript, used by the browser, the REST routes and the MCP tools alike:
   - `types.ts` holds the shapes.
   - `time.ts` holds time-zone and DST-safe helpers, plus `parseWhen` for times like "3:10am", "20 min ago" and "yesterday 11pm".
-  - `feed.ts` does the left/right timer math and the next-side rule (offer the opposite of the side the last feed started on).
+  - `feed.ts` does the left/right timer math and the next-side rule (offer the opposite of the side the last feed started on). `retimeBreast` moves a timed session's start or end: the first side grows or shrinks from the start, the last side from the end. The timer card ("since 4:05 ✎", and the "started earlier?" toast after a start), the feed sheet and `update_entry` all use it.
   - `insights.ts` builds the Today summary, alerts, targets and celebrations.
   - `guidelines.ts` holds every pediatric threshold and every line of alert wording.
   - `growth.ts` + `who-girls.ts` hold the WHO girls LMS tables (daily, 0–730 days) and the percentile math. Only load these lazily on the client.

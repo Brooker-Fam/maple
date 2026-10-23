@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useVisiblePoll } from "@/lib/use-visible-poll";
-import { finalizeBreast, pause as pauseFeed, startBreast, switchTo } from "@/lib/maple/feed";
+import { finalizeBreast, pause as pauseFeed, retimeBreast, startBreast, switchTo } from "@/lib/maple/feed";
 import { summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
 import type {
@@ -644,7 +644,18 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         } else if (running?.active) {
           const next = (() => {
             if (input.action === "discard") return null;
-            if (input.action === "adjust") return { ...running, started_at: at.toISOString() };
+            if (input.action === "adjust") {
+              // A nursing session's first side starts when it does (the server agrees).
+              let data = running.data;
+              if (running.kind === "feed") {
+                try {
+                  data = retimeBreast(running.data as FeedData, { start: at });
+                } catch {
+                  // the server will say why
+                }
+              }
+              return { ...running, started_at: at.toISOString(), data };
+            }
             if (running.kind === "feed") {
               const d = running.data as FeedData;
               if (input.action === "switch" || input.action === "resume") return { ...running, data: switchTo(d, input.side ?? "L", at) };

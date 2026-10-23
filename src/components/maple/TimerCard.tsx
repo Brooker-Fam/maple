@@ -120,6 +120,32 @@ export function useTimerActions() {
     [me, now, open, reopen, timer, toast, tz]
   );
 
+  const adjust = useCallback(
+    async (e: Entry, at: Date) => {
+      const saved = await timer({ action: "adjust", id: e.id, at: at.toISOString() });
+      if (saved?.active) {
+        toast(`Start moved to ${formatTime(saved.started_at, tz)}`, {
+          emoji: "🕰️",
+          undo: () => void timer({ action: "adjust", id: e.id, at: e.started_at }),
+        });
+      }
+    },
+    [timer, toast, tz]
+  );
+
+  /** Right after a start: one tap if she'd actually started a few minutes earlier. */
+  const offerEarlier = useCallback(
+    (e: Entry, what: string, emoji: string) => {
+      if (!e.active || e.id < 0) return;
+      const from = Date.parse(e.started_at);
+      toast(`${what} · started earlier?`, {
+        emoji,
+        actions: [5, 10].map((m) => ({ label: `${m} min ago`, onClick: () => void adjust(e, new Date(from - m * 60_000)) })),
+      });
+    },
+    [adjust, toast]
+  );
+
   const startFeed = useCallback(
     async (side: Side) => {
       tick();
@@ -133,15 +159,19 @@ export function useTimerActions() {
           });
         }
       }
-      return timer({ action: "start", kind: "feed", side });
+      const wasRunning = !!running("feed");
+      const s = await timer({ action: "start", kind: "feed", side });
+      if (s && !wasRunning) offerEarlier(s, `${SIDE_NAME[side]} side`, "🤱");
+      return s;
     },
-    [reopen, running, timer, toast]
+    [offerEarlier, reopen, running, timer, toast]
   );
 
   const startTimer = useCallback(
     async (kind: Exclude<TimerKind, "feed">) => {
       tick();
       const feed = kind === "sleep" ? running("feed") : null;
+      const wasRunning = !!running(kind);
       const s = await timer({ action: "start", kind });
       if (feed && feed.id > 0 && s) {
         toast("Stop the feed too?", {
@@ -151,10 +181,12 @@ export function useTimerActions() {
             { label: "Keep both", onClick: () => {} },
           ],
         });
+      } else if (s && !wasRunning) {
+        offerEarlier(s, KIND_TITLE[kind], KIND_ICON[kind]);
       }
       return s;
     },
-    [running, stop, timer, toast]
+    [offerEarlier, running, stop, timer, toast]
   );
 
   /** Fell asleep at the breast: stop the feed and start sleep at the same instant. */
@@ -202,18 +234,6 @@ export function useTimerActions() {
     [timer]
   );
 
-  const adjust = useCallback(
-    async (e: Entry, at: Date) => {
-      const saved = await timer({ action: "adjust", id: e.id, at: at.toISOString() });
-      if (saved?.active) {
-        toast(`Start moved to ${formatTime(saved.started_at, tz)}`, {
-          emoji: "🕰️",
-          undo: () => void timer({ action: "adjust", id: e.id, at: e.started_at }),
-        });
-      }
-    },
-    [timer, toast, tz]
-  );
 
   const discard = useCallback(
     async (e: Entry) => {
@@ -415,7 +435,24 @@ export default function TimerCard({ entry }: { entry: Entry }) {
               </div>
             )}
             <p className={cx(tone.muted, "mt-1 flex items-center gap-1 text-[13px] [.maple-night_&]:text-[#E0A93B]/55")}>
-              since {formatTime(entry.started_at, tz)} · {startedBy}
+              {controls && !pending ? (
+                // Tap to fix the start ("she'd started five minutes before I tapped").
+                <button
+                  type="button"
+                  onClick={() => setMenu((m) => (m === "adjust" ? null : "adjust"))}
+                  aria-expanded={menu === "adjust"}
+                  aria-label={`Started ${formatTime(entry.started_at, tz)}. Change the start time`}
+                  className="-my-2 -ml-1.5 inline-flex min-h-[44px] items-center gap-1 rounded-full px-1.5 underline decoration-dotted underline-offset-4 hover:bg-[#1D4420]/5 dark:hover:bg-[#F5EDDF]/10"
+                >
+                  since {formatTime(entry.started_at, tz)}
+                  <span aria-hidden className="text-[11px] no-underline">
+                    ✎
+                  </span>
+                </button>
+              ) : (
+                <>since {formatTime(entry.started_at, tz)}</>
+              )}{" "}
+              · {startedBy}
               {who?.emoji && <span aria-hidden>{who.emoji}</span>}
               {pending && <span className="ml-1 italic opacity-80">· starting…</span>}
             </p>
@@ -550,9 +587,9 @@ function TimerMenu({
           </>
         ) : (
           <div className="p-1">
-            <p className={cx(tone.label, "mb-2")}>Started earlier · now {formatTime(start, tz)}</p>
+            <p className={cx(tone.label, "mb-2")}>Started earlier? · now {formatTime(start, tz)}</p>
             <div className="flex flex-wrap gap-2">
-              {[1, 2, 5, 10].map((m) => (
+              {[2, 5, 10, 15].map((m) => (
                 <button
                   key={m}
                   type="button"

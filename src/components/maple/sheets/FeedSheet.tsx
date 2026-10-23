@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { describeEntry, entryEmoji } from "@/lib/maple/describe";
-import { feedTotals, other } from "@/lib/maple/feed";
+import { feedTotals, other, retimeBreast } from "@/lib/maple/feed";
 import { BOTTLE_CUES, typicalBottle } from "@/lib/maple/guidelines";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
 import type { EntryOf, FeedData, Side } from "@/lib/maple/types";
@@ -33,8 +33,10 @@ import {
  * Nursing (logged afterwards, or a finished timer): Left and Right minutes,
  * which side she started on, and when it started and ended. Typing the
  * minutes for a new one slides the start back from the end, so "15 left, 10
- * right, just finished" needs no time fiddling. Editing the minutes of a timed
- * session replaces its segments with the two totals (there's no segment editor).
+ * right, just finished" needs no time fiddling. On a timed session, moving the
+ * start grows or shrinks the first side and moving the end the last side
+ * ("she'd started five minutes before I tapped"); typing the minutes instead
+ * replaces its segments with the two totals (there's no segment editor).
  *
  * Bottle: the amount (oz or ml, per the units setting) starts at the last
  * bottle's amount and milk, so the primary button reads "Log 2 oz now".
@@ -100,6 +102,35 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const span = e.ended_at ? Date.parse(e.ended_at) - Date.parse(e.started_at) : 0;
     return totals && Math.abs(span - totals.total * 1000) < MIN ? "start" : null;
   });
+
+  // A timed session keeps its sides: until the minutes are typed, they follow
+  // the start and end (the server moves the first and last side the same way).
+  const timed = !!e && !running && e.data.method === "breast" && !!e.data.segments?.length;
+  const [minutesTyped, setMinutesTyped] = useState(false);
+  const retimed = (() => {
+    if (!e || !timed || minutesTyped || e.data.method !== "breast") return null;
+    const [s, en] = range;
+    const startMoved = s.getTime() !== Date.parse(e.started_at);
+    const endMoved = !!e.ended_at && en.getTime() !== Date.parse(e.ended_at);
+    if (!startMoved && !endMoved) return null;
+    try {
+      const data = retimeBreast(e.data, {
+        start: startMoved ? s : undefined,
+        end: endMoved ? en : undefined,
+        prevEnd: e.ended_at ? new Date(e.ended_at) : null,
+      });
+      const t = feedTotals(data, now());
+      return { l: Math.round(t.left / 60), r: Math.round(t.right / 60), error: null };
+    } catch (err) {
+      return { l: origL ?? 0, r: origR ?? 0, error: err instanceof Error ? err.message : "Those times don't fit this feed" };
+    }
+  })();
+  const shownL = retimed ? retimed.l : left;
+  const shownR = retimed ? retimed.r : right;
+  const typeMinutes = (l: number | null, r: number | null) => {
+    setMinutesTyped(true);
+    setMinutes(l, r);
+  };
 
   const setMinutes = (l: number | null, r: number | null) => {
     setLeft(l);
@@ -227,8 +258,16 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={primary}
           busy={busy}
-          disabled={(!!e && e.id < 0) || (!running && checks.invalid)}
-          hint={!running && checks.invalid ? CHECK_NUMBER_HINT : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
+          disabled={(!!e && e.id < 0) || (!running && checks.invalid) || !!retimed?.error}
+          hint={
+            !running && checks.invalid
+              ? CHECK_NUMBER_HINT
+              : retimed?.error
+                ? `${retimed.error}. Change the minutes instead.`
+                : e && e.id < 0
+                  ? "Still syncing, so it can't be edited yet."
+                  : undefined
+          }
         />
       }
     >
@@ -253,9 +292,14 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           {method === "breast" ? (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <MiniStepper key="left" label="Left" unit="min" ariaLabel="minutes on the left" value={left} onChange={(v) => setMinutes(v, right)} max={240} onInvalid={checks.watch("left")} />
-                <MiniStepper key="right" label="Right" unit="min" ariaLabel="minutes on the right" value={right} onChange={(v) => setMinutes(left, v)} max={240} onInvalid={checks.watch("right")} />
+                <MiniStepper key="left" label="Left" unit="min" ariaLabel="minutes on the left" value={shownL} onChange={(v) => typeMinutes(v, shownR)} max={240} onInvalid={checks.watch("left")} />
+                <MiniStepper key="right" label="Right" unit="min" ariaLabel="minutes on the right" value={shownR} onChange={(v) => typeMinutes(shownL, v)} max={240} onInvalid={checks.watch("right")} />
               </div>
+              {timed && !minutesTyped && (
+                <p className={cx(tone.muted, "-mt-1 px-1 text-xs leading-snug")}>
+                  Started earlier or ended sooner? Move the times below and the first or last side follows.
+                </p>
+              )}
               <div>
                 <Label>Started on</Label>
                 <Segmented<Side>

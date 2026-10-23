@@ -38,6 +38,40 @@ export function sideTotals(segments: Segment[] | undefined, now: Date): { left: 
   return { left: Math.round(left), right: Math.round(right) };
 }
 
+/**
+ * Move a timed nursing session's start and/or end. The first side grows or
+ * shrinks from the start ("she'd been on the left five minutes before I
+ * tapped"), the last side from the end, and the stretches between stay put.
+ * The end moves the last side by however far the session's end moved, so a
+ * session stopped while paused keeps its gap. A finished session gets its
+ * side totals recomputed. Throws when the new start is after the first side
+ * ended, or the new end is before the last side began.
+ */
+export function retimeBreast(data: FeedData, change: { start?: Date; end?: Date; prevEnd?: Date | null }): FeedData {
+  const segs = (data.segments ?? []).map((x) => ({ ...x }));
+  if (!segs.length) return data;
+  if (change.start) {
+    const first = segs[0];
+    if (first.end && change.start.getTime() > Date.parse(first.end)) throw new Error("Start time is after the first side ended");
+    first.start = change.start.toISOString();
+  }
+  const last = segs[segs.length - 1];
+  if (change.end && last.end) {
+    const was = Date.parse(last.end);
+    const delta = change.end.getTime() - (change.prevEnd ? change.prevEnd.getTime() : was);
+    const next = Math.min(was + delta, change.end.getTime());
+    if (next < Date.parse(last.start)) throw new Error("End time is before the last side started");
+    last.end = new Date(next).toISOString();
+  }
+  const out: FeedData = { ...data, segments: segs };
+  if (segs.every((x) => x.end)) {
+    const t = sideTotals(segs, new Date(0));
+    out.left_sec = t.left;
+    out.right_sec = t.right;
+  }
+  return out;
+}
+
 /** Totals for any feed: from segments when present, else the manual numbers. */
 export function feedTotals(data: FeedData, now: Date): { left: number; right: number; total: number } {
   if (data.segments?.length) {

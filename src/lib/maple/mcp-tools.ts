@@ -2213,7 +2213,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Start a timer",
       description:
-        'Use this when something is starting now (or started a few minutes ago and is still going): nursing (with side), sleep, tummy time or pumping. Timers show on every family phone. If one of that kind is already running it returns that one instead (nursing: switches to the side you name). A nursing timer with no side starts on the suggested next side. E.g. "start a feed on the right", "she fell asleep 10 minutes ago", "starting tummy time".',
+        'Use this when something is starting now (or started a few minutes ago and is still going): nursing (with side), sleep, tummy time or pumping. Timers show on every family phone. If one of that kind is already running it returns that one instead (nursing: switches to the side you name); to fix when a running one started ("she actually started at 4"), use update_entry with its id and at. A nursing timer with no side starts on the suggested next side. E.g. "start a feed on the right", "she fell asleep 10 minutes ago", "starting tummy time".',
       inputSchema: {
         timer: z.enum(TIMER_NAMES).describe("Which timer."),
         side: sideEnum().nullish().describe("Nursing: which side she's on. Leave out to use the suggested next side."),
