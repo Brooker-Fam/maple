@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import MapleUiScope from "@/components/maple/MapleUiScope";
 import "./maple.css";
 
 export const metadata: Metadata = {
@@ -23,12 +24,12 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#FDF8F0" },
-    { media: "(prefers-color-scheme: dark)", color: "#0D1F0F" },
+    { media: "(prefers-color-scheme: light)", color: "#F6F3EC" },
+    { media: "(prefers-color-scheme: dark)", color: "#0E1310" },
   ],
   viewportFit: "cover",
 };
 
 export default function MapleLayout({ children }: { children: React.ReactNode }) {
-  return <>{children}</>;
+  return <MapleUiScope>{children}</MapleUiScope>;
 }

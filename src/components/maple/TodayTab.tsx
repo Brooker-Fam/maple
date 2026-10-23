@@ -15,6 +15,7 @@ import TimerCard, { SIDE_NAME, timerNumbers } from "./TimerCard";
 import Waiting from "./Waiting";
 import WhileYouSlept from "./WhileYouSlept";
 import { useSheets } from "./sheets";
+import { Icon } from "./icons";
 import { cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
@@ -70,18 +71,19 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: TabId) => voi
       {recent.length > 0 && (
         <section aria-labelledby="recent">
           <div className="mb-1 flex items-end justify-between px-1">
-            <h2 id="recent" className={cx(tone.heading, "text-xl")}>
+            <h2 id="recent" className={cx(tone.heading, "text-[17px]")}>
               Recent
             </h2>
             <button
               type="button"
               onClick={() => onNavigate("log")}
-              className="min-h-[44px] rounded-full px-3 text-sm font-semibold text-[#5C7A4A] hover:bg-[#1D4420]/5 dark:text-[#A9C08F]"
+              className="-mr-2 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-medium text-mp-accent-fg"
             >
-              See all →
+              See all
+              <Icon name="chevron-right" size={16} />
             </button>
           </div>
-          <div className={cx(tone.card, "p-1.5")}>
+          <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
             {recent.map((e) => (
               <EntryRow key={e.id} entry={e} now={now} showRelative onClick={readOnly ? undefined : () => open({ kind: e.kind, entry: e })} />
             ))}

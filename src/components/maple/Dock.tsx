@@ -8,8 +8,10 @@ import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { formatClock, formatRelative, formatTime, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, Side, StoolColor } from "@/lib/maple/types";
+import { Icon, type IconName } from "./icons";
 import MoreSheet, { usePress } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
+import { DETAIL_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE, timerNumbers, useTimerActions } from "./TimerCard";
 import { cx } from "./ui";
@@ -44,14 +46,11 @@ const SHORT_COLOR: Record<StoolColor, string> = {
 };
 
 const TILE = {
-  L: SIDE_COLOR.L,
-  R: SIDE_COLOR.R,
-  bottle: "#C49A3C",
-  more: "#5C7A4A",
-  pee: "#7FA7B5",
-  poop: "#8A5A2B",
-  both: "#9C7E5A",
-  sleep: "#8E7CB0",
+  bottle: DETAIL_COLOR.bottle,
+  pee: DETAIL_COLOR.pee,
+  poop: DETAIL_COLOR.poop,
+  sleep: DETAIL_COLOR.sleep,
+  wake: "#6E5C94",
 };
 
 // Daytime toasts get a little garnish now and then (never more than once every 3 logs, never at night).
@@ -173,7 +172,6 @@ export default function Dock() {
       { kind: "diaper", data: { pee, poop } },
       {
         toast: text,
-        emoji: pee && poop ? "💧💩" : poop ? "💩" : "💧",
         actions: (saved: Entry): ToastAction[] => {
           if (dup) {
             return [
@@ -203,22 +201,18 @@ export default function Dock() {
 
   const holdFeed = (side: Side) => open({ kind: "feed", preset: { method: "breast", first_side: side, started_at: earlierAt() } });
 
-  const lastBottleLabel = lastBottle?.kind === "feed" && lastBottle.data.amount_ml ? `${formatVolume(lastBottle.data.amount_ml, units)} last` : "formula or milk";
+  const lastBottleLabel = lastBottle?.kind === "feed" && lastBottle.data.amount_ml ? `${formatVolume(lastBottle.data.amount_ml, units)} last` : undefined;
 
   return createPortal(
     <>
       <div
         ref={ref}
-        className="fixed inset-x-0 bottom-[calc(64px+env(safe-area-inset-bottom))] z-[65] mx-auto max-w-lg"
+        className="fixed inset-x-0 bottom-[calc(57px+env(safe-area-inset-bottom))] z-[65] mx-auto max-w-lg"
         role="region"
         aria-label="Log something"
       >
-        <div className="rounded-t-[26px] border-t border-[#1D4420]/10 bg-[#FDF8F0]/95 px-3 pt-2.5 pb-2 shadow-[0_-8px_24px_rgba(29,68,32,0.08)] backdrop-blur-md dark:border-[#C49A3C]/15 dark:bg-[#0F2014]/95 dark:shadow-[0_-8px_24px_rgba(0,0,0,0.35)] [.maple-night_&]:border-[#E0A93B]/10 [.maple-night_&]:bg-[#0B0F0A]/95">
-          {showHint && (
-            <p className="mb-1.5 text-center text-[11px] font-medium text-[#5C6B57] dark:text-[#B9B39C] [.maple-night_&]:text-[#E0A93B]/55">
-              Hold a button to log an earlier one.
-            </p>
-          )}
+        <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl">
+          {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Hold a button to log an earlier one.</p>}
           <div className="grid grid-cols-4 gap-2">
             {/* Row 1: feeding, which becomes the nursing controls while a feed runs. */}
             {feed && feedN && !feedN.paused ? (
@@ -228,21 +222,21 @@ export default function Dock() {
                   className="col-span-2"
                   label={`Switch to ${SIDE_NAME[feedN.side === "L" ? "R" : "L"]}`}
                   sub={`on ${SIDE_NAME[feedN.side ?? "L"]} · ${formatClock(feedN.side === "L" ? feedN.left : feedN.right)}`}
-                  icon="⇄"
+                  icon="arrow-left-right"
                   color={SWITCH_STYLE[feedN.side === "L" ? "R" : "L"].bg}
                   ink={SWITCH_STYLE[feedN.side === "L" ? "R" : "L"].fg}
                   strong
                   disabled={feedPending}
                   onTap={tap(() => void actions.switchSide(feed, feedN.side === "L" ? "R" : "L"))}
                 />
-                <Tile id="done" label="Done ✓" sub={feedPending ? "starting…" : formatClock(feedN.elapsed)} color="#1D4420" disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
+                <Tile id="done" label="Done" icon="check" sub={feedPending ? "starting…" : formatClock(feedN.elapsed)} accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
               </>
             ) : feed && feedN ? (
               <>
                 {(["L", "R"] as Side[]).map((s) => (
-                  <Tile key={s} id={`resume-${s}`} label={SIDE_NAME[s]} sub="▶ resume" letter={s} color={SIDE_COLOR[s]} disabled={feedPending} onTap={tap(() => void actions.resume(feed, s))} />
+                  <Tile key={s} id={`resume-${s}`} label={SIDE_NAME[s]} sub="Resume" letter={s} color={SIDE_COLOR[s]} disabled={feedPending} onTap={tap(() => void actions.resume(feed, s))} />
                 ))}
-                <Tile id="done" label="Done ✓" sub={`paused ${formatClock(feedN.pausedSec)}`} color="#1D4420" disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
+                <Tile id="done" label="Done" icon="check" sub={`paused ${formatClock(feedN.pausedSec)}`} accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
               </>
             ) : (
               <>
@@ -251,7 +245,7 @@ export default function Dock() {
                     key={s}
                     id={s}
                     label={SIDE_NAME[s]}
-                    sub="nurse"
+                    sub={next === s ? "Next side" : "Nurse"}
                     letter={s}
                     color={SIDE_COLOR[s]}
                     next={next === s}
@@ -264,20 +258,20 @@ export default function Dock() {
                   id="bottle"
                   label="Bottle"
                   sub={lastBottleLabel}
+                  icon="bottle"
                   color={TILE.bottle}
                   onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))}
                   onHold={() => open({ kind: "feed", preset: { method: "bottle", started_at: earlierAt() } })}
                 />
               </>
             )}
-            <Tile id="more" label="More" sub="＋ log" color={TILE.more} onTap={tap(() => setMoreOpen(true))} />
+            <Tile id="more" label="More" icon="plus" onTap={tap(() => setMoreOpen(true))} />
 
             {/* Row 2: diapers and sleep. */}
             <Tile
               id="pee"
               label="Pee"
-              sub="wet 💧"
-              color={TILE.pee}
+              dots={[TILE.pee]}
               done={done.pee}
               onTap={tap(() => void logDiaper("pee", true, false))}
               onHold={() => open({ kind: "diaper", preset: { pee: true, poop: false, started_at: earlierAt() } })}
@@ -285,8 +279,7 @@ export default function Dock() {
             <Tile
               id="poop"
               label="Poop"
-              sub="dirty"
-              color={TILE.poop}
+              dots={[TILE.poop]}
               done={done.poop}
               onTap={tap(() => void logDiaper("poop", false, true))}
               onHold={() => open({ kind: "diaper", preset: { pee: false, poop: true, started_at: earlierAt() } })}
@@ -294,8 +287,7 @@ export default function Dock() {
             <Tile
               id="both"
               label="Both"
-              sub="pee + poop"
-              color={TILE.both}
+              dots={[TILE.pee, TILE.poop]}
               done={done.both}
               onTap={tap(() => void logDiaper("both", true, true))}
               onHold={() => open({ kind: "diaper", preset: { pee: true, poop: true, started_at: earlierAt() } })}
@@ -304,8 +296,9 @@ export default function Dock() {
               <Tile
                 id="wake"
                 label="Woke up"
-                sub={sleepPending ? "starting…" : `☀️ ${formatClock(timerNumbers(sleep, clock).elapsed)}`}
-                color="#6E5C94"
+                icon="sun"
+                sub={sleepPending ? "starting…" : formatClock(timerNumbers(sleep, clock).elapsed)}
+                color={TILE.wake}
                 strong
                 disabled={sleepPending}
                 onTap={tap(() => void actions.stop(sleep))}
@@ -314,7 +307,7 @@ export default function Dock() {
               <Tile
                 id="sleep"
                 label="Sleep"
-                sub="🌙"
+                icon="moon"
                 color={TILE.sleep}
                 done={done.sleep}
                 onTap={tap(() => flash("sleep") && void actions.startTimer("sleep"))}
@@ -330,6 +323,12 @@ export default function Dock() {
   );
 }
 
+/**
+ * One dock button: a quiet surface with one colored mark (a side letter, an
+ * icon or diaper dots) so the eye finds it, a label, and an optional live
+ * subline. `strong` fills it with its color (the action you most likely
+ * want now); `accent` fills it with the app's primary color (Done).
+ */
 function Tile({
   id,
   label,
@@ -341,24 +340,31 @@ function Tile({
   done,
   letter,
   icon,
+  dots,
   strong,
+  accent,
   ink,
   disabled,
   className,
 }: {
   id: string;
   label: string;
-  sub: string;
-  color: string;
+  sub?: string;
+  /** The tile's mark color (and its fill when strong). */
+  color?: string;
   onTap: () => void;
   onHold?: () => void;
   next?: boolean;
   done?: boolean;
   letter?: Side;
-  icon?: string;
-  /** Filled (the action you most likely want right now). */
+  icon?: IconName;
+  /** Diaper dots (pee, poop, or both), matching the day dial. */
+  dots?: string[];
+  /** Filled with its color (the action you most likely want right now). */
   strong?: boolean;
-  /** Text color on a filled tile (default white). */
+  /** Filled with the primary color. */
+  accent?: boolean;
+  /** Text color on a strong tile (default white). */
   ink?: string;
   /** Not tappable yet (a timer still starting). */
   disabled?: boolean;
@@ -367,7 +373,8 @@ function Tile({
   const press = usePress(onTap, onHold);
   // At night a filled tile glows softly instead of blazing.
   const night = useNightActive();
-  const fill = strong ? (night ? `${color}55` : color) : `${color}${next ? "2E" : "1F"}`;
+  const filled = strong || accent;
+  const fill = strong && color ? (night ? `${color}40` : color) : undefined;
   return (
     <button
       type="button"
@@ -376,44 +383,52 @@ function Tile({
       aria-label={`${label}${next ? " (next side)" : ""}${onHold ? ". Hold to log an earlier one" : ""}`}
       {...press}
       className={cx(
-        "relative flex min-h-[60px] flex-col items-center justify-center rounded-2xl px-1 py-1.5 text-center transition select-none active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100",
-        strong ? "text-white" : "text-[#1D4420] dark:text-[#F5EDDF] [.maple-night_&]:text-[#E0A93B]/85",
-        next && "ring-2 ring-[#C49A3C] ring-offset-2 ring-offset-[#FDF8F0] dark:ring-offset-[#0F2014] [.maple-night_&]:ring-[#E0A93B]/70 [.maple-night_&]:ring-offset-[#0B0F0A]",
+        "relative flex min-h-[64px] flex-col items-center justify-center rounded-2xl border px-1 py-1.5 text-center transition select-none active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100",
+        accent
+          ? "border-transparent bg-mp-accent text-mp-on-accent"
+          : strong
+            ? "border-transparent"
+            : next
+              ? "border-mp-accent-fg/70 bg-mp-surface text-mp-ink"
+              : "border-mp-line bg-mp-surface text-mp-ink",
         className
       )}
       style={{
         backgroundColor: fill,
-        color: strong ? (night ? "#E8A23F" : ink) : undefined,
-        boxShadow: strong ? "0 2px 10px rgba(0,0,0,0.15)" : next ? `inset 0 0 0 1.5px ${color}99, 0 0 18px ${color}55` : `inset 0 0 0 1.5px ${color}55`,
+        color: strong ? (night ? "#E8A23F" : ink ?? "#FFFFFF") : undefined,
+        boxShadow: next ? "inset 0 0 0 1px var(--mp-accent-fg)" : undefined,
         WebkitTouchCallout: "none",
       }}
     >
-      {next && (
-        <span className="absolute -top-2 right-1 rounded-full bg-[#C49A3C] px-1.5 py-px text-[10px] font-bold text-[#1D2A12] shadow-sm [.maple-night_&]:bg-[#D9772B]/45 [.maple-night_&]:text-[#F0C27A]">
-          🍁 next
-        </span>
-      )}
       <AnimatePresence mode="wait" initial={false}>
         {done ? (
-          <motion.span key="done" initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} className="text-2xl leading-none font-bold" aria-hidden>
-            ✓
+          <motion.span key="done" initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden>
+            <Icon name="check" size={26} strokeWidth={2.4} />
           </motion.span>
         ) : (
-          <motion.span key="label" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center">
-            <span className="flex items-center gap-1 text-[15px] leading-tight font-semibold">
+          <motion.span key="label" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-1">
+            <span className="flex items-center gap-1.5">
               {letter && (
                 <span
                   aria-hidden
-                  className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full text-[10px] font-bold text-white"
+                  className="mp-kind-fill inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold text-white"
                   style={{ backgroundColor: color }}
                 >
                   {letter}
                 </span>
               )}
-              {icon && <span aria-hidden>{icon}</span>}
-              {label}
+              {icon && <Icon name={icon} size={20} className={cx(!filled && color && "mp-kind-ink")} style={!filled && color ? { color } : undefined} />}
+              {dots?.map((c) => (
+                <span key={c} aria-hidden className="mp-kind-fill h-2.5 w-2.5 rounded-full" style={{ backgroundColor: c }} />
+              ))}
+              {(filled || letter) && <span className="text-[15px] leading-tight font-semibold">{label}</span>}
             </span>
-            <span className={cx("mt-0.5 text-[11px] leading-tight tabular-nums", strong ? "opacity-90" : "opacity-70")}>{sub}</span>
+            {!filled && !letter && <span className="text-[14px] leading-tight font-semibold">{label}</span>}
+            {sub && (
+              <span className={cx("text-[11px] leading-tight tabular-nums", filled ? "opacity-85" : next ? "font-semibold text-mp-accent-fg" : "text-mp-ink-3")}>
+                {sub}
+              </span>
+            )}
           </motion.span>
         )}
       </AnimatePresence>
