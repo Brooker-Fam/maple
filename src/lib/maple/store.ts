@@ -1,5 +1,5 @@
 import { query } from "@/lib/db";
-import { finalizeBreast, pause as pauseFeed, retimeBreast, startBreast, switchTo } from "./feed";
+import { finalizeBreast, openSegment, pause as pauseFeed, retimeBreast, startBreast, switchTo } from "./feed";
 import { cleanData } from "./validate";
 import type {
   Baby,
@@ -335,6 +335,10 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string): P
   const newEnd = !cur.active && patch.endedAt ? patch.endedAt : undefined;
   if (cur.kind === "feed" && (patch.startedAt || newEnd) && Array.isArray(mergedData.segments) && mergedData.segments.length) {
     if (cur.active && patch.startedAt && patch.startedAt.getTime() > Date.now()) throw new Error("Start time can't be in the future");
+    // A "started on" correction sent with the move beats the recomputed sides.
+    const sides = Object.fromEntries(
+      (["first_side", "last_side"] as const).filter((k) => patch.data?.[k] != null).map((k) => [k, patch.data![k]])
+    );
     mergedData = {
       ...mergedData,
       ...retimeBreast(mergedData as FeedData, {
@@ -342,6 +346,7 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string): P
         end: newEnd,
         prevEnd: cur.ended_at ? new Date(cur.ended_at) : null,
       }),
+      ...sides,
     };
   }
   const data = cleanData(cur.kind, mergedData);
@@ -452,9 +457,10 @@ export async function listDeleted(babyId: number, since: Date): Promise<Entry[]>
 export class Conflict extends Error {
   /**
    * "stopped": the timer had already stopped (the other parent got there
-   * first). "changed": someone edited it a moment ago.
+   * first). "changed": someone edited it a moment ago. "clash": another timer
+   * of its kind is running, and only one may.
    */
-  constructor(message: string, readonly entry: Entry, readonly reason: "stopped" | "changed" = "stopped") {
+  constructor(message: string, readonly entry: Entry, readonly reason: "stopped" | "changed" | "clash" = "stopped") {
     super(message);
   }
 }
@@ -501,7 +507,8 @@ export async function startTimer(opts: {
   const existing = async () => {
     const running = (await activeTimers(opts.babyId)).find((e) => e.kind === opts.kind);
     if (!running) return null;
-    if (running.kind === "feed" && opts.side && opts.side !== (running.data as FeedData).last_side) {
+    // A different side switches; the same side resumes a paused feed.
+    if (running.kind === "feed" && opts.side && opts.side !== openSegment((running.data as FeedData).segments)?.side) {
       return { entry: await switchSide(running.id, opts.side, opts.at, opts.createdBy), alreadyRunning: true };
     }
     return { entry: running, alreadyRunning: true };
@@ -605,7 +612,7 @@ export async function reopenTimer(id: number, by?: string): Promise<Entry> {
     return cur;
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
-    throw new Conflict("Another timer of that kind is running now", e);
+    throw new Conflict("Another timer of that kind is running now", e, "clash");
   }
 }
 

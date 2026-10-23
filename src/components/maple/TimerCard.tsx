@@ -82,7 +82,7 @@ export function clockValue(d: Date, tz: string): string {
  * during a feed offers to stop the feed too.
  */
 export function useTimerActions() {
-  const { state, timer, toast, api, refresh, now, memberName, restore } = useMaple();
+  const { state, timer, toast, api, refresh, now, memberName, restore, update } = useMaple();
   const { open } = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const me = state?.me.email;
@@ -132,25 +132,52 @@ export function useTimerActions() {
     [timer, toast, tz]
   );
 
-  /** Right after a start: one tap if she'd actually started a few minutes earlier. */
+  /**
+   * Right after a start: one tap if she'd actually started a few minutes
+   * earlier. Only for a timer this tap really started (not one the other
+   * phone already had running). A nap this tap ended moves back with it, so
+   * the two don't overlap.
+   */
   const offerEarlier = useCallback(
-    (e: Entry, what: string) => {
-      if (!e.active || e.id < 0) return;
+    (e: Entry, tapAt: number, what: string, nap?: Entry | null) => {
+      if (!e.active || e.id < 0 || e.created_by !== me || Math.abs(Date.parse(e.started_at) - tapAt) > 60_000) return;
       const from = Date.parse(e.started_at);
+      const endedWithIt = nap?.ended_at && Math.abs(Date.parse(nap.ended_at) - from) < 60_000 ? nap : null;
       toast(`${what} · started earlier?`, {
-        actions: [5, 10].map((m) => ({ label: `${m} min ago`, onClick: () => void adjust(e, new Date(from - m * 60_000)) })),
+        actions: [5, 10].map((m) => ({
+          label: `${m} min ago`,
+          onClick: () =>
+            void (async () => {
+              const at = new Date(from - m * 60_000);
+              // The feed first; the nap only follows once that worked.
+              const saved = await timer({ action: "adjust", id: e.id, at: at.toISOString() });
+              if (!saved?.active) return;
+              // Leave a nap shorter than the move alone rather than shrink it to nothing.
+              const napEnd = endedWithIt && at.getTime() - Date.parse(endedWithIt.started_at) >= 60_000 ? at : null;
+              const napMoved = endedWithIt && napEnd ? await update(endedWithIt.id, { ended_at: napEnd.toISOString() }, { toast: "" }) : null;
+              toast(`Start moved to ${formatTime(saved.started_at, tz)}${napMoved ? " · nap ends then too" : ""}`, {
+                undo: async () => {
+                  await timer({ action: "adjust", id: e.id, at: e.started_at });
+                  if (napMoved && endedWithIt?.ended_at) await update(endedWithIt.id, { ended_at: endedWithIt.ended_at }, { toast: "" });
+                },
+              });
+            })(),
+        })),
       });
     },
-    [adjust, toast]
+    [me, timer, toast, tz, update]
   );
 
   const startFeed = useCallback(
     async (side: Side) => {
       tick();
+      const tapAt = now().getTime();
       const nap = running("sleep");
+      let napEnded: Entry | null = null;
       if (nap && nap.id > 0) {
         const s = await timer({ action: "stop", id: nap.id });
         if (s && !s.active && s.ended_at) {
+          napEnded = s;
           toast(`Nap ended (${formatDuration((Date.parse(s.ended_at) - Date.parse(s.started_at)) / 1000)})`, {
             undo: () => void reopen(s),
           });
@@ -158,15 +185,16 @@ export function useTimerActions() {
       }
       const wasRunning = !!running("feed");
       const s = await timer({ action: "start", kind: "feed", side });
-      if (s && !wasRunning) offerEarlier(s, `${SIDE_NAME[side]} side`);
+      if (s && !wasRunning) offerEarlier(s, tapAt, `${SIDE_NAME[side]} side`, napEnded);
       return s;
     },
-    [offerEarlier, reopen, running, timer, toast]
+    [now, offerEarlier, reopen, running, timer, toast]
   );
 
   const startTimer = useCallback(
     async (kind: Exclude<TimerKind, "feed">) => {
       tick();
+      const tapAt = now().getTime();
       const feed = kind === "sleep" ? running("feed") : null;
       const wasRunning = !!running(kind);
       const s = await timer({ action: "start", kind });
@@ -178,11 +206,11 @@ export function useTimerActions() {
           ],
         });
       } else if (s && !wasRunning) {
-        offerEarlier(s, KIND_TITLE[kind]);
+        offerEarlier(s, tapAt, KIND_TITLE[kind]);
       }
       return s;
     },
-    [offerEarlier, running, stop, timer, toast]
+    [now, offerEarlier, running, stop, timer, toast]
   );
 
   /** Fell asleep at the breast: stop the feed and start sleep at the same instant. */

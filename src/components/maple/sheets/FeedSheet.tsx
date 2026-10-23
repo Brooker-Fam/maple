@@ -218,7 +218,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const [s, en] = range;
     const startMoved = s.getTime() !== Date.parse(e.started_at);
     const endMoved = en.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : s.getTime());
-    const minutesChanged = left !== origL || right !== origR;
+    // Typed minutes win whenever a time moved too (else the server would retime the segments instead).
+    const minutesChanged = left !== origL || right !== origR || (timed && minutesTyped && (startMoved || endMoved));
     const data: Record<string, unknown> = {};
     if (minutesChanged) {
       // New side minutes replace the timer's segments (the server drops them).
@@ -229,7 +230,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     return {
       started_at: startMoved ? s.toISOString() : undefined,
       // Keep the end where it shows (otherwise new minutes would move it).
-      ended_at: endMoved || minutesChanged ? (en.getTime() > s.getTime() ? en.toISOString() : null) : undefined,
+      // A timed session keeps an end even at its start, so the server retimes what the sheet previewed.
+      ended_at: endMoved || minutesChanged ? (en.getTime() > s.getTime() || (timed && !minutesChanged) ? en.toISOString() : null) : undefined,
       data: Object.keys(data).length ? data : undefined,
       note: noteVal,
     };
