@@ -1,4 +1,4 @@
-import { BadRequest, json, readJson, withMember } from "@/lib/maple/api";
+import { BadRequest, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
 import { getBaby, updateBaby, type BabyPatch } from "@/lib/maple/store";
 import { isDayKey } from "@/lib/maple/time";
 
@@ -15,7 +15,7 @@ function num(v: unknown, label: string, min: number, max: number): number | null
  * PATCH /api/maple/baby — profile edits and the big one: "She's here!"
  * (born_at + birth measurements). Any family member can update it.
  */
-export const PATCH = withMember("PATCH /api/maple/baby", async (request) => {
+export const PATCH = withMember("PATCH /api/maple/baby", async (request, me) => {
   const body = await readJson<Record<string, unknown>>(request);
   const baby = await getBaby();
   const patch: BabyPatch = {};
@@ -64,6 +64,12 @@ export const PATCH = withMember("PATCH /api/maple/baby", async (request) => {
         }
         patch.acks = clean;
       }
+    }
+    if ("admin_as" in incoming) {
+      // An owner can have the site admin login (the calendar connector) log as
+      // themselves, or switch that off. Never as someone else.
+      if (me.role !== "owner" || me.email === "admin") throw new Forbidden("Only an owner signed in with Google can change that");
+      if (incoming.admin_as !== null && incoming.admin_as !== me.email) throw new BadRequest("That can only be set to yourself");
     }
     // Acks are capped and pruned separately, so they don't count toward the limit.
     const { acks: _acks, ...rest } = { ...baby.settings, ...incoming };

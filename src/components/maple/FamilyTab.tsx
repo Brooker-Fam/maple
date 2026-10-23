@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTheme } from "@/components/ThemeProvider";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
+import { adminActsAs, alertsOn } from "@/lib/maple/insights";
 import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatLength, formatWeight } from "@/lib/maple/units";
 import type { Entry, EntryOf, Member, Role } from "@/lib/maple/types";
@@ -704,6 +705,8 @@ function BabyDetails() {
     }
   };
   const flag = (key: string) => toggles[key] ?? settings[key] !== false;
+  // Off unless switched on (the others default on).
+  const warnings = toggles.show_alerts ?? alertsOn(baby);
 
   const born = baby.born_at ? new Date(baby.born_at) : null;
   const bornDay = born ? formatDayLabel(dayKey(born, tz), dayKey(now(), tz), { long: true }) : "";
@@ -785,24 +788,29 @@ function BabyDetails() {
           <p className={cx(tone.heading, "text-lg")}>Her doctor</p>
           <PhoneField label="Pediatrician" value={d.pedPhone} saved={doctorSrc.pedPhone} onChange={(v) => setDEdits((x) => ({ ...x, pedPhone: v }))} />
           <PhoneField label="After-hours line" value={d.afterHours} saved={doctorSrc.afterHours} onChange={(v) => setDEdits((x) => ({ ...x, afterHours: v }))} />
-          <Field label="Weeks at birth" hint="Born before 37 weeks or under 5½ lb? Maple's reminders step back and defer to your pediatrician's plan.">
-            <input
-              className={tone.input}
-              inputMode="numeric"
-              placeholder="e.g. 39"
-              value={d.gaWeeks}
-              onChange={(e) => setDEdits((x) => ({ ...x, gaWeeks: e.target.value.replace(/[^\d.]/g, "") }))}
-            />
-          </Field>
-          <Field label="Feed every … hours (optional)" hint="Only if her pediatrician gave you a number. It replaces the built-in feeding reminders.">
-            <input
-              className={tone.input}
-              inputMode="decimal"
-              placeholder="e.g. 3"
-              value={d.feedHours}
-              onChange={(e) => setDEdits((x) => ({ ...x, feedHours: e.target.value.replace(/[^\d.]/g, "") }))}
-            />
-          </Field>
+          {/* These only tune the reminders. */}
+          {warnings && (
+            <>
+              <Field label="Weeks at birth" hint="Born before 37 weeks or under 5½ lb? Maple's reminders step back and defer to your pediatrician's plan.">
+                <input
+                  className={tone.input}
+                  inputMode="numeric"
+                  placeholder="e.g. 39"
+                  value={d.gaWeeks}
+                  onChange={(e) => setDEdits((x) => ({ ...x, gaWeeks: e.target.value.replace(/[^\d.]/g, "") }))}
+                />
+              </Field>
+              <Field label="Feed every … hours (optional)" hint="Only if her pediatrician gave you a number. It replaces the built-in feeding reminders.">
+                <input
+                  className={tone.input}
+                  inputMode="decimal"
+                  placeholder="e.g. 3"
+                  value={d.feedHours}
+                  onChange={(e) => setDEdits((x) => ({ ...x, feedHours: e.target.value.replace(/[^\d.]/g, "") }))}
+                />
+              </Field>
+            </>
+          )}
           {dDirty && (
             <div className="flex gap-2">
               <Button className="flex-1" disabled={busy === "doctor"} onClick={() => void save("doctor")}>
@@ -817,11 +825,19 @@ function BabyDetails() {
 
         <Card className="divide-y divide-[#1D4420]/[0.07] py-1 dark:divide-[#F5EDDF]/[0.08]">
           <Toggle
-            label="Vitamin D reminder"
-            hint="A gentle evening nudge if no sunshine drops are logged that day."
-            checked={flag("vitamin_d_reminder")}
-            onChange={(v) => void setSetting("vitamin_d_reminder", v)}
+            label="Warnings & reminders"
+            hint="Feed gaps, diaper counts, weight, vitamin D and checkups. They only make sense when everything gets logged. A temperature, oxygen reading or poop color is still checked as you enter it."
+            checked={warnings}
+            onChange={(v) => void setSetting("show_alerts", v)}
           />
+          {warnings && (
+            <Toggle
+              label="Vitamin D reminder"
+              hint="A gentle evening nudge if no sunshine drops are logged that day."
+              checked={flag("vitamin_d_reminder")}
+              onChange={(v) => void setSetting("vitamin_d_reminder", v)}
+            />
+          )}
           <Toggle
             label="Show diaper brigade"
             hint="This week's diaper changes as a team tally. Just for fun, never a contest."
@@ -1157,8 +1173,52 @@ function ConnectAI() {
         >
           Step-by-step setup →
         </Link>
+        <CalendarConnectorAsMe />
       </Card>
     </Section>
+  );
+}
+
+/**
+ * The "Brooker Family Calendar" connector (the site admin login) carries
+ * Maple's tools too. An owner can have what it logs count as them, so it
+ * isn't split off under "Admin".
+ */
+function CalendarConnectorAsMe() {
+  const { state, api, refresh, toast, memberName } = useMaple();
+  const [busy, setBusy] = useState(false);
+  const me = state?.me;
+  if (!state || !me || me.role !== "owner" || me.email === "admin") return null;
+  const raw = (state.baby.settings as { admin_as?: unknown }).admin_as;
+  const stored = typeof raw === "string" ? raw : null;
+  const someoneElse = stored && stored !== me.email && adminActsAs(state.baby, state.members) ? stored : null;
+
+  const set = async (on: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api("/api/maple/baby", { method: "PATCH", body: JSON.stringify({ settings: { admin_as: on ? me.email : null } }) });
+      await refresh();
+      toast(on ? "The calendar connector logs as you now" : "The calendar connector logs as Admin", { emoji: "🍁" });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-[#1D4420]/[0.07] pt-2 dark:border-[#F5EDDF]/[0.08]">
+      <Toggle
+        label="Calendar connector logs as me"
+        hint={`The Brooker Family Calendar connector (the site's admin login) can log Maple too. ${
+          someoneElse ? `Right now it logs as ${memberName(someoneElse)}.` : "Turn this on so what it logs counts as you, not “Admin”."
+        }`}
+        checked={stored === me.email}
+        disabled={busy}
+        onChange={(v) => void set(v)}
+      />
+    </div>
   );
 }
 

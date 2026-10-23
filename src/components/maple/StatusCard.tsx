@@ -5,7 +5,7 @@ import { useState } from "react";
 import { tick } from "@/components/atlas/haptics";
 import { feedTotals, openSegment } from "@/lib/maple/feed";
 import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
-import type { DayStats } from "@/lib/maple/insights";
+import { alertsOn, type DayStats } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime, localParts } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, FeedData } from "@/lib/maple/types";
@@ -195,7 +195,7 @@ export default function StatusCard() {
       <div className="divide-y divide-[#1D4420]/[0.07] border-t border-[#1D4420]/[0.07] dark:divide-[#F5EDDF]/[0.07] dark:border-[#F5EDDF]/[0.07]">
         {/* Drops not given yet is a daytime thing; at 3am it's just clutter (More → Vitamin D still works). */}
         {summary.born &&
-          (summary.vitaminD || !isNight()) &&
+          (summary.vitaminD || (!isNight() && alertsOn(state.baby))) &&
           (summary.vitaminD ? (
             <Row icon="☀️" sub="sunshine drops">
               Vitamin D ✓ {formatTime(summary.vitaminD.givenAt, tz)} ({memberName(summary.vitaminD.by)})

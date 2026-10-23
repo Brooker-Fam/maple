@@ -193,6 +193,12 @@ export default function MapleConnectPage() {
             and use the same Google account you use for Maple&apos;s Log, then
             tap <strong>Approve</strong>.
           </p>
+          <p className="mt-3 font-[family-name:var(--font-body)] text-sm text-[#1D4420]/80 dark:text-[#FDF8F0]/75">
+            <strong>Already have the Brooker Family Calendar connector?</strong>{" "}
+            Maple&apos;s tools are in it too, so you can skip this. Reconnect it
+            if Claude asks, then in Maple&apos;s Log &rarr; <strong>Family</strong>,
+            turn on <strong>Calendar connector logs as me</strong>.
+          </p>
         </motion.div>
 
         <div className="space-y-5">
@@ -326,10 +332,12 @@ export default function MapleConnectPage() {
               second one.
             </p>
             <p>
-              Health alerts (a fever, a pale poop, too few wet diapers) come
-              through word for word, the same as in the app. It&apos;s general
-              guidance, not medical advice: when in doubt, call the
-              pediatrician.
+              A fever, an oxygen reading or a pale poop is checked as you log
+              it, and the alert comes through word for word, the same as in
+              the app. Feeding, diaper-count and weight warnings only come
+              through if they&apos;re switched on in Family &rarr; Warnings
+              &amp; reminders. It&apos;s general guidance, not medical
+              advice: when in doubt, call the pediatrician.
             </p>
           </Section>
 

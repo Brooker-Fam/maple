@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mintAuthCode, publicOrigin, verifyAdminCreds } from "@/lib/mcp/auth";
+import { mintAuthCode, publicOrigin, trustedRedirect, verifyAdminCreds } from "@/lib/mcp/auth";
 import {
   ADMIN_ID,
   isGoogleConfigured,
@@ -206,26 +206,6 @@ function readMapleParams(url: URL, form?: FormData): MapleParams {
   };
 }
 
-/**
- * Where a Maple code may be sent: Claude (web, desktop, mobile all use
- * claude.ai), ChatGPT, or a loopback app on this computer (Claude Code,
- * MCP Inspector). Nothing else, so a code can't be phished to a stranger.
- */
-function mapleRedirectOk(uri: string): boolean {
-  let u: URL;
-  try {
-    u = new URL(uri);
-  } catch {
-    return false;
-  }
-  if (u.username || u.password || u.hash) return false;
-  const host = u.hostname.toLowerCase();
-  if (u.protocol === "https:") {
-    return ["claude.ai", "claude.com", "chatgpt.com", "chat.openai.com"].includes(host);
-  }
-  if (u.protocol === "http:") return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-  return false;
-}
 
 /** "Claude" / "ChatGPT" / "this app", plus the host shown on the consent card. */
 function mapleClient(uri: string): { name: string; host: string } {
@@ -264,7 +244,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
   if (!p.client_id || !p.redirect_uri) {
     return maplePage(400, "Something's missing", `<p>This sign-in link is missing its app details. Start again from Claude or ChatGPT.</p>`);
   }
-  if (!mapleRedirectOk(p.redirect_uri)) {
+  if (!trustedRedirect(p.redirect_uri)) {
     return maplePage(
       400,
       "Unknown app",

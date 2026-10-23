@@ -89,7 +89,10 @@ export type Summary = {
   today: DayStats;
   /** Rolling last 24 hours: what the clinical targets are measured against. */
   last24h: DayStats;
-  /** Minimums per 24 hours for her current day of life (null before birth). */
+  /**
+   * Minimums per 24 hours for her current day of life. Null before birth, and
+   * while warnings are off: against patchy logging they only say "behind".
+   */
   targets: { wet: number; dirty: number | null; feeds: readonly [number, number]; tummyMin: number } | null;
   vitaminD: { givenAt: string; by: string | null } | null;
   weight: {
@@ -100,7 +103,10 @@ export type Summary = {
     changePct: number | null;
     backToBirthWeight: boolean | null;
   } | null;
-  /** Most urgent first. Already excludes alerts the family marked handled. */
+  /**
+   * Most urgent first. Already excludes alerts the family marked handled.
+   * Empty unless warnings are switched on (see alertsOn).
+   */
   alerts: Alert[];
   /**
    * The diaper brigade (last 7 days): a team total, not a leaderboard.
@@ -253,6 +259,28 @@ export function memberName(id: string | null | undefined, members: Member[]): st
   if (m?.display_name) return m.display_name;
   if (id === "admin") return "Admin";
   return id.split("@")[0];
+}
+
+/**
+ * Warnings and reminders (feed gaps, diaper counts, weight, vitamin D,
+ * checkups) need consistent logging to mean anything, so they're off unless
+ * the family switches them on in Family → Warnings & reminders. A reading
+ * entered in a sheet or through an assistant is still checked as it's logged.
+ */
+export function alertsOn(baby: Baby): boolean {
+  return (baby.settings as { show_alerts?: unknown }).show_alerts === true;
+}
+
+/**
+ * Who the site admin login logs as through Claude or ChatGPT: the member an
+ * owner picked under Family → Admin (settings.admin_as), while they can still
+ * log. Null means it logs as "Admin".
+ */
+export function adminActsAs(baby: Baby, members: Member[]): Member | null {
+  const as = (baby.settings as { admin_as?: unknown }).admin_as;
+  if (typeof as !== "string") return null;
+  const m = members.find((x) => x.email === as);
+  return m && m.email !== "admin" && m.role !== "viewer" ? m : null;
 }
 
 /** Alerts a family has marked handled ("We called"), keyed by alert id. */
@@ -615,10 +643,10 @@ export function summarize(opts: {
     lastSleep,
     today,
     last24h,
-    targets,
+    targets: alertsOn(baby) ? targets : null,
     vitaminD,
     weight,
-    alerts: visible,
+    alerts: alertsOn(baby) ? visible : [],
     duty,
     teamDiapers,
     celebrations,

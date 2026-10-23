@@ -21,12 +21,13 @@ Full instructions with copy buttons are at `/maple/connect`. The MCP server URL 
 - **Claude** (web, desktop, mobile): Settings → Connectors → Add custom connector → paste the URL → Connect → Continue with Google.
 - **ChatGPT** (web, developer mode / custom connectors): add a custom MCP server with the same URL and OAuth.
 - **Claude Code:** `claude mcp add --transport http maple https://brooker.family/api/maple/mcp`.
+- **The existing "Brooker Family Calendar" connector** (`/api/mcp`, admin login) carries Maple's tools too, next to `calendar_exec`, so Matt doesn't need a second connector. Its entries are credited to "Admin" unless an owner signed in with Google turns on Family → Talk to Maple's Log → "Calendar connector logs as me" (`settings.admin_as`, which can only be set to yourself). The Admin row appears in Family after the connector's first Maple call, so an owner can turn it off there. If an owner turns off the admin login for Maple, those tools refuse but the calendar keeps working.
 
 OAuth reuses the site's `/oauth/*` shim. A Maple connection (detected by the RFC 8707 `resource` parameter, or the `maple` scope) signs in with the same Google session as the app, and the token is minted for `maple:<email>`, so entries show "via Claude / via ChatGPT" under the right person.
 
 - **Bound to this server.** Tokens are bound to exactly `https://brooker.family/api/maple/mcp`. Any other resource is refused at consent, so another MCP server can't obtain or replay a parent's token.
 - **Calendar and RSVP stay admin-only.** Those MCP servers only accept admin tokens, so a family member's Maple token can't open them.
-- **Refresh tokens for Maple only.** Maple grants get refresh tokens, so parents' connectors don't expire monthly. Calendar and RSVP grants keep their old 30-day tokens with no refresh.
+- **Refresh tokens, for Claude, ChatGPT and local apps only.** A code sent anywhere else (say, a phishing page) gets a 30-day token and no renewal. Each refresh hands out a new refresh token, so connectors in use don't expire. They're stateless, so an old one stays valid until it expires. Admin-login ones last 90 days (the admin login can run code on the calendar and RSVP servers) and die when `ADMIN_PASS` or `MCP_SECRET` changes. Family members' last a year and are re-checked against membership.
 
 ## Access and revocation
 
@@ -66,6 +67,7 @@ Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `
   - `sheets/` holds the log and edit forms.
   - There's one component per tab.
 - **Medical guidance** in `guidelines.ts` was checked against AAP/HealthyChildren, CDC, NIH, WHO, ABM and children's hospital triage guides. It's tuned for a healthy full-term baby.
+  - **Warnings and reminders are off by default** (`settings.show_alerts`, Family → Baby → Warnings & reminders). Feed gaps, diaper counts, weight trends, vitamin D and checkup notes only mean something when every feed and diaper gets logged, and the family doesn't log that consistently. With them off, Today, Siri and Claude/ChatGPT show none. A reading is still checked as it's entered (temperature, oxygen/heart/breathing, poop color, medicine for her age), in the sheet and in the assistant's reply.
   - Alerts always say who to call: 911, the pediatrician now, today, or mention it at the next visit.
   - The app never suggests a medicine dose.
   - If Maple's pediatrician gives different targets (feed interval, preterm plan), set them under Family → Baby.

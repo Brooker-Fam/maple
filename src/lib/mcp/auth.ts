@@ -147,6 +147,14 @@ export interface RefreshTokenPayload {
 }
 
 export const REFRESH_TOKEN_TTL = 60 * 60 * 24 * 365; // 365 days
+/**
+ * The admin login can run code on the calendar and RSVP servers, so its
+ * refresh tokens are shorter-lived. Each refresh hands out a new one, so a
+ * connector in use stays connected; one left idle 90 days signs in again.
+ * (They're stateless: an old one stays valid until it expires, unless
+ * ADMIN_PASS or MCP_SECRET changes.)
+ */
+export const ADMIN_REFRESH_TOKEN_TTL = 60 * 60 * 24 * 90; // 90 days
 
 /**
  * Admin grants are tied to the current ADMIN_PASS: changing the password
@@ -157,8 +165,8 @@ function adminPassFingerprint(): string {
 }
 
 export function mintRefreshToken(payload: RefreshTokenPayload): string {
-  const body = payload.sub === "admin" ? { ...payload, pf: adminPassFingerprint() } : payload;
-  return pack(body, REFRESH_TOKEN_TTL, "mcprt");
+  if (payload.sub === "admin") return pack({ ...payload, pf: adminPassFingerprint() }, ADMIN_REFRESH_TOKEN_TTL, "mcprt");
+  return pack(payload, REFRESH_TOKEN_TTL, "mcprt");
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload | null {
@@ -168,6 +176,28 @@ export function verifyRefreshToken(token: string): RefreshTokenPayload | null {
   const { pf: _pf, ...rest } = p;
   void _pf;
   return rest;
+}
+
+/**
+ * Redirects we trust with long-lived grants: Claude, ChatGPT, or an app on
+ * this machine (Claude Code, Inspector). Maple consent requires one, and only
+ * these get refresh tokens, so a login phished to a stranger's site can't keep
+ * renewing.
+ */
+export function trustedRedirect(uri: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (u.username || u.password || u.hash) return false;
+  const host = u.hostname.toLowerCase();
+  if (u.protocol === "https:") {
+    return ["claude.ai", "claude.com", "chatgpt.com", "chat.openai.com"].includes(host);
+  }
+  if (u.protocol === "http:") return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  return false;
 }
 
 /**
