@@ -218,7 +218,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const [s, en] = range;
     const startMoved = s.getTime() !== Date.parse(e.started_at);
     const endMoved = en.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : s.getTime());
-    const minutesChanged = left !== origL || right !== origR;
+    // Typed minutes win whenever a time moved too (else the server would retime the segments instead).
+    const minutesChanged = left !== origL || right !== origR || (timed && minutesTyped && (startMoved || endMoved));
     const data: Record<string, unknown> = {};
     if (minutesChanged) {
       // New side minutes replace the timer's segments (the server drops them).

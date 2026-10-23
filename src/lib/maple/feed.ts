@@ -42,32 +42,38 @@ export function sideTotals(segments: Segment[] | undefined, now: Date): { left: 
  * Move a timed nursing session's start and/or end. The first side grows or
  * shrinks from the start ("she'd been on the left five minutes before I
  * tapped"), the last side from the end, and the stretches between stay put.
- * The end moves the last side by however far the session's end moved, so a
- * session stopped while paused keeps its gap. A finished session gets its
- * side totals recomputed. Throws when the new start is after the first side
- * ended, or the new end is before the last side began.
+ * A session stopped while paused keeps its pause: an end inside the gap
+ * leaves the sides alone, and only an end before the pause trims the last
+ * side. A finished session gets its side totals and first/last side
+ * recomputed. Throws when the new start is after the first side ended, or the
+ * new end is before the last side began.
  */
 export function retimeBreast(data: FeedData, change: { start?: Date; end?: Date; prevEnd?: Date | null }): FeedData {
   const segs = (data.segments ?? []).map((x) => ({ ...x }));
   if (!segs.length) return data;
+  // The end first, so moving a one-side feed later as a whole checks the start against its new end.
+  const last = segs[segs.length - 1];
+  if (change.end && last.end) {
+    const was = Date.parse(last.end);
+    const ranToStop = !change.prevEnd || Math.abs(was - change.prevEnd.getTime()) < 1500;
+    const next = ranToStop ? change.end.getTime() : Math.min(was, change.end.getTime());
+    if (next < Date.parse(last.start)) throw new Error("End time is before the last side started");
+    last.end = new Date(next).toISOString();
+  }
   if (change.start) {
     const first = segs[0];
     if (first.end && change.start.getTime() > Date.parse(first.end)) throw new Error("Start time is after the first side ended");
     first.start = change.start.toISOString();
-  }
-  const last = segs[segs.length - 1];
-  if (change.end && last.end) {
-    const was = Date.parse(last.end);
-    const delta = change.end.getTime() - (change.prevEnd ? change.prevEnd.getTime() : was);
-    const next = Math.min(was + delta, change.end.getTime());
-    if (next < Date.parse(last.start)) throw new Error("End time is before the last side started");
-    last.end = new Date(next).toISOString();
   }
   const out: FeedData = { ...data, segments: segs };
   if (segs.every((x) => x.end)) {
     const t = sideTotals(segs, new Date(0));
     out.left_sec = t.left;
     out.right_sec = t.right;
+    // As finalizeBreast: sides that lasted at least a second.
+    const used = segs.filter((x) => Date.parse(x.end!) - Date.parse(x.start) >= 1000);
+    out.first_side = used[0]?.side ?? data.first_side;
+    out.last_side = used[used.length - 1]?.side ?? data.last_side;
   }
   return out;
 }
