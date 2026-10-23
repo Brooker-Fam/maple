@@ -81,4 +81,4 @@ export function useNightActive(): boolean {
 
 // ── Theme color (iOS status bar / Android toolbar) ─────────────────────
 
-export const THEME_COLORS = { day: "#FDF8F0", dark: "#0D1F0F", night: "#0B0F0A" } as const;
+export const THEME_COLORS = { day: "#F6F3EC", dark: "#0E1310", night: "#0B0F0A" } as const;

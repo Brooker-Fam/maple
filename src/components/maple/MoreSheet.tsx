@@ -5,6 +5,7 @@ import { tick } from "@/components/atlas/haptics";
 import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, formatTime } from "@/lib/maple/time";
 import type { EntryKind } from "@/lib/maple/types";
+import { KindBadge, type IconName } from "./icons";
 import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { useTimerActions } from "./TimerCard";
@@ -13,8 +14,9 @@ import { useMaple } from "./useMaple";
 
 /**
  * The "More" grid: everything that isn't one of the eight everyday dock
- * buttons. Plain labels, with a soft subline for the whimsy ("sunshine drops").
- * Hold any tile to log one from earlier.
+ * buttons. Plain labels; a subline only when it says something live
+ * (today's vitamin D, a running tummy timer). Hold any tile to log one from
+ * earlier.
  */
 
 export const LONG_PRESS_MS = 450;
@@ -70,8 +72,8 @@ export function usePress(onTap: () => void, onHold?: () => void) {
 type Item = {
   id: string;
   label: string;
-  sub: string;
-  emoji: string;
+  sub?: string;
+  icon: IconName;
   color: string;
   onTap: () => void;
   onHold?: () => void;
@@ -98,24 +100,24 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
     {
       id: "vitd",
       label: "Vitamin D",
-      sub: vitD ? `✓ ${formatTime(vitD.givenAt, tz)} · ${memberName(vitD.by)}` : "sunshine drops",
-      emoji: "☀️",
+      sub: vitD ? `Given ${formatTime(vitD.givenAt, tz)} · ${memberName(vitD.by)}` : undefined,
+      icon: "sun",
       color: KIND_COLOR.med,
       onTap: () => {
         // One tap logs today's drops; if they're already logged, open the form instead of double-logging.
         if (vitD) return go("med", { ...VITAMIN_D_DEFAULT });
         tick();
         onClose();
-        void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops ✓", emoji: "☀️" });
+        void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops logged" });
       },
       onHold: earlier("med", { ...VITAMIN_D_DEFAULT }),
     },
-    { id: "temp", label: "Temperature", sub: "thermometer", emoji: "🌡️", color: KIND_COLOR.temp, onTap: () => go("temp"), onHold: earlier("temp") },
+    { id: "temp", label: "Temperature", icon: "thermometer", color: KIND_COLOR.temp, onTap: () => go("temp"), onHold: earlier("temp") },
     {
       id: "tummy",
       label: "Tummy time",
-      sub: tummy ? "running now" : "starts a timer",
-      emoji: "🐢",
+      sub: tummy ? "Running now" : "Starts a timer",
+      icon: "tummy",
       color: KIND_COLOR.tummy,
       onTap: () => {
         onClose();
@@ -123,40 +125,40 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
       },
       onHold: earlier("tummy"),
     },
-    { id: "pump", label: "Pump", sub: "milk for later", emoji: "🫙", color: KIND_COLOR.pump, onTap: () => go("pump"), onHold: earlier("pump") },
-    { id: "med", label: "Medicine", sub: "anything given", emoji: "💊", color: KIND_COLOR.med, onTap: () => go("med"), onHold: earlier("med") },
-    { id: "growth", label: "Growth", sub: "weight & length", emoji: "📏", color: KIND_COLOR.growth, onTap: () => go("growth"), onHold: earlier("growth") },
-    { id: "bath", label: "Bath", sub: "splish", emoji: "🛁", color: KIND_COLOR.bath, onTap: () => go("bath"), onHold: earlier("bath") },
-    { id: "note", label: "Note", sub: "spit-up, hiccups…", emoji: "📝", color: KIND_COLOR.note, onTap: () => go("note"), onHold: earlier("note") },
+    { id: "pump", label: "Pump", icon: "milk", color: KIND_COLOR.pump, onTap: () => go("pump"), onHold: earlier("pump") },
+    { id: "med", label: "Medicine", icon: "pill", color: KIND_COLOR.med, onTap: () => go("med"), onHold: earlier("med") },
+    { id: "growth", label: "Growth", sub: "Weight, length", icon: "ruler", color: KIND_COLOR.growth, onTap: () => go("growth"), onHold: earlier("growth") },
+    { id: "bath", label: "Bath", icon: "bath", color: KIND_COLOR.bath, onTap: () => go("bath"), onHold: earlier("bath") },
+    { id: "note", label: "Note", sub: "Spit-up, hiccups…", icon: "sticky-note", color: KIND_COLOR.note, onTap: () => go("note"), onHold: earlier("note") },
     {
       id: "doctor",
-      label: "Question for the doctor",
-      sub: "for the next visit",
-      emoji: "🩺",
+      label: "Doctor question",
+      sub: "For the next visit",
+      icon: "stethoscope",
       color: KIND_COLOR.vitals,
       onTap: () => go("note", { for_doctor: true }),
     },
-    { id: "moment", label: "Moment / Photo", sub: "keep this one", emoji: "📸", color: KIND_COLOR.moment, onTap: () => go("moment") },
+    { id: "moment", label: "Moment", sub: "Photo or milestone", icon: "camera", color: KIND_COLOR.moment, onTap: () => go("moment") },
     {
       id: "skin",
       label: "Skin check",
-      sub: "jaundice, in daylight",
-      emoji: "🌼",
+      sub: "Jaundice, in daylight",
+      icon: "eye",
       color: "#C9962A",
       onTap: () => go("vitals", { jaundice: "none" }),
       onHold: earlier("vitals", { jaundice: "none" }),
     },
-    { id: "vitals", label: "Other readings", sub: "heart, breathing", emoji: "💓", color: KIND_COLOR.vitals, onTap: () => go("vitals"), onHold: earlier("vitals") },
+    { id: "vitals", label: "Other readings", sub: "Heart, breathing", icon: "heart-pulse", color: KIND_COLOR.vitals, onTap: () => go("vitals"), onHold: earlier("vitals") },
   ];
 
   return (
-    <Sheet open={open} onClose={onClose} title="More to log" emoji="🍂">
-      <div className="grid grid-cols-3 gap-2 pb-2">
+    <Sheet open={open} onClose={onClose} title="More to log">
+      <div className="grid grid-cols-3 gap-2 pb-1">
         {items.map((it) => (
           <MoreTile key={it.id} item={it} />
         ))}
       </div>
-      <p className={cx(tone.muted, "pb-1 text-center text-xs")}>Hold a button to log one from earlier.</p>
+      <p className={cx(tone.faint, "pb-1 text-center text-xs")}>Hold a button to log one from earlier.</p>
     </Sheet>
   );
 }
@@ -167,14 +169,12 @@ function MoreTile({ item }: { item: Item }) {
     <button
       type="button"
       {...press}
-      className="flex min-h-[92px] flex-col items-center justify-center gap-1 rounded-2xl px-1.5 py-2 text-center transition select-none active:scale-[0.97]"
-      style={{ backgroundColor: `${item.color}18`, boxShadow: `inset 0 0 0 1.5px ${item.color}40`, WebkitTouchCallout: "none" }}
+      className="flex min-h-[96px] flex-col items-center justify-start gap-1.5 rounded-2xl border border-mp-line bg-mp-surface px-1.5 pt-3 pb-2.5 text-center transition select-none active:scale-[0.97]"
+      style={{ WebkitTouchCallout: "none" }}
     >
-      <span aria-hidden className="text-2xl leading-none">
-        {item.emoji}
-      </span>
-      <span className={cx(tone.body, "text-[14px] leading-tight font-semibold")}>{item.label}</span>
-      <span className={cx(tone.muted, "text-[11px] leading-tight")}>{item.sub}</span>
+      <KindBadge icon={item.icon} color={item.color} size={34} />
+      <span className={cx(tone.body, "text-[13px] leading-tight font-semibold")}>{item.label}</span>
+      {item.sub && <span className={cx(tone.faint, "text-[11px] leading-tight")}>{item.sub}</span>}
     </button>
   );
 }

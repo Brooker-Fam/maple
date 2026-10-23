@@ -1,4 +1,103 @@
 /*
+ * Maple's Log colors. Components use the semantic Tailwind colors registered
+ * in globals.css (bg-mp-surface, text-mp-ink-2, border-mp-line, …); this file
+ * gives them values by day, in dark mode, and in the night look. The shell
+ * (MapleApp) puts .maple-ui on <html> while the app is mounted.
+ *
+ *   bg        page background            surface    cards, inputs, rows
+ *   sunken    tracks, chips, wells       line       hairlines and borders
+ *   ink       primary text               ink-2/3    secondary / tertiary text
+ *   accent    primary fills              on-accent  text on an accent fill
+ *   accent-fg accent-colored text/icons  maple      the one warm highlight
+ *   danger    destructive text           focus      focus rings
+ *   toast     toast background           on-toast   toast text
+ */
+
+:root {
+  --mp-font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mp-bg: #f6f3ec;
+  --mp-surface: #ffffff;
+  --mp-sunken: #eeeae1;
+  --mp-ink: #1c2619;
+  --mp-ink-2: #5b6356;
+  --mp-ink-3: #8a8f84;
+  --mp-line: rgb(28 38 25 / 0.1);
+  --mp-accent: #1d4420;
+  --mp-on-accent: #ffffff;
+  --mp-accent-fg: #2c5a2f;
+  --mp-maple: #b5452b;
+  --mp-danger: #a63a22;
+  --mp-focus: #c49a3c;
+  --mp-toast: #1c2619;
+  --mp-on-toast: #f6f3ec;
+}
+
+.dark {
+  --mp-bg: #0e1310;
+  --mp-surface: #171d18;
+  --mp-sunken: #222a23;
+  --mp-ink: #ece7dc;
+  --mp-ink-2: #a7aba0;
+  --mp-ink-3: #737a70;
+  --mp-line: rgb(236 231 220 / 0.09);
+  --mp-accent: #d9b76a;
+  --mp-on-accent: #17200f;
+  --mp-accent-fg: #d9b76a;
+  --mp-maple: #e5895e;
+  --mp-danger: #f09a80;
+  --mp-focus: #d9b76a;
+  --mp-toast: #ece7dc;
+  --mp-on-toast: #141a15;
+}
+
+html.maple-night {
+  --mp-bg: #0b0f0a;
+  --mp-surface: #13170f;
+  --mp-sunken: #1b1d12;
+  --mp-ink: rgb(224 169 59 / 0.85);
+  --mp-ink-2: rgb(224 169 59 / 0.58);
+  --mp-ink-3: rgb(224 169 59 / 0.4);
+  --mp-line: rgb(224 169 59 / 0.1);
+  --mp-accent: #3a2711;
+  --mp-on-accent: #e8a23f;
+  --mp-accent-fg: #e8a23f;
+  --mp-maple: #d9772b;
+  --mp-danger: #e07a4f;
+  --mp-focus: rgb(217 119 43 / 0.6);
+  --mp-toast: #1c1a11;
+  --mp-on-toast: rgb(224 169 59 / 0.9);
+}
+
+html.maple-ui body {
+  font-family: var(--mp-font);
+  background: var(--mp-bg);
+  color: var(--mp-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * Kind colors (feeds, diapers, sleep…) are information by day; at night
+ * they fold into the amber, like everything else. Anything colored inline
+ * by kind carries one of these:
+ *   .mp-kind       a tinted badge (KindBadge): amber glyph on an amber wash
+ *   .mp-kind-ink   colored text or a bare icon: secondary amber
+ *   .mp-kind-fill  a solid dot, bar or swatch: dim amber fill
+ */
+.maple-night .mp-kind {
+  color: var(--mp-ink-2) !important;
+  background-color: rgb(224 169 59 / 0.08) !important;
+  border-color: rgb(224 169 59 / 0.18) !important;
+}
+.maple-night .mp-kind-ink {
+  color: var(--mp-ink-2) !important;
+}
+.maple-night .mp-kind-fill {
+  background-color: rgb(224 169 59 / 0.45) !important;
+  border-color: transparent !important;
+  color: #0b0f0a !important;
+}
+
+/*
  * Maple's Log night look. The shell puts .maple-night (and .dark) on <html>
  * from 8pm–7am (Family → Preferences → Night look: Auto / Always / Off).
  *

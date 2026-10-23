@@ -63,6 +63,25 @@
   --font-body: var(--font-quicksand), system-ui, sans-serif;
   /* Legacy font alias */
   --font-pixel: var(--font-display);
+
+  /* Maple's Log semantic colors (bg-mp-surface, text-mp-ink-2, …). The
+     values live in src/app/maple/maple.css, which swaps them for dark mode
+     and the 3am night look. */
+  --color-mp-bg: var(--mp-bg);
+  --color-mp-surface: var(--mp-surface);
+  --color-mp-sunken: var(--mp-sunken);
+  --color-mp-ink: var(--mp-ink);
+  --color-mp-ink-2: var(--mp-ink-2);
+  --color-mp-ink-3: var(--mp-ink-3);
+  --color-mp-line: var(--mp-line);
+  --color-mp-accent: var(--mp-accent);
+  --color-mp-on-accent: var(--mp-on-accent);
+  --color-mp-accent-fg: var(--mp-accent-fg);
+  --color-mp-maple: var(--mp-maple);
+  --color-mp-danger: var(--mp-danger);
+  --color-mp-focus: var(--mp-focus);
+  --color-mp-toast: var(--mp-toast);
+  --color-mp-on-toast: var(--mp-on-toast);
 }
 
 /* ========================================

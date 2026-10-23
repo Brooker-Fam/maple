@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { TIER_LABEL, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryKind, Source } from "@/lib/maple/types";
+import { Icon, type IconName } from "../icons";
 import { Button, NumberProblem, RepeatButton, TextArea, cx, parseTypedNumber, tone, useTypedNumber } from "../ui";
 import { useMaple } from "../useMaple";
 
@@ -161,9 +162,7 @@ export function MoreDetails({ summary, children, label = "More details" }: { sum
           <span className={cx(tone.body, "text-[15px] font-semibold")}>{label}</span>
           {summary && <span className={cx(tone.muted, "ml-2 truncate text-sm")}>· {summary}</span>}
         </span>
-        <span aria-hidden className={cx(tone.muted, "shrink-0 transition", open && "rotate-180")}>
-          ▾
-        </span>
+        <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", open && "rotate-180")} />
       </button>
       <AnimatePresence initial={false}>
         {open && (
@@ -191,12 +190,20 @@ export function NoteField({ value, onChange, placeholder = "Anything to remember
 }
 
 /** Muted context (typical ranges, how-tos). Never a target. */
-export function ContextNote({ emoji = "🍃", children, className }: { emoji?: string; children: ReactNode; className?: string }) {
+export function ContextNote({
+  icon = "info",
+  children,
+  className,
+}: {
+  icon?: IconName;
+  /** @deprecated Ignored: pass an icon. */
+  emoji?: string;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
     <p className={cx(tone.muted, "flex gap-2 text-[13px] leading-relaxed", className)}>
-      <span aria-hidden className="shrink-0">
-        {emoji}
-      </span>
+      <Icon name={icon} size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
       <span>{children}</span>
     </p>
   );
@@ -241,17 +248,20 @@ export function AssessmentCard({ a, className }: { a: Assessment; className?: st
         <div className="mt-2.5 flex flex-wrap gap-2">
           {a.tier === "emergency" && (
             <a href="tel:911" className={link}>
-              📞 Call 911
+              <Icon name="phone" size={16} />
+              Call 911
             </a>
           )}
           {ped && (
             <a href={`tel:${ped.replace(/[^\d+]/g, "")}`} className={link}>
-              📞 Pediatrician
+              <Icon name="phone" size={16} />
+              Pediatrician
             </a>
           )}
           {after && (
             <a href={`tel:${after.replace(/[^\d+]/g, "")}`} className={link}>
-              📞 After-hours line
+              <Icon name="phone" size={16} />
+              After-hours line
             </a>
           )}
         </div>
@@ -271,9 +281,7 @@ const RUNNING_LABEL: Partial<Record<EntryKind, string>> = {
 export function RunningNote({ kind }: { kind: EntryKind }) {
   return (
     <div className={cx(tone.inset, "flex gap-3 px-4 py-3")}>
-      <span aria-hidden className="text-xl">
-        ⏱️
-      </span>
+      <Icon name="timer" size={20} className="mt-0.5 shrink-0 text-mp-ink-2" />
       <p className={cx(tone.body, "text-sm leading-relaxed")}>
         <span className="font-semibold">{RUNNING_LABEL[kind] ?? "This timer is running"}.</span> Use the timer card on Today to switch, pause,
         fix the start or stop it. You can add a note here.

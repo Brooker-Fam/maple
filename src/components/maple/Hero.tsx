@@ -203,39 +203,25 @@ export default function Hero() {
       leaves === 1
         ? `${first}'s tree has its first leaf. One more grows each week.`
         : `${first}'s tree has ${leaves} leaves, one for each week.${season === "winter" ? " They're resting for winter." : ""}`,
-      { emoji: "🍁", tone: "info" }
+      { tone: "info" }
     );
 
   return (
-    <header className="relative flex items-end gap-3 px-1 pt-3">
-      {/* Fireflies: by day only, never behind the dial or at night. */}
-      {!night && (
-        <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden motion-reduce:hidden [.maple-night_&]:hidden">
-          {[
-            ["62%", "18%", "0s"],
-            ["84%", "52%", "1.4s"],
-            ["44%", "70%", "2.6s"],
-          ].map(([left, top, delay]) => (
-            <span
-              key={left}
-              className="animate-firefly absolute h-1.5 w-1.5 rounded-full bg-[#E9C46A] shadow-[0_0_8px_3px_rgba(233,196,106,0.55)]"
-              style={{ left, top, animationDelay: delay }}
-            />
-          ))}
-        </div>
-      )}
-      <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} leaves, one for each week`} className="relative shrink-0 rounded-2xl active:scale-[0.98]">
-        <Sapling leaves={leaves} season={season} gnome={monthDay} sway={!night} className="h-24 w-[88px]" />
-        {night && <Zoe alert={timerRunning} className="absolute bottom-[2px] left-0 h-[27px] w-[44px]" />}
-      </button>
-      <div className="min-w-0 flex-1 pb-1.5">
-        <p className={cx(tone.label, "[.maple-night_&]:text-[#E0A93B]/55")}>Maple&apos;s Log</p>
-        <h1 className={cx(tone.heading, "flex flex-wrap items-baseline gap-x-2 text-[32px] leading-[1.05] [.maple-night_&]:text-[#E0A93B]/85")}>
-          <span className="truncate">{state.baby.name}</span>
-          {age && <span className="text-[24px] text-[#B5452B] dark:text-[#E0A93B] [.maple-night_&]:text-[#D9772B]">Day {age.dayOfLife}</span>}
-        </h1>
-        {age && <p className={cx(tone.muted, "mt-0.5 text-[14px] [.maple-night_&]:text-[#E0A93B]/55")}>{age.label}</p>}
+    <header className="flex items-end gap-3 px-1 pt-4">
+      <div className="min-w-0 flex-1 pb-1">
+        <h1 className={cx(tone.display, "truncate text-[34px] leading-[1.05]")}>{state.baby.name}</h1>
+        {age && (
+          <p className={cx(tone.muted, "mt-1 text-[15px]")}>
+            <span className="font-semibold text-mp-maple">Day {age.dayOfLife}</span>
+            <span aria-hidden> · </span>
+            {age.label}
+          </p>
+        )}
       </div>
+      <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} leaves, one for each week`} className="relative shrink-0 rounded-2xl active:scale-[0.98]">
+        <Sapling leaves={leaves} season={season} gnome={monthDay} sway={!night} className="h-[72px] w-[66px]" />
+        {night && <Zoe alert={timerRunning} className="absolute bottom-[1px] left-0 h-[20px] w-[33px]" />}
+      </button>
     </header>
   );
 }

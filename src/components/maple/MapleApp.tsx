@@ -9,6 +9,8 @@ import MomentsTab from "./MomentsTab";
 import PatternsTab from "./PatternsTab";
 import SignIn from "./SignIn";
 import TodayTab from "./TodayTab";
+import { MAPLE_LEAF_PATH } from "./Hero";
+import { Icon, type IconName } from "./icons";
 import { THEME_COLORS, setNightActive, useNightPref } from "./nightLook";
 import { SheetProvider } from "./sheets";
 import { ToastHost, cx, tone } from "./ui";
@@ -26,12 +28,12 @@ import { MapleProvider, useMaple } from "./useMaple";
 
 export type TabId = "today" | "log" | "patterns" | "moments" | "family";
 
-const TABS: { id: TabId; label: string; emoji: string }[] = [
-  { id: "today", label: "Today", emoji: "🍁" },
-  { id: "log", label: "Timeline", emoji: "📖" },
-  { id: "patterns", label: "Patterns", emoji: "🌙" },
-  { id: "moments", label: "Moments", emoji: "📸" },
-  { id: "family", label: "Family", emoji: "🏡" },
+const TABS: { id: TabId; label: string; icon: IconName }[] = [
+  { id: "today", label: "Today", icon: "house" },
+  { id: "log", label: "Timeline", icon: "list" },
+  { id: "patterns", label: "Patterns", icon: "chart-column" },
+  { id: "moments", label: "Moments", icon: "image" },
+  { id: "family", label: "Family", icon: "users" },
 ];
 
 const TAB_KEY = "maple-tab";
@@ -84,7 +86,7 @@ function Screens() {
     return (
       <Splash>
         <p className={cx(tone.muted, "mt-4 text-sm")}>{error ?? "Couldn't reach Maple's log."}</p>
-        <button type="button" onClick={() => void refresh()} className="mt-3 min-h-[44px] rounded-full bg-[#1D4420] px-5 text-sm font-semibold text-[#FDF8F0]">
+        <button type="button" onClick={() => void refresh()} className="mt-4 min-h-[44px] rounded-xl bg-mp-accent px-5 text-sm font-semibold text-mp-on-accent">
           Try again
         </button>
       </Splash>
@@ -92,7 +94,7 @@ function Screens() {
   }
 
   return (
-    <div className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(88px+env(safe-area-inset-bottom))]">
+    <div className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
       <SyncChip />
       <AnimatePresence mode="wait">
         <motion.div
@@ -212,8 +214,8 @@ function SyncChip() {
         aria-label={`${text}. Tap to try syncing now.`}
         className="pointer-events-auto flex min-h-[44px] items-center"
       >
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#FDF8F0]/90 px-3 py-1.5 text-xs font-semibold text-[#5A3E12] shadow-sm ring-1 ring-[#C49A3C]/35 backdrop-blur-md dark:bg-[#12261A]/90 dark:text-[#F0DDB0] dark:ring-[#C49A3C]/30">
-          <span aria-hidden>🍂</span>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-mp-surface/95 px-3 py-1.5 text-xs font-semibold text-mp-ink-2 shadow-sm ring-1 ring-mp-line backdrop-blur-md">
+          <Icon name={online ? "refresh-cw" : "cloud-off"} size={14} />
           {text}
         </span>
       </button>
@@ -225,7 +227,7 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
   return (
     <nav
       aria-label="Maple's Log"
-      className="fixed inset-x-0 bottom-0 z-[70] border-t border-[#1D4420]/10 bg-[#FDF8F0]/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-md dark:border-[#C49A3C]/15 dark:bg-[#0D1F0F]/90"
+      className="fixed inset-x-0 bottom-0 z-[70] border-t border-mp-line bg-mp-bg/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl"
     >
       <div className="mx-auto flex max-w-lg">
         {TABS.map((t) => {
@@ -237,15 +239,12 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
               onClick={() => onChange(t.id)}
               aria-current={active ? "page" : undefined}
               className={cx(
-                "flex min-h-[64px] flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-semibold tracking-wide transition",
-                active ? "text-[#1D4420] dark:text-[#E0C27A]" : "text-[#1D4420]/50 dark:text-[#F5EDDF]/45"
+                "flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 text-[11px] font-medium transition",
+                active ? "text-mp-accent-fg" : "text-mp-ink-3"
               )}
             >
-              <span className={cx("text-[22px] leading-none transition", active ? "scale-110" : "grayscale-[60%] opacity-80")} aria-hidden>
-                {t.emoji}
-              </span>
+              <Icon name={t.icon} size={24} strokeWidth={active ? 2.1 : 1.75} />
               {t.label}
-              <span className={cx("mt-0.5 h-1 w-1 rounded-full", active ? "bg-[#C49A3C]" : "bg-transparent")} />
             </button>
           );
         })}
@@ -257,15 +256,16 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
 function Splash({ children }: { children?: React.ReactNode }) {
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center px-6 text-center">
-      <motion.div
-        className="text-6xl"
-        animate={{ rotate: [-8, 8, -8], y: [0, 6, 0] }}
-        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+      <motion.svg
+        viewBox="-11 -11 22 22"
+        className="h-10 w-10 text-mp-maple"
+        animate={{ opacity: [0.45, 1, 0.45] }}
+        transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
         aria-hidden
       >
-        🍁
-      </motion.div>
-      <p className={cx(tone.heading, "mt-3 text-2xl")}>Maple&apos;s Log</p>
+        <path d={MAPLE_LEAF_PATH} fill="currentColor" />
+      </motion.svg>
+      <p className={cx(tone.display, "mt-3 text-[28px]")}>Maple&apos;s Log</p>
       {children}
     </div>
   );
