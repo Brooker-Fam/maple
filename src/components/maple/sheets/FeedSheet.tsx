@@ -230,7 +230,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     return {
       started_at: startMoved ? s.toISOString() : undefined,
       // Keep the end where it shows (otherwise new minutes would move it).
-      ended_at: endMoved || minutesChanged ? (en.getTime() > s.getTime() ? en.toISOString() : null) : undefined,
+      // A timed session keeps an end even at its start, so the server retimes what the sheet previewed.
+      ended_at: endMoved || minutesChanged ? (en.getTime() > s.getTime() || (timed && !minutesChanged) ? en.toISOString() : null) : undefined,
       data: Object.keys(data).length ? data : undefined,
       note: noteVal,
     };

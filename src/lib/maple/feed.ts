@@ -49,22 +49,31 @@ export function sideTotals(segments: Segment[] | undefined, now: Date): { left: 
  * new end is before the last side began.
  */
 export function retimeBreast(data: FeedData, change: { start?: Date; end?: Date; prevEnd?: Date | null }): FeedData {
-  const segs = (data.segments ?? []).map((x) => ({ ...x }));
+  let segs = (data.segments ?? []).map((x) => ({ ...x }));
   if (!segs.length) return data;
-  // The end first, so moving a one-side feed later as a whole checks the start against its new end.
+  // Sub-second taps (Left then Right straight away) aren't sides anyone saw:
+  // the move belongs to the first and last real ones, as finalizeBreast counts them.
+  const real = (x: { start: string; end: string | null }) => !x.end || Date.parse(x.end) - Date.parse(x.start) >= 1000;
+  if (change.start) {
+    const i = segs.findIndex(real);
+    if (i > 0) segs = segs.slice(i);
+  }
+  if (change.end && segs.every((x) => x.end)) {
+    let k = segs.length - 1;
+    while (k > 0 && !real(segs[k])) k--;
+    segs = segs.slice(0, k + 1);
+  }
+  const first = segs[0];
   const last = segs[segs.length - 1];
+  // Both moves, then the checks: a one-side feed can shift either way as a whole.
   if (change.end && last.end) {
     const was = Date.parse(last.end);
     const ranToStop = !change.prevEnd || Math.abs(was - change.prevEnd.getTime()) < 1500;
-    const next = ranToStop ? change.end.getTime() : Math.min(was, change.end.getTime());
-    if (next < Date.parse(last.start)) throw new Error("End time is before the last side started");
-    last.end = new Date(next).toISOString();
+    last.end = new Date(ranToStop ? change.end.getTime() : Math.min(was, change.end.getTime())).toISOString();
   }
-  if (change.start) {
-    const first = segs[0];
-    if (first.end && change.start.getTime() > Date.parse(first.end)) throw new Error("Start time is after the first side ended");
-    first.start = change.start.toISOString();
-  }
+  if (change.start) first.start = change.start.toISOString();
+  if (first.end && Date.parse(first.start) > Date.parse(first.end)) throw new Error("Start time is after the first side ended");
+  if (last.end && Date.parse(last.end) < Date.parse(last.start)) throw new Error("End time is before the last side started");
   const out: FeedData = { ...data, segments: segs };
   if (segs.every((x) => x.end)) {
     const t = sideTotals(segs, new Date(0));

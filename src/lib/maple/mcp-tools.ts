@@ -40,6 +40,7 @@ import {
   getBaby,
   getEntry,
   lifetimeCounts,
+  discardTimer,
   listEntries,
   pauseTimer,
   reopenTimer,
@@ -281,6 +282,9 @@ async function toolError(name: string, err: unknown, ctx: Ctx | null): Promise<C
     const e = err.entry;
     if (err.reason === "changed") {
       return fail(`Someone just changed #${e.id}, so nothing was saved. Call list_entries to see it as it is now, then try again.`);
+    }
+    if (err.reason === "clash") {
+      return fail(`Another ${TIMER_LABEL[e.kind as TimerKind] ?? KIND_NAME[e.kind]} timer is running now, and only one runs at a time. Call maple_status to see it.`);
     }
     if (ctx && !e.active && e.ended_at) {
       const who = memberName(e.updated_by ?? e.created_by, ctx.members);
@@ -1666,7 +1670,8 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
   const [entries, growth, notes] = await Promise.all([
     listEntries({
       babyId: ctx.baby.id,
-      from: new Date(Math.min(windowFrom.getTime(), nightFrom.getTime())),
+      // 12 hours early too, so the first day gets its overnight gap from the evening before.
+      from: new Date(Math.min(windowFrom.getTime() - 12 * HOUR, nightFrom.getTime())),
       to: dayBounds(todayKey, ctx.tz)[1],
       includeActive: true,
       limit: 5000,
@@ -2535,6 +2540,10 @@ export function registerMapleTools(server: McpServer) {
           reopened: false,
           timer: timerJson(e, ctx),
         });
+      const hourAgo = ctx.now.getTime() - HOUR;
+      // When it was stopped, not the (possibly back-dated) end it was given.
+      const stoppedRecently = (e: Entry) => !e.active && !!e.ended_at && Date.parse(e.updated_at) >= hourAgo;
+      const timed = (e: Entry) => e.kind !== "feed" || !!(e as EntryOf<"feed">).data.segments?.length;
       let target: Entry | null = a.id != null ? await getEntry(a.id) : null;
       if (a.id != null && !target) throw new ToolError(`There's no entry #${a.id}. Use list_entries to find the right id.`);
       if (!target) {
@@ -2542,35 +2551,45 @@ export function registerMapleTools(server: McpServer) {
         // Only one of each kind runs: a kind that's running again has nothing to undo.
         const live = running.find((r) => kinds.includes(r.kind as TimerKind));
         if (a.timer && live) return alreadyRunning(live);
-        const hourAgo = ctx.now.getTime() - HOUR;
-        const recent = await listEntries({ babyId: ctx.baby.id, kinds, from: new Date(hourAgo), to: new Date(ctx.now.getTime() + 1), limit: 50 });
+        const recent = await listEntries({ babyId: ctx.baby.id, kinds, from: new Date(ctx.now.getTime() - 24 * HOUR), to: new Date(ctx.now.getTime() + 1), limit: 200 });
         target =
           recent
-            .filter(
-              (e) =>
-                !e.active &&
-                e.ended_at &&
-                Date.parse(e.ended_at) >= hourAgo &&
-                !running.some((r) => r.kind === e.kind) &&
-                (e.kind !== "feed" || (e as EntryOf<"feed">).data.segments?.length)
-            )
-            .sort((x, y) => Date.parse(y.ended_at!) - Date.parse(x.ended_at!))[0] ?? null;
+            .filter((e) => stoppedRecently(e) && timed(e) && !running.some((r) => r.kind === e.kind))
+            .sort((x, y) => Date.parse(y.updated_at) - Date.parse(x.updated_at))[0] ?? null;
         if (!target && live) return alreadyRunning(live);
       }
       if (!target) throw new ToolError("No timer was stopped in the last hour. To log something that's still going, use start_timer (it takes minutes_ago).");
       if (!(target.kind in TIMER_NAME)) throw new ToolError(`#${target.id} isn't a timer.`);
       if (target.active) return alreadyRunning(target);
+      if (!timed(target)) throw new ToolError(`#${target.id} was logged by minutes, not timed, so it can't restart. Use start_timer for a feed that's still going.`);
+      // Restarting something that ended hours ago would count all the time since.
+      if (!stoppedRecently(target) && ctx.now.getTime() - Date.parse(target.ended_at!) > 3 * HOUR) {
+        throw new ToolError(
+          `#${target.id} ended at ${whenText(target.ended_at!, ctx)}, too long ago to restart. Use start_timer (with minutes_ago) for one that's going now, or update_entry to fix its end.`
+        );
+      }
       const clash = running.find((r) => r.kind === target.kind);
       if (clash) {
         throw new ToolError(
           `Another ${TIMER_LABEL[target.kind as TimerKind]} timer is running (#${clash.id}, since ${whenText(clash.started_at, ctx)}), and only one runs at a time. Stop or delete that one first if #${target.id} should run instead.`
         );
       }
+      // "Fell asleep" in the app stops the feed and starts sleep at the same
+      // instant; undoing the stop takes that sleep back too, as the app does.
+      const stoppedAt = Date.parse(target.ended_at!);
+      const napWithIt =
+        target.kind === "feed" ? running.find((r) => r.kind === "sleep" && Math.abs(Date.parse(r.started_at) - stoppedAt) < 2000) : undefined;
       const e = await reopenTimer(target.id, ctx.who.id);
-      return ok(`The ${TIMER_LABEL[e.kind as TimerKind]} timer is running again (#${e.id}, since ${whenText(e.started_at, ctx)}).`, {
-        reopened: true,
-        timer: timerJson(e, ctx),
-      });
+      if (napWithIt) await discardTimer(napWithIt.id, ctx.who.id);
+      const label = TIMER_LABEL[e.kind as TimerKind];
+      const paused = e.kind === "feed" && !openSegment((e as EntryOf<"feed">).data.segments);
+      const lines = [
+        paused
+          ? `The ${label} timer is back (#${e.id}, since ${whenText(e.started_at, ctx)}), paused as it was when it stopped. switch_side with the side she's on resumes the clock.`
+          : `The ${label} timer is running again (#${e.id}, since ${whenText(e.started_at, ctx)}).`,
+        ...(napWithIt ? [`The sleep timer started when it stopped (#${napWithIt.id}) was taken back.`] : []),
+      ];
+      return ok(lines.join(" "), { reopened: true, paused, sleep_discarded: napWithIt?.id ?? null, timer: timerJson(e, ctx) });
     }
   );
 
@@ -3205,7 +3224,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
           ? `${formatTime(edited.started_at, ctx.tz)}–${formatTime(edited.ended_at, ctx.tz)} ${dayWord(new Date(edited.started_at), ctx)}`
           : whenText(edited.started_at, ctx);
         throw new ToolError(
-          `Nothing was removed. Your last action was a change to #${edited.id} (${phrase(edited, ctx.now)}, ${span}) at ${formatTime(edited.updated_at, ctx.tz)}, ${edited.active ? "and it's still running" : "not a new entry"}. undo_last only takes back entries you just added. ${!edited.active && edited.kind in TIMER_NAME ? `If that timer was stopped by mistake, reopen_timer with id ${edited.id} starts it again. ` : ""}To fix that change use update_entry with id ${edited.id} (for example a different end time or details); to remove the entry entirely use delete_entry with id ${edited.id}.`
+          `Nothing was removed. Your last action was a change to #${edited.id} (${phrase(edited, ctx.now)}, ${span}) at ${formatTime(edited.updated_at, ctx.tz)}, ${edited.active ? "and it's still running" : "not a new entry"}. undo_last only takes back entries you just added. ${!edited.active && edited.kind in TIMER_NAME && edited.ended_at && Date.parse(edited.updated_at) >= ctx.now.getTime() - HOUR && (edited.kind !== "feed" || (edited as EntryOf<"feed">).data.segments?.length) ? `If that timer was stopped by mistake, reopen_timer with id ${edited.id} starts it again. ` : ""}To fix that change use update_entry with id ${edited.id} (for example a different end time or details); to remove the entry entirely use delete_entry with id ${edited.id}.`
         );
       }
       if (!created) {

@@ -151,16 +151,24 @@ export function useTimerActions() {
           onClick: () =>
             void (async () => {
               const at = new Date(from - m * 60_000);
-              if (endedWithIt) {
-                const napEnd = new Date(Math.max(Date.parse(endedWithIt.started_at), at.getTime()));
-                await update(endedWithIt.id, { ended_at: napEnd.toISOString() }, { toast: "" });
-              }
-              await adjust(e, at);
+              // The feed first; the nap only follows once that worked.
+              const saved = await timer({ action: "adjust", id: e.id, at: at.toISOString() });
+              if (!saved?.active) return;
+              // Leave a nap shorter than the move alone rather than shrink it to nothing.
+              const napEnd = endedWithIt && at.getTime() - Date.parse(endedWithIt.started_at) >= 60_000 ? at : null;
+              const napMoved = endedWithIt && napEnd ? await update(endedWithIt.id, { ended_at: napEnd.toISOString() }, { toast: "" }) : null;
+              toast(`Start moved to ${formatTime(saved.started_at, tz)}${napMoved ? " · nap ends then too" : ""}`, {
+                emoji: "🕰️",
+                undo: async () => {
+                  await timer({ action: "adjust", id: e.id, at: e.started_at });
+                  if (napMoved && endedWithIt?.ended_at) await update(endedWithIt.id, { ended_at: endedWithIt.ended_at }, { toast: "" });
+                },
+              });
             })(),
         })),
       });
     },
-    [adjust, me, toast, update]
+    [me, timer, toast, tz, update]
   );
 
   const startFeed = useCallback(
