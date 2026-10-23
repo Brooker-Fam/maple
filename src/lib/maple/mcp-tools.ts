@@ -41,6 +41,8 @@ import {
   getEntry,
   lifetimeCounts,
   listEntries,
+  pauseTimer,
+  reopenTimer,
   restoreEntryDetailed,
   rowToEntry,
   softDeleteEntry,
@@ -132,7 +134,7 @@ Health alerts: when a result includes alerts, tell the user each one word for wo
 
 Duplicates: if a write returns created:false with possible_duplicate, nothing was saved. Ask the user whether it's the same event; only if it's a different one, call again with allow_duplicate: true. A result with deduped:true means it was already saved, so don't retry. If you didn't get a "Saved #…" line back, say it didn't save.
 
-Feeds: log_feed is for a feed that already finished; start_timer, switch_side and stop_timer track one happening now. Sides are "left"/"right"; the next side to offer is the opposite of the side the last feed started on.
+Feeds: log_feed is for a feed that already finished; start_timer, switch_side, pause_nursing and stop_timer track one happening now (reopen_timer undoes a mistaken stop; update_entry with at fixes when a running one started). Sides are "left"/"right"; the next side to offer is the opposite of the side the last feed started on.
 
 Several things at once ("she nursed 15 min on the left at 2, pooped, and slept until 4:30"): use log_many.
 
@@ -1686,6 +1688,17 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     byDay.set(k, [...(byDay.get(k) ?? []), e]);
   }
 
+  // Feeding intervals: start to start between logged feeds, credited to the
+  // day of the later one. Over 12 hours is a missing log, not a stretch.
+  const feedStarts = entries.filter((e) => e.kind === "feed").map(ts).sort((x, y) => x - y);
+  const gapsByDay = new Map<string, number[]>();
+  for (let i = 1; i < feedStarts.length; i++) {
+    const gap = (feedStarts[i] - feedStarts[i - 1]) / MIN;
+    if (gap <= 0 || gap > 12 * 60 || feedStarts[i] < windowFrom.getTime()) continue;
+    const k = dayKey(new Date(feedStarts[i]), ctx.tz);
+    gapsByDay.set(k, [...(gapsByDay.get(k) ?? []), gap]);
+  }
+
   const dayRows = stats.map((d) => {
     const list = byDay.get(d.key) ?? [];
     const colors = [
@@ -1706,6 +1719,9 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       breast_feeds: d.breastFeeds,
       bottle_feeds: d.bottleFeeds,
       nursing_minutes: Math.round(d.nursingSec / 60),
+      nursing_left_minutes: Math.round(d.leftSec / 60),
+      nursing_right_minutes: Math.round(d.rightSec / 60),
+      ...gapStats(gapsByDay.get(d.key) ?? []),
       bottle: d.bottleMl ? formatVolumeBoth(d.bottleMl) : null,
       pumped: d.pumpMl ? formatVolumeBoth(d.pumpMl) : null,
       wet: d.wet,
@@ -1732,6 +1748,10 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     nursing_minutes_per_feed: (() => {
       const feeds = basis.reduce((n, r) => n + r.breast_feeds, 0);
       return feeds ? Math.round(basis.reduce((n, r) => n + r.nursing_minutes, 0) / feeds) : null;
+    })(),
+    ...(() => {
+      const g = gapStats(basis.flatMap((r) => gapsByDay.get(r.date) ?? []));
+      return { minutes_between_feeds: g.feed_gap_avg_minutes, longest_gap_minutes: g.feed_gap_longest_minutes };
     })(),
   };
   const vitDDays = dayRows.filter((r) => r.vitamin_d).length;
@@ -1793,8 +1813,9 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     const perSession = averages.nursing_minutes_per_feed ? ` (about ${averages.nursing_minutes_per_feed} min per nursing session)` : "";
     if (full.length) {
       const range = full.length === 1 ? lbl(full[0].date) : `${lbl(full[0].date)} to ${lbl(full[full.length - 1].date)}`;
+      const every = averages.minutes_between_feeds ? `, about every ${formatDuration(averages.minutes_between_feeds * 60)} start to start` : "";
       p.push(
-        `Over ${plural(full.length, "full day")} (${range}) she averaged ${averages.feeds} feeds a day${perSession}, ${averages.wet} wet and ${averages.dirty} dirty diapers a day, and about ${averages.sleep_hours} hours of logged sleep a day.`
+        `Over ${plural(full.length, "full day")} (${range}) she averaged ${averages.feeds} feeds a day${perSession}${every}, ${averages.wet} wet and ${averages.dirty} dirty diapers a day, and about ${averages.sleep_hours} hours of logged sleep a day.`
       );
     } else {
       const f = dayRows.reduce((n, r) => n + r.feeds, 0);
@@ -1838,6 +1859,15 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     open_doctor_questions: questions,
     last_night: night.json,
   });
+}
+
+/** Average and longest gap between feeds, in minutes (null with no gaps). */
+function gapStats(gaps: number[]): { feed_gap_avg_minutes: number | null; feed_gap_longest_minutes: number | null } {
+  if (!gaps.length) return { feed_gap_avg_minutes: null, feed_gap_longest_minutes: null };
+  return {
+    feed_gap_avg_minutes: Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length),
+    feed_gap_longest_minutes: Math.round(Math.max(...gaps)),
+  };
 }
 
 // ── tool registration ───────────────────────────────────────────────────
@@ -1941,7 +1971,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Daily summary / checkup report",
       description:
-        'Use this for patterns over days or a pediatrician-visit summary: per-day feeds, wet/dirty diapers with stool colors, sleep, temperatures, vitamin D days, growth history with WHO percentiles and weight change vs birth weight, flagged events, open questions for the doctor, and a "last night" block (7pm–7am: wake-ups, longest stretch, total sleep). Includes a short paragraph ready to read to the doctor. E.g. "make a summary for her 2-week checkup" (days: 14), "how did last night go?", "how has this week gone?".',
+        'Use this for patterns over days or a pediatrician-visit summary: per-day feeds, nursing minutes (left and right), feeding intervals (average and longest gap, start to start, from what was logged), wet/dirty diapers with stool colors, sleep, temperatures, vitamin D days, growth history with WHO percentiles and weight change vs birth weight, flagged events, open questions for the doctor, and a "last night" block (7pm–7am: wake-ups, longest stretch, total sleep). Includes a short paragraph ready to read to the doctor. E.g. "make a summary for her 2-week checkup" (days: 14), "how did last night go?", "how has this week gone?".',
       inputSchema: {
         days: z.number().int().min(1).max(31).nullish().describe("How many local days to cover, ending today (default 7, max 31)."),
       },
@@ -2444,6 +2474,103 @@ export function registerMapleTools(server: McpServer) {
         `Switched to the ${sideWord(target)} side at ${whenText(ctx.now, ctx)} (timer #${updated.id}). So far: L ${formatDuration(t.left)}, R ${formatDuration(t.right)}.`,
         { switched: true, timer: timerJson(updated, ctx) }
       );
+    }
+  );
+
+  addTool(
+    server,
+    "pause_nursing",
+    {
+      title: "Pause nursing",
+      description:
+        'Use this when a feed stops for a bit and will carry on (burping, a diaper change): the nursing timer stops counting until switch_side resumes it on the side she goes back to. For a feed that\'s over, use stop_timer. E.g. "pause the feed, she\'s burping".',
+      inputSchema: {
+        id: z.number().int().positive().nullish().describe("The nursing timer id, if more than one could match."),
+      },
+      annotations: WRITE_ANN,
+      invoking: "Pausing the feed…",
+      invoked: "Feed paused ⏸️",
+      write: true,
+    },
+    async (a, ctx) => {
+      const timer = a.id != null ? await getEntry(a.id) : (await activeTimers(ctx.baby.id)).find((e) => e.kind === "feed") ?? null;
+      if (!timer || timer.kind !== "feed" || !timer.active) {
+        throw new ToolError("No nursing timer is running, so there's nothing to pause. start_timer (timer: nursing) starts one.");
+      }
+      if (!openSegment(timer.data.segments)) {
+        return ok(`The feed is already paused (timer #${timer.id}). switch_side with the side she's on resumes it.`, {
+          paused: true,
+          timer: timerJson(timer, ctx),
+        });
+      }
+      const updated = await pauseTimer(timer.id, ctx.now, ctx.who.id);
+      const t = sideTotals((updated as EntryOf<"feed">).data.segments, ctx.now);
+      return ok(
+        `Paused the feed at ${whenText(ctx.now, ctx)} (timer #${updated.id}; L ${formatDuration(t.left)}, R ${formatDuration(t.right)} so far). When she starts again, switch_side with that side resumes it; stop_timer if she's done.`,
+        { paused: true, timer: timerJson(updated, ctx) }
+      );
+    }
+  );
+
+  addTool(
+    server,
+    "reopen_timer",
+    {
+      title: "Undo a stop",
+      description:
+        'Use this when a timer was stopped by mistake and is really still going ("oops, she\'s still nursing", "she isn\'t actually awake"): it runs again as if it never stopped. Pass the id, or the timer kind for the one stopped most recently (within the last hour). E.g. "she\'s still eating, restart the timer".',
+      inputSchema: {
+        id: z.number().int().positive().nullish().describe("The stopped timer's entry id."),
+        timer: z.enum(TIMER_NAMES).nullish().describe("Which kind of timer, if no id."),
+      },
+      annotations: WRITE_ANN,
+      invoking: "Winding it back up…",
+      invoked: "Timer running again ⏳",
+      write: true,
+    },
+    async (a, ctx) => {
+      const running = await activeTimers(ctx.baby.id);
+      const alreadyRunning = (e: Entry) =>
+        ok(`The ${TIMER_LABEL[e.kind as TimerKind]} timer is already running (#${e.id}, since ${whenText(e.started_at, ctx)}). Nothing changed.`, {
+          reopened: false,
+          timer: timerJson(e, ctx),
+        });
+      let target: Entry | null = a.id != null ? await getEntry(a.id) : null;
+      if (a.id != null && !target) throw new ToolError(`There's no entry #${a.id}. Use list_entries to find the right id.`);
+      if (!target) {
+        const kinds = a.timer ? [TIMER_KIND[a.timer]] : (["feed", "sleep", "tummy", "pump"] as TimerKind[]);
+        // Only one of each kind runs: a kind that's running again has nothing to undo.
+        const live = running.find((r) => kinds.includes(r.kind as TimerKind));
+        if (a.timer && live) return alreadyRunning(live);
+        const hourAgo = ctx.now.getTime() - HOUR;
+        const recent = await listEntries({ babyId: ctx.baby.id, kinds, from: new Date(hourAgo), to: new Date(ctx.now.getTime() + 1), limit: 50 });
+        target =
+          recent
+            .filter(
+              (e) =>
+                !e.active &&
+                e.ended_at &&
+                Date.parse(e.ended_at) >= hourAgo &&
+                !running.some((r) => r.kind === e.kind) &&
+                (e.kind !== "feed" || (e as EntryOf<"feed">).data.segments?.length)
+            )
+            .sort((x, y) => Date.parse(y.ended_at!) - Date.parse(x.ended_at!))[0] ?? null;
+        if (!target && live) return alreadyRunning(live);
+      }
+      if (!target) throw new ToolError("No timer was stopped in the last hour. To log something that's still going, use start_timer (it takes minutes_ago).");
+      if (!(target.kind in TIMER_NAME)) throw new ToolError(`#${target.id} isn't a timer.`);
+      if (target.active) return alreadyRunning(target);
+      const clash = running.find((r) => r.kind === target.kind);
+      if (clash) {
+        throw new ToolError(
+          `Another ${TIMER_LABEL[target.kind as TimerKind]} timer is running (#${clash.id}, since ${whenText(clash.started_at, ctx)}), and only one runs at a time. Stop or delete that one first if #${target.id} should run instead.`
+        );
+      }
+      const e = await reopenTimer(target.id, ctx.who.id);
+      return ok(`The ${TIMER_LABEL[e.kind as TimerKind]} timer is running again (#${e.id}, since ${whenText(e.started_at, ctx)}).`, {
+        reopened: true,
+        timer: timerJson(e, ctx),
+      });
     }
   );
 
@@ -3078,7 +3205,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
           ? `${formatTime(edited.started_at, ctx.tz)}–${formatTime(edited.ended_at, ctx.tz)} ${dayWord(new Date(edited.started_at), ctx)}`
           : whenText(edited.started_at, ctx);
         throw new ToolError(
-          `Nothing was removed. Your last action was a change to #${edited.id} (${phrase(edited, ctx.now)}, ${span}) at ${formatTime(edited.updated_at, ctx.tz)}, ${edited.active ? "and it's still running" : "not a new entry"}. undo_last only takes back entries you just added. To fix that change use update_entry with id ${edited.id} (for example a different end time or details); to remove the entry entirely use delete_entry with id ${edited.id}.`
+          `Nothing was removed. Your last action was a change to #${edited.id} (${phrase(edited, ctx.now)}, ${span}) at ${formatTime(edited.updated_at, ctx.tz)}, ${edited.active ? "and it's still running" : "not a new entry"}. undo_last only takes back entries you just added. ${!edited.active && edited.kind in TIMER_NAME ? `If that timer was stopped by mistake, reopen_timer with id ${edited.id} starts it again. ` : ""}To fix that change use update_entry with id ${edited.id} (for example a different end time or details); to remove the entry entirely use delete_entry with id ${edited.id}.`
         );
       }
       if (!created) {
