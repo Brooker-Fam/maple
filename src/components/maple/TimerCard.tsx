@@ -8,6 +8,7 @@ import { addDays, dayKey, DEFAULT_TZ, formatClock, formatDuration, formatTime, l
 import type { Entry, FeedData, Side, TimerKind } from "@/lib/maple/types";
 import { Icon, KindBadge, type IconName } from "./icons";
 import Lantern from "./Lantern";
+import { SIDE_COLOR, SIDE_INK } from "./palette";
 import { useSheets } from "./sheets";
 import { Avatar, Button, Chip, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -23,9 +24,12 @@ import { useMaple, useNow } from "./useMaple";
  */
 
 export const SIDE_NAME: Record<Side, string> = { L: "Left", R: "Right" };
-export const SIDE_COLOR: Record<Side, string> = { L: "#B5452B", R: "#E0A93B" };
-/** Filled "switch to" buttons, with text that stays readable on each (rust takes white, honey takes ink). */
-export const SWITCH_STYLE: Record<Side, { bg: string; fg: string }> = { L: { bg: "#B5452B", fg: "#FFFFFF" }, R: { bg: "#E0A93B", fg: "#2A1A08" } };
+export { SIDE_COLOR };
+/** Filled "switch to" buttons, with text that stays readable on each. */
+export const SWITCH_STYLE: Record<Side, { bg: string; fg: string }> = {
+  L: { bg: SIDE_COLOR.L, fg: SIDE_INK.L },
+  R: { bg: SIDE_COLOR.R, fg: SIDE_INK.R },
+};
 
 const KIND_TITLE: Record<TimerKind, string> = { feed: "Nursing", sleep: "Asleep", tummy: "Tummy time", pump: "Pumping" };
 

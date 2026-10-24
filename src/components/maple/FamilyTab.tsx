@@ -330,7 +330,7 @@ export default function FamilyTab() {
   return (
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
       <header className="px-1">
-        <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Family</h1>
+        <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Family</h1>
         <p className={cx(tone.muted, "mt-1 text-[15px]")}>Everyone helping Maple grow, and how the log works for you.</p>
       </header>
       <People />

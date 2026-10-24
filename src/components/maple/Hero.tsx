@@ -208,7 +208,7 @@ export default function Hero() {
     );
 
   return (
-    <header className="flex items-end gap-3 px-1 pt-5">
+    <header className="flex items-center gap-3 px-1">
       <div className="min-w-0 flex-1 pb-1">
         <h1 className={cx(tone.display, "truncate text-[34px] leading-[1.05]")}>{state.baby.name}</h1>
         {age && (

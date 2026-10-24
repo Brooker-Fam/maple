@@ -35,7 +35,7 @@ export default function Waiting() {
   const before = baby.due_date ? daysBetween(dayKey(now, baby.timezone), baby.due_date) > 0 : false;
 
   return (
-    <div className="pt-[calc(env(safe-area-inset-top)+1rem)]">
+    <div>
       <section aria-label={`Waiting for ${name}`} className={cx(tone.card, "px-5 pt-4 pb-5 text-center")}>
         <div className="mx-auto w-fit">
           <Sapling size={148} sway={false} />

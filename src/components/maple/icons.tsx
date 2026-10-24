@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import type { Entry, EntryKind } from "@/lib/maple/types";
-import { entryColor, KIND_COLOR, SIDE_COLOR } from "./palette";
+import { entryColor, KIND_COLOR, SIDE_COLOR, SIDE_INK } from "./palette";
 
 /**
  * Line icons for Maple's Log, in place of emoji: one 24-unit grid, round
@@ -188,7 +188,7 @@ export function KindBadge({
       <span
         aria-hidden
         className={["mp-kind-fill inline-flex shrink-0 items-center justify-center font-bold", className].filter(Boolean).join(" ")}
-        style={{ width: size, height: size, borderRadius: Math.round(size * 0.28), fontSize: Math.round(size * 0.42), backgroundColor: SIDE_COLOR[side], color: side === "R" ? "#2A1A08" : "#FFFFFF" }}
+        style={{ width: size, height: size, borderRadius: Math.round(size * 0.28), fontSize: Math.round(size * 0.42), backgroundColor: SIDE_COLOR[side], color: SIDE_INK[side] }}
       >
         {side}
       </span>

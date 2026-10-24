@@ -298,7 +298,7 @@ export default function Dock() {
                 id="wake"
                 label="Woke up"
                 icon="sun"
-                sub={sleepPending ? "starting…" : formatClock(timerNumbers(sleep, clock).elapsed)}
+                sub={sleepPending ? "starting…" : undefined}
                 color={TILE.wake}
                 strong
                 disabled={sleepPending}

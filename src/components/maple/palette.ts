@@ -39,6 +39,8 @@ export const KIND_COLOR: Record<EntryKind, string> = {
 
 /** Left and right, the same everywhere: dock, timer card, rows, sheets, dial. */
 export const SIDE_COLOR: Record<Side, string> = { L: MAPLE.rust, R: MAPLE.honey };
+/** Text on a filled side color that stays readable (rust takes white, honey takes ink). */
+export const SIDE_INK: Record<Side, string> = { L: "#FFFFFF", R: "#2A1A08" };
 
 /** Finer-grained colors for the dial/ribbons. */
 export const DETAIL_COLOR = {

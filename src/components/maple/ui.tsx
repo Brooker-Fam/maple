@@ -816,6 +816,20 @@ export function Avatar({ member, size = 28 }: { member: Member | null; size?: nu
   );
 }
 
+/** A chart's explanation, one tap away: "How to read this", closed by default. */
+export function HowToRead({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <details className={cx("group/how px-1", className)}>
+      <summary className="-ml-1 inline-flex min-h-[44px] cursor-pointer list-none items-center gap-1.5 rounded-lg px-1 text-[13px] font-medium text-mp-ink-2 outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60 [&::-webkit-details-marker]:hidden">
+        <Icon name="info" size={15} className="text-mp-ink-3" />
+        How to read this
+        <Icon name="chevron-down" size={15} className="text-mp-ink-3 transition group-open/how:rotate-180 motion-reduce:transition-none" />
+      </summary>
+      <div className={cx(tone.muted, "space-y-2 pb-2 text-[13px] leading-snug")}>{children}</div>
+    </details>
+  );
+}
+
 export function EmptyState({
   icon,
   title,

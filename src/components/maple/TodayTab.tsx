@@ -42,7 +42,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: TabId) => voi
   const recent = state.entries.filter((e) => !e.active).slice(0, 5);
 
   return (
-    <div className="space-y-6 px-4 pb-4">
+    <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
       {summary.active.length > 0 && <TitleTicker />}
       {born ? <Hero /> : <Waiting />}
       {readOnly && <LatestMoment />}

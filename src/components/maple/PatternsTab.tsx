@@ -34,7 +34,7 @@ import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, stat
 import { useNightActive } from "./nightLook";
 import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
-import { Button, Card, EmptyState, SectionTitle, Segmented, cx, tone } from "./ui";
+import { Button, Card, EmptyState, HowToRead, SectionTitle, Segmented, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -134,7 +134,7 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
   return (
     <div className={cx("px-4 pt-[max(1.25rem,env(safe-area-inset-top))]", VIZ_VARS)}>
       <header className="mb-4 px-1">
-        <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Patterns</h1>
+        <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Patterns</h1>
         <p className={cx(tone.muted, "mt-1 text-[15px] leading-snug")}>What the days have looked like, for you and her pediatrician.</p>
       </header>
 
@@ -979,20 +979,6 @@ function KeyDot({ color, hollow }: { color: string; hollow?: boolean }) {
     <svg width="8" height="8" aria-hidden className="shrink-0">
       {hollow ? <circle cx="4" cy="4" r="3.25" fill="none" stroke={color} strokeWidth="1.5" /> : <circle cx="4" cy="4" r="4" fill={color} />}
     </svg>
-  );
-}
-
-/** A chart's explanation, one tap away. The words are passed through as they are (some come from guidelines.ts). */
-function HowToRead({ children }: { children: ReactNode }) {
-  return (
-    <details className="group/how px-1">
-      <summary className="-ml-1 inline-flex min-h-[44px] cursor-pointer list-none items-center gap-1.5 rounded-lg px-1 text-[13px] font-medium text-mp-ink-2 outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60 [&::-webkit-details-marker]:hidden">
-        <Icon name="info" size={15} className="text-mp-ink-3" />
-        How to read this
-        <Icon name="chevron-down" size={15} className="text-mp-ink-3 transition group-open/how:rotate-180 motion-reduce:transition-none" />
-      </summary>
-      <div className={cx(tone.muted, "space-y-2 pb-3 text-[13px] leading-snug")}>{children}</div>
-    </details>
   );
 }
 

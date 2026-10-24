@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WEIGHT_GAIN_NOTE } from "@/lib/maple/guidelines";
 import { ageInDays, curves, percentileFor, type Measure, type Percentile } from "@/lib/maple/growth";
 import { dayKey, formatDayLabel } from "@/lib/maple/time";
 import { CM_PER_IN, G_PER_LB, formatLength, formatWeight } from "@/lib/maple/units";
 import type { Baby, Entry, EntryOf, UnitSystem } from "@/lib/maple/types";
 import { Icon } from "./icons";
-import { Button, EmptyState, Segmented, cx, tone } from "./ui";
+import { Button, EmptyState, HowToRead, Segmented, cx, tone } from "./ui";
 
 /**
  * Her measurements on the WHO girls' growth standards (3rd–97th percentile
@@ -191,7 +191,7 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
           )}
         </div>
       )}
-      <HowToRead>
+      <HowToRead className="mt-2">
         <p>
           Shaded bands are the WHO growth standards for girls: the wide band spans the 3rd to 97th percentile, the deeper, narrower one
           the 15th to 85th, and the dashed line is the 50th. Percentiles describe where she sits among healthy girls her age; they aren&apos;t
@@ -200,23 +200,6 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
         {measure === "weight" && <p>{WEIGHT_GAIN_NOTE}</p>}
       </HowToRead>
     </div>
-  );
-}
-
-/**
- * The explanation, one tap away (same look as the Patterns charts' own; kept
- * here so Patterns can go on loading this file, and the WHO tables, lazily).
- */
-function HowToRead({ children }: { children: ReactNode }) {
-  return (
-    <details className="group/how mt-2 px-1">
-      <summary className="-ml-1 inline-flex min-h-[44px] cursor-pointer list-none items-center gap-1.5 rounded-lg px-1 text-[13px] font-medium text-mp-ink-2 outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60 [&::-webkit-details-marker]:hidden">
-        <Icon name="info" size={15} className="text-mp-ink-3" />
-        How to read this
-        <Icon name="chevron-down" size={15} className="text-mp-ink-3 transition group-open/how:rotate-180 motion-reduce:transition-none" />
-      </summary>
-      <div className={cx(tone.muted, "space-y-2 pb-1 text-[13px] leading-snug")}>{children}</div>
-    </details>
   );
 }
 
