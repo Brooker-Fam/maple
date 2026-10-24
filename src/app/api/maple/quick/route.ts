@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
       case "nurse_left":
       case "nurse_right": {
         const s = action === "nurse_left" ? "L" : "R";
-        if (runningSleep) await stopTimer(runningSleep.id, now, me.email);
+        if (runningSleep) await stopTimer(runningSleep.id, undefined, me.email);
         ({ entry } = await startTimer({ ...base, kind: "feed", side: s, at: now, clientId }));
         speak = `Nursing timer running on the ${side(s)}.`;
         break;
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
         }
         const d = runningFeed.data as FeedData;
         const to = d.last_side === "L" ? "R" : "L";
-        entry = await switchSide(runningFeed.id, to, now, me.email);
+        entry = (await switchSide(runningFeed.id, to, undefined, me.email)).entry;
         speak = `Switched to the ${side(to)}.`;
         break;
       }
@@ -118,12 +118,13 @@ export async function POST(request: NextRequest) {
           speak = action === "wake" ? "No sleep timer is running." : "No timer is running.";
           break;
         }
-        entry = await stopTimer(target.id, now, me.email);
+        // No time: "now" under the stop rule (a paused feed ends at its pause).
+        entry = await stopTimer(target.id, undefined, me.email);
         speak = `Stopped. ${describeEntry(entry, { now }).text}.`;
         break;
       }
       case "sleep": {
-        if (runningFeed) await stopTimer(runningFeed.id, now, me.email);
+        if (runningFeed) await stopTimer(runningFeed.id, undefined, me.email);
         ({ entry } = await startTimer({ ...base, kind: "sleep", at: now, clientId }));
         speak = runningFeed ? "Feed stopped and sleep timer started. Sweet dreams, Maple." : "Sleep timer started. Sweet dreams, Maple.";
         break;

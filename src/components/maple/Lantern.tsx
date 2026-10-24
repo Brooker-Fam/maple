@@ -5,17 +5,20 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
 import { other } from "@/lib/maple/feed";
-import { DEFAULT_TZ, formatClock, formatTime } from "@/lib/maple/time";
+import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, Side } from "@/lib/maple/types";
+import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import { Icon } from "./icons";
-import { SIDE_NAME, timerNumbers, useTimerActions } from "./TimerCard";
 import { useMaple, useNow } from "./useMaple";
+import { useTimerActions } from "./useTimerActions";
 
 /**
  * Lantern: a full-screen, nearly black timer for feeds in the dark. A web app
  * can't put a live timer on the lock screen, so this keeps the screen awake
- * but dim instead. Its two buttons need a half-second hold, so a flailing
- * baby hand or a cheek can't end the feed by accident.
+ * but dim instead. It covers the dock, so it carries the dock's buttons in
+ * the dock's column order, each needing a half-second hold so a flailing baby
+ * hand or a cheek can't end the feed by accident. Timer toasts wait while it's
+ * open and show when it closes (if still true).
  */
 
 const HOLD_MS = 500;
@@ -40,6 +43,13 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   });
 
   useEffect(() => setMounted(true), []);
+
+  // Open: no timer toast behind it; taps in here keep theirs for when it closes.
+  const hold = actions.holdToasts;
+  useEffect(() => {
+    hold(true);
+    return () => hold(false);
+  }, [hold]);
 
   // Gone (stopped or discarded elsewhere)? Close.
   useEffect(() => {
@@ -92,13 +102,18 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     hintTimer.current = window.setTimeout(() => setHint(null), 1800);
   };
 
-  const isFeed = live.kind === "feed";
+  const isFeed = live.kind === "feed" && n.parts.length > 0;
   // Viewers only watch; a just-started timer (temporary id) can't take actions yet.
   const locked = readOnly || live.id < 0;
-  const target: Side = n.side ? other(n.side) : "L";
-  const subtitle = isFeed
-    ? `${n.paused ? "Paused" : `${SIDE_NAME[n.side ?? "L"]} side`} · since ${formatTime(live.started_at, tz)}`
-    : `Asleep · since ${formatTime(live.started_at, tz)}`;
+  const side: Side = n.side ?? "L";
+  const target: Side = other(side);
+  const short = (t: string) => formatTimeNear(t, t, tz);
+  // The big clock is the part she's on now: this side, or the break (dimmed).
+  const subtitle = !isFeed
+    ? `Asleep · since ${formatTime(live.started_at, tz)}`
+    : n.paused
+      ? `On a break · since ${short(n.current.since)}`
+      : `${SIDE_NAME[side]} side · since ${short(n.current.since)} · feed started ${short(live.started_at)}`;
 
   if (!mounted) return null;
   return createPortal(
@@ -141,14 +156,10 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           style={{ opacity: n.paused ? 0.35 : dim ? 0.55 : 0.6 }}
           aria-live="off"
         >
-          {formatClock(n.elapsed)}
+          {formatClock(isFeed ? n.current.sec : n.elapsed)}
         </p>
         <p className="mt-3 text-lg opacity-50">{subtitle}</p>
-        {isFeed && (
-          <p className="mt-1 text-sm tabular-nums opacity-35">
-            L {formatClock(n.left)} · R {formatClock(n.right)}
-          </p>
-        )}
+        {isFeed && !n.paused && <p className="mt-1 text-sm tabular-nums opacity-35">Total nursing {formatClock(n.total)}</p>}
         <p className="mt-6 h-5 text-sm opacity-60" aria-live="polite">
           {hint ?? ""}
         </p>
@@ -159,9 +170,19 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         {!locked && isFeed && !n.paused && (
           <HoldButton label={`Switch to ${SIDE_NAME[target]}`} onHint={() => showHint("Hold to switch")} onConfirm={() => void actions.switchSide(live, target)} />
         )}
-        {!locked && isFeed && n.paused && (
-          <HoldButton label={`Resume ${SIDE_NAME[n.side ?? "L"]}`} onHint={() => showHint("Hold to resume")} onConfirm={() => void actions.resume(live, n.side ?? "L")} />
-        )}
+        {/* Paused: both sides, the other one first, as in the dock. */}
+        {!locked &&
+          isFeed &&
+          n.paused &&
+          [target, side].map((s) => (
+            <HoldButton
+              key={s}
+              label={SIDE_NAME[s]}
+              aria={`Resume on ${SIDE_NAME[s]}`}
+              onHint={() => showHint(`Hold to go back on the ${SIDE_NAME[s]}`)}
+              onConfirm={() => void actions.resume(live, s)}
+            />
+          ))}
         {!locked && (
           <HoldButton
             label={live.kind === "sleep" ? "Woke up" : "Done"}
@@ -179,7 +200,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
 }
 
 /** A big button that only fires after a 500ms press-and-hold, with a ring that fills. */
-function HoldButton({ label, onConfirm, onHint }: { label: string; onConfirm: () => void; onHint: () => void }) {
+function HoldButton({ label, aria, onConfirm, onHint }: { label: string; aria?: string; onConfirm: () => void; onHint: () => void }) {
   const [progress, setProgress] = useState(0);
   const raf = useRef<number | null>(null);
   const start = useRef<number | null>(null);
@@ -217,7 +238,7 @@ function HoldButton({ label, onConfirm, onHint }: { label: string; onConfirm: ()
   return (
     <button
       type="button"
-      aria-label={`${label} (press and hold)`}
+      aria-label={`${aria ?? label} (press and hold)`}
       onPointerDown={(e) => {
         e.stopPropagation();
         fired.current = false;

@@ -84,16 +84,24 @@ export const POST = withMember("POST /api/maple/entries", async (request, me) =>
   return json({ entry: toClientEntry(entry), deduped }, deduped ? 200 : 201);
 }, { write: true });
 
-/** PATCH /api/maple/entries?id= — edit time, details, or note. */
+/**
+ * PATCH /api/maple/entries?id= — edit time, details, or note. With
+ * expect_updated_at (FeedSheet's Times), a newer edit by someone else answers
+ * 409 "changed" instead of being overwritten.
+ */
 export const PATCH = withMember("PATCH /api/maple/entries", async (request, me) => {
   const id = idParam(request);
   const body = await readJson<UpdateEntryInput>(request);
+  const expect = body.expect_updated_at;
+  if (expect !== undefined && (typeof expect !== "string" || Number.isNaN(Date.parse(expect)))) {
+    throw new BadRequest("expect_updated_at must be an ISO timestamp");
+  }
   const entry = await updateEntry(id, {
     startedAt: body.started_at ? instant(body.started_at, "Start time") : undefined,
     endedAt: body.ended_at === null ? null : body.ended_at ? instant(body.ended_at, "End time") : undefined,
     data: body.data && typeof body.data === "object" ? body.data : undefined,
     note: body.note === undefined ? undefined : typeof body.note === "string" ? body.note : null,
-  }, me.email);
+  }, me.email, { expectUpdatedAt: expect });
   return json({ entry: toClientEntry(entry) });
 }, { write: true });
 

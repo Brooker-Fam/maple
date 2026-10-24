@@ -15,6 +15,7 @@ import {
 } from "@/lib/maple/time";
 import type { Member } from "@/lib/maple/types";
 import { Icon, type IconName } from "./icons";
+import { useNightActive } from "./nightLook";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -460,7 +461,8 @@ export function RepeatButton({
  * Pick a time with one thumb: the time big, −5/−1/+1/+5 (hold to keep
  * going), "minutes ago" chips, a Yesterday/Today toggle around midnight, and
  * an "Exact time…" escape hatch (a native time-only picker). Never later than
- * now + 1 minute.
+ * now + 1 minute. nudgeStyle "words" spells the nudges out ("5 min" over
+ * "earlier"), for Fix times, where a bare − or + reads as arithmetic.
  */
 export function TimeScrubber({
   value,
@@ -472,6 +474,7 @@ export function TimeScrubber({
   min,
   max,
   className,
+  nudgeStyle = "signed",
 }: {
   value: Date;
   onChange: (d: Date) => void;
@@ -486,6 +489,8 @@ export function TimeScrubber({
   /** Latest allowed; never later than now + 1 minute anyway. */
   max?: Date;
   className?: string;
+  /** "signed": −5 −1 +1 +5. "words": "5 min / earlier" … "5 min / later". */
+  nudgeStyle?: "signed" | "words";
 }) {
   const { now: nowFn } = useMaple();
   const now = useNow(30_000);
@@ -506,7 +511,8 @@ export function TimeScrubber({
   };
   const step = (mins: number) => {
     setChip(null);
-    set(Math.round(latest.current / MIN_MS) * MIN_MS + mins * MIN_MS);
+    // Step from the minute that's shown (seconds are hidden), so "1 min earlier" always changes it.
+    set(Math.floor(latest.current / MIN_MS) * MIN_MS + mins * MIN_MS);
   };
 
   const t = value.getTime();
@@ -569,10 +575,22 @@ export function TimeScrubber({
             onStep={() => step(d)}
             disabled={d < 0 ? atMin : atMax}
             ariaLabel={`${Math.abs(d)} minute${Math.abs(d) === 1 ? "" : "s"} ${d < 0 ? "earlier" : "later"}`}
-            className="h-[52px] rounded-xl border border-mp-line bg-mp-raised text-lg font-semibold text-mp-ink tabular-nums"
+            className={cx(
+              "h-[52px] rounded-xl border border-mp-line bg-mp-raised font-semibold text-mp-ink tabular-nums",
+              nudgeStyle === "words" ? "flex flex-col items-center justify-center leading-tight" : "text-lg"
+            )}
           >
-            {d < 0 ? "−" : "+"}
-            {Math.abs(d)}
+            {nudgeStyle === "words" ? (
+              <>
+                <span className="text-[15px]">{Math.abs(d)} min</span>
+                <span className="text-[12px] font-medium text-mp-ink-2">{d < 0 ? "earlier" : "later"}</span>
+              </>
+            ) : (
+              <>
+                {d < 0 ? "−" : "+"}
+                {Math.abs(d)}
+              </>
+            )}
           </RepeatButton>
         ))}
       </div>
@@ -696,29 +714,44 @@ export function Sheet({
   open,
   onClose,
   title,
+  subtitle,
   children,
   footer,
+  calm,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
+  /** One quiet line under the title ("Nursing · feed started 4:00 PM"). */
+  subtitle?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  /**
+   * Fix times: at night it fades in (no slide) over a darker backdrop, it
+   * stops at 90% of the screen, and focus goes to the title, then back to
+   * whatever opened it.
+   */
+  calm?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const drag = useDragControls();
+  const night = useNightActive();
+  const still = calm && night;
   useEffect(() => {
     if (!open) return;
+    const opener = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    panelRef.current?.focus();
+    (calm ? titleRef.current : panelRef.current)?.focus();
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
+      if (calm && opener?.isConnected) opener.focus({ preventScroll: true });
     };
-  }, [open, onClose]);
+  }, [open, onClose, calm]);
 
   return (
     <AnimatePresence>
@@ -726,7 +759,7 @@ export function Sheet({
         // m-0!: a sheet rendered inside a space-y list mustn't pick up its margin and float off the bottom.
         <div className="fixed inset-0 z-[80] m-0! flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
           <motion.div
-            className="absolute inset-0 bg-black/40"
+            className={cx("absolute inset-0", still ? "bg-black/55" : "bg-black/40")}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -735,10 +768,10 @@ export function Sheet({
           <motion.div
             ref={panelRef}
             tabIndex={-1}
-            initial={{ y: "100%" }}
-            animate={{ y: 0 }}
-            exit={{ y: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 320 }}
+            initial={still ? { opacity: 0 } : { y: "100%" }}
+            animate={still ? { opacity: 1 } : { y: 0 }}
+            exit={still ? { opacity: 0 } : { y: "100%" }}
+            transition={still ? { duration: 0.18 } : { type: "spring", damping: 30, stiffness: 320 }}
             drag="y"
             dragListener={false}
             dragControls={drag}
@@ -747,13 +780,21 @@ export function Sheet({
             onDragEnd={(_, info) => {
               if (info.offset.y > 120 || info.velocity.y > 600) onClose();
             }}
-            className="relative flex max-h-[92dvh] w-full max-w-lg flex-col rounded-t-[24px] bg-mp-bg outline-none sm:rounded-[24px]"
+            className={cx(
+              "relative flex w-full max-w-lg flex-col rounded-t-[24px] bg-mp-bg outline-none sm:rounded-[24px]",
+              calm ? "max-h-[90dvh]" : "max-h-[92dvh]"
+            )}
           >
             {/* Drag from the header to dismiss; the body scrolls normally. */}
             <div className="shrink-0 touch-none" onPointerDown={(e) => drag.start(e)}>
             <div className="mx-auto mt-2 h-[5px] w-9 rounded-full bg-mp-ink/15" />
             <div className="flex items-center justify-between gap-3 px-5 pt-2 pb-3">
-              <h2 className={cx(tone.heading, "text-[20px]")}>{title}</h2>
+              <div className="min-w-0">
+                <h2 ref={titleRef} tabIndex={calm ? -1 : undefined} className={cx(tone.heading, "text-[20px] outline-none")}>
+                  {title}
+                </h2>
+                {subtitle && <p className="mt-0.5 text-[13px] leading-snug text-mp-ink-2">{subtitle}</p>}
+              </div>
               <button type="button" onClick={onClose} aria-label="Close" className="-mr-1.5 flex h-11 w-11 items-center justify-center rounded-full">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2">
                   <Icon name="x" size={18} strokeWidth={2.25} />
@@ -882,15 +923,26 @@ export function ToastHost() {
                     <button
                       key={a.label}
                       type="button"
-                      aria-label={a.ariaLabel ?? a.label}
+                      aria-label={a.ariaLabel ?? (a.sub ? `${a.label}, ${a.sub}` : a.label)}
                       onClick={() => {
                         a.onClick();
                         dismissToast(t.id);
                       }}
-                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full bg-current/15 px-2.5 text-xs font-semibold"
+                      className={cx(
+                        "inline-flex min-h-[44px] items-center gap-1.5 bg-current/15 font-semibold",
+                        // A chip with a second line (the time it produces) is a two-line tile.
+                        a.sub ? "min-w-[96px] flex-col items-start justify-center rounded-xl px-3 py-1 text-left" : "rounded-full px-3 text-xs"
+                      )}
                     >
                       {a.color && <span className="mp-kind-fill h-4 w-4 rounded-full ring-1 ring-current/40" style={{ backgroundColor: a.color }} aria-hidden />}
-                      {a.label}
+                      {a.sub ? (
+                        <>
+                          <span className="text-[13px] leading-tight">{a.label}</span>
+                          <span className="text-[12px] leading-tight font-medium tabular-nums opacity-80">{a.sub}</span>
+                        </>
+                      ) : (
+                        a.label
+                      )}
                     </button>
                   ))}
                 </span>
@@ -903,9 +955,9 @@ export function ToastHost() {
                   t.undo?.();
                   dismissToast(t.id);
                 }}
-                className="min-h-[36px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold"
+                className="min-h-[44px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold whitespace-nowrap"
               >
-                Undo
+                {t.undoLabel ?? "Undo"}
               </button>
             )}
           </motion.div>

@@ -1,5 +1,22 @@
 import { query } from "@/lib/db";
-import { finalizeBreast, openSegment, pause as pauseFeed, retimeBreast, startBreast, switchTo } from "./feed";
+import {
+  FeedEditError,
+  feedCtx,
+  feedParts,
+  finalizeBreast,
+  moveEdge,
+  normalizeSegments,
+  openSegment,
+  pause as pauseFeed,
+  retimeBreast,
+  setSide,
+  startBreast,
+  stopBreast,
+  summarize,
+  switchTo,
+  undoLastTap,
+  type Moment,
+} from "./feed";
 import { cleanData } from "./validate";
 import type {
   Baby,
@@ -7,12 +24,15 @@ import type {
   EntryDataByKind,
   EntryKind,
   FeedData,
+  FeedEdit,
   Member,
   MomentData,
   Role,
+  Segment,
   Side,
   Source,
   TimerKind,
+  TimerResponse,
 } from "./types";
 
 /**
@@ -304,9 +324,31 @@ export type EntryPatch = {
   note?: string | null;
 };
 
-export async function updateEntry(id: number, patch: EntryPatch, by?: string): Promise<Entry> {
+const SEC = 1000;
+const HOUR = 3600 * SEC;
+/** A last end this close to ended_at ran to the stop (feed.ts uses the same). */
+const NEAR = 1500;
+
+/** Two updated_at values from JS (ms) and Postgres (µs) name the same write. */
+const sameInstant = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 1;
+
+/** Parts can't end in the future (a little slack for clock skew). */
+function noFutureEnds(segments: Segment[], now: Date) {
+  for (const s of segments) {
+    if (s.end && Date.parse(s.end) > now.getTime() + 5 * SEC) throw new FeedEditError("future", { now: now.toISOString() });
+  }
+}
+
+/**
+ * `expectUpdatedAt`: the updated_at the edit was made against (FeedSheet's
+ * Save, a nap's restore); anything newer is someone else's change, 409.
+ */
+export async function updateEntry(id: number, patch: EntryPatch, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
   const cur = await getEntry(id);
   if (!cur) throw new NotFound(`Entry ${id} not found`);
+  if (opts.expectUpdatedAt !== undefined && !sameInstant(opts.expectUpdatedAt, cur.updated_at)) {
+    throw new Conflict("Someone else just changed this. Have another look and try again.", cur, "changed");
+  }
 
   let mergedData: Record<string, unknown> = { ...(cur.data as Record<string, unknown>) };
   if (patch.data) {
@@ -328,12 +370,35 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string): P
     !cur.active
   ) {
     delete mergedData.segments;
+    delete mergedData.paused_at_stop;
   }
-  const startedAt = patch.startedAt ?? new Date(cur.started_at);
-  // Moving the start (or, once finished, the end) of a timed nursing session
-  // moves its first (or last) side too, so the side minutes follow.
+  let startedAt = patch.startedAt ?? new Date(cur.started_at);
+  // A finished timed feed's parts as FeedSheet's Times staged them: they are
+  // the feed, so totals, sides and the start follow them.
+  let partsEnd: Date | undefined;
   const newEnd = !cur.active && patch.endedAt ? patch.endedAt : undefined;
-  if (cur.kind === "feed" && (patch.startedAt || newEnd) && Array.isArray(mergedData.segments) && mergedData.segments.length) {
+  if (cur.kind === "feed" && !cur.active && mergedData.method === "breast" && Array.isArray(patch.data?.segments) && Array.isArray(mergedData.segments)) {
+    const now = new Date();
+    const segments = normalizeSegments(mergedData.segments as Segment[], { active: false });
+    noFutureEnds(segments, now);
+    mergedData = { ...mergedData, segments, ...summarize(segments) };
+    startedAt = new Date(segments[0].start);
+    const lastEnd = Date.parse(segments[segments.length - 1].end!);
+    // A legacy trailing break keeps its end when the last side's end didn't move.
+    const trailing = feedParts(cur.data as FeedData, feedCtx(cur, now)).find((p) => p.kind === "break" && p.legacy);
+    const kept = trailing && Math.abs(lastEnd - Date.parse(trailing.start)) < NEAR ? Date.parse(cur.ended_at!) : lastEnd;
+    let end = patch.endedAt ? patch.endedAt.getTime() : kept;
+    if (end > now.getTime() + 5 * SEC) throw new FeedEditError("future", { now: now.toISOString() });
+    if (end < lastEnd) {
+      if (lastEnd - end >= NEAR) throw new FeedEditError("before_break", { t: new Date(lastEnd).toISOString() });
+      end = lastEnd;
+    }
+    // An end past the last side is a trailing break, not a stop at the pause.
+    if (end - lastEnd >= NEAR) delete mergedData.paused_at_stop;
+    partsEnd = new Date(end);
+  } else if (cur.kind === "feed" && (patch.startedAt || newEnd) && Array.isArray(mergedData.segments) && mergedData.segments.length) {
+    // Moving the start (or, once finished, the end) of a timed nursing session
+    // moves its first (or last) side too, so the side minutes follow.
     if (cur.active && patch.startedAt && patch.startedAt.getTime() > Date.now()) throw new Error("Start time can't be in the future");
     // A "started on" correction sent with the move beats the recomputed sides.
     const sides = Object.fromEntries(
@@ -351,7 +416,7 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string): P
   }
   const data = cleanData(cur.kind, mergedData);
 
-  let endedAt = patch.endedAt !== undefined ? patch.endedAt : cur.ended_at ? new Date(cur.ended_at) : null;
+  let endedAt = partsEnd ?? (patch.endedAt !== undefined ? patch.endedAt : cur.ended_at ? new Date(cur.ended_at) : null);
   if (cur.active) endedAt = null;
   // New side minutes or a new start time on a by-minutes nursing session move its end.
   if (patch.endedAt === undefined && !cur.active && (patch.data || patch.startedAt)) {
@@ -428,8 +493,14 @@ export async function restoreEntryDetailed(id: number, by?: string): Promise<{ e
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
     const deletedAt = await q(`SELECT deleted_at FROM maple_entries WHERE id = $1`, [id]);
-    const stopAt = new Date(isoOrNull(deletedAt[0]?.deleted_at) ?? Date.now());
-    const data = prev.kind === "feed" ? finalizeBreast(prev.data as FeedData, stopAt) : prev.data;
+    let stopAt = new Date(isoOrNull(deletedAt[0]?.deleted_at) ?? Date.now());
+    let data: unknown = prev.data;
+    if (prev.kind === "feed" && (prev.data as FeedData).segments?.length) {
+      // The one stop rule: a running feed ends when it was deleted, a paused one at its pause.
+      const stopped = stopBreast(prev.data as FeedData, undefined, stopAt);
+      data = stopped.data;
+      stopAt = new Date(stopped.endedAt);
+    } else if (prev.kind === "feed") data = finalizeBreast(prev.data as FeedData, stopAt);
     const rows = await q(
       `UPDATE maple_entries SET deleted_at = NULL, active = FALSE, ended_at = COALESCE(ended_at, $3::timestamptz),
          data = $4::jsonb, updated_by = COALESCE($2, updated_by), updated_at = NOW()
@@ -465,22 +536,78 @@ export class Conflict extends Error {
   }
 }
 
-async function saveTimer(id: number, data: unknown, opts: { stopAt?: Date; by?: string } = {}): Promise<Entry> {
-  const rows = await q(
-    `UPDATE maple_entries SET data = $2::jsonb,
-       active = CASE WHEN $3::timestamptz IS NULL THEN active ELSE FALSE END,
-       ended_at = COALESCE($3::timestamptz, ended_at),
-       updated_by = COALESCE($4, updated_by),
-       updated_at = NOW()
-     WHERE id = $1 AND deleted_at IS NULL AND active RETURNING *`,
-    [id, JSON.stringify(data), opts.stopAt ? opts.stopAt.toISOString() : null, opts.by ?? null]
-  );
-  if (!rows.length) {
-    const cur = await getEntry(id, { includeDeleted: true });
+/** What a timer edit writes. Feed segments are normalized on the way in, and started_at follows them. */
+type TimerWrite = {
+  data: unknown;
+  startedAt?: string;
+  /** Finished entries only; omitted keeps the stored one. */
+  endedAt?: string | null;
+  active?: boolean;
+  flags?: Pick<TimerResponse, "clamped" | "merged" | "reverted">;
+};
+
+const CAS_ATTEMPTS = 3;
+
+const changed = (cur: Entry) => new Conflict(`Someone just changed this ${cur.kind === "feed" ? "feed" : "timer"}`, cur, "changed");
+
+/** The feed as an edit found it, for "Back to …" (retime restore). */
+function beforeOf(cur: Entry): TimerResponse["before"] {
+  if (cur.kind !== "feed") return undefined;
+  return { segments: cur.data.segments ?? [], started_at: cur.started_at, ended_at: cur.ended_at, updated_at: cur.updated_at };
+}
+
+/**
+ * The one way a timer changes: read it, apply `fn`, and write only if the row
+ * is still the one read, else read again and re-apply. Every `fn` is an
+ * intent ("switch to Right at 4:16", "move the stretch {R, 4:25} to 4:20",
+ * "undo the tap that made {R, 4:25}"), so when both phones write at once
+ * their changes merge instead of one overwriting the other. `fn` answers null
+ * when there's nothing to do (already on that side, already paused).
+ */
+async function mutateTimer(
+  id: number,
+  fn: (cur: Entry) => TimerWrite | null,
+  opts: { by?: string; allowFinished?: boolean; expectUpdatedAt?: string } = {}
+): Promise<TimerResponse> {
+  for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+    const cur = await getEntry(id);
     if (!cur) throw new NotFound(`Timer ${id} not found`);
-    throw new Conflict("That timer already stopped", cur);
+    if (!cur.active && !opts.allowFinished) throw new Conflict("That timer already stopped", cur, "stopped");
+    if (opts.expectUpdatedAt !== undefined && !sameInstant(opts.expectUpdatedAt, cur.updated_at)) throw changed(cur);
+    let w: TimerWrite | null;
+    try {
+      w = fn(cur);
+    } catch (err) {
+      // The stretch the edit names is gone, or isn't the newest any more.
+      if (err instanceof FeedEditError && (err.code === "not_found" || err.code === "not_newest")) throw changed(cur);
+      throw err;
+    }
+    if (!w) return { entry: cur, noop: true };
+    const active = w.active ?? cur.active;
+    let data = w.data;
+    let startedAt = w.startedAt ?? cur.started_at;
+    const segs = cur.kind === "feed" ? (data as FeedData).segments : undefined;
+    if (segs?.length) {
+      const segments = normalizeSegments(segs, { active });
+      data = { ...(data as FeedData), segments };
+      startedAt = segments[0].start;
+    }
+    const endedAt = active ? null : w.endedAt !== undefined ? w.endedAt : cur.ended_at;
+    if (endedAt && Date.parse(endedAt) < Date.parse(startedAt)) throw new Error("End time is before the start time");
+    const rows = await q(
+      `UPDATE maple_entries SET data = $2::jsonb, started_at = $3, ended_at = $4, active = $5,
+         updated_by = COALESCE($6, updated_by), updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL AND active = $7
+         -- JS dates carry milliseconds; the column has microseconds.
+         AND updated_at BETWEEN $8::timestamptz - INTERVAL '1 millisecond' AND $8::timestamptz + INTERVAL '1 millisecond'
+       RETURNING *`,
+      [id, JSON.stringify(cleanData(cur.kind, data)), startedAt, endedAt, active, opts.by ?? null, cur.active, cur.updated_at]
+    );
+    if (rows.length) return { entry: rowToEntry(rows[0]), ...w.flags, ...(cur.kind === "feed" ? { before: beforeOf(cur) } : {}) };
   }
-  return rowToEntry(rows[0]);
+  const latest = await getEntry(id);
+  if (!latest) throw new NotFound(`Timer ${id} not found`);
+  throw changed(latest);
 }
 
 async function runningTimer(id: number): Promise<Entry> {
@@ -507,9 +634,9 @@ export async function startTimer(opts: {
   const existing = async () => {
     const running = (await activeTimers(opts.babyId)).find((e) => e.kind === opts.kind);
     if (!running) return null;
-    // A different side switches; the same side resumes a paused feed.
+    // A different side switches (now: this is a tap, not a time someone gave); the same side resumes a paused feed.
     if (running.kind === "feed" && opts.side && opts.side !== openSegment((running.data as FeedData).segments)?.side) {
-      return { entry: await switchSide(running.id, opts.side, opts.at, opts.createdBy), alreadyRunning: true };
+      return { entry: (await switchSide(running.id, opts.side, undefined, opts.createdBy)).entry, alreadyRunning: true };
     }
     return { entry: running, alreadyRunning: true };
   };
@@ -537,38 +664,183 @@ export async function startTimer(opts: {
   }
 }
 
-export async function switchSide(id: number, side: Side, at: Date, by?: string): Promise<Entry> {
-  const e = await runningTimer(id);
-  if (e.kind !== "feed") throw new Error("Only nursing timers have sides");
-  return saveTimer(id, switchTo(e.data as FeedData, side, at), { by });
-}
-
-export async function pauseTimer(id: number, at: Date, by?: string): Promise<Entry> {
-  const e = await runningTimer(id);
-  if (e.kind !== "feed") throw new Error("Only nursing timers can pause");
-  return saveTimer(id, pauseFeed(e.data as FeedData, at), { by });
+/**
+ * When a tap really happened: the `at` someone gave ("she went back on at
+ * 4:20"), within the last 4 hours, else now. A few seconds ahead (a phone's
+ * clock) counts as now.
+ */
+function tapTime(at: Date | undefined, now: Date): Date {
+  if (!at) return now;
+  const t = at.getTime();
+  if (Number.isNaN(t)) throw new Error("That time isn't a valid time");
+  if (t > now.getTime() + 5 * SEC) throw new FeedEditError("future", { now: now.toISOString() });
+  if (t < now.getTime() - 4 * HOUR) throw new Error("That's more than 4 hours ago.");
+  return t > now.getTime() ? now : at;
 }
 
 /**
- * Stop a timer at `at` (now, or earlier for "ended earlier…"). Never before
- * the moment the current side started, never in the future.
+ * Switch sides, or resume on a side while paused, now or at `at`. Already on
+ * that side: noop. It never moves a stretch that's already there; fixing one
+ * is retimeFeed's job.
  */
-export async function stopTimer(id: number, at: Date, by?: string): Promise<Entry> {
-  const e = await runningTimer(id);
-  let floor = Date.parse(e.started_at);
-  if (e.kind === "feed") {
-    for (const s of (e.data as FeedData).segments ?? []) floor = Math.max(floor, Date.parse(s.start));
-  }
-  const stopAt = new Date(Math.min(Date.now(), Math.max(at.getTime(), floor)));
-  const data = e.kind === "feed" ? finalizeBreast(e.data as FeedData, stopAt) : e.data;
-  return saveTimer(id, data, { stopAt, by });
+export async function switchSide(id: number, side: Side, at: Date | undefined, by?: string): Promise<TimerResponse> {
+  const t = tapTime(at, new Date());
+  return mutateTimer(id, (cur) => {
+    if (cur.kind !== "feed") throw new Error("Only nursing timers have sides");
+    const { data, noop, ...flags } = switchTo(cur.data, side, t, { explicit: at !== undefined });
+    return noop ? null : { data, flags };
+  }, { by });
 }
 
-/** "Forgot to tap at latch": move a running timer's start earlier (or later). */
+/** Pause the open side now or at `at` (when she came off). Already paused: noop. */
+export async function pauseTimer(id: number, at: Date | undefined, by?: string): Promise<TimerResponse> {
+  const t = tapTime(at, new Date());
+  return mutateTimer(id, (cur) => {
+    if (cur.kind !== "feed") throw new Error("Only nursing timers can pause");
+    const paused = pauseFeed(cur.data, t, { explicit: at !== undefined });
+    return paused.noop ? null : { data: paused.data };
+  }, { by });
+}
+
+/**
+ * Stop a timer. The one rule every Done goes through (the dock, Fell asleep,
+ * Still nursing?, stop_timer): a running feed ends at `at` (default now,
+ * never later), and an explicit time before its current side began is
+ * refused, not clamped. A paused feed ends at its pause, unless `at` is
+ * earlier, which trims the last side to it. Other timers end at `at`, kept
+ * between their start and now.
+ */
+export async function stopTimer(id: number, at: Date | undefined, by?: string): Promise<Entry> {
+  if (at && Number.isNaN(at.getTime())) throw new Error("That time isn't a valid time");
+  const now = new Date();
+  const res = await mutateTimer(id, (cur) => {
+    if (cur.kind === "feed" && cur.data.segments?.length) {
+      const stopped = stopBreast(cur.data, at, now);
+      return { data: stopped.data, endedAt: stopped.endedAt, active: false };
+    }
+    const stopAt = new Date(Math.max(Date.parse(cur.started_at), Math.min((at ?? now).getTime(), now.getTime())));
+    return { data: cur.kind === "feed" ? finalizeBreast(cur.data, stopAt) : cur.data, endedAt: stopAt.toISOString(), active: false };
+  }, { by });
+  return res.entry;
+}
+
+/** The timed breast feed an edit applies to, else not_timed (400). */
+function timedFeed(cur: Entry): FeedData {
+  if (cur.kind !== "feed" || cur.data.method !== "breast" || !cur.data.segments?.length) throw new FeedEditError("not_timed");
+  return cur.data;
+}
+
+/**
+ * Fix times: move one moment, fix which side a part was, undo the latest
+ * tap, or put back what a fix replaced (the `before` it answered with). Each
+ * names the stretch it means, so it merges with the other phone's taps.
+ */
+export async function retimeFeed(id: number, edit: FeedEdit, by?: string): Promise<TimerResponse> {
+  return retime(id, edit, by, true);
+}
+
+async function retime(id: number, edit: FeedEdit, by: string | undefined, allowFinished: boolean): Promise<TimerResponse> {
+  switch (edit.op) {
+    case "move": {
+      // The moment the winning attempt moved (a retry re-reads the feed).
+      const last: { moment?: Moment } = {};
+      const res = await mutateTimer(id, (cur) => {
+        const moved = moveEdge(timedFeed(cur), { edge: edit.edge, ref: edit.ref, to: new Date(edit.to) }, feedCtx(cur, new Date()));
+        last.moment = moved.moment;
+        return { data: moved.data, startedAt: moved.startedAt, endedAt: moved.endedAt };
+      }, { by, allowFinished });
+      const was = res.before?.started_at;
+      if (last.moment !== "feed_start" || !was || Date.parse(res.entry.started_at) >= Date.parse(was)) return res;
+      const nap = await followNap(id, was, res.entry.started_at, by);
+      return nap ? { ...res, nap } : res;
+    }
+    case "set_side":
+      return mutateTimer(id, (cur) => ({ data: setSide(timedFeed(cur), edit.ref, edit.side, feedCtx(cur, new Date())).data }), { by, allowFinished });
+    case "undo_tap":
+      // Running feeds only: a finished one comes back with reopen (the Done toast's Undo).
+      return mutateTimer(id, (cur) => ({ data: undoLastTap(timedFeed(cur), edit.expect, { active: cur.active }).data }), { by });
+    case "restore": {
+      const res = await mutateTimer(id, (cur) => restoreWrite(cur, edit), { by, allowFinished: true, expectUpdatedAt: edit.expect_updated_at });
+      // The nap only goes back once the feed has.
+      return edit.nap ? { ...res, ...(await restoreNap(edit.nap, by)) } : res;
+    }
+  }
+}
+
+/** Put back the parts a fix replaced, checked as strictly as any edit. */
+function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): TimerWrite {
+  const d = timedFeed(cur);
+  const segments = normalizeSegments(edit.segments, { active: cur.active });
+  noFutureEnds(segments, new Date());
+  const sides = summarize(segments);
+  if (cur.active) return { data: { ...d, segments, first_side: sides.first_side, last_side: sides.last_side } };
+  const lastEnd = Date.parse(segments[segments.length - 1].end!);
+  if (!edit.ended_at || Date.parse(edit.ended_at) < lastEnd - NEAR) throw new Error("A finished feed can't end before its last side");
+  const end = Math.max(Date.parse(edit.ended_at), lastEnd);
+  const data: FeedData = { ...d, segments, ...sides };
+  // An end past the last side is a trailing break, not a stop at the pause.
+  if (end - lastEnd >= NEAR) delete data.paused_at_stop;
+  return { data, endedAt: new Date(end).toISOString() };
+}
+
+/**
+ * A feed start moved earlier takes the nap that ended at the old start with
+ * it (she woke and latched), as long as the nap keeps a minute. The nap is
+ * written with its own CAS and left alone if it changed meanwhile.
+ */
+async function followNap(feedId: number, wasStart: string, newStart: string, by?: string): Promise<TimerResponse["nap"]> {
+  const rows = await q(
+    `SELECT * FROM maple_entries
+     WHERE baby_id = (SELECT baby_id FROM maple_entries WHERE id = $1)
+       AND kind = 'sleep' AND NOT active AND deleted_at IS NULL
+       AND ended_at BETWEEN $2::timestamptz - INTERVAL '60 seconds' AND $2::timestamptz + INTERVAL '60 seconds'
+     ORDER BY ABS(EXTRACT(EPOCH FROM ended_at - $2::timestamptz)), id DESC LIMIT 1`,
+    [feedId, wasStart]
+  );
+  if (!rows.length) return undefined;
+  const nap = rowToEntry(rows[0]);
+  if (Date.parse(newStart) - Date.parse(nap.started_at) < 60 * SEC) return undefined;
+  try {
+    const entry = await updateEntry(nap.id, { endedAt: new Date(newStart) }, by, { expectUpdatedAt: nap.updated_at });
+    return { entry, before_ended_at: nap.ended_at!, before_updated_at: nap.updated_at };
+  } catch (err) {
+    if (!(err instanceof Conflict || err instanceof NotFound)) console.error("Maple nap follow failed:", err);
+    return undefined;
+  }
+}
+
+/** Put a followed nap's end back, only if nobody changed the nap since. */
+async function restoreNap(
+  nap: { id: number; ended_at: string; expect_updated_at: string },
+  by?: string
+): Promise<Pick<TimerResponse, "nap" | "nap_restored">> {
+  try {
+    const cur = await getEntry(nap.id);
+    if (!cur || cur.kind !== "sleep" || cur.active || !cur.ended_at) return { nap_restored: false };
+    const entry = await updateEntry(nap.id, { endedAt: new Date(nap.ended_at) }, by, { expectUpdatedAt: nap.expect_updated_at });
+    return { nap: { entry, before_ended_at: cur.ended_at, before_updated_at: cur.updated_at }, nap_restored: true };
+  } catch (err) {
+    // The feed is already back; a nap someone changed meanwhile stays as it is.
+    if (!(err instanceof Conflict || err instanceof NotFound)) console.error("Maple nap restore failed:", err);
+    return { nap_restored: false };
+  }
+}
+
+/**
+ * "Forgot to tap at latch": move a running timer's start. A feed moves its
+ * first stretch's start (so a nap that ended then follows); this is also the
+ * REST "adjust" alias that cached PWA clients still send. Other timers: not
+ * in the future, at most 12 hours back.
+ */
 export async function adjustTimerStart(id: number, at: Date, by?: string): Promise<Entry> {
-  await runningTimer(id);
-  if (at.getTime() > Date.now()) throw new Error("Start time can't be in the future");
-  return updateEntry(id, { startedAt: at }, by);
+  if (Number.isNaN(at.getTime())) throw new Error("Start time must be a valid time");
+  const e = await getEntry(id);
+  if (!e) throw new NotFound(`Timer ${id} not found`);
+  if (e.kind === "feed") return (await retime(id, { op: "move", edge: "start", to: at.toISOString() }, by, false)).entry;
+  const now = Date.now();
+  if (at.getTime() > now) throw new Error("Start time can't be in the future");
+  if (at.getTime() < now - 12 * HOUR) throw new Error("That's more than 12 hours ago.");
+  return (await mutateTimer(id, (cur) => ({ data: cur.data, startedAt: at.toISOString() }), { by })).entry;
 }
 
 export async function discardTimer(id: number, by?: string): Promise<Entry> {
@@ -592,11 +864,14 @@ export async function reopenTimer(id: number, by?: string): Promise<Entry> {
     if (!d.segments?.length) throw new Error("That feed wasn't timed, so it can't restart");
     const segs = d.segments.map((s) => ({ ...s }));
     const last = segs[segs.length - 1];
-    // A discarded-then-restored timer never stopped (ended_at null): its open side is still open.
-    if (last.end && e.ended_at && Math.abs(Date.parse(last.end) - Date.parse(e.ended_at)) < 1500) last.end = null;
+    // Stopped at its pause (paused_at_stop): the last side stays closed. Otherwise
+    // the side that ran to the stop reopens; a discarded-then-restored timer
+    // never stopped (ended_at null), so its open side is still open.
+    if (!d.paused_at_stop && last.end && e.ended_at && Math.abs(Date.parse(last.end) - Date.parse(e.ended_at)) < NEAR) last.end = null;
     const rest: FeedData = { ...d, segments: segs };
     delete rest.left_sec;
     delete rest.right_sec;
+    delete rest.paused_at_stop;
     data = rest;
   }
   try {

@@ -103,7 +103,7 @@ function NextSide({ side }: { side: Side }) {
  * and this card keeps only what the timer doesn't say.
  */
 export default function StatusCard() {
-  const { state, summary, log, memberName, readOnly, units, isNight } = useMaple();
+  const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
   const now = useNow(20_000);
   const [info, setInfo] = useState(false);
   if (!state || !summary) return null;
@@ -144,11 +144,13 @@ export default function StatusCard() {
   // Drops not given yet is a daytime thing; at 3am it's just clutter (More → Vitamin D still works).
   const showVitD = summary.born && (summary.vitaminD || (!isNight() && alertsOn(state.baby)));
   const vitD = summary.vitaminD;
+  // Never "Admin": the name only when it's someone else we can name.
+  const vitDBy = vitD ? (vitD.by === state.me.email ? "you" : memberLabel(vitD.by)) : null;
   const vitDText = (
     <span className="min-w-0 flex-1">
       <span className="block text-[15px] font-medium text-mp-ink">Vitamin D</span>
       <span className="block text-[13px] text-mp-ink-2">
-        {vitD ? `Given ${formatTime(vitD.givenAt, tz)} · ${memberName(vitD.by)}` : "Not yet today"}
+        {vitD ? `Given ${formatTime(vitD.givenAt, tz)}${vitDBy ? ` · ${vitDBy}` : ""}` : "Not yet today"}
       </span>
     </span>
   );

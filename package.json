@@ -10,7 +10,8 @@
     "lint": "eslint",
     "gen:invite-pdf": "node scripts/gen-invite-pdf.js",
     "gen:photos-qr": "node scripts/gen-photos-qr-pdf.js",
-    "export:photos": "node scripts/export-photos.js"
+    "export:photos": "node scripts/export-photos.js",
+    "check:maple-feed": "tsx scripts/maple-feed-check.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

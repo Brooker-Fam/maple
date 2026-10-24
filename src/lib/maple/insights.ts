@@ -283,6 +283,19 @@ export function adminActsAs(baby: Baby, members: Member[]): Member | null {
   return m && m.email !== "admin" && m.role !== "viewer" ? m : null;
 }
 
+/**
+ * A name worth printing ("started by Brittany", "Brittany just changed this
+ * feed"), or null when it would only mean the viewer, an unknown id, or
+ * "Admin": the admin login reads as the member it acts as (adminActsAs), and
+ * the word "Admin" is never shown on a timer.
+ */
+export function memberLabel(id: string | null | undefined, ctx: { members: Member[]; me: Member | null | undefined; baby: Baby }): string | null {
+  if (!id || id === ctx.me?.email) return null;
+  const m = id === "admin" ? adminActsAs(ctx.baby, ctx.members) : ctx.members.find((x) => x.email === id);
+  if (!m || m.email === "admin" || m.email === ctx.me?.email) return null;
+  return m.display_name || m.email.split("@")[0];
+}
+
 /** Alerts a family has marked handled ("We called"), keyed by alert id. */
 export function acknowledged(baby: Baby): Record<string, string> {
   const acks = (baby.settings as { acks?: unknown }).acks;

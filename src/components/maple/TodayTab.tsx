@@ -11,7 +11,8 @@ import EntryRow, { photoUrl } from "./EntryRow";
 import Hero from "./Hero";
 import type { TabId } from "./MapleApp";
 import StatusCard, { DiaperBrigade } from "./StatusCard";
-import TimerCard, { SIDE_NAME, timerNumbers } from "./TimerCard";
+import { SIDE_NAME, timerNumbers } from "./FeedParts";
+import TimerCard from "./TimerCard";
 import Waiting from "./Waiting";
 import WhileYouSlept from "./WhileYouSlept";
 import { useSheets } from "./sheets";
@@ -24,9 +25,10 @@ import { useMaple, useNow } from "./useMaple";
  * (or the waiting hero), anything urgent, the "while you slept" hand-off,
  * "Right now" (running timers, then the 3am answers), gentler alerts, the
  * day dial (the screen's hero) with its tallies, celebrations, the diaper
- * brigade, and the last few entries. Logging
- * lives in the dock pinned above the tab bar, so nothing here needs a scroll
- * to reach.
+ * brigade, and the last few entries. While a timer runs, "Right now" moves up
+ * under anything urgent, so the timer and the Since tiles sit above the dock
+ * without a scroll. Logging lives in the dock pinned above the tab bar, so
+ * nothing here needs a scroll to reach.
  */
 
 const KIND_TITLE: Record<string, string> = { feed: "Nursing", sleep: "Asleep", tummy: "Tummy time", pump: "Pumping" };
@@ -40,32 +42,46 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: TabId) => voi
   const born = !!state.baby.born_at;
   const nothingYet = state.entries.length === 0;
   const recent = state.entries.filter((e) => !e.active).slice(0, 5);
+  const timing = summary.active.length > 0;
+
+  const rightNow = (!nothingYet || timing) && (
+    <section aria-labelledby="right-now">
+      {/* A 22px line: with the timer card and the Since tiles, it has to clear the dock on a 667px-tall phone. */}
+      <h2 id="right-now" className={cx(tone.heading, "mb-2 px-1 text-[17px] leading-[22px]")}>
+        Right now
+      </h2>
+      <div className="space-y-3">
+        <AnimatePresence initial={false}>
+          {summary.active.map((e) => (
+            // Keyed by kind: only one of each runs, and the optimistic copy hands over to the saved one without a remount.
+            <TimerCard key={e.kind} entry={e} />
+          ))}
+        </AnimatePresence>
+        <StatusCard />
+      </div>
+    </section>
+  );
 
   return (
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
-      {summary.active.length > 0 && <TitleTicker />}
-      {born ? <Hero /> : <Waiting />}
-      {readOnly && <LatestMoment />}
-
-      <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
-      <WhileYouSlept />
-
-      {nothingYet && born && <FreshPage readOnly={readOnly} />}
-      {(!nothingYet || summary.active.length > 0) && (
-        <section aria-labelledby="right-now">
-          <h2 id="right-now" className={cx(tone.heading, "mb-2 px-1 text-[17px]")}>
-            Right now
-          </h2>
-          <div className="space-y-3">
-            <AnimatePresence initial={false}>
-              {summary.active.map((e) => (
-                // Keyed by kind: only one of each runs, and the optimistic copy hands over to the saved one without a remount.
-                <TimerCard key={e.kind} entry={e} />
-              ))}
-            </AnimatePresence>
-            <StatusCard />
-          </div>
-        </section>
+      {timing && <TitleTicker />}
+      {timing ? (
+        <>
+          <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
+          {rightNow}
+          {born ? <Hero /> : <Waiting />}
+          {readOnly && <LatestMoment />}
+          <WhileYouSlept />
+        </>
+      ) : (
+        <>
+          {born ? <Hero /> : <Waiting />}
+          {readOnly && <LatestMoment />}
+          <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
+          <WhileYouSlept />
+          {nothingYet && born && <FreshPage readOnly={readOnly} />}
+          {rightNow}
+        </>
       )}
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
@@ -107,7 +123,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: TabId) => voi
   );
 }
 
-/** "12:04 · Right · Maple" in the tab title while a timer runs, so it shows in the app switcher. */
+/**
+ * "6:02 · Right · Maple" (the time on this side) in the tab title while a
+ * timer runs, so it shows in the app switcher; "Break 4:12 · Maple" while
+ * paused; "1:32:04 · Asleep · Maple".
+ */
 function TitleTicker() {
   const { summary, state } = useMaple();
   const now = useNow(1000);
@@ -117,8 +137,9 @@ function TitleTicker() {
   let title: string | null = null;
   if (e) {
     const n = timerNumbers(e, now);
-    const what = e.kind === "feed" ? SIDE_NAME[n.side ?? "L"] : KIND_TITLE[e.kind] ?? "Timer";
-    title = `${formatClock(n.elapsed)} · ${n.paused ? "Paused" : what} · ${name}`;
+    if (n.parts.length && n.paused) title = `Break ${formatClock(n.current.sec)} · ${name}`;
+    else if (n.parts.length) title = `${formatClock(n.current.sec)} · ${SIDE_NAME[n.current.side ?? "L"]} · ${name}`;
+    else title = `${formatClock(n.elapsed)} · ${KIND_TITLE[e.kind] ?? "Timer"} · ${name}`;
   }
   useEffect(() => {
     if (original.current == null) original.current = document.title;

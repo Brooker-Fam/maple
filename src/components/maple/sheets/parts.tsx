@@ -5,10 +5,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { TIER_LABEL, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryKind, Side, Source } from "@/lib/maple/types";
+import { fixPreset } from "../FeedParts";
 import { Icon, type IconName } from "../icons";
 import { SIDE_COLOR } from "../palette";
 import { Avatar, Button, NumberProblem, RepeatButton, TextArea, cx, parseTypedNumber, tone, useTypedNumber } from "../ui";
 import { useMaple } from "../useMaple";
+import { useSheets } from "./index";
 
 /**
  * Shared pieces for the log/edit sheets: a fresh form each time a sheet
@@ -324,15 +326,38 @@ const RUNNING_LABEL: Partial<Record<EntryKind, string>> = {
   pump: "Still pumping",
 };
 
-/** Editing a running timer: the timer card controls it; only the note is editable here. */
-export function RunningNote({ kind }: { kind: EntryKind }) {
+/** Where the running timer's buttons are (the dock has the feed and sleep ones). */
+const RUNNING_WHERE: Partial<Record<EntryKind, string>> = {
+  feed: "Switch, pause and Done are in the dock on Today.",
+  sleep: "Woke up is in the dock on Today.",
+  tummy: "Done is on its card on Today.",
+  pump: "Done is on its card on Today.",
+};
+
+/**
+ * Editing a running timer (opened from Recent): the dock runs it and Fix
+ * times fixes its times; only the note is editable here. The timer is the
+ * running one of this kind (only one of each runs).
+ */
+export function RunningNote({ kind, entry }: { kind: EntryKind; entry?: Entry }) {
+  const { state, readOnly } = useMaple();
+  const { open } = useSheets();
+  const running = entry?.active ? entry : state?.entries.find((e) => e.active && e.kind === kind);
   return (
-    <div className={cx(tone.inset, "flex gap-3 px-4 py-3")}>
-      <Icon name="timer" size={20} className="mt-0.5 shrink-0 text-mp-ink-2" />
-      <p className={cx(tone.body, "text-sm leading-relaxed")}>
-        <span className="font-semibold">{RUNNING_LABEL[kind] ?? "This timer is running"}.</span> Use the timer card on Today to switch, pause,
-        fix the start or stop it. You can add a note here.
-      </p>
+    <div className={cx(tone.inset, "px-4 py-3")}>
+      <div className="flex gap-3">
+        <Icon name="timer" size={20} className="mt-0.5 shrink-0 text-mp-ink-2" />
+        <p className={cx(tone.body, "text-sm leading-relaxed")}>
+          <span className="font-semibold">{RUNNING_LABEL[kind] ?? "This timer is running"}.</span> {RUNNING_WHERE[kind] ?? "It's on Today."} You can add
+          a note here.
+        </p>
+      </div>
+      {!readOnly && running && running.id > 0 && (
+        <Button variant="soft" onClick={() => open({ kind: running.kind, entry: running, preset: fixPreset("current") })} className="mt-3 w-full">
+          <Icon name="pencil" size={16} />
+          Fix times
+        </Button>
+      )}
     </div>
   );
 }

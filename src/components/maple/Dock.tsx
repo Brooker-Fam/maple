@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
-import { formatClock, formatRelative, formatTime, DEFAULT_TZ } from "@/lib/maple/time";
+import { other } from "@/lib/maple/feed";
+import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, Side, StoolColor } from "@/lib/maple/types";
 import { Icon, type IconName } from "./icons";
@@ -21,7 +22,10 @@ import { useMaple, useNow, type ToastAction } from "./useMaple";
  * The logging dock on Today: two rows of big buttons fixed just above the tab
  * bar, where a thumb lands at 3am. One tap does the common thing right away
  * (start the timer, log the diaper now); holding a button opens the full form
- * for one from earlier. The top row turns into timer controls while she nurses.
+ * for one from earlier. The top row turns into the feed's controls while she
+ * nurses, and they are the only ones on screen: each column keeps one
+ * meaning (1 the other side, 2 this side, 3 Done, 4 More), so a thumb that
+ * knows where Switch was finds Resume there after a pause.
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
@@ -67,10 +71,11 @@ const diaperName = (pee: boolean, poop: boolean) => (pee && poop ? "wet + dirty 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function Dock() {
-  const { state, summary, log, remove, update, now, isNight, readOnly, memberName, units } = useMaple();
+  const { state, summary, log, remove, update, now, isNight, readOnly, memberLabel, units } = useMaple();
   const { open } = useSheets();
   const actions = useTimerActions();
   const clock = useNow(1000);
+  const night = useNightActive();
   const [moreOpen, setMoreOpen] = useState(false);
   const [done, setDone] = useState<Record<string, boolean>>({});
   const ref = useRef<HTMLDivElement>(null);
@@ -104,12 +109,14 @@ export default function Dock() {
   const feed = summary.active.find((e) => e.kind === "feed") ?? null;
   const sleep = summary.active.find((e) => e.kind === "sleep") ?? null;
   const feedN = feed ? timerNumbers(feed, clock) : null;
+  // A timed nursing feed: the dock runs it (an untimed one only has Done).
+  const nursing = !!feedN && feedN.parts.length > 0;
   // A timer the server hasn't confirmed yet has a temporary id: hold its controls until it has a real one.
   const feedPending = !!feed && feed.id < 0;
   const sleepPending = !!sleep && sleep.id < 0;
   const next = summary.nextSide;
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
-  const showHint = !summary.age || summary.age.dayOfLife <= 3;
+  const showHint = (!summary.age || summary.age.dayOfLife <= 3) && !summary.active.length;
 
   /** Show a check on the tile for 1.2s and ignore repeat taps meanwhile. Returns false if it's cooling down. */
   const flash = (id: string) => {
@@ -127,13 +134,41 @@ export default function Dock() {
     return true;
   };
 
-  /** Wrap a tap so taps within the dock-wide cooldown are ignored. */
+  /** Wrap a tap so taps within the dock-wide cooldown are ignored. Any tap closes the timer toast. */
   const tap = (fn: () => void) => () => {
     // A monotonic local clock: the server-synced now() can jump on each poll.
     const t = performance.now();
     if (t - lastTap.current < TAP_COOLDOWN_MS) return;
     lastTap.current = t;
+    actions.dismissToast();
     fn();
+  };
+
+  /**
+   * A tap that changes what columns 1 and 2 mean (start, switch, pause,
+   * resume): both show the check and ignore taps for 1.2s, so a double tap
+   * can't land on the tile that just appeared under the thumb.
+   */
+  const swap = (fn: () => void) => {
+    if (done.col1 || done.col2) return;
+    setDone((d) => ({ ...d, col1: true, col2: true }));
+    window.setTimeout(
+      () =>
+        setDone((d) => {
+          const n = { ...d };
+          delete n.col1;
+          delete n.col2;
+          return n;
+        }),
+      1200
+    );
+    fn();
+  };
+
+  /** This phone just started a timer: bring "Right now" to the top (no glide at night or with reduced motion). */
+  const toTop = () => {
+    const still = night || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" });
   };
 
   const earlierAt = () => new Date(now().getTime() - 15 * 60_000).toISOString();
@@ -166,7 +201,8 @@ export default function Dock() {
         !!(e.data as DiaperData).poop === poop
     );
     const text = dup
-      ? `${memberName(dup.created_by)} logged a ${name} ${formatRelative(dup.started_at, t)}. Same one?`
+      ? // Never "Admin": the shared login reads as the member it acts for, or as the other phone.
+        `${memberLabel(dup.created_by) ?? "The other phone"} logged a ${name} ${formatRelative(dup.started_at, t)}. Same one?`
       : `${cap(name)} · ${formatTime(t, tz)}${garnish(isNight())}`;
     await log(
       { kind: "diaper", data: { pee, poop } },
@@ -194,10 +230,11 @@ export default function Dock() {
     );
   };
 
-  const tapSide = (side: Side) => {
-    if (!flash(side)) return;
-    void actions.startFeed(side);
-  };
+  const tapSide = (side: Side) =>
+    swap(() => {
+      toTop();
+      void actions.startFeed(side);
+    });
 
   const holdFeed = (side: Side) => open({ kind: "feed", preset: { method: "breast", first_side: side, started_at: earlierAt() } });
 
@@ -214,30 +251,76 @@ export default function Dock() {
         <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl">
           {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Hold a button to log an earlier one.</p>}
           <div className="grid grid-cols-4 gap-2">
-            {/* Row 1: feeding, which becomes the nursing controls while a feed runs. */}
-            {feed && feedN && !feedN.paused ? (
+            {/* Row 1: feeding, which becomes the nursing controls while a feed runs. No tile shows a feed clock (the card has it). */}
+            {feed && feedN && nursing && !feedN.paused ? (
               <>
                 <Tile
                   id="switch"
-                  wide
-                  label={`Switch to ${SIDE_NAME[feedN.side === "L" ? "R" : "L"]}`}
-                  sub={`on ${SIDE_NAME[feedN.side ?? "L"]} · ${formatClock(feedN.side === "L" ? feedN.left : feedN.right)}`}
-                  icon="arrow-left-right"
-                  color={SWITCH_STYLE[feedN.side === "L" ? "R" : "L"].bg}
-                  ink={SWITCH_STYLE[feedN.side === "L" ? "R" : "L"].fg}
+                  label="Switch"
+                  sub={`to ${SIDE_NAME[other(feedN.side ?? "L")]}`}
+                  aria={`Switch to ${SIDE_NAME[other(feedN.side ?? "L")]}`}
+                  letter={other(feedN.side ?? "L")}
+                  color={SWITCH_STYLE[other(feedN.side ?? "L")].bg}
+                  ink={SWITCH_STYLE[other(feedN.side ?? "L")].fg}
                   strong
-                  disabled={feedPending}
-                  onTap={tap(() => void actions.switchSide(feed, feedN.side === "L" ? "R" : "L"))}
+                  done={done.col1}
+                  disabled={feedPending || done.col1}
+                  onTap={tap(() => swap(() => void actions.switchSide(feed, other(feedN.side ?? "L"))))}
                 />
-                {/* No clock here: the timer card above owns the big one (Switch keeps the side's time, to decide when to switch). */}
-                <Tile id="done" label="Done" icon="check" sub={feedPending ? "starting…" : undefined} accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
+                <Tile
+                  id="pause"
+                  label="Pause"
+                  icon="pause"
+                  aria="Pause the feed"
+                  done={done.col2}
+                  disabled={feedPending || done.col2}
+                  onTap={tap(() => swap(() => void actions.pause(feed)))}
+                />
+                <Tile
+                  id="done"
+                  label="Done"
+                  icon="check"
+                  aria="Done: end the feed now"
+                  sub={feedPending ? "starting…" : undefined}
+                  accent
+                  disabled={feedPending}
+                  onTap={tap(() => void actions.stop(feed))}
+                />
               </>
-            ) : feed && feedN ? (
+            ) : feed && feedN && nursing ? (
               <>
-                {(["L", "R"] as Side[]).map((s) => (
-                  <Tile key={s} id={`resume-${s}`} label={SIDE_NAME[s]} sub="Resume" letter={s} color={SIDE_COLOR[s]} disabled={feedPending} onTap={tap(() => void actions.resume(feed, s))} />
+                {/* Paused: column 1 is still "the other side", column 2 "this side" (a double tap on Pause resumes the same side, which just erases the break). */}
+                {[other(feedN.side ?? "L"), feedN.side ?? "L"].map((s, i) => (
+                  <Tile
+                    key={s}
+                    id={`resume-${s}`}
+                    label={SIDE_NAME[s]}
+                    sub="Resume"
+                    aria={`Resume on ${SIDE_NAME[s]}`}
+                    letter={s}
+                    color={SIDE_COLOR[s]}
+                    done={i === 0 ? done.col1 : done.col2}
+                    disabled={feedPending || (i === 0 ? done.col1 : done.col2)}
+                    onTap={tap(() => swap(() => void actions.resume(feed, s)))}
+                  />
                 ))}
-                <Tile id="done" label="Done" icon="check" sub={`paused ${formatClock(feedN.pausedSec)}`} accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
+                <Tile
+                  id="done"
+                  label="Done"
+                  icon="check"
+                  sub={feedPending ? "starting…" : `ends ${formatTimeNear(feedN.current.since, feedN.current.since, tz)}`}
+                  aria={`Done: end the feed at ${formatTime(feedN.current.since, tz)}, when you paused`}
+                  accent
+                  disabled={feedPending}
+                  onTap={tap(() => void actions.stop(feed))}
+                />
+              </>
+            ) : feed ? (
+              <>
+                {/* An untimed feed (logged by voice without sides): just its Done. */}
+                <Tile id="bottle" label="Bottle" sub={lastBottleLabel} icon="bottle" color={TILE.bottle} onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))} />
+                <div aria-hidden />
+                <Tile id="done" label="Done" icon="check" aria="Done: end the feed now" accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
               </>
             ) : (
               <>
@@ -250,7 +333,8 @@ export default function Dock() {
                     letter={s}
                     color={SIDE_COLOR[s]}
                     next={next === s}
-                    done={done[s]}
+                    done={s === "L" ? done.col1 : done.col2}
+                    disabled={s === "L" ? done.col1 : done.col2}
                     onTap={tap(() => tapSide(s))}
                     onHold={() => holdFeed(s)}
                   />
@@ -311,7 +395,11 @@ export default function Dock() {
                 icon="moon"
                 color={TILE.sleep}
                 done={done.sleep}
-                onTap={tap(() => flash("sleep") && void actions.startTimer("sleep"))}
+                onTap={tap(() => {
+                  if (!flash("sleep")) return;
+                  toTop();
+                  void actions.startTimer("sleep");
+                })}
                 onHold={() => open({ kind: "sleep", preset: { started_at: earlierAt() } })}
               />
             )}
@@ -346,7 +434,7 @@ function Tile({
   accent,
   ink,
   disabled,
-  wide,
+  aria,
 }: {
   id: string;
   label: string;
@@ -367,10 +455,10 @@ function Tile({
   accent?: boolean;
   /** Text color on a strong tile (default white). */
   ink?: string;
-  /** Not tappable yet (a timer still starting). */
+  /** Not tappable yet (a timer still starting, or a tile that just changed meaning). */
   disabled?: boolean;
-  /** Two columns wide (Switch), with room for the icon and label on one line. */
-  wide?: boolean;
+  /** The accessible name, when the label alone doesn't say it ("Switch to Right", "Pause the feed"). */
+  aria?: string;
 }) {
   const press = usePress(onTap, onHold);
   // At night a filled tile glows softly instead of blazing, in the amber like
@@ -378,15 +466,15 @@ function Tile({
   // be the only cool or red patch on the 3am screen).
   const night = useNightActive();
   const filled = strong || accent;
-  // Icon and label share a line when there's room (a side letter, Done, the wide Switch); "Woke up" stacks.
-  const inline = !!letter || accent || (strong && wide);
+  // Icon and label share a line when there's room (a side letter, Done); "Woke up" and Pause stack.
+  const inline = !!letter || accent;
   const fill = strong && color ? (night ? "rgb(224 169 59 / 0.25)" : color) : undefined;
   return (
     <button
       type="button"
       data-tile={id}
       disabled={disabled}
-      aria-label={`${label}${next ? " (next side)" : ""}${onHold ? ". Hold to log an earlier one" : ""}`}
+      aria-label={`${aria ?? label}${next ? " (next side)" : ""}${onHold ? ". Hold to log an earlier one" : ""}`}
       {...press}
       className={cx(
         "relative flex min-h-[64px] flex-col items-center justify-center rounded-2xl border px-1 py-1.5 text-center transition select-none active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100",
@@ -396,8 +484,7 @@ function Tile({
             ? "border-transparent"
             : next
               ? "border-mp-accent-fg/70 bg-mp-surface text-mp-ink"
-              : "border-mp-line bg-mp-surface text-mp-ink",
-        wide && "col-span-2"
+              : "border-mp-line bg-mp-surface text-mp-ink"
       )}
       style={{
         backgroundColor: fill,
@@ -417,8 +504,10 @@ function Tile({
               {letter && (
                 <span
                   aria-hidden
-                  className="mp-kind-fill inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
-                  style={{ backgroundColor: color, color: SWITCH_STYLE[letter].fg }}
+                  // Under 360px "Switch" needs the room; its "to Left" already names the side.
+                  className={cx("mp-kind-fill inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold", strong && "max-[359px]:hidden")}
+                  // On a tile filled with the side's color, the mark turns over (ink disc, colored letter) so it still shows.
+                  style={strong ? { backgroundColor: ink ?? "#FFFFFF", color } : { backgroundColor: color, color: SWITCH_STYLE[letter].fg }}
                 >
                   {letter}
                 </span>

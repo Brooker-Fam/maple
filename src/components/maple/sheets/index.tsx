@@ -5,6 +5,7 @@ import type { Entry, EntryKind } from "@/lib/maple/types";
 import ActivitySheet from "./ActivitySheet";
 import DiaperSheet from "./DiaperSheet";
 import FeedSheet from "./FeedSheet";
+import FixTimesSheet from "./FixTimesSheet";
 import GrowthSheet from "./GrowthSheet";
 import MedSheet from "./MedSheet";
 import MomentSheet from "./MomentSheet";
@@ -20,6 +21,7 @@ import VitalsSheet from "./VitalsSheet";
  *   open({ kind: "diaper" })                      // log a new one
  *   open({ kind: "diaper", preset: { poop: true } })
  *   open({ kind: e.kind, entry: e })              // edit an existing entry
+ *   open({ kind: e.kind, entry: e, preset: fixPreset("current") })  // Fix times (../FeedParts)
  *
  * Every sheet component takes SheetProps and renders a <Sheet> from ../ui.
  */
@@ -75,13 +77,15 @@ export function SheetProvider({ children }: { children: ReactNode }) {
   const close = useCallback(() => setCurrent(null), []);
   const value = useMemo(() => ({ open, close, current }), [open, close, current]);
   const shown = current ?? last;
-  const Comp = shown ? SHEETS[shown.kind] : null;
+  // A preset with `fix` opens Fix times for that entry instead of its form.
+  const fix = !!shown?.entry && !!shown.preset?.fix;
+  const Comp = shown ? (fix ? FixTimesSheet : SHEETS[shown.kind]) : null;
   return (
     <SheetContext.Provider value={value}>
       {children}
       {Comp && shown && (
         <Comp
-          key={`${shown.kind}-${shown.entry?.id ?? "new"}`}
+          key={fix ? `fix-${shown.entry!.id}` : `${shown.kind}-${shown.entry?.id ?? "new"}`}
           open={!!current}
           onClose={close}
           kind={shown.kind}

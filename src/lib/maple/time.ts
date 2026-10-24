@@ -288,6 +288,47 @@ export function formatTime(date: Date | number | string, tz: string = DEFAULT_TZ
   return f.format(new Date(date));
 }
 
+const MERIDIEM_RE = /\s*([AP]M)$/i;
+const meridiem = (s: string) => MERIDIEM_RE.exec(s)?.[1]?.toUpperCase() ?? "";
+const dropMeridiem = (s: string) => s.replace(MERIDIEM_RE, "");
+
+/** "4:10" when it shares AM/PM with `near`, else "11:58 AM" (chip times beside a recorded one). */
+export function formatTimeNear(date: Date | number | string, near: Date | number | string, tz: string = DEFAULT_TZ): string {
+  const t = formatTime(date, tz);
+  return meridiem(t) === meridiem(formatTime(near, tz)) ? dropMeridiem(t) : t;
+}
+
+/**
+ * "4:00 – 4:10 PM" when both share AM/PM, "11:50 PM – 12:10 AM" otherwise.
+ * Compact (part chips, MCP timelines): "4:00–4:10", "11:50 PM–12:10 AM". An
+ * open end reads "since 4:25 PM" ("since 4:25" compact).
+ */
+export function formatRange(
+  start: Date | number | string,
+  end: Date | number | string | null,
+  tz: string = DEFAULT_TZ,
+  opts: { compact?: boolean } = {}
+): string {
+  const a = formatTime(start, tz);
+  if (end === null) return `since ${opts.compact ? dropMeridiem(a) : a}`;
+  const b = formatTime(end, tz);
+  const shared = meridiem(a) === meridiem(b);
+  if (opts.compact) return shared ? `${dropMeridiem(a)}–${dropMeridiem(b)}` : `${a}–${b}`;
+  return `${shared ? dropMeridiem(a) : a} – ${b}`;
+}
+
+/**
+ * Rounded whole minutes for rows, toasts and previews (live clocks use
+ * formatClock): "<1 min" up to 29 s, "22 min", "1h 12m" from an hour.
+ */
+export function formatMinutes(totalSec: number): string {
+  const s = Math.max(0, Math.round(totalSec));
+  if (s === 0) return "0 min";
+  if (s < 30) return "<1 min";
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${pad(m % 60)}m`;
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const LONG_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

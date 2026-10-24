@@ -56,6 +56,8 @@ export const dataSchemas = {
       last_side: side.optional(),
       amount_ml: optNum(0, 500, "Bottle amount"),
       milk: z.enum(["breastmilk", "formula", "mixed"]).optional(),
+      // Listed so .strip() keeps it: a stopped-while-paused feed must stay one through later edits.
+      paused_at_stop: z.boolean().optional(),
     })
     .strip(),
   pump: z

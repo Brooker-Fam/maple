@@ -32,6 +32,9 @@ export type TimerKind = (typeof TIMER_KINDS)[number];
 
 export type Segment = { side: Side; start: string; end: string | null };
 
+/** Names one stretch on a side by its side and start, matched within ±1.5 s so it survives re-saves. */
+export type StretchRef = { side: Side; start: string };
+
 export type FeedData = {
   method: "breast" | "bottle";
   /** Breast timers record each stretch on a side; manual entries may skip these. */
@@ -43,6 +46,12 @@ export type FeedData = {
   /** Bottle volume. */
   amount_ml?: number;
   milk?: "breastmilk" | "formula" | "mixed";
+  /**
+   * Stopped while paused: the feed ended when she came off (ended_at = the
+   * last segment's end), and reopening brings it back paused. Feeds stopped
+   * while paused before this flag existed keep a trailing break to ended_at.
+   */
+  paused_at_stop?: boolean;
 };
 
 export type PumpData = { left_ml?: number; right_ml?: number; total_ml?: number };
@@ -236,10 +245,56 @@ export type UpdateEntryInput = {
   ended_at?: string | null;
   data?: Record<string, unknown>;
   note?: string | null;
+  /** The updated_at the edit was made against; a newer one answers 409 "changed". */
+  expect_updated_at?: string;
 };
 
-/** reopen: undo a stop (the timer runs again as if never stopped). */
-export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "discard" | "adjust" | "reopen";
+/**
+ * reopen: undo a stop (the timer runs again as if never stopped).
+ * retime: fix one recorded moment of a timed nursing feed (`edit`).
+ */
+export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "discard" | "adjust" | "reopen" | "retime";
+
+/**
+ * A Fix times edit (POST /api/maple/timer { action: "retime", id, edit }).
+ * move: one moment of one stretch (start/end of `ref`, which defaults to the
+ * first stretch for start and the last for end; "ended" is a finished feed's
+ * ended_at alone). undo_tap: the latest switch, resume or pause, if the newest
+ * stretch still matches `expect`. restore: put back the `before` a fix
+ * answered with, only if nobody changed it since.
+ */
+export type FeedEdit =
+  | { op: "move"; edge: "start" | "end" | "ended"; ref?: StretchRef; to: string }
+  | { op: "set_side"; ref: StretchRef; side: Side }
+  | { op: "undo_tap"; expect: { side: Side; start: string; end: string | null } }
+  | {
+      op: "restore";
+      segments: Segment[];
+      started_at: string;
+      ended_at: string | null;
+      expect_updated_at: string;
+      nap?: { id: number; ended_at: string; expect_updated_at: string };
+    };
+
+/**
+ * POST /api/maple/timer answer. noop: nothing changed (already on that side,
+ * already paused). clamped: a resume asked for before the break began starts
+ * at the break. merged: a same-side resume within a minute erased the break.
+ * reverted: a switch back within 15 s undid the switch. before: the feed as
+ * it was, for "Back to …". nap: the nap whose end followed a feed start.
+ */
+export type TimerResponse = {
+  entry: Entry;
+  clamped?: true;
+  noop?: true;
+  merged?: true;
+  reverted?: true;
+  alreadyRunning?: boolean;
+  before?: { segments: Segment[]; started_at: string; ended_at: string | null; updated_at: string };
+  nap?: { entry: Entry; before_ended_at: string; before_updated_at: string };
+  /** restore with a nap: false when the nap had changed and was left alone. */
+  nap_restored?: boolean;
+};
 
 /** POST /api/maple/timer */
 export type TimerInput = {
@@ -248,13 +303,16 @@ export type TimerInput = {
   kind?: TimerKind;
   /** start/switch/resume for breastfeeding. */
   side?: Side;
-  /** switch/pause/resume/stop/discard/adjust: which running entry. */
+  /** switch/pause/resume/stop/discard/adjust/reopen/retime: which entry. */
   id?: number;
   /**
+   * switch/resume/pause: when it really happened (ISO, default now).
    * stop: when it actually ended (ISO, default now; for "ended earlier…").
    * adjust: the corrected start time (forgot to tap at latch).
    */
   at?: string;
+  /** retime: the one moment to fix. */
+  edit?: FeedEdit;
   /** start: client-generated id for idempotency. */
   client_id?: string;
 };

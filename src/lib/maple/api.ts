@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { captureServerException } from "@/lib/posthog-server";
 import { sessionMember } from "./auth";
+import { FeedEditError, feedEditCopy } from "./feed";
 import { Conflict, NotFound, StoreUnavailable, toClientEntry } from "./store";
 import type { Member } from "./types";
 
@@ -48,6 +49,8 @@ export async function errorResponse(route: string, error: unknown): Promise<Resp
   }
   if (error instanceof Forbidden) return json({ error: error.message || "Not allowed" }, 403);
   if (error instanceof BadRequest) return json({ error: error.message }, 400);
+  // A time fix that doesn't fit the feed: the sheet shows the copy, code says which bound.
+  if (error instanceof FeedEditError) return json({ error: feedEditCopy(error, "ui"), code: error.code }, 400);
   // Validation errors from cleanData / store checks are plain Errors with a
   // readable message; anything else (pg, network) is a real 500.
   if (error instanceof Error && !("code" in error) && isUserFacing(error)) {
