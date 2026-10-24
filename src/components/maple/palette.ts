@@ -1,4 +1,4 @@
-import type { Entry, EntryKind } from "@/lib/maple/types";
+import type { Entry, EntryKind, Side } from "@/lib/maple/types";
 
 /**
  * Colors for Maple's Log: the site's enchanted-forest palette plus autumn
@@ -36,6 +36,9 @@ export const KIND_COLOR: Record<EntryKind, string> = {
   moment: "#9A88B0",
   note: "#7F8C6A",
 };
+
+/** Left and right, the same everywhere: dock, timer card, rows, sheets, dial. */
+export const SIDE_COLOR: Record<Side, string> = { L: MAPLE.rust, R: MAPLE.honey };
 
 /** Finer-grained colors for the dial/ribbons. */
 export const DETAIL_COLOR = {

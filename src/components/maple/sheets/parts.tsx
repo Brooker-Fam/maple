@@ -6,7 +6,7 @@ import { TIER_LABEL, type AlertTier, type Assessment } from "@/lib/maple/guideli
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryKind, Side, Source } from "@/lib/maple/types";
 import { Icon, type IconName } from "../icons";
-import { MAPLE } from "../palette";
+import { SIDE_COLOR } from "../palette";
 import { Avatar, Button, NumberProblem, RepeatButton, TextArea, cx, parseTypedNumber, tone, useTypedNumber } from "../ui";
 import { useMaple } from "../useMaple";
 
@@ -226,17 +226,11 @@ export function Label({ children, optional, className }: { children: ReactNode; 
   );
 }
 
-/**
- * The dock's side colors (TimerCard's SIDE_COLOR), taken from the palette
- * because TimerCard imports the sheets.
- */
-const SIDE_DOT: Record<Side, string> = { L: MAPLE.rust, R: MAPLE.honey };
-
 /** "● Left" / "● Right" for a field label: the side's dot, as on the dock. */
 export function SideLabel({ side }: { side: Side }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span aria-hidden className="mp-kind-fill h-2 w-2 rounded-full" style={{ backgroundColor: SIDE_DOT[side] }} />
+      <span aria-hidden className="mp-kind-fill h-2 w-2 rounded-full" style={{ backgroundColor: SIDE_COLOR[side] }} />
       {side === "L" ? "Left" : "Right"}
     </span>
   );

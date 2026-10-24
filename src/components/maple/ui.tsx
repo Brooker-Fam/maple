@@ -77,7 +77,7 @@ export function Button({ children, onClick, variant = "primary", size = "md", ty
     danger: "bg-mp-danger/10 text-mp-danger hover:bg-mp-danger/15",
   }[variant];
   const s = {
-    sm: "min-h-[36px] rounded-[10px] px-3 text-sm",
+    sm: "min-h-[44px] rounded-[10px] px-3 text-sm",
     md: "min-h-[44px] rounded-xl px-4 text-[15px]",
     lg: "min-h-[52px] rounded-[14px] px-5 text-base",
   }[size];
@@ -159,7 +159,7 @@ export function Segmented<T extends string>({
   "aria-label"?: string;
 }) {
   return (
-    <div className={cx("flex rounded-xl bg-mp-sunken p-[3px]", className)} role="radiogroup" aria-label={ariaLabel}>
+    <div className={cx("flex rounded-xl bg-mp-sunken p-[2px]", className)} role="radiogroup" aria-label={ariaLabel}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -168,7 +168,7 @@ export function Segmented<T extends string>({
           aria-checked={value === o.value}
           onClick={() => onChange(o.value)}
           className={cx(
-            "min-h-[38px] flex-1 rounded-[10px] px-3 text-sm transition",
+            "min-h-[40px] flex-1 rounded-[10px] px-3 text-sm transition",
             value === o.value
               ? "bg-mp-raised font-semibold text-mp-ink shadow-[0_1px_3px_rgba(0,0,0,0.12)]"
               : "font-medium text-mp-ink-2"
@@ -319,10 +319,12 @@ export function WhenField({
   offsets?: number[];
 }) {
   const { now } = useMaple();
-  // Opening with a time already set (editing, or "log an earlier one") goes straight to the scrubber.
-  const [custom, setCustom] = useState(() => value != null);
+  // Opening at one of the quick offsets (holding a dock button presets 15m ago) lights that chip;
+  // any other time already set (editing an entry) goes straight to the scrubber.
+  const offsetOf = () => (value == null ? null : (offsets.find((m) => Math.abs(now().getTime() - m * 60000 - value.getTime()) < 30_000) ?? null));
+  const [custom, setCustom] = useState(() => value != null && offsetOf() == null);
   // Which quick chip was tapped, so it stays lit as the clock moves on.
-  const [chip, setChip] = useState<number | null>(null);
+  const [chip, setChip] = useState<number | null>(offsetOf);
   const n = now();
 
   return (
@@ -520,6 +522,18 @@ export function TimeScrubber({
   const atMax = t >= Math.min(nowFn().getTime() - 30_000, (max?.getTime() ?? Infinity) - 1000);
   const atMin = min ? t <= min.getTime() + 1000 : false;
 
+  const showLabel = !!label && !hideLabel;
+  const exactButton = (
+    <button
+      type="button"
+      onClick={() => setExact((x) => !x)}
+      aria-expanded={exact}
+      className="-my-2 min-h-[44px] px-1 text-[13px] font-semibold text-mp-accent-fg"
+    >
+      Exact time…
+    </button>
+  );
+
   const pickDay = (k: string) => {
     setChip(null);
     const n = nowFn();
@@ -528,22 +542,19 @@ export function TimeScrubber({
 
   return (
     <div role="group" aria-label={label ?? "Time"} className={cx(tone.inset, "p-3", className)}>
-      <div className="-mt-1 flex items-center justify-between gap-3">
-        <span className={tone.label}>{label && !hideLabel ? label : ""}</span>
-        <button
-          type="button"
-          onClick={() => setExact((x) => !x)}
-          aria-expanded={exact}
-          className="-my-2 min-h-[44px] px-1 text-[13px] font-semibold text-mp-accent-fg"
-        >
-          Exact time…
-        </button>
-      </div>
+      {showLabel && (
+        <div className="-mt-1 flex items-center justify-between gap-3">
+          <span className={tone.label}>{label}</span>
+          {exactButton}
+        </div>
+      )}
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
         <span className="text-[28px] leading-tight font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">{formatTime(value, tz)}</span>
         <span className={cx(tone.muted, "text-sm")}>
           {formatDayLabel(key, todayKey)} · {formatRelative(value, now)}
         </span>
+        {/* Without a label row, "Exact time…" sits beside the time instead of alone on a line. */}
+        {!showLabel && <span className="ml-auto self-center">{exactButton}</span>}
       </div>
       {pass && (
         <p className={cx(tone.muted, "text-xs")}>
@@ -773,7 +784,7 @@ export function Card({ children, className }: { children: ReactNode; className?:
 
 export function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="mb-2 flex min-h-[28px] items-end justify-between gap-3 px-1">
+    <div className="mb-2 flex min-h-[28px] items-center justify-between gap-3 px-1">
       <h2 className={cx(tone.heading, "text-[17px]")}>{children}</h2>
       {action}
     </div>

@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import type { Entry, EntryKind } from "@/lib/maple/types";
-import { entryColor, KIND_COLOR } from "./palette";
+import { entryColor, KIND_COLOR, SIDE_COLOR } from "./palette";
 
 /**
  * Line icons for Maple's Log, in place of emoji: one 24-unit grid, round
@@ -152,10 +152,18 @@ export function entryIcon(e: Entry): IconName {
   return KIND_ICON[e.kind];
 }
 
+/** The side a breastfeed started on, if it's known. */
+function firstSide(e: Entry) {
+  if (e.kind !== "feed" || e.data.method !== "breast") return null;
+  return e.data.first_side ?? e.data.segments?.[0]?.side ?? null;
+}
+
 /**
  * A kind's icon on a soft square of its color: the one place color marks
- * what something is (lists, the More grid, sheet headers). At night it
- * folds into the amber (.mp-kind in maple.css).
+ * what something is (lists, the More grid, sheet headers). A breastfeed
+ * shows the side it started on instead, lettered in that side's color as
+ * on the dock and the timer. At night it folds into the amber (.mp-kind
+ * and .mp-kind-fill in maple.css).
  */
 export function KindBadge({
   entry,
@@ -174,13 +182,26 @@ export function KindBadge({
   size?: number;
   className?: string;
 }) {
+  const side = entry && !icon && !color ? firstSide(entry) : null;
+  if (side) {
+    return (
+      <span
+        aria-hidden
+        className={["mp-kind-fill inline-flex shrink-0 items-center justify-center font-bold", className].filter(Boolean).join(" ")}
+        style={{ width: size, height: size, borderRadius: Math.round(size * 0.28), fontSize: Math.round(size * 0.42), backgroundColor: SIDE_COLOR[side], color: side === "R" ? "#2A1A08" : "#FFFFFF" }}
+      >
+        {side}
+      </span>
+    );
+  }
   const c = color ?? (entry ? entryColor(entry) : kind ? KIND_COLOR[kind] : "#5C7A4A");
   const name = icon ?? (entry ? entryIcon(entry) : kind ? KIND_ICON[kind] : "sticky-note");
   return (
     <span
       aria-hidden
-      className={["mp-kind inline-flex shrink-0 items-center justify-center rounded-[10px]", className].filter(Boolean).join(" ")}
-      style={{ width: size, height: size, color: c, backgroundColor: `color-mix(in srgb, ${c} 13%, transparent)` }}
+      className={["mp-kind inline-flex shrink-0 items-center justify-center", className].filter(Boolean).join(" ")}
+      // Radius scales with the badge, so a big one in the More grid keeps the same shape.
+      style={{ width: size, height: size, borderRadius: Math.round(size * 0.28), color: c, backgroundColor: `color-mix(in srgb, ${c} 13%, transparent)` }}
     >
       <Icon name={name} size={Math.round(size * 0.55)} strokeWidth={1.9} />
     </span>

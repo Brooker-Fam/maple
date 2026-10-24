@@ -46,7 +46,7 @@ export default function EntryRow({
     <button
       type="button"
       onClick={onClick}
-      className={cx(tone.row, "min-h-[60px] py-2.5")}
+      className={cx(tone.row, "min-h-[56px] py-2.5")}
     >
       {firstPhoto ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -54,29 +54,32 @@ export default function EntryRow({
       ) : (
         <KindBadge entry={entry} className={cx(entry.active && "animate-pulse motion-reduce:animate-none [.maple-night_&]:animate-none")} />
       )}
+      {/* Two lines that share baselines: what + when, then detail + how long ago. A one-line entry stays one line. */}
       <span className="min-w-0 flex-1">
-        <span className={cx(tone.body, "block truncate text-[15px] font-medium")}>{d.title}</span>
-        {(d.detail || entry.note) && (
-          <span className={cx(tone.muted, "block truncate text-[13px]")}>
-            {[d.detail, entry.note ? `“${entry.note}”` : ""].filter(Boolean).join(" · ")}
+        <span className="flex items-baseline gap-3">
+          <span className={cx(tone.body, "min-w-0 flex-1 truncate text-[15px] font-medium")}>{d.title}</span>
+          <span className={cx(tone.body, "inline-flex shrink-0 items-center gap-1.5 self-center text-sm tabular-nums")}>
+            {entry.id < 0 && (
+              <span title="Saving…" className="inline-flex text-mp-ink-3">
+                <Icon name="refresh-cw" size={12} label="Not synced yet" />
+              </span>
+            )}
+            <Avatar member={who} size={16} />
+            {formatTime(entry.started_at, tz)}
+          </span>
+        </span>
+        {(d.detail || entry.note || VIA[entry.source] || showRelative) && (
+          <span className="flex items-baseline gap-3">
+            <span className={cx(tone.muted, "min-w-0 flex-1 truncate text-[13px]")}>
+              {[d.detail, entry.note ? `“${entry.note}”` : ""].filter(Boolean).join(" · ")}
+            </span>
+            {(VIA[entry.source] || showRelative) && (
+              <span className={cx(tone.faint, "shrink-0 text-[12px]")}>
+                {[VIA[entry.source] && `via ${VIA[entry.source]}`, showRelative && formatRelative(entry.started_at, now)].filter(Boolean).join(" · ")}
+              </span>
+            )}
           </span>
         )}
-      </span>
-      <span className="flex shrink-0 flex-col items-end gap-0.5">
-        <span className={cx(tone.body, "text-sm tabular-nums")}>
-          {entry.id < 0 && (
-            <span title="Saving…" className="mr-1 inline-flex align-[-1px] text-mp-ink-3">
-              <Icon name="refresh-cw" size={12} label="Not synced yet" />
-            </span>
-          )}
-          {formatTime(entry.started_at, tz)}
-        </span>
-        <span className={cx(tone.faint, "flex items-center gap-1 text-[11px]")}>
-          {VIA[entry.source] && <span>via {VIA[entry.source]}</span>}
-          {VIA[entry.source] && showRelative && <span aria-hidden>·</span>}
-          {showRelative && formatRelative(entry.started_at, now)}
-          <Avatar member={who} size={16} />
-        </span>
       </span>
     </button>
   );
