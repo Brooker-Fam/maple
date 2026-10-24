@@ -317,6 +317,16 @@ function SideMark({ side, size = 32 }: { side: Side; size?: number }) {
 
 const ICON_BTN = "flex h-11 w-11 items-center justify-center rounded-full text-mp-ink-2 transition active:scale-95 disabled:opacity-40";
 
+/** Keeps a just-opened panel clear of the dock and tab bar (the dock publishes its height). */
+const CLEAR_DOCK = "scroll-mt-4 scroll-mb-[calc(var(--maple-dock-h,0px)+72px+env(safe-area-inset-bottom))]";
+
+/** Scroll a just-opened panel into view if the dock covers it (instantly with reduced motion or at night). */
+function revealAboveDock(el: HTMLElement | null) {
+  if (!el) return;
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("maple-night");
+  el.scrollIntoView({ block: "nearest", behavior: still ? "auto" : "smooth" });
+}
+
 export default function TimerCard({ entry }: { entry: Entry }) {
   const { state, memberName, member, isNight, readOnly } = useMaple();
   const now = useNow(1000);
@@ -446,7 +456,8 @@ export default function TimerCard({ entry }: { entry: Entry }) {
       ) : (
         <>
           <div className="mt-3">
-            <div className="flex items-end justify-between gap-3">
+            {/* On a 320px screen an hour-long clock leaves no room beside it, so Pause wraps under it (right-aligned). */}
+            <div className="flex flex-wrap items-end justify-between gap-x-3">
               <p
                 className={cx(
                   "text-[56px] leading-none font-semibold tracking-[-0.03em] text-mp-ink tabular-nums transition-opacity",
@@ -465,7 +476,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
                     disabled={pending}
                     onClick={() => void actions.resume(entry, resumeSide)}
                     aria-label={`Resume ${SIDE_NAME[resumeSide]}`}
-                    className="-mr-2 mb-0.5 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
+                    className="-mr-2 mb-0.5 ml-auto inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
                   >
                     <SideMark side={resumeSide} size={18} />
                     Resume
@@ -475,7 +486,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
                     type="button"
                     disabled={pending}
                     onClick={() => void actions.pause(entry)}
-                    className="-mr-2 mb-0.5 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
+                    className="-mr-2 mb-0.5 ml-auto inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
                   >
                     <Icon name="pause" size={15} />
                     Pause
@@ -540,17 +551,22 @@ type Numbers = ReturnType<typeof timerNumbers>;
 
 /** The … menu: a small card anchored under the button, floating over the timer. */
 function TimerMenu({ entry, setView, actions }: { entry: Entry; setView: (v: null | "menu" | "adjust") => void; actions: Actions }) {
+  const ref = useRef<HTMLDivElement>(null);
   return (
     <motion.div
+      ref={ref}
       initial={{ opacity: 0, scale: 0.96, y: -4 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.98 }}
       transition={{ duration: 0.14 }}
+      // A card low on the screen (an alert above it) would open its menu under the dock.
+      onAnimationComplete={(def) => (def as { opacity?: number }).opacity === 1 && revealAboveDock(ref.current)}
       style={{ transformOrigin: "top right" }}
       role="group"
       aria-label="Timer options"
       className={cx(
         "absolute top-full right-0 z-20 mt-1 w-[260px] overflow-hidden rounded-2xl border border-mp-line bg-mp-surface shadow-[0_10px_30px_rgba(0,0,0,0.16)] [.maple-night_&]:shadow-none",
+        CLEAR_DOCK,
         tone.divide
       )}
     >
@@ -591,12 +607,16 @@ function AdjustStart({ entry, close, tz, now, actions }: { entry: Entry; close: 
     void actions.adjust(entry, new Date(start.getTime() - min * 60_000));
     close();
   };
+  const ref = useRef<HTMLDivElement>(null);
   return (
     <motion.div
+      ref={ref}
       initial={{ height: 0, opacity: 0 }}
       animate={{ height: "auto", opacity: 1 }}
       exit={{ height: 0, opacity: 0 }}
-      className="overflow-hidden"
+      // Once open, make sure the dock isn't covering it.
+      onAnimationComplete={(def) => (def as { opacity?: number }).opacity === 1 && revealAboveDock(ref.current)}
+      className={cx("overflow-hidden", CLEAR_DOCK)}
     >
       <div className="mt-3 overflow-hidden rounded-2xl border border-mp-line p-3">
         <p className={cx(tone.label, "mb-2")}>Started earlier? · now {formatTime(start, tz)}</p>

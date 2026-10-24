@@ -72,8 +72,8 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  * seam between them), bottles a hollow outline (0.55), wet diapers a hollow
  * ring (0.7), dirty ones a solid dot (0.7), tummy time and pumping 0.45. The
  * alphas live here; the hollow shapes switch on useNightActive(). Legends
- * draw from the same values, so a key always matches its marks. Dirty dots
- * keep their stool color (it's information), edged in amber.
+ * draw from the same values, so a key always matches its marks. Stool colors
+ * fold into the amber too, as on the day dial; the diaper tooltip names them.
  */
 const VIZ_VARS =
   "[--v-grid:var(--mp-line)] [--v-track:var(--mp-sunken)] [--v-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] [--v-surface:var(--mp-surface)] " +
@@ -1178,7 +1178,7 @@ type DiaperDay = { wet: number; stools: (string | null)[]; wetTarget: number | n
 
 /**
  * Wet and dirty diapers in one chart: two lanes of dots on one day axis, each
- * dot one diaper (dirty ones in their stool color), with a short line at the
+ * dot one diaper (dirty ones in their stool color by day), with a short line at the
  * least to expect for her day of life. Both lanes share a step, so a dot and
  * a count are the same size in each.
  */
@@ -1264,11 +1264,12 @@ function DiaperLanes({
                           key={j}
                           cx={cx_}
                           cy={y(j + 0.5)}
-                          r={night && c ? r - 0.5 : r}
-                          fill={c ?? "var(--v-poop)"}
-                          // At night a noted stool color stays (it's information), edged in the amber.
-                          stroke={night ? (c ? "var(--v-poop)" : "none") : "var(--v-dot-edge)"}
-                          strokeWidth={night ? 1 : 0.75}
+                          r={r}
+                          // At night every dirty dot is the solid amber, like the dial's: a dark stool color
+                          // drawn there would read as a hollow ring (a wet diaper). The tooltip names each color.
+                          fill={night ? "var(--v-poop)" : (c ?? "var(--v-poop)")}
+                          stroke={night ? "none" : "var(--v-dot-edge)"}
+                          strokeWidth={0.75}
                           opacity={partial ? 0.65 : 1}
                         />
                       )

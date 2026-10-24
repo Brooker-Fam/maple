@@ -501,8 +501,9 @@ function PointsTable({
                       onEdit!(p.entry!);
                     }}
                     aria-label={`Edit the ${when} measurement`}
-                    // A 44px hit area; the negative margin keeps the row exactly as tall as before.
-                    className="-my-3 block w-full py-3 text-left underline-offset-2 hover:underline">
+                    // A 44px hit area that stays inside its own row (10px up to the cell's top, 14px down over
+                    // the age line); the negative margins keep the row exactly as tall as before.
+                    className="-mt-2.5 -mb-3.5 block w-full pt-2.5 pb-3.5 text-left underline-offset-2 hover:underline">
                     {when}
                   </button>
                 ) : (

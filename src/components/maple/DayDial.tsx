@@ -605,14 +605,22 @@ export default function DayDial() {
           </button>
           <Segmented
             aria-label="Which day"
-            className="max-w-[284px] min-w-0 flex-1"
+            // On a 320px screen (an SE with Display Zoom) three options only fit a little tighter, as "24h".
+            className="max-w-[284px] min-w-0 flex-1 max-[359px]:[&>button]:px-2"
             value={view}
             onChange={(v) => {
               setPop(null);
               setChoice(v);
             }}
             options={[
-              { value: "rolling", label: "Last 24h" },
+              {
+                value: "rolling",
+                label: (
+                  <>
+                    <span className="max-[359px]:hidden">Last </span>24h
+                  </>
+                ),
+              },
               { value: "today", label: "Today" },
               { value: yesterday, label: "Yesterday" },
             ]}

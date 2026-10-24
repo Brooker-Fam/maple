@@ -321,6 +321,7 @@ export default function LogTab() {
   const [pinned, setPinned] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [scrollTarget, setScrollTarget] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
 
   const { entries, ready, loadedFrom, error, reload, partialDays, touch } = useEntryRange(oldestKey, todayKey);
 
@@ -437,8 +438,15 @@ export default function LogTab() {
         <div className="flex min-h-[44px] items-center justify-between gap-3">
           <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Timeline</h1>
           <div className="flex items-center gap-1">
-            {!readOnly && <RecentlyRemoved onRestore={touch} />}
-            <JumpToDate todayKey={todayKey} minKey={hasPreBirth ? undefined : bornKey ?? undefined} onJump={jumpTo} />
+            {/* The open date field needs the room at phone width; the trash comes back when it closes. */}
+            {!readOnly && <RecentlyRemoved onRestore={touch} hidden={picking} />}
+            <JumpToDate
+              todayKey={todayKey}
+              minKey={hasPreBirth ? undefined : bornKey ?? undefined}
+              onJump={jumpTo}
+              open={picking}
+              onOpenChange={setPicking}
+            />
           </div>
         </div>
       </header>
@@ -697,12 +705,14 @@ function RunningNow({ entries }: { entries: Entry[] }) {
  * there's something to restore; the list opens in a sheet, so it never sits
  * in the day's flow or in the way of loading older weeks.
  */
-function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
+function RecentlyRemoved({ onRestore, hidden }: { onRestore: (e: Entry) => void; hidden?: boolean }) {
   const { api, state, restore: restoreEntry, memberName, units } = useMaple();
   const now = useNow(60_000);
   const [items, setItems] = useState<Entry[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
+  // Stable, so the sheet doesn't re-run its open effect (and pull focus back to itself) on every poll.
+  const close = useCallback(() => setOpen(false), []);
   const rev = state?.rev;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
 
@@ -723,12 +733,10 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
     };
   }, [api, rev]);
 
-  // The last one restored closes the sheet.
+  // The last one restored closes the sheet (and it stays closed if more arrive later).
   useEffect(() => {
     if (!items.length) setOpen(false);
   }, [items.length]);
-
-  if (!items.length && !open) return null;
 
   const restore = async (e: Entry) => {
     setBusy(e.id);
@@ -738,18 +746,22 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
     setBusy(null);
   };
 
+  // The sheet stays mounted (closed) so restoring the last one slides it away
+  // instead of cutting it off; the button only shows while there's something to restore.
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label={`Recently removed: ${items.length}`}
-        className="inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-[15px] text-mp-ink-2 tabular-nums transition active:bg-mp-ink/5"
-      >
-        <Icon name="trash-2" size={18} />
-        {items.length}
-      </button>
-      <Sheet open={open} onClose={() => setOpen(false)} title="Recently removed">
+      {items.length > 0 && !hidden && (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label={`Recently removed: ${items.length}`}
+          className="inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-[15px] text-mp-ink-2 tabular-nums transition active:bg-mp-ink/5"
+        >
+          <Icon name="trash-2" size={18} />
+          {items.length}
+        </button>
+      )}
+      <Sheet open={open && items.length > 0} onClose={close} title="Recently removed">
         <p className={cx(tone.muted, "text-sm")}>Deleted in the last day. Restore puts one back where it was.</p>
         <ul className={cx(tone.card, tone.divide, "overflow-hidden")}>
           {items.map((e) => {
@@ -776,8 +788,20 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
   );
 }
 
-function JumpToDate({ todayKey, minKey, onJump }: { todayKey: string; minKey?: string; onJump: (k: string) => void }) {
-  const [openPicker, setOpenPicker] = useState(false);
+function JumpToDate({
+  todayKey,
+  minKey,
+  onJump,
+  open: openPicker,
+  onOpenChange: setOpenPicker,
+}: {
+  todayKey: string;
+  minKey?: string;
+  onJump: (k: string) => void;
+  /** Held by the tab, so the header can make room while the date field is open. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!openPicker) return;
@@ -806,7 +830,7 @@ function JumpToDate({ todayKey, minKey, onJump }: { todayKey: string; minKey?: s
               setOpenPicker(false);
             }
           }}
-          className={cx(tone.input, "h-11 w-[9.5rem] px-3 py-0 text-base [&::-webkit-calendar-picker-indicator]:opacity-50")}
+          className={cx(tone.input, "h-11 w-[9.5rem]! px-3 py-0 text-base [&::-webkit-calendar-picker-indicator]:opacity-50")}
         />
       )}
       {openPicker && (
@@ -814,7 +838,7 @@ function JumpToDate({ todayKey, minKey, onJump }: { todayKey: string; minKey?: s
           type="button"
           onClick={() => setOpenPicker(false)}
           aria-label="Close date picker"
-          className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full"
+          className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2">
             <Icon name="x" size={18} strokeWidth={2.25} />

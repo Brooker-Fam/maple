@@ -12,7 +12,7 @@ import { Icon, KindBadge, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE } from "./TimerCard";
-import { cx, tone } from "./ui";
+import { Avatar, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -383,6 +383,7 @@ export function DiaperBrigade() {
       const hit = byName.get(d.who);
       return {
         ...d,
+        member: hit?.m ?? null,
         color: hit?.m.color ?? MEMBER_COLORS[(hit?.i ?? i) % MEMBER_COLORS.length],
         title: TITLES[(week + (hit?.i ?? i)) % TITLES.length],
       };
@@ -404,6 +405,7 @@ export function DiaperBrigade() {
             {i > 0 && <span aria-hidden className="text-mp-ink-3">·</span>}
             <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
             <span className="font-semibold text-mp-ink">{p.who}</span>
+            {p.member?.emoji && <Avatar member={p.member} size={18} />}
             <span className="text-mp-ink tabular-nums">{p.diapers}</span>
           </span>
         ))}
