@@ -617,6 +617,102 @@ async function migrate() {
     )
   `;
 
+  // FOR MOM: the person who gave birth, her medicines, temperature, questions and
+  // check-ins. Separate from maple_entries on purpose: nothing here is about
+  // Maple, and every read goes through careAccess() in src/lib/maple/care.ts.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_care_people (
+      member TEXT PRIMARY KEY,
+      shared_with JSONB NOT NULL DEFAULT '[]'::jsonb,
+      settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_people_one ON maple_care_people ((TRUE))`;
+
+  // Ids are random 8-digit numbers made by care-store.ts, not a sequence:
+  // a gap in a sequence would show other readers that a private row exists.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_care_meds (
+      id BIGINT PRIMARY KEY CHECK (id BETWEEN 10000000 AND 99999999),
+      person TEXT NOT NULL REFERENCES maple_care_people(member) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      also_called TEXT,
+      dose_text TEXT,
+      units_per_dose TEXT,
+      schedule JSONB NOT NULL DEFAULT '{"type":"as_needed"}'::jsonb,
+      max_24h NUMERIC,
+      limit_unit TEXT CHECK (limit_unit IN ('tablets', 'caplets', 'capsules', 'doses', 'mL')),
+      label_text TEXT,
+      reason TEXT,
+      contains_apap BOOLEAN NOT NULL DEFAULT FALSE,
+      instructions TEXT,
+      course_start DATE,
+      course_end DATE,
+      show_on_today BOOLEAN NOT NULL DEFAULT TRUE,
+      private BOOLEAN NOT NULL DEFAULT FALSE,
+      stopped_at TIMESTAMPTZ,
+      reviewed_at TIMESTAMPTZ,
+      reviewed_by TEXT,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT,
+      updated_by TEXT,
+      source TEXT NOT NULL DEFAULT 'web',
+      client_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ,
+      CHECK (max_24h IS NULL OR limit_unit IS NOT NULL)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_meds_person ON maple_care_meds(person, sort, id) WHERE deleted_at IS NULL`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_meds_client ON maple_care_meds(client_id) WHERE client_id IS NOT NULL`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_care_entries (
+      id BIGINT PRIMARY KEY CHECK (id BETWEEN 10000000 AND 99999999),
+      person TEXT NOT NULL REFERENCES maple_care_people(member) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('dose', 'temp', 'question', 'bp')),
+      med_id BIGINT REFERENCES maple_care_meds(id) ON DELETE SET NULL,
+      at TIMESTAMPTZ NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      note TEXT,
+      private BOOLEAN NOT NULL DEFAULT FALSE,
+      created_by TEXT,
+      updated_by TEXT,
+      source TEXT NOT NULL DEFAULT 'web',
+      client_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_time ON maple_care_entries(person, at DESC) WHERE deleted_at IS NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_med ON maple_care_entries(med_id, at DESC) WHERE deleted_at IS NULL AND kind = 'dose'`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_updated ON maple_care_entries(person, updated_at DESC)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_entries_client ON maple_care_entries(client_id) WHERE client_id IS NOT NULL`;
+
+  // Check-ins and fuller check-ins: hers only, never shared, hard-deleted, never in MCP or Siri.
+  // Their own table and sequence, so no other reader ever sees their ids.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_care_mood (
+      id BIGSERIAL PRIMARY KEY,
+      person TEXT NOT NULL REFERENCES maple_care_people(member) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('checkin', 'screen')),
+      at TIMESTAMPTZ NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      note TEXT,
+      source TEXT NOT NULL DEFAULT 'web',
+      client_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_mood_time ON maple_care_mood(person, at DESC)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_mood_client ON maple_care_mood(client_id) WHERE client_id IS NOT NULL`;
+
   console.log("Migrations complete.");
 }
 

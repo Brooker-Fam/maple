@@ -7,6 +7,7 @@
  * Storage is metric (grams, cm, °C, ml); the UI converts to lb/oz, inches,
  * °F and fl oz by default.
  */
+import type { Assessment, MoodTag } from "./guidelines";
 
 export type Side = "L" | "R";
 
@@ -226,6 +227,14 @@ export type MapleState = {
    * you slept" recap. Only meaningful on the first poll of a visit.
    */
   seen_at: string | null;
+  /** Mom's area, filtered by careAccess for this reader; absent when they can't read anything there. */
+  care?: CareState;
+  /**
+   * Before mom's area is set up, for someone who may set it up: "anyone"
+   * (an owner, for any owner or member) or "self" (a member, for herself).
+   * Absent once it exists, and for viewers and the admin login acting as nobody.
+   */
+  care_setup?: "anyone" | "self";
 };
 
 export type MapleStateUnchanged = { unchanged: true; now: string; rev: string };
@@ -358,3 +367,188 @@ export type TimerInput = {
 };
 
 export type UnitSystem = "us" | "metric";
+
+// ── For mom: her medicines, temperature, questions and check-ins ─────────
+// Stored apart from Maple's entries (maple_care_* tables); every read goes
+// through careAccess() in care.ts. Every number on a plan is typed by the
+// family from her label, discharge papers or clinician, in the label's unit.
+
+export type CareKind = "dose" | "temp" | "question"; // "bp" is reserved for Appendix A
+export type MoodKind = "checkin" | "screen";
+export type LimitUnit = "tablets" | "caplets" | "capsules" | "doses" | "mL";
+
+export type MedSchedule =
+  | { type: "as_needed"; min_gap_min?: number | null }
+  | { type: "every"; every_min: number }
+  | { type: "daily"; per_day: number }
+  | { type: "times"; times: string[] }; // local "HH:MM"
+
+export type MedReason = "pain" | "constipation" | "bp" | "iron" | "infection" | "mood" | "vitamin" | "other";
+
+export type CarePlan = {
+  id: number; name: string; also_called: string | null; dose_text: string | null;
+  schedule: MedSchedule; max_24h: number | null; limit_unit: LimitUnit | null; units_per_dose: string | null;
+  label_text: string | null; reason: MedReason | null; contains_apap: boolean; instructions: string | null;
+  course_start: string | null; course_end: string | null; show_on_today: boolean; private: boolean;
+  stopped_at: string | null; reviewed_at: string | null; reviewed_by: string | null; sort: number;
+  created_by: string | null; updated_by: string | null; source: Source; created_at: string; updated_at: string;
+};
+
+export type CareDataByKind = {
+  dose: { name: string; dose?: string | null; units?: number | null; unit?: LimitUnit | null; skipped?: boolean };
+  temp: { temp_c: number };
+  question: { done?: boolean; answer?: string | null }; // the question text is in note
+};
+export type MoodDataByKind = {
+  checkin: { level: 1 | 2 | 3 | 4 | 5; tags?: MoodTag[] };
+  screen: { phq9: (0 | 1 | 2 | 3)[]; gad7: (0 | 1 | 2 | 3)[]; difficulty?: 0 | 1 | 2 | 3 | null;
+            phq9_score: number; gad7_score: number | null; item9: boolean; item9_ever: boolean; complete: boolean };
+};
+
+export type CareEntry = { [K in CareKind]: {
+  id: number; kind: K; med_id: number | null; at: string; data: CareDataByKind[K]; note: string | null;
+  private: boolean; created_by: string | null; updated_by: string | null; source: Source;
+  created_at: string; updated_at: string; pending?: boolean;
+} }[CareKind];
+export type MoodEntry = { [K in MoodKind]: {
+  id: number; kind: K; at: string; data: MoodDataByKind[K]; note: string | null; created_at: string; updated_at: string; pending?: boolean;
+} }[MoodKind];
+
+/** A dose (taken or skipped) of a plan or a one-off. */
+export type DoseEntry = Extract<CareEntry, { kind: "dose" }>;
+
+export type CareSettings = {
+  care_team?: { ob?: string; after_hours?: string; pharmacy?: string; therapist?: string }; // therapist: hers only
+  feeding?: "yes" | "no" | null;
+  next_visit?: string | null;        // 'YYYY-MM-DD'
+  checkin_suggestions?: boolean;     // hers only; default true
+  sharing_seen_at?: string | null;   // hers only
+  acks?: Record<string, string>;     // noteKey → ISO
+};
+
+export type CareAccess = {
+  self: boolean; read: boolean; write: boolean;
+  private: boolean;   // can see Only me rows (her session or her Siri token only)
+  mood: boolean;      // her session only
+  therapist: boolean; // her session only
+  manage: boolean;    // sharing and deleting the area (her session only)
+};
+
+export type CareState = {
+  person: { member: string; name: string; self: boolean; created_by: string | null };
+  access: CareAccess;
+  settings: CareSettings;   // therapist and hers-only keys only for her
+  shared_with?: string[];   // her only
+  plans: CarePlan[];        // not deleted; private ones only for her
+  /**
+   * Last 72 h ∪ 8 days of doses and questions (plan detail's 7 days need no
+   * fetch) ∪ newest non-skipped dose per plan ∪ open questions ∪ newest temp;
+   * private ones (and doses of private plans) only for her.
+   */
+  entries: CareEntry[];
+  mood?: MoodEntry[];       // her only: check-ins of the last 14 days + her newest screen
+};
+
+/** A maple_care_people row, as the server reads it (clients get CareState.person). One per log. */
+export type CarePerson = {
+  member: string;
+  shared_with: string[];
+  settings: CareSettings;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * What the medicine engine (care.ts) works out for one plan, in the order of
+ * §5.4: stopped, finished, none, at_limit, wait, ok, unknown, then the Each
+ * day and At set times states.
+ */
+export type PlanState =
+  | "stopped" | "finished" | "none" | "at_limit" | "wait" | "ok" | "unknown"
+  | "day_open" | "day_done" | "slot_open" | "slot_next";
+
+export type PlanStatus = {
+  state: PlanState;
+  /** The newest dose by `at` that wasn't skipped or deleted. */
+  last: DoseEntry | null;
+  /** last.at + the plan's gap (As needed with a gap, Every few hours). */
+  gapOkAt: string | null;
+  /** At the limit: when enough of the last 24 hours' doses drop out for the next one. */
+  limitOkAt: string | null;
+  /** The later of gapOkAt and limitOkAt. */
+  nextOkAt: string | null;
+  /** The units of every non-skipped dose in the last 24 hours, in limit_unit (doses when it has none). */
+  count24: number;
+  max24: number | null;
+  unit: LimitUnit | null;
+  /** What the next dose counts as: the fixed "each time", else its smallest choice, else 1. */
+  nextUnits: number;
+  /** Non-skipped doses in the last 24 hours, oldest first (the over-limit list). */
+  window: DoseEntry[];
+  /** Each day and At set times: today's doses (local), taken or skipped, oldest first. */
+  today: DoseEntry[];
+  /** At set times: today's slots, each with the dose that filled it. */
+  slots: { time: string; at: string; filled_by: number | null }[] | null;
+  /** At set times: the next unfilled slot today. */
+  nextSlotAt: string | null;
+  courseDay: number | null;
+  courseDays: number | null;
+};
+
+/** Why "Took it" (or a write) stopped to ask instead of saving. Nothing is ever blocked. */
+export type CareAskReason = "early" | "recent" | "at_limit" | "units" | "logged_today";
+
+export type OneTapAsk = {
+  reason: CareAskReason;
+  /** recent: who logged the dose this may repeat (a member id; the UI says "You" for the reader). */
+  by?: string | null;
+  /** recent and early: when that dose was (ISO). */
+  at?: string;
+};
+
+/** POST /api/maple/care/meds (a new plan), or PATCH ?id= with any subset plus expect_updated_at. */
+export type PlanInput = {
+  /** Edit this plan instead of adding one. */
+  id?: number;
+  name: string;
+  also_called?: string | null;
+  dose_text?: string | null;
+  schedule: MedSchedule;
+  max_24h?: number | null;
+  limit_unit?: LimitUnit | null;
+  units_per_dose?: string | null;
+  label_text?: string | null;
+  reason?: MedReason | null;
+  contains_apap?: boolean;
+  instructions?: string | null;
+  course_start?: string | null;
+  course_end?: string | null;
+  show_on_today?: boolean;
+  /** Only me: hers to set. */
+  private?: boolean;
+  sort?: number;
+  client_id?: string;
+};
+
+/** POST /api/maple/care/entries */
+export type CareEntryInput = { [K in CareKind]: {
+  kind: K; at: string; med_id?: number | null; data: CareDataByKind[K]; note?: string | null;
+  private?: boolean; client_id: string; allow_duplicate?: boolean;
+} }[CareKind];
+
+/** POST /api/maple/care/entries answer (a dose or a temperature). */
+export type DoseResult = {
+  /** false: nothing was saved (possible_duplicate, or `reason`). */
+  created: boolean;
+  /** The same client_id was already saved: don't retry. */
+  deduped?: boolean;
+  entry: CareEntry | null;
+  /** earlyDose, overDailyMax, LABEL_NOT_WHILE_NURSING, assessMomTemp: guidelines.ts copy, forMom-prefixed for other readers. */
+  notes: Assessment[];
+  /** The dose this may repeat (anyone's, within the plan's gap or 30 minutes). */
+  possible_duplicate?: DoseEntry;
+  reason?: CareAskReason;
+  /** That plan's status after the write. */
+  status?: PlanStatus;
+};

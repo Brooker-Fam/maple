@@ -59,6 +59,13 @@ export const DETAIL_COLOR = {
 /** A skin check (jaundice only): the gold of its eye icon everywhere, not the vitals plum. */
 export const SKIN_COLOR = "#C9962A";
 
+/**
+ * Mom's own things (her medicines, the Today row, her More tile): a deep teal
+ * no kind of Maple's uses. Worn through mp-kind / mp-kind-ink / mp-kind-fill
+ * so it folds into the amber at night like every kind color.
+ */
+export const CARE_COLOR = "#3F7F7A";
+
 /** One color per thing: a skin check and a doctor question wear the same color in lists as in More. */
 export function entryColor(e: Entry): string {
   if (e.kind === "feed") return e.data.method === "bottle" ? DETAIL_COLOR.bottle : DETAIL_COLOR.nursing;

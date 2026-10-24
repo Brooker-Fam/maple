@@ -9,14 +9,19 @@ import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/
 import { formatLength, formatWeight } from "@/lib/maple/units";
 import type { Entry, EntryOf, Member, Role } from "@/lib/maple/types";
 import BirthSheet from "./BirthSheet";
+import { useCareNav } from "./care/CareNav";
+import { NavRow } from "./care/parts";
+import { useCare, useCareSetup } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
 import { useNightPref, type NightPref } from "./nightLook";
+import { CARE_COLOR } from "./palette";
 import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, TextArea, cx, memberColor, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
  * Family: who's in the log (and inviting more), Maple's details and her
- * doctor, questions for the next checkup, this phone's preferences,
+ * doctor, after the birth (mom's medicines and recovery, and support for
+ * everyone), questions for the next checkup, this phone's preferences,
  * connecting Claude/ChatGPT and Siri, and the CSV export. Viewers get a
  * read-only version.
  *
@@ -352,7 +357,7 @@ export default function FamilyTab() {
         <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Family</h1>
       </header>
       <People />
-      <BabyDetails />
+      <BabyDetails after={<AfterTheBirth />} />
       <DoctorQuestions />
       <Preferences />
       {!readOnly && <ConnectAI />}
@@ -801,7 +806,8 @@ const numOrNull = (s: string) => {
   return Number.isFinite(n) ? n : NaN;
 };
 
-function BabyDetails() {
+/** `after`: what comes after "Her doctor" (After the birth). */
+function BabyDetails({ after }: { after?: ReactNode }) {
   const { state, api, refresh, toast, readOnly, units, now } = useMaple();
   const baby = state!.baby;
   const tz = baby.timezone;
@@ -901,22 +907,25 @@ function BabyDetails() {
   if (readOnly) {
     const phone = doctorSrc.pedPhone;
     return (
-      <Section title="Maple">
-        <div className={GROUP}>
-          <p className="flex flex-wrap items-baseline gap-x-2 px-4 py-3.5">
-            <span className={cx(tone.display, "text-[24px] leading-tight")}>{baby.name}</span>
-            {baby.nickname && <span className={cx(tone.muted, "text-sm")}>“{baby.nickname}”</span>}
-          </p>
-          {birthRow}
-          {phone && (
-            <a href={telHref(phone)} className={cx(tone.row, "min-h-[52px]")}>
-              <Icon name="phone" size={20} className="shrink-0 text-mp-accent-fg" />
-              <span className={cx(tone.body, "flex-1 text-[15px]")}>Pediatrician</span>
-              <span className="text-[15px] font-medium text-mp-accent-fg tabular-nums">{phone}</span>
-            </a>
-          )}
-        </div>
-      </Section>
+      <>
+        <Section title="Maple">
+          <div className={GROUP}>
+            <p className="flex flex-wrap items-baseline gap-x-2 px-4 py-3.5">
+              <span className={cx(tone.display, "text-[24px] leading-tight")}>{baby.name}</span>
+              {baby.nickname && <span className={cx(tone.muted, "text-sm")}>“{baby.nickname}”</span>}
+            </p>
+            {birthRow}
+            {phone && (
+              <a href={telHref(phone)} className={cx(tone.row, "min-h-[52px]")}>
+                <Icon name="phone" size={20} className="shrink-0 text-mp-accent-fg" />
+                <span className={cx(tone.body, "flex-1 text-[15px]")}>Pediatrician</span>
+                <span className="text-[15px] font-medium text-mp-accent-fg tabular-nums">{phone}</span>
+              </a>
+            )}
+          </div>
+        </Section>
+        {after}
+      </>
     );
   }
 
@@ -967,6 +976,8 @@ function BabyDetails() {
         {dDirty && <SaveBar busy={busy === "doctor"} onSave={() => void save("doctor")} onCancel={() => setDEdits({})} />}
       </Section>
 
+      {after}
+
       <Section title="On Today">
         <div className={GROUP}>
           <Toggle
@@ -993,6 +1004,49 @@ function BabyDetails() {
       </Section>
       <BirthSheet open={birthOpen} onClose={() => setBirthOpen(false)} mode={born ? "edit" : "birth"} />
     </>
+  );
+}
+
+// ── After the birth ──────────────────────────────────────────────────────
+
+/**
+ * Mom's rows (§11.1). Her medicines and recovery for whoever she shares
+ * them with; before it's set up, the setup row for the people who may set
+ * it up; Support and help lines for everyone signed in, viewers included.
+ * It never says more than the reader can see: without access it's the
+ * Support row alone, so nothing here confirms an area exists.
+ */
+function AfterTheBirth() {
+  const care = useCare();
+  const setup = useCareSetup();
+  const nav = useCareNav();
+  // Her first plan as the list sorts them; never an Only me one on a glanceable row.
+  const first = care?.plans.find((v) => !v.plan.private)?.line;
+  return (
+    <Section title="After the birth">
+      <div className={GROUP}>
+        {care ? (
+          <NavRow
+            icon="pill"
+            iconColor={CARE_COLOR}
+            label={care.self ? "Your medicines and recovery" : `${care.name}'s medicines and recovery`}
+            note={first ?? (care.plans.length ? undefined : "No medicines yet")}
+            onClick={nav.openCare}
+          />
+        ) : (
+          setup && (
+            <NavRow
+              icon="pill"
+              iconColor={CARE_COLOR}
+              label="Medicines and support for mom"
+              note="Her medicine schedule and help lines for the weeks after birth"
+              onClick={nav.openSetup}
+            />
+          )
+        )}
+        <NavRow icon="life-buoy" label="Support and help lines" note="Warning signs, hotlines, and how to help" onClick={nav.openSupport} />
+      </div>
+    </Section>
   );
 }
 
@@ -1579,8 +1633,62 @@ function HandsFree() {
             </li>
           </ol>
         </Disclosure>
+        <MomShortcut url={url} />
       </div>
     </Section>
+  );
+}
+
+/**
+ * The one "Mom meds" shortcut (§10.5) for every medicine on her list, from
+ * any phone, for whoever she shares them with. Asks come back as
+ * needs_units / needs_confirm, so nothing early or over her limit is saved
+ * without a yes; reminders go to Apple Reminders, never a family calendar.
+ */
+function MomShortcut({ url }: { url: string }) {
+  const care = useCare();
+  const [open, setOpen] = useState(false);
+  if (!care?.access.write) return null;
+  const strong = "font-semibold text-mp-ink";
+  return (
+    <Disclosure
+      label={care.self ? "Your medicines" : `${care.name}'s medicines`}
+      summary="One shortcut for all"
+      open={open}
+      onToggle={() => setOpen((v) => !v)}
+    >
+      <p className={cx(tone.body, "text-sm leading-relaxed")}>
+        One shortcut, <strong className={strong}>Mom meds</strong>, covers every medicine on {care.self ? "your" : "her"} list. Its Get Contents of URL
+        actions are set up like the ones above: the same URL <Code>{url}</Code>, <strong className={strong}>POST</strong>, and the same Authorization
+        header.
+      </p>
+      <ol className={cx(tone.body, "mt-3 list-decimal space-y-3 pl-5 text-sm leading-relaxed marker:font-semibold marker:text-mp-ink-3")}>
+        <li>
+          <strong className={strong}>Get Contents of URL</strong> with a JSON body: <Code>action</Code> = <Code>mom_status</Code>. Then{" "}
+          <strong className={strong}>Choose from List</strong> over its <Code>plans</Code>, showing each one&apos;s <Code>label</Code>.
+        </li>
+        <li>
+          <strong className={strong}>Get Contents of URL</strong> again: <Code>action</Code> = <Code>mom_dose</Code>, and a Text field <Code>med</Code>{" "}
+          set to the chosen item&apos;s <Code>id</Code>.
+        </li>
+        <li>
+          If <Code>needs_units</Code> is true: <strong className={strong}>Ask for Number</strong> with <Code>speak</Code> as the prompt, then call again
+          with a Number field <Code>units</Code>.
+        </li>
+        <li>
+          If <Code>needs_confirm</Code> is true: <strong className={strong}>Choose from Menu</strong> with <Code>speak</Code> as the prompt, Yes and No.
+          On Yes, call again with a Boolean field <Code>confirm</Code> set to true.
+        </li>
+        <li>
+          <strong className={strong}>Speak Text</strong> with <Code>speak</Code>.
+        </li>
+        <li>
+          Optional: if <Code>next_ok_at</Code> has a value, <strong className={strong}>Add New Reminder</strong> titled <Code>reminder_title</Code>, due
+          at <Code>next_ok_at</Code>.
+        </li>
+      </ol>
+      <p className={cx(tone.muted, "mt-3 text-[13px] leading-snug")}>Use Apple Reminders, not a calendar: family calendars show on the kitchen display.</p>
+    </Disclosure>
   );
 }
 

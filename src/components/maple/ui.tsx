@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useDragControls, useReducedMotion } from "framer-motion";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   addDays,
@@ -258,6 +258,7 @@ export function Stepper({
   decimals = 0,
   ariaLabel,
   onInvalid,
+  start,
 }: {
   value: number | null;
   onChange: (v: number | null) => void;
@@ -269,9 +270,12 @@ export function Stepper({
   ariaLabel: string;
   /** Called with true while the text isn't a usable number (so a form can hold Save). */
   onInvalid?: (invalid: boolean) => void;
+  /** An empty field's first − or + lands here, not at `min` (a field that starts blank rather than at a made-up reading). */
+  start?: number;
 }) {
   const { text, setText, invalid } = useTypedNumber(value, max, onInvalid);
   const bump = (d: number) => {
+    if (value == null && start != null) return onChange(start);
     const next = Math.min(max, Math.max(min, Math.round(((value ?? 0) + d) * 10 ** decimals) / 10 ** decimals));
     onChange(next);
   };
@@ -764,6 +768,18 @@ function setSlot(el: HTMLElement, on: boolean) {
   for (const cb of slotSubs) cb();
 }
 
+/** The open sheets, newest last: Escape closes only the top one (and nothing while that one is locked). */
+const openSheets: object[] = [];
+
+/** How long a locked sheet ignores taps after it opens: a double tap on whatever opened it must not start a call. */
+const LOCK_HOLD_MS = 700;
+const SheetArmed = createContext(true);
+
+/** False for a locked sheet's first moments, while its buttons ignore taps (they show it as aria-disabled). */
+export function useSheetArmed(): boolean {
+  return useContext(SheetArmed);
+}
+
 export function Sheet({
   open,
   onClose,
@@ -772,6 +788,9 @@ export function Sheet({
   children,
   footer,
   calm,
+  locked,
+  actions,
+  display,
 }: {
   open: boolean;
   onClose: () => void;
@@ -786,6 +805,16 @@ export function Sheet({
    * at night and under Reduce Motion.)
    */
   calm?: boolean;
+  /**
+   * The crisis sheet: no backdrop close, no drag-to-dismiss, no Escape and no
+   * X, so the only ways out are its own `actions`. For its first 700 ms every
+   * tap inside is ignored (useSheetArmed tells its buttons to say so).
+   */
+  locked?: boolean;
+  /** Small text buttons in the header row, at the top; a locked sheet's only way out ("Close"). */
+  actions?: ReactNode;
+  /** The title in the display serif, larger: her screen's name, the one place it's used (§11.5). */
+  display?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -795,6 +824,22 @@ export function Sheet({
   const drag = useDragControls();
   const night = useNightActive();
   const reduce = useReducedMotion();
+  // A locked sheet holds its taps for a moment each time it opens (React's "adjust state while rendering" pattern).
+  const [armed, setArmed] = useState(!locked);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open && locked && armed) setArmed(false);
+  }
+  useEffect(() => {
+    if (!open || armed) return;
+    const t = window.setTimeout(() => setArmed(true), LOCK_HOLD_MS);
+    return () => window.clearTimeout(t);
+  }, [open, armed]);
+  const lockedRef = useRef(locked);
+  useEffect(() => {
+    lockedRef.current = locked;
+  });
   // No slide at 3am or with Reduce Motion: it fades in where it will sit.
   const still = night || !!reduce;
   // aria-modal alone doesn't keep focus in: the background goes inert while it's open.
@@ -847,12 +892,19 @@ export function Sheet({
   });
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
+    // Only the top sheet answers Escape, so a sheet opened from another closes alone and a locked one stays put.
+    const me = {};
+    openSheets.push(me);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || openSheets[openSheets.length - 1] !== me || lockedRef.current) return;
+      closeRef.current();
+    };
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     (calm ? titleRef.current : panelRef.current)?.focus();
     return () => {
+      openSheets.splice(openSheets.indexOf(me), 1);
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
@@ -868,7 +920,7 @@ export function Sheet({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={onClose}
+            onClick={locked ? undefined : onClose}
           />
           <motion.div
             ref={panelRef}
@@ -877,7 +929,7 @@ export function Sheet({
             animate={still ? { opacity: 1 } : { y: 0 }}
             exit={still ? { opacity: 0 } : { y: "100%" }}
             transition={still ? { duration: 0.18 } : { type: "spring", damping: 30, stiffness: 320 }}
-            drag="y"
+            drag={locked ? false : "y"}
             dragListener={false}
             dragControls={drag}
             dragConstraints={{ top: 0, bottom: 0 }}
@@ -885,26 +937,46 @@ export function Sheet({
             onDragEnd={(_, info) => {
               if (info.offset.y > 120 || info.velocity.y > 600) onClose();
             }}
+            // A locked sheet's first moments: a tap (or Enter) does nothing, a tel: link included.
+            onClickCapture={
+              armed
+                ? undefined
+                : (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+            }
             className={cx(
               "relative flex w-full max-w-lg flex-col rounded-t-[24px] bg-mp-bg outline-none sm:rounded-[24px]",
               calm ? "max-h-[90dvh]" : "max-h-[92dvh]"
             )}
           >
-            {/* Drag from the header to dismiss; the body scrolls normally. */}
-            <div className="shrink-0 touch-none" onPointerDown={(e) => drag.start(e)}>
-            <div className="mx-auto mt-2 h-[5px] w-9 rounded-full bg-mp-ink/15" />
-            <div className="flex items-center justify-between gap-3 px-5 pt-2 pb-3">
+            <SheetArmed.Provider value={armed}>
+            {/* Drag from the header to dismiss; the body scrolls normally. A locked sheet has no grabber and doesn't drag. */}
+            <div className={cx("shrink-0", !locked && "touch-none")} onPointerDown={locked ? undefined : (e) => drag.start(e)}>
+            {locked ? (
+              // No grabber: its way out is a row of small text buttons at the very top, never down by the thumb.
+              <div className="flex min-h-[44px] flex-wrap items-center justify-end gap-x-1 px-3 pt-2">{actions}</div>
+            ) : (
+              <div className="mx-auto mt-2 h-[5px] w-9 rounded-full bg-mp-ink/15" />
+            )}
+            <div className={cx("flex items-center justify-between gap-3 px-5 pb-3", locked ? "pt-0.5" : "pt-2")}>
               <div className="min-w-0">
-                <h2 ref={titleRef} tabIndex={calm ? -1 : undefined} className={cx(tone.heading, "text-[20px] outline-none")}>
+                <h2 ref={titleRef} tabIndex={calm ? -1 : undefined} className={cx(display ? tone.display : tone.heading, display ? "text-[28px] leading-tight" : "text-[20px]", "outline-none")}>
                   {title}
                 </h2>
                 {subtitle && <p className="mt-0.5 text-[13px] leading-snug text-mp-ink-2">{subtitle}</p>}
               </div>
-              <button type="button" onClick={onClose} aria-label="Close" className="-mr-1.5 flex h-11 w-11 items-center justify-center rounded-full">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2">
-                  <Icon name="x" size={18} strokeWidth={2.25} />
-                </span>
-              </button>
+              {!locked && (
+                <div className="-mr-1.5 flex shrink-0 items-center gap-1">
+                  {actions}
+                  <button type="button" onClick={onClose} aria-label="Close" className="flex h-11 w-11 items-center justify-center rounded-full">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2">
+                      <Icon name="x" size={18} strokeWidth={2.25} />
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
             </div>
             <div ref={bodyRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 pb-4">
@@ -925,6 +997,7 @@ export function Sheet({
                 {footer}
               </div>
             )}
+            </SheetArmed.Provider>
           </motion.div>
         </div>
       )}

@@ -3,6 +3,7 @@
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { WelcomeHost } from "./BirthSheet";
+import { CareNavProvider } from "./care/CareNav";
 import FamilyTab from "./FamilyTab";
 import LogTab from "./LogTab";
 import MomentsTab from "./MomentsTab";
@@ -42,11 +43,16 @@ export default function MapleApp() {
   return (
     <MapleProvider>
       {/* Reduce Motion turns every slide and spring into a fade (framer drops transforms, keeps opacity). Outside
-          SheetProvider, so the sheets it renders beside the shell follow it too. */}
+          SheetProvider, so the sheets it renders beside the shell follow it too. Mom's sheets (her screen, Support,
+          warning signs, setup, the picker, the Dose sheet) wrap SheetProvider: Maple's sheets (MedSheet's "Log it for
+          {Name} instead") render beside the shell, so they only reach useCareNav from inside it, and hers come after
+          them, on top. */}
       <MotionConfig reducedMotion="user">
-        <SheetProvider>
-          <Shell />
-        </SheetProvider>
+        <CareNavProvider>
+          <SheetProvider>
+            <Shell />
+          </SheetProvider>
+        </CareNavProvider>
       </MotionConfig>
     </MapleProvider>
   );

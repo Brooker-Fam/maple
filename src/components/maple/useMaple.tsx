@@ -28,7 +28,11 @@ import {
 import { memberLabel as labelOf, summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
 import type {
+  CareEntry,
+  CareEntryInput,
+  CareState,
   CreateEntryInput,
+  DoseEntry,
   Entry,
   FeedData,
   FeedEdit,
@@ -202,6 +206,21 @@ export type MapleContextValue = {
   member: (id: string | null | undefined) => Member | null;
   /** True for read-only viewers (hide logging controls). */
   readOnly: boolean;
+  /**
+   * Mom's area in the shared state (useCare in care/useCare.tsx is built on
+   * these): change state.care at once (an optimistic dose, a plan edit),
+   * hold polls while a care write is out, and queue a dose, temperature or
+   * question for when the connection is back (it shows as pending meanwhile).
+   */
+  care: {
+    patch: (fn: (c: CareState) => CareState) => void;
+    track: <T>(fn: () => Promise<T>) => Promise<T>;
+    queue: (input: CareEntryInput, entry: CareEntry) => void;
+    /** Drop a queued care item (deleted before it synced); true if it was queued. */
+    unqueue: (entryId: number) => boolean;
+    /** A temporary (negative) id for an optimistic care entry; never one Maple's entries use. */
+    tempId: () => number;
+  };
 };
 
 const MapleContext = createContext<MapleContextValue | null>(null);
@@ -292,7 +311,21 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-type OutboxItem = { client_id: string; input: CreateEntryInput; entry: Entry; tries: number };
+/**
+ * One write waiting for a connection. `target` says where it goes: Maple's
+ * entries (the default, so items saved before targets existed still post to
+ * /api/maple/entries), mom's care entries, or her check-ins. The key stays
+ * maple-outbox-v1.
+ */
+type OutboxItem =
+  | { target?: "entries"; client_id: string; input: CreateEntryInput; entry: Entry; tries: number }
+  | { target: "care"; client_id: string; input: CareEntryInput; entry: CareEntry; tries: number }
+  | { target: "mood"; client_id: string; input: Record<string, unknown>; entry: { id: number }; tries: number };
+type EntryItem = Extract<OutboxItem, { input: CreateEntryInput }>;
+type CareItem = Extract<OutboxItem, { target: "care" }>;
+const isEntryItem = (i: OutboxItem): i is EntryItem => !i.target || i.target === "entries";
+const isCareItem = (i: OutboxItem): i is CareItem => i.target === "care";
+const OUTBOX_URL = { entries: "/api/maple/entries", care: "/api/maple/care/entries", mood: "/api/maple/care/mood" } as const;
 
 function readOutbox(): OutboxItem[] {
   try {
@@ -481,7 +514,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     setOutbox(queued);
     // Queued entries keep their temporary (negative) ids across reloads; new
     // ones must not reuse them.
-    for (const i of queued) tempId = Math.min(tempId, i.entry.id - 1);
+    for (const i of queued) tempId = Math.min(tempId, (i.entry?.id ?? 0) - 1);
     setOnline(typeof navigator === "undefined" ? true : navigator.onLine !== false);
   }, []);
 
@@ -569,13 +602,19 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  /** Server entries plus anything still waiting in the outbox. */
+  /** Server entries plus anything still waiting in the outbox (care items as pending care entries). */
   const withPending = useCallback((s: MapleState, items: OutboxItem[]): MapleState => {
     if (!items.length) return s;
     const ids = new Set(s.entries.map((e) => e.id));
-    const extra = items.map((i) => i.entry).filter((e) => !ids.has(e.id));
-    const entries = [...extra, ...s.entries].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
-    return { ...s, entries };
+    const extra = items.filter(isEntryItem).map((i) => i.entry).filter((e) => !ids.has(e.id));
+    const entries = extra.length ? [...extra, ...s.entries].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at)) : s.entries;
+    let care = s.care;
+    const careExtra = items.filter(isCareItem).map((i) => ({ ...i.entry, pending: true }) as CareEntry);
+    if (care && careExtra.length) {
+      const have = new Set(care.entries.map((e) => e.id));
+      care = { ...care, entries: [...careExtra.filter((e) => !have.has(e.id)), ...care.entries].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) };
+    }
+    return { ...s, entries, ...(care ? { care } : {}) };
   }, []);
 
   const outboxRef = useRef<OutboxItem[]>([]);
@@ -615,6 +654,13 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         revRef.current = null;
         setState(null);
         setStatus("signedOut");
+        // Signed out: her doses and check-ins waiting on this phone go, so nothing about her stays behind.
+        if (outboxRef.current.some((i) => i.target === "care" || i.target === "mood")) {
+          const kept = outboxRef.current.filter((i) => i.target !== "care" && i.target !== "mood");
+          setOutbox(kept);
+          writeOutbox(kept);
+          outboxRef.current = kept;
+        }
         void loadAuth();
         return;
       }
@@ -636,6 +682,38 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     outboxRef.current = items;
   }, []);
 
+  const forceRefreshRef = useRef(forceRefresh);
+  forceRefreshRef.current = forceRefresh;
+
+  /**
+   * A dose saved on this phone offline turned out to repeat one logged
+   * elsewhere meanwhile: nothing was saved, and the toast asks (as the Dose
+   * sheet would) before logging it again.
+   */
+  const careDuplicateToast = useCallback(
+    (item: CareItem, dup: DoseEntry) => {
+      const s = stateRef.current;
+      const who = dup.created_by && dup.created_by === s?.me.email ? "You" : nameOf(dup.created_by, s?.members ?? []);
+      const text = `${who} logged ${dup.data.name} at ${formatTime(dup.at, tzRef.current)}. Is this another dose?`;
+      toast(text, {
+        tone: "info",
+        duration: 20_000,
+        actions: [
+          {
+            label: "Yes, another dose",
+            onClick: () =>
+              void fetchJson("/api/maple/care/entries", { method: "POST", body: JSON.stringify({ ...item.input, allow_duplicate: true }) })
+                .then(() => toast("Logged"))
+                .catch((e) => toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" }))
+                .finally(() => void forceRefreshRef.current()),
+          },
+          { label: "No, same one", onClick: () => toast("Not saved: it's the same dose", { tone: "info" }) },
+        ],
+      });
+    },
+    [toast]
+  );
+
   /**
    * Send anything waiting in the outbox. Entries can be queued or removed
    * while a slow request is in flight, so the result is applied to the
@@ -651,14 +729,21 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         // Removed from the queue while we were busy (the parent deleted it).
         if (!outboxRef.current.some((i) => i.client_id === item.client_id)) continue;
         try {
-          const { entry } = await fetchJson<{ entry: Entry }>("/api/maple/entries", {
+          const target = item.target ?? "entries";
+          const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; possible_duplicate?: DoseEntry }>(OUTBOX_URL[target], {
             method: "POST",
             body: JSON.stringify(item.input),
           });
           done.add(item.client_id);
+          if (isCareItem(item) && res.created === false && res.possible_duplicate) {
+            // The other phone (or Siri) logged it first: ask instead of saving a second dose.
+            careDuplicateToast(item, res.possible_duplicate);
+            continue;
+          }
           // Deleted on this phone while it was uploading: take it back out.
-          if (!outboxRef.current.some((i) => i.client_id === item.client_id)) {
-            await fetchJson(`/api/maple/entries?id=${entry.id}`, { method: "DELETE" }).catch(() => {});
+          if (res.entry && !outboxRef.current.some((i) => i.client_id === item.client_id)) {
+            const del = target === "care" ? `/api/maple/care/entries?id=${res.entry.id}` : target === "mood" ? `/api/maple/care/mood?id=${res.entry.id}` : `/api/maple/entries?id=${res.entry.id}`;
+            await fetchJson(del, { method: "DELETE" }).catch(() => {});
           }
         } catch (e) {
           if (isTransient(e)) bumped.add(item.client_id);
@@ -680,7 +765,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     } finally {
       flushing.current = false;
     }
-  }, [forceRefresh, setQueue, toast]);
+  }, [careDuplicateToast, forceRefresh, setQueue, toast]);
 
   useEffect(() => {
     void refresh();
@@ -818,7 +903,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const remove = useCallback<MapleContextValue["remove"]>(
     async (id, opts = {}) => {
       // Still in the outbox: just drop it locally.
-      const queued = outboxRef.current.find((i) => i.entry.id === id);
+      const queued = outboxRef.current.filter(isEntryItem).find((i) => i.entry.id === id);
       // Still being saved (temporary id, not queued): nothing to delete yet.
       if (id < 0 && !queued) {
         toast("One sec, that's still saving", { tone: "info" });
@@ -908,7 +993,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       if (id < 0) {
         // Not on the server yet. If it's waiting in the outbox, fold the edit
         // into the queued save; otherwise it's mid-save, so ask for a moment.
-        const queued = outboxRef.current.find((i) => i.entry.id === id);
+        const queued = outboxRef.current.filter(isEntryItem).find((i) => i.entry.id === id);
         if (!queued) {
           toast("One sec, that's still saving", { tone: "info" });
           return null;
@@ -927,7 +1012,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           note: input.note ?? null,
           data: input.data as never,
         } as Entry;
-        setQueue(outboxRef.current.map((i) => (i.client_id === queued.client_id ? { ...i, input, entry } : i)));
+        setQueue(outboxRef.current.map((i) => (i.client_id === queued.client_id ? ({ ...queued, input, entry } as OutboxItem) : i)));
         upsert(entry);
         if (opts.toast !== "") toast(opts.toast ?? "Saved on this phone", { icon: toastIcon(entry) });
         return entry;
@@ -1176,6 +1261,27 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const care = useMemo<MapleContextValue["care"]>(
+    () => ({
+      patch: (fn) => setState((s) => (s?.care ? { ...s, care: fn(s.care) } : s)),
+      track: (fn) => withInflight(fn),
+      queue: (input, entry) => {
+        setQueue([...outboxRef.current, { target: "care", client_id: input.client_id, input, entry, tries: 1 }]);
+        setOnline(false);
+        setState((s) => (s ? withPending(s, outboxRef.current) : s));
+      },
+      unqueue: (entryId) => {
+        const queued = outboxRef.current.find((i) => isCareItem(i) && i.entry.id === entryId);
+        if (!queued) return false;
+        setQueue(outboxRef.current.filter((i) => i.client_id !== queued.client_id));
+        setState((s) => (s?.care ? { ...s, care: { ...s.care, entries: s.care.entries.filter((e) => e.id !== entryId) } } : s));
+        return true;
+      },
+      tempId: () => tempId--,
+    }),
+    [setQueue, withInflight, withPending]
+  );
+
   const value = useMemo<MapleContextValue>(
     () => ({
       status,
@@ -1209,8 +1315,9 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       whoDiscarded,
       member,
       readOnly,
+      care,
     }),
-    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox.length, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly]
+    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox.length, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care]
   );
 
   return <MapleContext.Provider value={value}>{children}</MapleContext.Provider>;

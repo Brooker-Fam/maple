@@ -1,6 +1,6 @@
 # Maple's Log (`/maple`)
 
-A private, collaborative newborn tracker for Maple Jane: nursing (left/right timers), bottles, pumping, diapers with stool colors, sleep, tummy time, baths, temperature, vitals and skin checks, growth with WHO percentiles, notes and questions for the doctor, photos and milestones. Matt and Brittany (and anyone they invite) log from their phones, from Claude or ChatGPT (MCP), or hands-free with Siri.
+A private, collaborative newborn tracker for Maple Jane: nursing (left/right timers), bottles, pumping, diapers with stool colors, sleep, tummy time, baths, temperature, vitals and skin checks, growth with WHO percentiles, notes and questions for the doctor, photos and milestones. Matt and Brittany (and anyone they invite) log from their phones, from Claude or ChatGPT (MCP), or hands-free with Siri. A separate area "for mom" keeps her own medicines, temperature, questions for her OB and check-ins, with warning signs and help lines (see [For mom](#for-mom)).
 
 It's a family side project: unlinked from the public site and `noindex`.
 
@@ -40,7 +40,7 @@ OAuth reuses the site's `/oauth/*` shim. A Maple connection (detected by the RFC
 
 Family → Hands-free creates a personal token. An iOS Shortcut does *Get Contents of URL* (`POST https://brooker.family/api/maple/quick`, header `Authorization: Bearer maple_…`, JSON `{"action":"pee"}`), then *Speak Text* with the response's `speak` field.
 
-Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `sleep`, `wake`, `vitamin_d`, `bottle` (with `amount_oz`), `status`.
+Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `sleep`, `wake`, `vitamin_d`, `bottle` (with `amount_oz`), `status`, and mom's `mom_status` and `mom_dose` (see [For mom](#for-mom)).
 
 `nurse_left` / `nurse_right` during a running feed switch to (or resume on) that side, unless the feed looks forgotten (`staleFeed` in `feed.ts`, the same rule as MCP `start_timer`): nothing tapped on it for an hour, or (with a start time given, on a break) a time over 30 minutes after she came off. It's judged by the newest stretch start/end or tap, not the feed start, so a long cluster feed tapped a minute ago still resumes, and so does one she dozed off for half an hour. A stale one is refused out loud ("Stop that one first, then start the new feed").
 
@@ -89,7 +89,7 @@ Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `
   - `auth.ts` handles Google sign-in, the session cookie, membership and roles (owner, member, viewer).
   - `store.ts` handles the SQL.
   - `api.ts` has the route helpers.
-  - `mcp-tools.ts` has the MCP tools.
+  - `mcp-tools.ts` has the MCP tools, and `care-mcp.ts` mom's (registered by `registerMapleTools`).
 - **Client** in `src/components/maple/`:
   - `useMaple.tsx` handles polling every 10s, optimistic writes, the offline outbox, and undo toasts.
   - `ui.tsx` holds the small UI kit, and `icons.tsx` the line icons (Lucide paths plus custom bottle, diaper, drop, soft-pile and tummy glyphs).
@@ -101,3 +101,60 @@ Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `
   - Alerts always say who to call: 911, the pediatrician now, today, or mention it at the next visit.
   - The app never suggests a medicine dose.
   - If Maple's pediatrician gives different targets (feed interval, preterm plan), set them under Family → Her doctor.
+
+## For mom
+
+Her own area: medicines on the schedule her clinician gave, her temperature, questions for her OB, a private daily check-in (with an optional PHQ-9 and GAD-7), warning signs after the birth, help lines and a page for partners. It's a full-height sheet, not a tab: Today's medicine row, the More tile, and Family → After the birth open it. Support and warning signs open for everyone signed in, viewers included, even before it's set up.
+
+**The rules it's built on.**
+- **Her data lives only in `maple_care_*`.** No Maple path reads it: not the Timeline, Patterns, Moments, the dial, celebrations, While you slept, Recently removed, the CSV export, `AlertStack`, or Maple's MCP `list_entries`, `daily_summary`, `undo_last`, `update_entry` and `delete_entry`. Nothing about her goes in `maple_babies.settings`.
+- **Every read goes through `careAccess()`** (`src/lib/maple/care.ts`), with roles read fresh on each request, so a demoted or removed member loses access at once.
+- **No dose numbers anywhere by default.** Every number on a plan (how often, the 24-hour limit, how many each time, course length) is typed by the family from her label, discharge papers or clinician; fields start blank and no placeholder or hint has a digit (`npm run check:maple-care` fails on one). The app only does arithmetic on her numbers: "OK after", "OK since", "by your schedule", never "take", "due" or "time for".
+- **Limits are in the label's own unit** (tablets, caplets, capsules, doses or mL), and the 24-hour count adds up each dose's units, not the taps.
+- **Nothing early, recent or over her limit saves silently.** "Took it" saves at once only when nothing needs asking; otherwise it opens the Dose sheet with the reason on top (early, someone already logged it, at the limit, how many this time, already logged today). Nothing is ever blocked.
+- **Medical copy** (warning signs, crisis card, notes, help lines, screener text) lives only in `guidelines.ts`, word for word, with its sources. Alerts say who to call (`MOM_TIER_LABEL`, or the alert's own label such as "Call Poison Help now"); readers who aren't her see "For {Name}: " before the title.
+
+**Tables** (`src/lib/migrate.ts`):
+- `maple_care_people`: the one care person per log (a single-row unique index), `shared_with`, and `settings` (care team numbers, nursing yes/no, next OB visit, note acks; the therapist's number, check-in suggestions and the sharing banner are hers only).
+- `maple_care_meds`: her plans. `schedule` is as needed (optional gap), every N hours, N times a day, or set clock times; `max_24h` needs `limit_unit`; `units_per_dose` is her own text ("2", "1 or 2"); `private` is Only me; `reviewed_at` clears when an assistant adds or changes one ("Check this against the label").
+- `maple_care_entries`: doses (taken or skipped, with `units` and the plan's unit at the time), temperatures and questions. Soft deletes with Undo.
+- `maple_care_mood`: check-ins and fuller check-ins, hers only, hard-deleted, its own sequence.
+- Plan and entry ids are random 8-digit numbers (`care-store.ts`), so a gap never shows that a private row exists. The MCP prints them as `p12345678` (plans) and `c12345678` (entries).
+
+**Who sees what** (`careAccess`):
+
+| Who | Medicines, temperature, questions | Only me items | Check-ins | Therapist's number | Sharing, deleting the area |
+|---|---|---|---|---|---|
+| Her (Google or invite session) | read, write | read, write | read, write | yes | yes |
+| Her Siri token | read, write | read, write | never | never | no |
+| Her MCP token (Claude, ChatGPT) | read, write | never | never | never | no |
+| An owner or member she shares with | read, write | never | never | never | no |
+| An owner or member she doesn't | none | none | none | none | no |
+| A viewer | none (Support and warning signs only) | none | none | none | no |
+| The admin login with `admin_as` = a member | that member's access, minus her own | never | never | never | no |
+| The admin login with `admin_as` unset | none | none | none | none | no |
+
+Sharing starts with every other owner; she changes it in Who sees this. Each reader's rev token includes only the care rows they can read, so her Only me and check-in writes never change anyone else's. Errors on care routes, `care-mcp.ts` and the Siri mom actions are reported as `new Error(code)` with `{ route }` only, since Postgres messages can hold row data.
+
+**App** (`src/components/maple/care/`): `useCare()` is the reader's view (null without access), and `CareNav.tsx` (mounted in `MapleApp`) holds the full-height sheets: her screen, Support, warning signs, setup, the plan picker and the Dose sheet, opened with `useCareNav()`. `CareLine.tsx` has Today's row (inside `StatusCard`, under the Since tiles: her first Show on Today plan, "+n", and "Took it", at most 48px so it clears the dock at 375×667 with a feed running) and the Lantern's dim, read-only line (never an Only me plan). Outbox items carry `target: "entries" | "care" | "mood"`; an old item without one still goes to `/api/maple/entries`.
+
+**API** (`/api/maple/care/*`, wrapped by `withCare`): `person` (POST set up, PATCH sharing and settings, DELETE), `meds` (POST, PATCH `?id=` with `expect_updated_at`, `reviewed`, `stopped`; DELETE), `entries` (GET by local days, POST, PATCH, DELETE) and `entries/restore`, `mood` (her session only; everyone else gets 404), and `move` (a Maple medicine entry to her dose, in one statement, with an undo). A dose POST returns `created: false` with `possible_duplicate` when anyone logged that plan within its gap (or 30 minutes), unless `allow_duplicate`.
+
+Examples here use a made-up medicine, Examplex: the repo is public, so docs never name anything she takes.
+
+**MCP tools** (`care-mcp.ts`, on both the Maple connector and the calendar connector): `mom_status`, `log_mom_medicine`, `set_mom_medicine`, `log_mom_temperature`, `add_mom_question` and `fix_mom_entry`. There are no mood tools, and assistants never see Only me items or the therapist's number, even on her own token.
+- `MAPLE_INSTRUCTIONS` ends with a paragraph for her medicines and the crisis numbers: call 911 if anyone is in immediate danger, otherwise call or text 988; the maternal hotline isn't a crisis line.
+- `log_mom_medicine` (strict, like Siri) answers `created: false` with `reason` (`early`, `recent`, `at_limit`, `units`) and saves only when called again with `allow_duplicate: true`. `set_mom_medicine` saves only what the user read from the label and leaves the rest empty; a mood or zuranolone medicine she adds is saved as Only me and the result says so.
+- Access errors (no area yet, not shared, the admin login acting as nobody, a viewer) end with `HELP_NOW_LINE` and carry `help_now: MOM_HELP.now`.
+- Maple's `log_medicine` refuses a name that exactly matches (after `normName`) an active, non-private plan or Also called name on her list, and says to use `log_mom_medicine` or call again with `for_maple: true`. Vitamin D never trips it. In `log_many` that item comes back "Not saved (item N, medicine): …" and the others save.
+- `maple_status` adds one line, "{Name}: Examplex OK after 9:10 AM", for callers she shares her medicines with.
+
+**Siri** (`POST /api/maple/quick`, a personal token, `careAccess` on the Siri channel; viewers get 403):
+- `mom_status` → `speak` (up to three plans: "Examplex: OK since 4:10 AM. …") and `plans: [{ id, label }]` for Choose from List.
+- `mom_dose` with `{ med, minutes_ago?, skipped?, units?, confirm?, client_id?, name_in_reminder? }` (`med` is a name, Also called, or a `p…` id). Asks come back `ok: false` with `needs_units` or `needs_confirm` (and `reason`) and a question to speak; nothing is saved until `units` or `confirm: true` comes back. A save answers "Got it, Examplex at 3:02. Next one's OK after 9:02.", plus `next_ok_at` and `reminder_title` ("Medicine").
+- Family → Hands-free shows the one "Mom meds" shortcut for her plans: mom_status, Choose from List, mom_dose, the two asks, Speak Text, and an optional Apple Reminder at `next_ok_at`. Not a calendar: family calendars show on the kitchen display.
+
+**Help lines** are one constant, `MOM_HELP` in `guidelines.ts`, verified on `HELP_VERIFIED_ON` (2026-10-24) against each line's own page; `npm run check:maple-care` fails once that's more than 183 days old, so recheck every number and its hours before then. Don't copy numbers from secondary pages: some official pages still show retired or mistyped ones (NIMH's "1-833-9-TLC-MAMA", CDC's retired "1-833-9-HELP4MOMS", and 1-800-273-8255).
+
+**Sources** are next to each constant in `guidelines.ts`. The main ones: AWHONN's POST-BIRTH warning signs (paraphrased, never reproduced), CDC Hear Her, NIMH on perinatal depression and postpartum psychosis, ACOG Clinical Practice Guideline 4 and FAQ091, ACOG Committee Opinion 736 (the postpartum visit), Postpartum Support International, 988lifeline.org, HRSA's National Maternal Mental Health Hotline, Poison Help (poisonhelp.org), MotherToBaby, the InfantRisk Center, NLM LactMed, the FDA labels quoted for codeine, tramadol and the opioid note, and the PHQ-9 and GAD-7 developers' official forms (word for word; the EPDS isn't used, for licensing).
+

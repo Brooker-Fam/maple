@@ -8,8 +8,10 @@ import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, dayKey, daysBetween, formatTime, formatTimeNear, parseDayKey } from "@/lib/maple/time";
 import type { Entry, EntryKind, EntryOf } from "@/lib/maple/types";
 import { formatTemp, formatVolume, formatWeight } from "@/lib/maple/units";
+import { useCareNav } from "./care/CareNav";
+import { useCare, useCareSetup } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
-import { KIND_COLOR, SKIN_COLOR } from "./palette";
+import { CARE_COLOR, KIND_COLOR, SKIN_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { useTimerActions } from "./TimerCard";
 import { Sheet, cx, tone } from "./ui";
@@ -21,6 +23,10 @@ import { useMaple } from "./useMaple";
  * when it was last done ("1.2 oz · Fri 11:05 PM", "4 min today", "2 to ask")
  * instead of a grid of icon tiles. Tap logs one now; hold one to log it from
  * earlier.
+ *
+ * Mom's medicines get their own row (her plan picker, or setting it up),
+ * and Maple's "Medicine" says "For Maple" beside it, so nobody logs one of
+ * hers in Maple's log by mistake.
  */
 
 export const LONG_PRESS_MS = 450;
@@ -148,6 +154,9 @@ function useOpenQuestions(active: boolean): number {
 export default function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, summary, log, memberName, now, units } = useMaple();
   const sheets = useSheets();
+  const care = useCare();
+  const careNav = useCareNav();
+  const canSetUp = useCareSetup() != null;
   const actions = useTimerActions();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
@@ -225,6 +234,26 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const lastMoment = latest("moment");
   const weight = summary?.weight;
 
+  // Mom's row: her plan picker for anyone who can log her doses, or setup for anyone who could set it up.
+  // The subline never shows an Only me plan, even to her (§9.2).
+  const careLine = care?.plans.find((v) => !v.plan.private)?.line;
+  const openCare = (fn: () => void) => {
+    onClose();
+    window.setTimeout(fn, 120);
+  };
+  const mom: Item | null = care?.access.write
+    ? {
+        id: "mom",
+        label: care.self ? "My medicine" : `${care.name}'s medicine`,
+        sub: careLine ?? (care.plans.length ? undefined : care.self ? "Add your medicines" : "Add her medicines"),
+        icon: "pill",
+        color: CARE_COLOR,
+        onTap: () => openCare(careNav.openPicker),
+      }
+    : !care && canSetUp
+      ? { id: "mom", label: "Mom's medicine", sub: "Set up her list", icon: "pill", color: CARE_COLOR, onTap: () => openCare(careNav.openSetup) }
+      : null;
+
   const vitaminD: Item = {
     id: "vitd",
     label: "Vitamin D",
@@ -301,7 +330,7 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
       {
         id: "med",
         label: "Medicine",
-        sub: lastMed && `${lastMed.data.name} · ${when(lastMed.started_at)}`,
+        sub: mom ? "For Maple" : lastMed && `${lastMed.data.name} · ${when(lastMed.started_at)}`,
         icon: "pill",
         color: KIND_COLOR.med,
         onTap: () => go("med"),
@@ -325,6 +354,8 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
         onTap: () => go("note", { for_doctor: true }),
       },
     ],
+    // Mom's medicines, next to Maple's.
+    ...(mom ? [[mom]] : []),
     // Words.
     [
       {
@@ -347,7 +378,7 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
           <div key={g[0].id} className={cx(tone.card, "grid grid-cols-2 overflow-hidden")}>
             {g.map((it, i) => (
               // Hairlines between cells: a right edge on the left column, a bottom edge on all but the last row.
-              <MoreRow key={it.id} item={it} className={cx(i % 2 === 0 && "border-r", i < g.length - 2 && "border-b")} />
+              <MoreRow key={it.id} item={it} className={cx(g.length === 1 ? "col-span-2" : i % 2 === 0 && "border-r", i < g.length - 2 && "border-b")} />
             ))}
           </div>
         ))}

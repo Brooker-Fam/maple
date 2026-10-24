@@ -1068,6 +1068,8 @@ export async function addMember(email: string, addedBy: string, emoji: string | 
  * in with Google. Inviting them again (addMember) lifts it.
  */
 export async function removeMember(email: string, by: string): Promise<boolean> {
+  // Mom's area belongs to her: she deletes it first (Family → her page → Who sees this).
+  if (await isCarePerson(email)) throw new Error("Her recovery log belongs to her. She can delete it first.");
   // Owners stay, except the "admin" pseudo-owner, which a real owner may remove.
   const rows = await q(
     `DELETE FROM maple_members WHERE email = $1 AND (role <> 'owner' OR email = 'admin') RETURNING email`,
@@ -1080,7 +1082,14 @@ export async function removeMember(email: string, by: string): Promise<boolean> 
      ON CONFLICT (email) DO UPDATE SET removed_at = NOW(), removed_by = EXCLUDED.removed_by`,
     [email, by]
   );
+  // Nobody removed keeps a place on her share list (careAccess turns them away anyway).
+  await q(`UPDATE maple_care_people SET shared_with = shared_with - $1::text, updated_at = NOW() WHERE shared_with ? $1::text`, [email]);
   return true;
+}
+
+/** Is this member the one mom's area (maple_care_people) is about? */
+async function isCarePerson(email: string): Promise<boolean> {
+  return (await q(`SELECT 1 FROM maple_care_people WHERE member = $1`, [email])).length > 0;
 }
 
 export async function wasRemoved(email: string): Promise<boolean> {
@@ -1096,6 +1105,9 @@ export async function updateMember(
   const cur = rows[0];
   // Owners stay owners; only members and viewers swap roles.
   const role = patch.role && cur.role !== "owner" ? patch.role : cur.role;
+  if (role === "viewer" && cur.role !== "viewer" && (await isCarePerson(email))) {
+    throw new Error("Her recovery log belongs to her, so she stays a member.");
+  }
   await q(
     `UPDATE maple_members SET display_name = $2, emoji = $3, color = $4, role = $5, updated_at = NOW() WHERE email = $1`,
     [

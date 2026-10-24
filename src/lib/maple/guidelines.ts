@@ -25,7 +25,8 @@ export const TIER_LABEL: Record<AlertTier, string> = {
   nudge: "Gentle nudge",
 };
 
-export type Assessment = { tier: AlertTier; title: string; body: string };
+/** `label` overrides the tier label (mom's crisis and over-limit cards say exactly who to call). */
+export type Assessment = { tier: AlertTier; title: string; body: string; label?: string };
 
 export const DISCLAIMER = "Maple's Log isn't medical advice. When in doubt, call your pediatrician.";
 
@@ -383,3 +384,481 @@ export const FIRST_CHECKUP_NOTE =
 export function needsOwnPlan(gestationalWeeks: number | null | undefined, birthWeightG: number | null | undefined): boolean {
   return (gestationalWeeks != null && gestationalWeeks < 37) || (birthWeightG != null && birthWeightG < 2500);
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// FOR MOM: her own medicines, recovery and mood.
+//
+// Same rules as Maple's side: every alert says who to call, and nothing
+// suggests, fills in or calculates a medicine dose. Her medicines are timed
+// only against numbers the family typed from her label, discharge papers or
+// clinician, in the label's own unit. Copy is written to her ("you"). When
+// someone else reads it, the UI and MCP put "For {name}: " before the title
+// (forMom in care.ts) and never reword the body, so assistants can repeat it
+// verbatim. The one exception is the crisis card: readers who aren't her get
+// CRISIS_PARTNER instead of CRISIS.
+// Help-line numbers verified 2026-10-24 (HELP_VERIFIED_ON); recheck every 6 months.
+// ════════════════════════════════════════════════════════════════════════
+
+/** Same tiers as Maple's; the person to call is her OB or midwife. */
+export const MOM_TIER_LABEL: Record<AlertTier, string> = {
+  emergency: "Call 911 now",
+  now: "Call your OB now",
+  today: "Call your OB today",
+  mention: "Mention it to your OB",
+  nudge: "Gentle nudge",
+};
+
+export const MOM_DISCLAIMER =
+  "Maple's Log isn't medical advice. It keeps your medicines on the schedule your own doctor gave you. When in doubt, call your OB or midwife.";
+
+/** AWHONN https://pbws.s3.amazonaws.com/PBWSSaveYourLifeHandout_English.pdf */
+export const MOM_CANT_REACH = "If you can't reach them right away, call 911 or go to the emergency room.";
+
+/** AWHONN (handout and 2023 updates); CDC Hear Her https://www.cdc.gov/hearher/maternal-warning-signs/index.html */
+export const MOM_ONE_YEAR_NOTE =
+  "Most people recover from birth without problems, but complications can show up any time in the first year. You only need one warning sign to call.";
+
+/** AWHONN's script, paraphrased; birthDate from baby.born_at in the family's zone, e.g. "October 20, 2026". */
+export const momWhatToSay = (birthDate: string) => `Tell them: "I gave birth on ${birthDate}," and which signs you have.`;
+
+// ── Crisis (one card for every self-harm path) ───────────────────────────
+// AWHONN lists "Thoughts of hurting yourself or someone else" under Call 911.
+// 988: https://988lifeline.org/talk-to-someone-now/ (call or text 988, 24/7).
+// HRSA FAQ https://mchb.hrsa.gov/national-maternal-mental-health-hotline/faq:
+//   the maternal hotline "is not a crisis line"; imminent danger → 911.
+// NIMH https://www.nimh.nih.gov/health/publications/perinatal-depression:
+//   postpartum psychosis needs "immediate help by calling 911 or going to the nearest emergency room".
+// PSI https://postpartum.net/get-help/postpartum-psychosis-help/: "stay with the perinatal individual and the child".
+// ACOG CPG 4: an affirmative self-harm answer means clinicians "immediately assess".
+// Always shown; ignores show_alerts and every other setting; never auto-notifies anyone.
+
+export const CRISIS_LEAD = "Thank you for being honest about this.";
+/** For her. */
+export const CRISIS: Assessment = {
+  tier: "emergency",
+  label: "Call 911 or 988 now",
+  title: "Please talk to someone now",
+  body: "Thoughts like these can come with depression after a baby, and they get better with help. If you might act on them, they're about hurting Maple or someone else, or you don't feel safe, call 911 now. Otherwise, call or text 988 now: it's free, open 24/7, and you don't have to be in crisis to call. Then let your OB know today, and if you can, tell someone you trust so you're not alone with this.",
+};
+/** For any reader who isn't her (partner, family). Never prefixed by forMom. */
+export const CRISIS_PARTNER: Assessment = {
+  tier: "emergency",
+  label: "Call 911 now",
+  title: "If she talks about hurting herself or the baby",
+  body: "Call 911 now if she talks about hurting herself or the baby, sees or hears things that aren't there, or you're worried about her or Maple's safety. Stay with her, and don't leave her alone with Maple. If you're not sure, call or text 988 for advice: it's for people worried about someone they care about too.",
+};
+export const NO_AUTO_NOTIFY = "No one is notified automatically. Maple's Log can't call anyone for you.";
+/** Prefilled body for "Text someone you trust" (she only picks the person). */
+export const TRUSTED_TEXT = "I'm having a really hard time. Can you call me or come be with me?";
+/** The quiet row kept on the check-in card and results, always (tel:988, sms:988, tel:911). */
+export const HELP_ROW = "Need to talk now? Call or text 988 · Call 911";
+/** Appended to every care access error from the MCP (with MOM_HELP.now as data). */
+export const HELP_NOW_LINE =
+  "If anyone mentions thoughts of harming themselves or someone else: call 911 if anyone is in immediate danger; otherwise call or text 988, any time.";
+
+// ── Warning signs ────────────────────────────────────────────────────────
+// Tiers: AWHONN's 911 list → emergency; AWHONN's provider list and CDC Hear
+// Her's post-birth signs ("Seek medical care immediately") → now; psychosis →
+// emergency (NIMH; ACOG CPG 4 Box 1); breast and peeing → today
+// (MedlinePlus, NHS). Order inside a tier is display order.
+
+export const MOM_SIGNS = [
+  "chest_pain", "breathing", "seizure", "harm_thoughts", "psychosis",
+  "heavy_bleeding", "racing_heart", "headache", "fever", "vision", "swelling", "faint",
+  "belly_pain", "vomiting", "leg", "wound", "discharge", "exhausted",
+  "breast", "peeing",
+] as const;
+export type MomSign = (typeof MOM_SIGNS)[number];
+
+export const MOM_SIGN_INFO: Record<MomSign, { label: string; labelOther?: string; tier: AlertTier; body: string }> = {
+  chest_pain: { label: "Chest pain", tier: "emergency",
+    body: "Chest pain after birth can mean a blood clot in the lung or a heart problem. Call 911 now." },
+  breathing: { label: "Trouble breathing or short of breath", tier: "emergency",
+    body: "Trouble catching your breath after birth can mean a blood clot in the lung or a heart problem. Call 911 now." },
+  seizure: { label: "Seizure", tier: "emergency",
+    body: "A seizure after birth can be eclampsia, a blood pressure emergency. Call 911 now." },
+  harm_thoughts: { label: "Thoughts of hurting myself or someone else", labelOther: "Talking about hurting herself or the baby", tier: "emergency",
+    body: CRISIS.body }, // UI opens CRISIS for her, CRISIS_PARTNER for anyone else
+  psychosis: { label: "Seeing or hearing things, very confused, or barely sleeping with racing energy", tier: "emergency",
+    body: "These can be signs of postpartum psychosis, an emergency that's treatable. Call 911 or go to the nearest emergency room now, and don't stay alone with Maple." }, // NIMH; ACOG CPG 4 Box 1
+  heavy_bleeding: { label: "Soaking a pad in an hour, or clots egg-sized or bigger", tier: "now",
+    body: "That much bleeding can be a postpartum hemorrhage. Call your OB now. If you can't reach them right away, call 911 or go to the emergency room. Call 911 if you also feel faint or dizzy or your heart is pounding." }, // AWHONN; NHS
+  racing_heart: { label: "Heart racing or pounding", tier: "now",
+    body: "A racing or pounding heart after birth can be a sign of a heart problem, a blood clot or heavy bleeding. Call your OB now. If you can't reach them right away, call 911 or go to the emergency room. Call 911 if you also have chest pain, trouble breathing, heavy bleeding or feel faint." }, // CDC Hear Her; AWHONN; NHS Early days
+  headache: { label: "Headache that won't go away, even after medicine", tier: "now",
+    body: "A headache that doesn't get better, or a bad headache with vision changes, can be a sign of high blood pressure or preeclampsia after birth. If you have a cuff, check your blood pressure, then call your OB now. If you can't reach them right away, call 911 or go to the emergency room." },
+  fever: { label: "Temperature 100.4°F or higher, or 96.8°F or lower", tier: "now",
+    body: "A temperature of 100.4°F (38.0°C) or higher, or 96.8°F (36.0°C) or lower, can be a sign of infection after birth. Call your OB now. If you can't reach them right away, call 911 or go to the emergency room." },
+  vision: { label: "Vision changes (spots, flashing lights, blurry)", tier: "now",
+    body: "Vision changes after birth can be a sign of high blood pressure or preeclampsia. If you have a cuff, check your blood pressure, then call your OB now. If you can't reach them right away, call 911 or go to the emergency room." },
+  swelling: { label: "Sudden swelling of face or hands", tier: "now",
+    body: "Sudden swelling of your face, hands or eyes can be a sign of preeclampsia after birth. Check your blood pressure if you can, then call your OB now." }, // MedlinePlus
+  faint: { label: "Dizzy or fainting", tier: "now",
+    body: "Call your OB now. If you can't reach them right away, call 911 or go to the emergency room. If you're also bleeding heavily, call 911." },
+  belly_pain: { label: "Severe belly pain that doesn't go away", tier: "now",
+    body: "Severe belly pain, or pain in the upper right of your belly under the ribs, needs a call to your OB now. If you can't reach them right away, call 911 or go to the emergency room." },
+  vomiting: { label: "Severe nausea and throwing up", tier: "now",
+    body: "Call your OB now. If you can't reach them right away, call 911 or go to the emergency room." },
+  leg: { label: "A red, swollen leg or arm that's painful or warm", tier: "now",
+    body: "Redness, swelling, warmth or pain in one leg (often the calf) or arm can mean a blood clot. Call your OB now. If you can't reach them right away, call 911 or go to the emergency room. Call 911 if you're also short of breath or have chest pain." },
+  wound: { label: "Incision or stitches getting redder, leaking or opening", tier: "now",
+    body: "More redness, swelling, pus or bad-smelling fluid, or a wound that's opening can mean an infection. Call your OB now. If you can't reach them right away, call 911 or go to the emergency room." },
+  discharge: { label: "Bad-smelling bleeding or discharge", tier: "now",
+    body: "Bad-smelling blood or discharge can mean an infection. Take your temperature and call your OB now." },
+  exhausted: { label: "Overwhelming tiredness", tier: "now",
+    body: "Overwhelming tiredness is on the CDC's list of urgent warning signs after birth. Call your OB now and tell them what you're noticing." },
+  breast: { label: "A red, sore, warm area on a breast", tier: "today",
+    body: "That can be the start of mastitis. Call your OB today, and now if you also have a temperature of 100.4°F or higher." },
+  peeing: { label: "Trouble peeing, or pain when peeing", tier: "today",
+    body: "Call your OB or midwife today, and now if you also have a fever." },
+};
+
+// ── Temperature ──────────────────────────────────────────────────────────
+/** AWHONN 2023: 100.4°F or higher, or 96.8°F or lower; CDC Hear Her. */
+export function assessMomTemp(tempC: number): Assessment | null {
+  const f = round1(cToF(tempC));
+  const shown = `${f.toFixed(1)}°F`;
+  if (f >= 100.4 || tempC >= 38 - 1e-9) {
+    return { tier: "now", title: `${shown}: call your OB now`,
+      body: "100.4°F (38.0°C) or higher after birth can be a sign of infection. Call your OB now, and mention anything else you've noticed, like bad-smelling bleeding, a sore red breast, or a red or leaking incision. If you can't reach them right away, call 911 or go to the emergency room." };
+  }
+  if (f <= 96.8 || tempC <= 36 + 1e-9) {
+    return { tier: "now", title: `${shown}: call your OB now`,
+      body: "96.8°F (36.0°C) or lower can also be a sign of a serious infection after birth, since not every infection causes a fever. Call your OB now. If you can't reach them right away, call 911 or go to the emergency room." };
+  }
+  return null;
+}
+
+// ── Medicines ────────────────────────────────────────────────────────────
+// The app records what her clinician prescribed and keeps time against it.
+// Name matching only adds sourced notes or a privacy default; it never
+// changes or blocks a dose.
+
+export const MOM_MED_NOTE =
+  "Type each medicine exactly as your label or discharge papers say: the dose, how often, and the most you can take in 24 hours, in the label's own unit. Maple's Log only keeps time against the schedule you enter. It never suggests a dose.";
+
+/** AAP https://www.healthychildren.org/English/ages-stages/baby/breastfeeding/Pages/Medications-and-Breastfeeding.aspx;
+ *  ACOG FAQ029; NHS. Numbers: mothertobaby.org, infantrisk.com (verified 2026-10-24). */
+export const MED_NURSING_NOTE =
+  "Before starting any medicine while nursing, including over-the-counter ones, check with your OB, Maple's pediatrician or your pharmacist. Many medicines can be used while breastfeeding, but not all. LactMed, from the National Library of Medicine, is a free reference. MotherToBaby (call 866-626-6847 or text 855-999-3525) and the InfantRisk Center (806-352-2519, weekdays 8–3 Central) answer questions by phone.";
+
+/** AAP (as above). Shown unless settings.feeding === "no". */
+export const MED_BABY_WATCH =
+  "If you're nursing or pumping and taking any medicine, watch Maple for poor feeding, diarrhea, more sleepiness than usual, a lot of crying, vomiting or a rash, and call her pediatrician right away if you see them.";
+
+export const OPIOID_NAMES =
+  /\b(oxycodone|hydrocodone|percocet|endocet|roxicodone|oxycontin|norco|vicodin|lortab|morphine|hydromorphone|dilaudid|tapentadol|nucynta|codeine|tramadol|ultram|ultracet)\b/i;
+export const LABEL_NOT_WHILE_NURSING_NAMES = /\b(codeine|tramadol|ultram|ultracet)\b|tylenol\s*(#|no\.?)?\s*[34]\b/i;
+/** FDA https://www.fda.gov/consumers/consumer-updates/dont-overuse-acetaminophen: many products contain it; labels may say APAP. A hint only: she can untick it. */
+export const ACETAMINOPHEN_NAMES =
+  /\b(acetaminophen|paracetamol|apap|tylenol|percocet|endocet|norco|vicodin|lortab|ultracet|excedrin|nyquil|dayquil|theraflu|mucinex|midol|vicks|robitussin)\b/i;
+/** Zuranolone (Zurzuvae), FDA-approved for postpartum depression (FDA, Aug 4 2023). Used only to default a plan to "Only me". */
+export const ZURANOLONE_NAMES = /\b(zuranolone|zurzuvae)\b/i;
+
+/** Percocet label https://www.accessdata.fda.gov/drugsatfda_docs/label/2018/040330s052lbl.pdf ("until they know how they will react");
+ *  AAP safe sleep; MedlinePlus; FDA disposal. */
+export const OPIOID_NOTE: Assessment = {
+  tier: "nudge",
+  title: "Opioid pain medicine",
+  body: "This can make you drowsy. Don't drive until you know how it affects you, and don't doze off with Maple in your bed or on the couch: put her in her bassinet, on her back, before you rest. If you're nursing, watch her for more sleepiness than usual, trouble feeding, trouble breathing or limpness. Call 911 if she's limp, can't be woken or is struggling to breathe, and her pediatrician now for the others. When you no longer need it, take leftovers to a pharmacy take-back site.",
+};
+
+/** ULTRAM label https://www.accessdata.fda.gov/drugsatfda_docs/label/2017/020281s039lbl.pdf and acetaminophen-codeine label
+ *  https://dailymed.nlm.nih.gov/dailymed/lookup.cfm?setid=1fe39679-fd58-4d2c-ba61-49d492a2b087: "breastfeeding is not
+ *  recommended during treatment". Shown unless settings.feeding === "no". */
+export const LABEL_NOT_WHILE_NURSING: Assessment = {
+  tier: "today",
+  label: "Check before your next dose",
+  title: "Its label says not while nursing",
+  body: "The FDA labels for codeine and tramadol say breastfeeding isn't recommended while taking them. If you're nursing or pumping for Maple, call your OB or pharmacist before your next dose.",
+};
+
+/** "For: Mood". ACOG FAQ091 https://www.acog.org/womens-health/faqs/postpartum-depression ("call your ob-gyn, another health
+ *  care professional, or emergency medical services right away"); NIMH. Never a dose; never "stop". */
+export const MOOD_MED_NOTE: Assessment = {
+  tier: "nudge",
+  title: "Medicine for mood",
+  body: "Medicines for mood can take a few weeks to help. If you feel worse soon after starting or changing one, or have thoughts of hurting yourself, call your OB right away or call or text 988, and call 911 if you might act on them. Talk with your OB before stopping it.",
+};
+
+/** FDA "Don't overuse acetaminophen"; opioid-combination labels. */
+export const acetaminophenOverlap = (a: string, b: string): Assessment => ({
+  tier: "mention",
+  title: "Two medicines with acetaminophen",
+  body: `${a} and ${b} both contain acetaminophen (labels may say APAP). Taking more than one acetaminophen medicine can add up to more than is safe for your liver. Ask your pharmacist or OB whether taking both is part of your plan.`,
+});
+
+/** Her own interval, her own words. Poison Help https://www.poisonhelp.org/ (911 line verbatim in spirit:
+ *  "If an individual has collapsed, had a seizure, has trouble breathing, or can't be awakened, call 911 immediately"). */
+export const earlyDose = (name: string, sinceText: string, everyText: string): Assessment => ({
+  tier: "nudge",
+  title: `${name} came early`,
+  body: `That's ${sinceText} after the last one, and your schedule says no sooner than every ${everyText}. If you think you've taken more than your label or doctor directed, call Poison Help at 1-800-222-1222 (free, 24/7) or your pharmacist. If anyone collapses, has a seizure, has trouble breathing or can't be woken, call 911 now.`,
+});
+
+/** Her own 24-hour limit, in the label's own unit: count and max are formatted with it ("8 caplets", "6 caplets";
+ *  "5 doses", "4 doses"). Poison Help https://www.poisonhelp.org/ */
+export const overDailyMax = (name: string, count: string, max: string): Assessment => ({
+  tier: "now",
+  label: "Call Poison Help now",
+  title: `${name}: over your daily limit`,
+  body: `That's ${count} in the last 24 hours, and your schedule says no more than ${max}. Call Poison Help at 1-800-222-1222 (free, 24/7) now, or your pharmacist or OB. If anyone collapses, has a seizure, has trouble breathing or can't be woken, call 911 now.`,
+});
+
+// ── Mood: daily check-in (never scored, never shared) ────────────────────
+export const CHECKIN_TITLE = "How are you doing?";
+export const CHECKIN_SUB = "Just for you. Only you can see this.";
+export const MOOD_OPTIONS = [
+  { value: 5, label: "Good" },
+  { value: 4, label: "Okay" },
+  { value: 3, label: "Up and down" },
+  { value: 2, label: "Low" },
+  { value: 1, label: "Really struggling" },
+] as const;
+export const MOOD_TAGS = {
+  tearful: "Tearful",
+  anxious: "Anxious or on edge",
+  irritable: "Irritable or angry",
+  overwhelmed: "Overwhelmed",
+  numb: "Numb or flat",
+  no_sleep: "Can't sleep even when I could",
+  scary_thoughts: "Scary thoughts I don't want", // → INTRUSIVE
+  harm_self: "Thoughts of hurting myself",        // → CRISIS
+  calm: "Calm",
+  hopeful: "Hopeful",
+  close: "Felt close to Maple",
+  supported: "Felt supported",
+} as const;
+export type MoodTag = keyof typeof MOOD_TAGS;
+export const CHECKIN_NOTE_PLACEHOLDER = "Anything on your mind? Only you can see this.";
+export const CHECKIN_SAVED = "Saved. Thanks for checking in.";
+
+/** Days 0–14. ACOG FAQ091; NIMH. */
+export const BLUES_NOTE =
+  "In the first two weeks after birth, lots of people feel weepy, anxious or overwhelmed. These baby blues usually ease on their own within a few days to 2 weeks. If they last longer, feel severe, or make it hard to get through the day, call your OB. You don't have to wait for your postpartum visit.";
+
+/** "Scary thoughts I don't want". Lifeline for Moms; PSI; CDC Hear Her. */
+export const INTRUSIVE: Assessment = {
+  tier: "now",
+  title: "Unwanted scary thoughts: call your OB now",
+  body: "Sudden, upsetting thoughts or pictures of something bad happening to the baby are common after birth, even thoughts of causing it. They usually come from anxiety or OCD, most people who have them never act on them, and they're very treatable. Please don't keep them to yourself: call your OB now, or call or text the National Maternal Mental Health Hotline at 1-833-852-6262, any time. If the thoughts start to feel comforting or right, or you're seeing or hearing things others don't, call 911 and ask someone to stay with you and Maple.",
+};
+
+/** "Really struggling". ACOG FAQ091. The tier label says who to call. */
+export const STRUGGLING: Assessment = {
+  tier: "today",
+  title: "That sounds really hard",
+  body: "You don't have to wait for this to pass or for your next checkup. Call your OB today. Any time, day or night, you can also call or text the National Maternal Mental Health Hotline at 1-833-852-6262 to talk it through. If you're having thoughts of hurting yourself, call or text 988 now.",
+};
+
+export const CHECKIN_SUGGEST = {
+  day14: "It's been about two weeks since Maple was born, when baby blues usually ease. A 3-minute check-in can show how you're really doing.",
+  visit: "Your OB visit is coming up. A 3-minute check-in now gives you something to bring.",
+} as const;
+
+// ── Mood: fuller check-in. The developers' own forms, word for word; do not edit. ──
+// PHQ-9 https://www.phqscreeners.com/images/sites/g/files/g10060481/f/201412/PHQ-9_English.pdf
+// GAD-7 https://www.phqscreeners.com/images/sites/g/files/g10060481/f/201412/GAD-7_English.pdf
+// Manual https://www.phqscreeners.com/images/sites/g/files/g10016261/f/201412/instructions.pdf
+// Never embed the EPDS (© RCPsych; written permission needed to republish online).
+
+export const FULL_INTRO = {
+  title: "A fuller check-in",
+  body: "Two short sets of questions doctors use after a baby: the PHQ-9 for depression and the GAD-7 for anxiety. They ask about the last 2 weeks and take about 3 minutes. This isn't a diagnosis, and no one is notified. Only you can see your answers.",
+  credit: "Developed by Drs. Robert L. Spitzer, Janet B.W. Williams, Kurt Kroenke and colleagues, with an educational grant from Pfizer Inc. No permission required to reproduce, translate, display or distribute.",
+};
+export const FREQ = ["Not at all", "Several days", "More than half the days", "Nearly every day"] as const; // 0–3
+
+export const PHQ9_STEM = "Over the last 2 weeks, how often have you been bothered by any of the following problems?";
+export const PHQ9_ITEMS = [
+  "Little interest or pleasure in doing things",
+  "Feeling down, depressed, or hopeless",
+  "Trouble falling or staying asleep, or sleeping too much",
+  "Feeling tired or having little energy",
+  "Poor appetite or overeating",
+  "Feeling bad about yourself — or that you are a failure or have let yourself or your family down",
+  "Trouble concentrating on things, such as reading the newspaper or watching television",
+  "Moving or speaking so slowly that other people could have noticed? Or the opposite — being so fidgety or restless that you have been moving around a lot more than usual",
+  "Thoughts that you would be better off dead or of hurting yourself in some way", // item 9 → CRISIS if > 0
+] as const;
+
+export const GAD7_STEM = "Over the last 2 weeks, how often have you been bothered by the following problems?";
+export const GAD7_ITEMS = [
+  "Feeling nervous, anxious or on edge",
+  "Not being able to stop or control worrying",
+  "Worrying too much about different things",
+  "Trouble relaxing",
+  "Being so restless that it is hard to sit still",
+  "Becoming easily annoyed or irritable",
+  "Feeling afraid as if something awful might happen",
+] as const;
+
+/** Unscored. Shown only if any item > 0. */
+export const DIFFICULTY_Q =
+  "If you checked off any problems, how difficult have these problems made it for you to do your work, take care of things at home, or get along with other people?";
+export const DIFFICULTY = ["Not difficult at all", "Somewhat difficult", "Very difficult", "Extremely difficult"] as const;
+
+// ── Mood: results ────────────────────────────────────────────────────────
+export const RESULTS_HEADER = (date: string) => `Your check-in, ${date}`;
+export const RESULTS_SUB = "Not a diagnosis. Only you can see this.";
+
+/** PHQ-9 bands (manual; ACOG CPG 4). Show "PHQ-9: {score} of 27". Never show .low or .some when item 9 was ever above 0. */
+export const PHQ9_RESULT = {
+  low: { title: "Mood: few signs of depression right now",
+    body: "If something still feels off, trust that and mention it to your OB. You can check in again any time." },
+  some: { tier: "mention", title: "Mood: some signs to keep an eye on",
+    body: "Your answers show some symptoms of depression. That's common after a baby. Mention it at your next visit and check in again in about 2 weeks. If things get harder before then, call sooner." },
+  positive: { tier: "today", title: "Mood: worth a call to your OB today",
+    body: "Your answers suggest depression may be part of what you're feeling. It's common after having a baby, it isn't your fault, and it's very treatable with talk therapy, medicine, or both. Call your OB today (you don't need to wait for a checkup) and tell them your PHQ-9 score. Any time, the National Maternal Mental Health Hotline (call or text 1-833-852-6262) can also help you find support." },
+} as const;
+
+/** Item 9 above "Not at all" at any point, with a PHQ-9 total under 10 (ACOG CPG 4: clinicians "immediately assess"). */
+export const PHQ9_ITEM9: Assessment = {
+  tier: "today",
+  title: "Tell your OB about question 9 today",
+  body: "You answered that you've had thoughts of being better off dead or of hurting yourself. Whatever the total, tell your OB today, and call or text 988 any time.",
+};
+
+/** GAD-7 bands (manual; ACOG CPG 4; Lifeline for Moms). Show "GAD-7: {score} of 21". */
+export const GAD7_RESULT = {
+  low: { title: "Worry: few signs of anxiety right now",
+    body: "If worry starts getting in the way, check in again or mention it to your OB." },
+  some: { tier: "mention", title: "Worry: some signs of anxiety",
+    body: "Some worry with a new baby is expected, and anxiety after birth is common and treatable. Mention it at your next visit and check in again in about 2 weeks. If it gets harder before then, call sooner." },
+  positive: { tier: "today", title: "Worry: worth a call to your OB today",
+    body: "Your answers suggest anxiety may be making things harder than they need to be. It's common after a baby and very treatable. Call your OB today and tell them your GAD-7 score." },
+} as const;
+
+/** "Very" or "Extremely difficult", with no other `today` result. */
+export const DIFFICULTY_HARD: Assessment = {
+  tier: "today",
+  title: "This is making daily life hard: call your OB today",
+  body: "You said these feelings are making it very hard to get through the day. That alone is a good reason to call your OB today, whatever the scores say.",
+};
+
+/** PHQ-9 somatic items (AAP screening tool finder; ACOG CPG 4). */
+export const RESULTS_CAVEAT =
+  "Some questions ask about sleep, energy and appetite, which a newborn affects too. Your OB will look at the whole picture.";
+/** Followed by HELP_ROW. */
+export const RESULTS_FOOTER = "No one is notified about these results.";
+
+// ── Help lines (verified 2026-10-24) ─────────────────────────────────────
+export const HELP_VERIFIED_ON = "2026-10-24";
+export type HelpLine = {
+  name: string; action: string; detail: string; sources: readonly string[];
+  tel?: string; sms?: string; url?: string; extra?: { action: string; tel?: string; sms?: string }[];
+};
+export const MOM_HELP: Record<"now" | "talk" | "medicine", HelpLine[]> = {
+  now: [
+    { name: "Emergency", action: "Call 911", tel: "911",
+      sources: ["https://pbws.s3.amazonaws.com/PBWSSaveYourLifeHandout_English.pdf", "https://www.nimh.nih.gov/health/publications/perinatal-depression"],
+      detail: "If you might hurt yourself or someone else, you're seeing or hearing things others don't, or for chest pain, trouble breathing, a seizure, or heavy bleeding with feeling faint." },
+    { name: "988 Suicide & Crisis Lifeline", action: "Call 988", tel: "988", sources: ["https://988lifeline.org/talk-to-someone-now/"],
+      extra: [{ action: "Text 988", sms: "988" }],
+      detail: "Free and confidential, 24/7, for any kind of emotional crisis. You don't have to be suicidal to call. Chat at 988lifeline.org. En español: marque 988 y oprima 2, o envíe AYUDA al 988. TTY: dial 711, then 988." },
+  ],
+  talk: [
+    { name: "National Maternal Mental Health Hotline", action: "Call 1-833-852-6262", tel: "+18338526262",
+      extra: [{ action: "Text 1-833-852-6262", sms: "+18338526262" }],
+      sources: ["https://postpartum.net/get-help/", "https://mchb.hrsa.gov/national-maternal-mental-health-hotline/faq"],
+      detail: "1-833-TLC-MAMA. Free, confidential, 24/7, in English and Spanish, with interpreters for 60 languages. Counselors listen, help you work out next steps, and find support near you. Partners and family can call too. It isn't a crisis line: in a crisis, call 988 or 911. TTY: dial 711, then 1-833-852-6262." },
+    { name: "Postpartum Support International HelpLine", action: "Call 1-800-944-4773", tel: "+18009444773",
+      extra: [{ action: "Text \"Help\" to 800-944-4773", sms: "+18009444773" }, { action: "Texto en español: 971-203-7773", sms: "+19712037773" }],
+      sources: ["https://postpartum.net/get-help/psi-helpline/", "https://postpartum.net/get-help/"],
+      detail: "Press 2 for English or 1 for Spanish. Leave a confidential message any time; a trained volunteer calls or texts back every day between 8am and 11pm Eastern. Not for emergencies." },
+    { name: "PSI support groups", action: "Open postpartum.net", url: "https://postpartum.net/get-help/",
+      sources: ["https://postpartum.net/get-help/", "https://postpartum.net/get-help/resources-for-fathers/"],
+      detail: "Free online support groups led by trained facilitators, including a group for dads, a weekly \"Chat with an Expert\" call, and a directory of perinatal therapists." },
+    { name: "Postpartum Resource Center of New York", action: "Call 1-855-631-0001", tel: "+18556310001", sources: ["https://postpartumny.org/"],
+      detail: "New York's statewide helpline, open 7 days, 9am to 5pm. Calls are returned the same day." },
+  ],
+  medicine: [
+    { name: "Poison Help", action: "Call 1-800-222-1222", tel: "+18002221222", sources: ["https://www.poisonhelp.org/", "https://poisoncenters.org/"],
+      detail: "If you think you've taken more medicine than your label or doctor directed. Free expert advice, 24/7. If anyone collapses, has a seizure, has trouble breathing or can't be woken, call 911 now." },
+    { name: "MotherToBaby", action: "Call 866-626-6847", tel: "+18666266847", extra: [{ action: "Text 855-999-3525", sms: "+18559993525" }],
+      sources: ["https://mothertobaby.org/"], detail: "Free answers about medicines while pregnant or breastfeeding." },
+    { name: "InfantRisk Center", action: "Call 806-352-2519", tel: "+18063522519", sources: ["https://www.infantrisk.com/"],
+      detail: "Questions about medicines while nursing, weekdays 8am to 3pm Central." },
+    { name: "LactMed", action: "Open LactMed", url: "https://www.ncbi.nlm.nih.gov/books/NBK501922/", sources: ["https://www.ncbi.nlm.nih.gov/books/NBK501922/"],
+      detail: "A free reference from the National Library of Medicine on medicines and breast milk. It's a reference, not a yes or no: ask your OB, Maple's pediatrician or a pharmacist." },
+  ],
+};
+
+// ── Support page text ────────────────────────────────────────────────────
+export const SUPPORT = {
+  intro: "You don't need a diagnosis, or a crisis, to reach out.", // PSI; 988
+  wellVisit: "Maple's pediatrician may ask about your mood at her 1-, 2-, 4- and 6-month checkups. The AAP recommends pediatricians ask at these visits.", // AAFP summary of the AAP report
+  learn: {
+    blues: "Baby blues: weepy, anxious or overwhelmed in the first two weeks, easing on its own. If it lasts longer than 2 weeks or feels severe, call your OB.",
+    depression: "Postpartum depression: sadness, emptiness, guilt, or losing interest most days for 2 weeks or more, any time in the first year. It's common, it isn't your fault, and it's treatable. Call your OB.",
+    anxiety: "Anxiety: constant worry, racing thoughts, can't relax, or panic attacks. Common and treatable. Call your OB.",
+    intrusive: "Unwanted scary thoughts: sudden thoughts or images of harm coming to the baby. Common with anxiety or OCD, and treatable. Call your OB now; you don't have to keep them to yourself.",
+    trauma: "After a hard birth: flashbacks, nightmares, or avoiding reminders of it. Treatable. Call your OB or a therapist.",
+    psychosis: "Seeing or hearing things, believing things that aren't true, or barely sleeping with racing energy, usually in the first two weeks. This is an emergency: call 911.",
+  }, // ACOG FAQ091; NIMH; PSI; ACOG CPG 4
+  privacy: "Private here means no one else in Maple's Log can see your check-ins or anything you mark Only me, including family and connected AI tools. Whoever runs Maple's Log's server could technically reach the database, so this protects what shows in the app, not the server itself.",
+} as const;
+
+/** Partner section. NIMH; ACOG CPG 4; PSI (psychosis, family, fathers); ACOG FAQ091; HRSA; Paulson 2010; AAP. */
+export const PARTNER = {
+  intro: "You may notice changes before she does. Here's what to look for, how to help, and when to call.",
+  watch: {
+    heading: "Signs to watch for",
+    items: [
+      "Sadness, crying, flatness or irritability lasting more than about 2 weeks, or getting worse",
+      "Losing interest in things she usually enjoys",
+      "Seeming hopeless or guilty, or calling herself a bad mom",
+      "Constant worry or panic",
+      "Not sleeping even when she could, or not eating",
+      "Pulling away from Maple or from you",
+      "Saying things like \"you'd be better off without me\"",
+    ],
+    action: "If you're worried, tell her what you've noticed, kindly and specifically, and offer to call her OB together. You don't need to wait for her checkup.",
+  },
+  emergency: {
+    heading: "Call 911 or go to the ER now if she:",
+    items: [
+      "Sees or hears things that aren't there, or believes things that aren't true",
+      "Has a burst of energy with little or no sleep, or seems confused or very unlike herself",
+      "Talks about hurting herself or the baby",
+    ],
+    note: "Stay with her and Maple, and don't leave them alone. This is rare, usually starts in the first two weeks, and is treatable.",
+  },
+  help: {
+    heading: "How to help",
+    items: [
+      "Tell her: this isn't your fault, you're not alone, you'll get better.",
+      "Listen without fixing. Ask how you can help right now; if she doesn't know, suggest something.",
+      "Take a night feed so she gets one long stretch of sleep.",
+      "Do things around the house before she asks, and make sure she eats.",
+      "Help her make the call, and go with her to appointments.",
+    ],
+    hotline: "You can call or text the National Maternal Mental Health Hotline yourself at 1-833-852-6262. It's for partners and family too.",
+  },
+  you: {
+    heading: "How are you doing?",
+    body: "Around 1 in 10 new dads get depressed, most often 3 to 6 months after the birth, and it's more likely when mom is struggling too. In dads it often looks like irritability, anger, low energy or pulling away. Postpartum Support International has a Dads support group and a weekly \"Chat with an Expert\" call at postpartum.net, and its HelpLine is 1-800-944-4773.",
+  },
+} as const;
+
+// ── Visits ───────────────────────────────────────────────────────────────
+/** ACOG Committee Opinion 736. Shown in Care team. */
+export const POSTPARTUM_VISIT_NOTE =
+  "ACOG recommends talking with your OB within the first 3 weeks after birth, then a full postpartum visit no later than 12 weeks, covering mood, feeding, sleep, recovery, birth control and any ongoing conditions. Don't wait for a visit to call about a warning sign.";
+
+// ── Maple's fever-medicine copy, moved here verbatim from mcp-tools.ts (doMedicine) and MedSheet.tsx ──
+export const BABY_FEVER_MED_NAMES = /acetaminophen|paracetamol|tylenol|ibuprofen|motrin|advil/i;
+export const BABY_IBUPROFEN_NAMES = /ibuprofen|motrin|advil/i;
+export const BABY_ACETAMINOPHEN_NAMES = /acetaminophen|tylenol|paracetamol/i;
+export const BABY_IBUPROFEN_UNDER_6M: Assessment = {
+  tier: "mention",
+  title: "Ibuprofen under 6 months",
+  body: "Ibuprofen isn't recommended for babies under 6 months unless her pediatrician said to give it.",
+};
+export const BABY_FEVER_MED_UNDER_3M: Assessment = {
+  tier: "mention",
+  title: "Fever medicine under 3 months",
+  body: "For babies under 3 months, give fever medicine only when her pediatrician has said to, and call them about any fever first.",
+};
+export const BABY_FEVER_MED_UNDER_3M_HINT = "At her age, fever medicine only if her pediatrician says so. If she has a fever, call them first.";
+export const BABY_IBUPROFEN_UNDER_6M_HINT = "Ibuprofen isn't recommended under 6 months without your pediatrician's OK.";

@@ -7,6 +7,7 @@ import { tick } from "@/components/atlas/haptics";
 import { minutesText, other, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, Side } from "@/lib/maple/types";
+import { CareLanternLine } from "./care/CareLine";
 import { fixPreset, SIDE_NAME, timerNumbers, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import { useSheets } from "./sheets";
@@ -187,6 +188,10 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         >
           <Icon name="x" size={26} />
         </button>
+      </div>
+      {/* Mom's medicine for whoever she shares it with: read-only, as dim as the line above, never an Only me plan. */}
+      <div className="-mt-1.5 px-4">
+        <CareLanternLine />
       </div>
 
       <div

@@ -11,7 +11,8 @@
     "gen:invite-pdf": "node scripts/gen-invite-pdf.js",
     "gen:photos-qr": "node scripts/gen-photos-qr-pdf.js",
     "export:photos": "node scripts/export-photos.js",
-    "check:maple-feed": "tsx scripts/maple-feed-check.ts"
+    "check:maple-feed": "tsx scripts/maple-feed-check.ts",
+    "check:maple-care": "tsx scripts/maple-care-check.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

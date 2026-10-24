@@ -1,10 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { normName, planNames } from "@/lib/maple/care";
 import { describeEntry } from "@/lib/maple/describe";
-import { VITAMIN_D_DEFAULT, VITAMIN_D_NOTE } from "@/lib/maple/guidelines";
+import {
+  BABY_FEVER_MED_NAMES,
+  BABY_FEVER_MED_UNDER_3M_HINT,
+  BABY_IBUPROFEN_NAMES,
+  BABY_IBUPROFEN_UNDER_6M_HINT,
+  VITAMIN_D_DEFAULT,
+  VITAMIN_D_NOTE,
+} from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
-import type { EntryOf } from "@/lib/maple/types";
+import type { CarePlan, EntryOf } from "@/lib/maple/types";
+import { useCareNav } from "../care/CareNav";
+import { useCare, useCareSetup } from "../care/useCare";
 import { Icon } from "../icons";
 import { Chip, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
@@ -15,12 +25,22 @@ import { ContextNote, Label, LoggedBy, NoteField, SheetFooter, presetStart, pstr
  * box is free text, filled in only for vitamin D's standard 400 IU (and the
  * label wins if the drops say otherwise). Logging vitamin D twice in a day
  * gets a gentle heads-up so two caregivers don't double up.
+ *
+ * Mom's medicines live apart (§5.10): before her list is set up, the fever
+ * caution offers to keep hers separate; once it is, a name on her list says
+ * so here, with a way over to her Dose sheet, and an existing entry can be
+ * moved across. The fever copy itself (AAP / Seattle Children's: no fever
+ * medicine under 3 months, and no ibuprofen under 6 months, without the
+ * doctor's OK) lives in guidelines.ts.
  */
 
-// Copy from the pediatric research (AAP / Seattle Children's): no fever medicine
-// under 3 months, and no ibuprofen under 6 months, without the doctor's OK.
-const FEVER_MED = /acetaminophen|paracetamol|tylenol|ibuprofen|motrin|advil/i;
-const IBUPROFEN = /ibuprofen|motrin|advil/i;
+/** One of her active, shared plans by this exact name or an Also called name (never vitamin D, which is Maple's every day). */
+function herPlanNamed(name: string, plans: CarePlan[]): CarePlan | undefined {
+  if (!name.trim() || isVitaminD(name)) return undefined;
+  const n = normName(name);
+  if (!n) return undefined;
+  return plans.find((p) => !p.private && planNames(p).includes(n));
+}
 
 export default function MedSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
@@ -30,6 +50,9 @@ export default function MedSheet(props: SheetProps) {
 function MedForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, state, summary, log, update, remove, now, ageMonths, clock, memberName } = useSheetBase();
   const e = entry?.kind === "med" ? entry : undefined;
+  const care = useCare();
+  const careNav = useCareNav();
+  const setupMode = useCareSetup();
 
   const [name, setName] = useState(() => e?.data.name ?? pstr(preset, "name") ?? VITAMIN_D_DEFAULT.name);
   const [dose, setDose] = useState(() => e?.data.dose ?? pstr(preset, "dose") ?? (isVitaminD(pstr(preset, "name") ?? VITAMIN_D_DEFAULT.name) ? VITAMIN_D_DEFAULT.dose : ""));
@@ -58,7 +81,26 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const givenToday = !e && vitD ? summary?.vitaminD : null;
-  const feverCaution = FEVER_MED.test(name) && (ageMonths < 3 || (IBUPROFEN.test(name) && ageMonths < 6));
+  const feverCaution = BABY_FEVER_MED_NAMES.test(name) && (ageMonths < 3 || (BABY_IBUPROFEN_NAMES.test(name) && ageMonths < 6));
+  // Before her list exists: anyone who could set it up gets the way to.
+  const canSetUp = !care && setupMode != null;
+  const herPlan = care ? herPlanNamed(name, care.plans.map((v) => v.plan)) : undefined;
+  const careWrite = !!care?.access.write;
+  const [moving, setMoving] = useState(false);
+  const toCare = (fn: () => void) => {
+    onClose();
+    window.setTimeout(fn, 120);
+  };
+  // Closes first; useCare says "Moved to {Name}'s medicines" with Undo (or why it couldn't). Vitamin D is always Maple's.
+  const move = () => {
+    if (!e || !care || moving) return;
+    setMoving(true);
+    onClose();
+    void care.act
+      .moveFromMaple(e.id, herPlanNamed(e.data.name, care.plans.map((v) => v.plan))?.id)
+      .catch(() => {})
+      .finally(() => setMoving(false));
+  };
 
   const save = async () => {
     const n = name.trim();
@@ -162,20 +204,55 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
         {!vitD && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Follow the label or your pediatrician&apos;s instructions.</p>}
       </div>
 
+      {herPlan && care && (
+        <div role="status" className={cx(tone.inset, "px-4 py-3")}>
+          <p className={cx(tone.body, "flex gap-2.5 text-sm leading-relaxed")}>
+            <Icon name="pill" size={18} className="mt-px shrink-0 text-mp-ink-2" />
+            <span>
+              {care.self ? `You have ${herPlan.name} on your list.` : `${care.name} has ${herPlan.name} on her list.`} Logging it here is for{" "}
+              {state ? (state.baby.nickname || state.baby.name).split(" ")[0] : "the baby"}.
+            </span>
+          </p>
+          {careWrite && !e && (
+            <button
+              type="button"
+              onClick={() => toCare(() => careNav.openDose(herPlan.id))}
+              className="mt-1 -ml-1 min-h-[44px] rounded-lg px-1 text-sm font-semibold text-mp-accent-fg"
+            >
+              {care.self ? "Log it for yourself instead" : `Log it for ${care.name} instead`}
+            </button>
+          )}
+        </div>
+      )}
+
       {feverCaution && (
-        <p role="status" className={cx(tone.body, "flex gap-2.5 rounded-xl border-l-[3px] border-mp-maple bg-mp-maple/[0.08] px-4 py-3 text-sm leading-relaxed")}>
-          <Icon name="triangle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
-          <span>
-            {ageMonths < 3
-              ? "At her age, fever medicine only if her pediatrician says so. If she has a fever, call them first."
-              : "Ibuprofen isn't recommended under 6 months without your pediatrician's OK."}
-          </span>
-        </p>
+        <div role="status" className={cx(tone.body, "rounded-xl border-l-[3px] border-mp-maple bg-mp-maple/[0.08] px-4 py-3 text-sm leading-relaxed")}>
+          <p className="flex gap-2.5">
+            <Icon name="triangle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
+            <span>{ageMonths < 3 ? BABY_FEVER_MED_UNDER_3M_HINT : BABY_IBUPROFEN_UNDER_6M_HINT}</span>
+          </p>
+          {canSetUp && !e && (
+            <button type="button" onClick={() => toCare(careNav.openSetup)} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+              Is this for mom? Keep her medicines separate
+            </button>
+          )}
+        </div>
       )}
 
       <WhenField value={when} onChange={setWhen} tz={tz} />
       <NoteField value={note} onChange={setNote} />
       {vitD && <ContextNote icon="sun">{VITAMIN_D_NOTE}</ContextNote>}
+      {e && care && careWrite && !isVitaminD(e.data.name) && e.id > 0 && (
+        <button
+          type="button"
+          disabled={moving}
+          onClick={move}
+          className={cx(tone.card, tone.row, "min-h-[52px] py-2.5 text-[15px] font-medium text-mp-accent-fg disabled:opacity-50")}
+        >
+          <Icon name="arrow-right" size={18} className="shrink-0" />
+          {care.self ? "Move to my medicines" : `Move to ${care.name}'s medicines`}
+        </button>
+      )}
     </Sheet>
   );
 }

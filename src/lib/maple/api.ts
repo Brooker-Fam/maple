@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { captureServerException } from "@/lib/posthog-server";
-import { sessionMember } from "./auth";
+import { listMembers, sessionMember } from "./auth";
+import { CareConflict, CareForbidden, careSession, viewerFor, type CareSession } from "./care-store";
 import { FeedEditError, feedEditCopy } from "./feed";
-import { Conflict, NotFound, StoreUnavailable, toClientEntry } from "./store";
+import { Conflict, NotFound, StoreUnavailable, getBaby, toClientEntry } from "./store";
+import { OnlyHers } from "./validate";
 import type { Member } from "./types";
 
 /**
@@ -82,4 +84,62 @@ export function idParam(request: NextRequest, name = "id"): number {
   const n = Number(raw);
   if (!raw || !Number.isSafeInteger(n) || n <= 0) throw new BadRequest(`${name} is required`);
   return n;
+}
+
+// ── For mom (/api/maple/care/*) ───────────────────────────────────────
+
+/** What a care route gets: the session member, plus her area as this reader may see it. */
+export type CareHandler = (request: NextRequest, member: Member, s: CareSession) => Promise<Response>;
+
+/**
+ * Wrap a care route: resolves the viewer (the admin login reads as its
+ * admin_as member, or as nobody), the person and the viewer's access, read
+ * fresh on every request. No area, or nothing the viewer can read, answers
+ * 404 so the app never confirms there's anything there; `write` and
+ * `manage` she can read but not change answer 403; `mood` (her session
+ * only) answers 404 to everyone else.
+ *
+ * Errors are scrubbed: Postgres puts row data in its messages ("Failing row
+ * contains (…)"), so an unexpected error is reported as `new Error(code)`
+ * with `{ route }` only, and never forwarded.
+ */
+export function withCare(route: string, handler: CareHandler, opts: { write?: boolean; manage?: boolean; mood?: boolean } = {}) {
+  return async function (request: NextRequest): Promise<Response> {
+    try {
+      const member = await sessionMember(request);
+      if (!member) return json({ error: "Not signed in" }, 401);
+      const s = await sessionCare(member);
+      if (!s.person || !s.access.read || (opts.mood && !s.access.mood)) return json({ error: "Not found" }, 404);
+      if (opts.write && !s.access.write) return json({ error: `${s.name}'s medicines aren't shared with you.` }, 403);
+      if (opts.manage && !s.access.manage) return json({ error: `Only ${s.name} can change that.` }, 403);
+      return await handler(request, member, s);
+    } catch (error) {
+      return careErrorResponse(route, error);
+    }
+  };
+}
+
+/** The care session for a member signed in to the app. */
+export async function sessionCare(member: Member): Promise<CareSession> {
+  const [baby, members] = await Promise.all([getBaby(), listMembers()]);
+  return careSession(viewerFor(member, baby, members), { members, baby });
+}
+
+export async function careErrorResponse(route: string, error: unknown): Promise<Response> {
+  if (error instanceof StoreUnavailable) return json({ error: "Maple's log is offline right now" }, 503);
+  if (error instanceof NotFound) return json({ error: error.message || "Not found" }, 404);
+  if (error instanceof CareConflict) {
+    if (error.reason === "exists") return json({ error: error.message, reason: "exists" }, 409);
+    return json({ error: error.message, reason: error.reason, ...error.current }, 409);
+  }
+  if (error instanceof CareForbidden || error instanceof OnlyHers || error instanceof Forbidden) return json({ error: error.message || "Not allowed" }, 403);
+  if (error instanceof BadRequest) return json({ error: error.message }, 400);
+  if (error instanceof Error && !("code" in error) && isUserFacing(error) && error.message !== "id_exhausted") {
+    return json({ error: error.message }, 400);
+  }
+  const code = (error as { code?: unknown } | null)?.code;
+  const scrubbed = new Error(typeof code === "string" && /^[A-Za-z0-9_]{1,40}$/.test(code) ? code : error instanceof Error && error.message === "id_exhausted" ? "id_exhausted" : "care_error");
+  console.error(`${route} error: ${scrubbed.message}`);
+  await captureServerException(scrubbed, { route });
+  return json({ error: "Something went wrong" }, 500);
 }

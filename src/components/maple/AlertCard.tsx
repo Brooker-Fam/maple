@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState, type ReactNode } from "react";
-import { DISCLAIMER, EMERGENCY_SIGNS, TIER_LABEL, VITAMIN_D_DEFAULT, type AlertTier } from "@/lib/maple/guidelines";
+import { DISCLAIMER, EMERGENCY_SIGNS, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT, type AlertTier } from "@/lib/maple/guidelines";
 import type { Alert } from "@/lib/maple/insights";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import { Icon, type IconName } from "./icons";
@@ -26,7 +26,7 @@ const NUDGE_KEY = "maple-nudges-dismissed";
  * 911 red: solid in every look, night included (dimmed, never folded into
  * the amber), so an emergency never reads like anything else on the page.
  */
-const EMERGENCY_FILL = "bg-[#9B2419] text-white [.maple-night_&]:bg-[#6E1A12] [.maple-night_&]:text-[#F6CBBE]";
+export const EMERGENCY_FILL = "bg-[#9B2419] text-white [.maple-night_&]:bg-[#6E1A12] [.maple-night_&]:text-[#F6CBBE]";
 
 /**
  * Each tier looks unmistakably different, loudest first: 911 is a solid red
@@ -105,6 +105,18 @@ const STYLE: Record<
     soft: "bg-mp-sunken text-mp-ink hover:bg-mp-ink/10",
   },
 };
+
+/**
+ * A tier's icon and colored ink on a plain card (a group heading, a label),
+ * for the alert look outside an alert card. 911's own card is solid red, so
+ * on a plain card its ink is the danger red.
+ */
+export function tierMark(tier: AlertTier): { icon: IconName; className: string } {
+  return { icon: STYLE[tier].icon, className: tier === "emergency" ? "text-mp-danger" : STYLE[tier].mark };
+}
+
+/** The "call now" wash (border and tinted surface), for a card that sits beside the 911 path. */
+export const NOW_WASH = STYLE.now.card;
 
 const BTN =
   "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-semibold transition active:scale-[0.98]";
@@ -188,19 +200,31 @@ function AlertCard({
   onHandled,
   onDismissNudge,
   onNavigate,
+  audience = "baby",
 }: {
   alert: Alert;
   onHandled: () => void;
   onDismissNudge: () => void;
   onNavigate: (t: TabId) => void;
+  /**
+   * "mom": her own card. The label says her OB (MOM_TIER_LABEL), the call is
+   * her OB from her care settings, and nothing is noted in Maple's log.
+   */
+  audience?: "baby" | "mom";
 }) {
-  const { api, log, now, refresh, toast, readOnly, state } = useMaple();
+  const { api, log, now, refresh, toast, readOnly: viewer, state } = useMaple();
   const { open } = useSheets();
-  const phones = usePhones();
+  const mom = audience === "mom";
+  const babyPhones = usePhones();
+  const team = state?.care?.settings.care_team;
+  const momPhone = (v: string | undefined) => (v && v.replace(/\D/g, "").length >= 3 ? v.trim() : null);
+  const phones = mom ? { pediatrician: momPhone(team?.ob), afterHours: momPhone(team?.after_hours) } : babyPhones;
+  // "We called", "Got it" and Log Vitamin D all write to Maple's log or settings: never for one of her cards.
+  const readOnly = viewer || mom;
   const st = STYLE[alert.tier];
   const urgent = URGENT.includes(alert.tier);
   const emergency = alert.tier === "emergency";
-  const entry = alert.entryId ? state?.entries.find((e) => e.id === alert.entryId) : undefined;
+  const entry = !mom && alert.entryId ? state?.entries.find((e) => e.id === alert.entryId) : undefined;
 
   const ack = async (note: boolean) => {
     onHandled();
@@ -224,7 +248,7 @@ function AlertCard({
   const call: { href: string; label: string } | null = emergency
     ? { href: "tel:911", label: "Call 911" }
     : urgent && phones.pediatrician
-      ? { href: telHref(phones.pediatrician), label: "Call pediatrician" }
+      ? { href: telHref(phones.pediatrician), label: mom ? "Call your OB" : "Call pediatrician" }
       : null;
 
   const rest: ReactNode[] = [];
@@ -284,7 +308,7 @@ function AlertCard({
       <div className="flex items-center justify-between gap-2">
         <p className={cx("flex min-w-0 items-center gap-1.5 text-[13px] font-semibold", st.mark)}>
           <Icon name={st.icon} size={16} strokeWidth={2} className="shrink-0" />
-          {TIER_LABEL[alert.tier]}
+          {(mom ? MOM_TIER_LABEL : TIER_LABEL)[alert.tier]}
         </p>
         {entry && !readOnly && (
           <button
@@ -311,7 +335,7 @@ function AlertCard({
           {rest.length > 0 && <div className="flex flex-wrap gap-2">{rest}</div>}
         </div>
       )}
-      {urgent && !emergency && !phones.pediatrician && (
+      {urgent && !emergency && !mom && !phones.pediatrician && (
         <button
           type="button"
           onClick={() => onNavigate("family")}

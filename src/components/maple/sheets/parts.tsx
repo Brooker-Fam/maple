@@ -3,7 +3,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { TapFeedData } from "@/lib/maple/feed";
-import { TIER_LABEL, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
+import { MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, overDailyMax, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryKind, Side, Source } from "@/lib/maple/types";
 import { fixPreset } from "../FeedParts";
@@ -315,12 +315,39 @@ const TIER_STYLE: Record<AlertTier, { card: string; label: string; icon: IconNam
   },
 };
 
-/** Calm card for guidance from guidelines.ts: who to call, plainly, with tap-to-call for urgent tiers. */
-export function AssessmentCard({ a, className }: { a: Assessment; className?: string }) {
+/** overDailyMax's own label: its card calls Poison Help, not her OB. */
+const POISON_LABEL = overDailyMax("", "", "").label;
+const POISON_HELP = MOM_HELP.medicine.find((l) => l.name === "Poison Help");
+
+const phone = (v: unknown) => (typeof v === "string" && v.replace(/\D/g, "").length >= 3 ? v.trim() : null);
+
+/**
+ * Calm card for guidance from guidelines.ts: who to call, plainly, with
+ * tap-to-call for urgent tiers. `audience="mom"` is for her own cards: the
+ * label says her OB (a.label ?? MOM_TIER_LABEL) and the buttons are her OB
+ * and after-hours line from her care settings, never Maple's pediatrician.
+ */
+export function AssessmentCard({
+  a,
+  className,
+  audience = "baby",
+  calls = true,
+}: {
+  a: Assessment;
+  className?: string;
+  audience?: "baby" | "mom";
+  /** False where the sheet around it already has the call buttons. */
+  calls?: boolean;
+}) {
   const { state } = useMaple();
+  const mom = audience === "mom";
   const settings = state?.baby.settings ?? {};
-  const ped = typeof settings.pediatrician_phone === "string" ? settings.pediatrician_phone : null;
-  const after = typeof settings.after_hours_phone === "string" ? settings.after_hours_phone : null;
+  // Her numbers are in her care settings, which only readers of her area get.
+  const team = state?.care?.settings.care_team;
+  const ob = mom ? phone(team?.ob) : null;
+  const ped = mom ? null : phone(settings.pediatrician_phone);
+  const after = mom ? phone(team?.after_hours) : phone(settings.after_hours_phone);
+  const poison = mom && a.label === POISON_LABEL ? POISON_HELP : undefined;
   const urgent = a.tier === "emergency" || a.tier === "now" || a.tier === "today";
   const solid = a.tier === "emergency";
   const style = TIER_STYLE[a.tier];
@@ -328,15 +355,16 @@ export function AssessmentCard({ a, className }: { a: Assessment; className?: st
     "inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3.5 text-sm font-semibold transition active:scale-[0.97]",
     solid ? "bg-white text-[#8E1B12] [.maple-night_&]:bg-white/90" : "bg-mp-accent text-mp-on-accent"
   );
+  const call = (n: string) => `tel:${n.replace(/[^\d+]/g, "")}`;
   return (
     <div role="status" className={cx("rounded-xl border-l-[3px] px-4 py-3", style.card, className)}>
       <p className={cx("flex items-center gap-1.5 text-[13px] font-semibold", style.label)}>
         <Icon name={style.icon} size={15} strokeWidth={2} className="shrink-0" />
-        {TIER_LABEL[a.tier]}
+        {a.label ?? (mom ? MOM_TIER_LABEL : TIER_LABEL)[a.tier]}
       </p>
       <p className={cx("mt-1 text-[15px] leading-snug font-semibold", solid ? "text-white" : "text-mp-ink")}>{a.title}</p>
       <p className={cx("mt-1 text-sm leading-relaxed", solid ? "text-white/90" : "text-mp-ink")}>{a.body}</p>
-      {urgent && (
+      {urgent && calls && (
         <div className="mt-3 flex flex-wrap gap-2">
           {a.tier === "emergency" && (
             <a href="tel:911" className={link}>
@@ -344,14 +372,26 @@ export function AssessmentCard({ a, className }: { a: Assessment; className?: st
               Call 911
             </a>
           )}
+          {poison?.tel && (
+            <a href={`tel:${poison.tel}`} className={link}>
+              <Icon name="phone" size={16} />
+              Call Poison Help
+            </a>
+          )}
+          {ob && (
+            <a href={call(ob)} className={link}>
+              <Icon name="phone" size={16} />
+              OB or midwife
+            </a>
+          )}
           {ped && (
-            <a href={`tel:${ped.replace(/[^\d+]/g, "")}`} className={link}>
+            <a href={call(ped)} className={link}>
               <Icon name="phone" size={16} />
               Pediatrician
             </a>
           )}
           {after && (
-            <a href={`tel:${after.replace(/[^\d+]/g, "")}`} className={link}>
+            <a href={call(after)} className={link}>
               <Icon name="phone" size={16} />
               After-hours line
             </a>

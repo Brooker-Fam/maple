@@ -9,6 +9,8 @@ import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, EntryOf, Side } from "@/lib/maple/types";
+import { CareTodayRow } from "./care/CareLine";
+import { useCare } from "./care/useCare";
 import { Icon, KindBadge, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
@@ -115,13 +117,15 @@ function NextSide({ side }: { side: Side }) {
 /**
  * The "Right now" card. While she nurses, the timer card above it already has
  * the side, the start and the running clock, so the feed block steps aside
- * and this card keeps only what the timer doesn't say.
+ * and this card keeps only what the timer doesn't say. Mom's medicine line
+ * (when she shares it with this reader) sits right under the Since tiles.
  */
 export default function StatusCard() {
   const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
   const { open } = useSheets();
   const now = useNow(20_000);
   const [info, setInfo] = useState(false);
+  const care = useCare();
   if (!state || !summary) return null;
   const tz = state.baby.timezone ?? DEFAULT_TZ;
 
@@ -132,7 +136,14 @@ export default function StatusCard() {
   const lastSleepEnd = summary.lastSleep && !summary.lastSleep.active ? summary.lastSleep.ended_at : null;
   const hasAnything = state.entries.length > 0;
 
-  if (!hasAnything) return null;
+  // Nothing of Maple's logged yet: mom's line can still stand on its own.
+  if (!hasAnything) {
+    return care?.todayLine ? (
+      <div className={cx(tone.card, "overflow-hidden")}>
+        <CareTodayRow />
+      </div>
+    ) : null;
+  }
 
   // The big answer: how long since she last ate.
   let feedSub: string[] | null = null;
@@ -259,6 +270,9 @@ export default function StatusCard() {
           />
         )}
       </div>
+
+      {/* Her medicine: a 48px row, so with a feed timer running it still clears the dock on a small phone. */}
+      <CareTodayRow />
 
       {showVitD &&
         (vitD || readOnly ? (
