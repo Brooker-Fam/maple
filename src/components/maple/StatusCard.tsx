@@ -4,10 +4,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { tick } from "@/components/atlas/haptics";
 import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
+import { feedCtx, feedParts } from "@/lib/maple/feed";
 import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
-import type { Entry, FeedData, Side } from "@/lib/maple/types";
+import type { Entry, EntryOf, Side } from "@/lib/maple/types";
 import { Icon, KindBadge, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
@@ -26,12 +27,29 @@ const ts = (e: { started_at: string }) => Date.parse(e.started_at);
 /** Like formatDuration, but "<1m" instead of a ticking "12s". */
 const since = (sec: number) => (sec < 60 ? "<1m" : formatDuration(sec));
 
-/** The sides in the order she nursed: "Left then Right", "Left, Right, then Left", "Right only". */
-function sidesLabel(d: FeedData): string {
+/**
+ * The sides in the order she nursed: "Right only", "Left then Right", "Left,
+ * Right, then Left"; past three, just the first and the last she ended on
+ * ("Left first, ended on Right"), never a cut-off list that names the wrong
+ * last side.
+ */
+function sidesLabel(e: EntryOf<"feed">, now: Date): string {
+  const d = e.data;
   const words = (sides: Side[]) =>
-    sides.length === 1 ? `${SIDE_NAME[sides[0]]} only` : sides.length === 2 ? `${SIDE_NAME[sides[0]]} then ${SIDE_NAME[sides[1]]}` : `${sides.slice(0, -1).map((s) => SIDE_NAME[s]).join(", ")}, then ${SIDE_NAME[sides[sides.length - 1]]}`;
-  const order = (d.segments ?? []).map((s) => s.side).filter((s, i, a) => i === 0 || a[i - 1] !== s);
-  if (order.length) return words(order.slice(0, 3));
+    sides.length === 1
+      ? `${SIDE_NAME[sides[0]]} only`
+      : sides.length === 2
+        ? `${SIDE_NAME[sides[0]]} then ${SIDE_NAME[sides[1]]}`
+        : sides.length === 3
+          ? `${SIDE_NAME[sides[0]]}, ${SIDE_NAME[sides[1]]}, then ${SIDE_NAME[sides[2]]}`
+          : `${SIDE_NAME[sides[0]]} first, ended on ${SIDE_NAME[sides[sides.length - 1]]}`;
+  // The card's parts (sub-second double taps gone); the same side again after a break is one side.
+  const order = d.segments?.length
+    ? feedParts(d, feedCtx(e, now))
+        .flatMap((p) => (p.kind === "side" ? [p.side] : []))
+        .filter((s, i, a) => i === 0 || a[i - 1] !== s)
+    : [];
+  if (order.length) return words(order);
   if (d.first_side && d.last_side && d.first_side !== d.last_side) return words([d.first_side, d.last_side]);
   if ((d.left_sec ?? 0) > 0 && (d.right_sec ?? 0) > 0) return words(d.first_side === "R" ? ["R", "L"] : ["L", "R"]);
   if ((d.left_sec ?? 0) > 0) return words(["L"]);
@@ -127,7 +145,7 @@ export default function StatusCard() {
     } else {
       const t = summary.lastFeedTotals;
       if (t?.total) bits.push(formatDuration(t.total));
-      const sides = sidesLabel(last.data);
+      const sides = sidesLabel(last, now);
       if (sides) bits.push(sides);
     }
     if (gap != null) bits.push(`usually every ~${roughGap(gap)}`);

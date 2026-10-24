@@ -710,6 +710,34 @@ export function TextArea({ value, onChange, placeholder, rows = 2 }: { value: st
 
 // ── Sheet (bottom drawer) ────────────────────────────────────────────────
 
+/**
+ * Make everything outside `el` inert (the app, the dock, the tab bar), so
+ * Tab and Switch Control stay in an open sheet and can't reach Done in the
+ * dock behind it. Toasts stay live: they draw above sheets, and an inert one
+ * would let a tap fall through to whatever is under it. Returns the undo,
+ * which clears only what this call set.
+ */
+function inertOutside(el: HTMLElement): () => void {
+  const set: HTMLElement[] = [];
+  const shut = (n: Element) => {
+    if (!(n instanceof HTMLElement) || n.inert || n.matches("script, style, link, template, [data-maple-toasts]")) return;
+    if (n.querySelector("[data-maple-toasts]")) {
+      for (const c of Array.from(n.children)) shut(c);
+      return;
+    }
+    n.inert = true;
+    set.push(n);
+  };
+  let node: HTMLElement = el;
+  while (node.parentElement && node !== document.body) {
+    for (const sib of Array.from(node.parentElement.children)) if (sib !== node) shut(sib);
+    node = node.parentElement;
+  }
+  return () => {
+    for (const n of set) n.inert = false;
+  };
+}
+
 export function Sheet({
   open,
   onClose,
@@ -733,15 +761,31 @@ export function Sheet({
    */
   calm?: boolean;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const drag = useDragControls();
   const night = useNightActive();
   const still = calm && night;
+  // aria-modal alone doesn't keep focus in: the background goes inert while it's open.
+  // The opener is noted first (going inert takes its focus) and refocused once it's live again.
+  useEffect(() => {
+    if (!open || !rootRef.current) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const undo = inertOutside(rootRef.current);
+    return () => {
+      undo();
+      if (calm && opener?.isConnected) opener.focus({ preventScroll: true });
+    };
+  }, [open, calm]);
+  // The latest onClose without re-running the effect: a parent ticking every second (the dock) would otherwise pull focus back to the top each time.
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
   useEffect(() => {
     if (!open) return;
-    const opener = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -749,15 +793,14 @@ export function Sheet({
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
-      if (calm && opener?.isConnected) opener.focus({ preventScroll: true });
     };
-  }, [open, onClose, calm]);
+  }, [open, calm]);
 
   return (
     <AnimatePresence>
       {open && (
         // m-0!: a sheet rendered inside a space-y list mustn't pick up its margin and float off the bottom.
-        <div className="fixed inset-0 z-[80] m-0! flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
+        <div ref={rootRef} className="fixed inset-0 z-[80] m-0! flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
           <motion.div
             className={cx("absolute inset-0", still ? "bg-black/55" : "bg-black/40")}
             initial={{ opacity: 0 }}
@@ -896,29 +939,50 @@ export function EmptyState({
 /**
  * Toasts pinned above the tab bar, and above Today's logging dock when it's
  * showing (the dock publishes its height as --maple-dock-h) so a toast never
- * covers a button you're about to tap.
+ * covers a button you're about to tap. A toast with chips puts them and its
+ * trailing button on one row under the text, so a timer toast stays two
+ * lines tall at 375 px and doesn't climb over the card's live clock.
  */
 export function ToastHost() {
   const { toasts, dismissToast } = useMaple();
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--maple-dock-h,0px)+72px+env(safe-area-inset-bottom))] z-[90] flex flex-col items-center gap-2 px-4" aria-live="polite">
+    <div
+      data-maple-toasts
+      className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--maple-dock-h,0px)+72px+env(safe-area-inset-bottom))] z-[90] flex flex-col items-center gap-2 px-4"
+      aria-live="polite"
+    >
       <AnimatePresence>
-        {toasts.map((t) => (
-          <motion.div
-            key={t.id}
-            initial={{ opacity: 0, y: 16, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8 }}
-            className={cx(
-              "pointer-events-auto flex w-full max-w-md items-center gap-3 rounded-2xl px-4 py-3 text-[15px] shadow-[0_8px_30px_rgba(0,0,0,0.18)] [.maple-night_&]:ring-1 [.maple-night_&]:ring-mp-line",
-              t.tone === "error" ? "bg-[#8A2F1C] text-white [.maple-night_&]:bg-[#2A140C] [.maple-night_&]:text-[#F0A07A]" : "bg-mp-toast text-mp-on-toast"
-            )}
-          >
-            <Icon name={t.tone === "error" ? "triangle-alert" : t.tone === "info" ? "info" : "circle-check"} size={20} className="shrink-0 self-start opacity-80" />
-            <span className="flex-1">
-              {t.text}
+        {toasts.map((t) => {
+          const undo = t.undo && (
+            <button
+              type="button"
+              onClick={() => {
+                t.undo?.();
+                dismissToast(t.id);
+              }}
+              className={cx("min-h-[44px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold whitespace-nowrap", !!t.actions?.length && "ml-auto")}
+            >
+              {t.undoLabel ?? "Undo"}
+            </button>
+          );
+          return (
+            <motion.div
+              key={t.id}
+              initial={{ opacity: 0, y: 16, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8 }}
+              className={cx(
+                "pointer-events-auto w-full max-w-md rounded-2xl px-4 py-3 text-[15px] shadow-[0_8px_30px_rgba(0,0,0,0.18)] [.maple-night_&]:ring-1 [.maple-night_&]:ring-mp-line",
+                t.tone === "error" ? "bg-[#8A2F1C] text-white [.maple-night_&]:bg-[#2A140C] [.maple-night_&]:text-[#F0A07A]" : "bg-mp-toast text-mp-on-toast"
+              )}
+            >
+              <div className="flex items-center gap-3">
+                <Icon name={t.tone === "error" ? "triangle-alert" : t.tone === "info" ? "info" : "circle-check"} size={20} className="shrink-0 self-start opacity-80" />
+                <span className="flex-1">{t.text}</span>
+                {!t.actions?.length && undo}
+              </div>
               {t.actions?.length ? (
-                <span className="mt-2 flex flex-wrap gap-1.5">
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {t.actions.map((a) => (
                     <button
                       key={a.label}
@@ -945,23 +1009,12 @@ export function ToastHost() {
                       )}
                     </button>
                   ))}
-                </span>
+                  {undo}
+                </div>
               ) : null}
-            </span>
-            {t.undo && (
-              <button
-                type="button"
-                onClick={() => {
-                  t.undo?.();
-                  dismissToast(t.id);
-                }}
-                className="min-h-[44px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold whitespace-nowrap"
-              >
-                {t.undoLabel ?? "Undo"}
-              </button>
-            )}
-          </motion.div>
-        ))}
+            </motion.div>
+          );
+        })}
       </AnimatePresence>
     </div>
   );

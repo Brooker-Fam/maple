@@ -23,9 +23,9 @@ import { useMaple, useNow, type ToastAction } from "./useMaple";
  * bar, where a thumb lands at 3am. One tap does the common thing right away
  * (start the timer, log the diaper now); holding a button opens the full form
  * for one from earlier. The top row turns into the feed's controls while she
- * nurses, and they are the only ones on screen: each column keeps one
- * meaning (1 the other side, 2 this side, 3 Done, 4 More), so a thumb that
- * knows where Switch was finds Resume there after a pause.
+ * nurses, and they are the only ones on screen: Switch and Pause while she's
+ * on (columns 1 and 2), then Left and Right in their idle places during a
+ * break, with the other side filled like Switch; Done in column 3, More in 4.
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
@@ -146,18 +146,22 @@ export default function Dock() {
 
   /**
    * A tap that changes what columns 1 and 2 mean (start, switch, pause,
-   * resume): both show the check and ignore taps for 1.2s, so a double tap
-   * can't land on the tile that just appeared under the thumb.
+   * resume): both ignore taps for 1.2s, so a double tap can't land on the
+   * tile that just appeared under the thumb. Only the tapped one shows the
+   * check; the other shows its new label, dimmed, so it never looks as if
+   * two buttons were pressed.
    */
-  const swap = (fn: () => void) => {
+  const swap = (col: "col1" | "col2", fn: () => void) => {
     if (done.col1 || done.col2) return;
-    setDone((d) => ({ ...d, col1: true, col2: true }));
+    setDone((d) => ({ ...d, col1: true, col2: true, [`check-${col}`]: true }));
     window.setTimeout(
       () =>
         setDone((d) => {
           const n = { ...d };
           delete n.col1;
           delete n.col2;
+          delete n["check-col1"];
+          delete n["check-col2"];
           return n;
         }),
       1200
@@ -231,7 +235,7 @@ export default function Dock() {
   };
 
   const tapSide = (side: Side) =>
-    swap(() => {
+    swap(side === "L" ? "col1" : "col2", () => {
       toTop();
       void actions.startFeed(side);
     });
@@ -263,18 +267,18 @@ export default function Dock() {
                   color={SWITCH_STYLE[other(feedN.side ?? "L")].bg}
                   ink={SWITCH_STYLE[other(feedN.side ?? "L")].fg}
                   strong
-                  done={done.col1}
+                  done={done["check-col1"]}
                   disabled={feedPending || done.col1}
-                  onTap={tap(() => swap(() => void actions.switchSide(feed, other(feedN.side ?? "L"))))}
+                  onTap={tap(() => swap("col1", () => void actions.switchSide(feed, other(feedN.side ?? "L"))))}
                 />
                 <Tile
                   id="pause"
                   label="Pause"
                   icon="pause"
                   aria="Pause the feed"
-                  done={done.col2}
+                  done={done["check-col2"]}
                   disabled={feedPending || done.col2}
-                  onTap={tap(() => swap(() => void actions.pause(feed)))}
+                  onTap={tap(() => swap("col2", () => void actions.pause(feed)))}
                 />
                 <Tile
                   id="done"
@@ -289,28 +293,40 @@ export default function Dock() {
               </>
             ) : feed && feedN && nursing ? (
               <>
-                {/* Paused: column 1 is still "the other side", column 2 "this side" (a double tap on Pause resumes the same side, which just erases the break). */}
-                {[other(feedN.side ?? "L"), feedN.side ?? "L"].map((s, i) => (
-                  <Tile
-                    key={s}
-                    id={`resume-${s}`}
-                    label={SIDE_NAME[s]}
-                    sub="Resume"
-                    aria={`Resume on ${SIDE_NAME[s]}`}
-                    letter={s}
-                    color={SIDE_COLOR[s]}
-                    done={i === 0 ? done.col1 : done.col2}
-                    disabled={feedPending || (i === 0 ? done.col1 : done.col2)}
-                    onTap={tap(() => swap(() => void actions.resume(feed, s)))}
-                  />
-                ))}
+                {/*
+                  Paused: Left stays in column 1 and Right in column 2, as on the idle dock, so a
+                  thumb that remembers "Left is the first button" is right. The other side (where she
+                  usually goes next) is filled like Switch was and says "Next side", the way the idle
+                  dock marks it. Both turn off for 1.2 s after Pause, so a double tap can't land here.
+                */}
+                {(["L", "R"] as Side[]).map((s, i) => {
+                  const col = i === 0 ? "col1" : "col2";
+                  const suggested = s === other(feedN.side ?? "L");
+                  return (
+                    <Tile
+                      key={s}
+                      id={`resume-${s}`}
+                      label={SIDE_NAME[s]}
+                      sub={suggested ? "Next side" : "Resume"}
+                      aria={`Resume on ${SIDE_NAME[s]}${suggested ? " (next side)" : ""}`}
+                      letter={s}
+                      color={suggested ? SWITCH_STYLE[s].bg : SIDE_COLOR[s]}
+                      ink={suggested ? SWITCH_STYLE[s].fg : undefined}
+                      strong={suggested}
+                      done={done[`check-${col}`]}
+                      disabled={feedPending || done[col]}
+                      onTap={tap(() => swap(col, () => void actions.resume(feed, s)))}
+                    />
+                  );
+                })}
+                {/* Quiet while paused: it ends the feed at the pause ("ends 4:10"), the riskier choice here. */}
                 <Tile
                   id="done"
                   label="Done"
                   icon="check"
+                  inline
                   sub={feedPending ? "starting…" : `ends ${formatTimeNear(feedN.current.since, feedN.current.since, tz)}`}
                   aria={`Done: end the feed at ${formatTime(feedN.current.since, tz)}, when you paused`}
-                  accent
                   disabled={feedPending}
                   onTap={tap(() => void actions.stop(feed))}
                 />
@@ -333,7 +349,7 @@ export default function Dock() {
                     letter={s}
                     color={SIDE_COLOR[s]}
                     next={next === s}
-                    done={s === "L" ? done.col1 : done.col2}
+                    done={done[s === "L" ? "check-col1" : "check-col2"]}
                     disabled={s === "L" ? done.col1 : done.col2}
                     onTap={tap(() => tapSide(s))}
                     onHold={() => holdFeed(s)}
@@ -435,6 +451,7 @@ function Tile({
   ink,
   disabled,
   aria,
+  inline: inlineProp,
 }: {
   id: string;
   label: string;
@@ -459,6 +476,8 @@ function Tile({
   disabled?: boolean;
   /** The accessible name, when the label alone doesn't say it ("Switch to Right", "Pause the feed"). */
   aria?: string;
+  /** Icon and label on one line even when quiet (the paused Done, so its "ends 4:10" fits the same height). */
+  inline?: boolean;
 }) {
   const press = usePress(onTap, onHold);
   // At night a filled tile glows softly instead of blazing, in the amber like
@@ -467,7 +486,7 @@ function Tile({
   const night = useNightActive();
   const filled = strong || accent;
   // Icon and label share a line when there's room (a side letter, Done); "Woke up" and Pause stack.
-  const inline = !!letter || accent;
+  const inline = !!letter || accent || !!inlineProp;
   const fill = strong && color ? (night ? "rgb(224 169 59 / 0.25)" : color) : undefined;
   return (
     <button
@@ -505,7 +524,8 @@ function Tile({
                 <span
                   aria-hidden
                   // Under 360px "Switch" needs the room; its "to Left" already names the side.
-                  className={cx("mp-kind-fill inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold", strong && "max-[359px]:hidden")}
+                  // mp-side-mark: the side letters' own night look, shared with the card's SideMark.
+                  className={cx("mp-kind-fill mp-side-mark inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold", strong && "max-[359px]:hidden")}
                   // On a tile filled with the side's color, the mark turns over (ink disc, colored letter) so it still shows.
                   style={strong ? { backgroundColor: ink ?? "#FFFFFF", color } : { backgroundColor: color, color: SWITCH_STYLE[letter].fg }}
                 >
@@ -520,7 +540,13 @@ function Tile({
             </span>
             {!inline && <span className={cx("leading-tight font-semibold", filled ? "text-[15px]" : "text-[14px]")}>{label}</span>}
             {sub && (
-              <span className={cx("text-[11px] leading-tight tabular-nums", filled ? "opacity-85" : next ? "font-semibold text-mp-accent-fg" : "text-mp-ink-3")}>
+              // 11px needs ink-2 (ink-3 is 3:1 at night); on a filled tile it's full strength at night (85% was 4.46:1).
+              <span
+                className={cx(
+                  "text-[11px] leading-tight tabular-nums",
+                  filled ? "opacity-85 [.maple-night_&]:opacity-100" : next ? "font-semibold text-mp-accent-fg" : "text-mp-ink-2"
+                )}
+              >
                 {sub}
               </span>
             )}

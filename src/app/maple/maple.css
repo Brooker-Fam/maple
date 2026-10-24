@@ -61,7 +61,7 @@ html.maple-night {
   --mp-sunken: #1b1d12;
   --mp-raised: #2b2515;
   --mp-ink: rgb(224 169 59 / 0.85);
-  --mp-ink-2: rgb(224 169 59 / 0.66);
+  --mp-ink-2: rgb(224 169 59 / 0.7);
   --mp-ink-3: rgb(224 169 59 / 0.5);
   --mp-line: rgb(224 169 59 / 0.1);
   --mp-accent: #3a2711;
@@ -103,6 +103,12 @@ html.maple-ui body.enchanted-bg {
   background-color: rgb(224 169 59 / 0.45) !important;
   border-color: transparent !important;
   color: #0b0f0a !important;
+}
+/* Side letters (L / R) at night: an amber ring and letter, not a dim fill (the fill's letter was 2.2–2.9:1). */
+.maple-night .mp-side-mark {
+  background-color: transparent !important;
+  box-shadow: inset 0 0 0 1.5px rgb(224 169 59 / 0.45);
+  color: #e8a23f !important;
 }
 
 /*

@@ -1,8 +1,10 @@
 import { BadRequest, json, readJson, withMember } from "@/lib/maple/api";
 import {
   adjustTimerStart,
+  discardedBy,
   discardTimer,
   getBaby,
+  NotFound,
   pauseTimer,
   reopenTimer,
   retimeFeed,
@@ -96,16 +98,22 @@ const timerJson = (r: TimerResponse) =>
   json({ ...r, entry: toClientEntry(r.entry), ...(r.nap ? { nap: { ...r.nap, entry: toClientEntry(r.nap.entry) } } : {}) });
 
 /**
- * POST /api/maple/timer { action, kind?, side?, id?, at?, edit?, client_id? }
+ * POST /api/maple/timer { action, kind?, side?, id?, at?, edit?, client_id?, expect_updated_at? }
  * Timers run on server time so every phone shows the same clock; `at` is
  * only for when it really happened (switch/resume/pause within the last 4
  * hours, stop, adjust). retime fixes one moment ({ id, edit }). A write that
  * loses to the other parent answers 409 with the current entry and a reason
  * ("stopped", "changed"), so the app can say "Brittany already stopped it";
- * an edit that doesn't fit the feed answers 400 { error, code }.
+ * an edit that doesn't fit the feed answers 400 { error, code }. resume with
+ * `at` was asked of a paused feed: if the other phone resumed it since, on
+ * that side an earlier `at` moves when she went back on (moved: true), on
+ * the other side it's 409 "changed". discard takes expect_updated_at (the
+ * start toast's Undo): changed since, 409 "changed" and nothing is thrown
+ * away. A timer that was discarded answers 404 { reason: "discarded",
+ * deleted_by } so the app can name who did it.
  */
 export const POST = withMember("POST /api/maple/timer", async (request, me) => {
-  const body = await readJson<TimerInput>(request);
+  const body = await readJson<TimerInput & { expect_updated_at?: unknown }>(request);
   const now = new Date();
 
   if (body.action === "start") {
@@ -127,26 +135,39 @@ export const POST = withMember("POST /api/maple/timer", async (request, me) => {
   const id = Number(body.id);
   if (!Number.isSafeInteger(id) || id <= 0) throw new BadRequest("id is required");
   const at = body.at ? instant(body.at, "at") : undefined;
+  try {
+    return await act(body, id, at, me.email);
+  } catch (err) {
+    if (!(err instanceof NotFound)) throw err;
+    const who = await discardedBy(id);
+    if (who === undefined) throw err;
+    return json({ error: err.message, reason: "discarded", deleted_by: who }, 404);
+  }
+}, { write: true });
 
+async function act(body: TimerInput & { expect_updated_at?: unknown }, id: number, at: Date | undefined, by: string): Promise<Response> {
   switch (body.action) {
     case "switch":
     case "resume": {
       if (!isSide(body.side)) throw new BadRequest("side must be L or R");
-      return timerJson(await switchSide(id, body.side, at, me.email));
+      return timerJson(await switchSide(id, body.side, at, by, { resume: body.action === "resume" }));
     }
     case "pause":
-      return timerJson(await pauseTimer(id, at, me.email));
+      return timerJson(await pauseTimer(id, at, by));
     case "stop":
-      return json({ entry: toClientEntry(await stopTimer(id, at, me.email)) });
+      return json({ entry: toClientEntry(await stopTimer(id, at, by)) });
     case "retime":
-      return timerJson(await retimeFeed(id, feedEdit(body.edit), me.email));
+      return timerJson(await retimeFeed(id, feedEdit(body.edit), by));
     case "adjust":
-      return json({ entry: toClientEntry(await adjustTimerStart(id, instant(body.at, "at"), me.email)) });
-    case "discard":
-      return json({ entry: toClientEntry(await discardTimer(id, me.email)) });
+      return json({ entry: toClientEntry(await adjustTimerStart(id, instant(body.at, "at"), by)) });
+    case "discard": {
+      const expect = body.expect_updated_at;
+      const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
+      return json({ entry: toClientEntry(await discardTimer(id, by, { expectUpdatedAt })) });
+    }
     case "reopen":
-      return json({ entry: toClientEntry(await reopenTimer(id, me.email)) });
+      return json({ entry: toClientEntry(await reopenTimer(id, by)) });
     default:
       throw new BadRequest("Unknown timer action");
   }
-}, { write: true });
+}

@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { tick } from "@/components/atlas/haptics";
-import { edgeBounds, feedCtx, feedParts, feedTotals, openSegment, suggestNextSide, undoLastTap, type Moment, type Part } from "@/lib/maple/feed";
+import { edgeBounds, feedCtx, feedMinutes, feedParts, minutesShort, minutesText, openSegment, sideMinutesText, suggestNextSide, undoLastTap, type Moment, type Part } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedEdit, Side, TimerKind, TimerResponse } from "@/lib/maple/types";
 import { fixPreset, KIND_TITLE, SIDE_NAME } from "./FeedParts";
 import { useSheets } from "./sheets";
-import { useMaple, type TimerCallOptions, type ToastAction } from "./useMaple";
+import { useMaple, type TimerCallOptions, type TimerFailure, type ToastAction } from "./useMaple";
 
 /**
  * Timer actions shared by the dock, the timer card, the lantern and Fix
@@ -25,6 +25,9 @@ import { useMaple, type TimerCallOptions, type ToastAction } from "./useMaple";
 
 type SidePart = Extract<Part, { kind: "side" }>;
 
+/** A feed the other phone ended this recently can still be carried on from a stale Resume. */
+const CONTINUE_WITHIN_MS = 30 * 60_000;
+
 const minutesWord = (n: number) => `${n} minute${n === 1 ? "" : "s"}`;
 
 /**
@@ -35,11 +38,12 @@ const minutesWord = (n: number) => `${n} minute${n === 1 ? "" : "s"}`;
 export function doneText(e: Entry, now: Date, ended?: string): { text: string } {
   const dur = e.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / 1000 : 0;
   if (e.kind === "feed" && e.data.method === "breast") {
-    const t = feedTotals(e.data, now);
-    const sides = ended ? "" : [t.left >= 30 ? `L ${Math.round(t.left / 60)}` : "", t.right >= 30 ? `R ${Math.round(t.right / 60)}` : ""].filter(Boolean).join(" · ");
+    // The card's rows added up (feedMinutes), so the sides always sum to the total.
+    const t = feedMinutes(e, now);
+    const sides = ended ? "" : sideMinutesText(t);
     const next = suggestNextSide(e.data);
     return {
-      text: `Nursed ${formatDuration(t.total)}${sides ? ` (${sides})` : ""}${ended ? ` · ${ended}` : ""}${next ? ` · ${SIDE_NAME[next]} next time` : ""}`,
+      text: `Nursed ${minutesShort(t.total)}${sides ? ` (${sides})` : ""}${ended ? ` · ${ended}` : ""}${next ? ` · ${SIDE_NAME[next]} next time` : ""}`,
     };
   }
   if (e.kind === "sleep") return { text: `Slept ${formatDuration(dur)}` };
@@ -60,7 +64,7 @@ function allParts(e: Entry, now: Date): Part[] {
 }
 
 export function useTimerActions() {
-  const { state, timerCall, toast, now, isNight, memberName, restore, dismissTimerToast, holdTimerToasts } = useMaple();
+  const { state, timerCall, timerBusy, toast, now, isNight, memberName, restore, dismissTimerToast, holdTimerToasts } = useMaple();
   const { open } = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const entries = state?.entries;
@@ -143,10 +147,11 @@ export function useTimerActions() {
   /**
    * The fix toast (what changed, from the server's answer) and its "Back
    * to …" button. `moved` is the moment as it was recorded before the fix,
-   * `undid` the tap an undo_tap took back.
+   * `undid` the tap an undo_tap took back, `wasActive` whether this phone
+   * still showed the feed running when the fix was asked for.
    */
   const fixToast = useCallback(
-    (res: TimerResponse, edit: FeedEdit, moved: { moment: Moment; recorded: Date } | null, undid: "switch" | "resume" | "pause" | null) => {
+    (res: TimerResponse, edit: FeedEdit, moved: { moment: Moment; recorded: Date } | null, undid: "switch" | "resume" | "pause" | null, wasActive: boolean) => {
       const after = res.entry;
       const n = now();
       const parts = allParts(after, n);
@@ -177,7 +182,7 @@ export function useTimerActions() {
             const i = sides.findIndex((s) => nearT(s.start, to));
             const s = sides[i];
             const p = sides[i - 1];
-            if (s && p) text = `Switched to ${SIDE_NAME[s.side]} at ${short(s.start)} · ${SIDE_NAME[p.side]} ${formatMinutes(p.sec)}`;
+            if (s && p) text = `Switched to ${SIDE_NAME[s.side]} at ${short(s.start)} · ${SIDE_NAME[p.side]} ${minutesText(p.min)}`;
             break;
           }
           case "resume": {
@@ -185,24 +190,27 @@ export function useTimerActions() {
               sides.find((x) => x.side === side && nearT(x.start, to)) ??
               sides.find((x) => x.side === side && Date.parse(x.start) <= to && (x.end === null || Date.parse(x.end) >= to));
             const b = s ? breakBefore(s) : null;
-            if (s) text = b ? `${SIDE_NAME[s.side]} now from ${short(s.start)} · break ${formatMinutes(b.sec)}` : `${SIDE_NAME[s.side]} now from ${short(to)} · no break`;
+            // "Right side from 3:11", as the card says "Right side · since": "Right now from" read as the phrase "right now".
+            if (s) text = b ? `${SIDE_NAME[s.side]} side from ${short(s.start)} · break ${minutesText(b.min)}` : `${SIDE_NAME[s.side]} side from ${short(to)} · no break`;
             break;
           }
           case "pause": {
             const s = sides.find((x) => x.end !== null && nearT(x.end, to));
             const b = s ? breakAfter(s) : null;
-            if (s && b && b.end === null) text = `Came off at ${short(s.end!)} · ${SIDE_NAME[s.side]} ${formatMinutes(s.sec)}`;
-            else if (s) text = `Came off ${SIDE_NAME[s.side]} at ${short(s.end!)} · ${b ? `break ${formatMinutes(b.sec)}` : "no break"}`;
+            if (s && b && b.end === null) text = `Came off at ${short(s.end!)} · ${SIDE_NAME[s.side]} ${minutesText(s.min)}`;
+            else if (s) text = `Came off ${SIDE_NAME[s.side]} at ${short(s.end!)} · ${b ? `break ${minutesText(b.min)}` : "no break"}`;
             break;
           }
           case "feed_end": {
-            const t = feedTotals(after.kind === "feed" ? after.data : { method: "breast" }, n);
-            const each = [t.left >= 30 ? `L ${Math.round(t.left / 60)}` : "", t.right >= 30 ? `R ${Math.round(t.right / 60)}` : ""].filter(Boolean).join(" · ");
-            text = `Ended ${short(after.ended_at ?? to)} · nursed ${formatDuration(t.total)}${each ? ` (${each})` : ""}`;
+            const t = after.kind === "feed" ? feedMinutes(after, n) : null;
+            const each = t ? sideMinutesText(t) : "";
+            text = `Ended ${short(after.ended_at ?? to)} · nursed ${minutesShort(t?.total ?? 0)}${each ? ` (${each})` : ""}`;
             break;
           }
         }
       }
+      // A stale chip on a feed the other phone had already ended: the fix saved, but say the feed is over.
+      if (wasActive && !after.active && after.ended_at && moved?.moment !== "feed_end") text += ` · the feed ended ${short(after.ended_at)}`;
       timerToast(text, after, { undo: () => void restoreFrom(res), undoLabel: back });
     },
     [now, restoreFrom, short, timerToast]
@@ -229,7 +237,7 @@ export function useTimerActions() {
       const res = await timerCall({ action: "retime", id: e.id, edit }, opts);
       if (!res || res.noop) return res;
       if (edit.op === "restore") toast("Undone", { group: "timer" });
-      else fixToast(res, edit, moved, undid);
+      else fixToast(res, edit, moved, undid, before.active);
       return res;
     },
     [fixToast, live, now, timerCall, toast]
@@ -255,10 +263,38 @@ export function useTimerActions() {
   /** Put a just-stopped timer back to running (a paused feed comes back paused). */
   const reopen = useCallback(async (e: Entry) => (await timerCall({ action: "reopen", id: e.id }))?.entry ?? null, [timerCall]);
 
-  /** Throw away a timer this phone just started (a start toast's Undo). */
+  // Set below, once switchSide and resume exist (the toast button needs both).
+  const carryOnRef = useRef<(e: Entry, side: Side) => void>(() => {});
+
+  /**
+   * A Resume or Switch from a dock that hadn't caught up with the other
+   * phone's Done (409 "stopped"): if that feed ended in the last half hour,
+   * the toast offers to carry it on rather than leave a second feed as the
+   * only way forward. Reopen brings it back as it was (a feed ended at its
+   * pause comes back paused), then the tap happens.
+   */
+  const continueAction = useCallback(
+    (side: Side) =>
+      (f: TimerFailure): ToastAction[] | undefined => {
+        const e = f.entry;
+        if (f.kind !== "stopped" || !e || e.kind !== "feed" || e.data.method !== "breast" || e.active || !e.ended_at) return undefined;
+        if (now().getTime() - Date.parse(e.ended_at) > CONTINUE_WITHIN_MS) return undefined;
+        // Another feed already on (this one still shows running here: the 409 is how this phone hears it ended).
+        if (entriesRef.current?.some((x) => x.active && x.kind === "feed" && x.id !== e.id)) return undefined;
+        return [{ label: `Continue that feed on ${SIDE_NAME[side]}`, onClick: () => carryOnRef.current(e, side) }];
+      },
+    [now]
+  );
+
+  /**
+   * Throw away a timer this phone just started (a start toast's Undo), only
+   * as the start left it: if the other phone has switched or paused since,
+   * the server says so (409, "Brittany just changed this feed. Have another
+   * look.") and keeps it.
+   */
   const unstart = useCallback(
     async (e: Entry, nap?: Entry | null) => {
-      const gone = await timerCall({ action: "discard", id: e.id });
+      const gone = await timerCall({ action: "discard", id: e.id, expect_updated_at: e.updated_at });
       if (!gone) return;
       // The nap only comes back once the feed is gone.
       if (nap) await reopen(nap);
@@ -413,13 +449,15 @@ export function useTimerActions() {
       const at = now();
       const stopped = (await timerCall({ action: "stop", id: feed.id, at: at.toISOString() }))?.entry;
       if (!stopped || stopped.active) return;
-      const s = (await timerCall({ action: "start", kind: "sleep" }))?.entry ?? null;
+      let s = (await timerCall({ action: "start", kind: "sleep" }))?.entry ?? null;
       if (s && Math.abs(Date.parse(s.started_at) - at.getTime()) > 1500) {
-        await timerCall({ action: "adjust", id: s.id, at: at.toISOString() });
+        s = (await timerCall({ action: "adjust", id: s.id, at: at.toISOString() }))?.entry ?? s;
       }
+      const sleep = s;
       timerToast(`${doneText(stopped, now()).text} · sleep timer on`, stopped, {
         undo: async () => {
-          if (s) await timerCall({ action: "discard", id: s.id });
+          // The feed only comes back once the sleep is gone, and the sleep only goes as it was started.
+          if (sleep && !(await timerCall({ action: "discard", id: sleep.id, expect_updated_at: sleep.updated_at }))) return;
           await reopen(stopped);
         },
       });
@@ -430,7 +468,7 @@ export function useTimerActions() {
   const switchSide = useCallback(
     async (e: Entry, side: Side) => {
       tick();
-      const res = await timerCall({ action: "switch", id: e.id, side });
+      const res = await timerCall({ action: "switch", id: e.id, side }, { failActions: continueAction(side) });
       if (!res || res.noop) return res?.entry ?? null;
       const after = res.entry;
       if (res.reverted) {
@@ -458,7 +496,7 @@ export function useTimerActions() {
       });
       return after;
     },
-    [earlierChips, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
+    [continueAction, earlierChips, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
   );
 
   const pause = useCallback(
@@ -467,7 +505,7 @@ export function useTimerActions() {
       const res = await timerCall({ action: "pause", id: e.id });
       if (!res || res.noop) return res?.entry ?? null;
       const last = sideParts(res.entry, now()).at(-1);
-      timerToast(last ? `Paused · ${SIDE_NAME[last.side]} ${formatMinutes(last.sec)}` : "Paused", res.entry, { undo: () => void undoTap(res.entry) });
+      timerToast(last ? `Paused · ${SIDE_NAME[last.side]} ${minutesText(last.min)}` : "Paused", res.entry, { undo: () => void undoTap(res.entry) });
       return res.entry;
     },
     [now, timerCall, timerToast, undoTap]
@@ -480,22 +518,25 @@ export function useTimerActions() {
   const resume = useCallback(
     async (e: Entry, side: Side, at?: Date, opts: TimerCallOptions = {}) => {
       tick();
-      const res = await timerCall({ action: "resume", id: e.id, side, at: at?.toISOString() }, opts);
+      const res = await timerCall({ action: "resume", id: e.id, side, at: at?.toISOString() }, { failActions: continueAction(side), ...opts });
       if (!res || res.noop) return res;
       const after = res.entry;
       const name = SIDE_NAME[side];
       const parts = allParts(after, now());
       const cur = parts.filter((p): p is SidePart => p.kind === "side").at(-1);
       const brk = cur ? parts.find((p) => p.kind === "break" && p.end === cur.start) : undefined;
+      // Already back on (the other phone resumed first): the time moved when she went back on, so undo puts that back.
+      const wasOpen = res.moved ? res.before?.segments.at(-1) : undefined;
+      const back = wasOpen && wasOpen.end == null ? `Back to ${short(wasOpen.start)}` : "Back to paused";
       if (res.merged) {
         timerToast(`Back on the ${name} · no break`, after, { undo: () => void restoreFrom(res) });
       } else if (res.clamped && cur) {
-        timerToast(`${name} starts ${short(cur.start)}, when the break began (no break)`, after, { undo: () => void restoreFrom(res), undoLabel: "Back to paused" });
+        timerToast(`${name} starts ${short(cur.start)}, when the break began (no break)`, after, { undo: () => void restoreFrom(res), undoLabel: back });
       } else if (at && cur) {
         // A time someone gave (Fix times): say what's recorded now, and put the break back on undo.
-        timerToast(`${name} now from ${short(cur.start)} · ${brk ? `break ${formatMinutes(brk.sec)}` : "no break"}`, after, {
+        timerToast(`${name} side from ${short(cur.start)} · ${brk ? `break ${minutesText(brk.min)}` : "no break"}`, after, {
           undo: () => void restoreFrom(res),
-          undoLabel: "Back to paused",
+          undoLabel: back,
         });
       } else if (cur) {
         const chips = brk
@@ -507,13 +548,24 @@ export function useTimerActions() {
               { floor: Date.parse(brk.start) }
             )
           : [];
-        const text = `Back on the ${name} · ${short(cur.start)}${brk ? ` · break ${formatMinutes(brk.sec)}` : ""}${chips.length ? ". Earlier?" : ""}`;
+        const text = `Back on the ${name} · ${short(cur.start)}${brk ? ` · break ${minutesText(brk.min)}` : ""}${chips.length ? ". Earlier?" : ""}`;
         timerToast(text, after, { actions: chips, undo: () => void undoTap(after) });
       }
       return res;
     },
-    [earlierChips, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
+    [continueAction, earlierChips, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
   );
+
+  useEffect(() => {
+    carryOnRef.current = (e, side) =>
+      void (async () => {
+        const back = await reopen(e);
+        if (!back?.active) return;
+        // Ended while running, it comes back on its side (switch); ended at a pause, it comes back paused (resume).
+        if (back.kind === "feed" && openSegment(back.data.segments)) await switchSide(back, side);
+        else await resume(back, side);
+      })();
+  });
 
   const discard = useCallback(
     async (e: Entry) => {
@@ -546,7 +598,9 @@ export function useTimerActions() {
     reopen,
     memberName,
     dismissToast: dismissTimerToast,
-    /** The Lantern holds timer toasts while it's open (see useMaple's holdTimerToasts). */
+    /** Timer toasts wait while the Lantern or Fix times is open (see useMaple's holdTimerToasts / useHoldTimerToasts). */
     holdToasts: holdTimerToasts,
+    /** A timer call for this entry is queued or out (see useMaple's timerBusy). */
+    busy: timerBusy,
   };
 }

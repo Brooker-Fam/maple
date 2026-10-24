@@ -9,7 +9,7 @@ import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple
 import type { Entry, Side } from "@/lib/maple/types";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import { Icon } from "./icons";
-import { useMaple, useNow } from "./useMaple";
+import { useHoldTimerToasts, useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
 
 /**
@@ -25,7 +25,7 @@ const HOLD_MS = 500;
 const AMBER = "#E0A93B";
 
 export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose: () => void; dim?: boolean }) {
-  const { state, readOnly } = useMaple();
+  const { state, readOnly, now: serverNow } = useMaple();
   const now = useNow(1000);
   const actions = useTimerActions();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
@@ -45,11 +45,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   useEffect(() => setMounted(true), []);
 
   // Open: no timer toast behind it; taps in here keep theirs for when it closes.
-  const hold = actions.holdToasts;
-  useEffect(() => {
-    hold(true);
-    return () => hold(false);
-  }, [hold]);
+  useHoldTimerToasts(true);
 
   // Gone (stopped or discarded elsewhere)? Close.
   useEffect(() => {
@@ -96,10 +92,10 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     []
   );
 
-  const showHint = (text: string) => {
+  const showHint = (text: string, ms = 1800) => {
     setHint(text);
     if (hintTimer.current) window.clearTimeout(hintTimer.current);
-    hintTimer.current = window.setTimeout(() => setHint(null), 1800);
+    hintTimer.current = window.setTimeout(() => setHint(null), ms);
   };
 
   const isFeed = live.kind === "feed" && n.parts.length > 0;
@@ -108,6 +104,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const side: Side = n.side ?? "L";
   const target: Side = other(side);
   const short = (t: string) => formatTimeNear(t, t, tz);
+  /** After a hold, say what happened once the server has it (its toast waits until the lantern closes). */
+  const confirmed = (ok: boolean, text: string) => showHint(ok ? `${text} · ${short(serverNow().toISOString())}` : "That didn't save. Close the lantern to see why.", 3000);
   // The big clock is the part she's on now: this side, or the break (dimmed).
   const subtitle = !isFeed
     ? `Asleep · since ${formatTime(live.started_at, tz)}`
@@ -168,24 +166,32 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       <div className="flex h-[40dvh] gap-3 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">
         {locked && <p className="m-auto text-sm opacity-50">{readOnly ? "Viewing only" : "Starting…"}</p>}
         {!locked && isFeed && !n.paused && (
-          <HoldButton label={`Switch to ${SIDE_NAME[target]}`} onHint={() => showHint("Hold to switch")} onConfirm={() => void actions.switchSide(live, target)} />
+          <HoldButton
+            label={`Switch to ${SIDE_NAME[target]}`}
+            onHint={() => showHint("Hold to switch")}
+            onConfirm={() => void actions.switchSide(live, target).then((r) => confirmed(!!r, `Switched to ${SIDE_NAME[target]}`))}
+          />
         )}
-        {/* Paused: both sides, the other one first, as in the dock. */}
+        {/* Paused: Left then Right, in the dock's columns, the other side marked as the next one. */}
         {!locked &&
           isFeed &&
           n.paused &&
-          [target, side].map((s) => (
+          (["L", "R"] as Side[]).map((s) => (
             <HoldButton
               key={s}
               label={SIDE_NAME[s]}
-              aria={`Resume on ${SIDE_NAME[s]}`}
+              sub={s === target ? "Next side" : "Resume"}
+              aria={`Resume on ${SIDE_NAME[s]}${s === target ? " (next side)" : ""}`}
               onHint={() => showHint(`Hold to go back on the ${SIDE_NAME[s]}`)}
-              onConfirm={() => void actions.resume(live, s)}
+              onConfirm={() => void actions.resume(live, s).then((r) => confirmed(!!r, `Back on the ${SIDE_NAME[s]}`))}
             />
           ))}
         {!locked && (
           <HoldButton
             label={live.kind === "sleep" ? "Woke up" : "Done"}
+            // Done during a break ends the feed at the pause, as the dock's tile says.
+            sub={isFeed && n.paused ? `ends ${short(n.current.since)}` : undefined}
+            aria={isFeed && n.paused ? `Done: end the feed at ${formatTime(n.current.since, tz)}, when you paused` : undefined}
             onHint={() => showHint(live.kind === "sleep" ? "Hold to stop sleep" : "Hold to finish")}
             onConfirm={() => {
               void actions.stop(live);
@@ -200,7 +206,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
 }
 
 /** A big button that only fires after a 500ms press-and-hold, with a ring that fills. */
-function HoldButton({ label, aria, onConfirm, onHint }: { label: string; aria?: string; onConfirm: () => void; onHint: () => void }) {
+function HoldButton({ label, sub, aria, onConfirm, onHint }: { label: string; sub?: string; aria?: string; onConfirm: () => void; onHint: () => void }) {
   const [progress, setProgress] = useState(0);
   const raf = useRef<number | null>(null);
   const start = useRef<number | null>(null);
@@ -275,7 +281,10 @@ function HoldButton({ label, aria, onConfirm, onHint }: { label: string; aria?: 
           transform="rotate(-90 32 32)"
         />
       </svg>
-      {label}
+      <span className="flex flex-col items-center gap-1">
+        {label}
+        {sub && <span className="text-sm font-medium tabular-nums opacity-70">{sub}</span>}
+      </span>
     </button>
   );
 }

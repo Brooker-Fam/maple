@@ -280,7 +280,8 @@ export type FeedEdit =
  * POST /api/maple/timer answer. noop: nothing changed (already on that side,
  * already paused). clamped: a resume asked for before the break began starts
  * at the break. merged: a same-side resume within a minute erased the break.
- * reverted: a switch back within 15 s undid the switch. before: the feed as
+ * reverted: a switch back within 15 s undid the switch. moved: a resume on
+ * the side already open moved that side's start. before: the feed as
  * it was, for "Back to …". nap: the nap whose end followed a feed start.
  */
 export type TimerResponse = {
@@ -289,6 +290,8 @@ export type TimerResponse = {
   noop?: true;
   merged?: true;
   reverted?: true;
+  /** resume with an explicit time on the side that's already open: its start moved instead. */
+  moved?: true;
   alreadyRunning?: boolean;
   before?: { segments: Segment[]; started_at: string; ended_at: string | null; updated_at: string };
   nap?: { entry: Entry; before_ended_at: string; before_updated_at: string };

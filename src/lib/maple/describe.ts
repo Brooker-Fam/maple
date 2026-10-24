@@ -3,7 +3,7 @@
  * the app's lists, the MCP tools' replies, and the CSV export so every surface
  * words things the same way.
  */
-import { feedTotals } from "./feed";
+import { feedMinutes, minutesShort } from "./feed";
 import { JAUNDICE_LABEL, STOOL_COLOR_INFO } from "./guidelines";
 import { milestoneLabel } from "./milestones";
 import { formatDuration } from "./time";
@@ -65,8 +65,6 @@ export function entryEmoji(e: Entry): string {
   return KIND_EMOJI[e.kind];
 }
 
-const sideMin = (sec: number) => formatDuration(sec);
-
 function durationOf(e: Entry, now: Date): number | null {
   if (!e.ended_at && !e.active) return null;
   const end = e.ended_at ? Date.parse(e.ended_at) : now.getTime();
@@ -91,10 +89,11 @@ export function describeEntry(
         if (e.data.milk) bits.push(e.data.milk === "breastmilk" ? "breast milk" : e.data.milk);
       } else {
         title = e.active ? "Nursing now" : "Nursed";
-        const t = feedTotals(e.data, now);
+        // The card's rows added up (feedMinutes), so lists, the day's totals and toasts agree.
+        const t = feedMinutes(e, now);
         const sides: string[] = [];
-        if (t.left > 0) sides.push(`L ${sideMin(t.left)}`);
-        if (t.right > 0) sides.push(`R ${sideMin(t.right)}`);
+        if (t.has.L) sides.push(`L ${minutesShort(t.left)}`);
+        if (t.has.R) sides.push(`R ${minutesShort(t.right)}`);
         if (sides.length) bits.push(sides.join(", "));
         if (e.data.first_side && !e.active) bits.push(`started ${e.data.first_side === "L" ? "left" : "right"}`);
       }

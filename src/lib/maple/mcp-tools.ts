@@ -8,7 +8,7 @@ import { query } from "@/lib/db";
 import { captureServerException } from "@/lib/posthog-server";
 import { ADMIN_ID, ensureAdminMember, isRemoved, listMembers } from "./auth";
 import { describeEntry } from "./describe";
-import { feedCtx, feedEditCopy, FeedEditError, feedParts, feedTotals, openSegment, other, partTotals, type Moment, type Part } from "./feed";
+import { feedCtx, feedEditCopy, FeedEditError, feedMinutes, feedParts, feedTotals, minutesShort, minutesText, openSegment, other, partTotals, staleFeed, undoableTap, type Moment, type Part } from "./feed";
 import { ageInDays, percentileFor, type Measure } from "./growth";
 import {
   ALERT_TIERS,
@@ -36,7 +36,6 @@ import {
   NotFound,
   StoreUnavailable,
   activeTimers,
-  adjustTimerStart,
   createEntryOnce,
   getBaby,
   getEntry,
@@ -55,6 +54,7 @@ import {
   touchLastSeen,
   updateBaby,
   updateEntry,
+  type SwitchResponse,
 } from "./store";
 import {
   addDays,
@@ -65,7 +65,6 @@ import {
   DEFAULT_TZ,
   formatDayLabel,
   formatDuration,
-  formatMinutes,
   formatRange,
   formatTime,
   formatTimeNear,
@@ -480,8 +479,10 @@ function phrase(e: Entry, now: Date): string {
 function compactData(e: Entry, now: Date): Record<string, unknown> {
   if (e.kind === "feed" && e.data.method === "breast") {
     const t = feedTotals(e.data, now);
-    const { segments: _segments, ...rest } = e.data;
+    // Segments and the tap record are the timer's insides; the timeline says it in words.
+    const { segments: _segments, last_tap: _tap, ...rest } = e.data as typeof e.data & { last_tap?: unknown };
     void _segments;
+    void _tap;
     return { ...rest, left_sec: t.left, right_sec: t.right };
   }
   if (e.kind === "moment") {
@@ -523,8 +524,8 @@ const sideParts = (parts: Part[]) => parts.filter((p): p is SidePart => p.kind =
 /** "Left 4:00–4:10", "break 10 min", "Right since 4:20 (5 min so far)", "on a break since 4:10 (15 min so far)". */
 function partText(p: Part, ctx: Ctx): string {
   const range = formatRange(p.start, p.end, ctx.tz, { compact: true });
-  const soFar = p.end ? "" : ` (${formatMinutes(p.sec)} so far)`;
-  if (p.kind === "break") return p.end ? `break ${formatMinutes(p.sec)}` : `on a break ${range}${soFar}`;
+  const soFar = p.end ? "" : ` (${minutesText(p.min)} so far)`;
+  if (p.kind === "break") return p.end ? `break ${minutesText(p.min)}` : `on a break ${range}${soFar}`;
   return `${SIDE_NAME[p.side]} ${range}${soFar}`;
 }
 
@@ -536,7 +537,7 @@ function partText(p: Part, ctx: Ctx): string {
 function timelineText(e: FeedEntry, ctx: Ctx): string {
   const parts = partsOf(e, ctx);
   const end = !e.active && e.ended_at ? `, ended ${formatTime(e.ended_at, ctx.tz)}` : "";
-  return `${parts.map((p) => partText(p, ctx)).join(", ")}. Total nursing ${formatMinutes(partTotals(parts).nursing)}${end}.`;
+  return `${parts.map((p) => partText(p, ctx)).join(", ")}. Total nursing ${minutesText(partTotals(parts).min.nursing)}${end}.`;
 }
 
 /**
@@ -549,11 +550,11 @@ function nowText(e: FeedEntry, ctx: Ctx): string {
   const parts = partsOf(e, ctx);
   const cur = parts[parts.length - 1];
   if (!cur) return "";
-  const since = `since ${formatTime(cur.start, ctx.tz)} (${formatMinutes(cur.sec)})`;
+  const since = `since ${formatTime(cur.start, ctx.tz)} (${minutesText(cur.min)})`;
   const head = cur.kind === "break" ? `On a break ${since}.` : `${SIDE_NAME[cur.side]} side ${since}.`;
   const past = parts.slice(0, -1);
   if (!past.length) return head;
-  return `${head} ${past.map((p) => partText(p, ctx)).join(", ")}; total nursing ${formatMinutes(partTotals(parts).nursing)}.`;
+  return `${head} ${past.map((p) => partText(p, ctx)).join(", ")}; total nursing ${minutesText(partTotals(parts).min.nursing)}.`;
 }
 
 /** The parts for JSON, in order, in whole minutes (as the card rounds them). */
@@ -1566,10 +1567,10 @@ function timerLine(e: Entry, ctx: Ctx): string {
     const parts = partsOf(e, ctx);
     const cur = parts[parts.length - 1];
     if (!cur) return `Nursing timer running since ${formatTime(e.started_at, ctx.tz)}, started by ${by} [timer #${e.id}].`;
-    const since = `since ${formatTime(cur.start, ctx.tz)} (${formatMinutes(cur.sec)})`;
+    const since = `since ${formatTime(cur.start, ctx.tz)} (${minutesText(cur.min)})`;
     const where = cur.kind === "break" ? `paused ${since}` : `on the ${sideWord(cur.side)} ${since}`;
     const past = parts.slice(0, -1).map((p) => partText(p, ctx));
-    const rest = past.length ? `; ${past.join(", ")}; total nursing ${formatMinutes(partTotals(parts).nursing)}` : "";
+    const rest = past.length ? `; ${past.join(", ")}; total nursing ${minutesText(partTotals(parts).min.nursing)}` : "";
     return `Nursing ${where}${rest}, started by ${by} [timer #${e.id}].`;
   }
   return `${TIMER_LABEL[e.kind as TimerKind].replace(/^./, (c) => c.toUpperCase())} timer running: ${elapsed} since ${formatTime(e.started_at, ctx.tz)} (started by ${by}) [timer #${e.id}].`;
@@ -1584,8 +1585,9 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   if (f.data.method === "bottle") {
     return `Last feed: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${f.data.milk ? ` of ${f.data.milk === "breastmilk" ? "breast milk" : f.data.milk}` : ""} at ${when}.`;
   }
-  const t = feedTotals(f.data, ctx.now);
-  const sides = [t.left > 0 ? `L ${formatDuration(t.left)}` : "", t.right > 0 ? `R ${formatDuration(t.right)}` : ""].filter(Boolean).join(", ");
+  // The same whole minutes the app shows for this feed (feedMinutes).
+  const t = feedMinutes(f, ctx.now);
+  const sides = (["L", "R"] as const).filter((x) => t.has[x]).map((x) => `${x} ${minutesShort(x === "L" ? t.left : t.right)}`).join(", ");
   const first = f.data.first_side ? `, started on the ${sideWord(f.data.first_side)}` : "";
   return `Last feed: nursed at ${when}${sides ? `: ${sides}` : ""}${first}.`;
 }
@@ -2084,10 +2086,12 @@ async function runningFeed(id: number | null | undefined, ctx: Ctx, none: string
 async function switchResult(
   timer: FeedEntry,
   to: Side | undefined,
-  at: Date | null,
+  asked: Date | null,
   ctx: Ctx,
   opts: { assumed: string[]; lead?: string[]; extra?: Record<string, unknown> }
 ): Promise<CallToolResult> {
+  // minutes_ago: 0 or at: "now" ("she's on the right now") is the plain tap, never a move to now.
+  const at = asked && Math.abs(ctx.now.getTime() - asked.getTime()) < MIN ? null : asked;
   const parts = partsOf(timer, ctx);
   const cur = parts[parts.length - 1];
   const open = cur?.kind === "side" && cur.end === null ? cur : null;
@@ -2122,8 +2126,9 @@ async function switchResult(
     return reply(r.entry as FeedEntry, { switched: false, moved: true, ...(note ? { clamped: true } : {}), ...(token ? { undo: undoHint(token) } : {}) });
   };
 
-  // What a switch or resume answered: noop, reverted (switched back within 15 s), merged, clamped.
-  const tapped = (r: TimerResponse, resuming: boolean) => {
+  // What a switch or resume answered: noop, reverted (switched back within 15 s), merged, clamped, or moved
+  // (a resume at a time found her already back on that side, from another phone, so when she went back on moved).
+  const tapped = (r: SwitchResponse, resuming: boolean) => {
     const e = r.entry as FeedEntry;
     const now = partsOf(e, ctx);
     const last = now[now.length - 1];
@@ -2131,15 +2136,22 @@ async function switchResult(
     const name = SIDE_NAME[side];
     const from = last ? whenText(last.start, ctx) : whenText(ctx.now, ctx);
     const breakAt = cur?.kind === "break" ? formatTime(cur.start, ctx.tz) : "";
+    const wasOn = r.before?.segments.at(-1)?.start;
     if (r.noop) lines.push(`She's already on the ${sideWord(side)} side (timer #${e.id}). Nothing changed.`);
-    else if (r.reverted) lines.push(`Back on the ${name}: the switch a moment ago is undone (timer #${e.id}).`);
+    else if (r.moved && r.clamped) {
+      lines.push(
+        `She was already back on the ${name}${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}. The break began at ${breakAt}, so ${name} now carries on from then with no break (timer #${e.id}).`
+      );
+    } else if (r.moved) {
+      lines.push(`She was already back on the ${name}${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}, so that now starts ${whenText(at ?? ctx.now, ctx)} (timer #${e.id}).`);
+    } else if (r.reverted) lines.push(`Back on the ${name}: the switch a moment ago is undone (timer #${e.id}).`);
     else if (r.merged && r.clamped) lines.push(`Back on the ${name} with no break: the break began at ${breakAt}, so ${name} carries on from then (timer #${e.id}).`);
     else if (r.merged) lines.push(`Back on the ${name} with no break: she was off under a minute (timer #${e.id}).`);
     else if (resuming) {
       lines.push(`Back on the ${name} side from ${from} (timer #${e.id}).${r.clamped ? ` The break began at ${breakAt}, so ${name} starts then (no break).` : ""}`);
     } else lines.push(`Switched to the ${name} side at ${from} (timer #${e.id}).`);
     // undo_last_tap follows intent (it survives the other phone's taps); a merge or revert has no tap left to undo.
-    const token = r.merged || r.reverted || r.clamped ? undoToken(r) : null;
+    const token = r.merged || r.reverted || r.clamped || r.moved ? undoToken(r) : null;
     const undo = r.noop ? {} : { undo: token ? undoHint(token) : "fix_nursing_time {undo_last_tap:true}" };
     return reply(e, {
       switched: !r.noop,
@@ -2147,6 +2159,7 @@ async function switchResult(
       ...(r.clamped ? { clamped: true } : {}),
       ...(r.merged ? { merged: true } : {}),
       ...(r.reverted ? { reverted: true } : {}),
+      ...(r.moved ? { moved: true } : {}),
       ...undo,
     });
   };
@@ -2156,7 +2169,7 @@ async function switchResult(
       try {
         return tapped(await switchSide(timer.id, to, at, ctx.who.id), false);
       } catch (err) {
-        if (err instanceof FeedEditError && err.code === "before_own_start") {
+        if (err instanceof FeedEditError && err.code === "before_own_start" && !err.params.first) {
           throw new ToolError(
             `${feedEditCopy(err, "mcp", ctx.tz)} To move when ${SIDE_NAME[open.side]} started instead, use fix_nursing_time {part:"current_side", at:"${atArg(at, ctx)}"}.`
           );
@@ -2192,9 +2205,10 @@ async function switchResult(
     }
     return tapped(await switchSide(timer.id, side, undefined, ctx.who.id), false);
   }
-  // Paused: back on `to`, or the side she didn't just come off.
+  // Paused: back on `to`, or the side she didn't just come off. With a time it's a resume of the feed as seen
+  // paused: if another phone resumed it since, that side's start moves (moved), the other side is a "changed" error.
   const lastSide = cur?.kind === "break" ? cur.before.side : timer.data.last_side ?? "L";
-  return tapped(await switchSide(timer.id, to ?? other(lastSide), at ?? undefined, ctx.who.id), true);
+  return tapped(await switchSide(timer.id, to ?? other(lastSide), at ?? undefined, ctx.who.id, { resume: true }), true);
 }
 
 /** fix_nursing_time's feed: the id given, else the running one, else the latest timed one that ended in the last 12 hours. */
@@ -2691,10 +2705,9 @@ export function registerMapleTools(server: McpServer) {
       const prior = ref && clientId ? await priorForRef(ctx, ref, clientId, kind, null) : null;
       const live = kind === "feed" ? ((await activeTimers(ctx.baby.id)).find((e) => e.kind === "feed") as FeedEntry | undefined) : undefined;
       if (live && prior?.id !== live.id) {
-        // A feed left running (nobody tapped Done) isn't this one: switching it would glue two feeds together.
+        // A feed left running (nobody tapped Done) isn't this one: switching it would glue two feeds together (Siri's nurse_* uses the same rule).
         const sides = sideParts(partsOf(live, ctx));
-        const newest = Math.max(ts(live), ...sides.flatMap((p) => [Date.parse(p.start), p.end ? Date.parse(p.end) : 0]));
-        if (ctx.now.getTime() - ts(live) > HOUR || (given && given.getTime() - newest > 30 * MIN)) {
+        if (staleFeed(live, ctx.now, given)) {
           throw new ToolError(
             `A nursing timer from ${formatTime(live.started_at, ctx.tz)} is still running (${ageText(ctx.now.getTime() - ts(live))}). Stop it first (stop_timer with at), then start the new feed.`
           );
@@ -3063,19 +3076,19 @@ export function registerMapleTools(server: McpServer) {
         if (!feed.active) {
           throw new ToolError(`#${feed.id} already ended, so there's no tap to undo. If it was stopped by mistake, reopen_timer with id ${feed.id} brings it back.`);
         }
-        // expect = the newest stretch as it is now, so a tap the other phone just made isn't the one undone.
+        // expect = the newest stretch as it is now, so a tap the other phone just made isn't the one undone. Which tap comes
+        // back is the store's call (the tap it recorded, not an older one the stretches show), so say it from the result.
         const sides = sideParts(partsOf(feed, ctx));
         const L = sides[sides.length - 1];
         if (!L) throw new FeedEditError("not_timed");
-        if (L.end === null && L.startMoment === "feed_start") throw new FeedEditError("nothing_to_undo");
-        const prev = sides[sides.length - 2];
         const r = await retimeFeed(feed.id, { op: "undo_tap", expect: { side: L.side, start: L.start, end: L.end } }, ctx.who.id);
+        const after = sideParts(partsOf(r.entry as FeedEntry, ctx)).pop();
         const note =
-          L.end !== null
-            ? `(Pause undone: ${SIDE_NAME[L.side]} still going.)`
-            : L.startMoment === "switch"
-              ? `(Switch undone: back on ${prev ? SIDE_NAME[prev.side] : SIDE_NAME[other(L.side)]}.)`
-              : `(Back to paused: on a break since ${prev?.end ? formatTime(prev.end, ctx.tz) : "then"}.)`;
+          !after || after.end !== null
+            ? `(Back to paused: on a break since ${after?.end ? formatTime(after.end, ctx.tz) : "then"}.)`
+            : L.end !== null
+              ? `(Pause undone: ${SIDE_NAME[after.side]} still going.)`
+              : `(Switch undone: back on ${SIDE_NAME[after.side]}.)`;
         return fixResult(r, note, ctx);
       }
 
@@ -3704,18 +3717,24 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       if (!start && !end && !data && note === undefined) throw new ToolError("Nothing to change: give a new time, end, note or details.");
       const before = phrase(cur, ctx.now);
       let updated: Entry;
-      if (start && cur.active && isTimedFeed(cur)) {
-        // A running feed's start is the feed_start moment: the same move (and nap follow) as Fix times.
-        updated = await adjustTimerStart(cur.id, start, ctx.who.id);
-        if (data || note !== undefined) updated = await updateEntry(cur.id, { data, note }, ctx.who.id);
+      let moved: TimerResponse | null = null;
+      if (start && !end && isTimedFeed(cur)) {
+        // A timed feed's start is the feed_start moment: the same move as fix_nursing_time {part:"feed_start"}, so the
+        // nap that ran into it follows and the reply carries an undo. Details and note first, so the undo's check is the move's.
+        if (data || note !== undefined) await updateEntry(cur.id, { data, note }, ctx.who.id);
+        moved = await retimeFeed(cur.id, { op: "move", edge: "start", to: start.toISOString() }, ctx.who.id);
+        updated = moved.entry;
       } else {
         updated = await updateEntry(cur.id, { startedAt: start ?? undefined, endedAt: end ?? undefined, data, note }, ctx.who.id);
       }
+      const token = moved && !moved.noop ? undoToken(moved) : null;
       const { alerts, emergencySigns } = await entryAlerts(updated, ctx);
       const timeline = isTimedFeed(updated) ? partsOf(updated, ctx) : null;
       const lines = [
         `Updated #${updated.id}: now ${phrase(updated, ctx.now)} at ${whenText(updated.started_at, ctx)}${updated.ended_at ? ` until ${formatTime(updated.ended_at, ctx.tz)}` : ""} (was: ${before}, ${whenText(cur.started_at, ctx)}).`,
         ...(timeline && timeline.length > 1 ? [updated.active ? nowText(updated as FeedEntry, ctx) : timelineText(updated as FeedEntry, ctx)] : []),
+        ...(moved ? napLines(moved, ctx) : []),
+        ...(token ? [`To put the start back: ${undoHint(token)}.`] : []),
         ...assumedLine(assumed),
         ...alertLines(sortAlerts(alerts), { emergencySigns }),
       ];
@@ -3724,8 +3743,10 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         ...entryJson(updated, ctx),
         details: compactData(updated, ctx.now),
         ...(timeline ? { timeline: timelineJson(timeline, ctx) } : {}),
+        ...(moved?.nap ? { nap: { id: moved.nap.entry.id, ended_local: moved.nap.entry.ended_at ? localWhen(moved.nap.entry.ended_at, ctx) : null } } : {}),
         alerts,
         ...(assumed.length ? { assumed } : {}),
+        ...(token ? { undo: undoHint(token) } : {}),
       });
     }
   );
@@ -3836,7 +3857,9 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
           `Nothing was removed. Your last action was a change to #${edited.id} (${phrase(edited, ctx.now)}, ${span}) at ${formatTime(edited.updated_at, ctx.tz)}, ${edited.active ? "and it's still running" : "not a new entry"}. undo_last only takes back entries you just added.`,
           ...(reopenable ? [`If that timer was stopped by mistake, reopen_timer with id ${edited.id} starts it again.`] : []),
           // A nursing tap or time fix has its own undo, which moves only that one moment back.
-          ...(edited.active && isTimedFeed(edited) ? [`If it was a mistaken switch, pause or going back on, fix_nursing_time {undo_last_tap:true} takes that tap back.`] : []),
+          ...(edited.active && isTimedFeed(edited) && undoableTap(edited.data, feedCtx(edited, ctx.now))
+            ? [`If it was a mistaken switch, pause or going back on, fix_nursing_time {undo_last_tap:true} takes that tap back.`]
+            : []),
           ...(isTimedFeed(edited)
             ? [`If it was a time fix with fix_nursing_time, call fix_nursing_time with the undo token from that reply ({undo:"u1…"}), or fix the time again with fix_nursing_time.`]
             : [`To fix that change use update_entry with id ${edited.id} (for example a different end time or details).`]),

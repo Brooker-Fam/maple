@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { errorResponse, json } from "@/lib/maple/api";
 import { listMembers, memberFor } from "@/lib/maple/auth";
 import { describeEntry } from "@/lib/maple/describe";
+import { staleFeed } from "@/lib/maple/feed";
 import { TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { summarize } from "@/lib/maple/insights";
 import {
@@ -95,6 +96,11 @@ export async function POST(request: NextRequest) {
       case "nurse_left":
       case "nurse_right": {
         const s = action === "nurse_left" ? "L" : "R";
+        // A feed nobody tapped Done on (MCP start_timer's rule): switching sides on it would glue this feed onto that one.
+        if (runningFeed && staleFeed({ started_at: runningFeed.started_at, data: runningFeed.data as FeedData }, now)) {
+          speak = `A feed from ${formatTime(runningFeed.started_at, tz)} is still running. Stop that one first, then start the new feed.`;
+          break;
+        }
         if (runningSleep) await stopTimer(runningSleep.id, undefined, me.email);
         ({ entry } = await startTimer({ ...base, kind: "feed", side: s, at: now, clientId }));
         speak = `Nursing timer running on the ${side(s)}.`;

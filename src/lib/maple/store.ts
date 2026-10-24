@@ -8,6 +8,7 @@ import {
   normalizeSegments,
   openSegment,
   pause as pauseFeed,
+  restoredTap,
   retimeBreast,
   setSide,
   startBreast,
@@ -16,6 +17,7 @@ import {
   switchTo,
   undoLastTap,
   type Moment,
+  type TapFeedData,
 } from "./feed";
 import { cleanData } from "./validate";
 import type {
@@ -358,6 +360,8 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
     if (cur.kind === "moment") delete incoming.photos;
     // Running nursing sessions keep their segments; timer actions edit those.
     if (cur.active) delete incoming.segments;
+    // The tap record is the taps' own (undo reads it), never a client's.
+    delete incoming.last_tap;
     mergedData = { ...mergedData, ...incoming };
     for (const [k, v] of Object.entries(incoming)) if (v === null) delete mergedData[k];
   }
@@ -380,6 +384,8 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
   if (cur.kind === "feed" && !cur.active && mergedData.method === "breast" && Array.isArray(patch.data?.segments) && Array.isArray(mergedData.segments)) {
     const now = new Date();
     const segments = normalizeSegments(mergedData.segments as Segment[], { active: false });
+    // Sent as [] (an old or hand-made client): a timed feed is its parts, so that's a 400, not a crash.
+    if (!segments.length) throw new Error("A timed feed needs at least one side");
     noFutureEnds(segments, now);
     mergedData = { ...mergedData, segments, ...summarize(segments) };
     startedAt = new Date(segments[0].start);
@@ -543,7 +549,8 @@ type TimerWrite = {
   /** Finished entries only; omitted keeps the stored one. */
   endedAt?: string | null;
   active?: boolean;
-  flags?: Pick<TimerResponse, "clamped" | "merged" | "reverted">;
+  /** moved: a resume at a time found her already back on that side, so that one start moved instead. */
+  flags?: Pick<TimerResponse, "clamped" | "merged" | "reverted"> & { moved?: true };
 };
 
 const CAS_ATTEMPTS = 3;
@@ -610,13 +617,6 @@ async function mutateTimer(
   throw changed(latest);
 }
 
-async function runningTimer(id: number): Promise<Entry> {
-  const e = await getEntry(id, { includeDeleted: true });
-  if (!e) throw new NotFound(`Timer ${id} not found`);
-  if (!e.active) throw new Conflict("That timer already stopped", e);
-  return e;
-}
-
 /**
  * Start a timer. Idempotent per kind: if one is already running (say, the
  * other parent started it a second ago), return that one, switching sides if
@@ -678,26 +678,35 @@ function tapTime(at: Date | undefined, now: Date): Date {
   return t > now.getTime() ? now : at;
 }
 
+/** switchSide's answer: `moved` when a resume at a time moved when she went back on instead (see below). */
+export type SwitchResponse = TimerResponse & { moved?: true };
+
 /**
  * Switch sides, or resume on a side while paused, now or at `at`. Already on
- * that side: noop. It never moves a stretch that's already there; fixing one
- * is retimeFeed's job.
+ * that side: noop. A tap never moves a stretch that's already there; fixing
+ * one is retimeFeed's job. The one exception is `resume` with a time (the
+ * paused sheet's "Already back on? 5 min ago", made against a feed the other
+ * phone has since resumed): on that side, an earlier time moves when she
+ * went back on (`moved`, with `before` for "Back to …"); on the other side
+ * it's 409 "changed", since what the person saw is gone (switchTo).
  */
-export async function switchSide(id: number, side: Side, at: Date | undefined, by?: string): Promise<TimerResponse> {
-  const t = tapTime(at, new Date());
+export async function switchSide(id: number, side: Side, at: Date | undefined, by?: string, opts: { resume?: boolean } = {}): Promise<SwitchResponse> {
+  const now = new Date();
+  const t = tapTime(at, now);
   return mutateTimer(id, (cur) => {
     if (cur.kind !== "feed") throw new Error("Only nursing timers have sides");
-    const { data, noop, ...flags } = switchTo(cur.data, side, t, { explicit: at !== undefined });
+    const { data, noop, ...flags } = switchTo(cur.data, side, t, { explicit: at !== undefined, resume: opts.resume, now });
     return noop ? null : { data, flags };
   }, { by });
 }
 
 /** Pause the open side now or at `at` (when she came off). Already paused: noop. */
 export async function pauseTimer(id: number, at: Date | undefined, by?: string): Promise<TimerResponse> {
-  const t = tapTime(at, new Date());
+  const now = new Date();
+  const t = tapTime(at, now);
   return mutateTimer(id, (cur) => {
     if (cur.kind !== "feed") throw new Error("Only nursing timers can pause");
-    const paused = pauseFeed(cur.data, t, { explicit: at !== undefined });
+    const paused = pauseFeed(cur.data, t, { explicit: at !== undefined, now });
     return paused.noop ? null : { data: paused.data };
   }, { by });
 }
@@ -773,7 +782,14 @@ function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): T
   const segments = normalizeSegments(edit.segments, { active: cur.active });
   noFutureEnds(segments, new Date());
   const sides = summarize(segments);
-  if (cur.active) return { data: { ...d, segments, first_side: sides.first_side, last_side: sides.last_side } };
+  if (cur.active) {
+    // The latest tap stays only if it still fits the stretches put back ("Put it back" after an undo brings it back too).
+    const data: TapFeedData = { ...d, segments, first_side: sides.first_side, last_side: sides.last_side };
+    const tap = restoredTap(d, segments, true);
+    if (tap) data.last_tap = tap;
+    else delete data.last_tap;
+    return { data };
+  }
   const lastEnd = Date.parse(segments[segments.length - 1].end!);
   if (!edit.ended_at || Date.parse(edit.ended_at) < lastEnd - NEAR) throw new Error("A finished feed can't end before its last side");
   const end = Math.max(Date.parse(edit.ended_at), lastEnd);
@@ -843,51 +859,79 @@ export async function adjustTimerStart(id: number, at: Date, by?: string): Promi
   return (await mutateTimer(id, (cur) => ({ data: cur.data, startedAt: at.toISOString() }), { by })).entry;
 }
 
-export async function discardTimer(id: number, by?: string): Promise<Entry> {
-  await runningTimer(id);
-  return softDeleteEntry(id, by);
+/**
+ * Throw away a running timer (soft delete; Undo restores it). With
+ * `expectUpdatedAt` (the start toast's Undo, sent with the start's answer),
+ * only that version goes: if someone switched, paused or fixed it since,
+ * 409 "changed" and nothing is thrown away.
+ */
+export async function discardTimer(id: number, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
+  // Already discarded is a 404 (who did it: discardedBy), never a 409 carrying the deleted row.
+  const cur = await getEntry(id);
+  if (!cur) throw new NotFound(`Timer ${id} not found`);
+  if (!cur.active) throw new Conflict("That timer already stopped", cur);
+  if (opts.expectUpdatedAt === undefined) return softDeleteEntry(id, by);
+  if (!sameInstant(opts.expectUpdatedAt, cur.updated_at)) throw changed(cur);
+  const rows = await q(
+    `UPDATE maple_entries SET deleted_at = NOW(), updated_by = COALESCE($2, updated_by), updated_at = NOW()
+     WHERE id = $1 AND deleted_at IS NULL AND active
+       AND updated_at BETWEEN $3::timestamptz - INTERVAL '1 millisecond' AND $3::timestamptz + INTERVAL '1 millisecond'
+     RETURNING *`,
+    [id, by ?? null, opts.expectUpdatedAt]
+  );
+  if (rows.length) return rowToEntry(rows[0]);
+  // Lost the race: stopped, discarded or changed in between.
+  const now = await getEntry(id);
+  if (!now) throw new NotFound(`Timer ${id} not found`);
+  if (!now.active) throw new Conflict("That timer already stopped", now, "stopped");
+  throw changed(now);
+}
+
+/**
+ * Who discarded an entry, when `id` is a soft-deleted one (its updated_by,
+ * which the delete wrote): for a 404 that can say "Brittany discarded this
+ * feed". undefined when it isn't deleted (or doesn't exist).
+ */
+export async function discardedBy(id: number): Promise<string | null | undefined> {
+  const rows = await q(`SELECT updated_by FROM maple_entries WHERE id = $1 AND deleted_at IS NOT NULL`, [id]);
+  if (!rows.length) return undefined;
+  return rows[0].updated_by == null ? null : String(rows[0].updated_by);
 }
 
 /**
  * Undo a stop ("Done" tapped by mistake): the timer runs again as if it never
  * stopped. A nursing session reopens the side it ended on, unless it was
- * paused when it stopped, in which case it comes back paused.
+ * paused when it stopped, in which case it comes back paused. Built from the
+ * row as read and written only if it's still that row (mutateTimer), so a
+ * fix the other phone saved on the finished feed meanwhile isn't overwritten:
+ * the reopen re-reads and applies to the fixed feed.
  */
 export async function reopenTimer(id: number, by?: string): Promise<Entry> {
-  const e = await getEntry(id);
-  if (!e) throw new NotFound(`Timer ${id} not found`);
-  if (e.active) return e;
-  if (!["feed", "sleep", "tummy", "pump"].includes(e.kind)) throw new Error("Only a timer can be reopened");
-  let data: unknown = e.data;
-  if (e.kind === "feed") {
-    const d = e.data as FeedData;
-    if (!d.segments?.length) throw new Error("That feed wasn't timed, so it can't restart");
-    const segs = d.segments.map((s) => ({ ...s }));
-    const last = segs[segs.length - 1];
-    // Stopped at its pause (paused_at_stop): the last side stays closed. Otherwise
-    // the side that ran to the stop reopens; a discarded-then-restored timer
-    // never stopped (ended_at null), so its open side is still open.
-    if (!d.paused_at_stop && last.end && e.ended_at && Math.abs(Date.parse(last.end) - Date.parse(e.ended_at)) < NEAR) last.end = null;
-    const rest: FeedData = { ...d, segments: segs };
-    delete rest.left_sec;
-    delete rest.right_sec;
-    delete rest.paused_at_stop;
-    data = rest;
-  }
   try {
-    const rows = await q(
-      `UPDATE maple_entries SET active = TRUE, ended_at = NULL, data = $2::jsonb,
-         updated_by = COALESCE($3, updated_by), updated_at = NOW()
-       WHERE id = $1 AND deleted_at IS NULL AND NOT active RETURNING *`,
-      [id, JSON.stringify(data), by ?? null]
-    );
-    if (rows.length) return rowToEntry(rows[0]);
-    const cur = await getEntry(id);
-    if (!cur) throw new NotFound(`Timer ${id} not found`);
-    return cur;
+    const res = await mutateTimer(id, (e) => {
+      if (e.active) return null;
+      if (!["feed", "sleep", "tummy", "pump"].includes(e.kind)) throw new Error("Only a timer can be reopened");
+      if (e.kind !== "feed") return { data: e.data, active: true, endedAt: null };
+      const d = e.data as FeedData;
+      if (!d.segments?.length) throw new Error("That feed wasn't timed, so it can't restart");
+      const segs = d.segments.map((s) => ({ ...s }));
+      const last = segs[segs.length - 1];
+      // Stopped at its pause (paused_at_stop): the last side stays closed. Otherwise
+      // the side that ran to the stop reopens; a discarded-then-restored timer
+      // never stopped (ended_at null), so its open side is still open.
+      if (!d.paused_at_stop && last.end && e.ended_at && Math.abs(Date.parse(last.end) - Date.parse(e.ended_at)) < NEAR) last.end = null;
+      const rest: FeedData = { ...d, segments: segs };
+      delete rest.left_sec;
+      delete rest.right_sec;
+      delete rest.paused_at_stop;
+      return { data: rest, active: true, endedAt: null };
+    }, { by, allowFinished: true });
+    return res.entry;
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
-    throw new Conflict("Another timer of that kind is running now", e, "clash");
+    const cur = await getEntry(id);
+    if (!cur) throw new NotFound(`Timer ${id} not found`);
+    throw new Conflict("Another timer of that kind is running now", cur, "clash");
   }
 }
 

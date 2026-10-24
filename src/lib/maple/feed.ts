@@ -12,13 +12,17 @@
  * neighbouring side, and every result goes through normalizeSegments, so
  * sub-second double taps vanish and touching same-side stretches merge.
  */
-import { DEFAULT_TZ, formatMinutes, formatRange, formatTime, formatTimeNear } from "./time";
+import { DEFAULT_TZ, formatDuration, formatMinutes, formatRange, formatTime, formatTimeNear } from "./time";
 import type { FeedData, Segment, Side, StretchRef } from "./types";
 
 export type { StretchRef } from "./types";
 
 export type Moment = "feed_start" | "switch" | "pause" | "resume" | "feed_end";
 
+/**
+ * `sec` is exact (live m:ss clocks); `min` is the whole minutes every other
+ * surface shows (spanMinutes: the difference of the displayed clock times).
+ */
 export type Part =
   | {
       kind: "side";
@@ -26,11 +30,12 @@ export type Part =
       start: string;
       end: string | null;
       sec: number;
+      min: number;
       ref: StretchRef;
       startMoment: "feed_start" | "switch" | "resume";
       endMoment: "switch" | "pause" | "feed_end" | null;
     }
-  | { kind: "break"; start: string; end: string | null; sec: number; before: StretchRef; after: StretchRef | null; legacy?: true };
+  | { kind: "break"; start: string; end: string | null; sec: number; min: number; before: StretchRef; after: StretchRef | null; legacy?: true };
 
 export type FeedEditCode =
   | "future"
@@ -62,6 +67,30 @@ export class FeedEditError extends Error {
     this.message = feedEditCopy(this, "ui", DEFAULT_TZ);
   }
 }
+
+/**
+ * The latest switch, resume or pause, as switchTo and pause record it in
+ * `data.last_tap`, so undoLastTap takes back that tap and not an older one
+ * the stretches happen to show: a same-side resume within a minute
+ * (merged) leaves no break behind, and a switch back within 15 s (reverted)
+ * leaves only the side before it. `at` is when it was tapped (how fresh a
+ * "Tapped … by mistake?" offer is), not the moment it recorded; `paused_at`
+ * is where a resume's break began; `undone` once undoLastTap took it back.
+ */
+export type LastTap = {
+  kind: "switch" | "resume" | "pause";
+  side: Side;
+  at: string;
+  paused_at?: string;
+  merged?: true;
+  reverted?: true;
+  undone?: true;
+};
+
+/** FeedData with the tap record (kept by validate.ts; types.ts's FeedData doesn't list it). */
+export type TapFeedData = FeedData & { last_tap?: LastTap };
+
+const lastTapOf = (data: FeedData): LastTap | undefined => (data as TapFeedData).last_tap;
 
 /** What feedParts and the edits need to know about the entry around the data. */
 export type FeedCtx = { now: Date; active: boolean; endedAt: string | null; pausedAtStop?: boolean };
@@ -106,6 +135,61 @@ export function sideTotals(segments: Segment[] | undefined, now: Date): { left: 
     else right += sec;
   }
   return { left: Math.round(left), right: Math.round(right) };
+}
+
+// ── whole minutes ────────────────────────────────────────────────────────
+
+/**
+ * The one rule for whole minutes of nursing, on every row, total, toast and
+ * preview (live m:ss clocks stay in seconds): a part counts the difference
+ * of the clock minutes it's shown with, so "2:27 – 2:36 AM" is 9 min
+ * whatever the seconds. A part whose two ends show the same minute counts 0
+ * and reads "<1 min", even at 50 s: a rounded-up "1 min" beside "2:27 –
+ * 2:27" would contradict its own range, and break the sums. Likewise a 20 s
+ * break shown as "2:16 – 2:17" is 1 min, as it reads. A side is the sum
+ * of its parts and a feed the sum of its sides, so "Nursed 36m (L 12 · R
+ * 24)" adds up, and sides plus breaks come to the feed's own clock span.
+ * (Epoch minutes are the zone's clock minutes: every offset in use is whole
+ * minutes, and formatTime drops seconds rather than rounding them.)
+ */
+export function spanMinutes(start: Date | number | string, end: Date | number | string): number {
+  const minute = (t: Date | number | string) => Math.floor(new Date(t).getTime() / MIN);
+  return Math.max(0, minute(end) - minute(start));
+}
+
+/** "9 min", "1h 12m"; 0 (some time, but no whole clock minute) reads "<1 min". */
+export const minutesText = (min: number): string => (min > 0 ? formatMinutes(min * 60) : "<1 min");
+
+/** The short form lists and toasts use: "12m", "1h 05m", "<1m". */
+export const minutesShort = (min: number): string => (min > 0 ? formatDuration(min * 60) : "<1m");
+
+/** Whole minutes of a feed per side and in all (left + right); `has` is which sides she was on at all. */
+export type FeedMinutes = { left: number; right: number; total: number; has: Record<Side, boolean> };
+
+/**
+ * A feed's whole minutes, its rows added up (spanMinutes), for lists, the
+ * day's totals, "Last fed" and the Done toast. A running feed counts up to
+ * now. Fed by typed minutes (no segments), the stored seconds round.
+ */
+export function feedMinutes(e: { active: boolean; ended_at: string | null; data: FeedData }, now: Date): FeedMinutes {
+  const d = e.data;
+  if (d.segments?.length) {
+    const parts = feedParts(d, feedCtx(e, now));
+    const t = partTotals(parts).min;
+    const has = (side: Side) => parts.some((p) => p.kind === "side" && p.side === side);
+    return { left: t.left, right: t.right, total: t.nursing, has: { L: has("L"), R: has("R") } };
+  }
+  const left = Math.round((d.left_sec ?? 0) / 60);
+  const right = Math.round((d.right_sec ?? 0) / 60);
+  return { left, right, total: left + right, has: { L: (d.left_sec ?? 0) > 0, R: (d.right_sec ?? 0) > 0 } };
+}
+
+/** "L 12 · R 24" ("L <1" for a side under a minute), the sides of "Nursed 36m (L 12 · R 24)". */
+export function sideMinutesText(t: FeedMinutes, sep = " · "): string {
+  return (["L", "R"] as const)
+    .filter((s) => t.has[s])
+    .map((s) => `${s} ${(s === "L" ? t.left : t.right) || "<1"}`)
+    .join(sep);
 }
 
 // ── stretches ────────────────────────────────────────────────────────────
@@ -256,18 +340,20 @@ export function feedParts(data: FeedData, ctx: FeedCtx): Part[] {
   const now = ctx.now.getTime();
   const { endedAt, legacy } = ending(S, data, ctx);
   const parts: Part[] = [];
+  // Exact seconds for the live clocks, and the whole minutes everything else shows.
+  const len = (a: number, b: number) => ({ sec: secs(b - a), min: spanMinutes(a, b) });
   S.forEach((s, i) => {
     const p = S[i - 1];
     const n = S[i + 1];
     if (p?.end != null && s.start > p.end) {
-      parts.push({ kind: "break", start: iso(p.end), end: iso(s.start), sec: secs(s.start - p.end), before: refOf(p), after: refOf(s) });
+      parts.push({ kind: "break", start: iso(p.end), end: iso(s.start), ...len(p.end, s.start), before: refOf(p), after: refOf(s) });
     }
     parts.push({
       kind: "side",
       side: s.side,
       start: iso(s.start),
       end: s.end === null ? null : iso(s.end),
-      sec: secs((s.end ?? (ctx.active ? now : endedAt ?? now)) - s.start),
+      ...len(s.start, s.end ?? (ctx.active ? now : endedAt ?? now)),
       ref: refOf(s),
       startMoment: !p ? "feed_start" : p.end === s.start ? "switch" : "resume",
       endMoment: s.end === null ? null : n ? (n.start === s.end ? "switch" : "pause") : ctx.active || legacy ? "pause" : "feed_end",
@@ -275,25 +361,43 @@ export function feedParts(data: FeedData, ctx: FeedCtx): Part[] {
   });
   const last = S[S.length - 1];
   if (last?.end != null) {
-    if (ctx.active) parts.push({ kind: "break", start: iso(last.end), end: null, sec: secs(now - last.end), before: refOf(last), after: null });
+    if (ctx.active) parts.push({ kind: "break", start: iso(last.end), end: null, ...len(last.end, now), before: refOf(last), after: null });
     else if (legacy && endedAt !== null) {
-      parts.push({ kind: "break", start: iso(last.end), end: iso(endedAt), sec: secs(endedAt - last.end), before: refOf(last), after: null, legacy: true });
+      parts.push({ kind: "break", start: iso(last.end), end: iso(endedAt), ...len(last.end, endedAt), before: refOf(last), after: null, legacy: true });
     }
   }
   return parts;
 }
 
-/** Seconds on each side, nursing in all, and in breaks (open ones count up to now). */
-export function partTotals(parts: Part[]): { left: number; right: number; nursing: number; breaks: number; breakCount: number } {
-  const t = { left: 0, right: 0, nursing: 0, breaks: 0, breakCount: 0 };
+/**
+ * Seconds on each side, nursing in all, and in breaks (open ones count up to
+ * now), for the live clocks; `min` is the same in whole minutes (the sums of
+ * the parts' `min`), for everything else.
+ */
+export function partTotals(parts: Part[]): {
+  left: number;
+  right: number;
+  nursing: number;
+  breaks: number;
+  breakCount: number;
+  min: { left: number; right: number; nursing: number; breaks: number };
+} {
+  const t = { left: 0, right: 0, nursing: 0, breaks: 0, breakCount: 0, min: { left: 0, right: 0, nursing: 0, breaks: 0 } };
   for (const p of parts) {
     if (p.kind === "break") {
       t.breaks += p.sec;
+      t.min.breaks += p.min;
       t.breakCount++;
     } else {
-      if (p.side === "L") t.left += p.sec;
-      else t.right += p.sec;
+      if (p.side === "L") {
+        t.left += p.sec;
+        t.min.left += p.min;
+      } else {
+        t.right += p.sec;
+        t.min.right += p.min;
+      }
       t.nursing += p.sec;
+      t.min.nursing += p.min;
     }
   }
   return t;
@@ -504,17 +608,65 @@ export function addPart(
   return { data: next, startedAt: iso(out[0].start), endedAt: iso(Math.max(was, end)) };
 }
 
+export type TapWhat = "switch" | "resume" | "pause";
+
+/**
+ * How the latest tap comes back off the stretches S (mutating them), or why
+ * it can't: "only" (just the start tap), "taken_back" (it was undone, or
+ * itself undid a switch), "changed" (later fixes reshaped what it made).
+ * With no tap recorded (feeds from before taps were), it's read off the
+ * newest stretch. `at` is when it was tapped (the moment, unrecorded).
+ */
+function tapUndo(S: Stretch[], tap: LastTap | undefined): { what: TapWhat; at: number; apply: () => void } | { refuse: "only" | "taken_back" | "changed" } {
+  const L = S[S.length - 1];
+  const P = S[S.length - 2];
+  if (!L) return { refuse: "only" };
+  const tapped = (moment: number) => (tap ? Date.parse(tap.at) : moment);
+  const reopen = () => ({ what: "pause" as const, at: tapped(L.end!), apply: () => void (L.end = null) });
+  const drop = (what: "switch" | "resume") => ({
+    what,
+    at: tapped(L.start),
+    apply: () => {
+      S.pop();
+      if (what === "switch") P.end = null;
+    },
+  });
+  if (!tap) {
+    if (L.end !== null) return reopen();
+    if (!P) return { refuse: "only" };
+    return drop(P.end === L.start ? "switch" : "resume");
+  }
+  if (tap.undone || tap.reverted) return { refuse: "taken_back" };
+  switch (tap.kind) {
+    case "pause":
+      return L.end !== null ? reopen() : { refuse: "changed" };
+    case "switch":
+      return L.end === null && P && P.end === L.start ? drop("switch") : { refuse: "changed" };
+    case "resume": {
+      if (L.end !== null) return { refuse: "changed" };
+      // Back on the same side within a minute merged into it: end it again where the break began.
+      const cut = tap.paused_at ? Date.parse(tap.paused_at) : NaN;
+      if (cut >= L.start + SEC) return { what: "resume", at: tapped(cut), apply: () => void (L.end = cut) };
+      // Its own stretch (after the break, or on the other side right at it): drop it, the break comes back.
+      return P && P.end !== null && P.end <= L.start ? drop("resume") : { refuse: "changed" };
+    }
+  }
+}
+
 /**
  * Undo the latest tap on a running feed, if the newest stretch is still the
  * one the person saw (`expect`): a switch reopens the side before it, a
- * resume goes back to paused, a pause reopens the side. A finished feed is
- * reopened instead (not_timed).
+ * resume goes back to paused (a merged one ends again at its old pause), a
+ * pause reopens the side. It's the tap recorded in last_tap, never an older
+ * one: a tap already undone, or one that switched back, has nothing left to
+ * undo (nothing_to_undo, why taken_back). A finished feed is reopened
+ * instead (not_timed).
  */
 export function undoLastTap(
   data: FeedData,
   expect: { side: Side; start: string; end: string | null },
   opts: { active?: boolean } = {}
-): { data: FeedData; what: "switch" | "resume" | "pause" } {
+): { data: FeedData; what: TapWhat } {
   if (opts.active === false || data.method !== "breast" || !data.segments?.length) throw new FeedEditError("not_timed");
   const S = real(data, true);
   const L = S[S.length - 1];
@@ -522,18 +674,43 @@ export function undoLastTap(
   const same =
     L.side === expect.side && near(L.start, expect.start) && (L.end === null ? expect.end === null : expect.end !== null && near(L.end, expect.end));
   if (!same) throw new FeedEditError("not_newest");
-  let what: "switch" | "resume" | "pause";
-  if (L.end !== null) {
-    L.end = null;
-    what = "pause";
-  } else {
-    const P = S[S.length - 2];
-    if (!P) throw new FeedEditError("nothing_to_undo");
-    S.pop();
-    what = P.end === L.start ? "switch" : "resume";
-    if (what === "switch") P.end = null;
-  }
-  return { data: settle(data, tidy(S, true, true), true), what };
+  const tap = lastTapOf(data);
+  const plan = tapUndo(S, tap);
+  if ("refuse" in plan) throw new FeedEditError("nothing_to_undo", plan.refuse === "only" ? {} : { why: plan.refuse });
+  plan.apply();
+  const out: TapFeedData = settle(data, tidy(S, true, true), true);
+  if (tap) out.last_tap = { ...tap, undone: true };
+  return { data: out, what: plan.what };
+}
+
+/**
+ * What undoLastTap would take back on this feed now, and when that tap was
+ * made, or null when there's nothing to undo: for the "Tapped Switch by
+ * mistake?" / "Didn't mean to pause?" offers, so they only show for the tap
+ * that undo really takes back.
+ */
+export function undoableTap(data: FeedData, ctx: FeedCtx): { what: TapWhat; at: string } | null {
+  if (!ctx.active || data.method !== "breast" || !data.segments?.length) return null;
+  const plan = tapUndo(real(data, true), lastTapOf(data));
+  return "refuse" in plan ? null : { what: plan.what, at: iso(plan.at) };
+}
+
+/**
+ * The tap record to keep once a restore puts `segments` back: the same tap
+ * if it still fits them (no longer undone: "Put it back" after an undo
+ * brings the tap back), else none, so undo reads the restored stretches.
+ */
+export function restoredTap(data: FeedData, segments: Segment[], active: boolean): LastTap | undefined {
+  const tap = lastTapOf(data);
+  if (!tap || !active) return undefined;
+  const { undone: _undone, ...live } = tap;
+  void _undone;
+  const S = tidy(toStretches(segments), true, false);
+  const L = S[S.length - 1];
+  if (!L || L.side !== live.side) return undefined;
+  // One that undid a switch stands while she's on its side; any other has to fit the stretches as undo reads them.
+  if (live.reverted) return L.end === null ? live : undefined;
+  return "refuse" in tapUndo(S, live) ? undefined : live;
 }
 
 export function startBreast(side: Side, at: Date): FeedData {
@@ -547,25 +724,44 @@ export function startBreast(side: Side, at: Date): FeedData {
 
 /**
  * Switch to a side, or resume on it when paused. `explicit` is a time someone
- * gave ("she went back on at 4:20"); without it `at` is just now.
+ * gave ("she went back on at 4:20"); without it `at` is just now. `now` is
+ * when it was tapped (default `at`), for last_tap.
  *   - Already on that side: noop.
  *   - Switching back within 15 s of a switch undoes it (reverted).
  *   - Resuming before the break began starts at the break (clamped); the same
  *     side within a minute of the pause erases the break (merged).
+ * `resume` says the person saw the feed paused ("Already back on? 5 min
+ * ago"), so with an explicit time, finding it running means someone else
+ * resumed it meanwhile: on that side, a time before it went back on moves
+ * that one moment there (moved; no earlier than the break began, clamped)
+ * and a later one is a noop; on the other side, the feed changed under the
+ * request (not_newest, which the store answers 409 "changed").
  */
 export function switchTo(
   data: FeedData,
   side: Side,
   at: Date,
-  opts: { explicit?: boolean } = {}
-): { data: FeedData; noop?: true; clamped?: true; merged?: true; reverted?: true } {
+  opts: { explicit?: boolean; resume?: boolean; now?: Date } = {}
+): { data: FeedData; noop?: true; clamped?: true; merged?: true; reverted?: true; moved?: true } {
   const S = real(data, true);
   const O = S[S.length - 1]?.end === null ? S[S.length - 1] : null;
   let t = at.getTime();
+  const tappedAt = iso((opts.now ?? at).getTime());
   const flags: { clamped?: true; merged?: true; reverted?: true } = {};
+  let tap: LastTap;
   if (O) {
+    if (opts.resume && opts.explicit) {
+      if (O.side !== side) throw new FeedEditError("not_newest");
+      if (t >= O.start - SEC) return { data, noop: true };
+      const P = S[S.length - 2];
+      // Only a side she went back on after a break moves here; any other shape isn't what was seen.
+      if (!P || P.end === null || P.end >= O.start) throw new FeedEditError("not_newest");
+      const to = Math.max(t, P.end);
+      const moved = moveEdge(data, { edge: "start", ref: refOf(O), to: new Date(to) }, { now: opts.now ?? at, active: true, endedAt: null });
+      return { data: moved.data, moved: true, ...(t < P.end ? { clamped: true as const } : {}) };
+    }
     if (O.side === side) return { data, noop: true };
-    if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t });
+    if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
     const P = S[S.length - 2];
     if (t - O.start < 15 * SEC && P && P.end === O.start && P.side === side) {
       S.pop();
@@ -575,6 +771,7 @@ export function switchTo(
       O.end = Math.max(t, O.start);
       S.push({ side, start: O.end, end: null });
     }
+    tap = { kind: "switch", side, at: tappedAt, ...(flags.reverted ? { reverted: true } : {}) };
   } else if (S.length) {
     const L = S[S.length - 1];
     const lEnd = L.end!;
@@ -586,19 +783,28 @@ export function switchTo(
       L.end = null;
       flags.merged = true;
     } else S.push({ side, start: t, end: null });
-  } else S.push({ side, start: t, end: null });
-  return { data: { ...settle(data, tidy(S, true, true), true), last_side: side }, ...flags };
+    tap = { kind: "resume", side, at: tappedAt, paused_at: iso(lEnd), ...(flags.merged ? { merged: true } : {}) };
+  } else {
+    S.push({ side, start: t, end: null });
+    return { data: { ...settle(data, tidy(S, true, true), true), last_side: side }, ...flags };
+  }
+  const out: TapFeedData = { ...settle(data, tidy(S, true, true), true), last_side: side, last_tap: tap };
+  return { data: out, ...flags };
 }
 
-/** Pause the open side at `at`. Already paused: noop. */
-export function pause(data: FeedData, at: Date, opts: { explicit?: boolean } = {}): { data: FeedData; noop?: true } {
+/** before_own_start's `first` when the refused side is the feed's only one: then its start is the feed start, and there's no tap to take back. */
+const firstOf = (S: Stretch[], s: Stretch): { first?: string } => (S[0] === s && S.length === 1 ? { first: "1" } : {});
+
+/** Pause the open side at `at` (`now`: when it was tapped, default `at`). Already paused: noop. */
+export function pause(data: FeedData, at: Date, opts: { explicit?: boolean; now?: Date } = {}): { data: FeedData; noop?: true } {
   const S = real(data, true);
   const O = S[S.length - 1]?.end === null ? S[S.length - 1] : null;
   if (!O) return { data, noop: true };
   const t = at.getTime();
-  if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t });
+  if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
   O.end = Math.max(t, O.start);
-  return { data: settle(data, tidy(S, true, true), true) };
+  const out: TapFeedData = { ...settle(data, tidy(S, true, true), true), last_tap: { kind: "pause", side: O.side, at: iso((opts.now ?? at).getTime()) } };
+  return { data: out };
 }
 
 /**
@@ -632,13 +838,13 @@ export function stopBreast(data: FeedData, at: Date | undefined, now: Date): { d
   const t = at?.getTime();
   if (!last || last.end === null) {
     const stopAt = Math.min(t ?? now.getTime(), now.getTime());
-    if (last && t !== undefined && t < last.start + SEC) throw editError("before_own_start", { side: last.side, t: last.start, asked: t, then: "stop_timer" });
+    if (last && t !== undefined && t < last.start + SEC) throw editError("before_own_start", { side: last.side, t: last.start, asked: t, then: "stop_timer", ...firstOf(S, last) });
     const out = finalizeBreast(data, new Date(stopAt));
     return { data: out, endedAt: iso(Math.max(stopAt, last?.start ?? stopAt)), pausedAtStop: false };
   }
   const lEnd = last.end;
   if (t === undefined || t >= lEnd) return { data: finalizeBreast(data, new Date(lEnd), { pausedAtStop: true }), endedAt: iso(lEnd), pausedAtStop: true };
-  if (t < last.start + SEC) throw editError("before_own_start", { side: last.side, t: last.start, asked: t, then: "stop_timer" });
+  if (t < last.start + SEC) throw editError("before_own_start", { side: last.side, t: last.start, asked: t, then: "stop_timer", ...firstOf(S, last) });
   const moved = moveEdge(data, { edge: "end", ref: refOf(last), to: new Date(t) }, { now, active: true, endedAt: null });
   return { data: finalizeBreast(moved.data, new Date(t), { pausedAtStop: true }), endedAt: iso(t), pausedAtStop: true };
 }
@@ -700,17 +906,23 @@ export function feedTotals(data: FeedData, now: Date): { left: number; right: nu
  * The preview under a moment editor: "Break 15 → 10 min · Right 5 min longer ·
  * Left unchanged". Changed items first (break, then sides), then the sides
  * that stay put. A side still going reads as a delta, so it doesn't tick.
+ * Counted in the rows' whole minutes (spanMinutes), so a move is measured
+ * from the displayed minute: Right's start 2:52 → 2:44 is "8 min longer"
+ * whatever the seconds, and the numbers match the rows before and after.
  */
 export function describeChange(beforeParts: Part[], afterParts: Part[]): string {
-  const a = partTotals(beforeParts);
-  const b = partTotals(afterParts);
-  const mins = (s: number) => Math.round(Math.round(s) / 60);
-  const short = (s: number) => Math.round(s) === 0 || (Math.round(s) >= 30 && mins(s) < 60);
-  const span = (x: number, y: number) => (short(x) && short(y) ? `${mins(x)} → ${mins(y)} min` : `${formatMinutes(x)} → ${formatMinutes(y)}`);
+  const a = partTotals(beforeParts).min;
+  const b = partTotals(afterParts).min;
+  // A part with time but no whole minute is "<1"; one that's gone is 0.
+  const num = (m: number, present: boolean) => (m > 0 ? String(m) : present ? "<1" : "0");
+  const long = (m: number, present: boolean) => (m > 0 || present ? minutesText(m) : "0 min");
+  const span = (x: number, px: boolean, y: number, py: boolean) =>
+    x < 60 && y < 60 ? `${num(x, px)} → ${num(y, py)} min` : `${long(x, px)} → ${long(y, py)}`;
   const changed: string[] = [];
   const same: string[] = [];
-  if (mins(a.breaks) !== mins(b.breaks)) {
-    changed.push(mins(b.breaks) === 0 && !b.breakCount ? `No break (was ${formatMinutes(a.breaks)})` : `Break ${span(a.breaks, b.breaks)}`);
+  const hasBreak = (parts: Part[]) => parts.some((p) => p.kind === "break");
+  if (a.breaks !== b.breaks) {
+    changed.push(!hasBreak(afterParts) ? `No break (was ${minutesText(a.breaks)})` : `Break ${span(a.breaks, hasBreak(beforeParts), b.breaks, true)}`);
   }
   for (const side of ["L", "R"] as const) {
     const has = (parts: Part[]) => parts.some((p) => p.kind === "side" && p.side === side);
@@ -719,12 +931,9 @@ export function describeChange(beforeParts: Part[], afterParts: Part[]): string 
     const x = side === "L" ? a.left : a.right;
     const y = side === "L" ? b.left : b.right;
     const name = SIDE_NAME[side];
-    if (open) {
-      const d = y - x;
-      if (mins(Math.abs(d)) === 0) same.push(name);
-      else changed.push(`${name} ${formatMinutes(Math.abs(d))} ${d > 0 ? "longer" : "shorter"}`);
-    } else if (mins(x) === mins(y)) same.push(name);
-    else changed.push(`${name} ${span(x, y)}`);
+    if (x === y) same.push(name);
+    else if (open) changed.push(`${name} ${minutesText(Math.abs(y - x))} ${y > x ? "longer" : "shorter"}`);
+    else changed.push(`${name} ${span(x, has(beforeParts), y, has(afterParts))}`);
   }
   if (!changed.length) return "No change";
   return [...changed, ...same.map((n) => `${n} unchanged`)].join(" · ");
@@ -759,6 +968,10 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
       const side = name("side");
       if (!mcp) return `Can't be before ${side} started (${t}).`;
       const asked = p.asked ? `, after ${formatTimeNear(p.asked, p.t, tz)}` : "";
+      // The feed's only side: no tap to take back, so either the start is off or the time asked is.
+      if (p.first) {
+        return `The feed started at ${t}${asked}. If it really started earlier, fix that first with fix_nursing_time {part:"feed_start", at:"…"}, then ${p.then ?? "try again"}; otherwise give a time after ${t}.`;
+      }
       return `The ${side} side started at ${t}${asked}. If ${side} was a mistaken tap, call fix_nursing_time {undo_last_tap:true} first, then ${p.then ?? "try again"}.`;
     }
     case "overlap":
@@ -766,6 +979,16 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
     case "use_stop":
       return mcp ? "The feed is still going; to end it earlier use stop_timer with at." : "Use She already finished to end the feed.";
     case "nothing_to_undo":
+      if (p.why === "taken_back") {
+        return mcp
+          ? "The latest tap on this feed was already taken back, so there's no tap left to undo. To fix a time, use fix_nursing_time with part and at."
+          : "That tap was already undone.";
+      }
+      if (p.why === "changed") {
+        return mcp
+          ? "The times were fixed after the latest tap, so there's no tap left to undo. Use fix_nursing_time with part and at instead."
+          : "The times were fixed after that tap, so there's nothing to undo.";
+      }
       return mcp ? "That's the only tap on this feed; delete_entry removes the whole feed." : "Nothing to undo; use Discard.";
     case "not_timed":
       return "That feed wasn't timed, so its parts can't be fixed.";
@@ -775,6 +998,20 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
     case "not_newest":
       return mcp ? "The feed changed since you looked; call maple_status and try again." : "This feed just changed, so nothing was saved. Have another look.";
   }
+}
+
+/**
+ * A running feed nobody tapped Done on, so "start a feed" (MCP start_timer,
+ * Siri's nurse_left / nurse_right) must not switch sides on it, which would
+ * glue two feeds together: it started over an hour ago, or the start time
+ * someone gave is over 30 min after its newest moment.
+ */
+export function staleFeed(e: { started_at: string; data: FeedData }, now: Date, given?: Date | null): boolean {
+  const started = Date.parse(e.started_at);
+  if (now.getTime() - started > HOUR) return true;
+  if (!given) return false;
+  const newest = Math.max(started, ...real(e.data, true).flatMap((s) => [s.start, s.end ?? 0]));
+  return given.getTime() - newest > 30 * MIN;
 }
 
 /**

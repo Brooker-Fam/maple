@@ -1,5 +1,5 @@
 import { BadRequest, idParam, json, readJson, withMember } from "@/lib/maple/api";
-import { createEntryOnce, getBaby, listDeleted, listEntries, softDeleteEntry, toClientEntry, updateEntry } from "@/lib/maple/store";
+import { createEntryOnce, discardedBy, getBaby, listDeleted, listEntries, NotFound, softDeleteEntry, toClientEntry, updateEntry } from "@/lib/maple/store";
 import { dayBounds, dayKey, daysBetween, isDayKey } from "@/lib/maple/time";
 import { isEntryKind } from "@/lib/maple/validate";
 import type { CreateEntryInput, EntryKind, UpdateEntryInput } from "@/lib/maple/types";
@@ -17,6 +17,22 @@ function instant(value: unknown, label: string): Date {
   const d = new Date(value);
   if (d.getTime() > Date.now() + FUTURE_SLACK_MS) throw new BadRequest(`${label} is in the future`);
   return d;
+}
+
+/**
+ * An edit or delete of an entry someone deleted meanwhile: 404 with who did
+ * it ({ reason: "discarded", deleted_by }), so the sheet can say "Brittany
+ * removed this feed" instead of a bare "not found".
+ */
+async function orGone(id: number, run: () => Promise<Response>): Promise<Response> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!(err instanceof NotFound)) throw err;
+    const who = await discardedBy(id);
+    if (who === undefined) throw err;
+    return json({ error: err.message, reason: "discarded", deleted_by: who }, 404);
+  }
 }
 
 function kindsParam(raw: string | null): EntryKind[] | undefined {
@@ -96,17 +112,17 @@ export const PATCH = withMember("PATCH /api/maple/entries", async (request, me) 
   if (expect !== undefined && (typeof expect !== "string" || Number.isNaN(Date.parse(expect)))) {
     throw new BadRequest("expect_updated_at must be an ISO timestamp");
   }
-  const entry = await updateEntry(id, {
+  const patch = {
     startedAt: body.started_at ? instant(body.started_at, "Start time") : undefined,
     endedAt: body.ended_at === null ? null : body.ended_at ? instant(body.ended_at, "End time") : undefined,
     data: body.data && typeof body.data === "object" ? body.data : undefined,
     note: body.note === undefined ? undefined : typeof body.note === "string" ? body.note : null,
-  }, me.email, { expectUpdatedAt: expect });
-  return json({ entry: toClientEntry(entry) });
+  };
+  return orGone(id, async () => json({ entry: toClientEntry(await updateEntry(id, patch, me.email, { expectUpdatedAt: expect })) }));
 }, { write: true });
 
 /** DELETE /api/maple/entries?id= — soft delete (restorable for undo). */
 export const DELETE = withMember("DELETE /api/maple/entries", async (request, me) => {
-  const entry = await softDeleteEntry(idParam(request), me.email);
-  return json({ entry: toClientEntry(entry) });
+  const id = idParam(request);
+  return orGone(id, async () => json({ entry: toClientEntry(await softDeleteEntry(id, me.email)) }));
 }, { write: true });

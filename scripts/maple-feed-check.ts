@@ -17,26 +17,36 @@ import {
   edgeBounds,
   feedEditCopy,
   FeedEditError,
+  feedMinutes,
   feedParts,
   finalizeBreast,
+  minutesShort,
+  minutesText,
   momentQuestion,
   moveEdge,
   normalizeSegments,
   partTotals,
   pause,
+  restoredTap,
   retimeBreast,
   setSide,
+  sideMinutesText,
+  spanMinutes,
+  staleFeed,
   stopBreast,
   summarize,
   switchTo,
+  undoableTap,
   undoLastTap,
   type FeedCtx,
   type FeedEditCode,
   type Part,
+  type TapFeedData,
 } from "../src/lib/maple/feed";
-import { memberLabel } from "../src/lib/maple/insights";
+import { describeEntry } from "../src/lib/maple/describe";
+import { memberLabel, statsFor } from "../src/lib/maple/insights";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
-import type { Baby, FeedData, Member, Segment, Side } from "../src/lib/maple/types";
+import type { Baby, EntryOf, FeedData, Member, Segment, Side } from "../src/lib/maple/types";
 
 const TZ = "America/New_York";
 
@@ -126,9 +136,9 @@ const live = (now: string): FeedCtx => ({ now: D(now), active: true, endedAt: nu
 const done = (now: string, endedAt: string, pausedAtStop?: boolean): FeedCtx => ({ now: D(now), active: false, endedAt: T(endedAt), pausedAtStop });
 const ref = (side: Side, at: string) => ({ side, start: T(at) });
 
-/** Parts as readable rows: "L 16:00-16:10 10 min", "Break 16:10- 20 min". */
+/** Parts as readable rows, in the whole minutes the card shows: "L 16:00-16:10 10 min", "Break 16:10- 20 min". */
 const rows = (parts: Part[]) =>
-  parts.map((p) => `${p.kind === "side" ? p.side : p.legacy ? "Legacy" : "Break"} ${clock(p.start)}-${p.end ? clock(p.end) : ""} ${formatMinutes(p.sec)}`);
+  parts.map((p) => `${p.kind === "side" ? p.side : p.legacy ? "Legacy" : "Break"} ${clock(p.start)}-${p.end ? clock(p.end) : ""} ${minutesText(p.min)}`);
 
 /** describeChange of one moveEdge, both sides seen at the same now. */
 function preview(data: FeedData, edit: Parameters<typeof moveEdge>[1], ctx: FeedCtx): string {
@@ -247,13 +257,99 @@ check("feedParts: flagged paused stop has no trailing break", () => {
   eq(rows(parts), ["L 16:00-16:10 10 min"]);
   eq(parts[0].kind === "side" && parts[0].endMoment, "feed_end");
 });
-check("feedParts: break rows read 2 min and <1 min", () => {
-  eq(rows(feedParts(switchTo(feed("L 16:00-16:10"), "L", D("16:11:30")).data, live("16:12")))[1], "Break 16:10-16:11:30 2 min");
+check("feedParts: break rows read their clock minutes, and <1 min within one minute", () => {
+  // 4:10 – 4:11 PM is 1 min, whatever the 30 s (rounding said 2, against its own range).
+  eq(rows(feedParts(switchTo(feed("L 16:00-16:10"), "L", D("16:11:30")).data, live("16:12")))[1], "Break 16:10-16:11:30 1 min");
   eq(rows(feedParts(switchTo(feed("L 16:00-16:10"), "R", D("16:10:20")).data, live("16:12")))[1], "Break 16:10-16:10:20 <1 min");
 });
 check("feedParts: odd stored data is repaired, not thrown", () => {
   const parts = feedParts(feed("L 16:00-16:10, R 16:05-16:20"), done("17:00", "16:20"));
   eq(rows(parts), ["L 16:00-16:10 10 min", "R 16:10-16:20 10 min"]);
+});
+
+// ── whole minutes: one rule everywhere (spanMinutes) ─────────────────────
+
+/** A feed entry around `data`, for the list, day-total and toast helpers. */
+const entryOf = (data: FeedData, ctx: FeedCtx): EntryOf<"feed"> => {
+  const S = data.segments ?? [];
+  const at = S[0]?.start ?? T("16:00");
+  return {
+    id: 1, kind: "feed", started_at: at, ended_at: ctx.active ? null : ctx.endedAt, active: ctx.active, data, note: null,
+    created_by: null, updated_by: null, source: "web", created_at: at, updated_at: at,
+  };
+};
+// The tester's feed: Left 12:30 and Right 24:26, which rounding showed as L 13 · R 24 = "36m".
+const odd = feed("L 02:15:10-02:27:40, R 02:27:40-02:52:06");
+const oddCtx = done("03:30", "02:52:06");
+
+check("minutes: a part is the difference of its displayed clock minutes", () => {
+  eq(spanMinutes(T("02:27:05"), T("02:36:40")), 9, "2:27 – 2:36 (9:35 of seconds)");
+  eq(spanMinutes(T("02:16:50"), T("02:17:10")), 1, "2:16 – 2:17, a 20 s break");
+  eq(spanMinutes(T("02:27:05"), T("02:27:55")), 0, "same minute, 50 s");
+  eq(spanMinutes(T("02:30"), T("02:20")), 0, "never negative");
+});
+check("minutes: words", () => {
+  eq([0, 1, 9, 59, 60, 72].map(minutesText), ["<1 min", "1 min", "9 min", "59 min", "1h 00m", "1h 12m"]);
+  eq([0, 1, 12, 72].map(minutesShort), ["<1m", "1m", "12m", "1h 12m"]);
+});
+check("minutes: rows, sides, total and toast agree (the tester's feed)", () => {
+  const parts = feedParts(odd, oddCtx);
+  eq(rows(parts), ["L 02:15:10-02:27:40 12 min", "R 02:27:40-02:52:06 25 min"]);
+  const t = feedMinutes(entryOf(odd, oddCtx), D("03:30"));
+  eq([t.left, t.right, t.total], [12, 25, 37]);
+  eq(t.total, t.left + t.right, "sides add up");
+  eq(sideMinutesText(t), "L 12 · R 25");
+  // And the feed's own range, 2:15 – 2:52 AM, is 37 min.
+  eq(spanMinutes(parts[0].start, parts[1].end!), t.total, "the clock span");
+  eq(partTotals(parts).min, { left: 12, right: 25, nursing: 37, breaks: 0 });
+});
+check("minutes: lists and the day's totals use the same numbers", () => {
+  const e = entryOf(odd, oddCtx);
+  eq(describeEntry(e, { now: D("03:30") }).detail, "L 12m, R 25m");
+  const s = statsFor([e], D("00:00"), D("23:59"), "day", D("03:30"));
+  eq([s.leftSec, s.rightSec, s.nursingSec], [12 * 60, 25 * 60, 37 * 60]);
+});
+check("minutes: sides and breaks add up to the feed's clock span", () => {
+  const d = feed("L 02:15:10-02:27:40, R 02:27:40-02:31:20, R 02:40:45-02:52:06");
+  const t = partTotals(feedParts(d, done("03:30", "02:52:06"))).min;
+  eq(t, { left: 12, right: 4 + 12, nursing: 28, breaks: 9 });
+  eq(t.nursing + t.breaks, spanMinutes(T("02:15:10"), T("02:52:06")), "2:15 – 2:52");
+});
+check("minutes: a side under a minute is <1, and counts 0", () => {
+  const d = feed("L 02:00:10-02:00:50, R 02:00:50-02:10:20");
+  const t = feedMinutes(entryOf(d, done("03:00", "02:10:20")), D("03:00"));
+  eq([t.left, t.right, t.total], [0, 10, 10]);
+  eq(sideMinutesText(t), "L <1 · R 10");
+  eq(rows(feedParts(d, done("03:00", "02:10:20")))[0], "L 02:00:10-02:00:50 <1 min");
+});
+check("minutes: a running feed counts the live part up to now's clock minute", () => {
+  const d = feed("L 02:15:10-02:27:40, R 02:27:40-");
+  const now = "02:40:05";
+  eq(rows(feedParts(d, live(now))), ["L 02:15:10-02:27:40 12 min", "R 02:27:40- 13 min"]);
+  const t = feedMinutes(entryOf(d, live(now)), D(now));
+  eq([t.left, t.right, t.total], [12, 13, 25]);
+});
+check("minutes: typed minutes (no segments) round their seconds", () => {
+  const d: FeedData = { method: "breast", left_sec: 600, right_sec: 20 };
+  const t = feedMinutes(entryOf(d, done("17:00", "16:10")), D("17:00"));
+  eq([t.left, t.right, t.total, t.has], [10, 0, 10, { L: true, R: true }]);
+  eq(sideMinutesText(t), "L 10 · R <1");
+});
+check("minutes: a move is measured from the displayed minute", () => {
+  // Right started 2:52:40, moved to 2:44: "8 min longer" (the seconds said 8:40, which rounded to 9).
+  const d = feed("L 02:30:00-02:52:40, R 02:52:40-");
+  eq(preview(d, { edge: "start", ref: ref("R", "02:52:40"), to: D("02:44") }, live("03:01:20")), "Left 22 → 14 min · Right 8 min longer");
+  // Finished: the preview's after numbers are the after rows.
+  const e2 = moveEdge(odd, { edge: "start", ref: ref("R", "02:27:40"), to: D("02:24") }, oddCtx);
+  const after = feedParts(e2.data, { ...oddCtx, endedAt: e2.endedAt });
+  eq(describeChange(feedParts(odd, oddCtx), after), "Left 12 → 9 min · Right 25 → 28 min");
+  eq(rows(after), ["L 02:15:10-02:24 9 min", "R 02:24-02:52:06 28 min"]);
+});
+check("minutes: a break that shrinks under a minute reads <1, gone reads No break", () => {
+  const d = feed("L 16:00-16:10, R 16:15-16:30");
+  const ctx = done("17:00", "16:30");
+  eq(preview(d, { edge: "start", ref: ref("R", "16:15"), to: D("16:10:40") }, ctx), "Break 5 → <1 min · Right 15 → 20 min · Left unchanged");
+  eq(preview(d, { edge: "start", ref: ref("R", "16:15"), to: D("16:10") }, ctx), "No break (was 5 min) · Right 15 → 20 min · Left unchanged");
 });
 
 // ── S1: Matt's case, the Right after a break ─────────────────────────────
@@ -802,6 +898,141 @@ check("feedEditCopy across noon keeps AM/PM on asked", () =>
     feedEditCopy(new FeedEditError("before_own_start", { side: "L", t: T("12:05"), asked: T("11:58") }), "mcp", TZ),
     "The Left side started at 12:05 PM, after 11:58 AM. If Left was a mistaken tap, call fix_nursing_time {undo_last_tap:true} first, then try again."
   ));
+
+// ── last_tap: undo takes back the tap that was made (review-server) ─────
+
+const tapOf = (d: FeedData) => (d as TapFeedData).last_tap;
+const newest = (d: FeedData) => {
+  const L = d.segments![d.segments!.length - 1];
+  return { side: L.side, start: L.start, end: L.end };
+};
+check("taps record last_tap: switch, pause, resume (merged), reverted", () => {
+  const sw = switchTo(feed("L 16:00-"), "R", D("16:10"), { now: D("16:10:02") });
+  eq(tapOf(sw.data), { kind: "switch", side: "R", at: T("16:10:02") });
+  const pa = pause(sw.data, D("16:20"));
+  eq(tapOf(pa.data), { kind: "pause", side: "R", at: T("16:20") });
+  const re = switchTo(pa.data, "R", D("16:20:30"));
+  eq(tapOf(re.data), { kind: "resume", side: "R", at: T("16:20:30"), paused_at: T("16:20"), merged: true });
+  const back = switchTo(sw.data, "L", D("16:10:05"));
+  eq([back.reverted, tapOf(back.data)?.reverted], [true, true]);
+});
+check("the reviewer's case: a merged same-side resume undoes back to paused, never the older switch", () => {
+  // R 3:04–3:14, L 3:14–3:29, paused 30 s ago, Resume on Left: merged.
+  const paused = pause(switchTo(feed("R 16:04-"), "L", D("16:14")).data, D("16:29")).data;
+  const merged = switchTo(paused, "L", D("16:29:30"));
+  eqSegs(merged.data.segments, "R 16:04-16:14, L 16:14-");
+  eq(undoableTap(merged.data, live("16:30"))?.what, "resume");
+  const r = undoLastTap(merged.data, newest(merged.data));
+  eqSegs(r.data.segments, "R 16:04-16:14, L 16:14-16:29");
+  eq([r.what, tapOf(r.data)?.undone], ["resume", true]);
+  // And once undone there's nothing left, rather than the switch before it.
+  const e = throwsCode(() => undoLastTap(r.data, newest(r.data)), "nothing_to_undo");
+  eq(feedEditCopy(e, "ui", TZ), "That tap was already undone.");
+  eq(undoableTap(r.data, live("16:30")), null);
+});
+check("a merged resume on the feed's only side still goes back to paused", () => {
+  const merged = switchTo(pause(feed("L 16:00-"), D("16:05")).data, "L", D("16:05:30")).data;
+  eqSegs(merged.segments, "L 16:00-");
+  eqSegs(undoLastTap(merged, newest(merged)).data.segments, "L 16:00-16:05");
+});
+check("a switch back within 15 s (reverted) has no tap left to undo", () => {
+  const back = switchTo(switchTo(feed("R 16:00-16:10, L 16:10-"), "R", D("16:20")).data, "L", D("16:20:05")).data;
+  eqSegs(back.segments, "R 16:00-16:10, L 16:10-");
+  const e = throwsCode(() => undoLastTap(back, newest(back)), "nothing_to_undo");
+  eq(feedEditCopy(e, "mcp", TZ), "The latest tap on this feed was already taken back, so there's no tap left to undo. To fix a time, use fix_nursing_time with part and at.");
+});
+check("a clamped resume (other side, at the pause) undoes back to paused, not into the side before", () => {
+  const r = switchTo(feed("L 16:00-16:10"), "R", D("16:05"), { explicit: true });
+  eqSegs(r.data.segments, "L 16:00-16:10, R 16:10-");
+  const u = undoLastTap(r.data, newest(r.data));
+  eqSegs(u.data.segments, "L 16:00-16:10");
+  eq(u.what, "resume");
+});
+check("a resume turned into no break by a fix still undoes back to paused", () => {
+  const resumed = switchTo(feed("L 16:00-16:10"), "L", D("16:20")).data;
+  const fixed = moveEdge(resumed, { edge: "start", ref: ref("L", "16:20"), to: D("16:10") }, live("16:25")).data;
+  eqSegs(fixed.segments, "L 16:00-");
+  eqSegs(undoLastTap(fixed, newest(fixed)).data.segments, "L 16:00-16:10");
+});
+check("a switch whose time was fixed is still the tap undo takes back", () => {
+  const sw = switchTo(feed("L 16:00-"), "R", D("16:16")).data;
+  const fixed = moveEdge(sw, { edge: "start", ref: ref("R", "16:16"), to: D("16:12") }, live("16:20")).data;
+  eqSegs(undoLastTap(fixed, newest(fixed)).data.segments, "L 16:00-");
+});
+check("a pause, then It was Right on that part, still undoes the pause", () => {
+  const pa = pause(feed("L 16:00-"), D("16:10")).data;
+  const flipped = setSide(pa, ref("L", "16:00"), "R", live("16:12")).data;
+  const u = undoLastTap(flipped, newest(flipped));
+  eqSegs(u.data.segments, "R 16:00-");
+  eq(u.what, "pause");
+});
+check("a tap the stretches no longer show is refused (changed)", () => {
+  // Switched to Right, then It was Left on it: Left all along, so no switch to take back.
+  const sw = switchTo(feed("L 16:00-"), "R", D("16:16")).data;
+  const merged = setSide(sw, ref("R", "16:16"), "L", live("16:20")).data;
+  eqSegs(merged.segments, "L 16:00-");
+  const e = throwsCode(() => undoLastTap(merged, newest(merged)), "nothing_to_undo");
+  eq(feedEditCopy(e, "ui", TZ), "The times were fixed after that tap, so there's nothing to undo.");
+});
+check("undoableTap: what undo would take back, and when it was tapped", () => {
+  eq(undoableTap(switchTo(feed("L 16:00-"), "R", D("16:10"), { now: D("16:10:01") }).data, live("16:11")), { what: "switch", at: T("16:10:01") });
+  eq(undoableTap(pause(feed("L 16:00-"), D("16:10")).data, live("16:11")), { what: "pause", at: T("16:10") });
+  eq(undoableTap(feed("L 16:00-"), live("16:11")), null);
+  // Feeds from before taps were recorded: read off the newest stretch, at its moment.
+  eq(undoableTap(s5, live("16:11")), { what: "switch", at: T("16:05") });
+  eq(undoableTap(feed("L 16:00-16:05"), done("16:11", "16:05")), null);
+});
+check("restoredTap: Put it back after an undo brings the tap back; a misfit is dropped", () => {
+  const sw = switchTo(feed("L 16:00-"), "R", D("16:10")).data;
+  const undone = undoLastTap(sw, newest(sw)).data;
+  eq(restoredTap(undone, sw.segments!, true), { kind: "switch", side: "R", at: T("16:10") });
+  // A merged resume put back to its paused before: the pause is the latest tap again, read off the stretches.
+  const paused = pause(feed("L 16:00-"), D("16:05")).data;
+  const merged = switchTo(paused, "L", D("16:05:30")).data;
+  eq(restoredTap(merged, paused.segments!, true), undefined);
+  eq(restoredTap(merged, merged.segments!, false), undefined);
+});
+check("switchTo resume with a time: already back on that side moves when she went back on", () => {
+  // Paused at 4:10; the other phone resumed Right at 4:17; this phone says she went back on at 4:12.
+  const theirs = switchTo(feed("L 16:00-16:10"), "R", D("16:17")).data;
+  const r = switchTo(theirs, "R", D("16:12"), { explicit: true, resume: true, now: D("16:18") });
+  eqSegs(r.data.segments, "L 16:00-16:10, R 16:12-");
+  eq([r.moved, r.clamped, r.noop], [true, undefined, undefined]);
+  eq(tapOf(r.data), tapOf(theirs), "the tap stays theirs");
+  const early = switchTo(theirs, "R", D("16:05"), { explicit: true, resume: true, now: D("16:18") });
+  eqSegs(early.data.segments, "L 16:00-16:10, R 16:10-");
+  eq([early.moved, early.clamped], [true, true]);
+  eq(switchTo(theirs, "R", D("16:17:30"), { explicit: true, resume: true, now: D("16:18") }).noop, true);
+});
+check("switchTo resume with a time: the other side is not_newest (409 changed), not before_own_start", () => {
+  const theirs = switchTo(feed("L 16:00-16:10"), "L", D("16:17")).data;
+  throwsCode(() => switchTo(theirs, "R", D("16:12"), { explicit: true, resume: true }), "not_newest");
+  throwsCode(() => switchTo(theirs, "R", D("16:20"), { explicit: true, resume: true }), "not_newest");
+  // Without resume (a switch someone asked for at a time) the old answer stands.
+  throwsCode(() => switchTo(theirs, "R", D("16:12"), { explicit: true }), "before_own_start");
+  // Still paused: an ordinary resume.
+  eqSegs(switchTo(feed("L 16:00-16:10"), "R", D("16:12"), { explicit: true, resume: true }).data.segments, "L 16:00-16:10, R 16:12-");
+});
+check("before_own_start on the feed's only side names feed_start (stop_timer, switch, pause)", () => {
+  const stop = throwsCode(() => stopBreast(feed("L 16:17-"), D("16:15"), D("16:27")), "before_own_start");
+  eq(
+    feedEditCopy(stop, "mcp", TZ),
+    'The feed started at 4:17 PM, after 4:15. If it really started earlier, fix that first with fix_nursing_time {part:"feed_start", at:"…"}, then stop_timer; otherwise give a time after 4:17 PM.'
+  );
+  eq(feedEditCopy(stop, "ui", TZ), "Can't be before Left started (4:17 PM).");
+  eq(throwsCode(() => stopBreast(feed("L 16:00-16:10"), D("15:55"), D("16:27")), "before_own_start").params.first, "1");
+  eq(throwsCode(() => pause(feed("L 16:00-"), D("15:58"), { explicit: true }), "before_own_start").params.first, "1");
+  eq(throwsCode(() => switchTo(feed("L 16:00-"), "R", D("15:58"), { explicit: true }), "before_own_start").params.first, "1");
+  // With a side before it, the mistaken-tap advice stands.
+  eq(throwsCode(() => stopBreast(s1, D("16:10"), D("16:30")), "before_own_start").params.first, undefined);
+});
+check("staleFeed: over an hour old, or a given time 30 min past its newest moment", () => {
+  const e = (start: string, spec: string) => ({ started_at: T(start), data: feed(spec) });
+  eq(staleFeed(e("15:00", "L 15:00-"), D("16:01")), true);
+  eq(staleFeed(e("15:30", "L 15:30-15:40, R 15:40-"), D("16:20")), false);
+  eq(staleFeed(e("15:30", "L 15:30-15:40"), D("16:20"), D("16:15")), true);
+  eq(staleFeed(e("15:30", "L 15:30-15:40, R 15:50-"), D("16:20"), D("16:15")), false);
+});
 
 // ── memberLabel (§1.5) ───────────────────────────────────────────────────
 

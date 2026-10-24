@@ -8,12 +8,14 @@ import {
   FeedEditError,
   feedEditCopy,
   feedParts,
+  minutesText,
   momentQuestion,
   moveEdge,
   partTotals,
+  spanMinutes,
   type Part,
 } from "@/lib/maple/feed";
-import { DEFAULT_TZ, formatClock, formatMinutes, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
+import { DEFAULT_TZ, formatClock, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, Side, StretchRef, TimerKind } from "@/lib/maple/types";
 import { Icon } from "./icons";
 import { SIDE_COLOR, SIDE_INK } from "./palette";
@@ -57,7 +59,7 @@ export function SideMark({ side, size = 24, className }: { side: Side; size?: nu
   return (
     <span
       aria-hidden
-      className={cx("mp-kind-fill inline-flex shrink-0 items-center justify-center rounded-full font-bold", className)}
+      className={cx("mp-kind-fill mp-side-mark inline-flex shrink-0 items-center justify-center rounded-full font-bold", className)}
       style={{ width: size, height: size, fontSize: Math.round(size * 0.46), backgroundColor: SIDE_COLOR[side], color: SIDE_INK[side] }}
     >
       {side}
@@ -82,9 +84,9 @@ export function BreakMark({ size = 24, open, className }: { size?: number; open?
   );
 }
 
-/** "22 minutes", "less than a minute", "1 hour 12 minutes": formatMinutes, read aloud. */
-export function minutesAloud(sec: number): string {
-  const m = formatMinutes(sec);
+/** "22 minutes", "less than a minute", "1 hour 12 minutes": whole minutes (minutesText), read aloud. */
+export function minutesAloud(min: number): string {
+  const m = minutesText(min);
   if (m === "<1 min") return "less than a minute";
   const hm = /^(\d+)h (\d+)m$/.exec(m);
   if (hm) return `${+hm[1]} hour${+hm[1] === 1 ? "" : "s"}${+hm[2] ? ` ${+hm[2]} minute${+hm[2] === 1 ? "" : "s"}` : ""}`;
@@ -106,7 +108,7 @@ export function clockAloud(sec: number): string {
 export function partAria(p: Part, tz: string = DEFAULT_TZ): string {
   const name = p.kind === "side" ? SIDE_NAME[p.side] : "Break";
   const range = p.end === null ? `since ${formatTime(p.start, tz)}` : formatRange(p.start, p.end, tz).replace(" – ", " to ");
-  return `${name}, ${range}, ${minutesAloud(p.sec)}`;
+  return `${name}, ${range}, ${minutesAloud(p.min)}`;
 }
 
 /** The start of a range, with its AM/PM in a span that hides under 360px (where the range wraps under the name). */
@@ -182,8 +184,9 @@ export function PartRows({
   let earlier: ReactNode = null;
   if (folded) {
     const hidden = parts.slice(0, -1);
-    const t = partTotals(hidden);
-    const bits = [t.left >= 1 ? `L ${formatMinutes(t.left)}` : "", t.right >= 1 ? `R ${formatMinutes(t.right)}` : ""].filter(Boolean);
+    const t = partTotals(hidden).min;
+    const has = (s: Side) => hidden.some((p) => p.kind === "side" && p.side === s);
+    const bits = [has("L") ? `L ${minutesText(t.left)}` : "", has("R") ? `R ${minutesText(t.right)}` : ""].filter(Boolean);
     const text = ["Earlier", ...bits, `from ${formatTime(hidden[0].start, tz)}`].join(" · ");
     earlier = readOnly ? (
       <div className={cx("flex min-h-[44px] items-center gap-2 text-[13px] text-mp-ink-2", card && NIGHT_TEXT)}>
@@ -222,7 +225,7 @@ export function PartRows({
                 <RangeText start={p.start} end={p.end} tz={tz} />
               </span>
             </span>
-            <span className={cx("shrink-0 text-[14px] text-mp-ink-2 tabular-nums", card && NIGHT_TEXT)}>{formatMinutes(p.sec)}</span>
+            <span className={cx("shrink-0 text-[14px] text-mp-ink-2 tabular-nums", card && NIGHT_TEXT)}>{minutesText(p.min)}</span>
             {!readOnly && <Icon name={isOpen ? "chevron-down" : "chevron-right"} size={16} className={cx("shrink-0 text-mp-ink-3", card && NIGHT_DIM)} />}
           </>
         );
@@ -262,9 +265,10 @@ export function timerNumbers(e: Entry, now: Date) {
     const last = parts[parts.length - 1];
     const paused = last?.kind === "break" && last.end === null;
     const side: Side = lastSide?.side ?? e.data.last_side ?? "L";
+    // sec drives the live clock; min is the same part in the rows' whole minutes (for words like "Right side for 52 min").
     const current = paused
-      ? { kind: "break" as const, side, since: last.start, sec: last.sec }
-      : { kind: "side" as const, side, since: lastSide?.start ?? e.started_at, sec: lastSide?.sec ?? wallSec };
+      ? { kind: "break" as const, side, since: last.start, sec: last.sec, min: last.min }
+      : { kind: "side" as const, side, since: lastSide?.start ?? e.started_at, sec: lastSide?.sec ?? wallSec, min: lastSide?.min ?? spanMinutes(e.started_at, now) };
     return {
       elapsed: t.nursing,
       total: t.nursing,
@@ -295,7 +299,7 @@ export function timerNumbers(e: Entry, now: Date) {
     parts: [] as Part[],
     sideCount: 0,
     closedBreaks: 0,
-    current: { kind: "side" as const, side: undefined as Side | undefined, since: e.started_at, sec: wallSec },
+    current: { kind: "side" as const, side: undefined as Side | undefined, since: e.started_at, sec: wallSec, min: spanMinutes(e.started_at, now) },
   };
 }
 
@@ -316,7 +320,6 @@ export function LiveBlock({
   disabled,
   readOnly,
   compact,
-  footer,
 }: {
   entry: Entry;
   n: TimerNumbers;
@@ -326,8 +329,6 @@ export function LiveBlock({
   readOnly?: boolean;
   /** Short screens: a 44px clock instead of 56px. */
   compact?: boolean;
-  /** "Started by Brittany", under the numbers. */
-  footer?: string | null;
 }) {
   const isFeed = entry.kind === "feed" && n.parts.length > 0;
   const paused = isFeed && n.paused;
@@ -347,7 +348,7 @@ export function LiveBlock({
     setInline(room < 104);
   }, [showTotal, clockText, compact]);
 
-  const aria = `${what}, ${clockAloud(n.current.sec)}, since ${since}.${showTotal ? ` Total nursing ${minutesAloud(n.total)}.` : ""}${readOnly ? "" : " Fix times."}`;
+  const aria = `${what}, ${clockAloud(n.current.sec)}, since ${since}.${showTotal ? ` Total nursing ${minutesAloud(Math.floor(n.total / 60))}.` : ""}${readOnly ? "" : " Fix times."}`;
   const body = (
     <>
       <span className="flex min-h-[24px] items-center gap-2">
@@ -384,7 +385,6 @@ export function LiveBlock({
             </span>
           ))}
       </span>
-      {footer && <span className="mt-1.5 block text-[13px] text-mp-ink-2">{footer}</span>}
     </>
   );
   if (readOnly) {
@@ -428,6 +428,7 @@ export function TimeChip({
   ring,
   ariaLabel,
   tall,
+  className,
 }: {
   line1: string;
   line2: string;
@@ -440,6 +441,8 @@ export function TimeChip({
   ariaLabel?: string;
   /** 56px (the chip grids) instead of 48px. */
   tall?: boolean;
+  /** Grid placement ("col-span-2" for a chip with a long first line). */
+  className?: string;
 }) {
   const stop = variant === "stop";
   return (
@@ -455,7 +458,8 @@ export function TimeChip({
         stop
           ? "bg-mp-sunken text-mp-ink [.maple-night_&]:bg-[rgb(224_169_59/0.15)]"
           : "border border-mp-line bg-mp-surface text-mp-ink active:bg-mp-sunken [.maple-night_&]:border-[rgb(224_169_59/0.55)] [.maple-night_&]:bg-transparent [.maple-night_&]:text-[#E8A23F] [.maple-night_&]:active:bg-[rgb(224_169_59/0.2)]",
-        ring && "ring-2 ring-mp-accent-fg"
+        ring && "ring-2 ring-mp-accent-fg",
+        className
       )}
     >
       <span className="flex items-center gap-1 text-[15px] leading-tight font-semibold tracking-[-0.01em]">
@@ -540,6 +544,8 @@ type MomentEditorProps = {
   disabled?: boolean;
   /** Who changed the recorded value from another phone, for "{Who} just changed this to 4:22" (null: unnamed). */
   who?: string | null;
+  /** The change was the viewer's own (the same login elsewhere): unnamed, and not "on another device". */
+  mine?: boolean;
 };
 
 /**
@@ -607,6 +613,7 @@ function MomentEditorInner({
   busy,
   disabled,
   who,
+  mine,
   info,
   changed,
 }: MomentEditorProps & { info: MomentInfo; changed: boolean }) {
@@ -665,7 +672,9 @@ function MomentEditorInner({
         <p className="mt-0.5 text-[13px] text-mp-ink-2">Recorded now: {formatTime(info.recorded, tz)}</p>
         {changed && (
           <p role="status" className="mt-2 rounded-xl bg-mp-sunken px-3 py-2 text-[13px] text-mp-ink-2">
-            {who ? `${who} just changed this to ${formatTime(info.recorded, tz)}` : `This just changed to ${formatTime(info.recorded, tz)} on another device or through Claude`}
+            {who
+              ? `${who} just changed this to ${formatTime(info.recorded, tz)}`
+              : `This just changed to ${formatTime(info.recorded, tz)}${mine ? "" : " on another device or through Claude"}`}
           </p>
         )}
       </div>

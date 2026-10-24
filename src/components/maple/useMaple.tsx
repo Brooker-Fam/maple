@@ -90,7 +90,7 @@ export type Toast = {
  * person behind a 409 (null: this viewer, the admin login, or unknown).
  */
 export type TimerFailure = {
-  kind: "changed" | "stopped" | "bad" | "offline" | "pending" | "error";
+  kind: "changed" | "stopped" | "gone" | "bad" | "offline" | "pending" | "error";
   message: string;
   who: string | null;
   entry?: Entry;
@@ -103,7 +103,16 @@ export type TimerCallOptions = {
   silent409?: boolean;
   /** Report every failure here instead of a toast. */
   onError?: (f: TimerFailure) => void;
+  /** Buttons for the failure toast (a stale Resume after the other phone's Done: "Continue that feed on Right"). */
+  failActions?: (f: TimerFailure) => ToastAction[] | undefined;
 };
+
+/**
+ * A timer call. discard takes `expect_updated_at` (the start toast's Undo):
+ * if someone changed the timer since, it answers 409 "changed" and nothing
+ * is thrown away.
+ */
+export type TimerCallInput = TimerInput & { expect_updated_at?: string };
 
 type Status = "loading" | "signedOut" | "ready" | "error";
 
@@ -140,9 +149,20 @@ export type MapleContextValue = {
   update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string }) => Promise<Entry | null>;
   remove: (id: number, opts?: { toast?: string }) => Promise<void>;
   restore: (id: number) => Promise<Entry | null>;
-  /** A timer action with the server's whole answer (noop, merged, before, …), or null when it didn't happen. */
-  timerCall: (input: TimerInput, opts?: TimerCallOptions) => Promise<TimerResponse | null>;
+  /**
+   * A timer action with the server's whole answer (noop, merged, before, …),
+   * or null when it didn't happen. Calls for one entry go one at a time, in
+   * tap order; if one fails, the taps queued behind it are dropped.
+   */
+  timerCall: (input: TimerCallInput, opts?: TimerCallOptions) => Promise<TimerResponse | null>;
   timer: (input: TimerInput) => Promise<Entry | null>;
+  /**
+   * True while a timer call for this entry is queued or waiting for the
+   * server (Fix times holds its chips meanwhile, as it does for a timer
+   * that's still starting, so this phone's own tap never reads as someone
+   * else's change).
+   */
+  timerBusy: (id: number) => boolean;
   /** Raw JSON fetch against /api/maple; throws ApiError (with .status, .body). */
   api: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
   toasts: Toast[];
@@ -152,9 +172,10 @@ export type MapleContextValue = {
   /** Close the timer toast, if one is up (a dock tap, Fix times opening). */
   dismissTimerToast: () => void;
   /**
-   * While the Lantern covers the screen, timer toasts wait (only the latest);
-   * turning the hold off shows it if the tap was under 2 minutes ago and its
-   * entry hasn't changed since.
+   * While the Lantern or Fix times covers the screen, timer toasts wait (only
+   * the latest); when the last hold ends it shows if the tap was under 2
+   * minutes ago and its entry hasn't changed since. Holds count, so each
+   * `true` needs its own `false` (or use useHoldTimerToasts).
    */
   holdTimerToasts: (on: boolean) => void;
   memberName: (id: string | null | undefined) => string;
@@ -171,6 +192,21 @@ export function useMaple(): MapleContextValue {
   const ctx = useContext(MapleContext);
   if (!ctx) throw new Error("useMaple must be used inside <MapleProvider>");
   return ctx;
+}
+
+/**
+ * Hold timer toasts while `on` (the Lantern, the Fix times sheet): any one
+ * showing closes, new ones wait, and the latest shows when the hold ends if
+ * it's still true. A fix saved from the sheet leaves its own toast, which
+ * replaces whatever was waiting.
+ */
+export function useHoldTimerToasts(on: boolean) {
+  const { holdTimerToasts } = useMaple();
+  useEffect(() => {
+    if (!on) return;
+    holdTimerToasts(true);
+    return () => holdTimerToasts(false);
+  }, [on, holdTimerToasts]);
 }
 
 /** Re-render on an interval (for live timers and "5m ago" labels). */
@@ -250,6 +286,11 @@ function newClientId(): string {
 let tempId = -1;
 
 const TIMER_TOAST_HOLD_MS = 2 * 60_000;
+
+const byStart = (es: Entry[]) => es.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+
+/** One entry's timer calls: the last one's outcome (true: it happened), how many are queued or out, and the early copies they showed. */
+type TimerQueue = { tail: Promise<boolean>; n: number; mine: Set<Entry> };
 
 /** Put back the parts a fix replaced (the optimistic copy of retime restore). */
 function restoredFeed(e: Entry & { kind: "feed" }, d: FeedData, edit: Extract<FeedEdit, { op: "restore" }>): Entry {
@@ -372,8 +413,11 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const confirmedRef = useRef(new Map<number, { updatedAt: string; at: number }>());
   const stateRef = useRef<MapleState | null>(null);
   stateRef.current = state;
-  const holdRef = useRef(false);
+  /** How many holds are on (the Lantern, Fix times); timer toasts wait while any is. */
+  const holdRef = useRef(0);
   const heldRef = useRef<{ text: string; opts: Partial<Omit<Toast, "id" | "text">>; at: number } | null>(null);
+  const queuesRef = useRef(new Map<number, TimerQueue>());
+  const [busy, setBusy] = useState<ReadonlySet<number>>(() => new Set());
 
   useEffect(() => {
     try {
@@ -419,7 +463,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const toast = useCallback(
     (text: string, opts: Partial<Omit<Toast, "id" | "text">> = {}) => {
       const id = Date.now() + Math.random();
-      if (holdRef.current && opts.group === "timer") heldRef.current = { text, opts, at: Date.now() };
+      if (holdRef.current > 0 && opts.group === "timer") heldRef.current = { text, opts, at: Date.now() };
       else show(id, text, opts);
       return id;
     },
@@ -428,12 +472,13 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const dismissTimerToast = useCallback(() => setToasts((t) => (t.some((x) => x.group === "timer") ? t.filter((x) => x.group !== "timer") : t)), []);
   const holdTimerToasts = useCallback(
     (on: boolean) => {
-      holdRef.current = on;
       if (on) {
-        heldRef.current = null;
+        if (holdRef.current++ === 0) heldRef.current = null;
         dismissTimerToast();
         return;
       }
+      if (holdRef.current === 0) return;
+      if (--holdRef.current > 0) return;
       const held = heldRef.current;
       heldRef.current = null;
       if (!held || Date.now() - held.at >= TIMER_TOAST_HOLD_MS) return;
@@ -615,14 +660,34 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     });
   }, [state, tick, now]);
 
-  /** Apply a local change to entries (optimistic), returning a rollback. */
-  const patchEntries = useCallback((fn: (entries: Entry[]) => Entry[]) => {
-    let before: MapleState | null = null;
+  /**
+   * Show a change to one entry at once (optimistic): `make` gets its current
+   * copy and returns the new one (null drops it, undefined leaves it alone).
+   * The returned rollback puts back only that entry, and only while it still
+   * shows one of the early copies in `mine`: a server answer or a poll since
+   * then wins, and anything else that changed meanwhile (a diaper logged
+   * offline) stays.
+   */
+  const optimistic = useCallback((id: number, make: (cur: Entry | undefined) => Entry | null | undefined, mine: Set<Entry> = new Set()) => {
+    let prev: Entry | undefined;
+    let next: Entry | null | undefined;
     setState((s) => {
-      before = s;
-      return s ? { ...s, entries: fn(s.entries) } : s;
+      if (!s) return s;
+      prev = s.entries.find((e) => e.id === id);
+      next = make(prev);
+      if (next === undefined) return s;
+      if (next) mine.add(next);
+      const rest = s.entries.filter((e) => e.id !== id);
+      return { ...s, entries: next ? byStart([next, ...rest]) : rest };
     });
-    return () => setState(before);
+    return () =>
+      setState((s) => {
+        if (!s || next === undefined) return s;
+        const cur = s.entries.find((e) => e.id === id);
+        if (cur ? !mine.has(cur) : next !== null) return s;
+        const rest = s.entries.filter((e) => e.id !== id);
+        return { ...s, entries: prev ? byStart([prev, ...rest]) : rest };
+      });
   }, []);
 
   const upsert = useCallback(
@@ -693,7 +758,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         toast(opts.toast ?? "Removed");
         return;
       }
-      const rollback = patchEntries((es) => es.filter((e) => e.id !== id));
+      const rollback = optimistic(id, () => null);
       try {
         await withInflight(() => fetchJson(`/api/maple/entries?id=${id}`, { method: "DELETE" }));
         toast(opts.toast ?? "Deleted", { undo: () => void restore(id) });
@@ -704,7 +769,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void forceRefresh();
       }
     },
-    [dropEntry, forceRefresh, patchEntries, restore, setQueue, toast, withInflight]
+    [dropEntry, forceRefresh, optimistic, restore, setQueue, toast, withInflight]
   );
 
   const log = useCallback<MapleContextValue["log"]>(
@@ -820,44 +885,88 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     async (input, opts = {}) => {
       const fail = (f: TimerFailure, tone: Toast["tone"] = "error", duration?: number) => {
         if (opts.onError) opts.onError(f);
-        else if (!(opts.silent409 && f.kind === "changed")) toast(f.message, { tone, duration });
+        else if (!(opts.silent409 && f.kind === "changed")) {
+          const actions = opts.failActions?.(f);
+          toast(f.message, { tone, duration, ...(actions?.length ? { actions } : {}) });
+        }
         // null: the action didn't happen (callers must not toast success or offer Undo).
         return null;
       };
       // A timer that hasn't reached the server yet has a temporary id; acting
       // on it would 400 and lose the tap.
       if (input.id != null && input.id < 0) return fail({ kind: "pending", message: "One sec, that timer is still starting", who: null }, "info");
-      // Optimistic: reflect the change immediately; the server answer replaces it.
-      const at = input.at ? new Date(input.at) : now();
-      const body: TimerInput = input.action === "start" ? { ...input, client_id: input.client_id ?? newClientId() } : input;
+      const body: TimerCallInput = input.action === "start" ? { ...input, client_id: input.client_id ?? newClientId() } : input;
+      // Without a time of its own, a tap happens when the server gets it.
+      const atNow = () => (input.at ? new Date(input.at) : now());
+      const id = input.id != null && input.id > 0 ? input.id : null;
       let rollback: (() => void) | null = null;
-      if (state) {
-        const target = input.id ? state.entries.find((e) => e.id === input.id) : undefined;
-        if (input.action === "start" && input.kind && !state.entries.some((e) => e.active && e.kind === input.kind)) {
-          const optimistic = {
-            id: tempId--,
-            kind: input.kind,
-            started_at: at.toISOString(),
-            ended_at: null,
-            active: true,
-            data: input.kind === "feed" ? startBreast(input.side ?? "L", at) : {},
-            note: null,
-            created_by: state.me.email,
-            updated_by: null,
-            source: "web",
-            created_at: at.toISOString(),
-            updated_at: at.toISOString(),
-          } as Entry;
-          rollback = patchEntries((es) => [optimistic, ...es]);
-        } else if (target && (target.active || input.action === "retime")) {
-          const next = optimisticTimer(target, input, at, now());
-          if (next !== undefined) {
-            rollback = patchEntries((es) => (next ? es.map((e) => (e.id === target.id ? next : e)) : es.filter((e) => e.id !== target.id)));
-          }
-        }
+      // Optimistic: reflect the change immediately; the server answer replaces it.
+      if (id === null && input.action === "start" && input.kind && state && !state.entries.some((e) => e.active && e.kind === input.kind)) {
+        const at = atNow();
+        const early = {
+          id: tempId--,
+          kind: input.kind,
+          started_at: at.toISOString(),
+          ended_at: null,
+          active: true,
+          data: input.kind === "feed" ? startBreast(input.side ?? "L", at) : {},
+          note: null,
+          created_by: state.me.email,
+          updated_by: null,
+          source: "web",
+          created_at: at.toISOString(),
+          updated_at: at.toISOString(),
+        } as Entry;
+        rollback = optimistic(early.id, () => early);
       }
+      /**
+       * One request at a time per entry, in tap order: a Pause tapped while a
+       * slow Switch is still out goes after the Switch's answer, never beside
+       * it (whichever landed first used to win).
+       */
+      let q: TimerQueue | null = null;
+      if (id !== null) {
+        q = queuesRef.current.get(id) ?? { tail: Promise.resolve(true), n: 0, mine: new Set<Entry>() };
+        queuesRef.current.set(id, q);
+        q.n++;
+        setBusy((b) => (b.has(id) ? b : new Set(b).add(id)));
+      }
+      const mine = q?.mine;
+      /** This tap's early copy, over whatever the entry shows now; `fresh` skips it while an early copy from this queue still shows. */
+      const showEarly = (fresh: boolean) =>
+        optimistic(
+          id!,
+          (cur) => {
+            if (!cur || (fresh && mine!.has(cur)) || !(cur.active || input.action === "retime")) return undefined;
+            return optimisticTimer(cur, input, atNow(), now());
+          },
+          mine
+        );
+      const waits = !!q && q.n > 1;
+      if (q) rollback = showEarly(false);
+      const ahead = q?.tail ?? Promise.resolve(true);
+      let settle: (happened: boolean) => void = () => {};
+      if (q) q.tail = new Promise<boolean>((r) => (settle = r));
+      let happened = false;
+      // Counted from the tap, not the send, so no poll lands while a tap waits its turn.
+      inflight.current++;
       try {
-        const res = await withInflight(() => fetchJson<TimerResponse>("/api/maple/timer", { method: "POST", body: JSON.stringify(body) }));
+        if (!(await ahead)) {
+          // The tap before this one didn't happen (its toast said why), and this one was made on top of it.
+          rollback?.();
+          return null;
+        }
+        if (waits) {
+          // The answer to the tap before replaced this tap's early copy: show it again, over the server's version.
+          const first = rollback;
+          const again = showEarly(true);
+          rollback = () => {
+            again();
+            first?.();
+          };
+        }
+        const res = await fetchJson<TimerResponse>("/api/maple/timer", { method: "POST", body: JSON.stringify(body) });
+        happened = true;
         const { entry } = res;
         if (input.action === "discard") {
           dropEntry(entry.id);
@@ -892,7 +1001,15 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             return fail({ kind: "changed", message, who, entry: cur }, "info");
           }
           const when = cur?.ended_at ? ` at ${formatTime(cur.ended_at, tzRef.current)}` : "";
-          return fail({ kind: "stopped", message: who ? `${who} already stopped it${when}` : `Already stopped${when}`, who, entry: cur }, "info");
+          const message =
+            !cur || cur.kind === "feed"
+              ? who
+                ? `${who} already ended this feed${when}`
+                : `This feed already ended${when}`
+              : who
+                ? `${who} already stopped this timer${when}`
+                : `This timer already stopped${when}`;
+          return fail({ kind: "stopped", message, who, entry: cur }, "info");
         }
         if (!(e instanceof ApiError)) {
           // Timers need the server's clock, so they aren't queued like entries.
@@ -903,14 +1020,33 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             8000
           );
         }
-        const code = (e.body as { code?: string } | null)?.code;
-        return fail({ kind: e.status === 400 ? "bad" : "error", message: e.message || "Timer hiccup, try again", who: null, code });
+        const b = e.body as { code?: string; reason?: string; deleted_by?: string | null } | null;
+        if (e.status === 404 && b?.reason === "discarded") {
+          // Thrown away on the other phone (or through Claude): say who, and drop it here too.
+          if (id !== null) dropEntry(id);
+          const who = memberLabel(b.deleted_by);
+          return fail({ kind: "gone", message: who ? `${who} discarded this timer` : "This timer was discarded", who }, "info");
+        }
+        return fail({ kind: e.status === 400 ? "bad" : "error", message: e.message || "Timer hiccup, try again", who: null, code: b?.code ?? undefined });
       } finally {
+        inflight.current--;
+        settle(happened);
+        if (q && id !== null && --q.n === 0) {
+          queuesRef.current.delete(id);
+          setBusy((b) => {
+            if (!b.has(id)) return b;
+            const n = new Set(b);
+            n.delete(id);
+            return n;
+          });
+        }
         void forceRefresh();
       }
     },
-    [confirm, dropEntry, forceRefresh, memberLabel, now, patchEntries, state, toast, upsert, withInflight]
+    [confirm, dropEntry, forceRefresh, memberLabel, now, optimistic, state, toast, upsert]
   );
+
+  const timerBusy = useCallback((id: number) => busy.has(id), [busy]);
 
   const timer = useCallback<MapleContextValue["timer"]>(async (input) => (await timerCall(input))?.entry ?? null, [timerCall]);
 
@@ -955,6 +1091,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       restore,
       timerCall,
       timer,
+      timerBusy,
       api,
       toasts,
       toast,
@@ -966,7 +1103,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       member,
       readOnly,
     }),
-    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox.length, online, seenAt, log, update, remove, restore, timerCall, timer, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, member, readOnly]
+    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox.length, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, member, readOnly]
   );
 
   return <MapleContext.Provider value={value}>{children}</MapleContext.Provider>;

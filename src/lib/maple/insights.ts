@@ -8,7 +8,7 @@
  * Clinical day-of-life targets use rolling 24-hour windows, never the local
  * calendar day, so a baby born at 11 PM doesn't look "behind" at midnight.
  */
-import { feedTotals, suggestNextSide } from "./feed";
+import { feedMinutes, suggestNextSide } from "./feed";
 import {
   ALERT_TIERS,
   BIRTH_WEIGHT_REGAIN_DAY,
@@ -46,6 +46,7 @@ export type DayStats = {
   feeds: number;
   breastFeeds: number;
   bottleFeeds: number;
+  /** Nursing as whole minutes × 60: each feed's rows added up (feedMinutes), so every surface shows the same minutes. */
   nursingSec: number;
   leftSec: number;
   rightSec: number;
@@ -76,7 +77,7 @@ export type Summary = {
   /** Running timers, oldest first. */
   active: Entry[];
   lastFeed: EntryOf<"feed"> | null;
-  /** Last feed's totals in seconds (breast) and ml (bottle). */
+  /** Last feed's totals in seconds, as whole minutes × 60 like its rows (breast), and ml (bottle). */
   lastFeedTotals: { left: number; right: number; total: number; ml: number | null } | null;
   /** Minutes since the last feed started, or null. */
   minutesSinceFeed: number | null;
@@ -173,10 +174,10 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
           s.bottleMl += e.data.amount_ml ?? 0;
         } else {
           s.breastFeeds++;
-          const t = feedTotals(e.data, now);
-          s.leftSec += t.left;
-          s.rightSec += t.right;
-          s.nursingSec += t.total;
+          const t = feedMinutes(e, now);
+          s.leftSec += t.left * 60;
+          s.rightSec += t.right * 60;
+          s.nursingSec += t.total * 60;
         }
         break;
       }
@@ -339,9 +340,11 @@ export function summarize(opts: {
   const active = entries.filter((e) => e.active).sort((a, b) => ts(a) - ts(b));
   const lastFeed = newest(entries, "feed");
   const lastBreast = newest(entries, "feed", (e) => e.data.method === "breast");
-  const lastFeedTotals = lastFeed
-    ? { ...feedTotals(lastFeed.data, now), ml: lastFeed.data.method === "bottle" ? lastFeed.data.amount_ml ?? null : null }
-    : null;
+  const lastMin = lastFeed ? feedMinutes(lastFeed, now) : null;
+  const lastFeedTotals =
+    lastFeed && lastMin
+      ? { left: lastMin.left * 60, right: lastMin.right * 60, total: lastMin.total * 60, ml: lastFeed.data.method === "bottle" ? lastFeed.data.amount_ml ?? null : null }
+      : null;
   const minutesSinceFeed = lastFeed ? Math.max(0, Math.round((nowMs - ts(lastFeed)) / 60000)) : null;
   // While nursing, this is the side to offer at the *next* feed.
   const nextSide = suggestNextSide(lastBreast?.data);
