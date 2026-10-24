@@ -66,8 +66,10 @@ export type DayStats = {
 /**
  * A milestone reached recently. The app shows each one once per person
  * (seen ids in localStorage), only by daytime, until it's 3 days old.
+ * `entryId` is the entry that made it (her first bath, the 100th diaper), so
+ * the card can quote the note the family wrote on it.
  */
-export type Celebration = { id: string; emoji: string; title: string; reachedAt: string; milestone?: string };
+export type Celebration = { id: string; emoji: string; title: string; reachedAt: string; milestone?: string; entryId?: number };
 
 export type Summary = {
   now: string;
@@ -621,19 +623,28 @@ export function summarize(opts: {
 
   // The diaper brigade (last 7 days). Diapers only: feeds are credited to
   // whoever logged them, not whoever fed, so they'd make a misleading score.
+  // The loaded entries reach back only ~72h, so the server counts the older
+  // part of the week (lifetime.week, up to its `before`) and the loaded ones
+  // count from there on: a change just logged shows at once.
   const weekAgo = nowMs - 7 * 24 * H;
   const dutyMap = new Map<string, { diapers: number; night: number }>();
   let teamDiapers = 0;
-  for (const e of ofKind(entries, "diaper")) {
-    if (ts(e) < weekAgo || ts(e) > nowMs) continue;
-    teamDiapers++;
-    if (!e.created_by) continue;
-    const who = memberName(e.created_by, members);
+  const credit = (by: string | null | undefined, diapers: number, night: number) => {
+    teamDiapers += diapers;
+    if (!by || !diapers) return;
+    const who = memberName(by, members);
     const d = dutyMap.get(who) ?? { diapers: 0, night: 0 };
-    d.diapers++;
-    const h = localParts(ts(e), tz).hour;
-    if (h >= 22 || h < 6) d.night++;
+    d.diapers += diapers;
+    d.night += night;
     dutyMap.set(who, d);
+  };
+  const older = opts.lifetime?.week;
+  const olderUntil = older ? Date.parse(older.before) : -Infinity;
+  for (const c of older?.counts ?? []) credit(c.by, c.diapers, c.night);
+  for (const e of ofKind(entries, "diaper")) {
+    if (ts(e) < weekAgo || ts(e) < olderUntil || ts(e) > nowMs) continue;
+    const h = localParts(ts(e), tz).hour;
+    credit(e.created_by, 1, h >= 22 || h < 6 ? 1 : 0);
   }
   const duty = [...dutyMap.entries()].map(([who, d]) => ({ who, ...d })).sort((a, b) => a.who.localeCompare(b.who));
 
@@ -678,7 +689,7 @@ const FIRST_POOP_DAYS = 4;
 
 /**
  * Milestones reached in the last 3 days, newest first. Counted milestones
- * ("Diaper #100") are dated by finding that entry among the recent ones.
+ * ("100 diapers") are dated by finding that entry among the recent ones.
  */
 function milestonesReached(o: {
   entries: Entry[];
@@ -726,31 +737,36 @@ function milestonesReached(o: {
     const e = entries.filter((x) => pred(x) && Date.parse(x.started_at) >= bornMs - 3600_000).sort((x, y) => ts(x) - ts(y))[0];
     return e ? ts(e) : null;
   };
+  /** The loaded entry behind a first (when it's still in the ~72h loaded), for its note. */
+  const entryAt = (at: number, pred: (e: Entry) => boolean) => entries.find((x) => pred(x) && ts(x) === at)?.id;
   // Meconium comes in her first days: a "first" poop logged later is just when the logging started.
-  const firstPoop = firstAt("poop", (e) => e.kind === "diaper" && e.data.poop);
-  if (firstPoop !== null && firstPoop - bornMs <= FIRST_POOP_DAYS * 24 * 3600_000) add({ id: "first-poop", emoji: "🌰", title: "First poop! The meconium era begins." }, firstPoop);
-  const firstBath = firstAt("bath", (e) => e.kind === "bath");
-  if (firstBath !== null) add({ id: "first-bath", emoji: "🛁", title: "First bath! Squeaky-clean little leaf.", milestone: "First bath" }, firstBath);
-  const firstTummy = firstAt("tummy", (e) => e.kind === "tummy" && !e.active);
-  if (firstTummy !== null) add({ id: "first-tummy", emoji: "🐢", title: "First tummy time! Tiny push-ups.", milestone: "First tummy time" }, firstTummy);
+  const isPoop = (e: Entry) => e.kind === "diaper" && !!e.data.poop;
+  const firstPoop = firstAt("poop", isPoop);
+  if (firstPoop !== null && firstPoop - bornMs <= FIRST_POOP_DAYS * 24 * 3600_000) add({ id: "first-poop", emoji: "🌰", title: "Her first poop", entryId: entryAt(firstPoop, isPoop) }, firstPoop);
+  const isBath = (e: Entry) => e.kind === "bath";
+  const firstBath = firstAt("bath", isBath);
+  if (firstBath !== null) add({ id: "first-bath", emoji: "🛁", title: "Her first bath", milestone: "First bath", entryId: entryAt(firstBath, isBath) }, firstBath);
+  const isTummy = (e: Entry) => e.kind === "tummy" && !e.active;
+  const firstTummy = firstAt("tummy", isTummy);
+  if (firstTummy !== null) add({ id: "first-tummy", emoji: "🐢", title: "Her first tummy time", milestone: "First tummy time", entryId: entryAt(firstTummy, isTummy) }, firstTummy);
 
   if (baby.birth_weight_g) {
     const back = o.weights.find((w) => w.data.weight_g! >= baby.birth_weight_g! && ts(w) > bornMs + 24 * 3600_000);
     const dippedFirst = back && o.weights.some((w) => ts(w) < ts(back) && w.data.weight_g! < baby.birth_weight_g!);
-    if (back && dippedFirst) add({ id: `regained-${back.id}`, emoji: "🎈", title: "Back to birth weight!", milestone: "Back to birth weight" }, ts(back));
+    if (back && dippedFirst) add({ id: `regained-${back.id}`, emoji: "🎈", title: "Back to her birth weight", milestone: "Back to birth weight", entryId: back.id }, ts(back));
   }
 
-  // "Diaper #100" / "Feed #500": date it by the entry that was the Nth.
+  // "100 diapers" / "500 feeds": date it by the entry that was the Nth.
   const counted = (kind: "diaper" | "feed", total: number, marks: number[], label: (n: number) => string, emoji: string) => {
     const recent = ofKind(entries, kind).filter((e) => !e.active).sort((x, y) => ts(y) - ts(x));
     for (const n of marks) {
       const fromNewest = total - n;
       if (fromNewest < 0 || fromNewest >= recent.length) continue;
-      add({ id: `${kind}-${n}`, emoji, title: label(n) }, ts(recent[fromNewest]));
+      add({ id: `${kind}-${n}`, emoji, title: label(n), entryId: recent[fromNewest].id }, ts(recent[fromNewest]));
     }
   };
-  counted("diaper", totals.diapers, [100, 250, 500, 1000, 2000], (n) => `Diaper #${n}. The changing table salutes you.`, "🎉");
-  counted("feed", totals.feeds, [100, 500, 1000], (n) => `Feed #${n}. That's a lot of milky naps.`, "🍼");
+  counted("diaper", totals.diapers, [100, 250, 500, 1000, 2000], (n) => `${n} diapers`, "🎉");
+  counted("feed", totals.feeds, [100, 500, 1000], (n) => `${n} feeds`, "🍼");
 
   return out.sort((a, b) => Date.parse(b.reachedAt) - Date.parse(a.reachedAt));
 }

@@ -149,7 +149,7 @@ export default function JoinPage() {
         )}
 
         {phase.kind === "offline" && (
-          <Stuck title="Couldn't reach the forest">
+          <Stuck title="Couldn't connect">
             Check your connection, then try again. Your link still works.
             <RetryButton onClick={retry} />
           </Stuck>

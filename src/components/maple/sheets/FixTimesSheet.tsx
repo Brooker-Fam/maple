@@ -774,18 +774,20 @@ function PartPicker({
   const shows: StretchRef | null = (pin.kind === "side" || pin.kind === "break") && editing ? editing : pin.kind === "side" ? pin.ref : null;
   const sides = sidesOf(parts);
   const openBreak = e.active && parts.at(-1)?.kind === "break" ? parts.at(-1)! : null;
-  const chip = (key: string, selected: boolean, label: ReactNode, onClick: () => void) => (
+  const chip = (key: string, selected: boolean, label: ReactNode, onClick: () => void, aria?: string) => (
     <button
       key={key}
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-pressed={selected}
+      aria-label={aria}
       className={cx(
-        // (px-3: two parts fit side by side at 375 px.)
+        // (px-3, and no side word beside the side's disc: two parts fit side by side at 375 px.)
         "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 text-[14px] font-medium whitespace-nowrap tabular-nums transition disabled:opacity-60",
+        // Selected is the accent, as everywhere else (an ink fill turned into a cream slab in dark mode).
         selected
-          ? "bg-mp-ink text-mp-surface [.maple-night_&]:bg-[rgb(224_169_59/0.2)] [.maple-night_&]:text-[#E8A23F]"
+          ? "bg-mp-accent text-mp-on-accent [.maple-night_&]:bg-[rgb(224_169_59/0.2)] [.maple-night_&]:text-[#E8A23F]"
           : "bg-mp-sunken text-mp-ink"
       )}
     >
@@ -800,9 +802,11 @@ function PartPicker({
           !!shows && shows.side === s.side && near(shows.start, s.start),
           <>
             <SideMark side={s.side} size={20} />
-            {SIDE_NAME[s.side]} · {formatRange(s.start, s.end, tz, { compact: true })}
+            {formatRange(s.start, s.end, tz, { compact: true })}
           </>,
-          () => onPick({ kind: "side", ref: s.ref, index: i, panel: s.end === null && e.active ? "open" : "closed" })
+          () => onPick({ kind: "side", ref: s.ref, index: i, panel: s.end === null && e.active ? "open" : "closed" }),
+          // The disc is aria-hidden, so the side is said here.
+          `${SIDE_NAME[s.side]}, ${formatRange(s.start, s.end, tz, { compact: true })}`
         )
       )}
       {openBreak &&
@@ -835,7 +839,8 @@ type PanelProps = {
 function Title({ children, sub, focusRef }: { children: ReactNode; sub?: ReactNode; focusRef?: Ref<HTMLParagraphElement> }) {
   return (
     <div>
-      <p ref={focusRef} tabIndex={focusRef ? -1 : undefined} className="text-[20px] leading-snug font-semibold text-mp-ink outline-none">
+      {/* 17px: a question under the sheet's 20px title, not a second title. */}
+      <p ref={focusRef} tabIndex={focusRef ? -1 : undefined} className="text-[17px] leading-snug font-semibold text-mp-ink outline-none">
         {children}
       </p>
       {sub && <p className="mt-0.5 text-[14px] text-mp-ink-2">{sub}</p>}
@@ -1309,7 +1314,7 @@ function SidePicker({ side, label, disabled, onPick }: { side: Side | null; labe
           onClick={() => onPick(x)}
           className={cx(
             "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl text-[15px] font-semibold transition disabled:opacity-45",
-            side === x ? "bg-mp-ink text-mp-surface [.maple-night_&]:bg-[rgb(224_169_59/0.2)] [.maple-night_&]:text-[#E8A23F]" : "bg-mp-sunken text-mp-ink"
+            side === x ? "bg-mp-accent text-mp-on-accent [.maple-night_&]:bg-[rgb(224_169_59/0.2)] [.maple-night_&]:text-[#E8A23F]" : "bg-mp-sunken text-mp-ink"
           )}
         >
           <SideMark side={x} size={22} />

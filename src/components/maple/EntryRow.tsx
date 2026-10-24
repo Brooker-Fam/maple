@@ -21,8 +21,8 @@ export function photoUrl(entryId: number, index: number, size: "thumb" | "full" 
 
 /**
  * One line in a list of entries: the kind's icon, what happened, when, and
- * who logged it. Tap to edit. Lists put these in a card with hairline
- * dividers (tone.divide).
+ * who logged it (only when it wasn't you). Tap to edit. Lists put these in a
+ * card with hairline dividers (tone.divide), or a thread (the Timeline).
  */
 export default function EntryRow({
   entry,
@@ -52,7 +52,8 @@ export default function EntryRow({
         // eslint-disable-next-line @next/next/no-img-element
         <img src={photoUrl(entry.id, 0)} alt="" className="h-9 w-9 shrink-0 rounded-[10px] object-cover" loading="lazy" />
       ) : (
-        <KindBadge entry={entry} className={cx(entry.active && "animate-pulse motion-reduce:animate-none [.maple-night_&]:animate-none")} />
+        // No pulse on a live one: "Nursing now" and its minutes already say so, and a pulse reads as a loading skeleton.
+        <KindBadge entry={entry} />
       )}
       {/* Two lines that share baselines: what + when, then detail + how long ago. A one-line entry stays one line. */}
       <span className="min-w-0 flex-1">
@@ -64,7 +65,8 @@ export default function EntryRow({
                 <Icon name="refresh-cw" size={12} label="Not synced yet" />
               </span>
             )}
-            <Avatar member={who} size={16} />
+            {/* Your own rows go unmarked: the initial only says when someone else logged it. */}
+            {entry.created_by && entry.created_by !== state?.me.email && <Avatar member={who} size={16} />}
             {formatTime(entry.started_at, tz)}
           </span>
         </span>

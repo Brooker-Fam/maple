@@ -155,8 +155,9 @@ export default function TimerCard({ entry }: { entry: Entry }) {
       aria-busy={!!fixLater || undefined}
       onClick={() => openFix("current")}
       className={cx(
-        "inline-flex w-full items-center justify-center gap-2 rounded-[14px] border border-mp-line text-[15px] font-semibold text-mp-ink transition active:bg-mp-ink/5 disabled:opacity-50",
-        "[.maple-night_&]:border-[rgb(224_169_59/0.35)] [.maple-night_&]:text-[#E8A23F]",
+        // A filled well like the app's other secondary buttons (an outline here was the only one in the app).
+        "inline-flex w-full items-center justify-center gap-2 rounded-[14px] bg-mp-sunken text-[15px] font-semibold text-mp-ink transition active:bg-mp-ink/10 disabled:opacity-50",
+        "[.maple-night_&]:bg-[rgb(224_169_59/0.1)] [.maple-night_&]:text-[#E8A23F]",
         compact ? "min-h-[44px]" : "min-h-[48px]"
       )}
     >
@@ -183,15 +184,24 @@ export default function TimerCard({ entry }: { entry: Entry }) {
         </div>
         {controls && (
           <div className="-my-2 -mr-2 flex shrink-0 items-center">
+            {/* At night the 3am feature says its name (a labelled pill in the same 44px hit area); by day it's just the lamp. */}
             {canLantern && (
               <button
                 type="button"
                 disabled={pending}
                 onClick={() => setLantern(true)}
                 aria-label="Lantern: dim full-screen timer that keeps the screen on"
-                className={ICON_BTN}
+                className={night ? "flex h-11 shrink-0 items-center justify-center text-mp-ink-2 transition active:scale-95 disabled:opacity-40" : ICON_BTN}
               >
-                <Icon name="lamp" size={21} />
+                {/* (Snug: "Nursing · paused" still fits beside it at 375 px.) */}
+                {night ? (
+                  <span className="inline-flex min-h-[36px] items-center gap-1 rounded-full border border-[rgb(224_169_59/0.35)] px-2.5 text-[13px] font-semibold">
+                    <Icon name="lamp" size={17} />
+                    Lantern
+                  </span>
+                ) : (
+                  <Icon name="lamp" size={21} />
+                )}
               </button>
             )}
             <div ref={menuWrap} className="relative">

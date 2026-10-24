@@ -455,7 +455,8 @@ export function LiveBlock({
             "leading-none font-semibold tracking-[-0.03em] tabular-nums",
             compact ? "text-[44px]" : "text-[56px]",
             // The one live number on screen gets a soft amber glow at night (never by day, never paused).
-            paused ? "text-mp-ink-2 opacity-45" : "text-mp-ink [.maple-night_&]:[text-shadow:0_0_22px_rgb(224_169_59/0.3)]"
+            // Paused it steps back to ink-3, still 4:1 or better: it's the number that decides "resume or done".
+            paused ? "text-mp-ink-3" : "text-mp-ink [.maple-night_&]:[text-shadow:0_0_22px_rgb(224_169_59/0.3)]"
           )}
         >
           {clockText}

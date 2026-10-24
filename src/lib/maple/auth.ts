@@ -32,8 +32,6 @@ export const MAPLE_STATE_PREFIX = "maple.";
 const SESSION_DAYS = 180;
 export const ADMIN_ID = "admin";
 
-const DEFAULT_EMOJIS = ["🌲", "🌸", "🦊", "🍄", "🦉", "🐿️", "🦔", "🌻", "🐝", "🍁"];
-
 export function isGoogleConfigured(): boolean {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
@@ -196,12 +194,6 @@ function allowlist(): string[] {
     .filter(Boolean);
 }
 
-async function pickEmoji(): Promise<string> {
-  const rows = await query(`SELECT emoji FROM maple_members`);
-  const used = new Set((rows ?? []).map((r) => String(r.emoji)));
-  return DEFAULT_EMOJIS.find((e) => !used.has(e)) ?? "🍁";
-}
-
 /**
  * Resolves a Google sign-in to a member, adding them when allowed.
  *
@@ -237,11 +229,12 @@ export async function joinWithGoogle(
   }
 
   const role: Role = noOneYet ? "owner" : "member";
+  // No emoji: avatars show the initial in the member's color until they pick one in Family.
   const inserted = await query(
     `INSERT INTO maple_members (email, role, display_name, emoji, added_by)
-     VALUES ($1, $2, $3, $4, 'self')
+     VALUES ($1, $2, $3, NULL, 'self')
      ON CONFLICT (email) DO NOTHING`,
-    [who.email, role, who.name, await pickEmoji()]
+    [who.email, role, who.name]
   );
   if (inserted === null) return { member: null, reason: "unavailable" };
   return { member: await memberFor(who.email) };

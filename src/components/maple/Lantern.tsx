@@ -149,13 +149,13 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     const last = timerNumbers(e, serverNow()).parts.filter((p) => p.kind === "side").at(-1);
     showHint(last?.kind === "side" ? `Paused · ${SIDE_NAME[last.side]} ${minutesText(last.min)}` : "Paused", 3000);
   };
-  // The big clock is the part she's on now: this side, or the break (dimmed).
-  const subtitle = !isFeed
-    ? `Asleep · since ${formatTime(live.started_at, tz)}`
-    : n.paused
-      ? `On a break · since ${short(n.current.since)}`
-      : // The feed's start only when it's another time (on a one-side feed it's this side's start).
-        `${SIDE_NAME[side]} side · since ${short(n.current.since)}${short(live.started_at) === short(n.current.since) ? "" : ` · feed started ${short(live.started_at)}`}`;
+  // The big clock is the part she's on now: this side, or the break (dimmed). The side is named first, above it
+  // (it's the 3am question); when it started goes under it.
+  const heading = !isFeed ? "Asleep" : n.paused ? "On a break" : `${SIDE_NAME[side]} side`;
+  const detail = !isFeed
+    ? `Since ${formatTime(live.started_at, tz)}`
+    : // The feed's start only when it's another time (on a one-side feed it's this side's start).
+      `Since ${short(n.current.since)}${short(live.started_at) === short(n.current.since) ? "" : ` · started ${short(live.started_at)}`}`;
 
   if (!mounted) return null;
   return createPortal(
@@ -178,7 +178,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       }}
     >
       <div className="flex items-center justify-between px-4 pt-[max(12px,env(safe-area-inset-top))]">
-        <p className="text-[13px] opacity-40">Lantern · swipe down to close</p>
+        <p className="text-[13px] opacity-50">Lantern · swipe down to close</p>
         <button
           type="button"
           onClick={onClose}
@@ -193,18 +193,31 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         className="flex flex-1 flex-col items-center justify-center px-6 text-center"
         onClick={() => showHint(isFeed && !n.paused ? "Hold Switch, Pause or Done" : "Hold a button to use it")}
       >
+        <p className="mb-3 flex items-center gap-2.5 text-2xl font-semibold" style={{ opacity: n.paused ? 0.55 : 0.75 }}>
+          {/* The side's letter in a ring, as the card and dock show it at night. */}
+          {isFeed && !n.paused && (
+            <span
+              aria-hidden
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[17px] font-bold"
+              style={{ boxShadow: "inset 0 0 0 2px rgba(224,169,59,.5)" }}
+            >
+              {side}
+            </span>
+          )}
+          {heading}
+        </p>
         <p
           className="text-[80px] leading-none font-semibold tracking-[-0.03em] tabular-nums"
-          style={{ opacity: n.paused ? 0.35 : dim ? 0.55 : 0.6 }}
+          style={{ opacity: n.paused ? 0.5 : dim ? 0.7 : 0.75 }}
           aria-live="off"
         >
           {formatClock(isFeed ? n.current.sec : n.elapsed)}
         </p>
-        <p className="mt-3 text-lg opacity-50">{subtitle}</p>
+        <p className="mt-3 text-[17px] whitespace-nowrap tabular-nums opacity-65">{detail}</p>
         {/* Total only with more than one side (on one side it's the big clock, said twice); on a break, what she had so far. */}
-        {isFeed && !n.paused && n.parts.filter((p) => p.kind === "side").length > 1 && <p className="mt-1 text-sm tabular-nums opacity-35">Total nursing {minutesText(n.totalMin)}</p>}
+        {isFeed && !n.paused && n.parts.filter((p) => p.kind === "side").length > 1 && <p className="mt-1 text-base tabular-nums opacity-60">Total nursing {minutesText(n.totalMin)}</p>}
         {isFeed && n.paused && (
-          <p className="mt-1 text-sm tabular-nums opacity-40">
+          <p className="mt-1 text-base tabular-nums opacity-60">
             {stale ? "Over an hour: her side starts a new feed" : n.current.sec >= 20 * 60 ? `Still on a break? Nursed ${minutesText(n.totalMin)} so far` : `Nursed ${minutesText(n.totalMin)} so far`}
           </p>
         )}
@@ -220,7 +233,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
               Still nursing? {SIDE_NAME[side]} {minutesText(n.current.min)}
             </p>
           )}
-          <p className="text-[13px] opacity-40">Hold a button to use it</p>
+          <p className="text-[13px] opacity-50">Hold a button to use it</p>
         </div>
       )}
       <div className="flex h-[40dvh] gap-3 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">

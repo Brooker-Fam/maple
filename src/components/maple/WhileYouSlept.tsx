@@ -2,23 +2,29 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
+import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
 import { photoUrl } from "./EntryRow";
-import { Icon, type IconName } from "./icons";
 import { SIDE_NAME } from "./TimerCard";
 import { Avatar, Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
  * The hand-off card for the parent who just woke up (or got back from work):
- * everything logged since their last visit, in one paragraph, so they don't
- * have to rebuild the night from the timeline. Shown after a 3h+ gap, until
- * "Got it".
+ * everything logged since their last visit, as the few sentences the other
+ * parent would leave on the counter ("5 feeds, the last at 12:05 PM. Left is
+ * next."), signed by whoever logged it. So they don't have to rebuild the
+ * night from the timeline. Shown after a 3h+ gap, until "Got it".
  */
 
 const GAP_MS = 3 * 3600_000;
 const KEY = "maple-wys-dismissed";
+
+const plural = (n: number) => (n === 1 ? "" : "s");
+
+/** "1h 30m", "1h 30m and 1h 45m", "1h 30m, 1h 45m and 1h 03m". */
+const listed = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 function overlapsNight(from: number, to: number, tz: string): boolean {
   for (let t = from; t <= to; t += 30 * 60_000) {
@@ -52,41 +58,44 @@ export default function WhileYouSlept() {
   if (!fresh.length) return null;
 
   const feeds = fresh.filter((e) => e.kind === "feed").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
-  const diapers = fresh.filter((e) => e.kind === "diaper");
+  const diapers = fresh.filter((e) => e.kind === "diaper").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const wet = diapers.filter((e) => e.kind === "diaper" && e.data.pee).length;
-  const dirty = diapers.filter((e) => e.kind === "diaper" && e.data.poop).length;
+  const dirty = diapers.filter((e) => e.kind === "diaper" && e.data.poop);
   const sleeps = fresh.filter((e) => e.kind === "sleep").sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
-  const done = sleeps
-    .filter((e) => !e.active && e.ended_at)
-    .map((e) => formatDuration(Math.max(60, (Date.parse(e.ended_at!) - Date.parse(e.started_at)) / 1000)));
+  const slept = sleeps.filter((e) => !e.active && e.ended_at).map((e) => Math.max(60, (Date.parse(e.ended_at!) - Date.parse(e.started_at)) / 1000));
+  const napping = sleeps.some((e) => e.active);
   const vitD = fresh.some((e) => e.kind === "med" && isVitaminD(e.data.name));
   const moments = fresh.filter((e) => e.kind === "moment");
   const photo = moments.find((e) => e.kind === "moment" && e.data.photos?.length);
   const who = [...new Set(fresh.map((e) => e.created_by).filter((x): x is string => !!x))];
 
-  // One short line per kind of thing, so the night reads at a glance.
-  const bits: { icon: IconName; text: string }[] = [];
+  // The note she'd leave: one short sentence per kind of thing, so the night reads at a glance.
+  const lines: string[] = [];
   if (feeds.length) {
-    const next = summary.nextSide && !summary.active.some((e) => e.kind === "feed") ? `, ${SIDE_NAME[summary.nextSide]} next` : "";
-    bits.push({ icon: "baby", text: `${feeds.length} feed${feeds.length === 1 ? "" : "s"} (last ${formatTime(feeds[0].started_at, tz)}${next})` });
+    const next = summary.nextSide && !summary.active.some((e) => e.kind === "feed") ? ` ${SIDE_NAME[summary.nextSide]} is next.` : "";
+    const last = formatTime(feeds[0].started_at, tz);
+    lines.push(`${feeds.length === 1 ? `1 feed, at ${last}` : `${feeds.length} feeds, the last at ${last}`}.${next}`);
   }
   if (diapers.length) {
-    const parts = [wet && `${wet} wet`, dirty && `${dirty} dirty`].filter(Boolean).join(", ");
-    bits.push({ icon: "diaper", text: `${diapers.length} diaper${diapers.length === 1 ? "" : "s"}${parts ? ` (${parts})` : ""}` });
+    // Count diapers once (a wet + dirty one is one diaper), and say the color of the latest poop.
+    const latest = dirty[0];
+    const color = latest?.kind === "diaper" && latest.data.color ? STOOL_COLOR_INFO[latest.data.color].label.toLowerCase() : null;
+    const n = diapers.length;
+    if (!dirty.length) lines.push(wet === n ? `${n} wet diaper${plural(n)}.` : `${n} diaper${plural(n)}${wet ? `, ${wet} wet` : ""}.`);
+    else if (dirty.length === 1) lines.push(`${n} diaper${plural(n)}, ${n === 1 ? "with" : "1 with"} poop${color ? ` (${color})` : ""}.`);
+    else lines.push(`${n} diapers, ${dirty.length === n ? "all" : dirty.length} with poop${color ? `, the last ${color}` : ""}.`);
   }
-  const napping = sleeps.some((e) => e.active);
-  if (done.length > 3) {
+  if (slept.length > 3) {
     // A long shift: total and longest, not a list of every stretch.
-    const secs = sleeps.filter((e) => !e.active && e.ended_at).map((e) => (Date.parse(e.ended_at!) - Date.parse(e.started_at)) / 1000);
-    const total = secs.reduce((a, b) => a + b, 0);
-    bits.push({
-      icon: "moon",
-      text: `Slept ${formatDuration(total)} in ${secs.length} stretches (longest ${formatDuration(Math.max(...secs))})${napping ? " + asleep now" : ""}`,
-    });
-  } else if (done.length || napping) {
-    bits.push({ icon: "moon", text: done.length ? `Slept ${done.join(" + ")}${napping ? " + asleep now" : ""}` : "Asleep now" });
+    const total = slept.reduce((a, b) => a + b, 0);
+    lines.push(`Slept ${formatDuration(total)} in ${slept.length} stretches, longest ${formatDuration(Math.max(...slept))}.${napping ? " Asleep now." : ""}`);
+  } else if (slept.length) {
+    const naps = listed(slept.map(formatDuration));
+    lines.push(`${slept.length === 1 ? `A nap of ${naps}` : `Naps of ${naps}`}.${napping ? " Asleep now." : ""}`);
+  } else if (napping) {
+    lines.push("Asleep now.");
   }
-  if (vitD) bits.push({ icon: "sun", text: "Vitamin D given" });
+  if (vitD) lines.push("Vitamin D given.");
 
   const extra: string[] = [];
   const urgent = summary.alerts.filter((a) => a.tier === "emergency" || a.tier === "now" || a.tier === "today");
@@ -115,28 +124,17 @@ export default function WhileYouSlept() {
 
   return (
     <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} aria-labelledby="wys" className={cx(tone.card, "p-4")}>
-      <div className="flex items-start justify-between gap-3">
-        <h2 id="wys" className={cx(tone.heading, "flex min-w-0 items-center gap-2 text-[17px] leading-snug")}>
-          <Icon name={overnight ? "moon-star" : "history"} size={19} className="shrink-0 text-mp-ink-2" />
-          <span className="min-w-0">{title}</span>
-        </h2>
-        <div role="img" className="flex shrink-0 -space-x-1.5" aria-label={`Logged by ${who.map((w) => memberName(w)).join(", ")}`}>
-          {who.slice(0, 4).map((w) => (
-            <span key={w} title={memberName(w)} className="rounded-full ring-2 ring-mp-surface">
-              <Avatar member={member(w) ?? { email: w, display_name: memberName(w), role: "member", emoji: null, color: null }} size={26} />
-            </span>
+      <h2 id="wys" className={cx(tone.heading, "text-[17px] leading-snug")}>
+        {title}
+      </h2>
+      {lines.length > 0 && (
+        <div className="mt-2 space-y-0.5">
+          {lines.map((l) => (
+            <p key={l} className="text-[15px] leading-snug text-mp-ink">
+              {l}
+            </p>
           ))}
         </div>
-      </div>
-      {bits.length > 0 && (
-        <ul className="mt-2.5 space-y-1.5">
-          {bits.map((b) => (
-            <li key={b.icon} className="flex items-start gap-2.5 text-[15px] leading-snug text-mp-ink">
-              <Icon name={b.icon} size={17} className="mt-0.5 shrink-0 text-mp-ink-3" />
-              {b.text}
-            </li>
-          ))}
-        </ul>
       )}
       {(extra.length > 0 || photo) && (
         <div className="mt-3 flex items-center gap-2.5">
@@ -147,8 +145,21 @@ export default function WhileYouSlept() {
           <p className="text-sm text-mp-ink-2">{extra.join(" · ")}</p>
         </div>
       )}
-      <div className="mt-3 flex justify-end">
-        <Button variant="soft" onClick={gotIt}>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        {/* Signed, like a note: each person's initial disc and name ("Brittany", "Brittany and Grandma"). */}
+        <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-mp-ink-2">
+          {who.map((w, i) => (
+            <span key={w} className="inline-flex items-center gap-1.5">
+              <Avatar member={member(w) ?? { email: w, display_name: memberName(w), role: "member", emoji: null, color: null }} size={18} />
+              <span>
+                {memberName(w)}
+                {i < who.length - 2 && ","}
+              </span>
+              {i === who.length - 2 && <span>and</span>}
+            </span>
+          ))}
+        </p>
+        <Button variant="soft" className="shrink-0" onClick={gotIt}>
           Got it
         </Button>
       </div>

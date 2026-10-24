@@ -217,7 +217,7 @@ export type MapleState = {
   entries: Entry[];
   /** Every growth entry, oldest first (small, and charts need them all). */
   growth: Entry[];
-  /** Lifetime counts and firsts, for celebrations ("Diaper #100!", "First poop!"). */
+  /** Lifetime counts and firsts, for celebrations ("100 diapers", "Her first poop"), and the brigade's week. */
   lifetime: Lifetime;
   /** Opaque change token; pass back as ?rev= to get { unchanged: true }. */
   rev: string;
@@ -323,6 +323,13 @@ export type Lifetime = {
   diapers: number;
   feeds: number;
   firsts?: { poop: string | null; bath: string | null; tummy: string | null };
+  /**
+   * The diaper brigade's week, the part the loaded entries don't reach:
+   * changes per person (`by` = created_by) from 7 days ago up to `before`
+   * (72h ago, ISO). The summary adds the loaded entries from `before` on.
+   * `night` counts changes from 10pm to 6am in her timezone.
+   */
+  week?: { before: string; counts: { by: string | null; diapers: number; night: number }[] };
 };
 
 /** POST /api/maple/timer */

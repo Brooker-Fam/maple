@@ -1,5 +1,7 @@
 "use client";
 
+import { motion, useReducedMotion } from "framer-motion";
+import { useEffect, useState, type ReactNode } from "react";
 import { DEFAULT_TZ, localParts } from "@/lib/maple/time";
 import { useNightActive } from "./nightLook";
 import { cx, tone } from "./ui";
@@ -10,8 +12,13 @@ import { useMaple, useNow } from "./useMaple";
  * life and follows the real seasons (rust in October, bare with fairy lights
  * in winter, buds in spring, green in summer, red again on her birthday).
  * It stands still (no ambient motion); `sway` is there for a page that wants it.
- * Zoe naps at its roots at night and pricks up an ear while a timer runs.
+ * The one movement is earned: the first daytime visit after a week turns
+ * over, the new leaf unfurls once. Zoe naps at its roots at night and pricks
+ * up an ear while a timer runs.
  */
+
+/** The leaf count this phone last showed, so the week's new leaf grows in once. */
+const LEAVES_KEY = "maple-tree-leaves";
 
 /** A small maple leaf, centered on 0,0, about 20 units tall (stem at the bottom). */
 export const MAPLE_LEAF_PATH =
@@ -74,14 +81,15 @@ function leafSpots(n: number): [number, number, number][] {
 export function Sapling({
   leaves,
   season,
-  gnome,
+  fresh,
   sway,
   className,
 }: {
   /** One per week of age (capped at 52); the tree also grows taller over her first two months. */
   leaves: number;
   season: Season;
-  gnome?: boolean;
+  /** The index of a leaf that has just come in: it unfurls from its stem once. */
+  fresh?: number;
   sway?: boolean;
   className?: string;
 }) {
@@ -119,32 +127,40 @@ export function Sapling({
               <circle key={i} cx={x} cy={y + 3} r="1.6" fill="#F3D27A" />
             ))}
           {season === "spring" &&
-            spots.map(([x, y], i) => <circle key={i} cx={x} cy={y} r={2.4 * size} fill="#A9C98A" stroke="#6B8448" strokeWidth="0.6" />)}
+            spots.map(([x, y], i) => (
+              <g key={i} transform={`translate(${x} ${y})`}>
+                <Unfurl on={i === fresh}>
+                  <circle r={2.4 * size} fill="#A9C98A" stroke="#6B8448" strokeWidth="0.6" />
+                </Unfurl>
+              </g>
+            ))}
           {!bare &&
             season !== "spring" &&
             spots.map(([x, y, rot], i) => (
-              <path
-                key={i}
-                d={MAPLE_LEAF_PATH}
-                transform={`translate(${x} ${y}) rotate(${rot}) scale(${size})`}
-                fill={palette[i % palette.length]}
-                stroke="rgba(0,0,0,0.12)"
-                strokeWidth="0.5"
-              />
+              <g key={i} transform={`translate(${x} ${y}) rotate(${rot}) scale(${size})`}>
+                <Unfurl on={i === fresh}>
+                  <path d={MAPLE_LEAF_PATH} fill={palette[i % palette.length]} stroke="rgba(0,0,0,0.12)" strokeWidth="0.5" />
+                </Unfurl>
+              </g>
             ))}
         </g>
       </g>
-      {gnome && (
-        <g transform="translate(70 86)">
-          {/* a tiny acorn-capped gnome at the roots on her month-days */}
-          <path d="M0,14 L3,6 L9,6 L12,14 Z" fill="#5C7A4A" />
-          <circle cx="6" cy="6" r="3" fill="#E8C8B8" />
-          <path d="M3.2,7 Q6,13 8.8,7 Z" fill="#F5F0E6" />
-          <path d="M1.5,5 Q6,-2.5 10.5,5 Z" fill="#8A5A2B" />
-          <path d="M6,-0.8 L6,-2.8" stroke="#5A3A1A" strokeWidth="1" strokeLinecap="round" />
-        </g>
-      )}
     </svg>
+  );
+}
+
+/** A leaf growing in: from nothing to full size, pivoting on its stem, once. */
+function Unfurl({ on, children }: { on: boolean; children: ReactNode }) {
+  if (!on) return <>{children}</>;
+  return (
+    <motion.g
+      initial={{ scale: 0 }}
+      animate={{ scale: 1 }}
+      transition={{ type: "spring", damping: 14, stiffness: 140, delay: 0.5 }}
+      style={{ originX: 0.5, originY: 1 }}
+    >
+      {children}
+    </motion.g>
   );
 }
 
@@ -182,21 +198,48 @@ export function Zoe({ alert, className }: { alert?: boolean; className?: string 
   );
 }
 
+/**
+ * The leaf to grow in this visit, if a new one came since this phone last
+ * looked: only by day (at night it waits for the morning) and never under
+ * Reduce Motion. A first visit on a phone just remembers the count.
+ */
+function useFreshLeaf(leaves: number, night: boolean): number | undefined {
+  const reduce = useReducedMotion();
+  const [fresh, setFresh] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (leaves < 1 || night) return;
+    try {
+      const raw = localStorage.getItem(LEAVES_KEY);
+      const seen = raw == null ? null : Number(raw);
+      if (seen != null && Number.isFinite(seen) && leaves > seen && !reduce) setFresh(leaves - 1);
+      localStorage.setItem(LEAVES_KEY, String(leaves));
+    } catch {
+      // storage blocked: the tree just stands there, fully grown
+    }
+  }, [leaves, night, reduce]);
+  return fresh;
+}
+
 export default function Hero() {
   const { state, summary, isNight, toast } = useMaple();
   const now = useNow(60_000);
   const nightLook = useNightActive();
+  const age = summary?.age ?? null;
+  const night = isNight() || nightLook;
+  const leaves = age ? Math.min(52, age.weeks + 1) : 0;
+  const fresh = useFreshLeaf(leaves, night);
   if (!state || !summary) return null;
   const tz = state.baby.timezone ?? DEFAULT_TZ;
-  const age = summary.age;
-  const night = isNight() || nightLook;
   const p = localParts(now, tz);
   const born = state.baby.born_at ? localParts(Date.parse(state.baby.born_at), tz) : null;
   const monthDay = !!(born && age && age.months >= 1 && p.day === born.day);
   const birthday = !!(born && age && age.months >= 12 && p.month === born.month && p.day === born.day);
   const season = seasonFor(p.month, birthday);
-  const leaves = age ? Math.min(52, age.weeks + 1) : 0;
   const first = (state.baby.name || "Maple").split(" ")[0];
+  // One fact under her name: "Day 5" for her first two weeks, then her
+  // month-day on its day ("1 month old today", "1 year old today"), otherwise her age.
+  const years = age && age.months % 12 === 0 ? age.months / 12 : 0;
+  const onMonthDay = years ? `${years} year${years === 1 ? "" : "s"} old today` : `${age?.months} month${age?.months === 1 ? "" : "s"} old today`;
   const timerRunning = summary.active.length > 0;
 
   const aboutTree = () =>
@@ -213,15 +256,13 @@ export default function Hero() {
         <h1 className={cx(tone.display, "truncate text-[34px] leading-[1.05]")}>{state.baby.name}</h1>
         {age && (
           <p className={cx(tone.muted, "mt-1 text-[15px]")}>
-            <span className="font-semibold text-mp-maple">Day {age.dayOfLife}</span>
-            <span aria-hidden> · </span>
-            {age.label}
+            {age.days < 14 ? <span className="font-semibold text-mp-maple">Day {age.dayOfLife}</span> : monthDay ? onMonthDay : age.label}
           </p>
         )}
       </div>
       <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} ${leaves === 1 ? "leaf" : "leaves"}, one for each week`} className="relative shrink-0 rounded-2xl active:scale-[0.98]">
         {/* Still, not swaying: nothing on Today moves unless something happened. */}
-        <Sapling leaves={leaves} season={season} gnome={monthDay} className="h-[72px] w-[66px]" />
+        <Sapling leaves={leaves} season={season} fresh={fresh} className="h-[72px] w-[66px]" />
         {night && <Zoe alert={timerRunning} className="absolute bottom-[1px] left-0 h-[20px] w-[33px]" />}
       </button>
     </header>

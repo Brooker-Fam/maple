@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { WelcomeHost } from "./BirthSheet";
 import FamilyTab from "./FamilyTab";
@@ -42,7 +42,10 @@ export default function MapleApp() {
   return (
     <MapleProvider>
       <SheetProvider>
-        <Shell />
+        {/* Reduce Motion turns every slide and spring into a fade (framer drops transforms, keeps opacity). */}
+        <MotionConfig reducedMotion="user">
+          <Shell />
+        </MotionConfig>
       </SheetProvider>
     </MapleProvider>
   );
@@ -227,7 +230,8 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
   return (
     <nav
       aria-label="Maple's Log"
-      className="fixed inset-x-0 bottom-0 z-[70] border-t border-mp-line bg-mp-bg/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl"
+      // Opaque at night: through the frosted bar, the page scrolling under it showed as ghost text.
+      className="fixed inset-x-0 bottom-0 z-[70] border-t border-mp-line bg-mp-bg/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none"
     >
       <div className="mx-auto flex max-w-lg">
         {TABS.map((t) => {

@@ -14,7 +14,7 @@ import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE } from "./TimerCard";
-import { Avatar, cx, tone } from "./ui";
+import { Avatar, cx, memberColor, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -76,11 +76,6 @@ function roughGap(min: number): string {
   const h = Math.floor(r / 60);
   const m = r % 60;
   return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
-}
-
-/** A small colored dot, matching the dock's diaper buttons and the day dial. */
-function Dot({ color }: { color: string }) {
-  return <span aria-hidden className="mp-kind-fill h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />;
 }
 
 /** One of the three "how long since" numbers: the value, with its label underneath. */
@@ -241,11 +236,19 @@ export default function StatusCard() {
         </div>
       )}
 
-      {/* Diapers and sleep, side by side. */}
-      <div className="grid grid-cols-3 divide-x divide-mp-line">
-        {/* All three are "how long since", so they share one form (and fit a third of a phone). */}
-        <Since label="Since pee" mark={<Dot color={DETAIL_COLOR.pee} />} value={summary.lastPee ? since((now.getTime() - ts(summary.lastPee)) / 1000) : null} />
-        <Since label="Since poop" mark={<Dot color={DETAIL_COLOR.poop} />} value={summary.lastPoop ? since((now.getTime() - ts(summary.lastPoop)) / 1000) : null} />
+      {/* Diapers and sleep, side by side (no rules between them: the columns already line up). */}
+      <div className="grid grid-cols-3">
+        {/* All three are "how long since", so they share one form (and fit a third of a phone). The marks are the dock's. */}
+        <Since
+          label="Since pee"
+          mark={<Icon name="droplet" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.pee }} />}
+          value={summary.lastPee ? since((now.getTime() - ts(summary.lastPee)) / 1000) : null}
+        />
+        <Since
+          label="Since poop"
+          mark={<Icon name="poop" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.poop }} />}
+          value={summary.lastPoop ? since((now.getTime() - ts(summary.lastPoop)) / 1000) : null}
+        />
         {sleeping ? (
           <Since label="Asleep" mark={<Icon name="moon" size={13} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.sleep }} />} value={since((now.getTime() - ts(sleeping)) / 1000)} />
         ) : (
@@ -355,7 +358,7 @@ export function Tallies({
         </h2>
       </div>
       <div className={cx(tone.card, "overflow-hidden", loading && "opacity-60")}>
-        <div className="grid grid-cols-4 divide-x divide-mp-line">
+        <div className="grid grid-cols-4">
           {tiles.map((x) => {
             const pct = x.goal ? Math.min(1, x.have / x.goal) : 0;
             return (
@@ -400,70 +403,59 @@ export function Tallies({
 
 // ── Diaper brigade ───────────────────────────────────────────────────────
 
-const MEMBER_COLORS = ["#5C7A4A", "#8E7CB0", "#D9772B", "#6FA3B8", "#C49A3C", "#B5452B"];
-// Rotates through everyone weekly: a fun title, not a prize for the most changes.
-const TITLES = ["Knight of the Changing Table", "Keeper of the Wipes", "Guardian of the Snaps", "Wizard of the Onesie", "Duke of the Diaper Pail"];
-
-/** Who changed how many this week, in one line and a thin bar. A daytime thing: it stays away at night. */
+/**
+ * The family's shared number this week, a thin bar of who did them, and each
+ * person's own count in family order (with how many were after dark, 10pm–6am).
+ * Real names and real counts, nothing to win. A daytime thing: it stays away at night.
+ */
 export function DiaperBrigade() {
   const { state, summary, memberName, isNight } = useMaple();
   const nightLook = useNightActive();
-  const now = useNow(300_000);
   if (!state || !summary || !summary.teamDiapers) return null;
   if ((state.baby.settings as Record<string, unknown>).show_brigade === false) return null;
   if (nightLook || isNight()) return null;
   const byName = new Map(state.members.map((m, i) => [memberName(m.email), { m, i }]));
-  const week = Math.floor(now.getTime() / (7 * 86_400_000));
   const people = summary.duty
     .map((d, i) => {
       const hit = byName.get(d.who);
-      return {
-        ...d,
-        member: hit?.m ?? null,
-        color: hit?.m.color ?? MEMBER_COLORS[(hit?.i ?? i) % MEMBER_COLORS.length],
-        title: TITLES[(week + (hit?.i ?? i)) % TITLES.length],
-      };
+      // Family order (as on the Family tab), not by count; anyone no longer a member goes last.
+      return { ...d, member: hit?.m ?? null, order: hit ? hit.i : state.members.length + i, color: memberColor(hit?.m ?? null, state.members) };
     })
-    .sort((a, b) => b.diapers - a.diapers);
+    .sort((a, b) => a.order - b.order);
   const credited = people.reduce((a, p) => a + p.diapers, 0);
   const others = summary.teamDiapers - credited;
-  const total = `${summary.teamDiapers} change${summary.teamDiapers === 1 ? "" : "s"} together`;
+  const changes = `${summary.teamDiapers} change${summary.teamDiapers === 1 ? "" : "s"}`;
 
   return (
     <section aria-labelledby="brigade" className={cx(tone.card, "px-4 py-3")}>
       <h2 id="brigade" className="sr-only">
-        Diaper brigade this week
+        Diaper changes this week
       </h2>
-      <p className="flex flex-wrap items-center gap-x-1.5 text-[14px] text-mp-ink-2">
-        <span>This week:</span>
-        {people.map((p, i) => (
-          <span key={p.who} className="inline-flex items-center gap-1.5">
-            {i > 0 && <span aria-hidden className="text-mp-ink-3">·</span>}
-            <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
-            <span className="font-semibold text-mp-ink">{p.who}</span>
-            {p.member?.emoji && <Avatar member={p.member} size={18} />}
-            <span className="text-mp-ink tabular-nums">{p.diapers}</span>
-          </span>
-        ))}
-        {others > 0 && (
-          <span className="inline-flex items-center gap-1.5">
-            <span aria-hidden className="text-mp-ink-3">·</span>
-            others <span className="text-mp-ink tabular-nums">{others}</span>
-          </span>
-        )}
+      <p className="text-[14px] text-mp-ink-2">
+        <span className="font-semibold text-mp-ink tabular-nums">{changes}</span> this week
       </p>
-      <div
-        className="mt-2 flex h-1.5 w-full gap-0.5 overflow-hidden rounded-full bg-mp-sunken"
-        role="img"
-        aria-label={`${total}: ${people.map((p) => `${p.who} ${p.diapers}, ${p.title}`).join("; ")}${others > 0 ? `; others ${others}` : ""}`}
-      >
+      {/* The bar only repeats the numbers below, so it's hidden from screen readers. */}
+      <div className="mt-2 flex h-1.5 w-full gap-0.5 overflow-hidden rounded-full bg-mp-sunken" aria-hidden>
         {people.map((p) => (
           <span key={p.who} style={{ width: `${(p.diapers / summary.teamDiapers) * 100}%`, backgroundColor: p.color }} className="h-full" />
         ))}
         {others > 0 && <span style={{ width: `${(others / summary.teamDiapers) * 100}%` }} className="h-full bg-mp-ink/15" />}
       </div>
-      <p className={cx(tone.faint, "mt-1.5 text-[12px] leading-snug")} aria-hidden>
-        {people.map((p) => `${p.who}, ${p.title}`).join(" · ")}
+      <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-mp-ink-2">
+        {people.map((p) => (
+          <span key={p.who} className="inline-flex items-center gap-1.5">
+            {p.member && <Avatar member={p.member} size={16} />}
+            <span>
+              <span className="text-mp-ink">{p.who}</span> <span className="font-semibold text-mp-ink tabular-nums">{p.diapers}</span>
+              {p.night > 0 && <span className="text-mp-ink-3 tabular-nums"> · {p.night} after dark</span>}
+            </span>
+          </span>
+        ))}
+        {others > 0 && (
+          <span>
+            Others <span className="font-semibold text-mp-ink tabular-nums">{others}</span>
+          </span>
+        )}
       </p>
     </section>
   );

@@ -3,19 +3,22 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
 import type { Celebration } from "@/lib/maple/insights";
+import { DEFAULT_TZ, dayKey } from "@/lib/maple/time";
 import { MAPLE_LEAF_PATH } from "./Hero";
-import { Icon, type IconName } from "./icons";
+import { Icon } from "./icons";
+import { LeafMark, ageShort, keptDate } from "./keepsake";
 import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
 import { Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
- * Milestones ("One whole week of Maple", "Diaper #100") once each, per person.
+ * Milestones ("One whole week of Maple", "100 diapers") once each, per person.
  * A milestone reached at 3am waits for the morning: celebrations only show by
  * day, with a few maple leaves drifting down inside the card (a still card
- * under reduced motion or the night look). "Keep as a moment" turns it into a
- * keepsake.
+ * under reduced motion or the night look). The card is the fact, plainly: the
+ * leaf (kept), the title, the day it happened and, when whoever logged it
+ * wrote something, their words. "Keep as a moment" turns it into a keepsake.
  */
 
 const LEAF_COLORS = ["#B5452B", "#D9772B", "#E0A93B", "#C49A3C"];
@@ -24,20 +27,8 @@ const seenKey = (me: string) => `maple-celebrated:${me}`;
 /** The milestone id a kept moment carries (see milestones.ts): "monthly-2" stays, otherwise the celebration id. */
 const milestoneId = (c: Celebration) => (c.milestone && /^[a-z0-9-]+$/.test(c.milestone) ? c.milestone : c.id);
 
-/** An icon for each kind of milestone (the ids come from milestonesReached in insights.ts). */
-function celebrationIcon(c: Celebration): IconName {
-  const id = c.id;
-  if (id === "born") return "baby";
-  if (id.startsWith("week-")) return "sprout";
-  if (id.startsWith("month-")) return "cake";
-  if (id === "day-100") return "award";
-  if (id === "first-poop" || id.startsWith("diaper-")) return "diaper";
-  if (id === "first-bath") return "bath";
-  if (id === "first-tummy") return "tummy";
-  if (id.startsWith("regained-")) return "scale";
-  if (id.startsWith("feed-")) return "bottle";
-  return "party-popper";
-}
+/** Her age is the title of these ("One whole week of Maple", "2 months old today"): their date line skips it. */
+const AGE_TITLED = /^(born|week-\d+|month-\d+|day-100)$/;
 
 function readSeen(me: string): string[] {
   try {
@@ -85,7 +76,7 @@ function CardLeaves({ onDone }: { onDone: () => void }) {
 }
 
 export default function Celebrations() {
-  const { state, summary, isNight, readOnly } = useMaple();
+  const { state, summary, isNight, readOnly, memberName, now } = useMaple();
   const { open } = useSheets();
   const reduce = useReducedMotion();
   const nightLook = useNightActive();
@@ -113,6 +104,17 @@ export default function Celebrations() {
     setFalling(current.id);
   }, [current, played, reduce]);
 
+  // "Day 4 · Fri, Oct 23", and the words whoever logged it wrote on that entry ("Lifted her head for a second!").
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const bornAt = state?.baby.born_at ?? null;
+  const dated = current
+    ? [!AGE_TITLED.test(current.id) && ageShort(bornAt, current.reachedAt, tz), keptDate(dayKey(new Date(current.reachedAt), tz), dayKey(now(), tz))]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const source = current?.entryId != null ? state?.entries.find((e) => e.id === current.entryId) : undefined;
+  const said = source?.note?.trim() ? { note: source.note.trim(), created_by: source.created_by } : null;
+
   const markSeen = (id: string) => {
     const next = [...new Set([...(seen ?? []), ...readSeen(me), id])].slice(-200);
     setSeen(next);
@@ -136,10 +138,17 @@ export default function Celebrations() {
         >
           {falling === current.id && <CardLeaves key={falling} onDone={endFall} />}
           <div className="relative flex items-start gap-3">
-            <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-mp-maple/10 text-mp-maple">
-              <Icon name={celebrationIcon(current)} size={22} />
-            </span>
-            <h2 className={cx(tone.heading, "min-w-0 flex-1 self-center text-[17px] leading-snug")}>{current.title}</h2>
+            <LeafMark size={26} className="mt-px" />
+            <div className="min-w-0 flex-1">
+              <h2 className={cx(tone.heading, "text-[17px] leading-snug")}>{current.title}</h2>
+              <p className="mt-0.5 text-[13px] text-mp-ink-2 tabular-nums">{dated}</p>
+              {said && (
+                <>
+                  <p className={cx(tone.display, "mt-2 line-clamp-4 text-[20px] leading-snug italic")}>“{said.note}”</p>
+                  <p className="mt-0.5 text-[12px] text-mp-ink-2">{memberName(said.created_by)}</p>
+                </>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => markSeen(current.id)}
@@ -149,13 +158,14 @@ export default function Celebrations() {
               <Icon name="x" size={20} />
             </button>
           </div>
-          {!readOnly && (
-            <div className="relative mt-3 pl-[52px]">
+          {/* Her first poop is worth a cheer, not a keepsake. */}
+          {!readOnly && current.id !== "first-poop" && (
+            <div className="relative mt-3 pl-[38px]">
               <Button
                 variant="soft"
                 onClick={() => {
                   markSeen(current.id);
-                  open({ kind: "moment", preset: { title: current.title, milestone: milestoneId(current) } });
+                  open({ kind: "moment", preset: { title: current.title, milestone: milestoneId(current), ...(said ? { note: said.note } : {}) } });
                 }}
               >
                 <Icon name="camera" size={18} />

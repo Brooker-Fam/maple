@@ -5,7 +5,6 @@ import { describeEntry } from "@/lib/maple/describe";
 import { LATE_BLACK_STOOL, PALE_STOOL, RED_STOOL, STOOL_COLOR_INFO, STOOL_TIMELINE } from "@/lib/maple/guidelines";
 import { DIAPER_SIZES, STOOL_TEXTURES, type DiaperData, type DiaperSize, type StoolColor, type StoolTexture } from "@/lib/maple/types";
 import { Icon } from "../icons";
-import { DETAIL_COLOR } from "../palette";
 import { Chip, Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -34,8 +33,6 @@ import {
 type Type = "pee" | "poop" | "both" | "dry";
 
 const TYPE_LABEL: Record<Type, string> = { pee: "Pee", poop: "Poop", both: "Both", dry: "Dry" };
-/** The dock's diaper dots, so the picker reads like the buttons that opened it. */
-const TYPE_DOTS: Record<Type, string[]> = { pee: [DETAIL_COLOR.pee], poop: [DETAIL_COLOR.poop], both: [DETAIL_COLOR.pee, DETAIL_COLOR.poop], dry: [] };
 const TYPE_TOAST: Record<Type, string> = {
   pee: "Wet diaper",
   poop: "Dirty diaper",
@@ -169,17 +166,8 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
       <Segmented<Type>
         value={type}
         onChange={setType}
-        options={(["pee", "poop", "both", "dry"] as Type[]).map((t) => ({
-          value: t,
-          label: (
-            <span className="inline-flex items-center gap-1.5">
-              {TYPE_DOTS[t].map((c) => (
-                <span key={c} aria-hidden className="mp-kind-fill h-2 w-2 rounded-full" style={{ backgroundColor: c }} />
-              ))}
-              {TYPE_LABEL[t]}
-            </span>
-          ),
-        }))}
+        // Plain words, like any segmented control (Dry has no mark, so marks made the row ragged).
+        options={(["pee", "poop", "both", "dry"] as Type[]).map((t) => ({ value: t, label: TYPE_LABEL[t] }))}
         className="[&>button]:min-h-[48px] [&>button]:text-[15px]"
       />
 

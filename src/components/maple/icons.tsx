@@ -1,4 +1,5 @@
 import { createElement } from "react";
+import { isVitaminD } from "@/lib/maple/insights";
 import type { Entry, EntryKind } from "@/lib/maple/types";
 import { entryColor, KIND_COLOR, SIDE_COLOR, SIDE_INK } from "./palette";
 
@@ -7,10 +8,14 @@ import { entryColor, KIND_COLOR, SIDE_COLOR, SIDE_INK } from "./palette";
  * caps, currentColor, so they sit with the text and follow the night look.
  *
  * Most paths are from Lucide (https://lucide.dev, ISC License, Copyright (c)
- * Lucide Contributors). bottle, diaper and tummy are drawn here to match.
+ * Lucide Contributors). bottle, diaper, tummy, droplet (a wet diaper) and
+ * poop (a dirty one: a soft pile, no face) are drawn here to match.
  */
 
 type Node = [string, Record<string, string>][];
+
+/** The wet-diaper drop (24 grid, centred on x 12, y 3.9–21.5), also drawn filled on the day dial. */
+export const DROPLET_PATH = "M12 21.5a6.5 6.5 0 0 0 6.5-6.5c0-1.9-.95-3.65-2.8-5.15S12.45 6.2 12 3.9c-.45 2.3-1.85 4.45-3.7 5.95S5.5 13.1 5.5 15a6.5 6.5 0 0 0 6.5 6.5z";
 
 const ICONS = {
   "arrow-left-right": [["path",{"d":"M8 3 4 7l4 4"}],["path",{"d":"M4 7h16"}],["path",{"d":"m16 21 4-4-4-4"}],["path",{"d":"M20 17H4"}]],
@@ -40,6 +45,7 @@ const ICONS = {
   "copy": [["rect",{"width":"14","height":"14","x":"8","y":"8","rx":"2","ry":"2"}],["path",{"d":"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"}]],
   "diaper": [["path",{"d":"M3 6h18v4a9 9 0 0 1-18 0Z"}],["path",{"d":"M8 10a4 4 0 0 0 8 0"}]],
   "download": [["path",{"d":"M12 15V3"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}],["path",{"d":"m7 10 5 5 5-5"}]],
+  "droplet": [["path",{"d":DROPLET_PATH}]],
   "ellipsis": [["circle",{"cx":"12","cy":"12","r":"1"}],["circle",{"cx":"19","cy":"12","r":"1"}],["circle",{"cx":"5","cy":"12","r":"1"}]],
   "eye": [["path",{"d":"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"}],["circle",{"cx":"12","cy":"12","r":"3"}]],
   "heart": [["path",{"d":"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"}]],
@@ -69,6 +75,7 @@ const ICONS = {
   "phone": [["path",{"d":"M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384"}]],
   "pill": [["path",{"d":"m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"}],["path",{"d":"m8.5 8.5 7 7"}]],
   "plus": [["path",{"d":"M5 12h14"}],["path",{"d":"M12 5v14"}]],
+  "poop": [["path",{"d":"M5.75 20.5h12.5a2.75 2.75 0 0 0 .55-5.45A2.6 2.6 0 0 0 16.5 11h-.25a2.4 2.4 0 0 0-2.15-3.5h-.6c.5-1.7-.4-3.1-2.1-3.5.25 1.35-.55 2.55-2.1 3A2.4 2.4 0 0 0 7.75 11h-.25a2.6 2.6 0 0 0-2.3 4.05 2.75 2.75 0 0 0 .55 5.45Z"}]],
   "refresh-cw": [["path",{"d":"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"}],["path",{"d":"M21 3v5h-5"}],["path",{"d":"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"}],["path",{"d":"M8 16H3v5"}]],
   "ruler": [["path",{"d":"M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"}],["path",{"d":"m14.5 12.5 2-2"}],["path",{"d":"m11.5 9.5 2-2"}],["path",{"d":"m8.5 6.5 2-2"}],["path",{"d":"m17.5 15.5 2-2"}]],
   "scale": [["path",{"d":"M12 3v18"}],["path",{"d":"m19 8 3 8a5 5 0 0 1-6 0zV7"}],["path",{"d":"M3 7h1a17 17 0 0 0 8-2 17 17 0 0 0 8 2h1"}],["path",{"d":"m5 8 3 8a5 5 0 0 1-6 0zV7"}],["path",{"d":"M7 21h10"}]],
@@ -144,26 +151,39 @@ export const KIND_ICON: Record<EntryKind, IconName> = {
   note: "sticky-note",
 };
 
-/** The icon for one entry (a bottle feed gets the bottle, a doctor question the stethoscope). */
+/**
+ * The icon for one entry (a bottle feed gets the bottle, a doctor question the
+ * stethoscope, vitamin D the sun it has everywhere else). A diaper says what
+ * was in it: the drop for wet, the pile for dirty (wet + dirty too: the title
+ * says "Wet + dirty"), the plain diaper only for a dry one.
+ */
 export function entryIcon(e: Entry): IconName {
   if (e.kind === "feed" && e.data.method === "bottle") return "bottle";
+  if (e.kind === "diaper") return e.data.poop ? "poop" : e.data.pee ? "droplet" : "diaper";
+  if (e.kind === "med" && isVitaminD(e.data.name)) return "sun";
   if (e.kind === "note" && e.data.for_doctor) return "stethoscope";
   if (e.kind === "vitals" && e.data.jaundice && !e.data.heart_bpm && !e.data.resp_rate && !e.data.spo2) return "eye";
   return KIND_ICON[e.kind];
 }
 
-/** The side a breastfeed started on, if it's known. */
+/** The side a breastfeed started on, if it's known; while it runs, the side she's on now (so "Nursing now" never says L while she's on the Right). */
 function firstSide(e: Entry) {
   if (e.kind !== "feed" || e.data.method !== "breast") return null;
+  if (e.active) {
+    const live = e.data.segments?.findLast((s) => !s.end)?.side ?? e.data.segments?.at(-1)?.side;
+    if (live) return live;
+  }
   return e.data.first_side ?? e.data.segments?.[0]?.side ?? null;
 }
 
 /**
  * A kind's icon on a soft square of its color: the one place color marks
  * what something is (lists, the More grid, sheet headers). A breastfeed
- * shows the side it started on instead, lettered in that side's color as
- * on the dock and the timer. At night it folds into the amber (.mp-kind
- * and .mp-kind-fill in maple.css).
+ * keeps the feed's square and puts the side it started on inside it, as a
+ * lettered disc in that side's color like the dock's and the timer's. So a
+ * tinted square always means a kind and a lettered disc always a side. At
+ * night it folds into the amber (.mp-kind, .mp-kind-fill and .mp-side-mark
+ * in maple.css; the disc becomes a ring).
  */
 export function KindBadge({
   entry,
@@ -184,13 +204,19 @@ export function KindBadge({
 }) {
   const side = entry && !icon && !color ? firstSide(entry) : null;
   if (side) {
+    const disc = Math.round(size * 0.6);
     return (
       <span
         aria-hidden
-        className={["mp-kind-fill inline-flex shrink-0 items-center justify-center font-bold", className].filter(Boolean).join(" ")}
-        style={{ width: size, height: size, borderRadius: Math.round(size * 0.28), fontSize: Math.round(size * 0.42), backgroundColor: SIDE_COLOR[side], color: SIDE_INK[side] }}
+        className={["mp-kind inline-flex shrink-0 items-center justify-center", className].filter(Boolean).join(" ")}
+        style={{ width: size, height: size, borderRadius: Math.round(size * 0.28), color: KIND_COLOR.feed, backgroundColor: `color-mix(in srgb, ${KIND_COLOR.feed} 13%, transparent)` }}
       >
-        {side}
+        <span
+          className="mp-kind-fill mp-side-mark inline-flex items-center justify-center rounded-full font-bold"
+          style={{ width: disc, height: disc, fontSize: Math.round(size * 0.33), backgroundColor: SIDE_COLOR[side], color: SIDE_INK[side] }}
+        >
+          {side}
+        </span>
       </span>
     );
   }

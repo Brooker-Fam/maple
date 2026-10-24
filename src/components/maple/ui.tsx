@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useDragControls } from "framer-motion";
+import { AnimatePresence, motion, useDragControls, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -32,8 +32,8 @@ export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Bool
 
 /** Shared class strings. */
 export const tone = {
-  /** A white card on the paper background, with a hairline edge. */
-  card: "rounded-[20px] border border-mp-line bg-mp-surface",
+  /** A white card on the paper background. No outline by day; a hairline in dark and at night, where surface on bg is too close to see (--mp-edge). */
+  card: "rounded-[20px] border border-(--mp-edge) bg-mp-surface",
   /** A well inside a card or sheet (time scrubber, disclosure). */
   inset: "rounded-2xl bg-mp-sunken",
   /** Section and sheet titles: the UI sans, semibold. */
@@ -781,9 +781,9 @@ export function Sheet({
   children: ReactNode;
   footer?: ReactNode;
   /**
-   * Fix times: at night it fades in (no slide) over a darker backdrop, it
-   * stops at 90% of the screen, and focus goes to the title, then back to
-   * whatever opened it.
+   * Fix times: it stops at 90% of the screen, and focus goes to the title,
+   * then back to whatever opened it. (Every sheet fades in without a slide
+   * at night and under Reduce Motion.)
    */
   calm?: boolean;
 }) {
@@ -794,7 +794,9 @@ export function Sheet({
   const bodyRef = useRef<HTMLDivElement>(null);
   const drag = useDragControls();
   const night = useNightActive();
-  const still = calm && night;
+  const reduce = useReducedMotion();
+  // No slide at 3am or with Reduce Motion: it fades in where it will sit.
+  const still = night || !!reduce;
   // aria-modal alone doesn't keep focus in: the background goes inert while it's open.
   // The opener is noted first (going inert takes its focus) and refocused once it's live again.
   useEffect(() => {
@@ -862,7 +864,7 @@ export function Sheet({
         // m-0!: a sheet rendered inside a space-y list mustn't pick up its margin and float off the bottom.
         <div ref={rootRef} className="fixed inset-0 z-[80] m-0! flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
           <motion.div
-            className={cx("absolute inset-0", still ? "bg-black/55" : "bg-black/40")}
+            className={cx("absolute inset-0", night ? "bg-black/55" : "bg-black/40")}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -945,27 +947,46 @@ export function SectionTitle({ children, action }: { children: ReactNode; action
   );
 }
 
-/** A member's own emoji if they picked one, otherwise their initial. */
+/**
+ * One color per person, for their initial disc and their share of the diaper
+ * bar. Sage first (Matt's green suit); none of them is a kind's hue, so a
+ * person never reads as a feed or a diaper.
+ */
+export const MEMBER_PALETTE = ["#5C7A4A", "#8C4A5E", "#4E6E7E", "#6E6A3A", "#5A5F78"];
+
+/** A member's own color if they set one, otherwise their place in the family list picks one from MEMBER_PALETTE. */
+export function memberColor(m: Pick<Member, "email" | "color"> | null, members: Member[]): string {
+  if (m?.color) return m.color;
+  return MEMBER_PALETTE[Math.max(0, members.findIndex((x) => x.email === m?.email)) % MEMBER_PALETTE.length];
+}
+
+/**
+ * Who logged it: their initial on their color. At 24px and up a member's own
+ * emoji shows instead if they picked one; smaller than that it's always the
+ * initial (an emoji at 16px is a smudge, and a grey one at night).
+ */
 export function Avatar({ member, size = 28 }: { member: Member | null; size?: number }) {
+  const { state } = useMaple();
   const name = member?.display_name ?? member?.email ?? "";
   const initial = (name.trim()[0] ?? "?").toUpperCase();
+  const emoji = size >= 24 ? member?.emoji : null;
   return (
     <span
       title={name}
       className={cx(
         "inline-flex shrink-0 items-center justify-center rounded-full font-semibold",
         // Emoji keep their own colors, so they're dimmed at night like photos.
-        member?.emoji ? "bg-mp-sunken [.maple-night_&]:opacity-60 [.maple-night_&]:grayscale-[40%]" : "mp-kind-fill text-white"
+        emoji ? "bg-mp-sunken [.maple-night_&]:opacity-60 [.maple-night_&]:grayscale-[40%]" : "mp-kind-fill text-white"
       )}
       style={{
         width: size,
         height: size,
-        fontSize: member?.emoji ? size * 0.55 : size * 0.45,
-        backgroundColor: member?.emoji ? undefined : member?.color ?? "#5C7A4A",
+        fontSize: emoji ? size * 0.55 : size * 0.45,
+        backgroundColor: emoji ? undefined : memberColor(member, state?.members ?? []),
       }}
       aria-hidden
     >
-      {member?.emoji ?? initial}
+      {emoji || initial}
     </span>
   );
 }
@@ -1077,7 +1098,8 @@ export function ToastHost() {
 
 const toastLook = (t: Toast) =>
   cx(
-    "rounded-2xl px-4 py-3 text-[15px] [.maple-night_&]:ring-1 [.maple-night_&]:ring-mp-line",
+    // The card edge token: no ring by day, a hairline in dark mode and at night, where the toast is a dark card over dark cards.
+    "rounded-2xl px-4 py-3 text-[15px] ring-1 ring-(--mp-edge)",
     t.tone === "error" ? "bg-[#8A2F1C] text-white [.maple-night_&]:bg-[#2A140C] [.maple-night_&]:text-[#F0A07A]" : "bg-mp-toast text-mp-on-toast"
   );
 
@@ -1098,7 +1120,8 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
   return (
     <>
       <div className="flex items-center gap-3">
-        <Icon name={t.tone === "error" ? "triangle-alert" : t.tone === "info" ? "info" : "circle-check"} size={20} className="shrink-0 self-start opacity-80" />
+        {/* A diaper's own mark (drop or pile) says what was saved; everything else gets the check. */}
+        <Icon name={t.icon ?? (t.tone === "error" ? "triangle-alert" : t.tone === "info" ? "info" : "circle-check")} size={20} className="shrink-0 opacity-80" />
         <span className="flex-1">{t.text}</span>
         {!t.actions?.length && undo}
       </div>

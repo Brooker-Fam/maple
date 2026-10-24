@@ -481,7 +481,7 @@ export default function LogTab() {
       {error && !ready && (
         <div className={cx(tone.card, "mb-5 flex items-center gap-3 py-2.5 pr-2.5 pl-4")} role="status">
           <Icon name="cloud-off" size={20} className="shrink-0 text-mp-ink-3" />
-          <p className={cx(tone.body, "flex-1 text-sm")}>Couldn&apos;t reach the forest for older pages just now. Recent entries are below.</p>
+          <p className={cx(tone.body, "flex-1 text-sm")}>Couldn&apos;t load older days. Recent entries are below.</p>
           <Button size="sm" variant="soft" onClick={reload}>
             Try again
           </Button>
@@ -490,9 +490,7 @@ export default function LogTab() {
 
       {nothingAtAll && !running.length ? (
         <div className="mt-6">
-          <EmptyState icon="leaf" title="The first page is waiting">
-            Feeds, changes and naps will gather here like fallen leaves, newest on top. Zoe is keeping the page warm.
-          </EmptyState>
+          <EmptyState title="Nothing logged yet">Feeds, changes and naps show up here, newest first.</EmptyState>
           {!readOnly && <QuickLog />}
         </div>
       ) : (
@@ -620,15 +618,10 @@ function DaySection({
             >
               {/*
                 The day as one line: a hairline threads EntryRow's badges (36px, inset 16px)
-                from one row to the next, stopping short of each badge. Dividers start at
-                the text so the thread reads unbroken.
+                from one row to the next, stopping short of each badge. The thread alone
+                separates the rows (no dividers).
               */}
-              {i > 0 && (
-                <>
-                  <span aria-hidden className="pointer-events-none absolute top-0 right-0 left-16 h-px bg-mp-line" />
-                  <span aria-hidden className="pointer-events-none absolute top-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />
-                </>
-              )}
+              {i > 0 && <span aria-hidden className="pointer-events-none absolute top-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />}
               {i < rows.length - 1 && (
                 <span aria-hidden className="pointer-events-none absolute bottom-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />
               )}

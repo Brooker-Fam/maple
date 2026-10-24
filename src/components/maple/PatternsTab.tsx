@@ -60,6 +60,8 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  * shares a chart clears the data-viz checks (OKLCH chroma ≥ 0.10, adjacent
  * ΔE ≥ 15 normal / ≥ 8 under protan & deutan simulation, ≥ 3:1 on the card;
  * honey is the one sub-3:1 mark in light mode, so every chart has a table).
+ * Left and right nursing wear the side colors (rust and honey, as on the
+ * dial and the side discs), so "L" is the same color on every screen.
  * Ribbon lanes (feeds on top, sleep/tummy middle, diapers bottom) separate
  * classes by position as well as hue.
  *
@@ -77,15 +79,18 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  */
 const VIZ_VARS =
   "[--v-grid:var(--mp-line)] [--v-track:var(--mp-sunken)] [--v-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] [--v-surface:var(--mp-surface)] " +
-  "[--v-sleep:#9077BC] [--v-nurse:#C55F1D] [--v-bottle:#E0A93B] [--v-pee:#389EC1] [--v-poop:#905718] [--v-tummy:#69863E] [--v-pump:#CA805D] " +
-  "[--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
+  "[--v-sleep:#9077BC] [--v-nurse:#C55F1D] [--v-bottle:#E0A93B] [--v-pee:#4F8FAE] [--v-poop:#905718] [--v-tummy:#69863E] [--v-pump:#CA805D] " +
+  "[--v-left:#B5452B] [--v-right:#E0A93B] [--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
   "dark:[--v-sleep:#9E85CB] dark:[--v-nurse:#BF4213] dark:[--v-bottle:#B88C06] dark:[--v-pee:#3CA1C4] dark:[--v-poop:#985E22] dark:[--v-pump:#C97E5B] " +
-  "dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
+  "dark:[--v-left:#CF5B3E] dark:[--v-right:#D9A23A] dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
   "[.maple-night_&]:[--v-sleep:rgb(224_169_59/0.35)] [.maple-night_&]:[--v-nurse:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-bottle:rgb(224_169_59/0.55)] " +
+  "[.maple-night_&]:[--v-left:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-right:rgb(224_169_59/0.55)] " +
   "[.maple-night_&]:[--v-pee:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-poop:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-tummy:rgb(224_169_59/0.45)] [.maple-night_&]:[--v-pump:rgb(224_169_59/0.45)] " +
   "[.maple-night_&]:[--v-band:rgb(224_169_59/0.08)] [.maple-night_&]:[--v-target:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-dot-edge:rgb(224_169_59/0.3)] [.maple-night_&]:[--v-now:#D9772B]";
 
 const AXIS_TEXT = "fill-mp-ink-3 text-[10px] tabular-nums";
+/** The Dirty lane's key: three stool colors she's likely to have (black, green, mustard). */
+const DIRTY_KEY = [STOOL_COLOR_INFO.black.hex, STOOL_COLOR_INFO.green.hex, STOOL_COLOR_INFO.mustard.hex];
 /** Shared chart margins: y labels on the left, dates along the bottom. */
 const FRAME = { left: 30, right: 4, top: 10, bottom: 18 } as const;
 
@@ -135,7 +140,6 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
     <div className={cx("px-4 pt-[max(1.25rem,env(safe-area-inset-top))]", VIZ_VARS)}>
       <header className="mb-4 px-1">
         <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Patterns</h1>
-        <p className={cx(tone.muted, "mt-1 text-[15px] leading-snug")}>What the days have looked like, for you and her pediatrician.</p>
       </header>
 
       <Segmented
@@ -152,13 +156,13 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
 
       <div className={cx("space-y-6 transition-opacity", !ready && loaded && "opacity-60")} aria-busy={!ready}>
         {!loaded ? (
-          <EmptyState icon="leaf" title="Gathering the pages…" />
+          <EmptyState title="Loading…" />
         ) : (
           <>
             {loggedDays < 2 && ready && (
               <Card>
-                <EmptyState icon="cat" title="Patterns need a few days to grow">
-                  Bruce is keeping count ({Math.min(loggedDays, 2)} of 2 days). Keep logging and her rhythms will show up here.
+                <EmptyState title="Patterns show up after two days">
+                  {loggedDays > 0 && `Day ${loggedDays} of 2. `}Keep logging and her rhythms will appear here.
                 </EmptyState>
               </Card>
             )}
@@ -1216,10 +1220,19 @@ function DiaperLanes({
               {/* Lane name, keyed like its dots */}
               {wet && night ? (
                 <circle cx={s.left + 4} cy={ky} r={3.25} fill="none" stroke="var(--v-pee)" strokeWidth={1.5} />
-              ) : (
+              ) : wet || night ? (
                 <circle cx={s.left + 4} cy={ky} r={4} fill={wet ? "var(--v-pee)" : "var(--v-poop)"} />
+              ) : (
+                // Dirty dots wear their stool color, so the key is a few of them overlapping
+                // (cut apart by the card), not one brown dot that matches none of them.
+                DIRTY_KEY.map((hex, j) => (
+                  <g key={hex}>
+                    {j > 0 && <circle cx={s.left + 4 + 5 * j} cy={ky} r={5} fill="var(--v-surface)" />}
+                    <circle cx={s.left + 4 + 5 * j} cy={ky} r={4} fill={hex} stroke="var(--v-dot-edge)" strokeWidth={0.75} />
+                  </g>
+                ))
               )}
-              <text x={s.left + 13} y={ky} dy="0.35em" className="fill-mp-ink-2 text-[11px] font-medium">
+              <text x={s.left + (wet || night ? 13 : 23)} y={ky} dy="0.35em" className="fill-mp-ink-2 text-[11px] font-medium">
                 {lane.label}
               </text>
               {ticks.map((v) => (
@@ -1469,8 +1482,8 @@ function DailyCharts({
                 title="Nursing minutes, left and right"
                 subtitle={totalL + totalR >= 60 ? `Over these days: L ${lPct}% · R ${100 - lPct}%.` : undefined}
                 legend={[
-                  { color: "var(--v-nurse)", label: "L · Left" },
-                  { color: "var(--v-bottle)", label: "R · Right" },
+                  { color: "var(--v-left)", label: "L · Left" },
+                  { color: "var(--v-right)", label: "R · Right" },
                 ]}
               >
                 <Columns
@@ -1478,16 +1491,16 @@ function DailyCharts({
                   todayKey={todayKey}
                   night={night}
                   series={[
-                    { id: "L", label: "Left", color: "var(--v-nurse)", values: days.map((d) => d.leftSec / 3600) },
-                    { id: "R", label: "Right", color: "var(--v-bottle)", values: days.map((d) => d.rightSec / 3600) },
+                    { id: "L", label: "Left", color: "var(--v-left)", values: days.map((d) => d.leftSec / 3600) },
+                    { id: "R", label: "Right", color: "var(--v-right)", values: days.map((d) => d.rightSec / 3600) },
                   ]}
                   yLabel={(v) => (v ? `${v}h` : "0")}
                   valueLabel={(v) => formatDuration(v * 3600)}
                   ariaLabel={`Nursing minutes per day: ${days.map((d) => `${shortDate(d.key)} left ${Math.round(d.leftSec / 60)}, right ${Math.round(d.rightSec / 60)}`).join("; ")}`}
                   tooltip={(i) => (
                     <>
-                      <TipRow color="var(--v-nurse)" value={formatDuration(days[i].leftSec)} label="L" />
-                      <TipRow color="var(--v-bottle)" value={formatDuration(days[i].rightSec)} label={`R${so(i)}`} />
+                      <TipRow color="var(--v-left)" value={formatDuration(days[i].leftSec)} label="L" />
+                      <TipRow color="var(--v-right)" value={formatDuration(days[i].rightSec)} label={`R${so(i)}`} />
                     </>
                   )}
                 />

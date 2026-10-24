@@ -354,7 +354,7 @@ export function assessJaundice(
 
 export const VITAMIN_D_DEFAULT = { name: "Vitamin D", dose: "400 IU" };
 export const VITAMIN_D_NOTE =
-  "Sunshine drops: 400 IU of vitamin D once a day. Breast milk is amazing but naturally low in vitamin D, so pediatricians recommend a daily dose starting in her first few days. Drop strengths differ by brand, so follow the label.";
+  "Sunshine drops: 400 IU of vitamin D once a day. Breast milk is naturally low in vitamin D, so pediatricians recommend a daily dose starting in her first few days. Drop strengths differ by brand, so follow the label.";
 
 /** Daily tummy-time goal in minutes (WHO / NIH Safe to Sleep, ramped for newborns). */
 export function tummyGoalMinutes(ageDays: number): number {

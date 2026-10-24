@@ -6,7 +6,7 @@
  *
  *   bg        page background            surface    cards, inputs, rows
  *   sunken    tracks, chips, wells       raised     a selected thumb or chip on a well
- *   line      hairlines and borders
+ *   line      hairlines and borders      edge       a card's outline (none by day: white on cream is edge enough)
  *   ink       primary text               ink-2/3    secondary / tertiary text
  *   accent    primary fills              on-accent  text on an accent fill
  *   accent-fg accent-colored text/icons  maple      the one warm highlight
@@ -25,6 +25,7 @@
   /* ink-3 carries 11–13px meta text: kept at about 4.5:1 on the page. */
   --mp-ink-3: #686d61;
   --mp-line: rgb(28 38 25 / 0.1);
+  --mp-edge: transparent;
   --mp-accent: #1d4420;
   --mp-on-accent: #ffffff;
   --mp-accent-fg: #2c5a2f;
@@ -44,6 +45,8 @@
   --mp-ink-2: #a7aba0;
   --mp-ink-3: #878e83;
   --mp-line: rgb(236 231 220 / 0.09);
+  /* Dark and night keep a hairline: surface on bg is only about 1.1:1 there. */
+  --mp-edge: rgb(236 231 220 / 0.09);
   /* Sage, not gold: gold would read as the honey "Right" side next to it. */
   --mp-accent: #b4cc96;
   --mp-on-accent: #16210f;
@@ -51,8 +54,9 @@
   --mp-maple: #e5895e;
   --mp-danger: #f09a80;
   --mp-focus: #d9b76a;
-  --mp-toast: #ece7dc;
-  --mp-on-toast: #141a15;
+  /* A raised dark card, not a cream slab (the inverted toast lit up the whole screen). */
+  --mp-toast: #2a322b;
+  --mp-on-toast: #ece7dc;
 }
 
 html.maple-night {
@@ -62,8 +66,10 @@ html.maple-night {
   --mp-raised: #2b2515;
   --mp-ink: rgb(224 169 59 / 0.85);
   --mp-ink-2: rgb(224 169 59 / 0.7);
-  --mp-ink-3: rgb(224 169 59 / 0.5);
+  /* ink-3 carries 11–13px meta text: about 4:1 on the night page. */
+  --mp-ink-3: rgb(224 169 59 / 0.62);
   --mp-line: rgb(224 169 59 / 0.1);
+  --mp-edge: rgb(224 169 59 / 0.1);
   --mp-accent: #3a2711;
   --mp-on-accent: #e8a23f;
   --mp-accent-fg: #e8a23f;
@@ -72,6 +78,8 @@ html.maple-night {
   --mp-focus: rgb(217 119 43 / 0.6);
   --mp-toast: #2b2515;
   --mp-on-toast: rgb(224 169 59 / 0.9);
+  /* Native date and time pickers select in amber, not system blue. */
+  accent-color: #e8a23f;
 }
 
 /* body.enchanted-bg too: the site's `.dark .enchanted-bg` would otherwise win in dark mode. */
@@ -107,9 +115,9 @@ html.maple-ui body.enchanted-bg {
   border-color: transparent !important;
   color: #0b0f0a !important;
 }
-/* "Black" has to look black at 3am: the swatch keeps its colour, dimmed like photos so it doesn't glare. */
+/* "Black" has to look black at 3am: the swatch keeps its colour, dimmed like photos so the chalky and pale ones don't outshine the text. */
 .maple-night .mp-swatch {
-  filter: brightness(0.75) saturate(0.8);
+  filter: brightness(0.6) saturate(0.8);
 }
 /* Side letters (L / R) at night: an amber ring and letter, not a dim fill (the fill's letter was 2.2–2.9:1). */
 .maple-night .mp-side-mark {

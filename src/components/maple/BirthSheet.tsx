@@ -117,7 +117,7 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
       await api("/api/maple/baby", { method: "PATCH", body: JSON.stringify(body) });
     } catch (e) {
       setSaving(false);
-      setProblem(e instanceof Error && e.message ? e.message : "Couldn't reach the forest. Try again in a moment.");
+      setProblem(e instanceof Error && e.message ? e.message : "Couldn't save. Try again in a moment.");
       return;
     }
 

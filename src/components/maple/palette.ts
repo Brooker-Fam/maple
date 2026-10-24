@@ -42,18 +42,28 @@ export const SIDE_COLOR: Record<Side, string> = { L: MAPLE.rust, R: MAPLE.honey 
 /** Text on a filled side color that stays readable (rust takes white, honey takes ink). */
 export const SIDE_INK: Record<Side, string> = { L: "#FFFFFF", R: "#2A1A08" };
 
-/** Finer-grained colors for the dial/ribbons. */
+/**
+ * Finer-grained colors for the dial/ribbons. Pee and poop are a step stronger
+ * than dew and acorn: they draw 1.75px line marks (the drop and the pile), and
+ * the poop mark mustn't equal the "Tan / brown" stool swatch (acorn).
+ */
 export const DETAIL_COLOR = {
   nursing: MAPLE.ember,
   bottle: MAPLE.honey,
-  pee: MAPLE.dew,
-  poop: MAPLE.acorn,
+  pee: "#4F8FAE",
+  poop: "#9A6638",
   sleep: "#8E7CB0",
   tummy: MAPLE.moss,
 } as const;
 
+/** A skin check (jaundice only): the gold of its eye icon everywhere, not the vitals plum. */
+export const SKIN_COLOR = "#C9962A";
+
+/** One color per thing: a skin check and a doctor question wear the same color in lists as in More. */
 export function entryColor(e: Entry): string {
   if (e.kind === "feed") return e.data.method === "bottle" ? DETAIL_COLOR.bottle : DETAIL_COLOR.nursing;
   if (e.kind === "diaper") return e.data.poop ? DETAIL_COLOR.poop : DETAIL_COLOR.pee;
+  if (e.kind === "vitals" && e.data.jaundice && !e.data.heart_bpm && !e.data.resp_rate && !e.data.spo2) return SKIN_COLOR;
+  if (e.kind === "note" && e.data.for_doctor) return KIND_COLOR.vitals;
   return KIND_COLOR[e.kind];
 }

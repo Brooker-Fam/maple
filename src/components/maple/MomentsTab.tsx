@@ -19,8 +19,8 @@ import {
 } from "@/lib/maple/time";
 import type { Entry, EntryOf, Member } from "@/lib/maple/types";
 import { photoUrl } from "./EntryRow";
-import { MAPLE_LEAF_PATH } from "./Hero";
 import { Icon, KindBadge } from "./icons";
+import { LeafMark, ageShort, keptDate } from "./keepsake";
 import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
 import { Avatar, Button, Chip, EmptyState, SectionTitle, cx, tone } from "./ui";
@@ -87,14 +87,6 @@ function ageAt(bornAt: string | null, at: string, tz: string): string | null {
   return `${age.label} old`;
 }
 
-/** Compact age for the Firsts list: "Day 3", "2w 3d", "3mo". */
-function ageShort(bornAt: string | null, at: string, tz: string): string | null {
-  if (!bornAt) return null;
-  if (Date.parse(at) < Date.parse(bornAt)) return "Before birth";
-  const age = babyAge(bornAt, new Date(at), tz);
-  return age.days < 14 ? `Day ${age.dayOfLife}` : age.short;
-}
-
 /** Her n-month day as a day key (clamped to the month's last day: Jan 31 → Feb 28). */
 function monthDayKey(bornAt: string, n: number, tz: string): string {
   const b = localParts(new Date(bornAt), tz);
@@ -128,15 +120,6 @@ function groupByWeek(moments: Moment[], bornAt: string | null, tz: string): Week
   }
   // Moments arrive newest first, so pages do too ("before" lands last).
   return [...weeks.values()];
-}
-
-/** Maple's leaf: the mark for a memory kept in words rather than a photo. */
-function LeafMark({ size = 22, className }: { size?: number; className?: string }) {
-  return (
-    <svg viewBox="-11 -11 22 22" width={size} height={size} className={cx("shrink-0 text-mp-maple", className)} aria-hidden focusable="false">
-      <path d={MAPLE_LEAF_PATH} fill="currentColor" />
-    </svg>
-  );
 }
 
 export default function MomentsTab() {
@@ -209,7 +192,7 @@ export default function MomentsTab() {
 
   return (
     <div className="ph-no-capture overflow-x-clip px-4 pb-8">
-      {/* px-1 lines the title up with the section titles below it. */}
+      {/* px-1 lines the title up with the section titles below it. A large title, no tagline. */}
       <header className="mb-5 px-1 pt-[max(1.25rem,env(safe-area-inset-top))]">
         <div className="flex min-h-[44px] items-center justify-between gap-3">
           <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Moments</h1>
@@ -221,7 +204,6 @@ export default function MomentsTab() {
             </Button>
           )}
         </div>
-        <p className={cx(tone.muted, "mt-1 text-[15px] leading-snug")}>Little leaves for {babyName}&apos;s someday-book</p>
       </header>
 
       <div className="space-y-6">
@@ -400,7 +382,7 @@ function FirstsShelf({
       <SectionTitle
         action={
           <span className={cx(tone.faint, "text-[13px]")}>
-            {achieved.length ? `${achieved.length} of ${MILESTONES.length} found` : "All still to come"}
+            {achieved.length ? `${achieved.length} so far` : "All still to come"}
           </span>
         }
       >
@@ -414,8 +396,9 @@ function FirstsShelf({
               return (
                 <li key={p.id}>
                   <button type="button" className={cx(tone.row, "min-h-[52px] py-2.5")} onClick={() => onOpen(m)} aria-label={`${p.label}: open the moment`}>
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-mp-accent text-mp-on-accent" aria-hidden>
-                      <Icon name="check" size={14} strokeWidth={2.75} />
+                    {/* The leaf: a first, found and kept (not a to-do ticked off). */}
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden>
+                      <LeafMark size={18} />
                     </span>
                     <span className={cx(tone.body, "min-w-0 flex-1 text-[15px] leading-snug font-medium")}>{p.label}</span>
                     <span className={cx(tone.muted, "shrink-0 text-[13px] tabular-nums")}>
@@ -734,13 +717,15 @@ function MomentCard({
   const landscape = !!(p?.w && p?.h && p.w > p.h * 1.1);
   const aspect = landscape ? "aspect-[5/4]" : "aspect-[4/5]";
   const caption = captionOf(m);
-  const meta = ageAt(bornAt, m.started_at, tz) ?? formatDayLabel(dayKey(new Date(m.started_at), tz), todayKey);
+  // "Day 3 · Thu, Oct 22": the same age as the Firsts list, plus the day it happened.
+  const meta = [ageShort(bornAt, m.started_at, tz), keptDate(dayKey(new Date(m.started_at), tz), todayKey)].filter(Boolean).join(" · ");
   // A first (or a monthly photo, a kept celebration) is named above the
   // caption, as in the lightbox, unless the caption already is its name.
   const first = milestoneLabel(m.data.milestone);
   const tag = first && first !== caption ? first : null;
   const note = count ? null : extraNote(m);
   const photosOnTheWay = saving && !!m.data.photos?.length;
+  const words = !count && !photosOnTheWay;
 
   return (
     <button
@@ -771,9 +756,13 @@ function MomentCard({
         </span>
       )}
       <span className="block px-3 pt-2.5 pb-3">
-        {!count && !photosOnTheWay && <LeafMark size={16} className="mb-2" />}
         {tag && <span className="mb-0.5 block text-[12px] leading-snug font-semibold text-mp-accent-fg">{tag}</span>}
-        <span className={cx(tone.body, "line-clamp-2 block text-[15px] leading-snug font-semibold")}>{caption}</span>
+        {words ? (
+          // No photo: the family's words are the keepsake, set like a note in the book.
+          <span className={cx(tone.display, "line-clamp-5 block text-[19px] leading-[1.2] lining-nums")}>{caption}</span>
+        ) : (
+          <span className={cx(tone.body, "line-clamp-2 block text-[15px] leading-snug font-semibold")}>{caption}</span>
+        )}
         {note && (
           <span className={cx(tone.muted, "mt-1 line-clamp-4 block text-[14px] leading-snug")}>“{note}”</span>
         )}
@@ -807,7 +796,7 @@ function EmptyScrapbook({ viewer, onAdd }: { viewer: boolean; onAdd: () => void 
   return (
     <div className={tone.card}>
       <EmptyState icon="camera" title="No moments yet">
-        <p>Her first photo goes here. Tiny toes count.</p>
+        <p>Her first photo goes here.</p>
         {!viewer && (
           <Button className="mt-4" onClick={onAdd}>
             <Icon name="camera" size={18} />
@@ -967,9 +956,8 @@ function Lightbox({
                 {slide.photo != null ? (
                   <FullPhoto entryId={slide.entry.id} index={slide.photo} dim={night} />
                 ) : (
-                  // No photo: the words are the picture (the caption below skips a note shown here).
-                  <div className="flex aspect-square max-h-full w-full max-w-xs flex-col items-center justify-center gap-4 overflow-hidden rounded-[20px] border border-mp-line bg-mp-surface p-7 text-center">
-                    <LeafMark size={30} />
+                  // No photo: the words are the picture (the caption below skips what's shown here).
+                  <div className="flex aspect-square max-h-full w-full max-w-xs flex-col items-center justify-center overflow-hidden rounded-[20px] border border-mp-line bg-mp-surface p-7 text-center">
                     <span className={cx(tone.display, "line-clamp-6 text-[24px] leading-tight lining-nums")}>
                       {pictureNote(slide) ? `“${pictureNote(slide)}”` : captionOf(slide.entry)}
                     </span>
@@ -1058,20 +1046,23 @@ function Caption({
 }) {
   const m = slide.entry;
   const at = new Date(m.started_at);
-  const age = ageAt(bornAt, m.started_at, tz);
+  // "Day 4" in her first two weeks, as the cards and Firsts say it; "2 weeks, 3 days old" after that.
+  const short = ageShort(bornAt, m.started_at, tz);
+  const age = short?.startsWith("Day ") ? short : ageAt(bornAt, m.started_at, tz);
   const milestone = m.data.milestone ? milestoneLabel(m.data.milestone) : null;
   const title = captionOf(m);
-  // A photo-less slide may already show its (short) note as the picture.
+  // A photo-less slide already shows its (short) note as the picture, or else its title: say each once.
   const showNote = m.note && m.note !== title && !pictureNote(slide);
+  const showTitle = slide.photo != null || !!pictureNote(slide);
   const via = m.source === "claude" ? " via Claude" : m.source === "chatgpt" ? " via ChatGPT" : m.source === "mcp" ? " via AI" : "";
   return (
     <div className="max-h-[42%] shrink-0 overflow-y-auto px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
       {milestone && milestone !== title && <p className="mb-1 text-[13px] font-semibold text-mp-accent-fg">{milestone}</p>}
-      <p className={cx(tone.display, "text-[26px] leading-tight lining-nums")}>{title}</p>
+      {showTitle && <p className={cx(tone.display, "text-[26px] leading-tight lining-nums")}>{title}</p>}
       {showNote && <p className={cx(tone.muted, "mt-1.5 text-[15px] leading-relaxed whitespace-pre-line")}>{m.note}</p>}
       <p className={cx(tone.faint, "mt-2.5 text-[13px]")}>
         {formatDayLabel(dayKey(at, tz), dayKey(now, tz))} · {formatTime(at, tz)}
-        {age && <> · {age.charAt(0).toLowerCase() + age.slice(1)}</>}
+        {age && <> · {age.startsWith("Day ") ? age : age.charAt(0).toLowerCase() + age.slice(1)}</>}
       </p>
       <p className={cx(tone.faint, "mt-1 flex items-center gap-1.5 text-[13px]")}>
         <Avatar member={avatar} size={20} /> Added by {who}

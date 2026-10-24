@@ -11,7 +11,7 @@ import type { Entry, EntryOf, Member, Role } from "@/lib/maple/types";
 import BirthSheet from "./BirthSheet";
 import { Icon, type IconName } from "./icons";
 import { useNightPref, type NightPref } from "./nightLook";
-import { Avatar, Button, Field, Segmented, SectionTitle, Sheet, TextArea, cx, tone } from "./ui";
+import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, TextArea, cx, memberColor, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
@@ -39,7 +39,7 @@ type PersonalToken = { id: number; label: string | null; created_at: string; las
 
 type Question = EntryOf<"note">;
 
-// Avatar choices. Members pick their own mark, so these stay emoji.
+// Avatar choices after the initial (the default). Members pick their own mark, so these stay emoji.
 const EMOJIS = ["🌲", "🌸", "🦊", "🍄", "🦉", "🐻", "🐿️", "🦔", "🌻", "🐝", "🦌", "🐞", "🌼", "🌙", "⭐", "🐸", "🪺", "🍂", "🌰", "🍁"];
 
 const ROLE_LINE: Record<Role, string> = {
@@ -256,14 +256,16 @@ function Switch({ checked, onChange, label, disabled }: { checked: boolean; onCh
       <span
         className={cx(
           "relative block h-[31px] w-[51px] rounded-full transition-colors",
-          checked ? "bg-mp-accent" : "bg-mp-sunken ring-1 ring-mp-line ring-inset"
+          checked ? "bg-mp-accent [.maple-night_&]:bg-[rgb(224_169_59/0.3)]" : "bg-mp-sunken ring-1 ring-mp-line ring-inset [.maple-night_&]:bg-transparent"
         )}
       >
-        {/* White knob by day and in dark mode; amber at night, bright when on, dim when off. */}
+        {/* White knob by day and in dark mode. At night on is filled (a bright knob on an amber track) and off is hollow, so off can't pass for on. */}
         <span
           className={cx(
             "absolute top-[2px] left-[2px] h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.18)] transition-transform",
-            checked ? "translate-x-5 [.maple-night_&]:bg-mp-on-accent" : "[.maple-night_&]:bg-mp-ink-3"
+            checked
+              ? "translate-x-5 [.maple-night_&]:bg-mp-on-accent"
+              : "[.maple-night_&]:bg-transparent [.maple-night_&]:shadow-[inset_0_0_0_2px_rgb(224_169_59/0.5)]"
           )}
         />
       </span>
@@ -279,9 +281,25 @@ function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean
   );
 }
 
-function EmojiPicker({ value, onChange }: { value: string; onChange: (e: string) => void }) {
+/** How someone shows on rows: their initial on their color (value "", the default), or an emoji they pick. */
+function EmojiPicker({ value, onChange, initial, color }: { value: string; onChange: (e: string) => void; initial: string; color: string }) {
   return (
-    <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Emoji">
+    <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Shown as">
+      <button
+        type="button"
+        role="radio"
+        aria-checked={value === ""}
+        aria-label="Initial"
+        onClick={() => onChange("")}
+        className={cx(
+          "flex h-11 w-11 items-center justify-center rounded-full transition active:scale-95",
+          value === "" ? "bg-mp-accent/10 ring-2 ring-mp-accent-fg" : "bg-mp-sunken"
+        )}
+      >
+        <span aria-hidden className="mp-kind-fill flex h-8 w-8 items-center justify-center rounded-full text-[15px] font-semibold text-white" style={{ backgroundColor: color }}>
+          {initial}
+        </span>
+      </button>
       {EMOJIS.map((e) => (
         <button
           key={e}
@@ -331,7 +349,6 @@ export default function FamilyTab() {
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
       <header className="px-1">
         <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Family</h1>
-        <p className={cx(tone.muted, "mt-1 text-[15px]")}>Everyone helping Maple grow, and how the log works for you.</p>
       </header>
       <People />
       <BabyDetails />
@@ -435,7 +452,7 @@ function People() {
 }
 
 function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) {
-  const { api, refresh, toast, memberName } = useMaple();
+  const { state, api, refresh, toast, memberName } = useMaple();
   const isMe = m.email === me.email;
   // The site admin password signs in as the "admin" owner; a real owner can switch it off.
   const isAdminLogin = m.email === "admin";
@@ -443,7 +460,8 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
   const [managing, setManaging] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [name, setName] = useState(m.display_name ?? "");
-  const [emoji, setEmoji] = useState(m.emoji ?? "🍁");
+  // "" is their initial: emoji are opt-in.
+  const [emoji, setEmoji] = useState(m.emoji ?? "");
   const [busy, setBusy] = useState(false);
 
   const who = m.email === "admin" ? "Site admin login" : m.email.startsWith("invite:") ? "Joined with an invite link" : m.email;
@@ -517,8 +535,8 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
             <input className={tone.input} value={name} maxLength={40} placeholder="What should the log call you?" onChange={(e) => setName(e.target.value)} />
           </Field>
           <div>
-            <span className={cx(tone.label, "mb-1.5 block")}>Your emoji</span>
-            <EmojiPicker value={emoji} onChange={setEmoji} />
+            <span className={cx(tone.label, "mb-1.5 block")}>Shown as</span>
+            <EmojiPicker value={emoji} onChange={setEmoji} initial={(name.trim() || memberName(m.email))[0]?.toUpperCase() ?? "?"} color={memberColor(m, state?.members ?? [])} />
           </div>
           <div className="flex gap-2">
             <Button
@@ -535,7 +553,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
               onClick={() => {
                 setEditing(false);
                 setName(m.display_name ?? "");
-                setEmoji(m.emoji ?? "🍁");
+                setEmoji(m.emoji ?? "");
               }}
             >
               Cancel
@@ -645,9 +663,9 @@ function InviteByEmail() {
 }
 
 function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
-  const { api, toast } = useMaple();
+  const { state, api, toast } = useMaple();
   const [name, setName] = useState("");
-  const [emoji, setEmoji] = useState("🦉");
+  const [emoji, setEmoji] = useState("");
   const [role, setRole] = useState<"member" | "viewer">("viewer");
   const [busy, setBusy] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
@@ -661,7 +679,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
   useEffect(() => {
     if (open) {
       setName("");
-      setEmoji("🦉");
+      setEmoji("");
       setRole("viewer");
       setUrl(null);
     }
@@ -720,8 +738,14 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
             <input className={tone.input} value={name} maxLength={40} placeholder="Grandma Sue" onChange={(e) => setName(e.target.value)} />
           </Field>
           <div>
-            <span className={cx(tone.label, "mb-1.5 block")}>Their emoji</span>
-            <EmojiPicker value={emoji} onChange={setEmoji} />
+            <span className={cx(tone.label, "mb-1.5 block")}>Shown as</span>
+            {/* They'll join at the end of the family list, so that's the color their initial gets; the letter fills in as their name is typed. */}
+            <EmojiPicker
+              value={emoji}
+              onChange={setEmoji}
+              initial={name.trim()[0]?.toUpperCase() ?? ""}
+              color={MEMBER_PALETTE[(state?.members.length ?? 0) % MEMBER_PALETTE.length]}
+            />
           </div>
           <div>
             <span className={cx(tone.label, "mb-1.5 block")}>What they can do</span>
@@ -960,7 +984,7 @@ function BabyDetails() {
           )}
           <Toggle
             label="Show diaper brigade"
-            hint="This week's diaper changes as a team tally. Just for fun, never a contest."
+            hint="Who changed how many this week, nights included."
             checked={flag("show_brigade")}
             onChange={(v) => void setSetting("show_brigade", v)}
           />
@@ -1074,7 +1098,7 @@ function DoctorQuestions() {
         )}
 
         {open.length === 0 ? (
-          <p className={cx(tone.muted, "px-4 py-4 text-center text-sm")}>{done.length ? "All asked. Nice work." : "No questions yet."}</p>
+          <p className={cx(tone.muted, "px-4 py-4 text-center text-sm")}>{done.length ? "All asked." : "No questions yet."}</p>
         ) : (
           <ul className={tone.divide}>
             {open.map((q) => (

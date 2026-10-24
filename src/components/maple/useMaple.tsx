@@ -40,6 +40,7 @@ import type {
   UnitSystem,
   UpdateEntryInput,
 } from "@/lib/maple/types";
+import type { IconName } from "./icons";
 
 /**
  * Client state for Maple's Log: one provider at the top of the app holds the
@@ -83,7 +84,12 @@ export type Toast = {
   group?: "timer";
   /** Close early once this entry is newer than the version the toast was built from (someone else changed it). */
   watch?: { entryId: number; updatedAt: string };
+  /** The mark in place of the check: a saved diaper wears its drop or pile (toastIcon). */
+  icon?: IconName;
 };
+
+/** A diaper's toast says what was saved by its mark: the pile if it had poop, else the drop (a dry one keeps the check). */
+const toastIcon = (e: Entry): IconName | undefined => (e.kind === "diaper" ? (e.data.poop ? "poop" : e.data.pee ? "droplet" : undefined) : undefined);
 
 /**
  * Why a timer call didn't happen, for callers that report it themselves
@@ -875,6 +881,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           toast(opts.toast ?? "Logged", {
             undo: () => void remove(entry.id, { toast: "Undone" }),
             actions: opts.actions?.(entry),
+            icon: toastIcon(entry),
           });
         }
         return entry;
@@ -922,7 +929,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         } as Entry;
         setQueue(outboxRef.current.map((i) => (i.client_id === queued.client_id ? { ...i, input, entry } : i)));
         upsert(entry);
-        if (opts.toast !== "") toast(opts.toast ?? "Saved on this phone");
+        if (opts.toast !== "") toast(opts.toast ?? "Saved on this phone", { icon: toastIcon(entry) });
         return entry;
       }
       const kind = stateRef.current?.entries.find((x) => x.id === id)?.kind;
@@ -931,7 +938,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           fetchJson<{ entry: Entry }>(`/api/maple/entries?id=${id}`, { method: "PATCH", body: JSON.stringify(patch) })
         );
         upsert(entry);
-        if (opts.toast !== "") toast(opts.toast ?? "Saved");
+        if (opts.toast !== "") toast(opts.toast ?? "Saved", { icon: toastIcon(entry) });
         return entry;
       } catch (e) {
         // The other phone discarded it while this sheet was open: say who, and drop it here too.

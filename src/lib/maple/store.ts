@@ -1052,7 +1052,7 @@ export async function reopenTimer(id: number, by?: string, opts: { side?: Side; 
 
 // ── members ───────────────────────────────────────────────────────────
 
-export async function addMember(email: string, addedBy: string, emoji: string, role: "member" | "viewer" = "member"): Promise<void> {
+export async function addMember(email: string, addedBy: string, emoji: string | null, role: "member" | "viewer" = "member"): Promise<void> {
   await q(`DELETE FROM maple_removed WHERE email = $1`, [email]);
   await q(
     `INSERT INTO maple_members (email, role, emoji, added_by) VALUES ($1, $2, $3, $4)
@@ -1107,28 +1107,53 @@ export async function updateMember(
   );
 }
 
+/** How far back the app's entries reach (the state route's window): the brigade's week is split here. */
+const LOADED_MS = 72 * 3600_000;
+
 /**
  * Lifetime counts, and her firsts (the earliest poop, bath and finished tummy
  * time since she was born; an hour's slack for a birth time typed late), for
- * celebrations: the state only carries the last ~72h of entries.
+ * celebrations: the state only carries the last ~72h of entries. Also the
+ * diaper brigade's week before that window (Lifetime.week), so "this week"
+ * counts seven days, not three.
  */
 export async function lifetimeCounts(babyId: number): Promise<Lifetime> {
-  const rows = await q(
-    `SELECT COUNT(*) FILTER (WHERE e.kind = 'diaper')::int AS diapers,
-            COUNT(*) FILTER (WHERE e.kind = 'feed' AND NOT e.active)::int AS feeds,
-            MIN(e.started_at) FILTER (WHERE e.kind = 'diaper' AND e.data->>'poop' = 'true' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_poop,
-            MIN(e.started_at) FILTER (WHERE e.kind = 'bath' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_bath,
-            MIN(e.started_at) FILTER (WHERE e.kind = 'tummy' AND NOT e.active AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_tummy
-     FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id
-     WHERE e.baby_id = $1 AND e.deleted_at IS NULL`,
-    [babyId]
-  );
+  const before = new Date(Date.now() - LOADED_MS);
+  const [rows, week] = await Promise.all([
+    q(
+      `SELECT COUNT(*) FILTER (WHERE e.kind = 'diaper')::int AS diapers,
+              COUNT(*) FILTER (WHERE e.kind = 'feed' AND NOT e.active)::int AS feeds,
+              MIN(e.started_at) FILTER (WHERE e.kind = 'diaper' AND e.data->>'poop' = 'true' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_poop,
+              MIN(e.started_at) FILTER (WHERE e.kind = 'bath' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_bath,
+              MIN(e.started_at) FILTER (WHERE e.kind = 'tummy' AND NOT e.active AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_tummy
+       FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id
+       WHERE e.baby_id = $1 AND e.deleted_at IS NULL`,
+      [babyId]
+    ),
+    // Diapers from 7 days ago up to `before`, per person; night = 10pm–6am in
+    // her timezone. Best effort: without it the summary counts what's loaded.
+    q(
+      `SELECT e.created_by AS by, COUNT(*)::int AS diapers, COUNT(*) FILTER (WHERE l.hour >= 22 OR l.hour < 6)::int AS night
+       FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id,
+            LATERAL (SELECT EXTRACT(HOUR FROM e.started_at AT TIME ZONE COALESCE(NULLIF(b.timezone, ''), 'America/New_York')) AS hour) l
+       WHERE e.baby_id = $1 AND e.deleted_at IS NULL AND e.kind = 'diaper'
+         AND e.started_at > $2::timestamptz - INTERVAL '96 hours' AND e.started_at < $2::timestamptz
+       GROUP BY e.created_by`,
+      [babyId, before.toISOString()]
+    ).catch(() => null),
+  ]);
   const r = rows[0];
   const at = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
   return {
     diapers: Number(r?.diapers ?? 0),
     feeds: Number(r?.feeds ?? 0),
     firsts: { poop: at(r?.first_poop), bath: at(r?.first_bath), tummy: at(r?.first_tummy) },
+    ...(week && {
+      week: {
+        before: before.toISOString(),
+        counts: week.map((w) => ({ by: w.by == null ? null : String(w.by), diapers: Number(w.diapers ?? 0), night: Number(w.night ?? 0) })),
+      },
+    }),
   };
 }
 

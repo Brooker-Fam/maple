@@ -68,7 +68,7 @@ export default function SignIn() {
       }
       await refresh();
     } catch {
-      setError("Couldn't reach the forest. Check your connection and try again.");
+      setError("Couldn't connect. Check your connection and try again.");
     }
     setBusy(false);
   };
@@ -91,7 +91,7 @@ export default function SignIn() {
         </div>
         <h1 className={cx(tone.display, "mt-6 text-[34px] leading-[1.05]")}>Maple&apos;s Log</h1>
         <p className={cx(tone.muted, "mx-auto mt-2 max-w-[18rem] text-[15px] leading-relaxed text-balance")}>
-          Just for Maple&apos;s family. Sign in to come in.
+          Just for Maple&apos;s family.
         </p>
 
         {notice && (

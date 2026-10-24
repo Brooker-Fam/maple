@@ -9,8 +9,9 @@ import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatDayLabel, format
 import type { Entry, FeedData } from "@/lib/maple/types";
 import { useClockMinute } from "./FeedParts";
 import { MAPLE_LEAF_PATH } from "./Hero";
-import { Icon, KindBadge } from "./icons";
+import { DROPLET_PATH, Icon, KindBadge } from "./icons";
 import { useNightActive } from "./nightLook";
+import { DETAIL_COLOR, SIDE_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { Tallies } from "./StatusCard";
 import { Segmented, cx, tone } from "./ui";
@@ -20,8 +21,9 @@ import { useMaple } from "./useMaple";
  * The Day Dial: a 24-hour clock face (midnight at the top, clockwise). It's
  * Today's hero, so it sits on the page without a card or a title. Sleep is the
  * outer ring, feeds the middle (rust = left, honey = right, a hollow gold pill
- * = bottle), diapers are dots (pee dew-blue, poop in its logged color). Tap
- * anywhere on the ring to see what happened around then and edit it.
+ * = bottle), diapers the inner track: pee an upright blue drop, poop a dot in
+ * its logged color, both a dot with a small drop. Tap anywhere on the ring to
+ * see what happened around then and edit it.
  *
  * One range control drives both the dial and the tallies under it ("The day so
  * far"): the last 24 hours ending now (at 3am that's last night and yesterday
@@ -29,24 +31,26 @@ import { useMaple } from "./useMaple";
  * yesterday, or an older day with the arrows.
  *
  * By day and in dark mode the marks keep their kind colors. At night they fold
- * into the amber, told apart by lane, strength and shape (a hollow ring for
- * pee and bottles, Right striped against Left's solid band), with a soft
- * amber glow; the legend follows.
+ * into the amber, told apart by lane, strength and shape (a hollow drop for
+ * pee, a hollow pill for bottles, Right striped against Left's solid band);
+ * the legend follows. The night hours are shaded in the face's own ink, and
+ * the one ornament is the maple leaf on the now hand.
  */
 
 const C = 160;
 const R = { night: 150, label: 161, sleep: 132, feed: 110, diaper: 88, handIn: 68, handOut: 150 };
+// The kinds' own colors (palette.ts), so a mark on the dial matches its tile, row and toast. Sleep stays lighter on the ring.
 const COLORS = {
   sleep: "#B8A9C9",
-  left: "#B5452B",
-  right: "#E0A93B",
+  left: SIDE_COLOR.L,
+  right: SIDE_COLOR.R,
   // The bottle pill is hollow: its inside is the face color (stroke-mp-surface), so it never glares white at night.
   bottleEdge: "#C49A3C",
-  pee: "#7FA7B5",
-  poop: "#8B5A2B",
+  pee: DETAIL_COLOR.pee,
+  poop: DETAIL_COLOR.poop,
   hand: "#D9772B",
 };
-type Palette = typeof COLORS;
+type Palette = Record<keyof typeof COLORS, string>;
 const amber = (a: number) => `rgb(224 169 59 / ${a})`;
 /** The night look: every kind in the amber, strongest where it matters most (the left side, the diapers). */
 const NIGHT_COLORS: Palette = {
@@ -83,7 +87,11 @@ type Arc = {
   s: number;
   e: number;
 };
-type Dot = { key: string; entry: Entry; a: number; pee: boolean; poop: boolean; color: string; opacity: number; t: number };
+/**
+ * A diaper on the inner track. `color` is the poop's (its logged stool color; null when none was logged, drawn
+ * neutral). `edge`: a stool color that would vanish into the face (black in dark mode, white or pale by day) gets a ring.
+ */
+type Dot = { key: string; entry: Entry; a: number; pee: boolean; poop: boolean; color: string | null; edge: "dark" | "light" | null; opacity: number; t: number };
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const pt = (r: number, deg: number): [number, number] => [C + r * Math.sin(rad(deg)), C - r * Math.cos(rad(deg))];
@@ -147,9 +155,12 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
       }
     } else if (entry.kind === "diaper") {
       if (start < lo || start > hi) continue;
-      // At night every poop is the same amber: the stool color is in the popover and the entry.
-      const color = entry.data.poop ? (night ? pal.poop : entry.data.color ? STOOL_COLOR_INFO[entry.data.color].hex : pal.poop) : pal.pee;
-      dots.push({ key: `d${entry.id}`, entry, a: clockDeg(start, tz), pee: entry.data.pee, poop: entry.data.poop, color, opacity: opacityAt(start), t: start });
+      // At night every poop is the same amber: the stool color is in the popover and the entry. A poop with no color
+      // logged is neutral, never a made-up brown.
+      const stool = entry.data.poop ? entry.data.color : undefined;
+      const color = night ? pal.poop : stool ? STOOL_COLOR_INFO[stool].hex : null;
+      const edge = night || !stool ? null : stool === "black" ? "dark" : stool === "white" || stool === "pale_yellow" ? "light" : null;
+      dots.push({ key: `d${entry.id}`, entry, a: clockDeg(start, tz), pee: entry.data.pee, poop: entry.data.poop, color, edge, opacity: opacityAt(start), t: start });
     }
   }
   // Long arcs first so short ones (and live ones) draw on top.
@@ -164,7 +175,6 @@ export default function DayDial() {
   const now = useClockMinute();
   const night = useNightActive();
   const uid = useId().replace(/[^\w-]/g, "");
-  const glowId = `maple-dial-glow-${uid}`;
   const hatchId = `maple-dial-hatch-${uid}`;
   const hintId = `maple-dial-hint-${uid}`;
   const [choice, setChoice] = useState<View | null>(null);
@@ -324,14 +334,6 @@ export default function DayDial() {
 
   const nightStart = (20 / 24) * 360;
   const nightSpan = (11 / 24) * 360;
-  const stars: [number, number][] = [
-    [304, 145],
-    [322, 146],
-    [341, 144],
-    [6, 146],
-    [32, 145],
-    [70, 144],
-  ];
 
   // The center readout: the time (or the day), and what the ring covers. The counts are in the tallies below.
   const sub = loading ? "Loading…" : past ? (pastAge ? `Day ${pastAge.dayOfLife}` : "") : rolling ? "Last 24 hours" : "Since midnight";
@@ -359,36 +361,15 @@ export default function DayDial() {
               .maple-night .maple-dial-live { animation: none; }
             `}</style>
             <defs>
-              {/* Night only: the marks carry a soft amber glow, the one place anything glows. */}
-              <filter id={glowId} x="-10%" y="-10%" width="120%" height="120%">
-                <feGaussianBlur in="SourceAlpha" stdDeviation="2.5" result="blur" />
-                <feFlood floodColor="#E0A93B" floodOpacity="0.4" />
-                <feComposite in2="blur" operator="in" result="glow" />
-                <feMerge>
-                  <feMergeNode in="glow" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
               {/* Night: Right's stripes, across the band wherever it runs round the ring (Left stays solid). */}
               <pattern id={hatchId} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
                 <rect width="2.4" height="4" fill={NIGHT_COLORS.right} />
               </pattern>
             </defs>
 
-            {/* face, with the night hours (8pm–7am) shaded */}
+            {/* face, with the night hours (8pm–7am) shaded in the paper's own ink */}
             <circle cx={C} cy={C} r={R.night} strokeWidth={1} className="fill-mp-surface stroke-mp-line" />
-            <path d={sectorPath(R.night, nightStart, nightSpan)} className="fill-[#4B4F8F]/[0.07] dark:fill-[#9AA0E0]/[0.07] [.maple-night_&]:fill-mp-ink/[0.05]" />
-            {stars.map(([a, r], i) => {
-              const [x, y] = pt(r, a);
-              return (
-                <path
-                  key={i}
-                  d={`M${f(x)},${f(y - 2.2)} L${f(x + 0.6)},${f(y - 0.6)} L${f(x + 2.2)},${f(y)} L${f(x + 0.6)},${f(y + 0.6)} L${f(x)},${f(y + 2.2)} L${f(x - 0.6)},${f(y + 0.6)} L${f(x - 2.2)},${f(y)} L${f(x - 0.6)},${f(y - 0.6)} Z`}
-                  className="fill-[#8C86C0] dark:fill-[#C8C2F0] [.maple-night_&]:fill-mp-ink-3"
-                  opacity={0.7}
-                />
-              );
-            })}
+            <path d={sectorPath(R.night, nightStart, nightSpan)} className="fill-mp-ink/[0.035] [.maple-night_&]:fill-mp-ink/[0.05]" />
             {/* lanes: the whole ring, or for today only midnight to now */}
             {isToday ? (
               <>
@@ -424,7 +405,7 @@ export default function DayDial() {
               );
             })}
 
-            <g filter={night ? `url(#${glowId})` : undefined}>
+            <g>
               {/* sleep + feeds */}
               {arcs.map((a) => {
                 const d = arcPath(a.r, a.a0, a.span);
@@ -460,33 +441,49 @@ export default function DayDial() {
                   </g>
                 );
               })}
-              {/* diapers, each ringed in the face color so neighbors stay apart */}
+              {/*
+                diapers, each ringed in the face color so neighbors stay apart: pee an upright drop (never rotated, a
+                drop points up), poop a dot in its stool color, both a dot with a small drop at its shoulder. At night
+                the drop is hollow and the dot solid amber, so shape alone tells them apart.
+              */}
               {dots.map((d) => {
                 const [x, y] = pt(R.diaper, d.a);
-                if (night) {
-                  // Pee is a hollow ring, poop a filled dot; both is a ring half filled.
+                // A drop h units tall centred on (dx, dy); the halo is in dial units whatever the scale.
+                const drop = (dx: number, dy: number, h: number, halo: number) => {
+                  const k = h / 18;
                   return (
-                    <g key={d.key} opacity={d.opacity} transform={`translate(${f(x)} ${f(y)}) rotate(${f(d.a)})`}>
-                      {d.pee && <circle r="4.75" stroke={pal.pee} strokeWidth="1.5" className="fill-mp-surface" />}
-                      {d.poop &&
-                        (d.pee ? (
-                          <path d="M0,-5.5 A5.5,5.5 0 0 1 0,5.5 Z" fill={d.color} />
-                        ) : (
-                          <circle r="5.5" fill={d.color} strokeWidth="1" className="stroke-mp-surface" />
-                        ))}
-                    </g>
+                    <path
+                      d={DROPLET_PATH}
+                      transform={`translate(${f(dx - 12 * k)} ${f(dy - 12.7 * k)}) scale(${f(k)})`}
+                      fill={night ? undefined : pal.pee}
+                      stroke={night ? pal.pee : undefined}
+                      strokeWidth={f(halo / k)}
+                      strokeLinejoin="round"
+                      className={night ? "fill-mp-surface" : "stroke-mp-surface"}
+                    />
                   );
-                }
-                if (d.pee && d.poop) {
-                  return (
-                    <g key={d.key} opacity={d.opacity} transform={`translate(${f(x)} ${f(y)}) rotate(${f(d.a)})`}>
-                      <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill={pal.pee} />
-                      <path d="M0,-5.5 A5.5,5.5 0 0 1 0,5.5 Z" fill={d.color} />
-                      <circle r="5.5" fill="none" strokeWidth="1" className="stroke-mp-surface" />
-                    </g>
-                  );
-                }
-                return <circle key={d.key} cx={f(x)} cy={f(y)} r={5.5} fill={d.color} opacity={d.opacity} strokeWidth="1" className="stroke-mp-surface" />;
+                };
+                return (
+                  <g key={d.key} opacity={d.opacity}>
+                    {d.poop && (
+                      <circle
+                        cx={f(x)}
+                        cy={f(d.pee ? y + 1.5 : y)}
+                        r={d.pee ? 5 : 5.5}
+                        fill={d.color ?? undefined}
+                        strokeWidth="1"
+                        className={cx(
+                          "stroke-mp-surface",
+                          !d.color && "fill-mp-ink-3",
+                          // Meconium on the dark face, chalky or pale on the white one: a faint ring so it doesn't vanish.
+                          d.edge === "dark" && "dark:stroke-[rgb(236_231_220/0.35)]",
+                          d.edge === "light" && "stroke-mp-ink/30 dark:stroke-mp-surface"
+                        )}
+                      />
+                    )}
+                    {d.pee && (d.poop ? drop(x + 4.5, y - 4, 9, night ? 1.4 : 1.6) : drop(x, y, 13, night ? 1.5 : 1))}
+                  </g>
+                );
               })}
             </g>
 
@@ -655,27 +652,53 @@ export default function DayDial() {
   );
 }
 
-/** What the marks mean: small swatches drawn like the marks themselves (amber, by strength and shape, at night). */
+/** The stool colors the Poop key shows: plotted poops wear their own color, so the key does too. */
+const LEGEND_STOOLS = [STOOL_COLOR_INFO.black.hex, STOOL_COLOR_INFO.green.hex, STOOL_COLOR_INFO.mustard.hex];
+
+/** What the marks mean: each swatch drawn in its mark's shape, in every mode (amber, by strength and shape, at night). */
 function Legend({ pal, night }: { pal: Palette; night: boolean }) {
   const dot = "h-[7px] w-[7px] rounded-full";
-  const ring = (color: string, width: string): { style: React.CSSProperties; className: string } => ({ style: { borderColor: color }, className: cx("h-2 w-2 rounded-full", width) });
-  // At night the sides are short bands, as on the ring: Left solid, Right striped.
+  // Sleep, and the sides at night, are short bands as on the ring (Right striped); a bottle is a hollow pill.
   const band = "h-2 w-4 rounded-full";
-  const items: { label: string; style: React.CSSProperties; className: string }[] = [
-    { label: "Left", style: { backgroundColor: pal.left }, className: night ? band : dot },
-    night
-      ? { label: "Right", style: { backgroundImage: `repeating-linear-gradient(135deg, ${pal.right} 0 1.7px, transparent 1.7px 2.8px)` }, className: band }
-      : { label: "Right", style: { backgroundColor: pal.right }, className: dot },
-    { label: "Bottle", ...ring(pal.bottleEdge, "border-2") },
-    { label: "Sleep", style: { backgroundColor: pal.sleep }, className: dot },
-    { label: "Pee", ...(night ? ring(pal.pee, "border-[1.5px]") : { style: { backgroundColor: pal.pee }, className: dot }) },
-    { label: "Poop", style: { backgroundColor: pal.poop }, className: dot },
+  const items: { label: string; mark: React.ReactNode }[] = [
+    { label: "Left", mark: <i className={cx("shrink-0", night ? band : dot)} style={{ backgroundColor: pal.left }} /> },
+    {
+      label: "Right",
+      mark: night ? (
+        <i className={cx("shrink-0", band)} style={{ backgroundImage: `repeating-linear-gradient(135deg, ${pal.right} 0 1.7px, transparent 1.7px 2.8px)` }} />
+      ) : (
+        <i className={cx("shrink-0", dot)} style={{ backgroundColor: pal.right }} />
+      ),
+    },
+    { label: "Bottle", mark: <i className={cx("shrink-0 border-2", band)} style={{ borderColor: pal.bottleEdge }} /> },
+    { label: "Sleep", mark: <i className={cx("shrink-0", band)} style={{ backgroundColor: pal.sleep }} /> },
+    {
+      label: "Pee",
+      mark: (
+        <svg viewBox="0 0 24 24" width={10} height={12} className="shrink-0">
+          <path d={DROPLET_PATH} fill={night ? "none" : pal.pee} stroke={night ? pal.pee : "none"} strokeWidth={3} strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      label: "Poop",
+      mark: night ? (
+        <i className={cx("shrink-0", dot)} style={{ backgroundColor: pal.poop }} />
+      ) : (
+        <span className="inline-flex shrink-0">
+          {LEGEND_STOOLS.map((c, i) => (
+            // Each overlaps the last, parted by a hairline of the page.
+            <i key={c} className={cx(dot, i > 0 && "-ml-[3px]")} style={{ backgroundColor: c, boxShadow: i > 0 ? "0 0 0 1px var(--mp-bg)" : undefined }} />
+          ))}
+        </span>
+      ),
+    },
   ];
   return (
     <div className={cx(tone.faint, "mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 px-2 text-[11px]")} aria-hidden>
       {items.map((it) => (
         <span key={it.label} className="inline-flex items-center gap-1.5">
-          <i className={cx("shrink-0", it.className)} style={it.style} />
+          {it.mark}
           {it.label}
         </span>
       ))}

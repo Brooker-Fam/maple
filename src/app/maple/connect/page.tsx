@@ -171,14 +171,12 @@ export default function MapleConnectPage() {
           <div className="flex h-14 w-14 items-center justify-center rounded-[16px] border border-mp-line bg-mp-surface">
             <MapleLeaf size={38} className="[.maple-night_&]:opacity-70" />
           </div>
-          <p className={cx(tone.muted, "mt-5 text-[13px] font-medium")}>For the grown-ups</p>
-          <h1 className={cx(tone.display, "mt-1 text-[34px] leading-[1.05] sm:text-[40px]")}>Just say it out loud</h1>
+          <h1 className={cx(tone.display, "mt-5 text-[34px] leading-[1.05] sm:text-[40px]")}>Just say it out loud</h1>
           <p className={cx(tone.muted, "mt-3 text-[15px] leading-relaxed sm:text-base")}>
             Connect Claude or ChatGPT to Maple&apos;s Log, then tell it what
             happened (&ldquo;wet and dirty diaper, mustard&rdquo;) or ask
             what you need to know (&ldquo;which side next?&rdquo;). It lands in
-            the same log as the app, with your name on it. Handy at 3am with one
-            hand free.
+            the same log as the app, with your name on it.
           </p>
         </header>
 

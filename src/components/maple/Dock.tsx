@@ -71,16 +71,6 @@ const TILE = {
   wake: "#6E5C94",
 };
 
-// Daytime toasts get a little garnish now and then (never more than once every 3 logs, never at night).
-const SUFFIXES = ["Zoe gives it two paws up.", "Bruce pretends not to have noticed.", "Another leaf on the tree.", "Noted in the forest ledger."];
-let logsSinceSuffix = 0;
-function garnish(night: boolean): string {
-  logsSinceSuffix++;
-  if (night || logsSinceSuffix < 3 || Math.random() < 0.5) return "";
-  logsSinceSuffix = 0;
-  return ` · ${SUFFIXES[Math.floor(Math.random() * SUFFIXES.length)]}`;
-}
-
 const diaperName = (pee: boolean, poop: boolean) => (pee && poop ? "wet + dirty diaper" : poop ? "dirty diaper" : "wet diaper");
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -116,7 +106,7 @@ function useCooldowns(): [Record<string, boolean>, (key: string, ms: number) => 
 }
 
 export default function Dock() {
-  const { state, summary, log, remove, update, now, isNight, readOnly, memberLabel, units } = useMaple();
+  const { state, summary, log, remove, update, now, readOnly, memberLabel, units } = useMaple();
   const { open } = useSheets();
   const actions = useTimerActions();
   const clock = useNow(1000);
@@ -261,7 +251,7 @@ export default function Dock() {
     const text = dup
       ? // Never "Admin": the shared login reads as the member it acts for, or as the other phone.
         `${memberLabel(dup.created_by) ?? "The other phone"} logged a ${name} ${formatRelative(dup.started_at, t)}. Same one?`
-      : `${cap(name)} · ${formatTime(t, tz)}${garnish(isNight())}`;
+      : `${cap(name)} · ${formatTime(t, tz)}`;
     await log(
       { kind: "diaper", data: { pee, poop } },
       {
@@ -310,7 +300,8 @@ export default function Dock() {
         role="region"
         aria-label="Log something"
       >
-        <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl">
+        {/* Opaque at night: through the blur, the page's amber text ghosted under the tiles. */}
+        <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none">
           {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Hold a button to log an earlier one.</p>}
           <div className="grid grid-cols-4 gap-2">
             {/* Row 1: feeding, which becomes the nursing controls while a feed runs. No tile shows a feed clock (the card has it). */}
@@ -345,6 +336,7 @@ export default function Dock() {
                   icon="check"
                   aria={askWhen ? "Done: choose when the feed ended" : "Done: end the feed now"}
                   sub={feedPending ? "starting…" : askWhen ? "when?" : undefined}
+                  inline={feedPending || askWhen}
                   accent
                   disabled={feedPending}
                   onTap={tap(() => (askWhen ? open({ kind: "feed", entry: feed, preset: fixPreset("current", "done") }) : void actions.stop(feed)))}
@@ -398,7 +390,7 @@ export default function Dock() {
             ) : feed ? (
               <>
                 {/* An untimed feed (logged by voice without sides): just its Done. */}
-                <Tile id="bottle" label="Bottle" sub={lastBottleLabel} icon="bottle" color={TILE.bottle} onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))} />
+                <Tile id="bottle" label="Bottle" sub={lastBottleLabel} inline={!!lastBottleLabel} icon="bottle" color={TILE.bottle} onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))} />
                 <div aria-hidden />
                 <Tile id="done" label="Done" icon="check" aria="Done: end the feed now" accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
               </>
@@ -423,6 +415,7 @@ export default function Dock() {
                   id="bottle"
                   label="Bottle"
                   sub={lastBottleLabel}
+                  inline={!!lastBottleLabel}
                   icon="bottle"
                   color={TILE.bottle}
                   onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))}
@@ -436,7 +429,7 @@ export default function Dock() {
             <Tile
               id="pee"
               label="Pee"
-              dots={[TILE.pee]}
+              marks={[{ icon: "droplet", color: TILE.pee }]}
               done={done.pee}
               onTap={tap(() => void logDiaper("pee", true, false))}
               onHold={hold(() => open({ kind: "diaper", preset: { pee: true, poop: false, started_at: earlierAt() } }))}
@@ -444,7 +437,7 @@ export default function Dock() {
             <Tile
               id="poop"
               label="Poop"
-              dots={[TILE.poop]}
+              marks={[{ icon: "poop", color: TILE.poop }]}
               done={done.poop}
               onTap={tap(() => void logDiaper("poop", false, true))}
               onHold={hold(() => open({ kind: "diaper", preset: { pee: false, poop: true, started_at: earlierAt() } }))}
@@ -452,7 +445,10 @@ export default function Dock() {
             <Tile
               id="both"
               label="Both"
-              dots={[TILE.pee, TILE.poop]}
+              marks={[
+                { icon: "droplet", color: TILE.pee },
+                { icon: "poop", color: TILE.poop },
+              ]}
               done={done.both}
               onTap={tap(() => void logDiaper("both", true, true))}
               onHold={hold(() => open({ kind: "diaper", preset: { pee: true, poop: true, started_at: earlierAt() } }))}
@@ -494,9 +490,12 @@ export default function Dock() {
 
 /**
  * One dock button: a quiet surface with one colored mark (a side letter, an
- * icon or diaper dots) so the eye finds it, a label, and an optional live
+ * icon or diaper marks) so the eye finds it, a label, and an optional live
  * subline. `strong` fills it with its color (the action you most likely
- * want now); `accent` fills it with the app's primary color (Done).
+ * want now); `accent` fills it with the app's primary color (Done). Two
+ * layouts: mark and label on one line over the subline (side letters, and
+ * any tile given `inline` because it has a subline), or the mark over the
+ * label.
  */
 function Tile({
   id,
@@ -509,7 +508,7 @@ function Tile({
   done,
   letter,
   icon,
-  dots,
+  marks,
   strong,
   accent,
   ink,
@@ -529,8 +528,8 @@ function Tile({
   done?: boolean;
   letter?: Side;
   icon?: IconName;
-  /** Diaper dots (pee, poop, or both), matching the day dial. */
-  dots?: string[];
+  /** Diaper marks (the drop, the pile, or both), drawn like the Timeline's and the Since tiles'. */
+  marks?: { icon: IconName; color: string }[];
   /** Filled with its color (the action you most likely want right now). */
   strong?: boolean;
   /** Filled with the primary color. */
@@ -541,7 +540,7 @@ function Tile({
   disabled?: boolean;
   /** The accessible name, when the label alone doesn't say it ("Switch to Right", "Pause the feed"). */
   aria?: string;
-  /** Icon and label on one line even when quiet (the paused Done, so its "ends 4:10" fits the same height). */
+  /** Icon and label on one line, over the subline (Done and Bottle when they have one), so every tile with a subline fits the same height. */
   inline?: boolean;
   /** A bigger side letter that never hides (the paused sides, whose columns follow the feed rather than Left/Right). */
   bigLetter?: boolean;
@@ -552,8 +551,8 @@ function Tile({
   // be the only cool or red patch on the 3am screen).
   const night = useNightActive();
   const filled = strong || accent;
-  // Icon and label share a line when there's room (a side letter, Done); "Woke up" and Pause stack.
-  const inline = !!letter || accent || !!inlineProp;
+  // Icon and label share a line for a side letter or when asked (a tile with a subline); Done, Pause, More and "Woke up" stack.
+  const inline = !!letter || !!inlineProp;
   const fill = strong && color ? (night ? "rgb(224 169 59 / 0.25)" : color) : undefined;
   return (
     <button
@@ -570,7 +569,8 @@ function Tile({
             ? "border-transparent"
             : next
               ? "border-mp-accent-fg/70 bg-mp-surface text-mp-ink"
-              : "border-mp-line bg-mp-surface text-mp-ink"
+              : // By day a white tile on the cream needs no outline, just a soft lift; dark and night keep a hairline (--mp-edge).
+                "border-(--mp-edge) bg-mp-surface text-mp-ink shadow-[0_1px_2px_rgb(28_38_25/0.06)]"
       )}
       style={{
         backgroundColor: fill,
@@ -604,18 +604,23 @@ function Tile({
                 </span>
               )}
               {icon && <Icon name={icon} size={20} className={cx(!filled && color && "mp-kind-ink")} style={!filled && color ? { color } : undefined} />}
-              {dots?.map((c) => (
-                <span key={c} aria-hidden className="mp-kind-fill h-2.5 w-2.5 rounded-full" style={{ backgroundColor: c }} />
-              ))}
+              {marks && (
+                // h-5, as tall as Sleep's moon, so Pee, Poop and Both sit on Sleep's baseline.
+                <span aria-hidden className="flex h-5 items-center gap-0.5">
+                  {marks.map((m) => (
+                    <Icon key={m.icon} name={m.icon} size={marks.length > 1 ? 17 : 20} className="mp-kind-ink" style={{ color: m.color }} />
+                  ))}
+                </span>
+              )}
               {inline && <span className="text-[15px] leading-tight font-semibold">{label}</span>}
             </span>
             {!inline && <span className={cx("leading-tight font-semibold", filled ? "text-[15px]" : "text-[14px]")}>{label}</span>}
             {sub && (
-              // 11px needs ink-2 (ink-3 is 3:1 at night); on a filled tile it's full strength at night (85% was 4.46:1).
+              // 11px needs ink-2 (ink-3 is 3:1 at night); on a filled tile it's full strength (85% was 4.39:1 on "to Left").
               <span
                 className={cx(
                   "text-[11px] leading-tight tabular-nums",
-                  filled ? "opacity-85 [.maple-night_&]:opacity-100" : next ? "font-semibold text-mp-accent-fg" : "text-mp-ink-2"
+                  filled ? "opacity-100" : next ? "font-semibold text-mp-accent-fg" : "text-mp-ink-2"
                 )}
               >
                 {sub}
