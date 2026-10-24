@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   describeChange,
   edgeBounds,
@@ -279,13 +279,15 @@ export function timerNumbers(e: Entry, now: Date) {
     const current = paused
       ? { kind: "break" as const, side, since: last.start, sec: last.sec, min: last.min }
       : { kind: "side" as const, side, since: lastSide?.start ?? e.started_at, sec: lastSide?.sec ?? wallSec, min: lastSide?.min ?? spanMinutes(e.started_at, now) };
-    // The total on screen: the closed sides in the rows' whole minutes plus the live side's clock (nothing while
-    // paused), so the rows and the clock above it add up to it, and so does the Done toast's minutes.
-    const closedMin = sides.reduce((a, p) => a + (p.end === null ? 0 : p.min), 0);
     return {
-      /** Exact seconds nursing (stats, logic); `total` is the one to show. */
+      /** Exact seconds nursing (stats, logic); `totalMin` is the one to show. */
       elapsed: t.nursing,
-      total: closedMin * 60 + (paused ? 0 : current.sec),
+      /**
+       * "Total nursing 13 min": every side row's whole minutes, the live one counted to now (spanMinutes), nothing
+       * for a break. The rows' rule, so it equals the Done toast and the Today list, flips with them on the clock
+       * minute, and never moves at a Switch or Pause (the row that closes has the minutes the live side had).
+       */
+      totalMin: t.min.nursing,
       wallSec,
       left: t.left,
       right: t.right,
@@ -302,7 +304,7 @@ export function timerNumbers(e: Entry, now: Date) {
   }
   return {
     elapsed: wallSec,
-    total: wallSec,
+    totalMin: spanMinutes(e.started_at, now),
     wallSec,
     left: 0,
     right: 0,
@@ -319,12 +321,85 @@ export function timerNumbers(e: Entry, now: Date) {
 
 export type TimerNumbers = ReturnType<typeof timerNumbers>;
 
+/** UX defaults (not health rules): when a running timer asks "still going?". Family settings can override. */
+const CHECK_AFTER_MIN: Record<TimerKind, number> = { feed: 45, sleep: 300, tummy: 30, pump: 60 };
+/** A break this long asks "Still on a break?". */
+const CHECK_BREAK_MIN = 20;
+const SNOOZE_MIN = 30;
+const SNOOZE_KEY = "maple-timer-snooze";
+
+/** Which check a running timer is on: a feed's side ("Still nursing?"), its break ("Still on a break?"), or another timer's length. */
+export type StillCheck = "side" | "break" | "timer";
+
+// Snoozes are shared by the card, the dock and the Lantern ("Still going" on the card un-asks all three), and kept
+// per entry and check: "Still going" on a long side doesn't mute "Still on a break?" when she comes off.
+let snoozeCache: Record<string, number> | null = null;
+const snoozeSubs = new Set<() => void>();
+const NO_SNOOZES: Record<string, number> = {};
+function readSnoozes(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}") as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+const snoozeSnapshot = () => (snoozeCache ??= readSnoozes());
+function subscribeSnoozes(cb: () => void) {
+  snoozeSubs.add(cb);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== SNOOZE_KEY) return;
+    snoozeCache = null;
+    cb();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    snoozeSubs.delete(cb);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+/**
+ * Has a running timer gone past its "still going?" check (the side she's on,
+ * or the break, for a feed; wall time for the others), not snoozed? While it
+ * has, the card asks "Still nursing?", the Lantern says so, and the dock's
+ * Done asks when she finished instead of ending the feed now. Viewers and a
+ * timer still starting are never asked.
+ */
+export function useStillGoing(entry: Entry | null, n: TimerNumbers | null, now: Date): { forgotten: boolean; check: StillCheck; snooze: () => void } {
+  const { state, readOnly } = useMaple();
+  const snoozes = useSyncExternalStore(subscribeSnoozes, snoozeSnapshot, () => NO_SNOOZES);
+  const kind = (entry?.kind ?? "feed") as TimerKind;
+  const check: StillCheck = !entry || !n || kind !== "feed" || !n.parts.length ? "timer" : n.paused ? "break" : "side";
+  const settings = (state?.baby.settings ?? {}) as Record<string, unknown>;
+  const checkMin = Number(settings[`timer_check_${kind}_min`]) || CHECK_AFTER_MIN[kind] || CHECK_AFTER_MIN.feed;
+  const long = !n ? false : check === "break" ? n.current.sec / 60 >= CHECK_BREAK_MIN : check === "side" ? n.current.sec / 60 >= checkMin : n.wallSec / 60 >= checkMin;
+  // Per part too: "Still going" on one break doesn't mute the next break (or side) of the same feed.
+  const key = entry ? `${entry.id}:${check}${n && check !== "timer" ? `:${n.current.since}` : ""}` : "";
+  const forgotten = !!entry && !readOnly && entry.id > 0 && long && now.getTime() > (snoozes[key] ?? 0);
+  const snooze = () => {
+    if (!key) return;
+    const t = now.getTime();
+    const next = { ...snoozeSnapshot(), [key]: t + SNOOZE_MIN * 60_000 };
+    // Drop stale snoozes so the key never grows.
+    for (const [k, v] of Object.entries(next)) if (v < t - 86_400_000) delete next[k];
+    try {
+      localStorage.setItem(SNOOZE_KEY, JSON.stringify(next));
+    } catch {
+      // storage blocked: the snooze lasts until reload
+    }
+    snoozeCache = next;
+    for (const cb of snoozeSubs) cb();
+  };
+  return { forgotten, check, snooze };
+}
+
 /**
  * The live part of a running timer, as one button that opens Fix times on
  * it: "(R) Right side · since 11:37 PM ›" over the time on this side, with
- * "Total nursing 28:00 / break not counted" beside it once there's more than
- * one part. Paused, it's the break and its clock, dimmed. When the total
- * can't fit beside a long clock it drops under it as one line.
+ * "Total nursing 28 min / break not counted" beside it once there's more than
+ * one part (the rows' whole minutes added up, see timerNumbers). Paused,
+ * it's the break and its clock, dimmed. When the total can't fit beside a
+ * long clock it drops under it as one line.
  */
 export function LiveBlock({
   entry,
@@ -362,7 +437,7 @@ export function LiveBlock({
     setInline(room < 104);
   }, [showTotal, clockText, compact]);
 
-  const aria = `${what}, ${clockAloud(n.current.sec)}, since ${since}.${showTotal ? ` Total nursing ${clockAloud(n.total)}.` : ""}${readOnly ? "" : " Fix times."}`;
+  const aria = `${what}, ${clockAloud(n.current.sec)}, since ${since}.${showTotal ? ` Total nursing ${minutesAloud(n.totalMin)}.` : ""}${readOnly ? "" : " Fix times."}`;
   const body = (
     <>
       <span className="flex min-h-[24px] items-center gap-2">
@@ -388,14 +463,14 @@ export function LiveBlock({
         {showTotal &&
           (inline ? (
             <span className="mt-1 w-full text-[13px] text-mp-ink-2 tabular-nums">
-              Total nursing {formatClock(n.total)}
+              Total nursing {minutesText(n.totalMin)}
               {note && ` · ${note}`}
             </span>
           ) : (
             // Compact: the three lines fit the 44px clock's height (leading-none), so the card keeps its budget.
             <span className={cx("ml-auto flex flex-col items-end text-right", compact ? "leading-none" : "leading-tight")}>
               <span className="text-[12px] text-mp-ink-2">Total nursing</span>
-              <span className="text-[20px] font-semibold text-mp-ink-2 tabular-nums">{formatClock(n.total)}</span>
+              <span className="text-[20px] font-semibold text-mp-ink-2 tabular-nums">{minutesText(n.totalMin)}</span>
               {note && <span className="text-[11px] text-mp-ink-2">{note}</span>}
             </span>
           ))}
@@ -477,10 +552,8 @@ export function TimeChip({
         className
       )}
     >
-      <span className="flex items-center gap-1 text-[15px] leading-tight font-semibold tracking-[-0.01em]">
-        {stop && <Icon name="check" size={16} strokeWidth={2.2} />}
-        {line1}
-      </span>
+      {/* One line at 375 px ("20 min ago" never wraps); no check on stop chips, which made every one look already picked. */}
+      <span className="text-[15px] leading-tight font-semibold tracking-[-0.01em] whitespace-nowrap max-[350px]:text-[13px]">{line1}</span>
       <span className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-tight text-mp-ink-2 tabular-nums">
         {busy ? (
           <>
@@ -615,7 +688,8 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
     };
     return {
       keyBase: `${edge.ref?.side ?? ""}|${edge.ref?.start ?? ""}|${edge.edge}|${b.moment}`,
-      title: momentQuestion(b.moment, side ?? "L"),
+      // "go back on the Right" only if she was on the Right before the break.
+      title: momentQuestion(b.moment, side ?? "L", b.moment === "resume" && i > 0 ? sides[i - 1]?.side : undefined),
       recorded: b.recorded,
       min: b.uiMin,
       max: soft ? new Date(ceiling) : b.max,

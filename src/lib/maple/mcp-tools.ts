@@ -43,7 +43,7 @@ import {
   discardTimer,
   listEntries,
   pauseTimer,
-  reopenTimer,
+  reopenTimerDetailed,
   restoreEntryDetailed,
   retimeFeed,
   rowToEntry,
@@ -480,9 +480,10 @@ function compactData(e: Entry, now: Date): Record<string, unknown> {
   if (e.kind === "feed" && e.data.method === "breast") {
     const t = feedTotals(e.data, now);
     // Segments and the tap record are the timer's insides; the timeline says it in words.
-    const { segments: _segments, last_tap: _tap, ...rest } = e.data as typeof e.data & { last_tap?: unknown };
+    const { segments: _segments, last_tap: _tap, stopped_at: _stopped, ...rest } = e.data as typeof e.data & { last_tap?: unknown };
     void _segments;
     void _tap;
+    void _stopped;
     return { ...rest, left_sec: t.left, right_sec: t.right };
   }
   if (e.kind === "moment") {
@@ -573,20 +574,48 @@ function atArg(d: Date, ctx: Ctx): string {
   return ctx.now.getTime() - d.getTime() < 11 * HOUR ? clock : `${clock}${p.hour < 12 ? "am" : "pm"}`;
 }
 
-/** "the switch to Right", "going back on the Left": the moment a move changed. `side` is the stretch it starts (or, for pause, ends). */
-function momentWords(moment: Moment, side: Side): string {
+/**
+ * "the switch to Right", "going back on the Left": the moment a move changed. `side` is the stretch it starts (or,
+ * for pause, ends); `prev`, for a resume, the side before the break ("back on" only when it's the same side).
+ */
+function momentWords(moment: Moment, side: Side, prev?: Side): string {
   switch (moment) {
     case "feed_start":
       return "the feed start";
     case "switch":
       return `the switch to ${SIDE_NAME[side]}`;
     case "resume":
-      return `going back on the ${SIDE_NAME[side]}`;
+      return prev && prev !== side ? `going on the ${SIDE_NAME[side]} after the break` : `going back on the ${SIDE_NAME[side]}`;
     case "pause":
       return `coming off the ${SIDE_NAME[side]}`;
     case "feed_end":
       return "the feed end";
   }
+}
+
+/**
+ * What reopen_timer with a side did, from the answer: "Back on the Right at
+ * 4:25 PM after a 12 min break; the feed from 4:00 PM goes on (#812)."
+ */
+function carriedText(r: TimerResponse, side: Side, ctx: Ctx): string {
+  const e = r.entry as FeedEntry;
+  const parts = partsOf(e, ctx);
+  const sides = sideParts(parts);
+  const cur = sides.at(-1);
+  const name = SIDE_NAME[side];
+  const goesOn = `the feed from ${whenText(e.started_at, ctx)} goes on (#${e.id})`;
+  if (!cur) return `The nursing timer is running again (#${e.id}).`;
+  const brk = parts.find((p) => p.kind === "break" && p.end === cur.start);
+  // A part the finished feed already had: it was stopped while she was on it, so that side runs on.
+  const kept = !!r.before?.segments.some((x) => x.side === cur.side && Math.abs(Date.parse(x.start) - Date.parse(cur.start)) <= 1500);
+  if (r.merged) return `Back on the ${name} with no break (she was off under a minute); ${goesOn}.`;
+  if (r.clamped) return `${name} from ${formatTime(cur.start, ctx.tz)}, when the break began (no break); ${goesOn}.`;
+  if (kept) return `The stop is taken back and the ${SIDE_NAME[cur.side]} side runs on (since ${formatTime(cur.start, ctx.tz)}); ${goesOn}.`;
+  if (brk) {
+    const prev = sides.at(-2)?.side;
+    return `${prev && prev !== side ? "On" : "Back on"} the ${name} at ${formatTime(cur.start, ctx.tz)} after a ${minutesText(brk.min)} break; ${goesOn}.`;
+  }
+  return `Switched to the ${SIDE_NAME[cur.side]} at ${formatTime(cur.start, ctx.tz)}, when it was stopped; ${goesOn}.`;
 }
 
 /** A feed start moved earlier also moves the end of the nap that ran into it (the store does that). */
@@ -615,6 +644,8 @@ type UndoPayload = {
   sa: number;
   ea: number | null;
   eu: number;
+  /** The feed was finished at its pause (paused_at_stop), so the undo puts that back too. */
+  pa?: 1;
   nap?: { id: number; ea: number; eu: number };
 };
 
@@ -636,6 +667,7 @@ function undoToken(r: TimerResponse): string | null {
     sa: ms(r.before.started_at),
     ea: r.before.ended_at ? ms(r.before.ended_at) : null,
     eu: ms(r.entry.updated_at),
+    ...(r.before.paused_at_stop ? { pa: 1 as const } : {}),
     ...(r.nap ? { nap: { id: r.nap.entry.id, ea: ms(r.nap.before_ended_at), eu: ms(r.nap.entry.updated_at) } } : {}),
   };
   const body = Buffer.from(JSON.stringify(p)).toString("base64url");
@@ -2121,7 +2153,7 @@ async function switchResult(
     const r = await retimeFeed(timer.id, { op: "move", edge: "start", ref: O.ref, to: target.toISOString() }, ctx.who.id);
     const token = undoToken(r);
     lines.push(
-      `Moved ${momentWords(O.startMoment, O.side)} to ${formatTime(target, ctx.tz)} (was ${formatTimeNear(O.start, target, ctx.tz)}; timer #${r.entry.id}).${note}`,
+      `Moved ${momentWords(O.startMoment, O.side, sideParts(parts)[sideParts(parts).indexOf(O) - 1]?.side)} to ${formatTime(target, ctx.tz)} (was ${formatTimeNear(O.start, target, ctx.tz)}; timer #${r.entry.id}).${note}`,
       ...napLines(r, ctx)
     );
     return reply(r.entry as FeedEntry, { switched: false, moved: true, ...(note ? { clamped: true } : {}), ...(token ? { undo: undoHint(token) } : {}) });
@@ -2138,7 +2170,13 @@ async function switchResult(
     const from = last ? whenText(last.start, ctx) : whenText(ctx.now, ctx);
     const breakAt = cur?.kind === "break" ? formatTime(cur.start, ctx.tz) : "";
     const wasOn = r.before?.segments.at(-1)?.start;
+    // "Back on" after a break only when she came off that same side.
+    const prev = sideParts(now).at(-2)?.side;
+    const backOn = prev && prev !== side ? `On the ${name}` : `Back on the ${name}`;
     if (r.noop) lines.push(`She's already on the ${sideWord(side)} side (timer #${e.id}). Nothing changed.`);
+    else if (r.resided) {
+      lines.push(`${backOn} side from ${from}, not the ${SIDE_NAME[other(side)]}: the side she went back on a moment ago is changed, and the break stays (timer #${e.id}).`);
+    }
     else if (r.moved && r.clamped) {
       lines.push(
         `She was already back on the ${name}${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}. The break began at ${breakAt}, so ${name} now carries on from then with no break (timer #${e.id}).`
@@ -2149,10 +2187,10 @@ async function switchResult(
     else if (r.merged && r.clamped) lines.push(`Back on the ${name} with no break: the break began at ${breakAt}, so ${name} carries on from then (timer #${e.id}).`);
     else if (r.merged) lines.push(`Back on the ${name} with no break: she was off under a minute (timer #${e.id}).`);
     else if (resuming) {
-      lines.push(`Back on the ${name} side from ${from} (timer #${e.id}).${r.clamped ? ` The break began at ${breakAt}, so ${name} starts then (no break).` : ""}`);
+      lines.push(`${backOn} side from ${from} (timer #${e.id}).${r.clamped ? ` The break began at ${breakAt}, so ${name} starts then (no break).` : ""}`);
     } else lines.push(`Switched to the ${name} side at ${from} (timer #${e.id}).`);
     // undo_last_tap follows intent (it survives the other phone's taps); a merge or revert has no tap left to undo.
-    const token = r.merged || r.reverted || r.clamped || r.moved ? undoToken(r) : null;
+    const token = r.merged || r.reverted || r.resided || r.clamped || r.moved ? undoToken(r) : null;
     const undo = r.noop ? {} : { undo: token ? undoHint(token) : "fix_nursing_time {undo_last_tap:true}" };
     return reply(e, {
       switched: !r.noop,
@@ -2160,6 +2198,7 @@ async function switchResult(
       ...(r.clamped ? { clamped: true } : {}),
       ...(r.merged ? { merged: true } : {}),
       ...(r.reverted ? { reverted: true } : {}),
+      ...(r.resided ? { resided: true } : {}),
       ...(r.moved ? { moved: true } : {}),
       ...undo,
     });
@@ -3046,6 +3085,7 @@ export function registerMapleTools(server: McpServer) {
           started_at: isoMs(p.sa),
           ended_at: p.ea === null ? null : isoMs(p.ea),
           expect_updated_at: isoMs(p.eu),
+          ...(p.pa === 1 ? { paused_at_stop: true as const } : {}),
           ...(p.nap ? { nap: { id: p.nap.id, ended_at: isoMs(p.nap.ea), expect_updated_at: isoMs(p.nap.eu) } } : {}),
         };
         let r: TimerResponse;
@@ -3133,10 +3173,13 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Undo a stop",
       description:
-        'Use this when a timer was stopped by mistake and is really still going ("oops, she\'s still nursing", "she isn\'t actually awake"): it runs again as if it never stopped. Pass the id, or the timer kind for the one stopped most recently (within the last hour). E.g. "she\'s still eating, restart the timer".',
+        'Use this when a timer was stopped by mistake and is really still going ("oops, she\'s still nursing", "she isn\'t actually awake"): it runs again as if it never stopped. Pass the id, or the timer kind for the one stopped most recently (within the last hour). For a feed, side carries it on on that side in the same step ("she went back on the right, same feed"): a feed stopped at its pause gets that side from at / minutes_ago (default now), after the break; one stopped while she was on a side switches to the other side when it was stopped (the same side just runs on). E.g. "she\'s still eating, restart the timer", "it\'s the same feed, she\'s on the right now" → {timer:"nursing", side:"right"}.',
       inputSchema: {
         id: z.number().int().positive().nullish().describe("The stopped timer's entry id."),
         timer: z.enum(TIMER_NAMES).nullish().describe("Which kind of timer, if no id."),
+        side: sideEnum().nullish().describe("Nursing only: the side she's on now, to carry the feed on there."),
+        at: fields.at("With side: when she went back on after the break (default now)"),
+        minutes_ago: fields.minutesAgo("With side: how many minutes ago she went back on"),
       },
       annotations: WRITE_ANN,
       invoking: "Winding it back up…",
@@ -3178,6 +3221,11 @@ export function registerMapleTools(server: McpServer) {
           `#${target.id} ended at ${whenText(target.ended_at!, ctx)}, too long ago to restart. Use start_timer (with minutes_ago) for one that's going now, or update_entry to fix its end.`
         );
       }
+      const side = a.side ? toSide(a.side) : undefined;
+      const assumed: string[] = [];
+      const at = startFrom(a, ctx, assumed);
+      if (at && !side) throw new ToolError('at / minutes_ago say when she went back on, so they go with side ("left" or "right").');
+      if (side && target.kind !== "feed") throw new ToolError(`side is for a nursing feed; #${target.id} is a ${TIMER_LABEL[target.kind as TimerKind]} timer.`);
       const clash = running.find((r) => r.kind === target.kind);
       if (clash) {
         throw new ToolError(
@@ -3189,18 +3237,33 @@ export function registerMapleTools(server: McpServer) {
       const stoppedAt = Date.parse(target.ended_at!);
       const napWithIt =
         target.kind === "feed" ? running.find((r) => r.kind === "sleep" && Math.abs(Date.parse(r.started_at) - stoppedAt) < 2000) : undefined;
-      const e = await reopenTimer(target.id, ctx.who.id);
+      const res = await reopenTimerDetailed(target.id, ctx.who.id, side ? { side, ...(at ? { at } : {}) } : {});
+      const e = res.entry;
       if (napWithIt) await discardTimer(napWithIt.id, ctx.who.id);
       const label = TIMER_LABEL[e.kind as TimerKind];
       const paused = e.kind === "feed" && !openSegment((e as EntryOf<"feed">).data.segments);
-      const lines = [
-        paused
+      const head = side && isTimedFeed(e)
+        ? carriedText(res, side, ctx)
+        : paused
           ? `The ${label} timer is back (#${e.id}, since ${whenText(e.started_at, ctx)}), paused as it was when it stopped. switch_side with the side she's on resumes the clock.`
-          : `The ${label} timer is running again (#${e.id}, since ${whenText(e.started_at, ctx)}).`,
+          : `The ${label} timer is running again (#${e.id}, since ${whenText(e.started_at, ctx)}).`;
+      const lines = [
+        head,
         ...(napWithIt ? [`The sleep timer started when it stopped (#${napWithIt.id}) was taken back.`] : []),
         ...(isTimedFeed(e) ? [nowText(e, ctx)] : []),
+        ...assumedLine(assumed),
       ];
-      return ok(lines.join(" "), { reopened: true, paused, sleep_discarded: napWithIt?.id ?? null, timer: timerJson(e, ctx) });
+      // With a side it's a fix of the finished feed: the undo puts it back as it was stopped.
+      const token = side ? undoToken(res) : null;
+      return ok(lines.join(" "), {
+        reopened: true,
+        paused,
+        ...(side ? { side: sideWord(side), ...(res.merged ? { merged: true } : {}), ...(res.clamped ? { clamped: true } : {}) } : {}),
+        sleep_discarded: napWithIt?.id ?? null,
+        timer: timerJson(e, ctx),
+        ...(token ? { undo: undoHint(token) } : {}),
+        ...(assumed.length ? { assumed } : {}),
+      });
     }
   );
 

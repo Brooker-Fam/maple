@@ -1,14 +1,15 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
-import { other } from "@/lib/maple/feed";
+import { other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
-import type { DiaperData, Entry, Side, StoolColor } from "@/lib/maple/types";
+import type { DiaperData, Entry, FeedData, Side, StoolColor } from "@/lib/maple/types";
+import { fixPreset, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import MoreSheet, { usePress } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
@@ -27,7 +28,8 @@ import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMap
  * on (columns 1 and 2); during a break, the other side where Switch was
  * (filled like it, "Next side") and the side she came off where Pause was
  * ("Resume"), so Pause and Resume toggle in one spot; Done in column 3, More
- * in 4.
+ * in 4. Once the side she's on has run past the card's "Still nursing?"
+ * check, Done asks when she finished ("when?") instead of ending the feed now.
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
@@ -37,6 +39,16 @@ const DUP_WINDOW_MS = 3 * 60_000;
  * the replacement and do the opposite thing.
  */
 const TAP_COOLDOWN_MS = 800;
+/**
+ * After a tap on columns 1 or 2 (start, switch, pause, resume), both wait
+ * 1.2 s; column 1 waits 2.5 s after its own tap. That one changes the side
+ * (Left → "Switch to Right", "Next side" → "Switch to Left"), so a late
+ * second tap there would put her straight back; column 2 stays quick so a
+ * late second Pause still lands on Resume and merges.
+ */
+const SWAP_COOL_MS = 1200;
+const SIDE_COOL_MS = 2500;
+
 const DEFAULT_SWATCHES: StoolColor[] = ["black", "green", "yellow", "brown"];
 const SHORT_COLOR: Record<StoolColor, string> = {
   black: "Black",
@@ -72,6 +84,37 @@ function garnish(night: boolean): string {
 const diaperName = (pee: boolean, poop: boolean) => (pee && poop ? "wet + dirty diaper" : poop ? "dirty diaper" : "wet diaper");
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/**
+ * Flags that clear themselves: cool(key, ms) sets `key` for at least `ms`
+ * (a longer cooldown already running on it is kept, never cut short).
+ */
+function useCooldowns(): [Record<string, boolean>, (key: string, ms: number) => void] {
+  const [on, setOn] = useState<Record<string, boolean>>({});
+  const timers = useRef(new Map<string, { until: number; timer: number }>());
+  useEffect(() => {
+    const t = timers.current;
+    return () => t.forEach((c) => window.clearTimeout(c.timer));
+  }, []);
+  const cool = useCallback((key: string, ms: number) => {
+    // A monotonic clock: the server-synced now() can jump on each poll.
+    const until = performance.now() + ms;
+    const c = timers.current.get(key);
+    if (c && c.until >= until) return;
+    if (c) window.clearTimeout(c.timer);
+    const timer = window.setTimeout(() => {
+      timers.current.delete(key);
+      setOn((d) => {
+        const n = { ...d };
+        delete n[key];
+        return n;
+      });
+    }, ms);
+    timers.current.set(key, { until, timer });
+    setOn((d) => (d[key] ? d : { ...d, [key]: true }));
+  }, []);
+  return [on, cool];
+}
+
 export default function Dock() {
   const { state, summary, log, remove, update, now, isNight, readOnly, memberLabel, units } = useMaple();
   const { open } = useSheets();
@@ -83,7 +126,13 @@ export default function Dock() {
   const ref = useRef<HTMLDivElement>(null);
   const [host, setHost] = useState<HTMLElement | null>(null);
   const lastTap = useRef(-Infinity);
+  const [cooling, cool] = useCooldowns();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const feed = summary?.active.find((e) => e.kind === "feed") ?? null;
+  const feedN = feed ? timerNumbers(feed, clock) : null;
+  // The card's "Still nursing?" (the side she's on has run long, not snoozed): Done asks when she finished.
+  const still = useStillGoing(feed, feedN, clock);
+  const askWhen = still.forgotten && still.check === "side";
 
   // More is a sheet too: a timer toast answering a tap still out waits under it, like under the other sheets (SheetProvider).
   useHoldTimerToasts(moreOpen);
@@ -111,9 +160,7 @@ export default function Dock() {
 
   const entries = state.entries;
   const me = state.me.email;
-  const feed = summary.active.find((e) => e.kind === "feed") ?? null;
   const sleep = summary.active.find((e) => e.kind === "sleep") ?? null;
-  const feedN = feed ? timerNumbers(feed, clock) : null;
   // A timed nursing feed: the dock runs it (an untimed one only has Done).
   const nursing = !!feedN && feedN.parts.length > 0;
   // A timer the server hasn't confirmed yet has a temporary id: hold its controls until it has a real one.
@@ -161,26 +208,17 @@ export default function Dock() {
 
   /**
    * A tap that changes what columns 1 and 2 mean (start, switch, pause,
-   * resume): both ignore taps for 1.2s, so a double tap can't land on the
-   * tile that just appeared under the thumb. Only the tapped one shows the
-   * check; the other shows its new label, dimmed, so it never looks as if
-   * two buttons were pressed.
+   * resume): both ignore taps for a moment (SWAP_COOL_MS, SIDE_COOL_MS), so
+   * a double tap can't land on the tile that just appeared under the thumb.
+   * Only the tapped one shows the check (then its new label, dimmed, while
+   * it still waits); the other shows its new label, dimmed, so it never
+   * looks as if two buttons were pressed.
    */
   const swap = (col: "col1" | "col2", fn: () => void) => {
-    if (done.col1 || done.col2) return;
-    setDone((d) => ({ ...d, col1: true, col2: true, [`check-${col}`]: true }));
-    window.setTimeout(
-      () =>
-        setDone((d) => {
-          const n = { ...d };
-          delete n.col1;
-          delete n.col2;
-          delete n["check-col1"];
-          delete n["check-col2"];
-          return n;
-        }),
-      1200
-    );
+    if (cooling[col]) return;
+    cool("col1", col === "col1" ? SIDE_COOL_MS : SWAP_COOL_MS);
+    cool("col2", SWAP_COOL_MS);
+    cool(`check-${col}`, SWAP_COOL_MS);
     fn();
   };
 
@@ -282,8 +320,8 @@ export default function Dock() {
                   color={SWITCH_STYLE[other(feedN.side ?? "L")].bg}
                   ink={SWITCH_STYLE[other(feedN.side ?? "L")].fg}
                   strong
-                  done={done["check-col1"]}
-                  disabled={feedPending || done.col1}
+                  done={cooling["check-col1"]}
+                  disabled={feedPending || cooling.col1}
                   onTap={tap(() => swap("col1", () => void actions.switchSide(feed, other(feedN.side ?? "L"))))}
                 />
                 <Tile
@@ -291,19 +329,20 @@ export default function Dock() {
                   label="Pause"
                   icon="pause"
                   aria="Pause the feed"
-                  done={done["check-col2"]}
-                  disabled={feedPending || done.col2}
+                  done={cooling["check-col2"]}
+                  disabled={feedPending || cooling.col2}
                   onTap={tap(() => swap("col2", () => void actions.pause(feed)))}
                 />
+                {/* Past "Still nursing?" a tap here would record a feed that ran on unwatched: it asks when she finished (Fix times, "Ended at…"). */}
                 <Tile
                   id="done"
                   label="Done"
                   icon="check"
-                  aria="Done: end the feed now"
-                  sub={feedPending ? "starting…" : undefined}
+                  aria={askWhen ? "Done: choose when the feed ended" : "Done: end the feed now"}
+                  sub={feedPending ? "starting…" : askWhen ? "when?" : undefined}
                   accent
                   disabled={feedPending}
-                  onTap={tap(() => void actions.stop(feed))}
+                  onTap={tap(() => (askWhen ? open({ kind: "feed", entry: feed, preset: fixPreset("current", "finished") }) : void actions.stop(feed)))}
                 />
               </>
             ) : feed && feedN && nursing ? (
@@ -314,26 +353,28 @@ export default function Dock() {
                   was) is the side she came off, "Resume". So Pause and Resume toggle in one spot, and
                   a late second tap on Pause goes back on the same side and merges (no break) instead
                   of starting the other side. The sides move with the feed, so their letters are big.
-                  Both turn off for 1.2 s after the tap, so a double tap can't land on the new tile.
+                  Both turn off after a tap (column 1 for 2.5 s after its own), so a double tap can't land on the new tile.
                 */}
                 {[other(feedN.side ?? "L"), feedN.side ?? "L"].map((s, i) => {
                   const col = i === 0 ? "col1" : "col2";
                   const suggested = i === 0;
+                  // On a break for over an hour (the Siri/Claude rule): a tap starts a new feed, ending this one at its pause.
+                  const fresh = staleFeed(feed as Entry & { data: FeedData }, clock);
                   return (
                     <Tile
                       key={col}
                       id={`resume-${s}`}
                       label={SIDE_NAME[s]}
-                      sub={suggested ? "Next side" : "Resume"}
-                      aria={`Resume on ${SIDE_NAME[s]}${suggested ? " (next side)" : ""}`}
+                      sub={fresh ? "New feed" : suggested ? "Next side" : "Resume"}
+                      aria={fresh ? `Start a new feed on ${SIDE_NAME[s]} (this one ends at its pause)` : `Resume on ${SIDE_NAME[s]}${suggested ? " (next side)" : ""}`}
                       letter={s}
                       bigLetter
                       color={suggested ? SWITCH_STYLE[s].bg : SIDE_COLOR[s]}
                       ink={suggested ? SWITCH_STYLE[s].fg : undefined}
                       strong={suggested}
-                      done={done[`check-${col}`]}
-                      disabled={feedPending || done[col]}
-                      onTap={tap(() => swap(col, () => void actions.resume(feed, s)))}
+                      done={cooling[`check-${col}`]}
+                      disabled={feedPending || cooling[col]}
+                      onTap={tap(() => swap(col, () => void (fresh ? actions.freshFeed(feed, s) : actions.resume(feed, s))))}
                     />
                   );
                 })}
@@ -367,8 +408,8 @@ export default function Dock() {
                     letter={s}
                     color={SIDE_COLOR[s]}
                     next={next === s}
-                    done={done[s === "L" ? "check-col1" : "check-col2"]}
-                    disabled={s === "L" ? done.col1 : done.col2}
+                    done={cooling[s === "L" ? "check-col1" : "check-col2"]}
+                    disabled={s === "L" ? cooling.col1 : cooling.col2}
                     onTap={tap(() => tapSide(s))}
                     onHold={hold(() => holdFeed(s))}
                   />

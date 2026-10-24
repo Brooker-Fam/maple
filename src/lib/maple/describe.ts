@@ -71,13 +71,20 @@ function durationOf(e: Entry, now: Date): number | null {
   return Math.max(0, (end - Date.parse(e.started_at)) / 1000);
 }
 
-/** { title, detail } for lists; `text` joins them for plain-text surfaces. */
+/**
+ * { title, detail } for lists; `text` joins them for plain-text surfaces.
+ * `removed`: a deleted entry (Recently removed). A timer deleted while it ran
+ * isn't happening "now": it reads "Nursing timer · L 12m, R 5m", its minutes
+ * counted to when it was removed (its updated_at), not on to the present.
+ */
 export function describeEntry(
   e: Entry,
-  opts: { units?: UnitSystem; now?: Date } = {}
+  opts: { units?: UnitSystem; now?: Date; removed?: boolean } = {}
 ): { title: string; detail: string; text: string } {
   const units = opts.units ?? "us";
-  const now = opts.now ?? new Date();
+  const stopped = !!opts.removed && e.active;
+  const now = stopped ? new Date(e.updated_at) : (opts.now ?? new Date());
+  const live = e.active && !stopped;
   let title: string = KIND_LABELS[e.kind];
   const bits: string[] = [];
 
@@ -88,19 +95,19 @@ export function describeEntry(
         if (e.data.amount_ml != null) bits.push(formatVolume(e.data.amount_ml, units));
         if (e.data.milk) bits.push(e.data.milk === "breastmilk" ? "breast milk" : e.data.milk);
       } else {
-        title = e.active ? "Nursing now" : "Nursed";
+        title = live ? "Nursing now" : stopped ? "Nursing timer" : "Nursed";
         // The card's rows added up (feedMinutes), so lists, the day's totals and toasts agree.
         const t = feedMinutes(e, now);
         const sides: string[] = [];
         if (t.has.L) sides.push(`L ${minutesShort(t.left)}`);
         if (t.has.R) sides.push(`R ${minutesShort(t.right)}`);
         if (sides.length) bits.push(sides.join(", "));
-        if (e.data.first_side && !e.active) bits.push(`started ${e.data.first_side === "L" ? "left" : "right"}`);
+        if (e.data.first_side && !live) bits.push(`started ${e.data.first_side === "L" ? "left" : "right"}`);
       }
       break;
     }
     case "pump": {
-      title = e.active ? "Pumping now" : "Pumped";
+      title = live ? "Pumping now" : stopped ? "Pump timer" : "Pumped";
       const total = e.data.total_ml ?? ((e.data.left_ml ?? 0) + (e.data.right_ml ?? 0) || null);
       if (total) bits.push(formatVolume(total, units));
       if (e.data.left_ml != null || e.data.right_ml != null) {
@@ -120,7 +127,7 @@ export function describeEntry(
     }
     case "sleep": {
       const d = durationOf(e, now);
-      title = e.active ? "Sleeping now" : "Slept";
+      title = live ? "Sleeping now" : stopped ? "Sleep timer" : "Slept";
       if (d != null) bits.push(formatDuration(d));
       if (e.data.place) bits.push(`in ${e.data.place === "arms" ? "arms" : `the ${e.data.place}`}`);
       break;
@@ -156,7 +163,7 @@ export function describeEntry(
     }
     case "tummy":
     case "bath": {
-      title = e.kind === "tummy" ? (e.active ? "Tummy time now" : "Tummy time") : "Bath";
+      title = e.kind === "tummy" ? (live ? "Tummy time now" : stopped ? "Tummy timer" : "Tummy time") : "Bath";
       const d = durationOf(e, now);
       if (d) bits.push(formatDuration(d));
       break;

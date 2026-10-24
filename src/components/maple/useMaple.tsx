@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useVisiblePoll } from "@/lib/use-visible-poll";
 import {
+  addPart,
   feedCtx,
   moveEdge,
   normalizeSegments,
@@ -176,8 +177,9 @@ export type MapleContextValue = {
   /**
    * While the Lantern or Fix times covers the screen, timer toasts wait (only
    * the latest); when the last hold ends it shows if the tap was under 2
-   * minutes ago and its entry hasn't changed since. Holds count, so each
-   * `true` needs its own `false` (or use useHoldTimerToasts).
+   * minutes ago, its entry hasn't changed since, and no newer toast came up
+   * (the sheet's own save, even one answering just after it closed). Holds
+   * count, so each `true` needs its own `false` (or use useHoldTimerToasts).
    */
   holdTimerToasts: (on: boolean) => void;
   memberName: (id: string | null | undefined) => string;
@@ -206,7 +208,7 @@ export function useMaple(): MapleContextValue {
 /**
  * Hold timer toasts while `on` (the Lantern, the Fix times sheet): any one
  * showing closes, new ones wait, and the latest shows when the hold ends if
- * it's still true. A fix saved from the sheet leaves its own toast, which
+ * it's still true. A save from the sheet leaves its own toast, which
  * replaces whatever was waiting.
  */
 export function useHoldTimerToasts(on: boolean) {
@@ -323,11 +325,14 @@ type TimerQueue = { tail: Promise<boolean>; n: number; mine: Set<Entry> };
 
 /** Put back the parts a fix replaced (the optimistic copy of retime restore). */
 function restoredFeed(e: Entry & { kind: "feed" }, d: FeedData, edit: Extract<FeedEdit, { op: "restore" }>): Entry {
-  const segments = normalizeSegments(edit.segments, { active: e.active });
+  // An end on a feed that's running again finishes it there (the Undo of a Continue), as the server does.
+  const active = e.active && edit.ended_at == null;
+  const segments = normalizeSegments(edit.segments, { active });
   const t = summarizeSegments(segments);
   const data: FeedData = { ...d, segments, first_side: t.first_side ?? d.first_side, last_side: t.last_side ?? d.last_side };
-  if (!e.active) Object.assign(data, { left_sec: t.left_sec, right_sec: t.right_sec });
-  return { ...e, data, started_at: edit.started_at, ended_at: e.active ? null : edit.ended_at };
+  if (!active) Object.assign(data, { left_sec: t.left_sec, right_sec: t.right_sec });
+  if (!active && edit.paused_at_stop) data.paused_at_stop = true;
+  return { ...e, active, data, started_at: edit.started_at, ended_at: active ? null : edit.ended_at };
 }
 
 /**
@@ -370,6 +375,10 @@ function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date): Entr
             return { ...e, data: s.data, started_at: s.startedAt };
           }
           if (edit.op === "undo_tap") return { ...e, data: undoLastTap(d, edit.expect, { active: e.active }).data };
+          if (edit.op === "add_part") {
+            const a = addPart(d, { side: edit.side, start: edit.start, end: edit.end }, ctx);
+            return { ...e, data: a.data, started_at: a.startedAt, ended_at: a.endedAt };
+          }
           return restoredFeed(e, d, edit);
         }
       }
@@ -445,7 +454,9 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   /** How many holds are on (the Lantern, Fix times); timer toasts wait while any is. */
   const holdRef = useRef(0);
-  const heldRef = useRef<{ text: string; opts: Partial<Omit<Toast, "id" | "text">>; at: number } | null>(null);
+  const heldRef = useRef<{ text: string; opts: Partial<Omit<Toast, "id" | "text">>; at: number; seen: number } | null>(null);
+  /** Toasts shown so far: a held timer toast is dropped if a newer one came up (the sheet's own save or undo). */
+  const shownRef = useRef(0);
   const queuesRef = useRef(new Map<number, TimerQueue>());
   const [busy, setBusy] = useState<ReadonlySet<number>>(() => new Set());
 
@@ -482,6 +493,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const dismissToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
   const show = useCallback(
     (id: number, text: string, opts: Partial<Omit<Toast, "id" | "text">>) => {
+      shownRef.current++;
       // A group holds one toast: the newest timer toast replaces the last.
       setToasts((t) => [...t.filter((x) => !opts.group || x.group !== opts.group).slice(-2), { id, text, tone: opts.tone ?? "ok", ...opts }]);
       const long = opts.undo || opts.actions?.length;
@@ -493,7 +505,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const toast = useCallback(
     (text: string, opts: Partial<Omit<Toast, "id" | "text">> = {}) => {
       const id = Date.now() + Math.random();
-      if (holdRef.current > 0 && opts.group === "timer") heldRef.current = { text, opts, at: Date.now() };
+      if (holdRef.current > 0 && opts.group === "timer") heldRef.current = { text, opts, at: Date.now(), seen: shownRef.current };
       else show(id, text, opts);
       return id;
     },
@@ -511,11 +523,25 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       if (--holdRef.current > 0) return;
       const held = heldRef.current;
       heldRef.current = null;
-      if (!held || Date.now() - held.at >= TIMER_TOAST_HOLD_MS) return;
-      const w = held.opts.watch;
-      const live = w ? stateRef.current?.entries.find((e) => e.id === w.entryId) : null;
-      if (w && (!live || live.updated_at !== w.updatedAt)) return;
-      show(Date.now() + Math.random(), held.text, held.opts);
+      // Still worth saying: recent, its entry unchanged, and no toast since. A newer one (the sheet's own save or
+      // undo) means the parent has moved on, and two toasts with two Undos would stack over the card.
+      const current = () => {
+        if (!held || Date.now() - held.at >= TIMER_TOAST_HOLD_MS || shownRef.current !== held.seen) return false;
+        const w = held.opts.watch;
+        const live = w ? stateRef.current?.entries.find((e) => e.id === w.entryId) : null;
+        return !w || (!!live && live.updated_at === w.updatedAt);
+      };
+      if (!held || !current()) return;
+      if (inflight.current === 0) return show(Date.now() + Math.random(), held.text, held.opts);
+      // A save the sheet sent as it closed (a new diaper: close, then log) answers with its own toast in a moment:
+      // wait for it (up to 3 s), so the held one shows only if nothing newer does. A new hold meanwhile drops it.
+      const until = Date.now() + 3000;
+      const wait = () => {
+        if (holdRef.current > 0 || !current()) return;
+        if (inflight.current > 0 && Date.now() < until) return void window.setTimeout(wait, 150);
+        show(Date.now() + Math.random(), held.text, held.opts);
+      };
+      window.setTimeout(wait, 150);
     },
     [dismissTimerToast, show]
   );

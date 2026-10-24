@@ -767,15 +767,19 @@ function RecentlyRemoved({ onRestore, hidden }: { onRestore: (e: Entry) => void;
         <p className={cx(tone.muted, "text-sm")}>Deleted in the last day. Restore puts one back where it was.</p>
         <ul className={cx(tone.card, tone.divide, "overflow-hidden")}>
           {items.map((e) => {
-            const d = describeEntry(e, { units, now });
+            // Which one it was: its sides and minutes too (a timer removed while it ran, counted to when it was removed).
+            const d = describeEntry(e, { units, now, removed: true });
             return (
               <li key={e.id} className="flex items-center gap-3 py-2.5 pr-3 pl-4">
                 <KindBadge entry={e} className="opacity-60" />
                 <span className="min-w-0 flex-1">
                   <span className={cx(tone.muted, "block truncate text-[15px] font-medium line-through decoration-mp-ink-3")}>{d.title}</span>
+                  <span className={cx(tone.muted, "block text-[13px] leading-snug")}>
+                    {formatDayLabel(dayKey(Date.parse(e.started_at), tz), dayKey(now, tz))} {formatTime(e.started_at, tz)}
+                    {d.detail ? ` · ${d.detail}` : ""}
+                  </span>
                   <span className={cx(tone.faint, "block text-[13px] leading-snug")}>
-                    {formatDayLabel(dayKey(Date.parse(e.started_at), tz), dayKey(now, tz))} {formatTime(e.started_at, tz)} · removed by{" "}
-                    {memberName(e.updated_by ?? e.created_by)} {formatRelative(e.updated_at, now)}
+                    Removed by {memberName(e.updated_by ?? e.created_by)} {formatRelative(e.updated_at, now)}
                   </span>
                 </span>
                 <Button size="sm" variant="soft" onClick={() => void restore(e)} disabled={busy === e.id}>

@@ -30,7 +30,8 @@ import { useMaple } from "./useMaple";
  *
  * By day and in dark mode the marks keep their kind colors. At night they fold
  * into the amber, told apart by lane, strength and shape (a hollow ring for
- * pee and bottles), with a soft amber glow; the legend follows.
+ * pee and bottles, Right striped against Left's solid band), with a soft
+ * amber glow; the legend follows.
  */
 
 const C = 160;
@@ -51,7 +52,8 @@ const amber = (a: number) => `rgb(224 169 59 / ${a})`;
 const NIGHT_COLORS: Palette = {
   sleep: amber(0.35),
   left: amber(0.85),
-  right: amber(0.55),
+  // Striped (the dial's hatch pattern), so it can be nearly as strong as Left and still read as the other side.
+  right: amber(0.8),
   bottleEdge: amber(0.55),
   pee: amber(0.7),
   poop: amber(0.7),
@@ -76,6 +78,8 @@ type Arc = {
   width: number;
   opacity: number;
   live: boolean;
+  /** Night: the Right side, striped (two strengths of one amber alone looked the same). */
+  hatch: boolean;
   s: number;
   e: number;
 };
@@ -108,12 +112,12 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
   const arcs: Arc[] = [];
   const dots: Dot[] = [];
   const opacityAt = (t: number) => (fade ? Math.max(0.4, 1 - 0.6 * ((nowMs - t) / 3600_000 / 24)) : 1);
-  const addArc = (entry: Entry, key: string, lane: Arc["lane"], s0: number, e0: number, r: number, color: string, width: number, live: boolean) => {
+  const addArc = (entry: Entry, key: string, lane: Arc["lane"], s0: number, e0: number, r: number, color: string, width: number, live: boolean, hatch = false) => {
     const s = Math.max(s0, lo);
     const e = Math.min(e0, hi);
     if (e < s || s0 > hi || e0 < lo) return;
     const span = Math.max(MIN_ARC_DEG, (e - s) / 60_000 / 4);
-    arcs.push({ key, entry, lane, r, a0: clockDeg(s, tz), span, color, width, opacity: opacityAt(e), live, s: s0, e: e0 });
+    arcs.push({ key, entry, lane, r, a0: clockDeg(s, tz), span, color, width, opacity: opacityAt(e), live, hatch, s: s0, e: e0 });
   };
 
   for (const entry of entries) {
@@ -129,7 +133,7 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
         d.segments.forEach((seg, i) => {
           const s = Date.parse(seg.start);
           const e = seg.end ? Date.parse(seg.end) : entry.active ? nowMs : s;
-          addArc(entry, `f${entry.id}-${i}`, "feed", s, e, R.feed, seg.side === "L" ? pal.left : pal.right, 14, entry.active && !seg.end);
+          addArc(entry, `f${entry.id}-${i}`, "feed", s, e, R.feed, seg.side === "L" ? pal.left : pal.right, 14, entry.active && !seg.end, night && seg.side === "R");
         });
       } else {
         // A feed logged by minutes: first side, then the other.
@@ -137,8 +141,9 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
         const a = (first === "L" ? d.left_sec : d.right_sec) ?? 0;
         const b = (first === "L" ? d.right_sec : d.left_sec) ?? 0;
         const col = (side: string) => (side === "L" ? pal.left : pal.right);
-        addArc(entry, `f${entry.id}-a`, "feed", start, start + a * 1000, R.feed, col(first), 14, false);
-        if (b > 0) addArc(entry, `f${entry.id}-b`, "feed", start + a * 1000, start + (a + b) * 1000, R.feed, col(first === "L" ? "R" : "L"), 14, false);
+        const then = first === "L" ? "R" : "L";
+        addArc(entry, `f${entry.id}-a`, "feed", start, start + a * 1000, R.feed, col(first), 14, false, night && first === "R");
+        if (b > 0) addArc(entry, `f${entry.id}-b`, "feed", start + a * 1000, start + (a + b) * 1000, R.feed, col(then), 14, false, night && then === "R");
       }
     } else if (entry.kind === "diaper") {
       if (start < lo || start > hi) continue;
@@ -160,6 +165,7 @@ export default function DayDial() {
   const night = useNightActive();
   const uid = useId().replace(/[^\w-]/g, "");
   const glowId = `maple-dial-glow-${uid}`;
+  const hatchId = `maple-dial-hatch-${uid}`;
   const hintId = `maple-dial-hint-${uid}`;
   const [choice, setChoice] = useState<View | null>(null);
   const [fetched, setFetched] = useState<{ key: string; entries: Entry[] } | null>(null);
@@ -363,6 +369,10 @@ export default function DayDial() {
                   <feMergeNode in="SourceGraphic" />
                 </feMerge>
               </filter>
+              {/* Night: Right's stripes, across the band wherever it runs round the ring (Left stays solid). */}
+              <pattern id={hatchId} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="2.4" height="4" fill={NIGHT_COLORS.right} />
+              </pattern>
             </defs>
 
             {/* face, with the night hours (8pm–7am) shaded */}
@@ -426,18 +436,19 @@ export default function DayDial() {
                     </g>
                   );
                 }
+                // Night's Right is striped, its live part too (the live dashes rest at night anyway).
                 const mark = (
                   <path
                     d={d}
                     fill="none"
-                    stroke={a.color}
+                    stroke={a.hatch ? `url(#${hatchId})` : a.color}
                     strokeWidth={a.width}
                     strokeLinecap="round"
-                    strokeDasharray={a.live ? "8 4" : undefined}
-                    className={a.live ? "maple-dial-live" : undefined}
+                    strokeDasharray={a.live && !a.hatch ? "8 4" : undefined}
+                    className={a.live && !a.hatch ? "maple-dial-live" : undefined}
                   />
                 );
-                // At night Left and Right differ only in strength, so a 1px gap keeps neighbors apart.
+                // At night Left and Right are one amber, so a 1px gap keeps neighbors apart (and shows between Right's stripes).
                 return night && a.lane === "feed" ? (
                   <g key={a.key} opacity={a.opacity}>
                     <path d={d} fill="none" stroke="var(--mp-bg)" strokeWidth={a.width + 2} strokeLinecap="round" />
@@ -646,11 +657,15 @@ export default function DayDial() {
 
 /** What the marks mean: small swatches drawn like the marks themselves (amber, by strength and shape, at night). */
 function Legend({ pal, night }: { pal: Palette; night: boolean }) {
-  const dot = "h-[7px] w-[7px]";
-  const ring = (color: string, width: string): { style: React.CSSProperties; className: string } => ({ style: { borderColor: color }, className: cx("h-2 w-2", width) });
+  const dot = "h-[7px] w-[7px] rounded-full";
+  const ring = (color: string, width: string): { style: React.CSSProperties; className: string } => ({ style: { borderColor: color }, className: cx("h-2 w-2 rounded-full", width) });
+  // At night the sides are short bands, as on the ring: Left solid, Right striped.
+  const band = "h-2 w-4 rounded-full";
   const items: { label: string; style: React.CSSProperties; className: string }[] = [
-    { label: "Left", style: { backgroundColor: pal.left }, className: dot },
-    { label: "Right", style: { backgroundColor: pal.right }, className: dot },
+    { label: "Left", style: { backgroundColor: pal.left }, className: night ? band : dot },
+    night
+      ? { label: "Right", style: { backgroundImage: `repeating-linear-gradient(135deg, ${pal.right} 0 1.7px, transparent 1.7px 2.8px)` }, className: band }
+      : { label: "Right", style: { backgroundColor: pal.right }, className: dot },
     { label: "Bottle", ...ring(pal.bottleEdge, "border-2") },
     { label: "Sleep", style: { backgroundColor: pal.sleep }, className: dot },
     { label: "Pee", ...(night ? ring(pal.pee, "border-[1.5px]") : { style: { backgroundColor: pal.pee }, className: dot }) },
@@ -660,7 +675,7 @@ function Legend({ pal, night }: { pal: Palette; night: boolean }) {
     <div className={cx(tone.faint, "mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 px-2 text-[11px]")} aria-hidden>
       {items.map((it) => (
         <span key={it.label} className="inline-flex items-center gap-1.5">
-          <i className={cx("shrink-0 rounded-full", it.className)} style={it.style} />
+          <i className={cx("shrink-0", it.className)} style={it.style} />
           {it.label}
         </span>
       ))}

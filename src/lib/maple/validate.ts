@@ -58,6 +58,7 @@ export const dataSchemas = {
       milk: z.enum(["breastmilk", "formula", "mixed"]).optional(),
       // Listed so .strip() keeps it: a stopped-while-paused feed must stay one through later edits.
       paused_at_stop: z.boolean().optional(),
+      stopped_at: iso.optional(),
       // The latest switch / resume / pause (feed.ts LastTap), so undo takes back that tap and not an older one.
       last_tap: z
         .object({
@@ -68,6 +69,7 @@ export const dataSchemas = {
           merged: z.literal(true).optional(),
           reverted: z.literal(true).optional(),
           undone: z.literal(true).optional(),
+          by: z.string().max(320).optional(),
         })
         .strip()
         .optional(),

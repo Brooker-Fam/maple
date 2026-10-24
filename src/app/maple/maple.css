@@ -90,6 +90,8 @@ html.maple-ui body.enchanted-bg {
  *   .mp-kind       a tinted badge (KindBadge): amber glyph on an amber wash
  *   .mp-kind-ink   colored text or a bare icon: secondary amber
  *   .mp-kind-fill  a solid dot, bar or swatch: dim amber fill
+ *   .mp-swatch     a real colour that is the information (stool colour):
+ *                  never amber, only dimmed, even beside .mp-kind-fill
  */
 .maple-night .mp-kind {
   color: var(--mp-ink-2) !important;
@@ -99,10 +101,15 @@ html.maple-ui body.enchanted-bg {
 .maple-night .mp-kind-ink {
   color: var(--mp-ink-2) !important;
 }
-.maple-night .mp-kind-fill {
+/* :where keeps it as specific as before, so .mp-side-mark below still wins on the side letters. */
+.maple-night .mp-kind-fill:where(:not(.mp-swatch)) {
   background-color: rgb(224 169 59 / 0.45) !important;
   border-color: transparent !important;
   color: #0b0f0a !important;
+}
+/* "Black" has to look black at 3am: the swatch keeps its colour, dimmed like photos so it doesn't glare. */
+.maple-night .mp-swatch {
+  filter: brightness(0.75) saturate(0.8);
 }
 /* Side letters (L / R) at night: an amber ring and letter, not a dim fill (the fill's letter was 2.2–2.9:1). */
 .maple-night .mp-side-mark {

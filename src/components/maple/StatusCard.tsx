@@ -12,6 +12,7 @@ import type { Entry, EntryOf, Side } from "@/lib/maple/types";
 import { Icon, KindBadge, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
+import { useSheets } from "./sheets";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE } from "./TimerCard";
 import { Avatar, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -98,7 +99,8 @@ function Since({ label, value, mark }: { label: string; value: string | null; ma
 /** The side to offer next: its letter in the side's color, and the name. */
 function NextSide({ side }: { side: Side }) {
   return (
-    <div className="flex shrink-0 items-center gap-2 rounded-2xl bg-mp-sunken py-2 pr-3.5 pl-2">
+    // relative: above the Last fed block's button, so a tap here isn't taken for "open the last feed".
+    <div className="relative flex shrink-0 items-center gap-2 rounded-2xl bg-mp-sunken py-2 pr-3.5 pl-2">
       <span
         aria-hidden
         // At night the next-side cue is one of the few things allowed a soft amber glow.
@@ -122,6 +124,7 @@ function NextSide({ side }: { side: Side }) {
  */
 export default function StatusCard() {
   const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
+  const { open } = useSheets();
   const now = useNow(20_000);
   const [info, setInfo] = useState(false);
   if (!state || !summary) return null;
@@ -177,10 +180,23 @@ export default function StatusCard() {
     <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
       {/* Feeding: the most-asked question at 3am, and which side is next. */}
       {!nursing && (
-        <div className="p-4">
+        <div className="relative p-4">
+          {last && (
+            // The whole block opens that feed, so a wrong Done is fixed right where its wrong number shows. It lies
+            // over the text; the next side and the info button sit above it.
+            <button
+              type="button"
+              onClick={() => open({ kind: "feed", entry: last })}
+              aria-label={`Last fed ${formatRelative(last.started_at, now)}, started ${formatTime(last.started_at, tz)}. ${readOnly ? "Open that feed." : "Open that feed to fix it."}`}
+              className="absolute inset-0 transition active:bg-mp-ink/[0.04]"
+            />
+          )}
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
-              <p className={tone.label}>Last fed</p>
+              <p className={cx(tone.label, "flex items-center gap-0.5")}>
+                Last fed
+                {last && <Icon name="chevron-right" size={14} className="text-mp-ink-3" />}
+              </p>
               {last ? (
                 <p className="mt-0.5 text-[28px] leading-tight font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">
                   {formatRelative(last.started_at, now)}
@@ -202,7 +218,7 @@ export default function StatusCard() {
                   onClick={() => setInfo((v) => !v)}
                   aria-expanded={info}
                   aria-label="How this is counted"
-                  className="-my-3 -mr-3 inline-flex h-11 w-11 items-center justify-center rounded-full align-middle text-mp-ink-3 active:text-mp-ink-2"
+                  className="relative -my-3 -mr-3 inline-flex h-11 w-11 items-center justify-center rounded-full align-middle text-mp-ink-3 active:text-mp-ink-2"
                 >
                   <Icon name="info" size={15} />
                 </button>

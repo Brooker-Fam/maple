@@ -6,7 +6,7 @@ import { adminActsAs } from "@/lib/maple/insights";
 import { minutesText } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
 import type { Entry, Side, TimerKind } from "@/lib/maple/types";
-import { fixPreset, KIND_TITLE, LiveBlock, PartRows, SIDE_NAME, timerNumbers, useCompact, type FixExpand, type FixTarget, type TimerNumbers } from "./FeedParts";
+import { fixPreset, KIND_TITLE, LiveBlock, PartRows, SIDE_NAME, timerNumbers, useCompact, useStillGoing, type FixExpand, type FixTarget, type TimerNumbers } from "./FeedParts";
 import { Icon, KindBadge, type IconName } from "./icons";
 import Lantern from "./Lantern";
 import { useNightActive } from "./nightLook";
@@ -36,21 +36,9 @@ export const SWITCH_STYLE: Record<Side, { bg: string; fg: string }> = {
   R: { bg: SIDE_COLOR.R, fg: SIDE_INK.R },
 };
 
-/** UX defaults (not health rules): when a running timer asks "still going?". Family settings can override. */
-const CHECK_AFTER_MIN: Record<TimerKind, number> = { feed: 45, sleep: 300, tummy: 30, pump: 60 };
-/** A break this long asks "Still on a break?". */
-const CHECK_BREAK_MIN = 20;
-const SNOOZE_MIN = 30;
-const SNOOZE_KEY = "maple-timer-snooze";
 const VIA: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT", mcp: "Claude" };
-
-function readSnoozes(): Record<string, number> {
-  try {
-    return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}") as Record<string, number>;
-  } catch {
-    return {};
-  }
-}
+/** What a Discard would lose, for "Discard 20 min of sleep?" (a timed feed says "nursing"). */
+const DISCARD_WHAT: Record<TimerKind, string> = { feed: "feeding", sleep: "sleep", tummy: "tummy time", pump: "pumping" };
 
 const ICON_BTN = "flex h-11 w-11 items-center justify-center rounded-full text-mp-ink-2 transition active:scale-95 disabled:opacity-40";
 
@@ -101,11 +89,8 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   const isFeed = kind === "feed" && n.parts.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
   const [lantern, setLantern] = useState(false);
-  const [snoozes, setSnoozes] = useState<Record<string, number>>({});
   const menuWrap = useRef<HTMLDivElement>(null);
   const menuBtn = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => setSnoozes(readSnoozes()), []);
 
   // The … menu floats over the card (so the clock never jumps) and closes on Escape or a tap anywhere else.
   useEffect(() => {
@@ -126,24 +111,9 @@ export default function TimerCard({ entry }: { entry: Entry }) {
     };
   }, [menuOpen]);
 
-  // "Still nursing?" once the side she's on has run long, "Still on a break?" after a long break; other timers by wall time.
-  const settings = (state?.baby.settings ?? {}) as Record<string, unknown>;
-  const checkMin = Number(settings[`timer_check_${kind}_min`]) || CHECK_AFTER_MIN[kind];
-  const longSec = isFeed ? (n.paused ? n.current.sec / 60 >= CHECK_BREAK_MIN : n.current.sec / 60 >= checkMin) : n.wallSec / 60 >= checkMin;
-  const snoozedUntil = snoozes[String(entry.id)] ?? 0;
-  const forgotten = controls && !pending && longSec && now.getTime() > snoozedUntil;
-
-  const snooze = () => {
-    const next = { ...readSnoozes(), [String(entry.id)]: now.getTime() + SNOOZE_MIN * 60_000 };
-    // Drop stale snoozes so the key never grows.
-    for (const [k, v] of Object.entries(next)) if (v < now.getTime() - 86_400_000) delete next[k];
-    try {
-      localStorage.setItem(SNOOZE_KEY, JSON.stringify(next));
-    } catch {
-      // storage blocked: the snooze lasts until reload
-    }
-    setSnoozes(next);
-  };
+  // "Still nursing?" once the side she's on has run long, "Still on a break?" after a long break; other timers by wall
+  // time. The same test turns the dock's Done (and the Lantern's) into "when did she finish?".
+  const { forgotten, snooze } = useStillGoing(entry, n, now);
 
   // Never drop a Fix times tap made while this phone's own tap is out: it opens once the answer is in, pinned on the
   // server's version (the entry here is already that answer). If another sheet opened meanwhile, that one was the later tap.
@@ -167,6 +137,10 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   const name = memberLabel(entry.created_by);
   const via = !name && entry.created_by === "admin" && state && !adminActsAs(state.baby, state.members) ? VIA[entry.source] : undefined;
   const starter = name ? `Started by ${name}` : via ? `Started from ${via}` : null;
+
+  // Discard asks first once the timer has run 2 minutes: what would go, in the card's own minutes.
+  const discardQuestion =
+    n.wallSec < 120 ? null : n.totalMin > 0 ? `Discard ${minutesText(n.totalMin)} of ${isFeed ? "nursing" : DISCARD_WHAT[kind]}?` : `Discard this ${isFeed ? "feed" : DISCARD_WHAT[kind]}?`;
 
   // Every part before the live one (the open side or the open break).
   const past = isFeed ? n.parts.slice(0, -1) : [];
@@ -232,7 +206,9 @@ export default function TimerCard({ entry }: { entry: Entry }) {
               >
                 <Icon name="ellipsis" size={22} strokeWidth={2.25} />
               </button>
-              <AnimatePresence>{menuOpen && !pending && <TimerMenu key="menu" entry={entry} close={() => setMenuOpen(false)} actions={actions} />}</AnimatePresence>
+              <AnimatePresence>
+                {menuOpen && !pending && <TimerMenu key="menu" entry={entry} close={() => setMenuOpen(false)} actions={actions} confirm={discardQuestion} />}
+              </AnimatePresence>
             </div>
           </div>
         )}
@@ -298,9 +274,25 @@ export default function TimerCard({ entry }: { entry: Entry }) {
 
 type Actions = ReturnType<typeof useTimerActions>;
 
-/** The … menu: a small card anchored under the button, floating over the timer. */
-function TimerMenu({ entry, close, actions }: { entry: Entry; close: () => void; actions: Actions }) {
+/** A Discard tap this soon after the question appeared is the first tap's double, not an answer. */
+const CONFIRM_ARM_MS = 600;
+
+/**
+ * The … menu: a small card anchored under the button, floating over the
+ * timer. Discard on a timer that has run a while asks first, in place
+ * ("Discard 20 min of nursing?"), since it sits right under Fell asleep.
+ */
+function TimerMenu({ entry, close, actions, confirm }: { entry: Entry; close: () => void; actions: Actions; confirm: string | null }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [askedAt, setAskedAt] = useState<number | null>(null);
+  // The question takes the menu's place: focus moves to Keep, the safe answer.
+  useEffect(() => {
+    if (askedAt !== null) ref.current?.querySelector<HTMLButtonElement>("[data-keep]")?.focus();
+  }, [askedAt]);
+  const discard = () => {
+    close();
+    void actions.discard(entry);
+  };
   return (
     <motion.div
       ref={ref}
@@ -319,27 +311,35 @@ function TimerMenu({ entry, close, actions }: { entry: Entry; close: () => void;
         tone.divide
       )}
     >
-      {entry.kind === "feed" && (
-        <MenuItem
-          icon="moon"
-          label="Fell asleep"
-          sub="Stop the feed and start sleep now"
-          onClick={() => {
-            close();
-            void actions.fellAsleep(entry);
-          }}
-        />
+      {askedAt !== null && confirm ? (
+        <div className="px-4 py-3">
+          <p className="text-[15px] leading-snug font-semibold text-mp-ink">{confirm}</p>
+          <p className="mt-0.5 text-[13px] text-mp-ink-2">It goes to Recently removed.</p>
+          <div className="mt-3 flex gap-2">
+            <Button variant="danger" onClick={() => performance.now() - askedAt >= CONFIRM_ARM_MS && discard()} className="flex-1">
+              Discard
+            </Button>
+            <button type="button" data-keep onClick={close} className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-mp-sunken px-4 text-[15px] font-semibold text-mp-ink transition active:scale-[0.98]">
+              Keep
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {entry.kind === "feed" && (
+            <MenuItem
+              icon="moon"
+              label="Fell asleep"
+              sub="Stop the feed and start sleep now"
+              onClick={() => {
+                close();
+                void actions.fellAsleep(entry);
+              }}
+            />
+          )}
+          <MenuItem icon="trash-2" label="Discard" sub="Started by mistake" danger onClick={() => (confirm ? setAskedAt(performance.now()) : discard())} />
+        </>
       )}
-      <MenuItem
-        icon="trash-2"
-        label="Discard"
-        sub="Started by mistake"
-        danger
-        onClick={() => {
-          close();
-          void actions.discard(entry);
-        }}
-      />
     </motion.div>
   );
 }
@@ -426,7 +426,10 @@ function ForgottenPrompt({
   }
   if (isFeed) {
     question = "Still nursing?";
-    sub = `${SIDE_NAME[n.current.side ?? "L"]} side for ${minutesText(n.current.min)}, since ${formatTime(n.current.since, tz)} · feed started ${formatTime(entry.started_at, tz)}`;
+    // The feed's start only when it's another time (on a one-side feed it's the side's own start, said once).
+    const since = formatTime(n.current.since, tz);
+    const began = formatTime(entry.started_at, tz);
+    sub = `${SIDE_NAME[n.current.side ?? "L"]} side for ${minutesText(n.current.min)}, since ${since}${began === since ? "" : ` · feed started ${began}`}`;
     primary = { label: "She finished earlier…", onClick: onEarlier };
   } else {
     question = kind === "sleep" ? "Still asleep? Lucky you." : kind === "tummy" ? "Still doing tummy time?" : "Still pumping?";

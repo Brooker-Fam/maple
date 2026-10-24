@@ -7,8 +7,9 @@ import { tick } from "@/components/atlas/haptics";
 import { minutesText, other } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, Side } from "@/lib/maple/types";
-import { SIDE_NAME, timerNumbers } from "./FeedParts";
+import { fixPreset, SIDE_NAME, timerNumbers, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
+import { useSheets } from "./sheets";
 import { useHoldTimerToasts, useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
 
@@ -19,8 +20,10 @@ import { useTimerActions } from "./useTimerActions";
  * the dock's column order (Switch, Pause, Done while she nurses; the other
  * side, the side she came off, Done during a break), each needing a
  * half-second hold so a flailing baby hand or a cheek can't end the feed by
- * accident. Timer toasts wait while it's open and show when it closes (if
- * still true).
+ * accident (a quiet line over them says so). A side left running past the
+ * card's "Still nursing?" check says so here too, and Done then closes the
+ * Lantern and asks when she finished, as the dock's does. Timer toasts wait
+ * while it's open and show when it closes (if still true).
  */
 
 const HOLD_MS = 500;
@@ -30,10 +33,14 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const { state, readOnly, now: serverNow, toasts } = useMaple();
   const now = useNow(1000);
   const actions = useTimerActions();
+  const { open } = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   // Follow the live entry (switches from the other phone show up here too).
   const live = state?.entries.find((e) => e.id === entry.id) ?? entry;
   const n = timerNumbers(live, now);
+  // The card's "Still nursing?" (a long side, not snoozed): Done asks when instead of ending the feed now.
+  const still = useStillGoing(live, n, now);
+  const askWhen = still.forgotten && still.check === "side";
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<number | null>(null);
   const swipe = useRef<{ y: number; t: number } | null>(null);
@@ -145,7 +152,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     ? `Asleep · since ${formatTime(live.started_at, tz)}`
     : n.paused
       ? `On a break · since ${short(n.current.since)}`
-      : `${SIDE_NAME[side]} side · since ${short(n.current.since)} · feed started ${short(live.started_at)}`;
+      : // The feed's start only when it's another time (on a one-side feed it's this side's start).
+        `${SIDE_NAME[side]} side · since ${short(n.current.since)}${short(live.started_at) === short(n.current.since) ? "" : ` · feed started ${short(live.started_at)}`}`;
 
   if (!mounted) return null;
   return createPortal(
@@ -191,12 +199,22 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           {formatClock(isFeed ? n.current.sec : n.elapsed)}
         </p>
         <p className="mt-3 text-lg opacity-50">{subtitle}</p>
-        {isFeed && !n.paused && <p className="mt-1 text-sm tabular-nums opacity-35">Total nursing {formatClock(n.total)}</p>}
+        {isFeed && !n.paused && <p className="mt-1 text-sm tabular-nums opacity-35">Total nursing {minutesText(n.totalMin)}</p>}
         <p className="mt-6 h-5 text-sm opacity-60" aria-live="polite">
           {hint ?? ""}
         </p>
       </div>
 
+      {!locked && (
+        <div className="px-4 pb-3 text-center">
+          {askWhen && (
+            <p className="mb-1 text-lg font-semibold tabular-nums opacity-60">
+              Still nursing? {SIDE_NAME[side]} {minutesText(n.current.min)}
+            </p>
+          )}
+          <p className="text-[13px] opacity-40">Hold a button to use it</p>
+        </div>
+      )}
       <div className="flex h-[40dvh] gap-3 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">
         {locked && <p className="m-auto text-sm opacity-50">{readOnly ? "Viewing only" : "Starting…"}</p>}
         {/* Nursing: Switch and Pause where the dock has them, so a mid-feed diaper is a break, not the end of the feed. */}
@@ -232,11 +250,15 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           <HoldButton
             label={live.kind === "sleep" ? "Woke up" : "Done"}
             icon={isFeed ? "check" : undefined}
-            // Done during a break ends the feed at the pause, as the dock's tile says.
-            sub={isFeed && n.paused ? `ends ${short(n.current.since)}` : undefined}
-            aria={isFeed && n.paused ? `Done: end the feed at ${formatTime(n.current.since, tz)}, when you paused` : undefined}
-            onHint={() => showHint(live.kind === "sleep" ? "Hold to stop sleep" : "Hold to finish")}
+            // Done during a break ends the feed at the pause, as the dock's tile says; past "Still nursing?" it asks when.
+            sub={isFeed && n.paused ? `ends ${short(n.current.since)}` : askWhen ? "when?" : undefined}
+            aria={isFeed && n.paused ? `Done: end the feed at ${formatTime(n.current.since, tz)}, when you paused` : askWhen ? "Done: choose when the feed ended" : undefined}
+            onHint={() => showHint(live.kind === "sleep" ? "Hold to stop sleep" : askWhen ? "Hold, then pick when she finished" : "Hold to finish")}
             onConfirm={() => {
+              if (askWhen) {
+                onClose();
+                return open({ kind: "feed", entry: live, preset: fixPreset("current", "finished") });
+              }
               void actions.stop(live);
               onClose();
             }}

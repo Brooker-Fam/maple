@@ -463,6 +463,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     void remove(e.id, { toast: `${describeEntry(e).title} deleted` });
   };
 
+  // No minutes on either side and no times that give any: it would still count as a feed, move "Last fed" and flip
+  // the next side (a hold on a side, then Log it). Typed 0 and 0 on a timed feed would replace its parts with nothing.
+  const noMinutes = (left ?? 0) + (right ?? 0) === 0;
+  const empty = method === "breast" && !running && !gone && (timed ? minutesTyped && noMinutes : noMinutes && spanMinutes(range[0], range[1]) === 0);
+
   const title = e ? (running ? "Nursing now" : describeEntry(e).title) : "Feed";
   const primary = e ? "Save" : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
@@ -519,13 +524,15 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && addBlocked)}
+              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && addBlocked) || empty}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
                   : !running && checks.invalid
                   ? CHECK_NUMBER_HINT
-                  : conflict
+                  : empty
+                    ? "Add how long she nursed."
+                    : conflict
                     ? undefined
                     : addBlocked
                       ? ADD_BLOCKED

@@ -52,6 +52,8 @@ export type FeedData = {
    * while paused before this flag existed keep a trailing break to ended_at.
    */
   paused_at_stop?: boolean;
+  /** When Done was tapped (it can end the feed earlier: "She finished 20 min ago"), so that write isn't read as an edit. */
+  stopped_at?: string;
 };
 
 export type PumpData = { left_ml?: number; right_ml?: number; total_ml?: number };
@@ -250,7 +252,8 @@ export type UpdateEntryInput = {
 };
 
 /**
- * reopen: undo a stop (the timer runs again as if never stopped).
+ * reopen: undo a stop (the timer runs again as if never stopped); with a
+ * side, carry a finished feed on on that side in the same write.
  * retime: fix one recorded moment of a timed nursing feed (`edit`).
  */
 export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "discard" | "adjust" | "reopen" | "retime";
@@ -261,12 +264,16 @@ export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "di
  * first stretch for start and the last for end; "ended" is a finished feed's
  * ended_at alone). undo_tap: the latest switch, resume or pause, if the newest
  * stretch still matches `expect`. restore: put back the `before` a fix
- * answered with, only if nobody changed it since.
+ * answered with, only if nobody changed it since; an `ended_at` on a feed
+ * that's running again ends it there (the Undo of a Continue). add_part: a
+ * side she nursed on after a finished feed's Done ("She went back on…"),
+ * which moves its end there, only if nobody changed it since.
  */
 export type FeedEdit =
   | { op: "move"; edge: "start" | "end" | "ended"; ref?: StretchRef; to: string }
   | { op: "set_side"; ref: StretchRef; side: Side }
   | { op: "undo_tap"; expect: { side: Side; start: string; end: string | null } }
+  | { op: "add_part"; side: Side; start: string; end: string; expect_updated_at: string }
   | {
       op: "restore";
       segments: Segment[];
@@ -282,9 +289,10 @@ export type FeedEdit =
  * POST /api/maple/timer answer. noop: nothing changed (already on that side,
  * already paused). clamped: a resume asked for before the break began starts
  * at the break. merged: a same-side resume within a minute erased the break.
- * reverted: a switch back within 15 s undid the switch. moved: a resume on
- * the side already open moved that side's start. before: the feed as
- * it was, for "Back to …". nap: the nap whose end followed a feed start.
+ * reverted: a switch back within 15 s undid the switch. resided: a switch
+ * within 15 s of going back on changed which side she went back on. moved: a
+ * resume on the side already open moved that side's start. before: the feed
+ * as it was, for "Back to …". nap: the nap whose end followed a feed start.
  */
 export type TimerResponse = {
   entry: Entry;
@@ -292,10 +300,13 @@ export type TimerResponse = {
   noop?: true;
   merged?: true;
   reverted?: true;
+  /** A switch within 15 s of a resume: the side she went back on changed (no stray second-long part). */
+  resided?: true;
   /** resume with an explicit time on the side that's already open: its start moved instead. */
   moved?: true;
   alreadyRunning?: boolean;
-  before?: { segments: Segment[]; started_at: string; ended_at: string | null; updated_at: string };
+  /** paused_at_stop: the feed was finished at its pause, so a restore of it puts the flag back too. */
+  before?: { segments: Segment[]; started_at: string; ended_at: string | null; updated_at: string; paused_at_stop?: true };
   nap?: { entry: Entry; before_ended_at: string; before_updated_at: string };
   /** restore with a nap: false when the nap had changed and was left alone. */
   nap_restored?: boolean;
@@ -306,7 +317,7 @@ export type TimerInput = {
   action: TimerAction;
   /** start: which timer. */
   kind?: TimerKind;
-  /** start/switch/resume for breastfeeding. */
+  /** start/switch/resume for breastfeeding; reopen: carry the feed on on this side. */
   side?: Side;
   /** switch/pause/resume/stop/discard/adjust/reopen/retime: which entry. */
   id?: number;
@@ -314,6 +325,7 @@ export type TimerInput = {
    * switch/resume/pause: when it really happened (ISO, default now).
    * stop: when it actually ended (ISO, default now; for "ended earlier…").
    * adjust: the corrected start time (forgot to tap at latch).
+   * reopen with a side: when she went back on after the break (default now).
    */
   at?: string;
   /** retime: the one moment to fix. */

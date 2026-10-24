@@ -2,6 +2,7 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { TapFeedData } from "@/lib/maple/feed";
 import { TIER_LABEL, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryKind, Side, Source } from "@/lib/maple/types";
@@ -70,8 +71,48 @@ const VIA: Partial<Record<Source, string>> = {
   shortcut: "Siri",
 };
 
+/** A Done can land after the end it records (at the pause, or a time given), but a change this long after the end is an edit. */
+const EDIT_AFTER_END_MS = 30 * 60_000;
+/** A running timer's own taps write the row within moments of their tap time (the server's and the database's clocks). */
+const TAP_SLACK_MS = 60_000;
+
 /**
- * "[avatar] Logged by Matt via Claude · 3:12 AM · edited by Brittany", under the sheet title.
+ * "changed by Brittany" or "edited", only for a real change, else null.
+ * updated_by is the last writer and every timer tap writes it, so the
+ * starter's own name there is usually just their Switch, Pause or Done.
+ *   - Someone else: always named ("changed by Brittany").
+ *   - Logged after the fact (typed minutes, a sleep logged once it ended, a
+ *     moment like a diaper): any write since is an edit.
+ *   - A timer, running: written well after its last tap (or its start), so a
+ *     fix or a note, not a tap.
+ *   - A timer, finished: written well after it ended (a fix or a note later
+ *     on), not the Done itself.
+ */
+function editedText(entry: Entry, name: (id: string) => string): string | null {
+  if (!entry.updated_by) return null;
+  const updated = Date.parse(entry.updated_at);
+  const created = Date.parse(entry.created_at);
+  const ended = entry.ended_at ? Date.parse(entry.ended_at) : null;
+  const tap = entry.kind === "feed" ? Date.parse((entry.data as TapFeedData).last_tap?.at ?? "") : NaN;
+  // When Done was tapped (store.ts stopTimer): a Done that set an earlier end ("She finished 20 min ago") isn't an edit.
+  const stop = Date.parse((entry.data as { stopped_at?: string }).stopped_at ?? "");
+  const tapped = Math.max(created, Number.isFinite(tap) ? tap : 0, Number.isFinite(stop) ? stop : 0);
+  if (entry.updated_by !== entry.created_by) {
+    // Someone else's last write was a tap, not a fix: their Done says so; a switch or pause needs no word.
+    if (Number.isFinite(stop) && Math.abs(updated - stop) <= TAP_SLACK_MS) return `ended by ${name(entry.updated_by)}`;
+    if (Number.isFinite(tap) && Math.abs(updated - tap) <= TAP_SLACK_MS) return null;
+    return `changed by ${name(entry.updated_by)}`;
+  }
+  if (entry.active) return updated - tapped > TAP_SLACK_MS ? "edited" : null;
+  // It ran as a timer: a timed feed (its sides), or anything created before it ended. Logged afterwards (or with no
+  // end at all), every write since was an edit.
+  const timer = (entry.kind === "feed" && !!entry.data.segments?.length) || (ended !== null && created < ended - 5_000);
+  if (!timer || ended === null) return "edited";
+  return updated - Math.max(ended, tapped) > EDIT_AFTER_END_MS ? "edited" : null;
+}
+
+/**
+ * "[avatar] Logged by Matt via Claude · 3:12 AM · changed by Brittany", under the sheet title.
  * `noTime` (a timed feed): the day but no tap time, since right above its start and end rows it reads as one of them.
  */
 export function LoggedBy({ entry, noTime }: { entry: Entry; noTime?: boolean }) {
@@ -82,11 +123,7 @@ export function LoggedBy({ entry, noTime }: { entry: Entry; noTime?: boolean }) 
   const created = new Date(entry.created_at);
   const day = formatDayLabel(dayKey(created, tz), dayKey(now(), tz));
   const when = `${day === "Today" ? "" : `${day} `}${formatTime(created, tz)}`;
-  const editor = entry.updated_by
-    ? entry.updated_by === entry.created_by
-      ? "edited"
-      : `edited by ${memberName(entry.updated_by)}`
-    : null;
+  const editor = editedText(entry, memberName);
   return (
     <p className={cx(tone.muted, "flex items-start gap-2 text-[13px] leading-snug")}>
       {/* Their own emoji (or initial), the same mark the lists use. */}

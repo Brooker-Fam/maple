@@ -791,6 +791,7 @@ export function Sheet({
   const panelRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const drag = useDragControls();
   const night = useNightActive();
   const still = calm && night;
@@ -811,6 +812,31 @@ export function Sheet({
     if (!open || !el) return;
     setSlot(el, true);
     return () => setSlot(el, false);
+  }, [open]);
+  // A toast in the slot takes the body's room. What you were on stays in view: the field you're typing in, or the
+  // bottom of the form if you'd scrolled down to it (never a jump from the top, where the sheet's main choice is).
+  useEffect(() => {
+    const slot = slotRef.current;
+    const body = bodyRef.current;
+    if (!open || !slot || !body) return;
+    let h = slot.offsetHeight;
+    const nearBottom = () => body.scrollTop > 0 && body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+    let atBottom = nearBottom();
+    const onScroll = () => (atBottom = nearBottom());
+    const ro = new ResizeObserver(() => {
+      const grew = slot.offsetHeight - h;
+      h = slot.offsetHeight;
+      if (grew <= 0) return;
+      if (atBottom) body.scrollTop += grew;
+      const a = document.activeElement;
+      if (a instanceof HTMLElement && a !== body && body.contains(a)) a.scrollIntoView({ block: "nearest" });
+    });
+    body.addEventListener("scroll", onScroll, { passive: true });
+    ro.observe(slot);
+    return () => {
+      body.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
   }, [open]);
   // The latest onClose without re-running the effect: a parent ticking every second (the dock) would otherwise pull focus back to the top each time.
   const closeRef = useRef(onClose);
@@ -879,11 +905,19 @@ export function Sheet({
               </button>
             </div>
             </div>
-            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 pb-4">
+            <div ref={bodyRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 pb-4">
               {children}
             </div>
-            {/* Toasts while it's open (ToastHost portals them here): above the footer, never over it. */}
-            <div ref={slotRef} className="shrink-0 px-5" aria-live="polite" />
+            {/*
+              Toasts while it's open (ToastHost portals them here): above the footer, never over it. A hairline
+              sets one off from the form, so it can't read as the field above it; with no footer, it keeps clear
+              of the home indicator.
+            */}
+            <div
+              ref={slotRef}
+              className={cx("shrink-0 px-5 not-empty:border-t not-empty:border-mp-line not-empty:pt-3", !footer && "pb-[env(safe-area-inset-bottom)]")}
+              aria-live="polite"
+            />
             {footer && (
               <div className="shrink-0 border-t border-mp-line px-5 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
                 {footer}
@@ -1085,7 +1119,8 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
                 a.sub ? "min-w-[96px] flex-col items-start justify-center rounded-xl px-3 py-1 text-left" : "rounded-full px-3 text-xs"
               )}
             >
-              {a.color && <span className="mp-kind-fill h-4 w-4 rounded-full ring-1 ring-current/40" style={{ backgroundColor: a.color }} aria-hidden />}
+              {/* mp-swatch: the real colour, dimmed at night, never folded into amber (matching the diaper is the point). */}
+              {a.color && <span className="mp-swatch h-4 w-4 rounded-full ring-1 ring-current/40" style={{ backgroundColor: a.color }} aria-hidden />}
               {a.sub ? (
                 <>
                   <span className="text-[13px] leading-tight">{a.label}</span>

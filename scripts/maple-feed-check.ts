@@ -27,6 +27,8 @@ import {
   normalizeSegments,
   partTotals,
   pause,
+  previousFeed,
+  previousFeedEnd,
   restoredTap,
   retimeBreast,
   setSide,
@@ -172,6 +174,9 @@ check("momentQuestion titles (§1.2)", () => {
   eq(momentQuestion("switch", "R"), "When did she switch to Right?");
   eq(momentQuestion("pause", "L"), "When did she come off the Left?");
   eq(momentQuestion("resume", "R"), "When did she go back on the Right?");
+  // fix-everything NEW[2]: "back on" only when she came off that side before the break.
+  eq(momentQuestion("resume", "R", "R"), "When did she go back on the Right?");
+  eq(momentQuestion("resume", "R", "L"), "When did she go on the Right?");
   eq(momentQuestion("feed_end", "R"), "When did the feed end?");
 });
 
@@ -791,6 +796,17 @@ check("addPart: before the first side moves the start, not the end", () => {
 });
 check("addPart: ended before started is refused", () =>
   throwsCode(() => addPart(feed("L 16:00-16:10"), { side: "R", start: D("16:30"), end: D("16:20") }, done("17:00", "16:10")), "before_own_start"));
+check("addPart: She went back on… after a Done at the pause (add_part until the Done tap)", () => {
+  // Left 4:00–4:10, Done tapped at 4:25 (ended at the pause); she was back on the Right from 4:14.
+  const flagged = feed("L 16:00-16:10", { paused_at_stop: true, left_sec: 600, right_sec: 0 });
+  const r = addPart(flagged, { side: "R", start: D("16:14"), end: D("16:25") }, done("16:30", "16:10", true));
+  eqSegs(r.data.segments, "L 16:00-16:10, R 16:14-16:25");
+  eqTime(r.endedAt, "16:25", "ends at the Done tap");
+  eq(r.data.paused_at_stop, undefined, "no longer ended at a pause");
+  eq(rows(feedParts(r.data, done("16:30", "16:25"))), ["L 16:00-16:10 10 min", "Break 16:10-16:14 4 min", "R 16:14-16:25 11 min"]);
+  // No break: from the pause on the same side merges into it.
+  eqSegs(addPart(flagged, { side: "L", start: D("16:10"), end: D("16:25") }, done("16:30", "16:10", true)).data.segments, "L 16:00-16:25");
+});
 
 // ── S8: two phones ───────────────────────────────────────────────────────
 
@@ -1061,6 +1077,75 @@ check("staleFeed: an hour with nothing tapped, or on a break a given time 30 min
   eq(staleFeed(late, D("16:41")), true, "61 min since the tap");
 });
 
+// ── resided: a Switch just after going back on (round 3) ─────────────────
+
+check("resided: Switch within 15 s of a resume onto the other side changes that side, keeping the break", () => {
+  // Left 4:00–4:10, break, Next side (Right) at 4:20, then Switch at 4:20:05: she went back on the Left.
+  const resumed = switchTo(feed("L 16:00-16:10"), "R", D("16:20"));
+  const r = switchTo(resumed.data, "L", D("16:20:05"));
+  eqSegs(r.data.segments, "L 16:00-16:10, L 16:20-");
+  eq([r.resided, r.reverted], [true, undefined]);
+  eq(tapOf(r.data), { kind: "resume", side: "L", at: T("16:20"), paused_at: T("16:10") }, "still the resume, on its new side");
+  eq(rows(feedParts(r.data, live("16:21"))), ["L 16:00-16:10 10 min", "Break 16:10-16:20 10 min", "L 16:20- 1 min"]);
+  // Undo takes back the resume: paused again, as before it.
+  eqSegs(undoLastTap(r.data, newest(r.data)).data.segments, "L 16:00-16:10");
+  eq(undoableTap(r.data, live("16:21"))?.what, "resume");
+});
+check("resided: the same for a Resume on the side she came off, and a second Switch flips it back", () => {
+  const resumed = switchTo(feed("L 16:00-16:10"), "L", D("16:20"));
+  const r = switchTo(resumed.data, "R", D("16:20:10"));
+  eqSegs(r.data.segments, "L 16:00-16:10, R 16:20-");
+  eq(r.resided, true);
+  const again = switchTo(r.data, "L", D("16:20:14"));
+  eqSegs(again.data.segments, "L 16:00-16:10, L 16:20-");
+  eq(again.resided, true);
+});
+check("resided: 15 s or more after the resume it's an ordinary switch", () => {
+  const resumed = switchTo(feed("L 16:00-16:10"), "R", D("16:20"));
+  const r = switchTo(resumed.data, "L", D("16:20:15"));
+  eqSegs(r.data.segments, "L 16:00-16:10, R 16:20-16:20:15, L 16:20:15-");
+  eq([r.resided, tapOf(r.data)?.kind], [undefined, "switch"]);
+});
+check("resided: a short break keeps its break; a resume given an earlier time is a real part, so a switch is a switch", () => {
+  const quick = switchTo(feed("L 16:00-16:10"), "R", D("16:10:30"));
+  const r = switchTo(quick.data, "L", D("16:10:35"));
+  eqSegs(r.data.segments, "L 16:00-16:10, L 16:10:30-");
+  eq(r.resided, true);
+  eqSegs(undoLastTap(r.data, newest(r.data)).data.segments, "L 16:00-16:10");
+  // "Back on the Right 5 min ago" (or clamped to the pause), then Switch: Right was on, so it stays and Left starts now.
+  const told = switchTo(feed("L 16:00-16:10"), "R", D("16:15"), { explicit: true, now: D("16:20") });
+  eqSegs(switchTo(told.data, "L", D("16:20:03")).data.segments, "L 16:00-16:10, R 16:15-16:20:03, L 16:20:03-");
+  const clamped = switchTo(feed("L 16:00-16:10"), "R", D("16:05"), { explicit: true, now: D("16:20") });
+  eqSegs(clamped.data.segments, "L 16:00-16:10, R 16:10-");
+  eq(switchTo(clamped.data, "L", D("16:20:03")).resided, undefined);
+});
+check("resided: not after a merged resume, a switch tapped with a time, or a switch (that's the revert rule)", () => {
+  const merged = switchTo(feed("L 16:00-16:10"), "L", D("16:10:30"));
+  eq(merged.merged, true);
+  const r = switchTo(merged.data, "R", D("16:10:35"));
+  eqSegs(r.data.segments, "L 16:00-16:10:35, R 16:10:35-");
+  eq(r.resided, undefined);
+  const resumed = switchTo(feed("L 16:00-16:10"), "R", D("16:20"));
+  const timed = switchTo(resumed.data, "L", D("16:20:05"), { explicit: true, now: D("16:20:06") });
+  eqSegs(timed.data.segments, "L 16:00-16:10, R 16:20-16:20:05, L 16:20:05-");
+  eq(timed.resided, undefined);
+  const sw = switchTo(switchTo(feed("L 16:00-"), "R", D("16:10")).data, "L", D("16:10:05"));
+  eq([sw.reverted, sw.resided], [true, undefined]);
+  eqSegs(sw.data.segments, "L 16:00-");
+});
+
+// ── previousFeed (the start toast's "Same feed as 8:30") ─────────────────
+
+check("previousFeed: the newest finished feed that ended by this one's start", () => {
+  const mk = (id: number, start: string, end: string | null, active = false) =>
+    ({ ...entryOf(feed(`L ${start}-${end ?? ""}`), active ? live("17:00") : done("17:00", end!)), id }) as EntryOf<"feed">;
+  const list = [mk(1, "15:00", "15:20"), mk(2, "16:00", "16:30"), mk(3, "16:50", null, true), mk(4, "16:20", "16:40")];
+  const now = { id: 9, started_at: T("16:45") };
+  eq(previousFeed(list, now)?.id, 4);
+  eqTime(new Date(previousFeedEnd(list, now)!), "16:40", "its end");
+  eq(previousFeed(list, { id: 9, started_at: T("15:10") }), null);
+});
+
 // ── memberLabel (§1.5) ───────────────────────────────────────────────────
 
 const member = (email: string, display_name: string | null, role: Member["role"] = "member"): Member => ({ email, role, display_name, emoji: null, color: null });
@@ -1089,24 +1174,23 @@ check("memberLabel: never prints Admin", () =>
 
 // ── the card's live total (timerNumbers, FeedParts.tsx) ──────────────────
 
-check("live total: the closed rows' minutes plus the live clock (Matt's card)", () => {
+check("live total: the closed rows' minutes plus the live row's (Matt's card)", () => {
   // Left 5:19:57 – 5:35:00 reads "16 min"; the old seconds total said 15:04 under it.
   const data = feed("L 05:19:57-05:35:00, R 05:35:00-");
   const ctx = live("05:35:01");
   const n = timerNumbers(entryOf(data, ctx), ctx.now);
   eq(rows(n.parts.slice(0, 1)), ["L 05:19:57-05:35 16 min"]);
   eq(formatClock(n.current.sec), "0:01", "live clock");
-  eq(formatClock(n.total), "16:01", "total");
+  eq(n.totalMin, 16, "total");
 });
-check("live total: rows + live clock = total, at every second of a long feed", () => {
+check("live total: every row's whole minutes, the live one counted to now, at every second of a long feed", () => {
   const data = feed("L 02:15:10-02:27:40, R 02:27:40-02:40:05, L 02:40:30-");
   for (let s = 0; s < 900; s += 7) {
     const now = new Date(D("02:40:30").getTime() + s * 1000);
     const n = timerNumbers(entryOf(data, { now, active: true, endedAt: null }), now);
     const closed = n.parts.filter((p) => p.kind === "side" && p.end !== null).reduce((a, p) => a + p.min, 0);
     eq(closed, 12 + 13, "closed rows");
-    eq(n.total, closed * 60 + n.current.sec, `rows + clock at +${s}s`);
-    eq(Math.floor(n.total / 60), closed + Math.floor(n.current.sec / 60), `whole minutes at +${s}s`);
+    eq(n.totalMin, closed + spanMinutes(n.current.since, now), `rows + live row at +${s}s`);
   }
 });
 check("live total: paused, it's the closed sides' minutes (the break's clock isn't nursing)", () => {
@@ -1114,7 +1198,7 @@ check("live total: paused, it's the closed sides' minutes (the break's clock isn
   const ctx = live("05:50:10");
   const n = timerNumbers(entryOf(data, ctx), ctx.now);
   eq(n.paused, true, "paused");
-  eq(formatClock(n.total), "28:00", "16 + 12");
+  eq(n.totalMin, 28, "16 + 12");
   eq(n.elapsed, 15 * 60 + 3 + 12 * 60 + 20, "elapsed keeps the exact seconds");
 });
 check("live total: Done says the rows' minutes, the card's closed rows plus the last side's row", () => {
@@ -1125,7 +1209,26 @@ check("live total: Done says the rows' minutes, the card's closed rows plus the 
   const t = feedMinutes(entryOf(stopped.data, { now: at, active: false, endedAt: stopped.endedAt }), at);
   eq(t.total, 16 + 12 + spanMinutes(n.current.since, at), "Done");
   eq(t.total, 29, "L 16 + 1 · R 12");
-  eq(formatClock(n.total), "28:45", "the card a moment before: 28 min of rows + 0:45 on the Left");
+  eq(n.totalMin, 29, "the card a moment before says what Done then says");
+});
+
+check("resided: only the same person's resume; the other phone's Switch just after it is a real switch", () => {
+  const resumed = switchTo(feed("L 16:00-16:10"), "R", D("16:20"), { by: "brittany@example.com" });
+  eq(tapOf(resumed.data)?.by, "brittany@example.com", "the tap says who");
+  const mine = switchTo(resumed.data, "L", D("16:20:05"), { by: "brittany@example.com" });
+  eq(mine.resided, true, "her own quick Switch re-sides her resume");
+  const theirs = switchTo(resumed.data, "L", D("16:20:05"), { by: "matt@example.com" });
+  eq(theirs.resided, undefined, "his Switch switches");
+  eqSegs(theirs.data.segments, "L 16:00-16:10, R 16:20-16:20:05, L 16:20:05-");
+});
+check("live total: a Switch or a Pause doesn't move it (the row that closes has the live side's minutes)", () => {
+  const data = feed("L 05:19:57-05:35:00, R 05:35:00-");
+  const at = D("05:47:56");
+  const before = timerNumbers(entryOf(data, live("05:47:56")), at).totalMin;
+  eq(before, 16 + 12, "before");
+  const later = D("05:47:58");
+  eq(timerNumbers(entryOf(switchTo(data, "L", at).data, live("05:47:58")), later).totalMin, before, "after Switch");
+  eq(timerNumbers(entryOf(pause(data, at).data, live("05:47:58")), later).totalMin, before, "after Pause");
 });
 
 // ── done ─────────────────────────────────────────────────────────────────

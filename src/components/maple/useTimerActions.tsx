@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { tick } from "@/components/atlas/haptics";
-import { edgeBounds, feedCtx, feedMinutes, feedParts, minutesShort, minutesText, openSegment, previousFeedEnd, sideMinutesText, suggestNextSide, undoLastTap, type Moment, type Part, type TapFeedData } from "@/lib/maple/feed";
+import { edgeBounds, feedCtx, feedMinutes, feedParts, minutesShort, minutesText, other, previousFeed, previousFeedEnd, sideMinutesText, suggestNextSide, undoLastTap, type Moment, type Part, type TapFeedData } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedEdit, Side, TimerKind, TimerResponse } from "@/lib/maple/types";
 import { fixPreset, KIND_TITLE, SIDE_NAME } from "./FeedParts";
@@ -27,6 +27,8 @@ type SidePart = Extract<Part, { kind: "side" }>;
 
 /** A feed the other phone ended this recently can still be carried on from a stale Resume. */
 const CONTINUE_WITHIN_MS = 30 * 60_000;
+/** A feed started this soon after the last one ended offers "Same feed as 8:30" (a Done by mistake, or the other phone's). */
+const SAME_FEED_MS = 10 * 60_000;
 
 const minutesWord = (n: number) => `${n} minute${n === 1 ? "" : "s"}`;
 
@@ -61,6 +63,15 @@ export function sideParts(e: Entry, now: Date): SidePart[] {
 function allParts(e: Entry, now: Date): Part[] {
   if (e.kind !== "feed" || e.data.method !== "breast" || !e.data.segments?.length) return [];
   return feedParts(e.data, feedCtx(e, now));
+}
+
+/** "Back on the Left" after a break only when she came off the Left; on the other side it's "On the Right" (as the sheets word it). */
+const onSide = (side: Side, prev: Side | undefined) => (prev && prev !== side ? `On the ${SIDE_NAME[side]}` : `Back on the ${SIDE_NAME[side]}`);
+
+/** The pause a merged resume took back was under a minute (from when she came off to when she went back on). */
+function shortPause(res: TimerResponse, back: Date): boolean {
+  const off = res.before?.segments.at(-1)?.end;
+  return !!off && back.getTime() - Date.parse(off) < 60_000;
 }
 
 export function useTimerActions() {
@@ -142,9 +153,9 @@ export function useTimerActions() {
     [clock, tz]
   );
 
-  /** Put back what a change replaced (`before`), only if nobody changed the feed since. */
+  /** Put back what a change replaced (`before`), only if nobody changed the feed since. `said` words the toast after it. */
   const restoreFrom = useCallback(
-    async (res: TimerResponse) => {
+    async (res: TimerResponse, said?: (back: TimerResponse) => string) => {
       const b = res.before;
       if (!b) return null;
       const edit: FeedEdit = {
@@ -153,10 +164,12 @@ export function useTimerActions() {
         started_at: b.started_at,
         ended_at: b.ended_at,
         expect_updated_at: res.entry.updated_at,
+        // A finished feed comes back as its Done left it: ended at its pause, so a later reopen brings it back paused.
+        ...(b.paused_at_stop ? { paused_at_stop: true as const } : {}),
         ...(res.nap ? { nap: { id: res.nap.entry.id, ended_at: res.nap.before_ended_at, expect_updated_at: res.nap.entry.updated_at } } : {}),
       };
       const back = await timerCall({ action: "retime", id: res.entry.id, edit });
-      if (back) toast("Undone", { group: "timer" });
+      if (back) toast(said?.(back) ?? "Undone", { group: "timer" });
       return back;
     },
     [timerCall, toast]
@@ -281,15 +294,102 @@ export function useTimerActions() {
   /** Put a just-stopped timer back to running (a paused feed comes back paused). */
   const reopen = useCallback(async (e: Entry) => (await timerCall({ action: "reopen", id: e.id }))?.entry ?? null, [timerCall]);
 
-  // Set below, once switchSide and resume exist (the toast button needs both).
-  const carryOnRef = useRef<(e: Entry, side: Side) => void>(() => {});
+  /** After undoing a Continue or a side added after Done, what's back: "Undone · the 8:10 feed ended 8:24". */
+  const endedAgain = useCallback(
+    (back: TimerResponse) =>
+      back.entry.active || !back.entry.ended_at ? "Undone" : `Undone · the ${short(back.entry.started_at)} feed ended ${short(back.entry.ended_at)}`,
+    [short]
+  );
+
+  /**
+   * The toast of a feed carried on (reopen with a side), read off the
+   * server's answer: where she is now and since when, the break if there was
+   * one, then `tail` ("the 8:10 feed goes on", "still going"). Its Undo puts
+   * the finished feed back exactly (retime restore of `before`, with
+   * paused_at_stop), so the other phone's Done comes back too.
+   */
+  const carriedToast = useCallback(
+    (res: TimerResponse, side: Side, tail: string, more: { at?: Date; afterUndo?: () => Promise<unknown> } = {}) => {
+      const after = res.entry;
+      const parts = allParts(after, now());
+      const sides = parts.filter((p): p is SidePart => p.kind === "side");
+      const cur = sides.at(-1);
+      const name = SIDE_NAME[side];
+      const brk = cur ? parts.find((p) => p.kind === "break" && p.end === cur.start) : undefined;
+      // A part the finished feed already had: ended while she was on it, so the Done is taken back and it runs on.
+      const kept = !!cur && !!res.before?.segments.some((x) => x.side === cur.side && Math.abs(Date.parse(x.start) - Date.parse(cur.start)) <= 1500);
+      let text = tail;
+      if (cur) {
+        if (res.merged) text = `Back on the ${name} · ${shortPause(res, more.at ?? now()) ? "paused under a minute, so " : ""}no break · ${tail}`;
+        else if (res.clamped) text = `${name} from ${short(cur.start)}, when the break began (no break) · ${tail}`;
+        else if (kept) text = `${SIDE_NAME[cur.side]} still going, since ${short(cur.start)} · ${tail}`;
+        else if (brk) text = `${onSide(side, sides.at(-2)?.side)} since ${short(cur.start)} · break ${minutesText(brk.min)} · ${tail}`;
+        else text = `Switched to ${SIDE_NAME[cur.side]} at ${short(cur.start)} · ${tail}`;
+      }
+      const undo = async () => {
+        // "Same feed as 8:30": the feed it discarded comes back too, so Undo leaves both as they were.
+        if ((await restoreFrom(res, endedAgain)) && more.afterUndo) await more.afterUndo();
+      };
+      timerToast(text, after, { undo: () => void undo() });
+    },
+    [endedAgain, now, restoreFrom, short, timerToast]
+  );
+
+  /**
+   * Carry a finished feed on on `side`, from `at` (default now), in one
+   * write the server checks against the feed this phone saw (e.updated_at:
+   * changed since, 409 and nothing is written): the dock's "Continue that
+   * feed on Right", the start toast's "Same feed as 8:30", Fix times'
+   * "Continue it on Right". Ended at its pause, it's a resume after the
+   * break; ended while running, she switches at the Done (the same side just
+   * runs on). Resolves to the answer, or null when nothing was saved.
+   */
+  const continueFeed = useCallback(
+    async (e: Entry, side: Side, at?: Date, opts: TimerCallOptions = {}, afterUndo?: () => Promise<unknown>): Promise<TimerResponse | null> => {
+      tick();
+      const res = await timerCall({ action: "reopen", id: e.id, side, at: at?.toISOString(), expect_updated_at: e.updated_at }, opts);
+      if (!res || res.noop || !res.entry.active) return res;
+      carriedToast(res, side, `the ${short(res.entry.started_at)} feed goes on`, { at, afterUndo });
+      return res;
+    },
+    [carriedToast, short, timerCall]
+  );
+
+  /**
+   * "She went back on…" after a Done, once the sheet has an answer (nothing
+   * is reopened to ask, so a phone locked mid-question leaves the Done as it
+   * was). On `side` from `from` until `until` (the Done tap) adds that side to
+   * the finished feed, which then ends there (add_part); `until` null ("She's
+   * still on") carries the feed on from `from` (reopen with a side). Each is
+   * one write checked against the finished feed this phone saw, and its Undo
+   * puts that feed back exactly as Done left it.
+   */
+  const backOnAfterDone = useCallback(
+    async (e: Entry, side: Side, from: Date, until: Date | null, opts: TimerCallOptions = {}): Promise<TimerResponse | null> => {
+      tick();
+      if (!until) {
+        const res = await timerCall({ action: "reopen", id: e.id, side, at: from.toISOString(), expect_updated_at: e.updated_at }, opts);
+        if (!res || res.noop || !res.entry.active) return res;
+        carriedToast(res, side, "still going", { at: from });
+        return res;
+      }
+      const edit: FeedEdit = { op: "add_part", side, start: from.toISOString(), end: until.toISOString(), expect_updated_at: e.updated_at };
+      const res = await timerCall({ action: "retime", id: e.id, edit }, opts);
+      if (!res || res.noop) return res;
+      const last = sideParts(res.entry, now()).at(-1);
+      const ended = res.entry.ended_at ?? until.toISOString();
+      const text = last?.end ? `${SIDE_NAME[last.side]} ${short(last.start)} – ${short(last.end)} · ended ${short(ended)}` : `Ended ${short(ended)}`;
+      timerToast(text, res.entry, { undo: () => void restoreFrom(res, endedAgain) });
+      return res;
+    },
+    [carriedToast, endedAgain, now, restoreFrom, short, timerCall, timerToast]
+  );
 
   /**
    * A Resume or Switch from a dock that hadn't caught up with the other
    * phone's Done (409 "stopped"): if that feed ended in the last half hour,
    * the toast offers to carry it on rather than leave a second feed as the
-   * only way forward. Reopen brings it back as it was (a feed ended at its
-   * pause comes back paused), then the tap happens.
+   * only way forward, in one checked write (continueFeed).
    */
   const continueAction = useCallback(
     (side: Side) =>
@@ -299,9 +399,9 @@ export function useTimerActions() {
         if (now().getTime() - Date.parse(e.ended_at) > CONTINUE_WITHIN_MS) return undefined;
         // Another feed already on (this one still shows running here: the 409 is how this phone hears it ended).
         if (entriesRef.current?.some((x) => x.active && x.kind === "feed" && x.id !== e.id)) return undefined;
-        return [{ label: `Continue that feed on ${SIDE_NAME[side]}`, onClick: () => carryOnRef.current(e, side) }];
+        return [{ label: `Continue that feed on ${SIDE_NAME[side]}`, onClick: () => void continueFeed(e, side) }];
       },
-    [now]
+    [continueFeed, now]
   );
 
   /**
@@ -325,15 +425,13 @@ export function useTimerActions() {
    * Done (or Woke up). A feed ends by the one stop rule: running, at `at`
    * (default now); paused, at the pause. The toast offers the fix that fits:
    * "Ended earlier…" after a running feed, "She went back on…" after one
-   * that ended at its pause.
+   * that ended at its pause, which opens Fix times on the finished feed.
    */
   const stop = useCallback(
     async (e: Entry, at?: Date, opts: TimerCallOptions = {}) => {
       tick();
       // When Done was tapped here: "She went back on…" ends the side it adds then, so that tap isn't lost.
       const doneAt = now().toISOString();
-      const cur = live(e);
-      const wasPaused = cur.kind === "feed" && cur.data.method === "breast" && !!cur.data.segments?.length && !openSegment(cur.data.segments);
       const res = await timerCall({ action: "stop", id: e.id, at: at?.toISOString() }, opts);
       if (!res || res.noop || res.entry.active) return res?.entry ?? null;
       const saved = res.entry;
@@ -348,17 +446,15 @@ export function useTimerActions() {
         });
       } else if (at) {
         timerToast(`${doneText(saved, now()).text} · ended ${short(ended)}`, saved, { undo });
-      } else if (wasPaused) {
+      } else if (saved.kind === "feed" && saved.data.paused_at_stop === true) {
+        // Ended at its pause (the server's word for it, even if this phone still showed her on).
         timerToast(doneText(saved, now(), `ended ${short(ended)}, when you paused`).text, saved, {
           undo,
           actions: [
             {
               label: "She went back on…",
-              onClick: () =>
-                void (async () => {
-                  const back = await reopen(saved);
-                  if (back?.active) open({ kind: "feed", entry: back, preset: fixPreset("current", "backOn", doneAt) });
-                })(),
+              // Asked of the finished feed: the sheet's answer is one write (backOnAfterDone), so nothing is reopened to ask.
+              onClick: () => open({ kind: "feed", entry: saved, preset: fixPreset("current", "backOn", doneAt) }),
             },
           ],
         });
@@ -370,7 +466,22 @@ export function useTimerActions() {
       }
       return saved;
     },
-    [live, now, open, reopen, short, timerCall, timerToast]
+    [now, open, reopen, short, timerCall, timerToast]
+  );
+
+  /**
+   * The start toast's "Same feed as 8:30": the feed before ended a few
+   * minutes before this one started (a Done by mistake, or the other
+   * phone's), so this one goes (only as it was started) and that one carries
+   * on on this side from this start. If carrying on fails, this one comes back.
+   */
+  const sameFeed = useCallback(
+    async (e: Entry, prev: Entry, side: Side) => {
+      if (!(await timerCall({ action: "discard", id: e.id, expect_updated_at: e.updated_at }))) return;
+      const res = await continueFeed(live(prev), side, new Date(e.started_at), {}, () => restore(e.id));
+      if (!res?.entry.active) await restore(e.id);
+    },
+    [continueFeed, live, restore, timerCall]
   );
 
   const startFeed = useCallback(
@@ -401,13 +512,56 @@ export function useTimerActions() {
         // Never over the feed before this one (two-phones #53): Fix times stops its chips there too.
         { after: previousFeedEnd(entriesRef.current, e) }
       );
+      // The last feed ended minutes ago (fresh-eyes: a Done by mistake split one feed in two): one tap joins them.
+      const prev = previousFeed(entriesRef.current, e);
+      const joinable =
+        !napEnded &&
+        prev?.kind === "feed" &&
+        prev.data.method === "breast" &&
+        !!prev.data.segments?.length &&
+        Date.parse(e.started_at) - Date.parse(prev.ended_at!) <= SAME_FEED_MS;
+      if (joinable && prev) {
+        const join: ToastAction = { label: `Same feed as ${short(prev.started_at)}`, onClick: () => void sameFeed(e, prev, first?.side ?? side) };
+        timerToast(`${name} started ${clock(e.started_at)} · the ${short(prev.started_at)} feed ended ${short(prev.ended_at!)}`, e, {
+          actions: [join, ...chips.slice(0, 1)],
+          undo: () => void unstart(e),
+        });
+        return e;
+      }
       const ask = chips.length ? ". Started earlier?" : "";
       // One toast for both: the nap it ended, then the feed.
       const text = napEnded ? `${napText} · ${name} started ${short(e.started_at)}${ask}` : `${name} started ${clock(e.started_at)}${ask}`;
       timerToast(text, e, { actions: chips, undo: () => void unstart(e, napEnded) });
       return e;
     },
-    [clock, earlierChips, now, reopen, retime, running, short, timerCall, timerToast, unstart]
+    [clock, earlierChips, now, reopen, retime, running, sameFeed, short, timerCall, timerToast, unstart]
+  );
+
+  /**
+   * A paused feed nobody came back to for over an hour (staleFeed, the Siri
+   * and Claude rule): the dock's side tiles start a new feed instead of
+   * gluing this one onto it. The old one ends at its pause (only as this
+   * phone saw it), then the new one starts; one toast says both, and Undo
+   * throws the new one away and brings the old one back paused.
+   */
+  const freshFeed = useCallback(
+    async (old: Entry, side: Side) => {
+      tick();
+      const ended = await timerCall({ action: "stop", id: old.id, expect_updated_at: old.updated_at });
+      if (!ended || ended.entry.active) return null;
+      const res = await timerCall({ action: "start", kind: "feed", side });
+      if (!res || res.alreadyRunning !== false) return res?.entry ?? null;
+      const e = res.entry;
+      const end = ended.entry.ended_at ?? ended.entry.started_at;
+      timerToast(`${SIDE_NAME[side]} started ${short(e.started_at)} · the ${short(old.started_at)} feed ended ${short(end)}, when you paused`, e, {
+        undo: () =>
+          void (async () => {
+            if (await timerCall({ action: "discard", id: e.id, expect_updated_at: e.updated_at })) await reopen(ended.entry);
+          })(),
+      });
+      return e;
+    },
+    [reopen, short, timerCall, timerToast]
   );
 
   /** Move a sleep, tummy-time or pumping start (Fix times, a start toast chip). */
@@ -487,17 +641,27 @@ export function useTimerActions() {
   );
 
   const switchSide = useCallback(
-    async (e: Entry, side: Side) => {
+    async (e: Entry, side: Side, opts: TimerCallOptions = {}) => {
       tick();
-      const res = await timerCall({ action: "switch", id: e.id, side }, { failActions: continueAction(side) });
+      const res = await timerCall({ action: "switch", id: e.id, side }, { failActions: continueAction(side), ...opts });
       if (!res || res.noop) return res?.entry ?? null;
       const after = res.entry;
       if (res.reverted) {
         timerToast(`Back on the ${SIDE_NAME[side]} · that switch is undone`, after, { undo: () => void restoreFrom(res) });
         return after;
       }
-      const cur = sideParts(after, now()).at(-1);
+      const sides = sideParts(after, now());
+      const cur = sides.at(-1);
       if (!cur) return after;
+      if (res.resided) {
+        // A Switch just after going back on: she went back on this side, not the one tapped (no stray second-long part).
+        const was = SIDE_NAME[other(side)];
+        timerToast(`${onSide(side, sides.at(-2)?.side)}, not the ${was} · since ${short(cur.start)}`, after, {
+          undo: () => void restoreFrom(res),
+          undoLabel: `Back to ${was}`,
+        });
+        return after;
+      }
       let min: number | undefined;
       try {
         min = edgeBounds(after.kind === "feed" ? after.data : { method: "breast" }, { edge: "start", ref: cur.ref }, feedCtx(after, now())).uiMin.getTime();
@@ -587,7 +751,9 @@ export function useTimerActions() {
       const wasOpen = res.moved ? res.before?.segments.at(-1) : undefined;
       const back = wasOpen && wasOpen.end == null ? `Back to ${short(wasOpen.start)}` : "Back to paused";
       if (res.merged) {
-        timerToast(`Back on the ${name} · no break`, after, { undo: () => void restoreFrom(res) });
+        // The pause was under a minute, so it counts as nursing: say so, or the pause just tapped seems to vanish
+        // (a "No break" picked after a long pause is just no break).
+        timerToast(`Back on the ${name} · ${shortPause(res, at ?? now()) ? "paused under a minute, so " : ""}no break`, after, { undo: () => void restoreFrom(res) });
       } else if (res.clamped && cur) {
         timerToast(`${name} starts ${short(cur.start)}, when the break began (no break)`, after, { undo: () => void restoreFrom(res), undoLabel: back });
       } else if (at && cur) {
@@ -606,24 +772,14 @@ export function useTimerActions() {
               { floor: Date.parse(brk.start) }
             )
           : [];
-        const text = `Back on the ${name} · ${short(cur.start)}${brk ? ` · break ${minutesText(brk.min)}` : ""}${chips.length ? ". Earlier?" : ""}`;
+        const prev = parts.filter((p): p is SidePart => p.kind === "side").at(-2)?.side;
+        const text = `${brk ? onSide(side, prev) : `Back on the ${name}`} · ${short(cur.start)}${brk ? ` · break ${minutesText(brk.min)}` : ""}${chips.length ? ". Earlier?" : ""}`;
         timerToast(text, after, { actions: chips, undo: () => void undoTap(after) });
       }
       return res;
     },
     [earlierChips, now, restoreFrom, retime, short, staleResume, timerCall, timerToast, undoTap]
   );
-
-  useEffect(() => {
-    carryOnRef.current = (e, side) =>
-      void (async () => {
-        const back = await reopen(e);
-        if (!back?.active) return;
-        // Ended while running, it comes back on its side (switch); ended at a pause, it comes back paused (resume).
-        if (back.kind === "feed" && openSegment(back.data.segments)) await switchSide(back, side);
-        else await resume(back, side);
-      })();
-  });
 
   const discard = useCallback(
     async (e: Entry) => {
@@ -654,6 +810,11 @@ export function useTimerActions() {
     adjust,
     discard,
     reopen,
+    /** Carry a finished feed on on a side, in one checked write (reopen with a side); Undo puts the finished feed back. */
+    continueFeed,
+    freshFeed,
+    /** "She went back on…" after a Done: a side until the Done tap (add_part), or, with until null, still on (reopen with a side). */
+    backOnAfterDone,
     memberName,
     dismissToast: dismissTimerToast,
     /** Timer toasts wait while the Lantern or Fix times is open (see useMaple's holdTimerToasts / useHoldTimerToasts). */

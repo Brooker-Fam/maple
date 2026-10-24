@@ -6,7 +6,7 @@ import {
   getBaby,
   NotFound,
   pauseTimer,
-  reopenTimer,
+  reopenTimerDetailed,
   retimeFeed,
   startTimer,
   stopTimer,
@@ -67,6 +67,13 @@ function feedEdit(v: unknown): FeedEdit {
       }
       return { op: "undo_tap", expect: { side: x.side, start: x.start, end: x.end as string | null } };
     }
+    case "add_part": {
+      if (!isSide(v.side)) throw new BadRequest("edit.side must be L or R");
+      const start = instant(v.start, "edit.start").toISOString();
+      const end = instant(v.end, "edit.end").toISOString();
+      if (!isIso(v.expect_updated_at)) throw new BadRequest("edit.expect_updated_at must be an ISO timestamp");
+      return { op: "add_part", side: v.side, start, end, expect_updated_at: v.expect_updated_at };
+    }
     case "restore": {
       if (!Array.isArray(v.segments) || !v.segments.length || v.segments.length > 60) throw new BadRequest("edit.segments must list 1 to 60 parts");
       if (!isIso(v.started_at)) throw new BadRequest("edit.started_at must be an ISO timestamp");
@@ -90,7 +97,7 @@ function feedEdit(v: unknown): FeedEdit {
       };
     }
     default:
-      throw new BadRequest("edit.op must be move, set_side, undo_tap or restore");
+      throw new BadRequest("edit.op must be move, set_side, undo_tap, add_part or restore");
   }
 }
 
@@ -111,8 +118,11 @@ const timerJson = (r: TimerResponse) =>
  * that side it's a noop, or with an earlier `at` moves when she went back
  * on (moved: true). discard takes expect_updated_at (the
  * start toast's Undo): changed since, 409 "changed" and nothing is thrown
- * away. A timer that was discarded answers 404 { reason: "discarded",
- * deleted_by } so the app can name who did it.
+ * away. reopen takes an optional side (+ at) and expect_updated_at: one
+ * write that carries the finished feed on on that side (store
+ * reopenTimerDetailed), answering like a fix, with `before`. A timer that
+ * was discarded answers 404 { reason: "discarded", deleted_by } so the app
+ * can name who did it.
  */
 export const POST = withMember("POST /api/maple/timer", async (request, me) => {
   const body = await readJson<TimerInput & { expect_updated_at?: unknown }>(request);
@@ -171,8 +181,14 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
       const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
       return json({ entry: toClientEntry(await discardTimer(id, by, { expectUpdatedAt })) });
     }
-    case "reopen":
-      return json({ entry: toClientEntry(await reopenTimer(id, by)) });
+    case "reopen": {
+      // side: carry the feed on there in the same write; expect_updated_at: only the finished feed this phone saw.
+      if (body.side !== undefined && !isSide(body.side)) throw new BadRequest("side must be L or R");
+      if (at && body.side === undefined) throw new BadRequest("at goes with side (when she went back on)");
+      const expect = body.expect_updated_at;
+      const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
+      return timerJson(await reopenTimerDetailed(id, by, { side: body.side, at, expectUpdatedAt }));
+    }
     default:
       throw new BadRequest("Unknown timer action");
   }

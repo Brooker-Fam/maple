@@ -85,6 +85,8 @@ export type LastTap = {
   merged?: true;
   reverted?: true;
   undone?: true;
+  /** Who tapped it (a member id), so a quick switch only re-sides that person's own resume. */
+  by?: string;
 };
 
 /** FeedData with the tap record (kept by validate.ts; types.ts's FeedData doesn't list it). */
@@ -403,8 +405,13 @@ export function partTotals(parts: Part[]): {
   return t;
 }
 
-/** The question that titles a moment's editor. `side` is the stretch it starts (switch, resume) or ends (pause). */
-export function momentQuestion(moment: Moment, side: Side): string {
+/**
+ * The question that titles a moment's editor. `side` is the stretch it
+ * starts (switch, resume) or ends (pause); `prev` is the side before the
+ * break, for a resume: "back on" only when she goes back on the side she
+ * came off, else "When did she go on the Right?".
+ */
+export function momentQuestion(moment: Moment, side: Side, prev?: Side | null): string {
   switch (moment) {
     case "feed_start":
       return "When did the feed start?";
@@ -413,7 +420,7 @@ export function momentQuestion(moment: Moment, side: Side): string {
     case "pause":
       return `When did she come off the ${SIDE_NAME[side]}?`;
     case "resume":
-      return `When did she go back on the ${SIDE_NAME[side]}?`;
+      return prev && prev !== side ? `When did she go on the ${SIDE_NAME[side]}?` : `When did she go back on the ${SIDE_NAME[side]}?`;
     case "feed_end":
       return "When did the feed end?";
   }
@@ -727,6 +734,9 @@ export function startBreast(side: Side, at: Date): FeedData {
  * gave ("she went back on at 4:20"); without it `at` is just now. `now` is
  * when it was tapped (default `at`), for last_tap.
  *   - Already on that side: noop.
+ *   - A switch tapped within 15 s of a tapped resume (one that made its own
+ *     part, under 15 s old) means she went back on the other side: that part
+ *     changes side and the break stays (resided), never a stray short part.
  *   - Switching back within 15 s of a switch undoes it (reverted).
  *   - Resuming before the break began starts at the break (clamped); the same
  *     side within a minute of the pause erases the break (merged).
@@ -742,13 +752,14 @@ export function switchTo(
   data: FeedData,
   side: Side,
   at: Date,
-  opts: { explicit?: boolean; resume?: boolean; now?: Date } = {}
-): { data: FeedData; noop?: true; clamped?: true; merged?: true; reverted?: true; moved?: true } {
+  opts: { explicit?: boolean; resume?: boolean; now?: Date; by?: string } = {}
+): { data: FeedData; noop?: true; clamped?: true; merged?: true; reverted?: true; resided?: true; moved?: true } {
   const S = real(data, true);
   const O = S[S.length - 1]?.end === null ? S[S.length - 1] : null;
   let t = at.getTime();
-  const tappedAt = iso((opts.now ?? at).getTime());
-  const flags: { clamped?: true; merged?: true; reverted?: true } = {};
+  const tapped = (opts.now ?? at).getTime();
+  const tappedAt = iso(tapped);
+  const flags: { clamped?: true; merged?: true; reverted?: true; resided?: true } = {};
   let tap: LastTap;
   if (O) {
     if (opts.resume) {
@@ -764,15 +775,36 @@ export function switchTo(
     if (O.side === side) return { data, noop: true };
     if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
     const P = S[S.length - 2];
-    if (t - O.start < 15 * SEC && P && P.end === O.start && P.side === side) {
-      S.pop();
-      P.end = null;
-      flags.reverted = true;
+    const last = lastTapOf(data);
+    if (
+      !opts.explicit &&
+      last?.kind === "resume" &&
+      !last.merged &&
+      !last.undone &&
+      last.side === O.side &&
+      // The same person's resume: the other phone's real Switch just after it is a switch.
+      (!last.by || !opts.by || last.by === opts.by) &&
+      tapped - Date.parse(last.at) < 15 * SEC &&
+      t - O.start < 15 * SEC &&
+      P?.end != null &&
+      P.end <= O.start
+    ) {
+      // Resumed on the wrong tile a moment ago: the part she went back on changes side (touching the same side, it
+      // merges). A resume given a time (she went back on 5 min ago) is a real part, so a switch then is a switch.
+      O.side = side;
+      flags.resided = true;
+      tap = { ...last, side };
     } else {
-      O.end = Math.max(t, O.start);
-      S.push({ side, start: O.end, end: null });
+      if (t - O.start < 15 * SEC && P && P.end === O.start && P.side === side) {
+        S.pop();
+        P.end = null;
+        flags.reverted = true;
+      } else {
+        O.end = Math.max(t, O.start);
+        S.push({ side, start: O.end, end: null });
+      }
+      tap = { kind: "switch", side, at: tappedAt, ...(flags.reverted ? { reverted: true } : {}), ...(opts.by ? { by: opts.by } : {}) };
     }
-    tap = { kind: "switch", side, at: tappedAt, ...(flags.reverted ? { reverted: true } : {}) };
   } else if (S.length) {
     const L = S[S.length - 1];
     const lEnd = L.end!;
@@ -784,7 +816,7 @@ export function switchTo(
       L.end = null;
       flags.merged = true;
     } else S.push({ side, start: t, end: null });
-    tap = { kind: "resume", side, at: tappedAt, paused_at: iso(lEnd), ...(flags.merged ? { merged: true } : {}) };
+    tap = { kind: "resume", side, at: tappedAt, paused_at: iso(lEnd), ...(flags.merged ? { merged: true } : {}), ...(opts.by ? { by: opts.by } : {}) };
   } else {
     S.push({ side, start: t, end: null });
     return { data: { ...settle(data, tidy(S, true, true), true), last_side: side }, ...flags };
@@ -1002,19 +1034,27 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
 }
 
 /**
- * When the feed before `e` ended: the newest finished feed that ended by
- * its start (null if none in `entries`). Start chips stop there, so a chip
- * can't lay a new feed over the last one.
+ * The feed before `e`: the newest finished feed that ended by its start
+ * (null if none in `entries`), for the start toast's "Same feed as 8:30".
  */
-export function previousFeedEnd(entries: readonly Entry[] | undefined, e: { id: number; started_at: string }): number | null {
+export function previousFeed(entries: readonly Entry[] | undefined, e: { id: number; started_at: string }): Entry | null {
   const start = Date.parse(e.started_at);
-  let best: number | null = null;
+  let best: Entry | null = null;
   for (const x of entries ?? []) {
     if (x.kind !== "feed" || x.id === e.id || x.active || !x.ended_at) continue;
     const t = Date.parse(x.ended_at);
-    if (t <= start + SEC && (best === null || t > best)) best = t;
+    if (t <= start + SEC && (best === null || t > Date.parse(best.ended_at!))) best = x;
   }
   return best;
+}
+
+/**
+ * When the feed before `e` ended (previousFeed). Start chips stop there, so
+ * a chip can't lay a new feed over the last one.
+ */
+export function previousFeedEnd(entries: readonly Entry[] | undefined, e: { id: number; started_at: string }): number | null {
+  const prev = previousFeed(entries, e);
+  return prev ? Date.parse(prev.ended_at!) : null;
 }
 
 /** A break this long ended the feed, for staleFeed (Still on a break? asks at 20 min). */
