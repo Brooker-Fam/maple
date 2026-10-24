@@ -297,7 +297,8 @@ function EmojiPicker({ value, onChange, initial, color }: { value: string; onCha
         )}
       >
         <span aria-hidden className="mp-kind-fill flex h-8 w-8 items-center justify-center rounded-full text-[15px] font-semibold text-white" style={{ backgroundColor: color }}>
-          {initial}
+          {/* Before a name is typed there's no initial yet: "Aa" says this is the letter option, not a blank swatch. */}
+          {initial || "Aa"}
         </span>
       </button>
       {EMOJIS.map((e) => (

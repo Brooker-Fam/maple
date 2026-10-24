@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode, useLayoutEffect, useState } from "react";
 import { DEFAULT_TZ, localParts } from "@/lib/maple/time";
 import { useNightActive } from "./nightLook";
 import { cx, tone } from "./ui";
@@ -206,7 +206,8 @@ export function Zoe({ alert, className }: { alert?: boolean; className?: string 
 function useFreshLeaf(leaves: number, night: boolean): number | undefined {
   const reduce = useReducedMotion();
   const [fresh, setFresh] = useState<number | undefined>(undefined);
-  useEffect(() => {
+  // Before paint, so the new leaf never shows full-size for a frame and then pops back to grow.
+  useLayoutEffect(() => {
     if (leaves < 1 || night) return;
     try {
       const raw = localStorage.getItem(LEAVES_KEY);
@@ -256,7 +257,7 @@ export default function Hero() {
         <h1 className={cx(tone.display, "truncate text-[34px] leading-[1.05]")}>{state.baby.name}</h1>
         {age && (
           <p className={cx(tone.muted, "mt-1 text-[15px]")}>
-            {age.days < 14 ? <span className="font-semibold text-mp-maple">Day {age.dayOfLife}</span> : monthDay ? onMonthDay : age.label}
+            {age.days < 14 ? <span className="font-semibold text-mp-maple [.maple-night_&]:text-mp-ink">Day {age.dayOfLife}</span> : monthDay ? onMonthDay : age.label}
           </p>
         )}
       </div>

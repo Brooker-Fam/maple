@@ -188,8 +188,8 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
    */
   const when = (at: string) => {
     const k = dayKey(new Date(at), tz);
+    // Today: the time; any other day says which ("Fri 8:50 PM"), so last night's bath doesn't read as this evening.
     if (k === todayKey) return formatTimeNear(at, n, tz);
-    if (n.getTime() - Date.parse(at) < 24 * 3600_000) return formatTime(at, tz);
     return `${daysBetween(k, todayKey) < 7 ? weekday(k) : `${MON[parseDayKey(k).month - 1]} ${parseDayKey(k).day}`} ${formatTime(at, tz)}`;
   };
   /** "today", "Thu", "Oct 12": for a weigh-in, the day is enough. */

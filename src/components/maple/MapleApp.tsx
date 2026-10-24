@@ -41,12 +41,13 @@ const TAB_KEY = "maple-tab";
 export default function MapleApp() {
   return (
     <MapleProvider>
-      <SheetProvider>
-        {/* Reduce Motion turns every slide and spring into a fade (framer drops transforms, keeps opacity). */}
-        <MotionConfig reducedMotion="user">
+      {/* Reduce Motion turns every slide and spring into a fade (framer drops transforms, keeps opacity). Outside
+          SheetProvider, so the sheets it renders beside the shell follow it too. */}
+      <MotionConfig reducedMotion="user">
+        <SheetProvider>
           <Shell />
-        </MotionConfig>
-      </SheetProvider>
+        </SheetProvider>
+      </MotionConfig>
     </MapleProvider>
   );
 }

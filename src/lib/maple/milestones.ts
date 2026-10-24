@@ -24,7 +24,7 @@ export const MILESTONES: readonly MilestonePreset[] = [
   { id: "met-bruce", label: "Bruce acknowledged Maple (eventually)", emoji: "🐈", hint: "From a dignified distance" },
   { id: "emmett-held", label: "Emmett held Maple", emoji: "🥋", hint: "Big brother, steady arms" },
   { id: "sapphire-read", label: "Sapphire read to Maple", emoji: "📖", hint: "A story from big sister" },
-  { id: "first-bath", label: "First bath", emoji: "🛁", hint: "Squeaky-clean little leaf" },
+  { id: "first-bath", label: "First bath", emoji: "🛁", hint: "Sponge bath or the first real one" },
   { id: "cord-stump", label: "Cord stump fell off", emoji: "🌰", hint: "A tiny acorn moment" },
   { id: "first-checkup", label: "First checkup", emoji: "🩺" },
   { id: "first-outing", label: "First walk outside", emoji: "🍂", hint: "Leaves underfoot" },

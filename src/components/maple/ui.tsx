@@ -957,7 +957,10 @@ export const MEMBER_PALETTE = ["#5C7A4A", "#8C4A5E", "#4E6E7E", "#6E6A3A", "#5A5
 /** A member's own color if they set one, otherwise their place in the family list picks one from MEMBER_PALETTE. */
 export function memberColor(m: Pick<Member, "email" | "color"> | null, members: Member[]): string {
   if (m?.color) return m.color;
-  return MEMBER_PALETTE[Math.max(0, members.findIndex((x) => x.email === m?.email)) % MEMBER_PALETTE.length];
+  // By the order people joined, leaving out the shared admin login (so the first family member is sage); someone no
+  // longer in the list gets a neutral, never another person's colour.
+  const i = members.filter((x) => x.email !== "admin").findIndex((x) => x.email === m?.email);
+  return i < 0 ? "rgb(110 117 105)" : MEMBER_PALETTE[i % MEMBER_PALETTE.length];
 }
 
 /**

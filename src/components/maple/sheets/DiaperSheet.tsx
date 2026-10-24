@@ -271,7 +271,7 @@ function SwatchGroup({
               {/* The real shades, even at night (dimmed, not folded into amber): matching the diaper to them is the point. */}
               <span
                 className={cx(
-                  "flex h-10 w-10 items-center justify-center rounded-full ring-1 ring-mp-ink/15 ring-inset [.maple-night_&]:brightness-[0.7]",
+                  "mp-swatch flex h-10 w-10 items-center justify-center rounded-full ring-1 ring-mp-ink/15 ring-inset",
                   on && "outline-2 outline-offset-2 outline-mp-ink"
                 )}
                 style={{ backgroundColor: info.hex, color: light ? "#3A3020" : "#FFFFFF" }}

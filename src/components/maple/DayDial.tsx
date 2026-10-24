@@ -473,11 +473,11 @@ export default function DayDial() {
                         fill={d.color ?? undefined}
                         strokeWidth="1"
                         className={cx(
-                          "stroke-mp-surface",
+                          // One stroke class per case (two same-property utilities would fight on class order): meconium
+                          // on the dark face, chalky or pale on the white one, get a faint ring so they don't vanish.
+                          d.edge === "light" ? "stroke-mp-ink/30 dark:stroke-mp-surface" : "stroke-mp-surface",
                           !d.color && "fill-mp-ink-3",
-                          // Meconium on the dark face, chalky or pale on the white one: a faint ring so it doesn't vanish.
-                          d.edge === "dark" && "dark:stroke-[rgb(236_231_220/0.35)]",
-                          d.edge === "light" && "stroke-mp-ink/30 dark:stroke-mp-surface"
+                          d.edge === "dark" && "dark:stroke-[rgb(236_231_220/0.35)]"
                         )}
                       />
                     )}
@@ -526,7 +526,7 @@ export default function DayDial() {
                 dominantBaseline="central"
                 fontSize={past && !loading ? 13 : 11}
                 fontWeight={past && !loading ? 600 : 500}
-                className={past && !loading ? "fill-mp-maple" : "fill-mp-ink-3"}
+                className={past && !loading ? "fill-mp-maple [.maple-night_&]:fill-mp-ink-2" : "fill-mp-ink-3"}
               >
                 {sub}
               </text>
@@ -688,7 +688,12 @@ function Legend({ pal, night }: { pal: Palette; night: boolean }) {
         <span className="inline-flex shrink-0">
           {LEGEND_STOOLS.map((c, i) => (
             // Each overlaps the last, parted by a hairline of the page.
-            <i key={c} className={cx(dot, i > 0 && "-ml-[3px]")} style={{ backgroundColor: c, boxShadow: i > 0 ? "0 0 0 1px var(--mp-bg)" : undefined }} />
+            // The black one gets the dial's faint light ring in dark mode, or it vanishes on the page.
+            <i
+              key={c}
+              className={cx(dot, i > 0 && "-ml-[3px]", i === 0 && "dark:shadow-[0_0_0_1px_rgb(236_231_220/0.35)]")}
+              style={{ backgroundColor: c, boxShadow: i > 0 ? "0 0 0 1px var(--mp-bg)" : undefined }}
+            />
           ))}
         </span>
       ),

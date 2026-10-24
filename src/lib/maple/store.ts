@@ -38,6 +38,7 @@ import type {
   TimerKind,
   TimerResponse,
 } from "./types";
+import { captureServerException } from "@/lib/posthog-server";
 
 /**
  * Database access for Maple's Log. Every function throws StoreUnavailable when
@@ -1140,7 +1141,11 @@ export async function lifetimeCounts(babyId: number): Promise<Lifetime> {
          AND e.started_at > $2::timestamptz - INTERVAL '96 hours' AND e.started_at < $2::timestamptz
        GROUP BY e.created_by`,
       [babyId, before.toISOString()]
-    ).catch(() => null),
+    ).catch((e) => {
+      // Best effort (the card falls back to what's loaded), but never silent.
+      void captureServerException(e, { where: "lifetimeCounts.week" });
+      return null;
+    }),
   ]);
   const r = rows[0];
   const at = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -1321,5 +1326,7 @@ export async function rev(babyId: number): Promise<string> {
     [babyId]
   );
   const r = rows[0] ?? {};
-  return `${r.e}|${r.b}|${r.m}`;
+  // The hour too: a full state at least hourly, so the server's older-week diaper count (lifetime.week) never goes
+  // stale while nobody logs anything.
+  return `${r.e}|${r.b}|${r.m}|${Math.floor(Date.now() / 3600_000)}`;
 }

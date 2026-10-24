@@ -5,7 +5,6 @@ import { addMember, removeMember, updateMember } from "@/lib/maple/store";
 export const dynamic = "force-dynamic";
 
 const MAX_MEMBERS = 12;
-const INVITE_EMOJIS = ["🦊", "🍄", "🦉", "🐿️", "🦔", "🌻", "🐝", "🐞", "🌼", "🪺"];
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 export const GET = withMember("GET /api/maple/members", async () => json({ members: await listMembers() }));
@@ -22,8 +21,8 @@ export const POST = withMember("POST /api/maple/members", async (request, me) =>
   const current = await listMembers();
   if (current.some((m) => m.email === email)) return json({ members: current });
   if (current.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
-  const emoji = INVITE_EMOJIS.find((e) => !current.some((m) => m.emoji === e)) ?? "🍁";
-  await addMember(email, me.email, emoji, body.role === "viewer" ? "viewer" : "member");
+  // Their initial until they pick an emoji (Family tab), like every other way in.
+  await addMember(email, me.email, null, body.role === "viewer" ? "viewer" : "member");
   return json({ members: await listMembers() });
 });
 

@@ -57,7 +57,9 @@ export default function WhileYouSlept() {
   );
   if (!fresh.length) return null;
 
-  const feeds = fresh.filter((e) => e.kind === "feed").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+  // Finished feeds; one still going is said as "Nursing now", not counted as done.
+  const feeds = fresh.filter((e) => e.kind === "feed" && !e.active).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+  const nursing = fresh.find((e) => e.kind === "feed" && e.active);
   const diapers = fresh.filter((e) => e.kind === "diaper").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const wet = diapers.filter((e) => e.kind === "diaper" && e.data.pee).length;
   const dirty = diapers.filter((e) => e.kind === "diaper" && e.data.poop);
@@ -76,6 +78,7 @@ export default function WhileYouSlept() {
     const last = formatTime(feeds[0].started_at, tz);
     lines.push(`${feeds.length === 1 ? `1 feed, at ${last}` : `${feeds.length} feeds, the last at ${last}`}.${next}`);
   }
+  if (nursing) lines.push(`Nursing now, since ${formatTime(nursing.started_at, tz)}.`);
   if (diapers.length) {
     // Count diapers once (a wet + dirty one is one diaper), and say the color of the latest poop.
     const latest = dirty[0];
