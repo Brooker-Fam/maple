@@ -47,10 +47,17 @@ export const KIND_TITLE: Record<TimerKind, string> = { feed: "Nursing", sleep: "
 export type FixTarget = "current" | "finish" | { ref: StretchRef } | { breakAfter: StretchRef };
 /** What the sheet starts with expanded: "She already finished" (Still nursing?) or "Already back on?" (She went back on…). */
 export type FixExpand = "finished" | "backOn";
-export type FixPreset = { fix: { target: FixTarget; expand?: FixExpand } };
+/**
+ * `doneAt`: the Done tap that ended this feed at its pause (the Done toast's
+ * "She went back on…"): she went back on and finished then, so the side
+ * Fix times adds ends at `doneAt` and the feed stays finished.
+ */
+export type FixPreset = { fix: { target: FixTarget; expand?: FixExpand; doneAt?: string } };
 
 /** open({ kind, entry, preset: fixPreset(target) }) opens Fix times instead of the entry's form. */
-export const fixPreset = (target: FixTarget, expand?: FixExpand): FixPreset => ({ fix: { target, ...(expand ? { expand } : {}) } });
+export const fixPreset = (target: FixTarget, expand?: FixExpand, doneAt?: string): FixPreset => ({
+  fix: { target, ...(expand ? { expand } : {}), ...(doneAt ? { doneAt } : {}) },
+});
 
 type SidePart = Extract<Part, { kind: "side" }>;
 

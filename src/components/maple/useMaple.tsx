@@ -181,6 +181,13 @@ export type MapleContextValue = {
   memberName: (id: string | null | undefined) => string;
   /** A name worth printing for a member id, or null for the viewer, unknown ids and an admin login acting as nobody. */
   memberLabel: (id: string | null | undefined) => string | null;
+  /**
+   * Who discarded entry `id` (memberLabel of the last edit, so null for the
+   * viewer, the admin login or an unknown), or undefined if it isn't among
+   * the recently discarded (still there, or the lookup failed). For "Brittany
+   * discarded this feed" when a poll is what noticed it was gone.
+   */
+  whoDiscarded: (id: number) => Promise<string | null | undefined>;
   member: (id: string | null | undefined) => Member | null;
   /** True for read-only viewers (hide logging controls). */
   readOnly: boolean;
@@ -1070,6 +1077,19 @@ export function MapleProvider({ children }: { children: ReactNode }) {
 
   const readOnly = state?.me.role === "viewer";
 
+  const whoDiscarded = useCallback(
+    async (id: number) => {
+      try {
+        const r = await fetchJson<{ entries: Entry[] }>("/api/maple/entries?deleted=1");
+        const e = r.entries?.find((x) => x.id === id);
+        return e ? memberLabel(e.updated_by) : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    [memberLabel]
+  );
+
   const value = useMemo<MapleContextValue>(
     () => ({
       status,
@@ -1100,10 +1120,11 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       holdTimerToasts,
       memberName,
       memberLabel,
+      whoDiscarded,
       member,
       readOnly,
     }),
-    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox.length, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, member, readOnly]
+    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox.length, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly]
   );
 
   return <MapleContext.Provider value={value}>{children}</MapleContext.Provider>;
