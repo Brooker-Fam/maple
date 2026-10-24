@@ -12,8 +12,11 @@ import {
   addCareQuestion,
   careSession,
   carePersonName,
+  createCarePerson,
   deleteCarePlan,
   deleteCareEntry,
+  eligible,
+  getCarePerson,
   listCareEntries,
   logCareDose,
   logCareTemp,
@@ -73,7 +76,9 @@ async function careFor(ctx: Ctx): Promise<CareSession> {
 /** §10.2's access errors, in this order: a viewer, no area yet, the admin login acting as nobody, not shared. */
 function needAccess(ctx: Ctx, s: CareSession, write: boolean) {
   if (ctx.who.role === "viewer") throw new CareAccessError(VIEWER_MESSAGE);
-  if (!s.person) throw new CareAccessError("There's no area for mom in Maple's Log yet. Someone can set it up in the app under Family.");
+  if (!s.person) {
+    throw new CareAccessError("There's no area for mom in Maple's Log yet. set_up_mom creates it (she can for herself, or an owner can for her), or someone can in the app under Family.");
+  }
   if (!s.access.read || (write && !s.access.write)) {
     if (ctx.who.id === ADMIN_ID) {
       throw new CareAccessError(
@@ -375,6 +380,61 @@ export async function momStatusLine(ctx: Ctx): Promise<string | null> {
 }
 
 export function registerCareTools(server: McpServer) {
+  // Before her page exists there's no care session to check, so this one does the app's own rule (POST
+  // /api/maple/care/person): she can set it up for herself, or an owner can for her; one per log.
+  const setUpTitle = "Set up her mom's medicines page";
+  server.registerTool(
+    "set_up_mom",
+    {
+      title: setUpTitle,
+      description:
+        'Use this when the mom tools say there\'s no area for her yet and the user wants one, e.g. "set up Brittany\'s medicines". It creates her page in Maple\'s Log for one family member: she can set it up for herself, or an owner can for her. There\'s one per log, and it starts shared with the other owners (she can change that in the app). Then add each medicine with set_mom_medicine.',
+      inputSchema: {
+        person: z.string().min(1).max(120).nullish().describe("Who it's for: a family member's name or email. Leave it out to set it up for yourself."),
+      },
+      annotations: { title: setUpTitle, ...WRITE_ANN },
+      _meta: { "openai/toolInvocation/invoking": "Setting up her page…", "openai/toolInvocation/invoked": "Her page is set up" },
+    },
+    (async (a: { person?: string | null }, extra: Extra): Promise<CallToolResult> => {
+      try {
+        const ctx = await context(extra);
+        if (ctx.who.role === "viewer") throw new CareAccessError(VIEWER_MESSAGE);
+        if (ctx.who.id === ADMIN_ID) {
+          throw new CareAccessError(`The admin login can't set this up while it logs as nobody. An owner can turn on "Calendar connector logs as me" in Family, or set it up in the app under Family.`);
+        }
+        const caller = ctx.members.find((m) => m.email === ctx.who.id);
+        if (!eligible(caller)) throw new CareForbidden("Only she, or an owner, can set this up.");
+        const pool = ctx.members.filter(eligible);
+        let target = caller;
+        const asked = a.person?.trim().toLowerCase();
+        if (asked) {
+          const name = (m: (typeof pool)[number]) => memberName(m.email, ctx.members).toLowerCase();
+          const hits = pool.filter((m) => m.email.toLowerCase() === asked || name(m) === asked || name(m).split(" ")[0] === asked);
+          const names = pool.map((m) => memberName(m.email, ctx.members)).join(", ");
+          if (!hits.length) throw new ToolError(`I couldn't find "${a.person}" among the family members who can have one: ${names}.`);
+          if (hits.length > 1) throw new ToolError(`"${a.person}" matches more than one person: ${hits.map((m) => memberName(m.email, ctx.members)).join(", ")}. Which one?`);
+          target = hits[0];
+        }
+        if (caller.role !== "owner" && caller.email !== target.email) throw new CareForbidden("Only she, or an owner, can set this up.");
+        const who = memberName(target.email, ctx.members);
+        const existing = await getCarePerson();
+        if (existing) {
+          if (existing.member === target.email) return ok(`${who}'s medicines page is already set up. Add medicines with set_mom_medicine.`, { created: false, for: who });
+          throw new ToolError(`Maple's Log already has a page for ${carePersonName(existing, ctx.members)}, and there's one per log.`);
+        }
+        const person = await createCarePerson(target.email, caller.email, ctx.members);
+        const shared = person.shared_with.map((e) => (e === ctx.who.id ? "you" : memberName(e, ctx.members)));
+        const sharing = shared.length ? `It's shared with ${shared.join(" and ")} to start` : "Only she can see it to start";
+        return ok(
+          `Set up ${who}'s medicines page. ${sharing}; she can change that in Maple's Log. Next, add each medicine with set_mom_medicine, typed from her label or discharge papers.`,
+          { created: true, for: who, shared_with: shared }
+        );
+      } catch (err) {
+        return careToolError("set_up_mom", err);
+      }
+    }) as unknown as ToolCallback<{ person: z.ZodOptional<z.ZodNullable<z.ZodString>> }>
+  );
+
   addCareTool(
     server,
     "mom_status",
@@ -444,7 +504,7 @@ export function registerCareTools(server: McpServer) {
     {
       title: "Log a dose of her mom's medicine",
       description:
-        "Log a dose of her mom's own medicine (not Maple's: Maple's medicines use log_medicine). Match `medicine` to a name or also-called name on her list; on no match the error lists her medicines, so ask which one. If her plan counts its limit in tablets, caplets, capsules or mL and doesn't fix how many each time, pass `units` only as the user said it, and if they didn't say, ask them. Pass `dose` only if the user said something different from her plan. Never fill in a dose. If the result says created:false (too soon by her schedule, at her limit, or someone already logged it), tell the user why and call again with allow_duplicate: true only if they confirm she took it. Repeat the result's alerts word for word with their labels.",
+        "Log a dose of her mom's own medicine (not Maple's: Maple's medicines use log_medicine). Match `medicine` to a name or also-called name on her list; on no match the error lists her medicines, so ask which one. If her plan counts its limit in tablets, caplets, capsules or mL and doesn't fix how many each time, pass `units` only as the user said it, and if they didn't say, ask them. Pass `dose` only if the user said something different from her plan. Never fill in a dose. If the result says created:false (too soon by her schedule, at her limit, or someone already logged it), tell the user why and call again with allow_duplicate: true only if they confirm she took it (still passing units, if they gave a count). Repeat the result's alerts word for word with their labels.",
       inputSchema: {
         medicine: z.string().min(1).max(80).describe("The medicine as the user said it: a name or also-called name on her list, or its p id."),
         at: inputs.at("When she took it"),

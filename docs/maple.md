@@ -142,7 +142,7 @@ Sharing starts with every other owner; she changes it in Who sees this. Each rea
 
 Examples here use a made-up medicine, Examplex: the repo is public, so docs never name anything she takes.
 
-**MCP tools** (`care-mcp.ts`, on both the Maple connector and the calendar connector): `mom_status`, `log_mom_medicine`, `set_mom_medicine`, `log_mom_temperature`, `add_mom_question` and `fix_mom_entry`. There are no mood tools, and assistants never see Only me items or the therapist's number, even on her own token.
+**MCP tools** (`care-mcp.ts`, on both the Maple connector and the calendar connector): `set_up_mom` (creates her page, by the app's rule: she can for herself, or an owner for her; the admin login only while it logs as a member), `mom_status`, `log_mom_medicine`, `set_mom_medicine`, `log_mom_temperature`, `add_mom_question` and `fix_mom_entry`. There are no mood tools, and assistants never see Only me items or the therapist's number, even on her own token.
 - `MAPLE_INSTRUCTIONS` ends with a paragraph for her medicines and the crisis numbers: call 911 if anyone is in immediate danger, otherwise call or text 988; the maternal hotline isn't a crisis line.
 - `log_mom_medicine` (strict, like Siri) answers `created: false` with `reason` (`early`, `recent`, `at_limit`, `units`) and saves only when called again with `allow_duplicate: true`. `set_mom_medicine` saves only what the user read from the label and leaves the rest empty; a mood or zuranolone medicine she adds is saved as Only me and the result says so.
 - Access errors (no area yet, not shared, the admin login acting as nobody, a viewer) end with `HELP_NOW_LINE` and carry `help_now: MOM_HELP.now`.
