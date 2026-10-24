@@ -10,6 +10,7 @@ import {
   MOM_TIER_LABEL,
   assessMomTemp,
   momWhatToSay,
+  momWhatToSayOther,
   type AlertTier,
   type Assessment,
   type MomSign,
@@ -203,7 +204,7 @@ function SignSheet({ sign, onClose }: { sign: MomSign | null; onClose: () => voi
         {bornAt && (
           <div className={cx(tone.inset, "px-4 py-3")}>
             <p className={tone.label}>What to say</p>
-            <p className={cx(tone.body, "mt-1 text-[15px] leading-relaxed")}>{momWhatToSay(birthDateText(bornAt, tz))}</p>
+            <p className={cx(tone.body, "mt-1 text-[15px] leading-relaxed")}>{(self ? momWhatToSay : momWhatToSayOther)(birthDateText(bornAt, tz))}</p>
           </div>
         )}
         <div className="space-y-2.5 pb-2">

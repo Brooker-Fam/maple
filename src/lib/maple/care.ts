@@ -490,50 +490,59 @@ const suffixes = (plan: CarePlan, ctx: PlanTextCtx) =>
 
 /** The compact line (Today, the Lantern, picker rows, the More subline, Siri, maple_status): "Ibuprofen OK after 9:10 PM". */
 export function planLine(plan: CarePlan, status: PlanStatus, ctx: PlanTextCtx): string {
+  const s = planLineStatus(plan, status, ctx);
+  return `${plan.name}${status.state === "wait" ? " " : " · "}${s}`;
+}
+
+/**
+ * The compact line without the name ("OK after 9:10 PM"), for Today's second
+ * line. The time the reader is after comes first, so a narrow phone clips
+ * the count, never the clock ("OK after 7:57 PM · 6 of 6 caplets in 24 h").
+ */
+export function planLineStatus(plan: CarePlan, status: PlanStatus, ctx: PlanTextCtx): string {
   const at = (iso: string | null | undefined) => (iso ? careTime(iso, ctx.now, ctx.tz) : "");
-  const n = plan.name;
   const takenToday = status.today.filter(isTaken);
   const lastToday = takenToday[takenToday.length - 1];
   let line: string;
   switch (status.state) {
     case "wait":
-      line = `${n} OK after ${at(status.nextOkAt)}`;
+      line = `OK after ${at(status.nextOkAt)}`;
       break;
     case "ok":
-      line = `${n} · OK since ${at(status.gapOkAt)} · last ${at(status.last?.at)}`;
+      line = `OK since ${at(status.gapOkAt)} · last ${at(status.last?.at)}`;
       break;
     case "at_limit":
-      line = `${n} · ${ofMax(status)} in 24 h · OK after ${at(status.nextOkAt)}`;
+      line = `OK after ${at(status.nextOkAt)} · ${ofMax(status)} in 24 h`;
       break;
     case "unknown":
-      line = `${n} · last ${at(status.last?.at)} (${agoShort(ctx.now.getTime() - ms(status.last!.at))})`;
+      line = `last ${at(status.last?.at)} (${agoShort(ctx.now.getTime() - ms(status.last!.at))})`;
       break;
     case "none":
-      line = `${n} · none logged yet`;
+      line = "none logged yet";
       break;
     case "day_open": {
       const per = plan.schedule.type === "daily" ? plan.schedule.per_day : 1;
-      line = lastToday ? `${n} · taken ${at(lastToday.at)} · ${status.today.length} of ${per} today` : `${n} · not logged today`;
+      line = lastToday ? `taken ${at(lastToday.at)} · ${status.today.length} of ${per} today` : "not logged today";
       break;
     }
     case "day_done": {
       const lastAny = status.today[status.today.length - 1];
-      line = lastToday ? `${n} · taken ${at(lastToday.at)}` : lastAny ? `${n} · skipped ${at(lastAny.at)}` : `${n} · logged today`;
+      line = lastToday ? `taken ${at(lastToday.at)}` : lastAny ? `skipped ${at(lastAny.at)}` : "logged today";
       break;
     }
     case "slot_open": {
       const open = (status.slots ?? []).filter((x) => x.filled_by === null && ms(x.at) <= ctx.now.getTime());
-      line = `${n} · ${at(open[open.length - 1]?.at)} not logged`;
+      line = `${at(open[open.length - 1]?.at)} not logged`;
       break;
     }
     case "slot_next":
-      line = lastToday ? `${n} · taken ${at(lastToday.at)} · next ${at(status.nextSlotAt)}` : `${n} · next ${at(status.nextSlotAt)}`;
+      line = lastToday ? `taken ${at(lastToday.at)} · next ${at(status.nextSlotAt)}` : `next ${at(status.nextSlotAt)}`;
       break;
     case "finished":
-      line = `${n} · course finished ${shortDate(plan.course_end!)}`;
+      line = `course finished ${shortDate(plan.course_end!)}`;
       break;
     case "stopped":
-      line = `${n} · stopped ${shortDate(dayKey(new Date(plan.stopped_at!), ctx.tz))}`;
+      line = `stopped ${shortDate(dayKey(new Date(plan.stopped_at!), ctx.tz))}`;
       break;
   }
   return line + suffixes(plan, ctx);
@@ -593,7 +602,8 @@ export function planMeta(plan: CarePlan, status: PlanStatus, ctx: PlanTextCtx): 
   const out: string[] = [];
   const last = status.last;
   if (last) out.push(`Last: ${careTime(last.at, ctx.now, ctx.tz)} · ${loggedBy(last.created_by, ctx)}${viaText(last.source)}`);
-  if (plan.max_24h != null) out.push(`${ofMax(status)} in the last 24 hours`);
+  // At the limit the sentence already says it ("6 of 6 caplets in the last 24 hours. OK after …").
+  if (plan.max_24h != null && status.state !== "at_limit") out.push(`${ofMax(status)} in the last 24 hours`);
   if (status.courseDays != null && status.courseDay != null && status.state !== "finished" && status.state !== "stopped") {
     out.push(`Day ${Math.min(status.courseDay, status.courseDays)} of ${status.courseDays}`);
   }
@@ -785,6 +795,8 @@ export type PlanView = {
   plan: CarePlan;
   status: PlanStatus;
   line: string;
+  /** `line` without the name, for Today's two-line row. */
+  lineStatus: string;
   sentence: string;
   meta: string[];
   summary: string;
@@ -799,6 +811,7 @@ export function planView(plan: CarePlan, doses: DoseEntry[], ctx: PlanTextCtx & 
     plan,
     status,
     line: planLine(plan, status, ctx),
+    lineStatus: planLineStatus(plan, status, ctx),
     sentence: planSentence(plan, status, ctx),
     meta: planMeta(plan, status, ctx),
     summary: scheduleSummary(plan),
@@ -909,14 +922,24 @@ export type ScreenCard = {
 type Band = { tier?: AlertTier; title: string; body: string };
 const band = (score: number, r: { low: Band; some: Band; positive: Band }): Band => (score >= 10 ? r.positive : score >= 5 ? r.some : r.low);
 
-/** §6.3 render order: CRISIS (item9_ever), the PHQ-9 card, the GAD-7 card, DIFFICULTY_HARD. */
+/**
+ * §6.3 render order: CRISIS (item9_ever), the PHQ-9 card, the GAD-7 card,
+ * DIFFICULTY_HARD. A scale she stopped partway through ("Stop here") gets no
+ * score band: a partial total would reassure on questions she never answered.
+ */
 export function screenResults(d: MoodDataByKind["screen"]): ScreenCard[] {
   const cards: ScreenCard[] = [];
   if (d.item9_ever) cards.push({ key: "crisis", tier: CRISIS.tier, label: CRISIS.label, title: CRISIS.title, body: CRISIS.body });
+  const phqDone = d.phq9.length === 9;
+  const phqHeading = phqDone ? { heading: `PHQ-9: ${d.phq9_score} of 27` } : {};
   // After any self-harm answer the results never reassure (S6): no "few signs" or "some signs".
-  const phq: Band = d.item9_ever && d.phq9_score < 10 ? PHQ9_ITEM9 : band(d.phq9_score, PHQ9_RESULT);
-  cards.push({ key: "phq9", heading: `PHQ-9: ${d.phq9_score} of 27`, tier: phq.tier ?? null, title: phq.title, body: phq.body });
-  if (d.gad7_score !== null) {
+  if (d.item9_ever && (d.phq9_score < 10 || !phqDone)) {
+    cards.push({ key: "phq9", ...phqHeading, tier: PHQ9_ITEM9.tier, title: PHQ9_ITEM9.title, body: PHQ9_ITEM9.body });
+  } else if (phqDone) {
+    const phq: Band = band(d.phq9_score, PHQ9_RESULT);
+    cards.push({ key: "phq9", ...phqHeading, tier: phq.tier ?? null, title: phq.title, body: phq.body });
+  }
+  if (d.gad7_score !== null && d.gad7.length === 7) {
     const gad = band(d.gad7_score, GAD7_RESULT);
     cards.push({ key: "gad7", heading: `GAD-7: ${d.gad7_score} of 21`, tier: gad.tier ?? null, title: gad.title, body: gad.body });
   }
@@ -939,21 +962,40 @@ export function suggestFullCheckin(ctx: {
   if (ctx.lastScreenAt && ctx.now.getTime() - ms(ctx.lastScreenAt) < 14 * DAY) return null;
   const acks = s.acks ?? {};
   const day = daysSinceBirth(ctx.bornAt, ctx.now, ctx.tz);
-  if (day !== null && day >= 14 && day <= 20 && !acks["suggest:day14"]) return "day14";
+  if (day !== null && day >= 14 && day <= 20 && !acks[suggestAckKey("day14", s)]) return "day14";
   const visit = s.next_visit;
-  if (visit && /^\d{4}-\d{2}-\d{2}$/.test(visit) && !acks[`suggest:visit:${visit}`]) {
+  if (visit && /^\d{4}-\d{2}-\d{2}$/.test(visit) && !acks[suggestAckKey("visit", s)]) {
     const until = daysBetween(dayKey(ctx.now, ctx.tz), visit);
     if (until >= 0 && until <= 7) return "visit";
   }
   return null;
 }
 
-/** Today's (local) check-ins include harm_self, or today's screen has item9_ever: the crisis strip stays up. */
+/**
+ * The ack "Not now" stores to dismiss a suggestion for good: "suggest:day14",
+ * or "suggest:visit:2026-12-01" for that one visit (a later visit asks again).
+ */
+export function suggestAckKey(kind: "day14" | "visit", settings: CareSettings): string {
+  return kind === "day14" ? "suggest:day14" : `suggest:visit:${settings.next_visit ?? ""}`;
+}
+
+/** Her newest check-in on today's local date ("Today: Up and down · Change"), or null. */
+export function todayCheckin(mood: MoodEntry[], now: Date, tz: string): Extract<MoodEntry, { kind: "checkin" }> | null {
+  const today = dayKey(now, tz);
+  let best: Extract<MoodEntry, { kind: "checkin" }> | null = null;
+  for (const m of mood) {
+    if (m.kind !== "checkin" || dayKey(new Date(m.at), tz) !== today) continue;
+    if (!best || ms(m.at) > ms(best.at) || (m.at === best.at && m.id > best.id)) best = m;
+  }
+  return best;
+}
+
+/** A check-in of today's (local) has had harm_self ticked, or today's screen has item9_ever: the crisis strip stays up. */
 export function crisisToday(mood: MoodEntry[], now: Date, tz: string): boolean {
   const today = dayKey(now, tz);
   return mood.some((m) => {
     if (dayKey(new Date(m.at), tz) !== today) return false;
-    if (m.kind === "checkin") return (m.data.tags ?? []).includes("harm_self");
+    if (m.kind === "checkin") return m.data.harm_ever === true || (m.data.tags ?? []).includes("harm_self");
     return m.data.item9_ever;
   });
 }

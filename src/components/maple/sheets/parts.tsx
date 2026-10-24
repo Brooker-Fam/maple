@@ -332,12 +332,15 @@ export function AssessmentCard({
   className,
   audience = "baby",
   calls = true,
+  more,
 }: {
   a: Assessment;
   className?: string;
   audience?: "baby" | "mom";
   /** False where the sheet around it already has the call buttons. */
   calls?: boolean;
+  /** Lines the card's own words name, after the OB's (the maternal hotline on her check-in cards). */
+  more?: { label: string; href: string; icon?: IconName }[];
 }) {
   const { state } = useMaple();
   const mom = audience === "mom";
@@ -396,6 +399,12 @@ export function AssessmentCard({
               After-hours line
             </a>
           )}
+          {more?.map((m) => (
+            <a key={m.href} href={m.href} className={link}>
+              <Icon name={m.icon ?? "phone"} size={16} />
+              {m.label}
+            </a>
+          ))}
         </div>
       )}
     </div>

@@ -10,8 +10,11 @@ import {
   oneTapDecision,
   planActive,
   planView,
+  scoreScreen,
   sortPlans,
+  suggestAckKey,
   suggestFullCheckin,
+  todayCheckin,
   unitsKnown,
   type PlanView,
 } from "@/lib/maple/care";
@@ -75,10 +78,21 @@ export type CareActions = {
   restoreEntry(id: number): Promise<void>;
   logTemp(tempC: number, at: string): Promise<DoseResult>;
   addQuestion(text: string, priv?: boolean): Promise<void>;
+  /** One tap saves (toast CHECKIN_SAVED). Resolves with the entry; its id is temporary (negative) while it waits on this phone, and every action below takes either. */
   checkin(level: 1 | 2 | 3 | 4 | 5): Promise<MoodEntry>;
-  updateCheckin(id: number, p: { tags?: MoodTag[]; note?: string }): Promise<void>;
+  /** The chips, the note, or a changed answer ("Change"): shown at once, saved as she goes with no toast; rejects with the server's words. */
+  updateCheckin(id: number, p: { level?: 1 | 2 | 3 | 4 | 5; tags?: MoodTag[]; note?: string }): Promise<void>;
+  /** A hard delete (after "Delete this check-in for good?"): no Undo. */
   deleteMood(id: number): Promise<void>;
-  saveScreen(d: MoodDataByKind["screen"]): Promise<MoodEntry>;
+  /**
+   * Save the fuller check-in's answers (the scores are worked out again on
+   * the server). With `id`, update that one instead: save at item 9 so the
+   * crisis strip holds even if the app closes, then again at the end.
+   * "Stop here" saves what's answered, which comes back complete: false.
+   */
+  saveScreen(d: Pick<MoodDataByKind["screen"], "phq9" | "gad7" | "difficulty" | "item9_ever">, opts?: { id?: number }): Promise<MoodEntry>;
+  /** "Not now" on a fuller check-in suggestion: gone for good (the visit one comes back only for a different visit date). */
+  dismissSuggestion(kind: "day14" | "visit"): Promise<void>;
   moveFromMaple(entryId: number, planId?: number): Promise<void>;
 };
 
@@ -91,12 +105,22 @@ export type UseCare = {
   /** Active, visible plans in sortPlans order. */
   plans: PlanView[];
   finished: PlanView[];
-  /** The first Show on Today plan (non-private for others and the Lantern). */
+  /** The first Show on Today plan, never an Only me one (nor on the Lantern). */
   todayLine: { view: PlanView; more: number } | null;
   lanternLine: string | null;
   doses(planId: number, days: number): CareEntry[];
-  /** Hers only. */
-  mood?: { checkins: MoodEntry[]; latestScreen: MoodEntry | null; crisisToday: boolean; suggestion: "day14" | "visit" | null };
+  /**
+   * Hers only. `checkins` newest first (the last 14 days); `todayCheckin` her
+   * newest one today ("Today: Up and down · Change"); `crisisToday` keeps
+   * CrisisStrip up until local midnight.
+   */
+  mood?: {
+    checkins: Extract<MoodEntry, { kind: "checkin" }>[];
+    todayCheckin: Extract<MoodEntry, { kind: "checkin" }> | null;
+    latestScreen: Extract<MoodEntry, { kind: "screen" }> | null;
+    crisisToday: boolean;
+    suggestion: "day14" | "visit" | null;
+  };
   act: CareActions;
 };
 
@@ -110,6 +134,15 @@ function newClientId(): string {
     return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
   }
 }
+
+// Her check-ins save one after another, so a chip tapped while "Low" is still
+// on its way goes out after it (to the saved id), and two quick taps reach the
+// server in the order she made them. Shared by every useCare() on the page
+// (the check-in card, the fuller check-in and its results each call it), like
+// useMaple's temporary ids.
+const moodChain: { current: Promise<unknown> } = { current: Promise.resolve() };
+/** Temporary id → saved id, for a caller still holding the temporary one. */
+const moodSaved = new Map<number, number>();
 
 /** "Call Poison Help now: Ibuprofen: over your daily limit" (a note, in one toast line). */
 const noteLine = (n: Assessment) => `${n.label ?? MOM_TIER_LABEL[n.tier]}: ${n.title}`;
@@ -147,14 +180,15 @@ export function useCare(): UseCare | null {
     const finished = views
       .filter((v) => !planActive(v.plan, now, tz))
       .sort((a, b) => (b.plan.stopped_at ?? b.plan.course_end ?? "").localeCompare(a.plan.stopped_at ?? a.plan.course_end ?? ""));
-    // Her own Today may show an Only me plan she put there; nobody else's, and never the Lantern.
-    const onToday = plans.filter((v) => v.plan.show_on_today && (self || !v.plan.private));
-    const lantern = plans.find((v) => v.plan.show_on_today && !v.plan.private);
-    const moodRows = care.mood;
-    const latestScreen = moodRows?.find((m) => m.kind === "screen") ?? null;
+    // Never an Only me plan, even on her own phone (§9.2 rule 8): Today and the Lantern are screens others glance at.
+    const onToday = plans.filter((v) => v.plan.show_on_today && !v.plan.private);
+    const lantern = onToday[0];
+    const moodRows = care.mood ? [...care.mood].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id) : null;
+    const latestScreen = (moodRows?.find((m) => m.kind === "screen") ?? null) as Extract<MoodEntry, { kind: "screen" }> | null;
     const mood = moodRows
       ? {
-          checkins: moodRows.filter((m) => m.kind === "checkin").sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+          checkins: moodRows.filter((m): m is Extract<MoodEntry, { kind: "checkin" }> => m.kind === "checkin"),
+          todayCheckin: todayCheckin(moodRows, now, tz),
           latestScreen,
           crisisToday: crisisToday(moodRows, now, tz),
           suggestion: suggestFullCheckin({ now, tz, bornAt: state.baby.born_at, settings: care.settings, lastScreenAt: latestScreen?.at ?? null }),
@@ -165,7 +199,8 @@ export function useCare(): UseCare | null {
       plans,
       finished,
       todayLine: onToday.length ? { view: onToday[0], more: onToday.length - 1 } : null,
-      lanternLine: lantern?.line ?? null,
+      // On anyone else's Lantern, whose medicine it is: the rest of that screen is all Maple.
+      lanternLine: lantern ? (self ? lantern.line : `${care.person.name}: ${lantern.line}`) : null,
       mood,
     };
   }, [care, state, now, tz, viewerId]);
@@ -560,54 +595,177 @@ export function useCare(): UseCare | null {
 
   const patchMood = useCallback((fn: (m: MoodEntry[]) => MoodEntry[]) => store.patch((c) => (c.mood ? { ...c, mood: fn(c.mood) } : c)), [store]);
 
+  const serialMood = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = moodChain.current.then(fn, fn);
+    moodChain.current = run.catch(() => {});
+    return run;
+  }, []);
+  const moodTarget = useCallback((id: number) => (id > 0 ? id : moodSaved.get(id) ?? id), []);
+  /** The entry as this phone has it (the render may lag a write by a tick), under its saved id. */
+  const moodNow = useCallback((id: number, target: number) => {
+    const m = careRef.current?.mood?.find((x) => x.id === target || x.id === id);
+    return m ? ({ ...m, id: target } as MoodEntry) : null;
+  }, []);
+
+  /** A new check-in or fuller check-in: on screen at once, then saved, or kept on this phone while offline. */
+  const createMood = useCallback(
+    async (kind: MoodEntry["kind"], data: Record<string, unknown>): Promise<{ entry: MoodEntry; queued: boolean }> => {
+      const at = clock().toISOString();
+      const input = { kind, at, data, client_id: newClientId() };
+      const shown = kind === "screen" ? scoreScreen(data as Parameters<typeof scoreScreen>[0]) : data;
+      const temp = { id: store.tempId(), kind, at, data: shown, note: null, created_at: at, updated_at: at } as MoodEntry;
+      patchMood((m) => [temp, ...m]);
+      return serialMood(async () => {
+        try {
+          const { entry } = await call<{ entry: MoodEntry }>("/api/maple/care/mood", { method: "POST", body: JSON.stringify(input) });
+          moodSaved.set(temp.id, entry.id);
+          // Keep what she changed on this phone meanwhile (a chip, the note): that change goes out next.
+          patchMood((m) => {
+            const local = m.find((x) => x.id === temp.id);
+            const saved = local ? ({ ...entry, data: local.data, note: local.note } as MoodEntry) : entry;
+            return [saved, ...m.filter((x) => x.id !== temp.id && x.id !== entry.id)];
+          });
+          return { entry, queued: false };
+        } catch (e) {
+          if (isTransient(e)) {
+            const kept = moodNow(temp.id, temp.id) ?? temp;
+            patchMood((m) => m.map((x) => (x.id === temp.id ? ({ ...x, pending: true } as MoodEntry) : x)));
+            store.queueMood({ ...input, data: kept.data, ...(kept.note ? { note: kept.note } : {}) }, kept);
+            return { entry: { ...kept, pending: true }, queued: true };
+          }
+          patchMood((m) => m.filter((x) => x.id !== temp.id));
+          throw fail(e, "Couldn't save that");
+        }
+      });
+    },
+    [call, clock, fail, moodNow, patchMood, serialMood, store]
+  );
+
+  /**
+   * A change to one of hers: shown at once (the crisis strip can't wait for
+   * the server), then sent; folded into one still waiting on this phone, or
+   * kept for later while offline. `data` merges into what's saved. Resolves
+   * with the entry as it now shows (pending while it waits on this phone).
+   */
+  const changeMood = useCallback(
+    (id: number, patch: { data?: Record<string, unknown>; note?: string | null }, apply: (m: MoodEntry) => MoodEntry): Promise<MoodEntry> => {
+      patchMood((m) => m.map((x) => (x.id === id || x.id === moodTarget(id) ? apply(x) : x)));
+      return serialMood(async () => {
+        const target = moodTarget(id);
+        if (target !== id) patchMood((m) => m.map((x) => (x.id === target ? apply(x) : x)));
+        const base = moodNow(id, target);
+        if (target < 0) {
+          if (!base) throw new Error("That check-in isn't here anymore.");
+          store.queueMood(patch, apply(base));
+          return { ...apply(base), pending: true } as MoodEntry;
+        }
+        try {
+          const { entry } = await call<{ entry: MoodEntry }>(`/api/maple/care/mood?id=${target}`, { method: "PATCH", body: JSON.stringify(patch) });
+          patchMood((m) => m.map((x) => (x.id === target ? entry : x)));
+          return entry;
+        } catch (e) {
+          if (isTransient(e) && base) {
+            store.queueMood(patch, apply(base), target);
+            return { ...apply(base), pending: true } as MoodEntry;
+          }
+          // Deleted on her other phone meanwhile: it's gone here too.
+          if (e instanceof ApiError && e.status === 404) patchMood((m) => m.filter((x) => x.id !== target));
+          throw fail(e, "Couldn't save that");
+        }
+      });
+    },
+    [call, fail, moodNow, moodTarget, patchMood, serialMood, store]
+  );
+
   const checkin = useCallback<CareActions["checkin"]>(
     async (level) => {
       try {
-        const { entry } = await call<{ entry: MoodEntry }>("/api/maple/care/mood", {
-          method: "POST",
-          body: JSON.stringify({ kind: "checkin", at: clock().toISOString(), data: { level }, client_id: newClientId() }),
-        });
-        patchMood((m) => [entry, ...m.filter((x) => x.id !== entry.id)]);
-        toast(CHECKIN_SAVED);
+        const { entry, queued } = await createMood("checkin", { level });
+        toast(queued ? "Saved on this phone · will sync when you're back online" : CHECKIN_SAVED, { tone: queued ? "info" : "ok" });
         return entry;
       } catch (e) {
         toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
-        throw fail(e, "Couldn't save that");
+        throw e;
       }
     },
-    [call, clock, fail, patchMood, toast]
+    [createMood, toast]
   );
 
   const updateCheckin = useCallback<CareActions["updateCheckin"]>(
     async (id, p) => {
-      const { entry } = await call<{ entry: MoodEntry }>(`/api/maple/care/mood?id=${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ ...(p.tags ? { data: { tags: p.tags } } : {}), ...(p.note !== undefined ? { note: p.note } : {}) }),
-      });
-      patchMood((m) => m.map((x) => (x.id === id ? entry : x)));
+      const data: Record<string, unknown> = { ...(p.level != null ? { level: p.level } : {}), ...(p.tags ? { tags: p.tags } : {}) };
+      const note = p.note === undefined ? undefined : p.note.trim() || null;
+      const patch = { ...(Object.keys(data).length ? { data } : {}), ...(note !== undefined ? { note } : {}) };
+      if (!Object.keys(patch).length) return;
+      await changeMood(id, patch, (m) =>
+        m.kind === "checkin"
+          ? ({
+              ...m,
+              // Like the server: once harm_self was ticked, harm_ever holds the day's crisis strip.
+              data: { ...m.data, ...data, ...(m.data.harm_ever || p.tags?.includes("harm_self") ? { harm_ever: true } : {}) },
+              ...(note !== undefined ? { note } : {}),
+            } as MoodEntry)
+          : m
+      );
     },
-    [call, patchMood]
+    [changeMood]
   );
 
   const deleteMood = useCallback<CareActions["deleteMood"]>(
-    async (id) => {
-      await call(`/api/maple/care/mood?id=${id}`, { method: "DELETE" });
-      patchMood((m) => m.filter((x) => x.id !== id));
-      toast("Deleted");
-    },
-    [call, patchMood, toast]
+    (id) =>
+      serialMood(async () => {
+        const target = moodTarget(id);
+        // Still only on this phone: dropping it is the whole delete.
+        if (store.unqueueMood(target)) {
+          toast("Deleted");
+          return;
+        }
+        if (target < 0) {
+          // Its save failed and it's already off the screen.
+          patchMood((m) => m.filter((x) => x.id !== target));
+          toast("Deleted");
+          return;
+        }
+        const before = moodNow(id, target);
+        patchMood((m) => m.filter((x) => x.id !== target && x.id !== id));
+        try {
+          await call(`/api/maple/care/mood?id=${target}`, { method: "DELETE" });
+          toast("Deleted");
+        } catch (e) {
+          // Already gone (her other phone): that's what she asked for.
+          if (e instanceof ApiError && e.status === 404) {
+            toast("Deleted");
+            return;
+          }
+          if (before) patchMood((m) => [before, ...m].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)));
+          const msg = isTransient(e) ? "Couldn't delete that: you're offline" : e instanceof Error ? e.message : "Couldn't delete";
+          toast(msg, { tone: "error" });
+          throw new Error(msg);
+        }
+      }),
+    [call, moodNow, moodTarget, patchMood, serialMood, store, toast]
   );
 
   const saveScreen = useCallback<CareActions["saveScreen"]>(
-    async (d) => {
-      const { entry } = await call<{ entry: MoodEntry }>("/api/maple/care/mood", {
-        method: "POST",
-        body: JSON.stringify({ kind: "screen", at: clock().toISOString(), data: d, client_id: newClientId() }),
-      });
-      patchMood((m) => [entry, ...m.filter((x) => x.kind !== "screen")]);
-      return entry;
+    async (d, opts) => {
+      // The server scores it again; these are only the answers.
+      const data = { phq9: d.phq9, gad7: d.gad7, difficulty: d.difficulty ?? null, item9_ever: d.item9_ever };
+      if (opts?.id == null) return (await createMood("screen", data)).entry;
+      // Once item 9 was above "Not at all" it stays set, even folded into one still waiting on this phone.
+      const prev = moodNow(opts.id, moodTarget(opts.id));
+      if (prev?.kind === "screen" && prev.data.item9_ever) data.item9_ever = true;
+      return changeMood(opts.id, { data }, (m) => (m.kind === "screen" ? ({ ...m, data: scoreScreen({ ...data, item9_ever: data.item9_ever || m.data.item9_ever }) } as MoodEntry) : m));
     },
-    [call, clock, patchMood]
+    [changeMood, createMood, moodNow, moodTarget]
+  );
+
+  const dismissSuggestion = useCallback<CareActions["dismissSuggestion"]>(
+    async (kind) => {
+      const c = careRef.current;
+      if (!c) return;
+      await patchPerson({ settings: { acks: { [suggestAckKey(kind, c.settings)]: clock().toISOString() } } });
+    },
+    [clock, patchPerson]
   );
 
   const moveFromMaple = useCallback<CareActions["moveFromMaple"]>(
@@ -651,9 +809,10 @@ export function useCare(): UseCare | null {
       updateCheckin,
       deleteMood,
       saveScreen,
+      dismissSuggestion,
       moveFromMaple,
     }),
-    [setup, patchPerson, savePlan, deletePlan, stopPlan, reviewPlan, tookIt, logDose, editEntry, deleteEntry, restoreEntry, logTemp, addQuestion, checkin, updateCheckin, deleteMood, saveScreen, moveFromMaple]
+    [setup, patchPerson, savePlan, deletePlan, stopPlan, reviewPlan, tookIt, logDose, editEntry, deleteEntry, restoreEntry, logTemp, addQuestion, checkin, updateCheckin, deleteMood, saveScreen, dismissSuggestion, moveFromMaple]
   );
 
   const doses = useCallback(

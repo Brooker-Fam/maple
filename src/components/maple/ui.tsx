@@ -989,6 +989,7 @@ export function Sheet({
             */}
             <div
               ref={slotRef}
+              data-locked={locked ? "" : undefined}
               className={cx("shrink-0 px-5 not-empty:border-t not-empty:border-mp-line not-empty:pt-3", !footer && "pb-[env(safe-area-inset-bottom)]")}
               aria-live="polite"
             />
@@ -1122,7 +1123,8 @@ export function ToastHost() {
   // Which toasts were already up when this sheet opened (React's "adjust state while rendering" pattern).
   const [opened, setOpened] = useState<{ slot: HTMLElement | null; before: ReadonlySet<number> }>({ slot: null, before: new Set() });
   if (opened.slot !== slot) setOpened({ slot, before: new Set(toasts.map((t) => t.id)) });
-  const inSheet = slot ? toasts.filter((t) => t.tone === "error" || !opened.before.has(t.id)) : [];
+  // A locked sheet (the crisis sheet) shows errors only: a "Saved" landing there is the wrong tone and takes its room.
+  const inSheet = slot ? toasts.filter((t) => t.tone === "error" || (!opened.before.has(t.id) && slot.dataset.locked === undefined)) : [];
   return (
     <>
       <div

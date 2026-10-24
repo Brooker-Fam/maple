@@ -400,7 +400,8 @@ export type CareDataByKind = {
   question: { done?: boolean; answer?: string | null }; // the question text is in note
 };
 export type MoodDataByKind = {
-  checkin: { level: 1 | 2 | 3 | 4 | 5; tags?: MoodTag[] };
+  // harm_ever: "Thoughts of hurting myself" was ticked at some point, so the day's crisis strip holds even if it's unticked.
+  checkin: { level: 1 | 2 | 3 | 4 | 5; tags?: MoodTag[]; harm_ever?: boolean };
   screen: { phq9: (0 | 1 | 2 | 3)[]; gad7: (0 | 1 | 2 | 3)[]; difficulty?: 0 | 1 | 2 | 3 | null;
             phq9_score: number; gad7_score: number | null; item9: boolean; item9_ever: boolean; complete: boolean };
 };
@@ -446,7 +447,7 @@ export type CareState = {
    * private ones (and doses of private plans) only for her.
    */
   entries: CareEntry[];
-  mood?: MoodEntry[];       // her only: check-ins of the last 14 days + her newest screen
+  mood?: MoodEntry[];       // her only: check-ins and screens of the last 14 days + her newest screen
 };
 
 /** A maple_care_people row, as the server reads it (clients get CareState.person). One per log. */

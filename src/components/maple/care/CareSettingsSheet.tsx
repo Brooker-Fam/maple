@@ -7,8 +7,6 @@ import { Segmented, Sheet, cx, tone } from "../ui";
 import { Footnote, GROUP, Problem, SwitchRow, errorText } from "./parts";
 import type { UseCare } from "./useCare";
 
-const CHECKINS_LIVE = false;
-
 /**
  * "Settings for this page" (§11.3, step 1). Her and the people she shares
  * with set the care team, the next OB visit and nursing; only she sets her
@@ -111,10 +109,9 @@ function SettingsForm({ open, onClose, care }: { open: boolean; onClose: () => v
         <Footnote>While it&apos;s not set, the notes about nursing still show.</Footnote>
       </section>
 
-      {/* Check-ins land in the next step: no switch for them until then. */}
-      {CHECKINS_LIVE && care.access.mood && (
+      {care.access.mood && (
         <div className={GROUP}>
-          {<SwitchRow label="Check-in suggestions" note="Suggest a fuller check-in now and then. Only you see these." checked={suggest} onChange={setSuggest} />}
+          <SwitchRow label="Check-in suggestions" note="Suggest a fuller check-in now and then. Only you see these." checked={suggest} onChange={setSuggest} />
         </div>
       )}
     </Sheet>

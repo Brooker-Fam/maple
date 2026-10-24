@@ -406,7 +406,8 @@ export function cleanMoodData<K extends MoodKind>(
     const level = d.level;
     if (level !== 1 && level !== 2 && level !== 3 && level !== 4 && level !== 5) throw new Error("Pick how you're doing");
     const tags = Array.isArray(d.tags) ? [...new Set(d.tags.filter((t): t is MoodTag => typeof t === "string" && t in MOOD_TAGS))] : undefined;
-    return { level, ...(tags ? { tags } : {}) } as MoodDataByKind[K];
+    const harmEver = d.harm_ever === true || !!tags?.includes("harm_self");
+    return { level, ...(tags ? { tags } : {}), ...(harmEver ? { harm_ever: true } : {}) } as MoodDataByKind[K];
   }
   if (kind === "screen") {
     const phq9 = Array.isArray(d.phq9) ? d.phq9.map((v, i) => ANSWER(v, `PHQ-9 question ${i + 1}`)) : [];

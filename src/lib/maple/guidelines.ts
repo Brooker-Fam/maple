@@ -420,6 +420,8 @@ export const MOM_ONE_YEAR_NOTE =
 
 /** AWHONN's script, paraphrased; birthDate from baby.born_at in the family's zone, e.g. "October 20, 2026". */
 export const momWhatToSay = (birthDate: string) => `Tell them: "I gave birth on ${birthDate}," and which signs you have.`;
+/** The same script for whoever is calling for her (a partner, a grandparent). */
+export const momWhatToSayOther = (birthDate: string) => `Tell them: "She gave birth on ${birthDate}," and which signs she has.`;
 
 // ── Crisis (one card for every self-harm path) ───────────────────────────
 // AWHONN lists "Thoughts of hurting yourself or someone else" under Call 911.

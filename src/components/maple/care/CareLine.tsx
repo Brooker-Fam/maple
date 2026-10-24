@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { KindBadge } from "../icons";
+import { unreviewed } from "@/lib/maple/care";
+import { Icon, KindBadge } from "../icons";
 import { CARE_COLOR } from "../palette";
 import { cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -55,8 +56,16 @@ export function CareTodayRow() {
         className={cx(tone.row, "min-h-[48px] min-w-0 flex-1 py-1.5 pr-1")}
       >
         <KindBadge icon="pill" color={CARE_COLOR} size={24} />
-        {/* Two short lines fit the same 48px: on one, a phone shows only the name and the status is cut off. */}
-        <span className="line-clamp-2 min-w-0 flex-1 text-[15px] leading-[18px] text-mp-ink-2 tabular-nums">{view.line}</span>
+        {/* Name, then status, each cut on its own line: a long name never pushes "OK after 3:10 AM" out of the 48px. */}
+        <span className="min-w-0 flex-1 text-[15px] leading-[18px] tabular-nums">
+          <span className="flex min-w-0 items-center gap-1 text-mp-ink">
+            <span className="truncate">{view.plan.name}</span>
+            {/* Added by an assistant and nobody has checked it against the label: a mark the line's cut can't hide. */}
+            {unreviewed(view.plan) && <Icon name="circle-alert" size={14} className="shrink-0 text-mp-ink-2" aria-label="Not checked against the label" />}
+          </span>
+          {/* The status without the unreviewed suffix (the mark says it), so the time keeps its room. */}
+          <span className="block truncate text-mp-ink-2">{view.lineStatus.replace(/ · not checked against the label$/, "")}</span>
+        </span>
         {/* "+1" (the aria-label says "and 1 more"): "+1 more" would take the status's room. */}
         {more > 0 && <span className={cx(tone.faint, "shrink-0 text-[13px] tabular-nums")}>+{more}</span>}
       </button>
@@ -65,10 +74,10 @@ export function CareTodayRow() {
   );
 }
 
-/** The Lantern's line: the same compact line, dim amber like its "swipe down to close", no buttons, never Only me. */
+/** The Lantern's line: the same compact line (named for whoever isn't her), dim amber like its "swipe down to close", no buttons, never Only me. Two lines at most, so the time isn't the part cut off. */
 export function CareLanternLine() {
   const care = useCare();
   const line = care?.lanternLine;
   if (!line) return null;
-  return <p className="truncate text-[13px] tabular-nums opacity-50">{line}</p>;
+  return <p className="line-clamp-2 text-[13px] tabular-nums opacity-50">{line}</p>;
 }

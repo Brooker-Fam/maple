@@ -175,7 +175,9 @@ function PlanDose({
       footer={
         showDup ? undefined : (
           <div>
-            {needUnits && units == null && <p className={cx(tone.muted, "mb-2 text-center text-xs")}>How many this time? Choose above.</p>}
+            {needUnits && units == null && (
+              <p className={cx(tone.muted, "mb-2 text-center text-xs")}>{parsed.options?.length ? "How many this time? Choose above." : "Type how many above."}</p>
+            )}
             <div className="flex items-center gap-3">
               {skippable && (
                 <Button variant="soft" size="lg" onClick={() => void save({ skipped: true })} disabled={busy || future}>
@@ -220,7 +222,9 @@ function PlanDose({
         <p className={cx(tone.inset, tone.body, "px-4 py-3 text-[15px] leading-snug")}>Already logged today. You can still log another.</p>
       )}
 
-      {notes.map((a) => (
+      {/* While it asks "another dose?", the early nudge (and its Poison Help line) would read as if she'd already doubled up:
+          it comes with the toast after "Yes, another dose". Over the limit always shows, before Save. */}
+      {notes.filter((a) => !showDup || isOverLimit(a)).map((a) => (
         <div key={a.title}>
           <NoteCard note={a} care={care} />
           {isOverLimit(a) && <OverLimitList doses={windowDoses} plan={plan} care={care} className="mt-2" />}
@@ -249,6 +253,8 @@ function PlanDose({
           ) : (
             <input
               inputMode={decimals ? "decimal" : "numeric"}
+              // Opened to ask for the count: the keyboard's already up for one thumb.
+              autoFocus={ask?.reason === "units"}
               aria-label={`How many ${plan.limit_unit} this time`}
               value={unitsTyped}
               onChange={(e) => {

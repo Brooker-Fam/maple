@@ -26,9 +26,6 @@ import { WarningSignsCard } from "./WarningSigns";
 import { GROUP, NavRow, NoteCard, joinNames, useCareCtx } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
-/** Check-ins and the visit summary land in the next step; until then her screen is medicines, recovery and help. */
-const CHECKINS_LIVE = false;
-
 /**
  * Her screen (§11.2): a full-height sheet opened through useCareNav().openCare(),
  * not a tab. Medicines first, then check-ins (hers only), temperature,
@@ -205,13 +202,13 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
             </div>
           </section>
 
-          {CHECKINS_LIVE && care.access.mood && <CheckInSection />}
+          {care.access.mood && <CheckInSection />}
           <TemperatureTile />
           <QuestionsSection />
           <WarningSignsCard />
           <SupportRow />
           <CareTeam care={care} onEdit={() => setSub({ kind: "settings" })} />
-          {CHECKINS_LIVE && <VisitSummaryRow />}
+          <VisitSummaryRow />
 
           {(care.access.manage || write) && (
             <div className={GROUP}>

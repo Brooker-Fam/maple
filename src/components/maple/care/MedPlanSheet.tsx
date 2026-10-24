@@ -442,9 +442,15 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
           <FieldBlock label="Instructions" optional hint="Anything else the label says, like taking it with food.">
             <input value={f.instructions} maxLength={120} aria-label="Instructions" onChange={(e) => set("instructions", e.target.value)} className={tone.input} />
           </FieldBlock>
-          <ToggleRow label="Show on Today" checked={showToday} onChange={(v) => set("showToday", v)} />
+          {/* An Only me plan never shows on Today, so the switch would do nothing. */}
+          {!onlyMe && <ToggleRow label="Show on Today" checked={showToday} onChange={(v) => set("showToday", v)} />}
           {care.access.private && (
-            <ToggleRow label="Only me" note="Hidden from everyone else, their assistants and the admin login." checked={onlyMe} onChange={(v) => set("priv", v)} />
+            <ToggleRow
+              label="Only me"
+              note="Hidden from everyone else, their assistants and the admin login, and kept off Today."
+              checked={onlyMe}
+              onChange={(v) => set("priv", v)}
+            />
           )}
         </MoreDetails>
       </Sheet>

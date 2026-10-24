@@ -491,10 +491,12 @@ export async function restoreEntry(id: number, by?: string): Promise<Entry> {
 export async function restoreEntryDetailed(id: number, by?: string): Promise<{ entry: Entry; stoppedAt: string | null }> {
   const prev = await getEntry(id, { includeDeleted: true });
   if (!prev) throw new NotFound(`Entry ${id} not found`);
+  // Moved to mom's medicines (care-store moveFromMaple): back only through the Undo there, never as Maple's too.
+  if ((prev.data as Record<string, unknown>).moved_to != null) throw new Error("That one moved to her own medicines, so it can't come back here. Undo the move from there.");
   try {
     const rows = await q(
       `UPDATE maple_entries SET deleted_at = NULL, data = data - 'joined_into', updated_by = COALESCE($2, updated_by), updated_at = NOW()
-       WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *`,
+       WHERE id = $1 AND deleted_at IS NOT NULL AND NOT (data ? 'moved_to') RETURNING *`,
       [id, by ?? null]
     );
     if (!rows.length) throw new NotFound(`Entry ${id} not found or not deleted`);
@@ -528,7 +530,7 @@ export async function restoreEntryDetailed(id: number, by?: string): Promise<{ e
 /** Soft-deleted entries since a time, newest first ("Recently removed"). */
 export async function listDeleted(babyId: number, since: Date): Promise<Entry[]> {
   const rows = await q(
-    `SELECT * FROM maple_entries WHERE baby_id = $1 AND deleted_at IS NOT NULL AND deleted_at >= $2
+    `SELECT * FROM maple_entries WHERE baby_id = $1 AND deleted_at IS NOT NULL AND deleted_at >= $2 AND NOT (data ? 'moved_to')
      ORDER BY deleted_at DESC LIMIT 100`,
     [babyId, since.toISOString()]
   );

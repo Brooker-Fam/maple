@@ -1677,7 +1677,7 @@ function MomShortcut({ url }: { url: string }) {
         </li>
         <li>
           If <Code>needs_confirm</Code> is true: <strong className={strong}>Choose from Menu</strong> with <Code>speak</Code> as the prompt, Yes and No.
-          On Yes, call again with a Boolean field <Code>confirm</Code> set to true.
+          On Yes, call again with a Boolean field <Code>confirm</Code> set to true (and the same <Code>units</Code>, if step 3 asked).
         </li>
         <li>
           <strong className={strong}>Speak Text</strong> with <Code>speak</Code>.

@@ -39,6 +39,7 @@ import type {
   MapleState,
   MapleStateUnchanged,
   Member,
+  MoodEntry,
   TimerInput,
   TimerResponse,
   UnitSystem,
@@ -218,6 +219,15 @@ export type MapleContextValue = {
     queue: (input: CareEntryInput, entry: CareEntry) => void;
     /** Drop a queued care item (deleted before it synced); true if it was queued. */
     unqueue: (entryId: number) => boolean;
+    /**
+     * Keep one of her check-ins for when the connection is back. With
+     * `serverId` it's a change to a saved one (sent as a PATCH, shown at once);
+     * a change to one still waiting here folds into it; otherwise it's a new
+     * one (`input` is the POST body), shown as pending meanwhile.
+     */
+    queueMood: (input: Record<string, unknown>, entry: MoodEntry, serverId?: number) => void;
+    /** Drop her queued check-in (deleted before it synced) and any queued change to it; true if a new one was queued. */
+    unqueueMood: (entryId: number) => boolean;
     /** A temporary (negative) id for an optimistic care entry; never one Maple's entries use. */
     tempId: () => number;
   };
@@ -320,11 +330,21 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 type OutboxItem =
   | { target?: "entries"; client_id: string; input: CreateEntryInput; entry: Entry; tries: number }
   | { target: "care"; client_id: string; input: CareEntryInput; entry: CareEntry; tries: number }
-  | { target: "mood"; client_id: string; input: Record<string, unknown>; entry: { id: number }; tries: number };
+  // `id`: a change to a saved check-in (PATCH ?id=); without it, a new one (POST, `entry` has a temporary id).
+  | { target: "mood"; client_id: string; input: Record<string, unknown>; entry: MoodEntry; id?: number; tries: number };
 type EntryItem = Extract<OutboxItem, { input: CreateEntryInput }>;
 type CareItem = Extract<OutboxItem, { target: "care" }>;
+type MoodItem = Extract<OutboxItem, { target: "mood" }>;
 const isEntryItem = (i: OutboxItem): i is EntryItem => !i.target || i.target === "entries";
 const isCareItem = (i: OutboxItem): i is CareItem => i.target === "care";
+const isMoodItem = (i: OutboxItem): i is MoodItem => i.target === "mood";
+
+/** A check-in change folded into what's already waiting: later fields win, `data` merges a level down. */
+function mergeMoodInput(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const da = a.data && typeof a.data === "object" ? (a.data as Record<string, unknown>) : null;
+  const db = b.data && typeof b.data === "object" ? (b.data as Record<string, unknown>) : null;
+  return { ...a, ...b, ...(da || db ? { data: { ...da, ...db } } : {}) };
+}
 const OUTBOX_URL = { entries: "/api/maple/entries", care: "/api/maple/care/entries", mood: "/api/maple/care/mood" } as const;
 
 function readOutbox(): OutboxItem[] {
@@ -614,6 +634,17 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       const have = new Set(care.entries.map((e) => e.id));
       care = { ...care, entries: [...careExtra.filter((e) => !have.has(e.id)), ...care.entries].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) };
     }
+    const moodItems = items.filter(isMoodItem);
+    if (care?.mood && moodItems.length) {
+      // Her check-ins waiting on this phone, and changes to saved ones, over what the server has.
+      let mood = care.mood;
+      for (const i of moodItems) {
+        const shown = { ...i.entry, pending: true } as MoodEntry;
+        if (i.id != null) mood = mood.map((m) => (m.id === i.id ? { ...shown, id: i.id } : m));
+        else if (!mood.some((m) => m.id === i.entry.id)) mood = [shown, ...mood];
+      }
+      care = { ...care, mood: [...mood].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id) };
+    }
     return { ...s, entries, ...(care ? { care } : {}) };
   }, []);
 
@@ -730,18 +761,32 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         if (!outboxRef.current.some((i) => i.client_id === item.client_id)) continue;
         try {
           const target = item.target ?? "entries";
-          const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; possible_duplicate?: DoseEntry }>(OUTBOX_URL[target], {
-            method: "POST",
-            body: JSON.stringify(item.input),
-          });
+          const change = isMoodItem(item) && item.id != null;
+          const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; possible_duplicate?: DoseEntry }>(
+            change ? `${OUTBOX_URL.mood}?id=${(item as MoodItem).id}` : OUTBOX_URL[target],
+            { method: change ? "PATCH" : "POST", body: JSON.stringify(item.input) }
+          );
           done.add(item.client_id);
           if (isCareItem(item) && res.created === false && res.possible_duplicate) {
             // The other phone (or Siri) logged it first: ask instead of saving a second dose.
             careDuplicateToast(item, res.possible_duplicate);
             continue;
           }
+          // A change goes out whole each time, so there's nothing to take back.
+          if (change) continue;
+          const current = outboxRef.current.find((i) => i.client_id === item.client_id);
+          if (isMoodItem(item) && res.entry && current && current !== item) {
+            // She changed this check-in (a chip, the note) while it was uploading: send the change to the saved one.
+            const later = current as MoodItem;
+            const patch = { data: later.input.data, ...(later.input.note !== undefined ? { note: later.input.note } : {}) };
+            setQueue([
+              ...outboxRef.current.filter((i) => i.client_id !== item.client_id),
+              { target: "mood", client_id: newClientId(), input: patch, entry: { ...later.entry, id: res.entry.id } as MoodEntry, id: res.entry.id, tries: 1 },
+            ]);
+            continue;
+          }
           // Deleted on this phone while it was uploading: take it back out.
-          if (res.entry && !outboxRef.current.some((i) => i.client_id === item.client_id)) {
+          if (res.entry && !current) {
             const del = target === "care" ? `/api/maple/care/entries?id=${res.entry.id}` : target === "mood" ? `/api/maple/care/mood?id=${res.entry.id}` : `/api/maple/entries?id=${res.entry.id}`;
             await fetchJson(del, { method: "DELETE" }).catch(() => {});
           }
@@ -1276,6 +1321,32 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         setQueue(outboxRef.current.filter((i) => i.client_id !== queued.client_id));
         setState((s) => (s?.care ? { ...s, care: { ...s.care, entries: s.care.entries.filter((e) => e.id !== entryId) } } : s));
         return true;
+      },
+      queueMood: (input, entry, serverId) => {
+        const items = outboxRef.current;
+        const waiting = entry.id < 0 ? items.find((i): i is MoodItem => isMoodItem(i) && i.id == null && i.entry.id === entry.id) : undefined;
+        const change = serverId != null ? items.find((i): i is MoodItem => isMoodItem(i) && i.id === serverId) : undefined;
+        if (waiting) {
+          // Not sent yet: one POST with everything (a new object, so a flush mid-upload sees it changed).
+          const folded: MoodItem = { ...waiting, input: mergeMoodInput(waiting.input, input), entry };
+          setQueue(items.map((i) => (i === waiting ? folded : i)));
+        } else if (serverId != null) {
+          // A new client_id each time: the change in flight (if any) finishes, then this one goes out whole.
+          const merged = change ? mergeMoodInput(change.input, input) : input;
+          setQueue([...items.filter((i) => i !== change), { target: "mood", client_id: newClientId(), input: merged, entry, id: serverId, tries: 1 }]);
+        } else {
+          setQueue([...items, { target: "mood", client_id: String(input.client_id ?? newClientId()), input, entry, tries: 1 }]);
+        }
+        setOnline(false);
+        setState((s) => (s ? withPending(s, outboxRef.current) : s));
+      },
+      unqueueMood: (entryId) => {
+        const items = outboxRef.current;
+        const isNew = items.some((i) => isMoodItem(i) && i.id == null && i.entry.id === entryId);
+        const kept = items.filter((i) => !(isMoodItem(i) && (i.id === entryId || (i.id == null && i.entry.id === entryId))));
+        if (kept.length !== items.length) setQueue(kept);
+        if (isNew) setState((s) => (s?.care?.mood ? { ...s, care: { ...s.care, mood: s.care.mood.filter((m) => m.id !== entryId) } } : s));
+        return isNew;
       },
       tempId: () => tempId--,
     }),

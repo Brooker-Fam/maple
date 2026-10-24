@@ -6,7 +6,7 @@ import { spokenLine } from "@/lib/maple/care-mcp";
 import { carePersonName, carePlanViews, careSession, logCareDose } from "@/lib/maple/care-store";
 import { describeEntry } from "@/lib/maple/describe";
 import { staleFeed } from "@/lib/maple/feed";
-import { MOM_HELP, TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
+import { LABEL_NOT_WHILE_NURSING, MOM_HELP, TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { memberName, summarize } from "@/lib/maple/insights";
 import {
   activeTimers,
@@ -299,6 +299,8 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     if (unreviewed(plan)) bits.push("This plan isn't checked against the label yet.");
     // After a confirmed early or over-the-limit dose: that note's own words.
     for (const n of res.notes) if (n.tier === "nudge" || n.label === "Call Poison Help now") bits.push(`${n.title}. ${n.body}`);
+    // Hands-free at 3am is when she's least likely to open the card, so the nursing note is said too, with its label.
+    for (const n of res.notes) if (n.label === LABEL_NOT_WHILE_NURSING.label) bits.push(`${n.label}: ${n.title}. ${n.body}`);
     return json({
       ok: true,
       speak: bits.join(" "),

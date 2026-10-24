@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { CRISIS, CRISIS_LEAD, CRISIS_PARTNER, NO_AUTO_NOTIFY, TRUSTED_TEXT } from "@/lib/maple/guidelines";
+import { CRISIS, CRISIS_LEAD, CRISIS_PARTNER, HELP_ROW, NO_AUTO_NOTIFY, TRUSTED_TEXT } from "@/lib/maple/guidelines";
 import { EMERGENCY_FILL } from "../AlertCard";
 import { Icon, type IconName } from "../icons";
 import { Sheet, cx, tone, useSheetArmed } from "../ui";
@@ -15,7 +15,7 @@ import { useCare } from "./useCare";
  * fuller check-in "Continue the check-in", "Stop here" and "Back".
  *
  * Also the bits mom's help pages share: tel: and sms: links, the big call
- * buttons, and OnTop for a sheet opened from inside another sheet.
+ * buttons, HELP_ROW, and OnTop for a sheet opened from inside another sheet.
  */
 export type CrisisSheetProps = {
   open: boolean;
@@ -149,23 +149,7 @@ export default function CrisisSheet({ open, onClose, audience, from, onContinue,
           </p>
           <p className={cx(tone.body, "mt-1.5 text-[17px] leading-relaxed")}>{a.body}</p>
         </div>
-        {/* 911 first, then 988; the maternal hotline and PSI aren't crisis lines, so they're not here. */}
-        <div className="space-y-2.5">
-          <CallButton href="tel:911" look="emergency">
-            Call 911
-          </CallButton>
-          <CallButton href="tel:988" look="primary">
-            Call 988
-          </CallButton>
-          <CallButton href={smsHref("988")} icon="message-square">
-            Text 988
-          </CallButton>
-          {her && (
-            <CallButton href={smsHref("", TRUSTED_TEXT)} icon="message-square">
-              Text someone you trust
-            </CallButton>
-          )}
-        </div>
+        <CrisisActions her={her} />
         <p className={cx(tone.muted, "px-1 text-[13px] leading-snug")}>{NO_AUTO_NOTIFY}</p>
       </div>
     </Sheet>
@@ -173,28 +157,109 @@ export default function CrisisSheet({ open, onClose, audience, from, onContinue,
 }
 
 /**
+ * The crisis card's calls, in the spec's order: 911 first, then 988; for her
+ * also a text to someone she picks, with TRUSTED_TEXT already written. The
+ * maternal hotline and PSI aren't crisis lines, so they're not here.
+ */
+export function CrisisActions({ her }: { her: boolean }) {
+  return (
+    <div className="space-y-2.5">
+      <CallButton href="tel:911" look="emergency">
+        Call 911
+      </CallButton>
+      <CallButton href="tel:988" look="primary">
+        Call 988
+      </CallButton>
+      <CallButton href={smsHref("988")} icon="message-square">
+        Text 988
+      </CallButton>
+      {her && (
+        <CallButton href={smsHref("", TRUSTED_TEXT)} icon="message-square">
+          Text someone you trust
+        </CallButton>
+      )}
+    </div>
+  );
+}
+
+const quietLink = "inline-flex min-h-[44px] items-center font-semibold text-mp-accent-fg underline decoration-mp-accent-fg/30 underline-offset-4";
+
+/**
+ * HELP_ROW, "Need to talk now? Call or text 988 · Call 911", with its three
+ * links (tel:988, sms:988, tel:911). Quiet, and always there: under the
+ * check-in card and at the end of results, whatever she answered. The words
+ * are the constant's own (the spaces too, for screen readers and copy).
+ */
+export function HelpRow({ className }: { className?: string }) {
+  const m = /^(.*\?) (Call) or (text 988) · (Call 911)$/.exec(HELP_ROW);
+  const p = cx(tone.muted, "flex flex-wrap items-center gap-x-1 text-[15px] leading-snug", className);
+  if (!m) {
+    // The copy changed shape: keep it word for word, and the three links after it.
+    return (
+      <p className={p}>
+        <span>{HELP_ROW}</span>{" "}
+        <a href="tel:988" className={quietLink}>Call 988</a>{" "}
+        <a href={smsHref("988")} className={quietLink}>Text 988</a>{" "}
+        <a href="tel:911" className={quietLink}>Call 911</a>
+      </p>
+    );
+  }
+  // On a narrow phone only the question wraps; the three links stay together on one line.
+  return (
+    <p className={p}>
+      <span>{m[1]}</span>{" "}
+      <span className="inline-flex items-center gap-x-1 whitespace-nowrap">
+        {/* Named in full for screen readers: "Call" alone doesn't say which number. */}
+        <a href="tel:988" aria-label="Call 988" className={quietLink}>
+          {m[2]}
+        </a>{" "}
+        <span>or</span>{" "}
+        <a href={smsHref("988")} aria-label="Text 988" className={quietLink}>
+          {m[3]}
+        </a>{" "}
+        <span aria-hidden className="text-mp-ink-3">
+          ·
+        </span>{" "}
+        <a href="tel:911" className={quietLink}>
+          {m[4]}
+        </a>
+      </span>
+    </p>
+  );
+}
+
+/**
  * "Call or text 988 · Call 911", pinned on her screen and her check-in card
  * for the rest of the local day after the crisis sheet closes (§6.4): when
  * today's check-ins include "Thoughts of hurting myself", or today's fuller
- * check-in had question 9 above "Not at all". Hers only, never a setting.
+ * check-in had question 9 above "Not at all". useCare shows those answers
+ * the moment she gives them (and keeps them while offline), so the strip
+ * never waits on the server. Hers only, never a setting.
  */
-export function CrisisStrip({ className }: { className?: string }) {
+export function CrisisStrip({
+  className,
+  inset,
+}: {
+  className?: string;
+  /** Inside a card (the check-in card's): a well, not a card of its own. */
+  inset?: boolean;
+}) {
   const care = useCare();
   if (!care?.mood?.crisisToday) return null;
   const link = "inline-flex min-h-[44px] items-center font-semibold text-mp-danger underline decoration-mp-danger/40 underline-offset-4";
   return (
-    <p role="note" className={cx(tone.card, "flex flex-wrap items-center gap-x-1.5 px-4 py-1 text-[15px] text-mp-ink", className)}>
-      <Icon name="phone" size={18} className="mr-1 shrink-0 text-mp-danger" />
-      <a href="tel:988" className={link}>
+    <p role="note" className={cx(inset ? tone.inset : tone.card, "flex flex-wrap items-center gap-x-1.5 px-4 py-1 text-[15px] text-mp-ink", className)}>
+      <Icon name="phone" size={18} className="mr-1 shrink-0 text-mp-danger" />{" "}
+      <a href="tel:988" aria-label="Call 988" className={link}>
         Call
-      </a>
-      <span>or</span>
-      <a href={smsHref("988")} className={link}>
+      </a>{" "}
+      <span>or</span>{" "}
+      <a href={smsHref("988")} aria-label="Text 988" className={link}>
         text 988
-      </a>
+      </a>{" "}
       <span aria-hidden className="text-mp-ink-3">
         ·
-      </span>
+      </span>{" "}
       <a href="tel:911" className={link}>
         Call 911
       </a>

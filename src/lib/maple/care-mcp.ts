@@ -5,7 +5,7 @@ import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/s
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
 import { ADMIN_ID } from "./auth";
-import { careTime, forMom, hoursText, matchPlan, planActive, planMeta, planSentence, planView, scheduleSummary, sortPlans, unitCount, unitsOf, unreviewed, type CareViewer, type PlanView } from "./care";
+import { careTime, forMom, hoursText, listNotes, matchPlan, planActive, planMeta, planSentence, planView, scheduleSummary, sortPlans, unitCount, unitsOf, unreviewed, type CareViewer, type PlanView } from "./care";
 import {
   CareConflict,
   CareForbidden,
@@ -273,6 +273,12 @@ const fullSentence = (v: PlanView) =>
 
 /** "Acetaminophen: OK since 4:10 AM" (speak; and Siri's). */
 export function spokenLine(v: PlanView, now: Date, tz: string): string {
+  const line = spokenStatus(v, now, tz);
+  // As on the compact line: an assistant-added plan nobody has checked yet says so out loud too.
+  return unreviewed(v.plan) ? `${line} (not checked against the label)` : line;
+}
+
+function spokenStatus(v: PlanView, now: Date, tz: string): string {
   const st = v.status;
   const at = (iso: string | null | undefined) => (iso ? careTime(iso, now, tz) : "");
   const n = v.plan.name;
@@ -474,12 +480,17 @@ export function registerCareTools(server: McpServer) {
       const whose = s.access.self ? "Your" : `${s.name}'s`;
       const lines: string[] = [];
       if (!shown.length) lines.push(`${whose} medicine list is empty so far. Medicines are added in the app (or with set_mom_medicine) from her label or discharge papers.`);
-      else lines.push(`${whose} medicines, by the schedule the family typed in from her label or clinician:`, ...shown.map((x) => `- ${fullSentence(x.view)}`));
+      else lines.push(`${whose} medicines, by the schedule the family typed in from ${s.access.self ? "your" : "her"} label or clinician:`, ...shown.map((x) => `- ${fullSentence(x.view)}`));
       // A reading from today keeps its card (a fever makes the breast and peeing signs urgent too).
       const tempAlert = temp && dayKey(new Date(temp.at), s.tz) === dayKey(s.now, s.tz) ? assessMomTemp(temp.data.temp_c) : null;
       if (temp) lines.push(`Latest temperature: ${tempText(temp.data.temp_c)} at ${whenText(temp.at, ctx)}.`);
       if (open.length) lines.push(`Open questions for ${s.access.self ? "your" : "her"} OB: ${open.map((q) => `"${q.note ?? ""}"`).join("; ")}.`);
-      const alerts = alertsOf([...shown.flatMap((x) => x.view.notes), ...(tempAlert ? [forMom(tempAlert, s.name, s.access.self)] : [])]);
+      // The app's list note (two medicines with acetaminophen) too, over the whole active list as it reads there.
+      const overlap = listNotes(
+        active.map((x) => x.view.plan),
+        { name: s.name, self: s.access.self, settings: s.person?.settings ?? {} }
+      );
+      const alerts = alertsOf([...overlap, ...shown.flatMap((x) => x.view.notes), ...(tempAlert ? [forMom(tempAlert, s.name, s.access.self)] : [])]);
       lines.push(...alertLines(alerts));
       const speak = shown.length ? `${shown.slice(0, 3).map((x) => spokenLine(x.view, s.now, s.tz)).join(". ")}.` : `No medicines on ${s.access.self ? "your" : "her"} list yet.`;
       return ok(lines.join("\n"), {
@@ -725,7 +736,11 @@ export function registerCareTools(server: McpServer) {
       }
       const summary = scheduleSummary(plan).replace(/^./, (c) => c.toLowerCase());
       const lines = [`Saved p${plan.id}: ${plan.name} · ${summary}.${unreviewed(plan) ? " Ask them to check it against the label." : ""}`];
-      const alerts = alertsOf(saved.notes);
+      // Two medicines with acetaminophen: the app's list note, said when this save makes (or keeps) the pair.
+      const overlap = plan.contains_apap && planActive(plan, s.now, s.tz)
+        ? listNotes((await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz)), { name: s.name, self: s.access.self, settings: s.person?.settings ?? {} })
+        : [];
+      const alerts = alertsOf([...overlap, ...saved.notes]);
       lines.push(...alertLines(alerts));
       return ok(lines.join("\n"), {
         saved: true,

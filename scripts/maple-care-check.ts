@@ -41,7 +41,9 @@ import {
   screenResults,
   sortPlans,
   startsPrivate,
+  suggestAckKey,
   suggestFullCheckin,
+  todayCheckin,
   unitsOf,
   type CareViewer,
   type PlanTextCtx,
@@ -257,7 +259,7 @@ check('T-ENG-3 S1: "2" each time, limit 6 caplets → ok after 2 doses, at_limit
   const three = st(p, [d1, d2, d3], now);
   eq([three.state, three.count24], ["at_limit", 6], "after 3");
   eq(three.nextOkAt, shift(d1.at, 24), "OK when the oldest ages out");
-  eq(planLine(p, three, her(now)), `Ibuprofen · 6 of 6 caplets in 24 h · OK after ${careTime(shift(d1.at, 24), now, TZ)}`, "line");
+  eq(planLine(p, three, her(now)), `Ibuprofen · OK after ${careTime(shift(d1.at, 24), now, TZ)} · 6 of 6 caplets in 24 h`, "line");
 });
 
 check("T-ENG-4 limit 6 caplets, fixed 2, doses of 2+2+1 → at_limit; OK at the oldest + 24 h", () => {
@@ -646,6 +648,57 @@ check("T-ENG-13 crisisToday only on that local day", () => {
   eq(crisisToday([scr], D(30, "18:00"), TZ), true, "a screen with item9_ever");
 });
 
+check("T-ENG-12 item 9 with a PHQ-9 of 10 or more → the positive band after CRISIS (not PHQ9_ITEM9)", () => {
+  const cards = screenResults(scoreScreen({ phq9: [2, 2, 2, 2, 1, 0, 0, 0, 1], gad7: zeros(7), item9_ever: false }));
+  eq(cards.map((c) => [c.key, c.title]), [["crisis", G.CRISIS.title], ["phq9", G.PHQ9_RESULT.positive.title], ["gad7", G.GAD7_RESULT.low.title]]);
+  eq(cards[0].label, "Call 911 or 988 now");
+});
+
+check('T-ENG-12 "Stop here": no band for a scale she didn\'t finish; item 9 still CRISIS then PHQ9_ITEM9', () => {
+  const stopped = scoreScreen({ phq9: [0, 0, 0, 0, 0, 0, 0, 0, 1], gad7: [], item9_ever: true });
+  eq([stopped.complete, stopped.gad7_score], [false, null]);
+  const cards = screenResults(stopped);
+  eq(cards.map((c) => c.key), ["crisis", "phq9"], "no GAD-7 card");
+  eq([cards[1].title, cards[1].heading], [G.PHQ9_ITEM9.title, "PHQ-9: 1 of 27"]);
+  // Partway through the GAD-7: its partial total never says "few signs".
+  const half = screenResults(scoreScreen({ phq9: zeros(9), gad7: [0, 0, 0], item9_ever: false }));
+  eq(half.map((c) => c.key), ["phq9"], "GAD-7 partway");
+  // Partway through the PHQ-9 (no item 9): nothing to reassure with.
+  eq(screenResults(scoreScreen({ phq9: [0, 0, 0, 0, 0], gad7: [], item9_ever: false })).length, 0, "PHQ-9 partway");
+  const early = screenResults(scoreScreen({ phq9: [3, 3, 3, 3, 3], gad7: [], item9_ever: true }));
+  eq([early.map((c) => c.key), early[1].title, early[1].heading], [["crisis", "phq9"], G.PHQ9_ITEM9.title, undefined], "item 9 ever, PHQ-9 partway");
+});
+
+check("T-ENG-13 suggestAckKey: the day-14 ack, and one per visit date", () => {
+  eq(suggestAckKey("day14", { next_visit: "2026-12-01" }), "suggest:day14");
+  eq(suggestAckKey("visit", { next_visit: "2026-12-01" }), "suggest:visit:2026-12-01");
+  const born = L(20, "10:20");
+  const acked = { next_visit: "2026-12-01", acks: { [suggestAckKey("visit", { next_visit: "2026-12-01" })]: L(24, "08:00", 11) } };
+  eq(suggestFullCheckin({ now: D(24, "09:00", 11), tz: TZ, bornAt: born, settings: acked, lastScreenAt: null }), null, "acked visit");
+  // A new visit date asks again.
+  eq(suggestFullCheckin({ now: D(1, "09:00", 12), tz: TZ, bornAt: born, settings: { ...acked, next_visit: "2026-12-05" }, lastScreenAt: null }), "visit", "new visit");
+});
+
+check("T-ENG-13 todayCheckin: her newest check-in on today's local date", () => {
+  const c = (id: number, at: string, level: 1 | 2 | 3 | 4 | 5): MoodEntry => ({ id, kind: "checkin", at, data: { level }, note: null, created_at: at, updated_at: at });
+  const rows = [c(1, L(29, "23:30"), 2), c(2, L(30, "07:00"), 3), c(3, L(30, "09:15"), 4)];
+  eq(todayCheckin(rows, D(30, "12:00"), TZ)?.id, 3);
+  eq(todayCheckin(rows, D(29, "23:59"), TZ)?.id, 1, "the evening before");
+  eq(todayCheckin(rows, D(31, "00:05"), TZ), null, "after midnight");
+  // A screen today isn't a check-in.
+  const scr: MoodEntry = { id: 4, kind: "screen", at: L(31, "08:00"), data: scoreScreen({ phq9: zeros(9), gad7: zeros(7), item9_ever: false }), note: null, created_at: L(31, "08:00"), updated_at: L(31, "08:00") };
+  eq(todayCheckin([scr], D(31, "09:00"), TZ), null, "screen only");
+});
+
+check("T-ENG-13 checkinResponse: several chips give several cards, INTRUSIVE (now) before STRUGGLING (today)", () => {
+  const r = checkinResponse({ level: 1, tags: ["scary_thoughts", "harm_self", "tearful"] }, { daysSinceBirth: 30 });
+  eq([r.crisis, r.cards.map((x) => x.title), r.blues], [true, [G.INTRUSIVE.title, G.STRUGGLING.title], false]);
+  eq(G.STRUGGLING.tier, "today");
+  eq(G.MOM_TIER_LABEL[G.STRUGGLING.tier], "Call your OB today");
+  eq(G.MOM_TIER_LABEL[G.INTRUSIVE.tier], "Call your OB now");
+  eq(checkinResponse({ level: 5 }, { daysSinceBirth: 30 }), { crisis: false, cards: [], blues: false }, "Good, day 30");
+});
+
 // ── T-ENG-14 the official forms, word for word (S11) ─────────────────────
 
 check("T-ENG-14 PHQ-9 and GAD-7 stems, items, difficulty and credit match the developers' forms", () => {
@@ -819,6 +872,8 @@ check("T-ENG-17 the MAPLE_INSTRUCTIONS paragraph (§10.1, verbatim; D's mcp-tool
   ok(start >= 0, "MAPLE_INSTRUCTIONS not found");
   const body = src.slice(start + "export const MAPLE_INSTRUCTIONS = `".length, src.indexOf("`;", start));
   has(body, "call 911 if anyone is in immediate danger; otherwise call or text 988");
+  // ChatGPT may show only the first ~500 characters: the crisis numbers are inside them too.
+  ok(body.slice(0, 500).includes("988") && body.slice(0, 500).includes("911"), "988 and 911 within the first 500 characters");
   has(body.replace(/\\`/g, "`"), INSTRUCTIONS_ADDITION, "the whole paragraph");
 });
 
