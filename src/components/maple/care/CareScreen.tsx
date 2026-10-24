@@ -18,6 +18,7 @@ import { TemperatureTile } from "./MomTempSheet";
 import PlanCard from "./PlanCard";
 import PlanDetail from "./PlanDetail";
 import { QuestionsSection } from "./Questions";
+import RemindersSheet, { remindersValue, usePhoneReminders } from "./Reminders";
 import SharingSheet from "./SharingSheet";
 import { SupportRow } from "./SupportScreen";
 import { VisitSummaryRow } from "./VisitSummary";
@@ -63,13 +64,14 @@ export default function CareScreen({ open, onClose }: CareScreenProps) {
   return <Screen care={care} open={open} onClose={onClose} onDeleted={() => (deleted.current = true)} />;
 }
 
-type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "sharing" } | { kind: "settings" } | { kind: "questions" } | null;
+type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "sharing" } | { kind: "settings" } | { kind: "questions" } | { kind: "reminders" } | null;
 
 function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boolean; onClose: () => void; onDeleted: () => void }) {
   const { state, memberName } = useMaple();
   const nav = useCareNav();
   const now = useNow(60_000);
   const ctx = useCareCtx(care);
+  const phone = usePhoneReminders();
   const [sub, setSub] = useState<Sub>(null);
   const [showFinished, setShowFinished] = useState(false);
   // Closing her screen closes whatever was open on top of it, so it doesn't come back with her screen next time.
@@ -196,6 +198,9 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
                   </div>
                 )}
                 <NavRow icon="message-square" label="Medicine questions" note="Nursing, and who to call about a medicine" onClick={() => setSub({ kind: "questions" })} />
+                {care.plans.length > 0 && (
+                  <NavRow icon="bell" label="Reminders on this phone" value={remindersValue(phone.status)} onClick={() => setSub({ kind: "reminders" })} />
+                )}
               </div>
             </div>
           </section>
@@ -231,6 +236,7 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
       <MedPlanSheet open={open && sub?.kind === "add"} onClose={() => setSub(null)} care={care} />
       <MedQuestionsSheet open={open && sub?.kind === "questions"} onClose={() => setSub(null)} care={care} />
       <CareSettingsSheet open={open && sub?.kind === "settings"} onClose={() => setSub(null)} care={care} />
+      <RemindersSheet open={open && sub?.kind === "reminders"} onClose={() => setSub(null)} care={care} phone={phone} />
       {care.access.manage && (
         <SharingSheet
           open={open && sub?.kind === "sharing"}

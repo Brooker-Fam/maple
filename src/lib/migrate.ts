@@ -713,6 +713,31 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_mood_time ON maple_care_mood(person, at DESC)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_mood_client ON maple_care_mood(client_id) WHERE client_id IS NOT NULL`;
 
+  // Push notifications (pill reminders): one row per phone that turned them on, and a log of what was sent so a
+  // reminder goes out once however many ticks see it.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_push_subs (
+      id BIGSERIAL PRIMARY KEY,
+      member TEXT NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      prefs JSONB NOT NULL DEFAULT '{}'::jsonb,
+      device TEXT,
+      failures INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      last_sent_at TIMESTAMPTZ
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_push_subs_member ON maple_push_subs(member)`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_push_sent (
+      key TEXT PRIMARY KEY,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
   console.log("Migrations complete.");
 }
 

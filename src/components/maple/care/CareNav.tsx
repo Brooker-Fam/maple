@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { OneTapAsk } from "@/lib/maple/types";
 import { useMaple } from "../useMaple";
 import CareScreen from "./CareScreen";
@@ -84,6 +84,17 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
     }),
     [openDose, show]
   );
+
+  // A reminder's tap opens /maple?care=1 (push.ts): her screen, once her page has loaded for this reader.
+  const hasCare = !!state?.care;
+  useEffect(() => {
+    if (!hasCare) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("care") !== "1") return;
+    url.searchParams.delete("care");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    show("care");
+  }, [hasCare, show]);
 
   const closeCare = useCallback(() => hide("care"), [hide]);
   const closeSupport = useCallback(() => hide("support"), [hide]);

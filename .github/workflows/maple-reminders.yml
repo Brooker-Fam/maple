@@ -1,0 +1,18 @@
+# Maple's Log pill reminders: works out what's due and sends it (src/lib/maple/push.ts).
+# Vercel's Hobby cron only runs daily, so this pokes the tick every 5 minutes.
+# GitHub can run scheduled jobs a few minutes late; an open app also ticks.
+name: Maple reminders
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: curl -fsS -X POST --max-time 60 https://brooker.family/api/maple/push/tick
