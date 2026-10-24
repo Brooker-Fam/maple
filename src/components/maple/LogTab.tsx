@@ -21,7 +21,7 @@ import EntryRow from "./EntryRow";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
-import { Button, Chip, EmptyState, SectionTitle, cx, tone } from "./ui";
+import { Button, Chip, EmptyState, SectionTitle, Sheet, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -431,10 +431,16 @@ export default function LogTab() {
   const nothingAtAll = ready && entries.length === 0;
 
   return (
-    <div className="px-4 pt-[max(1.25rem,env(safe-area-inset-top))]">
-      <header className="mb-4 flex min-h-[44px] items-center justify-between gap-3">
-        <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Timeline</h1>
-        <JumpToDate todayKey={todayKey} minKey={hasPreBirth ? undefined : bornKey ?? undefined} onJump={jumpTo} />
+    <div className="px-4">
+      {/* px-1 lines the title up with the section and day titles below it. */}
+      <header className="mb-4 px-1 pt-[max(1.25rem,env(safe-area-inset-top))]">
+        <div className="flex min-h-[44px] items-center justify-between gap-3">
+          <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Timeline</h1>
+          <div className="flex items-center gap-1">
+            {!readOnly && <RecentlyRemoved onRestore={touch} />}
+            <JumpToDate todayKey={todayKey} minKey={hasPreBirth ? undefined : bornKey ?? undefined} onJump={jumpTo} />
+          </div>
+        </div>
       </header>
 
       {/* Six chips don't fit at phone width; the right edge fades so "Other" reads as a scroll away. */}
@@ -450,7 +456,6 @@ export default function LogTab() {
         ))}
       </div>
 
-      {!readOnly && <RecentlyRemoved onRestore={touch} />}
       <RunningNow entries={running} />
 
       {partialDays.length > 0 && (
@@ -686,14 +691,18 @@ function RunningNow({ entries }: { entries: Entry[] }) {
   );
 }
 
-/** Last 24h of deleted entries, with Restore (in case the other parent deleted the wrong one). */
+/**
+ * Last 24h of deleted entries, with Restore (in case the other parent
+ * deleted the wrong one). A quiet trash button in the header, only while
+ * there's something to restore; the list opens in a sheet, so it never sits
+ * in the day's flow or in the way of loading older weeks.
+ */
 function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
   const { api, state, restore: restoreEntry, memberName, units } = useMaple();
   const now = useNow(60_000);
   const [items, setItems] = useState<Entry[]>([]);
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
-  const reduceMotion = useReducedMotion();
   const rev = state?.rev;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
 
@@ -705,7 +714,7 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
           if (!cancelled) setItems(r.entries ?? []);
         })
         .catch(() => {
-          // Optional strip: stay quiet if it can't load.
+          // Optional: stay quiet if it can't load.
         });
     }, 300);
     return () => {
@@ -714,7 +723,12 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
     };
   }, [api, rev]);
 
-  if (!items.length) return null;
+  // The last one restored closes the sheet.
+  useEffect(() => {
+    if (!items.length) setOpen(false);
+  }, [items.length]);
+
+  if (!items.length && !open) return null;
 
   const restore = async (e: Entry) => {
     setBusy(e.id);
@@ -724,52 +738,41 @@ function RecentlyRemoved({ onRestore }: { onRestore: (e: Entry) => void }) {
     setBusy(null);
   };
 
-  // Folded away by default, like MoreDetails: it's a safety net, not part of the day.
   return (
-    <section className={cx(tone.card, "mb-5 overflow-hidden")} aria-label="Recently removed">
+    <>
       <button
         type="button"
-        onClick={() => setExpanded((x) => !x)}
-        aria-expanded={expanded}
-        className="flex min-h-[52px] w-full items-center gap-3 px-4 text-left"
+        onClick={() => setOpen(true)}
+        aria-label={`Recently removed: ${items.length}`}
+        className="inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-[15px] text-mp-ink-2 tabular-nums transition active:bg-mp-ink/5"
       >
-        <Icon name="trash-2" size={18} className="shrink-0 text-mp-ink-3" />
-        <span className={cx(tone.body, "flex-1 text-[15px] font-medium")}>Recently removed</span>
-        <span className={cx(tone.faint, "text-sm tabular-nums")}>({items.length})</span>
-        <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", expanded && "rotate-180")} />
+        <Icon name="trash-2" size={18} />
+        {items.length}
       </button>
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.ul
-            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={reduceMotion ? undefined : { height: 0, opacity: 0 }}
-            className={cx(tone.divide, "overflow-hidden border-t border-mp-line")}
-          >
-            {items.map((e) => {
-              const d = describeEntry(e, { units, now });
-              return (
-                <li key={e.id} className="flex items-center gap-3 py-2.5 pr-3 pl-4">
-                  <KindBadge entry={e} className="opacity-60" />
-                  <span className="min-w-0 flex-1">
-                    <span className={cx(tone.muted, "block truncate text-[15px] font-medium line-through decoration-mp-ink-3")}>
-                      {d.title}
-                    </span>
-                    <span className={cx(tone.faint, "block text-[13px] leading-snug")}>
-                      {formatDayLabel(dayKey(Date.parse(e.started_at), tz), dayKey(now, tz))} {formatTime(e.started_at, tz)} · removed by{" "}
-                      {memberName(e.updated_by ?? e.created_by)} {formatRelative(e.updated_at, now)}
-                    </span>
+      <Sheet open={open} onClose={() => setOpen(false)} title="Recently removed">
+        <p className={cx(tone.muted, "text-sm")}>Deleted in the last day. Restore puts one back where it was.</p>
+        <ul className={cx(tone.card, tone.divide, "overflow-hidden")}>
+          {items.map((e) => {
+            const d = describeEntry(e, { units, now });
+            return (
+              <li key={e.id} className="flex items-center gap-3 py-2.5 pr-3 pl-4">
+                <KindBadge entry={e} className="opacity-60" />
+                <span className="min-w-0 flex-1">
+                  <span className={cx(tone.muted, "block truncate text-[15px] font-medium line-through decoration-mp-ink-3")}>{d.title}</span>
+                  <span className={cx(tone.faint, "block text-[13px] leading-snug")}>
+                    {formatDayLabel(dayKey(Date.parse(e.started_at), tz), dayKey(now, tz))} {formatTime(e.started_at, tz)} · removed by{" "}
+                    {memberName(e.updated_by ?? e.created_by)} {formatRelative(e.updated_at, now)}
                   </span>
-                  <Button size="sm" variant="soft" onClick={() => void restore(e)} disabled={busy === e.id}>
-                    Restore
-                  </Button>
-                </li>
-              );
-            })}
-          </motion.ul>
-        )}
-      </AnimatePresence>
-    </section>
+                </span>
+                <Button size="sm" variant="soft" onClick={() => void restore(e)} disabled={busy === e.id}>
+                  Restore
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      </Sheet>
+    </>
   );
 }
 
@@ -818,9 +821,8 @@ function JumpToDate({ todayKey, minKey, onJump }: { todayKey: string; minKey?: s
           </span>
         </button>
       )}
-      {/* Small to look at; the ::after pads the hit area out to 44px. */}
       {!openPicker && (
-        <Button variant="soft" size="sm" onClick={() => setOpenPicker(true)} aria-label="Jump to a day" className="relative after:absolute after:-inset-1 after:content-['']">
+        <Button variant="soft" size="sm" onClick={() => setOpenPicker(true)} aria-label="Jump to a day" className="min-h-[44px]">
           <Icon name="calendar-days" size={17} className="text-mp-ink-2" />
           Jump
         </Button>
@@ -918,7 +920,7 @@ function NewArrivalsPill({ pill, onDismiss }: { pill: Pill | null; onDismiss: ()
             el?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
             onDismiss();
           }}
-          className="fixed top-[calc(env(safe-area-inset-top)+12px)] left-1/2 z-40 inline-flex min-h-[40px] -translate-x-1/2 items-center gap-1.5 rounded-full bg-mp-accent pr-3.5 pl-4 text-sm font-semibold whitespace-nowrap text-mp-on-accent shadow-[0_8px_30px_rgba(0,0,0,0.18)] ring-1 ring-mp-line"
+          className="fixed top-[calc(env(safe-area-inset-top)+12px)] left-1/2 z-40 inline-flex min-h-[44px] -translate-x-1/2 items-center gap-1.5 rounded-full bg-mp-accent pr-3.5 pl-4 text-sm font-semibold whitespace-nowrap text-mp-on-accent shadow-[0_8px_30px_rgba(0,0,0,0.18)] ring-1 ring-mp-line"
         >
           {pill.text}
           <Icon name="chevron-up" size={16} strokeWidth={2.25} />

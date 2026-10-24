@@ -45,7 +45,10 @@ const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct
 const NIGHT_DIM = "[.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]";
 /** Placeholder shimmer, still under reduced motion and at night. */
 const PULSE = "animate-pulse motion-reduce:animate-none [.maple-night_&]:animate-none";
+/** Found firsts listed before "Show all". */
 const SHELF_COLLAPSED = 8;
+/** "Still to come" chips shown before "Show all": just the next few. */
+const TO_COME_COLLAPSED = 4;
 
 const isMoment = (e: Entry): e is Moment => e.kind === "moment";
 const photoCount = (m: Moment) => (m.id > 0 ? m.data.photos?.length ?? 0 : 0);
@@ -205,8 +208,9 @@ export default function MomentsTab() {
   const todayKey = dayKey(n, tz);
 
   return (
-    <div className="ph-no-capture overflow-x-clip px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
-      <header className="mb-5">
+    <div className="ph-no-capture overflow-x-clip px-4 pb-8">
+      {/* px-1 lines the title up with the section titles below it. */}
+      <header className="mb-5 px-1 pt-[max(1.25rem,env(safe-area-inset-top))]">
         <div className="flex min-h-[44px] items-center justify-between gap-3">
           <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Moments</h1>
           {/* The empty scrapbook has its own "Add a photo"; one invitation is enough. */}
@@ -384,10 +388,12 @@ function FirstsShelf({
   );
   const upcoming = MILESTONES.filter((p) => !found.has(p.id));
   const ordered = [...achieved, ...upcoming];
-  const shown = all ? ordered : ordered.slice(0, SHELF_COLLAPSED);
   // Found ones as a list (with when), the rest as light chips to tap and add.
-  const shownFound = shown.filter((p) => found.has(p.id));
-  const shownToCome = shown.filter((p) => !found.has(p.id));
+  // Folded, the list keeps its first few and only the next few to come show
+  // (MILESTONES runs roughly in the order they happen); the rest wait behind "Show all".
+  const shownFound = all ? achieved : achieved.slice(0, SHELF_COLLAPSED);
+  const shownToCome = all ? upcoming : upcoming.slice(0, TO_COME_COLLAPSED);
+  const folds = achieved.length > SHELF_COLLAPSED || upcoming.length > TO_COME_COLLAPSED;
 
   return (
     <section aria-label="Firsts">
@@ -449,7 +455,7 @@ function FirstsShelf({
             </ul>
           </div>
         )}
-        {ordered.length > SHELF_COLLAPSED && (
+        {folds && (
           <button
             type="button"
             onClick={() => setAll((v) => !v)}
@@ -491,17 +497,48 @@ function GrowingUp({
     const k = monthlyNumber(m.data.milestone);
     if (k != null && m.id > 0 && !byMonth.has(k)) byMonth.set(k, m);
   }
+  // Month-days fill in as they arrive: every one so far (a photo, or a gap to
+  // fill), any photo that came early, and one quiet slot for the next one.
+  // Months further off stay out of the strip rather than as empty squares.
+  const next = months < 12 ? months + 1 : null;
+  const shown = Array.from({ length: 12 }, (_, i) => i + 1).filter((k) => byMonth.has(k) || k <= months || k === next);
+
+  // The newest month-days sit at the end of the strip: start there.
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = strip.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [months]);
 
   return (
     <section aria-label="Growing up">
       <SectionTitle action={<span className={cx(tone.faint, "text-[13px]")}>A photo each month-day</span>}>Growing up</SectionTitle>
-      <div className="-mx-4 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <ol className="flex w-max gap-2.5">
-          {Array.from({ length: 12 }, (_, i) => i + 1).map((k) => {
+      <div ref={strip} className="-mx-4 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <ol className="flex w-max items-start gap-2.5">
+          {shown.map((k) => {
             const m = byMonth.get(k);
             const due = k <= months;
             const canAdd = due && !viewer;
             const date = shortDate(monthDayKey(bornAt, k, tz));
+            const label = `Month ${k}, ${date}`;
+            if (!m && !due) {
+              // The next month-day: not a button (her photo is taken on the day), just where it will go.
+              return (
+                <li key={k}>
+                  <div className="flex h-[76px] items-center gap-3 rounded-[14px] border border-dashed border-mp-line bg-transparent pr-5 pl-4">
+                    <Icon name="camera" size={22} className="shrink-0 text-mp-ink-3" />
+                    <span className="whitespace-nowrap">
+                      <span className={cx(tone.body, "block text-[15px] font-medium tabular-nums")}>
+                        Month {k} · {date}
+                      </span>
+                      <span className={cx(tone.faint, "block text-[13px]")}>
+                        {viewer ? "Her next monthly photo" : "Take her photo that day"}
+                      </span>
+                    </span>
+                  </div>
+                </li>
+              );
+            }
             const tile = (
               <>
                 <span
@@ -511,7 +548,8 @@ function GrowingUp({
                       ? "border border-mp-line bg-mp-surface"
                       : canAdd
                         ? "border-[1.5px] border-dashed border-mp-accent-fg/45 text-mp-accent-fg"
-                        : "bg-mp-sunken text-mp-ink-3"
+                        : // A month-day that passed without a photo (viewers can't add one).
+                          "border border-dashed border-mp-line bg-transparent text-mp-ink-3"
                   )}
                   aria-hidden
                 >
@@ -525,11 +563,10 @@ function GrowingUp({
                     <Icon name="plus" size={22} />
                   ) : null}
                 </span>
-                <span className={cx(m || due ? tone.body : tone.muted, "mt-1.5 block text-center text-[12px] font-medium")}>Month {k}</span>
+                <span className={cx(tone.body, "mt-1.5 block text-center text-[12px] font-medium")}>Month {k}</span>
                 <span className={cx(tone.faint, "block text-center text-[11px]")}>{date}</span>
               </>
             );
-            const label = `Month ${k}, ${date}`;
             return (
               <li key={k}>
                 {m ? (
@@ -546,7 +583,10 @@ function GrowingUp({
                     {tile}
                   </button>
                 ) : (
-                  <div aria-label={`${label}: not yet`}>{tile}</div>
+                  <div>
+                    {tile}
+                    <span className="sr-only">No photo that month</span>
+                  </div>
                 )}
               </li>
             );
