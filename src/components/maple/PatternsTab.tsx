@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { feedTotals } from "@/lib/maple/feed";
 import {
   DISCLAIMER,
@@ -31,6 +31,7 @@ import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/m
 import type { TabId } from "./MapleApp";
 import { Icon, KindBadge } from "./icons";
 import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
+import { useNightActive } from "./nightLook";
 import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { Button, Card, EmptyState, SectionTitle, Segmented, cx, tone } from "./ui";
@@ -63,11 +64,16 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  * classes by position as well as hue.
  *
  * The chrome (grid, track, axis, the halo around diaper dots) comes from the
- * mp-* tokens, so it follows dark mode and the night look on its own. The
- * series keep their dark-mode hues at night, like the day dial, so a legend
- * still matches its marks, but dimmed toward the night surface the way
- * photos are; the chrome-like marks (band, target ticks, dot edges) turn
- * amber there.
+ * mp-* tokens, so it follows dark mode and the night look on its own.
+ *
+ * At night every series folds into the one amber, like the dock's dots and
+ * the badges, and is told apart by lane, shape and strength instead of hue:
+ * sleep a soft wash (0.35), nursing solid (left 0.85, right 0.55, with a 1px
+ * seam between them), bottles a hollow outline (0.55), wet diapers a hollow
+ * ring (0.7), dirty ones a solid dot (0.7), tummy time and pumping 0.45. The
+ * alphas live here; the hollow shapes switch on useNightActive(). Legends
+ * draw from the same values, so a key always matches its marks. Dirty dots
+ * keep their stool color (it's information), edged in amber.
  */
 const VIZ_VARS =
   "[--v-grid:var(--mp-line)] [--v-track:var(--mp-sunken)] [--v-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] [--v-surface:var(--mp-surface)] " +
@@ -75,11 +81,13 @@ const VIZ_VARS =
   "[--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
   "dark:[--v-sleep:#9E85CB] dark:[--v-nurse:#BF4213] dark:[--v-bottle:#B88C06] dark:[--v-pee:#3CA1C4] dark:[--v-poop:#985E22] dark:[--v-pump:#C97E5B] " +
   "dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
-  "[.maple-night_&]:[--v-sleep:color-mix(in_srgb,#9E85CB_72%,#13170F)] [.maple-night_&]:[--v-nurse:color-mix(in_srgb,#BF4213_85%,#13170F)] [.maple-night_&]:[--v-bottle:color-mix(in_srgb,#B88C06_85%,#13170F)] " +
-  "[.maple-night_&]:[--v-pee:color-mix(in_srgb,#3CA1C4_72%,#13170F)] [.maple-night_&]:[--v-poop:color-mix(in_srgb,#985E22_85%,#13170F)] [.maple-night_&]:[--v-tummy:color-mix(in_srgb,#69863E_80%,#13170F)] [.maple-night_&]:[--v-pump:color-mix(in_srgb,#C97E5B_80%,#13170F)] " +
+  "[.maple-night_&]:[--v-sleep:rgb(224_169_59/0.35)] [.maple-night_&]:[--v-nurse:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-bottle:rgb(224_169_59/0.55)] " +
+  "[.maple-night_&]:[--v-pee:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-poop:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-tummy:rgb(224_169_59/0.45)] [.maple-night_&]:[--v-pump:rgb(224_169_59/0.45)] " +
   "[.maple-night_&]:[--v-band:rgb(224_169_59/0.08)] [.maple-night_&]:[--v-target:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-dot-edge:rgb(224_169_59/0.3)] [.maple-night_&]:[--v-now:#D9772B]";
 
 const AXIS_TEXT = "fill-mp-ink-3 text-[10px] tabular-nums";
+/** Shared chart margins: y labels on the left, dates along the bottom. */
+const FRAME = { left: 30, right: 4, top: 10, bottom: 18 } as const;
 
 type Range = "7" | "14" | "30" | "all";
 type RibbonMode = "days" | "nights";
@@ -125,7 +133,7 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
 
   return (
     <div className={cx("px-4 pt-[max(1.25rem,env(safe-area-inset-top))]", VIZ_VARS)}>
-      <header className="mb-4">
+      <header className="mb-4 px-1">
         <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Patterns</h1>
         <p className={cx(tone.muted, "mt-1 text-[15px] leading-snug")}>What the days have looked like, for you and her pediatrician.</p>
       </header>
@@ -478,7 +486,11 @@ function useWidth<T extends HTMLElement>(): [(el: T | null) => (() => void) | un
   const [w, setW] = useState(0);
   const ref = useCallback((el: T | null) => {
     if (!el) return undefined;
-    const ro = new ResizeObserver(([e]) => setW(Math.floor(e.contentRect.width)));
+    // A momentary 0 (an ancestor hidden, a re-layout for a capture) keeps the last width rather than unmounting the chart.
+    const ro = new ResizeObserver(([e]) => {
+      const w = Math.floor(e.contentRect.width);
+      if (w > 0) setW(w);
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -517,6 +529,7 @@ function Ribbons({
   );
   const [showAll, setShowAll] = useState(false);
   const [ref, W] = useWidth<HTMLDivElement>();
+  const night = useNightActive();
   const shown = showAll ? rows : rows.slice(0, RIBBON_PAGE);
   const ticks = mode === "days" ? ["12a", "6a", "12p", "6p", "12a"] : ["12p", "6p", "12a", "6a", "12p"];
 
@@ -539,7 +552,7 @@ function Ribbons({
       </SectionTitle>
 
       <div className={cx(tone.card, "px-3 pb-3")}>
-        <RibbonLegend />
+        <RibbonLegend night={night} />
         {/* Sticky clock: stays put while the rows scroll under it. */}
         <div className="sticky top-[env(safe-area-inset-top)] z-10 -mx-3 bg-mp-surface px-3 pt-1.5 pb-1">
           <div className="relative h-4" aria-hidden>
@@ -561,7 +574,7 @@ function Ribbons({
         <div ref={ref}>
           {W > 0 &&
             shown.map((r) => (
-              <RibbonRowView key={r.key} row={r} W={W} units={units} onPick={onPickDay ? () => onPickDay(r.jumpKey) : undefined} />
+              <RibbonRowView key={r.key} row={r} W={W} units={units} night={night} onPick={onPickDay ? () => onPickDay(r.jumpKey) : undefined} />
             ))}
         </div>
         {rows.length > shown.length && (
@@ -580,7 +593,8 @@ function Ribbons({
   );
 }
 
-function RibbonLegend() {
+/** The ribbon key, drawn like the marks (bottles and pee turn hollow at night, as they do in the rows). */
+function RibbonLegend({ night }: { night: boolean }) {
   const item = (swatch: ReactNode, label: string) => (
     <span className="inline-flex items-center gap-1.5">
       <svg width="16" height="10" aria-hidden className="shrink-0">
@@ -593,8 +607,22 @@ function RibbonLegend() {
     <div className={cx(tone.muted, "flex flex-wrap gap-x-3 gap-y-1 pt-3 pb-1 text-[11px] font-medium")}>
       {item(<rect x="0" y="1" width="16" height="8" rx="2.5" fill="var(--v-sleep)" />, "Sleep")}
       {item(<rect x="5" y="0" width="5" height="10" rx="1" fill="var(--v-nurse)" />, "Nursing")}
-      {item(<rect x="5" y="0" width="5" height="10" rx="1" fill="var(--v-bottle)" />, "Bottle")}
-      {item(<circle cx="8" cy="5" r="4" fill="var(--v-pee)" />, "Pee")}
+      {item(
+        night ? (
+          <rect x="4.25" y="0.75" width="6.5" height="8.5" rx="1.75" fill="none" stroke="var(--v-bottle)" strokeWidth="1.5" />
+        ) : (
+          <rect x="5" y="0" width="5" height="10" rx="1" fill="var(--v-bottle)" />
+        ),
+        "Bottle"
+      )}
+      {item(
+        night ? (
+          <circle cx="8" cy="5" r="3.25" fill="none" stroke="var(--v-pee)" strokeWidth="1.5" />
+        ) : (
+          <circle cx="8" cy="5" r="4" fill="var(--v-pee)" />
+        ),
+        "Pee"
+      )}
       {item(<circle cx="8" cy="5" r="4" fill="var(--v-poop)" />, "Poop")}
       {item(<rect x="0" y="2.5" width="16" height="5" rx="2" fill="var(--v-tummy)" />, "Tummy")}
       {item(<rect x="0" y="0" width="16" height="10" rx="2" fill="var(--v-bottle)" opacity="0.22" />, "Close-together feeds")}
@@ -602,7 +630,7 @@ function RibbonLegend() {
   );
 }
 
-function RibbonRowView({ row, W, units, onPick }: { row: RibbonRow; W: number; units: UnitSystem; onPick?: () => void }) {
+function RibbonRowView({ row, W, units, night, onPick }: { row: RibbonRow; W: number; units: UnitSystem; night: boolean; onPick?: () => void }) {
   const s = row.stats;
   const summary = [
     `${s.feeds} feed${s.feeds === 1 ? "" : "s"}`,
@@ -656,32 +684,53 @@ function RibbonRowView({ row, W, units, onPick }: { row: RibbonRow; W: number; u
             <title>{sp.title}</title>
           </rect>
         ))}
-        {row.feeds.map((f, i) => (
-          <rect
-            key={`f${i}`}
-            x={x(f.x1)}
-            y={0}
-            width={Math.max(2, x(f.x2) - x(f.x1))}
-            height={5}
-            rx={1}
-            fill={f.bottle ? "var(--v-bottle)" : "var(--v-nurse)"}
-          >
-            <title>{f.title}</title>
-          </rect>
-        ))}
+        {row.feeds.map((f, i) => {
+          const w = Math.max(2, x(f.x2) - x(f.x1));
+          // At night a bottle is a hollow pill (wide enough to read as one), like the dial's.
+          return f.bottle && night ? (
+            <rect
+              key={`f${i}`}
+              x={x(f.x1) + 0.75}
+              y={0.75}
+              width={Math.max(6, w) - 1.5}
+              height={3.5}
+              rx={1.75}
+              fill="transparent"
+              stroke="var(--v-bottle)"
+              strokeWidth={1.5}
+            >
+              <title>{f.title}</title>
+            </rect>
+          ) : (
+            <rect key={`f${i}`} x={x(f.x1)} y={0} width={w} height={5} rx={1} fill={f.bottle ? "var(--v-bottle)" : "var(--v-nurse)"}>
+              <title>{f.title}</title>
+            </rect>
+          );
+        })}
         {row.diapers.map((d, i) => {
           const cx_ = Math.min(W - 4, Math.max(4, x(d.x)));
           const cy = 29.5;
           const r = 3.6;
+          // Night: wet is a hollow ring, dirty a solid dot; wet + dirty is half of each.
+          const ring = r - 0.75;
           return (
             <g key={`d${i}`}>
               <title>{d.title}</title>
               <circle cx={cx_} cy={cy} r={r + 1.5} fill="var(--v-surface)" />
               {d.pee && d.poop ? (
-                <>
-                  <path d={`M${cx_},${cy - r}A${r},${r} 0 0 0 ${cx_},${cy + r}Z`} fill="var(--v-pee)" />
-                  <path d={`M${cx_},${cy - r}A${r},${r} 0 0 1 ${cx_},${cy + r}Z`} fill="var(--v-poop)" />
-                </>
+                night ? (
+                  <>
+                    <path d={`M${cx_},${cy - ring}A${ring},${ring} 0 0 0 ${cx_},${cy + ring}`} fill="none" stroke="var(--v-pee)" strokeWidth={1.5} />
+                    <path d={`M${cx_},${cy - r}A${r},${r} 0 0 1 ${cx_},${cy + r}Z`} fill="var(--v-poop)" />
+                  </>
+                ) : (
+                  <>
+                    <path d={`M${cx_},${cy - r}A${r},${r} 0 0 0 ${cx_},${cy + r}Z`} fill="var(--v-pee)" />
+                    <path d={`M${cx_},${cy - r}A${r},${r} 0 0 1 ${cx_},${cy + r}Z`} fill="var(--v-poop)" />
+                  </>
+                )
+              ) : d.pee && night ? (
+                <circle cx={cx_} cy={cy} r={ring} fill="var(--v-surface)" stroke="var(--v-pee)" strokeWidth={1.5} />
               ) : (
                 <circle cx={cx_} cy={cy} r={r} fill={d.poop ? "var(--v-poop)" : d.pee ? "var(--v-pee)" : "var(--v-axis)"} />
               )}
@@ -765,15 +814,16 @@ type Scale = {
 /**
  * Shared frame for the daily charts: hairline grid, y ticks, date labels,
  * and a per-day hit area (pointer, tap, or ←/→ keys) that shows a tooltip.
+ * Without yTicks the chart draws its own grid (the diaper lanes do).
  */
 function ChartFrame({
   n,
   keys,
   todayKey,
   height,
-  yMax,
-  yTicks,
-  yLabel,
+  yMax = 1,
+  yTicks = [],
+  yLabel = String,
   ariaLabel,
   tooltip,
   children,
@@ -782,9 +832,9 @@ function ChartFrame({
   keys: string[];
   todayKey: string;
   height: number;
-  yMax: number;
-  yTicks: number[];
-  yLabel: (v: number) => string;
+  yMax?: number;
+  yTicks?: number[];
+  yLabel?: (v: number) => string;
   ariaLabel: string;
   tooltip: (i: number) => ReactNode;
   children: (s: Scale) => ReactNode;
@@ -810,10 +860,7 @@ function ChartFrame({
     return () => document.removeEventListener("pointerdown", onDown);
   }, [active]);
 
-  const LEFT = 30;
-  const RIGHT = 4;
-  const TOP = 10;
-  const BOTTOM = 18;
+  const { left: LEFT, right: RIGHT, top: TOP, bottom: BOTTOM } = FRAME;
   const plotW = Math.max(0, W - LEFT - RIGHT);
   const slot = n ? plotW / n : 0;
   const s: Scale = {
@@ -903,11 +950,22 @@ function ChartFrame({
   );
 }
 
-function TipRow({ color, value, label, dot }: { color: string; value: string; label: string; dot?: boolean }) {
+/** A tooltip line: the series' key (hollow where its marks are), the number, and what it counts. */
+function TipRow({ color, value, label, dot, hollow }: { color: string; value: string; label: string; dot?: boolean; hollow?: boolean }) {
   return (
     <span className="flex items-center gap-1.5">
       <svg width="12" height="8" aria-hidden className="shrink-0">
-        {dot ? <circle cx="6" cy="4" r="3.5" fill={color} /> : <line x1="0" x2="12" y1="4" y2="4" stroke={color} strokeWidth="3" strokeLinecap="round" />}
+        {dot ? (
+          hollow ? (
+            <circle cx="6" cy="4" r="2.9" fill="none" stroke={color} strokeWidth="1.5" />
+          ) : (
+            <circle cx="6" cy="4" r="3.5" fill={color} />
+          )
+        ) : hollow ? (
+          <rect x="0.75" y="1.25" width="10.5" height="5.5" rx="2.75" fill="none" stroke={color} strokeWidth="1.5" />
+        ) : (
+          <line x1="0" x2="12" y1="4" y2="4" stroke={color} strokeWidth="3" strokeLinecap="round" />
+        )}
       </svg>
       <strong className="font-semibold tabular-nums">{value}</strong>
       <span className="opacity-80">{label}</span>
@@ -915,22 +973,49 @@ function TipRow({ color, value, label, dot }: { color: string; value: string; la
   );
 }
 
-function ChartCard({
+/** A legend key: a dot in the series color, or a ring where the marks are hollow (bottles at night). */
+function KeyDot({ color, hollow }: { color: string; hollow?: boolean }) {
+  return (
+    <svg width="8" height="8" aria-hidden className="shrink-0">
+      {hollow ? <circle cx="4" cy="4" r="3.25" fill="none" stroke={color} strokeWidth="1.5" /> : <circle cx="4" cy="4" r="4" fill={color} />}
+    </svg>
+  );
+}
+
+/** A chart's explanation, one tap away. The words are passed through as they are (some come from guidelines.ts). */
+function HowToRead({ children }: { children: ReactNode }) {
+  return (
+    <details className="group/how px-1">
+      <summary className="-ml-1 inline-flex min-h-[44px] cursor-pointer list-none items-center gap-1.5 rounded-lg px-1 text-[13px] font-medium text-mp-ink-2 outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60 [&::-webkit-details-marker]:hidden">
+        <Icon name="info" size={15} className="text-mp-ink-3" />
+        How to read this
+        <Icon name="chevron-down" size={15} className="text-mp-ink-3 transition group-open/how:rotate-180 motion-reduce:transition-none" />
+      </summary>
+      <div className={cx(tone.muted, "space-y-2 pb-3 text-[13px] leading-snug")}>{children}</div>
+    </details>
+  );
+}
+
+/**
+ * One chart inside the grouped "Day by day" card: title, a live subtitle and
+ * key when there is one, the plot, and its explanation behind "How to read this".
+ */
+function ChartBlock({
   title,
   subtitle,
   legend,
-  note,
+  how,
   children,
 }: {
   title: string;
   subtitle?: ReactNode;
-  /** Series colors are the --v-* variables, so the dots follow the night look with the marks. */
-  legend?: { color: string; label: string }[];
-  note?: ReactNode;
+  /** Series colors are the --v-* variables, so the keys follow the night look with the marks. */
+  legend?: { color: string; label: string; hollow?: boolean }[];
+  how?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <figure className={cx(tone.card, "px-3 pt-4 pb-3")}>
+    <figure className={cx("px-3 pt-4", how ? "pb-0.5" : "pb-3")}>
       <figcaption className="mb-3 px-1">
         <h3 className={cx(tone.heading, "text-[15px]")}>{title}</h3>
         {subtitle && <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>{subtitle}</p>}
@@ -938,7 +1023,7 @@ function ChartCard({
           <p className={cx(tone.muted, "mt-2 flex flex-wrap gap-x-3.5 gap-y-1 text-xs font-medium")}>
             {legend.map((l) => (
               <span key={l.label} className="inline-flex items-center gap-1.5">
-                <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: l.color }} />
+                <KeyDot color={l.color} hollow={l.hollow} />
                 {l.label}
               </span>
             ))}
@@ -946,12 +1031,38 @@ function ChartCard({
         )}
       </figcaption>
       {children}
-      {note && <p className={cx(tone.muted, "mt-2 px-1 text-xs leading-snug")}>{note}</p>}
+      {how && <HowToRead>{how}</HowToRead>}
     </figure>
   );
 }
 
-type BarSeries = { id: string; label: string; color: string; values: number[] };
+/** The quieter charts, folded into the bottom row of the card until asked for. */
+function MoreCharts({ open, onToggle, summary, children }: { open: boolean; onToggle: () => void; summary: string; children: ReactNode }) {
+  const id = useId();
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        className={cx(tone.row, "min-h-[52px]", !open && "rounded-b-[19px]")}
+      >
+        <span className={cx(tone.body, "shrink-0 text-[15px] font-medium")}>More charts</span>
+        <span className={cx(tone.muted, "min-w-0 flex-1 truncate text-right text-sm")}>{summary}</span>
+        <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition motion-reduce:transition-none", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div id={id} className={cx(tone.divide, "border-t border-mp-line")}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** At night bottles are hollow outlines (the series' color is then the stroke). */
+type BarSeries = { id: string; label: string; color: string; values: number[]; hollow?: boolean };
 
 /** Column chart, stacked when there's more than one series. Today's column (partial) is lighter. */
 function Columns({
@@ -961,6 +1072,7 @@ function Columns({
   height = 128,
   band,
   integer = false,
+  night = false,
   yLabel,
   valueLabel,
   ariaLabel,
@@ -973,6 +1085,7 @@ function Columns({
   band?: { lo: number; hi: number };
   /** Counts: whole-number ticks. */
   integer?: boolean;
+  night?: boolean;
   yLabel: (v: number) => string;
   valueLabel: (v: number) => string;
   ariaLabel: string;
@@ -983,6 +1096,8 @@ function Columns({
   const ticks = niceTicks(Math.max(...totals, band?.hi ?? 0, 1), 3, integer);
   const yMax = ticks[ticks.length - 1];
   const last = n - 1;
+  // Between stacked segments: a 2px gap by day; at night a 1px seam in the page color.
+  const seam = night ? 1 : 2;
   return (
     <ChartFrame n={n} keys={keys} todayKey={todayKey} height={height} yMax={yMax} yTicks={ticks} yLabel={yLabel} ariaLabel={ariaLabel} tooltip={tooltip}>
       {(s) => (
@@ -995,19 +1110,47 @@ function Columns({
             const topIdx = series.map((ser, j) => ((ser.values[i] ?? 0) > 0 ? j : -1)).reduce((a, b) => Math.max(a, b), -1);
             const x = s.cx(i) - s.barW / 2;
             return (
-              <g key={k} opacity={k === todayKey ? 0.55 : 1}>
+              <g key={k} opacity={k === todayKey ? (night ? 0.7 : 0.55) : 1}>
                 {series.map((ser, j) => {
                   const v = ser.values[i] ?? 0;
                   if (v <= 0) return null;
-                  const y0 = s.y(cum) - (cum > 0 ? 2 : 0); // 2px surface gap between stacked segments
+                  const gap = cum > 0 ? seam : 0;
+                  const y0 = s.y(cum) - gap;
                   cum += v;
                   const y1 = s.y(cum);
                   const h = y0 - y1;
                   if (h <= 0.5) return null;
-                  return j === topIdx ? (
-                    <path key={ser.id} d={topRounded(x, y1, s.barW, h, 4)} fill={ser.color} />
+                  const top = j === topIdx;
+                  // Hollow segments are inset by half the stroke so they cover the same footprint.
+                  const mark = ser.hollow ? (
+                    top ? (
+                      <path
+                        d={topRounded(x + 0.75, y1 + 0.75, Math.max(0.5, s.barW - 1.5), Math.max(0.5, h - 1.5), 3.25)}
+                        fill="none"
+                        stroke={ser.color}
+                        strokeWidth={1.5}
+                      />
+                    ) : (
+                      <rect
+                        x={x + 0.75}
+                        y={y1 + 0.75}
+                        width={Math.max(0.5, s.barW - 1.5)}
+                        height={Math.max(0.5, h - 1.5)}
+                        fill="none"
+                        stroke={ser.color}
+                        strokeWidth={1.5}
+                      />
+                    )
+                  ) : top ? (
+                    <path d={topRounded(x, y1, s.barW, h, 4)} fill={ser.color} />
                   ) : (
-                    <rect key={ser.id} x={x} y={y1} width={s.barW} height={h} fill={ser.color} />
+                    <rect x={x} y={y1} width={s.barW} height={h} fill={ser.color} />
+                  );
+                  return (
+                    <Fragment key={ser.id}>
+                      {night && gap > 0 && <rect x={x} y={y0} width={s.barW} height={gap} fill="var(--mp-bg)" />}
+                      {mark}
+                    </Fragment>
                   );
                 })}
               </g>
@@ -1030,51 +1173,121 @@ function Columns({
   );
 }
 
-type DotDay = { colors: string[]; target: number | null };
+/** One day of the diaper chart: wet count, dirty diapers by stool color (null = not noted), and the least to expect. */
+type DiaperDay = { wet: number; stools: (string | null)[]; wetTarget: number | null; dirtyTarget: number | null };
 
-/** "Each dot is one diaper" columns, with a short target tick per day. */
-function DotColumns({
+/**
+ * Wet and dirty diapers in one chart: two lanes of dots on one day axis, each
+ * dot one diaper (dirty ones in their stool color), with a short line at the
+ * least to expect for her day of life. Both lanes share a step, so a dot and
+ * a count are the same size in each.
+ */
+function DiaperLanes({
   keys,
   todayKey,
   data,
+  night,
   ariaLabel,
   tooltip,
 }: {
   keys: string[];
   todayKey: string;
-  data: DotDay[];
+  data: DiaperDay[];
+  night: boolean;
   ariaLabel: string;
   tooltip: (i: number) => ReactNode;
 }) {
-  const maxCount = Math.max(1, ...data.map((d) => Math.max(d.colors.length, d.target ?? 0)));
-  const yMax = maxCount + 1;
-  const height = Math.min(190, Math.max(104, yMax * 11 + 28));
-  const ticks = niceTicks(yMax - 1, 2, true).filter((t) => t <= yMax);
+  const wetMax = Math.max(1, ...data.map((d) => Math.max(d.wet, d.wetTarget ?? 0)));
+  const dirtyMax = Math.max(1, ...data.map((d) => Math.max(d.stools.length, d.dirtyTarget ?? 0)));
+  const step = Math.max(7, Math.min(11, 96 / (Math.max(wetMax, dirtyMax) + 0.5)));
+  const LABEL = 18;
+  const GAP = 12;
+  // The first lane's name sits in the frame's top margin, right under the chart title.
+  const wetLabel = 0;
+  const wetTop = wetLabel + LABEL;
+  const wetBottom = wetTop + (wetMax + 0.5) * step;
+  const dirtyLabel = wetBottom + GAP;
+  const dirtyTop = dirtyLabel + LABEL;
+  const dirtyBottom = dirtyTop + (dirtyMax + 0.5) * step;
+  const lanes = [
+    { id: "wet", label: "Wet", max: wetMax, labelY: wetLabel, bottom: wetBottom },
+    { id: "dirty", label: "Dirty", max: dirtyMax, labelY: dirtyLabel, bottom: dirtyBottom },
+  ] as const;
+  const height = dirtyBottom + FRAME.bottom;
+
   return (
-    <ChartFrame n={keys.length} keys={keys} todayKey={todayKey} height={height} yMax={yMax} yTicks={ticks} yLabel={(v) => String(v)} ariaLabel={ariaLabel} tooltip={tooltip}>
+    <ChartFrame n={keys.length} keys={keys} todayKey={todayKey} height={height} ariaLabel={ariaLabel} tooltip={tooltip}>
       {(s) => {
-        const step = s.y(0) - s.y(1);
         const r = Math.max(2, Math.min(5, s.slot * 0.34, step / 2 - 0.75));
-        return keys.map((k, i) => {
-          const d = data[i];
-          const partial = k === todayKey;
+        const half = Math.min(s.slot * 0.45, 11);
+        return lanes.map((lane) => {
+          const wet = lane.id === "wet";
+          const y = (v: number) => lane.bottom - v * step;
+          const ticks = niceTicks(lane.max, 2, true).filter((t) => t <= lane.max + 0.5);
+          const ky = lane.labelY + 5;
           return (
-            <g key={k}>
-              {d.colors.map((c, j) => (
-                <circle key={j} cx={s.cx(i)} cy={s.y(j + 0.5)} r={r} fill={c} stroke="var(--v-dot-edge)" strokeWidth={0.75} opacity={partial ? 0.65 : 1} />
-              ))}
-              {d.target != null && (
-                <line
-                  x1={s.cx(i) - Math.min(s.slot * 0.45, 11)}
-                  x2={s.cx(i) + Math.min(s.slot * 0.45, 11)}
-                  y1={s.y(d.target)}
-                  y2={s.y(d.target)}
-                  stroke="var(--v-target)"
-                  strokeWidth={1.5}
-                  strokeLinecap="round"
-                  opacity={partial ? 0.45 : 0.9}
-                />
+            <g key={lane.id}>
+              {/* Lane name, keyed like its dots */}
+              {wet && night ? (
+                <circle cx={s.left + 4} cy={ky} r={3.25} fill="none" stroke="var(--v-pee)" strokeWidth={1.5} />
+              ) : (
+                <circle cx={s.left + 4} cy={ky} r={4} fill={wet ? "var(--v-pee)" : "var(--v-poop)"} />
               )}
+              <text x={s.left + 13} y={ky} dy="0.35em" className="fill-mp-ink-2 text-[11px] font-medium">
+                {lane.label}
+              </text>
+              {ticks.map((v) => (
+                <g key={v}>
+                  <line x1={s.left} x2={s.W - FRAME.right} y1={y(v)} y2={y(v)} stroke={v === 0 ? "var(--v-axis)" : "var(--v-grid)"} strokeWidth={1} />
+                  <text x={s.left - 5} y={y(v)} dy="0.32em" textAnchor="end" className={AXIS_TEXT}>
+                    {v}
+                  </text>
+                </g>
+              ))}
+              {keys.map((k, i) => {
+                const d = data[i];
+                const partial = k === todayKey;
+                const cx_ = s.cx(i);
+                const target = wet ? d.wetTarget : d.dirtyTarget;
+                const dots: (string | null)[] = wet ? new Array<null>(d.wet).fill(null) : d.stools;
+                return (
+                  <g key={k}>
+                    {dots.map((c, j) =>
+                      wet ? (
+                        night ? (
+                          <circle key={j} cx={cx_} cy={y(j + 0.5)} r={r - 0.75} fill="var(--v-surface)" stroke="var(--v-pee)" strokeWidth={1.5} opacity={partial ? 0.65 : 1} />
+                        ) : (
+                          <circle key={j} cx={cx_} cy={y(j + 0.5)} r={r} fill="var(--v-pee)" stroke="var(--v-dot-edge)" strokeWidth={0.75} opacity={partial ? 0.65 : 1} />
+                        )
+                      ) : (
+                        <circle
+                          key={j}
+                          cx={cx_}
+                          cy={y(j + 0.5)}
+                          r={night && c ? r - 0.5 : r}
+                          fill={c ?? "var(--v-poop)"}
+                          // At night a noted stool color stays (it's information), edged in the amber.
+                          stroke={night ? (c ? "var(--v-poop)" : "none") : "var(--v-dot-edge)"}
+                          strokeWidth={night ? 1 : 0.75}
+                          opacity={partial ? 0.65 : 1}
+                        />
+                      )
+                    )}
+                    {target != null && (
+                      <line
+                        x1={cx_ - half}
+                        x2={cx_ + half}
+                        y1={y(target)}
+                        y2={y(target)}
+                        stroke="var(--v-target)"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                        opacity={partial ? 0.45 : 0.9}
+                      />
+                    )}
+                  </g>
+                );
+              })}
             </g>
           );
         });
@@ -1100,7 +1313,9 @@ function DailyCharts({
   units: UnitSystem;
   now: Date;
 }) {
+  const night = useNightActive();
   const [asTable, setAsTable] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const keys = days.map((d) => d.key);
   const so = (i: number) => (keys[i] === todayKey ? " so far" : "");
 
@@ -1139,6 +1354,8 @@ function DailyCharts({
   const totalR = days.reduce((n, d) => n + d.rightSec, 0);
   const lPct = totalL + totalR ? Math.round((totalL / (totalL + totalR)) * 100) : 0;
   const bornAge = bornAt ? babyAge(bornAt, now, tz) : null;
+  const more = [anyBottle && "bottle", anyPump && "pumped", anyTummy && "tummy time"].filter((m): m is string => !!m);
+  const moreSummary = more.length ? more[0][0].toUpperCase() + more.join(", ").slice(1) : "";
 
   return (
     <section aria-labelledby="maple-daily" className="space-y-3">
@@ -1161,178 +1378,188 @@ function DailyCharts({
         <DailyTable days={days} todayKey={todayKey} units={units} />
       ) : (
         <>
-          <ChartCard
-            title="Feeds per day"
-            subtitle={`Shaded band: ${FEEDS_PER_DAY[0]}–${FEEDS_PER_DAY[1]} a day, typical for newborns.`}
-            legend={
-              anyBottleFeeds
-                ? [
-                    { color: "var(--v-nurse)", label: "Nursing" },
-                    { color: "var(--v-bottle)", label: "Bottle" },
-                  ]
-                : undefined
-            }
-          >
-            <Columns
-              keys={keys}
-              todayKey={todayKey}
-              band={{ lo: FEEDS_PER_DAY[0], hi: FEEDS_PER_DAY[1] }}
-              integer
-              series={[
-                { id: "breast", label: "Nursing", color: "var(--v-nurse)", values: days.map((d) => d.breastFeeds) },
-                { id: "bottle", label: "Bottle", color: "var(--v-bottle)", values: days.map((d) => d.bottleFeeds) },
-              ]}
-              yLabel={(v) => String(v)}
-              valueLabel={(v) => String(v)}
-              ariaLabel={`Feeds per day: ${days.map((d) => `${shortDate(d.key)} ${d.feeds}`).join(", ")}`}
-              tooltip={(i) => (
-                <>
-                  <TipRow color="var(--v-nurse)" value={String(days[i].breastFeeds)} label={`nursing${so(i)}`} />
-                  {anyBottleFeeds && <TipRow color="var(--v-bottle)" value={String(days[i].bottleFeeds)} label="bottle" />}
-                </>
-              )}
-            />
-          </ChartCard>
-
-          <ChartCard
-            title="Wet diapers"
-            subtitle="Each dot is one wet diaper. The short line is the least to expect for her day of life."
-          >
-            <DotColumns
-              keys={keys}
-              todayKey={todayKey}
-              data={days.map((d, i) => ({ colors: new Array(d.wet).fill("var(--v-pee)"), target: targets[i]?.wet ?? null }))}
-              ariaLabel={`Wet diapers per day: ${days.map((d) => `${shortDate(d.key)} ${d.wet}`).join(", ")}`}
-              tooltip={(i) => (
-                <>
-                  <TipRow dot color="var(--v-pee)" value={String(days[i].wet)} label={`wet${so(i)}`} />
-                  {targets[i] && <span className="block opacity-80">Expect at least {targets[i]!.wet} around Day {targets[i]!.dol}</span>}
-                </>
-              )}
-            />
-          </ChartCard>
-
-          <ChartCard
-            title="Dirty diapers"
-            subtitle="Each dot is one dirty diaper, in its color: black at first, then green, then mustard yellow."
-          >
-            <DotColumns
-              keys={keys}
-              todayKey={todayKey}
-              data={days.map((d, i) => ({
-                colors: (stools.get(d.key) ?? []).map((c) => (c ? STOOL_COLOR_INFO[c].hex : "var(--v-poop)")),
-                target: targets[i]?.dirty ?? null,
-              }))}
-              ariaLabel={`Dirty diapers per day: ${days.map((d) => `${shortDate(d.key)} ${d.dirty}`).join(", ")}`}
-              tooltip={(i) => {
-                const cs = stools.get(keys[i]) ?? [];
-                const counts = new Map<string, number>();
-                for (const c of cs) {
-                  const label = c ? STOOL_COLOR_INFO[c].label.toLowerCase() : "no color noted";
-                  counts.set(label, (counts.get(label) ?? 0) + 1);
-                }
-                return (
-                  <>
-                    <TipRow dot color="var(--v-poop)" value={String(days[i].dirty)} label={`dirty${so(i)}`} />
-                    {[...counts].map(([l, c]) => (
-                      <span key={l} className="block opacity-80">
-                        {c > 1 ? `${c}× ` : ""}
-                        {l}
-                      </span>
-                    ))}
-                    {targets[i]?.dirty != null && <span className="block opacity-80">Expect at least {targets[i]!.dirty} around Day {targets[i]!.dol}</span>}
-                  </>
-                );
-              }}
-            />
-          </ChartCard>
-
-          <ChartCard title="Sleep per day" note={`${SLEEP_TOTAL_NOTE} Only logged sleep counts here, so a missed nap makes a day look short.`}>
-            <Columns
-              keys={keys}
-              todayKey={todayKey}
-              series={[{ id: "sleep", label: "Sleep", color: "var(--v-sleep)", values: days.map((d) => d.sleepSec / 3600) }]}
-              yLabel={(v) => (v ? `${v}h` : "0")}
-              valueLabel={(v) => formatDuration(v * 3600)}
-              ariaLabel={`Logged sleep per day: ${days.map((d) => `${shortDate(d.key)} ${formatDuration(d.sleepSec)}`).join(", ")}`}
-              tooltip={(i) => <TipRow color="var(--v-sleep)" value={formatDuration(days[i].sleepSec)} label={`logged sleep${so(i)}`} />}
-            />
-          </ChartCard>
-
-          {anyNursing && (
-            <ChartCard
-              title="Nursing minutes, left and right"
-              subtitle={totalL + totalR >= 60 ? `Over these days: L ${lPct}% · R ${100 - lPct}%.` : undefined}
-              legend={[
-                { color: "var(--v-nurse)", label: "L · Left" },
-                { color: "var(--v-bottle)", label: "R · Right" },
-              ]}
+          {/* One card, hairlines between charts. Not overflow-hidden: the first chart's tooltip may rise above its top edge. */}
+          <div className={cx(tone.card, tone.divide)}>
+            <ChartBlock
+              title="Feeds per day"
+              legend={
+                anyBottleFeeds
+                  ? [
+                      { color: "var(--v-nurse)", label: "Nursing" },
+                      { color: "var(--v-bottle)", label: "Bottle", hollow: night },
+                    ]
+                  : undefined
+              }
+              how={<p>{`Shaded band: ${FEEDS_PER_DAY[0]}–${FEEDS_PER_DAY[1]} a day, typical for newborns.`}</p>}
             >
               <Columns
                 keys={keys}
                 todayKey={todayKey}
+                band={{ lo: FEEDS_PER_DAY[0], hi: FEEDS_PER_DAY[1] }}
+                integer
+                night={night}
                 series={[
-                  { id: "L", label: "Left", color: "var(--v-nurse)", values: days.map((d) => d.leftSec / 3600) },
-                  { id: "R", label: "Right", color: "var(--v-bottle)", values: days.map((d) => d.rightSec / 3600) },
+                  { id: "breast", label: "Nursing", color: "var(--v-nurse)", values: days.map((d) => d.breastFeeds) },
+                  { id: "bottle", label: "Bottle", color: "var(--v-bottle)", values: days.map((d) => d.bottleFeeds), hollow: night },
                 ]}
-                yLabel={(v) => (v ? `${v}h` : "0")}
-                valueLabel={(v) => formatDuration(v * 3600)}
-                ariaLabel={`Nursing minutes per day: ${days.map((d) => `${shortDate(d.key)} left ${Math.round(d.leftSec / 60)}, right ${Math.round(d.rightSec / 60)}`).join("; ")}`}
+                yLabel={(v) => String(v)}
+                valueLabel={(v) => String(v)}
+                ariaLabel={`Feeds per day: ${days.map((d) => `${shortDate(d.key)} ${d.feeds}`).join(", ")}`}
                 tooltip={(i) => (
                   <>
-                    <TipRow color="var(--v-nurse)" value={formatDuration(days[i].leftSec)} label="L" />
-                    <TipRow color="var(--v-bottle)" value={formatDuration(days[i].rightSec)} label={`R${so(i)}`} />
+                    <TipRow color="var(--v-nurse)" value={String(days[i].breastFeeds)} label={`nursing${so(i)}`} />
+                    {anyBottleFeeds && <TipRow color="var(--v-bottle)" hollow={night} value={String(days[i].bottleFeeds)} label="bottle" />}
                   </>
                 )}
               />
-            </ChartCard>
-          )}
+            </ChartBlock>
 
-          {anyBottle && (
-            <ChartCard title={`Bottle per day (${volUnit})`}>
-              <Columns
-                keys={keys}
-                todayKey={todayKey}
-                series={[{ id: "bottle", label: "Bottle", color: "var(--v-bottle)", values: days.map((d) => vol(d.bottleMl)) }]}
-                yLabel={(v) => String(v)}
-                valueLabel={(v) => `${v} ${volUnit}`}
-                ariaLabel={`Bottle volume per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.bottleMl, units)}`).join(", ")}`}
-                tooltip={(i) => <TipRow color="var(--v-bottle)" value={formatVolume(days[i].bottleMl, units)} label={`by bottle${so(i)}`} />}
-              />
-            </ChartCard>
-          )}
-
-          {anyPump && (
-            <ChartCard title={`Pumped per day (${volUnit})`}>
-              <Columns
-                keys={keys}
-                todayKey={todayKey}
-                series={[{ id: "pump", label: "Pumped", color: "var(--v-pump)", values: days.map((d) => vol(d.pumpMl)) }]}
-                yLabel={(v) => String(v)}
-                valueLabel={(v) => `${v} ${volUnit}`}
-                ariaLabel={`Pumped per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.pumpMl, units)}`).join(", ")}`}
-                tooltip={(i) => <TipRow color="var(--v-pump)" value={formatVolume(days[i].pumpMl, units)} label={`pumped${so(i)}`} />}
-              />
-            </ChartCard>
-          )}
-
-          {anyTummy && (
-            <ChartCard
-              title="Tummy time per day"
-              subtitle={bornAge ? `A goal of about ${tummyGoalMinutes(bornAge.days)} minutes a day at her age, in short sessions.` : undefined}
+            <ChartBlock
+              title="Diapers"
+              how={
+                <>
+                  <p>Each dot is one wet diaper. The short line is the least to expect for her day of life.</p>
+                  <p>Each dot is one dirty diaper, in its color: black at first, then green, then mustard yellow.</p>
+                </>
+              }
             >
+              <DiaperLanes
+                keys={keys}
+                todayKey={todayKey}
+                night={night}
+                data={days.map((d, i) => ({
+                  wet: d.wet,
+                  stools: (stools.get(d.key) ?? []).map((c) => (c ? STOOL_COLOR_INFO[c].hex : null)),
+                  wetTarget: targets[i]?.wet ?? null,
+                  dirtyTarget: targets[i]?.dirty ?? null,
+                }))}
+                ariaLabel={`Wet diapers per day: ${days.map((d) => `${shortDate(d.key)} ${d.wet}`).join(", ")}. Dirty diapers per day: ${days
+                  .map((d) => `${shortDate(d.key)} ${d.dirty}`)
+                  .join(", ")}`}
+                tooltip={(i) => {
+                  const cs = stools.get(keys[i]) ?? [];
+                  const counts = new Map<string, number>();
+                  for (const c of cs) {
+                    const label = c ? STOOL_COLOR_INFO[c].label.toLowerCase() : "no color noted";
+                    counts.set(label, (counts.get(label) ?? 0) + 1);
+                  }
+                  const t = targets[i];
+                  return (
+                    <>
+                      <TipRow dot hollow={night} color="var(--v-pee)" value={String(days[i].wet)} label={`wet${so(i)}`} />
+                      {t && <span className="block opacity-80">Expect at least {t.wet} wet around Day {t.dol}</span>}
+                      <span className="mt-1 block">
+                        <TipRow dot color="var(--v-poop)" value={String(days[i].dirty)} label={`dirty${so(i)}`} />
+                      </span>
+                      {[...counts].map(([l, c]) => (
+                        <span key={l} className="block opacity-80">
+                          {c > 1 ? `${c}× ` : ""}
+                          {l}
+                        </span>
+                      ))}
+                      {t?.dirty != null && <span className="block opacity-80">Expect at least {t.dirty} dirty around Day {t.dol}</span>}
+                    </>
+                  );
+                }}
+              />
+            </ChartBlock>
+
+            <ChartBlock title="Sleep per day" how={<p>{`${SLEEP_TOTAL_NOTE} Only logged sleep counts here, so a missed nap makes a day look short.`}</p>}>
               <Columns
                 keys={keys}
                 todayKey={todayKey}
-                height={110}
-                series={[{ id: "tummy", label: "Tummy time", color: "var(--v-tummy)", values: days.map((d) => d.tummySec / 60) }]}
-                yLabel={(v) => (v ? `${v}m` : "0")}
-                valueLabel={(v) => formatDuration(v * 60)}
-                ariaLabel={`Tummy time per day: ${days.map((d) => `${shortDate(d.key)} ${formatDuration(d.tummySec)}`).join(", ")}`}
-                tooltip={(i) => <TipRow color="var(--v-tummy)" value={formatDuration(days[i].tummySec)} label={`tummy time${so(i)}`} />}
+                night={night}
+                series={[{ id: "sleep", label: "Sleep", color: "var(--v-sleep)", values: days.map((d) => d.sleepSec / 3600) }]}
+                yLabel={(v) => (v ? `${v}h` : "0")}
+                valueLabel={(v) => formatDuration(v * 3600)}
+                ariaLabel={`Logged sleep per day: ${days.map((d) => `${shortDate(d.key)} ${formatDuration(d.sleepSec)}`).join(", ")}`}
+                tooltip={(i) => <TipRow color="var(--v-sleep)" value={formatDuration(days[i].sleepSec)} label={`logged sleep${so(i)}`} />}
               />
-            </ChartCard>
-          )}
+            </ChartBlock>
+
+            {anyNursing && (
+              <ChartBlock
+                title="Nursing minutes, left and right"
+                subtitle={totalL + totalR >= 60 ? `Over these days: L ${lPct}% · R ${100 - lPct}%.` : undefined}
+                legend={[
+                  { color: "var(--v-nurse)", label: "L · Left" },
+                  { color: "var(--v-bottle)", label: "R · Right" },
+                ]}
+              >
+                <Columns
+                  keys={keys}
+                  todayKey={todayKey}
+                  night={night}
+                  series={[
+                    { id: "L", label: "Left", color: "var(--v-nurse)", values: days.map((d) => d.leftSec / 3600) },
+                    { id: "R", label: "Right", color: "var(--v-bottle)", values: days.map((d) => d.rightSec / 3600) },
+                  ]}
+                  yLabel={(v) => (v ? `${v}h` : "0")}
+                  valueLabel={(v) => formatDuration(v * 3600)}
+                  ariaLabel={`Nursing minutes per day: ${days.map((d) => `${shortDate(d.key)} left ${Math.round(d.leftSec / 60)}, right ${Math.round(d.rightSec / 60)}`).join("; ")}`}
+                  tooltip={(i) => (
+                    <>
+                      <TipRow color="var(--v-nurse)" value={formatDuration(days[i].leftSec)} label="L" />
+                      <TipRow color="var(--v-bottle)" value={formatDuration(days[i].rightSec)} label={`R${so(i)}`} />
+                    </>
+                  )}
+                />
+              </ChartBlock>
+            )}
+
+            {more.length > 0 && (
+              <MoreCharts open={moreOpen} onToggle={() => setMoreOpen((o) => !o)} summary={moreSummary}>
+                {anyBottle && (
+                  <ChartBlock title={`Bottle per day (${volUnit})`}>
+                    <Columns
+                      keys={keys}
+                      todayKey={todayKey}
+                      night={night}
+                      series={[{ id: "bottle", label: "Bottle", color: "var(--v-bottle)", values: days.map((d) => vol(d.bottleMl)), hollow: night }]}
+                      yLabel={(v) => String(v)}
+                      valueLabel={(v) => `${v} ${volUnit}`}
+                      ariaLabel={`Bottle volume per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.bottleMl, units)}`).join(", ")}`}
+                      tooltip={(i) => <TipRow color="var(--v-bottle)" hollow={night} value={formatVolume(days[i].bottleMl, units)} label={`by bottle${so(i)}`} />}
+                    />
+                  </ChartBlock>
+                )}
+
+                {anyPump && (
+                  <ChartBlock title={`Pumped per day (${volUnit})`}>
+                    <Columns
+                      keys={keys}
+                      todayKey={todayKey}
+                      night={night}
+                      series={[{ id: "pump", label: "Pumped", color: "var(--v-pump)", values: days.map((d) => vol(d.pumpMl)) }]}
+                      yLabel={(v) => String(v)}
+                      valueLabel={(v) => `${v} ${volUnit}`}
+                      ariaLabel={`Pumped per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.pumpMl, units)}`).join(", ")}`}
+                      tooltip={(i) => <TipRow color="var(--v-pump)" value={formatVolume(days[i].pumpMl, units)} label={`pumped${so(i)}`} />}
+                    />
+                  </ChartBlock>
+                )}
+
+                {anyTummy && (
+                  <ChartBlock
+                    title="Tummy time per day"
+                    how={bornAge ? <p>{`A goal of about ${tummyGoalMinutes(bornAge.days)} minutes a day at her age, in short sessions.`}</p> : undefined}
+                  >
+                    <Columns
+                      keys={keys}
+                      todayKey={todayKey}
+                      height={110}
+                      night={night}
+                      series={[{ id: "tummy", label: "Tummy time", color: "var(--v-tummy)", values: days.map((d) => d.tummySec / 60) }]}
+                      yLabel={(v) => (v ? `${v}m` : "0")}
+                      valueLabel={(v) => formatDuration(v * 60)}
+                      ariaLabel={`Tummy time per day: ${days.map((d) => `${shortDate(d.key)} ${formatDuration(d.tummySec)}`).join(", ")}`}
+                      tooltip={(i) => <TipRow color="var(--v-tummy)" value={formatDuration(days[i].tummySec)} label={`tummy time${so(i)}`} />}
+                    />
+                  </ChartBlock>
+                )}
+              </MoreCharts>
+            )}
+          </div>
           <p className={cx(tone.faint, "px-2 text-xs leading-snug")}>
             Tap or hover a day for its numbers. Counts come from what was logged, so a missed entry makes a day look light.
           </p>

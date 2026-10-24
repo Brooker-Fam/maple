@@ -139,10 +139,7 @@ export default function Celebrations() {
             <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-mp-maple/10 text-mp-maple">
               <Icon name={celebrationIcon(current)} size={22} />
             </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-medium text-mp-maple">A little celebration</p>
-              <h2 className={cx(tone.heading, "mt-0.5 text-[20px] leading-snug")}>{current.title}</h2>
-            </div>
+            <h2 className={cx(tone.heading, "min-w-0 flex-1 self-center text-[17px] leading-snug")}>{current.title}</h2>
             <button
               type="button"
               onClick={() => markSeen(current.id)}
@@ -155,6 +152,7 @@ export default function Celebrations() {
           {!readOnly && (
             <div className="relative mt-3 pl-[52px]">
               <Button
+                variant="soft"
                 onClick={() => {
                   markSeen(current.id);
                   open({ kind: "moment", preset: { title: current.title, milestone: milestoneId(current) } });

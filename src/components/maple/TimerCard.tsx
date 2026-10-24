@@ -1,9 +1,9 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { tick } from "@/components/atlas/haptics";
-import { feedTotals, openSegment, other, suggestNextSide } from "@/lib/maple/feed";
+import { feedTotals, openSegment, suggestNextSide } from "@/lib/maple/feed";
 import { addDays, dayKey, DEFAULT_TZ, formatClock, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Entry, FeedData, Side, TimerKind } from "@/lib/maple/types";
 import { Icon, KindBadge, type IconName } from "./icons";
@@ -333,8 +333,30 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   const [lantern, setLantern] = useState(false);
   const [snoozes, setSnoozes] = useState<Record<string, number>>({});
   const [ending, setEnding] = useState(false);
+  const menuWrap = useRef<HTMLDivElement>(null);
+  const menuBtn = useRef<HTMLButtonElement>(null);
 
   useEffect(() => setSnoozes(readSnoozes()), []);
+
+  // The … menu floats over the card (so the clock never jumps) and closes on Escape or a tap anywhere else.
+  const menuOpen = menu === "menu";
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenu(null);
+      menuBtn.current?.focus();
+    };
+    const onDown = (e: PointerEvent) => {
+      if (menuWrap.current && !menuWrap.current.contains(e.target as Node)) setMenu(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown);
+    };
+  }, [menuOpen]);
 
   const settings = (state?.baby.settings ?? {}) as Record<string, unknown>;
   const checkMin = Number(settings[`timer_check_${kind}_min`]) || CHECK_AFTER_MIN[kind];
@@ -356,13 +378,20 @@ export default function TimerCard({ entry }: { entry: Entry }) {
 
   const who = member(entry.created_by);
   const startedBy = entry.created_by && entry.created_by !== state?.me.email ? `started by ${memberName(entry.created_by)}` : memberName(entry.created_by);
-  const target = n.side ? other(n.side) : "L";
   const title = isFeed ? `Nursing · ${SIDE_NAME[n.side ?? "L"]}` : KIND_TITLE[kind];
   const canLantern = kind === "feed" || kind === "sleep";
-  // The dock repeats the feed and sleep controls (Switch, Resume, Done, Woke
-  // up) as its bright buttons, so here they stay quiet: one loud Done on
-  // screen, not two. Tummy time and pumping have only this card's Done.
+  // The dock (on Today, for everyone who can log) carries the feed and sleep
+  // controls (Switch, Resume, Done, Woke up), so this card doesn't repeat
+  // them: one Done on screen, not two. Tummy time and pumping have only this
+  // card's Done.
   const mirrored = kind === "feed" || kind === "sleep";
+  const resumeSide: Side = n.side ?? "L";
+  // "Started earlier?" opens under the since-line (its other way in), so the clock stays put.
+  const adjustStart = (
+    <AnimatePresence initial={false}>
+      {menu === "adjust" && controls && !pending && <AdjustStart key="adjust" entry={entry} close={() => setMenu(null)} tz={tz} now={now} actions={actions} />}
+    </AnimatePresence>
+  );
 
   return (
     <motion.section
@@ -371,7 +400,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97 }}
       aria-label={`${title} timer`}
-      className={cx(tone.card, "p-4")}
+      className={cx(tone.card, "p-4", menuOpen && "relative z-20")}
     >
       <div className="flex items-center gap-3">
         {isFeed ? <SideMark side={n.side ?? "L"} /> : <KindBadge kind={kind} size={32} />}
@@ -389,26 +418,31 @@ export default function TimerCard({ entry }: { entry: Entry }) {
                 <Icon name="lamp" size={21} />
               </button>
             )}
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => setMenu((m) => (m ? null : "menu"))}
-              aria-expanded={!!menu}
-              aria-label="More timer options"
-              className={cx(ICON_BTN, menu && "bg-mp-sunken text-mp-ink")}
-            >
-              <Icon name="ellipsis" size={22} strokeWidth={2.25} />
-            </button>
+            <div ref={menuWrap} className="relative">
+              <button
+                ref={menuBtn}
+                type="button"
+                disabled={pending}
+                onClick={() => setMenu((m) => (m === "menu" ? null : "menu"))}
+                aria-expanded={menuOpen}
+                aria-label="More timer options"
+                className={cx(ICON_BTN, menuOpen && "bg-mp-sunken text-mp-ink")}
+              >
+                <Icon name="ellipsis" size={22} strokeWidth={2.25} />
+              </button>
+              <AnimatePresence>
+                {menuOpen && !pending && <TimerMenu key="menu" entry={entry} setView={setMenu} actions={actions} />}
+              </AnimatePresence>
+            </div>
           </div>
         )}
       </div>
 
-      <AnimatePresence initial={false}>
-        {menu && controls && !pending && <TimerMenu key="menu" entry={entry} view={menu} setView={setMenu} tz={tz} now={now} actions={actions} />}
-      </AnimatePresence>
-
       {forgotten ? (
-        <ForgottenPrompt entry={entry} n={n} now={now} tz={tz} ending={ending} setEnding={setEnding} onSnooze={snooze} actions={actions} />
+        <>
+          <ForgottenPrompt entry={entry} n={n} now={now} tz={tz} ending={ending} setEnding={setEnding} onSnooze={snooze} actions={actions} />
+          {adjustStart}
+        </>
       ) : (
         <>
           <div className="mt-3">
@@ -422,18 +456,31 @@ export default function TimerCard({ entry }: { entry: Entry }) {
               >
                 {formatClock(n.elapsed)}
               </p>
-              {isFeed && !n.paused && controls && (
-                // Pause is secondary: most feeds just switch and finish.
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => void actions.pause(entry)}
-                  className="-mr-2 mb-0.5 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
-                >
-                  <Icon name="pause" size={15} />
-                  Pause
-                </button>
-              )}
+              {isFeed &&
+                controls &&
+                // Pause is secondary: most feeds just switch and finish. Paused, it resumes the same side (the dock offers either).
+                (n.paused ? (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => void actions.resume(entry, resumeSide)}
+                    aria-label={`Resume ${SIDE_NAME[resumeSide]}`}
+                    className="-mr-2 mb-0.5 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
+                  >
+                    <SideMark side={resumeSide} size={18} />
+                    Resume
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => void actions.pause(entry)}
+                    className="-mr-2 mb-0.5 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[15px] font-semibold text-mp-ink-2 transition active:bg-mp-ink/5 disabled:opacity-40"
+                  >
+                    <Icon name="pause" size={15} />
+                    Pause
+                  </button>
+                ))}
             </div>
             {n.paused && (
               <p className="mt-1.5 flex items-center gap-1.5 text-sm font-semibold text-mp-ink-2 tabular-nums">
@@ -470,35 +517,13 @@ export default function TimerCard({ entry }: { entry: Entry }) {
               {pending && <span className="text-mp-ink-3">· starting…</span>}
             </p>
           </div>
+          {adjustStart}
 
-          {controls && (
+          {controls && !mirrored && (
             <fieldset disabled={pending} className={cx("mt-4 flex min-w-0 gap-2 transition-opacity", pending && "opacity-50")}>
-              {isFeed && !n.paused && (
-                <Button variant="soft" size="lg" onClick={() => void actions.switchSide(entry, target)} className="flex-[2] whitespace-nowrap">
-                  <SideMark side={target} size={22} />
-                  Switch to {SIDE_NAME[target]}
-                </Button>
-              )}
-              {isFeed &&
-                n.paused &&
-                (["L", "R"] as Side[]).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    aria-label={`Resume ${SIDE_NAME[s]}`}
-                    onClick={() => void actions.resume(entry, s)}
-                    className="flex min-h-[52px] flex-1 items-center justify-center gap-2 rounded-[14px] border border-mp-line bg-mp-surface px-2 transition active:scale-[0.98]"
-                  >
-                    <SideMark side={s} size={22} />
-                    <span className="text-left leading-tight">
-                      <span className="block text-[15px] font-semibold text-mp-ink">{SIDE_NAME[s]}</span>
-                      <span className="block text-[11px] text-mp-ink-2">Resume</span>
-                    </span>
-                  </button>
-                ))}
-              <Button variant={mirrored ? "soft" : "primary"} size="lg" onClick={() => void actions.stop(entry)} className={isFeed ? "flex-1" : "flex-[2]"}>
-                <Icon name={kind === "sleep" ? "sun" : "check"} size={19} strokeWidth={2.1} />
-                {kind === "sleep" ? "Woke up" : "Done"}
+              <Button size="lg" onClick={() => void actions.stop(entry)} className="flex-1">
+                <Icon name="check" size={19} strokeWidth={2.1} />
+                Done
               </Button>
             </fieldset>
           )}
@@ -513,21 +538,50 @@ export default function TimerCard({ entry }: { entry: Entry }) {
 type Actions = ReturnType<typeof useTimerActions>;
 type Numbers = ReturnType<typeof timerNumbers>;
 
-function TimerMenu({
-  entry,
-  view,
-  setView,
-  tz,
-  now,
-  actions,
-}: {
-  entry: Entry;
-  view: "menu" | "adjust";
-  setView: (v: null | "menu" | "adjust") => void;
-  tz: string;
-  now: Date;
-  actions: Actions;
-}) {
+/** The … menu: a small card anchored under the button, floating over the timer. */
+function TimerMenu({ entry, setView, actions }: { entry: Entry; setView: (v: null | "menu" | "adjust") => void; actions: Actions }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.96, y: -4 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.98 }}
+      transition={{ duration: 0.14 }}
+      style={{ transformOrigin: "top right" }}
+      role="group"
+      aria-label="Timer options"
+      className={cx(
+        "absolute top-full right-0 z-20 mt-1 w-[260px] overflow-hidden rounded-2xl border border-mp-line bg-mp-surface shadow-[0_10px_30px_rgba(0,0,0,0.16)] [.maple-night_&]:shadow-none",
+        tone.divide
+      )}
+    >
+      <MenuItem icon="clock-3" label="Adjust start" sub="Forgot to tap at the start" onClick={() => setView("adjust")} />
+      {entry.kind === "feed" && (
+        <MenuItem
+          icon="moon"
+          label="Fell asleep"
+          sub="Stop the feed and start sleep now"
+          onClick={() => {
+            setView(null);
+            void actions.fellAsleep(entry);
+          }}
+        />
+      )}
+      <MenuItem
+        icon="trash-2"
+        label="Discard"
+        sub="Oops, didn't mean to start"
+        danger
+        onClick={() => {
+          setView(null);
+          void actions.discard(entry);
+        }}
+      />
+    </motion.div>
+  );
+}
+
+/** "Started earlier?": nudge the start back, or pick the real time. Opens inline, under the clock. */
+function AdjustStart({ entry, close, tz, now, actions }: { entry: Entry; close: () => void; tz: string; now: Date; actions: Actions }) {
   const start = new Date(entry.started_at);
   const [pick, setPick] = useState(false);
   // Typing a time fires change events mid-entry, so nothing moves until "Set".
@@ -535,7 +589,7 @@ function TimerMenu({
   const pickedAt = pickedTime(picked, now, tz);
   const move = (min: number) => {
     void actions.adjust(entry, new Date(start.getTime() - min * 60_000));
-    setView(null);
+    close();
   };
   return (
     <motion.div
@@ -544,68 +598,39 @@ function TimerMenu({
       exit={{ height: 0, opacity: 0 }}
       className="overflow-hidden"
     >
-      <div className={cx("mt-3 overflow-hidden rounded-2xl border border-mp-line", view === "menu" && tone.divide)}>
-        {view === "menu" ? (
-          <>
-            <MenuItem icon="clock-3" label="Adjust start" sub="Forgot to tap at the start" onClick={() => setView("adjust")} />
-            {entry.kind === "feed" && (
-              <MenuItem
-                icon="moon"
-                label="Fell asleep"
-                sub="Stop the feed and start sleep now"
-                onClick={() => {
-                  setView(null);
-                  void actions.fellAsleep(entry);
-                }}
-              />
-            )}
-            <MenuItem
-              icon="trash-2"
-              label="Discard"
-              sub="Oops, didn't mean to start"
-              danger
-              onClick={() => {
-                setView(null);
-                void actions.discard(entry);
-              }}
+      <div className="mt-3 overflow-hidden rounded-2xl border border-mp-line p-3">
+        <p className={cx(tone.label, "mb-2")}>Started earlier? · now {formatTime(start, tz)}</p>
+        <div className="flex flex-wrap gap-2">
+          {[2, 5, 10, 15].map((m) => (
+            <Chip key={m} onClick={() => move(m)} className="min-h-[44px]! min-w-[56px] justify-center tabular-nums">
+              −{m}m
+            </Chip>
+          ))}
+          <Chip selected={pick} onClick={() => setPick((p) => !p)} className="min-h-[44px]!">
+            <Icon name="clock-3" size={16} />
+            Pick…
+          </Chip>
+        </div>
+        {pick && (
+          <div className="mt-2 flex gap-2">
+            <input
+              type="time"
+              aria-label="Actual start time"
+              value={picked}
+              onChange={(e) => setPicked(e.target.value)}
+              className={cx(tone.input, "min-w-0 flex-1")}
             />
-          </>
-        ) : (
-          <div className="p-3">
-            <p className={cx(tone.label, "mb-2")}>Started earlier? · now {formatTime(start, tz)}</p>
-            <div className="flex flex-wrap gap-2">
-              {[2, 5, 10, 15].map((m) => (
-                <Chip key={m} onClick={() => move(m)} className="min-h-[44px]! min-w-[56px] justify-center tabular-nums">
-                  −{m}m
-                </Chip>
-              ))}
-              <Chip selected={pick} onClick={() => setPick((p) => !p)} className="min-h-[44px]!">
-                <Icon name="clock-3" size={16} />
-                Pick…
-              </Chip>
-            </div>
-            {pick && (
-              <div className="mt-2 flex gap-2">
-                <input
-                  type="time"
-                  aria-label="Actual start time"
-                  value={picked}
-                  onChange={(e) => setPicked(e.target.value)}
-                  className={cx(tone.input, "min-w-0 flex-1")}
-                />
-                <Button
-                  disabled={!pickedAt}
-                  onClick={() => {
-                    if (!pickedAt) return;
-                    void actions.adjust(entry, pickedAt);
-                    setView(null);
-                  }}
-                  className="min-h-[48px] shrink-0"
-                >
-                  Set {pickedAt ? formatTime(pickedAt, tz) : ""}
-                </Button>
-              </div>
-            )}
+            <Button
+              disabled={!pickedAt}
+              onClick={() => {
+                if (!pickedAt) return;
+                void actions.adjust(entry, pickedAt);
+                close();
+              }}
+              className="min-h-[48px] shrink-0"
+            >
+              Set {pickedAt ? formatTime(pickedAt, tz) : ""}
+            </Button>
           </div>
         )}
       </div>

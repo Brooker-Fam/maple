@@ -4,14 +4,15 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { tick } from "@/components/atlas/haptics";
 import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
-import { alertsOn, type DayStats } from "@/lib/maple/insights";
-import { DEFAULT_TZ, formatDuration, formatRelative, formatTime, localParts } from "@/lib/maple/time";
+import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
+import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, FeedData, Side } from "@/lib/maple/types";
 import { Icon, KindBadge, type IconName } from "./icons";
+import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE } from "./TimerCard";
-import { Avatar, Segmented, cx, tone } from "./ui";
+import { cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
@@ -25,14 +26,16 @@ const ts = (e: { started_at: string }) => Date.parse(e.started_at);
 /** Like formatDuration, but "<1m" instead of a ticking "12s". */
 const since = (sec: number) => (sec < 60 ? "<1m" : formatDuration(sec));
 
+/** The sides in the order she nursed: "Left then Right", "Left, Right, then Left", "Right only". */
 function sidesLabel(d: FeedData): string {
+  const words = (sides: Side[]) =>
+    sides.length === 1 ? `${SIDE_NAME[sides[0]]} only` : sides.length === 2 ? `${SIDE_NAME[sides[0]]} then ${SIDE_NAME[sides[1]]}` : `${sides.slice(0, -1).map((s) => SIDE_NAME[s]).join(", ")}, then ${SIDE_NAME[sides[sides.length - 1]]}`;
   const order = (d.segments ?? []).map((s) => s.side).filter((s, i, a) => i === 0 || a[i - 1] !== s);
-  if (order.length > 1) return order.slice(0, 3).join("→");
-  if (order.length === 1) return `${order[0]} only`;
-  if (d.first_side && d.last_side && d.first_side !== d.last_side) return `${d.first_side}→${d.last_side}`;
-  if ((d.left_sec ?? 0) > 0 && (d.right_sec ?? 0) > 0) return d.first_side === "R" ? "R→L" : "L→R";
-  if ((d.left_sec ?? 0) > 0) return "L only";
-  if ((d.right_sec ?? 0) > 0) return "R only";
+  if (order.length) return words(order.slice(0, 3));
+  if (d.first_side && d.last_side && d.first_side !== d.last_side) return words([d.first_side, d.last_side]);
+  if ((d.left_sec ?? 0) > 0 && (d.right_sec ?? 0) > 0) return words(d.first_side === "R" ? ["R", "L"] : ["L", "R"]);
+  if ((d.left_sec ?? 0) > 0) return words(["L"]);
+  if ((d.right_sec ?? 0) > 0) return words(["R"]);
   return "";
 }
 
@@ -45,6 +48,15 @@ function typicalGapMin(entries: Entry[], now: Date): number | null {
   if (recent.length < 4) return null;
   const gaps = recent.slice(1).map((t, i) => (t - recent[i]) / 60_000).sort((a, b) => a - b);
   return Math.round(gaps[Math.floor(gaps.length / 2)]);
+}
+
+/** A typical gap, rounded the way you'd say it: to 15 minutes under two hours, then to the half hour ("~3h", "~1h 45m"). */
+function roughGap(min: number): string {
+  const step = min < 120 ? 15 : 30;
+  const r = Math.max(step, Math.round(min / step) * step);
+  const h = Math.floor(r / 60);
+  const m = r % 60;
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
 }
 
 /** A small colored dot, matching the dock's diaper buttons and the day dial. */
@@ -107,7 +119,7 @@ export default function StatusCard() {
   if (!hasAnything) return null;
 
   // The big answer: how long since she last ate.
-  let feedSub: string | null = null;
+  let feedSub: string[] | null = null;
   if (!nursing && last) {
     const bits = [`started ${formatTime(last.started_at, tz)}`];
     if (last.data.method === "bottle") {
@@ -118,7 +130,8 @@ export default function StatusCard() {
       const sides = sidesLabel(last.data);
       if (sides) bits.push(sides);
     }
-    feedSub = bits.join(" · ");
+    if (gap != null) bits.push(`usually every ~${roughGap(gap)}`);
+    feedSub = bits;
   }
 
   const next = !nursing ? summary.nextSide : null;
@@ -159,17 +172,21 @@ export default function StatusCard() {
             {next && <NextSide side={next} />}
           </div>
           {feedSub && (
-            <p className="mt-0.5 flex flex-wrap items-center text-[13px] text-mp-ink-2">
-              {feedSub}
-              <button
-                type="button"
-                onClick={() => setInfo((v) => !v)}
-                aria-expanded={info}
-                aria-label="How this is counted"
-                className="-my-3 -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-full text-mp-ink-3 active:text-mp-ink-2"
-              >
-                <Icon name="info" size={15} />
-              </button>
+            <p className="mt-0.5 text-[13px] leading-snug text-mp-ink-2">
+              {feedSub.slice(0, -1).map((b) => `${b} · `).join("")}
+              {/* The info button rides with the last bit, so a wrap never leaves it alone on a line. */}
+              <span className="whitespace-nowrap">
+                {feedSub[feedSub.length - 1]}
+                <button
+                  type="button"
+                  onClick={() => setInfo((v) => !v)}
+                  aria-expanded={info}
+                  aria-label="How this is counted"
+                  className="-my-3 -mr-3 inline-flex h-11 w-11 items-center justify-center rounded-full align-middle text-mp-ink-3 active:text-mp-ink-2"
+                >
+                  <Icon name="info" size={15} />
+                </button>
+              </span>
             </p>
           )}
           <AnimatePresence>
@@ -181,6 +198,7 @@ export default function StatusCard() {
                 className="overflow-hidden text-[13px] text-mp-ink-3"
               >
                 Counted from when she started eating, the usual way feeds are timed.
+                {gap != null && <> Lately: about every {formatDuration(gap * 60)} (start to start).</>}
               </motion.p>
             )}
           </AnimatePresence>
@@ -216,7 +234,8 @@ export default function StatusCard() {
             <span className="inline-flex min-h-[36px] shrink-0 items-center rounded-[10px] bg-mp-sunken px-3.5 text-sm font-semibold text-mp-ink">Log</span>
           </button>
         ))}
-      {gap != null && (
+      {/* While she nurses the "Last fed" line (which carries this) steps aside, so it gets its own row. */}
+      {nursing && gap != null && (
         <div className="flex items-center gap-3 px-4 py-3">
           <span aria-hidden className="flex w-8 shrink-0 justify-center text-mp-ink-3">
             <Icon name="history" size={19} />
@@ -232,16 +251,30 @@ export default function StatusCard() {
 
 // ── The day so far ─────────────────────────────────────────────────────────
 
-export function Tallies() {
-  const { state, summary, units } = useMaple();
-  const now = useNow(60_000);
-  // At 3am "today" is nearly empty and misleading: before 9am show the last 24 hours.
-  const [choice, setChoice] = useState<"24h" | "today" | null>(null);
-  if (!state || !summary) return null;
-  const tz = state.baby.timezone ?? DEFAULT_TZ;
-  const mode = choice ?? (localParts(now, tz).hour < 9 ? "24h" : "today");
-  const s: DayStats = mode === "24h" ? summary.last24h : summary.today;
-  const t = summary.targets;
+type Targets = NonNullable<Summary["targets"]>;
+
+/**
+ * The counts for whatever range the day dial shows (the dial owns the one
+ * range control and passes the numbers down), so each number appears once.
+ */
+export function Tallies({
+  stats: s,
+  title,
+  targets: t,
+  targetDay,
+  loading,
+}: {
+  stats: DayStats;
+  /** What the range is: "Last 24 hours", "The day so far", "Yesterday", "Tuesday, Oct 20". */
+  title: string;
+  /** The usual numbers per 24 hours for her day of life (null while warnings are off). */
+  targets: Targets | null;
+  targetDay: number | null;
+  /** An older day still on its way from the server. */
+  loading?: boolean;
+}) {
+  const { state, units } = useMaple();
+  if (!state) return null;
   const nursingSplit = s.leftSec + s.rightSec > 0 ? Math.round((s.leftSec / (s.leftSec + s.rightSec)) * 100) : null;
 
   // Each count's bar fills toward the usual number for her day of life (the footnote says what that is).
@@ -279,34 +312,25 @@ export function Tallies() {
   ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; value: string }[];
 
   return (
-    <section aria-labelledby="day-so-far">
-      <div className="mb-2 flex items-end justify-between gap-3 px-1">
+    <section aria-labelledby="day-so-far" aria-busy={loading || undefined}>
+      <div className="mb-2 flex min-h-[28px] items-center justify-between gap-3 px-1">
         <h2 id="day-so-far" className={cx(tone.heading, "text-[17px]")}>
-          The day so far
+          {title}
         </h2>
-        <Segmented
-          className="w-[176px] shrink-0"
-          value={mode}
-          onChange={(v) => setChoice(v)}
-          options={[
-            { value: "24h", label: "Last 24h" },
-            { value: "today", label: "Today" },
-          ]}
-        />
       </div>
-      <div className={cx(tone.card, "overflow-hidden")}>
+      <div className={cx(tone.card, "overflow-hidden", loading && "opacity-60")}>
         <div className="grid grid-cols-4 divide-x divide-mp-line">
           {tiles.map((x) => {
             const pct = x.goal ? Math.min(1, x.have / x.goal) : 0;
             return (
               <div key={x.key} className="flex flex-col items-center px-1 pt-3.5 pb-3 text-center">
-                <span className="text-[28px] leading-none font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">{x.value}</span>
+                <span className="text-[28px] leading-none font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">{loading ? "–" : x.value}</span>
                 <span className="mt-1.5 text-[12px] font-medium text-mp-ink-2">{x.label}</span>
                 {x.goal ? (
                   <span className="mt-2 h-1 w-10 overflow-hidden rounded-full bg-mp-sunken" aria-hidden>
                     <span
                       className="mp-kind-fill block h-full rounded-full transition-[width] duration-500"
-                      style={{ width: `${Math.max(pct * 100, 4)}%`, backgroundColor: x.color }}
+                      style={{ width: `${loading ? 0 : Math.max(pct * 100, 4)}%`, backgroundColor: x.color }}
                     />
                   </span>
                 ) : null}
@@ -314,7 +338,7 @@ export function Tallies() {
             );
           })}
         </div>
-        {extras.length > 0 && (
+        {extras.length > 0 && !loading && (
           <ul className="divide-y divide-mp-line border-t border-mp-line">
             {extras.map((x) => (
               <li key={x.label} className="flex items-center gap-3 px-4 py-2.5 text-[14px]">
@@ -331,7 +355,7 @@ export function Tallies() {
       </div>
       {t && (
         <p className="mt-2 px-1 text-[13px] leading-snug text-mp-ink-3">
-          For Day {summary.age?.dayOfLife}: usually {t.feeds[0]}–{t.feeds[1]} feeds, {t.wet}+ wet{t.dirty ? `, ${t.dirty}+ dirty` : ""} and about {t.tummyMin} min of tummy time a day.
+          For Day {targetDay}: usually {t.feeds[0]}–{t.feeds[1]} feeds, {t.wet}+ wet{t.dirty ? `, ${t.dirty}+ dirty` : ""} and about {t.tummyMin} min of tummy time a day.
         </p>
       )}
     </section>
@@ -344,50 +368,65 @@ const MEMBER_COLORS = ["#5C7A4A", "#8E7CB0", "#D9772B", "#6FA3B8", "#C49A3C", "#
 // Rotates through everyone weekly: a fun title, not a prize for the most changes.
 const TITLES = ["Knight of the Changing Table", "Keeper of the Wipes", "Guardian of the Snaps", "Wizard of the Onesie", "Duke of the Diaper Pail"];
 
+/** Who changed how many this week, in one line and a thin bar. A daytime thing: it stays away at night. */
 export function DiaperBrigade() {
-  const { state, summary, memberName } = useMaple();
+  const { state, summary, memberName, isNight } = useMaple();
+  const nightLook = useNightActive();
   const now = useNow(300_000);
   if (!state || !summary || !summary.teamDiapers) return null;
   if ((state.baby.settings as Record<string, unknown>).show_brigade === false) return null;
+  if (nightLook || isNight()) return null;
   const byName = new Map(state.members.map((m, i) => [memberName(m.email), { m, i }]));
   const week = Math.floor(now.getTime() / (7 * 86_400_000));
-  const people = summary.duty.map((d, i) => {
-    const hit = byName.get(d.who);
-    return {
-      ...d,
-      member: hit?.m ?? null,
-      color: hit?.m.color ?? MEMBER_COLORS[(hit?.i ?? i) % MEMBER_COLORS.length],
-      title: TITLES[(week + (hit?.i ?? i)) % TITLES.length],
-    };
-  });
+  const people = summary.duty
+    .map((d, i) => {
+      const hit = byName.get(d.who);
+      return {
+        ...d,
+        color: hit?.m.color ?? MEMBER_COLORS[(hit?.i ?? i) % MEMBER_COLORS.length],
+        title: TITLES[(week + (hit?.i ?? i)) % TITLES.length],
+      };
+    })
+    .sort((a, b) => b.diapers - a.diapers);
   const credited = people.reduce((a, p) => a + p.diapers, 0);
   const others = summary.teamDiapers - credited;
+  const total = `${summary.teamDiapers} change${summary.teamDiapers === 1 ? "" : "s"} together`;
 
   return (
-    <section aria-labelledby="brigade" className={cx(tone.card, "p-4")}>
-      <h2 id="brigade" className={cx(tone.heading, "text-[17px] leading-tight")}>
+    <section aria-labelledby="brigade" className={cx(tone.card, "px-4 py-3")}>
+      <h2 id="brigade" className="sr-only">
         Diaper brigade this week
       </h2>
-      <p className="mt-0.5 text-[13px] text-mp-ink-2">
-        {summary.teamDiapers} change{summary.teamDiapers === 1 ? "" : "s"} together
+      <p className="flex flex-wrap items-center gap-x-1.5 text-[14px] text-mp-ink-2">
+        <span>This week:</span>
+        {people.map((p, i) => (
+          <span key={p.who} className="inline-flex items-center gap-1.5">
+            {i > 0 && <span aria-hidden className="text-mp-ink-3">·</span>}
+            <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
+            <span className="font-semibold text-mp-ink">{p.who}</span>
+            <span className="text-mp-ink tabular-nums">{p.diapers}</span>
+          </span>
+        ))}
+        {others > 0 && (
+          <span className="inline-flex items-center gap-1.5">
+            <span aria-hidden className="text-mp-ink-3">·</span>
+            others <span className="text-mp-ink tabular-nums">{others}</span>
+          </span>
+        )}
       </p>
-      <div className="mt-3 flex h-2 w-full gap-0.5 overflow-hidden rounded-full bg-mp-sunken" role="img" aria-label={people.map((p) => `${p.who} ${p.diapers}`).join(", ")}>
+      <div
+        className="mt-2 flex h-1.5 w-full gap-0.5 overflow-hidden rounded-full bg-mp-sunken"
+        role="img"
+        aria-label={`${total}: ${people.map((p) => `${p.who} ${p.diapers}, ${p.title}`).join("; ")}${others > 0 ? `; others ${others}` : ""}`}
+      >
         {people.map((p) => (
-          <span key={p.who} style={{ width: `${(p.diapers / summary.teamDiapers) * 100}%`, backgroundColor: p.color }} className="mp-kind-fill h-full" />
+          <span key={p.who} style={{ width: `${(p.diapers / summary.teamDiapers) * 100}%`, backgroundColor: p.color }} className="h-full" />
         ))}
         {others > 0 && <span style={{ width: `${(others / summary.teamDiapers) * 100}%` }} className="h-full bg-mp-ink/15" />}
       </div>
-      <ul className="mt-3 space-y-2">
-        {people.map((p) => (
-          <li key={p.who} className="flex items-center gap-2.5 text-[14px]">
-            <span aria-hidden className="mp-kind-fill h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
-            <span className="shrink-0 font-semibold text-mp-ink">{p.who}</span>
-            {p.member?.emoji && <Avatar member={p.member} size={18} />}
-            <span className="min-w-0 flex-1 truncate text-[13px] text-mp-ink-3">{p.title}</span>
-            <span className="shrink-0 font-semibold text-mp-ink tabular-nums">{p.diapers}</span>
-          </li>
-        ))}
-      </ul>
+      <p className={cx(tone.faint, "mt-1.5 text-[12px] leading-snug")} aria-hidden>
+        {people.map((p) => `${p.who}, ${p.title}`).join(" · ")}
+      </p>
     </section>
   );
 }

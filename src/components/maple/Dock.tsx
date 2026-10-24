@@ -229,7 +229,8 @@ export default function Dock() {
                   disabled={feedPending}
                   onTap={tap(() => void actions.switchSide(feed, feedN.side === "L" ? "R" : "L"))}
                 />
-                <Tile id="done" label="Done" icon="check" sub={feedPending ? "starting…" : formatClock(feedN.elapsed)} accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
+                {/* No clock here: the timer card above owns the big one (Switch keeps the side's time, to decide when to switch). */}
+                <Tile id="done" label="Done" icon="check" sub={feedPending ? "starting…" : undefined} accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
               </>
             ) : feed && feedN ? (
               <>

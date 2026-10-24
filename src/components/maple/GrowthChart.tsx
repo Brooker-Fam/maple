@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { WEIGHT_GAIN_NOTE } from "@/lib/maple/guidelines";
 import { ageInDays, curves, percentileFor, type Measure, type Percentile } from "@/lib/maple/growth";
 import { dayKey, formatDayLabel } from "@/lib/maple/time";
@@ -46,14 +46,15 @@ const ORD: Record<number, string> = { 3: "3rd", 15: "15th", 50: "50th", 85: "85t
  * Validated against the card surfaces (≥ 3:1, chroma ≥ 0.10): gold for her,
  * sage washes for the WHO bands, which sit well below her marks in weight.
  * The chrome (surface, grid, axis) is the mp-* tokens, so it follows dark
- * mode and the night look; at night her gold dims a little and the bands and
- * birth line turn amber, like the Patterns charts.
+ * mode and the night look; at night everything folds into the one amber,
+ * like the Patterns charts: her marks strongest (0.85), the bands a faint
+ * wash, the 50th and birth lines in between. Doctor/home stays solid/hollow.
  */
 const VARS =
   "[--g-surface:var(--mp-surface)] [--g-grid:var(--mp-line)] [--g-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] " +
   "[--g-her:#B78C24] [--g-outer:rgba(92,122,74,0.10)] [--g-inner:rgba(92,122,74,0.20)] [--g-mid:#5C7A4A] [--g-birth:#8A6A1F] " +
   "dark:[--g-her:#C9A04A] dark:[--g-outer:rgba(169,192,143,0.09)] dark:[--g-inner:rgba(169,192,143,0.18)] dark:[--g-mid:#A9C08F] dark:[--g-birth:#E0C27A] " +
-  "[.maple-night_&]:[--g-her:color-mix(in_srgb,#C9A04A_85%,#13170F)] [.maple-night_&]:[--g-outer:rgb(224_169_59/0.06)] [.maple-night_&]:[--g-inner:rgb(224_169_59/0.12)] " +
+  "[.maple-night_&]:[--g-her:rgb(224_169_59/0.85)] [.maple-night_&]:[--g-outer:rgb(224_169_59/0.06)] [.maple-night_&]:[--g-inner:rgb(224_169_59/0.12)] " +
   "[.maple-night_&]:[--g-mid:rgb(224_169_59/0.55)] [.maple-night_&]:[--g-birth:rgb(224_169_59/0.7)]";
 
 const AXIS_TEXT = "fill-mp-ink-3 text-[10px] tabular-nums";
@@ -97,7 +98,11 @@ function useWidth<T extends HTMLElement>(): [(el: T | null) => (() => void) | un
   const [w, setW] = useState(0);
   const ref = useCallback((el: T | null) => {
     if (!el) return undefined;
-    const ro = new ResizeObserver(([e]) => setW(Math.floor(e.contentRect.width)));
+    // A momentary 0 (an ancestor hidden, a re-layout for a capture) keeps the last width rather than unmounting the chart.
+    const ro = new ResizeObserver(([e]) => {
+      const w = Math.floor(e.contentRect.width);
+      if (w > 0) setW(w);
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -186,15 +191,32 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
           )}
         </div>
       )}
-      <div className={cx(tone.muted, "mt-4 space-y-2 text-[13px] leading-snug")}>
+      <HowToRead>
         <p>
           Shaded bands are the WHO growth standards for girls: the wide band spans the 3rd to 97th percentile, the deeper, narrower one
           the 15th to 85th, and the dashed line is the 50th. Percentiles describe where she sits among healthy girls her age; they aren&apos;t
           targets. Her pediatrician watches the curve over time.
         </p>
         {measure === "weight" && <p>{WEIGHT_GAIN_NOTE}</p>}
-      </div>
+      </HowToRead>
     </div>
+  );
+}
+
+/**
+ * The explanation, one tap away (same look as the Patterns charts' own; kept
+ * here so Patterns can go on loading this file, and the WHO tables, lazily).
+ */
+function HowToRead({ children }: { children: ReactNode }) {
+  return (
+    <details className="group/how mt-2 px-1">
+      <summary className="-ml-1 inline-flex min-h-[44px] cursor-pointer list-none items-center gap-1.5 rounded-lg px-1 text-[13px] font-medium text-mp-ink-2 outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60 [&::-webkit-details-marker]:hidden">
+        <Icon name="info" size={15} className="text-mp-ink-3" />
+        How to read this
+        <Icon name="chevron-down" size={15} className="text-mp-ink-3 transition group-open/how:rotate-180 motion-reduce:transition-none" />
+      </summary>
+      <div className={cx(tone.muted, "space-y-2 pb-1 text-[13px] leading-snug")}>{children}</div>
+    </details>
   );
 }
 
@@ -479,7 +501,8 @@ function PointsTable({
                       onEdit!(p.entry!);
                     }}
                     aria-label={`Edit the ${when} measurement`}
-                    className="text-left underline-offset-2 hover:underline">
+                    // A 44px hit area; the negative margin keeps the row exactly as tall as before.
+                    className="-my-3 block w-full py-3 text-left underline-offset-2 hover:underline">
                     {when}
                   </button>
                 ) : (

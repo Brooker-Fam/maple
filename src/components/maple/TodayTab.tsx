@@ -10,7 +10,7 @@ import Dock from "./Dock";
 import EntryRow, { photoUrl } from "./EntryRow";
 import Hero from "./Hero";
 import type { TabId } from "./MapleApp";
-import StatusCard, { DiaperBrigade, Tallies } from "./StatusCard";
+import StatusCard, { DiaperBrigade } from "./StatusCard";
 import TimerCard, { SIDE_NAME, timerNumbers } from "./TimerCard";
 import Waiting from "./Waiting";
 import WhileYouSlept from "./WhileYouSlept";
@@ -23,7 +23,8 @@ import { useMaple, useNow } from "./useMaple";
  * Today: the screen parents use one-handed at 3am. Top to bottom: who she is
  * (or the waiting hero), anything urgent, the "while you slept" hand-off,
  * "Right now" (running timers, then the 3am answers), gentler alerts, the
- * day dial, celebrations, tallies, and the last few entries. Logging
+ * day dial (the screen's hero) with its tallies, celebrations, the diaper
+ * brigade, and the last few entries. Logging
  * lives in the dock pinned above the tab bar, so nothing here needs a scroll
  * to reach.
  */
@@ -69,19 +70,14 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: TabId) => voi
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
 
-      {/* The dial is the day at a glance, so it leads; one-off celebrations follow it. */}
+      {/* The dial is the day at a glance, so it leads, with its tallies right under it; one-off celebrations follow. */}
       {!nothingYet && <DayDial />}
       <Celebrations />
-      {!nothingYet && (
-        <>
-          <Tallies />
-          <DiaperBrigade />
-        </>
-      )}
+      {!nothingYet && <DiaperBrigade />}
 
       {recent.length > 0 && (
         <section aria-labelledby="recent">
-          <div className="mb-1 flex items-end justify-between px-1">
+          <div className="mb-1 flex items-center justify-between px-1">
             <h2 id="recent" className={cx(tone.heading, "text-[17px]")}>
               Recent
             </h2>
