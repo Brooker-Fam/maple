@@ -85,6 +85,8 @@ export type LastTap = {
   merged?: true;
   reverted?: true;
   undone?: true;
+  /** Carried a finished feed on (Continue, She's still on, Same feed): its toast's Undo puts the Done back; undo_tap doesn't. */
+  carried?: true;
   /** Who tapped it (a member id), so a quick switch only re-sides that person's own resume. */
   by?: string;
 };
@@ -643,7 +645,7 @@ function tapUndo(S: Stretch[], tap: LastTap | undefined): { what: TapWhat; at: n
     if (!P) return { refuse: "only" };
     return drop(P.end === L.start ? "switch" : "resume");
   }
-  if (tap.undone || tap.reverted) return { refuse: "taken_back" };
+  if (tap.undone || tap.reverted || tap.carried) return { refuse: "taken_back" };
   switch (tap.kind) {
     case "pause":
       return L.end !== null ? reopen() : { refuse: "changed" };
@@ -829,14 +831,14 @@ export function switchTo(
 const firstOf = (S: Stretch[], s: Stretch): { first?: string } => (S[0] === s && S.length === 1 ? { first: "1" } : {});
 
 /** Pause the open side at `at` (`now`: when it was tapped, default `at`). Already paused: noop. */
-export function pause(data: FeedData, at: Date, opts: { explicit?: boolean; now?: Date } = {}): { data: FeedData; noop?: true } {
+export function pause(data: FeedData, at: Date, opts: { explicit?: boolean; now?: Date; by?: string } = {}): { data: FeedData; noop?: true } {
   const S = real(data, true);
   const O = S[S.length - 1]?.end === null ? S[S.length - 1] : null;
   if (!O) return { data, noop: true };
   const t = at.getTime();
   if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
   O.end = Math.max(t, O.start);
-  const out: TapFeedData = { ...settle(data, tidy(S, true, true), true), last_tap: { kind: "pause", side: O.side, at: iso((opts.now ?? at).getTime()) } };
+  const out: TapFeedData = { ...settle(data, tidy(S, true, true), true), last_tap: { kind: "pause", side: O.side, at: iso((opts.now ?? at).getTime()), ...(opts.by ? { by: opts.by } : {}) } };
   return { data: out };
 }
 
@@ -1067,7 +1069,8 @@ const STALE_BREAK = 30 * MIN;
  */
 function lastActivity(e: { started_at: string; data: FeedData }): number {
   const tap = lastTapOf(e.data);
-  const tapped = tap ? Date.parse(tap.at) : NaN;
+  // A tap that was taken back ("Back to paused" after a resume onto an old break) didn't happen.
+  const tapped = tap && !tap.undone ? Date.parse(tap.at) : NaN;
   return Math.max(Date.parse(e.started_at), ...real(e.data, true).flatMap((s) => [s.start, s.end ?? 0]), Number.isNaN(tapped) ? 0 : tapped);
 }
 

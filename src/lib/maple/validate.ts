@@ -69,6 +69,7 @@ export const dataSchemas = {
           merged: z.literal(true).optional(),
           reverted: z.literal(true).optional(),
           undone: z.literal(true).optional(),
+          carried: z.literal(true).optional(),
           by: z.string().max(320).optional(),
         })
         .strip()

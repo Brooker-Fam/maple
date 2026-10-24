@@ -46,7 +46,7 @@ export const KIND_TITLE: Record<TimerKind, string> = { feed: "Nursing", sleep: "
  */
 export type FixTarget = "current" | "finish" | { ref: StretchRef } | { breakAfter: StretchRef };
 /** What the sheet starts with expanded: "She already finished" (Still nursing?) or "Already back on?" (She went back on…). */
-export type FixExpand = "finished" | "backOn";
+export type FixExpand = "finished" | "backOn" | "done";
 /**
  * `doneAt`: the Done tap that ended this feed at its pause (the Done toast's
  * "She went back on…"): she went back on and finished then, so the side

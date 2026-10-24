@@ -723,7 +723,8 @@ function RecentlyRemoved({ onRestore, hidden }: { onRestore: (e: Entry) => void;
     const t = setTimeout(() => {
       api<{ entries: Entry[] }>("/api/maple/entries?deleted=1")
         .then((r) => {
-          if (!cancelled) setItems(r.entries ?? []);
+          // A feed joined into the one before it ("Same feed as 8:30") lives on in that one: nothing to restore.
+          if (!cancelled) setItems((r.entries ?? []).filter((x) => (x.data as { joined_into?: number }).joined_into == null));
         })
         .catch(() => {
           // Optional: stay quiet if it can't load.

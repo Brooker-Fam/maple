@@ -80,6 +80,9 @@ const MIN = 60_000;
 const NEAR = 1500;
 const ELSEWHERE = "on another device or through Claude";
 
+/** Neither side has minutes typed. */
+const l0r0 = (left: number | null | undefined, right: number | null | undefined) => (left ?? 0) + (right ?? 0) === 0;
+
 /** "Brittany discarded this feed, so nothing was saved." from a 404's deleted_by; null for any other error. */
 function discardedText(err: unknown, what: string, label: (id: string | null | undefined) => string | null, lost: string): string | null {
   if (!(err instanceof ApiError) || err.status !== 404) return null;
@@ -212,6 +215,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [timesNotice, setTimesNotice] = useState<string | null>(null);
   // An open "Add a side" whose times don't fit: Save waits, so what was typed is never dropped.
   const [addBlocked, setAddBlocked] = useState(false);
+  // "Add a side" open with no side picked: Save with nothing else to save would close as if it added one.
+  const [addPending, setAddPending] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const liveKey = liveFeed ? timesKey(liveFeed.data, liveFeed.ended_at, now()) : "";
   const dirty = !!liveFeed && !!draft && timesKey(draft.data, draft.endedAt, now()) !== liveKey;
@@ -320,10 +325,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       );
       return;
     }
-    const l = left ?? 0;
-    const r = right ?? 0;
-    const sides = sideFields(l, r, first);
     const [s, en] = range;
+    // No minutes typed but a start and an end ("15m ago" to now, after a hold on Left): that span is her first side's,
+    // so it never saves as a feed of nothing.
+    const spanMin = l0r0(left, right) ? spanMinutes(s, en) : 0;
+    const l = (left ?? 0) + (spanMin && first !== "R" ? spanMin : 0);
+    const r = (right ?? 0) + (spanMin && first === "R" ? spanMin : 0);
+    const sides = sideFields(l, r, first);
     const next = other(sides.first_side);
     void log(
       {
@@ -468,6 +476,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const noMinutes = (left ?? 0) + (right ?? 0) === 0;
   const empty = method === "breast" && !running && !gone && (timed ? minutesTyped && noMinutes : noMinutes && spanMinutes(range[0], range[1]) === 0);
 
+  const addOnly = addPending && !dirty && !("note" in notePatch);
   const title = e ? (running ? "Nursing now" : describeEntry(e).title) : "Feed";
   const primary = e ? "Save" : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
@@ -524,7 +533,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && addBlocked) || empty}
+              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && addBlocked) || empty || addOnly}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
@@ -532,6 +541,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   ? CHECK_NUMBER_HINT
                   : empty
                     ? "Add how long she nursed."
+                    : addOnly
+                    ? "Pick Left or Right to add a side."
                     : conflict
                     ? undefined
                     : addBlocked
@@ -595,6 +606,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     who={changedBy}
                     onStage={stage}
                     onAddBlocked={setAddBlocked}
+                    onAddPending={setAddPending}
                   />
                   {!readOnly && (
                     <MoreDetails label="Type minutes instead" summary={minutesTyped ? `L ${left ?? 0} · R ${right ?? 0} min` : undefined}>
@@ -789,6 +801,7 @@ function TimesSection({
   who,
   onStage,
   onAddBlocked,
+  onAddPending,
 }: {
   /** The feed as the server has it now. */
   live: FeedEntry;
@@ -804,6 +817,8 @@ function TimesSection({
   onStage: (next: Staged, builtOn: FeedEntry) => void;
   /** An open Add a side whose times don't fit (Save waits), or not. */
   onAddBlocked: (blocked: boolean) => void;
+  /** The add form is open and nothing is picked in it yet. */
+  onAddPending: (pending: boolean) => void;
 }) {
   const { now: nowFn } = useMaple();
   const [row, setRow] = useState<Row | null>(null);
@@ -841,6 +856,7 @@ function TimesSection({
       // Leaving Add a side: a side she set that fits stays staged (and shows as a row); times that don't fit go. The untouched guess staged nothing.
       if (add.form.touched && !tryAdd(add.base, add.form, nowFn(), tz).result) onStage(restOf(add.base), add.base);
       onAddBlocked(false);
+      onAddPending(false);
     }
     setRow(next);
   };
@@ -915,6 +931,7 @@ function TimesSection({
    * that doesn't holds Save). Untouched, it's a guess: nothing is staged, so a peek and Save (for a note) adds nothing.
    */
   const putAdd = (on: FeedEntry, form: AddForm) => {
+    onAddPending(!form.touched);
     if (form.touched) {
       const r = tryAdd(on, form, nowFn(), tz);
       onStage(r.result ?? restOf(on), on);
@@ -931,6 +948,7 @@ function TimesSection({
     if (!add) return;
     if (add.form.touched) onStage(restOf(add.base), add.base);
     onAddBlocked(false);
+    onAddPending(false);
     setRow(null);
   };
 

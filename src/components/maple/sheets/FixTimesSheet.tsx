@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { edgeBounds, feedCtx, feedParts, minutesShort, minutesText, momentQuestion, other, partTotals, previousFeedEnd, undoableTap, type Part, type TapWhat } from "@/lib/maple/feed";
+import { edgeBounds, feedCtx, feedParts, minutesShort, minutesText, momentQuestion, other, partTotals, previousFeed, previousFeedEnd, undoableTap, type Part, type TapWhat } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, FeedEdit, Side, StretchRef, TimerKind, TimerResponse } from "@/lib/maple/types";
 import {
@@ -251,7 +251,7 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   // A tap from this phone (the dock, a toast) still on its way: the sheet waits for its answer, as for a timer that's still starting.
   const saving = e.id > 0 && timerBusy(e.id) && !committing;
   return (
-    <Sheet open={open} onClose={onClose} title={saving ? "Fix times · saving…" : "Fix times"} subtitle={subtitle} calm>
+    <Sheet open={open} onClose={onClose} title={saving ? `${fix.expand === "done" ? "Done" : "Fix times"} · saving…` : fix.expand === "done" ? "Done" : "Fix times"} subtitle={subtitle} calm>
       {/* A fresh pin each time it opens (the router keeps one instance per entry mounted). */}
       <FixBody
         key={count}
@@ -303,7 +303,7 @@ function FixBody({
   const [holding, setHolding] = useState(false);
   const holdTimer = useRef(0);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [finished, setFinished] = useState(expand === "finished");
+  const [finished, setFinished] = useState(expand === "finished" || expand === "done");
   // "She's back on…" / "She went back on…": the other side is the likely one (the dock's next side), one tap from the chips.
   const [backSide, setBackSide] = useState<Side | null>(() => {
     if (expand !== "backOn") return null;
@@ -703,7 +703,7 @@ function FixBody({
   } else if (pin.kind === "break") {
     panel = <BreakPanel {...panelProps} pinRef={pin.ref} backSide={backSide} setBackSide={setBackSide} backOnly={backOnly} actions={actions} />;
   } else if (pin.panel === "open") {
-    panel = <OpenSidePanel {...panelProps} pin={pin} finished={finished} setFinished={setFinished} actions={actions} />;
+    panel = <OpenSidePanel {...panelProps} pin={pin} finished={finished} setFinished={setFinished} fromDone={expand === "done"} actions={actions} />;
   } else {
     panel = <ClosedSidePanel {...panelProps} pin={pin} actions={actions} />;
   }
@@ -911,6 +911,9 @@ function FinishQuestion({
   );
 }
 
+/** "20 min ago", "1h ago", "3h 05m ago". */
+const agoText = (m: number) => (m < 60 ? `${m} min ago` : m % 60 === 0 ? `${m / 60}h ago` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m ago`);
+
 /**
  * Stop chips for "When did she finish?" / "When did she wake up?": "{N} min
  * ago" over the time, in time order. The likely end (15 min on the side) is a
@@ -951,18 +954,16 @@ function StopChips({
 }) {
   const n = now.getTime();
   const fits = (m: number) => n - m * MIN >= sinceStart;
-  let set = mins.filter(fits);
+  // A side left on for hours (the forgotten overnight feed): hours to pick from, not "185 min ago".
+  let set = fits(60) ? [10, 30, 60, 120, 180].filter(fits) : mins.filter(fits);
   // A short part: the usual minutes don't fit, so smaller ones do.
   if (set.length < 2) set = [...new Set([1, 2, 3, ...mins])].filter(fits).sort((a, b) => a - b);
+  // "Likely" is exactly what it says (15 min on the side): its own chip, unless one already shows that minute.
   let tagged: number | null = null;
   if (likely != null && likely >= sinceStart) {
     const lm = Math.max(1, Math.round((n - likely) / MIN));
-    const closest = set.reduce<number | null>((best, m) => (best === null || Math.abs(m - lm) < Math.abs(best - lm) ? m : best), null);
-    if (closest !== null && Math.abs(closest - lm) <= 2) tagged = closest;
-    else if (fits(lm)) {
-      set = [...set, lm].sort((a, b) => a - b);
-      tagged = lm;
-    }
+    if (!set.includes(lm) && fits(lm)) set = [...set, lm].sort((a, b) => a - b);
+    if (set.includes(lm)) tagged = lm;
   }
   if (!set.length && !nowChip) return <Caption>{tooSoon}</Caption>;
   return (
@@ -988,7 +989,7 @@ function StopChips({
               key={m}
               variant="stop"
               tall
-              line1={`${m} min ago`}
+              line1={agoText(m)}
               line2={`${formatTimeNear(at, at, tz)}${isLikely ? " · likely" : ""}`}
               ariaLabel={`${verb} ${minutesWord(m)} ago, at ${formatTime(at, tz)}${isLikely && likelyWhy ? `, likely (${likelyWhy})` : ""}`}
               disabled={disabled}
@@ -1015,8 +1016,9 @@ function OpenSidePanel({
   pin,
   finished,
   setFinished,
+  fromDone,
   actions,
-}: PanelProps & { pin: Extract<Pin, { kind: "side" }>; finished: boolean; setFinished: (v: boolean) => void; actions: Actions }) {
+}: PanelProps & { pin: Extract<Pin, { kind: "side" }>; finished: boolean; setFinished: (v: boolean) => void; fromDone?: boolean; actions: Actions }) {
   const { state } = useMaple();
   // Expanded by a tap (not by the sheet opening with it): that one scrolls into view and takes focus.
   const [tapped, setTapped] = useState(false);
@@ -1039,12 +1041,20 @@ function OpenSidePanel({
   const recorded = Date.parse(s.start);
   const stillOn = e.active && s.end === null;
 
-  if (finished && stillOn) {
-    const likely = recorded + 15 * MIN < now.getTime() - 2 * MIN ? recorded + 15 * MIN : null;
+  // Asked when she finished: of the side she's on now, even if the other phone switched her since. Never the start
+  // chips under that question (a "10 min" meant "she finished 10 min ago" would move the start back instead).
+  const fin = finished ? (stillOn ? s : e.active ? (sides.find((x) => x.end === null) ?? null) : null) : null;
+  if (finished && !fin) {
+    return <Caption>{e.active ? "She's on a break now, so Done ends the feed at its pause." : `This feed already ended${e.ended_at ? ` at ${formatTime(e.ended_at, tz)}` : ""}.`}</Caption>;
+  }
+  if (finished && fin) {
+    const fName = SIDE_NAME[fin.side];
+    const fFrom = Date.parse(fin.start);
+    const likely = fFrom + 15 * MIN < now.getTime() - 2 * MIN ? fFrom + 15 * MIN : null;
     return (
       <FinishQuestion
         title="When did she finish?"
-        sub={`${name} side since ${formatTime(s.start, tz)} (${minutesText(s.min)}).`}
+        sub={`${fName} side since ${formatTime(fin.start, tz)} (${minutesText(fin.min)}).`}
         focus={tapped}
         back={
           <LinkRow
@@ -1054,24 +1064,25 @@ function OpenSidePanel({
               setBack((b) => b + 1);
             }}
           >
-            Fix when {name} started
+            Fix when {fName} started
           </LinkRow>
         }
       >
         <StopChips
-          sinceStart={recorded + MIN}
+          sinceStart={fFrom + MIN}
           mins={[5, 10, 20, 30]}
           likely={likely}
-          likelyWhy={`15 min after she went on the ${name}`}
+          likelyWhy={`15 min after she went on the ${fName}`}
           verb="Ended"
-          tooSoon={`${name} only started ${formatTime(s.start, tz)}, so use Other time…`}
-          // Opened by the dock's Done (or "Still nursing?"), not by "She already finished": she may have just finished.
-          nowChip={!tapped}
+          tooSoon={`${fName} only started ${formatTime(fin.start, tz)}, so use Other time…`}
+          // Opened by Done (the dock's or the Lantern's, past "Still nursing?"): she may have just finished. Not from
+          // "She finished earlier…", which says it wasn't now.
+          nowChip={fromDone && !tapped}
           now={now}
           tz={tz}
           disabled={disabled}
           busy={busy}
-          onStop={(id, at) => void run(id, (o) => actions.stop(e, at, o), { stop: { ref: s.ref } })}
+          onStop={(id, at) => void run(id, (o) => actions.stop(e, at, o), { stop: { ref: fin.ref } })}
         />
         <LinkRow
           disabled={disabled}
@@ -1081,12 +1092,12 @@ function OpenSidePanel({
               free: {
                 title: "When did the feed end?",
                 recorded: now,
-                min: new Date(recorded + MIN),
+                min: new Date(fFrom + MIN),
                 max: now,
-                notes: { low: `Can't be before ${name} started (${formatTime(s.start, tz)}).`, high: "That's in the future." },
+                notes: { low: `Can't be before ${fName} started (${formatTime(fin.start, tz)}).`, high: "That's in the future." },
               },
               commit: (to, o) => actions.stop(e, to, o),
-              meta: () => ({ stop: { ref: s.ref } }),
+              meta: () => ({ stop: { ref: fin.ref } }),
             })
           }
         >
@@ -1136,6 +1147,14 @@ function OpenSidePanel({
     const prevName = prev.side === s.side ? `The earlier ${SIDE_NAME[prev.side]} (${formatRange(prev.start, prev.end, tz)})` : SIDE_NAME[prev.side];
     caption = `Comes out of the ${brk.min > 0 ? `${minutesText(brk.min)} ` : ""}break. ${prevName} stays ${minutesText(prev.min)}.`;
   } else caption = prev ? `Comes out of the ${SIDE_NAME[prev.side]} side (${minutesText(prev.min)} now).` : "";
+
+  // "Same feed as 11:03?": a one-side feed started within 30 min of a timed feed ending (the start toast's offer is
+  // only there for its 20 seconds).
+  const before = k === 0 && stillOn && sides.length === 1 ? previousFeed(state?.entries, e) : null;
+  const joinInto =
+    before && before.kind === "feed" && before.data.method === "breast" && !!before.data.segments?.length && Date.parse(e.started_at) - Date.parse(before.ended_at!) <= 30 * MIN
+      ? before
+      : null;
 
   // Undo the tap that started this part, while that tap is fresh (its own start, not the feed's last edit).
   const mistap = k > 0 && stillOn ? freshTap(e, now, ["switch", "resume"]) : null;
@@ -1190,6 +1209,16 @@ function OpenSidePanel({
           busy={busy === "side"}
           onClick={() => void run("side", (o) => actions.setSide(e, s.ref, other(s.side), o))}
         />
+        {joinInto && (
+          // Started a few minutes after the last feed ended (a Done too early, or she came back for more): one feed.
+          <QuestionRow
+            question={`Same feed as ${formatTime(joinInto.started_at, tz)}?`}
+            label="Join them"
+            disabled={disabled}
+            busy={busy === "join"}
+            onClick={() => void run("join", (o) => actions.sameFeed(e, joinInto, s.side, o))}
+          />
+        )}
         {mistap && (
           <QuestionRow
             // The tile tapped: Switch, or her side's (the dock's resume tile is the side's name, "Right · Next side").
@@ -1502,7 +1531,7 @@ function AfterDonePanel({
   const tail = until !== null ? `until ${done}` : "and still on";
   return (
     <div className="space-y-4">
-      <Title sub={until !== null ? `She finished at ${done}, when you tapped Done.` : "She's still on, so the feed goes on from then."}>When did she go back on?</Title>
+      <Title sub={until !== null ? `You tapped Done at ${done}; the feed ended at ${formatTime(pauseAt, tz)}, when she came off.` : "She's still on, so the feed goes on from then."}>When did she go back on?</Title>
       <div className="space-y-3">
         <SidePicker side={side} label="Which side she went back on" disabled={disabled} onPick={setBackSide} />
         <Grid>

@@ -68,14 +68,21 @@ function allParts(e: Entry, now: Date): Part[] {
 /** "Back on the Left" after a break only when she came off the Left; on the other side it's "On the Right" (as the sheets word it). */
 const onSide = (side: Side, prev: Side | undefined) => (prev && prev !== side ? `On the ${SIDE_NAME[side]}` : `Back on the ${SIDE_NAME[side]}`);
 
-/** The pause a merged resume took back was under a minute (from when she came off to when she went back on). */
-function shortPause(res: TimerResponse, back: Date): boolean {
+/** The pause a merged resume took back was under a minute: from when she came off to the tap (a "No break" picked later isn't). */
+function shortPause(res: TimerResponse, tapped: Date): boolean {
   const off = res.before?.segments.at(-1)?.end;
-  return !!off && back.getTime() - Date.parse(off) < 60_000;
+  return !!off && tapped.getTime() - Date.parse(off) < 60_000;
+}
+
+/** "when you paused" for this phone's own pause, "at its pause" for the other phone's (or Claude's). */
+function pauseWords(e: Entry, me: string | undefined): string {
+  const tap = (e.data as TapFeedData).last_tap;
+  return tap?.kind === "pause" && tap.by && me && tap.by !== me ? "at its pause" : "when you paused";
 }
 
 export function useTimerActions() {
   const { state, timerCall, timerBusy, toast, now, isNight, memberName, restore, dismissTimerToast, holdTimerToasts } = useMaple();
+  const me = state?.me.email;
   const { open } = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const entries = state?.entries;
@@ -320,7 +327,8 @@ export function useTimerActions() {
       const kept = !!cur && !!res.before?.segments.some((x) => x.side === cur.side && Math.abs(Date.parse(x.start) - Date.parse(cur.start)) <= 1500);
       let text = tail;
       if (cur) {
-        if (res.merged) text = `Back on the ${name} · ${shortPause(res, more.at ?? now()) ? "paused under a minute, so " : ""}no break · ${tail}`;
+        // A carried-on feed never "paused under a minute": it was a Done (or a picked time), so just "no break".
+        if (res.merged) text = `Back on the ${name} · no break · ${tail}`;
         else if (res.clamped) text = `${name} from ${short(cur.start)}, when the break began (no break) · ${tail}`;
         else if (kept) text = `${SIDE_NAME[cur.side]} still going, since ${short(cur.start)} · ${tail}`;
         else if (brk) text = `${onSide(side, sides.at(-2)?.side)} since ${short(cur.start)} · break ${minutesText(brk.min)} · ${tail}`;
@@ -448,7 +456,7 @@ export function useTimerActions() {
         timerToast(`${doneText(saved, now()).text} · ended ${short(ended)}`, saved, { undo });
       } else if (saved.kind === "feed" && saved.data.paused_at_stop === true) {
         // Ended at its pause (the server's word for it, even if this phone still showed her on).
-        timerToast(doneText(saved, now(), `ended ${short(ended)}, when you paused`).text, saved, {
+        timerToast(doneText(saved, now(), `ended ${short(ended)}, ${pauseWords(saved, me)}`).text, saved, {
           undo,
           actions: [
             {
@@ -466,7 +474,7 @@ export function useTimerActions() {
       }
       return saved;
     },
-    [now, open, reopen, short, timerCall, timerToast]
+    [me, now, open, reopen, short, timerCall, timerToast]
   );
 
   /**
@@ -476,12 +484,19 @@ export function useTimerActions() {
    * on on this side from this start. If carrying on fails, this one comes back.
    */
   const sameFeed = useCallback(
-    async (e: Entry, prev: Entry, side: Side) => {
-      if (!(await timerCall({ action: "discard", id: e.id, expect_updated_at: e.updated_at }))) return;
-      const res = await continueFeed(live(prev), side, new Date(e.started_at), {}, () => restore(e.id));
-      if (!res?.entry.active) await restore(e.id);
+    async (e: Entry, prev: Entry, side: Side, opts: TimerCallOptions = {}): Promise<TimerResponse | null> => {
+      tick();
+      const p = live(prev);
+      // One request (join): the new feed is set aside and the old one carried on from its start, or neither happens.
+      const res = await timerCall(
+        { action: "join", id: e.id, into: p.id, side, expect_updated_at: live(e).updated_at, expect_into_updated_at: p.updated_at },
+        opts
+      );
+      if (!res || !res.entry.active) return res;
+      carriedToast(res, side, `one feed from ${short(res.entry.started_at)}`, { afterUndo: () => restore(e.id, { quiet: true }) });
+      return res;
     },
-    [continueFeed, live, restore, timerCall]
+    [carriedToast, live, restore, short, timerCall]
   );
 
   const startFeed = useCallback(
@@ -547,21 +562,36 @@ export function useTimerActions() {
   const freshFeed = useCallback(
     async (old: Entry, side: Side) => {
       tick();
-      const ended = await timerCall({ action: "stop", id: old.id, expect_updated_at: old.updated_at });
-      if (!ended || ended.entry.active) return null;
+      // The other phone may have ended it already (its Done): then there's just the new feed to start.
+      let gone: Entry | null = null;
+      const ended = await timerCall(
+        { action: "stop", id: old.id, expect_updated_at: old.updated_at },
+        {
+          onError: (f) => {
+            if (f.kind === "stopped" && f.entry && !f.entry.active) gone = f.entry;
+            else toast(f.message, { tone: "info" });
+          },
+        }
+      );
+      const was = ended && !ended.entry.active ? ended.entry : (gone as Entry | null);
+      if (!was) return null;
       const res = await timerCall({ action: "start", kind: "feed", side });
       if (!res || res.alreadyRunning !== false) return res?.entry ?? null;
       const e = res.entry;
-      const end = ended.entry.ended_at ?? ended.entry.started_at;
-      timerToast(`${SIDE_NAME[side]} started ${short(e.started_at)} · the ${short(old.started_at)} feed ended ${short(end)}, when you paused`, e, {
+      const end = was.ended_at ?? was.started_at;
+      const how = ended ? pauseWords(was, me) : "on the other phone";
+      timerToast(`${SIDE_NAME[side]} started ${short(e.started_at)} · the ${short(old.started_at)} feed ended ${short(end)}, ${how}`, e, {
         undo: () =>
           void (async () => {
-            if (await timerCall({ action: "discard", id: e.id, expect_updated_at: e.updated_at })) await reopen(ended.entry);
+            if (!(await timerCall({ action: "discard", id: e.id, expect_updated_at: e.updated_at }))) return;
+            // Only this phone's ending comes back; the other phone's Done stays.
+            if (ended && (await reopen(was))) toast(`Undone · the ${short(old.started_at)} feed is back, paused`, { group: "timer" });
+            else toast("Undone", { group: "timer" });
           })(),
       });
       return e;
     },
-    [reopen, short, timerCall, timerToast]
+    [me, reopen, short, timerCall, timerToast, toast]
   );
 
   /** Move a sleep, tummy-time or pumping start (Fix times, a start toast chip). */
@@ -753,7 +783,7 @@ export function useTimerActions() {
       if (res.merged) {
         // The pause was under a minute, so it counts as nursing: say so, or the pause just tapped seems to vanish
         // (a "No break" picked after a long pause is just no break).
-        timerToast(`Back on the ${name} · ${shortPause(res, at ?? now()) ? "paused under a minute, so " : ""}no break`, after, { undo: () => void restoreFrom(res) });
+        timerToast(`Back on the ${name} · ${shortPause(res, now()) ? "paused under a minute, so " : ""}no break`, after, { undo: () => void restoreFrom(res) });
       } else if (res.clamped && cur) {
         timerToast(`${name} starts ${short(cur.start)}, when the break began (no break)`, after, { undo: () => void restoreFrom(res), undoLabel: back });
       } else if (at && cur) {
@@ -813,6 +843,7 @@ export function useTimerActions() {
     /** Carry a finished feed on on a side, in one checked write (reopen with a side); Undo puts the finished feed back. */
     continueFeed,
     freshFeed,
+    sameFeed,
     /** "She went back on…" after a Done: a side until the Done tap (add_part), or, with until null, still on (reopen with a side). */
     backOnAfterDone,
     memberName,

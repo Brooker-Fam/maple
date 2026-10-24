@@ -256,7 +256,7 @@ export type UpdateEntryInput = {
  * side, carry a finished feed on on that side in the same write.
  * retime: fix one recorded moment of a timed nursing feed (`edit`).
  */
-export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "discard" | "adjust" | "reopen" | "retime";
+export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "discard" | "adjust" | "reopen" | "retime" | "join";
 
 /**
  * A Fix times edit (POST /api/maple/timer { action: "retime", id, edit }).
@@ -310,6 +310,8 @@ export type TimerResponse = {
   nap?: { entry: Entry; before_ended_at: string; before_updated_at: string };
   /** restore with a nap: false when the nap had changed and was left alone. */
   nap_restored?: boolean;
+  /** join: the new feed that was set aside, now part of `entry` ("Same feed as 8:30"). */
+  joined?: Entry;
 };
 
 /**
@@ -341,6 +343,9 @@ export type TimerInput = {
   at?: string;
   /** retime: the one moment to fix. */
   edit?: FeedEdit;
+  /** join (`id` = the new feed): the finished feed it's part of, and that feed's updated_at as this phone saw it. */
+  into?: number;
+  expect_into_updated_at?: string;
   /** start: client-generated id for idempotency. */
   client_id?: string;
 };

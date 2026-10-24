@@ -151,7 +151,8 @@ export type MapleContextValue = {
   ) => Promise<Entry | null>;
   update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string }) => Promise<Entry | null>;
   remove: (id: number, opts?: { toast?: string }) => Promise<void>;
-  restore: (id: number) => Promise<Entry | null>;
+  /** `quiet`: no "Restored" toast (an Undo that says its own "Undone"). */
+  restore: (id: number, opts?: { quiet?: boolean }) => Promise<Entry | null>;
   /**
    * A timer action with the server's whole answer (noop, merged, before, …),
    * or null when it didn't happen. Calls for one entry go one at a time, in
@@ -341,8 +342,10 @@ function restoredFeed(e: Entry & { kind: "feed" }, d: FeedData, edit: Extract<Fe
  * undefined: leave it for the server (an edit the engine refuses, or an
  * action with nothing to show early).
  */
-function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date): Entry | null | undefined {
+function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date, by?: string): Entry | null | undefined {
   if (input.action === "discard") return null;
+  // A join swaps one feed for another: shown when the server answers (an early "gone" would flash an idle dock).
+  if (input.action === "join") return undefined;
   const explicit = !!input.at;
   try {
     if (e.kind === "feed" && e.data.method === "breast" && e.data.segments?.length) {
@@ -352,9 +355,10 @@ function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date): Entr
         case "switch":
         case "resume":
           // A resume of a feed this phone already shows back on (the other phone's resume came in): the server's rule, so no early switch.
-          return { ...e, data: switchTo(d, input.side ?? "L", at, { explicit, resume: input.action === "resume" }).data };
+          // `by`: the server's re-side rule only re-sides this person's own resume.
+          return { ...e, data: switchTo(d, input.side ?? "L", at, { explicit, resume: input.action === "resume", now, by }).data };
         case "pause":
-          return { ...e, data: pauseFeed(d, at, { explicit }).data };
+          return { ...e, data: pauseFeed(d, at, { explicit, now, by }).data };
         case "stop": {
           const s = stopBreast(d, explicit ? at : undefined, now);
           return { ...e, active: false, ended_at: s.endedAt, data: s.data };
@@ -783,7 +787,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const restore = useCallback<MapleContextValue["restore"]>(
-    async (id) => {
+    async (id, opts = {}) => {
       try {
         const { entry, stopped_at } = await withInflight(() =>
           fetchJson<{ entry: Entry; stopped_at?: string | null }>(`/api/maple/entries/restore?id=${id}`, { method: "POST" })
@@ -791,7 +795,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         upsert(entry);
         if (stopped_at) {
           toast(`Restored, but stopped at ${formatTime(stopped_at, tzRef.current)}: another timer is running now`, { tone: "info" });
-        } else {
+        } else if (!opts.quiet) {
           toast("Restored");
         }
         return entry;
@@ -1013,7 +1017,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           id!,
           (cur) => {
             if (!cur || (fresh && mine!.has(cur)) || !(cur.active || input.action === "retime")) return undefined;
-            return optimisticTimer(cur, input, atNow(), now());
+            return optimisticTimer(cur, input, atNow(), now(), state?.me.email);
           },
           mine
         );
@@ -1047,6 +1051,11 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           dropEntry(entry.id);
           confirmedRef.current.delete(entry.id);
         } else {
+          // Joined into the feed before it: that one is the feed now.
+          if (res.joined) {
+            dropEntry(res.joined.id);
+            confirmedRef.current.delete(res.joined.id);
+          }
           // Drop any optimistic temp timer of the same kind, then upsert the real one.
           setState((s) => (s ? { ...s, entries: s.entries.filter((e) => !(e.id < 0 && e.kind === entry.kind && e.active)) } : s));
           upsert(entry);

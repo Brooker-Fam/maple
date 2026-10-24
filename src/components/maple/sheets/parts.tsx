@@ -108,6 +108,8 @@ function editedText(entry: Entry, name: (id: string) => string): string | null {
   // end at all), every write since was an edit.
   const timer = (entry.kind === "feed" && !!entry.data.segments?.length) || (ended !== null && created < ended - 5_000);
   if (!timer || ended === null) return "edited";
+  // With the Done's own time (stopped_at), any write a minute past it is a fix; older rows only know when it ended.
+  if (Number.isFinite(stop)) return updated - tapped > TAP_SLACK_MS ? "edited" : null;
   return updated - Math.max(ended, tapped) > EDIT_AFTER_END_MS ? "edited" : null;
 }
 

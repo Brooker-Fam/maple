@@ -214,10 +214,11 @@ export default function Dock() {
    * it still waits); the other shows its new label, dimmed, so it never
    * looks as if two buttons were pressed.
    */
-  const swap = (col: "col1" | "col2", fn: () => void) => {
+  const swap = (col: "col1" | "col2", fn: () => void, opts: { long?: boolean } = {}) => {
     if (cooling[col]) return;
-    cool("col1", col === "col1" ? SIDE_COOL_MS : SWAP_COOL_MS);
-    cool("col2", SWAP_COOL_MS);
+    // Column 1's own taps, and any start (the tapped tile turns into Pause or Switch), wait the longer while.
+    cool(col, col === "col1" || opts.long ? SIDE_COOL_MS : SWAP_COOL_MS);
+    cool(col === "col1" ? "col2" : "col1", SWAP_COOL_MS);
     cool(`check-${col}`, SWAP_COOL_MS);
     fn();
   };
@@ -288,10 +289,14 @@ export default function Dock() {
   };
 
   const tapSide = (side: Side) =>
-    swap(side === "L" ? "col1" : "col2", () => {
-      toTop();
-      void actions.startFeed(side);
-    });
+    swap(
+      side === "L" ? "col1" : "col2",
+      () => {
+        toTop();
+        void actions.startFeed(side);
+      },
+      { long: true }
+    );
 
   const holdFeed = (side: Side) => open({ kind: "feed", preset: { method: "breast", first_side: side, started_at: earlierAt() } });
 
@@ -342,7 +347,7 @@ export default function Dock() {
                   sub={feedPending ? "starting…" : askWhen ? "when?" : undefined}
                   accent
                   disabled={feedPending}
-                  onTap={tap(() => (askWhen ? open({ kind: "feed", entry: feed, preset: fixPreset("current", "finished") }) : void actions.stop(feed)))}
+                  onTap={tap(() => (askWhen ? open({ kind: "feed", entry: feed, preset: fixPreset("current", "done") }) : void actions.stop(feed)))}
                 />
               </>
             ) : feed && feedN && nursing ? (
@@ -374,7 +379,7 @@ export default function Dock() {
                       strong={suggested}
                       done={cooling[`check-${col}`]}
                       disabled={feedPending || cooling[col]}
-                      onTap={tap(() => swap(col, () => void (fresh ? actions.freshFeed(feed, s) : actions.resume(feed, s))))}
+                      onTap={tap(() => swap(col, () => void (fresh ? actions.freshFeed(feed, s) : actions.resume(feed, s)), { long: fresh }))}
                     />
                   );
                 })}

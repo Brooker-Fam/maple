@@ -4,9 +4,9 @@ import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
-import { minutesText, other } from "@/lib/maple/feed";
+import { minutesText, other, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple/time";
-import type { Entry, Side } from "@/lib/maple/types";
+import type { Entry, FeedData, Side } from "@/lib/maple/types";
 import { fixPreset, SIDE_NAME, timerNumbers, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import { useSheets } from "./sheets";
@@ -38,6 +38,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   // Follow the live entry (switches from the other phone show up here too).
   const live = state?.entries.find((e) => e.id === entry.id) ?? entry;
   const n = timerNumbers(live, now);
+  // On a break over an hour (staleFeed, the Siri/Claude rule the dock uses too): her side starts a new feed.
+  const stale = live.kind === "feed" && n.paused && staleFeed(live as Entry & { data: FeedData }, now);
   // The card's "Still nursing?" (a long side, not snoozed): Done asks when instead of ending the feed now.
   const still = useStillGoing(live, n, now);
   const askWhen = still.forgotten && still.check === "side";
@@ -199,7 +201,13 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           {formatClock(isFeed ? n.current.sec : n.elapsed)}
         </p>
         <p className="mt-3 text-lg opacity-50">{subtitle}</p>
-        {isFeed && !n.paused && <p className="mt-1 text-sm tabular-nums opacity-35">Total nursing {minutesText(n.totalMin)}</p>}
+        {/* Total only with more than one side (on one side it's the big clock, said twice); on a break, what she had so far. */}
+        {isFeed && !n.paused && n.parts.filter((p) => p.kind === "side").length > 1 && <p className="mt-1 text-sm tabular-nums opacity-35">Total nursing {minutesText(n.totalMin)}</p>}
+        {isFeed && n.paused && (
+          <p className="mt-1 text-sm tabular-nums opacity-40">
+            {stale ? "Over an hour: her side starts a new feed" : n.current.sec >= 20 * 60 ? `Still on a break? Nursed ${minutesText(n.totalMin)} so far` : `Nursed ${minutesText(n.totalMin)} so far`}
+          </p>
+        )}
         <p className="mt-6 h-5 text-sm opacity-60" aria-live="polite">
           {hint ?? ""}
         </p>
@@ -239,11 +247,16 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
             <HoldButton
               key={i}
               label={SIDE_NAME[s]}
-              sub={i === 0 ? "Next side" : "Resume"}
+              // On a break over an hour (the dock's rule): a hold starts a new feed, ending this one at its pause.
+              sub={stale ? "New feed" : i === 0 ? "Next side" : "Resume"}
               mark={s}
-              aria={`Resume on ${SIDE_NAME[s]}${i === 0 ? " (next side)" : ""}`}
-              onHint={() => showHint(`Hold to go back on the ${SIDE_NAME[s]}`)}
-              onConfirm={() => void actions.resume(live, s).then((r) => confirmed(!!r, `Back on the ${SIDE_NAME[s]}`))}
+              aria={stale ? `Start a new feed on ${SIDE_NAME[s]} (this one ends at its pause)` : `Resume on ${SIDE_NAME[s]}${i === 0 ? " (next side)" : ""}`}
+              onHint={() => showHint(stale ? "Hold to start a new feed" : `Hold to ${i === 0 ? "go on" : "go back on"} the ${SIDE_NAME[s]}`)}
+              onConfirm={() =>
+                void (stale
+                  ? actions.freshFeed(live, s).then((r) => confirmed(!!r, `New feed on the ${SIDE_NAME[s]}`))
+                  : actions.resume(live, s).then((r) => confirmed(!!r, `${i === 0 ? "On" : "Back on"} the ${SIDE_NAME[s]}`)))
+              }
             />
           ))}
         {!locked && (
@@ -257,7 +270,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
             onConfirm={() => {
               if (askWhen) {
                 onClose();
-                return open({ kind: "feed", entry: live, preset: fixPreset("current", "finished") });
+                return open({ kind: "feed", entry: live, preset: fixPreset("current", "done") });
               }
               void actions.stop(live);
               onClose();

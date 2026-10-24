@@ -3,9 +3,9 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { adminActsAs } from "@/lib/maple/insights";
-import { minutesText } from "@/lib/maple/feed";
+import { minutesText, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
-import type { Entry, Side, TimerKind } from "@/lib/maple/types";
+import type { Entry, FeedData, Side, TimerKind } from "@/lib/maple/types";
 import { fixPreset, KIND_TITLE, LiveBlock, PartRows, SIDE_NAME, timerNumbers, useCompact, useStillGoing, type FixExpand, type FixTarget, type TimerNumbers } from "./FeedParts";
 import { Icon, KindBadge, type IconName } from "./icons";
 import Lantern from "./Lantern";
@@ -240,6 +240,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
           onEarlier={() => openFix("current", "finished")}
           onBackOn={() => openFix("current", "backOn")}
           onDone={() => void actions.stop(entry)}
+          stale={entry.kind === "feed" && n.paused && staleFeed(entry as Entry & { data: FeedData }, now)}
           compact={compact}
           disabled={waiting}
           className={past.length ? "mt-1" : "mt-3"}
@@ -373,6 +374,7 @@ function ForgottenPrompt({
   onEarlier,
   onBackOn,
   onDone,
+  stale,
   compact,
   disabled,
   className,
@@ -384,6 +386,8 @@ function ForgottenPrompt({
   onEarlier: () => void;
   onBackOn: () => void;
   onDone: () => void;
+  /** On a break over an hour (staleFeed, the dock's "New feed"): the next latch is a new feed, so ending this one leads. */
+  stale?: boolean;
   compact?: boolean;
   /** A timer still starting: the fix buttons wait for it (a tap still on its way queues them instead, see openFix). */
   disabled?: boolean;
@@ -405,22 +409,42 @@ function ForgottenPrompt({
           Since {formatTime(n.current.since, tz)} ({minutesText(n.current.min)})
           {lastSide?.kind === "side" ? ` · ${SIDE_NAME[lastSide.side]} ${minutesText(lastSide.min)}` : ""}
         </p>
-        <Button size="lg" disabled={disabled} onClick={onBackOn} className={cx("w-full", compact ? "mt-2.5" : "mt-4", btn)}>
-          She&apos;s back on…
-        </Button>
-        <div className="mt-2 flex gap-2">
-          <Button variant="soft" size="lg" onClick={onSnooze} className={cx("flex-1 px-2 text-[15px]", btn)}>
-            Still on a break
-          </Button>
-          {/* Done while paused ends the feed at the pause, as the dock's Done says ("ends 4:10" under it, like the tile). */}
-          <Button variant="soft" size="lg" onClick={onDone} aria-label={`She's done: end the feed at ${formatTime(n.current.since, tz)}, when the break began`} className={cx("flex-1 px-2 text-[15px]", btn)}>
-            <span className="flex flex-col items-center leading-tight">
-              <span>She&apos;s done</span>
-              <span className="text-[12px] font-normal text-mp-ink-2 tabular-nums">ends {ends}</span>
-            </span>
-          </Button>
-        </div>
-        <p className={cx("text-[13px] text-mp-ink-2", compact ? "mt-1.5 leading-[15px]" : "mt-2 leading-snug")}>When she latches, tap her side in the dock below.</p>
+        {stale ? (
+          <>
+            {/* Over an hour: she's most likely done, and the dock's sides now start a new feed, so ending this one leads. */}
+            <Button size="lg" onClick={onDone} aria-label={`She's done: end the feed at ${formatTime(n.current.since, tz)}, when the break began`} className={cx("w-full", compact ? "mt-2.5" : "mt-4", btn)}>
+              She&apos;s done · ends {ends}
+            </Button>
+            <div className="mt-2 flex gap-2">
+              <Button variant="soft" size="lg" disabled={disabled} onClick={onBackOn} className={cx("flex-1 px-2 text-[15px]", btn)}>
+                Same feed, back on…
+              </Button>
+              <Button variant="soft" size="lg" onClick={onSnooze} className={cx("flex-1 px-2 text-[15px]", btn)}>
+                Still on a break
+              </Button>
+            </div>
+            <p className={cx("text-[13px] text-mp-ink-2", compact ? "mt-1.5 leading-[15px]" : "mt-2 leading-snug")}>When she latches, tap her side in the dock to start a new feed.</p>
+          </>
+        ) : (
+          <>
+            <Button size="lg" disabled={disabled} onClick={onBackOn} className={cx("w-full", compact ? "mt-2.5" : "mt-4", btn)}>
+              She&apos;s back on…
+            </Button>
+            <div className="mt-2 flex gap-2">
+              <Button variant="soft" size="lg" onClick={onSnooze} className={cx("flex-1 px-2 text-[15px]", btn)}>
+                Still on a break
+              </Button>
+              {/* Done while paused ends the feed at the pause, as the dock's Done says ("ends 4:10" under it, like the tile). */}
+              <Button variant="soft" size="lg" onClick={onDone} aria-label={`She's done: end the feed at ${formatTime(n.current.since, tz)}, when the break began`} className={cx("flex-1 px-2 text-[15px]", btn)}>
+                <span className="flex flex-col items-center leading-tight">
+                  <span>She&apos;s done</span>
+                  <span className="text-[12px] font-normal text-mp-ink-2 tabular-nums">ends {ends}</span>
+                </span>
+              </Button>
+            </div>
+            <p className={cx("text-[13px] text-mp-ink-2", compact ? "mt-1.5 leading-[15px]" : "mt-2 leading-snug")}>When she latches, tap her side in the dock below.</p>
+          </>
+        )}
       </div>
     );
   }

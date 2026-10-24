@@ -45,8 +45,10 @@ export default function WhileYouSlept() {
   const nowMs = now().getTime();
   if (!Number.isFinite(since) || nowMs - since < GAP_MS) return null;
 
-  // What happened while they were away (plus a nap that's still going).
-  const fresh = state.entries.filter((e) => e.id > 0 && (Date.parse(e.started_at) >= since || (e.active && e.kind === "sleep")));
+  // What the others logged while they were away (plus a nap that's still going); not what they just logged themselves.
+  const fresh = state.entries.filter(
+    (e) => e.id > 0 && e.created_by !== state.me.email && (Date.parse(e.started_at) >= since || (e.active && e.kind === "sleep"))
+  );
   if (!fresh.length) return null;
 
   const feeds = fresh.filter((e) => e.kind === "feed").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));

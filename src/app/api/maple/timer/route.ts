@@ -4,6 +4,7 @@ import {
   discardedBy,
   discardTimer,
   getBaby,
+  joinFeeds,
   NotFound,
   pauseTimer,
   reopenTimerDetailed,
@@ -103,7 +104,12 @@ function feedEdit(v: unknown): FeedEdit {
 
 /** A store answer with its entries made safe to send (no blob keys). */
 const timerJson = (r: TimerResponse) =>
-  json({ ...r, entry: toClientEntry(r.entry), ...(r.nap ? { nap: { ...r.nap, entry: toClientEntry(r.nap.entry) } } : {}) });
+  json({
+    ...r,
+    entry: toClientEntry(r.entry),
+    ...(r.nap ? { nap: { ...r.nap, entry: toClientEntry(r.nap.entry) } } : {}),
+    ...(r.joined ? { joined: toClientEntry(r.joined) } : {}),
+  });
 
 /**
  * POST /api/maple/timer { action, kind?, side?, id?, at?, edit?, client_id?, expect_updated_at? }
@@ -180,6 +186,15 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
       const expect = body.expect_updated_at;
       const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
       return json({ entry: toClientEntry(await discardTimer(id, by, { expectUpdatedAt })) });
+    }
+    case "join": {
+      // "Same feed as 8:30": `id` (just started) is that feed going on, on `side` from its start. One request.
+      if (!isSide(body.side)) throw new BadRequest("side must be L or R");
+      const into = Number(body.into);
+      if (!Number.isSafeInteger(into) || into <= 0 || into === id) throw new BadRequest("into must be the earlier feed's id");
+      const exp = (v: unknown, name: string) => (v == null ? undefined : instant(v, name).toISOString());
+      const res = await joinFeeds(id, into, body.side, by, { expectNew: exp(body.expect_updated_at, "expect_updated_at"), expectInto: exp(body.expect_into_updated_at, "expect_into_updated_at") });
+      return timerJson(res);
     }
     case "reopen": {
       // side: carry the feed on there in the same write; expect_updated_at: only the finished feed this phone saw.

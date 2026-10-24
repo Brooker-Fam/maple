@@ -1277,6 +1277,23 @@ check("live total: a Switch or a Pause doesn't move it (the row that closes has 
   });
 }
 
+// ── round 4: carried taps, undone taps and staleness, who paused ───────────
+
+check("carried: a Continue's resume can't be taken back with undo_tap (its toast's Undo restores the Done)", () => {
+  const resumed = switchTo(feed("L 16:00-16:10"), "R", D("16:20"), { resume: true });
+  const tap = tapOf(resumed.data)!;
+  const carried = { ...resumed.data, last_tap: { ...tap, carried: true } } as TapFeedData;
+  eq(undoableTap(carried, live("16:21")), null, "no mistap row");
+  eq(throwsCode(() => undoLastTap(carried, newest(carried)), "nothing_to_undo").params.why, "taken_back");
+});
+check("staleFeed: a resume that was taken back doesn't make an old break look recent", () => {
+  const e = { started_at: T("13:00"), data: { ...feed("L 13:00-13:12"), last_tap: { kind: "resume", side: "R", at: T("15:40"), paused_at: T("13:12"), undone: true } } as TapFeedData };
+  eq(staleFeed(e, D("15:45")), true, "on a break since 13:12; the 15:40 tap was undone");
+});
+check("pause records who tapped it", () => {
+  eq(tapOf(pause(feed("L 16:00-"), D("16:10"), { by: "matt@example.com" }).data)?.by, "matt@example.com");
+});
+
 // ── done ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`);

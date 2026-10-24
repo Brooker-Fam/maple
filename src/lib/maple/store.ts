@@ -492,7 +492,7 @@ export async function restoreEntryDetailed(id: number, by?: string): Promise<{ e
   if (!prev) throw new NotFound(`Entry ${id} not found`);
   try {
     const rows = await q(
-      `UPDATE maple_entries SET deleted_at = NULL, updated_by = COALESCE($2, updated_by), updated_at = NOW()
+      `UPDATE maple_entries SET deleted_at = NULL, data = data - 'joined_into', updated_by = COALESCE($2, updated_by), updated_at = NOW()
        WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *`,
       [id, by ?? null]
     );
@@ -509,6 +509,10 @@ export async function restoreEntryDetailed(id: number, by?: string): Promise<{ e
       data = stopped.data;
       stopAt = new Date(stopped.endedAt);
     } else if (prev.kind === "feed") data = finalizeBreast(prev.data as FeedData, stopAt);
+    // Back as itself, not as part of the feed it was joined into.
+    const { joined_into: _joined, ...kept } = data as Record<string, unknown>;
+    void _joined;
+    data = kept;
     const rows = await q(
       `UPDATE maple_entries SET deleted_at = NULL, active = FALSE, ended_at = COALESCE(ended_at, $3::timestamptz),
          data = $4::jsonb, updated_by = COALESCE($2, updated_by), updated_at = NOW()
@@ -709,7 +713,7 @@ export async function pauseTimer(id: number, at: Date | undefined, by?: string):
   const t = tapTime(at, now);
   return mutateTimer(id, (cur) => {
     if (cur.kind !== "feed") throw new Error("Only nursing timers can pause");
-    const paused = pauseFeed(cur.data, t, { explicit: at !== undefined, now });
+    const paused = pauseFeed(cur.data, t, { explicit: at !== undefined, now, by });
     return paused.noop ? null : { data: paused.data };
   }, { by });
 }
@@ -961,7 +965,8 @@ export async function reopenTimerDetailed(id: number, by?: string, opts: { side?
       const last = segs[segs.length - 1];
       // A side and a time after the Done ("Same feed as 9:09", from the new feed's start): she came off at the Done and
       // went back on then, so the gap is a break, not nursing nobody saw.
-      const after = !!opts.side && opts.at !== undefined && !!e.ended_at && t.getTime() - Date.parse(e.ended_at) >= NEAR;
+      // Within a minute of the Done (tapped Done, then her side, at once) there's no break to keep.
+      const after = !!opts.side && opts.at !== undefined && !!e.ended_at && t.getTime() - Date.parse(e.ended_at) >= 60 * SEC;
       // Stopped at its pause (paused_at_stop): the last side stays closed. Otherwise
       // the side that ran to the stop reopens; a discarded-then-restored timer
       // never stopped (ended_at null), so its open side is still open.
@@ -974,23 +979,69 @@ export async function reopenTimerDetailed(id: number, by?: string, opts: { side?
       const side = opts.side;
       const open = openSegment(segs);
       if (!side || open?.side === side) return { data: rest, active: true, endedAt: null };
+      // Carried on: the tap it records can't be taken back with undo_tap (that would leave it paused, not as Done
+      // left it); the toast's Undo restores the finished feed instead.
+      const carried = (x: FeedData) => {
+        const tap = (x as TapFeedData).last_tap;
+        if (tap) (x as TapFeedData).last_tap = { ...tap, carried: true };
+        return x;
+      };
       if (open) {
         // At the Done, which isn't a tap: the resume-side rule (a switch just after going back on) doesn't apply.
         delete rest.last_tap;
         const doneAt = e.ended_at ? new Date(e.ended_at) : t;
-        const { data, noop: _noop, ...flags } = switchTo(rest, side, doneAt, { now });
+        const { data, noop: _noop, ...flags } = switchTo(rest, side, doneAt, { now, by });
         void _noop;
-        return { data, active: true, endedAt: null, flags };
+        return { data: carried(data), active: true, endedAt: null, flags };
       }
       const { data, noop: _noop, ...flags } = switchTo(rest, side, t, { explicit: opts.at !== undefined, resume: true, now, by });
       void _noop;
-      return { data, active: true, endedAt: null, flags };
+      return { data: carried(data), active: true, endedAt: null, flags };
     }, { by, allowFinished: true, expectUpdatedAt: opts.expectUpdatedAt });
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
     const cur = await getEntry(id);
     if (!cur) throw new NotFound(`Timer ${id} not found`);
     throw new Conflict("Another timer of that kind is running now", cur, "clash");
+  }
+}
+
+/**
+ * "Same feed as 8:30": a feed started a few minutes after the last one
+ * ended (a Done by mistake, or she came back for more) is that feed going
+ * on. One request: the new feed is set aside (only as this phone saw it,
+ * marked joined_into so Recently removed doesn't offer it back as a stray)
+ * and the old one is carried on, on `side`, from the new one's start. If
+ * carrying on fails, the new one comes back as it was.
+ */
+export async function joinFeeds(newId: number, intoId: number, side: Side, by: string | undefined, opts: { expectNew?: string; expectInto?: string } = {}): Promise<TimerResponse & { joined: Entry }> {
+  const cur = await getEntry(newId);
+  if (!cur) throw new NotFound(`Timer ${newId} not found`);
+  if (cur.kind !== "feed" || !cur.active) throw new Conflict("That feed already stopped", cur, "stopped");
+  if (opts.expectNew !== undefined && !sameInstant(opts.expectNew, cur.updated_at)) throw changed(cur);
+  // Joined as one side from its start: a feed that has switched or paused since has more to it than that.
+  if (((cur.data as FeedData).segments?.length ?? 0) > 1) throw new Error("Only a feed still on its first side can be joined to the one before");
+  const rows = await q(
+    `UPDATE maple_entries SET deleted_at = NOW(), data = data || jsonb_build_object('joined_into', $3::bigint),
+       updated_by = COALESCE($2, updated_by), updated_at = NOW()
+     WHERE id = $1 AND deleted_at IS NULL AND active
+       AND updated_at BETWEEN $4::timestamptz - INTERVAL '1 millisecond' AND $4::timestamptz + INTERVAL '1 millisecond'
+     RETURNING *`,
+    [newId, by ?? null, intoId, cur.updated_at]
+  );
+  if (!rows.length) {
+    const now = await getEntry(newId);
+    if (!now) throw new NotFound(`Timer ${newId} not found`);
+    throw now.active ? changed(now) : new Conflict("That feed already stopped", now, "stopped");
+  }
+  const joined = rowToEntry(rows[0]);
+  try {
+    const res = await reopenTimerDetailed(intoId, by, { side, at: new Date(cur.started_at), expectUpdatedAt: opts.expectInto });
+    return { ...res, joined };
+  } catch (err) {
+    // Put the new one back exactly (still running), then say why.
+    await q(`UPDATE maple_entries SET deleted_at = NULL, data = data - 'joined_into', updated_at = NOW() WHERE id = $1`, [newId]);
+    throw err;
   }
 }
 
