@@ -79,7 +79,7 @@ Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `stop`, `
   - **Done while paused ends the feed when you paused** (flag `paused_at_stop`; Undo brings it back paused).
   - A same-side resume within a minute of the pause merges with no break, and its toast says why ("Back on the Left · paused under a minute, so no break").
   - MCP: `reopen_timer` takes an optional `side` (+ `at` / `minutes_ago`), the same one write as the app's Continue, and replies with an undo token; `switch_side`, `pause_nursing` and `stop_timer` take `minutes_ago` / `at`; `fix_nursing_time` moves one moment, fixes a side or undoes the latest tap, and replies with a signed undo token. `start_timer` during a running feed acts as `switch_side`, unless the feed is stale (Siri's rule above), when it says to stop that one first and shows where it stands.
-  - `insights.ts` builds the Today summary, alerts, targets and celebrations.
+  - `insights.ts` builds the Today summary, alerts, targets and celebrations. Her firsts ("First poop!", first bath, first tummy time) come from the server's lifetime firsts (`lifetimeCounts` in `store.ts`, sent as `state.lifetime.firsts`), never from the earliest entry loaded, since the app only loads the last 72 hours; a first poop is only celebrated in her first 4 days (meconium).
   - `guidelines.ts` holds every pediatric threshold and every line of alert wording.
   - `growth.ts` + `who-girls.ts` hold the WHO girls LMS tables (daily, 0–730 days) and the percentile math. Only load these lazily on the client.
   - `describe.ts` gives a one-line wording of any entry.

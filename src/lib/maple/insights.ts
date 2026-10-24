@@ -29,7 +29,7 @@ import {
   type AlertTier,
 } from "./guidelines";
 import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatTime, localParts, zonedTimeToUtc, type BabyAge } from "./time";
-import type { Baby, Entry, EntryOf, Member, Side } from "./types";
+import type { Baby, Entry, EntryOf, Lifetime, Member, Side } from "./types";
 
 export type Alert = {
   /** Stable id (e.g. "fever-123") so a family can mark it handled. */
@@ -319,7 +319,7 @@ export function summarize(opts: {
   baby: Baby;
   members?: Member[];
   now: Date;
-  lifetime?: { diapers: number; feeds: number };
+  lifetime?: Lifetime;
 }): Summary {
   const { baby, now } = opts;
   const members = opts.members ?? [];
@@ -642,7 +642,7 @@ export function summarize(opts: {
     feeds: ofKind(entries, "feed").length,
   };
 
-  const celebrations = milestonesReached({ entries, weights, baby, now, totals, tz });
+  const celebrations = milestonesReached({ entries, weights, baby, now, totals, firsts: opts.lifetime?.firsts, tz });
   return {
     now: now.toISOString(),
     tz,
@@ -671,6 +671,10 @@ export function summarize(opts: {
 }
 
 const CELEBRATE_FOR_MS = 3 * 24 * 3600_000;
+/** How far back the app's entries reach (the state route's window). */
+const LOADED_HOURS = 72;
+/** A first poop is the meconium only in her first few days. */
+const FIRST_POOP_DAYS = 4;
 
 /**
  * Milestones reached in the last 3 days, newest first. Counted milestones
@@ -682,6 +686,7 @@ function milestonesReached(o: {
   baby: Baby;
   now: Date;
   totals: { diapers: number; feeds: number };
+  firsts?: Lifetime["firsts"];
   tz: string;
 }): Celebration[] {
   const { entries, baby, now, totals, tz } = o;
@@ -709,14 +714,25 @@ function milestonesReached(o: {
   }
   add({ id: "day-100", emoji: "💯", title: `100 days of ${name}`, milestone: "100 days" }, bornMs + 100 * 24 * 3600_000);
 
-  const firstOf = (pred: (e: Entry) => boolean) =>
-    entries.filter((e) => pred(e) && Date.parse(e.started_at) >= bornMs - 3600_000).sort((x, y) => ts(x) - ts(y))[0];
-  const firstPoop = firstOf((e) => e.kind === "diaper" && e.data.poop);
-  if (firstPoop && totals.diapers <= 20) add({ id: "first-poop", emoji: "🌰", title: "First poop! The meconium era begins." }, ts(firstPoop));
-  const firstBath = firstOf((e) => e.kind === "bath");
-  if (firstBath) add({ id: "first-bath", emoji: "🛁", title: "First bath! Squeaky-clean little leaf.", milestone: "First bath" }, ts(firstBath));
-  const firstTummy = firstOf((e) => e.kind === "tummy" && !e.active);
-  if (firstTummy) add({ id: "first-tummy", emoji: "🐢", title: "First tummy time! Tiny push-ups.", milestone: "First tummy time" }, ts(firstTummy));
+  /**
+   * When she first did it: the server's lifetime first. The loaded entries
+   * only reach back ~72h, so their earliest is her first only while that
+   * covers her whole life (an older server answer with no firsts).
+   */
+  const coversBirth = nowMs - bornMs <= LOADED_HOURS * 3600_000;
+  const firstAt = (key: keyof NonNullable<Lifetime["firsts"]>, pred: (e: Entry) => boolean): number | null => {
+    if (o.firsts) return o.firsts[key] ? Date.parse(o.firsts[key]!) : null;
+    if (!coversBirth) return null;
+    const e = entries.filter((x) => pred(x) && Date.parse(x.started_at) >= bornMs - 3600_000).sort((x, y) => ts(x) - ts(y))[0];
+    return e ? ts(e) : null;
+  };
+  // Meconium comes in her first days: a "first" poop logged later is just when the logging started.
+  const firstPoop = firstAt("poop", (e) => e.kind === "diaper" && e.data.poop);
+  if (firstPoop !== null && firstPoop - bornMs <= FIRST_POOP_DAYS * 24 * 3600_000) add({ id: "first-poop", emoji: "🌰", title: "First poop! The meconium era begins." }, firstPoop);
+  const firstBath = firstAt("bath", (e) => e.kind === "bath");
+  if (firstBath !== null) add({ id: "first-bath", emoji: "🛁", title: "First bath! Squeaky-clean little leaf.", milestone: "First bath" }, firstBath);
+  const firstTummy = firstAt("tummy", (e) => e.kind === "tummy" && !e.active);
+  if (firstTummy !== null) add({ id: "first-tummy", emoji: "🐢", title: "First tummy time! Tiny push-ups.", milestone: "First tummy time" }, firstTummy);
 
   if (baby.birth_weight_g) {
     const back = o.weights.find((w) => w.data.weight_g! >= baby.birth_weight_g! && ts(w) > bornMs + 24 * 3600_000);

@@ -217,8 +217,8 @@ export type MapleState = {
   entries: Entry[];
   /** Every growth entry, oldest first (small, and charts need them all). */
   growth: Entry[];
-  /** Lifetime counts, for celebrations ("Diaper #100!"). */
-  lifetime: { diapers: number; feeds: number };
+  /** Lifetime counts and firsts, for celebrations ("Diaper #100!", "First poop!"). */
+  lifetime: Lifetime;
   /** Opaque change token; pass back as ?rev= to get { unchanged: true }. */
   rev: string;
   /**
@@ -310,6 +310,17 @@ export type TimerResponse = {
   nap?: { entry: Entry; before_ended_at: string; before_updated_at: string };
   /** restore with a nap: false when the nap had changed and was left alone. */
   nap_restored?: boolean;
+};
+
+/**
+ * Lifetime counts and firsts from the server. `entries` only reach back ~72h,
+ * so "the earliest poop loaded" isn't her first poop after day 3: firsts are
+ * the earliest of each since she was born (ISO, null if none yet).
+ */
+export type Lifetime = {
+  diapers: number;
+  feeds: number;
+  firsts?: { poop: string | null; bath: string | null; tummy: string | null };
 };
 
 /** POST /api/maple/timer */

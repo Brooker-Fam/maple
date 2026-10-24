@@ -47,7 +47,7 @@ import {
 } from "../src/lib/maple/feed";
 import { timerNumbers } from "../src/components/maple/FeedParts";
 import { describeEntry } from "../src/lib/maple/describe";
-import { memberLabel, statsFor } from "../src/lib/maple/insights";
+import { memberLabel, statsFor, summarize as summarizeDay } from "../src/lib/maple/insights";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Baby, EntryOf, FeedData, Member, Segment, Side } from "../src/lib/maple/types";
 
@@ -1230,6 +1230,52 @@ check("live total: a Switch or a Pause doesn't move it (the row that closes has 
   eq(timerNumbers(entryOf(switchTo(data, "L", at).data, live("05:47:58")), later).totalMin, before, "after Switch");
   eq(timerNumbers(entryOf(pause(data, at).data, live("05:47:58")), later).totalMin, before, "after Pause");
 });
+
+// ── celebrations: her firsts are lifetime firsts, not the earliest loaded ──
+
+{
+  const H = 3600_000;
+  const bornAt = new Date("2026-10-19T09:00:00Z");
+  const born: Baby = { ...baby(), born_at: bornAt.toISOString() };
+  let nextId = 9000;
+  const entry = (kind: "diaper" | "bath", at: Date, data: Record<string, unknown> = {}) =>
+    ({
+      id: nextId++, kind, started_at: at.toISOString(), ended_at: null, active: false, data, note: null,
+      created_by: "matt@example.com", updated_by: null, source: "web", created_at: at.toISOString(), updated_at: at.toISOString(),
+    }) as unknown as Parameters<typeof summarizeDay>[0]["entries"][number];
+  const poop = (at: Date) => entry("diaper", at, { pee: false, poop: true });
+  const ids = (now: Date, entries: ReturnType<typeof poop>[], lifetime?: Parameters<typeof summarizeDay>[0]["lifetime"]) =>
+    summarizeDay({ entries, baby: born, now, lifetime }).celebrations.map((c) => c.id);
+  const day5 = new Date(bornAt.getTime() + 4.5 * 24 * H);
+  const lastDays = [poop(new Date(day5.getTime() - 30 * H)), poop(new Date(day5.getTime() - 5 * H))];
+
+  check("celebrations: no 'First poop!' on day 5 when her first was on day 1 (only the last 72h are loaded)", () => {
+    const firsts = { poop: new Date(bornAt.getTime() + 6 * H).toISOString(), bath: null, tummy: null };
+    eq(ids(day5, lastDays, { diapers: 12, feeds: 20, firsts }).includes("first-poop"), false);
+  });
+  check("celebrations: an older server answer (no firsts) never calls a day-5 poop her first", () => {
+    eq(ids(day5, lastDays, { diapers: 12, feeds: 20 }).includes("first-poop"), false);
+    eq(ids(day5, lastDays).includes("first-poop"), false);
+  });
+  check("celebrations: her real first poop, on day 1, is celebrated", () => {
+    const now = new Date(bornAt.getTime() + 20 * H);
+    const first = poop(new Date(bornAt.getTime() + 10 * H));
+    eq(ids(now, [first], { diapers: 3, feeds: 4, firsts: { poop: first.started_at, bath: null, tummy: null } }).includes("first-poop"), true);
+    eq(ids(now, [first]).includes("first-poop"), true, "and from the loaded entries while they cover her whole life");
+  });
+  check("celebrations: a 'first' poop logged only on day 6 (logging started late) isn't the meconium", () => {
+    const now = new Date(bornAt.getTime() + 6 * 24 * H);
+    const late = poop(new Date(now.getTime() - 2 * H));
+    eq(ids(now, [late], { diapers: 1, feeds: 0, firsts: { poop: late.started_at, bath: null, tummy: null } }).includes("first-poop"), false);
+  });
+  check("celebrations: a bath yesterday isn't 'First bath!' when her first was a week ago", () => {
+    const now = new Date(bornAt.getTime() + 9 * 24 * H);
+    const bath = entry("bath", new Date(now.getTime() - 20 * H));
+    const firsts = { poop: null, bath: new Date(bornAt.getTime() + 2 * 24 * H).toISOString(), tummy: null };
+    eq(ids(now, [bath], { diapers: 60, feeds: 80, firsts }).includes("first-bath"), false);
+    eq(ids(now, [bath], { diapers: 60, feeds: 80, firsts: { ...firsts, bath: bath.started_at } }).includes("first-bath"), true, "unless it really was her first");
+  });
+}
 
 // ── done ─────────────────────────────────────────────────────────────────
 

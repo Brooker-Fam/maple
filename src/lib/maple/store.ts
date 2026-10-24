@@ -28,6 +28,7 @@ import type {
   EntryKind,
   FeedData,
   FeedEdit,
+  Lifetime,
   Member,
   MomentData,
   Role,
@@ -1055,14 +1056,29 @@ export async function updateMember(
   );
 }
 
-export async function lifetimeCounts(babyId: number): Promise<{ diapers: number; feeds: number }> {
+/**
+ * Lifetime counts, and her firsts (the earliest poop, bath and finished tummy
+ * time since she was born; an hour's slack for a birth time typed late), for
+ * celebrations: the state only carries the last ~72h of entries.
+ */
+export async function lifetimeCounts(babyId: number): Promise<Lifetime> {
   const rows = await q(
-    `SELECT COUNT(*) FILTER (WHERE kind = 'diaper')::int AS diapers,
-            COUNT(*) FILTER (WHERE kind = 'feed' AND NOT active)::int AS feeds
-     FROM maple_entries WHERE baby_id = $1 AND deleted_at IS NULL`,
+    `SELECT COUNT(*) FILTER (WHERE e.kind = 'diaper')::int AS diapers,
+            COUNT(*) FILTER (WHERE e.kind = 'feed' AND NOT e.active)::int AS feeds,
+            MIN(e.started_at) FILTER (WHERE e.kind = 'diaper' AND e.data->>'poop' = 'true' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_poop,
+            MIN(e.started_at) FILTER (WHERE e.kind = 'bath' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_bath,
+            MIN(e.started_at) FILTER (WHERE e.kind = 'tummy' AND NOT e.active AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_tummy
+     FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id
+     WHERE e.baby_id = $1 AND e.deleted_at IS NULL`,
     [babyId]
   );
-  return { diapers: Number(rows[0]?.diapers ?? 0), feeds: Number(rows[0]?.feeds ?? 0) };
+  const r = rows[0];
+  const at = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
+  return {
+    diapers: Number(r?.diapers ?? 0),
+    feeds: Number(r?.feeds ?? 0),
+    firsts: { poop: at(r?.first_poop), bath: at(r?.first_bath), tummy: at(r?.first_tummy) },
+  };
 }
 
 /**
