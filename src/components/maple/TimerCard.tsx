@@ -79,8 +79,8 @@ function useSlow(on: boolean, ms: number): boolean {
 }
 
 export default function TimerCard({ entry }: { entry: Entry }) {
-  const { state, memberLabel, isNight, readOnly, timerBusy } = useMaple();
-  const { open } = useSheets();
+  const { state, memberLabel, isNight, readOnly, timerBusy, toasts } = useMaple();
+  const { open, current: sheetOpen } = useSheets();
   const now = useNow(1000);
   const actions = useTimerActions();
   const night = useNightActive();
@@ -91,7 +91,9 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   // A tap from this phone still on its way (Switch, Pause, a toast chip): fixes wait for its answer too, so
   // Fix times never pins this phone's early copy and then reads the server's version as someone else's change.
   const saving = !pending && timerBusy(entry.id);
-  const savingSlow = useSlow(saving, 400);
+  // A Fix times tap made while that tap is out (Switch, then Fix times at once): it opens when the answer is in.
+  const [fixLater, setFixLater] = useState<{ target: FixTarget; expand?: FixExpand; seen: Set<number> } | null>(null);
+  const savingSlow = useSlow(saving, 400) || (saving && !!fixLater);
   const controls = !readOnly;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const kind = entry.kind as TimerKind;
@@ -143,12 +145,23 @@ export default function TimerCard({ entry }: { entry: Entry }) {
     setSnoozes(next);
   };
 
+  // Never drop a Fix times tap made while this phone's own tap is out: it opens once the answer is in, pinned on the
+  // server's version (the entry here is already that answer). If another sheet opened meanwhile, that one was the later tap.
   const openFix = (target: FixTarget, expand?: FixExpand) => {
-    if (pending || saving) return;
-    open({ kind: entry.kind, entry, preset: fixPreset(target, expand) });
+    if (pending) return;
+    if (saving) setFixLater({ target, expand, seen: new Set(toasts.map((t) => t.id)) });
+    else open({ kind: entry.kind, entry, preset: fixPreset(target, expand) });
   };
-  // Disabled-looking only once a tap has been out a moment (taps are ignored meanwhile either way).
-  const waiting = pending || savingSlow;
+  useEffect(() => {
+    if (!fixLater || saving) return;
+    setFixLater(null);
+    // The tap didn't happen (its failure toast, the one non-timer toast since, says why and offers the way on): that
+    // toast is the answer, and a sheet opening over it would hide it.
+    const failed = toasts.some((t) => !fixLater.seen.has(t.id) && t.group !== "timer" && t.tone !== "ok");
+    if (!sheetOpen && !failed) open({ kind: entry.kind, entry, preset: fixPreset(fixLater.target, fixLater.expand) });
+  }, [fixLater, saving, sheetOpen, entry, open, toasts]);
+  // Waits (disabled) only while the timer is still starting; a tap that's out just says "saving…" and queues the open.
+  const waiting = pending;
 
   // Who started it, under the title ("Started by Brittany"), only when it names someone other than the viewer (never "Admin").
   const name = memberLabel(entry.created_by);
@@ -165,6 +178,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
     <button
       type="button"
       disabled={waiting}
+      aria-busy={!!fixLater || undefined}
       onClick={() => openFix("current")}
       className={cx(
         "inline-flex w-full items-center justify-center gap-2 rounded-[14px] border border-mp-line text-[15px] font-semibold text-mp-ink transition active:bg-mp-ink/5 disabled:opacity-50",
@@ -371,7 +385,7 @@ function ForgottenPrompt({
   onBackOn: () => void;
   onDone: () => void;
   compact?: boolean;
-  /** A tap still on its way: the fix buttons wait for it. */
+  /** A timer still starting: the fix buttons wait for it (a tap still on its way queues them instead, see openFix). */
   disabled?: boolean;
   className?: string;
 }) {

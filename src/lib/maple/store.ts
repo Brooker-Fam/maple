@@ -719,7 +719,7 @@ export async function pauseTimer(id: number, at: Date | undefined, by?: string):
  * earlier, which trims the last side to it. Other timers end at `at`, kept
  * between their start and now.
  */
-export async function stopTimer(id: number, at: Date | undefined, by?: string): Promise<Entry> {
+export async function stopTimer(id: number, at: Date | undefined, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
   if (at && Number.isNaN(at.getTime())) throw new Error("That time isn't a valid time");
   const now = new Date();
   const res = await mutateTimer(id, (cur) => {
@@ -729,7 +729,7 @@ export async function stopTimer(id: number, at: Date | undefined, by?: string): 
     }
     const stopAt = new Date(Math.max(Date.parse(cur.started_at), Math.min((at ?? now).getTime(), now.getTime())));
     return { data: cur.kind === "feed" ? finalizeBreast(cur.data, stopAt) : cur.data, endedAt: stopAt.toISOString(), active: false };
-  }, { by });
+  }, { by, expectUpdatedAt: opts.expectUpdatedAt });
   return res.entry;
 }
 
@@ -796,6 +796,7 @@ function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): T
   const data: FeedData = { ...d, segments, ...sides };
   // An end past the last side is a trailing break, not a stop at the pause.
   if (end - lastEnd >= NEAR) delete data.paused_at_stop;
+  else if (edit.paused_at_stop) data.paused_at_stop = true;
   return { data, endedAt: new Date(end).toISOString() };
 }
 

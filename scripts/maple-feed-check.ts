@@ -43,6 +43,7 @@ import {
   type Part,
   type TapFeedData,
 } from "../src/lib/maple/feed";
+import { timerNumbers } from "../src/components/maple/FeedParts";
 import { describeEntry } from "../src/lib/maple/describe";
 import { memberLabel, statsFor } from "../src/lib/maple/insights";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
@@ -1013,6 +1014,16 @@ check("switchTo resume with a time: the other side is not_newest (409 changed), 
   // Still paused: an ordinary resume.
   eqSegs(switchTo(feed("L 16:00-16:10"), "R", D("16:12"), { explicit: true, resume: true }).data.segments, "L 16:00-16:10, R 16:12-");
 });
+check("switchTo resume with no time (a stale dock's Resume): the other side is not_newest, the same side a noop", () => {
+  // Two-phones NEW[3]: Brittany resumed on the Left; Matt's Resume on Right must not switch her over it.
+  const theirs = switchTo(feed("L 16:00-16:10"), "L", D("16:17")).data;
+  throwsCode(() => switchTo(theirs, "R", D("16:18"), { resume: true }), "not_newest");
+  eq(switchTo(theirs, "L", D("16:18"), { resume: true }).noop, true);
+  // A plain switch (the dock's Switch) still switches.
+  eqSegs(switchTo(theirs, "R", D("16:18")).data.segments, "L 16:00-16:10, L 16:17-16:18, R 16:18-");
+  // Still paused: an ordinary resume, now.
+  eqSegs(switchTo(feed("L 16:00-16:10"), "R", D("16:12"), { resume: true }).data.segments, "L 16:00-16:10, R 16:12-");
+});
 check("before_own_start on the feed's only side names feed_start (stop_timer, switch, pause)", () => {
   const stop = throwsCode(() => stopBreast(feed("L 16:17-"), D("16:15"), D("16:27")), "before_own_start");
   eq(
@@ -1026,12 +1037,28 @@ check("before_own_start on the feed's only side names feed_start (stop_timer, sw
   // With a side before it, the mistaken-tap advice stands.
   eq(throwsCode(() => stopBreast(s1, D("16:10"), D("16:30")), "before_own_start").params.first, undefined);
 });
-check("staleFeed: over an hour old, or a given time 30 min past its newest moment", () => {
+check("staleFeed: an hour with nothing tapped, or on a break a given time 30 min past the pause", () => {
   const e = (start: string, spec: string) => ({ started_at: T(start), data: feed(spec) });
-  eq(staleFeed(e("15:00", "L 15:00-"), D("16:01")), true);
+  eq(staleFeed(e("15:00", "L 15:00-"), D("16:01")), true, "a side left on for an hour");
   eq(staleFeed(e("15:30", "L 15:30-15:40, R 15:40-"), D("16:20")), false);
-  eq(staleFeed(e("15:30", "L 15:30-15:40"), D("16:20"), D("16:15")), true);
+  eq(staleFeed(e("15:30", "L 15:30-15:40"), D("16:20"), D("16:15")), true, "on a break, a time 35 min after the pause: a new feed");
   eq(staleFeed(e("15:30", "L 15:30-15:40, R 15:50-"), D("16:20"), D("16:15")), false);
+  // Two-phones NEW[5]: a cluster feed that started 70 min ago, tapped 2 min ago, is still this feed.
+  eq(staleFeed(e("15:00", "L 15:00-15:20, R 15:55-16:08"), D("16:10")), false, "paused 2 min ago");
+  eq(staleFeed(e("15:00", "L 15:00-15:20, R 15:55-16:08"), D("16:10"), D("16:09")), false, "with a time just now");
+  eq(staleFeed(e("15:00", "L 15:00-15:30, R 15:30-"), D("16:29")), false, "open 59 min since the switch");
+  eq(staleFeed(e("15:00", "L 15:00-15:30, R 15:30-"), D("16:31")), true, "open 61 min since the switch");
+  // Dozed on the shoulder: a 32 min break is still this feed for "nurse right" (review: Siri refused it).
+  eq(staleFeed(e("15:30", "L 15:30-15:40"), D("16:12")), false, "a 32 min break, no time given");
+  eq(staleFeed(e("15:30", "L 15:30-15:40"), D("16:41")), true, "a 61 min break");
+  eq(staleFeed(e("15:30", "L 15:30-15:40"), D("16:11"), D("15:45")), false, "a 31 min break, but she went back on 5 min after the pause");
+  eq(staleFeed(e("15:00", "L 15:00-15:20"), D("16:30"), D("15:25")), false, "a time just after an old pause is still this feed");
+  // A side that's on is going on now: a time given only switches (review: refused after 30 min on one side).
+  eq(staleFeed(e("15:40", "R 15:40-"), D("16:19"), D("16:17")), false, "Right on 37 min, a time 2 min ago");
+  // A pause tapped late (recorded 15:05) still counts from when it was tapped.
+  const late = { started_at: T("15:00"), data: { ...feed("L 15:00-15:05"), last_tap: { kind: "pause", side: "L", at: T("15:40") } } as TapFeedData };
+  eq(staleFeed(late, D("16:35")), false, "55 min since the tap");
+  eq(staleFeed(late, D("16:41")), true, "61 min since the tap");
 });
 
 // ── memberLabel (§1.5) ───────────────────────────────────────────────────
@@ -1059,6 +1086,47 @@ check("memberLabel: viewer signed in as admin", () => {
 });
 check("memberLabel: never prints Admin", () =>
   eq([matt.email, brit.email, "admin"].map((id) => memberLabel(id, { members, me: brit, baby: baby() })).filter((x) => x === "Admin"), []));
+
+// ── the card's live total (timerNumbers, FeedParts.tsx) ──────────────────
+
+check("live total: the closed rows' minutes plus the live clock (Matt's card)", () => {
+  // Left 5:19:57 – 5:35:00 reads "16 min"; the old seconds total said 15:04 under it.
+  const data = feed("L 05:19:57-05:35:00, R 05:35:00-");
+  const ctx = live("05:35:01");
+  const n = timerNumbers(entryOf(data, ctx), ctx.now);
+  eq(rows(n.parts.slice(0, 1)), ["L 05:19:57-05:35 16 min"]);
+  eq(formatClock(n.current.sec), "0:01", "live clock");
+  eq(formatClock(n.total), "16:01", "total");
+});
+check("live total: rows + live clock = total, at every second of a long feed", () => {
+  const data = feed("L 02:15:10-02:27:40, R 02:27:40-02:40:05, L 02:40:30-");
+  for (let s = 0; s < 900; s += 7) {
+    const now = new Date(D("02:40:30").getTime() + s * 1000);
+    const n = timerNumbers(entryOf(data, { now, active: true, endedAt: null }), now);
+    const closed = n.parts.filter((p) => p.kind === "side" && p.end !== null).reduce((a, p) => a + p.min, 0);
+    eq(closed, 12 + 13, "closed rows");
+    eq(n.total, closed * 60 + n.current.sec, `rows + clock at +${s}s`);
+    eq(Math.floor(n.total / 60), closed + Math.floor(n.current.sec / 60), `whole minutes at +${s}s`);
+  }
+});
+check("live total: paused, it's the closed sides' minutes (the break's clock isn't nursing)", () => {
+  const data = feed("L 05:19:57-05:35:00, R 05:35:00-05:47:20");
+  const ctx = live("05:50:10");
+  const n = timerNumbers(entryOf(data, ctx), ctx.now);
+  eq(n.paused, true, "paused");
+  eq(formatClock(n.total), "28:00", "16 + 12");
+  eq(n.elapsed, 15 * 60 + 3 + 12 * 60 + 20, "elapsed keeps the exact seconds");
+});
+check("live total: Done says the rows' minutes, the card's closed rows plus the last side's row", () => {
+  const data = feed("L 05:19:57-05:35:00, R 05:35:00-05:47:20, L 05:47:20-");
+  const at = D("05:48:05");
+  const n = timerNumbers(entryOf(data, live("05:48:05")), at);
+  const stopped = stopBreast(data, at, at);
+  const t = feedMinutes(entryOf(stopped.data, { now: at, active: false, endedAt: stopped.endedAt }), at);
+  eq(t.total, 16 + 12 + spanMinutes(n.current.since, at), "Done");
+  eq(t.total, 29, "L 16 + 1 · R 12");
+  eq(formatClock(n.total), "28:45", "the card a moment before: 28 min of rows + 0:45 on the Left");
+});
 
 // ── done ─────────────────────────────────────────────────────────────────
 

@@ -105,6 +105,8 @@ export type TimerCallOptions = {
   onError?: (f: TimerFailure) => void;
   /** Buttons for the failure toast (a stale Resume after the other phone's Done: "Continue that feed on Right"). */
   failActions?: (f: TimerFailure) => ToastAction[] | undefined;
+  /** A better line for the failure toast than the generic one ("Brittany already put her back on the Left at 5:46"); undefined keeps it. */
+  failText?: (f: TimerFailure) => string | undefined;
 };
 
 /**
@@ -239,6 +241,26 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * An edit or delete of an entry someone discarded meanwhile (PATCH / DELETE
+ * /api/maple/entries answer 404 { reason: "discarded", deleted_by }): the
+ * toast line, naming who (memberLabel; neutral when that's this viewer, the
+ * admin login or unknown), instead of a raw "Entry 165 not found". null for
+ * any other error. `saving` is what the edit carried: "note" or "change".
+ */
+function discardedLine(err: unknown, kind: string | undefined, label: (id: string | null | undefined) => string | null, saving?: "note" | "change"): string | null {
+  if (!(err instanceof ApiError) || err.status !== 404) return null;
+  const b = err.body as { reason?: string; deleted_by?: string | null } | null;
+  if (b?.reason !== "discarded") return null;
+  const who = label(b.deleted_by);
+  const [thing, done] = kind === "feed" ? ["feed", "discarded"] : ["entry", "deleted"];
+  if (saving) {
+    const lost = `so your ${saving} wasn't saved.`;
+    return who ? `${who} ${done} this ${thing}, ${lost}` : `This ${thing} was ${done} on another device or through Claude, ${lost}`;
+  }
+  return who ? `${who} already ${done} this ${thing}.` : `This ${thing} was already ${done} on another device or through Claude.`;
+}
+
 /** Network down or server hiccup: worth keeping and retrying, unlike a 4xx. */
 const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status >= 500 || e.status === 408 || e.status === 429;
 
@@ -324,7 +346,8 @@ function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date): Entr
       switch (input.action) {
         case "switch":
         case "resume":
-          return { ...e, data: switchTo(d, input.side ?? "L", at, { explicit }).data };
+          // A resume of a feed this phone already shows back on (the other phone's resume came in): the server's rule, so no early switch.
+          return { ...e, data: switchTo(d, input.side ?? "L", at, { explicit, resume: input.action === "resume" }).data };
         case "pause":
           return { ...e, data: pauseFeed(d, at, { explicit }).data };
         case "stop": {
@@ -718,6 +741,12 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  /** memberLabel for the actions defined before it (reads the state as it is when called). */
+  const labelFor = useCallback((id: string | null | undefined) => {
+    const s = stateRef.current;
+    return s ? labelOf(id, { members: s.members, me: s.me, baby: s.baby }) : null;
+  }, []);
+
   const withInflight = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
     inflight.current++;
     try {
@@ -765,18 +794,24 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         toast(opts.toast ?? "Removed");
         return;
       }
+      const kind = stateRef.current?.entries.find((x) => x.id === id)?.kind;
       const rollback = optimistic(id, () => null);
       try {
         await withInflight(() => fetchJson(`/api/maple/entries?id=${id}`, { method: "DELETE" }));
         toast(opts.toast ?? "Deleted", { undo: () => void restore(id) });
       } catch (e) {
-        rollback();
-        toast(e instanceof Error ? e.message : "Couldn't delete", { tone: "error" });
+        // Someone else deleted it first: it stays gone here too, and the toast says who.
+        const gone = discardedLine(e, kind, labelFor);
+        if (gone) toast(gone, { tone: "info" });
+        else {
+          rollback();
+          toast(e instanceof Error ? e.message : "Couldn't delete", { tone: "error" });
+        }
       } finally {
         void forceRefresh();
       }
     },
-    [dropEntry, forceRefresh, optimistic, restore, setQueue, toast, withInflight]
+    [dropEntry, forceRefresh, labelFor, optimistic, restore, setQueue, toast, withInflight]
   );
 
   const log = useCallback<MapleContextValue["log"]>(
@@ -860,6 +895,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         if (opts.toast !== "") toast(opts.toast ?? "Saved on this phone");
         return entry;
       }
+      const kind = stateRef.current?.entries.find((x) => x.id === id)?.kind;
       try {
         const { entry } = await withInflight(() =>
           fetchJson<{ entry: Entry }>(`/api/maple/entries?id=${id}`, { method: "PATCH", body: JSON.stringify(patch) })
@@ -868,13 +904,19 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         if (opts.toast !== "") toast(opts.toast ?? "Saved");
         return entry;
       } catch (e) {
-        toast(e instanceof Error ? e.message : "Couldn't save", { tone: "error" });
+        // The other phone discarded it while this sheet was open: say who, and drop it here too.
+        const onlyNote = Object.keys(patch).every((k) => k === "note" || k === "expect_updated_at");
+        const gone = discardedLine(e, kind, labelFor, onlyNote ? "note" : "change");
+        if (gone) {
+          dropEntry(id);
+          toast(gone, { tone: "info" });
+        } else toast(e instanceof Error ? e.message : "Couldn't save", { tone: "error" });
         return null;
       } finally {
         void forceRefresh();
       }
     },
-    [forceRefresh, setQueue, toast, upsert, withInflight]
+    [dropEntry, forceRefresh, labelFor, setQueue, toast, upsert, withInflight]
   );
 
   const memberName = useCallback((id: string | null | undefined) => nameOf(id, state?.members ?? []), [state]);
@@ -894,7 +936,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         if (opts.onError) opts.onError(f);
         else if (!(opts.silent409 && f.kind === "changed")) {
           const actions = opts.failActions?.(f);
-          toast(f.message, { tone, duration, ...(actions?.length ? { actions } : {}) });
+          toast(opts.failText?.(f) ?? f.message, { tone, duration, ...(actions?.length ? { actions } : {}) });
         }
         // null: the action didn't happen (callers must not toast success or offer Undo).
         return null;
@@ -1077,18 +1119,20 @@ export function MapleProvider({ children }: { children: ReactNode }) {
 
   const readOnly = state?.me.role === "viewer";
 
-  const whoDiscarded = useCallback(
-    async (id: number) => {
-      try {
-        const r = await fetchJson<{ entries: Entry[] }>("/api/maple/entries?deleted=1");
-        const e = r.entries?.find((x) => x.id === id);
-        return e ? memberLabel(e.updated_by) : undefined;
-      } catch {
-        return undefined;
-      }
-    },
-    [memberLabel]
-  );
+  // Stable (memberLabel changes with every poll), so a sheet asking once per disappearance doesn't ask again on each poll.
+  const labelRef = useRef(memberLabel);
+  useEffect(() => {
+    labelRef.current = memberLabel;
+  }, [memberLabel]);
+  const whoDiscarded = useCallback(async (id: number) => {
+    try {
+      const r = await fetchJson<{ entries: Entry[] }>("/api/maple/entries?deleted=1");
+      const e = r.entries?.find((x) => x.id === id);
+      return e ? labelRef.current(e.updated_by) : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
 
   const value = useMemo<MapleContextValue>(
     () => ({

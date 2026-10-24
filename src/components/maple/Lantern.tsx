@@ -4,11 +4,11 @@ import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
-import { other } from "@/lib/maple/feed";
+import { minutesText, other } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, Side } from "@/lib/maple/types";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { useHoldTimerToasts, useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
 
@@ -16,16 +16,18 @@ import { useTimerActions } from "./useTimerActions";
  * Lantern: a full-screen, nearly black timer for feeds in the dark. A web app
  * can't put a live timer on the lock screen, so this keeps the screen awake
  * but dim instead. It covers the dock, so it carries the dock's buttons in
- * the dock's column order, each needing a half-second hold so a flailing baby
- * hand or a cheek can't end the feed by accident. Timer toasts wait while it's
- * open and show when it closes (if still true).
+ * the dock's column order (Switch, Pause, Done while she nurses; the other
+ * side, the side she came off, Done during a break), each needing a
+ * half-second hold so a flailing baby hand or a cheek can't end the feed by
+ * accident. Timer toasts wait while it's open and show when it closes (if
+ * still true).
  */
 
 const HOLD_MS = 500;
 const AMBER = "#E0A93B";
 
 export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose: () => void; dim?: boolean }) {
-  const { state, readOnly, now: serverNow } = useMaple();
+  const { state, readOnly, now: serverNow, toasts } = useMaple();
   const now = useNow(1000);
   const actions = useTimerActions();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
@@ -98,6 +100,28 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     hintTimer.current = window.setTimeout(() => setHint(null), ms);
   };
 
+  /**
+   * A hold that didn't happen says why here: its toast ("Brittany already put her back on the Left at 7:08")
+   * draws under the lantern, so the newest failure toast since it opened becomes the hint.
+   */
+  const seenToasts = useRef<Set<number> | null>(null);
+  const failHintAt = useRef(0);
+  useEffect(() => {
+    if (!seenToasts.current) {
+      seenToasts.current = new Set(toasts.map((t) => t.id));
+      return;
+    }
+    const seen = seenToasts.current;
+    const fresh = toasts.filter((t) => !seen.has(t.id));
+    for (const t of fresh) seen.add(t.id);
+    const fail = fresh.filter((t) => t.group !== "timer" && t.tone !== "ok").at(-1);
+    if (!fail) return;
+    failHintAt.current = Date.now();
+    setHint(fail.text);
+    if (hintTimer.current) window.clearTimeout(hintTimer.current);
+    hintTimer.current = window.setTimeout(() => setHint(null), 6000);
+  }, [toasts]);
+
   const isFeed = live.kind === "feed" && n.parts.length > 0;
   // Viewers only watch; a just-started timer (temporary id) can't take actions yet.
   const locked = readOnly || live.id < 0;
@@ -105,7 +129,17 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const target: Side = other(side);
   const short = (t: string) => formatTimeNear(t, t, tz);
   /** After a hold, say what happened once the server has it (its toast waits until the lantern closes). */
-  const confirmed = (ok: boolean, text: string) => showHint(ok ? `${text} · ${short(serverNow().toISOString())}` : "That didn't save. Close the lantern to see why.", 3000);
+  const confirmed = (ok: boolean, text: string) => {
+    if (ok) return showHint(`${text} · ${short(serverNow().toISOString())}`, 3000);
+    // Its failure toast already said why (above); only without one is there nothing better to say.
+    if (Date.now() - failHintAt.current > 1500) showHint("That didn't save. Close the lantern to see why.", 3000);
+  };
+  /** Pause says what it closed, as the dock's toast does: "Paused · Left 14 min". */
+  const paused = (e: Entry | null) => {
+    if (!e) return confirmed(false, "");
+    const last = timerNumbers(e, serverNow()).parts.filter((p) => p.kind === "side").at(-1);
+    showHint(last?.kind === "side" ? `Paused · ${SIDE_NAME[last.side]} ${minutesText(last.min)}` : "Paused", 3000);
+  };
   // The big clock is the part she's on now: this side, or the break (dimmed).
   const subtitle = !isFeed
     ? `Asleep · since ${formatTime(live.started_at, tz)}`
@@ -147,7 +181,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
 
       <div
         className="flex flex-1 flex-col items-center justify-center px-6 text-center"
-        onClick={() => showHint(isFeed && !n.paused ? "Hold to switch, or hold Done" : "Hold a button to use it")}
+        onClick={() => showHint(isFeed && !n.paused ? "Hold Switch, Pause or Done" : "Hold a button to use it")}
       >
         <p
           className="text-[80px] leading-none font-semibold tracking-[-0.03em] tabular-nums"
@@ -165,23 +199,31 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
 
       <div className="flex h-[40dvh] gap-3 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">
         {locked && <p className="m-auto text-sm opacity-50">{readOnly ? "Viewing only" : "Starting…"}</p>}
+        {/* Nursing: Switch and Pause where the dock has them, so a mid-feed diaper is a break, not the end of the feed. */}
         {!locked && isFeed && !n.paused && (
-          <HoldButton
-            label={`Switch to ${SIDE_NAME[target]}`}
-            onHint={() => showHint("Hold to switch")}
-            onConfirm={() => void actions.switchSide(live, target).then((r) => confirmed(!!r, `Switched to ${SIDE_NAME[target]}`))}
-          />
+          <>
+            <HoldButton
+              label="Switch"
+              sub={`to ${SIDE_NAME[target]}`}
+              mark={target}
+              aria={`Switch to ${SIDE_NAME[target]}`}
+              onHint={() => showHint("Hold to switch")}
+              onConfirm={() => void actions.switchSide(live, target).then((r) => confirmed(!!r, `Switched to ${SIDE_NAME[target]}`))}
+            />
+            <HoldButton label="Pause" icon="pause" aria="Pause the feed" onHint={() => showHint("Hold to pause")} onConfirm={() => void actions.pause(live).then(paused)} />
+          </>
         )}
-        {/* Paused: Left then Right, in the dock's columns, the other side marked as the next one. */}
+        {/* Paused: the other side where Switch was, the side she came off where Pause was (the dock's order). */}
         {!locked &&
           isFeed &&
           n.paused &&
-          (["L", "R"] as Side[]).map((s) => (
+          [target, side].map((s, i) => (
             <HoldButton
-              key={s}
+              key={i}
               label={SIDE_NAME[s]}
-              sub={s === target ? "Next side" : "Resume"}
-              aria={`Resume on ${SIDE_NAME[s]}${s === target ? " (next side)" : ""}`}
+              sub={i === 0 ? "Next side" : "Resume"}
+              mark={s}
+              aria={`Resume on ${SIDE_NAME[s]}${i === 0 ? " (next side)" : ""}`}
               onHint={() => showHint(`Hold to go back on the ${SIDE_NAME[s]}`)}
               onConfirm={() => void actions.resume(live, s).then((r) => confirmed(!!r, `Back on the ${SIDE_NAME[s]}`))}
             />
@@ -189,6 +231,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         {!locked && (
           <HoldButton
             label={live.kind === "sleep" ? "Woke up" : "Done"}
+            icon={isFeed ? "check" : undefined}
             // Done during a break ends the feed at the pause, as the dock's tile says.
             sub={isFeed && n.paused ? `ends ${short(n.current.since)}` : undefined}
             aria={isFeed && n.paused ? `Done: end the feed at ${formatTime(n.current.since, tz)}, when you paused` : undefined}
@@ -205,8 +248,25 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   );
 }
 
-/** A big button that only fires after a 500ms press-and-hold, with a ring that fills. */
-function HoldButton({ label, sub, aria, onConfirm, onHint }: { label: string; sub?: string; aria?: string; onConfirm: () => void; onHint: () => void }) {
+/** A big button that only fires after a 500ms press-and-hold, with a ring that fills (around a side letter or an icon, when given). */
+function HoldButton({
+  label,
+  sub,
+  aria,
+  mark,
+  icon,
+  onConfirm,
+  onHint,
+}: {
+  label: string;
+  sub?: string;
+  aria?: string;
+  /** The side letter inside the ring (the sides' order follows the feed, so the letter says which is which). */
+  mark?: Side;
+  icon?: IconName;
+  onConfirm: () => void;
+  onHint: () => void;
+}) {
   const [progress, setProgress] = useState(0);
   const raf = useRef<number | null>(null);
   const start = useRef<number | null>(null);
@@ -216,9 +276,11 @@ function HoldButton({ label, sub, aria, onConfirm, onHint }: { label: string; su
   const cancel = (tap: boolean, at?: number) => {
     if (raf.current) cancelAnimationFrame(raf.current);
     raf.current = null;
-    const held = start.current != null && at != null ? at - start.current : 0;
+    // A release with no press here says nothing: after Pause or Resume the next button can appear under the finger still down.
+    const pressed = start.current != null;
+    const held = pressed && at != null ? at - start.current! : 0;
     start.current = null;
-    if (tap && !fired.current && held < HOLD_MS) onHint();
+    if (tap && pressed && !fired.current && held < HOLD_MS) onHint();
     setProgress(0);
   };
 
@@ -265,7 +327,8 @@ function HoldButton({ label, sub, aria, onConfirm, onHint }: { label: string; su
       className="relative flex flex-1 flex-col items-center justify-center gap-3 rounded-[28px] border text-xl font-semibold"
       style={{ borderColor: "rgba(224,169,59,0.18)", backgroundColor: "rgba(224,169,59,0.05)", color: "rgba(224,169,59,0.8)", WebkitTouchCallout: "none" }}
     >
-      <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden>
+      <span className="relative flex h-16 w-16 items-center justify-center">
+      <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden className="absolute inset-0">
         <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(224,169,59,0.15)" strokeWidth="4" />
         <circle
           cx="32"
@@ -281,6 +344,13 @@ function HoldButton({ label, sub, aria, onConfirm, onHint }: { label: string; su
           transform="rotate(-90 32 32)"
         />
       </svg>
+        {mark && (
+          <span aria-hidden className="text-[26px] leading-none font-bold">
+            {mark}
+          </span>
+        )}
+        {icon && !mark && <Icon name={icon} size={24} />}
+      </span>
       <span className="flex flex-col items-center gap-1">
         {label}
         {sub && <span className="text-sm font-medium tabular-nums opacity-70">{sub}</span>}

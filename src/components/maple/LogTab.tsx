@@ -18,6 +18,7 @@ import {
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, EntryKind, MapleState, UnitSystem } from "@/lib/maple/types";
 import EntryRow from "./EntryRow";
+import { useClockMinute } from "./FeedParts";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
@@ -307,7 +308,8 @@ export function requestTimelineDay(key: string) {
 
 export default function LogTab() {
   const { state, units, readOnly } = useMaple();
-  const now = useNow(60_000);
+  // On the clock minute, so a running feed's minutes in the day's totals flip with the card's.
+  const now = useClockMinute();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const todayKey = dayKey(now, tz);
   const bornAt = state?.baby.born_at ?? null;

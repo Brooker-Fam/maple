@@ -273,6 +273,8 @@ export type FeedEdit =
       started_at: string;
       ended_at: string | null;
       expect_updated_at: string;
+      /** A finished feed put back as Done left it at its pause (so a later reopen brings it back paused). */
+      paused_at_stop?: true;
       nap?: { id: number; ended_at: string; expect_updated_at: string };
     };
 

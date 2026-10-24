@@ -7,13 +7,14 @@ import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from
 import { statsFor } from "@/lib/maple/insights";
 import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Entry, FeedData } from "@/lib/maple/types";
+import { useClockMinute } from "./FeedParts";
 import { MAPLE_LEAF_PATH } from "./Hero";
 import { Icon, KindBadge } from "./icons";
 import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
 import { Tallies } from "./StatusCard";
 import { Segmented, cx, tone } from "./ui";
-import { useMaple, useNow } from "./useMaple";
+import { useMaple } from "./useMaple";
 
 /**
  * The Day Dial: a 24-hour clock face (midnight at the top, clockwise). It's
@@ -154,7 +155,8 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
 export default function DayDial() {
   const { state, summary, api, units, readOnly } = useMaple();
   const { open } = useSheets();
-  const now = useNow(30_000);
+  // On the clock minute, so a running feed's minutes in the list flip with the card's and the Timeline's.
+  const now = useClockMinute();
   const night = useNightActive();
   const uid = useId().replace(/[^\w-]/g, "");
   const glowId = `maple-dial-glow-${uid}`;

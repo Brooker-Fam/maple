@@ -96,9 +96,16 @@ export async function POST(request: NextRequest) {
       case "nurse_left":
       case "nurse_right": {
         const s = action === "nurse_left" ? "L" : "R";
-        // A feed nobody tapped Done on (MCP start_timer's rule): switching sides on it would glue this feed onto that one.
-        if (runningFeed && staleFeed({ started_at: runningFeed.started_at, data: runningFeed.data as FeedData }, now)) {
-          speak = `A feed from ${formatTime(runningFeed.started_at, tz)} is still running. Stop that one first, then start the new feed.`;
+        // A feed nobody tapped Done on (MCP start_timer's rule, by its newest tap, so a long feed tapped a minute ago still resumes):
+        // switching sides on it would glue this feed onto that one.
+        const d = runningFeed?.data as FeedData | undefined;
+        if (runningFeed && d && staleFeed({ started_at: runningFeed.started_at, data: d }, now)) {
+          const last = d.segments?.at(-1);
+          // Paused: "stop" ends it at the pause, so say that's where it stands.
+          speak =
+            last && last.end !== null
+              ? `A feed from ${formatTime(runningFeed.started_at, tz)} is still open, on a break since ${formatTime(last.end, tz)}. Stop that one first, then start the new feed.`
+              : `A feed from ${formatTime(runningFeed.started_at, tz)} is still running. Stop that one first, then start the new feed.`;
           break;
         }
         if (runningSleep) await stopTimer(runningSleep.id, undefined, me.email);

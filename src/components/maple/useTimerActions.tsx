@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { tick } from "@/components/atlas/haptics";
-import { edgeBounds, feedCtx, feedMinutes, feedParts, minutesShort, minutesText, openSegment, sideMinutesText, suggestNextSide, undoLastTap, type Moment, type Part } from "@/lib/maple/feed";
+import { edgeBounds, feedCtx, feedMinutes, feedParts, minutesShort, minutesText, openSegment, previousFeedEnd, sideMinutesText, suggestNextSide, undoLastTap, type Moment, type Part, type TapFeedData } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedEdit, Side, TimerKind, TimerResponse } from "@/lib/maple/types";
 import { fixPreset, KIND_TITLE, SIDE_NAME } from "./FeedParts";
@@ -100,12 +100,17 @@ export function useTimerActions() {
   /**
    * "{N} min earlier" chips over the time each produces. `to` is always the
    * recorded value minus N, so tapping two chips never adds up. A chip at or
-   * before `floor` (a resume's pause) becomes one "No break" chip.
+   * before `floor` (a resume's pause) becomes one "No break" chip. One before
+   * `after` (when the feed before this one ended) is dropped, and the last
+   * chip becomes "Since the last feed", so a chip never lays a new feed over
+   * the last one (as in Fix times).
    */
   const earlierChips = useCallback(
-    (recorded: number, mins: number[], aria: (n: number, at: string) => string, commit: (to: Date) => void, limits: { min?: number; floor?: number } = {}) => {
+    (recorded: number, mins: number[], aria: (n: number, at: string) => string, commit: (to: Date) => void, limits: { min?: number; floor?: number; after?: number | null } = {}) => {
       const chips: ToastAction[] = [];
       let floored = false;
+      let clipped = false;
+      let lastTo = recorded;
       for (const n of mins) {
         const to = recorded - n * 60_000;
         if (limits.min !== undefined && to < limits.min) continue;
@@ -114,10 +119,23 @@ export function useTimerActions() {
             floored = true;
             const f = limits.floor;
             chips.push({ label: "No break", sub: formatTimeNear(f, recorded, tz), ariaLabel: `No break, from ${clock(f)}`, onClick: () => commit(new Date(f)) });
+            lastTo = f;
           }
           continue;
         }
+        if (limits.after != null && to < limits.after) {
+          clipped = true;
+          continue;
+        }
         chips.push({ label: `${n} min earlier`, sub: formatTimeNear(to, recorded, tz), ariaLabel: aria(n, clock(to)), onClick: () => commit(new Date(to)) });
+        lastTo = to;
+      }
+      const f = limits.after;
+      // (Not when the last chip kept already lands within a minute of it: two chips would show one clock time.)
+      if (clipped && f != null && lastTo - f >= 60_000 && (limits.min === undefined || f >= limits.min)) {
+        // It takes the last of the two places.
+        chips.length = Math.min(chips.length, 1);
+        chips.push({ label: "Since the last feed", sub: formatTimeNear(f, recorded, tz), ariaLabel: `Since the last feed ended, at ${clock(f)}`, onClick: () => commit(new Date(f)) });
       }
       return chips.slice(0, 2);
     },
@@ -312,6 +330,8 @@ export function useTimerActions() {
   const stop = useCallback(
     async (e: Entry, at?: Date, opts: TimerCallOptions = {}) => {
       tick();
+      // When Done was tapped here: "She went back on…" ends the side it adds then, so that tap isn't lost.
+      const doneAt = now().toISOString();
       const cur = live(e);
       const wasPaused = cur.kind === "feed" && cur.data.method === "breast" && !!cur.data.segments?.length && !openSegment(cur.data.segments);
       const res = await timerCall({ action: "stop", id: e.id, at: at?.toISOString() }, opts);
@@ -337,7 +357,7 @@ export function useTimerActions() {
               onClick: () =>
                 void (async () => {
                   const back = await reopen(saved);
-                  if (back?.active) open({ kind: "feed", entry: back, preset: fixPreset("current", "backOn") });
+                  if (back?.active) open({ kind: "feed", entry: back, preset: fixPreset("current", "backOn", doneAt) });
                 })(),
             },
           ],
@@ -372,18 +392,19 @@ export function useTimerActions() {
       const e = res.entry;
       const first = sideParts(e, now())[0];
       const name = SIDE_NAME[first?.side ?? side];
-      // One toast for both: the nap it ended, then the feed.
-      const text = napEnded ? `${napText} · ${name} started ${short(e.started_at)}. Started earlier?` : `${name} started ${clock(e.started_at)}. Started earlier?`;
       const ref = first?.ref ?? { side, start: e.started_at };
-      timerToast(text, e, {
-        actions: earlierChips(
-          Date.parse(ref.start),
-          [2, 5],
-          (n, at) => `${name} started ${minutesWord(n)} earlier, at ${at}`,
-          (to) => void retime(e, { op: "move", edge: "start", ref, to: to.toISOString() })
-        ),
-        undo: () => void unstart(e, napEnded),
-      });
+      const chips = earlierChips(
+        Date.parse(ref.start),
+        [2, 5],
+        (n, at) => `${name} started ${minutesWord(n)} earlier, at ${at}`,
+        (to) => void retime(e, { op: "move", edge: "start", ref, to: to.toISOString() }),
+        // Never over the feed before this one (two-phones #53): Fix times stops its chips there too.
+        { after: previousFeedEnd(entriesRef.current, e) }
+      );
+      const ask = chips.length ? ". Started earlier?" : "";
+      // One toast for both: the nap it ended, then the feed.
+      const text = napEnded ? `${napText} · ${name} started ${short(e.started_at)}${ask}` : `${name} started ${clock(e.started_at)}${ask}`;
+      timerToast(text, e, { actions: chips, undo: () => void unstart(e, napEnded) });
       return e;
     },
     [clock, earlierChips, now, reopen, retime, running, short, timerCall, timerToast, unstart]
@@ -512,13 +533,50 @@ export function useTimerActions() {
   );
 
   /**
+   * A Resume from a dock that hadn't caught up with the other phone's resume
+   * on the other side (409 "changed"; the server never switches over it):
+   * the toast says where she is now, and "Switch to Right" does what he meant
+   * in one tap. A stale Resume after the other phone's Done gets
+   * continueAction's offer instead.
+   */
+  const staleResume = useCallback(
+    (side: Side): Pick<TimerCallOptions, "failActions" | "failText"> => {
+      const stillOn = (f: TimerFailure) => {
+        const e = f.kind === "changed" ? f.entry : undefined;
+        if (!e?.active || e.kind !== "feed") return null;
+        const cur = sideParts(e, now()).at(-1);
+        return cur && cur.end === null && cur.side !== side ? { e, cur } : null;
+      };
+      return {
+        failText: (f) => {
+          const s = stillOn(f);
+          if (!s) return undefined;
+          const name = SIDE_NAME[s.cur.side];
+          const t = short(s.cur.start);
+          if (!f.who) return `She's already on the ${name} side · since ${t}`;
+          const tap = (s.e.data as TapFeedData).last_tap;
+          // Brittany's "Keep Left going" took back the pause this phone still showed.
+          if ((tap?.kind === "pause" && tap.undone) || s.cur.startMoment === "feed_start") return `${f.who} took back the pause · ${name} side since ${t}`;
+          return s.cur.startMoment === "switch" ? `${f.who} already switched her to the ${name} at ${t}` : `${f.who} already put her back on the ${name} at ${t}`;
+        },
+        failActions: (f) => {
+          const s = stillOn(f);
+          if (!s) return continueAction(side)(f);
+          return [{ label: `Switch to ${SIDE_NAME[side]}`, onClick: () => void switchSide(s.e, side) }];
+        },
+      };
+    },
+    [continueAction, now, short, switchSide]
+  );
+
+  /**
    * Back on a side after a break. `at` (Fix times' "Already back on?") is
    * when she really went back on; without it, now.
    */
   const resume = useCallback(
     async (e: Entry, side: Side, at?: Date, opts: TimerCallOptions = {}) => {
       tick();
-      const res = await timerCall({ action: "resume", id: e.id, side, at: at?.toISOString() }, { failActions: continueAction(side), ...opts });
+      const res = await timerCall({ action: "resume", id: e.id, side, at: at?.toISOString() }, { ...staleResume(side), ...opts });
       if (!res || res.noop) return res;
       const after = res.entry;
       const name = SIDE_NAME[side];
@@ -553,7 +611,7 @@ export function useTimerActions() {
       }
       return res;
     },
-    [continueAction, earlierChips, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
+    [earlierChips, now, restoreFrom, retime, short, staleResume, timerCall, timerToast, undoTap]
   );
 
   useEffect(() => {

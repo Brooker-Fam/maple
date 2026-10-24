@@ -16,7 +16,7 @@ import { DETAIL_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE, timerNumbers, useTimerActions } from "./TimerCard";
 import { cx } from "./ui";
-import { useMaple, useNow, type ToastAction } from "./useMaple";
+import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMaple";
 
 /**
  * The logging dock on Today: two rows of big buttons fixed just above the tab
@@ -24,8 +24,10 @@ import { useMaple, useNow, type ToastAction } from "./useMaple";
  * (start the timer, log the diaper now); holding a button opens the full form
  * for one from earlier. The top row turns into the feed's controls while she
  * nurses, and they are the only ones on screen: Switch and Pause while she's
- * on (columns 1 and 2), then Left and Right in their idle places during a
- * break, with the other side filled like Switch; Done in column 3, More in 4.
+ * on (columns 1 and 2); during a break, the other side where Switch was
+ * (filled like it, "Next side") and the side she came off where Pause was
+ * ("Resume"), so Pause and Resume toggle in one spot; Done in column 3, More
+ * in 4.
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
@@ -82,6 +84,9 @@ export default function Dock() {
   const [host, setHost] = useState<HTMLElement | null>(null);
   const lastTap = useRef(-Infinity);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
+
+  // More is a sheet too: a timer toast answering a tap still out waits under it, like under the other sheets (SheetProvider).
+  useHoldTimerToasts(moreOpen);
 
   // Portal to <body>: the tab content animates with a transform when tabs
   // change, and a transformed ancestor would pull a fixed dock off the bottom.
@@ -140,6 +145,16 @@ export default function Dock() {
     const t = performance.now();
     if (t - lastTap.current < TAP_COOLDOWN_MS) return;
     lastTap.current = t;
+    actions.dismissToast();
+    fn();
+  };
+
+  /**
+   * A hold opens a form for an earlier one. It closes the timer toast as a
+   * tap does, so the toast's chips ("5 min earlier") never sit over the form's
+   * own times; the sheet holds any newer one until it closes.
+   */
+  const hold = (fn: () => void) => () => {
     actions.dismissToast();
     fn();
   };
@@ -294,22 +309,25 @@ export default function Dock() {
             ) : feed && feedN && nursing ? (
               <>
                 {/*
-                  Paused: Left stays in column 1 and Right in column 2, as on the idle dock, so a
-                  thumb that remembers "Left is the first button" is right. The other side (where she
-                  usually goes next) is filled like Switch was and says "Next side", the way the idle
-                  dock marks it. Both turn off for 1.2 s after Pause, so a double tap can't land here.
+                  Paused: each column keeps its job from while she nursed. Column 1 (where Switch was)
+                  is the other side, filled like Switch and marked "Next side"; column 2 (where Pause
+                  was) is the side she came off, "Resume". So Pause and Resume toggle in one spot, and
+                  a late second tap on Pause goes back on the same side and merges (no break) instead
+                  of starting the other side. The sides move with the feed, so their letters are big.
+                  Both turn off for 1.2 s after the tap, so a double tap can't land on the new tile.
                 */}
-                {(["L", "R"] as Side[]).map((s, i) => {
+                {[other(feedN.side ?? "L"), feedN.side ?? "L"].map((s, i) => {
                   const col = i === 0 ? "col1" : "col2";
-                  const suggested = s === other(feedN.side ?? "L");
+                  const suggested = i === 0;
                   return (
                     <Tile
-                      key={s}
+                      key={col}
                       id={`resume-${s}`}
                       label={SIDE_NAME[s]}
                       sub={suggested ? "Next side" : "Resume"}
                       aria={`Resume on ${SIDE_NAME[s]}${suggested ? " (next side)" : ""}`}
                       letter={s}
+                      bigLetter
                       color={suggested ? SWITCH_STYLE[s].bg : SIDE_COLOR[s]}
                       ink={suggested ? SWITCH_STYLE[s].fg : undefined}
                       strong={suggested}
@@ -352,7 +370,7 @@ export default function Dock() {
                     done={done[s === "L" ? "check-col1" : "check-col2"]}
                     disabled={s === "L" ? done.col1 : done.col2}
                     onTap={tap(() => tapSide(s))}
-                    onHold={() => holdFeed(s)}
+                    onHold={hold(() => holdFeed(s))}
                   />
                 ))}
                 <Tile
@@ -362,7 +380,7 @@ export default function Dock() {
                   icon="bottle"
                   color={TILE.bottle}
                   onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))}
-                  onHold={() => open({ kind: "feed", preset: { method: "bottle", started_at: earlierAt() } })}
+                  onHold={hold(() => open({ kind: "feed", preset: { method: "bottle", started_at: earlierAt() } }))}
                 />
               </>
             )}
@@ -375,7 +393,7 @@ export default function Dock() {
               dots={[TILE.pee]}
               done={done.pee}
               onTap={tap(() => void logDiaper("pee", true, false))}
-              onHold={() => open({ kind: "diaper", preset: { pee: true, poop: false, started_at: earlierAt() } })}
+              onHold={hold(() => open({ kind: "diaper", preset: { pee: true, poop: false, started_at: earlierAt() } }))}
             />
             <Tile
               id="poop"
@@ -383,7 +401,7 @@ export default function Dock() {
               dots={[TILE.poop]}
               done={done.poop}
               onTap={tap(() => void logDiaper("poop", false, true))}
-              onHold={() => open({ kind: "diaper", preset: { pee: false, poop: true, started_at: earlierAt() } })}
+              onHold={hold(() => open({ kind: "diaper", preset: { pee: false, poop: true, started_at: earlierAt() } }))}
             />
             <Tile
               id="both"
@@ -391,7 +409,7 @@ export default function Dock() {
               dots={[TILE.pee, TILE.poop]}
               done={done.both}
               onTap={tap(() => void logDiaper("both", true, true))}
-              onHold={() => open({ kind: "diaper", preset: { pee: true, poop: true, started_at: earlierAt() } })}
+              onHold={hold(() => open({ kind: "diaper", preset: { pee: true, poop: true, started_at: earlierAt() } }))}
             />
             {sleep ? (
               <Tile
@@ -416,7 +434,7 @@ export default function Dock() {
                   toTop();
                   void actions.startTimer("sleep");
                 })}
-                onHold={() => open({ kind: "sleep", preset: { started_at: earlierAt() } })}
+                onHold={hold(() => open({ kind: "sleep", preset: { started_at: earlierAt() } }))}
               />
             )}
           </div>
@@ -452,6 +470,7 @@ function Tile({
   disabled,
   aria,
   inline: inlineProp,
+  bigLetter,
 }: {
   id: string;
   label: string;
@@ -478,6 +497,8 @@ function Tile({
   aria?: string;
   /** Icon and label on one line even when quiet (the paused Done, so its "ends 4:10" fits the same height). */
   inline?: boolean;
+  /** A bigger side letter that never hides (the paused sides, whose columns follow the feed rather than Left/Right). */
+  bigLetter?: boolean;
 }) {
   const press = usePress(onTap, onHold);
   // At night a filled tile glows softly instead of blazing, in the amber like
@@ -525,7 +546,11 @@ function Tile({
                   aria-hidden
                   // Under 360px "Switch" needs the room; its "to Left" already names the side.
                   // mp-side-mark: the side letters' own night look, shared with the card's SideMark.
-                  className={cx("mp-kind-fill mp-side-mark inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold", strong && "max-[359px]:hidden")}
+                  className={cx(
+                    "mp-kind-fill mp-side-mark inline-flex shrink-0 items-center justify-center rounded-full font-bold",
+                    bigLetter ? "h-6 w-6 text-[13px] max-[359px]:h-5 max-[359px]:w-5 max-[359px]:text-[11px]" : "h-5 w-5 text-[11px]",
+                    strong && !bigLetter && "max-[359px]:hidden"
+                  )}
                   // On a tile filled with the side's color, the mark turns over (ink disc, colored letter) so it still shows.
                   style={strong ? { backgroundColor: ink ?? "#FFFFFF", color } : { backgroundColor: color, color: SWITCH_STYLE[letter].fg }}
                 >

@@ -79,6 +79,15 @@ const MIN = 60_000;
 /** The engine's "same moment" slack: a break shorter than this is no break. */
 const NEAR = 1500;
 const ELSEWHERE = "on another device or through Claude";
+
+/** "Brittany discarded this feed, so nothing was saved." from a 404's deleted_by; null for any other error. */
+function discardedText(err: unknown, what: string, label: (id: string | null | undefined) => string | null, lost: string): string | null {
+  if (!(err instanceof ApiError) || err.status !== 404) return null;
+  const b = err.body as { reason?: string; deleted_by?: string | null } | null;
+  const done = what === "feed" ? "discarded" : "deleted";
+  const who = b?.reason === "discarded" ? label(b.deleted_by) : null;
+  return who ? `${who} ${done} this ${what}, so ${lost}.` : `This ${what} was ${done}, so ${lost}.`;
+}
 const ADD_BLOCKED = "Fix the side you're adding, or tap Don't add it.";
 
 type FeedEntry = EntryOf<"feed">;
@@ -128,6 +137,22 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   });
   // Read live by id: a change from the other phone shows here, and a staged change can't overwrite it.
   const liveEntry = e ? state?.entries.find((x) => x.id === e.id) : undefined;
+  // Discarded on the other phone (or through Claude) while open: it was in the list and isn't now. An old feed
+  // that was never in the list isn't "gone".
+  const { whoDiscarded } = useMaple();
+  const [seen, setSeen] = useState(false);
+  if (liveEntry && !seen) setSeen(true);
+  const gone = !!e && e.id > 0 && seen && !!state && !liveEntry;
+  const [goneBy, setGoneBy] = useState<string | null | undefined>(undefined);
+  const eId = e?.id;
+  useEffect(() => {
+    if (!gone || eId == null) return;
+    let live = true;
+    void whoDiscarded(eId).then((w) => live && setGoneBy(w));
+    return () => {
+      live = false;
+    };
+  }, [gone, eId, whoDiscarded]);
   // The note box and the saved note it was filled from (seed). An untouched box follows the live
   // entry, and only a note changed here is sent, so saving times can't wipe the other phone's note.
   const [noteBox, setNoteBox] = useState(() => ({ text: e?.note ?? pstr(preset, "note") ?? "", seed: e?.note ?? "" }));
@@ -277,9 +302,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       // Nothing changed: close without a write (a bare write would bump the version under the other phone's edit).
       if (Object.values(patch).every((v) => v === undefined)) return onClose();
       setBusy(true);
-      const res = await update(e.id, patch, { toast: `${method === "bottle" ? "Bottle" : "Feed"} updated` });
+      const prev = liveEntry?.kind === "feed" ? liveEntry : e;
+      const res = await update(e.id, patch, { toast: "" });
       setBusy(false);
-      if (res) onClose();
+      if (res) {
+        savedToast(`${method === "bottle" ? "Bottle" : "Feed"} updated`, prev, patch, res);
+        onClose();
+      }
       return;
     }
     onClose();
@@ -349,6 +378,51 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     };
   };
 
+  /**
+   * "Feed updated · Undo": the Undo puts back what the save changed (times and parts, data it sent, the note), as
+   * `prev` had them, in one PATCH against the version the save wrote, so it can't overwrite a change made since on
+   * the other phone (that answers 409, and the toast says so). A save still waiting offline gets no Undo.
+   */
+  const savedToast = (text: string, prev: FeedEntry, sent: UpdateEntryInput, saved: Entry) => {
+    if (saved.id < 0) return void toast(text);
+    const what = prev.data.method === "bottle" ? "bottle" : "feed";
+    const back: UpdateEntryInput = { expect_updated_at: saved.updated_at };
+    if (sent.note !== undefined) back.note = prev.note;
+    if (sent.started_at !== undefined || sent.ended_at !== undefined || sent.data) {
+      back.started_at = prev.started_at;
+      back.ended_at = prev.ended_at;
+      const was = prev.data as Record<string, unknown>;
+      const data: Record<string, unknown> = Object.fromEntries(Object.keys(sent.data ?? {}).map((k) => [k, was[k] ?? null]));
+      // A timed feed gets its parts back as they were (typed minutes dropped them; a moved start or end retimed them).
+      if (prev.data.method === "breast" && prev.data.segments?.length && !prev.active) {
+        data.segments = prev.data.segments;
+        data.paused_at_stop = prev.data.paused_at_stop ? true : null;
+      }
+      if (Object.keys(data).length) back.data = data;
+    }
+    const undo = async () => {
+      try {
+        await api(`entries?id=${prev.id}`, { method: "PATCH", body: JSON.stringify(back) });
+        await refresh();
+        toast("Undone");
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          const who = memberLabel((err.body as { entry?: Entry } | null)?.entry?.updated_by);
+          toast(who ? `${who} changed this ${what} again, so it wasn't put back.` : `This ${what} changed again ${ELSEWHERE}, so it wasn't put back.`, { tone: "info" });
+          void refresh();
+        } else if (err instanceof ApiError) {
+          const gone = discardedText(err, what, memberLabel, "nothing was put back");
+          toast(gone ?? err.message, { tone: gone ? "info" : "error" });
+        } else {
+          toast("You're offline, so it wasn't put back. Try again when you're back online.", { tone: "error" });
+        }
+      }
+    };
+    // Closes once someone else changes it (when it's an entry the app is watching: an old one isn't in state).
+    const watched = state?.entries.some((x) => x.id === saved.id);
+    toast(text, { undo: () => void undo(), ...(watched ? { watch: { entryId: saved.id, updatedAt: saved.updated_at } } : {}) });
+  };
+
   /** The staged parts, in one PATCH against the version they were staged on (a newer one answers 409). */
   const saveTimes = async () => {
     if (!e || !draft || !liveFeed) return;
@@ -361,10 +435,10 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const expect = liveKey === draft.baseKey ? liveFeed.updated_at : draft.base;
     const patch: UpdateEntryInput = { data, started_at: draft.startedAt, ended_at: draft.endedAt, expect_updated_at: expect, ...notePatch };
     try {
-      await api(`entries?id=${e.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      const res = await api<{ entry: Entry }>(`entries?id=${e.id}`, { method: "PATCH", body: JSON.stringify(patch) });
       // Into state before the sheet goes, so Recent and the timeline show the new times at once.
       await refresh();
-      toast("Feed updated");
+      savedToast("Feed updated", liveFeed, patch, res.entry);
       onClose();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -374,7 +448,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         // Make it again on the times the server has now.
         await refresh();
       } else if (err instanceof ApiError) {
-        setTimesNotice(err.status === 404 ? "This feed was deleted, so nothing was saved." : err.message);
+        setTimesNotice(discardedText(err, "feed", memberLabel, "nothing was saved") ?? err.message);
       } else {
         setTimesNotice("You're offline, so nothing was saved. Try again when you're back online.");
       }
@@ -445,9 +519,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={(!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && addBlocked)}
+              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && addBlocked)}
               hint={
-                !running && checks.invalid
+                gone
+                  ? "Nothing to save: it's gone."
+                  : !running && checks.invalid
                   ? CHECK_NUMBER_HINT
                   : conflict
                     ? undefined
@@ -462,9 +538,17 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         )
       }
     >
-      {e && <LoggedBy entry={e} />}
+      {/* A timed feed's own times are its rows: the tap time up here would read as one more start. */}
+      {e && <LoggedBy entry={e} noTime={e.data.method === "breast" && !!e.data.segments?.length} />}
 
-      {running ? (
+      {gone && (
+        <p role="status" className="flex items-center gap-2 rounded-xl bg-mp-sunken px-3 py-2 text-[13px] leading-snug font-medium text-mp-ink">
+          <Icon name="info" size={14} className="shrink-0 text-mp-ink-2" />
+          {goneBy ? `${goneBy} discarded this feed.` : `This feed was discarded ${ELSEWHERE}.`} Restore it from Recently removed in the Log.
+        </p>
+      )}
+
+      {gone ? null : running ? (
         <RunningNote kind="feed" />
       ) : (
         <>
@@ -747,8 +831,8 @@ function TimesSection({
   };
   const openRow = (next: Row | null) => {
     if (add && next?.kind !== "add") {
-      // Leaving Add a side: a side she set that fits stays staged (and shows as a row); the untouched guess, or times that don't fit, go.
-      if (!add.form.touched || !tryAdd(add.base, add.form, nowFn(), tz).result) onStage(restOf(add.base), add.base);
+      // Leaving Add a side: a side she set that fits stays staged (and shows as a row); times that don't fit go. The untouched guess staged nothing.
+      if (add.form.touched && !tryAdd(add.base, add.form, nowFn(), tz).result) onStage(restOf(add.base), add.base);
       onAddBlocked(false);
     }
     setRow(next);
@@ -819,11 +903,16 @@ function TimesSection({
   };
 
   // ── Add a side ──
-  /** The form as set: what it shows is what Save saves (a side that fits is staged now; one that doesn't holds Save). */
+  /**
+   * The form as set: once she's touched it, what it shows is what Save saves (a side that fits is staged now; one
+   * that doesn't holds Save). Untouched, it's a guess: nothing is staged, so a peek and Save (for a note) adds nothing.
+   */
   const putAdd = (on: FeedEntry, form: AddForm) => {
-    const r = tryAdd(on, form, nowFn(), tz);
-    onStage(r.result ?? restOf(on), on);
-    onAddBlocked(!r.result);
+    if (form.touched) {
+      const r = tryAdd(on, form, nowFn(), tz);
+      onStage(r.result ?? restOf(on), on);
+      onAddBlocked(!r.result);
+    }
     setRow({ kind: "add", base: on, form });
   };
   const toggleAdd = () => {
@@ -833,7 +922,7 @@ function TimesSection({
   };
   const dropAdd = () => {
     if (!add) return;
-    onStage(restOf(add.base), add.base);
+    if (add.form.touched) onStage(restOf(add.base), add.base);
     onAddBlocked(false);
     setRow(null);
   };
@@ -860,7 +949,10 @@ function TimesSection({
     if (p.kind === "side") {
       const name = SIDE_NAME[p.side];
       const next = parts.slice(i + 1).find(isSide);
-      const startLabel = p.startMoment === "feed_start" ? "Feed started" : p.startMoment === "switch" ? `Switched to ${name}` : `Back on the ${name}`;
+      // After a break, "Back on the Left" only if she was on the Left before it; another side is just "On the Right".
+      const before = parts.slice(0, i).filter(isSide).at(-1);
+      const resumed = before?.side === p.side ? `Back on the ${name}` : `On the ${name} after the break`;
+      const startLabel = p.startMoment === "feed_start" ? "Feed started" : p.startMoment === "switch" ? `Switched to ${name}` : resumed;
       const endLabel = p.endMoment === "switch" && next ? `Switched to ${SIDE_NAME[next.side]}` : p.endMoment === "feed_end" ? "Feed ended" : "Came off";
       const end = v.end ?? p.end;
       return (
@@ -875,7 +967,9 @@ function TimesSection({
     return (
       <Detail>
         {line("off", `Came off ${SIDE_NAME[p.before.side]} ${clock(v.start)}`)}
-        {p.after && end ? line("on", `Back on the ${SIDE_NAME[p.after.side]} ${clock(end)}`) : end && line("legacy-end", `Feed ended ${clock(end)}`)}
+        {p.after && end
+          ? line("on", `${p.after.side === p.before.side ? "Back on the" : "On the"} ${SIDE_NAME[p.after.side]} ${clock(end)}`)
+          : end && line("legacy-end", `Feed ended ${clock(end)}`)}
       </Detail>
     );
   };
@@ -1144,7 +1238,8 @@ function tryAdd(feed: FeedEntry, form: AddForm, now: Date, tz: string): { end: D
  * end) and ended (5 minutes on, until moved), checked as it's set. No Add
  * button (it sat over Save, and Save dropped what it held): the side is
  * staged as it's set, "Save adds Right · 6 min" says so, and "Don't add it"
- * takes it back.
+ * takes it back. Until she picks a side or moves a time, the times are only
+ * a guess: no side is picked, nothing is staged, and the line says what to do.
  */
 function AddSide({
   feed,
@@ -1167,7 +1262,8 @@ function AddSide({
   const { end, result, error } = tryAdd(feed, form, n, tz);
   const set = (patch: Partial<AddForm>) => onForm({ ...form, ...patch, touched: true });
 
-  const note = error && (
+  // The guess's own trouble (say, a feed that only just ended) waits until she sets something.
+  const note = form.touched && error && (
     <p aria-live="polite" className="text-[13px] leading-snug text-mp-ink-2">
       {error}
     </p>
@@ -1176,9 +1272,10 @@ function AddSide({
   return (
     <Detail>
       <div className="space-y-3 pt-1 pb-1">
-        <Segmented<Side>
-          value={form.side}
-          onChange={(side) => set({ side })}
+        {/* No side picked until she picks one (or moves a time, which keeps the guess). */}
+        <Segmented<Side | "">
+          value={form.touched ? form.side : ""}
+          onChange={(side) => side && set({ side })}
           aria-label="Which side"
           options={[
             { value: "L", label: <SideLabel side="L" /> },
@@ -1193,13 +1290,17 @@ function AddSide({
         <div className="flex min-h-[44px] items-center gap-3">
           <p aria-live="polite" className="min-w-0 flex-1 text-[13px] leading-snug text-mp-ink-2">
             {/* The times are just above; this says the footer's Save is what keeps them. */}
-            {result && (
-              <>
-                Save adds{" "}
-                <span className="text-mp-accent-fg">
-                  {SIDE_NAME[form.side]} · {minutesText(spanMinutes(form.start, end))}
-                </span>
-              </>
+            {!form.touched ? (
+              "Pick the side and times, and Save adds it."
+            ) : (
+              result && (
+                <>
+                  Save adds{" "}
+                  <span className="text-mp-accent-fg">
+                    {SIDE_NAME[form.side]} · {minutesText(spanMinutes(form.start, end))}
+                  </span>
+                </>
+              )
             )}
           </p>
           <button

@@ -85,6 +85,7 @@ function feedEdit(v: unknown): FeedEdit {
         started_at: v.started_at,
         ended_at: v.ended_at as string | null,
         expect_updated_at: v.expect_updated_at,
+        ...(v.paused_at_stop === true ? { paused_at_stop: true as const } : {}),
         ...(nap ? { nap } : {}),
       };
     }
@@ -104,10 +105,11 @@ const timerJson = (r: TimerResponse) =>
  * hours, stop, adjust). retime fixes one moment ({ id, edit }). A write that
  * loses to the other parent answers 409 with the current entry and a reason
  * ("stopped", "changed"), so the app can say "Brittany already stopped it";
- * an edit that doesn't fit the feed answers 400 { error, code }. resume with
- * `at` was asked of a paused feed: if the other phone resumed it since, on
- * that side an earlier `at` moves when she went back on (moved: true), on
- * the other side it's 409 "changed". discard takes expect_updated_at (the
+ * an edit that doesn't fit the feed answers 400 { error, code }. resume was
+ * asked of a paused feed: if the other phone resumed it since, on the other
+ * side it's 409 "changed" (with or without `at`, never a silent switch); on
+ * that side it's a noop, or with an earlier `at` moves when she went back
+ * on (moved: true). discard takes expect_updated_at (the
  * start toast's Undo): changed since, 409 "changed" and nothing is thrown
  * away. A timer that was discarded answers 404 { reason: "discarded",
  * deleted_by } so the app can name who did it.
@@ -154,8 +156,12 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
     }
     case "pause":
       return timerJson(await pauseTimer(id, at, by));
-    case "stop":
-      return json({ entry: toClientEntry(await stopTimer(id, at, by)) });
+    case "stop": {
+      // expect_updated_at: end it only if it's still the feed this phone saw (Fix times' quiet re-stop on close).
+      const expect = body.expect_updated_at;
+      const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
+      return json({ entry: toClientEntry(await stopTimer(id, at, by, { expectUpdatedAt })) });
+    }
     case "retime":
       return timerJson(await retimeFeed(id, feedEdit(body.edit), by));
     case "adjust":

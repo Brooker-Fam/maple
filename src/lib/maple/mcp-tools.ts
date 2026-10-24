@@ -557,13 +557,13 @@ function nowText(e: FeedEntry, ctx: Ctx): string {
   return `${head} ${past.map((p) => partText(p, ctx)).join(", ")}; total nursing ${minutesText(partTotals(parts).min.nursing)}.`;
 }
 
-/** The parts for JSON, in order, in whole minutes (as the card rounds them). */
+/** The parts for JSON, in order, in whole clock minutes (the card's rows: end minute minus start minute). */
 const timelineJson = (parts: Part[], ctx: Ctx) =>
   parts.map((p) => ({
     part: p.kind === "break" ? "break" : sideWord(p.side),
     from_local: formatTime(p.start, ctx.tz),
     to_local: p.end ? formatTime(p.end, ctx.tz) : null,
-    minutes: Math.round(p.sec / 60),
+    minutes: p.min,
   }));
 
 /** "4:18", to hand back as at: a bare clock time means the most recent one, so it's exact within 12 hours. */
@@ -1543,12 +1543,13 @@ function timerJson(e: Entry, ctx: Ctx) {
     Object.assign(base, {
       side: open ? sideWord(open.side) : null,
       paused: !open,
-      left_minutes: round1(t.left / 60),
-      right_minutes: round1(t.right / 60),
+      left_minutes: t.min.left,
+      right_minutes: t.min.right,
       current_side_since_local: open ? localWhen(open.start, ctx) : null,
       ...(cur?.kind === "break" && cur.end === null ? { paused_since_local: localWhen(cur.start, ctx) } : {}),
-      total_nursing_minutes: Math.round(t.nursing / 60),
-      break_minutes: Math.round(t.breaks / 60),
+      // Whole clock minutes, as the card's rows count them, so Claude and the card agree.
+      total_nursing_minutes: t.min.nursing,
+      break_minutes: t.min.breaks,
       timeline: timelineJson(parts, ctx),
     });
   }
@@ -2205,8 +2206,9 @@ async function switchResult(
     }
     return tapped(await switchSide(timer.id, side, undefined, ctx.who.id), false);
   }
-  // Paused: back on `to`, or the side she didn't just come off. With a time it's a resume of the feed as seen
-  // paused: if another phone resumed it since, that side's start moves (moved), the other side is a "changed" error.
+  // Paused: back on `to`, or the side she didn't just come off. It's a resume of the feed as seen paused: if
+  // another phone resumed it since, the other side is a "changed" error (with or without a time, never a silent
+  // switch over theirs); that side is a noop, or with an earlier time its start moves (moved).
   const lastSide = cur?.kind === "break" ? cur.before.side : timer.data.last_side ?? "L";
   return tapped(await switchSide(timer.id, to ?? other(lastSide), at ?? undefined, ctx.who.id, { resume: true }), true);
 }
@@ -2298,7 +2300,7 @@ function fixResult(r: TimerResponse, note: string, ctx: Ctx, extra: { lines?: st
     updated: !r.noop,
     ...entryJson(e, ctx),
     timeline: timelineJson(partsOf(e, ctx), ctx),
-    total_nursing_minutes: Math.round(partTotals(partsOf(e, ctx)).nursing / 60),
+    total_nursing_minutes: partTotals(partsOf(e, ctx)).min.nursing,
     ...(e.active ? { timer: timerJson(e, ctx) } : {}),
     ...(r.nap ? { nap: { id: r.nap.entry.id, ended_local: r.nap.entry.ended_at ? localWhen(r.nap.entry.ended_at, ctx) : null } } : {}),
     ...(assumed.length ? { assumed } : {}),
@@ -2679,7 +2681,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Start a timer",
       description:
-        'Use this when something is starting now (or started a few minutes ago and is still going): nursing (with side), sleep, tummy time or pumping. Timers show on every family phone. If one of that kind is already running it returns that one instead (nursing: switches to the side you name, and with a time acts as switch_side with that time; a nursing timer started over an hour ago has to be stopped first). To fix when a running feed started ("she actually started at 4"), use fix_nursing_time {part:"feed_start", at:"4:00"}. A nursing timer with no side starts on the suggested next side. E.g. "start a feed on the right", "she fell asleep 10 minutes ago", "starting tummy time".',
+        'Use this when something is starting now (or started a few minutes ago and is still going): nursing (with side), sleep, tummy time or pumping. Timers show on every family phone. If one of that kind is already running it returns that one instead (nursing: switches to the side you name, and with a time acts as switch_side with that time; a nursing timer nobody has tapped for an hour, or on a break with a start time over 30 minutes after she came off, has to be stopped first). To fix when a running feed started ("she actually started at 4"), use fix_nursing_time {part:"feed_start", at:"4:00"}. A nursing timer with no side starts on the suggested next side. E.g. "start a feed on the right", "she fell asleep 10 minutes ago", "starting tummy time".',
       inputSchema: {
         timer: z.enum(TIMER_NAMES).describe("Which timer."),
         side: sideEnum().nullish().describe("Nursing: which side she's on. Leave out to use the suggested next side."),
@@ -2706,11 +2708,13 @@ export function registerMapleTools(server: McpServer) {
       const live = kind === "feed" ? ((await activeTimers(ctx.baby.id)).find((e) => e.kind === "feed") as FeedEntry | undefined) : undefined;
       if (live && prior?.id !== live.id) {
         // A feed left running (nobody tapped Done) isn't this one: switching it would glue two feeds together (Siri's nurse_* uses the same rule).
+        // Judged by its newest tap, not its start, so a long cluster feed tapped a minute ago still switches.
         const sides = sideParts(partsOf(live, ctx));
         if (staleFeed(live, ctx.now, given)) {
-          throw new ToolError(
-            `A nursing timer from ${formatTime(live.started_at, ctx.tz)} is still running (${ageText(ctx.now.getTime() - ts(live))}). Stop it first (stop_timer with at), then start the new feed.`
-          );
+          // Worded as Siri says it: a paused one is "still open, on a break since …", not "still running".
+          const lastEnd = sides[sides.length - 1]?.end ?? null;
+          const where = lastEnd ? `is still open, on a break since ${formatTime(lastEnd, ctx.tz)}` : `is still running (${ageText(ctx.now.getTime() - ts(live))})`;
+          throw new ToolError(`A nursing timer from ${formatTime(live.started_at, ctx.tz)} ${where}. Stop it first (stop_timer with at), then start the new feed. It reads: ${nowText(live, ctx)}`);
         }
         if (given) {
           // "She started on the right 5 minutes ago" while a feed runs: the switch_side rules, at that time.
@@ -2899,7 +2903,7 @@ export function registerMapleTools(server: McpServer) {
         stopped: true,
         ...entryJson(stopped, ctx),
         duration: formatDuration((Date.parse(stopped.ended_at!) - ts(stopped)) / 1000),
-        ...(timed ? { timeline: timelineJson(timed, ctx), total_nursing_minutes: Math.round(partTotals(timed).nursing / 60) } : {}),
+        ...(timed ? { timeline: timelineJson(timed, ctx), total_nursing_minutes: partTotals(timed).min.nursing } : {}),
         ...(ending ? { ended_at_pause: true } : {}),
         ...talliesJson(s),
         ...(stopped.kind === "feed" ? { next_side: s.nextSide ? sideWord(s.nextSide) : null } : {}),

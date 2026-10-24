@@ -70,8 +70,11 @@ const VIA: Partial<Record<Source, string>> = {
   shortcut: "Siri",
 };
 
-/** "[avatar] Logged by Matt via Claude · 3:12 AM · edited by Brittany", under the sheet title. */
-export function LoggedBy({ entry }: { entry: Entry }) {
+/**
+ * "[avatar] Logged by Matt via Claude · 3:12 AM · edited by Brittany", under the sheet title.
+ * `noTime` (a timed feed): the day but no tap time, since right above its start and end rows it reads as one of them.
+ */
+export function LoggedBy({ entry, noTime }: { entry: Entry; noTime?: boolean }) {
   const { member, memberName, now, tz } = useSheetBase();
   const who = member(entry.created_by);
   const name = who?.display_name ?? memberName(entry.created_by);
@@ -90,7 +93,8 @@ export function LoggedBy({ entry }: { entry: Entry }) {
       {who && <Avatar member={who} size={18} />}
       <span>
         Logged by {name}
-        {via ? ` via ${via}` : ""} · {when}
+        {via ? ` via ${via}` : ""}
+        {noTime ? (day === "Today" ? "" : ` · ${day}`) : ` · ${when}`}
         {editor ? ` · ${editor}` : ""}
         {entry.id < 0 && " · waiting to sync"}
       </span>

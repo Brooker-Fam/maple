@@ -13,7 +13,7 @@
  * sub-second double taps vanish and touching same-side stretches merge.
  */
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatRange, formatTime, formatTimeNear } from "./time";
-import type { FeedData, Segment, Side, StretchRef } from "./types";
+import type { Entry, FeedData, Segment, Side, StretchRef } from "./types";
 
 export type { StretchRef } from "./types";
 
@@ -730,12 +730,13 @@ export function startBreast(side: Side, at: Date): FeedData {
  *   - Switching back within 15 s of a switch undoes it (reverted).
  *   - Resuming before the break began starts at the break (clamped); the same
  *     side within a minute of the pause erases the break (merged).
- * `resume` says the person saw the feed paused ("Already back on? 5 min
- * ago"), so with an explicit time, finding it running means someone else
- * resumed it meanwhile: on that side, a time before it went back on moves
- * that one moment there (moved; no earlier than the break began, clamped)
- * and a later one is a noop; on the other side, the feed changed under the
- * request (not_newest, which the store answers 409 "changed").
+ * `resume` says the person saw the feed paused (a dock's Resume, "Already
+ * back on? 5 min ago"), so finding it running means someone else resumed it
+ * meanwhile: on the other side, the feed changed under the request
+ * (not_newest, which the store answers 409 "changed"), never a silent
+ * switch over their resume. On that side, with no time it's a noop; with an
+ * explicit time, one before it went back on moves that one moment there
+ * (moved; no earlier than the break began, clamped) and a later one is a noop.
  */
 export function switchTo(
   data: FeedData,
@@ -750,9 +751,9 @@ export function switchTo(
   const flags: { clamped?: true; merged?: true; reverted?: true } = {};
   let tap: LastTap;
   if (O) {
-    if (opts.resume && opts.explicit) {
+    if (opts.resume) {
       if (O.side !== side) throw new FeedEditError("not_newest");
-      if (t >= O.start - SEC) return { data, noop: true };
+      if (!opts.explicit || t >= O.start - SEC) return { data, noop: true };
       const P = S[S.length - 2];
       // Only a side she went back on after a break moves here; any other shape isn't what was seen.
       if (!P || P.end === null || P.end >= O.start) throw new FeedEditError("not_newest");
@@ -1001,17 +1002,52 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
 }
 
 /**
+ * When the feed before `e` ended: the newest finished feed that ended by
+ * its start (null if none in `entries`). Start chips stop there, so a chip
+ * can't lay a new feed over the last one.
+ */
+export function previousFeedEnd(entries: readonly Entry[] | undefined, e: { id: number; started_at: string }): number | null {
+  const start = Date.parse(e.started_at);
+  let best: number | null = null;
+  for (const x of entries ?? []) {
+    if (x.kind !== "feed" || x.id === e.id || x.active || !x.ended_at) continue;
+    const t = Date.parse(x.ended_at);
+    if (t <= start + SEC && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+/** A break this long ended the feed, for staleFeed (Still on a break? asks at 20 min). */
+const STALE_BREAK = 30 * MIN;
+
+/**
+ * When anything last happened on a feed: its start, any stretch's start or
+ * end, or the latest tap (a pause tapped late records an earlier end, but
+ * someone was there when they tapped it).
+ */
+function lastActivity(e: { started_at: string; data: FeedData }): number {
+  const tap = lastTapOf(e.data);
+  const tapped = tap ? Date.parse(tap.at) : NaN;
+  return Math.max(Date.parse(e.started_at), ...real(e.data, true).flatMap((s) => [s.start, s.end ?? 0]), Number.isNaN(tapped) ? 0 : tapped);
+}
+
+/**
  * A running feed nobody tapped Done on, so "start a feed" (MCP start_timer,
  * Siri's nurse_left / nurse_right) must not switch sides on it, which would
- * glue two feeds together: it started over an hour ago, or the start time
- * someone gave is over 30 min after its newest moment.
+ * glue two feeds together. Judged by its newest activity, not its start, so
+ * a long cluster feed tapped two minutes ago is still this feed: stale when
+ * nothing happened on it for an hour (a side left on, or a break that became
+ * the end), or, on a break, when the start time someone gave is over 30 min
+ * after she came off (a new feed). A side that's on is going on now, so a
+ * time given then only switches.
  */
 export function staleFeed(e: { started_at: string; data: FeedData }, now: Date, given?: Date | null): boolean {
-  const started = Date.parse(e.started_at);
-  if (now.getTime() - started > HOUR) return true;
-  if (!given) return false;
-  const newest = Math.max(started, ...real(e.data, true).flatMap((s) => [s.start, s.end ?? 0]));
-  return given.getTime() - newest > 30 * MIN;
+  const newest = lastActivity(e);
+  const S = real(e.data, true);
+  const onBreak = S.length > 0 && S[S.length - 1].end !== null;
+  // A time given while she's off is when she went back on: within 30 min of the pause it's this feed, however long ago.
+  if (given && onBreak) return given.getTime() - newest > STALE_BREAK;
+  return now.getTime() - newest > HOUR;
 }
 
 /**

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { edgeBounds, feedCtx, feedParts, minutesShort, minutesText, other, partTotals, undoableTap, type Part, type TapWhat } from "@/lib/maple/feed";
+import { edgeBounds, feedCtx, feedParts, minutesShort, minutesText, other, partTotals, previousFeedEnd, undoableTap, type Part, type TapWhat } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, FeedEdit, Side, StretchRef, TimerKind, TimerResponse } from "@/lib/maple/types";
 import {
@@ -29,7 +29,7 @@ import { useOpenCount } from "./parts";
  * the timer card (its rows, its live block, its Fix times button), toast
  * chips ("Ended earlier…", "She went back on…"), "Still nursing?" and Recent.
  *
- *   open({ kind, entry, preset: fixPreset(target, expand?) })
+ *   open({ kind, entry, preset: fixPreset(target, expand?, doneAt?) })
  *
  * It pins one part when it opens (the live side, the open break, a past
  * side, or a finished feed's end) and shows that part's panel; each control
@@ -62,8 +62,12 @@ type Cur = { kind: "ended" | "side" | "break" | "none"; side?: Side; start?: str
 
 type Snap = { recorded: string; current: Cur };
 
-/** What a commit was for, when the answer needs reading ("Already back on?" racing the other phone's Resume). */
-type RunMeta = { backOn?: { side: Side; at: number | null } };
+/**
+ * What a commit was for, when the answer needs reading: "Already back on?"
+ * racing the other phone's Resume or Done, or "She already finished" on the
+ * stretch the panel showed (`ref`) when the other phone has switched since.
+ */
+type RunMeta = { backOn?: { side: Side; at: number | null }; stop?: { ref: StretchRef } };
 
 /**
  * A moment editor. `edge` editors (a recorded moment) follow their stretch if
@@ -75,19 +79,33 @@ type Editor = {
   edge?: MomentEdge;
   free?: { title: string; recorded: Date; min: Date; max: Date; notes?: { low?: string; high?: string } };
   commit?: (to: Date, o: TimerCallOptions) => Promise<unknown>;
-  meta?: RunMeta;
+  /** What the commit was for, given the time picked. */
+  meta?: (to: Date) => RunMeta;
 };
 
 type BannerAction = { label: string; onClick: () => void };
 type Banner = { kind: "discarded" | "gone" | "current" | "moved" | "already"; text: string; actions?: BannerAction[] };
 
-/** "Brittany already put her on the Right at 3:17": the other phone's Resume got there first (`entry`: the server's copy, when the answer carried one). */
-type Already = { entry: Entry | null; side: Side; at: number | null };
+/**
+ * The other phone got there first, so nothing was saved:
+ *   back:  "Brittany already put her back on the Right at 3:17" (its Resume; `entry`: the server's copy, when the answer carried one);
+ *   ended: "Brittany ended this feed at 3:10" (its Done), with a way to carry it on from this phone's time;
+ *   stop:  "Brittany switched to the Left at 3:17. Pick again." (a stop chip meant for the stretch `ref`).
+ */
+type Already =
+  | { kind: "back"; entry: Entry | null; side: Side; at: number | null }
+  | { kind: "ended"; entry: Entry; side: Side; at: number | null }
+  | { kind: "stop"; ref: StretchRef };
+
+/** "She went back on…" after a Done at the pause: she nursed on `side` from `at` to the Done tap, and the feed ends there again. */
+type BackUntil = { at: number; commit: (x: Entry, side: Side, from: Date, o: TimerCallOptions) => Promise<unknown> };
 
 type Run = (id: string, go: (o: TimerCallOptions) => Promise<unknown>, meta?: RunMeta) => Promise<void>;
 
 const HOLD_MS = 1500;
 const MIN = 60_000;
+/** A feed the other phone ended this recently can still be carried on (as the dock's "Continue that feed on Right"). */
+const CONTINUE_WITHIN_MS = 30 * 60_000;
 const ELSEWHERE = "on another device or through Claude";
 
 const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 1500;
@@ -95,6 +113,14 @@ const timed = (e: Entry): e is Entry & { kind: "feed"; data: FeedData } => e.kin
 const partsOf = (e: Entry, now: Date): Part[] => (timed(e) ? feedParts(e.data, feedCtx(e, now)) : []);
 const sidesOf = (parts: Part[]) => parts.filter((p): p is SidePart => p.kind === "side");
 const minutesWord = (n: number) => `${n} minute${n === 1 ? "" : "s"}`;
+/** The clock minute a time shows ("6:03"): two chips in one minute read as the same time. */
+const clockMinute = (t: number) => Math.floor(t / MIN);
+/** Ended at its pause (Done while paused): the end is the last side's end. */
+const endedAtPause = (e: Entry) => {
+  if (!timed(e) || e.active || !e.ended_at) return false;
+  const end = e.data.segments!.at(-1)?.end;
+  return e.data.paused_at_stop === true || (!!end && near(end, e.ended_at));
+};
 /** The tap undo_tap would take back now, if it's one of `whats` and made in the last 10 minutes (what the server undoes, not a guess from the parts). */
 const freshTap = (e: Entry & { data: FeedData }, now: Date, whats: TapWhat[]) => {
   const tap = undoableTap(e.data, feedCtx(e, now));
@@ -199,38 +225,65 @@ function sameRecorded(a: string, b: string): boolean {
   return x.length === y.length && x.every((v, i) => (v === "" || y[i] === "" ? v === y[i] : near(v, y[i])));
 }
 
-/** When the feed before this one ended (start chips stop there, so a fix can't lay this feed over it). */
-function lastFeedEnd(entries: Entry[] | undefined, e: Entry): number | null {
-  const start = Date.parse(e.started_at);
-  let best: number | null = null;
-  for (const x of entries ?? []) {
-    if (x.kind !== "feed" || x.id === e.id || x.active || !x.ended_at) continue;
-    const t = Date.parse(x.ended_at);
-    if (t <= start + 1000 && (best === null || t > best)) best = t;
-  }
-  return best;
-}
-
 export default function FixTimesSheet({ open, onClose, kind, entry, preset }: SheetProps) {
-  const { state, memberLabel, timerBusy } = useMaple();
+  const { state, memberLabel, timerBusy, timerCall, now } = useMaple();
   const count = useOpenCount(open);
   useHoldTimerToasts(open);
   const [committing, setCommitting] = useState(false);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const live = entry ? state?.entries.find((e) => e.id === entry.id) ?? null : null;
   const e = live ?? entry;
+  const fix = (preset?.fix ?? { target: "current" }) as FixPreset["fix"];
+  // The Done tap that ended this feed at its pause (the Done toast's "She went back on…" reopened it to ask).
+  const doneAt = fix.expand === "backOn" && fix.doneAt && Number.isFinite(Date.parse(fix.doneAt)) ? fix.doneAt : undefined;
+
+  /**
+   * That reopen was only to ask. Closed without an answer, the feed ends at
+   * its pause again, silently, as long as it's still the feed the reopen left
+   * (nobody has changed it since, and no call of this phone's is still out
+   * for it). Here, not in the body: the body unmounts as the sheet closes.
+   */
+  const asked = useRef<string | null>(null);
+  // "She's still on": they answered, so the feed stays running even if they close without a time.
+  const keepOn = useRef(false);
+  const eUpdated = e?.updated_at ?? null;
+  useEffect(() => {
+    if (open) {
+      if (doneAt && asked.current === null) asked.current = eUpdated;
+      return;
+    }
+    const was = asked.current;
+    const keep = keepOn.current;
+    asked.current = null;
+    keepOn.current = false;
+    if (keep || !was || !live || !live.active || live.updated_at !== was || timerBusy(live.id) || openStretch(live, now())) return;
+    // Only if the server still has the feed this phone saw: the other phone may have resumed it since the last poll.
+    void timerCall({ action: "stop", id: live.id, expect_updated_at: was }, { onError: () => {} });
+  }, [open, doneAt, eUpdated, live, timerBusy, timerCall, now]);
+
   if (!e) return null;
   const by = memberLabel(e.created_by);
   const subtitle = timed(e)
     ? `Nursing · feed started ${formatTime(e.started_at, tz)}${by ? ` · by ${by}` : ""}`
     : `${KIND_TITLE[kind as TimerKind] ?? "Timer"} · since ${formatTime(e.started_at, tz)}`;
-  const fix = (preset?.fix ?? { target: "current" }) as FixPreset["fix"];
   // A tap from this phone (the dock, a toast) still on its way: the sheet waits for its answer, as for a timer that's still starting.
   const saving = e.id > 0 && timerBusy(e.id) && !committing;
   return (
     <Sheet open={open} onClose={onClose} title={saving ? "Fix times · saving…" : "Fix times"} subtitle={subtitle} calm>
       {/* A fresh pin each time it opens (the router keeps one instance per entry mounted). */}
-      <FixBody key={count} start={e} live={live} target={fix.target} expand={fix.expand} open={open} onClose={onClose} tz={tz} onCommitting={setCommitting} />
+      <FixBody
+        key={count}
+        start={e}
+        live={live}
+        target={fix.target}
+        expand={fix.expand}
+        doneAt={doneAt}
+        open={open}
+        onClose={onClose}
+        tz={tz}
+        onCommitting={setCommitting}
+        onStillOn={(v) => (keepOn.current = v)}
+      />
     </Sheet>
   );
 }
@@ -240,21 +293,25 @@ function FixBody({
   live,
   target,
   expand,
+  doneAt,
   open,
   onClose,
   tz,
   onCommitting,
+  onStillOn,
 }: {
   start: Entry;
   live: Entry | null;
   target: FixTarget;
   expand?: FixExpand;
+  doneAt?: string;
   open: boolean;
   onClose: () => void;
   tz: string;
   onCommitting: (on: boolean) => void;
+  onStillOn: (v: boolean) => void;
 }) {
-  const { state, now: nowFn, memberLabel, readOnly, timerBusy } = useMaple();
+  const { state, now: nowFn, memberLabel, readOnly, timerBusy, timerCall, toast, isNight, refresh, whoDiscarded } = useMaple();
   const actions = useTimerActions();
   const now = useNow(1000);
   const e = live ?? start;
@@ -270,6 +327,14 @@ function FixBody({
   const [finished, setFinished] = useState(expand === "finished");
   // "She's back on…" / "She went back on…": the other side is the likely one (the dock's next side), one tap from the chips.
   const [backSide, setBackSide] = useState<Side | null>(() => (expand === "backOn" && pin.kind === "break" ? other(pin.ref.side) : null));
+  // Opened to say she's back on: that question alone, with "Came off earlier?" folded behind one row.
+  const [backOnly, setBackOnly] = useState(expand === "backOn");
+  // "She's still on" (after "She went back on…" from a Done): the usual back-on chips, which leave the feed running.
+  const [stillOn, setStillOnState] = useState(false);
+  const setStillOn = (v: boolean) => {
+    setStillOnState(v);
+    onStillOn(v);
+  };
   // A tap from this phone still on its way (not this sheet's own commit).
   const flight = e.id > 0 && timerBusy(e.id) && !busy;
 
@@ -282,6 +347,7 @@ function FixBody({
     setAlready(null);
     setFinished(false);
     setBackSide(null);
+    setBackOnly(false);
   };
 
   // This phone's own tap landed while the sheet was open: its answer is the new baseline, not someone else's change.
@@ -308,6 +374,20 @@ function FixBody({
     } else if (g.away || live.updated_at !== g.updatedAt) setNotice(null);
   }, [live, notice]);
 
+  // Gone on a poll (not under a commit, whose 404 names who): ask who discarded it, so the banner can say so.
+  const [discarder, setDiscarder] = useState<{ id: number; who: string | null | undefined } | null>(null);
+  const goneOnPoll = open && !live && start.id > 0;
+  useEffect(() => {
+    if (!goneOnPoll) return;
+    let on = true;
+    void whoDiscarded(start.id).then((who) => {
+      if (on) setDiscarder({ id: start.id, who });
+    });
+    return () => {
+      on = false;
+    };
+  }, [goneOnPoll, start.id, whoDiscarded]);
+
   // ── what changed on the other phone ──
   const what = e.kind === "feed" ? "feed" : "timer";
   const who = memberLabel(e.updated_by);
@@ -322,8 +402,16 @@ function FixBody({
   if (open && !busy && !flight) {
     if (!live) {
       const g = notice?.gone;
-      // The 404 that stopped this sheet's commit may name who discarded it; otherwise the last person to change it.
-      const text = g?.who ? `${g.who} discarded this ${what}` : byWho((w) => `${w} discarded this ${what}`, `This ${what} was discarded`);
+      // The 404 that stopped this sheet's commit may name who discarded it; else the server's list of discarded entries
+      // (null: this viewer, or nobody worth naming); only if that lookup found nothing, the last person to change it.
+      const d = discarder?.id === start.id ? discarder : null;
+      const text = g?.who
+        ? `${g.who} discarded this ${what}`
+        : d?.who
+          ? `${d.who} discarded this ${what}`
+          : !d || d.who === null
+            ? `This ${what} was discarded`
+            : byWho((w) => `${w} discarded this ${what}`, `This ${what} was discarded`);
       banner = { kind: "discarded", text: `${text}${g ? ", so nothing was saved" : ""}.`, actions: [{ label: "Close", onClick: onClose }] };
     } else if (already) {
       banner = alreadyBanner(already);
@@ -394,17 +482,51 @@ function FixBody({
     }
   }
 
-  /** The other phone's Resume got there first: say what's recorded, offer this phone's time for it, or show that side. */
+  /** The other phone got there first: say what's recorded, and offer this phone's time for it or show that part. */
   function alreadyBanner(a: Already): Banner {
-    const x = live ?? a.entry;
+    const x = live ?? (a.kind === "stop" ? null : a.entry);
     const o = x ? openStretch(x, now) : null;
     const name = x ? memberLabel(x.updated_by) : null;
-    if (!x || !o) return { kind: "already", text: name ? `${name} just changed this feed, so nothing was saved.` : "This feed just changed, so nothing was saved." };
+    const changed: Banner = { kind: "already", text: name ? `${name} just changed this feed, so nothing was saved.` : "This feed just changed, so nothing was saved." };
+    if (a.kind === "ended" && x && !x.active && x.ended_at) {
+      const t = clock(x.ended_at);
+      const acts: BannerAction[] = [];
+      // As the dock offers after a stale Resume: one tap carries the feed on, from the time this phone asked for ("Now": now).
+      const from = a.at ?? now.getTime();
+      const otherFeed = state?.entries.some((y) => y.active && y.kind === "feed" && y.id !== x.id);
+      if (endedAtPause(x) && !otherFeed && now.getTime() - Date.parse(x.ended_at) <= CONTINUE_WITHIN_MS) {
+        acts.push({
+          label: `Continue it on ${SIDE_NAME[a.side]} from ${short(from)}`,
+          onClick: () =>
+            void run(
+              "continue",
+              async (o) => {
+                const back = (await timerCall({ action: "reopen", id: x.id }, o))?.entry;
+                return back?.active ? backOn(back, a.side, new Date(from), o) : null;
+              },
+              { backOn: { side: a.side, at: a.at } }
+            ),
+        });
+      }
+      acts.push({ label: "Show finished feed", onClick: () => repin({ kind: "finish" }) });
+      return { kind: "already", text: `${name ? `${name} ended this feed at ${t}` : `This feed ended at ${t}`}${endedAtPause(x) ? ", at its pause" : ""}.`, actions: acts };
+    }
+    if (!x || !o) return changed;
     const sides = sidesOf(partsOf(x, now));
+    if (a.kind === "stop") {
+      // Still the stretch the chip was meant for: some other change (the banner can't say which).
+      if (o.side === a.ref.side && near(o.start, a.ref.start)) return changed;
+      const s = SIDE_NAME[o.side];
+      const t = clock(o.start);
+      const brk = partsOf(x, now).some((p) => p.kind === "break" && p.end === o.start);
+      const did = brk || o.side === a.ref.side ? `put her back on the ${s} at ${t}` : `switched her to the ${s} at ${t}`;
+      return { kind: "already", text: `${name ? `${name} ${did}` : `She's on the ${s} since ${t}`}, so nothing was saved. Pick again.` };
+    }
     const s = SIDE_NAME[o.side];
     const t = clock(o.start);
     const sameSide = o.side === a.side;
-    const text = `${name ? `${name} already put her on the ${s} at ${t}` : `She's already on the ${s}, since ${t}`}${sameSide ? "." : ", so nothing was saved."}`;
+    // Worded as the dock's toast for the same race ("Brittany already put her back on the Left at 7:08").
+    const text = `${name ? `${name} already put her back on the ${s} at ${t}` : `She's already on the ${s} side, since ${t}`}${sameSide ? "." : ", so nothing was saved."}`;
     const acts: BannerAction[] = [];
     if (sameSide && a.at !== null && Math.abs(a.at - Date.parse(o.start)) >= MIN) {
       const to = a.at;
@@ -466,7 +588,7 @@ function FixBody({
     // "Already back on?" after the other phone's Resume on that side: nothing moved, so say what's there instead of closing as if saved.
     if (meta.backOn && !f && r?.noop) {
       setBusy(null);
-      setAlready({ entry: r.entry, side: meta.backOn.side, at: meta.backOn.at });
+      setAlready({ kind: "back", entry: r.entry, side: meta.backOn.side, at: meta.backOn.at });
       return;
     }
     if (res && !f) {
@@ -476,13 +598,28 @@ function FixBody({
     setBusy(null);
     if (!f) return;
     if (meta.backOn && f.kind === "changed" && f.entry && openStretch(f.entry, nowFn())) {
-      setAlready({ entry: f.entry, side: meta.backOn.side, at: meta.backOn.at });
+      setAlready({ kind: "back", entry: f.entry, side: meta.backOn.side, at: meta.backOn.at });
+      return;
+    }
+    // The other phone's Done got there first: say so once (the banner, not a notice too), with a way to carry the feed on.
+    if (meta.backOn && f.kind === "stopped" && f.entry) {
+      setAlready({ kind: "ended", entry: f.entry, side: meta.backOn.side, at: meta.backOn.at });
       return;
     }
     // An older server answers "Can't be before Left started" when the other phone resumed on the other side: a change, not a
     // mistake (the poll after the call brings her side in, and the banner names it then).
     if (meta.backOn && f.kind === "bad" && f.code === "before_own_start") {
-      setAlready({ entry: null, side: meta.backOn.side, at: meta.backOn.at });
+      setAlready({ kind: "back", entry: null, side: meta.backOn.side, at: meta.backOn.at });
+      return;
+    }
+    // A stop chip for the side this panel showed, after the other phone switched or resumed: "Can't be before Left started"
+    // names a Left he can't see yet, so it's a change, not his mistake. Fetch it; the panel follows her new side (stop chips
+    // for it) and the banner says who put her there.
+    const moved = f.kind === "changed" && !!f.entry && openStretch(f.entry, nowFn());
+    if (meta.stop && ((f.kind === "bad" && f.code === "before_own_start") || (moved && !(moved.side === meta.stop.ref.side && near(moved.start, meta.stop.ref.start))))) {
+      setAlready({ kind: "stop", ref: meta.stop.ref });
+      hold();
+      if (f.kind === "bad") await refresh();
       return;
     }
     if (isGone(f)) {
@@ -508,6 +645,87 @@ function FixBody({
       setNotice({ text: f.message });
     }
   };
+
+  // "Pick again": a stop chip lost to the other phone's switch follows her to the side she's on now (its stop chips, as before).
+  useEffect(() => {
+    if (already?.kind !== "stop" || !live) return;
+    const n = nowFn();
+    const o = openStretch(live, n);
+    if (!o || (o.side === already.ref.side && near(o.start, already.ref.start))) return;
+    if (pin.kind === "side" && pin.ref.side === o.side && near(pin.ref.start, o.start)) return;
+    const p: Pin = { kind: "side", ref: o.ref, index: sidesOf(partsOf(live, n)).length - 1, panel: "open" };
+    setPin(p);
+    setSnap({ recorded: recordedOf(p, live, n), current: currentOf(live, n) });
+    setEditor(null);
+  }, [already, live, pin, nowFn]);
+
+  const until = doneAt && !stillOn ? Date.parse(doneAt) : null;
+
+  /**
+   * "She went back on…" after a Done at the pause: back on `side` from
+   * `from`, then ended again at the Done tap, one call after the other on
+   * the entry's queue. One toast says what's recorded ("Right 5:54 – 6:04 ·
+   * ended 6:04"), and its Undo puts back what Done left (ended at the pause).
+   */
+  const backUntil = async (x: Entry, side: Side, from: Date, o: TimerCallOptions): Promise<TimerResponse | null> => {
+    if (until === null) return null;
+    const name = SIDE_NAME[side];
+    const r1 = await timerCall({ action: "resume", id: x.id, side, at: from.toISOString() }, o);
+    if (!r1 || r1.noop) return r1;
+    const watch = (y: Entry) => ({ group: "timer" as const, duration: isNight() ? 20_000 : 10_000, watch: { entryId: y.id, updatedAt: y.updated_at } });
+    const putBack = (res: TimerResponse, endedAt: string | null, pausedAtStop = false) => {
+      const b = res.before;
+      if (!b) return undefined;
+      return () =>
+        void (async () => {
+          const edit: FeedEdit = {
+            op: "restore",
+            segments: b.segments,
+            started_at: b.started_at,
+            ended_at: endedAt,
+            expect_updated_at: res.entry.updated_at,
+            // As Done left it: ended at the pause, so a later reopen brings it back paused, not running.
+            ...(pausedAtStop ? { paused_at_stop: true as const } : {}),
+          };
+          if (await timerCall({ action: "retime", id: x.id, edit })) toast("Undone", { group: "timer" });
+        })();
+    };
+    if (r1.moved) {
+      // The other phone had put her back on that side since the reopen: its feed is running, so it isn't ended here.
+      const cur = openStretch(r1.entry, nowFn());
+      toast(`${name} side from ${short(cur?.start ?? from)} · still going`, { ...watch(r1.entry), undo: putBack(r1, null) });
+      return r1;
+    }
+    let stopFail: TimerFailure | null = null;
+    const r2 = await timerCall(
+      { action: "stop", id: x.id, at: new Date(until).toISOString() },
+      {
+        onError: (f) => {
+          stopFail = f;
+        },
+      }
+    );
+    if (!r2 || r2.entry.active) {
+      const sf = stopFail as TimerFailure | null;
+      o.onError?.({
+        kind: "error",
+        who: sf?.who ?? null,
+        entry: sf?.entry,
+        message: `Saved the ${name} from ${short(from)}, but not the end at ${short(until)}${sf ? `: ${sf.message}` : ""}.`,
+      });
+      return null;
+    }
+    const last = sidesOf(partsOf(r2.entry, nowFn())).at(-1);
+    const ended = r2.entry.ended_at ?? new Date(until).toISOString();
+    const text = last?.end ? `${SIDE_NAME[last.side]} ${short(last.start)} – ${short(last.end)} · ended ${short(ended)}` : `Ended ${short(ended)}`;
+    // Back to what Done left: the stretches before she went back on, ended at the pause.
+    const pauseEnd = r1.before?.segments.at(-1)?.end ?? null;
+    toast(text, { ...watch(r2.entry), undo: putBack({ ...r1, entry: r2.entry }, pauseEnd, true) });
+    return r2;
+  };
+
+  /** Back on `side` from `from`: until the Done tap when "She went back on…" came from a Done, else still going. */
+  const backOn = (x: Entry, side: Side, from: Date, o: TimerCallOptions) => (until !== null ? backUntil(x, side, from, o) : actions.resume(x, side, from, o));
 
   const openEditor = (ed: Editor) => {
     setNotice(null);
@@ -539,7 +757,7 @@ function FixBody({
               ed.edge
                 ? actions.retime(e, { op: "move", edge: ed.edge.edge, ...(ed.edge.ref ? { ref: ed.edge.ref } : {}), to: to.toISOString() } as FeedEdit, o)
                 : ed.commit!(to, o),
-            ed.meta
+            ed.meta?.(to)
           )
         }
       />
@@ -549,7 +767,20 @@ function FixBody({
   } else if (pin.kind === "finish") {
     panel = <FinishPanel {...panelProps} actions={actions} />;
   } else if (pin.kind === "break") {
-    panel = <BreakPanel {...panelProps} pinRef={pin.ref} backSide={backSide} setBackSide={setBackSide} actions={actions} />;
+    panel = (
+      <BreakPanel
+        {...panelProps}
+        pinRef={pin.ref}
+        backSide={backSide}
+        setBackSide={setBackSide}
+        backOnly={backOnly}
+        until={until !== null ? { at: until, commit: backUntil } : null}
+        doneAt={doneAt ? Date.parse(doneAt) : null}
+        backOn={backOn}
+        setStillOn={setStillOn}
+        actions={actions}
+      />
+    );
   } else if (pin.panel === "open") {
     panel = <OpenSidePanel {...panelProps} pin={pin} finished={finished} setFinished={setFinished} actions={actions} />;
   } else {
@@ -580,7 +811,10 @@ function FixBody({
           )}
         </div>
       )}
-      {timed(e) && <PartPicker e={e} parts={parts} pin={pin} tz={tz} onPick={repin} disabled={!!busy} />}
+      {/* "When did she go back on?" after a Done is one question about a feed that's over: no parts to pick from. */}
+      {timed(e) && !(until !== null && pin.kind === "break") && (
+        <PartPicker e={e} parts={parts} pin={pin} editing={editor?.edge?.ref} tz={tz} onPick={repin} disabled={!!busy} />
+      )}
       {notice && !(notice.gone && !live) && (
         <p role="alert" className="rounded-xl border border-mp-danger/30 px-3 py-2.5 text-[13px] leading-snug text-mp-ink">
           {notice.text}
@@ -591,15 +825,32 @@ function FixBody({
   );
 }
 
-/** One chip per part ("(L) Left · 4:00–4:10", "‖ Break · since 4:10", "Ended 4:50"): the pinned one is filled. */
-function PartPicker({ e, parts, pin, tz, onPick, disabled }: { e: Entry; parts: Part[]; pin: Pin; tz: string; onPick: (p: Pin) => void; disabled?: boolean }) {
-  const row = useRef<HTMLDivElement>(null);
-  const pinKey = pin.kind === "side" ? `${pin.ref.side}${pin.ref.start}` : pin.kind;
-  // The pinned chip in view (a long feed scrolls the row sideways).
-  useEffect(() => {
-    const el = row.current?.querySelector<HTMLElement>('[aria-pressed="true"]');
-    if (row.current && el) row.current.scrollLeft = Math.max(0, el.offsetLeft - 20);
-  }, [pinKey]);
+/**
+ * One chip per part ("(L) Left · 4:00–4:10", "‖ Break · since 4:10", "Ended
+ * 4:50"): the filled one is the part on screen, which is the part an open
+ * editor is about ("fix when Left ended" from Right's panel fills Left).
+ * A long feed wraps onto more lines rather than scrolling sideways, so no
+ * chip is ever cut to "5:20–5:32" without its side, or hidden off the edge.
+ */
+function PartPicker({
+  e,
+  parts,
+  pin,
+  editing,
+  tz,
+  onPick,
+  disabled,
+}: {
+  e: Entry;
+  parts: Part[];
+  pin: Pin;
+  /** The stretch an open editor moves a moment of, when it isn't the pinned one. */
+  editing?: StretchRef;
+  tz: string;
+  onPick: (p: Pin) => void;
+  disabled?: boolean;
+}) {
+  const shows: StretchRef | null = (pin.kind === "side" || pin.kind === "break") && editing ? editing : pin.kind === "side" ? pin.ref : null;
   const sides = sidesOf(parts);
   const openBreak = e.active && parts.at(-1)?.kind === "break" ? parts.at(-1)! : null;
   const chip = (key: string, selected: boolean, label: ReactNode, onClick: () => void) => (
@@ -610,7 +861,8 @@ function PartPicker({ e, parts, pin, tz, onPick, disabled }: { e: Entry; parts: 
       disabled={disabled}
       aria-pressed={selected}
       className={cx(
-        "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[14px] font-medium whitespace-nowrap tabular-nums transition disabled:opacity-60",
+        // (px-3: two parts fit side by side at 375 px.)
+        "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 text-[14px] font-medium whitespace-nowrap tabular-nums transition disabled:opacity-60",
         selected
           ? "bg-mp-ink text-mp-surface [.maple-night_&]:bg-[rgb(224_169_59/0.2)] [.maple-night_&]:text-[#E8A23F]"
           : "bg-mp-sunken text-mp-ink"
@@ -620,11 +872,11 @@ function PartPicker({ e, parts, pin, tz, onPick, disabled }: { e: Entry; parts: 
     </button>
   );
   return (
-    <div ref={row} className="relative -mx-5 flex gap-2 overflow-x-auto px-5 pb-0.5 [scrollbar-width:none]" role="group" aria-label="Which part">
+    <div className="flex flex-wrap gap-2" role="group" aria-label="Which part">
       {sides.map((s, i) =>
         chip(
           `s-${s.ref.start}`,
-          pin.kind === "side" && pin.ref.side === s.side && near(pin.ref.start, s.start),
+          !!shows && shows.side === s.side && near(shows.start, s.start),
           <>
             <SideMark side={s.side} size={20} />
             {SIDE_NAME[s.side]} · {formatRange(s.start, s.end, tz, { compact: true })}
@@ -636,7 +888,7 @@ function PartPicker({ e, parts, pin, tz, onPick, disabled }: { e: Entry; parts: 
         openBreak.kind === "break" &&
         chip(
           "break",
-          pin.kind === "break",
+          pin.kind === "break" && !editing,
           <>
             <BreakMark open size={20} />
             Break · {formatRange(openBreak.start, null, tz, { compact: true })}
@@ -880,7 +1132,7 @@ function OpenSidePanel({
           tz={tz}
           disabled={disabled}
           busy={busy}
-          onStop={(id, at) => void run(id, (o) => actions.stop(e, at, o))}
+          onStop={(id, at) => void run(id, (o) => actions.stop(e, at, o), { stop: { ref: s.ref } })}
         />
         <LinkRow
           disabled={disabled}
@@ -895,6 +1147,7 @@ function OpenSidePanel({
                 notes: { low: `Can't be before ${name} started (${formatTime(s.start, tz)}).`, high: "That's in the future." },
               },
               commit: (to, o) => actions.stop(e, to, o),
+              meta: () => ({ stop: { ref: s.ref } }),
             })
           }
         >
@@ -913,7 +1166,7 @@ function OpenSidePanel({
   }
   const floor = brk && prev?.end ? Date.parse(prev.end) : null;
   // The feed before this one: a feed start can't be laid over it by a chip (Other time… still can, with a word in its preview).
-  const feedFloor = k === 0 ? lastFeedEnd(state?.entries, e) : null;
+  const feedFloor = k === 0 ? previousFeedEnd(state?.entries, e) : null;
   const chips: { id: string; to: number; line1: string; aria: string; wide?: boolean }[] = [];
   let clipped = false;
   for (const n of [1, 2, 3, 4, 5, 10, 15]) {
@@ -925,13 +1178,16 @@ function OpenSidePanel({
     }
     chips.push({ id: `a-${n}`, to, line1: `${n} min earlier`, aria: `${name} started ${minutesWord(n)} earlier, at ${formatTime(to, tz)}` });
   }
-  if (floor !== null && brk && brk.sec >= 60) chips.push({ id: "a-floor", to: floor, line1: "No break", aria: `No break: ${name} from ${formatTime(floor, tz)}, when she came off` });
+  // Any break, even one under a minute, can be no break at all.
+  if (floor !== null && brk) chips.push({ id: "a-floor", to: floor, line1: "No break", aria: `No break: ${name} from ${formatTime(floor, tz)}, when she came off` });
   // (Not when the last chip kept already lands within a minute of it.)
   const lastTo = chips.at(-1)?.to ?? recorded;
   if (clipped && feedFloor !== null && lastTo - feedFloor >= MIN && feedFloor >= uiMin) {
     chips.push({ id: "a-feed", to: feedFloor, line1: "Since the last feed", aria: `${name} started when the last feed ended, at ${formatTime(feedFloor, tz)}`, wide: true });
   }
-  const shown = chips.slice(0, 8);
+  // Two chips showing one clock time ("1 min earlier / 6:03" beside "No break / 6:03") would read as one: the named one stays.
+  const named = new Set(chips.filter((c) => c.id === "a-floor" || c.id === "a-feed").map((c) => clockMinute(c.to)));
+  const shown = chips.filter((c) => c.id === "a-floor" || c.id === "a-feed" || !named.has(clockMinute(c.to))).slice(0, 8);
   const move = (id: string, to: number) => void run(id, (o) => actions.retime(e, { op: "move", edge: "start", ref: s.ref, to: new Date(to).toISOString() }, o));
 
   let caption: string;
@@ -939,7 +1195,7 @@ function OpenSidePanel({
   else if (brk && prev) {
     // Two parts on the same side: "Right stays 6 min" would read as this one.
     const prevName = prev.side === s.side ? `The earlier ${SIDE_NAME[prev.side]} (${formatRange(prev.start, prev.end, tz)})` : SIDE_NAME[prev.side];
-    caption = `Comes out of the ${minutesText(brk.min)} break. ${prevName} stays ${minutesText(prev.min)}.`;
+    caption = `Comes out of the ${brk.min > 0 ? `${minutesText(brk.min)} ` : ""}break. ${prevName} stays ${minutesText(prev.min)}.`;
   } else caption = prev ? `Comes out of the ${SIDE_NAME[prev.side]} side (${minutesText(prev.min)} now).` : "";
 
   // Undo the tap that started this part, while that tap is fresh (its own start, not the feed's last edit).
@@ -947,7 +1203,8 @@ function OpenSidePanel({
 
   return (
     <div className="space-y-4">
-      <Title sub={`${name} shows since ${formatTime(s.start, tz)}.`} focusRef={titleRef}>{k === 0 ? `Was she on the ${name} before you tapped Start?` : `Was she on the ${name} before you tapped?`}</Title>
+      {/* (The feed's first side: the dock's tile is the side's name, never "Start".) */}
+      <Title sub={`${name} shows since ${formatTime(s.start, tz)}.`} focusRef={titleRef}>{k === 0 ? `Was she nursing before you tapped ${name}?` : `Was she on the ${name} before you tapped?`}</Title>
       {shown.length ? (
         <div className="space-y-2">
           <Grid>
@@ -974,7 +1231,7 @@ function OpenSidePanel({
           )}
         </div>
       ) : prev ? (
-        <Caption>{SIDE_NAME[prev.side]} was under a minute, so use Other time…</Caption>
+        <Caption>{brk ? "The break was under a minute" : `${SIDE_NAME[prev.side]} was under a minute`}, so use Other time…</Caption>
       ) : (
         feedFloor !== null && <Caption>The last feed ended at {formatTime(feedFloor, tz)}, so use Other time…</Caption>
       )}
@@ -1067,7 +1324,15 @@ function ClosedSidePanel({ e, tz, now, disabled, busy, run, openEditor, pin, act
   );
 }
 
-/** Panel C: the open break. Back on already (its two sides always showing), came off earlier, or didn't mean to pause. */
+/**
+ * Panel C: the open break. Back on already (its two sides always showing),
+ * came off earlier, or didn't mean to pause. Opened to say she's back on
+ * (`backOnly`), that question stands alone and "Came off earlier?" folds
+ * behind one row. Opened from a Done at the pause (`doneAt`), it asks only
+ * when she went back on: while `until` is set, a chip records that side up
+ * to the Done tap and ends the feed there again; "She's still on" brings the
+ * chips that leave it running.
+ */
 function BreakPanel({
   e,
   tz,
@@ -1079,32 +1344,129 @@ function BreakPanel({
   pinRef,
   backSide,
   setBackSide,
+  backOnly,
+  until,
+  doneAt,
+  backOn,
+  setStillOn,
   actions,
 }: PanelProps & {
   pinRef: StretchRef;
   backSide: Side | null;
   setBackSide: (s: Side) => void;
+  backOnly: boolean;
+  until: BackUntil | null;
+  /** The Done tap this feed was reopened from (the Done toast's "She went back on…"), else null. */
+  doneAt: number | null;
+  backOn: (x: Entry, side: Side, from: Date, o: TimerCallOptions) => Promise<unknown>;
+  setStillOn: (v: boolean) => void;
   actions: Actions;
 }) {
+  const { now: nowFn } = useMaple();
+  const [cameOff, setCameOff] = useState(false);
   if (!timed(e)) return null;
   const parts = partsOf(e, now);
   const last = locate({ kind: "break", ref: pinRef }, e, now).part;
   const brk = parts.at(-1);
   if (!last || last.end === null || brk?.kind !== "break" || brk.end !== null) {
+    if (!e.active && e.ended_at) return <Caption>{endedAtPause(e) ? `The feed ended at its pause (${formatTime(e.ended_at, tz)}).` : `The feed ended at ${formatTime(e.ended_at, tz)}.`}</Caption>;
     return <Caption>The break is over, so there&apos;s nothing to fix here.</Caption>;
   }
   const pauseAt = Date.parse(last.end);
   const n = now.getTime();
   const lastName = SIDE_NAME[last.side];
+  // Back on since the break began: no break at all (the same words as panel A's floor chip).
+  const floorChip = { at: pauseAt, line1: "No break", line2: formatTimeNear(pauseAt, pauseAt, tz) };
+  const sidePicker = (side: Side | null, label: string) => (
+    <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={label}>
+      {(["L", "R"] as Side[]).map((x) => (
+        <button
+          key={x}
+          type="button"
+          role="radio"
+          aria-checked={side === x}
+          disabled={disabled}
+          onClick={() => setBackSide(x)}
+          className={cx(
+            "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl text-[15px] font-semibold transition disabled:opacity-45",
+            side === x ? "bg-mp-ink text-mp-surface [.maple-night_&]:bg-[rgb(224_169_59/0.2)] [.maple-night_&]:text-[#E8A23F]" : "bg-mp-sunken text-mp-ink"
+          )}
+        >
+          <SideMark side={x} size={22} />
+          {SIDE_NAME[x]}
+        </button>
+      ))}
+    </div>
+  );
 
-  const since: { id: string; at: number | null; line1: string; line2: string; wide?: boolean }[] = [{ id: "back-now", at: null, line1: "Now", line2: formatTimeNear(n, pauseAt, tz) }];
+  if (until) {
+    const side = backSide ?? other(last.side);
+    const name = SIDE_NAME[side];
+    const done = formatTime(until.at, tz);
+    // Between the pause and the Done tap; a chip in the pause's minute would read as "No break".
+    const chips: { id: string; at: number; line1: string; line2: string }[] = [];
+    for (const m of [2, 5, 10, 15, 20, 30]) {
+      const at = n - m * MIN;
+      if (at <= pauseAt || at > until.at - MIN || clockMinute(at) === clockMinute(pauseAt)) continue;
+      chips.push({ id: `until-${m}`, at, line1: `${m} min ago`, line2: formatTimeNear(at, pauseAt, tz) });
+    }
+    chips.push({ id: "until-floor", ...floorChip });
+    return (
+      <div className="space-y-4">
+        <Title sub={`She finished at ${done}, when you tapped Done.`}>When did she go back on?</Title>
+        <div className="space-y-3">
+          {sidePicker(side, "Which side she went back on")}
+          <Grid>
+            {chips.map((c) => (
+              <TimeChip
+                key={c.id}
+                tall
+                line1={c.line1}
+                line2={c.line2}
+                ariaLabel={`${name} from ${c.id === "until-floor" ? "when she came off (no break)" : c.line1}, ${formatTime(c.at, tz)}, until ${done}`}
+                disabled={disabled}
+                busy={busy === c.id}
+                onClick={() => void run(c.id, (o) => until.commit(e, side, new Date(c.at), o), { backOn: { side, at: c.at } })}
+              />
+            ))}
+          </Grid>
+          <LinkRow
+            disabled={disabled}
+            onClick={() =>
+              openEditor({
+                id: "editor",
+                free: {
+                  title: `When did she go back on the ${name}?`,
+                  recorded: new Date(until.at),
+                  min: new Date(pauseAt),
+                  max: new Date(until.at),
+                  notes: { low: `Can't be before she came off (${formatTime(pauseAt, tz)}).`, high: `That's when she finished (${done}).` },
+                },
+                commit: (to, o) => until.commit(e, side, to, o),
+                meta: (to) => ({ backOn: { side, at: to.getTime() } }),
+              })
+            }
+          >
+            Other time…
+          </LinkRow>
+        </div>
+        <div className="border-t border-mp-line pt-2">
+          <LinkRow disabled={!!busy} onClick={() => setStillOn(true)}>
+            She&apos;s still on
+          </LinkRow>
+        </div>
+      </div>
+    );
+  }
+
+  const since: { id: string; at: number | null; line1: string; line2: string }[] = [{ id: "back-now", at: null, line1: "Now", line2: formatTimeNear(n, pauseAt, tz) }];
   for (const m of [2, 5, 10, 20]) {
     const at = n - m * MIN;
-    if (at <= pauseAt) continue;
+    // (One in the pause's own minute would show the same time as No break.)
+    if (at <= pauseAt || clockMinute(at) === clockMinute(pauseAt)) continue;
     since.push({ id: `back-${m}`, at, line1: `${m} min ago`, line2: formatTimeNear(at, pauseAt, tz) });
   }
-  // Back on since the break began: no break at all (the same words as panel A's floor chip).
-  since.push({ id: "back-floor", at: pauseAt, line1: "No break", line2: formatTimeNear(pauseAt, pauseAt, tz) });
+  since.push({ id: "back-floor", ...floorChip });
 
   const earlier: { id: string; to: number; n: number }[] = [];
   for (const m of [1, 2, 3, 5]) {
@@ -1112,6 +1474,7 @@ function BreakPanel({
     if (to < Date.parse(last.start) + MIN) continue;
     earlier.push({ id: `off-${m}`, to, n: m });
   }
+  const showCameOff = !doneAt && (!backOnly || cameOff);
 
   return (
     <div className="space-y-4">
@@ -1120,25 +1483,7 @@ function BreakPanel({
       </Title>
       <div className="space-y-3">
         <p className="text-[15px] font-medium text-mp-ink">Already back on?</p>
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Which side is she on">
-          {(["L", "R"] as Side[]).map((side) => (
-            <button
-              key={side}
-              type="button"
-              role="radio"
-              aria-checked={backSide === side}
-              disabled={disabled}
-              onClick={() => setBackSide(side)}
-              className={cx(
-                "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl text-[15px] font-semibold transition disabled:opacity-45",
-                backSide === side ? "bg-mp-ink text-mp-surface [.maple-night_&]:bg-[rgb(224_169_59/0.2)] [.maple-night_&]:text-[#E8A23F]" : "bg-mp-sunken text-mp-ink"
-              )}
-            >
-              <SideMark side={side} size={22} />
-              {SIDE_NAME[side]}
-            </button>
-          ))}
-        </div>
+        {sidePicker(backSide, "Which side is she on")}
         {backSide && (
           <>
             <Grid>
@@ -1151,7 +1496,11 @@ function BreakPanel({
                   ariaLabel={`Back on the ${SIDE_NAME[backSide]} ${c.at === null ? "now" : c.id === "back-floor" ? "since the break began (no break)" : c.line1}, at ${formatTime(c.at ?? n, tz)}`}
                   disabled={disabled}
                   busy={busy === c.id}
-                  onClick={() => void run(c.id, (o) => actions.resume(e, backSide, c.at === null ? undefined : new Date(c.at), o), { backOn: { side: backSide, at: c.at } })}
+                  onClick={() =>
+                    // "Now" goes with its time too, so the server's rule for a time applies: the other phone's Resume on that side is
+                    // "already", on the other side a 409, never a silent switch. (No "Make it" for it: now isn't a time he picked.)
+                    void run(c.id, (o) => backOn(e, backSide, new Date(c.at ?? nowFn().getTime()), o), { backOn: { side: backSide, at: c.at } })
+                  }
                 />
               ))}
             </Grid>
@@ -1167,8 +1516,8 @@ function BreakPanel({
                     max: now,
                     notes: { low: `Can't be before she came off (${formatTime(pauseAt, tz)}).`, high: "That's in the future." },
                   },
-                  commit: (to, o) => actions.resume(e, backSide, to, o),
-                  meta: { backOn: { side: backSide, at: null } },
+                  commit: (to, o) => backOn(e, backSide, to, o),
+                  meta: (to) => ({ backOn: { side: backSide, at: to.getTime() } }),
                 })
               }
             >
@@ -1177,28 +1526,39 @@ function BreakPanel({
           </>
         )}
       </div>
-      <div className="space-y-2">
-        <p className="text-[15px] font-medium text-mp-ink">Came off earlier?</p>
-        {earlier.length > 0 && (
-          <Grid>
-            {earlier.map((c) => (
-              <TimeChip
-                key={c.id}
-                line1={`${c.n} min earlier`}
-                line2={formatTimeNear(c.to, pauseAt, tz)}
-                ariaLabel={`Came off ${minutesWord(c.n)} earlier, at ${formatTime(c.to, tz)}`}
-                disabled={disabled}
-                busy={busy === c.id}
-                onClick={() => void run(c.id, (o) => actions.retime(e, { op: "move", edge: "end", ref: last.ref, to: new Date(c.to).toISOString() }, o))}
-              />
-            ))}
-          </Grid>
-        )}
-        <LinkRow disabled={disabled} onClick={() => openEditor({ id: "editor", edge: { edge: "end", ref: last.ref } })}>
-          Other time…
-        </LinkRow>
-      </div>
-      {freshTap(e, now, ["pause"]) && (
+      {showCameOff ? (
+        <div className="space-y-2">
+          <p className="text-[15px] font-medium text-mp-ink">Came off earlier?</p>
+          {earlier.length > 0 && (
+            <Grid>
+              {earlier.map((c) => (
+                <TimeChip
+                  key={c.id}
+                  line1={`${c.n} min earlier`}
+                  line2={formatTimeNear(c.to, pauseAt, tz)}
+                  ariaLabel={`Came off ${minutesWord(c.n)} earlier, at ${formatTime(c.to, tz)}`}
+                  disabled={disabled}
+                  busy={busy === c.id}
+                  onClick={() => void run(c.id, (o) => actions.retime(e, { op: "move", edge: "end", ref: last.ref, to: new Date(c.to).toISOString() }, o))}
+                />
+              ))}
+            </Grid>
+          )}
+          <LinkRow disabled={disabled} onClick={() => openEditor({ id: "editor", edge: { edge: "end", ref: last.ref } })}>
+            Other time…
+          </LinkRow>
+        </div>
+      ) : (
+        // Opened to say she's back on: when she came off is one quiet row, so its chips never sit beside the back-on ones.
+        !doneAt && (
+          <div className="border-t border-mp-line pt-2">
+            <LinkRow disabled={!!busy} onClick={() => setCameOff(true)}>
+              Fix when she came off
+            </LinkRow>
+          </div>
+        )
+      )}
+      {!backOnly && !doneAt && freshTap(e, now, ["pause"]) && (
         <QuestionRow
           question="Didn't mean to pause?"
           label={`Keep ${lastName} going`}
@@ -1207,7 +1567,15 @@ function BreakPanel({
           onClick={() => void run("undo", (o) => actions.undoTap(e, o))}
         />
       )}
-      <Caption>Done in the dock ends the feed at {formatTimeNear(pauseAt, pauseAt, tz)}.</Caption>
+      {doneAt ? (
+        <div className="border-t border-mp-line pt-2">
+          <LinkRow disabled={!!busy} onClick={() => setStillOn(false)}>
+            She finished at {formatTime(doneAt, tz)}
+          </LinkRow>
+        </div>
+      ) : (
+        !backOnly && <Caption>Done in the dock ends the feed at {formatTimeNear(pauseAt, pauseAt, tz)}.</Caption>
+      )}
     </div>
   );
 }

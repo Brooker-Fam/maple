@@ -191,9 +191,12 @@ export function PartRows({
   let earlier: ReactNode = null;
   if (folded) {
     const hidden = parts.slice(0, -1);
-    const t = partTotals(hidden).min;
+    const totals = partTotals(hidden);
+    const t = totals.min;
     const has = (s: Side) => hidden.some((p) => p.kind === "side" && p.side === s);
-    const bits = [has("L") ? `L ${minutesText(t.left)}` : "", has("R") ? `R ${minutesText(t.right)}` : ""].filter(Boolean);
+    // A folded break still shows ("· break 18 min"), so the fold never hides that she was off.
+    const brk = totals.breakCount ? `${totals.breakCount > 1 ? `${totals.breakCount} breaks` : "break"} ${minutesText(t.breaks)}` : "";
+    const bits = [has("L") ? `L ${minutesText(t.left)}` : "", has("R") ? `R ${minutesText(t.right)}` : "", brk].filter(Boolean);
     const text = ["Earlier", ...bits, `from ${formatTime(hidden[0].start, tz)}`].join(" · ");
     earlier = readOnly ? (
       <div className={cx("flex min-h-[44px] items-center gap-2 text-[13px] text-mp-ink-2", card && NIGHT_TEXT)}>
@@ -207,7 +210,7 @@ export function PartRows({
         aria-label={`${text}. Show every part`}
         className={cx("-mx-2 flex min-h-[44px] w-[calc(100%+16px)] items-center gap-2 rounded-xl px-2 text-left text-[13px] text-mp-ink-2 active:bg-mp-ink/5", card && NIGHT_TEXT)}
       >
-        <span className="min-w-0 flex-1 truncate">{text}</span>
+        <span className="line-clamp-2 min-w-0 flex-1 leading-[17px]">{text}</span>
         <Icon name="chevron-down" size={16} className={cx("shrink-0 text-mp-ink-3", card && NIGHT_DIM)} />
       </button>
     );
@@ -276,9 +279,13 @@ export function timerNumbers(e: Entry, now: Date) {
     const current = paused
       ? { kind: "break" as const, side, since: last.start, sec: last.sec, min: last.min }
       : { kind: "side" as const, side, since: lastSide?.start ?? e.started_at, sec: lastSide?.sec ?? wallSec, min: lastSide?.min ?? spanMinutes(e.started_at, now) };
+    // The total on screen: the closed sides in the rows' whole minutes plus the live side's clock (nothing while
+    // paused), so the rows and the clock above it add up to it, and so does the Done toast's minutes.
+    const closedMin = sides.reduce((a, p) => a + (p.end === null ? 0 : p.min), 0);
     return {
+      /** Exact seconds nursing (stats, logic); `total` is the one to show. */
       elapsed: t.nursing,
-      total: t.nursing,
+      total: closedMin * 60 + (paused ? 0 : current.sec),
       wallSec,
       left: t.left,
       right: t.right,
@@ -355,13 +362,14 @@ export function LiveBlock({
     setInline(room < 104);
   }, [showTotal, clockText, compact]);
 
-  const aria = `${what}, ${clockAloud(n.current.sec)}, since ${since}.${showTotal ? ` Total nursing ${minutesAloud(Math.floor(n.total / 60))}.` : ""}${readOnly ? "" : " Fix times."}`;
+  const aria = `${what}, ${clockAloud(n.current.sec)}, since ${since}.${showTotal ? ` Total nursing ${clockAloud(n.total)}.` : ""}${readOnly ? "" : " Fix times."}`;
   const body = (
     <>
       <span className="flex min-h-[24px] items-center gap-2">
         {isFeed && (paused ? <BreakMark open size={24} /> : <SideMark side={n.current.side ?? "L"} size={24} />)}
         <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-mp-ink">
-          {what} · since {since}
+          {/* The card's title already names a nap or tummy time ("Asleep"), so only a feed says which part this is. */}
+          {isFeed ? `${what} · since ${since}` : `Since ${since}`}
         </span>
         {!readOnly && <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />}
       </span>
@@ -557,7 +565,7 @@ type MomentEditorProps = {
 
 /**
  * The editor for one moment: its question ("When did she go back on the
- * Right?"), "Recorded now: 4:25 PM", a TimeScrubber spelled in words and
+ * Right?"), "Logged as 4:25 PM" (a recorded moment), a TimeScrubber spelled in words and
  * bounded by the engine (the neighbouring moments), a preview of what the
  * change does ("Break 15 → 10 min · Right 5 min longer · Left unchanged"),
  * and the limit it stops at. Keyed by the moment and its recorded value, so
@@ -594,13 +602,25 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
     const sides = feedParts(entry.data, ctx).filter((p): p is SidePart => p.kind === "side");
     const i = edge.ref ? sides.findIndex((s) => s.side === edge.ref!.side && Math.abs(Date.parse(s.start) - Date.parse(edge.ref!.start)) <= 1500) : edge.edge === "start" ? 0 : sides.length - 1;
     const side = edge.edge === "end" && b.moment === "switch" ? sides[i + 1]?.side : sides[i]?.side;
+    // A start moved later eats into its own side: it keeps a minute, as an end moved earlier does (uiMin),
+    // unless it's already shorter. A running side has no end to keep a minute before (the engine's own limit).
+    const shrinks = edge.edge === "start" ? sides[i] : b.moment === "switch" ? sides[i + 1] : undefined;
+    const ceiling = shrinks?.end ? Date.parse(shrinks.end) - 60_000 : null;
+    const soft = ceiling !== null && ceiling >= b.recorded.getTime() && ceiling < b.max.getTime();
+    // Where a minute stops it, the note says so ("Can't be after Left ended (6:24 AM)" read wrong at 6:23).
+    const shortest = (p: SidePart | undefined) => (p ? `${SIDE_NAME[p.side]} can't be shorter than a minute.` : undefined);
+    const notes = {
+      low: b.uiMin.getTime() > b.min.getTime() + 1000 ? shortest(edge.edge === "start" ? sides[i - 1] : sides[i]) : undefined,
+      high: soft ? shortest(shrinks) : undefined,
+    };
     return {
       keyBase: `${edge.ref?.side ?? ""}|${edge.ref?.start ?? ""}|${edge.edge}|${b.moment}`,
       title: momentQuestion(b.moment, side ?? "L"),
       recorded: b.recorded,
       min: b.uiMin,
-      max: b.max,
+      max: soft ? new Date(ceiling) : b.max,
       edge,
+      notes,
     };
   } catch {
     return null;
@@ -608,6 +628,8 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
 }
 
 const sameMinute = (a: Date, b: Date) => Math.floor(a.getTime() / 60_000) === Math.floor(b.getTime() / 60_000);
+/** The engine's "same moment" slack. */
+const NEAR_MS = 1500;
 
 function MomentEditorInner({
   entry,
@@ -643,12 +665,14 @@ function MomentEditorInner({
       const moved = moveEdge(entry.data, { ...info.edge, to: new Date(draftMs) }, ctx);
       const after = feedParts(moved.data as FeedData, { ...ctx, endedAt: moved.endedAt, pausedAtStop: moved.data.paused_at_stop === true });
       let text = describeChange(feedParts(entry.data, ctx), after);
-      // A feed start moved back past the end of the feed before this one: allowed, but worth a word.
-      const earlier = Date.parse(moved.startedAt) < Date.parse(entry.started_at);
+      // A feed start moved back past the end of the feed before this one: allowed, but worth a word. Only for the
+      // feed start, and with the engine's 1.5 s slack (a stored started_at can sit a moment off its first side).
+      const to = Date.parse(moved.startedAt);
+      const earlier = moved.moment === "feed_start" && to < Date.parse(entry.started_at) - NEAR_MS;
       const prev = earlier
         ? state?.entries.find((x) => x.kind === "feed" && x.id !== entry.id && !x.active && x.ended_at && Date.parse(x.started_at) < Date.parse(entry.started_at))
         : undefined;
-      if (prev?.ended_at && Date.parse(moved.startedAt) < Date.parse(prev.ended_at)) text += ` · overlaps the ${formatTimeNear(prev.started_at, prev.started_at, tz)} feed`;
+      if (prev?.ended_at && to < Date.parse(prev.ended_at) - NEAR_MS) text += ` · overlaps the ${formatTimeNear(prev.started_at, prev.started_at, tz)} feed`;
       return text;
     } catch (err) {
       return err instanceof FeedEditError ? feedEditCopy(err, "ui", tz) : null;
@@ -657,14 +681,18 @@ function MomentEditorInner({
 
   // The limit line, from the engine's own copy for one step past the limit.
   const limitNote = (side: "low" | "high"): string | null => {
-    if (info.notes) return info.notes[side] ?? null;
+    const own = info.notes?.[side];
+    if (own) return own;
     if (!info.edge || entry.kind !== "feed") return null;
     const to = side === "low" ? info.min.getTime() - 60_000 : info.max.getTime() + 60_000;
     try {
       moveEdge(entry.data, { ...info.edge, to: new Date(to) }, feedCtx(entry, now()));
       return null;
     } catch (err) {
-      return err instanceof FeedEditError ? feedEditCopy(err, "ui", tz) : null;
+      if (!(err instanceof FeedEditError)) return null;
+      // At the floor already (the low note only shows there): "For no break, pick 5:15" would ask for what's picked.
+      if (side === "low" && err.code === "before_break" && err.params.t) return `Can't be before she came off (${formatTime(err.params.t, tz)}), so this is no break.`;
+      return feedEditCopy(err, "ui", tz);
     }
   };
   const atLow = draftMs <= info.min.getTime() + 999;
@@ -676,7 +704,8 @@ function MomentEditorInner({
     <div className="space-y-3">
       <div>
         <p className="text-[17px] leading-snug font-semibold text-mp-ink">{info.title}</p>
-        <p className="mt-0.5 text-[13px] text-mp-ink-2">Recorded now: {formatTime(info.recorded, tz)}</p>
+        {/* What's logged for this moment ("Recorded now" read as "recorded this minute"); a new moment has nothing logged yet. */}
+        {info.edge && <p className="mt-0.5 text-[13px] text-mp-ink-2">Logged as {formatTime(info.recorded, tz)}</p>}
         {changed && (
           <p role="status" className="mt-2 rounded-xl bg-mp-sunken px-3 py-2 text-[13px] text-mp-ink-2">
             {who
@@ -740,4 +769,28 @@ export function useCompact(): boolean {
     return () => window.removeEventListener("resize", check);
   }, []);
   return compact;
+}
+
+/**
+ * "Now", re-read just after each clock minute (server-corrected), for lists
+ * that show a running feed's minutes: those count whole clock minutes
+ * (feedMinutes), so they flip on the minute, all together, instead of up to
+ * a minute late on a 30 or 60 s tick.
+ */
+export function useClockMinute(): Date {
+  const { now } = useMaple();
+  const [t, setT] = useState(() => now());
+  useEffect(() => {
+    let id: ReturnType<typeof setTimeout>;
+    const arm = () => {
+      // 50 ms past the minute, so the read lands in the new one.
+      id = setTimeout(() => {
+        setT(now());
+        arm();
+      }, 60_000 - (now().getTime() % 60_000) + 50);
+    };
+    arm();
+    return () => clearTimeout(id);
+  }, [now]);
+  return t;
 }

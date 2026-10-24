@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import type { Entry, EntryKind } from "@/lib/maple/types";
+import { useHoldTimerToasts } from "../useMaple";
 import ActivitySheet from "./ActivitySheet";
 import DiaperSheet from "./DiaperSheet";
 import FeedSheet from "./FeedSheet";
@@ -75,6 +76,11 @@ export function SheetProvider({ children }: { children: ReactNode }) {
     setCurrent(t);
   }, []);
   const close = useCallback(() => setCurrent(null), []);
+  // Timer toasts wait while any sheet is open: their chips ("5 min earlier", Undo) would sit over the sheet's
+  // own times and Save. The one showing closes; one that lands meanwhile (a tap still out when the sheet
+  // opened) shows on close if it's under 2 minutes old and its feed hasn't changed since (useMaple).
+  // Holds are counted, so Fix times' own hold still works.
+  useHoldTimerToasts(!!current);
   const value = useMemo(() => ({ open, close, current }), [open, close, current]);
   const shown = current ?? last;
   // A preset with `fix` opens Fix times for that entry instead of its form.

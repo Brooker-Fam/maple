@@ -1,7 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion, useDragControls } from "framer-motion";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   addDays,
   dayKey,
@@ -16,7 +17,7 @@ import {
 import type { Member } from "@/lib/maple/types";
 import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
-import { useMaple, useNow } from "./useMaple";
+import { useMaple, useNow, type Toast } from "./useMaple";
 
 /**
  * Small UI kit for Maple's Log. Big tap targets (≥ 44px), quiet surfaces,
@@ -713,9 +714,10 @@ export function TextArea({ value, onChange, placeholder, rows = 2 }: { value: st
 /**
  * Make everything outside `el` inert (the app, the dock, the tab bar), so
  * Tab and Switch Control stay in an open sheet and can't reach Done in the
- * dock behind it. Toasts stay live: they draw above sheets, and an inert one
- * would let a tap fall through to whatever is under it. Returns the undo,
- * which clears only what this call set.
+ * dock behind it. The toast host stays live (a toast leaving as the sheet
+ * opens must not let a tap fall through it); while a sheet is open, toasts
+ * draw inside it (sheetSlots). Returns the undo, which clears only what this
+ * call set.
  */
 function inertOutside(el: HTMLElement): () => void {
   const set: HTMLElement[] = [];
@@ -736,6 +738,30 @@ function inertOutside(el: HTMLElement): () => void {
   return () => {
     for (const n of set) n.inert = false;
   };
+}
+
+/**
+ * The open sheets' toast slots, newest last. While a sheet is open ToastHost
+ * draws toasts in the top one, between its body and its footer, so a toast
+ * takes room instead of sitting over the sheet's times or its Save (timer
+ * toasts wait meanwhile, see SheetProvider; an error still shows).
+ */
+const sheetSlots: HTMLElement[] = [];
+const slotSubs = new Set<() => void>();
+const subscribeSlots = (cb: () => void) => {
+  slotSubs.add(cb);
+  return () => {
+    slotSubs.delete(cb);
+  };
+};
+const topSlot = () => sheetSlots[sheetSlots.length - 1] ?? null;
+const noSlot = () => null;
+function setSlot(el: HTMLElement, on: boolean) {
+  const i = sheetSlots.indexOf(el);
+  if (on === i >= 0) return;
+  if (on) sheetSlots.push(el);
+  else sheetSlots.splice(i, 1);
+  for (const cb of slotSubs) cb();
 }
 
 export function Sheet({
@@ -764,6 +790,7 @@ export function Sheet({
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const slotRef = useRef<HTMLDivElement>(null);
   const drag = useDragControls();
   const night = useNightActive();
   const still = calm && night;
@@ -778,6 +805,13 @@ export function Sheet({
       if (calm && opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, [open, calm]);
+  // Toasts come in here while it's open (and go back above the dock as it starts to close).
+  useEffect(() => {
+    const el = slotRef.current;
+    if (!open || !el) return;
+    setSlot(el, true);
+    return () => setSlot(el, false);
+  }, [open]);
   // The latest onClose without re-running the effect: a parent ticking every second (the dock) would otherwise pull focus back to the top each time.
   const closeRef = useRef(onClose);
   useEffect(() => {
@@ -848,6 +882,8 @@ export function Sheet({
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 pb-4">
               {children}
             </div>
+            {/* Toasts while it's open (ToastHost portals them here): above the footer, never over it. */}
+            <div ref={slotRef} className="shrink-0 px-5" aria-live="polite" />
             {footer && (
               <div className="shrink-0 border-t border-mp-line px-5 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
                 {footer}
@@ -942,80 +978,127 @@ export function EmptyState({
  * covers a button you're about to tap. A toast with chips puts them and its
  * trailing button on one row under the text, so a timer toast stays two
  * lines tall at 375 px and doesn't climb over the card's live clock.
+ *
+ * While a sheet is open, toasts draw inside it, above its footer (sheetSlots):
+ * the ones raised meanwhile, and any error. A confirmation already up when it
+ * opened ("Saved", a diaper's color chips) is about something else, so it
+ * waits outside and comes back above the dock if it hasn't timed out.
  */
 export function ToastHost() {
   const { toasts, dismissToast } = useMaple();
+  const night = useNightActive();
+  const slot = useSyncExternalStore(subscribeSlots, topSlot, noSlot);
+  // Which toasts were already up when this sheet opened (React's "adjust state while rendering" pattern).
+  const [opened, setOpened] = useState<{ slot: HTMLElement | null; before: ReadonlySet<number> }>({ slot: null, before: new Set() });
+  if (opened.slot !== slot) setOpened({ slot, before: new Set(toasts.map((t) => t.id)) });
+  const inSheet = slot ? toasts.filter((t) => t.tone === "error" || !opened.before.has(t.id)) : [];
   return (
-    <div
-      data-maple-toasts
-      className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--maple-dock-h,0px)+72px+env(safe-area-inset-bottom))] z-[90] flex flex-col items-center gap-2 px-4"
-      aria-live="polite"
+    <>
+      <div
+        data-maple-toasts
+        className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--maple-dock-h,0px)+72px+env(safe-area-inset-bottom))] z-[90] flex flex-col items-center gap-2 px-4"
+        aria-live="polite"
+      >
+        <AnimatePresence>
+          {!slot &&
+            toasts.map((t) => (
+              <motion.div
+                key={t.id}
+                initial={{ opacity: 0, y: 16, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8 }}
+                className={cx("pointer-events-auto w-full max-w-md shadow-[0_8px_30px_rgba(0,0,0,0.18)]", toastLook(t))}
+              >
+                <ToastBody t={t} dismiss={dismissToast} />
+              </motion.div>
+            ))}
+        </AnimatePresence>
+      </div>
+      {slot &&
+        createPortal(
+          <AnimatePresence initial={false}>
+            {inSheet.map((t) => (
+              // It opens room for itself (at night it just fades in, nothing slides).
+              <motion.div
+                key={t.id}
+                initial={night ? { opacity: 0 } : { opacity: 0, height: 0 }}
+                animate={night ? { opacity: 1 } : { opacity: 1, height: "auto" }}
+                exit={night ? { opacity: 0 } : { opacity: 0, height: 0 }}
+                transition={{ duration: 0.18 }}
+                className="overflow-hidden"
+              >
+                <div className="pb-3">
+                  <div className={toastLook(t)}>
+                    <ToastBody t={t} dismiss={dismissToast} />
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>,
+          slot
+        )}
+    </>
+  );
+}
+
+const toastLook = (t: Toast) =>
+  cx(
+    "rounded-2xl px-4 py-3 text-[15px] [.maple-night_&]:ring-1 [.maple-night_&]:ring-mp-line",
+    t.tone === "error" ? "bg-[#8A2F1C] text-white [.maple-night_&]:bg-[#2A140C] [.maple-night_&]:text-[#F0A07A]" : "bg-mp-toast text-mp-on-toast"
+  );
+
+/** A toast's text, chips and trailing button (Undo, "Back to 4:25"). */
+function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) {
+  const undo = t.undo && (
+    <button
+      type="button"
+      onClick={() => {
+        t.undo?.();
+        dismiss(t.id);
+      }}
+      className={cx("min-h-[44px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold whitespace-nowrap", !!t.actions?.length && "ml-auto")}
     >
-      <AnimatePresence>
-        {toasts.map((t) => {
-          const undo = t.undo && (
+      {t.undoLabel ?? "Undo"}
+    </button>
+  );
+  return (
+    <>
+      <div className="flex items-center gap-3">
+        <Icon name={t.tone === "error" ? "triangle-alert" : t.tone === "info" ? "info" : "circle-check"} size={20} className="shrink-0 self-start opacity-80" />
+        <span className="flex-1">{t.text}</span>
+        {!t.actions?.length && undo}
+      </div>
+      {t.actions?.length ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {t.actions.map((a) => (
             <button
+              key={a.label}
               type="button"
+              aria-label={a.ariaLabel ?? (a.sub ? `${a.label}, ${a.sub}` : a.label)}
               onClick={() => {
-                t.undo?.();
-                dismissToast(t.id);
+                a.onClick();
+                dismiss(t.id);
               }}
-              className={cx("min-h-[44px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold whitespace-nowrap", !!t.actions?.length && "ml-auto")}
-            >
-              {t.undoLabel ?? "Undo"}
-            </button>
-          );
-          return (
-            <motion.div
-              key={t.id}
-              initial={{ opacity: 0, y: 16, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8 }}
               className={cx(
-                "pointer-events-auto w-full max-w-md rounded-2xl px-4 py-3 text-[15px] shadow-[0_8px_30px_rgba(0,0,0,0.18)] [.maple-night_&]:ring-1 [.maple-night_&]:ring-mp-line",
-                t.tone === "error" ? "bg-[#8A2F1C] text-white [.maple-night_&]:bg-[#2A140C] [.maple-night_&]:text-[#F0A07A]" : "bg-mp-toast text-mp-on-toast"
+                "inline-flex min-h-[44px] items-center gap-1.5 bg-current/15 font-semibold",
+                // A chip with a second line (the time it produces) is a two-line tile.
+                a.sub ? "min-w-[96px] flex-col items-start justify-center rounded-xl px-3 py-1 text-left" : "rounded-full px-3 text-xs"
               )}
             >
-              <div className="flex items-center gap-3">
-                <Icon name={t.tone === "error" ? "triangle-alert" : t.tone === "info" ? "info" : "circle-check"} size={20} className="shrink-0 self-start opacity-80" />
-                <span className="flex-1">{t.text}</span>
-                {!t.actions?.length && undo}
-              </div>
-              {t.actions?.length ? (
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  {t.actions.map((a) => (
-                    <button
-                      key={a.label}
-                      type="button"
-                      aria-label={a.ariaLabel ?? (a.sub ? `${a.label}, ${a.sub}` : a.label)}
-                      onClick={() => {
-                        a.onClick();
-                        dismissToast(t.id);
-                      }}
-                      className={cx(
-                        "inline-flex min-h-[44px] items-center gap-1.5 bg-current/15 font-semibold",
-                        // A chip with a second line (the time it produces) is a two-line tile.
-                        a.sub ? "min-w-[96px] flex-col items-start justify-center rounded-xl px-3 py-1 text-left" : "rounded-full px-3 text-xs"
-                      )}
-                    >
-                      {a.color && <span className="mp-kind-fill h-4 w-4 rounded-full ring-1 ring-current/40" style={{ backgroundColor: a.color }} aria-hidden />}
-                      {a.sub ? (
-                        <>
-                          <span className="text-[13px] leading-tight">{a.label}</span>
-                          <span className="text-[12px] leading-tight font-medium tabular-nums opacity-80">{a.sub}</span>
-                        </>
-                      ) : (
-                        a.label
-                      )}
-                    </button>
-                  ))}
-                  {undo}
-                </div>
-              ) : null}
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
-    </div>
+              {a.color && <span className="mp-kind-fill h-4 w-4 rounded-full ring-1 ring-current/40" style={{ backgroundColor: a.color }} aria-hidden />}
+              {a.sub ? (
+                <>
+                  <span className="text-[13px] leading-tight">{a.label}</span>
+                  <span className="text-[12px] leading-tight font-medium tabular-nums opacity-80">{a.sub}</span>
+                </>
+              ) : (
+                a.label
+              )}
+            </button>
+          ))}
+          {undo}
+        </div>
+      ) : null}
+    </>
   );
 }
