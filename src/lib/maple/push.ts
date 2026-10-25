@@ -208,11 +208,17 @@ export async function saveSub(
 
 /**
  * The browser replaced this phone's subscription (the worker's
- * pushsubscriptionchange): the new one takes over the old one's settings,
- * label, id and receipt token, and the old row goes. Null when the old one
- * isn't this member's.
+ * pushsubscriptionchange, or turning a stopped phone back on): the new one
+ * takes over the old one's settings, label, id and receipt token, and the
+ * old row goes. `deviceId` fills in an id the old row never had. Null when
+ * the old one isn't this member's.
  */
-export async function moveSub(member: string, oldEndpoint: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSub | null> {
+export async function moveSub(
+  member: string,
+  oldEndpoint: string,
+  sub: { endpoint: string; p256dh: string; auth: string },
+  opts: { deviceId?: string | null } = {}
+): Promise<PushSub | null> {
   const old = await subFor(member, oldEndpoint);
   if (!old) return null;
   if (old.endpoint !== sub.endpoint) await q(`DELETE FROM maple_push_subs WHERE id = $1`, [old.id]);
@@ -223,9 +229,14 @@ export async function moveSub(member: string, oldEndpoint: string, sub: { endpoi
        device_id = COALESCE($7, maple_push_subs.device_id), receipt_token = COALESCE($8, maple_push_subs.receipt_token),
        failures = 0, needs_resubscribe = FALSE, updated_at = NOW()
      RETURNING *`,
-    [member, sub.endpoint, sub.p256dh, sub.auth, JSON.stringify(old.prefs), old.device, old.device_id, old.receipt_token ?? randomBytes(16).toString("hex")]
+    [member, sub.endpoint, sub.p256dh, sub.auth, JSON.stringify(old.prefs), old.device, old.device_id ?? opts.deviceId ?? null, old.receipt_token ?? randomBytes(16).toString("hex")]
   );
   return rowToSub(rows[0]);
+}
+
+/** A phone that was on before per-install ids existed: remember this one (only when it has none). */
+export async function fillDeviceId(subId: number, deviceId: string): Promise<void> {
+  await q(`UPDATE maple_push_subs SET device_id = $2 WHERE id = $1 AND device_id IS NULL`, [subId, deviceId]);
 }
 
 /** This member's subscription for an endpoint (another member's phone reads as none). */
@@ -283,8 +294,10 @@ const topicFor = (subId: number, tag: string) => createHash("sha256").update(`${
 
 /**
  * Send one notice to one phone. `key` rides along for the receipt. A phone
- * that's gone (404/410) is forgotten; a 403 about keys marks it for turning
- * on again; anything else counts a failure (and the claim is given back).
+ * that's gone (404/410) or whose keys stopped matching (a 403 about keys) is
+ * marked for turning on again, keeping its settings for when it does (rows
+ * left that way for 30 days go); anything else counts a failure (and the
+ * claim is given back).
  */
 export async function deliver(sub: PushSub, n: Notice, opts: { key: string; ttlS: number; urgency?: "high" | "normal" }): Promise<Outcome> {
   const k = vapidKeys();
@@ -319,11 +332,12 @@ async function refused(sub: PushSub, err: unknown): Promise<Outcome> {
   const e = err as { statusCode?: number; body?: unknown };
   const status = e.statusCode;
   if (status === 404 || status === 410) {
-    await q(`DELETE FROM maple_push_subs WHERE id = $1`, [sub.id]);
+    // Kept, not deleted: turning the phone back on carries over its settings (hidden names, muted medicines).
+    await q(`UPDATE maple_push_subs SET needs_resubscribe = TRUE, updated_at = NOW() WHERE id = $1`, [sub.id]);
     return "gone";
   }
   if (status === 403 && keyMismatch(e.body)) {
-    await q(`UPDATE maple_push_subs SET needs_resubscribe = TRUE, failures = failures + 1 WHERE id = $1`, [sub.id]);
+    await q(`UPDATE maple_push_subs SET needs_resubscribe = TRUE, failures = failures + 1, updated_at = NOW() WHERE id = $1`, [sub.id]);
     void captureServerException(new Error("push send 403 keys"), { route: "maple push" });
     return "stopped";
   }
@@ -580,6 +594,15 @@ export async function runPushTick(
     }
   }
 
+  // "Logged" and nursing notices aren't worked out from the plans, so one the push service refused gets sent again from here.
+  try {
+    const again = await retryWriteNotices();
+    sent += again.sent;
+    failed += again.failed;
+  } catch (err) {
+    void captureServerException(new Error(errCode(err)), { route: "maple push retry" });
+  }
+
   if (opts.schedule) {
     try {
       await scheduleWakeups(now, pre);
@@ -587,14 +610,52 @@ export async function runPushTick(
       void captureServerException(new Error(errCode(err)), { route: "maple push schedule" });
     }
   }
-  // A send the push service refused for now: try again in a minute (the claim was given back).
-  if (failed) await scheduleWake(t + MIN, "retry", 0).catch(() => false);
-  // Keep the log short (the gate, tick times, the net and the floor stay).
+  // A send the push service refused for now: try again in a minute (the claim was given back). Timed from
+  // the end of the run, so every claim it made is past claim()'s 50 seconds by then.
+  if (failed) await retrySoon();
+  // Keep the log short (the gate, tick times, the net and the floor stay), and let go of phones stopped for a month.
   await q(
     `DELETE FROM maple_push_sent WHERE key <> 'tick' AND key NOT LIKE 'tick:%' AND key NOT LIKE 'net:%' AND key NOT LIKE 'floor:%'
        AND sent_at < NOW() - INTERVAL '3 days'`
   );
+  await q(`DELETE FROM maple_push_subs WHERE needs_resubscribe AND updated_at < NOW() - INTERVAL '30 days'`);
   return failed ? { sent, failed } : { sent };
+}
+
+/** Publish a retry wake a minute from now (QStash only; otherwise the next tick of any kind retries). */
+export async function retrySoon(): Promise<void> {
+  await scheduleWake(Date.now() + MIN, "retry", 0).catch(() => false);
+}
+
+/** "Logged" and nursing sends that failed and still have tries left: send them again as the dose or feed is now. */
+async function retryWriteNotices(): Promise<{ sent: number; failed: number }> {
+  const rows = await q(
+    `SELECT key FROM maple_push_sent WHERE state = 'failed' AND attempts < ${MAX_ATTEMPTS} AND sent_at > NOW() - INTERVAL '1 hour'
+       AND (key LIKE 's%|log:%' OR key LIKE 's%|nurse:%')`
+  );
+  const doses = new Set<number>();
+  const feeds = new Set<number>();
+  for (const r of rows) {
+    const what = String(r.key).split("|")[1] ?? "";
+    const log = /^log:(\d+)$/.exec(what);
+    const nurse = /^nurse:(\d+):/.exec(what);
+    if (log) doses.add(Number(log[1]));
+    else if (nurse) feeds.add(Number(nurse[1]));
+  }
+  if (!doses.size && !feeds.size) return { sent: 0, failed: 0 };
+  const { notifyDoseLogged, notifyNursing } = await import("./notify");
+  const out = { sent: 0, failed: 0 };
+  for (const id of doses) {
+    const r = await notifyDoseLogged(id, null, new Date(), { retry: false });
+    out.sent += r.sent;
+    out.failed += r.failed;
+  }
+  for (const id of feeds) {
+    const r = await notifyNursing(id, new Date(), { retry: false });
+    out.sent += r.sent;
+    out.failed += r.failed;
+  }
+  return out;
 }
 
 /** A Postgres code or the error's name, never its message (which can hold row data). */

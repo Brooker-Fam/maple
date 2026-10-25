@@ -7,6 +7,7 @@ import DoctorSheet from "../DoctorSheet";
 import HelpSheet from "../HelpSheet";
 import { MAPLE_OPEN_EVENT, type MapleOpenEvent } from "../notify";
 import { useMaple } from "../useMaple";
+import { OnTop } from "./CrisisSheet";
 import DoseSheet from "./DoseSheet";
 import { MomTempSheet } from "./MomTempSheet";
 import PlanPicker from "./PlanPicker";
@@ -139,6 +140,8 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
     (link: Link) => {
       go("care");
       if (link.plan == null) return;
+      // A crisis or check-in sheet that holds its taps stays as it is: her tab is underneath for after.
+      if (document.querySelector("[data-locked]")) return;
       const on = care?.plans.some((v) => v.plan.id === link.plan);
       if (on) openDose(link.plan);
       else toast("That medicine isn't on her list anymore.", { tone: "info" });
@@ -193,7 +196,12 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
           <WarningSignsSheet open={open.signs} onClose={closeSigns} />
           <PlanPicker open={open.picker} onClose={closePicker} />
           {care && <MomTempSheet open={open.temp} onClose={closeTemp} care={care} />}
-          {dose && <DoseSheet key={dose.seq} open={doseOpen} onClose={closeDose} planId={dose.planId} ask={dose.ask} name={dose.name} start={dose.start} />}
+          {/* At the end of <body>: a notice tapped while a check-in (itself on top) is open opens this over it, not under it. */}
+          {dose && (
+            <OnTop>
+              <DoseSheet key={dose.seq} open={doseOpen} onClose={closeDose} planId={dose.planId} ask={dose.ask} name={dose.name} start={dose.start} />
+            </OnTop>
+          )}
         </>
       )}
     </CareNavContext.Provider>

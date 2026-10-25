@@ -915,10 +915,50 @@ export type PlanMatch =
   | { kind: "none"; plans: CarePlan[] };
 
 /**
+ * Words a name can carry beyond her plan's and still be that plan ("Tylenol
+ * Extra Strength", "Advil Liqui-Gels", "my ibuprofen"): how strong, what
+ * form, and filler, plus a strength's bare number ("Ibuprofen 600"). Any
+ * other extra word makes it another product ("Tylenol PM", "Tylenol 3",
+ * "with codeine", "sinus", a second ingredient), which never counts toward
+ * the plan: it's logged as a one-time medicine, with its own notes.
+ */
+const SAME_PRODUCT_WORDS = new Set(
+  (
+    "extra strength regular maximum max rapid fast quick acting release extended er xr sr ib sodium " +
+    "liqui liquid gels gel gelcaps gelcap geltabs caplets caplet tablets tablet tabs tab capsules capsule pills pill softgels softgel chewable chewables " +
+    "brand generic otc oral her my his the a an some of dose"
+  ).split(" ")
+);
+
+/** A bare number that's a strength ("Ibuprofen 600"), not a product's number ("Tylenol 3"). */
+const strengthNumber = (w: string) => /^\d+(?:\.\d+)?$/.test(w) && Number(w) >= 10;
+
+/** A normalized name without SAME_PRODUCT_WORDS or a bare strength: "Extra Strength Tylenol" → "tylenol". */
+export function bareName(name: string): string {
+  return normName(name)
+    .split(" ")
+    .filter((w) => w && !SAME_PRODUCT_WORDS.has(w) && !strengthNumber(w))
+    .join(" ");
+}
+
+/** Whether `long` is `short` plus only SAME_PRODUCT_WORDS (both normalized, `long` containing `short` as whole words). */
+function sameProduct(long: string, short: string): boolean {
+  const have = new Set(short.split(" "));
+  return long
+    .split(" ")
+    .filter((w) => !have.has(w))
+    .every((w) => SAME_PRODUCT_WORDS.has(w) || strengthNumber(w));
+}
+
+/**
  * A normalized exact match on the name or an Also called name, else
- * whole-word containment either way. Private plans only when the caller is
- * her in the app or her own Siri token (`includePrivate`). A "p12345678" id
- * matches that plan.
+ * whole-word containment either way when the extra words only say its
+ * strength or form (sameProduct). A name that's part of a longer plan name
+ * with other words ("tylenol" for Tylenol PM, "vitamin" for Vitamin D3) asks
+ * which; one with words of its own beyond the plan's ("Tylenol 3" for
+ * Tylenol) is none, a one-time medicine. Private plans only when the caller
+ * is her in the app or her own Siri token (`includePrivate`). A "p12345678"
+ * id matches that plan.
  */
 export function matchPlan(query: string, plans: CarePlan[], opts: { includePrivate: boolean }): PlanMatch {
   const pool = plans.filter((p) => opts.includePrivate || !p.private);
@@ -933,9 +973,13 @@ export function matchPlan(query: string, plans: CarePlan[], opts: { includePriva
   if (exact.length === 1) return { kind: "match", plan: exact[0] };
   if (exact.length > 1) return { kind: "ambiguous", plans: exact };
   const wrap = (s: string) => ` ${s} `;
-  const part = pool.filter((p) => planNames(p).some((n) => wrap(q).includes(wrap(n)) || wrap(n).includes(wrap(q))));
+  const part = pool.filter((p) =>
+    planNames(p).some((n) => (wrap(q).includes(wrap(n)) && sameProduct(q, n)) || (wrap(n).includes(wrap(q)) && sameProduct(n, q)))
+  );
   if (part.length === 1) return { kind: "match", plan: part[0] };
   if (part.length > 1) return { kind: "ambiguous", plans: part };
+  const loose = pool.filter((p) => planNames(p).some((n) => wrap(n).includes(wrap(q))));
+  if (loose.length) return { kind: "ambiguous", plans: loose };
   return { kind: "none", plans: pool };
 }
 

@@ -6,6 +6,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
 import {
   aheadOfSlot,
+  bareName,
   careTime,
   countedAs,
   forMom,
@@ -113,9 +114,14 @@ export const SAME_MEDICINE: readonly (readonly string[])[] = [
   ["simethicone", "gas x"],
 ];
 
-/** The SAME_MEDICINE names `name` is one of (exactly, after normName), or none. */
+/**
+ * The SAME_MEDICINE names `name` is one of (exactly, after normName and
+ * without strength or form words like "Extra Strength"), or none. A dose said
+ * with another strength still counts toward her plan, so its gap is kept; the
+ * reply says what it counted as.
+ */
 function sameNames(name: string): readonly string[] {
-  const k = normName(name);
+  const k = bareName(name);
   return (k && SAME_MEDICINE.find((g) => g.includes(k))) || [];
 }
 
@@ -126,7 +132,27 @@ function sameNames(name: string): readonly string[] {
  */
 export function samePlans<P extends CarePlan>(name: string, plans: P[]): P[] {
   const g = sameNames(name);
-  return g.length ? plans.filter((p) => planNames(p).some((n) => g.includes(n))) : [];
+  return g.length ? plans.filter((p) => planNames(p).some((n) => g.includes(n) || g.includes(bareName(n)))) : [];
+}
+
+/**
+ * The plan already on her list that a medicine being added is: by its name or
+ * an Also called name, or the same medicine by another name,
+ * so a discharge sheet's "Ibuprofen" never becomes a second plan beside the
+ * "Motrin" she has (each would count only its own doses).
+ */
+function alreadyOnList(m: { name?: string | null; also_called?: string | null }, have: CarePlan[]): { plan: CarePlan; same: boolean } | null {
+  const names = [m.name ?? "", ...(m.also_called ?? "").split(",")].map((n) => n.trim()).filter(Boolean);
+  for (const n of names) {
+    const k = normName(n);
+    const hit = k ? have.find((p) => planNames(p).includes(k)) : undefined;
+    if (hit) return { plan: hit, same: false };
+  }
+  for (const n of names) {
+    const same = samePlans(n, have);
+    if (same.length) return { plan: same[0], same: true };
+  }
+  return null;
 }
 
 // ── who's asking ────────────────────────────────────────────────────────
@@ -962,6 +988,10 @@ export function registerCareTools(server: McpServer) {
         stop: z.boolean().nullish().describe("True to stop it (it moves to Finished, with its history); false to take a finished one again. Needs id."),
         delete: z.boolean().nullish().describe("True to delete a plan added by mistake (its logged doses stay). Needs id."),
         restore: z.boolean().nullish().describe("True to bring back a deleted plan, with its history. Needs id."),
+        separate: z
+          .boolean()
+          .nullish()
+          .describe("Adding one that's already on her list (by name or as the same medicine): true only when the user says it's a second, separate plan."),
       },
       annotations: { ...WRITE_ANN, destructiveHint: true },
       invoking: `Updating ${MOM}'s list…`,
@@ -987,6 +1017,15 @@ export function registerCareTools(server: McpServer) {
       if (a.stop && id != null) {
         const plan = await stopCarePlan(s, id, true);
         return ok(`Stopped p${plan.id}: ${plan.name}. It moved to Finished, with its history.`, { stopped: true, id: `p${plan.id}`, name: plan.name });
+      }
+      // A medicine she already has (by name, or the same one by another name): change that one, not a second plan
+      // whose doses would be counted apart.
+      if (id == null && !a.separate) {
+        const there = alreadyOnList(a, (await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz)));
+        if (there) {
+          const what = there.same ? `the same medicine as ${there.plan.name} (p${there.plan.id})` : `already on ${s.access.self ? "your" : "her"} list as p${there.plan.id} (${there.plan.name})`;
+          throw new ToolError(`Not added: ${a.name?.trim() || "that"} is ${what}. To change it, call again with id p${there.plan.id}; only if the user says it's a second, separate plan, add it with separate: true.`);
+        }
       }
       // Show on Today is gone (her strip shows her most pressing medicine by one rule): nothing here sets it.
       const r = await savePlan(a, id, s, source);
@@ -1024,6 +1063,9 @@ export function registerCareTools(server: McpServer) {
           .min(1)
           .max(12)
           .describe("Each medicine as printed or read out, in the paper's order."),
+        read_back_confirmed: z
+          .literal(true)
+          .describe("True only after you read every medicine and every number on this list back to the user and they said yes to it."),
       },
       annotations: WRITE_ANN,
       invoking: `Adding ${MOM}'s medicines…`,
@@ -1031,19 +1073,32 @@ export function registerCareTools(server: McpServer) {
       write: true,
     },
     async (a, ctx, s) => {
+      // The schema says so too; this holds for any client that doesn't check it.
+      if (a.read_back_confirmed !== true) {
+        throw new ToolError("Nothing was saved. Read every medicine and number on the list back to the user first, then call again with read_back_confirmed: true once they say yes.");
+      }
       const source = ctx.who.via;
       const have = (await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz));
       const her = s.access.self ? "your" : "her";
       const lines: string[] = [];
       const notes: Assessment[] = [];
       const results: Record<string, unknown>[] = [];
+      let stopped = false;
       for (const m of a.medicines) {
         const name = m.name.trim();
-        // Already on her list by that exact name (or an Also called one): left as it is, never a second plan.
-        const there = have.find((p) => planNames(p).includes(normName(name)));
-        if (there) {
-          lines.push(`${name}: already on ${her} list as p${there.id} (${there.name} · ${scheduleSummary(there).replace(/^./, (c) => c.toLowerCase())}), so it was left as it is. Change it with set_mom_medicine.`);
-          results.push({ name, saved: false, reason: "on_list", id: `p${there.id}` });
+        if (stopped) {
+          lines.push(`Not saved: ${name} (Maple's Log couldn't reach its database). Calling again is safe: lines already saved are skipped.`);
+          results.push({ name, saved: false, reason: "unavailable" });
+          continue;
+        }
+        // Already on her list by that name, an Also called one, or as the same medicine by another name: left as it is, never a second plan.
+        const found = alreadyOnList(m, have);
+        if (found) {
+          const there = found.plan;
+          const sched = scheduleSummary(there).replace(/^./, (c) => c.toLowerCase());
+          const as = found.same ? `the same medicine as ${there.name} on ${her} list (p${there.id} · ${sched})` : `already on ${her} list as p${there.id} (${there.name} · ${sched})`;
+          lines.push(`${name}: ${as}, so it was left as it is. Change it with set_mom_medicine.`);
+          results.push({ name, saved: false, reason: found.same ? "same_medicine" : "on_list", id: `p${there.id}` });
           continue;
         }
         try {
@@ -1055,9 +1110,17 @@ export function registerCareTools(server: McpServer) {
         } catch (err) {
           // One line the model can fix (no unit for a limit, a count over it): the rest still save.
           const why = err instanceof ToolError ? err.message : userFacing(err) ? err.message : null;
-          if (why == null) throw err;
-          lines.push(`Not saved: ${name}: ${why.replace(/\.$/, "")}.`);
-          results.push({ name, saved: false, reason: why });
+          if (why != null) {
+            lines.push(`Not saved: ${name}: ${why.replace(/\.$/, "")}.`);
+            results.push({ name, saved: false, reason: why });
+            continue;
+          }
+          // Anything else before a line saved: nothing was saved (careToolError says so). After one: say which did.
+          if (!results.some((x) => x.saved)) throw err;
+          void captureServerException(new Error(errorCode(err)), { route: ROUTE });
+          stopped = true;
+          lines.push(`Not saved: ${name} (Maple's Log couldn't reach its database). Calling again is safe: lines already saved are skipped.`);
+          results.push({ name, saved: false, reason: "unavailable" });
         }
       }
       const saved = results.filter((r) => r.saved).length;

@@ -199,23 +199,27 @@ export function tookItLabel(care: UseCare, plan: CarePlan): string {
 }
 
 /**
- * One medicine's Took it, with the safety rules (the strip, the picker):
- * quiet while it isn't OK yet, "Logged 6:56 AM" for a minute after a save on
- * this phone, and nothing at all for a tap inside the cooldown after any
- * care save. `onAsk` opens the Dose sheet with the reason (a likely
- * duplicate); `onSaved` runs after a save (the picker closes).
+ * One medicine's Took it, with the safety rules (the strip, the picker, her
+ * tab): quiet while it isn't OK yet, "Logged 6:56 AM" for a minute after a
+ * save on this phone, and in the strip nothing at all for a tap inside the
+ * cooldown after any care save. `fixed`: a list whose rows keep their order
+ * (her tab, the picker), where a tap on another medicine just after is meant.
+ * `onAsk` opens the Dose sheet with the reason (a likely duplicate);
+ * `onSaved` runs after a save (the picker closes).
  */
 export function TookIt({
   view,
   care,
   onAsk,
   onSaved,
+  fixed,
   className,
 }: {
   view: PlanView;
   care: UseCare;
   onAsk: (ask: OneTapAsk) => void;
   onSaved?: () => void;
+  fixed?: boolean;
   className?: string;
 }) {
   const { toast } = useMaple();
@@ -227,7 +231,7 @@ export function TookIt({
     if (busy) return;
     setBusy(true);
     try {
-      const r = await care.act.tookIt(view.plan.id);
+      const r = await care.act.tookIt(view.plan.id, { cool: !fixed });
       if (r === "saved") onSaved?.();
       else if (r !== "ignored") onAsk(r.ask);
     } catch (e) {
