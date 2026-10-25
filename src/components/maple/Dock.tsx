@@ -43,7 +43,8 @@ import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMap
  * and More: Left and Right take the Bottle tile's room between them (an
  * eight-column grid, each tile two columns, the sides three), still Left then
  * Right. A start from a wide side also holds Done (column 3, under the
- * Right's right half) for the side tiles' cooldown.
+ * Right's right half) for the side tiles' cooldown, and every Done holds the
+ * wide Right that takes its place, so a late second tap can't start a feed.
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
@@ -234,6 +235,17 @@ export default function Dock() {
     fn();
   };
 
+  /**
+   * Every Done (on the breast, paused, untimed). With Bottles off the idle
+   * Right tile is wide (columns 4-6) and lands right under Done (5-6) the
+   * moment the feed stops, so it waits the side tiles' while: a late second
+   * tap on Done must not start a new feed on the Right.
+   */
+  const doneTap = (fn: () => void) => () => {
+    if (!bottles) cool("col2", SIDE_COOL_MS);
+    fn();
+  };
+
   /** This phone just started a timer: bring "Right now" to the top (no glide at night or with reduced motion). */
   const toTop = () => {
     const still = night || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -417,7 +429,7 @@ export default function Dock() {
                   inline={feedPending || askWhen}
                   accent
                   disabled={feedPending || cooling.col3}
-                  onTap={tap(() => (askWhen ? open({ kind: "feed", entry: feed, preset: fixPreset("current", "done") }) : void actions.stop(feed)))}
+                  onTap={tap(doneTap(() => (askWhen ? open({ kind: "feed", entry: feed, preset: fixPreset("current", "done") }) : void actions.stop(feed))))}
                 />
               </>
             ) : feed && feedN && nursing && both && !staleFeed(feed as Entry & { data: FeedData }, clock) ? (
@@ -457,7 +469,7 @@ export default function Dock() {
                   sub={feedPending ? "starting…" : `ends ${formatTimeNear(feedN.current.since, feedN.current.since, tz)}`}
                   aria={`Done: end the feed at ${formatTime(feedN.current.since, tz)}, when you paused`}
                   disabled={feedPending}
-                  onTap={tap(() => void actions.stop(feed))}
+                  onTap={tap(doneTap(() => void actions.stop(feed)))}
                 />
               </>
             ) : feed && feedN && nursing ? (
@@ -503,7 +515,7 @@ export default function Dock() {
                   sub={feedPending ? "starting…" : `ends ${formatTimeNear(feedN.current.since, feedN.current.since, tz)}`}
                   aria={`Done: end the feed at ${formatTime(feedN.current.since, tz)}, when you paused`}
                   disabled={feedPending}
-                  onTap={tap(() => void actions.stop(feed))}
+                  onTap={tap(doneTap(() => void actions.stop(feed)))}
                 />
               </>
             ) : feed ? (
@@ -515,7 +527,7 @@ export default function Dock() {
                   <div aria-hidden className="col-span-2" />
                 )}
                 <div aria-hidden className="col-span-2" />
-                <Tile id="done" label="Done" icon="check" aria="Done: end the feed now" accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
+                <Tile id="done" label="Done" icon="check" aria="Done: end the feed now" accent disabled={feedPending} onTap={tap(doneTap(() => void actions.stop(feed)))} />
               </>
             ) : (
               <>

@@ -1,7 +1,7 @@
 "use client";
 
 import { describeEntry } from "@/lib/maple/describe";
-import { minutesShort, nursingRuns, sideMinutesText, spanText } from "@/lib/maple/feed";
+import { minutesShort, nursingRuns, sideMinutesText, spanText, type NursingRun } from "@/lib/maple/feed";
 import { formatRelative, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
@@ -90,15 +90,20 @@ export default function EntryRow({
 }
 
 /**
- * A cluster on the Timeline: one row, "Cluster · 4 feeds", with its span,
- * nursing and sides under it ("6:02–8:40 PM · nursed 1h 52m (L 18 · R 22 ·
- * both 1h 12m)"). Tapping opens it to its feeds, each opening its own sheet,
- * and a row about cluster feeding (the Cluster feeding sheet). `entries` are
- * that day's feeds in it, newest first (a cluster across midnight shows on
- * each day with that day's feeds).
+ * A cluster on the Timeline: one row, "Cluster · 4 feeds" with its span in
+ * the time column ("6:02–8:40 PM"), and its nursing and sides under it
+ * ("nursed 1h 52m (L 18 · R 22 · both 1h 12m)"). The Timeline puts it where
+ * its newest feed would be. Tapping opens it to its feeds, each opening its
+ * own sheet, and a row about cluster feeding (the Cluster feeding sheet).
+ * `entries` are that day's feeds in it, newest first (a cluster across
+ * midnight shows on each day with that day's feeds); `runs` are the
+ * cluster's own feeds (worked out from the whole log) that have one of those
+ * entries, so the count and span are the cluster's, never recounted from a
+ * subset (a feed's first half before a long pause isn't part of it).
  */
 export function ClusterRow({
   entries,
+  runs: given,
   now,
   expanded,
   onToggle,
@@ -107,6 +112,7 @@ export function ClusterRow({
   glow,
 }: {
   entries: EntryOf<"feed">[];
+  runs?: readonly NursingRun[];
   now: Date;
   expanded: boolean;
   onToggle: () => void;
@@ -116,7 +122,7 @@ export function ClusterRow({
 }) {
   const { state } = useMaple();
   const tz = state?.baby.timezone ?? "America/New_York";
-  const runs = nursingRuns(entries, now);
+  const runs = given?.length ? given : nursingRuns(entries, now);
   const start = runs[0]?.start ?? Date.parse(entries[entries.length - 1].started_at);
   const last = runs[runs.length - 1];
   const end = last ? last.end : null;
@@ -140,14 +146,14 @@ export function ClusterRow({
             <span className={cx(tone.body, "min-w-0 flex-1 truncate text-[15px] font-medium")}>
               Cluster · {runs.length} feed{runs.length === 1 ? "" : "s"}
             </span>
+            {/* Its span where a row's time goes: the row sits at its newest feed, so the rows under it read in order. */}
             <span className={cx(tone.body, "inline-flex shrink-0 items-center gap-1 self-center text-sm tabular-nums")}>
-              {formatTime(start, tz)}
+              {spanText(start, end, tz)}
               <Icon name="chevron-down" size={15} className={cx("text-mp-ink-3 transition", expanded && "rotate-180")} />
             </span>
           </span>
           {/* Wraps between its parts, never inside the side minutes. */}
           <span className={cx(tone.muted, "block text-[13px] leading-snug")}>
-            <span className="whitespace-nowrap">{spanText(start, end, tz)}</span> ·{" "}
             <span className="whitespace-nowrap">nursed {minutesShort(min.total)}</span>
             {sides && <span className="whitespace-nowrap"> ({sides})</span>}
           </span>

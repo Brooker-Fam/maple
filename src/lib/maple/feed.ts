@@ -92,6 +92,13 @@ export type LastTap = {
    * undoLastTap puts back.
    */
   from?: StretchSide;
+  /**
+   * With `from`: where that part began, when going back and forth joined it to
+   * the back-and-forth part just before it (the two merge), so undo, or a side
+   * tapped within 15 s, splits it off again there instead of giving the whole
+   * stretch that side.
+   */
+  cut?: string;
   paused_at?: string;
   merged?: true;
   reverted?: true;
@@ -755,7 +762,20 @@ function tapUndo(S: Stretch[], tap: LastTap | undefined): { what: TapWhat; at: n
       // A switch that changed the open part's side (back and forth from a fresh part): that part gets its side back.
       if (tap.from) {
         const was = tap.from;
-        return L.end === null && L.side === tap.side ? { what: "switch", at: tapped(L.start), apply: () => void (L.side = was) } : { refuse: "changed" };
+        if (L.end !== null || L.side !== tap.side) return { refuse: "changed" };
+        // That part joined back and forth before it: only it gets its side back, from where it began.
+        const cut = tap.cut ? Date.parse(tap.cut) : NaN;
+        if (cut >= L.start + SEC) {
+          return {
+            what: "switch",
+            at: tapped(cut),
+            apply: () => {
+              L.end = cut;
+              S.push({ side: was, start: cut, end: null });
+            },
+          };
+        }
+        return { what: "switch", at: tapped(L.start), apply: () => void (L.side = was) };
       }
       return L.end === null && P && P.end === L.start ? drop("switch") : { refuse: "changed" };
     case "resume": {
@@ -853,7 +873,9 @@ export function startBreast(side: Side, at: Date, opts: { both?: boolean } = {})
  * on ends and a both part opens. If that side began under a minute ago (the
  * toast's "Back and forth" right after a Switch, or a feed just started), it
  * becomes the both part instead (resided; its tap's `from` lets undo put the
- * side back), so no 20-second Left part is left behind. A side tapped within
+ * side back), so no 20-second Left part is left behind; one that began right
+ * as back and forth ended (Track sides, then Back and forth again) joins that
+ * stretch, and the tap's `cut` lets undo split it off again. A side tapped within
  * 15 s of going both takes it back: the part gets that side (reverted when
  * it's the side she was on, else resided). Later, a side means she's on it
  * now: tracking sides again. Back and forth never sets first_side or
@@ -907,9 +929,11 @@ export function switchTo(
       if (opts.explicit && t < O.start - NEAR) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
       if (t - O.start < MIN || S.length >= MAX_PARTS) {
         const from = O.side;
+        // Right after going back and forth, it joins that part: `cut` keeps where it began, for undo.
+        const cut = P && P.end === O.start && P.side === "B" ? { cut: iso(O.start) } : {};
         O.side = "B";
         flags.resided = true;
-        tap = { kind: "switch", side: "B", at: tappedAt, from, ...by };
+        tap = { kind: "switch", side: "B", at: tappedAt, from, ...cut, ...by };
       } else {
         O.end = t;
         S.push({ side: "B", start: t, end: null });
@@ -933,8 +957,14 @@ export function switchTo(
       // Took back going both a moment ago: the part takes the side tapped. Onto the side she was on, that's the
       // switch to both undone (and a both part that touches it merges back in); onto the other, the part re-sides.
       const back = last.from ?? P!.side;
-      O.side = side;
-      if (side === back || (P?.end === O.start && P.side === side)) {
+      // A part that joined back and forth before it splits off again where it began, on the side tapped.
+      const cut = last.cut ? Date.parse(last.cut) : NaN;
+      const split = cut >= O.start + SEC;
+      if (split) {
+        O.end = cut;
+        S.push({ side, start: cut, end: null });
+      } else O.side = side;
+      if (side === back || (!split && P?.end === O.start && P.side === side)) {
         flags.reverted = true;
         tap = { kind: "switch", side, at: tappedAt, reverted: true, ...by };
       } else {
@@ -982,7 +1012,11 @@ export function switchTo(
     if (side === L.side && t - lEnd < MIN) {
       L.end = null;
       flags.merged = true;
-    } else S.push({ side, start: t, end: null });
+    } else {
+      // A feed at 60 parts can't go back on (Back and forth too): Done, and a new feed within 10 minutes is the same feed.
+      if (S.length >= MAX_PARTS) throw editError("too_many", { paused: "1" });
+      S.push({ side, start: t, end: null });
+    }
     tap = { kind: "resume", side, at: tappedAt, paused_at: iso(lEnd), ...(flags.merged ? { merged: true } : {}), ...(opts.by ? { by: opts.by } : {}) };
   } else {
     S.push({ side, start: t, end: null });
@@ -1199,6 +1233,12 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
     case "not_timed":
       return "That feed wasn't timed, so its parts can't be fixed.";
     case "too_many":
+      // Paused at the limit: nothing can go back on, so the feed ends and a new one starts (under 10 minutes off is the same feed).
+      if (p.paused) {
+        return mcp
+          ? "This feed has 60 parts, the most one can hold, so it can't go back on. Use stop_timer, then start_timer on the side she's on: back on within 10 minutes still counts as the same feed."
+          : "That's 60 parts, the most one feed holds. Tap Done and start her again: back on within 10 minutes still counts as the same feed.";
+      }
       // Going back and forth stops adding parts (at the limit, the open part turns both sides).
       return mcp
         ? 'This feed has 60 parts, the most one can hold. If she\'s going back and forth, use switch_side with to: "both" to stop tracking sides.'
@@ -1322,8 +1362,10 @@ export type NursingRun = {
   /** The side she started on (the start tap's, even if it went back and forth at once) and the last side tracked; null if unknown. */
   firstSide: Side | null;
   lastSide: Side | null;
-  /** The last stretch's side: "B" when it ended going back and forth. */
+  /** The last stretch's side: "B" when it ended going back and forth (a feed logged by minutes with back and forth ends on it, as `order` reads). */
   endSide: StretchSide | null;
+  /** When the last stretch began, if it's a timed Left or Right (null: back and forth, or a feed logged by minutes), for runAnchor. */
+  lastSideStart: number | null;
   /** The sides in the order she was on them, the same one again after a break once ("L", "R", "B"). */
   order: StretchSide[];
   backAndForth: boolean;
@@ -1463,7 +1505,9 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
       min,
       firstSide: startSideOf(g[0]) ?? (isTracked(tracked?.side) ? tracked.side : null),
       lastSide,
-      endSide: lastPart.side ?? lastPart.entry.data.last_side ?? null,
+      // Back and forth by minutes comes last (as in `order`), so it never sets the next side either.
+      endSide: lastPart.side ?? ((lastPart.entry.data.both_sec ?? 0) > 0 ? "B" : lastPart.entry.data.last_side ?? null),
+      lastSideStart: isTracked(lastPart.side) ? lastPart.start : null,
       order,
       backAndForth: g.some((p) => p.side === "B" || (p.side === null && (p.entry.data.both_sec ?? 0) > 0)),
       live: entriesIn.some((e) => e.active),
@@ -1519,20 +1563,30 @@ export function clusterOf(runs: readonly NursingRun[], run: NursingRun | null | 
  * ran past 40 minutes counts from 40 minutes before it ended (FEED_LENGTH_MIN,
  * UNICEF UK's "between 5 and 40 minutes"; using it this way is our choice).
  * A feed left on one side keeps its real start, so a forgotten timer still
- * shows its gap. While she's on the breast, its start.
+ * shows its gap; so does a long feed whose last Left or Right alone ran past
+ * 40 minutes untouched (a side left on), which counts from when she went on
+ * that side ("side"). Back and forth gets no taps by design, so a long one
+ * keeps the 40-minute rule. While she's on the breast, its start.
  */
-export function runAnchor(r: NursingRun): { at: number; rule: "start" | "long" } {
+export function runAnchor(r: NursingRun): { at: number; rule: "start" | "long" | "side" } {
   const long = FEED_LENGTH_MIN[1] * MIN;
-  if (r.end !== null && (r.backAndForth || r.parts >= 3) && r.end - r.start > long) return { at: r.end - long, rule: "long" };
+  if (r.end !== null && (r.backAndForth || r.parts >= 3) && r.end - r.start > long) {
+    if (r.lastSideStart !== null && r.end - r.lastSideStart > long) return { at: r.lastSideStart, rule: "side" };
+    return { at: r.end - long, rule: "long" };
+  }
   return { at: r.start, rule: "start" };
 }
 
 /** Her last feed, and when "Last fed" counts from (lastFedAnchor). */
 export type LastFed = {
   kind: "breast" | "bottle";
-  /** When "Last fed" counts from (ISO): the feed's start, or 40 minutes before a long back-and-forth (or 3+ part) feed ended. */
+  /**
+   * When "Last fed" counts from (ISO): the feed's start, 40 minutes before a long back-and-forth (or 3+ part) feed
+   * ended ("long"), or, when that feed's last Left or Right alone ran past 40 minutes (a side left on), when she went
+   * on it ("side").
+   */
   at: string;
-  rule: "start" | "long";
+  rule: "start" | "long" | "side";
   /** The feed's start and end (ISO); end null while she's on the breast. */
   start: string;
   end: string | null;
@@ -1629,4 +1683,5 @@ export function clusterLine(c: FeedCluster, tz: string = DEFAULT_TZ): string {
 export const FEED_COUNT_RULE =
   "Off the breast for under 10 minutes is the same feed, whether Pause or Done was tapped. Three or more feeds, each starting less than 30 minutes after the last one ended, make a cluster, and each feed in it counts.";
 /** Last fed's info line, when a feed can count from 40 minutes before it ended. */
-export const LAST_FED_RULE = "Counted from when her last feed began. A long back-and-forth stretch counts from 40 minutes before she finished.";
+export const LAST_FED_RULE =
+  "Counted from when her last feed began. A long back-and-forth stretch counts from 40 minutes before she finished, or from when she went on her last side if that side alone ran longer.";

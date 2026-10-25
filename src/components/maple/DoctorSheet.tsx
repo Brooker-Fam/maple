@@ -8,7 +8,7 @@ import { useAppNav } from "./AppNav";
 import { telHref } from "./care/CareTeam";
 import { GROUP, NavRow } from "./care/parts";
 import { Icon } from "./icons";
-import { VisitSummary } from "./PatternsTab";
+import { requestGrowthChart, VisitSummary } from "./PatternsTab";
 import { Button, SectionTitle, Sheet, TextArea, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
@@ -47,8 +47,8 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
   const toGrowth = () =>
     then(() => {
       app.go("patterns");
-      // After History has drawn Patterns (the growth chart is near the end).
-      window.setTimeout(() => document.getElementById("maple-growth-chart")?.scrollIntoView({ block: "start" }), 400);
+      // Patterns scrolls there itself once its charts (above the growth chart) have loaded.
+      requestGrowthChart();
     });
 
   const numbers = [

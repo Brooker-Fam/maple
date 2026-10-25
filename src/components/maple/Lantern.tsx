@@ -187,10 +187,11 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-[120] flex touch-none flex-col bg-black select-none"
       style={{ color: AMBER }}
-      onPointerDown={(e) => {
+      // In the capture phase, so a swipe that starts on a hold row (her medicine, back and forth) still closes it.
+      onPointerDownCapture={(e) => {
         swipe.current = { y: e.clientY, t: Date.now() };
       }}
-      onPointerUp={(e) => {
+      onPointerUpCapture={(e) => {
         const s = swipe.current;
         swipe.current = null;
         if (s && e.clientY - s.y > 110 && Date.now() - s.t < 900) onClose();
@@ -467,11 +468,21 @@ function BothHoldRow({ onConfirm, onHint }: { onConfirm: () => void; onHint: () 
  * The Lantern's half-second press-and-hold: `progress` runs 0 → 1 while the
  * finger is down, and `onConfirm` fires when it fills; a shorter press is a
  * tap, which only says how (`onHint`). Spread `handlers` on the button.
+ *
+ * A finger that moves (HOLD_SLOP_PX) or leaves the button is a swipe, not a
+ * hold: it lets go without confirming, so the swipe down to close that starts
+ * on her medicine row (just under "swipe down to close") or the back-and-forth
+ * row never logs a dose or goes both. Under a touch's implicit capture the
+ * browser sends no pointerleave until lift, so the move check does that work.
+ * The Lantern's own swipe listens in the capture phase, so it still closes.
  */
+const HOLD_SLOP_PX = 10;
+
 function useHold(onConfirm: () => void, onHint: () => void) {
   const [progress, setProgress] = useState(0);
   const raf = useRef<number | null>(null);
   const start = useRef<number | null>(null);
+  const origin = useRef<{ x: number; y: number } | null>(null);
   const fired = useRef(false);
 
   // Times come from the events and animation frames themselves (both on the performance clock).
@@ -482,6 +493,7 @@ function useHold(onConfirm: () => void, onHint: () => void) {
     const pressed = start.current != null;
     const held = pressed && at != null ? at - start.current! : 0;
     start.current = null;
+    origin.current = null;
     if (tap && pressed && !fired.current && held < HOLD_MS) onHint();
     setProgress(0);
   };
@@ -506,15 +518,20 @@ function useHold(onConfirm: () => void, onHint: () => void) {
 
   const handlers = {
     onPointerDown: (e: React.PointerEvent) => {
-      e.stopPropagation();
       fired.current = false;
       start.current = e.timeStamp;
+      origin.current = { x: e.clientX, y: e.clientY };
       raf.current = requestAnimationFrame(loop);
     },
-    onPointerUp: (e: React.PointerEvent) => {
-      e.stopPropagation();
-      cancel(true, e.timeStamp);
+    onPointerMove: (e: React.PointerEvent) => {
+      const o = origin.current;
+      if (!o || start.current == null) return;
+      // Moved, or off the button (capture keeps sending moves here after the finger leaves it): a swipe, not a hold.
+      const r = e.currentTarget.getBoundingClientRect();
+      const off = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+      if (off || Math.hypot(e.clientX - o.x, e.clientY - o.y) > HOLD_SLOP_PX) cancel(false);
     },
+    onPointerUp: (e: React.PointerEvent) => cancel(true, e.timeStamp),
     onPointerLeave: () => cancel(false),
     onPointerCancel: () => cancel(false),
     onContextMenu: (e: React.MouseEvent) => e.preventDefault(),

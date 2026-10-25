@@ -17,7 +17,6 @@ import {
   other,
   partTotals,
   setSide,
-  sideMinutesText,
   spanMinutes,
   type Part,
 } from "@/lib/maple/feed";
@@ -30,6 +29,7 @@ import { logSwitches } from "../MoreSheet";
 import { Icon } from "../icons";
 import { Button, Chip, Segmented, Sheet, TimeRange, TimeScrubber, WhenField, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
+import { doneText, nextSideWords } from "../useTimerActions";
 import type { SheetProps } from "./index";
 import {
   CHECK_NUMBER_HINT,
@@ -82,6 +82,8 @@ import {
 type Milk = NonNullable<FeedData["milk"]>;
 const MILK_LABEL: Record<Milk, string> = { breastmilk: "Breast milk", formula: "Formula", mixed: "Mixed" };
 const MIN = 60_000;
+/** The id of a feed being logged, not saved yet (its toast is worded from it). */
+const DRAFT_ID = Number.MIN_SAFE_INTEGER;
 /** The engine's "same moment" slack: a break shorter than this is no break. */
 const NEAR = 1500;
 const ELSEWHERE = "on another device or through Claude";
@@ -347,19 +349,37 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const r = (right ?? 0) + (spanMin && first === "R" ? spanMin : 0);
     const b = both ?? 0;
     const sides = sideFields(l, r, first, b);
-    // After back and forth: "Left next, or the fuller side" (AAP; guidelines.ts NEXT_SIDE_NOTE).
-    const nextSide = SIDE_NAME[other(sides.first_side)];
-    const next = b > 0 ? `${nextSide} next, or the fuller side` : `${nextSide} next`;
-    const each = sideMinutesText({ left: l, right: r, both: b, total: l + r + b, has: { L: l > 0, R: r > 0, B: b > 0 } });
+    const data: FeedData = { method: "breast", left_sec: l * 60, right_sec: r * 60, ...(b > 0 ? { both_sec: b * 60 } : {}), ...sides };
+    const endedAt = en.getTime() > s.getTime() ? en.toISOString() : undefined;
+    // The next side as the card and the dock will show it once this is in the log (the Done toast's words): within
+    // 30 minutes of its end, the other side from the one she ended on ("Left if she wants more"); else the
+    // alternate rule ("Right next time"); after back and forth ", or the fuller side" (AAP; NEXT_SIDE_NOTE).
+    const t = now();
+    const draft: Entry = {
+      id: DRAFT_ID,
+      kind: "feed",
+      started_at: s.toISOString(),
+      ended_at: endedAt ?? null,
+      active: false,
+      data,
+      note: null,
+      created_by: null,
+      updated_by: null,
+      source: "web",
+      created_at: t.toISOString(),
+      updated_at: t.toISOString(),
+    };
+    const next = nextSideWords(draft, t, state?.entries);
+    const toastText = l + r + b > 0 ? doneText(draft, t, undefined, state?.entries).text : `Nursed · ${clock(s)}${next ? ` · ${next}` : ""}`;
     void log(
       {
         kind: "feed",
         started_at: s.toISOString(),
-        ended_at: en.getTime() > s.getTime() ? en.toISOString() : undefined,
-        data: { method: "breast", left_sec: l * 60, right_sec: r * 60, ...(b > 0 ? { both_sec: b * 60 } : {}), ...sides },
+        ended_at: endedAt,
+        data,
         note: note.trim() || null,
       },
-      { toast: l + r + b > 0 ? `Nursed ${l + r + b}m (${each}) · ${next}` : `Nursed · ${clock(s)} · ${next}` }
+      { toast: toastText }
     );
   };
 

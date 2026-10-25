@@ -75,20 +75,31 @@ export function doneText(e: Entry, now: Date, ended?: string, all?: readonly Ent
     // The card's rows added up (feedMinutes), so the sides always sum to the total ("L 12 · R 9 · both 38").
     const t = feedMinutes(e, now);
     const sides = ended ? "" : sideMinutesText(t);
-    const ns = all ? nextSideFor(nursingRuns([...all.filter((x) => x.id !== e.id), e], now), now) : null;
-    const next = ns?.side ?? suggestNextSide(e.data);
-    // After back and forth: "Right next time, or the fuller side" (AAP; guidelines.ts NEXT_SIDE_NOTE).
-    const nextWords = next
-      ? `${SIDE_NAME[next]} ${ns?.rule === "relatch" ? "if she wants more" : "next time"}${(ns ? ns.fuller : t.has.B) ? ", or the fuller side" : ""}`
-      : "";
+    const next = nextSideWords(e, now, all);
     return {
-      text: `Nursed ${minutesShort(t.total)}${sides ? ` (${sides})` : ""}${ended ? ` · ${ended}` : ""}${next ? ` · ${nextWords}` : ""}`,
+      text: `Nursed ${minutesShort(t.total)}${sides ? ` (${sides})` : ""}${ended ? ` · ${ended}` : ""}${next ? ` · ${next}` : ""}`,
     };
   }
   if (e.kind === "sleep") return { text: `Slept ${formatDuration(dur)}` };
   if (e.kind === "tummy") return { text: `Tummy time ${formatDuration(dur)}` };
   if (e.kind === "pump") return { text: `Pumped ${formatDuration(dur)}` };
   return { text: "Saved" };
+}
+
+/**
+ * The next side once nursing feed `e` is in the log, as Done's toast says it:
+ * "Left if she wants more", "Right next time", ", or the fuller side" after
+ * back and forth (AAP; guidelines.ts NEXT_SIDE_NOTE). With `all` (the loaded
+ * entries) it's the side Today's card and the dock show (nextSideFor); "" if
+ * there's none to say. The feed sheet words a feed logged by minutes with it.
+ */
+export function nextSideWords(e: Entry, now: Date, all?: readonly Entry[]): string {
+  if (e.kind !== "feed" || e.data.method !== "breast") return "";
+  const ns = all ? nextSideFor(nursingRuns([...all.filter((x) => x.id !== e.id), e], now), now) : null;
+  const next = ns?.side ?? suggestNextSide(e.data);
+  if (!next) return "";
+  const fuller = ns ? ns.fuller : feedMinutes(e, now).has.B;
+  return `${SIDE_NAME[next]} ${ns?.rule === "relatch" ? "if she wants more" : "next time"}${fuller ? ", or the fuller side" : ""}`;
 }
 
 /** The side parts of a timed feed as it stands at `now` (none for anything else). */
@@ -580,13 +591,13 @@ export function useTimerActions() {
    * forth". The toast's Undo puts the side back (undo_tap).
    */
   const backAndForth = useCallback(
-    async (e: Entry, opts: TimerCallOptions = {}) => {
+    async (e: Entry, opts: TimerCallOptions = {}, at?: Date) => {
       const cur = live(e);
       if (cur.kind === "feed" && cur.active && cur.data.segments?.length && !openSegment(cur.data.segments)) {
         return (await resumeRef.current(cur, "B", undefined, opts))?.entry ?? null;
       }
       tick();
-      const res = await timerCall({ action: "switch", id: e.id, side: "B" }, opts);
+      const res = await timerCall({ action: "switch", id: e.id, side: "B", at: at?.toISOString() }, opts);
       // Already going back and forth (the other phone, or Claude): nothing changed, nothing to say.
       if (!res || res.noop) return res?.entry ?? null;
       const after = res.entry;
@@ -598,7 +609,10 @@ export function useTimerActions() {
   );
   /**
    * The [Back and forth] a toast offers (a start within 30 minutes of the last feed, a feed's second Switch), over the
-   * time it records: the side just tapped is under a minute old, so it becomes the both part from its start.
+   * time it records: the side just tapped becomes the both part from its start. The chip sends that time, so it
+   * records what it shows however late it's tapped (a toast held while the Lantern was open can be minutes old;
+   * without the time, a side over a minute old would end at the tap and leave a stray Left or Right part behind).
+   * If the feed changed meanwhile, the time no longer fits and the server says why.
    */
   const bothChip = useCallback(
     (e: Entry): ToastAction => {
@@ -607,7 +621,7 @@ export function useTimerActions() {
         label: "Back and forth",
         sub: short(from),
         ariaLabel: `Going back and forth: both sides from ${clock(from)}, no need to tap Switch`,
-        onClick: () => void backAndForth(e),
+        onClick: () => void backAndForth(e, {}, new Date(from)),
       };
     },
     [backAndForth, clock, now, short]

@@ -65,7 +65,10 @@ export type DayStats = {
   clusterFeeds: number;
   /** Clusters that began in the window ("11 feeds (one cluster)"). */
   clusters: number;
-  /** Nursing as whole minutes × 60: each feed's rows added up (feedMinutes), so every surface shows the same minutes. */
+  /**
+   * Nursing as whole minutes × 60: each feed's rows added up (the rows' rule, as feedMinutes), so every surface shows
+   * the same minutes. Counted with the feeds, on the day each feed (run) began.
+   */
   nursingSec: number;
   leftSec: number;
   rightSec: number;
@@ -106,7 +109,8 @@ export type Summary = {
   /**
    * Her last feed by the 10-minute rule, and when "Last fed" counts from
    * (feed.ts lastFedAnchor): its start, or 40 minutes before a long
-   * back-and-forth (or 3+ part) feed ended.
+   * back-and-forth (or 3+ part) feed ended, or, when that feed's last side
+   * alone ran past 40 minutes (left on), when she went on it.
    */
   lastFed: LastFed | null;
   /** Minutes since lastFed.at (what "Last fed … ago" and the feed-gap checks say), or null. */
@@ -194,9 +198,12 @@ function overlapSec(a: number, b: number, lo: number, hi: number): number {
  * Totals for one window [from, to). Point events count by start time; sleep
  * and tummy time count only the part inside the window, so a sleep across
  * midnight splits between the two days. Nursing feeds are counted as runs
- * (feed.ts nursingRuns) by when each began; pass `runs` worked out from
- * every loaded entry when `entries` is only this window's, so a feed that
- * began before the window isn't counted again in it.
+ * (feed.ts nursingRuns) by when each began, and their minutes with them, so
+ * a day never reads 0 feeds with nursing minutes (a feed just after midnight
+ * that carries on one from 11:55 PM counts, minutes and all, on the day it
+ * began); pass `runs` worked out from every loaded entry when `entries` is
+ * only this window's, so a feed that began before the window isn't counted
+ * again in it.
  */
 export function statsFor(entries: Entry[], from: Date, to: Date, key: string, now: Date, runs?: readonly NursingRun[]): DayStats {
   const s = emptyStats(key);
@@ -214,6 +221,11 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
     s.feeds++;
     s.breastFeeds++;
     if (r.cluster !== null) s.clusterFeeds++;
+    // The rows' whole minutes (spanMinutes per part), so they add up with every list.
+    s.leftSec += r.min.left * 60;
+    s.rightSec += r.min.right * 60;
+    s.bothSec += r.min.both * 60;
+    s.nursingSec += r.min.total * 60;
   }
   for (const e of entries) {
     const start = Date.parse(e.started_at);
@@ -222,17 +234,11 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
     switch (e.kind) {
       case "feed": {
         if (!inWindow) break;
+        // Nursing is counted above, as runs.
         if (e.data.method === "bottle") {
           s.feeds++;
           s.bottleFeeds++;
           s.bottleMl += e.data.amount_ml ?? 0;
-        } else {
-          // Counted above as runs; the minutes stay each entry's own rows.
-          const t = feedMinutes(e, now);
-          s.leftSec += t.left * 60;
-          s.rightSec += t.right * 60;
-          s.bothSec += t.both * 60;
-          s.nursingSec += t.total * 60;
         }
         break;
       }
@@ -402,7 +408,8 @@ export function summarize(opts: {
     lastFeed && lastMin
       ? { left: lastMin.left * 60, right: lastMin.right * 60, total: lastMin.total * 60, ml: lastFeed.data.method === "bottle" ? lastFeed.data.amount_ml ?? null : null }
       : null;
-  // "Last fed" counts from her last feed's start, or 40 min before a long back-and-forth one ended (lastFedAnchor).
+  // "Last fed" counts from her last feed's start, or 40 min before a long back-and-forth one ended (lastFedAnchor),
+  // or from when she went on a last side left on past 40 min.
   const lastFed = lastFedAnchor(entries, now, runs);
   const minutesSinceFeed = lastFed ? Math.max(0, Math.round((nowMs - Date.parse(lastFed.at)) / 60000)) : null;
   const lastRun = runs[runs.length - 1] ?? null;

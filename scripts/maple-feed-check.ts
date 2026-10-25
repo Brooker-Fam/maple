@@ -62,7 +62,9 @@ import {
 import { timerNumbers } from "../src/components/maple/FeedParts";
 import { sidesLabel } from "../src/components/maple/StatusCard";
 import { describeEntry } from "../src/lib/maple/describe";
-import { memberLabel, statsFor, summarize as summarizeDay } from "../src/lib/maple/insights";
+import { dailyStats, memberLabel, statsFor, summarize as summarizeDay } from "../src/lib/maple/insights";
+import { CLUSTER_CALL, clusterCall } from "../src/lib/maple/guidelines";
+import { cleanData } from "../src/lib/maple/validate";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Baby, EntryOf, FeedData, Member, Segment, Side, StretchSide } from "../src/lib/maple/types";
 
@@ -915,6 +917,12 @@ const copyCases: [FeedEditCode, Record<string, string>, string, string][] = [
     "That's 60 parts, the most one feed holds. Going back and forth? Tap Back and forth to stop tracking sides.",
     'This feed has 60 parts, the most one can hold. If she\'s going back and forth, use switch_side with to: "both" to stop tracking sides.',
   ],
+  [
+    "too_many",
+    { paused: "1" },
+    "That's 60 parts, the most one feed holds. Tap Done and start her again: back on within 10 minutes still counts as the same feed.",
+    "This feed has 60 parts, the most one can hold, so it can't go back on. Use stop_timer, then start_timer on the side she's on: back on within 10 minutes still counts as the same feed.",
+  ],
   ["not_found", {}, "This feed just changed, so nothing was saved. Have another look.", "The feed changed since you looked; call maple_status and try again."],
   ["not_newest", {}, "This feed just changed, so nothing was saved. Have another look.", "The feed changed since you looked; call maple_status and try again."],
 ];
@@ -1431,6 +1439,55 @@ check("switchTo B at 60 parts turns the open part both instead of adding one", (
   eq([x.data.segments!.length, x.data.segments![59].side, x.resided], [60, "B", true]);
   throwsCode(() => switchTo({ method: "breast", segments: list }, "L", D("13:10")), "too_many");
 });
+check("paused at 60 parts nothing goes back on, Back and forth too, and the copy says Done and start again; the same side within a minute still merges", () => {
+  const list: Segment[] = Array.from({ length: 60 }, (_, i) => ({
+    side: (i % 2 ? "R" : "L") as Side,
+    start: new Date(D("12:00").getTime() + i * 60_000).toISOString(),
+    end: new Date(D("12:00").getTime() + (i + 1) * 60_000).toISOString(),
+  }));
+  const paused: FeedData = { method: "breast", segments: list };
+  for (const side of ["L", "R", "B"] as const) {
+    const e = throwsCode(() => switchTo(paused, side, D("13:05")), "too_many");
+    eq(e.params.paused, "1", side);
+    ok(e.message.includes("Tap Done and start her again"), `${side}: ${e.message}`);
+  }
+  const m = switchTo(paused, "R", D("13:00:30"));
+  eq([m.merged, m.data.segments!.length, m.data.segments![59].end], [true, 60, null]);
+});
+check("Back and forth again right after Track sides joins the back and forth; undo splits that side off again (the cut)", () => {
+  // Left 6:00 PM, Back and forth 6:05, Track sides on the Left at 6:30, then Back and forth again 30 s later.
+  const a = switchTo(startBreast("L", D("18:00")), "B", D("18:05")).data;
+  const t = switchTo(a, "L", D("18:30")).data;
+  eqSegs(t.segments, "L 18:00-18:05, B 18:05-18:30, L 18:30-");
+  const b = switchTo(t, "B", D("18:30:30"));
+  eqSegs(b.data.segments, "L 18:00-18:05, B 18:05-");
+  eq([b.resided, tapOf(b.data)], [true, { kind: "switch", side: "B", at: T("18:30:30"), from: "L", cut: T("18:30") }]);
+  eq(undoableTap(b.data, live("18:31")), { what: "switch", at: T("18:30:30") });
+  const u = undoLastTap(b.data, newest(b.data));
+  eqSegs(u.data.segments, "L 18:00-18:05, B 18:05-18:30, L 18:30-");
+  eq(sideTotals(u.data.segments, D("18:31")), { left: 360, right: 0, both: 1500 }, "back and forth stays back and forth");
+  eq([u.what, u.data.first_side, u.data.last_side], ["switch", "L", "L"]);
+  // Within 15 s too, and Put it back brings that tap back.
+  const q = switchTo(t, "B", D("18:30:10")).data;
+  eqSegs(undoLastTap(q, newest(q)).data.segments, "L 18:00-18:05, B 18:05-18:30, L 18:30-");
+  eq(restoredTap(u.data, b.data.segments!, true)?.cut, T("18:30"));
+  // validate.ts strips unknown keys: the cut must survive it.
+  eq((cleanData("feed", b.data) as TapFeedData).last_tap?.cut, T("18:30"));
+  // A part not touching back and forth keeps the plain re-side (no cut).
+  const fresh = switchTo(switchTo(feed("L 16:00-"), "R", D("16:10")).data, "B", D("16:10:20")).data;
+  eq(tapOf(fresh)?.cut, undefined);
+});
+check("a side within 15 s of that splits it off again too: the Left takes it back, the Right makes that part the Right (undo: back and forth)", () => {
+  const t = switchTo(switchTo(startBreast("L", D("18:00")), "B", D("18:05")).data, "L", D("18:30")).data;
+  const b = switchTo(t, "B", D("18:30:30")).data;
+  const l = switchTo(b, "L", D("18:30:40"));
+  eqSegs(l.data.segments, "L 18:00-18:05, B 18:05-18:30, L 18:30-");
+  eq([l.reverted, tapOf(l.data)?.reverted], [true, true]);
+  const r = switchTo(b, "R", D("18:30:40"));
+  eqSegs(r.data.segments, "L 18:00-18:05, B 18:05-18:30, R 18:30-");
+  eq([r.resided, tapOf(r.data)?.from, r.data.last_side], [true, "B", "R"]);
+  eqSegs(undoLastTap(r.data, newest(r.data)).data.segments, "L 18:00-18:05, B 18:05-");
+});
 check("momentQuestion words back and forth", () => {
   eq(momentQuestion("switch", "B"), "When did she start going back and forth?");
   eq(momentQuestion("switch", "L", "B"), "When did she go on the Left?");
@@ -1660,6 +1717,67 @@ check("describeEntry: back and forth reads as such", () => {
     const b = switchTo(b0, "B", D("16:10:20")).data;
     const undone = undoLastTap(b, newest(b)).data;
     eq(restoredTap(undone, b.segments!, true)?.from, "R", "Put it back brings the tap back");
+  });
+  check("Last fed: a long feed whose last side was left on counts from when she went on that side; back and forth left on keeps the 40-minute rule", () => {
+    // L 10, R 10, then L at 2:20 left running until Done at 6:00.
+    const lrl = fe("L 02:00-02:10, R 02:10-02:20, L 02:20-06:00");
+    const a = lastFedAnchor([lrl], D("06:05"))!;
+    eq([clock(a.at), a.rule, clock(a.start)], ["02:20", "side", "02:00"]);
+    eq(summarizeDay({ entries: [lrl], baby: baby(), now: D("06:05") }).minutesSinceFeed, 225, "3h 45m, not 45m");
+    // Back and forth gets no taps by design: L then both to 6:00 keeps 40 minutes before the end.
+    const lb = lastFedAnchor([fe("L 02:00-02:05, B 02:05-06:00", { first: "L" })], D("06:05"))!;
+    eq([clock(lb.at), lb.rule], ["05:20", "long"]);
+    // Back and forth, then a side left on: from that side.
+    const blr = lastFedAnchor([fe("L 18:00-18:05, B 18:05-18:40, R 18:40-21:00", { first: "L" })], D("21:05"))!;
+    eq([clock(blr.at), blr.rule], ["18:40", "side"]);
+    // A last side of 40 minutes exactly, or a busy evening, keeps the 40-minute rule.
+    const forty = lastFedAnchor([fe("L 18:00-18:10, R 18:10-18:20, L 18:20-19:00")], at845)!;
+    eq([clock(forty.at), forty.rule], ["18:20", "long"]);
+    eq(lastFedAnchor(paused, at845)!.rule, "start", "the evening's last feed is short");
+  });
+  check("next side: a feed logged by minutes with back and forth ends on it, as the same feed timed does (alternate, never re-latch)", () => {
+    const byMinutes: EntryOf<"feed"> = {
+      id: nid++, kind: "feed", started_at: T("18:00"), ended_at: T("18:50"), active: false,
+      data: { method: "breast", right_sec: 600, left_sec: 600, both_sec: 1800, first_side: "R", last_side: "L" }, note: null,
+      created_by: null, updated_by: null, source: "mcp", created_at: T("18:50"), updated_at: T("18:50"),
+    };
+    const timed = fe("R 18:00-18:10, L 18:10-18:20, B 18:20-18:50", { first: "R" });
+    for (const [what, e] of [["by minutes", byMinutes], ["timed", timed]] as const) {
+      const runs = nursingRuns([e], D("19:00"));
+      eq([runs[0].endSide, runs[0].order, nextSideFor(runs, D("19:00"))], ["B", ["R", "L", "B"], { side: "L", rule: "alternate", fuller: true }], what);
+    }
+  });
+  check("day totals: a feed's minutes count on the day it began, with the feed (never 0 feeds with nursing minutes)", () => {
+    // Done 11:40-11:55 PM, then on again at 12:03 AM: one feed, on the 20th.
+    const late = fe("L 23:40-23:55", { day: -1 });
+    const after = fe("R 00:03-00:20");
+    const days = dailyStats([late, after], "2026-10-20", "2026-10-21", D("02:00"), TZ);
+    eq(days.map((d) => [d.key, d.feeds, d.nursingSec / 60, d.leftSec / 60, d.rightSec / 60]), [
+      ["2026-10-20", 1, 32, 15, 17],
+      ["2026-10-21", 0, 0, 0, 0],
+    ]);
+    eq([summarizeDay({ entries: [late, after], baby: baby(), now: D("02:00") }).today.feeds, summarizeDay({ entries: [late, after], baby: baby(), now: D("02:00") }).today.nursingSec], [0, 0]);
+    // One entry paused 15 minutes across midnight: two feeds, each on its own day with its own minutes.
+    const across = fe("L 23:40-23:50, R 23:50-23:50", { day: -1 });
+    across.data.segments = [
+      { side: "L", start: shift(T("23:40"), -1), end: shift(T("23:50"), -1) },
+      { side: "R", start: T("00:05"), end: T("00:15") },
+    ];
+    across.ended_at = T("00:15");
+    const two = dailyStats([across], "2026-10-20", "2026-10-21", D("02:00"), TZ);
+    eq(two.map((d) => [d.feeds, d.nursingSec / 60]), [[1, 10], [1, 10]]);
+  });
+  check("clusterCall: the Today targets line while warnings are on; her day's numbers otherwise (never pointing at Today)", () => {
+    eq(clusterCall({ onToday: true, dayOfLife: 4 }), CLUSTER_CALL);
+    const off = clusterCall({ onToday: false, dayOfLife: 4 });
+    eq(off.label, CLUSTER_CALL.label);
+    eq(off.body, "Call your pediatrician if she seems hungry after most feeds or has fewer wet or dirty diapers than usual (on Day 4, at least 4 wet and 2 dirty a day).");
+    eq(
+      clusterCall({ onToday: false, dayOfLife: null }).body,
+      "Call your pediatrician if she seems hungry after most feeds or has fewer wet or dirty diapers than usual (by 5 days old, at least 6 wet and 3 dirty a day)."
+    );
+    eq(clusterCall({ onToday: false, dayOfLife: 50 }).body, "Call your pediatrician if she seems hungry after most feeds or has fewer wet diapers than usual (on Day 50, at least 6 a day).");
+    for (const d of [null, 1, 3, 5, 20, 43, 90]) ok(!/Today/.test(clusterCall({ onToday: false, dayOfLife: d }).body), `day ${d}`);
   });
   check("typicalFeedGapMin skips the gaps inside a cluster", () => {
     const entries = [

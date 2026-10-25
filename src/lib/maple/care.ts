@@ -848,6 +848,17 @@ export function pressingPlan<T extends { plan: CarePlan; status: PlanStatus }>(i
   return sorted.reduce<T | null>((best, x) => (best === null || rank(x) < rank(best) ? x : best), null);
 }
 
+/**
+ * Her medicines with the most pressing one first (pressingPlan), then the
+ * rest in the order given, for every capped list that's read out (Siri's
+ * "Maple status", maple_status), so the one Today's strip leads with is
+ * never the one the cap cuts.
+ */
+export function pressingFirst<T extends { plan: CarePlan; status: PlanStatus }>(items: T[]): T[] {
+  const top = pressingPlan(items);
+  return top ? [top, ...items.filter((x) => x !== top)] : [...items];
+}
+
 /** Not OK by her schedule yet, or nothing left to log today: Took it wears its quiet look (it still saves). */
 export function notYet(status: PlanStatus): boolean {
   return status.state === "wait" || status.state === "at_limit" || status.state === "slot_next" || status.state === "day_done";

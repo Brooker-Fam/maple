@@ -5,7 +5,7 @@ import { FEED_COUNT_RULE, LAST_FED_RULE, sideMinutesText, spanText, minutesShort
 import {
   BACK_AND_FORTH,
   BACK_AND_FORTH_SORE,
-  CLUSTER_CALL,
+  clusterCall,
   CLUSTER_ENOUGH,
   CLUSTER_FEEDING_NORMAL,
   CLUSTER_PAIN,
@@ -24,18 +24,21 @@ import { useMaple } from "../useMaple";
  * back and forth. Opened from "Cluster" on Last fed, a Timeline cluster row,
  * or "Both sides" on the timer card. It says clustering is normal, to switch
  * on her cues, the sore-nipple caution, what shows she's getting enough, and
- * who to call; every line of guidance is guidelines.ts's, word for word. No
- * alert, no tier color: nothing here is a warning. With a cluster, its line
- * sits on top ("6:02–8:40 PM · 4 feeds · nursed 1h 52m").
+ * who to call (the pediatrician line names her day's diaper numbers while
+ * Today shows none, `clusterCall`); every line of guidance is guidelines.ts's,
+ * word for word. No alert, no tier color: nothing here is a warning. With a
+ * cluster, its line sits on top ("6:02–8:40 PM · 4 feeds · nursed 1h 52m").
  *
  *   const info = useClusterInfo();
  *   <button onClick={() => info.open(cluster)}>Cluster</button>
  *   {info.sheet}
  */
 export default function ClusterInfoSheet({ open, onClose, cluster }: { open: boolean; onClose: () => void; cluster?: FeedCluster | null }) {
-  const { state } = useMaple();
+  const { state, summary } = useMaple();
   const phones = usePhones();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  // Today shows her diaper targets only while warnings are on; otherwise the call line says the numbers itself.
+  const call = clusterCall({ onToday: !!summary?.targets, dayOfLife: summary?.age?.dayOfLife ?? null });
   const calls = [
     phones.pediatrician && { label: "Pediatrician", phone: phones.pediatrician },
     phones.afterHours && { label: "After-hours line", phone: phones.afterHours },
@@ -73,8 +76,8 @@ export default function ClusterInfoSheet({ open, onClose, cluster }: { open: boo
           {CLUSTER_PAIN.body}
         </p>
         <p>
-          <span className="block text-[13px] font-semibold text-mp-ink-2">{CLUSTER_CALL.label}</span>
-          {CLUSTER_CALL.body}
+          <span className="block text-[13px] font-semibold text-mp-ink-2">{call.label}</span>
+          {call.body}
         </p>
         {calls.length > 0 && (
           <div className="flex flex-wrap gap-2">

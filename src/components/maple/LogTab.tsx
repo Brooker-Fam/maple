@@ -3,7 +3,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { feedClusters, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
+import { feedClusters, nursingRuns, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
 import { statsFor, type DayStats } from "@/lib/maple/insights";
 import {
   DEFAULT_TZ,
@@ -406,14 +406,16 @@ export default function LogTab({
   }, [entries, tz]);
 
   const stats = useMemo(() => statsByDay(entries, oldestKey, todayKey, now, tz), [entries, oldestKey, todayKey, now, tz]);
-  // Which cluster each feed is in (3+ feeds, each under 30 minutes after the last), so a day shows one Cluster row.
+  // The clusters (3+ feeds, each under 30 minutes after the last), worked out once from every loaded entry, and which
+  // one each feed is in, so a day shows one Cluster row with the cluster's own feeds (never recounted from that row's).
+  const clusters = useMemo(() => feedClusters(nursingRuns(entries, now)), [entries, now]);
   const clusterOf = useMemo(() => {
     const m = new Map<number, number>();
-    feedClusters(nursingRuns(entries, now)).forEach((c, i) => {
+    clusters.forEach((c, i) => {
       for (const e of c.entries) if (!e.active) m.set(e.id, i);
     });
     return m;
-  }, [entries, now]);
+  }, [clusters]);
   const clusterInfo = useClusterInfo();
 
   const shownFrom = ready ? oldestKey : loadedFrom ?? todayKey;
@@ -547,6 +549,7 @@ export default function LogTab({
               readOnly={readOnly}
               onOpen={touch}
               highlighted={d.key === flash}
+              clusters={clusters}
               clusterOf={clusterOf}
               onClusterInfo={clusterInfo.open}
             />
@@ -593,6 +596,7 @@ function DaySection({
   highlighted,
   readOnly,
   onOpen,
+  clusters,
   clusterOf,
   onClusterInfo,
 }: {
@@ -609,14 +613,16 @@ function DaySection({
   highlighted: boolean;
   readOnly: boolean;
   onOpen: (e: Entry) => void;
-  /** Feed id → its cluster's index (LogTab works them out from every loaded entry). */
+  /** The clusters LogTab worked out from every loaded entry, and feed id → its cluster's index. */
+  clusters: FeedCluster[];
   clusterOf: Map<number, number>;
   onClusterInfo: (c?: FeedCluster | null) => void;
 }) {
   const { open } = useSheets();
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const label = formatDayLabel(key, todayKey, { long: false });
-  // A cluster with two or more of this day's feeds is one row, where its first feed would be (rows are newest first).
+  // A cluster with two or more of this day's feeds is one row, where its newest feed would be (rows are newest first,
+  // as Claude's list_entries places it), with the cluster's own feeds (runs) that have an entry on this day.
   const items = useMemo(() => {
     const byCluster = new Map<number, EntryOf<"feed">[]>();
     for (const e of rows) {
@@ -626,15 +632,19 @@ function DaySection({
       list.push(e as EntryOf<"feed">);
       byCluster.set(c, list);
     }
-    const out: ({ type: "entry"; e: Entry } | { type: "cluster"; id: number; feeds: EntryOf<"feed">[] })[] = [];
+    const out: ({ type: "entry"; e: Entry } | { type: "cluster"; id: number; feeds: EntryOf<"feed">[]; runs: NursingRun[] })[] = [];
     for (const e of rows) {
       const c = e.kind === "feed" ? clusterOf.get(e.id) : undefined;
       const feeds = c === undefined ? undefined : byCluster.get(c);
       if (c === undefined || !feeds || feeds.length < 2) out.push({ type: "entry", e });
-      else if (feeds[feeds.length - 1].id === e.id) out.push({ type: "cluster", id: c, feeds });
+      else if (feeds[0].id === e.id) {
+        const here = new Set(feeds.map((f) => f.id));
+        const runs = (clusters[c]?.runs ?? []).filter((r) => r.entries.some((x) => here.has(x.id)));
+        out.push({ type: "cluster", id: c, feeds, runs });
+      }
     }
     return out;
-  }, [rows, clusterOf]);
+  }, [rows, clusters, clusterOf]);
   const dst = dstNote(key, tz);
   const summary = total ? daySummaryParts(stats, units) : null;
   const groupLabel = KIND_GROUPS.find((g) => g.id === group)?.label.toLowerCase();
@@ -686,6 +696,7 @@ function DaySection({
                   )}
                   <ClusterRow
                     entries={it.feeds}
+                    runs={it.runs}
                     now={now}
                     expanded={isOpen}
                     glow={glow}

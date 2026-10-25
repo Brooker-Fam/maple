@@ -143,6 +143,25 @@ export const CLUSTER_CALL = {
 } as const;
 
 /**
+ * CLUSTER_CALL as the Cluster feeding sheet shows it. Today shows her diaper targets only while warnings and
+ * reminders are on (`onToday`); otherwise the line says her day's numbers itself (diaperTargets, below: the same
+ * minimums Today would show), or, with no day of life (no birth time), CDC's by-five-days line (above: fewer than 3
+ * poops and 6 pees a day). Always shown with EMERGENCY_SIGNS after it.
+ */
+export function clusterCall(opts: { onToday: boolean; dayOfLife?: number | null }): { label: string; body: string } {
+  if (opts.onToday) return CLUSTER_CALL;
+  const lead = "Call your pediatrician if she seems hungry after most feeds or has";
+  const day = opts.dayOfLife;
+  if (day == null || day < 1) {
+    return { label: CLUSTER_CALL.label, body: `${lead} fewer wet or dirty diapers than usual (by 5 days old, at least 6 wet and 3 dirty a day).` };
+  }
+  const t = diaperTargets(day);
+  // From about six weeks there's no stool target (diaperTargets), as on Today.
+  if (!t.dirty) return { label: CLUSTER_CALL.label, body: `${lead} fewer wet diapers than usual (on Day ${day}, at least ${t.wet} a day).` };
+  return { label: CLUSTER_CALL.label, body: `${lead} fewer wet or dirty diapers than usual (on Day ${day}, at least ${t.wet} wet and ${t.dirty} dirty a day).` };
+}
+
+/**
  * AAP Settling In, https://www.healthychildren.org/English/ages-stages/baby/breastfeeding/Pages/Settling-In-The-First-Few-Weeks-of-Breastfeeding.aspx:
  * "it's important to alternate the breast you offer first with each breastfeeding session" and "Later on you will
  * know which breast feels fuller and start the next feeding there." AAP KidsDoc (above): "For each feeding, switch

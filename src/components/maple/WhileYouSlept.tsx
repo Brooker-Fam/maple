@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
+import { nursingRuns } from "@/lib/maple/feed";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
@@ -61,8 +62,15 @@ export default function WhileYouSlept() {
   );
   if (!fresh.length) return null;
 
-  // Finished feeds; one still going is said as "Nursing now", not counted as done.
-  const feeds = fresh.filter((e) => e.kind === "feed" && !e.active).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+  // Finished feeds as the family counts them (nursingRuns: Done and a side again under 10 minutes apart is one feed,
+  // as on Today's tally and in Claude's recap), plus each bottle; one still going is "Nursing now", not counted as done.
+  const done = fresh.filter((e) => e.kind === "feed" && !e.active);
+  const feedStarts = [
+    ...nursingRuns(done, now())
+      .filter((r) => r.start >= since)
+      .map((r) => r.start),
+    ...done.filter((e) => e.kind === "feed" && e.data.method === "bottle").map((e) => Date.parse(e.started_at)),
+  ].sort((a, b) => b - a);
   const nursing = fresh.find((e) => e.kind === "feed" && e.active);
   const diapers = fresh.filter((e) => e.kind === "diaper").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const wet = diapers.filter((e) => e.kind === "diaper" && e.data.pee).length;
@@ -77,10 +85,10 @@ export default function WhileYouSlept() {
 
   // The note she'd leave: one short sentence per kind of thing, so the night reads at a glance.
   const lines: string[] = [];
-  if (feeds.length) {
+  if (feedStarts.length) {
     const next = summary.nextSide && !summary.active.some((e) => e.kind === "feed") ? ` ${SIDE_NAME[summary.nextSide]} is next.` : "";
-    const last = formatTime(feeds[0].started_at, tz);
-    lines.push(`${feeds.length === 1 ? `1 feed, at ${last}` : `${feeds.length} feeds, the last at ${last}`}.${next}`);
+    const last = formatTime(feedStarts[0], tz);
+    lines.push(`${feedStarts.length === 1 ? `1 feed, at ${last}` : `${feedStarts.length} feeds, the last at ${last}`}.${next}`);
   }
   if (nursing) lines.push(`Nursing now, since ${formatTime(nursing.started_at, tz)}.`);
   if (diapers.length) {
@@ -113,7 +121,7 @@ export default function WhileYouSlept() {
 
   // The line: a few counts, then who.
   const facts: string[] = [];
-  if (feeds.length) facts.push(`${feeds.length} feed${plural(feeds.length)}`);
+  if (feedStarts.length) facts.push(`${feedStarts.length} feed${plural(feedStarts.length)}`);
   if (nursing) facts.push("nursing now");
   if (wet) facts.push(`${wet} wet`);
   if (dirty.length) facts.push(`${dirty.length} dirty`);

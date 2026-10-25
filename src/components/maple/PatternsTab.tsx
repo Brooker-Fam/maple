@@ -102,6 +102,17 @@ const FRAME = { left: 30, right: 4, top: 10, bottom: 18 } as const;
 type Range = "7" | "14" | "30" | "all";
 type RibbonMode = "days" | "nights";
 
+// For the doctor → "Growth chart": a request the tab takes once its charts have loaded (they sit above the growth
+// chart, so a scroll before then lands short). Like requestTimelineDay: read when it mounts, or at once if it's there.
+// It lapses after a while, so a request left behind (she went elsewhere first) never yanks a later visit down.
+const GROWTH_ASK_MS = 30_000;
+let pendingGrowth = 0;
+const growthSubs = new Set<() => void>();
+export function requestGrowthChart() {
+  pendingGrowth = Date.now();
+  for (const cb of growthSubs) cb();
+}
+
 // ── Tab ──────────────────────────────────────────────────────────────────
 
 export default function PatternsTab({
@@ -140,6 +151,38 @@ export default function PatternsTab({
   // Charts start at the first logged day: blank days before logging began would read as "0 feeds".
   const firstLogged = days.findIndex((d) => d.feeds + d.diapers + d.sleeps > 0);
   const chartDays = firstLogged > 0 ? days.slice(firstLogged) : days;
+
+  // "Growth chart" from For the doctor: scroll to it once everything above it has drawn (two frames after the last
+  // week arrives) and this segment is showing; until then the request waits.
+  const [growthAsk, setGrowthAsk] = useState(0);
+  useEffect(() => {
+    const cb = () => setGrowthAsk((n) => n + 1);
+    growthSubs.add(cb);
+    return () => {
+      growthSubs.delete(cb);
+    };
+  }, []);
+  const shown = below !== null;
+  useEffect(() => {
+    if (!pendingGrowth || !ready || !shown) return;
+    if (Date.now() - pendingGrowth > GROWTH_ASK_MS) {
+      pendingGrowth = 0;
+      return;
+    }
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        const el = document.getElementById("maple-growth-chart");
+        if (!el || !el.getClientRects().length) return;
+        pendingGrowth = 0;
+        el.scrollIntoView({ block: "start" });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [ready, shown, growthAsk]);
 
   const goToDay = useCallback(
     (key: string) => {

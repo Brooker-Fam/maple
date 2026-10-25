@@ -18,7 +18,7 @@ import {
   planNames,
   planSentence,
   planView,
-  pressingPlan,
+  pressingFirst,
   scheduleSummary,
   sortPlans,
   unitCount,
@@ -387,8 +387,9 @@ function spokenItem(v: PlanView, now: Date, tz: string): string {
 
 /**
  * Her medicines in one spoken sentence for Maple's status (maple_status
- * `speak`, Siri's "Maple status"), in the order given (sortPlans, so the
- * most pressing first: pressingPlan's rule), capped at `cap`:
+ * `speak`, Siri's "Maple status"), in the order given, capped at `cap`:
+ * callers pass pressingFirst's order, so the most pressing one (a set time
+ * not logged, then OK now, …) is never the one cut. E.g.
  * "Brittany's medicines: Ibuprofen OK since 2:10 AM; Tylenol OK after 10:55 AM."
  * Null with none.
  */
@@ -475,10 +476,11 @@ const UNITS = ["tablets", "caplets", "capsules", "doses", "mL"] as const;
 
 /**
  * Her medicines for maple_status, by the one rule every glanceable line uses
- * (pressingPlan: OK now first, then the soonest wait, then the next set
- * time), for every active one: `line` for the text ("Brittany's medicines:
- * Ibuprofen OK after 9:10 AM; Tylenol · OK since 4:10 AM · last 10:10 PM"),
- * and `speak` for voice, capped at two (momSpeak). Only for someone who can
+ * (pressingPlan: a set time not logged first, then OK now, then doses left
+ * today, then the soonest wait, then the next set time), for every active
+ * one: `line` for the text ("Brittany's medicines: Ibuprofen OK after 9:10
+ * AM; Tylenol · OK since 4:10 AM · last 10:10 PM"), and `speak` for voice,
+ * capped at two (momSpeak). Only for someone who can
  * read her medicines, and only with one on her list. Null otherwise, or on
  * any error (Maple's status never waits on hers).
  */
@@ -487,10 +489,10 @@ export async function momStatus(ctx: Ctx): Promise<{ name: string; line: string;
     const s = await careFor(ctx);
     if (!s.person || !s.access.read || ctx.who.role === "viewer") return null;
     const { active } = await viewsFor(s);
-    const top = pressingPlan(active.map((x) => x.view));
+    // The pressing one leads (a set time not logged comes before OK now), then sortPlans' order.
+    const views = pressingFirst(active.map((x) => x.view));
+    const top = views[0];
     if (!top) return null;
-    // viewsFor is sortPlans order already, so the pressing one leads either way.
-    const views = [top, ...active.map((x) => x.view).filter((v) => v !== top)];
     const shown = views.slice(0, 3).map((v) => v.line);
     const more = views.length > shown.length ? `; ${views.length - shown.length} more in mom_status` : "";
     const whose = s.access.self ? "Your medicines" : `${s.name}'s medicines`;
@@ -946,7 +948,7 @@ export function registerCareTools(server: McpServer) {
     "log_mom_medicine",
     {
       title: `Log a dose of ${MOM}'s medicine`,
-      description: `Log a dose of ${MOM}'s own medicine (she's Maple's mom; Maple's medicines use log_medicine). Use it whenever the dose was ${MOM}'s: "${MOM}", "mom", "my wife", or "I" when she's the one talking. It saves, like Maple's log: a name on her list counts toward that medicine, so does its brand or generic name (acetaminophen for Tylenol on her list), and any other name is saved as a one-time medicine. Pass \`units\` (how many tablets, caplets, capsules or mL) only if the user said it, and \`dose\` only if they said something different from her plan; never fill either in. created:false with possible_duplicate means someone logged the same medicine within 30 minutes: ask whether it's another dose, and only then call again with allow_duplicate: true. If it was early or over her limit it still saves; repeat the result's alerts word for word with their labels.`,
+      description: `Log a dose of ${MOM}'s own medicine (she's Maple's mom; Maple's medicines use log_medicine). Use it whenever the dose was ${MOM}'s: "${MOM}", "mom", "my wife", or "I" when she's the one talking. "She" and "her" mean Maple: when the medicine named is on ${MOM}'s list (by its name, an Also called name, or its brand or generic name) and the user didn't say whose dose it was, ask "Maple's or ${MOM}'s?" before logging, and use this tool only once they say ${MOM}'s. It saves, like Maple's log: a name on her list counts toward that medicine, so does its brand or generic name (acetaminophen for Tylenol on her list), and any other name is saved as a one-time medicine. Pass \`units\` (how many tablets, caplets, capsules or mL) only if the user said it, and \`dose\` only if they said something different from her plan; never fill either in. created:false with possible_duplicate means someone logged the same medicine within 30 minutes: ask whether it's another dose, and only then call again with allow_duplicate: true. If it was early or over her limit it still saves; repeat the result's alerts word for word with their labels.`,
       inputSchema: {
         medicine: z.string().min(1).max(80).describe("The medicine as the user said it: a name or also-called name on her list, its brand or generic name, or its p id."),
         at: inputs.at("When she took it"),

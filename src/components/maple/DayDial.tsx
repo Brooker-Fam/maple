@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { clusterLine, feedClusters, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
 import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from "@/lib/maple/guidelines";
@@ -102,18 +102,32 @@ type Arc = {
  */
 type Dot = { key: string; entry: Entry; a: number; pee: boolean; poop: boolean; color: string | null; edge: "dark" | "light" | null; opacity: number; t: number };
 
+/** The lowest point the popover may reach: the top of the dock (fixed over the page, her strip on it), or of the tab bar. */
+function usableBottom(): number {
+  if (typeof window === "undefined") return Infinity;
+  const tops = ['[role="region"][aria-label="Log something"]', 'nav[aria-label="Maple\'s Log"]']
+    .map((q) => document.querySelector(q)?.getBoundingClientRect().top)
+    .filter((t): t is number => t != null && t > 0);
+  return Math.min(window.innerHeight, ...tops);
+}
+
 /**
- * Whether the popover opens above the tap: above in the dial's lower part, as
- * before, unless that would run off the top of the screen (a cluster's
- * header and feeds are tall) and there's room below.
+ * Where the popover opens: above the tap in the dial's lower part and below
+ * it in the upper part, as before, when it fits there between the top of the
+ * screen and the dock; else the other way if it fits there; else the side
+ * with more room. `maxList` caps its list to the room on that side (it
+ * scrolls inside), so the newest feeds of a tall cluster never sit under the
+ * dock.
  */
-function placeAbove(clientY: number, y: number, w: number, items: number, cluster: boolean): boolean {
-  const height = (cluster ? 68 : 48) + Math.max(1, items) * 52;
+function placePop(clientY: number, y: number, w: number, items: number, cluster: boolean): { above: boolean; maxList: number } {
+  const head = cluster ? 68 : 48;
+  const height = head + Math.max(1, items) * 52;
+  const roomAbove = clientY - 12 - 8;
+  const roomBelow = usableBottom() - 8 - (clientY + 12);
   const wantAbove = y > w * 0.55;
-  if (!wantAbove) return false;
-  if (clientY - 12 - height >= 8) return true;
-  const roomBelow = (typeof window === "undefined" ? Infinity : window.innerHeight) - clientY - 12;
-  return roomBelow < height && clientY > roomBelow;
+  const fits = (above: boolean) => (above ? roomAbove : roomBelow) >= height;
+  const above = fits(wantAbove) ? wantAbove : fits(!wantAbove) ? !wantAbove : roomAbove > roomBelow;
+  return { above, maxList: Math.max(52, (above ? roomAbove : roomBelow) - head) };
 }
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
@@ -208,10 +222,11 @@ export default function DayDial() {
   const [choice, setChoice] = useState<View | null>(null);
   const [fetched, setFetched] = useState<{ key: string; entries: Entry[] } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pop, setPop] = useState<{ x: number; y: number; w: number; t: number; items: Entry[]; cluster?: FeedCluster; above: boolean } | null>(null);
+  const [pop, setPop] = useState<{ x: number; y: number; w: number; t: number; items: Entry[]; cluster?: FeedCluster; above: boolean; maxList: number } | null>(null);
   const [hint, setHint] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const todayKey = dayKey(now, tz);
   const yesterday = addDays(todayKey, -1);
@@ -233,7 +248,9 @@ export default function DayDial() {
     if (!needsFetch || !dayView || fetched?.key === dayView) return;
     let cancelled = false;
     setLoading(true);
-    api<{ entries: Entry[] }>(`entries?from=${dayView}&to=${dayView}`)
+    // From the day before too: a feed that began late that night runs into this day's first minutes, and a feed
+    // counts on the day it began (statsFor, runs from the whole window), as History's day line counts it.
+    api<{ entries: Entry[] }>(`entries?from=${addDays(dayView, -1)}&to=${dayView}`)
       .then((r) => !cancelled && setFetched({ key: dayView, entries: r.entries }))
       .catch(() => !cancelled && setFetched({ key: dayView, entries: [] }))
       .finally(() => !cancelled && setLoading(false));
@@ -259,6 +276,12 @@ export default function DayDial() {
       // storage blocked: the hint comes back next visit
     }
   };
+
+  // A cluster's list capped to fit (placePop) opens at its newest feeds, oldest first above them: "when did she last eat".
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el && pop?.cluster) el.scrollTop = el.scrollHeight;
+  }, [pop]);
 
   // The popover closes with Escape or a tap anywhere outside the dial.
   const popOpen = !!pop;
@@ -354,7 +377,7 @@ export default function DayDial() {
     if (inCluster && r >= R.feed + 6) {
       // Its last few feeds (the header says how many there were), so the popover stays on screen.
       const feeds = [...inCluster.c.entries].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at)).slice(-4);
-      setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: feeds, cluster: inCluster.c, above: placeAbove(ev.clientY, ev.clientY - box.top, box.width, feeds.length, true) });
+      setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: feeds, cluster: inCluster.c, ...placePop(ev.clientY, ev.clientY - box.top, box.width, feeds.length, true) });
       return;
     }
     const near = plotted
@@ -365,7 +388,7 @@ export default function DayDial() {
       })
       .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))
       .slice(0, 6);
-    setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: near, cluster: inCluster?.c, above: placeAbove(ev.clientY, ev.clientY - box.top, box.width, near.length, !!inCluster) });
+    setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: near, cluster: inCluster?.c, ...placePop(ev.clientY, ev.clientY - box.top, box.width, near.length, !!inCluster) });
   };
 
   // Earlier from the last 24 hours or today is yesterday; later from yesterday is today.
@@ -635,7 +658,8 @@ export default function DayDial() {
                   </button>
                 </div>
                 {pop.items.length ? (
-                  <div className={cx(tone.divide, "border-t border-mp-line")}>
+                  // Capped to the room on its side of the tap (placePop), scrolling inside, so it never runs under the dock.
+                  <div ref={listRef} className={cx(tone.divide, "overflow-y-auto overscroll-contain border-t border-mp-line")} style={{ maxHeight: pop.maxList }}>
                     {pop.items.map((e) => {
                       const d = describeEntry(e, { units, now });
                       return (

@@ -79,6 +79,8 @@ export const dataSchemas = {
           at: iso,
           // A switch that changed the open part's side (going back and forth from a fresh part): undo puts this back.
           from: stretchSide.optional(),
+          // With from: where that part began when it joined the back-and-forth part before it (undo splits it there).
+          cut: iso.optional(),
           paused_at: iso.optional(),
           merged: z.literal(true).optional(),
           reverted: z.literal(true).optional(),

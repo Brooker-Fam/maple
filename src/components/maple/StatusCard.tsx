@@ -268,26 +268,41 @@ export default function StatusCard() {
       )}
 
       {/* Diapers and sleep, side by side (no rules between them: the columns already line up). */}
-      <div className="grid grid-cols-3">
-        {/* All three are "how long since", so they share one form (and fit a third of a phone). The marks are the dock's. */}
-        <Since
-          label="Since pee"
-          mark={<Icon name="droplet" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.pee }} />}
-          value={summary.lastPee ? since((now.getTime() - ts(summary.lastPee)) / 1000) : null}
-        />
-        <Since
-          label="Since poop"
-          mark={<Icon name="poop" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.poop }} />}
-          value={summary.lastPoop ? since((now.getTime() - ts(summary.lastPoop)) / 1000) : null}
-        />
-        {sleeping ? (
-          <Since label="Asleep" mark={<Icon name="moon" size={13} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.sleep }} />} value={since((now.getTime() - ts(sleeping)) / 1000)} />
-        ) : (
+      <div>
+        <div className="grid grid-cols-3">
+          {/* All three are "how long since", so they share one form (and fit a third of a phone). The marks are the dock's. */}
           <Since
-            label="Awake"
-            mark={<Icon name="sun" size={13} className="mp-kind-ink shrink-0" style={{ color: KIND_COLOR.med }} />}
-            value={lastSleepEnd ? since((now.getTime() - Date.parse(lastSleepEnd)) / 1000) : null}
+            label="Since pee"
+            mark={<Icon name="droplet" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.pee }} />}
+            value={summary.lastPee ? since((now.getTime() - ts(summary.lastPee)) / 1000) : null}
           />
+          <Since
+            label="Since poop"
+            mark={<Icon name="poop" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.poop }} />}
+            value={summary.lastPoop ? since((now.getTime() - ts(summary.lastPoop)) / 1000) : null}
+          />
+          {sleeping ? (
+            <Since label="Asleep" mark={<Icon name="moon" size={13} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.sleep }} />} value={since((now.getTime() - ts(sleeping)) / 1000)} />
+          ) : (
+            <Since
+              label="Awake"
+              mark={<Icon name="sun" size={13} className="mp-kind-ink shrink-0" style={{ color: KIND_COLOR.med }} />}
+              value={lastSleepEnd ? since((now.getTime() - Date.parse(lastSleepEnd)) / 1000) : null}
+            />
+          )}
+        </div>
+        {/*
+          While she nurses the "Last fed" line (which carries this) steps aside, so it rides under the tiles as one slim
+          line, in the tiles' own bottom padding: at 375x667 with a feed of several parts it still clears the dock (and
+          her strip on it) without pushing the tiles down.
+        */}
+        {nursing && gap != null && (
+          <p className="-mt-1.5 flex items-center gap-1.5 px-4 pb-2.5 text-[12px] leading-4 text-mp-ink-2">
+            <Icon name="history" size={13} className="shrink-0 text-mp-ink-3" />
+            <span className="min-w-0">
+              Lately: about every {formatDuration(gap * 60)} <span className="whitespace-nowrap">(start to start)</span>
+            </span>
+          </p>
         )}
       </div>
 
@@ -305,17 +320,6 @@ export default function StatusCard() {
           </button>
         ))}
       {clusterInfo.sheet}
-      {/* While she nurses the "Last fed" line (which carries this) steps aside, so it gets its own row. */}
-      {nursing && gap != null && (
-        <div className="flex items-center gap-3 px-4 py-3">
-          <span aria-hidden className="flex w-8 shrink-0 justify-center text-mp-ink-3">
-            <Icon name="history" size={19} />
-          </span>
-          <p className="text-[14px] text-mp-ink-2">
-            Lately: about every {formatDuration(gap * 60)} <span className="whitespace-nowrap">(start to start)</span>
-          </p>
-        </div>
-      )}
     </div>
   );
 }

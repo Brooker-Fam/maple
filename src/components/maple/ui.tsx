@@ -1181,8 +1181,24 @@ const toastLook = (t: Toast) =>
     t.tone === "error" ? "bg-[#8A2F1C] text-white [.maple-night_&]:bg-[#2A140C] [.maple-night_&]:text-[#F0A07A]" : "bg-mp-toast text-mp-on-toast"
   );
 
+/**
+ * A toast that answers a chip tapped a moment ago (the question's [Left] then "On the Left from 2:17 · Earlier?",
+ * a start's [Back and forth]) appears where that toast was, often with its own first chip right under the finger.
+ * Its chips wait CHIP_ARM_MS once it shows, so a late second tap on "Left" never lands on "2 min earlier" (the
+ * dock's cooldowns don't cover a chip-to-chip chain). Its Undo, and any toast not raised by a chip, answer at once.
+ */
+const CHIP_CHAIN_MS = 3000;
+const CHIP_ARM_MS = 600;
+let lastChipTap = -Infinity;
+
 /** A toast's text, chips and trailing button (Undo, "Back to 4:25"). */
 function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) {
+  // When it showed, and whether a chip tap just raised it (performance clock: monotonic, like the dock's cooldowns).
+  const shown = useRef<{ at: number; chained: boolean } | null>(null);
+  useEffect(() => {
+    const at = performance.now();
+    shown.current = { at, chained: at - lastChipTap < CHIP_CHAIN_MS };
+  }, []);
   const undo = t.undo && (
     <button
       type="button"
@@ -1211,6 +1227,10 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
               type="button"
               aria-label={a.ariaLabel ?? (a.sub ? `${a.label}, ${a.sub}` : a.label)}
               onClick={() => {
+                const tapped = performance.now();
+                const s = shown.current;
+                if (s?.chained && tapped - s.at < CHIP_ARM_MS) return;
+                lastChipTap = tapped;
                 a.onClick();
                 dismiss(t.id);
               }}

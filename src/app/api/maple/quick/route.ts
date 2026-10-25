@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { careErrorResponse, errorResponse, json } from "@/lib/maple/api";
 import { listMembers, memberFor } from "@/lib/maple/auth";
-import { aheadOfSlot, careTime, countedAs, matchPlan, type PlanMatch, type PlanView } from "@/lib/maple/care";
+import { aheadOfSlot, careTime, countedAs, matchPlan, pressingFirst, type PlanMatch, type PlanView } from "@/lib/maple/care";
 import { momSpeak, samePlans, spokenLine } from "@/lib/maple/care-mcp";
 import { carePersonName, carePlanViews, careSession, logCareDose, planDoses } from "@/lib/maple/care-store";
 import { describeEntry } from "@/lib/maple/describe";
@@ -222,7 +222,9 @@ export async function POST(request: NextRequest) {
           const d = nursing.data as FeedData;
           const mins = Math.round((now.getTime() - Date.parse(nursing.started_at)) / 60000);
           const open = openSegment(d.segments);
-          const where = open?.side === "B" ? ", going back and forth" : open ? ` on the ${side(open.side)}` : d.last_side ? ` on the ${side(d.last_side)}` : "";
+          // On a break (nothing open), never the last side tracked: after going back and forth that's from before it.
+          const breakAt = open ? null : d.segments?.at(-1)?.end;
+          const where = open ? (open.side === "B" ? ", going back and forth" : ` on the ${side(open.side)}`) : breakAt ? `, on a break since ${formatTime(breakAt, tz)}` : "";
           bits.push(`${name} is nursing now${where}, ${mins} minute${mins === 1 ? "" : "s"} in.`);
           // A cluster still going: how many feeds so far (Today's rule: 3+ feeds, each under 30 minutes after the last ended).
           const c = s.lastFed?.kind === "breast" && s.lastFed.run?.cluster != null ? s.cluster : null;
@@ -268,15 +270,17 @@ const okFirst = (views: PlanView[]) => [...views.filter((v) => v.status.state ==
 
 /**
  * Her medicines for "Maple status" ("Brittany's medicines: Ibuprofen OK
- * since 2:10 AM; Tylenol OK after 10:55 AM."), most pressing first, capped at
- * two: only for someone who can read her page, and never an error (Maple's
- * status never waits on hers; a failure is reported as a code only).
+ * since 2:10 AM; Tylenol OK after 10:55 AM."), most pressing first by the
+ * rule Today's strip and maple_status use (pressingFirst: a set time not
+ * logged leads), capped at two: only for someone who can read her page, and
+ * never an error (Maple's status never waits on hers; a failure is reported
+ * as a code only).
  */
 async function momForStatus(me: Member, members: Member[], baby: Baby): Promise<string | null> {
   try {
     const s = await careSession({ id: me.email, role: me.role, viaAdmin: false, channel: "siri" }, { members, baby });
     if (!s.person || !s.access.read) return null;
-    return momSpeak(await carePlanViews(s), { name: carePersonName(s.person, members), self: s.access.self, now: s.now, tz: s.tz });
+    return momSpeak(pressingFirst(await carePlanViews(s)), { name: carePersonName(s.person, members), self: s.access.self, now: s.now, tz: s.tz });
   } catch {
     await captureServerException(new Error("care_status"), { route: "POST /api/maple/quick" });
     return null;
@@ -317,7 +321,12 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
       } else if (same.length > 1) m = { kind: "ambiguous", plans: same };
     }
     if (m.kind === "ambiguous") {
-      return json({ ok: false, not_found: true, speak: `Which one: ${andList(m.plans.map((p) => p.name)).replace(/ and ([^,]*)$/, " or $1")}?`, plans: m.plans.map((p) => ({ id: `p${p.id}`, label: views.find((v) => v.plan.id === p.id)!.line })) });
+      // One loose match ("Tylenol" with only Tylenol PM on her list) is a yes or no, never a one-item choice.
+      const speak =
+        m.plans.length === 1
+          ? `Did you mean ${m.plans[0].name}? Nothing was saved.`
+          : `Which one: ${andList(m.plans.map((p) => p.name)).replace(/ and ([^,]*)$/, " or $1")}?`;
+      return json({ ok: false, not_found: true, speak, plans: m.plans.map((p) => ({ id: `p${p.id}`, label: views.find((v) => v.plan.id === p.id)!.line })) });
     }
     // A p id is never a name: one that's no longer on her list answers like an unknown pick.
     if (m.kind === "none" && /^p?\d{8}$/i.test(med)) {
