@@ -1,6 +1,7 @@
 import { BadRequest, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
 import { getBaby, updateBaby, type BabyPatch } from "@/lib/maple/store";
 import { isDayKey } from "@/lib/maple/time";
+import { checkLogSwitches } from "@/lib/maple/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,12 @@ export const PATCH = withMember("PATCH /api/maple/baby", async (request, me) => 
         }
         patch.acks = clean;
       }
+    }
+    // Bottles and Pumping (Family → On Today) are switches: true, false, or null for the default.
+    try {
+      checkLogSwitches(incoming);
+    } catch (e) {
+      throw new BadRequest(e instanceof Error ? e.message : "settings look off");
     }
     if ("admin_as" in incoming) {
       // An owner can have the site admin login (the calendar connector) log as

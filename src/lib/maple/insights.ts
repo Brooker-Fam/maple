@@ -8,7 +8,17 @@
  * Clinical day-of-life targets use rolling 24-hour windows, never the local
  * calendar day, so a baby born at 11 PM doesn't look "behind" at midnight.
  */
-import { feedMinutes, suggestNextSide } from "./feed";
+import {
+  feedClusters,
+  feedMinutes,
+  lastFedAnchor,
+  nextSideFor,
+  nursingRuns,
+  type FeedCluster,
+  type LastFed,
+  type NextSide,
+  type NursingRun,
+} from "./feed";
 import {
   ALERT_TIERS,
   BIRTH_WEIGHT_REGAIN_DAY,
@@ -43,13 +53,24 @@ export type Alert = {
 export type DayStats = {
   /** 'YYYY-MM-DD' local day, or 'last24h'. */
   key: string;
+  /**
+   * Feeds as the family counts them: nursing by the 10-minute rule
+   * (nursingRuns: Pause or Done alike, a 10+ minute break starts a new feed)
+   * plus each bottle, counted on the day each began.
+   */
   feeds: number;
   breastFeeds: number;
   bottleFeeds: number;
+  /** Of breastFeeds, how many were in a cluster ("11 · 4 in a cluster"). */
+  clusterFeeds: number;
+  /** Clusters that began in the window ("11 feeds (one cluster)"). */
+  clusters: number;
   /** Nursing as whole minutes × 60: each feed's rows added up (feedMinutes), so every surface shows the same minutes. */
   nursingSec: number;
   leftSec: number;
   rightSec: number;
+  /** Back and forth (both sides, not tracked): part of nursingSec, never of leftSec or rightSec. */
+  bothSec: number;
   bottleMl: number;
   pumpMl: number;
   diapers: number;
@@ -78,11 +99,23 @@ export type Summary = {
   age: BabyAge | null;
   /** Running timers, oldest first. */
   active: Entry[];
+  /** The newest feed entry (to open it). Her last feed as counted (a run of entries) is lastFed. */
   lastFeed: EntryOf<"feed"> | null;
   /** Last feed's totals in seconds, as whole minutes × 60 like its rows (breast), and ml (bottle). */
   lastFeedTotals: { left: number; right: number; total: number; ml: number | null } | null;
-  /** Minutes since the last feed started, or null. */
+  /**
+   * Her last feed by the 10-minute rule, and when "Last fed" counts from
+   * (feed.ts lastFedAnchor): its start, or 40 minutes before a long
+   * back-and-forth (or 3+ part) feed ended.
+   */
+  lastFed: LastFed | null;
+  /** Minutes since lastFed.at (what "Last fed … ago" and the feed-gap checks say), or null. */
   minutesSinceFeed: number | null;
+  /** The cluster her last nursing feed belongs to (3+ feeds, each under 30 min after the last), or null. */
+  cluster: FeedCluster | null;
+  /** The side to offer next (nextSideFor): with the rule behind it and "or the fuller side" after back and forth. */
+  next: NextSide | null;
+  /** next?.side, for the places that only need the side. */
   nextSide: Side | null;
   lastDiaper: EntryOf<"diaper"> | null;
   lastPee: EntryOf<"diaper"> | null;
@@ -132,9 +165,12 @@ function emptyStats(key: string): DayStats {
     feeds: 0,
     breastFeeds: 0,
     bottleFeeds: 0,
+    clusterFeeds: 0,
+    clusters: 0,
     nursingSec: 0,
     leftSec: 0,
     rightSec: 0,
+    bothSec: 0,
     bottleMl: 0,
     pumpMl: 0,
     diapers: 0,
@@ -157,12 +193,28 @@ function overlapSec(a: number, b: number, lo: number, hi: number): number {
 /**
  * Totals for one window [from, to). Point events count by start time; sleep
  * and tummy time count only the part inside the window, so a sleep across
- * midnight splits between the two days.
+ * midnight splits between the two days. Nursing feeds are counted as runs
+ * (feed.ts nursingRuns) by when each began; pass `runs` worked out from
+ * every loaded entry when `entries` is only this window's, so a feed that
+ * began before the window isn't counted again in it.
  */
-export function statsFor(entries: Entry[], from: Date, to: Date, key: string, now: Date): DayStats {
+export function statsFor(entries: Entry[], from: Date, to: Date, key: string, now: Date, runs?: readonly NursingRun[]): DayStats {
   const s = emptyStats(key);
   const lo = from.getTime();
   const hi = to.getTime();
+  const all = runs ?? nursingRuns(entries, now);
+  const clustersSeen = new Set<number>();
+  for (const r of all) {
+    if (r.cluster !== null && !clustersSeen.has(r.cluster)) {
+      clustersSeen.add(r.cluster);
+      // A cluster counts on the day its first feed began.
+      if (r.start >= lo && r.start < hi) s.clusters++;
+    }
+    if (r.start < lo || r.start >= hi) continue;
+    s.feeds++;
+    s.breastFeeds++;
+    if (r.cluster !== null) s.clusterFeeds++;
+  }
   for (const e of entries) {
     const start = Date.parse(e.started_at);
     const end = e.ended_at ? Date.parse(e.ended_at) : e.active ? now.getTime() : start;
@@ -170,15 +222,16 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
     switch (e.kind) {
       case "feed": {
         if (!inWindow) break;
-        s.feeds++;
         if (e.data.method === "bottle") {
+          s.feeds++;
           s.bottleFeeds++;
           s.bottleMl += e.data.amount_ml ?? 0;
         } else {
-          s.breastFeeds++;
+          // Counted above as runs; the minutes stay each entry's own rows.
           const t = feedMinutes(e, now);
           s.leftSec += t.left * 60;
           s.rightSec += t.right * 60;
+          s.bothSec += t.both * 60;
           s.nursingSec += t.total * 60;
         }
         break;
@@ -221,9 +274,10 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
 /** One DayStats per local day from `fromKey` to `toKey` inclusive, oldest first. */
 export function dailyStats(entries: Entry[], fromKey: string, toKey: string, now: Date, tz: string = DEFAULT_TZ): DayStats[] {
   const out: DayStats[] = [];
+  const runs = nursingRuns(entries, now);
   for (let k = fromKey; k <= toKey; k = addDays(k, 1)) {
     const [a, b] = dayBounds(k, tz);
-    out.push(statsFor(entries, a, b, k, now));
+    out.push(statsFor(entries, a, b, k, now, runs));
   }
   return out;
 }
@@ -336,20 +390,26 @@ export function summarize(opts: {
 
   const todayKey = dayKey(now, tz);
   const [todayStart, todayEnd] = dayBounds(todayKey, tz);
-  const today = statsFor(entries, todayStart, todayEnd, todayKey, now);
-  const last24h = statsFor(entries, new Date(nowMs - 24 * H), new Date(nowMs + 1), "last24h", now);
+  // Feeds by the 10-minute rule, worked out once from everything loaded.
+  const runs = nursingRuns(entries, now);
+  const today = statsFor(entries, todayStart, todayEnd, todayKey, now, runs);
+  const last24h = statsFor(entries, new Date(nowMs - 24 * H), new Date(nowMs + 1), "last24h", now, runs);
 
   const active = entries.filter((e) => e.active).sort((a, b) => ts(a) - ts(b));
   const lastFeed = newest(entries, "feed");
-  const lastBreast = newest(entries, "feed", (e) => e.data.method === "breast");
   const lastMin = lastFeed ? feedMinutes(lastFeed, now) : null;
   const lastFeedTotals =
     lastFeed && lastMin
       ? { left: lastMin.left * 60, right: lastMin.right * 60, total: lastMin.total * 60, ml: lastFeed.data.method === "bottle" ? lastFeed.data.amount_ml ?? null : null }
       : null;
-  const minutesSinceFeed = lastFeed ? Math.max(0, Math.round((nowMs - ts(lastFeed)) / 60000)) : null;
+  // "Last fed" counts from her last feed's start, or 40 min before a long back-and-forth one ended (lastFedAnchor).
+  const lastFed = lastFedAnchor(entries, now, runs);
+  const minutesSinceFeed = lastFed ? Math.max(0, Math.round((nowMs - Date.parse(lastFed.at)) / 60000)) : null;
+  const lastRun = runs[runs.length - 1] ?? null;
+  const cluster = lastRun && lastRun.cluster !== null ? feedClusters(runs).find((c) => c.runs.includes(lastRun)) ?? null : null;
   // While nursing, this is the side to offer at the *next* feed.
-  const nextSide = suggestNextSide(lastBreast?.data);
+  const next = nextSideFor(runs, now);
+  const nextSide = next?.side ?? null;
 
   const lastDiaper = newest(entries, "diaper");
   const lastPee = newest(entries, "diaper", (e) => e.data.pee);
@@ -520,16 +580,18 @@ export function summarize(opts: {
     const nursingNow = active.some((e) => e.kind === "feed");
     const hour = localParts(now, tz).hour;
     const isNight = hour >= 22 || hour < 7;
-    if (lastFeed && minutesSinceFeed != null && !nursingNow && !(rule.nightsOff && isNight)) {
+    // Measured from the moment "Last fed" counts from, so the warning and the big number agree.
+    const gapFeed = lastFed?.entry ?? lastFeed;
+    if (gapFeed && minutesSinceFeed != null && !nursingNow && !(rule.nightsOff && isNight)) {
       const gap = `${Math.floor(minutesSinceFeed / 60)}h ${String(minutesSinceFeed % 60).padStart(2, "0")}m`;
       if (rule.firmMin && minutesSinceFeed >= rule.firmMin) {
-        push(`feed-gap:${lastFeed.id}:firm`, {
+        push(`feed-gap:${gapFeed.id}:firm`, {
           tier: "nudge",
           title: `${gap} since her last feed`,
           body: "Please wake her to feed: undress her, change her diaper, or try skin-to-skin. If she's too sleepy to feed, call your pediatrician.",
         });
       } else if (minutesSinceFeed >= rule.nudgeMin) {
-        push(`feed-gap:${lastFeed.id}`, {
+        push(`feed-gap:${gapFeed.id}`, {
           tier: "nudge",
           title: `${gap} since her last feed`,
           body: rule.firmMin
@@ -662,7 +724,10 @@ export function summarize(opts: {
     active,
     lastFeed,
     lastFeedTotals,
+    lastFed,
     minutesSinceFeed,
+    cluster,
+    next,
     nextSide,
     lastDiaper,
     lastPee,

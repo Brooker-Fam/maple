@@ -6,7 +6,7 @@ import { NOTE_TAG_LABELS } from "@/lib/maple/describe";
 import { JAUNDICE_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, dayKey, daysBetween, formatTime, formatTimeNear, parseDayKey } from "@/lib/maple/time";
-import type { Entry, EntryKind, EntryOf } from "@/lib/maple/types";
+import type { Baby, Entry, EntryKind, EntryOf } from "@/lib/maple/types";
 import { formatTemp, formatVolume, formatWeight } from "@/lib/maple/units";
 import { careTime } from "@/lib/maple/care";
 import { useCareNav } from "./care/CareNav";
@@ -32,6 +32,20 @@ import { useMaple } from "./useMaple";
  */
 
 export const LONG_PRESS_MS = 450;
+
+/**
+ * The log-wide switches in Family → On Today (maple_babies.settings, like
+ * show_alerts): Bottles ("feeds_bottle": the dock's Bottle tile and the new
+ * feed form's Breast/Bottle choice) and Pumping ("track_pump": Pump in
+ * More). Both are on unless switched off, so a new log has them. Off only
+ * hides the buttons: anything already logged still shows where it is, and
+ * Claude and Siri can still log either. (The API checks the same keys:
+ * validate.ts LOG_SWITCH_KEYS.)
+ */
+export function logSwitches(baby: Pick<Baby, "settings"> | null | undefined): { bottles: boolean; pumping: boolean } {
+  const s = (baby?.settings ?? {}) as Record<string, unknown>;
+  return { bottles: s.feeds_bottle !== false, pumping: s.track_pump !== false };
+}
 
 /**
  * After a hold opens a sheet, some phones (iOS) still send a click when the
@@ -161,6 +175,8 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const actions = useTimerActions();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
+  // Pumping off (Family → On Today): no Pump row; anything already pumped still shows in the log.
+  const { pumping } = logSwitches(state?.baby);
   const [held, setHeld] = useState(true);
   useEffect(() => {
     try {
@@ -312,15 +328,19 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
         onHold: earlier("tummy"),
       },
       { id: "bath", label: "Bath", sub: lastBath && when(lastBath.started_at), icon: "bath", color: KIND_COLOR.bath, onTap: () => go("bath"), onHold: earlier("bath") },
-      {
-        id: "pump",
-        label: "Pump",
-        sub: lastPump && (pumped ? `${formatVolume(pumped, units)} · ${when(lastPump.started_at)}` : when(lastPump.started_at)),
-        icon: "milk",
-        color: KIND_COLOR.pump,
-        onTap: () => go("pump"),
-        onHold: earlier("pump"),
-      },
+      ...(pumping
+        ? [
+            {
+              id: "pump",
+              label: "Pump",
+              sub: lastPump && (pumped ? `${formatVolume(pumped, units)} · ${when(lastPump.started_at)}` : when(lastPump.started_at)),
+              icon: "milk" as const,
+              color: KIND_COLOR.pump,
+              onTap: () => go("pump"),
+              onHold: earlier("pump"),
+            },
+          ]
+        : []),
     ],
     // Her health.
     [

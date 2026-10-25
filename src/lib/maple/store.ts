@@ -35,6 +35,7 @@ import type {
   Segment,
   Side,
   Source,
+  StretchSide,
   TimerKind,
   TimerResponse,
 } from "./types";
@@ -272,7 +273,8 @@ function manualFeedEnd(kind: EntryKind, data: unknown, startedAt: Date): Date | 
   if (kind !== "feed") return null;
   const d = data as FeedData;
   if (d.method !== "breast" || d.segments?.length) return null;
-  const sec = (d.left_sec ?? 0) + (d.right_sec ?? 0);
+  // Back and forth (both_sec) is nursing too.
+  const sec = (d.left_sec ?? 0) + (d.right_sec ?? 0) + (d.both_sec ?? 0);
   return sec > 0 ? new Date(startedAt.getTime() + sec * 1000) : null;
 }
 
@@ -378,7 +380,7 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
   if (
     cur.kind === "feed" &&
     patch.data &&
-    ("left_sec" in patch.data || "right_sec" in patch.data) &&
+    ("left_sec" in patch.data || "right_sec" in patch.data || "both_sec" in patch.data) &&
     !("segments" in patch.data) &&
     !cur.active
   ) {
@@ -396,6 +398,8 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
     // Sent as [] (an old or hand-made client): a timed feed is its parts, so that's a 400, not a crash.
     if (!segments.length) throw new Error("A timed feed needs at least one side");
     noFutureEnds(segments, now);
+    // summarize leaves the side stored when the feed began going back and forth; a feed with no back and forth now drops both_sec.
+    delete mergedData.both_sec;
     mergedData = { ...mergedData, segments, ...summarize(segments) };
     startedAt = new Date(segments[0].start);
     const lastEnd = Date.parse(segments[segments.length - 1].end!);
@@ -654,11 +658,18 @@ async function mutateTimer(
  * Start a timer. Idempotent per kind: if one is already running (say, the
  * other parent started it a second ago), return that one, switching sides if
  * asked. A unique index backs this up when two phones race.
+ *
+ * `backAndForth` (feeds): she's going back and forth from the start. The
+ * feed's one part is both sides and `side` is stored as where she started
+ * (what the next side alternates from). With a feed already running, it goes
+ * back and forth from now instead (a part under a minute old turns both,
+ * switchTo), or resumes going both if it was paused.
  */
 export async function startTimer(opts: {
   babyId: number;
   kind: TimerKind;
   side?: Side;
+  backAndForth?: boolean;
   at: Date;
   createdBy: string;
   source: Source;
@@ -666,19 +677,22 @@ export async function startTimer(opts: {
   /** The phone's per-install id (X-Maple-Device). */
   device?: string | null;
 }): Promise<{ entry: Entry; alreadyRunning: boolean }> {
+  const both = opts.kind === "feed" && !!opts.backAndForth;
   const existing = async () => {
     const running = (await activeTimers(opts.babyId)).find((e) => e.kind === opts.kind);
     if (!running) return null;
     // A different side switches (now: this is a tap, not a time someone gave); the same side resumes a paused feed.
-    if (running.kind === "feed" && opts.side && opts.side !== openSegment((running.data as FeedData).segments)?.side) {
-      return { entry: (await switchSide(running.id, opts.side, undefined, opts.createdBy)).entry, alreadyRunning: true };
+    // Back and forth goes both from now (or resumes going both).
+    const want: StretchSide | undefined = both ? "B" : opts.side;
+    if (running.kind === "feed" && want && want !== openSegment((running.data as FeedData).segments)?.side) {
+      return { entry: (await switchSide(running.id, want, undefined, opts.createdBy)).entry, alreadyRunning: true };
     }
     return { entry: running, alreadyRunning: true };
   };
   const found = await existing();
   if (found) return found;
   const data: EntryDataByKind[TimerKind] =
-    opts.kind === "feed" ? startBreast(opts.side ?? "L", opts.at) : {};
+    opts.kind === "feed" ? startBreast(opts.side ?? "L", opts.at, { both }) : {};
   try {
     const { entry, deduped } = await createEntryOnce({
       babyId: opts.babyId,
@@ -726,8 +740,15 @@ export type SwitchResponse = TimerResponse & { moved?: true };
  * phone has since resumed): on that side, an earlier time moves when she
  * went back on (`moved`, with `before` for "Back to …"); on the other side
  * it's 409 "changed", since what the person saw is gone (switchTo).
+ *
+ * `side` "B" is back and forth from now ("stop tracking sides"); a side
+ * while she's going both is "She's on the Left" (tracking sides again).
+ * resided: going both turned a part under a minute old into the both part
+ * (or a side tapped within 15 s of going both re-sided it); reverted: that
+ * side tap took going both back. Undo is retime undo_tap, as for any tap:
+ * it gives a re-sided part its side back, or drops the part the tap added.
  */
-export async function switchSide(id: number, side: Side, at: Date | undefined, by?: string, opts: { resume?: boolean } = {}): Promise<SwitchResponse> {
+export async function switchSide(id: number, side: StretchSide, at: Date | undefined, by?: string, opts: { resume?: boolean } = {}): Promise<SwitchResponse> {
   const now = new Date();
   const t = tapTime(at, now);
   return mutateTimer(id, (cur) => {
@@ -840,7 +861,8 @@ function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): T
   const sides = summarize(segments);
   if (active) {
     // The latest tap stays only if it still fits the stretches put back ("Put it back" after an undo brings it back too).
-    const data: TapFeedData = { ...d, segments, first_side: sides.first_side, last_side: sides.last_side };
+    // A side summarize can't give (a feed that began going back and forth) stays the one stored.
+    const data: TapFeedData = { ...d, segments, first_side: sides.first_side ?? d.first_side, last_side: sides.last_side ?? d.last_side };
     const tap = restoredTap(d, segments, true);
     if (tap) data.last_tap = tap;
     else delete data.last_tap;
@@ -850,6 +872,7 @@ function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): T
   if (!edit.ended_at || Date.parse(edit.ended_at) < lastEnd - NEAR) throw new Error("A finished feed can't end before its last side");
   const end = Math.max(Date.parse(edit.ended_at), lastEnd);
   const data: TapFeedData = { ...d, segments, ...sides };
+  if (!sides.both_sec) delete data.both_sec;
   if (finish) {
     // The tap the Continue made isn't on the finished feed; one that still fits it (the pause before Done) stays.
     const tap = restoredTap(d, segments, true);
@@ -985,7 +1008,7 @@ export async function discardedBy(id: number): Promise<string | null | undefined
  * "changed" and nothing is written. The answer's `before` is the finished
  * feed (with paused_at_stop), which a retime restore puts back exactly.
  */
-export async function reopenTimerDetailed(id: number, by?: string, opts: { side?: Side; at?: Date; expectUpdatedAt?: string } = {}): Promise<TimerResponse> {
+export async function reopenTimerDetailed(id: number, by?: string, opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string } = {}): Promise<TimerResponse> {
   const now = new Date();
   const t = tapTime(opts.at, now);
   try {
@@ -1008,6 +1031,7 @@ export async function reopenTimerDetailed(id: number, by?: string, opts: { side?
       const rest: TapFeedData = { ...d, segments: segs };
       delete rest.left_sec;
       delete rest.right_sec;
+      delete rest.both_sec;
       delete rest.paused_at_stop;
       delete rest.stopped_at;
       const side = opts.side;
@@ -1048,7 +1072,7 @@ export async function reopenTimerDetailed(id: number, by?: string, opts: { side?
  * and the old one is carried on, on `side`, from the new one's start. If
  * carrying on fails, the new one comes back as it was.
  */
-export async function joinFeeds(newId: number, intoId: number, side: Side, by: string | undefined, opts: { expectNew?: string; expectInto?: string } = {}): Promise<TimerResponse & { joined: Entry }> {
+export async function joinFeeds(newId: number, intoId: number, side: StretchSide, by: string | undefined, opts: { expectNew?: string; expectInto?: string } = {}): Promise<TimerResponse & { joined: Entry }> {
   const cur = await getEntry(newId);
   if (!cur) throw new NotFound(`Timer ${newId} not found`);
   if (cur.kind !== "feed" || !cur.active) throw new Conflict("That feed already stopped", cur, "stopped");
@@ -1080,7 +1104,7 @@ export async function joinFeeds(newId: number, intoId: number, side: Side, by: s
 }
 
 /** reopenTimerDetailed's entry. */
-export async function reopenTimer(id: number, by?: string, opts: { side?: Side; at?: Date; expectUpdatedAt?: string } = {}): Promise<Entry> {
+export async function reopenTimer(id: number, by?: string, opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string } = {}): Promise<Entry> {
   return (await reopenTimerDetailed(id, by, opts)).entry;
 }
 

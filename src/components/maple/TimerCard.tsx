@@ -12,12 +12,19 @@ import Lantern from "./Lantern";
 import { useNightActive } from "./nightLook";
 import { SIDE_COLOR, SIDE_INK } from "./palette";
 import { useSheets } from "./sheets";
+import { useClusterInfo } from "./sheets/ClusterInfoSheet";
 import { Button, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
 
 /**
  * A running timer (nursing, sleep, tummy time, pumping) on the Today screen.
+ *
+ * Going back and forth (both sides, not tracked) is a part like a side:
+ * "Both sides · 6:14–6:52 · 38 min" in the rows, "Both sides · since 6:14"
+ * live, with a line under it that opens the Cluster feeding sheet. The …
+ * menu always offers back and forth (or, while both, "She's on the Left /
+ * Right" to track sides again).
  *
  * The card shows what happened and is where you fix it: one labelled row per
  * part of a feed (a side or a break), then the live part with its clock, then
@@ -89,6 +96,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   const isFeed = kind === "feed" && n.parts.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
   const [lantern, setLantern] = useState(false);
+  const clusterInfo = useClusterInfo();
   const menuWrap = useRef<HTMLDivElement>(null);
   const menuBtn = useRef<HTMLButtonElement>(null);
 
@@ -217,7 +225,9 @@ export default function TimerCard({ entry }: { entry: Entry }) {
                 <Icon name="ellipsis" size={22} strokeWidth={2.25} />
               </button>
               <AnimatePresence>
-                {menuOpen && !pending && <TimerMenu key="menu" entry={entry} close={() => setMenuOpen(false)} actions={actions} confirm={discardQuestion} />}
+                {menuOpen && !pending && (
+                  <TimerMenu key="menu" entry={entry} n={n} close={() => setMenuOpen(false)} actions={actions} confirm={discardQuestion} onInfo={() => clusterInfo.open()} />
+                )}
               </AnimatePresence>
             </div>
           </div>
@@ -231,6 +241,8 @@ export default function TimerCard({ entry }: { entry: Entry }) {
               parts={past}
               mode="card"
               fold
+              // A short phone folds two or more past parts into one row (Left, Right, then back and forth is the usual case).
+              tight={compact}
               tz={tz}
               readOnly={!controls}
               disabled={waiting}
@@ -261,7 +273,28 @@ export default function TimerCard({ entry }: { entry: Entry }) {
             <LiveBlock entry={entry} n={n} tz={tz} onPick={() => openFix("current")} disabled={waiting} readOnly={!controls} compact={compact} />
           </div>
           {isFeed && n.paused && controls && (
-            <p className={cx("text-[13px] text-mp-ink-2", compact ? "leading-[15px]" : "mt-1 leading-snug")}>When she latches, tap her side in the dock below.</p>
+            <p className={cx("text-[13px] text-mp-ink-2", compact ? "leading-[15px]" : "mt-1 leading-snug")}>
+              {n.both ? "When she latches, tap Back on in the dock below." : "When she latches, tap her side in the dock below."}
+            </p>
+          )}
+          {/*
+            Going back and forth: no Switch taps, and one tap to what the sources say about it (the Cluster
+            feeding sheet). On a short screen it's the … menu's "About back and forth" instead, so the card
+            and the Since tiles still clear the dock.
+          */}
+          {isFeed && n.both && !n.paused && !compact && controls && (
+            <button
+              type="button"
+              onClick={() => clusterInfo.open()}
+              aria-label="No need to tap Switch while she goes back and forth. About back and forth"
+              className="-mx-2 flex min-h-[44px] w-[calc(100%+16px)] items-center gap-1.5 rounded-xl px-2 text-left text-[13px] text-mp-ink-2 active:bg-mp-ink/5"
+            >
+              <span className="min-w-0 flex-1 truncate">No need to tap Switch.</span>
+              <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-mp-accent-fg">
+                <Icon name="info" size={15} />
+                About back and forth
+              </span>
+            </button>
           )}
           {controls &&
             (ownDone ? (
@@ -279,6 +312,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
       )}
 
       {lantern && controls && <Lantern entry={entry} onClose={() => setLantern(false)} dim={isNight()} />}
+      {clusterInfo.sheet}
     </motion.section>
   );
 }
@@ -290,10 +324,28 @@ const CONFIRM_ARM_MS = 600;
 
 /**
  * The … menu: a small card anchored under the button, floating over the
- * timer. Discard on a timer that has run a while asks first, in place
- * ("Discard 20 min of nursing?"), since it sits right under Fell asleep.
+ * timer. A timed feed always offers back and forth here ("Back and forth ·
+ * Stop tracking sides from now"; on a break, back on going back and forth);
+ * while she goes both, "She's on the Left / Right" track sides again, and
+ * "About back and forth" opens the Cluster feeding sheet. Discard on a timer
+ * that has run a while asks first, in place ("Discard 20 min of nursing?"),
+ * since it sits right under Fell asleep.
  */
-function TimerMenu({ entry, close, actions, confirm }: { entry: Entry; close: () => void; actions: Actions; confirm: string | null }) {
+function TimerMenu({
+  entry,
+  n,
+  close,
+  actions,
+  confirm,
+  onInfo,
+}: {
+  entry: Entry;
+  n: TimerNumbers;
+  close: () => void;
+  actions: Actions;
+  confirm: string | null;
+  onInfo: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [askedAt, setAskedAt] = useState<number | null>(null);
   // The question takes the menu's place: focus moves to Keep, the safe answer.
@@ -337,6 +389,51 @@ function TimerMenu({ entry, close, actions, confirm }: { entry: Entry; close: ()
         </div>
       ) : (
         <>
+          {entry.kind === "feed" && n.parts.length > 0 &&
+            (n.both ? (
+              <>
+                {/* One row, two answers: the menu stays short enough to clear the dock on a small phone. */}
+                <div className="flex min-h-[60px] items-center gap-2 px-4 py-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-semibold text-mp-ink">Track sides</span>
+                    <span className="block text-[13px] text-mp-ink-2">{n.paused ? "Back on the…" : "She's on the…"}</span>
+                  </span>
+                  {(["L", "R"] as Side[]).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      aria-label={`She's ${n.paused ? "back " : ""}on the ${SIDE_NAME[s]}: track sides again from now`}
+                      onClick={() => {
+                        close();
+                        void actions.trackSides(entry, s);
+                      }}
+                      className="inline-flex min-h-[44px] min-w-[52px] shrink-0 items-center justify-center rounded-xl bg-mp-sunken px-2.5 text-[14px] font-semibold text-mp-ink active:scale-[0.97] [.maple-night_&]:text-[#E8A23F]"
+                    >
+                      {SIDE_NAME[s]}
+                    </button>
+                  ))}
+                </div>
+                <MenuItem
+                  icon="info"
+                  label="About back and forth"
+                  sub="What's normal, who to ask"
+                  onClick={() => {
+                    close();
+                    onInfo();
+                  }}
+                />
+              </>
+            ) : (
+              <MenuItem
+                icon="arrow-left-right"
+                label={n.paused ? "Back on, back and forth" : "Back and forth"}
+                sub={n.paused ? "Both sides from now, no Switch taps" : "Stop tracking sides from now"}
+                onClick={() => {
+                  close();
+                  void actions.backAndForth(entry);
+                }}
+              />
+            ))}
           {entry.kind === "feed" && (
             <MenuItem
               icon="moon"
@@ -417,7 +514,7 @@ function ForgottenPrompt({
         <p className={cx(tone.heading, "leading-tight", compact ? "text-[20px]" : "text-[22px]")}>Still on a break?</p>
         <p className={cx("text-sm text-mp-ink-2 tabular-nums", compact ? "mt-0.5" : "mt-1")}>
           Since {formatTime(n.current.since, tz)} ({minutesText(n.current.min)})
-          {lastSide?.kind === "side" ? ` · ${SIDE_NAME[lastSide.side]} ${minutesText(lastSide.min)}` : ""}
+          {lastSide?.kind === "side" ? ` · ${lastSide.side === "B" ? "back and forth" : SIDE_NAME[lastSide.side]} ${minutesText(lastSide.min)}` : ""}
         </p>
         {stale ? (
           <>
@@ -463,7 +560,7 @@ function ForgottenPrompt({
     // The feed's start only when it's another time (on a one-side feed it's the side's own start, said once).
     const since = formatTime(n.current.since, tz);
     const began = formatTime(entry.started_at, tz);
-    sub = `${SIDE_NAME[n.current.side ?? "L"]} side for ${minutesText(n.current.min)}, since ${since}${began === since ? "" : ` · feed started ${began}`}`;
+    sub = `${n.both ? "Back and forth" : `${SIDE_NAME[n.current.side ?? "L"]} side`} for ${minutesText(n.current.min)}, since ${since}${began === since ? "" : ` · feed started ${began}`}`;
     primary = { label: "She finished earlier…", onClick: onEarlier };
   } else {
     question = kind === "sleep" ? "Still asleep? Lucky you." : kind === "tummy" ? "Still doing tummy time?" : "Still pumping?";

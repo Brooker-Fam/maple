@@ -4,7 +4,10 @@
  *
  * A nursing session is a list of segments, one per stretch on a side.
  * Exactly zero or one segment is open (end = null); zero open while the entry
- * is still active means "paused".
+ * is still active means "paused". A stretch's side is Left, Right, or "B":
+ * both sides, not tracked (she went back and forth and nobody tapped
+ * Switch). A "B" stretch counts toward nursing but never toward Left or
+ * Right, and never sets the side she started on or the next side.
  *
  * The card and the Fix times sheet show a feed as parts (sides and breaks)
  * joined by moments (feed start, switch, pause, resume, feed end). Every edit
@@ -12,10 +15,11 @@
  * neighbouring side, and every result goes through normalizeSegments, so
  * sub-second double taps vanish and touching same-side stretches merge.
  */
+import { FEED_LENGTH_MIN } from "./guidelines";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatRange, formatTime, formatTimeNear } from "./time";
-import type { Entry, FeedData, Segment, Side, StretchRef } from "./types";
+import type { Entry, EntryOf, FeedData, Segment, Side, StretchRef, StretchSide } from "./types";
 
-export type { StretchRef } from "./types";
+export type { StretchRef, StretchSide } from "./types";
 
 export type Moment = "feed_start" | "switch" | "pause" | "resume" | "feed_end";
 
@@ -26,7 +30,7 @@ export type Moment = "feed_start" | "switch" | "pause" | "resume" | "feed_end";
 export type Part =
   | {
       kind: "side";
-      side: Side;
+      side: StretchSide;
       start: string;
       end: string | null;
       sec: number;
@@ -54,7 +58,7 @@ export type FeedEditCode =
   | "too_many";
 
 /**
- * An edit that doesn't fit the feed. `params` hold sides ("L"/"R") and ISO
+ * An edit that doesn't fit the feed. `params` hold sides ("L"/"R"/"B") and ISO
  * instants (t, now, asked, start, end), so feedEditCopy can word them for
  * either surface in the baby's zone. not_found / not_newest mean the feed
  * changed under the edit (the store answers 409 "changed").
@@ -79,8 +83,15 @@ export class FeedEditError extends Error {
  */
 export type LastTap = {
   kind: "switch" | "resume" | "pause";
-  side: Side;
+  side: StretchSide;
   at: string;
+  /**
+   * A switch that changed the open part's side instead of adding one (going
+   * back and forth from a part under a minute old, or taking back going both
+   * within 15 s onto another side): the side that part had before, which
+   * undoLastTap puts back.
+   */
+  from?: StretchSide;
   paused_at?: string;
   merged?: true;
   reverted?: true;
@@ -104,6 +115,8 @@ export function feedCtx(e: { active: boolean; ended_at: string | null; data: unk
 }
 
 const SIDE_NAME: Record<Side, string> = { L: "Left", R: "Right" };
+/** A stretch's side in words: "Left", "Right", "Both sides". */
+export const STRETCH_NAME: Record<StretchSide, string> = { L: "Left", R: "Right", B: "Both sides" };
 const SEC = 1000;
 const MIN = 60 * SEC;
 const HOUR = 60 * MIN;
@@ -111,7 +124,25 @@ const HOUR = 60 * MIN;
 const NEAR = 1500;
 const MAX_PARTS = 60;
 
+/**
+ * Off the breast for under this long is the same feed, whether she tapped
+ * Pause or Done (nursingRuns, and the start toast's "Same feed as 8:30").
+ */
+export const SAME_FEED_MS = 10 * MIN;
+/**
+ * Feeds each starting less than this after the last one ended belong
+ * together: three or more make a cluster (feedClusters), and within it the
+ * next side is the other one from the side she was last on (nextSideFor).
+ * The same window as "Continue that feed" and Fix times' join.
+ */
+export const CLUSTER_GAP_MS = 30 * MIN;
+/** Three or more feeds close together make a cluster. */
+export const CLUSTER_MIN_FEEDS = 3;
+
 export const other = (s: Side): Side => (s === "L" ? "R" : "L");
+
+/** Left or Right (not "B", both sides, and not unknown). */
+export const isTracked = (s: StretchSide | null | undefined): s is Side => s === "L" || s === "R";
 
 export function openSegment(segments: Segment[] | undefined): Segment | null {
   if (!segments?.length) return null;
@@ -128,17 +159,19 @@ export function closeSegments(segments: Segment[] | undefined, at: Date): Segmen
   });
 }
 
-/** Seconds per side; an open segment counts up to `now`. */
-export function sideTotals(segments: Segment[] | undefined, now: Date): { left: number; right: number } {
+/** Seconds per side and going back and forth ("B"); an open segment counts up to `now`. */
+export function sideTotals(segments: Segment[] | undefined, now: Date): { left: number; right: number; both: number } {
   let left = 0;
   let right = 0;
+  let both = 0;
   for (const s of segments ?? []) {
     const end = s.end ? Date.parse(s.end) : now.getTime();
     const sec = Math.max(0, (end - Date.parse(s.start)) / 1000);
     if (s.side === "L") left += sec;
-    else right += sec;
+    else if (s.side === "R") right += sec;
+    else if (s.side === "B") both += sec;
   }
-  return { left: Math.round(left), right: Math.round(right) };
+  return { left: Math.round(left), right: Math.round(right), both: Math.round(both) };
 }
 
 // ── whole minutes ────────────────────────────────────────────────────────
@@ -167,8 +200,11 @@ export const minutesText = (min: number): string => (min > 0 ? formatMinutes(min
 /** The short form lists and toasts use: "12m", "1h 05m", "<1m". */
 export const minutesShort = (min: number): string => (min > 0 ? formatDuration(min * 60) : "<1m");
 
-/** Whole minutes of a feed per side and in all (left + right); `has` is which sides she was on at all. */
-export type FeedMinutes = { left: number; right: number; total: number; has: Record<Side, boolean> };
+/**
+ * Whole minutes of a feed per side, going back and forth (both), and in all
+ * (left + right + both); `has` is which of them she was on at all.
+ */
+export type FeedMinutes = { left: number; right: number; both: number; total: number; has: Record<StretchSide, boolean> };
 
 /**
  * A feed's whole minutes, its rows added up (spanMinutes), for lists, the
@@ -180,26 +216,41 @@ export function feedMinutes(e: { active: boolean; ended_at: string | null; data:
   if (d.segments?.length) {
     const parts = feedParts(d, feedCtx(e, now));
     const t = partTotals(parts).min;
-    const has = (side: Side) => parts.some((p) => p.kind === "side" && p.side === side);
-    return { left: t.left, right: t.right, total: t.nursing, has: { L: has("L"), R: has("R") } };
+    const has = (side: StretchSide) => parts.some((p) => p.kind === "side" && p.side === side);
+    return { left: t.left, right: t.right, both: t.both, total: t.nursing, has: { L: has("L"), R: has("R"), B: has("B") } };
   }
   const left = Math.round((d.left_sec ?? 0) / 60);
   const right = Math.round((d.right_sec ?? 0) / 60);
-  return { left, right, total: left + right, has: { L: (d.left_sec ?? 0) > 0, R: (d.right_sec ?? 0) > 0 } };
+  const both = Math.round((d.both_sec ?? 0) / 60);
+  return {
+    left,
+    right,
+    both,
+    total: left + right + both,
+    has: { L: (d.left_sec ?? 0) > 0, R: (d.right_sec ?? 0) > 0, B: (d.both_sec ?? 0) > 0 },
+  };
 }
 
-/** "L 12 · R 24" ("L <1" for a side under a minute), the sides of "Nursed 36m (L 12 · R 24)". */
+/** Minutes as the side lists show them: "12", "<1", and from an hour "1h 12m". */
+const listMinutes = (min: number) => (min >= 60 ? minutesShort(min) : String(min || "<1"));
+
+/**
+ * "L 12 · R 24 · both 38" ("L <1" for a side under a minute, "both 1h 12m"
+ * from an hour), the sides of "Nursed 1h 14m (L 12 · R 24 · both 38)".
+ * Back and forth is its own bucket: never split into made-up Left and Right.
+ */
 export function sideMinutesText(t: FeedMinutes, sep = " · "): string {
-  return (["L", "R"] as const)
+  const value = { L: t.left, R: t.right, B: t.both };
+  return (["L", "R", "B"] as const)
     .filter((s) => t.has[s])
-    .map((s) => `${s} ${(s === "L" ? t.left : t.right) || "<1"}`)
+    .map((s) => `${s === "B" ? "both" : s} ${listMinutes(value[s])}`)
     .join(sep);
 }
 
 // ── stretches ────────────────────────────────────────────────────────────
 
 /** A segment in epoch ms, which is what the edits work in. */
-type Stretch = { side: Side; start: number; end: number | null };
+type Stretch = { side: StretchSide; start: number; end: number | null };
 
 const iso = (t: number) => new Date(t).toISOString();
 const toStretches = (segs: Segment[] | undefined): Stretch[] =>
@@ -220,7 +271,7 @@ function tidy(input: Stretch[], active: boolean, strict: boolean): Stretch[] {
   };
   let segs = input
     .filter((s) => {
-      const ok = (s.side === "L" || s.side === "R") && !Number.isNaN(s.start) && !(s.end !== null && Number.isNaN(s.end));
+      const ok = (s.side === "L" || s.side === "R" || s.side === "B") && !Number.isNaN(s.start) && !(s.end !== null && Number.isNaN(s.end));
       if (!ok) bad("Each part needs a side and valid times");
       return ok;
     })
@@ -228,7 +279,7 @@ function tidy(input: Stretch[], active: boolean, strict: boolean): Stretch[] {
     .sort((a, b) => a.start - b.start);
   segs.forEach((s, i) => {
     if (s.end !== null && s.end < s.start) {
-      bad(`${SIDE_NAME[s.side]} ends before it starts`);
+      bad(`${STRETCH_NAME[s.side]} ends before it starts`);
       s.end = s.start;
     }
     if (s.end === null && i < segs.length - 1) {
@@ -282,29 +333,66 @@ export function normalizeSegments(segs: Segment[], opts: { active: boolean }): S
   return toSegments(tidy(toStretches(segs), opts.active, true));
 }
 
+/**
+ * Closed stretches per side in seconds, and the sides: first_side is the
+ * first stretch's side, unless that's both sides (the start tap went back
+ * and forth at once), when the side stored stays (the start tap's);
+ * last_side is the last side tracked. `tracked` is the first Left or Right
+ * anywhere, for a feed that has no side stored.
+ */
 function tally(S: Stretch[]) {
   let left = 0;
   let right = 0;
+  let both = 0;
   for (const s of S) {
     if (s.end === null) continue;
     if (s.side === "L") left += s.end - s.start;
-    else right += s.end - s.start;
+    else if (s.side === "R") right += s.end - s.start;
+    else both += s.end - s.start;
   }
-  return { left_sec: Math.round(left / SEC), right_sec: Math.round(right / SEC), first_side: S[0]?.side, last_side: S[S.length - 1]?.side };
+  const first = S[0]?.side;
+  const last = [...S].reverse().find((s) => isTracked(s.side))?.side;
+  const tracked = S.find((s) => isTracked(s.side))?.side;
+  return {
+    left_sec: Math.round(left / SEC),
+    right_sec: Math.round(right / SEC),
+    both_sec: Math.round(both / SEC),
+    first_side: isTracked(first) ? first : undefined,
+    last_side: isTracked(last) ? last : undefined,
+    tracked: isTracked(tracked) ? tracked : undefined,
+  };
 }
 
-/** Closed real stretches per side (rounded seconds) and the first/last side she was on. */
-export function summarize(segs: Segment[]): { left_sec: number; right_sec: number; first_side?: Side; last_side?: Side } {
-  return tally(tidy(toStretches(segs), true, false));
+/**
+ * Closed real stretches per side (rounded seconds; both_sec only when she
+ * went back and forth) and the first/last side she was on (back and forth
+ * never sets either; a key is left out when there's no side to give).
+ */
+export function summarize(segs: Segment[]): { left_sec: number; right_sec: number; both_sec?: number; first_side?: Side; last_side?: Side } {
+  const t = tally(tidy(toStretches(segs), true, false));
+  return {
+    left_sec: t.left_sec,
+    right_sec: t.right_sec,
+    ...(t.both_sec ? { both_sec: t.both_sec } : {}),
+    // A feed that began going back and forth keeps the side stored (the start tap's): the caller's.
+    ...(t.first_side ? { first_side: t.first_side } : {}),
+    ...(t.last_side ? { last_side: t.last_side } : {}),
+  };
 }
 
 /** Store normalized stretches back on the feed: sides always, totals once it's finished. */
 function settle(data: FeedData, S: Stretch[], active: boolean): FeedData {
   const t = tally(S);
-  const out: FeedData = { ...data, segments: toSegments(S), first_side: t.first_side ?? data.first_side, last_side: t.last_side ?? data.last_side };
+  const out: FeedData = { ...data, segments: toSegments(S) };
+  const first = t.first_side ?? data.first_side ?? t.tracked;
+  const last = t.last_side ?? data.last_side;
+  if (first) out.first_side = first;
+  if (last) out.last_side = last;
   if (!active) {
     out.left_sec = t.left_sec;
     out.right_sec = t.right_sec;
+    if (t.both_sec) out.both_sec = t.both_sec;
+    else delete out.both_sec;
   }
   return out;
 }
@@ -374,19 +462,21 @@ export function feedParts(data: FeedData, ctx: FeedCtx): Part[] {
 }
 
 /**
- * Seconds on each side, nursing in all, and in breaks (open ones count up to
- * now), for the live clocks; `min` is the same in whole minutes (the sums of
- * the parts' `min`), for everything else.
+ * Seconds on each side, going back and forth (both), nursing in all (left +
+ * right + both), and in breaks (open ones count up to now), for the live
+ * clocks; `min` is the same in whole minutes (the sums of the parts' `min`),
+ * for everything else.
  */
 export function partTotals(parts: Part[]): {
   left: number;
   right: number;
+  both: number;
   nursing: number;
   breaks: number;
   breakCount: number;
-  min: { left: number; right: number; nursing: number; breaks: number };
+  min: { left: number; right: number; both: number; nursing: number; breaks: number };
 } {
-  const t = { left: 0, right: 0, nursing: 0, breaks: 0, breakCount: 0, min: { left: 0, right: 0, nursing: 0, breaks: 0 } };
+  const t = { left: 0, right: 0, both: 0, nursing: 0, breaks: 0, breakCount: 0, min: { left: 0, right: 0, both: 0, nursing: 0, breaks: 0 } };
   for (const p of parts) {
     if (p.kind === "break") {
       t.breaks += p.sec;
@@ -396,9 +486,12 @@ export function partTotals(parts: Part[]): {
       if (p.side === "L") {
         t.left += p.sec;
         t.min.left += p.min;
-      } else {
+      } else if (p.side === "R") {
         t.right += p.sec;
         t.min.right += p.min;
+      } else {
+        t.both += p.sec;
+        t.min.both += p.min;
       }
       t.nursing += p.sec;
       t.min.nursing += p.min;
@@ -409,20 +502,25 @@ export function partTotals(parts: Part[]): {
 
 /**
  * The question that titles a moment's editor. `side` is the stretch it
- * starts (switch, resume) or ends (pause); `prev` is the side before the
- * break, for a resume: "back on" only when she goes back on the side she
- * came off, else "When did she go on the Right?".
+ * starts (switch, resume) or ends (pause); `prev` is the side before it
+ * (before the switch, or before the break, for a resume): "back on" only
+ * when she goes back on the side she came off, else "When did she go on the
+ * Right?". Both sides ("B") reads as going back and forth.
  */
-export function momentQuestion(moment: Moment, side: Side, prev?: Side | null): string {
+export function momentQuestion(moment: Moment, side: StretchSide, prev?: StretchSide | null): string {
+  const name = side === "B" ? "" : SIDE_NAME[side];
   switch (moment) {
     case "feed_start":
       return "When did the feed start?";
     case "switch":
-      return `When did she switch to ${SIDE_NAME[side]}?`;
+      if (side === "B") return "When did she start going back and forth?";
+      // Tracking sides again after back and forth: she went on a side, she didn't switch to it.
+      return prev === "B" ? `When did she go on the ${name}?` : `When did she switch to ${name}?`;
     case "pause":
-      return `When did she come off the ${SIDE_NAME[side]}?`;
+      return side === "B" ? "When did she come off?" : `When did she come off the ${name}?`;
     case "resume":
-      return prev && prev !== side ? `When did she go on the ${SIDE_NAME[side]}?` : `When did she go back on the ${SIDE_NAME[side]}?`;
+      if (side === "B") return prev === "B" ? "When did she go back on?" : "When did she start going back and forth?";
+      return prev && prev !== side ? `When did she go on the ${name}?` : `When did she go back on the ${name}?`;
     case "feed_end":
       return "When did the feed end?";
   }
@@ -582,8 +680,12 @@ export function moveEdge(
   return { data: out, startedAt: iso(S[0].start), endedAt: ctx.active ? null : iso(endedAt ?? lastEnd ?? now), moment: p.moment };
 }
 
-/** "That was the Right": one stretch changes side; touching same-side neighbours merge. */
-export function setSide(data: FeedData, ref: StretchRef, side: Side, ctx: FeedCtx): { data: FeedData; startedAt: string } {
+/**
+ * "That was the Right" (or "That was both sides", "B"): one stretch changes
+ * side; touching same-side neighbours merge. The side she started on stays
+ * the start tap's when the first stretch becomes both sides.
+ */
+export function setSide(data: FeedData, ref: StretchRef, side: StretchSide, ctx: FeedCtx): { data: FeedData; startedAt: string } {
   if (data.method !== "breast" || !data.segments?.length) throw new FeedEditError("not_timed");
   const S = real(data, ctx.active);
   S[find(S, ref)].side = side;
@@ -594,7 +696,7 @@ export function setSide(data: FeedData, ref: StretchRef, side: Side, ctx: FeedCt
 /** "Add a side she nursed on" to a finished feed. It may touch a stretch but not overlap one by over a second. */
 export function addPart(
   data: FeedData,
-  part: { side: Side; start: Date | string; end: Date | string },
+  part: { side: StretchSide; start: Date | string; end: Date | string },
   ctx: FeedCtx
 ): { data: FeedData; startedAt: string; endedAt: string } {
   if (ctx.active) throw new Error("Sides are added once the feed has finished");
@@ -650,6 +752,11 @@ function tapUndo(S: Stretch[], tap: LastTap | undefined): { what: TapWhat; at: n
     case "pause":
       return L.end !== null ? reopen() : { refuse: "changed" };
     case "switch":
+      // A switch that changed the open part's side (back and forth from a fresh part): that part gets its side back.
+      if (tap.from) {
+        const was = tap.from;
+        return L.end === null && L.side === tap.side ? { what: "switch", at: tapped(L.start), apply: () => void (L.side = was) } : { refuse: "changed" };
+      }
       return L.end === null && P && P.end === L.start ? drop("switch") : { refuse: "changed" };
     case "resume": {
       if (L.end !== null) return { refuse: "changed" };
@@ -664,16 +771,17 @@ function tapUndo(S: Stretch[], tap: LastTap | undefined): { what: TapWhat; at: n
 
 /**
  * Undo the latest tap on a running feed, if the newest stretch is still the
- * one the person saw (`expect`): a switch reopens the side before it, a
- * resume goes back to paused (a merged one ends again at its old pause), a
- * pause reopens the side. It's the tap recorded in last_tap, never an older
+ * one the person saw (`expect`): a switch reopens the side before it (going
+ * back and forth from a fresh part gives that part its side back; tracking
+ * sides again goes back to both sides), a resume goes back to paused (a
+ * merged one ends again at its old pause), a pause reopens the side. It's the tap recorded in last_tap, never an older
  * one: a tap already undone, or one that switched back, has nothing left to
  * undo (nothing_to_undo, why taken_back). A finished feed is reopened
  * instead (not_timed).
  */
 export function undoLastTap(
   data: FeedData,
-  expect: { side: Side; start: string; end: string | null },
+  expect: { side: StretchSide; start: string; end: string | null },
   opts: { active?: boolean } = {}
 ): { data: FeedData; what: TapWhat } {
   if (opts.active === false || data.method !== "breast" || !data.segments?.length) throw new FeedEditError("not_timed");
@@ -722,10 +830,15 @@ export function restoredTap(data: FeedData, segments: Segment[], active: boolean
   return "refuse" in tapUndo(S, live) ? undefined : live;
 }
 
-export function startBreast(side: Side, at: Date): FeedData {
+/**
+ * A new nursing timer on `side`. `both`: she's going back and forth from the
+ * start, so the one part is both sides, and the side she started on is still
+ * stored (it's what the next side alternates from).
+ */
+export function startBreast(side: Side, at: Date, opts: { both?: boolean } = {}): FeedData {
   return {
     method: "breast",
-    segments: [{ side, start: at.toISOString(), end: null }],
+    segments: [{ side: opts.both ? "B" : side, start: at.toISOString(), end: null }],
     first_side: side,
     last_side: side,
   };
@@ -735,6 +848,17 @@ export function startBreast(side: Side, at: Date): FeedData {
  * Switch to a side, or resume on it when paused. `explicit` is a time someone
  * gave ("she went back on at 4:20"); without it `at` is just now. `now` is
  * when it was tapped (default `at`), for last_tap.
+ *
+ * "B" is back and forth (both sides, not tracked from now): the side she's
+ * on ends and a both part opens. If that side began under a minute ago (the
+ * toast's "Back and forth" right after a Switch, or a feed just started), it
+ * becomes the both part instead (resided; its tap's `from` lets undo put the
+ * side back), so no 20-second Left part is left behind. A side tapped within
+ * 15 s of going both takes it back: the part gets that side (reverted when
+ * it's the side she was on, else resided). Later, a side means she's on it
+ * now: tracking sides again. Back and forth never sets first_side or
+ * last_side. At 60 parts, going both turns the open part both instead of
+ * adding one.
  *   - Already on that side: noop.
  *   - A switch tapped within 15 s of a tapped resume (one that made its own
  *     part, under 15 s old) means she went back on the other side: that part
@@ -752,7 +876,7 @@ export function startBreast(side: Side, at: Date): FeedData {
  */
 export function switchTo(
   data: FeedData,
-  side: Side,
+  side: StretchSide,
   at: Date,
   opts: { explicit?: boolean; resume?: boolean; now?: Date; by?: string } = {}
 ): { data: FeedData; noop?: true; clamped?: true; merged?: true; reverted?: true; resided?: true; moved?: true } {
@@ -775,9 +899,50 @@ export function switchTo(
       return { data: moved.data, moved: true, ...(t < P.end ? { clamped: true as const } : {}) };
     }
     if (O.side === side) return { data, noop: true };
-    if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
     const P = S[S.length - 2];
     const last = lastTapOf(data);
+    const by = opts.by ? { by: opts.by } : {};
+    if (side === "B") {
+      // Going back and forth from a part under a minute old makes that part the both part (no stray short side).
+      if (opts.explicit && t < O.start - NEAR) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
+      if (t - O.start < MIN || S.length >= MAX_PARTS) {
+        const from = O.side;
+        O.side = "B";
+        flags.resided = true;
+        tap = { kind: "switch", side: "B", at: tappedAt, from, ...by };
+      } else {
+        O.end = t;
+        S.push({ side: "B", start: t, end: null });
+        tap = { kind: "switch", side: "B", at: tappedAt, ...by };
+      }
+      return { data: { ...settle(data, tidy(S, true, true), true), last_tap: tap } as TapFeedData, ...flags };
+    }
+    if (opts.explicit && t < O.start + SEC) throw editError("before_own_start", { side: O.side, t: O.start, asked: t, ...firstOf(S, O) });
+    if (
+      O.side === "B" &&
+      !opts.explicit &&
+      last?.kind === "switch" &&
+      last.side === "B" &&
+      !last.undone &&
+      !last.reverted &&
+      !last.carried &&
+      (!last.by || !opts.by || last.by === opts.by) &&
+      tapped - Date.parse(last.at) < 15 * SEC &&
+      (last.from !== undefined || (P?.end != null && P.end === O.start))
+    ) {
+      // Took back going both a moment ago: the part takes the side tapped. Onto the side she was on, that's the
+      // switch to both undone (and a both part that touches it merges back in); onto the other, the part re-sides.
+      const back = last.from ?? P!.side;
+      O.side = side;
+      if (side === back || (P?.end === O.start && P.side === side)) {
+        flags.reverted = true;
+        tap = { kind: "switch", side, at: tappedAt, reverted: true, ...by };
+      } else {
+        flags.resided = true;
+        tap = { kind: "switch", side, at: tappedAt, from: "B", ...by };
+      }
+      return { data: { ...settle(data, tidy(S, true, true), true), last_tap: tap } as TapFeedData, ...flags };
+    }
     if (
       !opts.explicit &&
       last?.kind === "resume" &&
@@ -821,9 +986,10 @@ export function switchTo(
     tap = { kind: "resume", side, at: tappedAt, paused_at: iso(lEnd), ...(flags.merged ? { merged: true } : {}), ...(opts.by ? { by: opts.by } : {}) };
   } else {
     S.push({ side, start: t, end: null });
-    return { data: { ...settle(data, tidy(S, true, true), true), last_side: side }, ...flags };
+    return { data: { ...settle(data, tidy(S, true, true), true), ...(isTracked(side) ? { last_side: side } : {}) }, ...flags };
   }
-  const out: TapFeedData = { ...settle(data, tidy(S, true, true), true), last_side: side, last_tap: tap };
+  // Back and forth never sets the last side (settle keeps the last one tracked).
+  const out: TapFeedData = { ...settle(data, tidy(S, true, true), true), ...(isTracked(side) ? { last_side: side } : {}), last_tap: tap };
   return { data: out, ...flags };
 }
 
@@ -924,15 +1090,16 @@ export function retimeBreast(data: FeedData, change: { start?: Date; end?: Date;
   }
 }
 
-/** Totals for any feed: from segments when present, else the manual numbers. */
-export function feedTotals(data: FeedData, now: Date): { left: number; right: number; total: number } {
+/** Totals in seconds for any feed (back and forth counts toward the total): from segments when present, else the manual numbers. */
+export function feedTotals(data: FeedData, now: Date): { left: number; right: number; both: number; total: number } {
   if (data.segments?.length) {
     const t = sideTotals(data.segments, now);
-    return { ...t, total: t.left + t.right };
+    return { ...t, total: t.left + t.right + t.both };
   }
   const left = Math.round(data.left_sec ?? 0);
   const right = Math.round(data.right_sec ?? 0);
-  return { left, right, total: left + right };
+  const both = Math.round(data.both_sec ?? 0);
+  return { left, right, both, total: left + right + both };
 }
 
 // ── words ────────────────────────────────────────────────────────────────
@@ -959,13 +1126,13 @@ export function describeChange(beforeParts: Part[], afterParts: Part[]): string 
   if (a.breaks !== b.breaks) {
     changed.push(!hasBreak(afterParts) ? `No break (was ${minutesText(a.breaks)})` : `Break ${span(a.breaks, hasBreak(beforeParts), b.breaks, true)}`);
   }
-  for (const side of ["L", "R"] as const) {
+  for (const side of ["L", "R", "B"] as const) {
     const has = (parts: Part[]) => parts.some((p) => p.kind === "side" && p.side === side);
     if (!has(beforeParts) && !has(afterParts)) continue;
     const open = [...beforeParts, ...afterParts].some((p) => p.kind === "side" && p.side === side && p.end === null);
-    const x = side === "L" ? a.left : a.right;
-    const y = side === "L" ? b.left : b.right;
-    const name = SIDE_NAME[side];
+    const x = side === "L" ? a.left : side === "R" ? a.right : a.both;
+    const y = side === "L" ? b.left : side === "R" ? b.right : b.both;
+    const name = STRETCH_NAME[side];
     if (x === y) same.push(name);
     else if (open) changed.push(`${name} ${minutesText(Math.abs(y - x))} ${y > x ? "longer" : "shorter"}`);
     else changed.push(`${name} ${span(x, has(beforeParts), y, has(afterParts))}`);
@@ -983,7 +1150,8 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
   const p = err.params;
   const mcp = surface === "mcp";
   const t = p.t ? formatTime(p.t, tz) : "";
-  const name = (k: string) => (p[k] === "L" || p[k] === "R" ? SIDE_NAME[p[k] as Side] : "");
+  // "Left", "Right", or "back and forth" for a both-sides part ("Can't be before back and forth started").
+  const name = (k: string) => (p[k] === "L" || p[k] === "R" ? SIDE_NAME[p[k] as Side] : p[k] === "B" ? "back and forth" : "");
   switch (err.code) {
     case "future":
       return mcp ? `That time is in the future; it's ${formatTime(p.now ?? new Date(), tz)} for Maple.` : "That's in the future.";
@@ -1007,6 +1175,9 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
       if (p.first) {
         return `The feed started at ${t}${asked}. If it really started earlier, fix that first with fix_nursing_time {part:"feed_start", at:"…"}, then ${p.then ?? "try again"}; otherwise give a time after ${t}.`;
       }
+      if (p.side === "B") {
+        return `Back and forth started at ${t}${asked}. If going back and forth was a mistaken tap, call fix_nursing_time {undo_last_tap:true} first, then ${p.then ?? "try again"}.`;
+      }
       return `The ${side} side started at ${t}${asked}. If ${side} was a mistaken tap, call fix_nursing_time {undo_last_tap:true} first, then ${p.then ?? "try again"}.`;
     }
     case "overlap":
@@ -1028,7 +1199,10 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
     case "not_timed":
       return "That feed wasn't timed, so its parts can't be fixed.";
     case "too_many":
-      return "Too many parts (60 max).";
+      // Going back and forth stops adding parts (at the limit, the open part turns both sides).
+      return mcp
+        ? 'This feed has 60 parts, the most one can hold. If she\'s going back and forth, use switch_side with to: "both" to stop tracking sides.'
+        : "That's 60 parts, the most one feed holds. Going back and forth? Tap Back and forth to stop tracking sides.";
     case "not_found":
     case "not_newest":
       return mcp ? "The feed changed since you looked; call maple_status and try again." : "This feed just changed, so nothing was saved. Have another look.";
@@ -1061,6 +1235,8 @@ export function previousFeedEnd(entries: readonly Entry[] | undefined, e: { id: 
 
 /** A break this long ended the feed, for staleFeed (Still on a break? asks at 20 min). */
 const STALE_BREAK = 30 * MIN;
+/** Back and forth gets no taps by design, so a feed going both sides isn't stale until this long. */
+const STALE_BOTH = 2 * HOUR;
 
 /**
  * When anything last happened on a feed: its start, any stretch's start or
@@ -1087,22 +1263,370 @@ function lastActivity(e: { started_at: string; data: FeedData }): number {
 export function staleFeed(e: { started_at: string; data: FeedData }, now: Date, given?: Date | null): boolean {
   const newest = lastActivity(e);
   const S = real(e.data, true);
-  const onBreak = S.length > 0 && S[S.length - 1].end !== null;
+  const last = S[S.length - 1];
+  const onBreak = !!last && last.end !== null;
   // A time given while she's off is when she went back on: within 30 min of the pause it's this feed, however long ago.
   if (given && onBreak) return given.getTime() - newest > STALE_BREAK;
-  return now.getTime() - newest > HOUR;
+  // Going back and forth gets no taps by design: two hours, not one.
+  return now.getTime() - newest > (last?.end === null && last.side === "B" ? STALE_BOTH : HOUR);
 }
 
 /**
  * Which side to offer first next time: the opposite of the side the last
- * nursing session started on. (L→R last time? start on R. Only L? start on R.)
+ * nursing session started on (L→R last time? start on R. Only L? start on R).
+ * A back-and-forth stretch never sets it; the side she started on does.
+ * Source: AAP, Settling In (healthychildren.org): "it's important to
+ * alternate the breast you offer first with each breastfeeding session";
+ * AAP KidsDoc: "For each feeding, switch which breast you start on." The
+ * wording the app shows is guidelines.ts NEXT_SIDE_NOTE; nextSideFor adds
+ * the re-latch rule inside a cluster.
  */
 export function suggestNextSide(last: FeedData | null | undefined): Side | null {
   if (!last || last.method !== "breast") return null;
-  const first = last.first_side ?? last.segments?.[0]?.side;
-  if (first) return other(first);
+  const first = last.first_side ?? last.segments?.find((s) => isTracked(s.side))?.side;
+  if (isTracked(first)) return other(first);
   const { left_sec = 0, right_sec = 0 } = last;
   if (left_sec > 0 && right_sec === 0) return "R";
   if (right_sec > 0 && left_sec === 0) return "L";
   return null;
 }
+
+// ── feeds as the family counts them: runs, clusters, Last fed, next side ──
+//
+// Worked out from the log every time, never stored, so old feeds and any mix
+// of taps read the same: an evening tapped Pause / Back on and the same
+// evening tapped Done / a side again give the same feeds, the same cluster
+// and the same "Last fed". Bottles stay feeds of their own (a top-up is not
+// part of a cluster).
+
+/** One stretch toward a run: a part of a timed feed, or a whole feed logged by minutes (side null). */
+type RunPart = { entry: EntryOf<"feed">; side: StretchSide | null; start: number; end: number | null; first: boolean };
+
+/**
+ * One feed as the family would say it: nursing with no break of 10 minutes
+ * or more (SAME_FEED_MS), whether the breaks were Pauses or a Done and a new
+ * feed. A feed paused for 10+ minutes is two runs; two feeds 5 minutes apart
+ * are one.
+ */
+export type NursingRun = {
+  /** Epoch ms of the first part's start. */
+  start: number;
+  /** Epoch ms of the last part's end; null while she's on the breast. */
+  end: number | null;
+  /** The feed entries in it, oldest first (one paused 10+ minutes shows in two runs). */
+  entries: EntryOf<"feed">[];
+  /** Its stretches (sides, both sides; a feed logged by minutes counts as one). */
+  parts: number;
+  /** Whole minutes, the rows' rule (spanMinutes per part), so they add up with every list. */
+  min: FeedMinutes;
+  /** The side she started on (the start tap's, even if it went back and forth at once) and the last side tracked; null if unknown. */
+  firstSide: Side | null;
+  lastSide: Side | null;
+  /** The last stretch's side: "B" when it ended going back and forth. */
+  endSide: StretchSide | null;
+  /** The sides in the order she was on them, the same one again after a break once ("L", "R", "B"). */
+  order: StretchSide[];
+  backAndForth: boolean;
+  /** A feed in it is still a running timer (on the breast, or paused). */
+  live: boolean;
+  /** Which cluster it's in (an index into feedClusters(runs)), or null. */
+  cluster: number | null;
+};
+
+/** Three or more runs, each starting less than 30 minutes after the last one ended (CLUSTER_GAP_MS). */
+export type FeedCluster = {
+  start: number;
+  end: number | null;
+  runs: NursingRun[];
+  /** How many feeds it holds (runs). */
+  feeds: number;
+  min: FeedMinutes;
+  entries: EntryOf<"feed">[];
+};
+
+const isBreastFeed = (e: Entry): e is EntryOf<"feed"> => e.kind === "feed" && e.data.method !== "bottle";
+const isBottleFeed = (e: Entry): e is EntryOf<"feed"> => e.kind === "feed" && e.data.method === "bottle";
+
+/** A feed logged by minutes on one side only: that side. */
+function minutesSide(d: FeedData): Side | null {
+  const l = (d.left_sec ?? 0) > 0;
+  const r = (d.right_sec ?? 0) > 0;
+  return l && !r ? "L" : r && !l ? "R" : null;
+}
+
+function runParts(e: EntryOf<"feed">): RunPart[] {
+  const d = e.data;
+  const start = Date.parse(e.started_at);
+  if (Number.isNaN(start)) return [];
+  if (d.segments?.length) {
+    const endedAt = e.ended_at ? Date.parse(e.ended_at) : null;
+    return real(d, e.active).map((s, i) => ({
+      entry: e,
+      side: s.side,
+      start: s.start,
+      end: s.end ?? (e.active ? null : Math.max(s.start, endedAt ?? s.start)),
+      first: i === 0,
+    }));
+  }
+  const sec = (d.left_sec ?? 0) + (d.right_sec ?? 0) + (d.both_sec ?? 0);
+  const end = e.ended_at ? Date.parse(e.ended_at) : e.active ? null : start + sec * SEC;
+  return [{ entry: e, side: null, start, end: end === null ? null : Math.max(start, end), first: true }];
+}
+
+const noMinutes = (): FeedMinutes => ({ left: 0, right: 0, both: 0, total: 0, has: { L: false, R: false, B: false } });
+
+function addMinutes(m: FeedMinutes, x: FeedMinutes): void {
+  m.left += x.left;
+  m.right += x.right;
+  m.both += x.both;
+  m.total += x.total;
+  m.has = { L: m.has.L || x.has.L, R: m.has.R || x.has.R, B: m.has.B || x.has.B };
+}
+
+function partMinutes(p: RunPart, now: number): FeedMinutes {
+  const m = noMinutes();
+  if (p.side === null) {
+    const d = p.entry.data;
+    m.left = Math.round((d.left_sec ?? 0) / 60);
+    m.right = Math.round((d.right_sec ?? 0) / 60);
+    m.both = Math.round((d.both_sec ?? 0) / 60);
+    m.has = { L: (d.left_sec ?? 0) > 0, R: (d.right_sec ?? 0) > 0, B: (d.both_sec ?? 0) > 0 };
+  } else {
+    const v = spanMinutes(p.start, p.end ?? now);
+    if (p.side === "L") m.left = v;
+    else if (p.side === "R") m.right = v;
+    else m.both = v;
+    m.has[p.side] = true;
+  }
+  m.total = m.left + m.right + m.both;
+  return m;
+}
+
+/** The side a part says she started on: its own, or (both sides at a feed's start, or by minutes) the side stored. */
+function startSideOf(p: RunPart): Side | null {
+  if (isTracked(p.side)) return p.side;
+  if (p.side === null) return p.entry.data.first_side ?? minutesSide(p.entry.data);
+  return p.first ? p.entry.data.first_side ?? null : null;
+}
+
+/**
+ * Her nursing as feeds (runs), oldest first, each tagged with its cluster:
+ * off the breast under 10 minutes is the same feed (Pause or Done alike);
+ * three or more feeds, each starting less than 30 minutes after the last one
+ * ended, make a cluster. Bottles aren't runs. A running timer's open part
+ * counts up to `now`.
+ */
+export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] {
+  const nowMs = now.getTime();
+  const parts = entries
+    .filter(isBreastFeed)
+    .flatMap(runParts)
+    .sort((a, b) => a.start - b.start || a.entry.id - b.entry.id);
+  const groups: RunPart[][] = [];
+  let end: number | null = -Infinity;
+  for (const p of parts) {
+    const cur = groups[groups.length - 1];
+    if (cur && (end === null || p.start - end < SAME_FEED_MS)) {
+      cur.push(p);
+      end = end === null || p.end === null ? null : Math.max(end, p.end);
+    } else {
+      groups.push([p]);
+      end = p.end;
+    }
+  }
+  const runs: NursingRun[] = groups.map((g) => {
+    const min = noMinutes();
+    for (const p of g) addMinutes(min, partMinutes(p, nowMs));
+    const entriesIn = [...new Map(g.map((p) => [p.entry.id, p.entry])).values()];
+    let runEnd: number | null = -Infinity;
+    for (const p of g) runEnd = runEnd === null || p.end === null ? null : Math.max(runEnd, p.end);
+    const tracked = g.find((p) => isTracked(p.side));
+    let lastSide: Side | null = null;
+    for (let i = g.length - 1; i >= 0 && !lastSide; i--) {
+      const p = g[i];
+      if (isTracked(p.side)) lastSide = p.side;
+      else if (p.side === null) lastSide = p.entry.data.last_side ?? minutesSide(p.entry.data);
+    }
+    const lastPart = g[g.length - 1];
+    const order: StretchSide[] = [];
+    for (const p of g) {
+      const d = p.entry.data;
+      const sides: StretchSide[] = p.side !== null ? [p.side] : [d.first_side ?? minutesSide(d), d.last_side].filter((x): x is Side => !!x);
+      if (p.side === null && (d.both_sec ?? 0) > 0) sides.push("B");
+      for (const x of sides) if (order[order.length - 1] !== x) order.push(x);
+    }
+    return {
+      start: g[0].start,
+      end: runEnd,
+      entries: entriesIn,
+      parts: g.length,
+      min,
+      firstSide: startSideOf(g[0]) ?? (isTracked(tracked?.side) ? tracked.side : null),
+      lastSide,
+      endSide: lastPart.side ?? lastPart.entry.data.last_side ?? null,
+      order,
+      backAndForth: g.some((p) => p.side === "B" || (p.side === null && (p.entry.data.both_sec ?? 0) > 0)),
+      live: entriesIn.some((e) => e.active),
+      cluster: null,
+    };
+  });
+  // Clusters: three or more runs in a row, each starting under 30 minutes after the last one ended.
+  let id = 0;
+  let group: NursingRun[] = [];
+  const flush = () => {
+    if (group.length >= CLUSTER_MIN_FEEDS) {
+      for (const r of group) r.cluster = id;
+      id++;
+    }
+  };
+  for (const r of runs) {
+    const prev = group[group.length - 1];
+    if (prev && prev.end !== null && r.start - prev.end < CLUSTER_GAP_MS) group.push(r);
+    else {
+      flush();
+      group = [r];
+    }
+  }
+  flush();
+  return runs;
+}
+
+/** The clusters nursingRuns tagged, oldest first (cluster i is the runs tagged i). */
+export function feedClusters(runs: readonly NursingRun[]): FeedCluster[] {
+  const out: FeedCluster[] = [];
+  for (const r of runs) {
+    if (r.cluster === null) continue;
+    let c = out[r.cluster];
+    if (!c) c = out[r.cluster] = { start: r.start, end: r.end, runs: [], feeds: 0, min: noMinutes(), entries: [] };
+    c.runs.push(r);
+    c.feeds++;
+    c.end = c.end === null || r.end === null ? null : Math.max(c.end, r.end);
+    addMinutes(c.min, r.min);
+    for (const e of r.entries) if (!c.entries.includes(e)) c.entries.push(e);
+  }
+  return out.filter(Boolean);
+}
+
+/** The cluster a run is in, if any. */
+export function clusterOf(runs: readonly NursingRun[], run: NursingRun | null | undefined): FeedCluster | null {
+  if (!run || run.cluster === null) return null;
+  return feedClusters(runs).find((c) => c.runs.includes(run)) ?? null;
+}
+
+/**
+ * When "Last fed" counts from, for one feed (run): its start, start to start
+ * as feeds are timed. A feed that went back and forth, or had 3+ parts, and
+ * ran past 40 minutes counts from 40 minutes before it ended (FEED_LENGTH_MIN,
+ * UNICEF UK's "between 5 and 40 minutes"; using it this way is our choice).
+ * A feed left on one side keeps its real start, so a forgotten timer still
+ * shows its gap. While she's on the breast, its start.
+ */
+export function runAnchor(r: NursingRun): { at: number; rule: "start" | "long" } {
+  const long = FEED_LENGTH_MIN[1] * MIN;
+  if (r.end !== null && (r.backAndForth || r.parts >= 3) && r.end - r.start > long) return { at: r.end - long, rule: "long" };
+  return { at: r.start, rule: "start" };
+}
+
+/** Her last feed, and when "Last fed" counts from (lastFedAnchor). */
+export type LastFed = {
+  kind: "breast" | "bottle";
+  /** When "Last fed" counts from (ISO): the feed's start, or 40 minutes before a long back-and-forth (or 3+ part) feed ended. */
+  at: string;
+  rule: "start" | "long";
+  /** The feed's start and end (ISO); end null while she's on the breast. */
+  start: string;
+  end: string | null;
+  /** The newest entry in it (the one to open). */
+  entry: EntryOf<"feed">;
+  /** The run it is (null for a bottle). */
+  run: NursingRun | null;
+};
+
+/**
+ * Her last feed by the 10-minute rule (or a bottle), and the moment "Last
+ * fed" counts from: whichever of the last run's anchor (runAnchor) and the
+ * last bottle's start is later. Feed-gap checks use the same moment, so the
+ * warning and the big number agree. Pass `runs` when you already have them.
+ */
+export function lastFedAnchor(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): LastFed | null {
+  const run = runs[runs.length - 1] ?? null;
+  let bottle: EntryOf<"feed"> | null = null;
+  for (const e of entries) if (isBottleFeed(e) && (!bottle || Date.parse(e.started_at) > Date.parse(bottle.started_at))) bottle = e;
+  const a = run ? runAnchor(run) : null;
+  const b = bottle ? Date.parse(bottle.started_at) : null;
+  if (bottle && b !== null && (!a || b > a.at)) {
+    return { kind: "bottle", at: iso(b), rule: "start", start: iso(b), end: bottle.ended_at, entry: bottle, run: null };
+  }
+  if (!run || !a) return null;
+  const entry = run.entries.reduce((x, y) => (Date.parse(y.started_at) >= Date.parse(x.started_at) ? y : x));
+  return { kind: "breast", at: iso(a.at), rule: a.rule, start: iso(run.start), end: run.end === null ? null : iso(run.end), entry, run };
+}
+
+/**
+ * The side to offer next. `rule`: "relatch" within 30 minutes of her last
+ * feed ending (a cluster's next latch): the other side from the one she was
+ * last on, what the paused dock offers; "alternate" after that (or while
+ * she's on the breast): the opposite of the side that feed started on
+ * (AAP's alternate rule, see suggestNextSide). A back-and-forth stretch
+ * never sets the side: a feed that ended going both sides alternates from
+ * the side it started on. `fuller`: that feed went back and forth, so the
+ * words add "or the fuller side" (AAP, guidelines.ts NEXT_SIDE_NOTE).
+ */
+export type NextSide = { side: Side; rule: "relatch" | "alternate"; fuller: boolean };
+
+export function nextSideFor(runs: readonly NursingRun[], now: Date): NextSide | null {
+  const run = runs[runs.length - 1];
+  if (!run) return null;
+  const fuller = run.backAndForth;
+  if (run.end !== null && now.getTime() - run.end < CLUSTER_GAP_MS && isTracked(run.endSide)) return { side: other(run.endSide), rule: "relatch", fuller };
+  if (run.firstSide) return { side: other(run.firstSide), rule: "alternate", fuller };
+  return null;
+}
+
+/** "Left, or the fuller side" / "Left". */
+export function nextSideText(n: NextSide): string {
+  return `${SIDE_NAME[n.side]}${n.fuller ? ", or the fuller side" : ""}`;
+}
+
+/**
+ * The usual gap between feeds over the last 24 hours (median, start to
+ * start, in minutes), once there's a day of data and 4+ feeds; gaps between
+ * feeds of the same cluster are skipped, so an evening of clustering doesn't
+ * make "usually every ~45m".
+ */
+export function typicalFeedGapMin(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): number | null {
+  const nowMs = now.getTime();
+  const starts = [
+    ...runs.map((r) => ({ t: r.start, cluster: r.cluster })),
+    ...entries.filter(isBottleFeed).map((e) => ({ t: Date.parse(e.started_at), cluster: null as number | null })),
+  ]
+    .filter((x) => x.t <= nowMs)
+    .sort((a, b) => a.t - b.t);
+  if (!starts.length || starts[0].t > nowMs - 24 * HOUR) return null;
+  const recent = starts.filter((x) => x.t >= nowMs - 24 * HOUR);
+  if (recent.length < 4) return null;
+  const gaps: number[] = [];
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i].cluster !== null && recent[i].cluster === recent[i - 1].cluster) continue;
+    gaps.push((recent[i].t - recent[i - 1].t) / MIN);
+  }
+  if (!gaps.length) return null;
+  gaps.sort((a, b) => a - b);
+  return Math.round(gaps[Math.floor(gaps.length / 2)]);
+}
+
+/** "6:02–8:40 PM" ("11:02 PM–1:40 AM" across noon or midnight), or "since 6:02 PM" while it's going. */
+export function spanText(start: number | string, end: number | string | null, tz: string = DEFAULT_TZ): string {
+  return formatRange(start, end, tz).replace(" – ", "–");
+}
+
+/** "Cluster 6:02–8:40 PM · 4 feeds · nursed 1h 52m" (Last fed's line, the dial's bracket, Claude's status). */
+export function clusterLine(c: FeedCluster, tz: string = DEFAULT_TZ): string {
+  return `Cluster ${spanText(c.start, c.end, tz)} · ${c.feeds} feeds · nursed ${minutesShort(c.min.total)}`;
+}
+
+/** How Maple's Log counts feeds (product rules, not guidance): the Cluster feeding sheet's last lines. */
+export const FEED_COUNT_RULE =
+  "Off the breast for under 10 minutes is the same feed, whether Pause or Done was tapped. Three or more feeds, each starting less than 30 minutes after the last one ended, make a cluster, and each feed in it counts.";
+/** Last fed's info line, when a feed can count from 40 minutes before it ended. */
+export const LAST_FED_RULE = "Counted from when her last feed began. A long back-and-forth stretch counts from 40 minutes before she finished.";

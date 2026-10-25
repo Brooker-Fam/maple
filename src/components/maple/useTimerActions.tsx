@@ -2,10 +2,33 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { tick } from "@/components/atlas/haptics";
-import { edgeBounds, feedCtx, feedMinutes, feedParts, minutesShort, minutesText, other, previousFeed, previousFeedEnd, sideMinutesText, suggestNextSide, undoLastTap, type Moment, type Part, type TapFeedData } from "@/lib/maple/feed";
+import {
+  CLUSTER_GAP_MS,
+  edgeBounds,
+  feedCtx,
+  feedMinutes,
+  feedParts,
+  minutesShort,
+  minutesText,
+  nextSideFor,
+  nursingRuns,
+  openSegment,
+  other,
+  previousFeed,
+  previousFeedEnd,
+  SAME_FEED_MS,
+  sideMinutesText,
+  staleFeed,
+  suggestNextSide,
+  undoLastTap,
+  type Moment,
+  type Part,
+  type TapFeedData,
+} from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatTime, formatTimeNear } from "@/lib/maple/time";
-import type { Entry, FeedEdit, Side, TimerKind, TimerResponse } from "@/lib/maple/types";
+import type { Entry, FeedData, FeedEdit, Side, StretchSide, TimerKind, TimerResponse } from "@/lib/maple/types";
 import { fixPreset, KIND_TITLE, SIDE_NAME } from "./FeedParts";
+import type { IconName } from "./icons";
 import { useSheets } from "./sheets";
 import { useMaple, type TimerCallOptions, type TimerFailure, type ToastAction } from "./useMaple";
 
@@ -25,27 +48,41 @@ import { useMaple, type TimerCallOptions, type TimerFailure, type ToastAction } 
 
 type SidePart = Extract<Part, { kind: "side" }>;
 
-/** A feed the other phone ended this recently can still be carried on from a stale Resume. */
-const CONTINUE_WITHIN_MS = 30 * 60_000;
-/** A feed started this soon after the last one ended offers "Same feed as 8:30" (a Done by mistake, or the other phone's). */
-const SAME_FEED_MS = 10 * 60_000;
+/**
+ * A feed the other phone ended this recently can still be carried on from a
+ * stale Resume, and a feed started this soon after the last one ended offers
+ * "Back and forth" on its start toast (a cluster's next latch).
+ * (SAME_FEED_MS, 10 minutes: the start toast's "Same feed as 8:30".)
+ */
+const CONTINUE_WITHIN_MS = CLUSTER_GAP_MS;
+/** "Back and forth" joins the switch toast from a feed's second Switch. */
+const OFFER_AFTER_SWITCHES = 2;
 
 const minutesWord = (n: number) => `${n} minute${n === 1 ? "" : "s"}`;
 
 /**
- * "Nursed 18m (L 11 · R 7) · Right next time" and friends, for the Done toast.
+ * "Nursed 18m (L 11 · R 7) · Left if she wants more" and friends, for the Done toast.
  * `ended` goes before the next side ("· ended 4:10, when you paused") and
- * drops the per-side minutes.
+ * drops the per-side minutes. With `all` (the loaded entries), the next side
+ * is the one Today's card and the dock show (nextSideFor over the feeds as
+ * counted): within 30 minutes of the end, the other side from the one she was
+ * last on ("if she wants more"); otherwise the opposite of the side the feed
+ * started on ("next time").
  */
-export function doneText(e: Entry, now: Date, ended?: string): { text: string } {
+export function doneText(e: Entry, now: Date, ended?: string, all?: readonly Entry[]): { text: string } {
   const dur = e.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / 1000 : 0;
   if (e.kind === "feed" && e.data.method === "breast") {
-    // The card's rows added up (feedMinutes), so the sides always sum to the total.
+    // The card's rows added up (feedMinutes), so the sides always sum to the total ("L 12 · R 9 · both 38").
     const t = feedMinutes(e, now);
     const sides = ended ? "" : sideMinutesText(t);
-    const next = suggestNextSide(e.data);
+    const ns = all ? nextSideFor(nursingRuns([...all.filter((x) => x.id !== e.id), e], now), now) : null;
+    const next = ns?.side ?? suggestNextSide(e.data);
+    // After back and forth: "Right next time, or the fuller side" (AAP; guidelines.ts NEXT_SIDE_NOTE).
+    const nextWords = next
+      ? `${SIDE_NAME[next]} ${ns?.rule === "relatch" ? "if she wants more" : "next time"}${(ns ? ns.fuller : t.has.B) ? ", or the fuller side" : ""}`
+      : "";
     return {
-      text: `Nursed ${minutesShort(t.total)}${sides ? ` (${sides})` : ""}${ended ? ` · ${ended}` : ""}${next ? ` · ${SIDE_NAME[next]} next time` : ""}`,
+      text: `Nursed ${minutesShort(t.total)}${sides ? ` (${sides})` : ""}${ended ? ` · ${ended}` : ""}${next ? ` · ${nextWords}` : ""}`,
     };
   }
   if (e.kind === "sleep") return { text: `Slept ${formatDuration(dur)}` };
@@ -65,8 +102,17 @@ function allParts(e: Entry, now: Date): Part[] {
   return feedParts(e.data, feedCtx(e, now));
 }
 
-/** "Back on the Left" after a break only when she came off the Left; on the other side it's "On the Right" (as the sheets word it). */
-const onSide = (side: Side, prev: Side | undefined) => (prev && prev !== side ? `On the ${SIDE_NAME[side]}` : `Back on the ${SIDE_NAME[side]}`);
+/**
+ * "Back on the Left" after a break only when she came off the Left; on the other side it's "On the Right" (as the
+ * sheets word it). Going back and forth: "Back on, back and forth" after a back-and-forth part, else "Back and forth".
+ */
+const onSide = (side: StretchSide, prev: StretchSide | undefined) =>
+  side === "B" ? (prev === "B" ? "Back on, back and forth" : "Back and forth") : prev && prev !== side ? `On the ${SIDE_NAME[side]}` : `Back on the ${SIDE_NAME[side]}`;
+
+/** The side she's on now (the open part's), or null on a break or a finished feed. */
+const openSide = (e: Entry): StretchSide | null => (e.kind === "feed" && e.active ? openSegment(e.data.segments)?.side ?? null : null);
+/** On a break right after going back and forth (the dock's "Track sides" / "Back on"). */
+const pausedBoth = (e: Entry): boolean => e.kind === "feed" && e.active && !openSegment(e.data.segments) && e.data.segments?.at(-1)?.side === "B";
 
 /** The pause a merged resume took back was under a minute: from when she came off to the tap (a "No break" picked later isn't). */
 function shortPause(res: TimerResponse, tapped: Date): boolean {
@@ -105,7 +151,7 @@ export function useTimerActions() {
 
   /** A timer toast: one at a time, 10 s by day and 20 s at night, closed early if someone else changes `entry`. */
   const timerToast = useCallback(
-    (text: string, entry: Entry | null, opts: { actions?: ToastAction[]; undo?: () => void; undoLabel?: string } = {}) =>
+    (text: string, entry: Entry | null, opts: { actions?: ToastAction[]; undo?: () => void; undoLabel?: string; icon?: IconName } = {}) =>
       toast(text, {
         group: "timer",
         duration: isNight() ? 20_000 : 10_000,
@@ -189,7 +235,15 @@ export function useTimerActions() {
    * still showed the feed running when the fix was asked for.
    */
   const fixToast = useCallback(
-    (res: TimerResponse, edit: FeedEdit, moved: { moment: Moment; recorded: Date } | null, undid: "switch" | "resume" | "pause" | null, wasActive: boolean) => {
+    (
+      res: TimerResponse,
+      edit: FeedEdit,
+      moved: { moment: Moment; recorded: Date } | null,
+      undid: "switch" | "resume" | "pause" | null,
+      wasActive: boolean,
+      /** The side the undone switch went to ("B": going back and forth). */
+      undidTo?: StretchSide
+    ) => {
       const after = res.entry;
       const n = now();
       const parts = allParts(after, n);
@@ -199,15 +253,19 @@ export function useTimerActions() {
       const nearT = (a: string, t: number) => Math.abs(Date.parse(a) - t) <= 1500;
       let text = "Times updated";
       let back = "Put it back";
+      // "Left", "Right", "both sides" in the middle of a sentence.
+      const word = (x: StretchSide) => (x === "B" ? "both sides" : SIDE_NAME[x]);
       if (edit.op === "set_side") {
-        text = `That part is now ${SIDE_NAME[edit.side]}`;
-        back = `Back to ${SIDE_NAME[edit.ref.side]}`;
+        text = edit.side === "B" ? "That part is now both sides" : `That part is now ${SIDE_NAME[edit.side]}`;
+        back = `Back to ${word(edit.ref.side)}`;
       } else if (edit.op === "undo_tap") {
         const last = sides[sides.length - 1];
         const open = parts[parts.length - 1];
-        if (undid === "switch" && last) text = `Switch undone · back on ${SIDE_NAME[last.side]}`;
+        if (undid === "switch" && last && last.side === "B") text = `Back to both sides · since ${short(last.start)}`;
+        else if (undid === "switch" && last && undidTo === "B") text = `Back and forth undone · ${SIDE_NAME[last.side]} since ${short(last.start)}`;
+        else if (undid === "switch" && last) text = `Switch undone · back on ${SIDE_NAME[last.side]}`;
         else if (undid === "resume" && open?.kind === "break") text = `Back to paused · break since ${short(open.start)}`;
-        else if (undid === "pause" && last) text = `Pause undone · ${SIDE_NAME[last.side]} still going`;
+        else if (undid === "pause" && last) text = last.side === "B" ? "Pause undone · still going back and forth" : `Pause undone · ${SIDE_NAME[last.side]} still going`;
       } else if (edit.op === "move" && moved) {
         const to = Date.parse(edit.to);
         back = `Back to ${short(moved.recorded)}`;
@@ -220,7 +278,9 @@ export function useTimerActions() {
             const i = sides.findIndex((s) => nearT(s.start, to));
             const s = sides[i];
             const p = sides[i - 1];
-            if (s && p) text = `Switched to ${SIDE_NAME[s.side]} at ${short(s.start)} · ${SIDE_NAME[p.side]} ${minutesText(p.min)}`;
+            // "Back and forth from 9:14 · Left 8 min", "Left at 9:40 · back and forth 26 min".
+            const was = p ? `${p.side === "B" ? "back and forth" : SIDE_NAME[p.side]} ${minutesText(p.min)}` : "";
+            if (s && p) text = s.side === "B" ? `Back and forth from ${short(s.start)} · ${was}` : p.side === "B" ? `${SIDE_NAME[s.side]} at ${short(s.start)} · ${was}` : `Switched to ${SIDE_NAME[s.side]} at ${short(s.start)} · ${was}`;
             break;
           }
           case "resume": {
@@ -229,14 +289,16 @@ export function useTimerActions() {
               sides.find((x) => x.side === side && Date.parse(x.start) <= to && (x.end === null || Date.parse(x.end) >= to));
             const b = s ? breakBefore(s) : null;
             // "Right side from 3:11", as the card says "Right side · since": "Right now from" read as the phrase "right now".
-            if (s) text = b ? `${SIDE_NAME[s.side]} side from ${short(s.start)} · break ${minutesText(b.min)}` : `${SIDE_NAME[s.side]} side from ${short(to)} · no break`;
+            const what = s?.side === "B" ? "Back and forth" : s ? `${SIDE_NAME[s.side]} side` : "";
+            if (s) text = b ? `${what} from ${short(s.start)} · break ${minutesText(b.min)}` : `${what} from ${short(to)} · no break`;
             break;
           }
           case "pause": {
             const s = sides.find((x) => x.end !== null && nearT(x.end, to));
             const b = s ? breakAfter(s) : null;
-            if (s && b && b.end === null) text = `Came off at ${short(s.end!)} · ${SIDE_NAME[s.side]} ${minutesText(s.min)}`;
-            else if (s) text = `Came off ${SIDE_NAME[s.side]} at ${short(s.end!)} · ${b ? `break ${minutesText(b.min)}` : "no break"}`;
+            const was = s?.side === "B" ? "back and forth" : s ? SIDE_NAME[s.side] : "";
+            if (s && b && b.end === null) text = `Came off at ${short(s.end!)} · ${was} ${minutesText(s.min)}`;
+            else if (s) text = `Came off${s.side === "B" ? "" : ` ${SIDE_NAME[s.side]}`} at ${short(s.end!)} · ${b ? `break ${minutesText(b.min)}` : "no break"}`;
             break;
           }
           case "feed_end": {
@@ -264,10 +326,14 @@ export function useTimerActions() {
       const before = live(e);
       let moved: { moment: Moment; recorded: Date } | null = null;
       let undid: "switch" | "resume" | "pause" | null = null;
+      let undidTo: StretchSide | undefined;
       if (before.kind === "feed") {
         try {
           if (edit.op === "move") moved = edgeBounds(before.data, { edge: edit.edge, ref: edit.ref }, feedCtx(before, now()));
-          if (edit.op === "undo_tap") undid = undoLastTap(before.data, edit.expect, { active: before.active }).what;
+          if (edit.op === "undo_tap") {
+            undid = undoLastTap(before.data, edit.expect, { active: before.active }).what;
+            undidTo = (before.data as TapFeedData).last_tap?.side;
+          }
         } catch {
           // The server has the last word (and the copy for why).
         }
@@ -275,7 +341,7 @@ export function useTimerActions() {
       const res = await timerCall({ action: "retime", id: e.id, edit }, opts);
       if (!res || res.noop) return res;
       if (edit.op === "restore") toast("Undone", { group: "timer" });
-      else fixToast(res, edit, moved, undid, before.active);
+      else fixToast(res, edit, moved, undid, before.active, undidTo);
       return res;
     },
     [fixToast, live, now, timerCall, toast]
@@ -293,8 +359,9 @@ export function useTimerActions() {
     [live, now, retime]
   );
 
+  /** "Wrong side?": a part is the other side, or both sides ("That was both sides"), or one side after all ("That was the Left"). */
   const setSide = useCallback(
-    (e: Entry, ref: { side: Side; start: string }, side: Side, opts: TimerCallOptions = {}) => retime(e, { op: "set_side", ref, side }, opts),
+    (e: Entry, ref: { side: StretchSide; start: string }, side: StretchSide, opts: TimerCallOptions = {}) => retime(e, { op: "set_side", ref, side }, opts),
     [retime]
   );
 
@@ -316,23 +383,25 @@ export function useTimerActions() {
    * paused_at_stop), so the other phone's Done comes back too.
    */
   const carriedToast = useCallback(
-    (res: TimerResponse, side: Side, tail: string, more: { at?: Date; afterUndo?: () => Promise<unknown> } = {}) => {
+    (res: TimerResponse, side: StretchSide, tail: string, more: { at?: Date; afterUndo?: () => Promise<unknown> } = {}) => {
       const after = res.entry;
       const parts = allParts(after, now());
       const sides = parts.filter((p): p is SidePart => p.kind === "side");
       const cur = sides.at(-1);
       const name = SIDE_NAME[side];
+      // "Left side", or "Back and forth" (a part going both sides).
+      const part = (x: StretchSide) => (x === "B" ? "Back and forth" : `${SIDE_NAME[x]} side`);
       const brk = cur ? parts.find((p) => p.kind === "break" && p.end === cur.start) : undefined;
       // A part the finished feed already had: ended while she was on it, so the Done is taken back and it runs on.
       const kept = !!cur && !!res.before?.segments.some((x) => x.side === cur.side && Math.abs(Date.parse(x.start) - Date.parse(cur.start)) <= 1500);
       let text = tail;
       if (cur) {
         // A carried-on feed never "paused under a minute": it was a Done (or a picked time), so just "no break".
-        if (res.merged) text = `Back on the ${name} · no break · ${tail}`;
-        else if (res.clamped) text = `${name} from ${short(cur.start)}, when the break began (no break) · ${tail}`;
-        else if (kept) text = `${SIDE_NAME[cur.side]} still going, since ${short(cur.start)} · ${tail}`;
+        if (res.merged) text = `${side === "B" ? "Back on" : `Back on the ${name}`} · no break · ${tail}`;
+        else if (res.clamped) text = `${side === "B" ? "Back and forth" : name} from ${short(cur.start)}, when the break began (no break) · ${tail}`;
+        else if (kept) text = `${part(cur.side)} still going, since ${short(cur.start)} · ${tail}`;
         else if (brk) text = `${onSide(side, sides.at(-2)?.side)} since ${short(cur.start)} · break ${minutesText(brk.min)} · ${tail}`;
-        else text = `Switched to ${SIDE_NAME[cur.side]} at ${short(cur.start)} · ${tail}`;
+        else text = cur.side === "B" ? `Back and forth from ${short(cur.start)} · ${tail}` : `Switched to ${SIDE_NAME[cur.side]} at ${short(cur.start)} · ${tail}`;
       }
       const undo = async () => {
         // "Same feed as 8:30": the feed it discarded comes back too, so Undo leaves both as they were.
@@ -353,7 +422,7 @@ export function useTimerActions() {
    * runs on). Resolves to the answer, or null when nothing was saved.
    */
   const continueFeed = useCallback(
-    async (e: Entry, side: Side, at?: Date, opts: TimerCallOptions = {}, afterUndo?: () => Promise<unknown>): Promise<TimerResponse | null> => {
+    async (e: Entry, side: StretchSide, at?: Date, opts: TimerCallOptions = {}, afterUndo?: () => Promise<unknown>): Promise<TimerResponse | null> => {
       tick();
       const res = await timerCall({ action: "reopen", id: e.id, side, at: at?.toISOString(), expect_updated_at: e.updated_at }, opts);
       if (!res || res.noop || !res.entry.active) return res;
@@ -373,7 +442,7 @@ export function useTimerActions() {
    * puts that feed back exactly as Done left it.
    */
   const backOnAfterDone = useCallback(
-    async (e: Entry, side: Side, from: Date, until: Date | null, opts: TimerCallOptions = {}): Promise<TimerResponse | null> => {
+    async (e: Entry, side: StretchSide, from: Date, until: Date | null, opts: TimerCallOptions = {}): Promise<TimerResponse | null> => {
       tick();
       if (!until) {
         const res = await timerCall({ action: "reopen", id: e.id, side, at: from.toISOString(), expect_updated_at: e.updated_at }, opts);
@@ -386,7 +455,7 @@ export function useTimerActions() {
       if (!res || res.noop) return res;
       const last = sideParts(res.entry, now()).at(-1);
       const ended = res.entry.ended_at ?? until.toISOString();
-      const text = last?.end ? `${SIDE_NAME[last.side]} ${short(last.start)} – ${short(last.end)} · ended ${short(ended)}` : `Ended ${short(ended)}`;
+      const text = last?.end ? `${last.side === "B" ? "Back and forth" : SIDE_NAME[last.side]} ${short(last.start)} – ${short(last.end)} · ended ${short(ended)}` : `Ended ${short(ended)}`;
       timerToast(text, res.entry, { undo: () => void restoreFrom(res, endedAgain) });
       return res;
     },
@@ -400,14 +469,14 @@ export function useTimerActions() {
    * only way forward, in one checked write (continueFeed).
    */
   const continueAction = useCallback(
-    (side: Side) =>
+    (side: StretchSide) =>
       (f: TimerFailure): ToastAction[] | undefined => {
         const e = f.entry;
         if (f.kind !== "stopped" || !e || e.kind !== "feed" || e.data.method !== "breast" || e.active || !e.ended_at) return undefined;
         if (now().getTime() - Date.parse(e.ended_at) > CONTINUE_WITHIN_MS) return undefined;
         // Another feed already on (this one still shows running here: the 409 is how this phone hears it ended).
         if (entriesRef.current?.some((x) => x.active && x.kind === "feed" && x.id !== e.id)) return undefined;
-        return [{ label: `Continue that feed on ${SIDE_NAME[side]}`, onClick: () => void continueFeed(e, side) }];
+        return [{ label: side === "B" ? "Continue that feed, back and forth" : `Continue that feed on ${SIDE_NAME[side]}`, onClick: () => void continueFeed(e, side) }];
       },
     [continueFeed, now]
   );
@@ -447,16 +516,16 @@ export function useTimerActions() {
       const timed = saved.kind === "feed" && saved.data.method === "breast" && !!saved.data.segments?.length;
       const undo = () => void reopen(saved);
       if (!timed) {
-        const d = doneText(saved, now());
+        const d = doneText(saved, now(), undefined, entriesRef.current);
         timerToast(at ? `${d.text} · ended ${short(ended)}` : d.text, saved, {
           undo,
           actions: [{ label: "Edit", onClick: () => open({ kind: saved.kind, entry: saved }) }],
         });
       } else if (at) {
-        timerToast(`${doneText(saved, now()).text} · ended ${short(ended)}`, saved, { undo });
+        timerToast(`${doneText(saved, now(), undefined, entriesRef.current).text} · ended ${short(ended)}`, saved, { undo });
       } else if (saved.kind === "feed" && saved.data.paused_at_stop === true) {
         // Ended at its pause (the server's word for it, even if this phone still showed her on).
-        timerToast(doneText(saved, now(), `ended ${short(ended)}, ${pauseWords(saved, me)}`).text, saved, {
+        timerToast(doneText(saved, now(), `ended ${short(ended)}, ${pauseWords(saved, me)}`, entriesRef.current).text, saved, {
           undo,
           actions: [
             {
@@ -467,7 +536,7 @@ export function useTimerActions() {
           ],
         });
       } else {
-        timerToast(doneText(saved, now()).text, saved, {
+        timerToast(doneText(saved, now(), undefined, entriesRef.current).text, saved, {
           undo,
           actions: [{ label: "Ended earlier…", onClick: () => open({ kind: "feed", entry: saved, preset: fixPreset("finish") }) }],
         });
@@ -484,7 +553,7 @@ export function useTimerActions() {
    * on on this side from this start. If carrying on fails, this one comes back.
    */
   const sameFeed = useCallback(
-    async (e: Entry, prev: Entry, side: Side, opts: TimerCallOptions = {}): Promise<TimerResponse | null> => {
+    async (e: Entry, prev: Entry, side: StretchSide, opts: TimerCallOptions = {}): Promise<TimerResponse | null> => {
       tick();
       const p = live(prev);
       // One request (join): the new feed is set aside and the old one carried on from its start, or neither happens.
@@ -497,6 +566,51 @@ export function useTimerActions() {
       return res;
     },
     [carriedToast, live, restore, short, timerCall]
+  );
+
+  /** resume, which is defined further down (backAndForth on a break goes back on through it). */
+  const resumeRef = useRef<(e: Entry, side: StretchSide, at?: Date, opts?: TimerCallOptions) => Promise<TimerResponse | null>>(async () => null);
+
+  /**
+   * Back and forth from now: she goes between sides as she likes and nobody
+   * taps Switch (the start or switch toast's [Back and forth], the card's
+   * menu, the Lantern's hold). The side she's on ends now and a both-sides
+   * part opens; a side under a minute old (the toast right after a Switch or a
+   * start) becomes the both part instead. On a break it's "back on, back and
+   * forth". The toast's Undo puts the side back (undo_tap).
+   */
+  const backAndForth = useCallback(
+    async (e: Entry, opts: TimerCallOptions = {}) => {
+      const cur = live(e);
+      if (cur.kind === "feed" && cur.active && cur.data.segments?.length && !openSegment(cur.data.segments)) {
+        return (await resumeRef.current(cur, "B", undefined, opts))?.entry ?? null;
+      }
+      tick();
+      const res = await timerCall({ action: "switch", id: e.id, side: "B" }, opts);
+      // Already going back and forth (the other phone, or Claude): nothing changed, nothing to say.
+      if (!res || res.noop) return res?.entry ?? null;
+      const after = res.entry;
+      const part = sideParts(after, now()).at(-1);
+      timerToast(`Both sides from ${short(part?.start ?? now())} · no need to tap Switch`, after, { undo: () => void undoTap(after) });
+      return after;
+    },
+    [live, now, short, timerCall, timerToast, undoTap]
+  );
+  /**
+   * The [Back and forth] a toast offers (a start within 30 minutes of the last feed, a feed's second Switch), over the
+   * time it records: the side just tapped is under a minute old, so it becomes the both part from its start.
+   */
+  const bothChip = useCallback(
+    (e: Entry): ToastAction => {
+      const from = sideParts(e, now()).at(-1)?.start ?? e.started_at;
+      return {
+        label: "Back and forth",
+        sub: short(from),
+        ariaLabel: `Going back and forth: both sides from ${clock(from)}, no need to tap Switch`,
+        onClick: () => void backAndForth(e),
+      };
+    },
+    [backAndForth, clock, now, short]
   );
 
   const startFeed = useCallback(
@@ -529,27 +643,27 @@ export function useTimerActions() {
       );
       // The last feed ended minutes ago (fresh-eyes: a Done by mistake split one feed in two): one tap joins them.
       const prev = previousFeed(entriesRef.current, e);
-      const joinable =
-        !napEnded &&
-        prev?.kind === "feed" &&
-        prev.data.method === "breast" &&
-        !!prev.data.segments?.length &&
-        Date.parse(e.started_at) - Date.parse(prev.ended_at!) <= SAME_FEED_MS;
+      const prevNursed = !napEnded && prev?.kind === "feed" && prev.data.method === "breast" && !!prev.ended_at;
+      const gap = prevNursed ? Date.parse(e.started_at) - Date.parse(prev.ended_at!) : Infinity;
+      const joinable = prevNursed && !!prev?.data.segments?.length && gap <= SAME_FEED_MS;
       if (joinable && prev) {
         const join: ToastAction = { label: `Same feed as ${short(prev.started_at)}`, onClick: () => void sameFeed(e, prev, first?.side ?? side) };
+        // She's back on minutes after the last feed: "Same feed" first (a Done by mistake), then going back and forth.
         timerToast(`${name} started ${clock(e.started_at)} · the ${short(prev.started_at)} feed ended ${short(prev.ended_at!)}`, e, {
-          actions: [join, ...chips.slice(0, 1)],
+          actions: [join, bothChip(e)],
           undo: () => void unstart(e),
         });
         return e;
       }
-      const ask = chips.length ? ". Started earlier?" : "";
+      // Within 30 minutes of the last feed (a cluster's next latch): Back and forth first, then one "earlier" chip.
+      const cluster = prevNursed && gap <= CLUSTER_GAP_MS;
+      const ask = chips.length && !cluster ? ". Started earlier?" : "";
       // One toast for both: the nap it ended, then the feed.
       const text = napEnded ? `${napText} · ${name} started ${short(e.started_at)}${ask}` : `${name} started ${clock(e.started_at)}${ask}`;
-      timerToast(text, e, { actions: chips, undo: () => void unstart(e, napEnded) });
+      timerToast(text, e, { actions: cluster ? [bothChip(e), ...chips.slice(0, 1)] : chips, undo: () => void unstart(e, napEnded) });
       return e;
     },
-    [clock, earlierChips, now, reopen, retime, running, sameFeed, short, timerCall, timerToast, unstart]
+    [bothChip, clock, earlierChips, now, reopen, retime, running, sameFeed, short, timerCall, timerToast, unstart]
   );
 
   /**
@@ -659,7 +773,7 @@ export function useTimerActions() {
         s = (await timerCall({ action: "adjust", id: s.id, at: at.toISOString() }))?.entry ?? s;
       }
       const sleep = s;
-      timerToast(`${doneText(stopped, now()).text} · sleep timer on`, stopped, {
+      timerToast(`${doneText(stopped, now(), undefined, entriesRef.current).text} · sleep timer on`, stopped, {
         undo: async () => {
           // The feed only comes back once the sleep is gone, and the sleep only goes as it was started.
           if (sleep && !(await timerCall({ action: "discard", id: sleep.id, expect_updated_at: sleep.updated_at }))) return;
@@ -670,19 +784,32 @@ export function useTimerActions() {
     [now, reopen, timerCall, timerToast]
   );
 
+  /**
+   * Switch to a side. While she's going back and forth, a side means she's on
+   * it now: tracking sides again ("On the Left from 9:31 · tracking sides"),
+   * or, within 15 s of going both, that tap taken back. "B" is backAndForth.
+   */
   const switchSide = useCallback(
-    async (e: Entry, side: Side, opts: TimerCallOptions = {}) => {
+    async (e: Entry, side: StretchSide, opts: TimerCallOptions = {}): Promise<Entry | null> => {
+      if (side === "B") return backAndForth(e, opts);
       tick();
+      // Going back and forth when this was tapped: a side now is "tracking sides again", not a switch.
+      const fromBoth = openSide(live(e)) === "B";
       const res = await timerCall({ action: "switch", id: e.id, side }, { failActions: continueAction(side), ...opts });
       if (!res || res.noop) return res?.entry ?? null;
       const after = res.entry;
       if (res.reverted) {
-        timerToast(`Back on the ${SIDE_NAME[side]} · that switch is undone`, after, { undo: () => void restoreFrom(res) });
+        timerToast(`Back on the ${SIDE_NAME[side]} · ${fromBoth ? "back and forth undone" : "that switch is undone"}`, after, { undo: () => void restoreFrom(res) });
         return after;
       }
       const sides = sideParts(after, now());
       const cur = sides.at(-1);
       if (!cur) return after;
+      if (res.resided && fromBoth) {
+        // A side a moment after going both (the other side from the one she was on): that part is this side after all.
+        timerToast(`${SIDE_NAME[side]} from ${short(cur.start)}, not back and forth`, after, { undo: () => void restoreFrom(res), undoLabel: "Back to both sides" });
+        return after;
+      }
       if (res.resided) {
         // A Switch just after going back on: she went back on this side, not the one tapped (no stray second-long part).
         const was = SIDE_NAME[other(side)];
@@ -705,13 +832,22 @@ export function useTimerActions() {
         (to) => void retime(after, { op: "move", edge: "start", ref: cur.ref, to: to.toISOString() }),
         { min }
       );
-      timerToast(`Switched to ${SIDE_NAME[cur.side]} · ${short(cur.start)}${chips.length ? ". Earlier?" : ""}`, after, {
-        actions: chips,
+      if (fromBoth) {
+        timerToast(`On the ${SIDE_NAME[cur.side]} from ${short(cur.start)} · tracking sides${chips.length ? ". Earlier?" : ""}`, after, {
+          actions: chips,
+          undo: () => void undoTap(after),
+        });
+        return after;
+      }
+      // From the feed's second Switch: going back and forth, so she can stop tapping (then one "earlier" chip).
+      const offer = sides.filter((p) => p.startMoment === "switch").length >= OFFER_AFTER_SWITCHES;
+      timerToast(`Switched to ${SIDE_NAME[cur.side]} · ${short(cur.start)}${chips.length && !offer ? ". Earlier?" : ""}`, after, {
+        actions: offer ? [bothChip(after), ...chips.slice(0, 1)] : chips,
         undo: () => void undoTap(after),
       });
       return after;
     },
-    [continueAction, earlierChips, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
+    [backAndForth, bothChip, continueAction, earlierChips, live, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
   );
 
   const pause = useCallback(
@@ -720,7 +856,8 @@ export function useTimerActions() {
       const res = await timerCall({ action: "pause", id: e.id });
       if (!res || res.noop) return res?.entry ?? null;
       const last = sideParts(res.entry, now()).at(-1);
-      timerToast(last ? `Paused · ${SIDE_NAME[last.side]} ${minutesText(last.min)}` : "Paused", res.entry, { undo: () => void undoTap(res.entry) });
+      const what = last ? `${last.side === "B" ? "back and forth" : SIDE_NAME[last.side]} ${minutesText(last.min)}` : "";
+      timerToast(what ? `Paused · ${what}` : "Paused", res.entry, { undo: () => void undoTap(res.entry) });
       return res.entry;
     },
     [now, timerCall, timerToast, undoTap]
@@ -734,7 +871,7 @@ export function useTimerActions() {
    * continueAction's offer instead.
    */
   const staleResume = useCallback(
-    (side: Side): Pick<TimerCallOptions, "failActions" | "failText"> => {
+    (side: StretchSide): Pick<TimerCallOptions, "failActions" | "failText"> => {
       const stillOn = (f: TimerFailure) => {
         const e = f.kind === "changed" ? f.entry : undefined;
         if (!e?.active || e.kind !== "feed") return null;
@@ -745,18 +882,20 @@ export function useTimerActions() {
         failText: (f) => {
           const s = stillOn(f);
           if (!s) return undefined;
-          const name = SIDE_NAME[s.cur.side];
           const t = short(s.cur.start);
-          if (!f.who) return `She's already on the ${name} side · since ${t}`;
+          const both = s.cur.side === "B";
+          const name = SIDE_NAME[s.cur.side];
+          if (!f.who) return both ? `She's already going back and forth · since ${t}` : `She's already on the ${name} side · since ${t}`;
           const tap = (s.e.data as TapFeedData).last_tap;
           // Brittany's "Keep Left going" took back the pause this phone still showed.
-          if ((tap?.kind === "pause" && tap.undone) || s.cur.startMoment === "feed_start") return `${f.who} took back the pause · ${name} side since ${t}`;
+          if ((tap?.kind === "pause" && tap.undone) || s.cur.startMoment === "feed_start") return `${f.who} took back the pause · ${both ? "back and forth" : `${name} side`} since ${t}`;
+          if (both) return `${f.who} already put her back on, back and forth, at ${t}`;
           return s.cur.startMoment === "switch" ? `${f.who} already switched her to the ${name} at ${t}` : `${f.who} already put her back on the ${name} at ${t}`;
         },
         failActions: (f) => {
           const s = stillOn(f);
           if (!s) return continueAction(side)(f);
-          return [{ label: `Switch to ${SIDE_NAME[side]}`, onClick: () => void switchSide(s.e, side) }];
+          return [{ label: side === "B" ? "Back and forth" : `${s.cur.side === "B" ? "On the" : "Switch to"} ${SIDE_NAME[side]}`, onClick: () => void switchSide(s.e, side) }];
         },
       };
     },
@@ -768,11 +907,12 @@ export function useTimerActions() {
    * when she really went back on; without it, now.
    */
   const resume = useCallback(
-    async (e: Entry, side: Side, at?: Date, opts: TimerCallOptions = {}) => {
+    async (e: Entry, side: StretchSide, at?: Date, opts: TimerCallOptions = {}) => {
       tick();
       const res = await timerCall({ action: "resume", id: e.id, side, at: at?.toISOString() }, { ...staleResume(side), ...opts });
       if (!res || res.noop) return res;
       const after = res.entry;
+      const both = side === "B";
       const name = SIDE_NAME[side];
       const parts = allParts(after, now());
       const cur = parts.filter((p): p is SidePart => p.kind === "side").at(-1);
@@ -783,12 +923,12 @@ export function useTimerActions() {
       if (res.merged) {
         // The pause was under a minute, so it counts as nursing: say so, or the pause just tapped seems to vanish
         // (a "No break" picked after a long pause is just no break).
-        timerToast(`Back on the ${name} · ${shortPause(res, now()) ? "paused under a minute, so " : ""}no break`, after, { undo: () => void restoreFrom(res) });
+        timerToast(`${both ? "Back on" : `Back on the ${name}`} · ${shortPause(res, now()) ? "paused under a minute, so " : ""}no break`, after, { undo: () => void restoreFrom(res) });
       } else if (res.clamped && cur) {
-        timerToast(`${name} starts ${short(cur.start)}, when the break began (no break)`, after, { undo: () => void restoreFrom(res), undoLabel: back });
+        timerToast(`${both ? "Back and forth" : name} starts ${short(cur.start)}, when the break began (no break)`, after, { undo: () => void restoreFrom(res), undoLabel: back });
       } else if (at && cur) {
         // A time someone gave (Fix times): say what's recorded now, and put the break back on undo.
-        timerToast(`${name} side from ${short(cur.start)} · ${brk ? `break ${minutesText(brk.min)}` : "no break"}`, after, {
+        timerToast(`${both ? "Back and forth" : `${name} side`} from ${short(cur.start)} · ${brk ? `break ${minutesText(brk.min)}` : "no break"}`, after, {
           undo: () => void restoreFrom(res),
           undoLabel: back,
         });
@@ -797,7 +937,7 @@ export function useTimerActions() {
           ? earlierChips(
               Date.parse(cur.start),
               [2, 5],
-              (n, t) => `${name} started ${minutesWord(n)} earlier, at ${t}`,
+              (n, t) => `${both ? "Back on" : `${name} started`} ${minutesWord(n)} earlier, at ${t}`,
               (to) => void retime(after, { op: "move", edge: "start", ref: cur.ref, to: to.toISOString() }),
               { floor: Date.parse(brk.start) }
             )
@@ -809,6 +949,50 @@ export function useTimerActions() {
       return res;
     },
     [earlierChips, now, restoreFrom, retime, short, staleResume, timerCall, timerToast, undoTap]
+  );
+  useEffect(() => {
+    resumeRef.current = resume;
+  });
+
+  /**
+   * "Which side is she on now?" answered: tracking sides again. Going back
+   * and forth, she's on that side from now (switch); on a break after it,
+   * she's back on that side (resume, or a new feed after an hour's break).
+   */
+  const trackSides = useCallback(
+    async (e: Entry, side: Side) => {
+      const cur = live(e);
+      if (!cur.active || cur.kind !== "feed") return null;
+      if (!openSegment(cur.data.segments)) {
+        if (staleFeed(cur as Entry & { data: FeedData }, now())) return freshFeed(cur, side);
+        return (await resume(cur, side))?.entry ?? null;
+      }
+      return switchSide(cur, side);
+    },
+    [freshFeed, live, now, resume, switchSide]
+  );
+
+  /**
+   * The dock's "Back & forth" / "Track sides" tile: it only asks "Which side
+   * is she on now?" [Left] [Right], and saves nothing until one is picked,
+   * so a habit tap where Switch used to be is harmless. The question closes
+   * if the feed changes meanwhile (the other phone, Claude).
+   */
+  const askSide = useCallback(
+    (e: Entry) => {
+      const paused = pausedBoth(live(e));
+      timerToast("Which side is she on now?", live(e), {
+        // A question, not a saved thing: no check mark.
+        icon: "arrow-left-right",
+        actions: (["L", "R"] as Side[]).map((s) => ({
+          label: SIDE_NAME[s],
+          sub: paused ? "back on now" : "from now",
+          ariaLabel: `She's ${paused ? "back " : ""}on the ${SIDE_NAME[s]} now: track sides again`,
+          onClick: () => void trackSides(e, s),
+        })),
+      });
+    },
+    [live, timerToast, trackSides]
   );
 
   const discard = useCallback(
@@ -832,6 +1016,11 @@ export function useTimerActions() {
     stop,
     fellAsleep,
     switchSide,
+    /** Back and forth from now (both sides, not tracked); on a break, back on going back and forth. */
+    backAndForth,
+    /** Ask "Which side is she on now?" (saves nothing until answered), then track sides again from that side. */
+    askSide,
+    trackSides,
     pause,
     resume,
     retime,

@@ -5,9 +5,10 @@ import { aheadOfSlot, careTime, countedAs, matchPlan, type PlanMatch, type PlanV
 import { momSpeak, samePlans, spokenLine } from "@/lib/maple/care-mcp";
 import { carePersonName, carePlanViews, careSession, logCareDose, planDoses } from "@/lib/maple/care-store";
 import { describeEntry } from "@/lib/maple/describe";
-import { staleFeed } from "@/lib/maple/feed";
+import { openSegment, staleFeed } from "@/lib/maple/feed";
 import { LABEL_NOT_WHILE_NURSING, MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { memberName, summarize } from "@/lib/maple/insights";
+import { lastFedSpeak } from "@/lib/maple/mcp-tools";
 import {
   activeTimers,
   createEntryOnce,
@@ -33,6 +34,13 @@ export const dynamic = "force-dynamic";
  * from Family → Hands-free). Body: { action, amount_oz?, client_id? }.
  * Answers { speak } — one sentence for the Shortcut's "Speak Text".
  *
+ * Going back and forth: `back_and_forth` with a feed running stops tracking
+ * sides from now (both sides; paused, it goes back on going both); with none
+ * it asks for a side first, since the next side alternates from where she
+ * started. While she's going both, `switch` says there's nothing to switch
+ * and `nurse_left` / `nurse_right` track sides again. `status` speaks a
+ * cluster (3+ feeds close together) as one line, as Today shows it.
+ *
  * Mom's medicines ride the same URL (one "Mom meds" Shortcut for every plan,
  * any phone): mom_status lists her plans as { id, label, ok_now } for Choose
  * from List, OK-now ones first, and mom_dose { med, minutes_ago?, skipped?,
@@ -53,6 +61,7 @@ const ACTIONS = [
   "nurse_left",
   "nurse_right",
   "switch",
+  "back_and_forth",
   "stop",
   "sleep",
   "wake",
@@ -65,14 +74,6 @@ const ACTIONS = [
 type Action = (typeof ACTIONS)[number];
 
 const side = (s: "L" | "R") => (s === "L" ? "left" : "right");
-
-function ago(min: number): string {
-  if (min < 1) return "just now";
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  const parts = [h ? `${h} hour${h === 1 ? "" : "s"}` : "", m ? `${m} minute${m === 1 ? "" : "s"}` : ""].filter(Boolean);
-  return `${parts.join(" ")} ago`;
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -129,8 +130,10 @@ export async function POST(request: NextRequest) {
           break;
         }
         if (runningSleep) await stopTimer(runningSleep.id, undefined, me.email);
+        // Going back and forth until now: this side is tracking sides again.
+        const wasBoth = !!d && openSegment(d.segments)?.side === "B";
         ({ entry } = await startTimer({ ...base, kind: "feed", side: s, at: now, clientId }));
-        speak = `Nursing timer running on the ${side(s)}.`;
+        speak = wasBoth ? `Tracking sides again: she's on the ${side(s)}.` : `Nursing timer running on the ${side(s)}.`;
         break;
       }
       case "switch": {
@@ -139,9 +142,39 @@ export async function POST(request: NextRequest) {
           break;
         }
         const d = runningFeed.data as FeedData;
+        // Going back and forth (or on a break from it): no side to flip to, and never a guess from the last side tracked.
+        if (d.segments?.at(-1)?.side === "B") {
+          speak = "She's going back and forth, so there's nothing to switch.";
+          break;
+        }
         const to = d.last_side === "L" ? "R" : "L";
         entry = (await switchSide(runningFeed.id, to, undefined, me.email)).entry;
         speak = `Switched to the ${side(to)}.`;
+        break;
+      }
+      case "back_and_forth": {
+        if (!runningFeed) {
+          // The side she starts on is what the next side alternates from.
+          speak = "Start the feed on a side first.";
+          break;
+        }
+        const d = runningFeed.data as FeedData;
+        // A feed nobody tapped Done on isn't this one (the nurse_* rule): going both on it would glue two feeds together.
+        if (staleFeed({ started_at: runningFeed.started_at, data: d }, now)) {
+          const last = d.segments?.at(-1);
+          speak =
+            last && last.end !== null
+              ? `A feed from ${formatTime(runningFeed.started_at, tz)} is still open, on a break since ${formatTime(last.end, tz)}. Stop that one first, then start the new feed.`
+              : `A feed from ${formatTime(runningFeed.started_at, tz)} is still running. Stop that one first, then start the new feed.`;
+          break;
+        }
+        const paused = !openSegment(d.segments);
+        const r = await switchSide(runningFeed.id, "B", undefined, me.email);
+        entry = r.entry;
+        const open = openSegment((r.entry.data as FeedData).segments);
+        if (r.noop) speak = "She's already going back and forth.";
+        else if (paused) speak = r.merged ? "Back on, still going back and forth." : "Back on, going back and forth.";
+        else speak = `Going back and forth from ${formatTime(open?.start ?? now, tz)}, so there's nothing to switch.`;
         break;
       }
       case "stop":
@@ -183,17 +216,21 @@ export async function POST(request: NextRequest) {
         ]);
         const s = summarize({ entries, growth, baby, members, now, lifetime });
         const bits: string[] = [];
+        const name = baby.nickname || baby.name;
         const nursing = s.active.find((e) => e.kind === "feed");
         if (nursing) {
           const d = nursing.data as FeedData;
           const mins = Math.round((now.getTime() - Date.parse(nursing.started_at)) / 60000);
-          bits.push(`${baby.nickname || baby.name} is nursing now${d.last_side ? ` on the ${side(d.last_side)}` : ""}, ${mins} minute${mins === 1 ? "" : "s"} in.`);
-        } else if (s.lastFeed && s.minutesSinceFeed != null) {
-          const first = s.lastFeed.data.first_side;
-          bits.push(
-            `${baby.nickname || baby.name} last ate ${ago(s.minutesSinceFeed)}${first ? `, starting on the ${side(first)}` : ""}${s.nextSide ? `, so start on the ${side(s.nextSide)} next` : ""}.`
-          );
-        } else bits.push("No feeds logged yet.");
+          const open = openSegment(d.segments);
+          const where = open?.side === "B" ? ", going back and forth" : open ? ` on the ${side(open.side)}` : d.last_side ? ` on the ${side(d.last_side)}` : "";
+          bits.push(`${name} is nursing now${where}, ${mins} minute${mins === 1 ? "" : "s"} in.`);
+          // A cluster still going: how many feeds so far (Today's rule: 3+ feeds, each under 30 minutes after the last ended).
+          const c = s.lastFed?.kind === "breast" && s.lastFed.run?.cluster != null ? s.cluster : null;
+          if (c) bits.push(`It's feed ${c.feeds} of a cluster since ${formatTime(c.start, tz)}.`);
+        } else {
+          // The cluster line after a cluster, else when she last ate and the side to start on (insights' lastFed and next).
+          bits.push(lastFedSpeak(s, name, tz));
+        }
         bits.push(`${s.last24h.wet} wet and ${s.last24h.dirty} dirty diapers in the last 24 hours.`);
         const others = s.active.filter((e) => e.kind !== "feed");
         if (others.length) bits.push(`A ${others.map((e) => (e.kind === "tummy" ? "tummy time" : e.kind)).join(" and ")} timer is running.`);

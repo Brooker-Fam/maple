@@ -177,7 +177,8 @@ export async function notifyDoseLogged(doseId: number, device: string | null, no
 
 // ── the nursing timer on the lock screen ──────────────────────────────
 
-const SIDE: Record<"L" | "R", string> = { L: "Left", R: "Right" };
+/** "B" is back and forth (both sides, not tracked): the notice reads "Nursing · both sides". */
+const SIDE: Record<"L" | "R" | "B", string> = { L: "Left", R: "Right", B: "both sides" };
 /** Two instants a part start and a feed start share (stored with ms vs µs). */
 const same = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) < 1500;
 

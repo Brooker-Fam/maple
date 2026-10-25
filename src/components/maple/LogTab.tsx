@@ -3,6 +3,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeEntry } from "@/lib/maple/describe";
+import { feedClusters, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
 import { statsFor, type DayStats } from "@/lib/maple/insights";
 import {
   DEFAULT_TZ,
@@ -16,12 +17,13 @@ import {
   formatTime,
 } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
-import type { Entry, EntryKind, MapleState, UnitSystem } from "@/lib/maple/types";
-import EntryRow from "./EntryRow";
+import type { Entry, EntryKind, EntryOf, MapleState, UnitSystem } from "@/lib/maple/types";
+import EntryRow, { ClusterRow } from "./EntryRow";
 import { useClockMinute } from "./FeedParts";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
+import { useClusterInfo } from "./sheets/ClusterInfoSheet";
 import { Button, Chip, EmptyState, SectionTitle, Sheet, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
@@ -268,7 +270,11 @@ export function bucketWindows(entries: Entry[], windows: TimeWindow[], now: Date
   return out;
 }
 
-/** DayStats per local day, oldest first (dailyStats, minus the rescans). */
+/**
+ * DayStats per local day, oldest first (dailyStats, minus the rescans).
+ * Feeds are counted as runs worked out once from every entry loaded (the
+ * 10-minute rule), so a feed that ran past midnight counts on the day it began.
+ */
 export function statsByDay(entries: Entry[], fromKey: string, toKey: string, now: Date, tz: string): DayStats[] {
   const windows: TimeWindow[] = [];
   for (let k = fromKey; k <= toKey; k = addDays(k, 1)) {
@@ -276,7 +282,8 @@ export function statsByDay(entries: Entry[], fromKey: string, toKey: string, now
     windows.push({ key: k, start: a.getTime(), end: b.getTime() });
   }
   const buckets = bucketWindows(entries, windows, now);
-  return windows.map((w, i) => statsFor(buckets[i], new Date(w.start), new Date(w.end), w.key, now));
+  const runs = nursingRuns(entries, now);
+  return windows.map((w, i) => statsFor(buckets[i], new Date(w.start), new Date(w.end), w.key, now, runs));
 }
 
 /** Clock-change days in the baby's zone get a gentle label instead of a mystery gap. */
@@ -288,9 +295,10 @@ export function dstNote(key: string, tz: string): string | null {
   return null;
 }
 
-/** "9 feeds · 2h 05m nursing · 2 oz bottle · 6 wet · 3 dirty · 14h 20m sleep" */
+/** "11 feeds (one cluster) · 2h 05m nursing · 2 oz bottle · 6 wet · 3 dirty · 14h 20m sleep" */
 export function daySummaryParts(s: DayStats, units: UnitSystem): string[] {
-  const parts = [`${s.feeds} feed${s.feeds === 1 ? "" : "s"}`];
+  const clusters = s.clusters === 1 ? " (one cluster)" : s.clusters > 1 ? ` (${s.clusters} clusters)` : "";
+  const parts = [`${s.feeds} feed${s.feeds === 1 ? "" : "s"}${clusters}`];
   if (s.nursingSec >= 60) parts.push(`${formatDuration(s.nursingSec)} nursing`);
   if (s.bottleMl > 0) parts.push(`${formatVolume(s.bottleMl, units)} bottle`);
   parts.push(`${s.wet} wet`, `${s.dirty} dirty`);
@@ -398,6 +406,15 @@ export default function LogTab({
   }, [entries, tz]);
 
   const stats = useMemo(() => statsByDay(entries, oldestKey, todayKey, now, tz), [entries, oldestKey, todayKey, now, tz]);
+  // Which cluster each feed is in (3+ feeds, each under 30 minutes after the last), so a day shows one Cluster row.
+  const clusterOf = useMemo(() => {
+    const m = new Map<number, number>();
+    feedClusters(nursingRuns(entries, now)).forEach((c, i) => {
+      for (const e of c.entries) if (!e.active) m.set(e.id, i);
+    });
+    return m;
+  }, [entries, now]);
+  const clusterInfo = useClusterInfo();
 
   const shownFrom = ready ? oldestKey : loadedFrom ?? todayKey;
   const days = useMemo(() => {
@@ -530,6 +547,8 @@ export default function LogTab({
               readOnly={readOnly}
               onOpen={touch}
               highlighted={d.key === flash}
+              clusterOf={clusterOf}
+              onClusterInfo={clusterInfo.open}
             />
           ))}
         </div>
@@ -553,6 +572,7 @@ export default function LogTab({
       </div>
 
       <NewArrivalsPill pill={pill} onDismiss={dismissPill} />
+      {clusterInfo.sheet}
     </div>
   );
 }
@@ -573,6 +593,8 @@ function DaySection({
   highlighted,
   readOnly,
   onOpen,
+  clusterOf,
+  onClusterInfo,
 }: {
   day: string;
   todayKey: string;
@@ -587,9 +609,32 @@ function DaySection({
   highlighted: boolean;
   readOnly: boolean;
   onOpen: (e: Entry) => void;
+  /** Feed id → its cluster's index (LogTab works them out from every loaded entry). */
+  clusterOf: Map<number, number>;
+  onClusterInfo: (c?: FeedCluster | null) => void;
 }) {
   const { open } = useSheets();
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const label = formatDayLabel(key, todayKey, { long: false });
+  // A cluster with two or more of this day's feeds is one row, where its first feed would be (rows are newest first).
+  const items = useMemo(() => {
+    const byCluster = new Map<number, EntryOf<"feed">[]>();
+    for (const e of rows) {
+      const c = e.kind === "feed" ? clusterOf.get(e.id) : undefined;
+      if (c === undefined) continue;
+      const list = byCluster.get(c) ?? [];
+      list.push(e as EntryOf<"feed">);
+      byCluster.set(c, list);
+    }
+    const out: ({ type: "entry"; e: Entry } | { type: "cluster"; id: number; feeds: EntryOf<"feed">[] })[] = [];
+    for (const e of rows) {
+      const c = e.kind === "feed" ? clusterOf.get(e.id) : undefined;
+      const feeds = c === undefined ? undefined : byCluster.get(c);
+      if (c === undefined || !feeds || feeds.length < 2) out.push({ type: "entry", e });
+      else if (feeds[feeds.length - 1].id === e.id) out.push({ type: "cluster", id: c, feeds });
+    }
+    return out;
+  }, [rows, clusterOf]);
   const dst = dstNote(key, tz);
   const summary = total ? daySummaryParts(stats, units) : null;
   const groupLabel = KIND_GROUPS.find((g) => g.id === group)?.label.toLowerCase();
@@ -630,7 +675,39 @@ function DaySection({
 
       {rows.length ? (
         <ol className={cx(tone.card, "overflow-hidden")}>
-          {rows.map((e, i) => (
+          {items.map((it, i) => {
+            if (it.type === "cluster") {
+              const isOpen = expanded.has(it.id);
+              return (
+                <li key={`c${it.id}`} className="relative">
+                  {i > 0 && <span aria-hidden className="pointer-events-none absolute top-0 left-[33.25px] h-[calc(28px-22px)] w-[1.5px] bg-mp-line" />}
+                  {i < items.length - 1 && !isOpen && (
+                    <span aria-hidden className="pointer-events-none absolute bottom-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />
+                  )}
+                  <ClusterRow
+                    entries={it.feeds}
+                    now={now}
+                    expanded={isOpen}
+                    glow={glow}
+                    onToggle={() =>
+                      setExpanded((s) => {
+                        const next = new Set(s);
+                        if (next.has(it.id)) next.delete(it.id);
+                        else next.add(it.id);
+                        return next;
+                      })
+                    }
+                    onOpenEntry={(e) => {
+                      onOpen(e);
+                      open({ kind: e.kind, entry: e });
+                    }}
+                    onInfo={() => onClusterInfo(null)}
+                  />
+                </li>
+              );
+            }
+            const e = it.e;
+            return (
             <li
               key={e.id}
               data-entry-id={e.id}
@@ -642,7 +719,7 @@ function DaySection({
                 separates the rows (no dividers).
               */}
               {i > 0 && <span aria-hidden className="pointer-events-none absolute top-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />}
-              {i < rows.length - 1 && (
+              {i < items.length - 1 && (
                 <span aria-hidden className="pointer-events-none absolute bottom-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />
               )}
               <EntryRow
@@ -654,7 +731,8 @@ function DaySection({
                 }}
               />
             </li>
-          ))}
+            );
+          })}
         </ol>
       ) : (
         <div className={cx(tone.card, "p-4 text-center")}>

@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { feedTotals } from "@/lib/maple/feed";
+import { feedClusters, feedTotals, nursingRuns, spanText, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
 import {
   DISCLAIMER,
   FEEDS_PER_DAY,
@@ -85,11 +85,11 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const VIZ_VARS =
   "[--v-grid:var(--mp-line)] [--v-track:var(--mp-sunken)] [--v-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] [--v-surface:var(--mp-surface)] " +
   "[--v-sleep:#9077BC] [--v-nurse:#C55F1D] [--v-bottle:#E0A93B] [--v-pee:#4F8FAE] [--v-poop:#905718] [--v-tummy:#69863E] [--v-pump:#CA805D] " +
-  "[--v-left:#B5452B] [--v-right:#E0A93B] [--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
+  "[--v-left:#B5452B] [--v-right:#E0A93B] [--v-both:#8C7C6B] [--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
   "dark:[--v-sleep:#9E85CB] dark:[--v-nurse:#BF4213] dark:[--v-bottle:#B88C06] dark:[--v-pee:#3CA1C4] dark:[--v-poop:#985E22] dark:[--v-pump:#C97E5B] " +
-  "dark:[--v-left:#CF5B3E] dark:[--v-right:#D9A23A] dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
+  "dark:[--v-left:#CF5B3E] dark:[--v-right:#D9A23A] dark:[--v-both:#A99A88] dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
   "[.maple-night_&]:[--v-sleep:rgb(224_169_59/0.35)] [.maple-night_&]:[--v-nurse:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-bottle:rgb(224_169_59/0.55)] " +
-  "[.maple-night_&]:[--v-left:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-right:rgb(224_169_59/0.55)] " +
+  "[.maple-night_&]:[--v-left:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-right:rgb(224_169_59/0.55)] [.maple-night_&]:[--v-both:rgb(224_169_59/0.3)] " +
   "[.maple-night_&]:[--v-pee:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-poop:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-tummy:rgb(224_169_59/0.45)] [.maple-night_&]:[--v-pump:rgb(224_169_59/0.45)] " +
   "[.maple-night_&]:[--v-band:rgb(224_169_59/0.08)] [.maple-night_&]:[--v-target:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-dot-edge:rgb(224_169_59/0.3)] [.maple-night_&]:[--v-now:#D9772B]";
 
@@ -194,7 +194,7 @@ export default function PatternsTab({
                 </EmptyState>
               </Card>
             )}
-            {loggedDays >= 2 && <Insights days={chartDays} entries={entries} todayKey={todayKey} tz={tz} />}
+            {loggedDays >= 2 && <Insights days={chartDays} entries={entries} todayKey={todayKey} tz={tz} now={now} />}
 
             {!ready && <p className={cx(tone.faint, "px-1 text-xs")}>Gathering earlier days…</p>}
             {partialDays.length > 0 && (
@@ -258,7 +258,7 @@ function hourLabel(h: number): string {
   return `${hh % 12} ${hh < 12 ? "AM" : "PM"}`;
 }
 
-function Insights({ days, entries, todayKey, tz }: { days: DayStats[]; entries: Entry[]; todayKey: string; tz: string }) {
+function Insights({ days, entries, todayKey, tz, now }: { days: DayStats[]; entries: Entry[]; todayKey: string; tz: string; now: Date }) {
   const lines = useMemo(() => {
     const out: string[] = [];
     // Whole days only (today is still being written).
@@ -285,40 +285,39 @@ function Insights({ days, entries, todayKey, tz }: { days: DayStats[]; entries: 
       out.push(`About ${Math.round(avgFeeds)} feed${Math.round(avgFeeds) === 1 ? "" : "s"} a day${busy}.`);
     }
 
+    // The Left/Right split leaves out back and forth (never split into made-up sides), and says so.
     const left = base.reduce((n, d) => n + d.leftSec, 0);
     const right = base.reduce((n, d) => n + d.rightSec, 0);
+    const both = base.reduce((n, d) => n + d.bothSec, 0);
     if (left + right >= 30 * 60) {
       const l = Math.round((left / (left + right)) * 100);
-      out.push(`Nursing split: L ${l}% · R ${100 - l}%.`);
+      out.push(`Nursing split: L ${l}% · R ${100 - l}%${both >= 60 ? ", not counting back and forth" : ""}.`);
     }
 
+    // Clusters by the one rule (feed.ts): 3+ feeds, each starting under 30 minutes after the last one ended.
     let clusterDays = 0;
     let evening = 0;
     let total = 0;
+    const clusters = feedClusters(nursingRuns(entries, now));
     for (const d of base) {
       const [a, b] = dayBounds(d.key, tz);
-      const cs = findClusters(
-        feeds.filter((f) => {
-          const t = Date.parse(f.started_at);
-          return t >= a.getTime() && t < b.getTime();
-        })
-      );
+      const cs = clusters.filter((c) => c.start >= a.getTime() && c.start < b.getTime());
       if (cs.length) clusterDays++;
       for (const c of cs) {
         total++;
-        const h = localParts(c.from, tz).hour;
+        const h = localParts(c.start, tz).hour;
         if (h >= 16 && h < 24) evening++;
       }
     }
     if (clusterDays) {
       const when = evening / total > 0.6 ? ", mostly in the evening" : "";
-      out.push(`Close-together feeds (3 or more within 3 hours) on ${clusterDays} of ${base.length} day${base.length === 1 ? "" : "s"}${when}.`);
+      out.push(`Cluster feeds on ${clusterDays} of ${base.length} day${base.length === 1 ? "" : "s"}${when}.`);
     } else {
       const sleep = base.reduce((n, d) => n + d.sleepSec, 0) / Math.max(1, base.length);
       if (sleep >= 3600) out.push(`About ${formatDuration(sleep)} of logged sleep a day.`);
     }
     return out.slice(0, 3);
-  }, [days, entries, todayKey, tz]);
+  }, [days, entries, todayKey, tz, now]);
 
   if (!lines.length) return null;
   // The first line is the headline; the rest read on as one short paragraph.
@@ -339,7 +338,6 @@ function Insights({ days, entries, todayKey, tz }: { days: DayStats[]; entries: 
 type Span = { x1: number; x2: number; title: string };
 type FeedMark = Span & { bottle: boolean };
 type DiaperMark = { x: number; pee: boolean; poop: boolean; title: string };
-type Cluster = { from: number; to: number; count: number };
 type RibbonRow = {
   key: string;
   label: string;
@@ -379,31 +377,6 @@ export function spanFrac(s: number, e: number, start: number, end: number, wallS
   return [x1, x2];
 }
 
-/**
- * Runs of close-together feeds: every feed that sits in some 3-hour window
- * holding 3+ feed starts, grouped while the gaps stay under 3 hours.
- * Descriptive only ("cluster · 4 feeds in 2h 50m").
- */
-function findClusters(feeds: Entry[]): Cluster[] {
-  const starts = feeds.map((f) => Date.parse(f.started_at)).sort((a, b) => a - b);
-  const inCluster = starts.map(() => false);
-  for (let i = 0; i < starts.length; i++) {
-    let j = i;
-    while (j + 1 < starts.length && starts[j + 1] - starts[i] <= 3 * H) j++;
-    if (j - i + 1 >= 3) for (let k = i; k <= j; k++) inCluster[k] = true;
-  }
-  const out: Cluster[] = [];
-  starts.forEach((t, k) => {
-    if (!inCluster[k]) return;
-    const last = out[out.length - 1];
-    if (last && inCluster[k - 1] && t - last.to <= 3 * H) {
-      last.to = t;
-      last.count++;
-    } else out.push({ from: t, to: t, count: 1 });
-  });
-  return out.filter((c) => c.count >= 3);
-}
-
 function nightLabel(key: string, todayKey: string): string {
   const d = daysBetween(key, todayKey);
   if (d === 0) return "Tonight";
@@ -434,6 +407,9 @@ function buildRibbon(
   const nowMs = now.getTime();
   const bornMs = bornAt ? Date.parse(bornAt) : null;
   const wallStartMin = mode === "nights" ? 720 : 0;
+  // Feeds and clusters by the one rule (feed.ts), worked out once from everything loaded.
+  const runs: NursingRun[] = nursingRuns(entries, now);
+  const clusters: FeedCluster[] = feedClusters(runs);
 
   // Row windows, oldest first: local days, or noon → noon for nights.
   const windows: TimeWindow[] = [];
@@ -463,7 +439,7 @@ function buildRibbon(
       label: mode === "nights" ? nightLabel(k, todayKey) : formatDayLabel(k, todayKey),
       jumpKey: mode === "nights" && addDays(k, 1) <= todayKey ? addDays(k, 1) : k,
       dst: null,
-      stats: statsFor(inRow, new Date(start), new Date(end), k, now),
+      stats: statsFor(inRow, new Date(start), new Date(end), k, now, runs),
       sleeps: [],
       tummies: [],
       feeds: [],
@@ -476,7 +452,6 @@ function buildRibbon(
     if (hours === 23) row.dst = mode === "days" ? dstNote(k, tz) : "23 hours (clocks sprang forward)";
 
     const when = (s: number, e: number) => `${formatTime(s, tz)}${e > s + MIN ? `–${formatTime(e, tz)}` : ""}`;
-    const feedsInRow: Entry[] = [];
     for (const e of inRow) {
       const s = Date.parse(e.started_at);
       if (e.kind === "sleep" || e.kind === "tummy") {
@@ -487,7 +462,6 @@ function buildRibbon(
         (e.kind === "sleep" ? row.sleeps : row.tummies).push({ x1, x2, title });
       } else if (e.kind === "feed") {
         if (s < start || s >= end) continue;
-        feedsInRow.push(e);
         const bottle = e.data.method === "bottle";
         const eEnd = entryEnd(e, now);
         const [x1, x2] = spanFrac(s, Math.max(eEnd, s + (bottle ? 10 * MIN : 0)), start, end, wallStartMin, tz);
@@ -501,9 +475,10 @@ function buildRibbon(
         row.diapers.push({ x: wallFrac(s, start, end, wallStartMin, tz), pee: !!e.data.pee, poop: !!e.data.poop, title: `${what} diaper · ${formatTime(s, tz)}` });
       }
     }
-    for (const c of findClusters(feedsInRow)) {
-      const [x1, x2] = spanFrac(c.from - 10 * MIN, c.to + 30 * MIN, start, end, wallStartMin, tz);
-      row.clusters.push({ x1, x2, count: c.count, title: `cluster · ${c.count} feeds in ${formatDuration((c.to - c.from) / 1000)}` });
+    for (const c of clusters) {
+      if (c.start < start || c.start >= end) continue;
+      const [x1, x2] = spanFrac(c.start - 5 * MIN, (c.end ?? nowMs) + 5 * MIN, start, end, wallStartMin, tz);
+      row.clusters.push({ x1, x2, count: c.feeds, title: `Cluster ${spanText(c.start, c.end, tz)} · ${c.feeds} feeds` });
     }
     rows.push(row);
   });
@@ -655,7 +630,7 @@ function RibbonLegend({ night }: { night: boolean }) {
       )}
       {item(<circle cx="8" cy="5" r="4" fill="var(--v-poop)" />, "Poop")}
       {item(<rect x="0" y="2.5" width="16" height="5" rx="2" fill="var(--v-tummy)" />, "Tummy")}
-      {item(<rect x="0" y="0" width="16" height="10" rx="2" fill="var(--v-bottle)" opacity="0.22" />, "Close-together feeds")}
+      {item(<rect x="0" y="0" width="16" height="10" rx="2" fill="var(--v-bottle)" opacity="0.22" />, "Cluster")}
     </div>
   );
 }
@@ -1378,6 +1353,7 @@ function DailyCharts({
   const anyTummy = days.some((d) => d.tummySec > 0);
   const totalL = days.reduce((n, d) => n + d.leftSec, 0);
   const totalR = days.reduce((n, d) => n + d.rightSec, 0);
+  const anyBoth = days.some((d) => d.bothSec > 0);
   const lPct = totalL + totalR ? Math.round((totalL / (totalL + totalR)) * 100) : 0;
   const bornAge = bornAt ? babyAge(bornAt, now, tz) : null;
   const more = [anyBottle && "bottle", anyPump && "pumped", anyTummy && "tummy time"].filter((m): m is string => !!m);
@@ -1505,11 +1481,14 @@ function DailyCharts({
 
             {anyNursing && (
               <ChartBlock
-                title="Nursing minutes, left and right"
-                subtitle={totalL + totalR >= 60 ? `Over these days: L ${lPct}% · R ${100 - lPct}%.` : undefined}
+                title={anyBoth ? "Nursing minutes, by side" : "Nursing minutes, left and right"}
+                subtitle={
+                  totalL + totalR >= 60 ? `Over these days: L ${lPct}% · R ${100 - lPct}%${anyBoth ? ", not counting back and forth" : ""}.` : undefined
+                }
                 legend={[
                   { color: "var(--v-left)", label: "L · Left" },
                   { color: "var(--v-right)", label: "R · Right" },
+                  ...(anyBoth ? [{ color: "var(--v-both)", label: "Back and forth" }] : []),
                 ]}
               >
                 <Columns
@@ -1519,14 +1498,19 @@ function DailyCharts({
                   series={[
                     { id: "L", label: "Left", color: "var(--v-left)", values: days.map((d) => d.leftSec / 3600) },
                     { id: "R", label: "Right", color: "var(--v-right)", values: days.map((d) => d.rightSec / 3600) },
+                    // Back and forth (both sides, not tracked) stacks on top as its own series, never split into L and R.
+                    ...(anyBoth ? [{ id: "B", label: "Back and forth", color: "var(--v-both)", values: days.map((d) => d.bothSec / 3600) }] : []),
                   ]}
                   yLabel={(v) => (v ? `${v}h` : "0")}
                   valueLabel={(v) => formatDuration(v * 3600)}
-                  ariaLabel={`Nursing minutes per day: ${days.map((d) => `${shortDate(d.key)} left ${Math.round(d.leftSec / 60)}, right ${Math.round(d.rightSec / 60)}`).join("; ")}`}
+                  ariaLabel={`Nursing minutes per day: ${days
+                    .map((d) => `${shortDate(d.key)} left ${Math.round(d.leftSec / 60)}, right ${Math.round(d.rightSec / 60)}${d.bothSec ? `, back and forth ${Math.round(d.bothSec / 60)}` : ""}`)
+                    .join("; ")}`}
                   tooltip={(i) => (
                     <>
                       <TipRow color="var(--v-left)" value={formatDuration(days[i].leftSec)} label="L" />
-                      <TipRow color="var(--v-right)" value={formatDuration(days[i].rightSec)} label={`R${so(i)}`} />
+                      <TipRow color="var(--v-right)" value={formatDuration(days[i].rightSec)} label={anyBoth ? "R" : `R${so(i)}`} />
+                      {anyBoth && <TipRow color="var(--v-both)" value={formatDuration(days[i].bothSec)} label={`back and forth${so(i)}`} />}
                     </>
                   )}
                 />
@@ -1598,6 +1582,7 @@ function DailyCharts({
 /** The charts' accessible twin: every number, one row per day. */
 function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: string; units: UnitSystem }) {
   const anyBottle = days.some((d) => d.bottleMl > 0);
+  const anyBoth = days.some((d) => d.bothSec > 0);
   // The table scrolls sideways on a phone; the day column stays put, with a
   // hairline (an inset shadow, so it travels with the sticky cell) to show
   // the other columns slide under it.
@@ -1622,7 +1607,7 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
           <tr className="border-b border-mp-line">
             <th scope="col" className={th}>Day</th>
             <th scope="col" className={th}>Feeds</th>
-            <th scope="col" className={th}>Nursing L / R</th>
+            <th scope="col" className={th}>{anyBoth ? "Nursing L / R / both" : "Nursing L / R"}</th>
             {anyBottle && <th scope="col" className={th}>Bottle</th>}
             <th scope="col" className={th}>Wet</th>
             <th scope="col" className={th}>Dirty</th>
@@ -1638,6 +1623,7 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
               <td className={td}>{d.feeds}</td>
               <td className={td}>
                 {formatDuration(d.leftSec)} / {formatDuration(d.rightSec)}
+                {anyBoth && ` / ${formatDuration(d.bothSec)}`}
               </td>
               {anyBottle && <td className={td}>{d.bottleMl ? formatVolume(d.bottleMl, units) : <span className={tone.faint}>—</span>}</td>}
               <td className={td}>{d.wet}</td>
@@ -1722,7 +1708,11 @@ export async function buildVisitSummary(opts: {
     const [a, b] = dayBounds(k, tz);
     const d = statsFor(entries, a, b, k, now);
     const feedBits: string[] = [];
-    if (d.nursingSec) feedBits.push(`nursing ${formatDuration(d.nursingSec)}: L ${formatDuration(d.leftSec)} / R ${formatDuration(d.rightSec)}`);
+    if (d.nursingSec) {
+      const both = d.bothSec ? ` / back and forth ${formatDuration(d.bothSec)}` : "";
+      feedBits.push(`nursing ${formatDuration(d.nursingSec)}: L ${formatDuration(d.leftSec)} / R ${formatDuration(d.rightSec)}${both}`);
+    }
+    if (d.clusters) feedBits.push(d.clusters === 1 ? "one cluster" : `${d.clusters} clusters`);
     if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${d.bottleMl ? `, ${formatVolume(d.bottleMl, "us")} (${Math.round(d.bottleMl)} ml)` : ""}`);
     const parts = [
       `${d.feeds} feed${d.feeds === 1 ? "" : "s"}${feedBits.length ? ` (${feedBits.join("; ")})` : ""}`,

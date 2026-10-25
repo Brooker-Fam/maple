@@ -69,6 +69,96 @@ export function typicalBottle(ageDays: number): string {
 export const BOTTLE_CUES =
   "Typical, not a target. Follow her hunger cues (rooting, hands to mouth) and fullness cues (turning away, relaxed hands).";
 
+// ── Cluster feeding and going back and forth ─────────────────────────────
+// Shown in one place, the "Cluster feeding" sheet (sheets/ClusterInfoSheet),
+// opened from "Cluster" on Last fed, a Timeline cluster row, or "Both sides"
+// on the card. No alert, no tier: clustering is normal, and the existing
+// diaper, weight and feed-gap checks already say when to call.
+//
+// Caveat: La Leche League International's own pages and the WHO counselling
+// text couldn't be opened, so the LLL wording comes from LLL GB and LLL
+// Canada. No source says how a cluster counts toward 8–12 feeds a day, so
+// that counting rule (each feed in it counts, split by 10+ minutes off the
+// breast) is a product rule in feed.ts (nursingRuns), not guidance here.
+
+/**
+ * ABM Clinical Protocol #3 (Kellams et al., Breastfeeding Medicine 2017),
+ * https://www.bfmed.org/assets/DOCUMENTS/PROTOCOLS/3-supplementation-protocol-english.pdf:
+ * "Cluster feeding (several short feeds close together) is normal newborn behavior".
+ * CDC, https://www.cdc.gov/infant-toddler-nutrition/breastfeeding/how-much-and-how-often.html:
+ * "Some babies may feed as often as every hour at times, often called cluster feeding."
+ * ABA, https://www.breastfeeding.asn.au/resources/feeding-patterns: "especially in the late afternoon and evening".
+ */
+export const CLUSTER_FEEDING_NORMAL =
+  "Cluster feeding, several short feeds close together, is normal for newborns, most often in the late afternoon and evening.";
+
+/**
+ * Newman/Kernerman, Breast Compression (Canadian Breastfeeding Foundation),
+ * http://www.canadianbreastfeedingfoundation.org/basics/breast_compression.shtml:
+ * "Continue on the first side until the baby does not drink even with the compression." / "If the baby wants more,
+ * offer the other side" / "You may wish, unless you have sore nipples, to switch sides back and forth in this way
+ * several times." LLL Canada, https://www.lllc.ca/node/3563: "Keep repeating this until your baby seems satisfied."
+ * ABA (feeding-patterns, above): "There's no need to time feeds." Says back and forth is fine; never prescribes it
+ * (no trial backs switch nursing for supply).
+ */
+export const BACK_AND_FORTH =
+  "Going back and forth between sides is fine. Offer the other side when her sucking slows or she comes off, not by the clock. There's no need to time each side.";
+
+/**
+ * Newman/Kernerman (above): "unless you have sore nipples". LLL GB,
+ * https://laleche.org.uk/is-my-baby-getting-enough-milk/, says to seek skilled help early if breastfeeding is
+ * uncomfortable or painful.
+ */
+export const BACK_AND_FORTH_SORE = "If your nipples are sore, check with a lactation consultant before switching back and forth many times.";
+
+/**
+ * ABM #3 (above): cluster feeding "should warrant a feeding evaluation to observe the infant's behavior at the breast
+ * and the comfort of the mother to ensure that the infant is latched deeply and effectively. Some fussy infants are in
+ * pain that should be addressed."
+ */
+export const CLUSTER_PAIN = {
+  label: "Ask a lactation consultant",
+  body: "If nursing hurts, or she seems to be in pain while she feeds, ask a lactation consultant to watch a feed.",
+} as const;
+
+/**
+ * KellyMom (IBCLC), https://kellymom.com/bf/got-milk/supply-worries/enough-milk/: "As long as baby is gaining well on
+ * mom's milk alone, then milk supply is good." AAP How Often to Breastfeed,
+ * https://www.healthychildren.org/English/ages-stages/baby/breastfeeding/Pages/How-Often-to-Breastfeed.aspx:
+ * "Shorter, timed nursing periods may not allow him the opportunity to enjoy the full benefits of your breastmilk."
+ * CDC Newborn Basics, https://www.cdc.gov/infant-toddler-nutrition/breastfeeding/newborn-basics.html: back to birth
+ * weight "by day 10 to 14 of life".
+ */
+export const CLUSTER_ENOUGH = "Her diapers and her weight show whether she's getting enough, not the minutes on each side.";
+
+/**
+ * AAP KidsDoc, https://www.healthychildren.org/English/tips-tools/symptom-checker/Pages/symptomviewer.aspx?symptom=Breast-Feeding+Questions:
+ * "Hungry after feedings. Reason: needs a weight check." CDC How Much and How Often (above) lists signs she might not
+ * be getting enough, including "seems fussy after breastfeeding" and fewer than 3 poops and 6 pees a day by 5 days
+ * old. Always shown with EMERGENCY_SIGNS after it ("can't be woken" stays a 911 sign).
+ */
+export const CLUSTER_CALL = {
+  label: "Call your pediatrician",
+  body: "Call your pediatrician if she seems hungry after most feeds or has fewer wet or dirty diapers than her targets on Today.",
+} as const;
+
+/**
+ * AAP Settling In, https://www.healthychildren.org/English/ages-stages/baby/breastfeeding/Pages/Settling-In-The-First-Few-Weeks-of-Breastfeeding.aspx:
+ * "it's important to alternate the breast you offer first with each breastfeeding session" and "Later on you will
+ * know which breast feels fuller and start the next feeding there." AAP KidsDoc (above): "For each feeding, switch
+ * which breast you start on." The rule behind feed.ts suggestNextSide / nextSideFor.
+ */
+export const NEXT_SIDE_NOTE = "Start the next feed on the other side from last time, or on the side that feels fuller.";
+
+/**
+ * UNICEF UK Baby Friendly breastfeeding assessment tool,
+ * https://www.unicef.org.uk/babyfriendly/wp-content/uploads/sites/2/2018/07/breastfeeding_assessment_tool_mat.pdf:
+ * the baby "will generally feed for between 5 and 40 minutes and will come off the breast spontaneously." Never shown
+ * as advice. Using the 40 as the yardstick for when "Last fed" counts from after a long back-and-forth feed (feed.ts
+ * lastFedAnchor) is Maple's Log's own choice, not the source's.
+ */
+export const FEED_LENGTH_MIN = [5, 40] as const;
+
 // ── Diapers ──────────────────────────────────────────────────────────────
 
 /**

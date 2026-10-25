@@ -212,12 +212,28 @@ export function KindBadge({
         className={["mp-kind inline-flex shrink-0 items-center justify-center", className].filter(Boolean).join(" ")}
         style={{ width: size, height: size, borderRadius: Math.round(size * 0.28), color: KIND_COLOR.feed, backgroundColor: `color-mix(in srgb, ${KIND_COLOR.feed} 13%, transparent)` }}
       >
-        <span
-          className="mp-kind-fill mp-side-mark inline-flex items-center justify-center rounded-full font-bold"
-          style={{ width: disc, height: disc, fontSize: Math.round(size * 0.33), backgroundColor: SIDE_COLOR[side], color: SIDE_INK[side] }}
-        >
-          {side}
-        </span>
+        {side === "B" ? (
+          // Going back and forth: the two side colors split down the middle (an amber ring at night, as for L and R).
+          <span
+            className="mp-side-mark relative inline-flex items-center justify-center overflow-hidden rounded-full font-bold"
+            style={{ width: disc, height: disc, fontSize: Math.max(8, Math.round(size * 0.27)), letterSpacing: "-0.04em" }}
+          >
+            <span className="absolute inset-y-0 left-0 w-1/2 [.maple-night_&]:hidden" style={{ backgroundColor: SIDE_COLOR.L }} />
+            <span className="absolute inset-y-0 right-0 w-1/2 [.maple-night_&]:hidden" style={{ backgroundColor: SIDE_COLOR.R }} />
+            <span className="relative flex">
+              {/* SIDE_INK per half, as classes so the night look can still turn them amber. */}
+              <span className="text-white [.maple-night_&]:text-[#e8a23f]">L</span>
+              <span className="text-[#2A1A08] [.maple-night_&]:text-[#e8a23f]">R</span>
+            </span>
+          </span>
+        ) : (
+          <span
+            className="mp-kind-fill mp-side-mark inline-flex items-center justify-center rounded-full font-bold"
+            style={{ width: disc, height: disc, fontSize: Math.round(size * 0.33), backgroundColor: SIDE_COLOR[side], color: SIDE_INK[side] }}
+          >
+            {side}
+          </span>
+        )}
       </span>
     );
   }

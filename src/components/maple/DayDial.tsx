@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
+import { clusterLine, feedClusters, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
 import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from "@/lib/maple/guidelines";
 import { statsFor } from "@/lib/maple/insights";
 import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
@@ -32,13 +33,19 @@ import { useMaple } from "./useMaple";
  *
  * By day and in dark mode the marks keep their kind colors. At night they fold
  * into the amber, told apart by lane, strength and shape (a hollow drop for
- * pee, a hollow pill for bottles, Right striped against Left's solid band);
- * the legend follows. The night hours are shaded in the face's own ink, and
- * the one ornament is the maple leaf on the now hand.
+ * pee, a hollow pill for bottles, Right striped against Left's solid band,
+ * back and forth a crosshatch); the legend follows. The night hours are
+ * shaded in the face's own ink, and the one ornament is the maple leaf on
+ * the now hand.
+ *
+ * Back and forth (both sides, not tracked) is striped in the two side
+ * colors by day. A thin bracket just outside the feed ring spans each
+ * cluster (3+ feeds, each under 30 minutes after the last); tapping it says
+ * "Cluster 6:02–8:40 PM · 4 feeds · nursed 1h 52m" above its feeds.
  */
 
 const C = 160;
-const R = { night: 150, label: 161, sleep: 132, feed: 110, diaper: 88, handIn: 68, handOut: 150 };
+const R = { night: 150, label: 161, sleep: 132, feed: 110, bracket: 120.5, diaper: 88, handIn: 68, handOut: 150 };
 // The kinds' own colors (palette.ts), so a mark on the dial matches its tile, row and toast. Sleep stays lighter on the ring.
 const COLORS = {
   sleep: "#B8A9C9",
@@ -84,6 +91,8 @@ type Arc = {
   live: boolean;
   /** Night: the Right side, striped (two strengths of one amber alone looked the same). */
   hatch: boolean;
+  /** Back and forth: striped in both side colors (a crosshatch at night). */
+  both: boolean;
   s: number;
   e: number;
 };
@@ -92,6 +101,20 @@ type Arc = {
  * neutral). `edge`: a stool color that would vanish into the face (black in dark mode, white or pale by day) gets a ring.
  */
 type Dot = { key: string; entry: Entry; a: number; pee: boolean; poop: boolean; color: string | null; edge: "dark" | "light" | null; opacity: number; t: number };
+
+/**
+ * Whether the popover opens above the tap: above in the dial's lower part, as
+ * before, unless that would run off the top of the screen (a cluster's
+ * header and feeds are tall) and there's room below.
+ */
+function placeAbove(clientY: number, y: number, w: number, items: number, cluster: boolean): boolean {
+  const height = (cluster ? 68 : 48) + Math.max(1, items) * 52;
+  const wantAbove = y > w * 0.55;
+  if (!wantAbove) return false;
+  if (clientY - 12 - height >= 8) return true;
+  const roomBelow = (typeof window === "undefined" ? Infinity : window.innerHeight) - clientY - 12;
+  return roomBelow < height && clientY > roomBelow;
+}
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const pt = (r: number, deg: number): [number, number] => [C + r * Math.sin(rad(deg)), C - r * Math.cos(rad(deg))];
@@ -120,12 +143,12 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
   const arcs: Arc[] = [];
   const dots: Dot[] = [];
   const opacityAt = (t: number) => (fade ? Math.max(0.4, 1 - 0.6 * ((nowMs - t) / 3600_000 / 24)) : 1);
-  const addArc = (entry: Entry, key: string, lane: Arc["lane"], s0: number, e0: number, r: number, color: string, width: number, live: boolean, hatch = false) => {
+  const addArc = (entry: Entry, key: string, lane: Arc["lane"], s0: number, e0: number, r: number, color: string, width: number, live: boolean, hatch = false, both = false) => {
     const s = Math.max(s0, lo);
     const e = Math.min(e0, hi);
     if (e < s || s0 > hi || e0 < lo) return;
     const span = Math.max(MIN_ARC_DEG, (e - s) / 60_000 / 4);
-    arcs.push({ key, entry, lane, r, a0: clockDeg(s, tz), span, color, width, opacity: opacityAt(e), live, hatch, s: s0, e: e0 });
+    arcs.push({ key, entry, lane, r, a0: clockDeg(s, tz), span, color, width, opacity: opacityAt(e), live, hatch, both, s: s0, e: e0 });
   };
 
   for (const entry of entries) {
@@ -141,17 +164,21 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
         d.segments.forEach((seg, i) => {
           const s = Date.parse(seg.start);
           const e = seg.end ? Date.parse(seg.end) : entry.active ? nowMs : s;
-          addArc(entry, `f${entry.id}-${i}`, "feed", s, e, R.feed, seg.side === "L" ? pal.left : pal.right, 14, entry.active && !seg.end, night && seg.side === "R");
+          // Each side keeps its own color; back and forth ("B") is its own striped mark, never painted as Right.
+          const color = seg.side === "R" ? pal.right : pal.left;
+          addArc(entry, `f${entry.id}-${i}`, "feed", s, e, R.feed, color, 14, entry.active && !seg.end, night && seg.side === "R", seg.side === "B");
         });
       } else {
-        // A feed logged by minutes: first side, then the other.
+        // A feed logged by minutes: first side, then the other, then any back and forth.
         const first = d.first_side ?? (d.left_sec ? "L" : "R");
         const a = (first === "L" ? d.left_sec : d.right_sec) ?? 0;
         const b = (first === "L" ? d.right_sec : d.left_sec) ?? 0;
+        const c = d.both_sec ?? 0;
         const col = (side: string) => (side === "L" ? pal.left : pal.right);
         const then = first === "L" ? "R" : "L";
-        addArc(entry, `f${entry.id}-a`, "feed", start, start + a * 1000, R.feed, col(first), 14, false, night && first === "R");
+        if (a > 0 || (b === 0 && c === 0)) addArc(entry, `f${entry.id}-a`, "feed", start, start + a * 1000, R.feed, col(first), 14, false, night && first === "R");
         if (b > 0) addArc(entry, `f${entry.id}-b`, "feed", start + a * 1000, start + (a + b) * 1000, R.feed, col(then), 14, false, night && then === "R");
+        if (c > 0) addArc(entry, `f${entry.id}-c`, "feed", start + (a + b) * 1000, start + (a + b + c) * 1000, R.feed, pal.left, 14, false, false, true);
       }
     } else if (entry.kind === "diaper") {
       if (start < lo || start > hi) continue;
@@ -176,11 +203,12 @@ export default function DayDial() {
   const night = useNightActive();
   const uid = useId().replace(/[^\w-]/g, "");
   const hatchId = `maple-dial-hatch-${uid}`;
+  const bothId = `maple-dial-both-${uid}`;
   const hintId = `maple-dial-hint-${uid}`;
   const [choice, setChoice] = useState<View | null>(null);
   const [fetched, setFetched] = useState<{ key: string; entries: Entry[] } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pop, setPop] = useState<{ x: number; y: number; w: number; t: number; items: Entry[] } | null>(null);
+  const [pop, setPop] = useState<{ x: number; y: number; w: number; t: number; items: Entry[]; cluster?: FeedCluster; above: boolean } | null>(null);
   const [hint, setHint] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -266,7 +294,20 @@ export default function DayDial() {
   const pal = night ? NIGHT_COLORS : COLORS;
   const { arcs, dots } = useMemo(() => buildMarks(source, lo, hi, nowMs, tz, rolling, pal, night), [source, lo, hi, nowMs, tz, rolling, pal, night]);
   // One set of numbers for the dial's label and the tallies below, from the same entries and window.
-  const stats = useMemo(() => statsFor(source, new Date(lo), new Date(hi + 1), dayView ?? "last24h", now), [source, lo, hi, dayView, now]);
+  const runs = useMemo(() => nursingRuns(source, now), [source, now]);
+  const stats = useMemo(() => statsFor(source, new Date(lo), new Date(hi + 1), dayView ?? "last24h", now, runs), [source, lo, hi, dayView, now, runs]);
+  // A bracket outside the feed ring for each cluster that reaches into the view.
+  const brackets = useMemo(
+    () =>
+      feedClusters(runs)
+        .map((c) => {
+          const s = Math.max(c.start, lo);
+          const e = Math.min(c.end ?? nowMs, hi);
+          return e > s ? { c, a0: clockDeg(s, tz), span: Math.max(MIN_ARC_DEG, (e - s) / 60_000 / 4), s, e } : null;
+        })
+        .filter((b): b is NonNullable<typeof b> => !!b),
+    [runs, lo, hi, nowMs, tz]
+  );
 
   if (!state || !summary) return null;
 
@@ -307,6 +348,15 @@ export default function DayDial() {
       const d = parseDayKey(dayView);
       t = zonedTimeToUtc(d.year, d.month, d.day, Math.floor(tapMin / 60), Math.floor(tapMin % 60), tz).getTime();
     }
+    // In a cluster, on the feed ring or its bracket: the popover says so ("Cluster 6:02–8:40 PM · 4 feeds · …"). On the
+    // bracket itself (between the feed and sleep rings) it lists the cluster's feeds.
+    const inCluster = r >= R.feed - 8 && r <= R.sleep - 6 ? brackets.find((b) => t >= b.s - 10 * 60_000 && t <= b.e + 10 * 60_000) : undefined;
+    if (inCluster && r >= R.feed + 6) {
+      // Its last few feeds (the header says how many there were), so the popover stays on screen.
+      const feeds = [...inCluster.c.entries].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at)).slice(-4);
+      setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: feeds, cluster: inCluster.c, above: placeAbove(ev.clientY, ev.clientY - box.top, box.width, feeds.length, true) });
+      return;
+    }
     const near = plotted
       .filter((e) => {
         const s = Date.parse(e.started_at);
@@ -315,7 +365,7 @@ export default function DayDial() {
       })
       .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))
       .slice(0, 6);
-    setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: near });
+    setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: near, cluster: inCluster?.c, above: placeAbove(ev.clientY, ev.clientY - box.top, box.width, near.length, !!inCluster) });
   };
 
   // Earlier from the last 24 hours or today is yesterday; later from yesterday is today.
@@ -365,6 +415,18 @@ export default function DayDial() {
               <pattern id={hatchId} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
                 <rect width="2.4" height="4" fill={NIGHT_COLORS.right} />
               </pattern>
+              {/* Back and forth: both side colors in stripes by day; at night a crosshatch (Right's stripes run one way only). */}
+              {night ? (
+                <pattern id={bothId} width="4.5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                  <rect width="1.7" height="4.5" fill={NIGHT_COLORS.left} />
+                  <rect width="4.5" height="1.7" fill={NIGHT_COLORS.left} />
+                </pattern>
+              ) : (
+                <pattern id={bothId} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                  <rect width="3" height="6" fill={COLORS.left} />
+                  <rect x="3" width="3" height="6" fill={COLORS.right} />
+                </pattern>
+              )}
             </defs>
 
             {/* face, with the night hours (8pm–7am) shaded in the paper's own ink */}
@@ -417,16 +479,18 @@ export default function DayDial() {
                     </g>
                   );
                 }
-                // Night's Right is striped, its live part too (the live dashes rest at night anyway).
+                // Night's Right is striped, its live part too (the live dashes rest at night anyway); back and forth is
+                // striped in both side colors (crosshatched at night), and its live part rests too.
+                const patterned = a.hatch || a.both;
                 const mark = (
                   <path
                     d={d}
                     fill="none"
-                    stroke={a.hatch ? `url(#${hatchId})` : a.color}
+                    stroke={a.both ? `url(#${bothId})` : a.hatch ? `url(#${hatchId})` : a.color}
                     strokeWidth={a.width}
                     strokeLinecap="round"
-                    strokeDasharray={a.live && !a.hatch ? "8 4" : undefined}
-                    className={a.live && !a.hatch ? "maple-dial-live" : undefined}
+                    strokeDasharray={a.live && !patterned ? "8 4" : undefined}
+                    className={a.live && !patterned ? "maple-dial-live" : undefined}
                   />
                 );
                 // At night Left and Right are one amber, so a 1px gap keeps neighbors apart (and shows between Right's stripes).
@@ -438,6 +502,22 @@ export default function DayDial() {
                 ) : (
                   <g key={a.key} opacity={a.opacity}>
                     {mark}
+                  </g>
+                );
+              })}
+              {/* clusters: a thin bracket just outside the feed ring, with a tick at each end */}
+              {brackets.map((b, i) => {
+                const end = b.a0 + Math.min(b.span, 359.9);
+                const tick = (deg: number) => {
+                  const [x0, y0] = pt(R.bracket - 3.5, deg);
+                  const [x1, y1] = pt(R.bracket + 0.5, deg);
+                  return <line x1={f(x0)} y1={f(y0)} x2={f(x1)} y2={f(y1)} strokeWidth={1.4} strokeLinecap="round" className="stroke-mp-ink-3" />;
+                };
+                return (
+                  <g key={`k${i}`} aria-hidden>
+                    <path d={arcPath(R.bracket, b.a0, b.span)} fill="none" strokeWidth={1.4} strokeLinecap="round" className="stroke-mp-ink-3" />
+                    {tick(b.a0)}
+                    {tick(end)}
                   </g>
                 );
               })}
@@ -544,12 +624,12 @@ export default function DayDial() {
                 style={{
                   width: popW,
                   left: Math.max(0, Math.min(pop.x - popW / 2, pop.w - popW)),
-                  top: pop.y > pop.w * 0.55 ? pop.y - 12 : pop.y + 12,
-                  y: pop.y > pop.w * 0.55 ? "-100%" : 0,
+                  top: pop.above ? pop.y - 12 : pop.y + 12,
+                  y: pop.above ? "-100%" : 0,
                 }}
               >
                 <div className="flex items-center justify-between pl-3.5">
-                  <p className={tone.label}>Around {formatTime(pop.t, tz)}</p>
+                  <p className={cx(tone.label, "min-w-0 py-1 leading-snug")}>{pop.cluster ? clusterLine(pop.cluster, tz) : `Around ${formatTime(pop.t, tz)}`}</p>
                   <button type="button" onClick={() => setPop(null)} aria-label="Close" className="flex h-11 w-11 items-center justify-center text-mp-ink-3">
                     <Icon name="x" size={18} />
                   </button>
@@ -593,6 +673,9 @@ export default function DayDial() {
         </p>
 
         <ul className="sr-only">
+          {brackets.map((b, i) => (
+            <li key={`k${i}`}>{clusterLine(b.c, tz)}</li>
+          ))}
           {plotted.map((e) => (
             <li key={e.id}>
               {formatTime(e.started_at, tz)}: {describeEntry(e, { units, now }).text}
@@ -600,7 +683,7 @@ export default function DayDial() {
           ))}
         </ul>
 
-        <Legend pal={pal} night={night} />
+        <Legend pal={pal} night={night} both={arcs.some((a) => a.both)} cluster={brackets.length > 0} bottle={arcs.some((a) => a.lane === "bottle")} />
 
         {/* One range for the dial and the tallies under it. */}
         <div className="mt-4 flex items-center justify-center gap-1">
@@ -655,8 +738,12 @@ export default function DayDial() {
 /** The stool colors the Poop key shows: plotted poops wear their own color, so the key does too. */
 const LEGEND_STOOLS = [STOOL_COLOR_INFO.black.hex, STOOL_COLOR_INFO.green.hex, STOOL_COLOR_INFO.mustard.hex];
 
-/** What the marks mean: each swatch drawn in its mark's shape, in every mode (amber, by strength and shape, at night). */
-function Legend({ pal, night }: { pal: Palette; night: boolean }) {
+/**
+ * What the marks mean: each swatch drawn in its mark's shape, in every mode (amber, by strength and shape, at night).
+ * Back and forth, the cluster bracket and bottles join the key only when the dial shows them (a family with
+ * Bottles off never sees a Bottle key).
+ */
+function Legend({ pal, night, both, cluster, bottle }: { pal: Palette; night: boolean; both?: boolean; cluster?: boolean; bottle?: boolean }) {
   const dot = "h-[7px] w-[7px] rounded-full";
   // Sleep, and the sides at night, are short bands as on the ring (Right striped); a bottle is a hollow pill.
   const band = "h-2 w-4 rounded-full";
@@ -670,7 +757,36 @@ function Legend({ pal, night }: { pal: Palette; night: boolean }) {
         <i className={cx("shrink-0", dot)} style={{ backgroundColor: pal.right }} />
       ),
     },
-    { label: "Bottle", mark: <i className={cx("shrink-0 border-2", band)} style={{ borderColor: pal.bottleEdge }} /> },
+    ...(both
+      ? [
+          {
+            label: "Both sides",
+            mark: (
+              <i
+                className={cx("shrink-0", band)}
+                style={{
+                  backgroundImage: night
+                    ? `repeating-linear-gradient(45deg, ${pal.left} 0 1.2px, transparent 1.2px 3px), repeating-linear-gradient(135deg, ${pal.left} 0 1.2px, transparent 1.2px 3px)`
+                    : `repeating-linear-gradient(135deg, ${pal.left} 0 2px, ${pal.right} 2px 4px)`,
+                }}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(cluster
+      ? [
+          {
+            label: "Cluster",
+            mark: (
+              <svg viewBox="0 0 16 8" width={16} height={8} className="shrink-0 text-mp-ink-3">
+                <path d="M1.5 7 V2.5 H14.5 V7" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ),
+          },
+        ]
+      : []),
+    ...(bottle ? [{ label: "Bottle", mark: <i className={cx("shrink-0 border-2", band)} style={{ borderColor: pal.bottleEdge }} /> }] : []),
     { label: "Sleep", mark: <i className={cx("shrink-0", band)} style={{ backgroundColor: pal.sleep }} /> },
     {
       label: "Pee",

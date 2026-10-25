@@ -21,6 +21,7 @@ import {
   type Segment,
   type Side,
   type StretchRef,
+  type StretchSide,
   type TimerInput,
   type TimerKind,
   type TimerResponse,
@@ -29,6 +30,8 @@ import {
 export const dynamic = "force-dynamic";
 
 const isSide = (s: unknown): s is Side => s === "L" || s === "R";
+/** A stretch's side: L, R, or "B" (back and forth: both sides, not tracked). */
+const isStretchSide = (s: unknown): s is StretchSide => s === "L" || s === "R" || s === "B";
 const isTimerKind = (k: unknown): k is TimerKind => (TIMER_KINDS as readonly unknown[]).includes(k);
 const isIso = (v: unknown): v is string => typeof v === "string" && !Number.isNaN(Date.parse(v));
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -39,13 +42,13 @@ function instant(v: unknown, label: string): Date {
 }
 
 function stretchRef(v: unknown, label: string): StretchRef {
-  if (!isObject(v) || !isSide(v.side) || !isIso(v.start)) throw new BadRequest(`${label} needs side (L or R) and an ISO start`);
+  if (!isObject(v) || !isStretchSide(v.side) || !isIso(v.start)) throw new BadRequest(`${label} needs side (L, R or B) and an ISO start`);
   return { side: v.side, start: v.start };
 }
 
 function segment(v: unknown, i: number): Segment {
-  if (!isObject(v) || !isSide(v.side) || !isIso(v.start) || !(v.end === null || isIso(v.end))) {
-    throw new BadRequest(`edit.segments[${i}] needs side (L or R), an ISO start, and an ISO end or null`);
+  if (!isObject(v) || !isStretchSide(v.side) || !isIso(v.start) || !(v.end === null || isIso(v.end))) {
+    throw new BadRequest(`edit.segments[${i}] needs side (L, R or B), an ISO start, and an ISO end or null`);
   }
   return { side: v.side, start: v.start, end: v.end as string | null };
 }
@@ -60,17 +63,18 @@ function feedEdit(v: unknown): FeedEdit {
       return { op: "move", edge: v.edge, to, ...(v.ref != null ? { ref: stretchRef(v.ref, "edit.ref") } : {}) };
     }
     case "set_side":
-      if (!isSide(v.side)) throw new BadRequest("edit.side must be L or R");
+      // "That was both sides" (B) or "That was the Left".
+      if (!isStretchSide(v.side)) throw new BadRequest("edit.side must be L, R or B");
       return { op: "set_side", ref: stretchRef(v.ref, "edit.ref"), side: v.side };
     case "undo_tap": {
       const x = v.expect;
-      if (!isObject(x) || !isSide(x.side) || !isIso(x.start) || !(x.end === null || isIso(x.end))) {
-        throw new BadRequest("edit.expect needs side (L or R), an ISO start, and an ISO end or null");
+      if (!isObject(x) || !isStretchSide(x.side) || !isIso(x.start) || !(x.end === null || isIso(x.end))) {
+        throw new BadRequest("edit.expect needs side (L, R or B), an ISO start, and an ISO end or null");
       }
       return { op: "undo_tap", expect: { side: x.side, start: x.start, end: x.end as string | null } };
     }
     case "add_part": {
-      if (!isSide(v.side)) throw new BadRequest("edit.side must be L or R");
+      if (!isStretchSide(v.side)) throw new BadRequest("edit.side must be L, R or B");
       const start = instant(v.start, "edit.start").toISOString();
       const end = instant(v.end, "edit.end").toISOString();
       if (!isIso(v.expect_updated_at)) throw new BadRequest("edit.expect_updated_at must be an ISO timestamp");
@@ -113,7 +117,13 @@ const timerJson = (r: TimerResponse) =>
   });
 
 /**
- * POST /api/maple/timer { action, kind?, side?, id?, at?, edit?, client_id?, expect_updated_at? }
+ * POST /api/maple/timer { action, kind?, side?, back_and_forth?, id?, at?, edit?, client_id?, expect_updated_at? }
+ * Back and forth: start { kind: "feed", side, back_and_forth: true } (side
+ * is where she started); switch { id, side: "B" } stops tracking sides from
+ * now (a part under a minute old turns both: resided); switch { id, side:
+ * "L" | "R" } while she's going both tracks sides again; resume { side: "B" }
+ * goes back on going both. Each one's Undo is retime undo_tap (a start's is
+ * discard with expect_updated_at), with the same 409 "changed" rules.
  * Timers run on server time so every phone shows the same clock; `at` is
  * only for when it really happened (switch/resume/pause within the last 4
  * hours, stop, adjust). retime fixes one moment ({ id, edit }). A write that
@@ -137,12 +147,16 @@ export const POST = withMember("POST /api/maple/timer", async (request, me) => {
 
   if (body.action === "start") {
     if (!isTimerKind(body.kind)) throw new BadRequest("kind must be feed, sleep, tummy, or pump");
-    if (body.side !== undefined && !isSide(body.side)) throw new BadRequest("side must be L or R");
+    // A feed starts on the side she latched on, even going back and forth (it's what the next side alternates from).
+    if (body.side !== undefined && !isSide(body.side)) throw new BadRequest("side must be L or R (where she started; add back_and_forth: true for both sides)");
+    if (body.back_and_forth !== undefined && typeof body.back_and_forth !== "boolean") throw new BadRequest("back_and_forth must be true or false");
+    if (body.back_and_forth && (body.kind !== "feed" || !body.side)) throw new BadRequest("back_and_forth goes with a feed and the side she started on");
     const baby = await getBaby();
     const { entry, alreadyRunning } = await startTimer({
       babyId: baby.id,
       kind: body.kind,
       side: body.side,
+      backAndForth: body.back_and_forth === true,
       at: now,
       createdBy: me.email,
       source: "web",
@@ -169,7 +183,8 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
   switch (body.action) {
     case "switch":
     case "resume": {
-      if (!isSide(body.side)) throw new BadRequest("side must be L or R");
+      // B: back and forth from now (or, on resume, back on going both); L/R while going both: tracking sides again.
+      if (!isStretchSide(body.side)) throw new BadRequest("side must be L, R or B (back and forth)");
       return timerJson(await switchSide(id, body.side, at, by, { resume: body.action === "resume" }));
     }
     case "pause":
@@ -191,7 +206,7 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
     }
     case "join": {
       // "Same feed as 8:30": `id` (just started) is that feed going on, on `side` from its start. One request.
-      if (!isSide(body.side)) throw new BadRequest("side must be L or R");
+      if (!isStretchSide(body.side)) throw new BadRequest("side must be L, R or B");
       const into = Number(body.into);
       if (!Number.isSafeInteger(into) || into <= 0 || into === id) throw new BadRequest("into must be the earlier feed's id");
       const exp = (v: unknown, name: string) => (v == null ? undefined : instant(v, name).toISOString());
@@ -200,7 +215,7 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
     }
     case "reopen": {
       // side: carry the feed on there in the same write; expect_updated_at: only the finished feed this phone saw.
-      if (body.side !== undefined && !isSide(body.side)) throw new BadRequest("side must be L or R");
+      if (body.side !== undefined && !isStretchSide(body.side)) throw new BadRequest("side must be L, R or B");
       if (at && body.side === undefined) throw new BadRequest("at goes with side (when she went back on)");
       const expect = body.expect_updated_at;
       const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();

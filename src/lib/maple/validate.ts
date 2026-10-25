@@ -30,8 +30,10 @@ const iso = z
   .refine((s) => !Number.isNaN(Date.parse(s)), { message: "must be an ISO timestamp" });
 
 const side = z.enum(["L", "R"]);
+/** A stretch's side: Left, Right, or "B" (back and forth: both sides, not tracked). first_side/last_side stay L/R. */
+const stretchSide = z.enum(["L", "R", "B"]);
 
-const segment = z.object({ side, start: iso, end: iso.nullable() });
+const segment = z.object({ side: stretchSide, start: iso, end: iso.nullable() });
 
 const optNum = (min: number, max: number, label: string) =>
   z
@@ -60,6 +62,8 @@ export const dataSchemas = {
       segments: z.array(segment).max(60).optional(),
       left_sec: optNum(0, 4 * 3600, "Left side time"),
       right_sec: optNum(0, 4 * 3600, "Right side time"),
+      // Back and forth gets no taps by design, so allow a long one (a forgotten timer must still stop).
+      both_sec: optNum(0, 12 * 3600, "Back and forth time"),
       first_side: side.optional(),
       last_side: side.optional(),
       amount_ml: optNum(0, 500, "Bottle amount"),
@@ -71,8 +75,10 @@ export const dataSchemas = {
       last_tap: z
         .object({
           kind: z.enum(["switch", "resume", "pause"]),
-          side,
+          side: stretchSide,
           at: iso,
+          // A switch that changed the open part's side (going back and forth from a fresh part): undo puts this back.
+          from: stretchSide.optional(),
           paused_at: iso.optional(),
           merged: z.literal(true).optional(),
           reverted: z.literal(true).optional(),
@@ -498,3 +504,22 @@ export function cleanCareSettings(raw: unknown, opts: { self: boolean; name?: st
   return { settings: out, acks };
 }
 
+// ── Maple's log settings (maple_babies.settings) ─────────────────────────
+
+/**
+ * The log-wide switches in Family → On Today: "feeds_bottle" (Bottles: the
+ * dock's Bottle tile) and "track_pump" (Pumping: Pump in More). Both read as
+ * on unless set to false (the client reads them through MoreSheet's
+ * logSwitches), so a new log has them; switching one off hides buttons only,
+ * never anything logged, and Claude and Siri log either regardless.
+ */
+export const LOG_SWITCH_KEYS = ["feeds_bottle", "track_pump"] as const;
+
+/** A settings patch's log switches: true, false, or null (back to the default, on). Throws on anything else. */
+export function checkLogSwitches(patch: Record<string, unknown>): void {
+  for (const k of LOG_SWITCH_KEYS) {
+    if (!(k in patch)) continue;
+    const v = patch[k];
+    if (v !== null && typeof v !== "boolean") throw new Error(`${k} must be true or false`);
+  }
+}

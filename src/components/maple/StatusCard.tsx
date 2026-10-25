@@ -4,15 +4,16 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { tick } from "@/components/atlas/haptics";
 import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
-import { feedCtx, feedParts } from "@/lib/maple/feed";
+import { LAST_FED_RULE, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
-import type { Entry, EntryOf, Side } from "@/lib/maple/types";
+import type { Side, StretchSide } from "@/lib/maple/types";
 import { Icon, KindBadge, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
+import { useClusterInfo } from "./sheets/ClusterInfoSheet";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE } from "./TimerCard";
 import { Avatar, cx, memberColor, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -29,45 +30,35 @@ const ts = (e: { started_at: string }) => Date.parse(e.started_at);
 const since = (sec: number) => (sec < 60 ? "<1m" : formatDuration(sec));
 
 /**
- * The sides in the order she nursed: "Right only", "Left then Right", "Left,
- * Right, then Left"; past three, just the first and the last she ended on
- * ("Left first, ended on Right"), never a cut-off list that names the wrong
- * last side.
+ * The sides of her last feed (a run: Pauses and Dones under 10 minutes
+ * apart are one feed) in the order she nursed: "Right only", "Left then
+ * Right", "Left, Right, then Left"; past three, just the first and the last
+ * she ended on ("Left first, ended on Right"), never a cut-off list that
+ * names the wrong last side. Back and forth reads "Right first, then back
+ * and forth" (or "…, back and forth, ended on Left"): the side she started
+ * on is the start tap's, even when it went both sides at once.
  */
-function sidesLabel(e: EntryOf<"feed">, now: Date): string {
-  const d = e.data;
-  const words = (sides: Side[]) =>
-    sides.length === 1
-      ? `${SIDE_NAME[sides[0]]} only`
-      : sides.length === 2
-        ? `${SIDE_NAME[sides[0]]} then ${SIDE_NAME[sides[1]]}`
-        : sides.length === 3
-          ? `${SIDE_NAME[sides[0]]}, ${SIDE_NAME[sides[1]]}, then ${SIDE_NAME[sides[2]]}`
-          : `${SIDE_NAME[sides[0]]} first, ended on ${SIDE_NAME[sides[sides.length - 1]]}`;
-  // The card's parts (sub-second double taps gone); the same side again after a break is one side.
-  const order = d.segments?.length
-    ? feedParts(d, feedCtx(e, now))
-        .flatMap((p) => (p.kind === "side" ? [p.side] : []))
-        .filter((s, i, a) => i === 0 || a[i - 1] !== s)
-    : [];
-  if (order.length) return words(order);
-  if (d.first_side && d.last_side && d.first_side !== d.last_side) return words([d.first_side, d.last_side]);
-  if ((d.left_sec ?? 0) > 0 && (d.right_sec ?? 0) > 0) return words(d.first_side === "R" ? ["R", "L"] : ["L", "R"]);
-  if ((d.left_sec ?? 0) > 0) return words(["L"]);
-  if ((d.right_sec ?? 0) > 0) return words(["R"]);
-  return "";
+export function sidesLabel(run: Pick<NursingRun, "order" | "firstSide">): string {
+  const order = run.order;
+  if (!order.length) return "";
+  if (order.includes("B")) {
+    const first = isSide(order[0]) ? order[0] : run.firstSide;
+    const end = order[order.length - 1];
+    const lead = first ? `${SIDE_NAME[first]} first, ` : "";
+    if (!isSide(end)) return first ? `${lead}then back and forth` : "Back and forth";
+    return first ? `${lead}back and forth, ended on ${SIDE_NAME[end]}` : `Back and forth, ended on ${SIDE_NAME[end]}`;
+  }
+  const sides = order as Side[];
+  return sides.length === 1
+    ? `${SIDE_NAME[sides[0]]} only`
+    : sides.length === 2
+      ? `${SIDE_NAME[sides[0]]} then ${SIDE_NAME[sides[1]]}`
+      : sides.length === 3
+        ? `${SIDE_NAME[sides[0]]}, ${SIDE_NAME[sides[1]]}, then ${SIDE_NAME[sides[2]]}`
+        : `${SIDE_NAME[sides[0]]} first, ended on ${SIDE_NAME[sides[sides.length - 1]]}`;
 }
 
-/** Median gap between feed starts over the last 24 hours, once there's a day of data. */
-function typicalGapMin(entries: Entry[], now: Date): number | null {
-  const nowMs = now.getTime();
-  const feeds = entries.filter((e) => e.kind === "feed").map(ts).filter((t) => t <= nowMs);
-  if (!feeds.length || Math.min(...feeds) > nowMs - 24 * 3600_000) return null;
-  const recent = feeds.filter((t) => t >= nowMs - 24 * 3600_000).sort((a, b) => a - b);
-  if (recent.length < 4) return null;
-  const gaps = recent.slice(1).map((t, i) => (t - recent[i]) / 60_000).sort((a, b) => a - b);
-  return Math.round(gaps[Math.floor(gaps.length / 2)]);
-}
+const isSide = (s: StretchSide | null | undefined): s is Side => s === "L" || s === "R";
 
 /** A typical gap, rounded the way you'd say it: to 15 minutes under two hours, then to the half hour ("~3h", "~1h 45m"). */
 function roughGap(min: number): string {
@@ -91,8 +82,9 @@ function Since({ label, value, mark }: { label: string; value: string | null; ma
   );
 }
 
-/** The side to offer next: its letter in the side's color, and the name. */
-function NextSide({ side }: { side: Side }) {
+/** The side to offer next: its letter in the side's color, and the name (after back and forth, "or the fuller side"). */
+function NextSide({ next }: { next: NextSideInfo }) {
+  const side = next.side;
   return (
     // relative: above the Last fed block's button, so a tap here isn't taken for "open the last feed".
     <div className="relative flex shrink-0 items-center gap-2 rounded-2xl bg-mp-sunken py-2 pr-3.5 pl-2">
@@ -106,7 +98,16 @@ function NextSide({ side }: { side: Side }) {
       </span>
       <span className="leading-tight">
         <span className="block text-[15px] font-semibold text-mp-ink">{SIDE_NAME[side]}</span>
-        <span className="block text-[11px] text-mp-ink-2">next side</span>
+        {/* "or fuller side" (not "or the fuller side"): the pill has to fit beside "12h 45m ago" at 375px. */}
+        <span className="block text-[11px] text-mp-ink-2">
+          {next.fuller ? (
+            <>
+              <span className="sr-only">next side, </span>or fuller side
+            </>
+          ) : (
+            "next side"
+          )}
+        </span>
       </span>
     </div>
   );
@@ -123,13 +124,20 @@ export default function StatusCard() {
   const { open } = useSheets();
   const now = useNow(20_000);
   const [info, setInfo] = useState(false);
+  const clusterInfo = useClusterInfo();
   if (!state || !summary) return null;
   const tz = state.baby.timezone ?? DEFAULT_TZ;
 
   const nursing = summary.active.find((e) => e.kind === "feed");
   const sleeping = summary.active.find((e) => e.kind === "sleep");
-  const last = summary.lastFeed;
-  const gap = typicalGapMin(state.entries, now);
+  // Her last feed as counted (Pauses and Dones under 10 minutes apart are one feed); the newest entry in it opens.
+  const fed = summary.lastFed;
+  const last = fed?.entry ?? summary.lastFeed;
+  // "Last fed … ago" counts from fed.at: the feed's start, or 40 minutes before a long back-and-forth one ended.
+  const fedAt = fed?.at ?? last?.started_at ?? null;
+  // Gaps inside a cluster are skipped, so an evening of clustering doesn't read "usually every ~45m".
+  const gap = typicalFeedGapMin(state.entries, now);
+  const cluster = fed?.kind === "breast" && fed.run?.cluster != null ? summary.cluster : null;
   const lastSleepEnd = summary.lastSleep && !summary.lastSleep.active ? summary.lastSleep.ended_at : null;
   const hasAnything = state.entries.length > 0;
 
@@ -139,20 +147,25 @@ export default function StatusCard() {
   // The big answer: how long since she last ate.
   let feedSub: string[] | null = null;
   if (!nursing && last) {
-    const bits = [`started ${formatTime(last.started_at, tz)}`];
-    if (last.data.method === "bottle") {
-      bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
+    const bits: string[] = [];
+    if (cluster) {
+      // "Cluster 6:02–8:40 PM · 4 feeds · nursed 1h 52m" ("Cluster" opens the Cluster feeding sheet).
+      bits.push(`${spanText(cluster.start, cluster.end, tz)}`, `${cluster.feeds} feeds`, `nursed ${minutesShort(cluster.min.total)}`);
+    } else if (last.data.method === "bottle" || !fed?.run) {
+      bits.push(`started ${formatTime(last.started_at, tz)}`);
+      if (last.data.method === "bottle") bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
     } else {
-      const t = summary.lastFeedTotals;
-      if (t?.total) bits.push(formatDuration(t.total));
-      const sides = sidesLabel(last, now);
+      const run = fed.run;
+      bits.push(`started ${formatTime(run.start, tz)}`);
+      if (run.min.total) bits.push(minutesShort(run.min.total));
+      const sides = sidesLabel(run);
       if (sides) bits.push(sides);
     }
     if (gap != null) bits.push(`usually every ~${roughGap(gap)}`);
     feedSub = bits;
   }
 
-  const next = !nursing ? summary.nextSide : null;
+  const next = !nursing ? summary.next : null;
   // A sleep (or tummy or pump) timer above this card on a short phone: the Last fed block keeps its answer and the next
   // side but folds its details, so the Since tiles still clear the dock (and her strip on it) at 375x667.
   const fold = summary.active.length > 0;
@@ -187,7 +200,7 @@ export default function StatusCard() {
             <button
               type="button"
               onClick={() => open({ kind: "feed", entry: last })}
-              aria-label={`Last fed ${formatRelative(last.started_at, now)}, started ${formatTime(last.started_at, tz)}. ${readOnly ? "Open that feed." : "Open that feed to fix it."}`}
+              aria-label={`Last fed ${formatRelative(fedAt ?? last.started_at, now)}, started ${formatTime(fed?.start ?? last.started_at, tz)}. ${readOnly ? "Open that feed." : "Open that feed to fix it."}`}
               className="absolute inset-0 transition active:bg-mp-ink/[0.04]"
             />
           )}
@@ -199,16 +212,29 @@ export default function StatusCard() {
               </p>
               {last ? (
                 <p className={cx("mt-0.5 text-[28px] leading-tight font-semibold tracking-[-0.02em] text-mp-ink tabular-nums", fold && "[@media(max-height:719px)]:text-[24px]")}>
-                  {formatRelative(last.started_at, now)}
+                  {formatRelative(fedAt ?? last.started_at, now)}
                 </p>
               ) : (
                 <p className="mt-0.5 text-[17px] text-mp-ink-2">No feeds logged yet</p>
               )}
             </div>
-            {next && <NextSide side={next} />}
+            {next && <NextSide next={next} />}
           </div>
           {feedSub && (
             <p className={cx("mt-0.5 text-[13px] leading-snug text-mp-ink-2", fold && "[@media(max-height:719px)]:hidden")}>
+              {cluster && (
+                // Above the block's button: "Cluster" opens what cluster feeding is, not the last feed.
+                <>
+                  <button
+                    type="button"
+                    onClick={() => clusterInfo.open(cluster)}
+                    aria-label="Cluster feeding: what it is"
+                    className="relative -my-3 inline-flex min-h-[44px] items-center font-semibold text-mp-ink underline decoration-mp-ink-3 decoration-dotted underline-offset-[3px] active:text-mp-ink-2"
+                  >
+                    Cluster
+                  </button>{" "}
+                </>
+              )}
               {feedSub.slice(0, -1).map((b) => `${b} · `).join("")}
               {/* The info button rides with the last bit, so a wrap never leaves it alone on a line. */}
               <span className="whitespace-nowrap">
@@ -233,7 +259,7 @@ export default function StatusCard() {
                 exit={{ height: 0, opacity: 0 }}
                 className="overflow-hidden text-[13px] text-mp-ink-3"
               >
-                Counted from when she started eating, the usual way feeds are timed.
+                {LAST_FED_RULE}
                 {gap != null && <> Lately: about every {formatDuration(gap * 60)} (start to start).</>}
               </motion.p>
             )}
@@ -278,6 +304,7 @@ export default function StatusCard() {
             <span className="inline-flex min-h-[36px] shrink-0 items-center rounded-[10px] bg-mp-sunken px-3.5 text-sm font-semibold text-mp-ink">Log</span>
           </button>
         ))}
+      {clusterInfo.sheet}
       {/* While she nurses the "Last fed" line (which carries this) steps aside, so it gets its own row. */}
       {nursing && gap != null && (
         <div className="flex items-center gap-3 px-4 py-3">
@@ -319,11 +346,24 @@ export function Tallies({
 }) {
   const { state, units } = useMaple();
   if (!state) return null;
+  // The Left/Right split leaves out back and forth (never split into made-up sides); "both" says how much there was.
   const nursingSplit = s.leftSec + s.rightSec > 0 ? Math.round((s.leftSec / (s.leftSec + s.rightSec)) * 100) : null;
+  const split = nursingSplit != null ? `L ${nursingSplit}% · R ${100 - nursingSplit}%` : null;
+  const both = s.bothSec >= 60 ? `both ${formatDuration(s.bothSec)}` : null;
 
   // Each count's bar fills toward the usual number for her day of life (the footnote says what that is).
-  const tiles: { key: string; label: string; value: string; goal: number | null; have: number; color: string }[] = [
-    { key: "feeds", label: "Feeds", value: String(s.feeds), have: s.feeds, goal: t ? t.feeds[0] : null, color: DETAIL_COLOR.nursing },
+  // Feeds count each feed in a cluster (split by 10+ minutes off the breast): "11 · 4 in a cluster".
+  const tiles: { key: string; label: string; value: string; goal: number | null; have: number; color: string; note?: string; aria?: string }[] = [
+    {
+      key: "feeds",
+      label: "Feeds",
+      value: String(s.feeds),
+      have: s.feeds,
+      goal: t ? t.feeds[0] : null,
+      color: DETAIL_COLOR.nursing,
+      note: s.clusterFeeds ? `${s.clusterFeeds} in a cluster` : undefined,
+      aria: s.clusterFeeds ? `${s.feeds} feeds, ${s.clusterFeeds} in a cluster` : undefined,
+    },
     { key: "wet", label: "Wet", value: String(s.wet), have: s.wet, goal: t?.wet ?? null, color: DETAIL_COLOR.pee },
     { key: "dirty", label: "Dirty", value: String(s.dirty), have: s.dirty, goal: t?.dirty ?? null, color: DETAIL_COLOR.poop },
     {
@@ -348,12 +388,14 @@ export function Tallies({
       icon: "baby",
       color: DETAIL_COLOR.nursing,
       label: "Nursing",
-      detail: nursingSplit != null ? `L ${nursingSplit}% · R ${100 - nursingSplit}%` : null,
+      detail: both ? null : split,
+      // With back and forth the split and "both" get their own line (one line truncates at 375px).
+      below: both ? [split, both].filter(Boolean).join(" · ") : null,
       value: formatDuration(s.nursingSec),
     },
     s.bottleMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: null, value: formatVolume(s.bottleMl, units) },
     s.pumpMl > 0 && { icon: "milk", color: KIND_COLOR.pump, label: "Pumped", detail: null, value: formatVolume(s.pumpMl, units) },
-  ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; value: string }[];
+  ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; below?: string | null; value: string }[];
 
   return (
     <section aria-labelledby="day-so-far" aria-busy={loading || undefined}>
@@ -367,7 +409,7 @@ export function Tallies({
           {tiles.map((x) => {
             const pct = x.goal ? Math.min(1, x.have / x.goal) : 0;
             return (
-              <div key={x.key} className="flex flex-col items-center px-1 pt-3.5 pb-3 text-center">
+              <div key={x.key} className="flex flex-col items-center px-1 pt-3.5 pb-3 text-center" aria-label={!loading && x.aria ? x.aria : undefined} role={!loading && x.aria ? "group" : undefined}>
                 <span className="text-[28px] leading-none font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">{loading ? "–" : x.value}</span>
                 <span className="mt-1.5 text-[12px] font-medium text-mp-ink-2">{x.label}</span>
                 {x.goal ? (
@@ -378,6 +420,8 @@ export function Tallies({
                     />
                   </span>
                 ) : null}
+                {/* Under the bar, so the bars still line up across the row. */}
+                {x.note && !loading && <span className="mt-1.5 text-[11px] leading-tight text-mp-ink-3">{x.note}</span>}
               </div>
             );
           })}
@@ -387,9 +431,12 @@ export function Tallies({
             {extras.map((x) => (
               <li key={x.label} className="flex items-center gap-3 px-4 py-2.5 text-[14px]">
                 <Icon name={x.icon} size={17} className="mp-kind-ink shrink-0" style={{ color: x.color }} />
-                <span className="min-w-0 flex-1 truncate text-mp-ink">
-                  {x.label}
-                  {x.detail && <span className="text-mp-ink-3"> · {x.detail}</span>}
+                <span className="min-w-0 flex-1 text-mp-ink">
+                  <span className="block truncate">
+                    {x.label}
+                    {x.detail && <span className="text-mp-ink-3"> · {x.detail}</span>}
+                  </span>
+                  {x.below && <span className="block truncate text-[13px] text-mp-ink-3">{x.below}</span>}
                 </span>
                 <span className="shrink-0 font-semibold text-mp-ink tabular-nums">{x.value}</span>
               </li>

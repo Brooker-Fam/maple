@@ -98,11 +98,20 @@ export function describeEntry(
         title = live ? "Nursing now" : stopped ? "Nursing timer" : "Nursed";
         // The card's rows added up (feedMinutes), so lists, the day's totals and toasts agree.
         const t = feedMinutes(e, now);
+        const started = e.data.first_side && !live ? `started ${e.data.first_side === "L" ? "left" : "right"}` : "";
         const sides: string[] = [];
         if (t.has.L) sides.push(`L ${minutesShort(t.left)}`);
         if (t.has.R) sides.push(`R ${minutesShort(t.right)}`);
-        if (sides.length) bits.push(sides.join(", "));
-        if (e.data.first_side && !live) bits.push(`started ${e.data.first_side === "L" ? "left" : "right"}`);
+        if (t.has.B) {
+          // Back and forth is its own bucket (never split into Left and Right): "1h 10m · back and forth, started right".
+          if (t.has.L || t.has.R) sides.push(`both ${minutesShort(t.both)}`);
+          else sides.push(minutesShort(t.total));
+          bits.push(sides.join(", "));
+          bits.push(started ? `back and forth, ${started}` : "back and forth");
+        } else {
+          if (sides.length) bits.push(sides.join(", "));
+          if (started) bits.push(started);
+        }
       }
       break;
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   describeChange,
   edgeBounds,
@@ -8,6 +8,7 @@ import {
   FeedEditError,
   feedEditCopy,
   feedParts,
+  isTracked,
   minutesText,
   momentQuestion,
   moveEdge,
@@ -16,7 +17,7 @@ import {
   type Part,
 } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
-import type { Entry, FeedData, Side, StretchRef, TimerKind } from "@/lib/maple/types";
+import type { Entry, FeedData, Side, StretchRef, StretchSide, TimerKind } from "@/lib/maple/types";
 import { Icon } from "./icons";
 import { SIDE_COLOR, SIDE_INK } from "./palette";
 import { cx, TimeScrubber } from "./ui";
@@ -34,7 +35,12 @@ import { useMaple } from "./useMaple";
 
 export { formatRange };
 
-export const SIDE_NAME: Record<Side, string> = { L: "Left", R: "Right" };
+/** A part's side as a row or the live block names it: "Left", "Right", "Both sides" (back and forth, not tracked). */
+export const SIDE_NAME: Record<StretchSide, string> = { L: "Left", R: "Right", B: "Both sides" };
+/** A part's name in a row of parts, beside its mark: "Both" (with the LR mark) keeps the rows' 46px name column. */
+export const ROW_NAME: Record<StretchSide, string> = { L: "Left", R: "Right", B: "Both" };
+/** UX default (not a health rule): a part going back and forth gets no Switch taps, so its "Still nursing?" waits twice as long. */
+export const BOTH_CHECK_FACTOR = 2;
 export const KIND_TITLE: Record<TimerKind, string> = { feed: "Nursing", sleep: "Asleep", tummy: "Tummy time", pump: "Pumping" };
 
 /**
@@ -61,8 +67,30 @@ export const fixPreset = (target: FixTarget, expand?: FixExpand, doneAt?: string
 
 type SidePart = Extract<Part, { kind: "side" }>;
 
-/** A side's letter on a dot of its color: which breast, at a glance. */
-export function SideMark({ side, size = 24, className }: { side: Side; size?: number; className?: string }) {
+/**
+ * A side's letter on a dot of its color: which breast, at a glance. Both
+ * sides ("B", back and forth) is the two colors side by side with "LR" on
+ * them; at night, like the letters, an amber ring with "LR" in it.
+ */
+export function SideMark({ side, size = 24, className }: { side: StretchSide; size?: number; className?: string }) {
+  if (side === "B") {
+    return (
+      <span
+        aria-hidden
+        className={cx("mp-side-mark relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold", className)}
+        style={{ width: size, height: size, fontSize: Math.max(8, Math.round(size * 0.4)), letterSpacing: "-0.04em" }}
+      >
+        {/* The halves hide at night (the ring and amber letters stand alone there, as for L and R). */}
+        <span className="absolute inset-y-0 left-0 w-1/2 [.maple-night_&]:hidden" style={{ backgroundColor: SIDE_COLOR.L }} />
+        <span className="absolute inset-y-0 right-0 w-1/2 [.maple-night_&]:hidden" style={{ backgroundColor: SIDE_COLOR.R }} />
+        {/* Each letter in its half's ink (SIDE_INK), amber at night. */}
+        <span className="relative flex">
+          <span className="text-white [.maple-night_&]:text-[#e8a23f]">L</span>
+          <span className="text-[#2A1A08] [.maple-night_&]:text-[#e8a23f]">R</span>
+        </span>
+      </span>
+    );
+  }
   return (
     <span
       aria-hidden
@@ -165,6 +193,7 @@ export function PartRows({
   tz,
   readOnly,
   fold,
+  tight,
   disabled,
   onPick,
   openIndex,
@@ -175,6 +204,12 @@ export function PartRows({
   tz: string;
   readOnly?: boolean;
   fold?: boolean;
+  /**
+   * A short screen: two or more parts fold whole into the "Earlier" row (none
+   * shown under it), so a feed that went Left, Right, then back and forth
+   * still leaves the Since tiles clear of the dock.
+   */
+  tight?: boolean;
   /** A timer still starting (temporary id): rows wait. */
   disabled?: boolean;
   onPick?: (part: Part, index: number) => void;
@@ -183,21 +218,31 @@ export function PartRows({
 }) {
   const [expanded, setExpanded] = useState(false);
   if (!parts.length) return null;
-  const folded = !!fold && !expanded && parts.length > 2;
-  const shown = folded ? parts.slice(-1) : parts;
-  const offset = folded ? parts.length - 1 : 0;
+  const folded = !!fold && !expanded && parts.length > (tight ? 1 : 2);
+  // How many of the newest stay as rows under the fold.
+  const keep = tight ? 0 : 1;
+  const shown = folded ? parts.slice(parts.length - keep) : parts;
+  const offset = folded ? parts.length - keep : 0;
   const card = mode === "card";
 
   let earlier: ReactNode = null;
   if (folded) {
-    const hidden = parts.slice(0, -1);
+    const hidden = parts.slice(0, parts.length - keep);
     const totals = partTotals(hidden);
     const t = totals.min;
-    const has = (s: Side) => hidden.some((p) => p.kind === "side" && p.side === s);
+    const has = (s: StretchSide) => hidden.some((p) => p.kind === "side" && p.side === s);
     // A folded break still shows ("· break 18 min"), so the fold never hides that she was off.
     const brk = totals.breakCount ? `${totals.breakCount > 1 ? `${totals.breakCount} breaks` : "break"} ${minutesText(t.breaks)}` : "";
-    const bits = [has("L") ? `L ${minutesText(t.left)}` : "", has("R") ? `R ${minutesText(t.right)}` : "", brk].filter(Boolean);
-    const text = ["Earlier", ...bits, `from ${formatTime(hidden[0].start, tz)}`].join(" · ");
+    const bits = [has("L") ? `L ${minutesText(t.left)}` : "", has("R") ? `R ${minutesText(t.right)}` : "", has("B") ? `both ${minutesText(t.both)}` : "", brk].filter(Boolean);
+    const words = ["Earlier", ...bits, `from ${formatTime(hidden[0].start, tz)}`];
+    const text = words.join(" · ");
+    // Wraps between its bits, never inside one ("from 1:31 PM" stays together).
+    const wrapped = words.map((w, k) => (
+      <Fragment key={k}>
+        {k ? " · " : ""}
+        <span className="whitespace-nowrap">{w}</span>
+      </Fragment>
+    ));
     earlier = readOnly ? (
       <div className={cx("flex min-h-[44px] items-center gap-2 text-[13px] text-mp-ink-2", card && NIGHT_TEXT)}>
         <span className="truncate">{text}</span>
@@ -210,7 +255,7 @@ export function PartRows({
         aria-label={`${text}. Show every part`}
         className={cx("-mx-2 flex min-h-[44px] w-[calc(100%+16px)] items-center gap-2 rounded-xl px-2 text-left text-[13px] text-mp-ink-2 active:bg-mp-ink/5", card && NIGHT_TEXT)}
       >
-        <span className="line-clamp-2 min-w-0 flex-1 leading-[17px]">{text}</span>
+        <span className="line-clamp-2 min-w-0 flex-1 leading-[17px]">{wrapped}</span>
         <Icon name="chevron-down" size={16} className={cx("shrink-0 text-mp-ink-3", card && NIGHT_DIM)} />
       </button>
     );
@@ -229,7 +274,7 @@ export function PartRows({
             </span>
             <span className="flex min-w-0 flex-1 items-baseline gap-2 max-[359px]:flex-col max-[359px]:gap-0">
               <span className={cx("w-[46px] shrink-0 text-mp-ink-2", p.kind === "side" ? "text-[15px] font-medium" : "text-[14px]", card && NIGHT_TEXT)}>
-                {p.kind === "side" ? SIDE_NAME[p.side] : "Break"}
+                {p.kind === "side" ? ROW_NAME[p.side] : "Break"}
               </span>
               <span className={cx("min-w-0 text-[14px] text-mp-ink-2 tabular-nums", card && NIGHT_TEXT)}>
                 <RangeText start={p.start} end={p.end} tz={tz} />
@@ -274,7 +319,11 @@ export function timerNumbers(e: Entry, now: Date) {
     const lastSide = sides[sides.length - 1];
     const last = parts[parts.length - 1];
     const paused = last?.kind === "break" && last.end === null;
-    const side: Side = lastSide?.side ?? e.data.last_side ?? "L";
+    // The side of the part she's on (or came off, on a break): "B" while she goes back and forth.
+    const side: StretchSide = lastSide?.side ?? e.data.last_side ?? "L";
+    // The last side tracked (a back-and-forth part never sets it): where the next side is counted from.
+    const lastTracked = [...sides].reverse().find((p) => isTracked(p.side))?.side;
+    const tracked: Side = (isTracked(lastTracked) ? lastTracked : null) ?? e.data.last_side ?? e.data.first_side ?? "L";
     // sec drives the live clock; min is the same part in the rows' whole minutes (for words like "Right side for 52 min").
     const current = paused
       ? { kind: "break" as const, side, since: last.start, sec: last.sec, min: last.min }
@@ -291,7 +340,12 @@ export function timerNumbers(e: Entry, now: Date) {
       wallSec,
       left: t.left,
       right: t.right,
-      side: side as Side | null,
+      side: side as StretchSide | null,
+      /** The part she's on (or came off, on a break) goes back and forth: no side tracked. */
+      both: side === "B",
+      tracked: tracked as Side | null,
+      /** Switches so far ("Back and forth" is offered from the feed's second one). */
+      switches: sides.filter((p) => p.startMoment === "switch").length,
       paused,
       pausedSec: paused ? last.sec : 0,
       lastSegStart: Date.parse(lastSide?.start ?? e.started_at),
@@ -308,14 +362,17 @@ export function timerNumbers(e: Entry, now: Date) {
     wallSec,
     left: 0,
     right: 0,
-    side: null as Side | null,
+    side: null as StretchSide | null,
+    both: false,
+    tracked: null as Side | null,
+    switches: 0,
     paused: false,
     pausedSec: 0,
     lastSegStart: Date.parse(e.started_at),
     parts: [] as Part[],
     sideCount: 0,
     closedBreaks: 0,
-    current: { kind: "side" as const, side: undefined as Side | undefined, since: e.started_at, sec: wallSec, min: spanMinutes(e.started_at, now) },
+    current: { kind: "side" as const, side: undefined as StretchSide | undefined, since: e.started_at, sec: wallSec, min: spanMinutes(e.started_at, now) },
   };
 }
 
@@ -372,7 +429,9 @@ export function useStillGoing(entry: Entry | null, n: TimerNumbers | null, now: 
   const check: StillCheck = !entry || !n || kind !== "feed" || !n.parts.length ? "timer" : n.paused ? "break" : "side";
   const settings = (state?.baby.settings ?? {}) as Record<string, unknown>;
   const checkMin = Number(settings[`timer_check_${kind}_min`]) || CHECK_AFTER_MIN[kind] || CHECK_AFTER_MIN.feed;
-  const long = !n ? false : check === "break" ? n.current.sec / 60 >= CHECK_BREAK_MIN : check === "side" ? n.current.sec / 60 >= checkMin : n.wallSec / 60 >= checkMin;
+  // Going back and forth gets no Switch taps to reset it, so that part is checked at twice the side's time (90 min by default).
+  const sideMin = n?.both ? checkMin * BOTH_CHECK_FACTOR : checkMin;
+  const long = !n ? false : check === "break" ? n.current.sec / 60 >= CHECK_BREAK_MIN : check === "side" ? n.current.sec / 60 >= sideMin : n.wallSec / 60 >= checkMin;
   // Per part too: "Still going" on one break doesn't mute the next break (or side) of the same feed.
   const key = entry ? `${entry.id}:${check}${n && check !== "timer" ? `:${n.current.since}` : ""}` : "";
   const forgotten = !!entry && !readOnly && entry.id > 0 && long && now.getTime() > (snoozes[key] ?? 0);
@@ -422,7 +481,8 @@ export function LiveBlock({
   const isFeed = entry.kind === "feed" && n.parts.length > 0;
   const paused = isFeed && n.paused;
   const since = formatTime(n.current.since, tz);
-  const what = !isFeed ? KIND_TITLE[entry.kind as TimerKind] ?? "Timer" : paused ? "On a break" : `${SIDE_NAME[n.current.side ?? "L"]} side`;
+  // "Left side", or "Both sides" while she goes back and forth.
+  const what = !isFeed ? KIND_TITLE[entry.kind as TimerKind] ?? "Timer" : paused ? "On a break" : n.both ? SIDE_NAME.B : `${SIDE_NAME[n.current.side ?? "L"]} side`;
   const showTotal = isFeed && (n.sideCount >= 2 || n.parts.some((p) => p.kind === "break"));
   const note = n.closedBreaks ? (n.closedBreaks > 1 ? "breaks not counted" : "break not counted") : null;
 
@@ -569,6 +629,45 @@ export function TimeChip({
   );
 }
 
+/**
+ * "Wrong side? [It was Right] [Both sides]" for a Left part, "Only one side?
+ * [It was Left] [It was Right]" for one going back and forth: one tap fixes
+ * which side a part was (set_side), Fix times' and the feed sheet's alike.
+ * `busy` is the side being saved.
+ */
+export function SideFixRow({
+  side,
+  onPick,
+  disabled,
+  busy,
+}: {
+  side: StretchSide;
+  onPick: (to: StretchSide) => void;
+  disabled?: boolean;
+  busy?: StretchSide | null;
+}) {
+  const options: StretchSide[] = side === "B" ? ["L", "R"] : [side === "L" ? "R" : "L", "B"];
+  return (
+    <div className="flex min-h-[48px] flex-wrap items-center gap-x-3 gap-y-1.5 py-1">
+      <span className="min-w-0 flex-1 text-[15px] whitespace-nowrap text-mp-ink">{side === "B" ? "Only one side?" : "Wrong side?"}</span>
+      <span className="flex shrink-0 gap-2">
+        {options.map((to) => (
+          <button
+            key={to}
+            type="button"
+            onClick={() => onPick(to)}
+            disabled={disabled}
+            aria-label={to === "B" ? "It was both sides: she went back and forth" : `It was ${SIDE_NAME[to]}`}
+            className="min-h-[44px] shrink-0 rounded-xl bg-mp-sunken px-3 text-[14px] font-semibold whitespace-nowrap text-mp-ink disabled:opacity-45 [.maple-night_&]:text-[#E8A23F]"
+          >
+            {busy === to ? "Saving…" : to === "B" ? "Both sides" : `It was ${SIDE_NAME[to]}`}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 /** A 48px row that opens something: "Other time… ›", "Feed started 4:00 PM ›", "She already finished ›". */
 export function LinkRow({
   children,
@@ -682,7 +781,7 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
     const ceiling = shrinks?.end ? Date.parse(shrinks.end) - 60_000 : null;
     const soft = ceiling !== null && ceiling >= b.recorded.getTime() && ceiling < b.max.getTime();
     // Where a minute stops it, the note says so ("Can't be after Left ended (6:24 AM)" read wrong at 6:23).
-    const shortest = (p: SidePart | undefined) => (p ? `${SIDE_NAME[p.side]} can't be shorter than a minute.` : undefined);
+    const shortest = (p: SidePart | undefined) => (p ? `${p.side === "B" ? "Back and forth" : SIDE_NAME[p.side]} can't be shorter than a minute.` : undefined);
     const notes = {
       low: b.uiMin.getTime() > b.min.getTime() + 1000 ? shortest(edge.edge === "start" ? sides[i - 1] : sides[i]) : undefined,
       high: soft ? shortest(shrinks) : undefined,

@@ -1,15 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { edgeBounds, feedCtx, feedParts, minutesShort, minutesText, momentQuestion, other, partTotals, previousFeed, previousFeedEnd, undoableTap, type Part, type TapWhat } from "@/lib/maple/feed";
+import {
+  CLUSTER_GAP_MS,
+  edgeBounds,
+  feedCtx,
+  feedParts,
+  isTracked,
+  minutesShort,
+  minutesText,
+  momentQuestion,
+  other,
+  partTotals,
+  previousFeed,
+  previousFeedEnd,
+  undoableTap,
+  type Part,
+  type TapFeedData,
+  type TapWhat,
+} from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
-import type { Entry, FeedData, FeedEdit, Side, StretchRef, TimerKind, TimerResponse } from "@/lib/maple/types";
+import type { Entry, FeedData, FeedEdit, StretchRef, StretchSide, TimerKind, TimerResponse } from "@/lib/maple/types";
 import {
   BreakMark,
   KIND_TITLE,
   LinkRow,
   MomentEditor,
   SIDE_NAME,
+  SideFixRow,
   SideMark,
   TimeChip,
   type FixExpand,
@@ -59,8 +77,8 @@ type Pin =
   /** Sleep, tummy time, pumping (one panel). */
   | { kind: "timer" };
 
-/** What's live (the side she's on, the open break, the end): its kind, side, start, and how many side parts lead to it. */
-type Cur = { kind: "ended" | "side" | "break" | "none"; side?: Side; start?: string; count: number };
+/** What's live (the side she's on, the open break, the end): its kind, side ("B": going back and forth), start, and how many side parts lead to it. */
+type Cur = { kind: "ended" | "side" | "break" | "none"; side?: StretchSide; start?: string; count: number };
 
 type Snap = { recorded: string; current: Cur };
 
@@ -70,7 +88,7 @@ type Snap = { recorded: string; current: Cur };
  * Done tap, panel E), or "She already finished" on the stretch the panel
  * showed (`ref`) when the other phone has switched since.
  */
-type BackOnMeta = { side: Side; at: number | null; until?: number };
+type BackOnMeta = { side: StretchSide; at: number | null; until?: number };
 type RunMeta = { backOn?: BackOnMeta; stop?: { ref: StretchRef } };
 
 /**
@@ -104,8 +122,8 @@ type Run = (id: string, go: (o: TimerCallOptions) => Promise<unknown>, meta?: Ru
 
 const HOLD_MS = 1500;
 const MIN = 60_000;
-/** A feed the other phone ended this recently can still be carried on (as the dock's "Continue that feed on Right"). */
-const CONTINUE_WITHIN_MS = 30 * 60_000;
+/** A feed the other phone ended this recently can still be carried on (as the dock's "Continue that feed on Right"); the same 30 minutes as a cluster's gap. */
+const CONTINUE_WITHIN_MS = CLUSTER_GAP_MS;
 const ELSEWHERE = "on another device or through Claude";
 
 const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 1500;
@@ -113,8 +131,16 @@ const timed = (e: Entry): e is Entry & { kind: "feed"; data: FeedData } => e.kin
 const partsOf = (e: Entry, now: Date): Part[] => (timed(e) ? feedParts(e.data, feedCtx(e, now)) : []);
 const sidesOf = (parts: Part[]) => parts.filter((p): p is SidePart => p.kind === "side");
 const minutesWord = (n: number) => `${n} minute${n === 1 ? "" : "s"}`;
-/** "back on the Left" after a break only when she came off the Left (`prev`); otherwise "on the Right" (as the feed sheet says it). */
-const putOn = (side: Side, prev?: Side | null) => `${prev && prev !== side ? "on" : "back on"} the ${SIDE_NAME[side]}`;
+/**
+ * "back on the Left" after a break only when she came off the Left (`prev`); otherwise "on the Right" (as the feed
+ * sheet says it). Going back and forth: "back on, back and forth" after a back-and-forth part, else "on both sides".
+ */
+const putOn = (side: StretchSide, prev?: StretchSide | null) =>
+  side === "B" ? (prev === "B" ? "back on, back and forth" : "on both sides") : `${prev && prev !== side ? "on" : "back on"} the ${SIDE_NAME[side]}`;
+/** A part in a sentence: "Left", "Right", "both sides". */
+const sideText = (x: StretchSide) => (x === "B" ? "both sides" : SIDE_NAME[x]);
+/** A part as a row names it: "Left side", "Right side", "Back and forth". */
+const partName = (x: StretchSide) => (x === "B" ? "Back and forth" : `${SIDE_NAME[x]} side`);
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** The clock minute a time shows ("6:03"): two chips in one minute read as the same time. */
 const clockMinute = (t: number) => Math.floor(t / MIN);
@@ -305,11 +331,11 @@ function FixBody({
   const [editor, setEditor] = useState<Editor | null>(null);
   const [finished, setFinished] = useState(expand === "finished" || expand === "done");
   // "She's back on…" / "She went back on…": the other side is the likely one (the dock's next side), one tap from the chips.
-  const [backSide, setBackSide] = useState<Side | null>(() => {
+  // After going back and forth, the likely one is going back on that way ("B").
+  const [backSide, setBackSide] = useState<StretchSide | null>(() => {
     if (expand !== "backOn") return null;
-    if (pin.kind === "break") return other(pin.ref.side);
-    const last = pin.kind === "after" ? sidesOf(partsOf(start, nowFn())).at(-1) : undefined;
-    return last ? other(last.side) : null;
+    const off = pin.kind === "break" ? pin.ref.side : pin.kind === "after" ? sidesOf(partsOf(start, nowFn())).at(-1)?.side : undefined;
+    return off ? (isTracked(off) ? other(off) : "B") : null;
   });
   // Opened to say she's back on: that question alone, with "Came off earlier?" folded behind one row.
   const [backOnly, setBackOnly] = useState(expand === "backOn");
@@ -400,11 +426,11 @@ function FixBody({
       const last = parts.at(-1);
       const watchesCurrent = pin.kind === "break" || pin.panel === "open";
       const change = watchesCurrent ? currentChange(snap.current, currentOf(live, now)) : null;
-      const showOpen = (s: SidePart): BannerAction => ({ label: `Show ${SIDE_NAME[s.side]}`, onClick: () => repin({ kind: "side", ref: s.ref, index: sides.length - 1, panel: "open" }) });
+      const showOpen = (s: SidePart): BannerAction => ({ label: `Show ${s.side === "B" ? "back and forth" : SIDE_NAME[s.side]}`, onClick: () => repin({ kind: "side", ref: s.ref, index: sides.length - 1, panel: "open" }) });
       // "Wrong side" from the other phone: this stretch is now the other side (merged into the one before it, if that touched).
       const absorbed = !found.part && pin.kind === "side" && pin.panel === "open" && last?.kind === "side" && last.end === null && last.side !== pin.ref.side && Date.parse(last.start) <= Date.parse(pin.ref.start) + 1500;
       if ((change === "side" || absorbed) && last?.kind === "side") {
-        banner = { kind: "current", text: byWho((w) => `${w} changed this part to ${SIDE_NAME[last.side]}`, `This part is now ${SIDE_NAME[last.side]}`), actions: [showOpen(last)] };
+        banner = { kind: "current", text: byWho((w) => `${w} changed this part to ${sideText(last.side)}`, `This part is now ${sideText(last.side)}`), actions: [showOpen(last)] };
       } else if (!found.part) {
         banner = {
           kind: "gone",
@@ -422,12 +448,17 @@ function FixBody({
         } else if (change && last?.kind === "side") {
           const t = clock(last.start);
           const s = SIDE_NAME[last.side];
+          const both = last.side === "B";
           const text =
             change === "merged"
-              ? byWho((w) => `${w} put her back on the ${s} (no break)`, `Back on the ${s} (no break)`)
+              ? byWho((w) => `${w} put her back on${both ? "" : ` the ${s}`} (no break)`, `Back on${both ? "" : ` the ${s}`} (no break)`)
               : change === "resumed"
-                ? byWho((w) => `${w} resumed on ${s} at ${t}`, `Resumed on ${s} at ${t}`)
-                : byWho((w) => `${w} switched to ${s} at ${t}`, `Switched to ${s} at ${t}`);
+                ? both
+                  ? byWho((w) => `${w} put her back on, back and forth, at ${t}`, `Back on, back and forth, at ${t}`)
+                  : byWho((w) => `${w} resumed on ${s} at ${t}`, `Resumed on ${s} at ${t}`)
+                : both
+                  ? byWho((w) => `${w} stopped tracking sides at ${t}`, `Back and forth from ${t}`)
+                  : byWho((w) => `${w} switched to ${s} at ${t}`, `Switched to ${s} at ${t}`);
           banner = { kind: "current", text, actions: [showOpen(last)] };
         }
         if (!banner) {
@@ -447,7 +478,7 @@ function FixBody({
       if (o) {
         const on = putOn(o.side, sidesOf(partsOf(live, now)).at(-2)?.side);
         const t = clock(o.start);
-        banner = { kind: "current", text: byWho((w) => `${w} put her ${on} at ${t}`, `She's ${on} since ${t}`), actions: [toCurrent(`Show ${SIDE_NAME[o.side]}`)] };
+        banner = { kind: "current", text: byWho((w) => `${w} put her ${on} at ${t}`, `She's ${on} since ${t}`), actions: [toCurrent(`Show ${o.side === "B" ? "back and forth" : SIDE_NAME[o.side]}`)] };
       } else if (live.active) {
         banner = { kind: "current", text: byWho((w) => `${w} reopened this feed`, "This feed was reopened"), actions: [toCurrent("Show current")] };
       } else if (!endedAtPause(live) || !sameRecorded(live.ended_at ?? "", snap.recorded)) {
@@ -493,17 +524,18 @@ function FixBody({
         id: "continue",
         onClick: () => void run("continue", (o) => actions.continueFeed(x, a.side, at !== null ? new Date(at) : undefined, o), { backOn: { side: a.side, at } }),
       });
+      const onIt = a.side === "B" ? "Continue it, back and forth," : `Continue it on ${SIDE_NAME[a.side]}`;
       if (recent && atPause) {
         // Ended at its pause: back on from the time this phone asked for ("Now": now).
-        acts.push(carry(`Continue it on ${SIDE_NAME[a.side]} from ${short(a.at ?? now.getTime())}`, a.at));
+        acts.push(carry(`${onIt} from ${short(a.at ?? now.getTime())}`, a.at));
       } else if (recent && lastSide?.end && lastSide.side === a.side) {
         // Ended while she was on the side this phone says she's on: that side just runs on, from when it began (the Done is taken back).
-        acts.push(carry(`Continue it on ${SIDE_NAME[a.side]}, since ${short(lastSide.start)}`, null));
+        acts.push(carry(`${onIt}${a.side === "B" ? "" : ","} since ${short(lastSide.start)}`, null));
       }
       // (Ended while she was on the other side: carrying it on would record a side this phone never said, so only the feed.)
       acts.push({ label: "Show finished feed", onClick: () => repin({ kind: "finish" }) });
       // Ended while she was on: that side up to the Done ("· Left 9:44 – 9:46"), which no "at its pause" could say.
-      const how = atPause ? ", at its pause" : lastSide?.end ? ` · ${SIDE_NAME[lastSide.side]} ${short(lastSide.start)} – ${short(lastSide.end)}` : "";
+      const how = atPause ? ", at its pause" : lastSide?.end ? ` · ${lastSide.side === "B" ? "back and forth" : SIDE_NAME[lastSide.side]} ${short(lastSide.start)} – ${short(lastSide.end)}` : "";
       return { kind: "already", text: `${name ? `${name} ended this feed at ${t}` : `This feed ended at ${t}`}${how}.`, actions: acts };
     }
     if (!x || !o) return changed;
@@ -514,15 +546,18 @@ function FixBody({
       const s = SIDE_NAME[o.side];
       const t = clock(o.start);
       const brk = partsOf(x, now).some((p) => p.kind === "break" && p.end === o.start);
-      const did = brk || o.side === a.ref.side ? `put her ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : `switched her to the ${s} at ${t}`;
-      return { kind: "already", text: `${name ? `${name} ${did}` : `She's on the ${s} since ${t}`}, so nothing was saved. Pick again.` };
+      const did =
+        brk || o.side === a.ref.side ? `put her ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : o.side === "B" ? `stopped tracking sides at ${t}` : `switched her to the ${s} at ${t}`;
+      const plain = o.side === "B" ? `She's going back and forth since ${t}` : `She's on the ${s} since ${t}`;
+      return { kind: "already", text: `${name ? `${name} ${did}` : plain}, so nothing was saved. Pick again.` };
     }
     const s = SIDE_NAME[o.side];
     const t = clock(o.start);
     const sameSide = o.side === a.side;
     // Worded as the dock's toast for the same race ("Brittany already put her back on the Left at 7:08").
     // (The same side agrees with this phone, unless this phone said she'd finished by its Done.)
-    const text = `${name ? `${name} already put her ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : `She's already on the ${s} side, since ${t}`}${sameSide && a.until === undefined ? "." : ", so nothing was saved."}`;
+    const plain = o.side === "B" ? `She's already going back and forth, since ${t}` : `She's already on the ${s} side, since ${t}`;
+    const text = `${name ? `${name} already put her ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : plain}${sameSide && a.until === undefined ? "." : ", so nothing was saved."}`;
     const acts: BannerAction[] = [];
     // (Not for "until Done" from panel E: the other phone says she's still on, so a time of this phone's would be half of each.)
     if (sameSide && a.until === undefined && a.at !== null && Math.abs(a.at - Date.parse(o.start)) >= MIN) {
@@ -534,8 +569,11 @@ function FixBody({
       });
     }
     // She's on the side this phone picked, not the other phone's: one tap switches her there now (as the dock's toast offers).
-    if (!sameSide && a.until === undefined) acts.push({ label: `Switch to ${SIDE_NAME[a.side]}`, id: "switch", onClick: () => void run("switch", (o) => actions.switchSide(x, a.side, o)) });
-    acts.push({ label: `Show ${s}`, onClick: () => repin({ kind: "side", ref: o.ref, index: sides.length - 1, panel: "open" }) });
+    if (!sameSide && a.until === undefined) {
+      const label = a.side === "B" ? "Back and forth" : `${o.side === "B" ? "On the" : "Switch to"} ${SIDE_NAME[a.side]}`;
+      acts.push({ label, id: "switch", onClick: () => void run("switch", (o) => actions.switchSide(x, a.side, o)) });
+    }
+    acts.push({ label: `Show ${o.side === "B" ? "back and forth" : s}`, onClick: () => repin({ kind: "side", ref: o.ref, index: sides.length - 1, panel: "open" }) });
     return { kind: "already", text, actions: acts };
   }
 
@@ -544,7 +582,7 @@ function FixBody({
   useEffect(() => {
     if (!moveKey || (pin.kind !== "side" && pin.kind !== "break")) return;
     const [side, startIso] = moveKey.split("|");
-    const ref: StretchRef = { side: side as Side, start: startIso };
+    const ref: StretchRef = { side: side as StretchSide, start: startIso };
     const old = pin.ref;
     setPin({ ...pin, ref });
     setEditor((ed) => (ed?.edge?.ref && ed.edge.ref.side === old.side && near(ed.edge.ref.start, old.start) ? { ...ed, edge: { ...ed.edge, ref } } : ed));
@@ -806,7 +844,7 @@ function PartPicker({
           </>,
           () => onPick({ kind: "side", ref: s.ref, index: i, panel: s.end === null && e.active ? "open" : "closed" }),
           // The disc is aria-hidden, so the side is said here.
-          `${SIDE_NAME[s.side]}, ${formatRange(s.start, s.end, tz, { compact: true })}`
+          `${s.side === "B" ? "Back and forth" : SIDE_NAME[s.side]}, ${formatRange(s.start, s.end, tz, { compact: true })}`
         )
       )}
       {openBreak &&
@@ -1042,7 +1080,8 @@ function OpenSidePanel({
   const s = sides[k];
   const prev = k > 0 ? sides[k - 1] : null;
   const brk = parts.find((p) => p.kind === "break" && p.end === s.start) ?? null;
-  const name = SIDE_NAME[s.side];
+  // "Left", or "Back and forth" for a part going both sides (as a sentence's subject).
+  const name = s.side === "B" ? "Back and forth" : SIDE_NAME[s.side];
   const recorded = Date.parse(s.start);
   const stillOn = e.active && s.end === null;
 
@@ -1053,13 +1092,15 @@ function OpenSidePanel({
     return <Caption>{e.active ? "She's on a break now, so Done ends the feed at its pause." : `This feed already ended${e.ended_at ? ` at ${formatTime(e.ended_at, tz)}` : ""}.`}</Caption>;
   }
   if (finished && fin) {
-    const fName = SIDE_NAME[fin.side];
+    // "Left", or "back and forth" for a part going both sides (no "likely" end there: it isn't one side's 15 minutes).
+    const fBoth = fin.side === "B";
+    const fName = fBoth ? "back and forth" : SIDE_NAME[fin.side];
     const fFrom = Date.parse(fin.start);
-    const likely = fFrom + 15 * MIN < now.getTime() - 2 * MIN ? fFrom + 15 * MIN : null;
+    const likely = !fBoth && fFrom + 15 * MIN < now.getTime() - 2 * MIN ? fFrom + 15 * MIN : null;
     return (
       <FinishQuestion
         title="When did she finish?"
-        sub={`${fName} side since ${formatTime(fin.start, tz)} (${minutesText(fin.min)}).`}
+        sub={`${partName(fin.side)} since ${formatTime(fin.start, tz)} (${minutesText(fin.min)}).`}
         focus={tapped}
         back={
           <LinkRow
@@ -1079,7 +1120,7 @@ function OpenSidePanel({
           likely={likely}
           likelyWhy={`15 min after she went on the ${fName}`}
           verb="Ended"
-          tooSoon={`${fName} only started ${formatTime(fin.start, tz)}, so use Other time…`}
+          tooSoon={`${fBoth ? "Back and forth" : fName} only started ${formatTime(fin.start, tz)}, so use Other time…`}
           // Opened by Done (the dock's or the Lantern's, past "Still nursing?"): she may have just finished. Not from
           // "She finished earlier…", which says it wasn't now.
           nowChip={fromDone && !tapped}
@@ -1149,25 +1190,42 @@ function OpenSidePanel({
   if (k === 0) caption = `The whole feed starts earlier.${clipped && feedFloor !== null ? ` The last feed ended at ${formatTime(feedFloor, tz)}.` : ""}`;
   else if (brk && prev) {
     // Two parts on the same side: "Right stays 6 min" would read as this one.
-    const prevName = prev.side === s.side ? `The earlier ${SIDE_NAME[prev.side]} (${formatRange(prev.start, prev.end, tz)})` : SIDE_NAME[prev.side];
+    const prevName =
+      prev.side === s.side ? `The earlier ${prev.side === "B" ? "back and forth" : SIDE_NAME[prev.side]} (${formatRange(prev.start, prev.end, tz)})` : prev.side === "B" ? "Back and forth" : SIDE_NAME[prev.side];
     caption = `Comes out of the ${brk.min > 0 ? `${minutesText(brk.min)} ` : ""}break. ${prevName} stays ${minutesText(prev.min)}.`;
-  } else caption = prev ? `Comes out of the ${SIDE_NAME[prev.side]} side (${minutesText(prev.min)} now).` : "";
+  } else caption = prev ? `Comes out of the ${prev.side === "B" ? "back-and-forth part" : `${SIDE_NAME[prev.side]} side`} (${minutesText(prev.min)} now).` : "";
 
   // "Same feed as 11:03?": a one-side feed started within 30 min of a timed feed ending (the start toast's offer is
   // only there for its 20 seconds).
   const before = k === 0 && stillOn && sides.length === 1 ? previousFeed(state?.entries, e) : null;
   const joinInto =
-    before && before.kind === "feed" && before.data.method === "breast" && !!before.data.segments?.length && Date.parse(e.started_at) - Date.parse(before.ended_at!) <= 30 * MIN
+    before && before.kind === "feed" && before.data.method === "breast" && !!before.data.segments?.length && Date.parse(e.started_at) - Date.parse(before.ended_at!) <= CLUSTER_GAP_MS
       ? before
       : null;
 
-  // Undo the tap that started this part, while that tap is fresh (its own start, not the feed's last edit).
-  const mistap = k > 0 && stillOn ? freshTap(e, now, ["switch", "resume"]) : null;
+  // Which switch: to back and forth (undo puts the side back), or a side after it (undo goes back to both sides).
+  const lastTap = (e.data as TapFeedData).last_tap;
+  const tapTo = lastTap?.side;
+  // Undo the tap that started this part, while that tap is fresh (its own start, not the feed's last edit). The feed's
+  // first part has none, unless going back and forth turned it both (the start toast's Back and forth): that one undoes.
+  const mistap = stillOn && (k > 0 || (s.side === "B" && !!lastTap?.from)) ? freshTap(e, now, ["switch", "resume"]) : null;
+  const mistapText =
+    mistap === "switch" && tapTo === "B"
+      ? { question: "Tapped Back and forth by mistake?", label: "Undo it" }
+      : mistap === "switch" && prev?.side === "B"
+        ? { question: `Tapped ${name} by mistake?`, label: "Back to both sides" }
+        : mistap === "switch"
+          ? { question: "Tapped Switch by mistake?", label: "Undo the switch" }
+          : { question: `Tapped ${s.side === "B" ? "Back on" : name} by mistake?`, label: "Back to paused" };
+  // The tile tapped to start the feed: her side's (going back and forth from the start, the side she latched on).
+  const startTile = s.side === "B" ? SIDE_NAME[e.data.first_side ?? "L"] : name;
 
   return (
     <div className="space-y-4">
       {/* (The feed's first side: the dock's tile is the side's name, never "Start".) */}
-      <Title sub={`${name} shows since ${formatTime(s.start, tz)}.`} focusRef={titleRef}>{k === 0 ? `Was she nursing before you tapped ${name}?` : `Was she on the ${name} before you tapped?`}</Title>
+      <Title sub={`${name} shows since ${formatTime(s.start, tz)}.`} focusRef={titleRef}>
+        {k === 0 ? `Was she nursing before you tapped ${startTile}?` : s.side === "B" ? "Was she going back and forth before you tapped?" : `Was she on the ${name} before you tapped?`}
+      </Title>
       {shown.length ? (
         <div className="space-y-2">
           <Grid>
@@ -1194,7 +1252,7 @@ function OpenSidePanel({
           )}
         </div>
       ) : prev ? (
-        <Caption>{brk ? "The break was under a minute" : `${SIDE_NAME[prev.side]} was under a minute`}, so use Other time…</Caption>
+        <Caption>{brk ? "The break was under a minute" : `${prev.side === "B" ? "Back and forth" : SIDE_NAME[prev.side]} was under a minute`}, so use Other time…</Caption>
       ) : (
         feedFloor !== null && <Caption>The last feed ended at {formatTime(feedFloor, tz)}, so use Other time…</Caption>
       )}
@@ -1204,15 +1262,14 @@ function OpenSidePanel({
         </LinkRow>
         {pin.fromBreak && prev && (
           <LinkRow disabled={disabled} onClick={() => openEditor({ id: "editor", edge: { edge: "end", ref: prev.ref } })}>
-            Or she came off later: fix when {SIDE_NAME[prev.side]} ended
+            Or she came off later: fix when {prev.side === "B" ? "back and forth" : SIDE_NAME[prev.side]} ended
           </LinkRow>
         )}
-        <QuestionRow
-          question="Wrong side?"
-          label={`It was ${SIDE_NAME[other(s.side)]}`}
+        <SideFixRow
+          side={s.side}
           disabled={disabled}
-          busy={busy === "side"}
-          onClick={() => void run("side", (o) => actions.setSide(e, s.ref, other(s.side), o))}
+          busy={busy?.startsWith("side-") ? (busy.slice(5) as StretchSide) : null}
+          onPick={(to) => void run(`side-${to}`, (o) => actions.setSide(e, s.ref, to, o))}
         />
         {joinInto && (
           // Started a few minutes after the last feed ended (a Done too early, or she came back for more): one feed.
@@ -1226,9 +1283,9 @@ function OpenSidePanel({
         )}
         {mistap && (
           <QuestionRow
-            // The tile tapped: Switch, or her side's (the dock's resume tile is the side's name, "Right · Next side").
-            question={mistap === "switch" ? "Tapped Switch by mistake?" : `Tapped ${name} by mistake?`}
-            label={mistap === "switch" ? "Undo the switch" : "Back to paused"}
+            // The tile tapped: Switch, Back and forth, or her side's (the dock's resume tile is the side's name, "Right · Next side").
+            question={mistapText.question}
+            label={mistapText.label}
             disabled={disabled}
             busy={busy === "undo"}
             onClick={() => void run("undo", (o) => actions.undoTap(e, o))}
@@ -1271,10 +1328,14 @@ function ClosedSidePanel({ e, tz, now, disabled, busy, run, openEditor, pin, act
   if (!s || s.end === null) return <Caption>This part changed, so there&apos;s nothing to fix here.</Caption>;
   const next = sides[k + 1];
   const name = SIDE_NAME[s.side];
+  const before = sides[k - 1]?.side;
   // After a break: "Back on the Left" only when she came off the Left, else "On the Right after the break" (as the feed sheet says it).
-  const resumed = sides[k - 1]?.side === s.side ? `Back on the ${name}` : `On the ${name} after the break`;
-  const startLabel = s.startMoment === "feed_start" ? "Feed started" : s.startMoment === "switch" ? `Switched to ${name}` : resumed;
-  const endLabel = s.endMoment === "switch" && next ? `Switched to ${SIDE_NAME[next.side]}` : s.endMoment === "feed_end" ? "Feed ended" : "Came off";
+  const resumed =
+    s.side === "B" ? (before === "B" ? "Back on, back and forth" : "Back and forth after the break") : before === s.side ? `Back on the ${name}` : `On the ${name} after the break`;
+  // A switch to back and forth "went back and forth"; a side after it is "on the Left" (tracking sides again).
+  const switchedTo = (to: StretchSide, from?: StretchSide) => (to === "B" ? "Went back and forth" : from === "B" ? `On the ${SIDE_NAME[to]}` : `Switched to ${SIDE_NAME[to]}`);
+  const startLabel = s.startMoment === "feed_start" ? "Feed started" : s.startMoment === "switch" ? switchedTo(s.side, before) : resumed;
+  const endLabel = s.endMoment === "switch" && next ? switchedTo(next.side, s.side) : s.endMoment === "feed_end" ? "Feed ended" : "Came off";
   const edit = (edge: "start" | "end") => openEditor({ id: "editor", edge: { edge, ref: s.ref } });
   return (
     <div className="space-y-3">
@@ -1288,23 +1349,37 @@ function ClosedSidePanel({ e, tz, now, disabled, busy, run, openEditor, pin, act
         <LinkRow disabled={disabled} onClick={() => edit("end")}>
           {endLabel} {formatTime(s.end, tz)}
         </LinkRow>
-        <QuestionRow
-          question="Wrong side?"
-          label={`It was ${SIDE_NAME[other(s.side)]}`}
+        <SideFixRow
+          side={s.side}
           disabled={disabled}
-          busy={busy === "side"}
-          onClick={() => void run("side", (o) => actions.setSide(e, s.ref, other(s.side), o))}
+          busy={busy?.startsWith("side-") ? (busy.slice(5) as StretchSide) : null}
+          onPick={(to) => void run(`side-${to}`, (o) => actions.setSide(e, s.ref, to, o))}
         />
       </div>
     </div>
   );
 }
 
-/** Which side she went back on: the two sides, always both showing (the likely one picked when it opens). */
-function SidePicker({ side, label, disabled, onPick }: { side: Side | null; label: string; disabled: boolean; onPick: (s: Side) => void }) {
+/**
+ * Which side she went back on: the two sides, always both showing (the likely one picked when it opens), and, after
+ * going back and forth (`withBoth`), "Both" too.
+ */
+function SidePicker({
+  side,
+  label,
+  disabled,
+  onPick,
+  withBoth,
+}: {
+  side: StretchSide | null;
+  label: string;
+  disabled: boolean;
+  onPick: (s: StretchSide) => void;
+  withBoth?: boolean;
+}) {
   return (
-    <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={label}>
-      {(["L", "R"] as Side[]).map((x) => (
+    <div className={cx("grid gap-2", withBoth ? "grid-cols-3" : "grid-cols-2")} role="radiogroup" aria-label={label}>
+      {(withBoth ? (["L", "R", "B"] as StretchSide[]) : (["L", "R"] as StretchSide[])).map((x) => (
         <button
           key={x}
           type="button"
@@ -1318,7 +1393,7 @@ function SidePicker({ side, label, disabled, onPick }: { side: Side | null; labe
           )}
         >
           <SideMark side={x} size={22} />
-          {SIDE_NAME[x]}
+          {x === "B" ? "Both" : SIDE_NAME[x]}
         </button>
       ))}
     </div>
@@ -1346,8 +1421,8 @@ function BreakPanel({
   actions,
 }: PanelProps & {
   pinRef: StretchRef;
-  backSide: Side | null;
-  setBackSide: (s: Side) => void;
+  backSide: StretchSide | null;
+  setBackSide: (s: StretchSide) => void;
   backOnly: boolean;
   actions: Actions;
 }) {
@@ -1364,6 +1439,8 @@ function BreakPanel({
   const pauseAt = Date.parse(last.end);
   const n = now.getTime();
   const lastName = SIDE_NAME[last.side];
+  // Off a back-and-forth part: going back on that way is the third choice.
+  const offBoth = last.side === "B";
 
   const since: { id: string; at: number | null; line1: string; line2: string }[] = [{ id: "back-now", at: null, line1: "Now", line2: formatTimeNear(n, pauseAt, tz) }];
   for (const m of [2, 5, 10, 20]) {
@@ -1392,7 +1469,7 @@ function BreakPanel({
       </Title>
       <div className="space-y-3">
         <p className="text-[15px] font-medium text-mp-ink">Already back on?</p>
-        <SidePicker side={backSide} label="Which side is she on" disabled={disabled} onPick={setBackSide} />
+        <SidePicker side={backSide} label="Which side is she on" disabled={disabled} onPick={setBackSide} withBoth={offBoth} />
         {backSide && (
           <>
             <Grid>
@@ -1468,7 +1545,7 @@ function BreakPanel({
       {!backOnly && freshTap(e, now, ["pause"]) && (
         <QuestionRow
           question="Didn't mean to pause?"
-          label={`Keep ${lastName} going`}
+          label={offBoth ? "Keep going" : `Keep ${lastName} going`}
           disabled={disabled}
           busy={busy === "undo"}
           onClick={() => void run("undo", (o) => actions.undoTap(e, o))}
@@ -1505,8 +1582,8 @@ function AfterDonePanel({
 }: PanelProps & {
   /** The Done tap (the side added ends there). */
   doneAt: number;
-  backSide: Side | null;
-  setBackSide: (s: Side) => void;
+  backSide: StretchSide | null;
+  setBackSide: (s: StretchSide) => void;
   actions: Actions;
 }) {
   const [stillOn, setStillOn] = useState(false);
@@ -1515,7 +1592,8 @@ function AfterDonePanel({
   if (!last?.end) return <Caption>This feed changed, so there&apos;s nothing to add here.</Caption>;
   const pauseAt = Date.parse(last.end);
   const n = now.getTime();
-  const side = backSide ?? other(last.side);
+  // The other side, or (off a back-and-forth part) back on going back and forth.
+  const side: StretchSide = backSide ?? (isTracked(last.side) ? other(last.side) : "B");
   const on = putOn(side, last.side);
   const done = formatTime(doneAt, tz);
   // Finished: the side runs to the Done tap (a minute at least); still on: it runs on from the time picked.
@@ -1538,7 +1616,7 @@ function AfterDonePanel({
     <div className="space-y-4">
       <Title sub={until !== null ? `You tapped Done at ${done}; the feed ended at ${formatTime(pauseAt, tz)}, when she came off.` : "She's still on, so the feed goes on from then."}>When did she go back on?</Title>
       <div className="space-y-3">
-        <SidePicker side={side} label="Which side she went back on" disabled={disabled} onPick={setBackSide} />
+        <SidePicker side={side} label="Which side she went back on" disabled={disabled} onPick={setBackSide} withBoth={last.side === "B"} />
         <Grid>
           {chips.map((c) => (
             <TimeChip
@@ -1629,7 +1707,7 @@ function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: P
           </>
         ) : (
           <Caption>
-            {legacy ? "The end is right after the last side" : `${SIDE_NAME[last.side]} only ran ${minutesText(last.min)}`}, so there&apos;s no earlier minute to pick here.
+            {legacy ? "The end is right after the last side" : `${last.side === "B" ? "Back and forth" : SIDE_NAME[last.side]} only ran ${minutesText(last.min)}`}, so there&apos;s no earlier minute to pick here.
           </Caption>
         )}
         <LinkRow disabled={disabled} onClick={() => openEditor({ id: "editor", edge })}>

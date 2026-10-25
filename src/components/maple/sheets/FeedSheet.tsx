@@ -11,19 +11,22 @@ import {
   feedMinutes,
   feedParts,
   feedTotals,
+  isTracked,
   minutesText,
   moveEdge,
   other,
   partTotals,
   setSide,
+  sideMinutesText,
   spanMinutes,
   type Part,
 } from "@/lib/maple/feed";
 import { BOTTLE_CUES, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
-import type { Entry, EntryOf, FeedData, Side, UpdateEntryInput } from "@/lib/maple/types";
-import { BreakMark, LinkRow, MomentEditor, partAria, SIDE_NAME, SideMark, type MomentEdge } from "../FeedParts";
+import type { Entry, EntryOf, FeedData, Side, StretchSide, UpdateEntryInput } from "@/lib/maple/types";
+import { BreakMark, LinkRow, MomentEditor, partAria, ROW_NAME, SIDE_NAME, SideFixRow, SideMark, type MomentEdge } from "../FeedParts";
+import { logSwitches } from "../MoreSheet";
 import { Icon } from "../icons";
 import { Button, Chip, Segmented, Sheet, TimeRange, TimeScrubber, WhenField, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
@@ -51,10 +54,11 @@ import {
 /**
  * Log or edit a feed.
  *
- * Nursing logged afterwards (or a finished feed that was never timed): Left
- * and Right minutes, which side she started on, and when it started and
- * ended. Typing the minutes for a new one slides the start back from the end,
- * so "15 left, 10 right, just finished" needs no time fiddling.
+ * Nursing logged afterwards (or a finished feed that was never timed): Left,
+ * Right and Back and forth minutes (both sides, not tracked: never split into
+ * made-up sides), which side she started on, and when it started and ended.
+ * Typing the minutes for a new one slides the start back from the end, so
+ * "15 left, 10 right, just finished" needs no time fiddling.
  *
  * A finished timed feed shows its times as what happened: a row per side and
  * break, "Ended", and "Add a side she nursed on". A row opens its moments
@@ -70,7 +74,9 @@ import {
  * follows the live entry, so a time fix never wipes the other phone's note.
  *
  * Bottle: the amount (oz or ml, per the units setting) starts at the last
- * bottle's amount and milk, so the primary button reads "Log 2 oz now".
+ * bottle's amount and milk, so the primary button reads "Log 2 oz now". With
+ * Bottles off (Family → On Today) a new feed has no Breast/Bottle choice;
+ * a bottle already logged still opens as one.
  */
 
 type Milk = NonNullable<FeedData["milk"]>;
@@ -80,8 +86,8 @@ const MIN = 60_000;
 const NEAR = 1500;
 const ELSEWHERE = "on another device or through Claude";
 
-/** Neither side has minutes typed. */
-const l0r0 = (left: number | null | undefined, right: number | null | undefined) => (left ?? 0) + (right ?? 0) === 0;
+/** No minutes typed on either side or going back and forth. */
+const l0r0 = (left: number | null | undefined, right: number | null | undefined, both?: number | null) => (left ?? 0) + (right ?? 0) + (both ?? 0) === 0;
 
 /** "Brittany discarded this feed, so nothing was saved." from a 404's deleted_by; null for any other error. */
 function discardedText(err: unknown, what: string, label: (id: string | null | undefined) => string | null, lost: string): string | null {
@@ -123,6 +129,7 @@ export default function FeedSheet(props: SheetProps) {
 function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const base = useSheetBase();
   const { tz, units, state, summary, log, update, remove, clock, now, ageDays, age, api, refresh, toast, memberLabel, readOnly } = base;
+  const bottlesOn = logSwitches(state?.baby).bottles;
   const e = entry?.kind === "feed" ? entry : undefined;
   const running = !!e?.active;
   // A finished timed session: its times are its parts (the Times section), not a start and an end.
@@ -178,9 +185,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const origMin = e && e.data.method === "breast" ? feedMinutes(e, now()) : null;
   const origL = origMin ? origMin.left : null;
   const origR = origMin ? origMin.right : null;
-  const origFirst: Side | undefined = e?.data.first_side ?? e?.data.segments?.[0]?.side;
+  const origB = origMin ? origMin.both : null;
+  // The side she latched on: stored, or the first side tracked (a back-and-forth part never says it).
+  const firstTracked = e?.data.segments?.find((x) => isTracked(x.side))?.side;
+  const origFirst: Side | undefined = e?.data.first_side ?? (isTracked(firstTracked) ? firstTracked : undefined);
   const [left, setLeft] = useState<number | null>(origL ?? 0);
   const [right, setRight] = useState<number | null>(origR ?? 0);
+  const [both, setBoth] = useState<number | null>(origB ?? 0);
   const [first, setFirst] = useState<Side>(() => {
     if (origFirst) return origFirst;
     const s = pstr(preset, "side") ?? pstr(preset, "first_side");
@@ -246,6 +257,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       setMinutesTyped(false);
       setLeft(origL ?? 0);
       setRight(origR ?? 0);
+      setBoth(origB ?? 0);
       if (origFirst) setFirst(origFirst);
       setRange(origRange());
     }
@@ -254,10 +266,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // Until minutes are typed, they follow the parts (staged ones included).
   const shownL = timed && !minutesTyped && workingTotals ? workingTotals.min.left : left;
   const shownR = timed && !minutesTyped && workingTotals ? workingTotals.min.right : right;
+  const shownB = timed && !minutesTyped && workingTotals ? workingTotals.min.both : both;
   const shownFirst = dirty && working?.data.first_side ? working.data.first_side : first;
-  const typeMinutes = (l: number | null, r: number | null) => {
+  const typeMinutes = (l: number | null, r: number | null, b: number | null) => {
     setMinutesTyped(true);
-    setMinutes(l, r);
+    setMinutes(l, r, b);
     // Saving minutes replaces the parts, so a staged change to them goes.
     if (draft) discardTimes();
   };
@@ -266,11 +279,12 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     if (draft) discardTimes();
   };
 
-  const setMinutes = (l: number | null, r: number | null) => {
+  const setMinutes = (l: number | null, r: number | null, b: number | null) => {
     setLeft(l);
     setRight(r);
+    setBoth(b);
     if (!anchor) return;
-    const total = ((l ?? 0) + (r ?? 0)) * MIN;
+    const total = ((l ?? 0) + (r ?? 0) + (b ?? 0)) * MIN;
     const [s, en] = range;
     const limit = now().getTime();
     // The end can't pass now, so a feed that would run into the future starts earlier instead.
@@ -328,25 +342,24 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const [s, en] = range;
     // No minutes typed but a start and an end ("15m ago" to now, after a hold on Left): that span is her first side's,
     // so it never saves as a feed of nothing.
-    const spanMin = l0r0(left, right) ? spanMinutes(s, en) : 0;
+    const spanMin = l0r0(left, right, both) ? spanMinutes(s, en) : 0;
     const l = (left ?? 0) + (spanMin && first !== "R" ? spanMin : 0);
     const r = (right ?? 0) + (spanMin && first === "R" ? spanMin : 0);
-    const sides = sideFields(l, r, first);
-    const next = other(sides.first_side);
+    const b = both ?? 0;
+    const sides = sideFields(l, r, first, b);
+    // After back and forth: "Left next, or the fuller side" (AAP; guidelines.ts NEXT_SIDE_NOTE).
+    const nextSide = SIDE_NAME[other(sides.first_side)];
+    const next = b > 0 ? `${nextSide} next, or the fuller side` : `${nextSide} next`;
+    const each = sideMinutesText({ left: l, right: r, both: b, total: l + r + b, has: { L: l > 0, R: r > 0, B: b > 0 } });
     void log(
       {
         kind: "feed",
         started_at: s.toISOString(),
         ended_at: en.getTime() > s.getTime() ? en.toISOString() : undefined,
-        data: { method: "breast", left_sec: l * 60, right_sec: r * 60, ...sides },
+        data: { method: "breast", left_sec: l * 60, right_sec: r * 60, ...(b > 0 ? { both_sec: b * 60 } : {}), ...sides },
         note: note.trim() || null,
       },
-      {
-        toast:
-          l + r > 0
-            ? `Nursed ${l + r}m (L ${l} · R ${r}) · ${next === "L" ? "Left" : "Right"} next`
-            : `Nursed · ${clock(s)} · ${next === "L" ? "Left" : "Right"} next`,
-      }
+      { toast: l + r + b > 0 ? `Nursed ${l + r + b}m (${each}) · ${next}` : `Nursed · ${clock(s)} · ${next}` }
     );
   };
 
@@ -368,11 +381,16 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const startMoved = s.getTime() !== Date.parse(e.started_at);
     const endMoved = en.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : s.getTime());
     // Typed minutes win whenever a time moved too (else the server would retime the segments instead).
-    const minutesChanged = left !== origL || right !== origR || (timed && minutesTyped && (startMoved || endMoved));
+    const minutesChanged = left !== origL || right !== origR || both !== origB || (timed && minutesTyped && (startMoved || endMoved));
     const data: Record<string, unknown> = {};
     if (minutesChanged) {
-      // New side minutes replace the timer's segments (the server drops them).
-      Object.assign(data, { left_sec: (left ?? 0) * 60, right_sec: (right ?? 0) * 60, ...sideFields(left ?? 0, right ?? 0, first) });
+      // New side minutes replace the timer's segments (the server drops them); back and forth goes as its own minutes.
+      Object.assign(data, {
+        left_sec: (left ?? 0) * 60,
+        right_sec: (right ?? 0) * 60,
+        ...((both ?? 0) > 0 || (origB ?? 0) > 0 || !!e.data.both_sec ? { both_sec: (both ?? 0) * 60 } : {}),
+        ...sideFields(left ?? 0, right ?? 0, first, both ?? 0),
+      });
     } else if (first !== origFirst) {
       data.first_side = first;
     }
@@ -473,7 +491,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
 
   // No minutes on either side and no times that give any: it would still count as a feed, move "Last fed" and flip
   // the next side (a hold on a side, then Log it). Typed 0 and 0 on a timed feed would replace its parts with nothing.
-  const noMinutes = (left ?? 0) + (right ?? 0) === 0;
+  const noMinutes = l0r0(left, right, both);
   const empty = method === "breast" && !running && !gone && (timed ? minutesTyped && noMinutes : noMinutes && spanMinutes(range[0], range[1]) === 0);
 
   const addOnly = addPending && !dirty && !("note" in notePatch);
@@ -481,10 +499,22 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const primary = e ? "Save" : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
 
+  // Left and Right abreast; back and forth (both sides, not split into made-up sides) under them, with what it means.
   const steppers = (
     <div className="grid grid-cols-2 gap-3">
-      <MiniStepper key="left" label={<SideLabel side="L" />} unit="min" ariaLabel="minutes on the left" value={shownL} onChange={(v) => typeMinutes(v, shownR)} max={240} onInvalid={checks.watch("left")} />
-      <MiniStepper key="right" label={<SideLabel side="R" />} unit="min" ariaLabel="minutes on the right" value={shownR} onChange={(v) => typeMinutes(shownL, v)} max={240} onInvalid={checks.watch("right")} />
+      <MiniStepper key="left" label={<SideLabel side="L" />} unit="min" ariaLabel="minutes on the left" value={shownL} onChange={(v) => typeMinutes(v, shownR, shownB)} max={240} onInvalid={checks.watch("left")} />
+      <MiniStepper key="right" label={<SideLabel side="R" />} unit="min" ariaLabel="minutes on the right" value={shownR} onChange={(v) => typeMinutes(shownL, v, shownB)} max={240} onInvalid={checks.watch("right")} />
+      <MiniStepper
+        key="both"
+        label={<SideLabel side="B" />}
+        unit="min"
+        ariaLabel="minutes going back and forth"
+        value={shownB}
+        onChange={(v) => typeMinutes(shownL, shownR, v)}
+        max={720}
+        onInvalid={checks.watch("both")}
+      />
+      <p className={cx(tone.muted, "self-end pb-1 text-[13px] leading-snug")}>Both sides, without tracking which.</p>
     </div>
   );
   const startedOn = (
@@ -570,7 +600,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         <RunningNote kind="feed" />
       ) : (
         <>
-          {!e && (
+          {/* Bottles off (Family → On Today): a new feed is nursing, no choice to make. */}
+          {!e && (bottlesOn || method === "bottle") && (
             <Segmented
               value={method}
               onChange={setMethod}
@@ -609,7 +640,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     onAddPending={setAddPending}
                   />
                   {!readOnly && (
-                    <MoreDetails label="Type minutes instead" summary={minutesTyped ? `L ${left ?? 0} · R ${right ?? 0} min` : undefined}>
+                    <MoreDetails label="Type minutes instead" summary={minutesTyped ? `L ${left ?? 0} · R ${right ?? 0}${(both ?? 0) > 0 ? ` · both ${both}` : ""} min` : undefined}>
                       <p className={cx(tone.muted, "text-[13px] leading-snug")}>Saving minutes replaces the timed parts.</p>
                       {steppers}
                       {startedOn}
@@ -706,8 +737,12 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   );
 }
 
-/** first/last side from the minutes: one side used → that side; both → the chosen start, then the other. */
-function sideFields(l: number, r: number, chosen: Side): { first_side: Side; last_side?: Side } {
+/**
+ * first/last side from the minutes: one side used → that side; both → the chosen start, then the other. With back
+ * and forth (b), she started on the chosen side whatever else was typed (it's what the next side alternates from).
+ */
+function sideFields(l: number, r: number, chosen: Side, b = 0): { first_side: Side; last_side?: Side } {
+  if (b > 0) return { first_side: chosen, last_side: l > 0 && r > 0 ? other(chosen) : l > 0 ? "L" : r > 0 ? "R" : chosen };
   if (l > 0 && r > 0) return { first_side: chosen, last_side: other(chosen) };
   if (l > 0) return { first_side: "L", last_side: "L" };
   if (r > 0) return { first_side: "R", last_side: "R" };
@@ -717,7 +752,7 @@ function sideFields(l: number, r: number, chosen: Side): { first_side: Side; las
 // ── Times: a finished timed feed, part by part ──────────────────────────
 
 /** Which row is open: a part (by its place, and side), the Ended row, or Add a side (its form, and the feed it adds to). */
-type Row = { kind: "side"; index: number; side: Side } | { kind: "break"; index: number } | { kind: "ended" } | { kind: "add"; base: FeedEntry; form: AddForm };
+type Row = { kind: "side"; index: number; side: StretchSide } | { kind: "break"; index: number } | { kind: "ended" } | { kind: "add"; base: FeedEntry; form: AddForm };
 /** The open moment editor: its line, the moment, and the feed as it was when it opened (`to`: the staged time). */
 type StagedEditor = { id: string; edge: MomentEdge; base: FeedEntry; to?: Date };
 
@@ -733,16 +768,19 @@ function rowIndex(row: Row | null, parts: Part[]): number | null {
   return best;
 }
 
-/** "30 min nursing · Left 15 · Right 15 · started on Left · 11 min break not counted" */
-function summaryOf(parts: Part[]): string {
-  // The rows' whole minutes added up, so Left + Right is the nursing total and each matches its rows.
+/** "30 min nursing · Left 15 · Right 15 · started on Left · 11 min break not counted" ("· back and forth 38" too). */
+function summaryOf(parts: Part[], firstSide?: Side): string {
+  // The rows' whole minutes added up, so Left + Right + back and forth is the nursing total and each matches its rows.
   const t = partTotals(parts);
   const sides = parts.filter(isSide);
-  const has = (s: Side) => sides.some((p) => p.side === s);
+  const has = (s: StretchSide) => sides.some((p) => p.side === s);
   const bits = [`${minutesText(t.min.nursing)} nursing`];
   if (has("L")) bits.push(`Left ${t.min.left || "<1"}`);
   if (has("R")) bits.push(`Right ${t.min.right || "<1"}`);
-  if (sides[0]) bits.push(`started on ${SIDE_NAME[sides[0].side]}`);
+  if (has("B")) bits.push(`back and forth ${t.min.both >= 60 ? minutesText(t.min.both) : t.min.both || "<1"}`);
+  // The side she latched on (a feed that went back and forth at once still has one).
+  const started = sides[0] && isTracked(sides[0].side) ? sides[0].side : firstSide;
+  if (started) bits.push(`started on ${SIDE_NAME[started]}`);
   if (t.breakCount) bits.push(`${minutesText(t.min.breaks)} ${t.breakCount > 1 ? "of breaks" : "break"} not counted`);
   return bits.join(" · ");
 }
@@ -893,11 +931,11 @@ function TimesSection({
       // Past a limit: the scrubber stops at the engine's bounds, and the editor's preview says why.
     }
   };
-  const flip = () => {
+  /** "Wrong side?": the part is the other side, or both sides; one going back and forth is one side after all. */
+  const flip = (side: StretchSide) => {
     const found = openInStaged();
     collapse();
     if (!found || found.p.kind !== "side") return;
-    const side = other(found.p.side);
     try {
       const r = setSide(working.data, found.p.ref, side, feedCtx(working, nowFn()));
       onStage({ data: r.data, startedAt: r.startedAt, endedAt: working.ended_at }, working);
@@ -976,25 +1014,27 @@ function TimesSection({
       const next = parts.slice(i + 1).find(isSide);
       // After a break, "Back on the Left" only if she was on the Left before it; another side is just "On the Right".
       const before = parts.slice(0, i).filter(isSide).at(-1);
-      const resumed = before?.side === p.side ? `Back on the ${name}` : `On the ${name} after the break`;
-      const startLabel = p.startMoment === "feed_start" ? "Feed started" : p.startMoment === "switch" ? `Switched to ${name}` : resumed;
-      const endLabel = p.endMoment === "switch" && next ? `Switched to ${SIDE_NAME[next.side]}` : p.endMoment === "feed_end" ? "Feed ended" : "Came off";
+      const resumed =
+        p.side === "B" ? (before?.side === "B" ? "Back on, back and forth" : "Back and forth after the break") : before?.side === p.side ? `Back on the ${name}` : `On the ${name} after the break`;
+      // A switch to back and forth "went back and forth"; a side after it is "On the Left" (tracking sides again).
+      const switchedTo = (to: StretchSide, from?: StretchSide) => (to === "B" ? "Went back and forth" : from === "B" ? `On the ${SIDE_NAME[to]}` : `Switched to ${SIDE_NAME[to]}`);
+      const startLabel = p.startMoment === "feed_start" ? "Feed started" : p.startMoment === "switch" ? switchedTo(p.side, before?.side) : resumed;
+      const endLabel = p.endMoment === "switch" && next ? switchedTo(next.side, p.side) : p.endMoment === "feed_end" ? "Feed ended" : "Came off";
       const end = v.end ?? p.end;
       return (
         <Detail>
           {line("start", `${startLabel} ${clock(v.start)}`)}
           {end && line("end", `${endLabel} ${clock(end)}`)}
-          <QuestionRow question="Wrong side?" label={`It was ${SIDE_NAME[other(p.side)]}`} disabled={disabled} onClick={flip} />
+          <SideFixRow side={p.side} disabled={disabled} onPick={flip} />
         </Detail>
       );
     }
     const end = v.end ?? p.end;
+    const back = !p.after ? "" : p.after.side === "B" ? (p.before.side === "B" ? "Back on, back and forth" : "Back and forth") : `${p.after.side === p.before.side ? "Back on the" : "On the"} ${SIDE_NAME[p.after.side]}`;
     return (
       <Detail>
-        {line("off", `Came off ${SIDE_NAME[p.before.side]} ${clock(v.start)}`)}
-        {p.after && end
-          ? line("on", `${p.after.side === p.before.side ? "Back on the" : "On the"} ${SIDE_NAME[p.after.side]} ${clock(end)}`)
-          : end && line("legacy-end", `Feed ended ${clock(end)}`)}
+        {line("off", p.before.side === "B" ? `Came off ${clock(v.start)}` : `Came off ${SIDE_NAME[p.before.side]} ${clock(v.start)}`)}
+        {p.after && end ? line("on", `${back} ${clock(end)}`) : end && line("legacy-end", `Feed ended ${clock(end)}`)}
       </Detail>
     );
   };
@@ -1007,7 +1047,7 @@ function TimesSection({
   return (
     <div>
       <Label>Times</Label>
-      <p className="mb-1 text-[15px] leading-snug font-medium text-mp-ink">{summaryOf(staged)}</p>
+      <p className="mb-1 text-[15px] leading-snug font-medium text-mp-ink">{summaryOf(staged, working.data.first_side)}</p>
       {error && (
         <p role="alert" className="my-2 rounded-xl border border-mp-danger/30 px-3 py-2.5 text-[13px] leading-snug text-mp-ink">
           {error}
@@ -1136,7 +1176,7 @@ function TimesRow({
     <>
       <span className="flex w-7 shrink-0 justify-start">{p.kind === "side" ? <SideMark side={p.side} size={24} /> : <BreakMark size={24} />}</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2 max-[359px]:flex-col max-[359px]:gap-0">
-        <span className={cx("w-[46px] shrink-0 text-mp-ink-2", p.kind === "side" ? "text-[15px] font-medium" : "text-[14px]")}>{p.kind === "side" ? SIDE_NAME[p.side] : "Break"}</span>
+        <span className={cx("w-[46px] shrink-0 text-mp-ink-2", p.kind === "side" ? "text-[15px] font-medium" : "text-[14px]")}>{p.kind === "side" ? ROW_NAME[p.side] : "Break"}</span>
         <span className={cx("min-w-0 text-[14px] tabular-nums", ink)}>{closed ? formatTime(p.start, tz) : <RangeText start={p.start} end={p.end} tz={tz} />}</span>
       </span>
       <span className={cx("flex shrink-0 items-center gap-1.5 text-[14px] tabular-nums", ink)}>
@@ -1215,35 +1255,19 @@ function ExtraRow({
   );
 }
 
-/** "Wrong side? [It was Right]": a question and one button. */
-function QuestionRow({ question, label, onClick, disabled }: { question: string; label: string; onClick: () => void; disabled?: boolean }) {
-  return (
-    <div className="flex min-h-[48px] items-center gap-3">
-      <span className="min-w-0 flex-1 text-[15px] text-mp-ink">{question}</span>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        className="min-h-[44px] shrink-0 rounded-xl bg-mp-sunken px-3.5 text-[14px] font-semibold text-mp-ink disabled:opacity-45"
-      >
-        {label}
-      </button>
-    </div>
-  );
-}
-
 /**
  * Add a side's form: the side, Started, Ended (null: five minutes after
  * Started, following it until moved), which time moved last (its note goes
  * under it), whether anyone touched it, and when it opened (the five minutes
  * stop there).
  */
-type AddForm = { side: Side; start: Date; end: Date | null; moved: "start" | "end"; touched: boolean; at: Date };
+type AddForm = { side: StretchSide; start: Date; end: Date | null; moved: "start" | "end"; touched: boolean; at: Date };
 
-/** The form's first guess: the other side from the last one, from the feed's end, for five minutes. */
+/** The form's first guess: the other side from the last one (after back and forth, back and forth again), from the feed's end, for five minutes. */
 function addDefaults(feed: FeedEntry, now: Date): AddForm {
   const lastSide = partsOf(feed, now).filter(isSide).at(-1);
-  return { side: other(lastSide?.side ?? "L"), start: new Date(feed.ended_at ?? lastSide?.end ?? feed.started_at), end: null, moved: "start", touched: false, at: now };
+  const side: StretchSide = !lastSide ? "L" : isTracked(lastSide.side) ? other(lastSide.side) : "B";
+  return { side, start: new Date(feed.ended_at ?? lastSide?.end ?? feed.started_at), end: null, moved: "start", touched: false, at: now };
 }
 
 /** What the form adds: the feed with the side in it, or why it can't ("That overlaps Left 4:00–4:10."). */
@@ -1298,13 +1322,14 @@ function AddSide({
     <Detail>
       <div className="space-y-3 pt-1 pb-1">
         {/* No side picked until she picks one (or moves a time, which keeps the guess). */}
-        <Segmented<Side | "">
+        <Segmented<StretchSide | "">
           value={form.touched ? form.side : ""}
           onChange={(side) => side && set({ side })}
           aria-label="Which side"
           options={[
             { value: "L", label: <SideLabel side="L" /> },
             { value: "R", label: <SideLabel side="R" /> },
+            { value: "B", label: <SideLabel side="B" bothLabel="Both" /> },
           ]}
           className="[&>button]:min-h-[44px]"
         />
@@ -1322,7 +1347,7 @@ function AddSide({
                 <>
                   Save adds{" "}
                   <span className="text-mp-accent-fg">
-                    {SIDE_NAME[form.side]} · {minutesText(spanMinutes(form.start, end))}
+                    {form.side === "B" ? "back and forth" : SIDE_NAME[form.side]} · {minutesText(spanMinutes(form.start, end))}
                   </span>
                 </>
               )

@@ -11,6 +11,14 @@ import type { Assessment, MoodTag } from "./guidelines";
 
 export type Side = "L" | "R";
 
+/**
+ * Which side a stretch of nursing was on: Left, Right, or "B", both sides,
+ * not tracked (she went back and forth and nobody tapped Switch). Side stays
+ * "L" | "R" for first_side, last_side, the next side and anything a person
+ * picks, so the type checker finds every place that reads a stretch's side.
+ */
+export type StretchSide = Side | "B";
+
 export const ENTRY_KINDS = [
   "feed",
   "pump",
@@ -31,10 +39,10 @@ export type EntryKind = (typeof ENTRY_KINDS)[number];
 export const TIMER_KINDS = ["feed", "sleep", "tummy", "pump"] as const;
 export type TimerKind = (typeof TIMER_KINDS)[number];
 
-export type Segment = { side: Side; start: string; end: string | null };
+export type Segment = { side: StretchSide; start: string; end: string | null };
 
 /** Names one stretch on a side by its side and start, matched within ±1.5 s so it survives re-saves. */
-export type StretchRef = { side: Side; start: string };
+export type StretchRef = { side: StretchSide; start: string };
 
 export type FeedData = {
   method: "breast" | "bottle";
@@ -42,6 +50,9 @@ export type FeedData = {
   segments?: Segment[];
   left_sec?: number;
   right_sec?: number;
+  /** Back and forth (both sides, not tracked): seconds, like left_sec. Timed feeds keep it on their "B" stretches. */
+  both_sec?: number;
+  /** The side she started on and the last side tracked; a back-and-forth stretch never sets either. */
   first_side?: Side;
   last_side?: Side;
   /** Bottle volume. */
@@ -274,9 +285,9 @@ export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "di
  */
 export type FeedEdit =
   | { op: "move"; edge: "start" | "end" | "ended"; ref?: StretchRef; to: string }
-  | { op: "set_side"; ref: StretchRef; side: Side }
-  | { op: "undo_tap"; expect: { side: Side; start: string; end: string | null } }
-  | { op: "add_part"; side: Side; start: string; end: string; expect_updated_at: string }
+  | { op: "set_side"; ref: StretchRef; side: StretchSide }
+  | { op: "undo_tap"; expect: { side: StretchSide; start: string; end: string | null } }
+  | { op: "add_part"; side: StretchSide; start: string; end: string; expect_updated_at: string }
   | {
       op: "restore";
       segments: Segment[];
@@ -340,8 +351,14 @@ export type TimerInput = {
   action: TimerAction;
   /** start: which timer. */
   kind?: TimerKind;
-  /** start/switch/resume for breastfeeding; reopen: carry the feed on on this side. */
-  side?: Side;
+  /**
+   * start: the side she starts on (L or R). switch/resume/reopen/join: L, R,
+   * or "B" (back and forth: both sides, not tracked from now). Switching to
+   * L or R while she's on "B" tracks sides again ("She's on the Left").
+   */
+  side?: StretchSide;
+  /** start (feeds): she's going back and forth from the start; `side` is still where she started. */
+  back_and_forth?: boolean;
   /** switch/pause/resume/stop/discard/adjust/reopen/retime: which entry. */
   id?: number;
   /**

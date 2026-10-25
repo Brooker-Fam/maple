@@ -994,6 +994,19 @@ function BabyDetails() {
             checked={flag("show_brigade")}
             onChange={(v) => void setSetting("show_brigade", v)}
           />
+          {/* What the family logs at all (logSwitches): off only hides the buttons, never anything already logged. */}
+          <Toggle
+            label="Bottles"
+            hint="The dock's Bottle button. Off, Left and Right take its room; bottles already logged still show."
+            checked={flag("feeds_bottle")}
+            onChange={(v) => void setSetting("feeds_bottle", v)}
+          />
+          <Toggle
+            label="Pumping"
+            hint="Pump in More. Off, it's hidden; pumping already logged still shows."
+            checked={flag("track_pump")}
+            onChange={(v) => void setSetting("track_pump", v)}
+          />
         </div>
       </Section>
       <BirthSheet open={birthOpen} onClose={() => setBirthOpen(false)} mode={born ? "edit" : "birth"} />
@@ -1266,6 +1279,8 @@ const SHORTCUTS: [string, string][] = [
   ["Maple left", "nurse_left"],
   ["Maple right", "nurse_right"],
   ["Maple switch", "switch"],
+  // With a feed running: both sides from now, so no Switch per side (Left / Right track sides again).
+  ["Maple back and forth", "back_and_forth"],
   ["Maple stop", "stop"],
   ["Maple sleep", "sleep"],
   ["Maple awake", "wake"],

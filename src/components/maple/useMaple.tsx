@@ -392,7 +392,12 @@ function restoredFeed(e: Entry & { kind: "feed" }, d: FeedData, edit: Extract<Fe
   const segments = normalizeSegments(edit.segments, { active });
   const t = summarizeSegments(segments);
   const data: FeedData = { ...d, segments, first_side: t.first_side ?? d.first_side, last_side: t.last_side ?? d.last_side };
-  if (!active) Object.assign(data, { left_sec: t.left_sec, right_sec: t.right_sec });
+  if (!active) {
+    Object.assign(data, { left_sec: t.left_sec, right_sec: t.right_sec });
+    // Back and forth minutes, as the server's restore stores them.
+    if (t.both_sec) data.both_sec = t.both_sec;
+    else delete data.both_sec;
+  }
   if (!active && edit.paused_at_stop) data.paused_at_stop = true;
   return { ...e, active, data, started_at: edit.started_at, ended_at: active ? null : edit.ended_at };
 }
@@ -1127,7 +1132,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           started_at: at.toISOString(),
           ended_at: null,
           active: true,
-          data: input.kind === "feed" ? startBreast(input.side ?? "L", at) : {},
+          // A start's side is where she started (L/R); back_and_forth opens it as a both part, as the server does.
+          data: input.kind === "feed" ? startBreast(input.side === "R" ? "R" : "L", at, { both: !!input.back_and_forth }) : {},
           note: null,
           created_by: state.me.email,
           updated_by: null,

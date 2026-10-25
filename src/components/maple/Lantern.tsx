@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
-import { minutesText, other, staleFeed } from "@/lib/maple/feed";
+import { isTracked, minutesText, other, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, Side } from "@/lib/maple/types";
 import { careTime, planTitle } from "@/lib/maple/care";
@@ -13,6 +13,7 @@ import { useCare } from "./care/useCare";
 import { fixPreset, SIDE_NAME, timerNumbers, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import { useSheets } from "./sheets";
+import { cx } from "./ui";
 import { useHoldTimerToasts, useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
 
@@ -27,6 +28,13 @@ import { useTimerActions } from "./useTimerActions";
  * card's "Still nursing?" check says so here too, and Done then closes the
  * Lantern and asks when she finished, as the dock's does. Timer toasts wait
  * while it's open and show when it closes (if still true).
+ *
+ * Going back and forth: from the feed's second Switch a hold row over the
+ * buttons offers it ("Going back and forth? Hold to stop tracking sides").
+ * While she's going both, the heading is "Both sides" with an LR ring and
+ * only two big buttons stay, Pause and Done (on a break, "Back on" and "Done ·
+ * ends 8:10"): fewer, bigger targets at 3am. Tracking sides again is the
+ * dock's, with the Lantern closed.
  */
 
 const HOLD_MS = 500;
@@ -140,8 +148,13 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const isFeed = live.kind === "feed" && n.parts.length > 0;
   // Viewers only watch; a just-started timer (temporary id) can't take actions yet.
   const locked = readOnly || live.id < 0;
-  const side: Side = n.side ?? "L";
+  // Going back and forth (the part she's on, or came off): two big buttons. An hour off it, the sides start a new feed as usual.
+  const both = isFeed && n.both && !stale;
+  // The side she's on, or (after back and forth) the last one tracked: what Switch and the paused sides count from.
+  const side: Side = isTracked(n.side) ? n.side : n.tracked ?? "L";
   const target: Side = other(side);
+  // From the feed's second Switch, while she's on a side: going back and forth is one hold away.
+  const offerBoth = isFeed && !n.paused && !n.both && n.switches >= 2;
   const short = (t: string) => formatTimeNear(t, t, tz);
   /** After a hold, say what happened once the server has it (its toast waits until the lantern closes). */
   const confirmed = (ok: boolean, text: string) => {
@@ -153,11 +166,11 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const paused = (e: Entry | null) => {
     if (!e) return confirmed(false, "");
     const last = timerNumbers(e, serverNow()).parts.filter((p) => p.kind === "side").at(-1);
-    showHint(last?.kind === "side" ? `Paused · ${SIDE_NAME[last.side]} ${minutesText(last.min)}` : "Paused", 3000);
+    showHint(last?.kind === "side" ? `Paused · ${last.side === "B" ? "back and forth" : SIDE_NAME[last.side]} ${minutesText(last.min)}` : "Paused", 3000);
   };
   // The big clock is the part she's on now: this side, or the break (dimmed). The side is named first, above it
   // (it's the 3am question); when it started goes under it.
-  const heading = !isFeed ? "Asleep" : n.paused ? "On a break" : `${SIDE_NAME[side]} side`;
+  const heading = !isFeed ? "Asleep" : n.paused ? "On a break" : n.both ? "Both sides" : `${SIDE_NAME[side]} side`;
   const detail = !isFeed
     ? `Since ${formatTime(live.started_at, tz)}`
     : // The feed's start only when it's another time (on a one-side feed it's this side's start).
@@ -201,17 +214,17 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
 
       <div
         className="flex flex-1 flex-col items-center justify-center px-6 text-center"
-        onClick={() => showHint(isFeed && !n.paused ? "Hold Switch, Pause or Done" : "Hold a button to use it")}
+        onClick={() => showHint(both ? (n.paused ? "Hold Back on or Done" : "Hold Pause or Done") : isFeed && !n.paused ? "Hold Switch, Pause or Done" : "Hold a button to use it")}
       >
         <p className="mb-3 flex items-center gap-2.5 text-2xl font-semibold" style={{ opacity: n.paused ? 0.55 : 0.75 }}>
           {/* The side's letter in a ring, as the card and dock show it at night. */}
           {isFeed && !n.paused && (
             <span
               aria-hidden
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[17px] font-bold"
+              className={cx("inline-flex h-9 w-9 items-center justify-center rounded-full font-bold", n.both ? "text-[13px] tracking-[-0.02em]" : "text-[17px]")}
               style={{ boxShadow: "inset 0 0 0 2px rgba(224,169,59,.5)" }}
             >
-              {side}
+              {n.both ? "LR" : side}
             </span>
           )}
           {heading}
@@ -254,16 +267,34 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         <div className="px-4 pb-3 text-center">
           {askWhen && (
             <p className="mb-1 text-lg font-semibold tabular-nums opacity-60">
-              Still nursing? {SIDE_NAME[side]} {minutesText(n.current.min)}
+              Still nursing? {n.both ? "Back and forth" : SIDE_NAME[side]} {minutesText(n.current.min)}
             </p>
           )}
-          <p className="text-[13px] opacity-50">Hold a button to use it</p>
+          {offerBoth && (
+            <BothHoldRow
+              onHint={() => showHint("Hold to stop tracking sides")}
+              onConfirm={() => void actions.backAndForth(live).then((r) => confirmed(!!r, "Both sides from now"))}
+            />
+          )}
+          <p className="text-[13px] opacity-50">{both ? (n.paused ? "Hold Back on or Done" : "Hold Pause or Done") : "Hold a button to use it"}</p>
         </div>
       )}
       <div className="flex h-[40dvh] gap-3 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">
         {locked && <p className="m-auto text-sm opacity-50">{readOnly ? "Viewing only" : "Starting…"}</p>}
         {/* Nursing: Switch and Pause where the dock has them, so a mid-feed diaper is a break, not the end of the feed. */}
-        {!locked && isFeed && !n.paused && (
+        {/* Going back and forth: Pause and Done only (two bigger targets); on a break, Back on where Pause was. */}
+        {!locked && both && !n.paused && <HoldButton label="Pause" icon="pause" aria="Pause the feed" onHint={() => showHint("Hold to pause")} onConfirm={() => void actions.pause(live).then(paused)} />}
+        {!locked && both && n.paused && (
+          <HoldButton
+            label="Back on"
+            sub="back and forth"
+            icon="arrow-left-right"
+            aria="Back on, going back and forth"
+            onHint={() => showHint("Hold to go back on")}
+            onConfirm={() => void actions.resume(live, "B").then((r) => confirmed(!!r, "Back on, back and forth"))}
+          />
+        )}
+        {!locked && isFeed && !both && !n.paused && (
           <>
             <HoldButton
               label="Switch"
@@ -279,6 +310,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         {/* Paused: the other side where Switch was, the side she came off where Pause was (the dock's order). */}
         {!locked &&
           isFeed &&
+          !both &&
           n.paused &&
           [target, side].map((s, i) => (
             <HoldButton
@@ -393,6 +425,39 @@ function CareLanternRow({ onHint }: { onHint: (text: string, ms?: number, undo?:
       >
         <span className="absolute inset-y-0 left-0" style={{ width: `${progress * 100}%`, backgroundColor: "rgba(224,169,59,0.22)" }} />
         <span className="relative">Hold to log</span>
+      </span>
+    </button>
+  );
+}
+
+/**
+ * "Going back and forth? Hold to stop tracking sides": from the feed's
+ * second Switch, a row over the big buttons behind the same half-second hold
+ * as her medicine row, its pill filling as it's held.
+ */
+function BothHoldRow({ onConfirm, onHint }: { onConfirm: () => void; onHint: () => void }) {
+  const { progress, handlers } = useHold(onConfirm, onHint);
+  return (
+    <button
+      type="button"
+      aria-label="Going back and forth? Stop tracking sides (press and hold)"
+      {...handlers}
+      className="mb-2 flex min-h-[52px] w-full items-center gap-3 rounded-2xl border px-3 py-1.5 text-left"
+      style={{ borderColor: "rgba(224,169,59,0.18)", WebkitTouchCallout: "none" }}
+    >
+      <Icon name="arrow-left-right" size={20} className="shrink-0 opacity-60" />
+      <span className="min-w-0 flex-1 leading-snug">
+        <span className="block text-[15px] opacity-75">Going back and forth?</span>
+        <span className="block text-[13px] opacity-55">Hold to stop tracking sides</span>
+      </span>
+      {/* The hold fills the pill from the left, as the big buttons' rings fill. */}
+      <span
+        aria-hidden
+        className="relative shrink-0 overflow-hidden rounded-full border px-3.5 py-1.5 text-[13px] font-semibold whitespace-nowrap"
+        style={{ borderColor: "rgba(224,169,59,0.3)", color: "rgba(224,169,59,0.85)" }}
+      >
+        <span className="absolute inset-y-0 left-0" style={{ width: `${progress * 100}%`, backgroundColor: "rgba(224,169,59,0.22)" }} />
+        <span className="relative">Hold</span>
       </span>
     </button>
   );

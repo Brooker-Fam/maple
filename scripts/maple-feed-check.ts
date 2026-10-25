@@ -13,43 +13,58 @@
  */
 import {
   addPart,
+  CLUSTER_GAP_MS,
+  clusterLine,
   describeChange,
   edgeBounds,
+  feedClusters,
   feedEditCopy,
   FeedEditError,
   feedMinutes,
   feedParts,
   finalizeBreast,
+  lastFedAnchor,
   minutesShort,
   minutesText,
   momentQuestion,
   moveEdge,
+  nextSideFor,
+  nextSideText,
   normalizeSegments,
+  nursingRuns,
   partTotals,
   pause,
   previousFeed,
   previousFeedEnd,
   restoredTap,
   retimeBreast,
+  SAME_FEED_MS,
   setSide,
   sideMinutesText,
+  sideTotals,
   spanMinutes,
+  spanText,
   staleFeed,
+  startBreast,
   stopBreast,
+  suggestNextSide,
   summarize,
   switchTo,
+  typicalFeedGapMin,
   undoableTap,
   undoLastTap,
   type FeedCtx,
   type FeedEditCode,
+  type LastTap,
   type Part,
   type TapFeedData,
 } from "../src/lib/maple/feed";
 import { timerNumbers } from "../src/components/maple/FeedParts";
+import { sidesLabel } from "../src/components/maple/StatusCard";
 import { describeEntry } from "../src/lib/maple/describe";
 import { memberLabel, statsFor, summarize as summarizeDay } from "../src/lib/maple/insights";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
-import type { Baby, EntryOf, FeedData, Member, Segment, Side } from "../src/lib/maple/types";
+import type { Baby, EntryOf, FeedData, Member, Segment, Side, StretchSide } from "../src/lib/maple/types";
 
 const TZ = "America/New_York";
 
@@ -137,7 +152,7 @@ const eqTime = (actual: string | Date | null | undefined, expected: string | nul
 const feed = (spec: string, extra: Partial<FeedData> = {}): FeedData => ({ method: "breast", segments: segs(spec), ...extra });
 const live = (now: string): FeedCtx => ({ now: D(now), active: true, endedAt: null });
 const done = (now: string, endedAt: string, pausedAtStop?: boolean): FeedCtx => ({ now: D(now), active: false, endedAt: T(endedAt), pausedAtStop });
-const ref = (side: Side, at: string) => ({ side, start: T(at) });
+const ref = (side: StretchSide, at: string) => ({ side, start: T(at) });
 
 /** Parts as readable rows, in the whole minutes the card shows: "L 16:00-16:10 10 min", "Break 16:10- 20 min". */
 const rows = (parts: Part[]) =>
@@ -307,7 +322,7 @@ check("minutes: rows, sides, total and toast agree (the tester's feed)", () => {
   eq(sideMinutesText(t), "L 12 · R 25");
   // And the feed's own range, 2:15 – 2:52 AM, is 37 min.
   eq(spanMinutes(parts[0].start, parts[1].end!), t.total, "the clock span");
-  eq(partTotals(parts).min, { left: 12, right: 25, nursing: 37, breaks: 0 });
+  eq(partTotals(parts).min, { left: 12, right: 25, both: 0, nursing: 37, breaks: 0 });
 });
 check("minutes: lists and the day's totals use the same numbers", () => {
   const e = entryOf(odd, oddCtx);
@@ -318,7 +333,7 @@ check("minutes: lists and the day's totals use the same numbers", () => {
 check("minutes: sides and breaks add up to the feed's clock span", () => {
   const d = feed("L 02:15:10-02:27:40, R 02:27:40-02:31:20, R 02:40:45-02:52:06");
   const t = partTotals(feedParts(d, done("03:30", "02:52:06"))).min;
-  eq(t, { left: 12, right: 4 + 12, nursing: 28, breaks: 9 });
+  eq(t, { left: 12, right: 4 + 12, both: 0, nursing: 28, breaks: 9 });
   eq(t.nursing + t.breaks, spanMinutes(T("02:15:10"), T("02:52:06")), "2:15 – 2:52");
 });
 check("minutes: a side under a minute is <1, and counts 0", () => {
@@ -338,7 +353,7 @@ check("minutes: a running feed counts the live part up to now's clock minute", (
 check("minutes: typed minutes (no segments) round their seconds", () => {
   const d: FeedData = { method: "breast", left_sec: 600, right_sec: 20 };
   const t = feedMinutes(entryOf(d, done("17:00", "16:10")), D("17:00"));
-  eq([t.left, t.right, t.total, t.has], [10, 0, 10, { L: true, R: true }]);
+  eq([t.left, t.right, t.total, t.has], [10, 0, 10, { L: true, R: true, B: false }]);
   eq(sideMinutesText(t), "L 10 · R <1");
 });
 check("minutes: a move is measured from the displayed minute", () => {
@@ -894,7 +909,12 @@ const copyCases: [FeedEditCode, Record<string, string>, string, string][] = [
   ["use_stop", {}, "Use She already finished to end the feed.", "The feed is still going; to end it earlier use stop_timer with at."],
   ["nothing_to_undo", {}, "Nothing to undo; use Discard.", "That's the only tap on this feed; delete_entry removes the whole feed."],
   ["not_timed", {}, "That feed wasn't timed, so its parts can't be fixed.", "That feed wasn't timed, so its parts can't be fixed."],
-  ["too_many", {}, "Too many parts (60 max).", "Too many parts (60 max)."],
+  [
+    "too_many",
+    {},
+    "That's 60 parts, the most one feed holds. Going back and forth? Tap Back and forth to stop tracking sides.",
+    'This feed has 60 parts, the most one can hold. If she\'s going back and forth, use switch_side with to: "both" to stop tracking sides.',
+  ],
   ["not_found", {}, "This feed just changed, so nothing was saved. Have another look.", "The feed changed since you looked; call maple_status and try again."],
   ["not_newest", {}, "This feed just changed, so nothing was saved. Have another look.", "The feed changed since you looked; call maple_status and try again."],
 ];
@@ -1293,6 +1313,369 @@ check("staleFeed: a resume that was taken back doesn't make an old break look re
 check("pause records who tapped it", () => {
   eq(tapOf(pause(feed("L 16:00-"), D("16:10"), { by: "matt@example.com" }).data)?.by, "matt@example.com");
 });
+
+// ── back and forth: the "B" (both sides, not tracked) stretch ─────────────
+
+check("both: sideTotals, partTotals and feedMinutes keep back and forth in its own bucket", () => {
+  const d = feed("L 16:00-16:12, R 16:12-16:21, B 16:21-16:59");
+  eq(sideTotals(d.segments, D("17:00")), { left: 720, right: 540, both: 2280 });
+  const ctx = done("17:00", "16:59");
+  eq(partTotals(feedParts(d, ctx)).min, { left: 12, right: 9, both: 38, nursing: 59, breaks: 0 });
+  const t = feedMinutes(entryOf(d, ctx), D("17:00"));
+  eq([t.left, t.right, t.both, t.total, t.has], [12, 9, 38, 59, { L: true, R: true, B: true }]);
+  eq(sideMinutesText(t), "L 12 · R 9 · both 38");
+});
+check("both: an hour or more of back and forth reads 1h 12m in the side list", () => {
+  const t = feedMinutes(entryOf(feed("L 16:00-16:18, B 16:18-17:30"), done("18:00", "17:30")), D("18:00"));
+  eq(sideMinutesText(t), "L 18 · both 1h 12m");
+});
+check("both: a feed logged by minutes keeps both_sec", () => {
+  const e = { ...entryOf(feed(""), done("18:00", "17:12")), data: { method: "breast", left_sec: 600, both_sec: 72 * 60 } as FeedData };
+  const t = feedMinutes(e, D("18:00"));
+  eq([t.left, t.right, t.both, t.total], [10, 0, 72, 82]);
+});
+check("both: summarize skips B for the sides and reports both_sec", () => {
+  eq(summarize(segs("L 16:00-16:05, B 16:05-16:45, R 16:45-16:50")), { left_sec: 300, right_sec: 300, both_sec: 2400, first_side: "L", last_side: "R" });
+  // Began going back and forth: no first side to give (the stored one, the start tap's, stays).
+  eq(summarize(segs("B 16:00-16:40")), { left_sec: 0, right_sec: 0, both_sec: 2400 });
+});
+check("both: startBreast going both keeps where she started", () => {
+  const d = startBreast("R", D("16:00"), { both: true });
+  eqSegs(d.segments, "B 16:00-");
+  eq([d.first_side, d.last_side], ["R", "R"]);
+});
+
+check("switchTo B: from a side she's been on a while, a both part opens", () => {
+  const a = switchTo(feed("L 16:00-"), "B", D("16:05"));
+  eqSegs(a.data.segments, "L 16:00-16:05, B 16:05-");
+  eq([a.data.first_side, a.data.last_side, a.resided], ["L", "L", undefined]);
+  eq(tapOf(a.data), { kind: "switch", side: "B", at: T("16:05") });
+  eq(switchTo(a.data, "B", D("16:06")).noop, true, "already both");
+});
+check("switchTo B: a part under a minute old becomes the both part (no 20-second Right left behind)", () => {
+  const b0 = switchTo(feed("L 16:00-"), "R", D("16:10")).data;
+  const b = switchTo(b0, "B", D("16:10:20"));
+  eqSegs(b.data.segments, "L 16:00-16:10, B 16:10-");
+  eq([b.resided, b.data.first_side, b.data.last_side], [true, "L", "L"]);
+  eq(tapOf(b.data), { kind: "switch", side: "B", at: T("16:10:20"), from: "R" });
+});
+check("switchTo B: a feed just started goes both from its start and keeps the start tap's side", () => {
+  const c = switchTo(startBreast("R", D("16:00")), "B", D("16:00:10"));
+  eqSegs(c.data.segments, "B 16:00-");
+  eq([c.resided, c.data.first_side, suggestNextSide(c.data)], [true, "R", "L"]);
+});
+check("undo going both: a new both part goes, the side reopens", () => {
+  const a = switchTo(feed("L 16:00-"), "B", D("16:05"));
+  const u = undoLastTap(a.data, newest(a.data));
+  eqSegs(u.data.segments, "L 16:00-");
+  eq(u.what, "switch");
+});
+check("undo going both: a re-sided part gets its side back", () => {
+  const b0 = switchTo(feed("L 16:00-"), "R", D("16:10")).data;
+  const b = switchTo(b0, "B", D("16:10:20")).data;
+  eq(undoableTap(b, live("16:10:40")), { what: "switch", at: T("16:10:20") });
+  eqSegs(undoLastTap(b, newest(b)).data.segments, "L 16:00-16:10, R 16:10-");
+});
+check("a side within 15 s of going both takes it back (reverted, or merged into the side before)", () => {
+  const b0 = switchTo(feed("L 16:00-"), "R", D("16:10")).data;
+  const b = switchTo(b0, "B", D("16:10:20")).data;
+  const r = switchTo(b, "R", D("16:10:30"));
+  eqSegs(r.data.segments, "L 16:00-16:10, R 16:10-");
+  eq([r.reverted, tapOf(r.data)?.reverted], [true, true]);
+  eq(undoableTap(r.data, live("16:10:35")), null, "a tap that took one back has nothing left to undo");
+  const l = switchTo(b, "L", D("16:10:30"));
+  eqSegs(l.data.segments, "L 16:00-");
+  eq(l.reverted, true);
+  const a = switchTo(feed("L 16:00-"), "B", D("16:05")).data;
+  eqSegs(switchTo(a, "L", D("16:05:08")).data.segments, "L 16:00-");
+});
+check("the other side within 15 s of going both re-sides the both part; undo puts both back", () => {
+  const a = switchTo(feed("L 16:00-"), "B", D("16:05")).data;
+  const r = switchTo(a, "R", D("16:05:10"));
+  eqSegs(r.data.segments, "L 16:00-16:05, R 16:05-");
+  eq([r.resided, (tapOf(r.data) as LastTap).from], [true, "B"]);
+  eqSegs(undoLastTap(r.data, newest(r.data)).data.segments, "L 16:00-16:05, B 16:05-");
+});
+check("tracking sides again: a side later on ends back and forth; undo goes back to both sides", () => {
+  const a = switchTo(feed("L 16:00-"), "B", D("16:05")).data;
+  const t = switchTo(a, "R", D("16:40"));
+  eqSegs(t.data.segments, "L 16:00-16:05, B 16:05-16:40, R 16:40-");
+  eq([t.data.first_side, t.data.last_side, t.resided, t.reverted], ["L", "R", undefined, undefined]);
+  eqSegs(undoLastTap(t.data, newest(t.data)).data.segments, "L 16:00-16:05, B 16:05-");
+});
+check("pause and back on while going both", () => {
+  const a = switchTo(feed("L 16:00-"), "B", D("16:05")).data;
+  const p = pause(a, D("16:30")).data;
+  eqSegs(p.segments, "L 16:00-16:05, B 16:05-16:30");
+  eq(tapOf(p)?.side, "B");
+  const m = switchTo(p, "B", D("16:30:40"));
+  eqSegs(m.data.segments, "L 16:00-16:05, B 16:05-");
+  eq(m.merged, true);
+  eqSegs(switchTo(p, "L", D("16:35")).data.segments, "L 16:00-16:05, B 16:05-16:30, L 16:35-");
+  throwsCode(() => switchTo(a, "L", D("16:31"), { resume: true }), "not_newest");
+});
+check("switchTo B with a time someone gave: the side ends there; before it began is refused", () => {
+  const x = switchTo(feed("L 16:00-"), "B", D("16:20"), { explicit: true, now: D("16:25") });
+  eqSegs(x.data.segments, "L 16:00-16:20, B 16:20-");
+  eq(tapOf(x.data)?.at, T("16:25"));
+  const e = throwsCode(() => switchTo(feed("L 16:00-16:10, R 16:10-"), "B", D("16:05"), { explicit: true, now: D("16:20") }), "before_own_start");
+  eq(e.params.side, "R");
+});
+check("switchTo B at 60 parts turns the open part both instead of adding one", () => {
+  const list: Segment[] = Array.from({ length: 60 }, (_, i) => ({
+    side: (i % 2 ? "R" : "L") as Side,
+    start: new Date(D("12:00").getTime() + i * 60_000).toISOString(),
+    end: i === 59 ? null : new Date(D("12:00").getTime() + (i + 1) * 60_000).toISOString(),
+  }));
+  const x = switchTo({ method: "breast", segments: list }, "B", D("13:10"));
+  eq([x.data.segments!.length, x.data.segments![59].side, x.resided], [60, "B", true]);
+  throwsCode(() => switchTo({ method: "breast", segments: list }, "L", D("13:10")), "too_many");
+});
+check("momentQuestion words back and forth", () => {
+  eq(momentQuestion("switch", "B"), "When did she start going back and forth?");
+  eq(momentQuestion("switch", "L", "B"), "When did she go on the Left?");
+  eq(momentQuestion("switch", "R", "L"), "When did she switch to Right?");
+  eq(momentQuestion("pause", "B"), "When did she come off?");
+  eq(momentQuestion("resume", "B", "B"), "When did she go back on?");
+});
+check("setSide: That was both sides (and back); the side she started on stays", () => {
+  const d = feed("L 16:00-16:10, R 16:10-16:30", { first_side: "L", last_side: "R", left_sec: 600, right_sec: 1200 });
+  const ctx = done("17:00", "16:30");
+  const b = setSide(d, ref("L", "16:00"), "B", ctx).data;
+  eqSegs(b.segments, "B 16:00-16:10, R 16:10-16:30");
+  eq([b.first_side, b.last_side, b.left_sec, b.right_sec, b.both_sec], ["L", "R", 0, 1200, 600]);
+  const back = setSide(b, ref("B", "16:00"), "L", ctx).data;
+  eq([back.first_side, back.left_sec, back.both_sec], ["L", 600, undefined]);
+});
+check("stopBreast while going both stores both_sec", () => {
+  const a = switchTo(feed("L 16:00-"), "B", D("16:05")).data;
+  const s2 = stopBreast(a, undefined, D("16:45"));
+  eq([s2.data.left_sec, s2.data.right_sec, s2.data.both_sec, s2.data.first_side, s2.data.last_side], [300, 0, 2400, "L", "L"]);
+});
+check("describeChange names both sides", () => {
+  eq(
+    preview(feed("L 16:00-16:10, B 16:10-16:40"), { edge: "start", ref: ref("B", "16:10"), to: D("16:05") }, done("17:00", "16:40")),
+    "Left 10 → 5 min · Both sides 30 → 35 min"
+  );
+});
+check("feedEditCopy words a both-sides part", () => {
+  eq(feedEditCopy(new FeedEditError("before_own_start", { side: "B", t: T("16:05") }), "ui", TZ), "Can't be before back and forth started (4:05 PM).");
+  ok(feedEditCopy(new FeedEditError("before_own_start", { side: "B", t: T("16:05"), asked: T("16:02") }), "mcp", TZ).startsWith("Back and forth started at 4:05 PM"), "mcp");
+});
+check("staleFeed: back and forth isn't stale for two hours (it gets no taps by design)", () => {
+  const both = { started_at: T("13:00"), data: { ...feed("L 13:00-13:05, B 13:05-"), last_tap: { kind: "switch", side: "B", at: T("13:05") } } as TapFeedData };
+  eq(staleFeed(both, D("14:35")), false, "90 min");
+  eq(staleFeed(both, D("15:10")), true, "over 2 h");
+  eq(staleFeed({ started_at: T("13:00"), data: feed("L 13:00-") }, D("14:05")), true, "a side left on: an hour");
+});
+check("suggestNextSide skips both sides", () => {
+  eq(suggestNextSide({ method: "breast", segments: segs("B 16:00-16:30"), first_side: "R" }), "L");
+  eq(suggestNextSide({ method: "breast", segments: segs("B 16:00-16:30, L 16:30-16:40") }), "R");
+});
+check("describeEntry: back and forth reads as such", () => {
+  const de = (d: FeedData, endedAt: string) => describeEntry(entryOf(d, done("18:00", endedAt)), { now: D("18:00") }).detail;
+  eq(de(feed("B 16:00-17:10", { first_side: "R" }), "17:10"), "1h 10m · back and forth, started right");
+  eq(de(feed("L 16:00-16:05, B 16:05-17:10", { first_side: "L" }), "17:10"), "L 5m, both 1h 05m · back and forth, started left");
+  eq(de(feed("L 16:00-16:12, R 16:12-16:20", { first_side: "L" }), "16:20"), "L 12m, R 8m · started left");
+});
+
+// ── feeds as counted: runs, clusters, Last fed, next side ─────────────────
+
+{
+  let nid = 7000;
+  const fe = (spec: string, o: { active?: boolean; first?: Side; day?: number } = {}): EntryOf<"feed"> => {
+    const list = segs(spec).map((x) => (o.day === undefined ? x : { ...x, start: shift(x.start, o.day), end: x.end && shift(x.end, o.day) }));
+    const start = list[0].start;
+    const end = list[list.length - 1].end;
+    const data: FeedData = { method: "breast", segments: list, ...(o.first ? { first_side: o.first } : {}) };
+    return {
+      id: nid++, kind: "feed", started_at: start, ended_at: o.active ? null : end, active: !!o.active, data, note: null,
+      created_by: null, updated_by: null, source: "web", created_at: start, updated_at: start,
+    };
+  };
+  const bottle = (at: string): EntryOf<"feed"> => ({
+    id: nid++, kind: "feed", started_at: T(at), ended_at: T(at), active: false, data: { method: "bottle", amount_ml: 30 }, note: null,
+    created_by: null, updated_by: null, source: "web", created_at: T(at), updated_at: T(at),
+  });
+  /** Days from the test day (-1: the day before). */
+  function shift(isoTime: string, days: number): string {
+    return new Date(Date.parse(isoTime) + days * 24 * 3600_000).toISOString();
+  }
+
+  // One evening, three ways: Pause / Back on, Done / a side again, and a mix.
+  const EVENING = "L 18:02-18:20, R 18:24-18:40, L 18:55-19:10, R 19:25-19:40, L 19:44-19:48, R 20:00-20:10, B 20:10-20:40";
+  const paused = [fe(EVENING, { first: "L" })];
+  const dones = [
+    fe("L 18:02-18:20"),
+    fe("R 18:24-18:40"),
+    fe("L 18:55-19:10"),
+    fe("R 19:25-19:40"),
+    fe("L 19:44-19:48"),
+    fe("R 20:00-20:10, B 20:10-20:40", { first: "R" }),
+  ];
+  const mixed = [fe("L 18:02-18:20, R 18:24-18:40, L 18:55-19:10"), fe("R 19:25-19:40"), fe("L 19:44-19:48, R 20:00-20:10, B 20:10-20:40")];
+  const at845 = D("20:45");
+  const view = (entries: EntryOf<"feed">[]) => {
+    const runs = nursingRuns(entries, at845);
+    const c = feedClusters(runs);
+    const lf = lastFedAnchor(entries, at845, runs);
+    return {
+      runs: runs.map((r) => `${clock(new Date(r.start).toISOString())}-${clock(new Date(r.end!).toISOString())}`),
+      clusters: c.map((x) => [x.feeds, clock(new Date(x.start).toISOString()), clock(new Date(x.end!).toISOString())]),
+      lastFed: [lf && clock(lf.at), lf?.rule],
+      next: nextSideFor(runs, at845),
+    };
+  };
+
+  check("runs: the same evening tapped Pause/Back on, Done/a side, or a mix: same feeds, cluster, Last fed and next side", () => {
+    const want = {
+      runs: ["18:02-18:40", "18:55-19:10", "19:25-19:48", "20:00-20:40"],
+      clusters: [[4, "18:02", "20:40"]],
+      lastFed: ["20:00", "start"],
+      next: { side: "L", rule: "alternate", fuller: true },
+    };
+    eq(view(paused), want, "pause and back on");
+    eq(view(dones), want, "done and a side again");
+    eq(view(mixed), want, "a mix");
+  });
+  check("runs: under 10 minutes off is the same feed; 10 or more is a new one", () => {
+    eq(SAME_FEED_MS, 10 * 60_000);
+    eq(nursingRuns([fe("L 10:00-10:20, R 10:29-10:40")], D("12:00")).length, 1);
+    eq(nursingRuns([fe("L 10:00-10:20, R 10:30-10:40")], D("12:00")).length, 2);
+    eq(nursingRuns([fe("L 10:00-10:20"), fe("R 10:29-10:40")], D("12:00")).length, 1);
+  });
+  check("runs: minutes add up per side, both apart; first side is the start tap's", () => {
+    const runs = nursingRuns(dones, at845);
+    eq(runs.map((r) => [r.min.left, r.min.right, r.min.both, r.min.total, r.parts, r.firstSide, r.lastSide, r.endSide, r.backAndForth]), [
+      [18, 16, 0, 34, 2, "L", "R", "R", false],
+      [15, 0, 0, 15, 1, "L", "L", "L", false],
+      [4, 15, 0, 19, 2, "R", "L", "L", false],
+      [0, 10, 30, 40, 2, "R", "R", "B", true],
+    ]);
+    const c = feedClusters(runs)[0];
+    eq([c.min.left, c.min.right, c.min.both, c.min.total, sideMinutesText(c.min)], [37, 41, 30, 108, "L 37 · R 41 · both 30"]);
+    eq(clusterLine(c, TZ), "Cluster 6:02–8:40 PM · 4 feeds · nursed 1h 48m");
+  });
+  check("clusters: three or more, each starting under 30 minutes after the last ended; bottles stay out", () => {
+    eq(CLUSTER_GAP_MS, 30 * 60_000);
+    const two = [fe("L 10:00-10:15"), fe("R 10:30-10:45")];
+    eq(feedClusters(nursingRuns(two, D("12:00"))).length, 0, "two feeds aren't a cluster");
+    const gap30 = [fe("L 10:00-10:15"), fe("R 10:30-10:45"), fe("L 11:15-11:30")];
+    eq(feedClusters(nursingRuns(gap30, D("12:00"))).length, 0, "30 minutes apart isn't close");
+    const three = [fe("L 10:00-10:15"), bottle("10:20"), fe("R 10:30-10:45"), fe("L 11:14-11:30")];
+    const runs = nursingRuns(three, D("12:00"));
+    eq([runs.length, feedClusters(runs).map((c) => c.feeds)], [3, [3]]);
+  });
+  check("statsFor: each feed in a cluster counts, bottles too; the day line's cluster count", () => {
+    const s = statsFor([...dones, bottle("21:00")], D("00:00"), D("23:59"), "day", D("23:59"));
+    eq(
+      [s.feeds, s.breastFeeds, s.bottleFeeds, s.clusterFeeds, s.clusters, s.leftSec / 60, s.rightSec / 60, s.bothSec / 60, s.nursingSec / 60],
+      [5, 4, 1, 4, 1, 37, 41, 30, 108]
+    );
+    eq(statsFor(paused, D("00:00"), D("23:59"), "day", D("23:59")).feeds, 4, "one entry, four feeds");
+    eq(statsFor([fe("L 10:00-10:20, R 10:35-10:50")], D("00:00"), D("23:59"), "day", D("23:59")).feeds, 2, "a 15-minute pause is two feeds");
+  });
+  check("statsFor with runs: a feed that began before the window isn't counted again in it", () => {
+    const a = fe("L 11:50-11:58");
+    const b = fe("R 12:03-12:15");
+    const runs = nursingRuns([a, b], D("13:00"));
+    eq(statsFor([b], D("12:00"), D("18:00"), "w", D("13:00"), runs).feeds, 0);
+    eq(statsFor([a, b], D("06:00"), D("12:00"), "w", D("13:00"), runs).feeds, 1);
+  });
+
+  check("Last fed: a long back-and-forth feed counts from 40 minutes before it ended", () => {
+    const lf = lastFedAnchor([fe("L 18:00-18:05, B 18:05-20:40", { first: "L" })], at845)!;
+    eq([clock(lf.at), lf.rule, clock(lf.start), lf.end && clock(lf.end)], ["20:00", "long", "18:00", "20:40"]);
+  });
+  check("Last fed: a feed left on one side keeps its real start (a forgotten timer still shows its gap)", () => {
+    eq(clock(lastFedAnchor([fe("L 18:00-20:40")], at845)!.at), "18:00");
+  });
+  check("Last fed: 3+ parts past 40 minutes count from 40 before the end; 2 parts, or 40 minutes exactly, keep the start", () => {
+    eq(clock(lastFedAnchor([fe("L 18:00-18:20, R 18:20-18:40, L 18:40-19:00")], at845)!.at), "18:20");
+    eq(clock(lastFedAnchor([fe("L 18:00-18:35, R 18:35-19:10")], at845)!.at), "18:00");
+    eq(clock(lastFedAnchor([fe("L 18:00-18:05, B 18:05-18:40")], at845)!.at), "18:00");
+  });
+  check("Last fed: a later bottle wins; one before the anchor doesn't", () => {
+    const long = fe("L 18:00-18:05, B 18:05-20:40");
+    const b = lastFedAnchor([long, bottle("20:44")], at845)!;
+    eq([b.kind, clock(b.at)], ["bottle", "20:44"]);
+    const c = lastFedAnchor([long, bottle("19:00")], at845)!;
+    eq([c.kind, clock(c.at), c.entry.id], ["breast", "20:00", long.id]);
+  });
+
+  check("next side: within 30 minutes, the other side from the one she was last on; after, the opposite of her start", () => {
+    const runs = nursingRuns([fe("L 18:00-18:15, R 18:15-18:30")], D("18:45"));
+    eq(nextSideFor(runs, D("18:45")), { side: "L", rule: "relatch", fuller: false });
+    eq(nextSideFor(runs, D("19:05")), { side: "R", rule: "alternate", fuller: false });
+  });
+  check("next side: on the breast, and paused (what the paused dock offers)", () => {
+    eq(nextSideFor(nursingRuns([fe("L 18:00-", { active: true })], D("18:10")), D("18:10")), { side: "R", rule: "alternate", fuller: false });
+    eq(nextSideFor(nursingRuns([fe("L 18:00-18:10", { active: true })], D("18:15")), D("18:15")), { side: "R", rule: "relatch", fuller: false });
+  });
+  check("next side: back and forth never sets it, and adds 'or the fuller side'", () => {
+    const n = nextSideFor(nursingRuns([fe("B 18:00-18:40", { first: "R" })], D("18:45")), D("18:45"))!;
+    eq(n, { side: "L", rule: "alternate", fuller: true });
+    eq(nextSideText(n), "Left, or the fuller side");
+  });
+
+  check("summarize: Last fed 45m ago after the cluster, its cluster, and the next side", () => {
+    const s = summarizeDay({ entries: dones, baby: baby(), now: at845 });
+    eq([s.minutesSinceFeed, s.lastFed && clock(s.lastFed.at), s.cluster?.feeds, s.nextSide, s.next?.fuller], [45, "20:00", 4, "L", true]);
+    eq(s.lastFeed?.id, dones[5].id);
+    eq([s.today.feeds, s.today.clusterFeeds, s.today.clusters], [4, 4, 1]);
+    const p = summarizeDay({ entries: paused, baby: baby(), now: at845 });
+    eq([p.minutesSinceFeed, p.cluster?.feeds, p.nextSide], [45, 4, "L"], "the paused way reads the same");
+  });
+
+  check("spanText keeps the meridiem: 6:02–8:40 PM, 11:30 AM–12:10 PM, since 6:02 PM", () => {
+    eq(spanText(T("18:02"), T("20:40"), TZ), "6:02–8:40 PM");
+    eq(spanText(T("11:30"), T("12:10"), TZ), "11:30 AM–12:10 PM");
+    eq(spanText(T("18:02"), null, TZ), "since 6:02 PM");
+  });
+  check("sidesLabel: Right first, then back and forth (the start tap's side, even when it went both at once)", () => {
+    const one = (spec: string, first?: Side) => sidesLabel(nursingRuns([fe(spec, { first })], D("21:00"))[0]);
+    eq(one("R 18:00-18:10, B 18:10-18:40", "R"), "Right first, then back and forth");
+    eq(one("B 18:00-18:40", "R"), "Right first, then back and forth");
+    eq(one("L 18:00-18:05, B 18:05-18:40, R 18:40-18:50", "L"), "Left first, back and forth, ended on Right");
+    eq(one("L 18:00-18:10, R 18:10-18:20", "L"), "Left then Right");
+    eq(sidesLabel(nursingRuns([fe("L 18:00-18:10"), fe("R 18:14-18:20")], D("21:00"))[0]), "Left then Right", "a Done and a side again is one feed");
+  });
+  check("Last fed: bottles only; nothing at all", () => {
+    const b = lastFedAnchor([bottle("17:00")], D("18:00"))!;
+    eq([b.kind, clock(b.at), b.run], ["bottle", "17:00", null]);
+    eq(lastFedAnchor([], D("18:00")), null);
+  });
+  check("typicalFeedGapMin waits for a day of data and 4+ feeds", () => {
+    eq(typicalFeedGapMin([fe("L 10:00-10:10"), fe("R 13:00-13:10"), fe("L 16:00-16:10"), fe("R 19:00-19:10")], D("21:00")), null);
+  });
+  check("undo a both start: the start's own tap can't be undone, but the fresh side's back and forth can", () => {
+    const c = switchTo(startBreast("R", D("16:00")), "B", D("16:00:10")).data;
+    eq(undoableTap(c, live("16:00:20")), { what: "switch", at: T("16:00:10") });
+    const u = undoLastTap(c, newest(c)).data;
+    eqSegs(u.segments, "R 16:00-");
+    eq(u.first_side, "R");
+  });
+  check("restoredTap keeps a from-tap that still fits the stretches put back", () => {
+    const b0 = switchTo(feed("L 16:00-"), "R", D("16:10")).data;
+    const b = switchTo(b0, "B", D("16:10:20")).data;
+    const undone = undoLastTap(b, newest(b)).data;
+    eq(restoredTap(undone, b.segments!, true)?.from, "R", "Put it back brings the tap back");
+  });
+  check("typicalFeedGapMin skips the gaps inside a cluster", () => {
+    const entries = [
+      fe("L 20:00-20:20", { day: -1 }),
+      fe("L 22:00-22:20", { day: -1 }),
+      fe("R 02:00-02:20"),
+      fe("L 06:00-06:20"),
+      fe("R 17:00-17:10"),
+      fe("L 17:30-17:40"),
+      fe("R 18:00-18:10"),
+      fe("L 18:30-18:40"),
+      fe("R 19:00-19:10"),
+    ];
+    eq(typicalFeedGapMin(entries, D("21:00")), 240);
+  });
+}
 
 // ── done ─────────────────────────────────────────────────────────────────
 

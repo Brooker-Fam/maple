@@ -8,7 +8,32 @@ import { query } from "@/lib/db";
 import { captureServerException } from "@/lib/posthog-server";
 import { ADMIN_ID, ensureAdminMember, isRemoved, listMembers } from "./auth";
 import { describeEntry } from "./describe";
-import { feedCtx, feedEditCopy, FeedEditError, feedMinutes, feedParts, feedTotals, minutesShort, minutesText, openSegment, other, partTotals, staleFeed, undoableTap, type Moment, type Part } from "./feed";
+import {
+  clusterLine,
+  feedClusters,
+  feedCtx,
+  feedEditCopy,
+  FeedEditError,
+  feedParts,
+  feedTotals,
+  isTracked,
+  minutesShort,
+  minutesText,
+  nursingRuns,
+  openSegment,
+  other,
+  partTotals,
+  sideMinutesText,
+  spanText,
+  staleFeed,
+  STRETCH_NAME,
+  undoableTap,
+  type FeedCluster,
+  type FeedMinutes,
+  type Moment,
+  type Part,
+  type TapFeedData,
+} from "./feed";
 import { ageInDays, percentileFor, type Measure } from "./growth";
 import {
   ALERT_TIERS,
@@ -19,9 +44,11 @@ import {
   BOTTLE_CUES,
   DISCLAIMER,
   EMERGENCY_SIGNS,
+  FEED_LENGTH_MIN,
   FIRST_CHECKUP_NOTE,
   JAUNDICE_LABEL,
   LATE_BLACK_STOOL,
+  NEXT_SIDE_NOTE,
   PALE_STOOL,
   RED_STOOL,
   STOOL_COLOR_INFO,
@@ -98,6 +125,7 @@ import {
   type Role,
   type Side,
   type Source,
+  type StretchSide,
   type TempMethod,
   type TimerKind,
   type TimerResponse,
@@ -158,7 +186,7 @@ Health alerts: when a result includes alerts, tell the user each one word for wo
 
 Duplicates: if a write returns created:false with possible_duplicate, nothing was saved. Ask the user whether it's the same event; only if it's a different one, call again with allow_duplicate: true. A result with deduped:true means it was already saved, so don't retry. If you didn't get a "Saved #…" line back, say it didn't save.
 
-Feeds: log_feed is for a feed that already finished; start_timer, switch_side, pause_nursing and stop_timer track one happening now (reopen_timer undoes a mistaken stop; update_entry with at fixes when a running one started). Sides are "left"/"right"; the next side to offer is the opposite of the side the last feed started on. switch_side, pause_nursing and stop_timer take minutes_ago for when it really happened; fix_nursing_time moves one recorded moment of a feed (its start, a switch, a pause, going back on, the end), fixes which side a part was, or undoes the latest tap; nothing else moves. Its reply includes an undo.
+Feeds: log_feed is for a feed that already finished; start_timer, switch_side, pause_nursing and stop_timer track one happening now (reopen_timer undoes a mistaken stop; update_entry with at fixes when a running one started). Sides are "left"/"right". When she's going back and forth between sides, switch_side {to:"both"} (or start_timer with back_and_forth and the side she started on) stops tracking sides, so nothing needs calling at each change; "left" or "right" later tracks sides again, and log_feed takes both_minutes. Which side next: say maple_status's next_side. The guidance behind it: "${NEXT_SIDE_NOTE}" The app takes "last time" as the side the last feed started on, or, within 30 minutes of a feed ending, the side she finished on; after going back and forth it adds "or whichever side feels fuller". Stopping and starting again within 10 minutes counts as one feed, like a pause, and 3 or more feeds close together are a cluster (maple_status describes it). switch_side, pause_nursing and stop_timer take minutes_ago for when it really happened; fix_nursing_time moves one recorded moment of a feed (its start, a switch, a pause, going back on, the end), fixes which side a part was, or undoes the latest tap; nothing else moves. Its reply includes an undo.
 
 Several things at once ("she nursed 15 min on the left at 2, pooped, and slept until 4:30"): use log_many.
 
@@ -232,6 +260,9 @@ const MCP_SOURCES = ["claude", "chatgpt", "mcp"];
 
 const sideWord = (s: Side) => (s === "L" ? "left" : "right");
 const toSide = (s: "left" | "right") => (s === "left" ? "L" : "R") as Side;
+/** A stretch's side as the MCP says it: "left", "right", or "both" (back and forth, sides not tracked). */
+const stretchWord = (s: StretchSide) => (s === "B" ? "both" : sideWord(s));
+const toStretch = (s: "left" | "right" | "both") => (s === "both" ? "B" : toSide(s)) as StretchSide;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 const ts = (e: { started_at: string }) => Date.parse(e.started_at);
@@ -513,7 +544,7 @@ function compactData(e: Entry, now: Date): Record<string, unknown> {
     void _segments;
     void _tap;
     void _stopped;
-    return { ...rest, left_sec: t.left, right_sec: t.right };
+    return { ...rest, left_sec: t.left, right_sec: t.right, ...(t.both ? { both_sec: t.both } : {}) };
   }
   if (e.kind === "moment") {
     return { title: e.data.title, milestone: e.data.milestone, photos: e.data.photos?.length ?? 0 };
@@ -542,6 +573,8 @@ type FeedEntry = EntryOf<"feed">;
 type SidePart = Extract<Part, { kind: "side" }>;
 
 const SIDE_NAME: Record<Side, string> = { L: "Left", R: "Right" };
+/** "Left", "Right", "Both sides" (a stretch of going back and forth). */
+const PART_NAME: Record<StretchSide, string> = STRETCH_NAME;
 
 /** A breastfeed timed in segments: the only feeds whose moments can move. */
 const isTimedFeed = (e: Entry): e is FeedEntry => e.kind === "feed" && e.data.method === "breast" && !!e.data.segments?.length;
@@ -551,12 +584,15 @@ const partsOf = (e: FeedEntry, ctx: Ctx): Part[] => feedParts(e.data, feedCtx(e,
 
 const sideParts = (parts: Part[]) => parts.filter((p): p is SidePart => p.kind === "side");
 
-/** "Left 4:00–4:10", "break 10 min", "Right since 4:20 (5 min so far)", "on a break since 4:10 (15 min so far)". */
+/**
+ * "Left 4:00–4:10", "break 10 min", "Right since 4:20 (5 min so far)", "on a break since 4:10 (15 min so far)",
+ * "Both sides 4:10–4:50" (going back and forth, sides not tracked).
+ */
 function partText(p: Part, ctx: Ctx): string {
   const range = formatRange(p.start, p.end, ctx.tz, { compact: true });
   const soFar = p.end ? "" : ` (${minutesText(p.min)} so far)`;
   if (p.kind === "break") return p.end ? `break ${minutesText(p.min)}` : `on a break ${range}${soFar}`;
-  return `${SIDE_NAME[p.side]} ${range}${soFar}`;
+  return `${PART_NAME[p.side]} ${range}${soFar}`;
 }
 
 /**
@@ -581,7 +617,8 @@ function nowText(e: FeedEntry, ctx: Ctx): string {
   const cur = parts[parts.length - 1];
   if (!cur) return "";
   const since = `since ${formatTime(cur.start, ctx.tz)} (${minutesText(cur.min)})`;
-  const head = cur.kind === "break" ? `On a break ${since}.` : `${SIDE_NAME[cur.side]} side ${since}.`;
+  const head =
+    cur.kind === "break" ? `On a break ${since}.` : cur.side === "B" ? `Going back and forth (both sides) ${since}.` : `${SIDE_NAME[cur.side]} side ${since}.`;
   const past = parts.slice(0, -1);
   if (!past.length) return head;
   return `${head} ${past.map((p) => partText(p, ctx)).join(", ")}; total nursing ${minutesText(partTotals(parts).min.nursing)}.`;
@@ -590,7 +627,7 @@ function nowText(e: FeedEntry, ctx: Ctx): string {
 /** The parts for JSON, in order, in whole clock minutes (the card's rows: end minute minus start minute). */
 const timelineJson = (parts: Part[], ctx: Ctx) =>
   parts.map((p) => ({
-    part: p.kind === "break" ? "break" : sideWord(p.side),
+    part: p.kind === "break" ? "break" : stretchWord(p.side),
     from_local: formatTime(p.start, ctx.tz),
     to_local: p.end ? formatTime(p.end, ctx.tz) : null,
     minutes: p.min,
@@ -605,18 +642,22 @@ function atArg(d: Date, ctx: Ctx): string {
 
 /**
  * "the switch to Right", "going back on the Left": the moment a move changed. `side` is the stretch it starts (or,
- * for pause, ends); `prev`, for a resume, the side before the break ("back on" only when it's the same side).
+ * for pause, ends); `prev`, for a resume, the side before the break ("back on" only when it's the same side), and
+ * for a switch the side before it ("going on the Left" after going back and forth). Both sides ("B") reads as going
+ * back and forth.
  */
-function momentWords(moment: Moment, side: Side, prev?: Side): string {
+function momentWords(moment: Moment, side: StretchSide, prev?: StretchSide): string {
   switch (moment) {
     case "feed_start":
       return "the feed start";
     case "switch":
-      return `the switch to ${SIDE_NAME[side]}`;
+      if (side === "B") return "going back and forth";
+      return prev === "B" ? `going on the ${SIDE_NAME[side]}` : `the switch to ${SIDE_NAME[side]}`;
     case "resume":
+      if (side === "B") return prev === "B" ? "going back on (going back and forth)" : "going back and forth after the break";
       return prev && prev !== side ? `going on the ${SIDE_NAME[side]} after the break` : `going back on the ${SIDE_NAME[side]}`;
     case "pause":
-      return `coming off the ${SIDE_NAME[side]}`;
+      return side === "B" ? "coming off (going back and forth)" : `coming off the ${SIDE_NAME[side]}`;
     case "feed_end":
       return "the feed end";
   }
@@ -639,12 +680,15 @@ function carriedText(r: TimerResponse, side: Side, ctx: Ctx): string {
   const kept = !!r.before?.segments.some((x) => x.side === cur.side && Math.abs(Date.parse(x.start) - Date.parse(cur.start)) <= 1500);
   if (r.merged) return `Back on the ${name} with no break (she was off under a minute); ${goesOn}.`;
   if (r.clamped) return `${name} from ${formatTime(cur.start, ctx.tz)}, when the break began (no break); ${goesOn}.`;
-  if (kept) return `The stop is taken back and the ${SIDE_NAME[cur.side]} side runs on (since ${formatTime(cur.start, ctx.tz)}); ${goesOn}.`;
+  if (kept) {
+    const runsOn = cur.side === "B" ? "going back and forth runs on" : `the ${SIDE_NAME[cur.side]} side runs on`;
+    return `The stop is taken back and ${runsOn} (since ${formatTime(cur.start, ctx.tz)}); ${goesOn}.`;
+  }
   if (brk) {
     const prev = sides.at(-2)?.side;
     return `${prev && prev !== side ? "On" : "Back on"} the ${name} at ${formatTime(cur.start, ctx.tz)} after a ${minutesText(brk.min)} break; ${goesOn}.`;
   }
-  return `Switched to the ${SIDE_NAME[cur.side]} at ${formatTime(cur.start, ctx.tz)}, when it was stopped; ${goesOn}.`;
+  return `Switched to the ${PART_NAME[cur.side]} at ${formatTime(cur.start, ctx.tz)}, when it was stopped; ${goesOn}.`;
 }
 
 /** A feed start moved earlier also moves the end of the nap that ran into it (the store does that). */
@@ -669,7 +713,7 @@ function ageText(ms: number): string {
  */
 type UndoPayload = {
   id: number;
-  s: [Side, number, number | null][];
+  s: [StretchSide, number, number | null][];
   sa: number;
   ea: number | null;
   eu: number;
@@ -862,18 +906,68 @@ function targetsJson(s: Summary) {
     : null;
 }
 
+/** Bottles and pumping only when there are some (the family mostly nurses); a cluster's feeds when there was one. */
 function talliesJson(s: Summary) {
+  const t = s.today;
   return {
     today: {
-      feeds: s.today.feeds,
-      wet: s.today.wet,
-      dirty: s.today.dirty,
-      sleep: durText(s.today.sleepSec),
-      tummy_minutes: Math.round(s.today.tummySec / 60),
-      pumped: s.today.pumpMl ? formatVolumeBoth(s.today.pumpMl) : null,
+      feeds: t.feeds,
+      ...(t.clusterFeeds ? { feeds_in_a_cluster: t.clusterFeeds } : {}),
+      ...(t.bottleFeeds ? { bottles: t.bottleFeeds, ...(t.bottleMl ? { bottle_total: formatVolumeBoth(t.bottleMl) } : {}) } : {}),
+      wet: t.wet,
+      dirty: t.dirty,
+      sleep: durText(t.sleepSec),
+      tummy_minutes: Math.round(t.tummySec / 60),
+      ...(t.pumpMl ? { pumped: formatVolumeBoth(t.pumpMl) } : {}),
     },
     last_24h: { feeds: s.last24h.feeds, wet: s.last24h.wet, dirty: s.last24h.dirty },
     targets_24h: targetsJson(s),
+  };
+}
+
+/**
+ * "Next feed: offer the left side first." After going back and forth it adds ", or whichever side feels fuller";
+ * within 30 minutes of a feed ending (a cluster's next latch) it says why it's the other side from the one she
+ * finished on. While she nurses, it's the side for the feed after this one. The rule is feed.ts nextSideFor.
+ */
+function nextLine(s: Summary): string | null {
+  const n = s.next;
+  if (!n) return null;
+  const fuller = n.fuller ? ", or whichever side feels fuller" : "";
+  if (s.active.some((e) => e.kind === "feed")) return `Next feed after this one: start on the ${sideWord(n.side)}${fuller}.`;
+  const why = n.rule === "relatch" ? ` (she came off the ${sideWord(other(n.side))} under 30 minutes ago, so it's the other side from that one)` : "";
+  return `Next feed: offer the ${sideWord(n.side)} side first${fuller}${why}.`;
+}
+
+/** next_side for JSON ("left" or null), with next_side_note after going back and forth. */
+const nextJson = (s: Summary) => ({
+  next_side: s.next ? sideWord(s.next.side) : null,
+  ...(s.next?.fuller ? { next_side_note: "or whichever side feels fuller" } : {}),
+});
+
+/** The cluster her last feed is in (the rule Today's Last fed uses: not once a bottle came after it), or null. */
+const lastCluster = (s: Summary): FeedCluster | null => (s.lastFed?.kind === "breast" && s.lastFed.run?.cluster != null ? s.cluster : null);
+
+/** "L 12m, R 8m, both 30m": the minutes of a feed or cluster, back and forth on its own (never split into sides). */
+const sidesText = (t: FeedMinutes) =>
+  (["L", "R", "B"] as const)
+    .filter((x) => t.has[x])
+    .map((x) => `${x === "B" ? "both" : x} ${minutesShort(x === "L" ? t.left : x === "R" ? t.right : t.both)}`)
+    .join(", ");
+
+/** A cluster for JSON: maple_status's `cluster`, list_entries' and the recap's. */
+function clusterJson(c: FeedCluster, ctx: Ctx) {
+  return {
+    from: localWhen(new Date(c.start), ctx),
+    to: c.end != null ? localWhen(new Date(c.end), ctx) : null,
+    ...(c.end == null ? { ongoing: true } : {}),
+    feeds: c.feeds,
+    nursing_min: c.min.total,
+    left_min: c.min.left,
+    right_min: c.min.right,
+    ...(c.min.has.B ? { both_min: c.min.both } : {}),
+    line: clusterLine(c, ctx.tz),
+    entries: c.entries.map((e) => e.id),
   };
 }
 
@@ -889,10 +983,11 @@ function tallyLines(s: Summary, kinds: Set<EntryKind>): string[] {
     out.push(line);
   }
   if (kinds.has("feed")) {
-    let line = `Feeds today: ${s.today.feeds}`;
+    let line = `Feeds today: ${s.today.feeds}${s.today.clusterFeeds ? ` (${s.today.clusterFeeds} in a cluster)` : ""}`;
     line += t ? `; last 24h: ${s.last24h.feeds} (aim ${t.feeds[0]}–${t.feeds[1]}).` : ".";
     out.push(line);
-    if (s.nextSide) out.push(`Next feed: offer the ${sideWord(s.nextSide)} side first.`);
+    const next = nextLine(s);
+    if (next) out.push(next);
   }
   if (kinds.has("sleep")) out.push(`Sleep logged today: ${durText(s.today.sleepSec)}.`);
   if (kinds.has("tummy") && t) {
@@ -1173,7 +1268,7 @@ async function writeResult(ctx: Ctx, sv: Saved): Promise<CallToolResult> {
   return ok(lines.join("\n"), {
     ...savedJson(sv, ctx),
     ...(s ? talliesJson(s) : {}),
-    ...(s && kinds.has("feed") ? { next_side: s.nextSide ? sideWord(s.nextSide) : null } : {}),
+    ...(s && kinds.has("feed") ? nextJson(s) : {}),
     alerts,
   });
 }
@@ -1316,6 +1411,8 @@ type FeedArgs = TimeArgs & {
   method: "breast" | "bottle";
   left_minutes?: number | null;
   right_minutes?: number | null;
+  /** Going back and forth between sides with nobody tracking which: nursing, never split into left and right. */
+  both_minutes?: number | null;
   first_side?: "left" | "right" | null;
   amount?: number | null;
   unit?: "oz" | "ml" | "F" | "C" | null;
@@ -1332,8 +1429,8 @@ function volumeMl(amount: number, unit: string | null | undefined, what: string)
 async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
   const assumed: string[] = [];
   if (a.method === "bottle") {
-    if (a.left_minutes != null || a.right_minutes != null || a.first_side) {
-      throw new ToolError("left_minutes, right_minutes and first_side are for breastfeeding. For a bottle give amount + unit.");
+    if (a.left_minutes != null || a.right_minutes != null || a.both_minutes != null || a.first_side) {
+      throw new ToolError("left_minutes, right_minutes, both_minutes and first_side are for breastfeeding. For a bottle give amount + unit.");
     }
     let amount_ml: number | undefined;
     if (a.amount != null) {
@@ -1359,26 +1456,40 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     });
   }
 
-  if (a.amount != null || a.milk) throw new ToolError("amount and milk are for bottles. For breastfeeding give left_minutes and/or right_minutes.");
+  if (a.amount != null || a.milk) throw new ToolError("amount and milk are for bottles. For breastfeeding give left_minutes, right_minutes and/or both_minutes.");
   const left = a.left_minutes ?? 0;
   const right = a.right_minutes ?? 0;
-  if (left <= 0 && right <= 0) {
+  const both = a.both_minutes ?? 0;
+  if (left <= 0 && right <= 0 && both <= 0) {
     throw new ToolError(
-      "For a breastfeed give left_minutes and/or right_minutes (minutes on each side). To time a feed that's happening now, use start_timer with timer: nursing."
+      "For a breastfeed give left_minutes and/or right_minutes (minutes on each side), or both_minutes for going back and forth. To time a feed that's happening now, use start_timer with timer: nursing."
     );
   }
-  if (left + right > 240) throw new ToolError("That's more than 4 hours of nursing; check the minutes.");
+  if (left + right + both > 240) throw new ToolError("That's more than 4 hours of nursing; check the minutes.");
   let first: Side | undefined = a.first_side ? toSide(a.first_side) : undefined;
   if (!first && left > 0 && right === 0) first = "L";
   if (!first && right > 0 && left === 0) first = "R";
+  // Back and forth never sets a side: the last side is the last one tracked.
   const last: Side | undefined = left > 0 && right > 0 ? (first ? other(first) : undefined) : first;
+  const data = {
+    method: "breast",
+    left_sec: Math.round(left * 60),
+    right_sec: Math.round(right * 60),
+    ...(both > 0 ? { both_sec: Math.round(both * 60) } : {}),
+    first_side: first,
+    last_side: last,
+  };
+  // validate.ts drops keys it doesn't list: never save a back-and-forth feed as no minutes at all.
+  if (both > 0 && !("both_sec" in cleanData("feed", data))) {
+    throw new ToolError("This server can't save back-and-forth minutes yet, so nothing was saved. Give left_minutes / right_minutes instead.");
+  }
   // No time given = it just finished.
-  const span = resolveSpan(a, left + right, ctx, assumed);
+  const span = resolveSpan(a, left + right + both, ctx, assumed);
   const core = await save(ctx, {
     kind: "feed",
     start: span.start,
-    end: span.end ?? new Date(span.start.getTime() + (left + right) * MIN),
-    data: { method: "breast", left_sec: Math.round(left * 60), right_sec: Math.round(right * 60), first_side: first, last_side: last },
+    end: span.end ?? new Date(span.start.getTime() + (left + right + both) * MIN),
+    data,
     note: a.note,
     ...w,
   });
@@ -1626,10 +1737,13 @@ function timerJson(e: Entry, ctx: Ctx) {
     const cur = parts[parts.length - 1];
     const open = cur?.kind === "side" && cur.end === null ? cur : null;
     Object.assign(base, {
-      side: open ? sideWord(open.side) : null,
+      // "both": going back and forth (sides not tracked), so there's no side to switch.
+      side: open ? stretchWord(open.side) : null,
+      ...(open?.side === "B" ? { back_and_forth: true } : {}),
       paused: !open,
       left_minutes: t.min.left,
       right_minutes: t.min.right,
+      ...(t.min.both || parts.some((p) => p.kind === "side" && p.side === "B") ? { both_minutes: t.min.both } : {}),
       current_side_since_local: open ? localWhen(open.start, ctx) : null,
       ...(cur?.kind === "break" && cur.end === null ? { paused_since_local: localWhen(cur.start, ctx) } : {}),
       // Whole clock minutes, as the card's rows count them, so Claude and the card agree.
@@ -1654,7 +1768,7 @@ function timerLine(e: Entry, ctx: Ctx): string {
     const cur = parts[parts.length - 1];
     if (!cur) return `Nursing timer running since ${formatTime(e.started_at, ctx.tz)}, started by ${by} [timer #${e.id}].`;
     const since = `since ${formatTime(cur.start, ctx.tz)} (${minutesText(cur.min)})`;
-    const where = cur.kind === "break" ? `paused ${since}` : `on the ${sideWord(cur.side)} ${since}`;
+    const where = cur.kind === "break" ? `paused ${since}` : cur.side === "B" ? `going back and forth (both sides) ${since}` : `on the ${sideWord(cur.side)} ${since}`;
     const past = parts.slice(0, -1).map((p) => partText(p, ctx));
     const rest = past.length ? `; ${past.join(", ")}; total nursing ${minutesText(partTotals(parts).min.nursing)}` : "";
     return `Nursing ${where}${rest}, started by ${by} [timer #${e.id}].`;
@@ -1662,20 +1776,60 @@ function timerLine(e: Entry, ctx: Ctx): string {
   return `${TIMER_LABEL[e.kind as TimerKind].replace(/^./, (c) => c.toUpperCase())} timer running: ${elapsed} since ${formatTime(e.started_at, ctx.tz)} (started by ${by}) [timer #${e.id}].`;
 }
 
+/**
+ * Her last feed as counted (feed.ts nursingRuns: Pauses and Dones under 10 minutes apart are one feed), from the
+ * moment "last fed" counts from (lastFedAnchor): "Last feed: nursed at 3:10 AM today (2h 05m ago): L 12m, R 8m,
+ * started on the left." After a cluster: "Maple cluster fed 6:02–8:40 PM today (4 feeds, 1h 52m nursing); her last
+ * feed began at 8:00 PM, 45m ago." A long back-and-forth feed says it counts from 40 minutes before she finished.
+ */
 function lastFeedLine(s: Summary, ctx: Ctx): string {
-  const f = s.lastFeed;
-  if (!f) return "No feeds logged yet.";
-  if (f.active) return "She's nursing right now (see the timer above).";
-  const ago = s.minutesSinceFeed != null ? formatDuration(s.minutesSinceFeed * 60) : "";
-  const when = `${whenText(f.started_at, ctx)} (${ago} ago)`;
-  if (f.data.method === "bottle") {
-    return `Last feed: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${f.data.milk ? ` of ${f.data.milk === "breastmilk" ? "breast milk" : f.data.milk}` : ""} at ${when}.`;
+  const c = lastCluster(s);
+  if (s.active.some((e) => e.kind === "feed")) {
+    const more = c ? `; it's feed ${c.feeds} of a cluster since ${formatTime(c.start, ctx.tz)} (${minutesShort(c.min.total)} of nursing so far)` : "";
+    return `She's nursing right now (see the timer above)${more}.`;
   }
-  // The same whole minutes the app shows for this feed (feedMinutes).
-  const t = feedMinutes(f, ctx.now);
-  const sides = (["L", "R"] as const).filter((x) => t.has[x]).map((x) => `${x} ${minutesShort(x === "L" ? t.left : t.right)}`).join(", ");
-  const first = f.data.first_side ? `, started on the ${sideWord(f.data.first_side)}` : "";
-  return `Last feed: nursed at ${when}${sides ? `: ${sides}` : ""}${first}.`;
+  const fed = s.lastFed;
+  if (!fed) return "No feeds logged yet.";
+  const ago = s.minutesSinceFeed != null ? `${formatDuration(s.minutesSinceFeed * 60)} ago` : "";
+  if (fed.kind === "bottle" || !fed.run) {
+    const f = fed.entry;
+    const milk = f.data.milk ? ` of ${f.data.milk === "breastmilk" ? "breast milk" : f.data.milk}` : "";
+    return `Last feed: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${milk} at ${whenText(f.started_at, ctx)} (${ago}).`;
+  }
+  const run = fed.run;
+  // "Last fed" counts from 40 minutes before a long back-and-forth (or 3+ part) feed ended, by feed.ts runAnchor.
+  const counted =
+    fed.rule === "long" && run.end != null
+      ? `"last fed" counts from ${formatTime(fed.at, ctx.tz)}, ${FEED_LENGTH_MIN[1]} minutes before she finished at ${formatTime(run.end, ctx.tz)} (${ago})`
+      : null;
+  if (c) {
+    const name = ctx.baby.nickname || "Maple";
+    const head = `${name} cluster fed ${spanText(c.start, c.end, ctx.tz)} ${dayWord(new Date(c.start), ctx)} (${plural(c.feeds, "feed")}, ${minutesShort(c.min.total)} nursing)`;
+    return `${head}; her last feed began at ${formatTime(run.start, ctx.tz)}${counted ? ` and ${counted}` : `, ${ago}`}.`;
+  }
+  const sides = sidesText(run.min);
+  const started = run.firstSide ? `started on the ${sideWord(run.firstSide)}${run.backAndForth ? " and went back and forth" : ""}` : run.backAndForth ? "back and forth" : "";
+  const how = [sides, started].filter(Boolean);
+  const detail = how.length ? `: ${how.join(", ")}` : "";
+  if (counted) return `Last feed: nursed ${spanText(run.start, run.end, ctx.tz)} ${dayWord(new Date(run.start), ctx)}${detail}; ${counted}.`;
+  return `Last feed: nursed at ${whenText(new Date(run.start), ctx)} (${ago})${detail}.`;
+}
+
+/** maple_status's last_feed: the feed as counted (its newest entry's id to open), and when "last fed" counts from. */
+function lastFeedJson(s: Summary, ctx: Ctx): Record<string, unknown> | null {
+  const fed = s.lastFed;
+  if (!fed) return null;
+  const run = fed.run;
+  return {
+    id: fed.entry.id,
+    local: localWhen(fed.start, ctx),
+    ...(fed.end && !run?.live ? { ended_local: localWhen(fed.end, ctx) } : {}),
+    minutes_ago: s.minutesSinceFeed,
+    ...(fed.rule === "long" ? { counted_from_local: localWhen(fed.at, ctx), counted_from: `${FEED_LENGTH_MIN[1]} minutes before she finished (a long back-and-forth feed)` } : {}),
+    what: run ? `breastfeed (${[sidesText(run.min), run.firstSide ? `started ${sideWord(run.firstSide)}` : "", run.backAndForth ? "back and forth" : ""].filter(Boolean).join(", ")})` : phrase(fed.entry, ctx.now),
+    ...(run && run.entries.length > 1 ? { entries: run.entries.map((e) => e.id) } : {}),
+    by: memberName(fed.entry.created_by, ctx.members),
+  };
 }
 
 function diaperLine(s: Summary, ctx: Ctx): string | null {
@@ -1703,21 +1857,41 @@ function speakLine(s: Summary, ctx: Ctx): string {
   const nursing = s.active.find((e) => e.kind === "feed") as EntryOf<"feed"> | undefined;
   if (nursing) {
     const open = openSegment(nursing.data.segments);
-    parts.push(
-      `She's nursing now${open ? ` on the ${sideWord(open.side)}` : ""}, ${spokenMinutes((ctx.now.getTime() - ts(nursing)) / MIN)} so far.`
-    );
-  } else if (s.lastFeed && s.minutesSinceFeed != null) {
-    const first = s.lastFeed.data.method === "breast" && s.lastFeed.data.first_side ? `, starting on the ${sideWord(s.lastFeed.data.first_side)}` : "";
-    const next = s.nextSide ? `, so start on the ${sideWord(s.nextSide)} next` : "";
-    parts.push(`${name} last ate ${spokenMinutes(s.minutesSinceFeed)} ago${first}${next}.`);
+    const where = !open ? "" : open.side === "B" ? ", going back and forth" : ` on the ${sideWord(open.side)}`;
+    parts.push(`She's nursing now${where}, ${spokenMinutes((ctx.now.getTime() - ts(nursing)) / MIN)} so far.`);
   } else {
-    parts.push("No feeds logged yet.");
+    parts.push(lastFedSpeak(s, name, ctx.tz));
   }
   const sleeping = s.active.find((e) => e.kind === "sleep");
   if (sleeping) parts.push(`She's been asleep for ${spokenMinutes((ctx.now.getTime() - ts(sleeping)) / MIN)}.`);
   const vitD = s.vitaminD ? ", and vitamin D is done" : s.age && s.age.days >= 1 && alertsOn(ctx.baby) ? ", and no vitamin D yet today" : "";
   parts.push(`${plural(s.today.wet, "wet diaper")} and ${s.today.dirty} dirty today${vitD}.`);
   return parts.join(" ");
+}
+
+/** "from 6:02 to 8:40 PM" ("from 11:02 PM to 1:40 AM" across noon or midnight), for voice. */
+const spokenSpan = (start: number, end: number, tz: string) => `from ${formatTimeNear(start, end, tz)} to ${formatTime(end, tz)}`;
+
+/** "2 hours 5 minutes ago", "just now". */
+const agoWords = (min: number) => (min < 1 ? "just now" : `${spokenMinutes(min)} ago`);
+
+/**
+ * Her last feed for voice, when she isn't nursing (maple_status's speak and Siri's status): "Maple last ate 45
+ * minutes ago, starting on the left, so start on the right next." After a cluster it leads with it: "Maple cluster
+ * fed from 6:02 to 8:40 PM: 4 feeds, 1 hour 52 minutes of nursing. She last ate 45 minutes ago, so start on the left
+ * next, or whichever side feels fuller." The minutes are Today's "Last fed" (from summary.lastFed.at).
+ */
+export function lastFedSpeak(s: Summary, name: string, tz: string): string {
+  const fed = s.lastFed;
+  if (!fed || s.minutesSinceFeed == null) return "No feeds logged yet.";
+  const next = s.next ? `, so start on the ${sideWord(s.next.side)} next${s.next.fuller ? ", or whichever side feels fuller" : ""}` : "";
+  const c = lastCluster(s);
+  if (c && c.end != null) {
+    return `${name} cluster fed ${spokenSpan(c.start, c.end, tz)}: ${plural(c.feeds, "feed")}, ${spokenMinutes(c.min.total)} of nursing. She last ate ${agoWords(s.minutesSinceFeed)}${next}.`;
+  }
+  const run = fed.run;
+  const first = run?.firstSide ? `, starting on the ${sideWord(run.firstSide)}${run.backAndForth ? " and going back and forth" : ""}` : fed.kind === "bottle" ? ", from a bottle" : "";
+  return `${name} last ate ${agoWords(s.minutesSinceFeed)}${first}${next}.`;
 }
 
 /** "While you slept" recap since a time. */
@@ -1730,7 +1904,13 @@ async function recap(ctx: Ctx, since: Date, reason: string) {
     ascending: true,
   })).filter((e) => !e.active);
   const after = (e: Entry) => ts(e) >= since.getTime();
-  const feeds = entries.filter((e): e is EntryOf<"feed"> => e.kind === "feed" && after(e));
+  // Feeds as counted (Pauses and Dones under 10 minutes apart are one feed), plus each bottle.
+  const runs = nursingRuns(entries, ctx.now);
+  const clusters = feedClusters(runs).filter((c) => c.start >= since.getTime());
+  const feedStarts = [
+    ...runs.filter((r) => r.start >= since.getTime()).map((r) => r.start),
+    ...entries.filter((e) => e.kind === "feed" && e.data.method === "bottle" && after(e)).map(ts),
+  ].sort((a, b) => a - b);
   const diapers = entries.filter((e): e is EntryOf<"diaper"> => e.kind === "diaper" && after(e));
   const sleeps = entries.filter((e): e is EntryOf<"sleep"> => e.kind === "sleep" && !!e.ended_at);
   const vitD = entries.find((e) => e.kind === "med" && isVitaminD(e.data.name) && after(e));
@@ -1743,8 +1923,16 @@ async function recap(ctx: Ctx, since: Date, reason: string) {
     (sinceH >= 22 || sinceH < 6 || nowH < 6 || dayKey(since, ctx.tz) !== dayKey(ctx.now, ctx.tz));
   const title = night ? "While you slept 🌙" : `Since ${whenText(since, ctx)}`;
   const bits: string[] = [];
-  const lastFeed = feeds[feeds.length - 1];
-  bits.push(feeds.length ? `${plural(feeds.length, "feed")} (last at ${formatTime(lastFeed.started_at, ctx.tz)})` : "no feeds");
+  const lastFeed = feedStarts[feedStarts.length - 1];
+  // A cluster folds into the count: "6 feeds (4 in a cluster, 6:02–8:40 PM; last at 9:30 PM)".
+  const inClusters = clusters.reduce((n, c) => n + c.feeds, 0);
+  const folded =
+    clusters.length === 1
+      ? `${inClusters} in a cluster, ${spanText(clusters[0].start, clusters[0].end, ctx.tz)}; `
+      : clusters.length > 1
+        ? `${inClusters} in ${clusters.length} clusters; `
+        : "";
+  bits.push(feedStarts.length ? `${plural(feedStarts.length, "feed")} (${folded}last at ${formatTime(lastFeed, ctx.tz)})` : "no feeds");
   const wet = diapers.filter((d) => d.data.pee).length;
   const dirty = diapers.filter((d) => d.data.poop).length;
   bits.push(diapers.length ? `${plural(diapers.length, "diaper")} (${wet} wet, ${dirty} dirty)` : "no diapers");
@@ -1761,8 +1949,9 @@ async function recap(ctx: Ctx, since: Date, reason: string) {
       title,
       since_local: localWhen(since, ctx),
       basis: reason,
-      feeds: feeds.length,
-      last_feed_local: lastFeed ? localWhen(lastFeed.started_at, ctx) : null,
+      feeds: feedStarts.length,
+      ...(clusters.length ? { clusters: clusters.map((c) => clusterJson(c, ctx)) } : {}),
+      last_feed_local: lastFeed != null ? localWhen(new Date(lastFeed), ctx) : null,
       diapers: diapers.length,
       wet,
       dirty,
@@ -1821,18 +2010,14 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   json.timers = s.active.map((e) => timerJson(e, ctx));
 
   lines.push(lastFeedLine(s, ctx));
-  if (s.nextSide && !s.lastFeed?.active) lines.push(`Next feed: offer the ${sideWord(s.nextSide)} side first.`);
-  else if (s.nextSide) lines.push(`Next feed after this one: start on the ${sideWord(s.nextSide)}.`);
-  json.last_feed = s.lastFeed
-    ? {
-        id: s.lastFeed.id,
-        local: localWhen(s.lastFeed.started_at, ctx),
-        minutes_ago: s.minutesSinceFeed,
-        what: phrase(s.lastFeed, ctx.now),
-        by: memberName(s.lastFeed.created_by, ctx.members),
-      }
-    : null;
-  json.next_side = s.nextSide ? sideWord(s.nextSide) : null;
+  const next = nextLine(s);
+  if (next) lines.push(next);
+  json.last_feed = lastFeedJson(s, ctx);
+  // The cluster her last feed is in: 3+ feeds, each starting under 30 minutes after the last one ended.
+  const cluster = lastCluster(s);
+  json.cluster = cluster ? clusterJson(cluster, ctx) : null;
+  Object.assign(json, nextJson(s));
+  if (s.next) json.next_side_rule = s.next.rule === "relatch" ? "the other side from the one she finished on (her last feed ended under 30 minutes ago)" : "the opposite of the side her last feed started on";
 
   const dl = diaperLine(s, ctx);
   if (dl) lines.push(dl);
@@ -1843,8 +2028,14 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   }
 
   const t = s.targets;
+  // Bottles and pumping only when there are some today.
+  const tb = s.today;
+  const extra = [
+    tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
+    tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${tb.bottleMl ? `, ${formatVolumeBoth(tb.bottleMl)}` : ""}` : "",
+  ].filter(Boolean);
   lines.push(
-    `Today so far: ${plural(s.today.feeds, "feed")}, ${s.today.wet} wet, ${s.today.dirty} dirty, ${s.today.sleepSec >= 60 ? `${formatDuration(s.today.sleepSec)} of sleep` : "no sleep"} logged.`
+    `Today so far: ${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged${tb.pumpMl ? `, pumped ${formatVolumeBoth(tb.pumpMl)}` : ""}.`
   );
   if (s.age) {
     // The aim only with warnings on (targets is null otherwise).
@@ -1922,7 +2113,10 @@ function lastNight(entries: Entry[], ctx: Ctx) {
     .sort((a, b) => a.s - b.s);
   const totalSec = sleeps.reduce((sum, x) => sum + (Math.min(x.end, hi) - Math.max(x.s, lo)) / 1000, 0);
   const longest = sleeps.reduce<(typeof sleeps)[number] | null>((best, x) => (!best || x.end - x.s > best.end - best.s ? x : best), null);
-  const feeds = entries.filter((e) => e.kind === "feed" && ts(e) >= lo && ts(e) < hi).length;
+  // Feeds as counted (Pauses and Dones under 10 minutes apart are one feed), plus each bottle.
+  const feeds =
+    nursingRuns(entries, ctx.now).filter((r) => r.start >= lo && r.start < hi).length +
+    entries.filter((e) => e.kind === "feed" && e.data.method === "bottle" && ts(e) >= lo && ts(e) < hi).length;
   const diapers = entries.filter((e) => e.kind === "diaper" && ts(e) >= lo && ts(e) < hi).length;
   const span = `${formatTime(w.from, ctx.tz)}–${w.inProgress ? "now" : formatTime(w.to, ctx.tz)}`;
   const json = {
@@ -1969,7 +2163,8 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
   ]);
   const inRange = entries.filter((e) => ts(e) >= windowFrom.getTime());
   const bornMs = ctx.baby.born_at ? Date.parse(ctx.baby.born_at) : null;
-  const stats = dailyStats(inRange, fromKey, todayKey, ctx.now, ctx.tz).filter((d) => {
+  // Every loaded entry (the evening before too), so a feed that began before the window isn't counted again in it.
+  const stats = dailyStats(entries, fromKey, todayKey, ctx.now, ctx.tz).filter((d) => {
     // Skip days that ended before she was born.
     return bornMs == null || dayBounds(d.key, ctx.tz)[1].getTime() > bornMs;
   });
@@ -1980,9 +2175,10 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     byDay.set(k, [...(byDay.get(k) ?? []), e]);
   }
 
-  // Feeding intervals: start to start between logged feeds, credited to the
-  // day of the later one. Over 12 hours is a missing log, not a stretch.
-  const feedStarts = entries.filter((e) => e.kind === "feed").map(ts).sort((x, y) => x - y);
+  // Feeding intervals: start to start between feeds as counted (a feed paused or stopped for under 10 minutes is
+  // one), credited to the day of the later one. Over 12 hours is a missing log, not a stretch.
+  const runs = nursingRuns(entries, ctx.now);
+  const feedStarts = [...runs.map((r) => r.start), ...entries.filter((e) => e.kind === "feed" && e.data.method === "bottle").map(ts)].sort((x, y) => x - y);
   const gapsByDay = new Map<string, number[]>();
   for (let i = 1; i < feedStarts.length; i++) {
     const gap = (feedStarts[i] - feedStarts[i - 1]) / MIN;
@@ -1991,6 +2187,10 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     gapsByDay.set(k, [...(gapsByDay.get(k) ?? []), gap]);
   }
 
+  // Bottles and pumping only when there are some in these days (the family mostly nurses).
+  const anyBottle = stats.some((d) => d.bottleFeeds > 0);
+  const anyPump = stats.some((d) => d.pumpMl > 0);
+  const anyBoth = stats.some((d) => d.bothSec > 0);
   const dayRows = stats.map((d) => {
     const list = byDay.get(d.key) ?? [];
     const colors = [
@@ -2009,13 +2209,16 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       ...(partial ? { partial: true } : {}),
       feeds: d.feeds,
       breast_feeds: d.breastFeeds,
-      bottle_feeds: d.bottleFeeds,
+      ...(d.clusters ? { clusters: d.clusters, feeds_in_clusters: d.clusterFeeds } : {}),
+      ...(anyBottle ? { bottle_feeds: d.bottleFeeds } : {}),
       nursing_minutes: Math.round(d.nursingSec / 60),
       nursing_left_minutes: Math.round(d.leftSec / 60),
       nursing_right_minutes: Math.round(d.rightSec / 60),
+      // Back and forth (sides not tracked): part of nursing_minutes, never of left or right.
+      ...(anyBoth ? { nursing_both_minutes: Math.round(d.bothSec / 60) } : {}),
       ...gapStats(gapsByDay.get(d.key) ?? []),
-      bottle: d.bottleMl ? formatVolumeBoth(d.bottleMl) : null,
-      pumped: d.pumpMl ? formatVolumeBoth(d.pumpMl) : null,
+      ...(anyBottle ? { bottle: d.bottleMl ? formatVolumeBoth(d.bottleMl) : null } : {}),
+      ...(anyPump ? { pumped: d.pumpMl ? formatVolumeBoth(d.pumpMl) : null } : {}),
       wet: d.wet,
       dirty: d.dirty,
       stool_colors: colors,
@@ -2116,6 +2319,9 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       const sleepH = round1(dayRows.reduce((n, r) => n + r.sleep_hours, 0));
       p.push(`So far she's had ${plural(f, "feed")}${perSession}, ${wet} wet and ${dirty} dirty diapers, and about ${sleepH} hours of logged sleep.`);
     }
+    // Clusters as counted from the log (3+ feeds, each under 30 minutes after the last ended): a fact, never a warning.
+    const clusterDays = dayRows.filter((r) => (r.clusters ?? 0) > 0).length;
+    if (clusterDays) p.push(`She cluster fed (3 or more feeds close together) on ${clusterDays} of ${plural(dayRows.length, "day")}.`);
     const allColors = [...new Set(dayRows.flatMap((r) => r.stool_colors))];
     if (allColors.length) p.push(`Stool colors logged: ${allColors.join(", ")}.`);
     const temps = inRange.filter((e): e is EntryOf<"temp"> => e.kind === "temp");
@@ -2174,6 +2380,9 @@ async function runningFeed(id: number | null | undefined, ctx: Ctx, none: string
   return e;
 }
 
+/** After going back and forth starts: what not to call (Claude would otherwise switch_side at every change). */
+const BOTH_NOTE = 'No need to call switch_side at each change; switch_side with to "left" or "right" tracks sides again, and stop_timer ends the feed.';
+
 /**
  * switch_side, and start_timer on a feed that's already running. No time:
  * flip, or go to `to`. With a time, running: the other side at that time is
@@ -2181,10 +2390,15 @@ async function runningFeed(id: number | null | undefined, ctx: Ctx, none: string
  * the tap was late, so that one start moves. Paused: going back on at that
  * time, never before the break began. A time that would only invent a short
  * extra part is refused with what to call instead.
+ *
+ * `to` "B" is going back and forth from then (both sides, not tracked; a part
+ * under a minute old turns both instead). While she's going both there's no
+ * side to flip to: no `to` says so and changes nothing, and "L" / "R" tracks
+ * sides again. Paused after going both, no `to` goes back on going both.
  */
 async function switchResult(
   timer: FeedEntry,
-  to: Side | undefined,
+  to: StretchSide | undefined,
   asked: Date | null,
   ctx: Ctx,
   opts: { assumed: string[]; lead?: string[]; extra?: Record<string, unknown> }
@@ -2210,10 +2424,10 @@ async function switchResult(
     const gap = parts[parts.indexOf(O) - 1];
     if (O.startMoment === "resume" && gap?.kind === "break" && T.getTime() <= Date.parse(gap.start)) {
       target = new Date(gap.start);
-      note = ` The break began at ${formatTime(gap.start, ctx.tz)}, so ${SIDE_NAME[O.side]} starts then (no break).`;
+      note = ` The break began at ${formatTime(gap.start, ctx.tz)}, so ${O.side === "B" ? "going back and forth" : SIDE_NAME[O.side]} starts then (no break).`;
     }
     if (!note && Math.abs(target.getTime() - Date.parse(O.start)) < MIN) {
-      lines.push(`${SIDE_NAME[O.side]} already shows since ${formatTime(O.start, ctx.tz)} (timer #${timer.id}). Nothing changed.`);
+      lines.push(`${O.side === "B" ? "Going back and forth" : SIDE_NAME[O.side]} already shows since ${formatTime(O.start, ctx.tz)} (timer #${timer.id}). Nothing changed.`);
       return reply(timer, { switched: false });
     }
     const r = await retimeFeed(timer.id, { op: "move", edge: "start", ref: O.ref, to: target.toISOString() }, ctx.who.id);
@@ -2231,35 +2445,67 @@ async function switchResult(
     const e = r.entry as FeedEntry;
     const now = partsOf(e, ctx);
     const last = now[now.length - 1];
-    const side = last?.kind === "side" ? last.side : to ?? "L";
-    const name = SIDE_NAME[side];
+    const side: StretchSide = last?.kind === "side" ? last.side : to ?? "L";
     const from = last ? whenText(last.start, ctx) : whenText(ctx.now, ctx);
     const breakAt = cur?.kind === "break" ? formatTime(cur.start, ctx.tz) : "";
     const wasOn = r.before?.segments.at(-1)?.start;
-    // "Back on" after a break only when she came off that same side.
-    const prev = sideParts(now).at(-2)?.side;
-    const backOn = prev && prev !== side ? `On the ${name}` : `Back on the ${name}`;
-    if (r.noop) lines.push(`She's already on the ${sideWord(side)} side (timer #${e.id}). Nothing changed.`);
-    else if (r.resided) {
-      lines.push(`${backOn} side from ${from}, not the ${SIDE_NAME[other(side)]}: the side she went back on a moment ago is changed, and the break stays (timer #${e.id}).`);
+    // The newest part as it was before this tap: "B" when she was going back and forth.
+    const was = r.before?.segments.at(-1)?.side;
+    const tap = (e.data as TapFeedData).last_tap;
+    const tag = `timer #${e.id}`;
+    if (side === "B") {
+      const since = last ? formatTime(last.start, ctx.tz) : "";
+      if (r.noop) lines.push(`She's already going back and forth (since ${since}; ${tag}). Nothing changed.`);
+      else if (r.resided) {
+        // The part she was on had only just begun (or the feed is at its 60 parts): it became the both part.
+        const old = tap?.from && tap.from !== "B" ? `the ${SIDE_NAME[tap.from]} part` : "the part";
+        const fresh = last && (at ?? ctx.now).getTime() - Date.parse(last.start) < MIN;
+        lines.push(
+          `Going back and forth from ${from}: ${old} from ${since} is now both sides, ${fresh ? "since it had only just begun" : "since a feed holds at most 60 parts"} (${tag}). ${BOTH_NOTE}`
+        );
+      } else if (r.moved && r.clamped) {
+        lines.push(`She was already back on, going back and forth. The break began at ${breakAt}, so it now carries on from then with no break (${tag}).`);
+      } else if (r.moved) {
+        lines.push(`She was already back on, going back and forth${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}, so that now starts ${whenText(at ?? ctx.now, ctx)} (${tag}).`);
+      } else if (r.merged && r.clamped) {
+        lines.push(`Back on with no break, still going back and forth: the break began at ${breakAt}, so it carries on from then (${tag}).`);
+      } else if (r.merged) lines.push(`Back on with no break, still going back and forth: she was off under a minute (${tag}).`);
+      else if (resuming) {
+        lines.push(`Back on, going back and forth, from ${from} (${tag}).${r.clamped ? ` The break began at ${breakAt}, so it starts then (no break).` : ""}`);
+      } else lines.push(`Going back and forth from ${from} (both sides, not tracked; ${tag}). ${BOTH_NOTE}`);
+    } else {
+      const name = SIDE_NAME[side];
+      // "Back on" after a break only when she came off that same side.
+      const prev = sideParts(now).at(-2)?.side;
+      const backOn = prev && prev !== side ? `On the ${name}` : `Back on the ${name}`;
+      if (r.noop) lines.push(`She's already on the ${sideWord(side)} side (${tag}). Nothing changed.`);
+      else if (r.resided && tap?.kind === "switch" && tap.from === "B") {
+        // A side tapped within 15 s of going back and forth: that both part is this side instead.
+        lines.push(`On the ${name} from ${from}: going back and forth a moment ago is now the ${name} (${tag}).`);
+      } else if (r.resided) {
+        const not = was === "B" ? "not going back and forth" : `not the ${SIDE_NAME[other(side)]}`;
+        lines.push(`${backOn} side from ${from}, ${not}: the side she went back on a moment ago is changed, and the break stays (${tag}).`);
+      } else if (r.moved && r.clamped) {
+        lines.push(
+          `She was already back on the ${name}${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}. The break began at ${breakAt}, so ${name} now carries on from then with no break (${tag}).`
+        );
+      } else if (r.moved) {
+        lines.push(`She was already back on the ${name}${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}, so that now starts ${whenText(at ?? ctx.now, ctx)} (${tag}).`);
+      } else if (r.reverted) {
+        lines.push(was === "B" ? `Back on the ${name}: going back and forth a moment ago is undone (${tag}).` : `Back on the ${name}: the switch a moment ago is undone (${tag}).`);
+      } else if (r.merged && r.clamped) lines.push(`Back on the ${name} with no break: the break began at ${breakAt}, so ${name} carries on from then (${tag}).`);
+      else if (r.merged) lines.push(`Back on the ${name} with no break: she was off under a minute (${tag}).`);
+      else if (resuming) {
+        lines.push(`${backOn} side from ${from} (${tag}).${r.clamped ? ` The break began at ${breakAt}, so ${name} starts then (no break).` : ""}`);
+      } else if (was === "B") lines.push(`Tracking sides again: ${name} from ${from}, after going back and forth (${tag}).`);
+      else lines.push(`Switched to the ${name} side at ${from} (${tag}).`);
     }
-    else if (r.moved && r.clamped) {
-      lines.push(
-        `She was already back on the ${name}${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}. The break began at ${breakAt}, so ${name} now carries on from then with no break (timer #${e.id}).`
-      );
-    } else if (r.moved) {
-      lines.push(`She was already back on the ${name}${wasOn ? ` (since ${formatTime(wasOn, ctx.tz)})` : ""}, so that now starts ${whenText(at ?? ctx.now, ctx)} (timer #${e.id}).`);
-    } else if (r.reverted) lines.push(`Back on the ${name}: the switch a moment ago is undone (timer #${e.id}).`);
-    else if (r.merged && r.clamped) lines.push(`Back on the ${name} with no break: the break began at ${breakAt}, so ${name} carries on from then (timer #${e.id}).`);
-    else if (r.merged) lines.push(`Back on the ${name} with no break: she was off under a minute (timer #${e.id}).`);
-    else if (resuming) {
-      lines.push(`${backOn} side from ${from} (timer #${e.id}).${r.clamped ? ` The break began at ${breakAt}, so ${name} starts then (no break).` : ""}`);
-    } else lines.push(`Switched to the ${name} side at ${from} (timer #${e.id}).`);
     // undo_last_tap follows intent (it survives the other phone's taps); a merge or revert has no tap left to undo.
     const token = r.merged || r.reverted || r.resided || r.clamped || r.moved ? undoToken(r) : null;
     const undo = r.noop ? {} : { undo: token ? undoHint(token) : "fix_nursing_time {undo_last_tap:true}" };
     return reply(e, {
       switched: !r.noop,
+      ...(side === "B" ? { back_and_forth: true } : {}),
       ...(resuming ? { resumed: !r.noop } : {}),
       ...(r.clamped ? { clamped: true } : {}),
       ...(r.merged ? { merged: true } : {}),
@@ -2276,9 +2522,8 @@ async function switchResult(
         return tapped(await switchSide(timer.id, to, at, ctx.who.id), false);
       } catch (err) {
         if (err instanceof FeedEditError && err.code === "before_own_start" && !err.params.first) {
-          throw new ToolError(
-            `${feedEditCopy(err, "mcp", ctx.tz)} To move when ${SIDE_NAME[open.side]} started instead, use fix_nursing_time {part:"current_side", at:"${atArg(at, ctx)}"}.`
-          );
+          const began = open.side === "B" ? "going back and forth started" : `${SIDE_NAME[open.side]} started`;
+          throw new ToolError(`${feedEditCopy(err, "mcp", ctx.tz)} To move when ${began} instead, use fix_nursing_time {part:"current_side", at:"${atArg(at, ctx)}"}.`);
         }
         throw err;
       }
@@ -2293,6 +2538,11 @@ async function switchResult(
     }
     // A time after it began would make up a short part nobody saw: ask which was meant.
     const t = atArg(at, ctx);
+    if (open.side === "B") {
+      throw new ToolError(
+        `She's been going back and forth since ${formatTimeNear(open.start, at, ctx.tz)}, so there's no side to switch. If she went on one side at ${t}, use switch_side {to:"left", at:"${t}"} or {to:"right", at:"${t}"}; if going back and forth really began at ${t}, use fix_nursing_time {part:"current_side", at:"${t}"}.`
+      );
+    }
     const name = SIDE_NAME[open.side];
     const back = parts.some((p) => p.kind === "side" && p.side !== open.side) ? " back" : "";
     const fix =
@@ -2300,22 +2550,35 @@ async function switchResult(
         ? `If the feed really started at ${t}, use fix_nursing_time {part:"feed_start", at:"${t}"}.`
         : `If ${open.startMoment === "switch" ? "the switch really happened" : "she really went back on"} at ${t}, use fix_nursing_time {part:"current_side", at:"${t}"}.`;
     throw new ToolError(
-      `${name} has been on since ${formatTimeNear(open.start, at, ctx.tz)}. ${fix} If she switched${back} to ${SIDE_NAME[other(open.side)]} at ${t}, use switch_side {to:"${sideWord(other(open.side))}", at:"${t}"}.`
+      `${name} has been on since ${formatTimeNear(open.start, at, ctx.tz)}. ${fix} If she switched${back} to ${SIDE_NAME[other(open.side)]} at ${t}, use switch_side {to:"${sideWord(other(open.side))}", at:"${t}"}; if she's been going back and forth since ${t}, switch_side {to:"both", at:"${t}"}.`
     );
   }
   if (open) {
-    const side = to ?? other(open.side);
+    // While she's going back and forth there's no other side to flip to.
+    const side: StretchSide | undefined = to ?? (isTracked(open.side) ? other(open.side) : undefined);
+    if (!side) {
+      lines.push(
+        `She's going back and forth (since ${formatTime(open.start, ctx.tz)}; timer #${timer.id}), so there's nothing to switch. If she's on one side now, call switch_side with to "left" or "right" to track sides again.`
+      );
+      return reply(timer, { switched: false, back_and_forth: true });
+    }
     if (side === open.side) {
-      lines.push(`She's already on the ${sideWord(side)} side (timer #${timer.id}). Nothing changed.`);
+      lines.push(
+        side === "B"
+          ? `She's already going back and forth (since ${formatTime(open.start, ctx.tz)}; timer #${timer.id}). Nothing changed.`
+          : `She's already on the ${sideWord(side)} side (timer #${timer.id}). Nothing changed.`
+      );
       return reply(timer, { switched: false });
     }
     return tapped(await switchSide(timer.id, side, undefined, ctx.who.id), false);
   }
-  // Paused: back on `to`, or the side she didn't just come off. It's a resume of the feed as seen paused: if
-  // another phone resumed it since, the other side is a "changed" error (with or without a time, never a silent
-  // switch over theirs); that side is a noop, or with an earlier time its start moves (moved).
-  const lastSide = cur?.kind === "break" ? cur.before.side : timer.data.last_side ?? "L";
-  return tapped(await switchSide(timer.id, to ?? other(lastSide), at ?? undefined, ctx.who.id, { resume: true }), true);
+  // Paused: back on `to`, or the side she didn't just come off (after going back and forth, going both again). It's a
+  // resume of the feed as seen paused: if another phone resumed it since, the other side is a "changed" error (with
+  // or without a time, never a silent switch over theirs); that side is a noop, or with an earlier time its start
+  // moves (moved).
+  const lastSide: StretchSide = cur?.kind === "break" ? cur.before.side : timer.data.last_side ?? "L";
+  const back: StretchSide = to ?? (isTracked(lastSide) ? other(lastSide) : "B");
+  return tapped(await switchSide(timer.id, back, at ?? undefined, ctx.who.id, { resume: true }), true);
 }
 
 /** fix_nursing_time's feed: the id given, else the running one, else the latest timed one that ended in the last 12 hours. */
@@ -2345,7 +2608,7 @@ async function fixTarget(id: number | null | undefined, ctx: Ctx): Promise<FeedE
   return done;
 }
 
-type FixPart = "feed_start" | "current_side" | "left" | "right" | "feed_end";
+type FixPart = "feed_start" | "current_side" | "left" | "right" | "both" | "feed_end";
 
 /** Which stretch and edge a part names, and the moment's recorded time there. */
 type Picked = { part: SidePart; edge: "start" | "end" | "ended"; moment: Moment; recorded: Date };
@@ -2375,8 +2638,11 @@ function pickPart(e: FeedEntry, which: FixPart, nth: "latest" | "first" | null |
       // While paused, "the side she was on" most often needs when she came off.
       return at(last, edge ?? (paused ? "end" : "start"));
     default: {
-      const mine = sides.filter((p) => p.side === toSide(which));
-      if (!mine.length) throw new ToolError(`There's no ${which} side in #${e.id} (${parts.map((p) => partText(p, ctx)).join(", ")}).`);
+      const mine = sides.filter((p) => p.side === toStretch(which));
+      if (!mine.length) {
+        const none = which === "both" ? "going back and forth" : `${which} side`;
+        throw new ToolError(`There's no ${none} in #${e.id} (${parts.map((p) => partText(p, ctx)).join(", ")}).`);
+      }
       return at(nth === "first" ? mine[0] : mine[mine.length - 1], edge ?? "start");
     }
   }
@@ -2387,7 +2653,7 @@ function wasText(p: Picked, to: Date, ctx: Ctx): string {
   const t = formatTimeNear(p.recorded, to, ctx.tz);
   if (p.moment === "feed_start") return `(Was: feed started ${t}.)`;
   if (p.moment === "feed_end") return `(Was: ended ${t}.)`;
-  return p.edge === "start" ? `(Was: ${SIDE_NAME[p.part.side]} from ${t}.)` : `(Was: ${SIDE_NAME[p.part.side]} until ${t}.)`;
+  return p.edge === "start" ? `(Was: ${PART_NAME[p.part.side]} from ${t}.)` : `(Was: ${PART_NAME[p.part.side]} until ${t}.)`;
 }
 
 /** "Updated #812: <timeline> (Was: …)", plus the nap that followed and the undo token. */
@@ -2431,7 +2697,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "How's Maple right now?",
       description:
-        'Call this first for anything about right now: the local time and day, her age, running timers, when she last ate and which side to offer next, last wet/dirty diaper, today\'s and last-24-hour counts (vs what\'s expected for her age, if the family has warnings on), vitamin D today, latest weight vs birth weight, and any health alerts (relay those word for word). Includes `speak`, one short sentence for voice. A nursing timer lists its timeline (each side and break, in order); its elapsed is since the feed started, breaks included, while total_nursing_minutes leaves the breaks out. Pass since: "last_seen" for a "while you slept" recap. E.g. "which side next?", "when did she last eat?", "how did the night go?". Before she\'s born it says so and gives the due date. One line about her mom\'s medicines when she has one on Today (mom_status has the rest).',
+        'Call this first for anything about right now: the local time and day, her age, running timers, when she last ate and which side to offer next (a cluster of feeds close together comes as one line and a cluster object, and a long back-and-forth feed says when "last fed" counts from), last wet/dirty diaper, today\'s and last-24-hour counts (vs what\'s expected for her age, if the family has warnings on), vitamin D today, latest weight vs birth weight, and any health alerts (relay those word for word). Includes `speak`, one short sentence for voice. A nursing timer lists its timeline (each side and break, in order); its elapsed is since the feed started, breaks included, while total_nursing_minutes leaves the breaks out. Pass since: "last_seen" for a "while you slept" recap. E.g. "which side next?", "when did she last eat?", "how did the night go?". Before she\'s born it says so and gives the due date. One line about her mom\'s medicines when she has one on Today (mom_status has the rest).',
       inputSchema: {
         since: z
           .string()
@@ -2452,7 +2718,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "List logged entries",
       description:
-        'Use this to look up what was logged: the last N hours (default 12) or a whole day ("today", "yesterday", "2026-10-20"), optionally one kind. Newest first. Each row has the id (for update_entry / delete_entry), local time, a one-line summary, who logged it and how. E.g. "what did we log overnight?", "show yesterday\'s diapers".',
+        'Use this to look up what was logged: the last N hours (default 12) or a whole day ("today", "yesterday", "2026-10-20"), optionally one kind. Newest first. Each row has the id (for update_entry / delete_entry), local time, a one-line summary, who logged it and how; a cluster (3+ feeds, each starting under 30 minutes after the last ended) is one feed_cluster row with its feeds, ids and all, inside. E.g. "what did we log overnight?", "show yesterday\'s diapers".',
       inputSchema: {
         kind: z.enum(KIND_NAMES).nullish().describe("Only this kind of entry."),
         day: z.string().max(20).nullish().describe('A local day: "today", "yesterday" or YYYY-MM-DD. Takes priority over hours.'),
@@ -2487,23 +2753,52 @@ export function registerMapleTools(server: McpServer) {
       const more = rows.length > limit;
       const shown = rows.slice(0, limit);
       const what = a.kind ? `${a.kind.replace("_", " ")} entries` : "entries";
+      const row = (e: Entry) => ({
+        id: e.id,
+        kind: KIND_NAME[e.kind],
+        local_time: localWhen(e.started_at, ctx),
+        ...(e.ended_at ? { ended_local: localWhen(e.ended_at, ctx) } : {}),
+        ...(e.active ? { running: true } : {}),
+        summary: describeEntry(e, { now: ctx.now }).text,
+        by: memberName(e.created_by, ctx.members),
+        via: e.source,
+        details: compactData(e, ctx.now),
+      });
+      // A cluster (3+ feeds, each starting under 30 minutes after the last one ended) folds into one row where its
+      // newest feed would be, with its feeds inside (each keeps its id), as the Timeline shows it.
+      const clusters = feedClusters(nursingRuns(shown, ctx.now));
+      const clusterOfEntry = new Map<number, number>();
+      clusters.forEach((c, i) => c.entries.forEach((e) => clusterOfEntry.set(e.id, i)));
+      const out: Record<string, unknown>[] = [];
+      const placed = new Set<number>();
+      for (const e of shown) {
+        const i = clusterOfEntry.get(e.id);
+        if (i === undefined) {
+          out.push(row(e));
+          continue;
+        }
+        if (placed.has(i)) continue;
+        placed.add(i);
+        const c = clusters[i];
+        const inIt = shown.filter((x) => clusterOfEntry.get(x.id) === i);
+        out.push({
+          kind: "feed_cluster",
+          local_time: localWhen(new Date(c.start), ctx),
+          ...(c.end != null ? { ended_local: localWhen(new Date(c.end), ctx) } : { running: true }),
+          summary: `${clusterLine(c, ctx.tz)} (${sideMinutesText(c.min)})`,
+          feeds: inIt.map(row),
+        });
+      }
+      const folded = clusters.length
+        ? ` ${clusters.length === 1 ? "A cluster is folded into one row" : `${clusters.length} clusters are folded into one row each`} (feed_cluster, its feeds inside): ${clusters.map((c) => clusterLine(c, ctx.tz)).join("; ")}.`
+        : "";
       const summary = shown.length
-        ? `${plural(shown.length, what.replace(/ies$/, "y"), what)} ${label}, newest first${more ? ` (showing the newest ${limit}; raise limit or narrow the window for more)` : ""}.`
+        ? `${plural(shown.length, what.replace(/ies$/, "y"), what)} ${label}, newest first${more ? ` (showing the newest ${limit}; raise limit or narrow the window for more)` : ""}.${folded}`
         : `No ${what} ${label}.`;
       return ok(summary, {
         count: shown.length,
         has_more: more,
-        entries: shown.map((e) => ({
-          id: e.id,
-          kind: KIND_NAME[e.kind],
-          local_time: localWhen(e.started_at, ctx),
-          ...(e.ended_at ? { ended_local: localWhen(e.ended_at, ctx) } : {}),
-          ...(e.active ? { running: true } : {}),
-          summary: describeEntry(e, { now: ctx.now }).text,
-          by: memberName(e.created_by, ctx.members),
-          via: e.source,
-          details: compactData(e, ctx.now),
-        })),
+        entries: out,
       });
     }
   );
@@ -2514,7 +2809,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Daily summary / checkup report",
       description:
-        `Use this for patterns over days or a pediatrician-visit summary: per-day feeds, nursing minutes (left and right), feeding intervals (average and longest gap, start to start, from what was logged), wet/dirty diapers with stool colors, sleep, temperatures, vitamin D days, growth history with WHO percentiles and weight change vs birth weight, flagged events, open questions for the doctor, and a "last night" block (7pm–7am: wake-ups, longest stretch, total sleep). Includes a short paragraph ready to read to the doctor. When ${MOM} (Maple's mom) has logged any, a separate last line (and \`mom\`) gives her own doses per medicine with the last one, her temperatures and her open questions for her OB over the same days, never part of Maple's paragraph. E.g. "make a summary for her 2-week checkup" (days: 14), "how did last night go?", "how has this week gone?".`,
+        `Use this for patterns over days or a pediatrician-visit summary: per-day feeds (a feed paused or stopped for under 10 minutes counts once, and days with a cluster of feeds close together say so), nursing minutes (left and right, and going back and forth when there was any), feeding intervals (average and longest gap, start to start, from what was logged), wet/dirty diapers with stool colors, sleep, temperatures, vitamin D days, growth history with WHO percentiles and weight change vs birth weight, flagged events, open questions for the doctor, and a "last night" block (7pm–7am: wake-ups, longest stretch, total sleep). Includes a short paragraph ready to read to the doctor. When ${MOM} (Maple's mom) has logged any, a separate last line (and \`mom\`) gives her own doses per medicine with the last one, her temperatures and her open questions for her OB over the same days, never part of Maple's paragraph. E.g. "make a summary for her 2-week checkup" (days: 14), "how did last night go?", "how has this week gone?".`,
       inputSchema: {
         days: z.number().int().min(1).max(31).nullish().describe("How many local days to cover, ending today (default 7, max 31)."),
       },
@@ -2698,7 +2993,13 @@ export function registerMapleTools(server: McpServer) {
     method: z.enum(["breast", "bottle"]).describe("breast = nursing; bottle = breast milk or formula from a bottle."),
     left_minutes: z.number().min(0).max(180).nullish().describe("Breast: minutes on the left side."),
     right_minutes: z.number().min(0).max(180).nullish().describe("Breast: minutes on the right side."),
-    first_side: sideEnum().nullish().describe("Breast: which side she started on (drives the next-side suggestion)."),
+    both_minutes: z
+      .number()
+      .min(0)
+      .max(240)
+      .nullish()
+      .describe("Breast: minutes going back and forth between sides when nobody tracked which (counts toward nursing, never split into left and right)."),
+    first_side: sideEnum().nullish().describe("Breast: which side she started on (drives the next-side suggestion; give it with both_minutes too)."),
     amount: z.number().min(0).max(1000).nullish().describe("Bottle: how much she drank, in `unit`."),
     unit: z.enum(["oz", "ml"]).nullish().describe("Bottle: fl oz (default) or ml."),
     milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe("Bottle: what was in it."),
@@ -2714,7 +3015,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Log a feed",
       description:
-        'Use this to record a feed that already finished: breastfeeding (minutes on each side) or a bottle (amount). For a feed happening right now use start_timer (timer: nursing) instead. Timing: give nothing for a feed that just finished (it ends now and starts total-minutes earlier); at / minutes_ago give when it STARTED; ended_minutes_ago gives when it ended. Returns the next side to offer. E.g. "she nursed 12 min left then 8 right, finished 10 minutes ago", "2 oz bottle of formula at 3:10", "fed 15 min on the right at 2am".',
+        'Use this to record a feed that already finished: breastfeeding (minutes on each side, and both_minutes for going back and forth between sides) or a bottle (amount). For a feed happening right now use start_timer (timer: nursing) instead. Timing: give nothing for a feed that just finished (it ends now and starts total-minutes earlier); at / minutes_ago give when it STARTED; ended_minutes_ago gives when it ended. Returns the next side to offer. E.g. "she nursed 12 min left then 8 right, finished 10 minutes ago", "2 oz bottle of formula at 3:10", "fed 15 min on the right at 2am", "nursed about an hour going back and forth, started on the right" → {method:"breast", both_minutes:60, first_side:"right"}.',
       inputSchema: feedShape,
       annotations: WRITE_ANN,
       invoking: "Warming the milk…",
@@ -2786,10 +3087,16 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Start a timer",
       description:
-        'Use this when something is starting now (or started a few minutes ago and is still going): nursing (with side), sleep, tummy time or pumping. Timers show on every family phone. If one of that kind is already running it returns that one instead (nursing: switches to the side you name, and with a time acts as switch_side with that time; a nursing timer nobody has tapped for an hour, or on a break with a start time over 30 minutes after she came off, has to be stopped first). To fix when a running feed started ("she actually started at 4"), use fix_nursing_time {part:"feed_start", at:"4:00"}. A nursing timer with no side starts on the suggested next side. E.g. "start a feed on the right", "she fell asleep 10 minutes ago", "starting tummy time".',
+        'Use this when something is starting now (or started a few minutes ago and is still going): nursing (with side), sleep, tummy time or pumping. Timers show on every family phone. Nursing with back_and_forth: true is for a feed where she\'s going back and forth between sides and nobody will track which: side is still required (the side she started on, which the next side alternates from), and nothing needs calling at each change. If one of that kind is already running it returns that one instead (nursing: switches to the side you name, and with a time acts as switch_side with that time; a nursing timer nobody has tapped for an hour, or on a break with a start time over 30 minutes after she came off, has to be stopped first). To fix when a running feed started ("she actually started at 4"), use fix_nursing_time {part:"feed_start", at:"4:00"}. A nursing timer with no side starts on the suggested next side. E.g. "start a feed on the right", "she fell asleep 10 minutes ago", "starting tummy time".',
       inputSchema: {
         timer: z.enum(TIMER_NAMES).describe("Which timer."),
-        side: sideEnum().nullish().describe("Nursing: which side she's on. Leave out to use the suggested next side."),
+        side: sideEnum().nullish().describe("Nursing: which side she's on (with back_and_forth: the side she started on). Leave out to use the suggested next side."),
+        back_and_forth: z
+          .boolean()
+          .nullish()
+          .describe(
+            'Nursing: true when she\'s going back and forth between sides (switching often, nobody tracking which). Needs side. With a feed already running, it goes back and forth from now, like switch_side {to:"both"}.'
+          ),
         at: fields.at("When it started (default now)"),
         minutes_ago: fields.minutesAgo("How many minutes ago it started"),
         client_ref: fields.clientRef(),
@@ -2804,6 +3111,8 @@ export function registerMapleTools(server: McpServer) {
       const given = startFrom(a, ctx, assumed);
       const at = given ?? ctx.now;
       const kind = TIMER_KIND[a.timer];
+      const both = !!a.back_and_forth;
+      if (both && kind !== "feed") throw new ToolError("back_and_forth is for nursing: it means she's going back and forth between sides.");
       let side: Side | undefined = a.side ? toSide(a.side) : undefined;
       let suggested = false;
       const ref = a.client_ref?.trim() || null;
@@ -2821,16 +3130,21 @@ export function registerMapleTools(server: McpServer) {
           const where = lastEnd ? `is still open, on a break since ${formatTime(lastEnd, ctx.tz)}` : `is still running (${ageText(ctx.now.getTime() - ts(live))})`;
           throw new ToolError(`A nursing timer from ${formatTime(live.started_at, ctx.tz)} ${where}. Stop it first (stop_timer with at), then start the new feed. It reads: ${nowText(live, ctx)}`);
         }
-        if (given) {
-          // "She started on the right 5 minutes ago" while a feed runs: the switch_side rules, at that time.
+        if (given || both) {
+          // "She started on the right 5 minutes ago" while a feed runs: the switch_side rules, at that time. Going
+          // back and forth with a feed running is switch_side {to:"both"} (from now, or from the time given).
           const open = sides[sides.length - 1]?.end === null ? sides[sides.length - 1] : null;
           const lead = `A nursing timer was already running (#${live.id}, started ${whenText(live.started_at, ctx)} by ${memberName(live.created_by, ctx.members)}), so no second timer was started.`;
-          return switchResult(live, side ?? open?.side, given, ctx, {
+          return switchResult(live, both ? "B" : side ?? open?.side, given, ctx, {
             assumed,
             lead: [lead],
             extra: { created: false, already_running: true, id: live.id },
           });
         }
+      }
+      // Going back and forth from the start still needs the side she started on: the next side alternates from it.
+      if (both && !side && !live) {
+        throw new ToolError('back_and_forth needs side: the side she started on ("left" or "right"), since the next side alternates from it. Ask which side she started on.');
       }
       // No side: a new nursing timer starts on the suggested side, but a
       // running one stays where it is.
@@ -2843,6 +3157,7 @@ export function registerMapleTools(server: McpServer) {
         babyId: ctx.baby.id,
         kind,
         side: kind === "feed" ? side : undefined,
+        ...(both ? { backAndForth: true } : {}),
         at,
         createdBy: ctx.who.id,
         source: ctx.who.via,
@@ -2852,12 +3167,16 @@ export function registerMapleTools(server: McpServer) {
       const label = TIMER_LABEL[kind];
       const sideText = entry.kind === "feed" ? (() => {
         const open = openSegment(entry.data.segments);
-        return open ? ` on the ${sideWord(open.side)}` : "";
+        if (!open) return "";
+        if (open.side !== "B") return ` on the ${sideWord(open.side)}`;
+        return ` going back and forth${entry.data.first_side ? ` (she started on the ${sideWord(entry.data.first_side)})` : ""}`;
       })() : "";
+      const goingBoth = entry.kind === "feed" && openSegment(entry.data.segments)?.side === "B";
       const lines = [
         alreadyRunning
           ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started.`
           : `Saved #${entry.id}: ${label} timer started${sideText} at ${whenText(entry.started_at, ctx)} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : ""}`,
+        ...(goingBoth && !alreadyRunning ? [BOTH_NOTE] : []),
       ];
       const others = (await activeTimers(ctx.baby.id)).filter((x) => x.id !== entry.id);
       for (const o of others) lines.push(`Also running: ${timerLine(o, ctx)}`);
@@ -2866,6 +3185,7 @@ export function registerMapleTools(server: McpServer) {
         created: !alreadyRunning,
         ...(alreadyRunning ? { already_running: true } : {}),
         ...entryJson(entry, ctx),
+        ...(goingBoth ? { back_and_forth: true } : {}),
         timer: timerJson(entry, ctx),
         other_timers: others.map((o) => timerJson(o, ctx)),
         ...(assumed.length ? { assumed } : {}),
@@ -2993,7 +3313,9 @@ export function registerMapleTools(server: McpServer) {
         const end = Date.parse(stopped.ended_at);
         const endText = formatTime(end, ctx.tz);
         if (at && at.getTime() > end + 30_000) ending = ` It ended ${endText}, when it was paused (${formatTimeNear(at, end, ctx.tz)} was during the break).`;
-        else if (at && lastBefore?.end && Date.parse(lastBefore.end) - end > 1500) ending = ` It ended ${endText} (${SIDE_NAME[lastBefore.side]} now ends then).`;
+        else if (at && lastBefore?.end && Date.parse(lastBefore.end) - end > 1500) {
+          ending = ` It ended ${endText} (${lastBefore.side === "B" ? "going back and forth" : SIDE_NAME[lastBefore.side]} now ends then).`;
+        }
         else ending = ` It ended ${endText}, when it was paused.`;
       }
       const timed = isTimedFeed(stopped) ? partsOf(stopped, ctx) : null;
@@ -3011,7 +3333,7 @@ export function registerMapleTools(server: McpServer) {
         ...(timed ? { timeline: timelineJson(timed, ctx), total_nursing_minutes: partTotals(timed).min.nursing } : {}),
         ...(ending ? { ended_at_pause: true } : {}),
         ...talliesJson(s),
-        ...(stopped.kind === "feed" ? { next_side: s.nextSide ? sideWord(s.nextSide) : null } : {}),
+        ...(stopped.kind === "feed" ? nextJson(s) : {}),
         ...(assumed.length ? { assumed } : {}),
         undo: timed
           ? `reopen_timer id ${stopped.id} if she's still going; fix_nursing_time {id:${stopped.id}, part:"feed_end", at:"…"} if it ended at another time; delete_entry id ${stopped.id} to remove it`
@@ -3026,9 +3348,12 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Switch nursing side",
       description:
-        'Use this mid-feed when Maple switches breasts or goes back on after a pause. Closes the current side and starts timing the other one (or the side you name; also resumes a paused feed on it). Does nothing if she\'s already on that side. at / minutes_ago say when it really happened: with to = the side she\'s on now, or a time and no to, it moves when that side started (a late tap) instead of adding a part. Any other moment: fix_nursing_time. The reply ends with the feed\'s timeline. E.g. "switch sides", "she\'s on the left now", "she\'s been on the right for 5 minutes" → {to:"right", minutes_ago:5}, "she switched at 4:12" → {at:"4:12"}.',
+        'Use this mid-feed when Maple switches breasts or goes back on after a pause. Closes the current side and starts timing the other one (or the side you name; also resumes a paused feed on it). Does nothing if she\'s already on that side. When she\'s going back and forth (switching often, nobody tracking sides), to "both" stops tracking sides from then: nothing needs calling at each change, a call with no to says there\'s nothing to switch, and to "left" or "right" tracks sides again. at / minutes_ago say when it really happened: with to = the side she\'s on now, or a time and no to, it moves when that side started (a late tap) instead of adding a part. Any other moment: fix_nursing_time. The reply ends with the feed\'s timeline. E.g. "switch sides", "she\'s on the left now", "she\'s been on the right for 5 minutes" → {to:"right", minutes_ago:5}, "she switched at 4:12" → {at:"4:12"}, "she\'s going back and forth" → {to:"both"}.',
       inputSchema: {
-        to: sideEnum().nullish().describe("The side she's on now. Leave out to flip to the other side."),
+        to: z
+          .enum(["left", "right", "both"])
+          .nullish()
+          .describe('The side she\'s on now, or "both" when she\'s going back and forth (sides not tracked from then). Leave out to flip to the other side.'),
         id: z.number().int().positive().nullish().describe("The nursing timer id, if more than one could match."),
         at: fields.at("When she actually switched or went back on (default now)"),
         minutes_ago: fields.minutesAgo("How many minutes ago she switched or went back on"),
@@ -3046,7 +3371,7 @@ export function registerMapleTools(server: McpServer) {
       );
       const assumed: string[] = [];
       const at = startFrom(a, ctx, assumed);
-      return switchResult(timer, a.to ? toSide(a.to) : undefined, at, ctx, { assumed });
+      return switchResult(timer, a.to ? toStretch(a.to) : undefined, at, ctx, { assumed });
     }
   );
 
@@ -3071,7 +3396,7 @@ export function registerMapleTools(server: McpServer) {
       const timer = await runningFeed(a.id, ctx, "No nursing timer is running, so there's nothing to pause. start_timer (timer: nursing) starts one.");
       const assumed: string[] = [];
       const at = startFrom(a, ctx, assumed);
-      const after = "When she starts again, switch_side with that side resumes it; stop_timer if she's done.";
+      const after = "When she starts again, switch_side with that side resumes it (to \"both\" if she's going back and forth); stop_timer if she's done.";
       const reply = (e: FeedEntry, head: string, json: Record<string, unknown>) =>
         ok([head, nowText(e, ctx), after, ...assumedLine(assumed)].join("\n"), {
           paused: true,
@@ -3085,7 +3410,8 @@ export function registerMapleTools(server: McpServer) {
         if (!at || !last?.end) return reply(timer, `The feed is already paused (timer #${timer.id}).`, {});
         // Already paused, with a time: that's when she really came off.
         if (Math.abs(at.getTime() - Date.parse(last.end)) < MIN) {
-          return reply(timer, `She already shows off the ${sideWord(last.side)} at ${formatTime(last.end, ctx.tz)} (timer #${timer.id}). Nothing changed.`, {});
+          const off = last.side === "B" ? "off (going back and forth)" : `off the ${sideWord(last.side)}`;
+          return reply(timer, `She already shows ${off} at ${formatTime(last.end, ctx.tz)} (timer #${timer.id}). Nothing changed.`, {});
         }
         const r = await retimeFeed(timer.id, { op: "move", edge: "end", ref: last.ref, to: at.toISOString() }, ctx.who.id);
         const token = undoToken(r);
@@ -3109,14 +3435,14 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Fix nursing times",
       description:
-        'Use this when a nursing feed\'s times are off because a tap was late, early or wrong. It moves exactly one recorded moment (when the feed started, when she switched sides, when she came off for a break, when she went back on, or when it ended), or fixes which side a part was, or takes back the latest switch / pause / going back on; nothing else moves. While a feed is running it\'s the default; pass id to fix an earlier, finished feed. part says which: feed_start, feed_end, current_side (the side she\'s on now; while paused, when she came off it), or left / right (that side\'s latest part, or its first with which: "first"); edge: "end" picks the end of that part instead of its start. Then exactly one of: add_minutes (positive = she was on it longer), at / minutes_ago (the real time), set_side, undo_last_tap: true, or undo (the token an earlier reply gave). The reply has the feed\'s timeline and an undo. E.g. "add 5 minutes to the right side" → {part:"right", add_minutes:5}; "she started 5 minutes before I hit start" → {part:"feed_start", add_minutes:5}; "the switch was really at 4:12" → {part:"current_side", at:"4:12"}; "that was the left, not the right" → {part:"current_side", set_side:"left"}; "I hit switch by mistake" → {undo_last_tap:true}.',
+        'Use this when a nursing feed\'s times are off because a tap was late, early or wrong. It moves exactly one recorded moment (when the feed started, when she switched sides, when she came off for a break, when she went back on, or when it ended), or fixes which side a part was, or takes back the latest switch / pause / going back on; nothing else moves. While a feed is running it\'s the default; pass id to fix an earlier, finished feed. part says which: feed_start, feed_end, current_side (the side she\'s on now; while paused, when she came off it), or left / right / both (that side\'s latest part, both = a stretch of going back and forth; or its first with which: "first"); edge: "end" picks the end of that part instead of its start. Then exactly one of: add_minutes (positive = she was on it longer), at / minutes_ago (the real time), set_side, undo_last_tap: true, or undo (the token an earlier reply gave). The reply has the feed\'s timeline and an undo. E.g. "add 5 minutes to the right side" → {part:"right", add_minutes:5}; "she started 5 minutes before I hit start" → {part:"feed_start", add_minutes:5}; "the switch was really at 4:12" → {part:"current_side", at:"4:12"}; "that was the left, not the right" → {part:"current_side", set_side:"left"}; "that was both sides" → {part:"current_side", set_side:"both"}; "I hit switch by mistake" → {undo_last_tap:true}.',
       inputSchema: {
         id: z.number().int().positive().nullish().describe("The feed's entry id. Leave out for the running nursing timer (with none running: the latest timed feed of the last 12 hours)."),
         part: z
-          .enum(["feed_start", "current_side", "left", "right", "feed_end"])
+          .enum(["feed_start", "current_side", "left", "right", "both", "feed_end"])
           .nullish()
           .describe("Which part or moment to fix. Needed except with undo_last_tap or undo."),
-        which: z.enum(["latest", "first"]).nullish().describe("left / right with more than one part on that side: the latest (default) or the first."),
+        which: z.enum(["latest", "first"]).nullish().describe("left / right / both with more than one such part: the latest (default) or the first."),
         edge: z.enum(["start", "end"]).nullish().describe("Which end of the part moves: start (the default, except current_side on a paused feed, which is end) or end."),
         add_minutes: z
           .number()
@@ -3126,7 +3452,7 @@ export function registerMapleTools(server: McpServer) {
           .describe("Minutes to add to that part (negative = shorter): its start moves that much earlier, or its end that much later."),
         at: z.string().max(60).nullish().describe(`The real time of that moment. ${TIME_HELP}`),
         minutes_ago: z.number().min(0).max(720).nullish().describe("How many minutes ago that moment really was. Use instead of at."),
-        set_side: sideEnum().nullish().describe("The side that part really was."),
+        set_side: z.enum(["left", "right", "both"]).nullish().describe('The side that part really was ("both": she was going back and forth).'),
         undo_last_tap: z.boolean().nullish().describe("true takes back the latest switch, pause or going back on of a running feed."),
         undo: z.string().max(4000).nullish().describe('The undo token from an earlier fix_nursing_time reply ("u1…"): puts that feed back as it was, if nobody changed it since.'),
       },
@@ -3197,8 +3523,14 @@ export function registerMapleTools(server: McpServer) {
           !after || after.end !== null
             ? `(Back to paused: on a break since ${after?.end ? formatTime(after.end, ctx.tz) : "then"}.)`
             : L.end !== null
-              ? `(Pause undone: ${SIDE_NAME[after.side]} still going.)`
-              : `(Switch undone: back on ${SIDE_NAME[after.side]}.)`;
+              ? after.side === "B"
+                ? "(Pause undone: still going back and forth.)"
+                : `(Pause undone: ${SIDE_NAME[after.side]} still going.)`
+              : after.side === "B"
+                ? "(Switch undone: back to going back and forth.)"
+                : L.side === "B"
+                  ? `(Back and forth undone: back on ${SIDE_NAME[after.side]}.)`
+                  : `(Switch undone: back on ${SIDE_NAME[after.side]}.)`;
         return fixResult(r, note, ctx);
       }
 
@@ -3207,9 +3539,10 @@ export function registerMapleTools(server: McpServer) {
       const pick = pickPart(feed, a.part, a.which, a.edge, ctx);
 
       if (a.set_side) {
-        const side = toSide(a.set_side);
+        const side = toStretch(a.set_side);
         if (side === pick.part.side) {
-          return ok(`That part of #${feed.id} is already the ${SIDE_NAME[side]}. Nothing changed. ${timelineText(feed, ctx)}`, {
+          const already = side === "B" ? "both sides (back and forth)" : `the ${SIDE_NAME[side]}`;
+          return ok(`That part of #${feed.id} is already ${already}. Nothing changed. ${timelineText(feed, ctx)}`, {
             updated: false,
             ...entryJson(feed, ctx),
             timeline: timelineJson(partsOf(feed, ctx), ctx),
@@ -3648,6 +3981,7 @@ export function registerMapleTools(server: McpServer) {
     duration_minutes: z.number().min(0).max(1440).nullish().describe("How long it lasted (sleep, pump, tummy_time, bath)."),
     left_minutes: z.number().min(0).max(180).nullish().describe("breastfeed: minutes on the left."),
     right_minutes: z.number().min(0).max(180).nullish().describe("breastfeed: minutes on the right."),
+    both_minutes: z.number().min(0).max(240).nullish().describe("breastfeed: minutes going back and forth between sides (sides not tracked)."),
     first_side: z.enum(["left", "right"]).nullish().describe("breastfeed: side she started on."),
     amount: z.number().min(0).max(2000).nullish().describe("bottle / pump: amount in `unit`."),
     unit: z.enum(["oz", "ml", "F", "C"]).nullish().describe("oz or ml for bottle/pump (default oz); F or C for temperature."),
@@ -3699,7 +4033,7 @@ export function registerMapleTools(server: McpServer) {
               sv = await doFeed({ ...item, method: "breast", amount: null, milk: null }, ctx, opts);
               break;
             case "bottle":
-              sv = await doFeed({ ...item, method: "bottle", left_minutes: null, right_minutes: null, first_side: null }, ctx, opts);
+              sv = await doFeed({ ...item, method: "bottle", left_minutes: null, right_minutes: null, both_minutes: null, first_side: null }, ctx, opts);
               break;
             case "diaper":
               if (!item.diaper) throw new ToolError('diaper items need diaper: "wet", "dirty", "both" or "dry".');
@@ -3764,7 +4098,7 @@ export function registerMapleTools(server: McpServer) {
         of: a.entries.length,
         results: results.map((r) => (r.saved ? { item: r.index + 1, ...savedJson(r.saved, ctx) } : { item: r.index + 1, created: false, error: r.error })),
         ...(s ? talliesJson(s) : {}),
-        ...(s && kinds.has("feed") ? { next_side: s.nextSide ? sideWord(s.nextSide) : null } : {}),
+        ...(s && kinds.has("feed") ? nextJson(s) : {}),
         alerts,
       });
       return created === 0 && results.every((r) => r.error) ? { ...out, isError: true } : out;
@@ -3774,7 +4108,7 @@ export function registerMapleTools(server: McpServer) {
   // ── fixing things ─────────────────────────────────────────────────────
 
   const DETAIL_KEYS: Record<EntryKind, string[]> = {
-    feed: ["method", "left_sec", "right_sec", "first_side", "last_side", "amount_ml", "milk"],
+    feed: ["method", "left_sec", "right_sec", "both_sec", "first_side", "last_side", "amount_ml", "milk"],
     pump: ["left_ml", "right_ml", "total_ml"],
     diaper: ["pee", "poop", "color", "texture", "size", "rash"],
     sleep: ["place"],
@@ -3794,7 +4128,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "Fix a logged entry",
       description: `Use this to fix an entry by id (from a log result or list_entries): its time (at / minutes_ago), end (ended_at / ended_minutes_ago / duration_minutes), note, or details. details holds kind-specific fields in STORAGE units; set a field to null to remove it:
-feed: method (breast|bottle), left_sec, right_sec (seconds), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed)
+feed: method (breast|bottle), left_sec, right_sec, both_sec (seconds; both = going back and forth, sides not tracked), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed)
 diaper: pee, poop (true/false), color (${STOOL_COLORS.join("|")}), texture, size, rash
 sleep: place · growth: weight_g, length_cm, head_cm, at (home|doctor) · temperature: temp_c (°C), method
 vitals: heart_bpm, resp_rate, spo2, jaundice · medicine: name, dose · pump: left_ml, right_ml, total_ml

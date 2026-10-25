@@ -1,9 +1,11 @@
 "use client";
 
 import { describeEntry } from "@/lib/maple/describe";
+import { minutesShort, nursingRuns, sideMinutesText, spanText } from "@/lib/maple/feed";
 import { formatRelative, formatTime } from "@/lib/maple/time";
-import type { Entry } from "@/lib/maple/types";
-import { Icon, KindBadge } from "./icons";
+import type { Entry, EntryOf } from "@/lib/maple/types";
+import { Icon, KIND_ICON, KindBadge } from "./icons";
+import { KIND_COLOR } from "./palette";
 import { Avatar, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
@@ -84,5 +86,91 @@ export default function EntryRow({
         )}
       </span>
     </button>
+  );
+}
+
+/**
+ * A cluster on the Timeline: one row, "Cluster · 4 feeds", with its span,
+ * nursing and sides under it ("6:02–8:40 PM · nursed 1h 52m (L 18 · R 22 ·
+ * both 1h 12m)"). Tapping opens it to its feeds, each opening its own sheet,
+ * and a row about cluster feeding (the Cluster feeding sheet). `entries` are
+ * that day's feeds in it, newest first (a cluster across midnight shows on
+ * each day with that day's feeds).
+ */
+export function ClusterRow({
+  entries,
+  now,
+  expanded,
+  onToggle,
+  onOpenEntry,
+  onInfo,
+  glow,
+}: {
+  entries: EntryOf<"feed">[];
+  now: Date;
+  expanded: boolean;
+  onToggle: () => void;
+  onOpenEntry: (e: Entry) => void;
+  onInfo: () => void;
+  glow?: Set<number>;
+}) {
+  const { state } = useMaple();
+  const tz = state?.baby.timezone ?? "America/New_York";
+  const runs = nursingRuns(entries, now);
+  const start = runs[0]?.start ?? Date.parse(entries[entries.length - 1].started_at);
+  const last = runs[runs.length - 1];
+  const end = last ? last.end : null;
+  const min = { left: 0, right: 0, both: 0, total: 0, has: { L: false, R: false, B: false } };
+  for (const r of runs) {
+    min.left += r.min.left;
+    min.right += r.min.right;
+    min.both += r.min.both;
+    min.total += r.min.total;
+    min.has = { L: min.has.L || r.min.has.L, R: min.has.R || r.min.has.R, B: min.has.B || r.min.has.B };
+  }
+  const sides = sideMinutesText(min);
+  const id = `maple-cluster-${entries[0].id}`;
+  return (
+    <div>
+      <button type="button" onClick={onToggle} aria-expanded={expanded} aria-controls={id} className={cx(tone.row, "min-h-[56px] py-2.5")}>
+        {/* A feed badge without a side letter: the cluster is several feeds. */}
+        <KindBadge icon={KIND_ICON.feed} color={KIND_COLOR.feed} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline gap-3">
+            <span className={cx(tone.body, "min-w-0 flex-1 truncate text-[15px] font-medium")}>
+              Cluster · {runs.length} feed{runs.length === 1 ? "" : "s"}
+            </span>
+            <span className={cx(tone.body, "inline-flex shrink-0 items-center gap-1 self-center text-sm tabular-nums")}>
+              {formatTime(start, tz)}
+              <Icon name="chevron-down" size={15} className={cx("text-mp-ink-3 transition", expanded && "rotate-180")} />
+            </span>
+          </span>
+          {/* Wraps between its parts, never inside the side minutes. */}
+          <span className={cx(tone.muted, "block text-[13px] leading-snug")}>
+            <span className="whitespace-nowrap">{spanText(start, end, tz)}</span> ·{" "}
+            <span className="whitespace-nowrap">nursed {minutesShort(min.total)}</span>
+            {sides && <span className="whitespace-nowrap"> ({sides})</span>}
+          </span>
+        </span>
+      </button>
+      {expanded && (
+        <div id={id} className="mx-3 mb-3 overflow-hidden rounded-xl bg-mp-sunken">
+          <div className={tone.divide}>
+            {entries.map((e) => (
+              <div key={e.id} data-entry-id={e.id} className={cx("transition-colors duration-700", glow?.has(e.id) && "bg-mp-focus/20")}>
+                <EntryRow entry={e} now={now} onClick={() => onOpenEntry(e)} />
+              </div>
+            ))}
+            <button type="button" onClick={onInfo} className={cx(tone.row, "min-h-[48px] py-2 text-[14px] text-mp-ink-2")}>
+              <span aria-hidden className="flex w-9 shrink-0 justify-center text-mp-ink-3">
+                <Icon name="info" size={17} />
+              </span>
+              <span className="min-w-0 flex-1">About cluster feeding</span>
+              <Icon name="chevron-right" size={16} className="shrink-0 text-mp-ink-3" />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

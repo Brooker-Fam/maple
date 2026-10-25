@@ -5,14 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
-import { other, staleFeed } from "@/lib/maple/feed";
+import { isTracked, other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
-import type { DiaperData, Entry, FeedData, Side, StoolColor } from "@/lib/maple/types";
+import type { DiaperData, Entry, FeedData, Side, StoolColor, StretchSide } from "@/lib/maple/types";
 import { CareStrip } from "./care/CareLine";
 import { fixPreset, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
-import MoreSheet, { usePress } from "./MoreSheet";
+import MoreSheet, { logSwitches, usePress } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR } from "./palette";
 import { useSheets } from "./sheets";
@@ -31,6 +31,19 @@ import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMap
  * ("Resume"), so Pause and Resume toggle in one spot; Done in column 3, More
  * in 4. Once the side she's on has run past the card's "Still nursing?"
  * check, Done asks when she finished ("when?") instead of ending the feed now.
+ *
+ * Going back and forth (both sides, not tracked), Switch's place is a quiet
+ * "Back & forth" tile: a tap only asks "Which side is she on now?" (a toast,
+ * nothing saved until it's answered), so a habit tap there is harmless; Pause
+ * and Done stay put. On a break after it, column 1 is "Track sides" (the same
+ * question) and column 2, where Pause was, is "Back on", filled, so a late
+ * second Pause tap still rejoins with no break.
+ *
+ * With Bottles off (Family → On Today; logSwitches), row 1 is Left, Right
+ * and More: Left and Right take the Bottle tile's room between them (an
+ * eight-column grid, each tile two columns, the sides three), still Left then
+ * Right. A start from a wide side also holds Done (column 3, under the
+ * Right's right half) for the side tiles' cooldown.
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
@@ -160,6 +173,11 @@ export default function Dock() {
   const next = summary.nextSide;
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
   const showHint = (!summary.age || summary.age.dayOfLife <= 3) && !summary.active.length;
+  // Family → On Today: no Bottle tile, so Left and Right share its room.
+  const { bottles } = logSwitches(state.baby);
+  // The part she's on (or came off) goes back and forth; the side the paused tiles count from is the last one tracked.
+  const both = !!feedN?.both;
+  const sideNow: Side = feedN ? (isTracked(feedN.side) ? feedN.side : feedN.tracked ?? "L") : "L";
 
   /** Show a check on the tile for 1.2s and ignore repeat taps meanwhile. Returns false if it's cooling down. */
   const flash = (id: string) => {
@@ -205,11 +223,13 @@ export default function Dock() {
    * it still waits); the other shows its new label, dimmed, so it never
    * looks as if two buttons were pressed.
    */
-  const swap = (col: "col1" | "col2", fn: () => void, opts: { long?: boolean } = {}) => {
+  const swap = (col: "col1" | "col2", fn: () => void, opts: { long?: boolean; wide?: boolean } = {}) => {
     if (cooling[col]) return;
     // Column 1's own taps, and any start (the tapped tile turns into Pause or Switch), wait the longer while.
     cool(col, col === "col1" || opts.long ? SIDE_COOL_MS : SWAP_COOL_MS);
-    cool(col === "col1" ? "col2" : "col1", SWAP_COOL_MS);
+    // A wide side (Bottles off) also covered part of the next column: that one waits as long, and Done (column 3) too.
+    cool(col === "col1" ? "col2" : "col1", opts.wide ? SIDE_COOL_MS : SWAP_COOL_MS);
+    if (opts.wide) cool("col3", SIDE_COOL_MS);
     cool(`check-${col}`, SWAP_COOL_MS);
     fn();
   };
@@ -326,7 +346,7 @@ export default function Dock() {
         toTop();
         void actions.startFeed(side);
       },
-      { long: true }
+      { long: true, wide: !bottles }
     );
 
   const holdFeed = (side: Side) => open({ kind: "feed", preset: { method: "breast", first_side: side, started_at: earlierAt() } });
@@ -346,23 +366,38 @@ export default function Dock() {
           {/* Her strip (her next medicine, 44px) rides on top; Maple's eight tiles stay exactly where they were. */}
           <CareStrip />
           {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Hold a button to log an earlier one.</p>}
-          <div className="grid grid-cols-4 gap-2">
+          {/* Eight columns, each tile two of them (four abreast), so Left and Right can take three each when Bottles is off. */}
+          <div className="grid grid-cols-8 gap-2">
             {/* Row 1: feeding, which becomes the nursing controls while a feed runs. No tile shows a feed clock (the card has it). */}
             {feed && feedN && nursing && !feedN.paused ? (
               <>
-                <Tile
-                  id="switch"
-                  label="Switch"
-                  sub={`to ${SIDE_NAME[other(feedN.side ?? "L")]}`}
-                  aria={`Switch to ${SIDE_NAME[other(feedN.side ?? "L")]}`}
-                  letter={other(feedN.side ?? "L")}
-                  color={SWITCH_STYLE[other(feedN.side ?? "L")].bg}
-                  ink={SWITCH_STYLE[other(feedN.side ?? "L")].fg}
-                  strong
-                  done={cooling["check-col1"]}
-                  disabled={feedPending || cooling.col1}
-                  onTap={tap(() => swap("col1", () => void actions.switchSide(feed, other(feedN.side ?? "L"))))}
-                />
+                {both ? (
+                  // Going back and forth: Switch's place only asks which side she's on (nothing saved until it's answered).
+                  <Tile
+                    id="back-and-forth"
+                    label="Back & forth"
+                    sub="Track sides"
+                    aria="Going back and forth. Track sides again: which side is she on now?"
+                    letter="B"
+                    stack
+                    disabled={feedPending || cooling.col1}
+                    onTap={tap(() => actions.askSide(feed))}
+                  />
+                ) : (
+                  <Tile
+                    id="switch"
+                    label="Switch"
+                    sub={`to ${SIDE_NAME[other(sideNow)]}`}
+                    aria={`Switch to ${SIDE_NAME[other(sideNow)]}`}
+                    letter={other(sideNow)}
+                    color={SWITCH_STYLE[other(sideNow)].bg}
+                    ink={SWITCH_STYLE[other(sideNow)].fg}
+                    strong
+                    done={cooling["check-col1"]}
+                    disabled={feedPending || cooling.col1}
+                    onTap={tap(() => swap("col1", () => void actions.switchSide(feed, other(sideNow))))}
+                  />
+                )}
                 <Tile
                   id="pause"
                   label="Pause"
@@ -381,8 +416,48 @@ export default function Dock() {
                   sub={feedPending ? "starting…" : askWhen ? "when?" : undefined}
                   inline={feedPending || askWhen}
                   accent
-                  disabled={feedPending}
+                  disabled={feedPending || cooling.col3}
                   onTap={tap(() => (askWhen ? open({ kind: "feed", entry: feed, preset: fixPreset("current", "done") }) : void actions.stop(feed)))}
+                />
+              </>
+            ) : feed && feedN && nursing && both && !staleFeed(feed as Entry & { data: FeedData }, clock) ? (
+              <>
+                {/*
+                  On a break after going back and forth: column 1 asks which side she's on (and goes back on
+                  there); column 2, where Pause was, is "Back on", still going back and forth, filled, so a late
+                  second Pause tap rejoins with no break (under a minute, the engine merges it).
+                */}
+                <Tile
+                  id="track"
+                  label="Track sides"
+                  sub="Left or Right"
+                  aria="Back on a side: which side is she on now?"
+                  letter="B"
+                  stack
+                  disabled={feedPending || cooling.col1}
+                  onTap={tap(() => actions.askSide(feed))}
+                />
+                <Tile
+                  id="back-on"
+                  label="Back on"
+                  sub="both sides"
+                  letter="B"
+                  stack
+                  aria="Back on, going back and forth"
+                  accent
+                  done={cooling["check-col2"]}
+                  disabled={feedPending || cooling.col2}
+                  onTap={tap(() => swap("col2", () => void actions.resume(feed, "B")))}
+                />
+                <Tile
+                  id="done"
+                  label="Done"
+                  icon="check"
+                  inline
+                  sub={feedPending ? "starting…" : `ends ${formatTimeNear(feedN.current.since, feedN.current.since, tz)}`}
+                  aria={`Done: end the feed at ${formatTime(feedN.current.since, tz)}, when you paused`}
+                  disabled={feedPending}
+                  onTap={tap(() => void actions.stop(feed))}
                 />
               </>
             ) : feed && feedN && nursing ? (
@@ -394,8 +469,9 @@ export default function Dock() {
                   a late second tap on Pause goes back on the same side and merges (no break) instead
                   of starting the other side. The sides move with the feed, so their letters are big.
                   Both turn off after a tap (column 1 for 2.5 s after its own), so a double tap can't land on the new tile.
+                  (After an hour off a back-and-forth part, the sides count from the last side tracked.)
                 */}
-                {[other(feedN.side ?? "L"), feedN.side ?? "L"].map((s, i) => {
+                {[other(sideNow), sideNow].map((s, i) => {
                   const col = i === 0 ? "col1" : "col2";
                   const suggested = i === 0;
                   // On a break for over an hour (the Siri/Claude rule): a tap starts a new feed, ending this one at its pause.
@@ -433,8 +509,12 @@ export default function Dock() {
             ) : feed ? (
               <>
                 {/* An untimed feed (logged by voice without sides): just its Done. */}
-                <Tile id="bottle" label="Bottle" sub={lastBottleLabel} inline={!!lastBottleLabel} icon="bottle" color={TILE.bottle} onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))} />
-                <div aria-hidden />
+                {bottles ? (
+                  <Tile id="bottle" label="Bottle" sub={lastBottleLabel} inline={!!lastBottleLabel} icon="bottle" color={TILE.bottle} onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))} />
+                ) : (
+                  <div aria-hidden className="col-span-2" />
+                )}
+                <div aria-hidden className="col-span-2" />
                 <Tile id="done" label="Done" icon="check" aria="Done: end the feed now" accent disabled={feedPending} onTap={tap(() => void actions.stop(feed))} />
               </>
             ) : (
@@ -448,22 +528,25 @@ export default function Dock() {
                     letter={s}
                     color={SIDE_COLOR[s]}
                     next={next === s}
+                    wide={!bottles}
                     done={cooling[s === "L" ? "check-col1" : "check-col2"]}
                     disabled={s === "L" ? cooling.col1 : cooling.col2}
                     onTap={tap(() => tapSide(s))}
                     onHold={hold(() => holdFeed(s))}
                   />
                 ))}
-                <Tile
-                  id="bottle"
-                  label="Bottle"
-                  sub={lastBottleLabel}
-                  inline={!!lastBottleLabel}
-                  icon="bottle"
-                  color={TILE.bottle}
-                  onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))}
-                  onHold={hold(() => open({ kind: "feed", preset: { method: "bottle", started_at: earlierAt() } }))}
-                />
+                {bottles && (
+                  <Tile
+                    id="bottle"
+                    label="Bottle"
+                    sub={lastBottleLabel}
+                    inline={!!lastBottleLabel}
+                    icon="bottle"
+                    color={TILE.bottle}
+                    onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))}
+                    onHold={hold(() => open({ kind: "feed", preset: { method: "bottle", started_at: earlierAt() } }))}
+                  />
+                )}
               </>
             )}
             <Tile id="more" label="More" icon="plus" onTap={tap(() => setMoreOpen(true))} />
@@ -559,6 +642,8 @@ function Tile({
   aria,
   inline: inlineProp,
   bigLetter,
+  stack,
+  wide,
 }: {
   id: string;
   label: string;
@@ -569,7 +654,8 @@ function Tile({
   onHold?: () => void;
   next?: boolean;
   done?: boolean;
-  letter?: Side;
+  /** A side letter on its color; "B" (going back and forth) is the two side colors with "LR". */
+  letter?: StretchSide;
   icon?: IconName;
   /** Diaper marks (the drop, the pile, or both), drawn like the Timeline's and the Since tiles'. */
   marks?: { icon: IconName; color: string }[];
@@ -587,6 +673,10 @@ function Tile({
   inline?: boolean;
   /** A bigger side letter that never hides (the paused sides, whose columns follow the feed rather than Left/Right). */
   bigLetter?: boolean;
+  /** The mark over the label even with a letter (a long label like "Back & forth" needs the tile's width). */
+  stack?: boolean;
+  /** Three of the grid's eight columns instead of two (Left and Right with Bottles off). */
+  wide?: boolean;
 }) {
   const press = usePress(onTap, onHold);
   // At night a filled tile glows softly instead of blazing, in the amber like
@@ -595,7 +685,7 @@ function Tile({
   const night = useNightActive();
   const filled = strong || accent;
   // Icon and label share a line for a side letter or when asked (a tile with a subline); Done, Pause, More and "Woke up" stack.
-  const inline = !!letter || !!inlineProp;
+  const inline = (!!letter && !stack) || !!inlineProp;
   const fill = strong && color ? (night ? "rgb(224 169 59 / 0.25)" : color) : undefined;
   return (
     <button
@@ -605,7 +695,9 @@ function Tile({
       aria-label={`${aria ?? label}${next ? " (next side)" : ""}${onHold ? ". Hold to log an earlier one" : ""}`}
       {...press}
       className={cx(
-        "relative flex min-h-[64px] flex-col items-center justify-center rounded-2xl border px-1 py-1.5 text-center transition select-none active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100",
+        "relative flex min-h-[64px] flex-col items-center justify-center rounded-2xl border px-1 text-center transition select-none active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100",
+        stack ? "py-1" : "py-1.5",
+        wide ? "col-span-3" : "col-span-2",
         accent
           ? "border-transparent bg-mp-accent text-mp-on-accent"
           : strong
@@ -628,9 +720,11 @@ function Tile({
             <Icon name="check" size={26} strokeWidth={2.4} />
           </motion.span>
         ) : (
-          <motion.span key="label" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-1">
+          // A stacked tile with a subline ("Back & forth" / "Track sides") sits tighter so it keeps the row's 64px.
+          <motion.span key="label" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className={cx("flex flex-col items-center", stack ? "gap-0.5" : "gap-1")}>
             <span className="flex items-center gap-1.5">
-              {letter && (
+              {letter === "B" && <BothMark />}
+              {letter && letter !== "B" && (
                 <span
                   aria-hidden
                   // Under 360px "Switch" needs the room; its "to Left" already names the side.
@@ -657,7 +751,12 @@ function Tile({
               )}
               {inline && <span className="text-[15px] leading-tight font-semibold">{label}</span>}
             </span>
-            {!inline && <span className={cx("leading-tight font-semibold", filled ? "text-[15px]" : "text-[14px]")}>{label}</span>}
+            {!inline && (
+              // "Back & forth" fits a 76px tile at 14px only just: a notch smaller under 360px.
+              <span className={cx("leading-tight font-semibold whitespace-nowrap", filled ? "text-[15px]" : "text-[14px]", stack && "tracking-[-0.01em] max-[359px]:text-[13px]")}>
+                {label}
+              </span>
+            )}
             {sub && (
               // 11px needs ink-2 (ink-3 is 3:1 at night); on a filled tile it's full strength (85% was 4.39:1 on "to Left").
               <span
@@ -673,5 +772,22 @@ function Tile({
         )}
       </AnimatePresence>
     </button>
+  );
+}
+
+/**
+ * Going back and forth: the two side colors side by side with "LR", the
+ * tile's mark where a side letter would be (an amber ring at night, as the
+ * side letters are).
+ */
+function BothMark() {
+  return (
+    <span aria-hidden className="mp-side-mark relative inline-flex h-4 shrink-0 items-center overflow-hidden rounded-full px-[3px] text-[10px] leading-none font-bold tracking-[-0.02em]">
+      <span className="absolute inset-y-0 left-0 w-1/2 [.maple-night_&]:hidden" style={{ backgroundColor: SIDE_COLOR.L }} />
+      <span className="absolute inset-y-0 right-0 w-1/2 [.maple-night_&]:hidden" style={{ backgroundColor: SIDE_COLOR.R }} />
+      {/* Each letter in its half's ink (SIDE_INK: white on rust, dark on honey). */}
+      <span className="relative text-white [.maple-night_&]:text-[#e8a23f]">L</span>
+      <span className="relative ml-[3px] text-[#2A1A08] [.maple-night_&]:text-[#e8a23f]">R</span>
+    </span>
   );
 }
