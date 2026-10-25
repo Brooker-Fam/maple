@@ -132,7 +132,7 @@ Her own area: medicines on the schedule her clinician gave, her temperature, que
 | An owner or member she doesn't | none | none | none | none | no |
 | A viewer | none (Support and warning signs only) | none | none | none | no |
 | The admin login with `admin_as` = a member | that member's access, minus her own | never | never | never | no |
-| The admin login with `admin_as` unset | none | none | none | none | no |
+| The admin login with `admin_as` unset (the family password, the calendar connector) | read, write while she shares with any owner; it can set up her page | never | never | never | no |
 
 Sharing starts with every other owner; she changes it in Who sees this. Each reader's rev token includes only the care rows they can read, and the person row as they see it, so her Only me and check-in writes, and her own settings (a suggestion's Not now, the check-in switch, the banner), never change anyone else's. Errors on care routes, `care-mcp.ts` and the Siri mom actions are reported as `new Error(code)` with `{ route }` only, since Postgres messages can hold row data.
 
@@ -150,10 +150,10 @@ Sharing starts with every other owner; she changes it in Who sees this. Each rea
 
 Examples here use a made-up medicine, Examplex: the repo is public, so docs never name anything she takes.
 
-**MCP tools** (`care-mcp.ts`, on both the Maple connector and the calendar connector): `set_up_mom` (creates her page, by the app's rule: she can for herself, or an owner for her; the admin login only while it logs as a member), `mom_status`, `log_mom_medicine`, `set_mom_medicine`, `log_mom_temperature`, `add_mom_question` and `fix_mom_entry`. There are no mood tools, and assistants never see Only me items or the therapist's number, even on her own token.
+**MCP tools** (`care-mcp.ts`, on both the Maple connector and the calendar connector): `set_up_mom` (creates her page, by the app's rule: she can for herself, or an owner for her; the admin login counts as an owner and names who it's for), `mom_status`, `log_mom_medicine`, `set_mom_medicine`, `log_mom_temperature`, `add_mom_question` and `fix_mom_entry`. There are no mood tools, and assistants never see Only me items or the therapist's number, even on her own token.
 - `MAPLE_INSTRUCTIONS` ends with a paragraph for her medicines and the crisis numbers: call 911 if anyone is in immediate danger, otherwise call or text 988; the maternal hotline isn't a crisis line.
 - `log_mom_medicine` (strict, like Siri) answers `created: false` with `reason` (`early`, `recent`, `at_limit`, `units`) and saves only when called again with `allow_duplicate: true`. `set_mom_medicine` saves only what the user read from the label and leaves the rest empty; a mood or zuranolone medicine she adds is saved as Only me and the result says so.
-- Access errors (no area yet, not shared, the admin login acting as nobody, a viewer) end with `HELP_NOW_LINE` and carry `help_now: MOM_HELP.now`.
+- Access errors (no area yet, not shared, the admin login while she shares with no owner, a viewer) end with `HELP_NOW_LINE` and carry `help_now: MOM_HELP.now`.
 - Maple's `log_medicine` refuses a name that exactly matches (after `normName`) an active, non-private plan or Also called name on her list, and says to use `log_mom_medicine` or call again with `for_maple: true`. Vitamin D never trips it. In `log_many` that item comes back "Not saved (item N, medicine): …" and the others save.
 - `maple_status` adds one line, "{Name}: Examplex OK after 9:10 AM", for callers she shares her medicines with.
 

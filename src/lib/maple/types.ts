@@ -232,7 +232,7 @@ export type MapleState = {
   /**
    * Before mom's area is set up, for someone who may set it up: "anyone"
    * (an owner, for any owner or member) or "self" (a member, for herself).
-   * Absent once it exists, and for viewers and the admin login acting as nobody.
+   * Absent once it exists, and for viewers.
    */
   care_setup?: "anyone" | "self";
 };

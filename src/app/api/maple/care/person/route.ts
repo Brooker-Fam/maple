@@ -18,10 +18,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (!me) return json({ error: "Not signed in" }, 401);
     const s = await sessionCare(me);
     const body = await readJson(request);
-    const caller = s.members.find((m) => m.email === s.viewer.id);
+    // The admin login logging as nobody is the family's password, so it sets up like an owner.
+    const admin = s.viewer.id === "admin";
+    const member = s.members.find((m) => m.email === s.viewer.id);
+    const caller = admin ? { email: "admin", role: "owner" } : eligible(member) ? member : null;
     const target = s.members.find((m) => m.email === body.member);
     if (!eligible(target)) return json({ error: "Choose an owner or member of Maple's Log." }, 400);
-    if (!eligible(caller) || (caller.role !== "owner" && caller.email !== target.email)) {
+    if (!caller || (caller.role !== "owner" && caller.email !== target.email)) {
       return json({ error: "Only she, or an owner, can set this up." }, 403);
     }
     const person = await createCarePerson(target.email, caller.email, s.members);

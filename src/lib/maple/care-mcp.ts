@@ -73,7 +73,7 @@ async function careFor(ctx: Ctx): Promise<CareSession> {
   return careSession(viewer, { members: ctx.members, baby: ctx.baby });
 }
 
-/** §10.2's access errors, in this order: a viewer, no area yet, the admin login acting as nobody, not shared. */
+/** §10.2's access errors, in this order: a viewer, no area yet, the admin login while she shares with no owner, not shared. */
 function needAccess(ctx: Ctx, s: CareSession, write: boolean) {
   if (ctx.who.role === "viewer") throw new CareAccessError(VIEWER_MESSAGE);
   if (!s.person) {
@@ -82,7 +82,7 @@ function needAccess(ctx: Ctx, s: CareSession, write: boolean) {
   if (!s.access.read || (write && !s.access.write)) {
     if (ctx.who.id === ADMIN_ID) {
       throw new CareAccessError(
-        `Her medicines aren't shared with the admin login. An owner she shares them with can turn on "Calendar connector logs as me" in Family.`
+        `${carePersonName(s.person, ctx.members)} keeps her medicines to herself right now (Who sees this is set to only her), so the admin login can't see them.`
       );
     }
     throw new CareAccessError(`${carePersonName(s.person, ctx.members)}'s medicines aren't shared with you.`);
@@ -405,14 +405,15 @@ export function registerCareTools(server: McpServer) {
       try {
         const ctx = await context(extra);
         if (ctx.who.role === "viewer") throw new CareAccessError(VIEWER_MESSAGE);
-        if (ctx.who.id === ADMIN_ID) {
-          throw new CareAccessError(`The admin login can't set this up while it logs as nobody. An owner can turn on "Calendar connector logs as me" in Family, or set it up in the app under Family.`);
-        }
-        const caller = ctx.members.find((m) => m.email === ctx.who.id);
-        if (!eligible(caller)) throw new CareForbidden("Only she, or an owner, can set this up.");
+        // The admin login logging as nobody is the family's password: it sets up like an owner, for someone it names.
+        const admin = ctx.who.id === ADMIN_ID;
+        const member = ctx.members.find((m) => m.email === ctx.who.id);
+        const caller = admin ? { email: ADMIN_ID, role: "owner" as const } : eligible(member) ? member : null;
+        if (!caller) throw new CareForbidden("Only she, or an owner, can set this up.");
         const pool = ctx.members.filter(eligible);
-        let target = caller;
+        let target: { email: string } = caller;
         const asked = a.person?.trim().toLowerCase();
+        if (admin && !asked) throw new ToolError(`Who is it for? Pass person: ${pool.map((m) => memberName(m.email, ctx.members)).join(", ")}.`);
         if (asked) {
           const name = (m: (typeof pool)[number]) => memberName(m.email, ctx.members).toLowerCase();
           const hits = pool.filter((m) => m.email.toLowerCase() === asked || name(m) === asked || name(m).split(" ")[0] === asked);

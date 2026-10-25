@@ -73,7 +73,8 @@ export default function SharingSheet({ open, onClose, care, onDeleted }: { open:
         <Problem>{problem}</Problem>
         <Footnote className="mt-0">
           Anything you mark Only me stays yours. Check-ins are always only yours: they never go to anyone else, their Claude or ChatGPT, the admin login or the calendar
-          connector. People you share with can see the rest through their own Claude or ChatGPT too.
+          connector. People you share with can see the rest through their own Claude or ChatGPT too, and while you share with an owner, so can the family&apos;s admin
+          login (the password sign-in and the calendar connector).
         </Footnote>
         <p className={cx(tone.muted, "px-1 text-[13px] leading-snug")}>{SUPPORT.privacy}</p>
         <div className={GROUP}>

@@ -92,8 +92,13 @@ const SHARED_ACCESS: CareAccess = { ...NO_CARE_ACCESS, read: true, write: true }
  */
 export function careAccess(viewer: CareViewer, person: CarePerson | null, members: Member[]): CareAccess {
   if (!person) return { ...NO_CARE_ACCESS };
-  // The admin login acting as nobody (admin_as unset) reaches nothing here.
-  if (viewer.id === "admin") return { ...NO_CARE_ACCESS };
+  // The admin login acting as nobody (admin_as unset) is the family's own password, the calendar connector
+  // included: it reads and logs her medicines like an owner she shares with, whenever she shares with any
+  // owner. Only me items, check-ins and the therapist stay hers (SHARED_ACCESS has none of them).
+  if (viewer.id === "admin") {
+    const owners = new Set(members.filter((x) => x.role === "owner" && x.email !== "admin").map((x) => x.email));
+    return person.shared_with.some((e) => owners.has(e)) ? { ...SHARED_ACCESS } : { ...NO_CARE_ACCESS };
+  }
   const m = members.find((x) => x.email === viewer.id);
   if (!m || m.role === "viewer") return { ...NO_CARE_ACCESS };
   if (viewer.id === person.member) {

@@ -745,7 +745,9 @@ check("T-ENG-15 careAccess: the §9.1 matrix", () => {
   eq(flags(careAccess(v(ALEX), person, members)), "read,write", "shared owner");
   eq(flags(careAccess(v(JO), person, members)), "", "not shared");
   eq(flags(careAccess(v(VI), { ...person, shared_with: [ALEX, VI] }, members)), "", "viewer, even if listed");
-  eq(flags(careAccess(v("admin", { viaAdmin: true }), person, members)), "", "admin, admin_as unset");
+  eq(flags(careAccess(v("admin", { viaAdmin: true }), person, members)), "read,write", "admin, admin_as unset: like an owner she shares with");
+  eq(flags(careAccess(v("admin", { viaAdmin: true }), { ...person, shared_with: [JO] }, members)), "", "admin, admin_as unset, shared with no owner");
+  eq(flags(careAccess(v("admin", { viaAdmin: true }), { ...person, shared_with: [] }, members)), "", "admin, admin_as unset, only her");
   eq(flags(careAccess(v(ALEX, { viaAdmin: true }), person, members)), "read,write", "admin_as = Alex");
   eq(flags(careAccess(v(SAM, { viaAdmin: true }), person, members)), "read,write", "admin_as = Sam: no mood, private, therapist or manage");
   eq(flags(careAccess(v(JO, { viaAdmin: true }), person, members)), "", "admin_as = Jo (not shared)");
