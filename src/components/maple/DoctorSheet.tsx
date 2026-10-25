@@ -31,7 +31,7 @@ const DANGER_TEXT =
   "-mr-2 min-h-[44px] shrink-0 rounded-[10px] px-2 text-[15px] font-medium text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97] disabled:opacity-40";
 
 export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onClose: () => void; ask?: number }) {
-  const { state } = useMaple();
+  const { state, readOnly } = useMaple();
   const now = useNow(60_000);
   const app = useAppNav();
   const phones = usePhones();
@@ -75,7 +75,8 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
               <span className="shrink-0 text-[15px] font-medium text-mp-accent-fg">Call</span>
             </a>
           ))}
-          {!numbers.length && (
+          {/* Viewers can't fill them in (Family → Her doctor is read-only for them). */}
+          {!numbers.length && !readOnly && (
             <NavRow icon="phone" label="Add her doctor's numbers" note="In Family → Her doctor, for one-tap calling" onClick={() => then(() => app.go("family"))} />
           )}
           <NavRow icon="ruler" label="Growth chart" note="Weights and lengths on the WHO curves" onClick={toGrowth} />

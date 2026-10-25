@@ -569,6 +569,23 @@ check("T-ENG-11 matchPlan: exact, Also called, containment, ambiguous, none; pri
   eq(pick("sertraline"), "none:4", "private hidden");
   eq(pick("sertraline", true), "Sertraline", "private for her");
   eq(pick(`p${ibu.id}`), "Ibuprofen", "by p id");
+  eq(pick("Tylenol Extra Strength"), "Acetaminophen", "strength words");
+  eq(pick("Advil Liqui-Gels"), "Ibuprofen", "form words");
+});
+
+check("T-ENG-11 matchPlan: another product never counts toward her plan", () => {
+  const apap = plan({ name: "Tylenol" });
+  const advil = plan({ name: "Advil" });
+  const pm = plan({ name: "Tylenol PM" });
+  const pick = (q: string, plans: CarePlan[]) => {
+    const m = matchPlan(q, plans, { includePrivate: true });
+    return m.kind === "match" ? m.plan.name : m.kind === "ambiguous" ? `ambiguous:${m.plans.map((x) => x.name).join("/")}` : "none";
+  };
+  for (const q of ["Tylenol 3", "Tylenol #3", "Tylenol with codeine", "Tylenol PM", "Tylenol Sinus"]) eq(pick(q, [apap, advil]), "none", q);
+  eq(pick("Advil PM", [apap, advil]), "none", "Advil PM");
+  eq(pick("tylenol", [pm]), "ambiguous:Tylenol PM", "plain name asks about the combination");
+  eq(pick("acetaminophen", [plan({ name: "Oxycodone-acetaminophen" })]), "ambiguous:Oxycodone-acetaminophen", "ingredient asks");
+  eq(pick("Ibuprofen 600", [plan({ name: "Ibuprofen" })]), "Ibuprofen", "a bare strength");
 });
 
 // ── T-ENG-12, 13 check-ins (step 2) ──────────────────────────────────────

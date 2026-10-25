@@ -70,9 +70,12 @@ export type CareActions = {
   /**
    * The one-tap: "saved" (its toast is up), { ask } (open the Dose sheet with
    * the reason on top), or "ignored" when it came within the tap cooldown
-   * after a care save (a double tap), so nothing happens at all.
+   * after a care save (a double tap), so nothing happens at all. The cooldown
+   * is for a slot whose medicine can change under the thumb (the strip, the
+   * Lantern); a list that keeps its order passes `cool: false`, so two
+   * medicines taken together are two quick taps.
    */
-  tookIt(planId: number): Promise<"saved" | "ignored" | { ask: OneTapAsk }>;
+  tookIt(planId: number, opts?: { cool?: boolean }): Promise<"saved" | "ignored" | { ask: OneTapAsk }>;
   logDose(i: {
     planId?: number;
     oneOff?: { name: string; dose?: string; private?: boolean };
@@ -552,9 +555,9 @@ export function useCare(): UseCare | null {
   );
 
   const tookIt = useCallback<CareActions["tookIt"]>(
-    async (planId) => {
-      // A second tap while the first saves, or just after: the list may have moved under the thumb.
-      if (tapCooling()) return "ignored";
+    async (planId, opts) => {
+      // A second tap while the first saves, or just after: the slot may have moved under the thumb.
+      if (opts?.cool !== false && tapCooling()) return "ignored";
       const plan = planOf(planId);
       if (!plan) throw new Error("That medicine isn't on the list anymore.");
       const t = clock();

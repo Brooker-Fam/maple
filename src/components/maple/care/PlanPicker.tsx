@@ -59,7 +59,7 @@ export default function PlanPicker({ open, onClose }: PlanPickerProps) {
                     </span>
                   </span>
                 </button>
-                <TookIt view={v} care={care} onSaved={onClose} onAsk={(ask) => then(() => nav.openDose(v.plan.id, ask))} />
+                <TookIt view={v} care={care} fixed onSaved={onClose} onAsk={(ask) => then(() => nav.openDose(v.plan.id, ask))} />
               </div>
             ))}
           </div>

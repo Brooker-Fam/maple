@@ -153,13 +153,15 @@ export default function WhileYouSlept() {
       <button
         type="button"
         onClick={(ev) => {
-          // Opened on a short phone, the sentences land under the dock: bring them up into view.
+          // Opened on a short phone, the sentences land under the dock (or, read-only, the tab bar): bring them up into
+          // view. Measured from the top of whichever sits lowest on the page's bottom edge, safe area and all.
           const sec = ev.currentTarget.closest("section");
           if (!open && sec)
             requestAnimationFrame(() =>
               requestAnimationFrame(() => {
-                const dock = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--maple-dock-h")) || 0;
-                const over = sec.getBoundingClientRect().bottom - (window.innerHeight - dock - 16);
+                const cover = document.querySelector('[aria-label="Log something"]') ?? document.querySelector(`nav[aria-label="Maple's Log"]`);
+                const bottom = cover ? cover.getBoundingClientRect().top : window.innerHeight;
+                const over = sec.getBoundingClientRect().bottom - (bottom - 16);
                 if (over > 0) window.scrollBy({ top: over, behavior: "smooth" });
               })
             );

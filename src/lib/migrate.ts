@@ -748,6 +748,8 @@ async function migrate() {
   await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS device_id TEXT`;
   await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS receipt_token TEXT`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_push_subs_receipt ON maple_push_subs(receipt_token) WHERE receipt_token IS NOT NULL`;
+  // Phones that were on before receipts existed get a token too (32 hex characters, like saveSub's).
+  await sql`UPDATE maple_push_subs SET receipt_token = replace(gen_random_uuid()::text, '-', '') WHERE receipt_token IS NULL`;
   await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS last_delivered_at TIMESTAMPTZ`;
   await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS last_delivered_key TEXT`;
   await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS undelivered INT NOT NULL DEFAULT 0`;

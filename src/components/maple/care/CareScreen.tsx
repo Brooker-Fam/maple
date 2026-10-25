@@ -259,7 +259,7 @@ function MedRow({ view, care, onOpen, finished }: { view: PlanView; care: UseCar
         </span>
         {finished && <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />}
       </button>
-      {!finished && <TookIt view={view} care={care} onAsk={(ask) => nav.openDose(view.plan.id, ask)} />}
+      {!finished && <TookIt view={view} care={care} fixed onAsk={(ask) => nav.openDose(view.plan.id, ask)} />}
     </div>
   );
 }

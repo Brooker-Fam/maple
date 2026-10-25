@@ -3,11 +3,13 @@
 # docs/maple.md → Notifications); without QStash this and an open app's polls are all
 # there is. GitHub runs scheduled jobs late or skips them under load (about 3 runs in
 # 7 hours were seen overnight), so never rely on this alone for a dose that matters.
+# Once QStash is set up, the tick ignores runs away from :04 and :34 (the safety net's
+# minutes) without touching the database.
 name: Maple reminders
 
 on:
   schedule:
-    - cron: "4,34 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions: {}
