@@ -7,8 +7,8 @@ import { cleanPrefs, deleteSub, patchPrefs, saveSub, subFor, vapidKeys } from "@
  *   POST   { subscription: PushSubscriptionJSON, prefs?, device? } → { sub }  (turn on, or move the phone to this member)
  *   PATCH  { endpoint, prefs } → { sub }
  *   DELETE ?endpoint=…  (turn off)
- * Viewers can turn reminders on too: what reaches them is only what they may
- * see of her medicines (nothing, unless she shares with them).
+ * Viewers can turn reminders on too, but they can't see her medicines, so
+ * nothing about them reaches a viewer's phone.
  */
 
 const endpointOf = (v: unknown): string => {

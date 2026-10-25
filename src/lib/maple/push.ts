@@ -261,7 +261,6 @@ export async function runPushTick(now = new Date()): Promise<{ sent: number; ski
   const subs = (await q(`SELECT * FROM maple_push_subs`)).map(rowToSub);
   if (!subs.length) return { sent: 0 };
   const person = await getCarePerson();
-  if (!person) return { sent: 0 };
   const [baby, members] = await Promise.all([getBaby(), listMembers()]);
   let sent = 0;
   const byMember = new Map<string, PushSub[]>();

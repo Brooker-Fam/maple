@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { unreviewed } from "@/lib/maple/care";
-import { Icon, KindBadge } from "../icons";
+import { KindBadge } from "../icons";
 import { CARE_COLOR } from "../palette";
 import { cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -60,11 +59,8 @@ export function CareTodayRow() {
         <span className="min-w-0 flex-1 text-[15px] leading-[18px] tabular-nums">
           <span className="flex min-w-0 items-center gap-1 text-mp-ink">
             <span className="truncate">{view.plan.name}</span>
-            {/* Added by an assistant and nobody has checked it against the label: a mark the line's cut can't hide. */}
-            {unreviewed(view.plan) && <Icon name="circle-alert" size={14} className="shrink-0 text-mp-ink-2" aria-label="Not checked against the label" />}
           </span>
-          {/* The status without the unreviewed suffix (the mark says it), so the time keeps its room. */}
-          <span className="block truncate text-mp-ink-2">{view.lineStatus.replace(/ · not checked against the label$/, "")}</span>
+          <span className="block truncate text-mp-ink-2">{view.lineStatus}</span>
         </span>
         {/* "+1" (the aria-label says "and 1 more"): "+1 more" would take the status's room. */}
         {more > 0 && <span className={cx(tone.faint, "shrink-0 text-[13px] tabular-nums")}>+{more}</span>}

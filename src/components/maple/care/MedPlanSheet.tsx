@@ -9,7 +9,7 @@ import { Icon } from "../icons";
 import { Label, MoreDetails, SheetFooter, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
-import { ConfirmSheet, LIMIT_UNITS, NoteCard, Problem, Switch, UNIT_LABEL, errorText } from "./parts";
+import { LIMIT_UNITS, NoteCard, Problem, Switch, UNIT_LABEL, errorText } from "./parts";
 import type { UseCare } from "./useCare";
 
 /**
@@ -139,7 +139,6 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const conflictRef = useRef<HTMLParagraphElement>(null);
   // The "changed a moment ago" line sits at the top: bring it into view from wherever Save was tapped.
   useEffect(() => {
@@ -247,7 +246,6 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   // Closes first, so "Deleted {name}" and its Undo land on the screen underneath (useCare says it, and any refusal).
   const del = () => {
     if (!base) return;
-    setConfirmDelete(false);
     onClose();
     onDeleted?.();
     void care.act.deletePlan(base.id).catch(() => {});
@@ -258,7 +256,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   return (
     <>
       <Sheet
-        open={open && !confirmDelete}
+        open={open}
         onClose={onClose}
         title={base ? `Edit ${base.name}` : "Add a medicine"}
         footer={
@@ -266,7 +264,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
             <Problem className="mt-0 mb-2 text-center">{problem}</Problem>
             <SheetFooter
               onClose={onClose}
-              onDelete={base ? () => setConfirmDelete(true) : undefined}
+              onDelete={base ? del : undefined}
               onPrimary={() => void save()}
               label="Save"
               busy={busy}
@@ -441,16 +439,6 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
           <ToggleRow label="Show on Today" checked={showToday} onChange={(v) => set("showToday", v)} />
         </MoreDetails>
       </Sheet>
-      <ConfirmSheet
-        open={open && confirmDelete}
-        onClose={() => setConfirmDelete(false)}
-        title={`Delete ${base?.name ?? "this medicine"}?`}
-        body="It leaves the list. Doses already logged stay in the history."
-        confirm="Delete"
-        danger
-        busy={busy}
-        onConfirm={del}
-      />
     </>
   );
 }

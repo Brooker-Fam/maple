@@ -9,7 +9,7 @@ import { DEFAULT_TZ, dayKey, daysBetween, formatTime, formatTimeNear, parseDayKe
 import type { Entry, EntryKind, EntryOf } from "@/lib/maple/types";
 import { formatTemp, formatVolume, formatWeight } from "@/lib/maple/units";
 import { useCareNav } from "./care/CareNav";
-import { useCare, useCareSetup } from "./care/useCare";
+import { useCare } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
 import { CARE_COLOR, KIND_COLOR, SKIN_COLOR } from "./palette";
 import { useSheets } from "./sheets";
@@ -156,7 +156,6 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const sheets = useSheets();
   const care = useCare();
   const careNav = useCareNav();
-  const canSetUp = useCareSetup() != null;
   const actions = useTimerActions();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
@@ -234,7 +233,7 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const lastMoment = latest("moment");
   const weight = summary?.weight;
 
-  // Mom's row: her plan picker for anyone who can log her doses, or setup for anyone who could set it up.
+  // Mom's row: her plan picker for anyone who can log her doses.
   const careLine = care?.plans[0]?.line;
   const openCare = (fn: () => void) => {
     onClose();
@@ -249,9 +248,7 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
         color: CARE_COLOR,
         onTap: () => openCare(careNav.openPicker),
       }
-    : !care && canSetUp
-      ? { id: "mom", label: "Mom's medicine", sub: "Set up her list", icon: "pill", color: CARE_COLOR, onTap: () => openCare(careNav.openSetup) }
-      : null;
+    : null;
 
   const vitaminD: Item = {
     id: "vitd",

@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useRef } from "react";
 import {
   careTime,
+  countedAs,
   crisisToday,
   doseNotes,
   nextUnits,
@@ -345,7 +346,9 @@ export function useCare(): UseCare | null {
   /** The toast after a dose saves: when the next is OK, any note, "2/5/15 min earlier" and Undo. */
   const doseToast = useCallback(
     (plan: CarePlan | null, entry: DoseEntry, notes: Assessment[]) => {
-      const text = doseText(plan, entry);
+      // A count left out on a plan that counts units: say what it counted as, so a wrong one gets fixed.
+      const counted = plan && !entry.data.skipped ? countedAs(plan, entry.data.units) : null;
+      const text = `${doseText(plan, entry)}${counted ? ` · counted as ${counted}` : ""}`;
       const urgent = notes.find((n) => n.tier === "now" || n.tier === "emergency") ?? notes.find((n) => n.tier === "nudge");
       const recorded = Date.parse(entry.at);
       const chips: ToastAction[] = entry.data.skipped
@@ -840,12 +843,3 @@ export function useCare(): UseCare | null {
   }, [act, care, derived, doses]);
 }
 
-/**
- * Before mom's area exists, whether this reader may set it up: "anyone" (an
- * owner) or "self" (a member, for herself); null once it exists or for
- * anyone else. For the pre-setup tile and Family row.
- */
-export function useCareSetup(): "anyone" | "self" | null {
-  const { state } = useMaple();
-  return state?.care_setup ?? null;
-}

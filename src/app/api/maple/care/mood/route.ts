@@ -7,9 +7,8 @@ const ROUTE = "/api/maple/care/mood";
 const MAX_DAYS = 120;
 
 /**
- * Her check-ins and fuller check-ins. Her own session only: everyone else,
- * her assistants and the admin login included, gets 404. Never shared, never
- * in an export, Siri or the MCP.
+ * Her check-ins and fuller check-ins, for everyone signed in (viewers get
+ * 404). Never in an export, Siri or the MCP.
  */
 
 /** GET ?days= (default 14, at most 120). */

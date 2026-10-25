@@ -21,7 +21,6 @@ import {
   type LimitUnit,
   type MedReason,
   type MedSchedule,
-  type Member,
   type MoodDataByKind,
   type MoodKind,
 } from "./types";
@@ -230,30 +229,32 @@ function gapMin(v: unknown): number {
   return Math.round(n);
 }
 
+/** How often. Nothing said (or the number left out) saves as As needed with no gap, never a made-up number. */
 function cleanSchedule(raw: unknown): MedSchedule {
   const s = (raw ?? {}) as Record<string, unknown>;
+  const loose: MedSchedule = { type: "as_needed", min_gap_min: null };
   switch (s.type) {
     case "as_needed":
       return { type: "as_needed", min_gap_min: s.min_gap_min == null ? null : gapMin(s.min_gap_min) };
     case "every":
-      if (s.every_min == null) throw new Error("How many hours between doses? Copy it from the label.");
+      if (s.every_min == null) return loose;
       return { type: "every", every_min: gapMin(s.every_min) };
     case "daily": {
-      if (s.per_day == null) throw new Error("How many times a day? Copy it from the label.");
+      if (s.per_day == null) return loose;
       const n = s.per_day;
       if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 8) throw new Error("Enter how many times a day: a whole number from 1 to 8.");
       return { type: "daily", per_day: n };
     }
     case "times": {
       const list = Array.isArray(s.times) ? s.times : [];
-      if (!list.length) throw new Error("Add at least one time.");
+      if (!list.length) return loose;
       if (list.length > 8) throw new Error("Add at most 8 times.");
       const times = [...new Set(list.map((x) => String(x).trim()))].sort();
       for (const t of times) if (!HHMM_RE.test(t)) throw new Error("Enter each time as HH:MM.");
       return { type: "times", times };
     }
     default:
-      throw new Error("Choose how often: as needed, every few hours, each day or at set times.");
+      return loose;
   }
 }
 
@@ -341,15 +342,13 @@ export function cleanPlan(input: Record<string, unknown>, opts: { creating: bool
   };
 }
 
-const COUNTED = ["tablets", "caplets", "capsules", "doses"];
-
-/** A dose's units: above 0, whole for counted units, at most 1000. */
+/** A dose's units: above 0, at most 1000 (half a tablet is fine). */
 export function cleanUnits(v: unknown, unit: LimitUnit | null): number | null {
+  void unit;
   if (v == null) return null;
   const n = typeof v === "number" ? v : Number.NaN;
   if (!Number.isFinite(n) || n <= 0 || n > 1000) throw new Error("Enter how many this time.");
-  if (unit && COUNTED.includes(unit) && !Number.isInteger(n)) throw new Error(`Enter a whole number of ${unit}.`);
-  return n;
+  return Math.round(n * 100) / 100;
 }
 
 /** Validate a care entry's data (kind by kind). Unknown keys are dropped. */
@@ -373,7 +372,7 @@ export function cleanCareData<K extends CareKind>(kind: K, data: unknown, opts: 
   if (kind === "question") {
     const out: CareDataByKind["question"] = {};
     if (typeof d.done === "boolean") out.done = d.done;
-    if (d.answer !== undefined) out.answer = text(d.answer, 1000, "What they said");
+    if (d.answer !== undefined) out.answer = clipped(d.answer);
     return out as CareDataByKind[K];
   }
   throw new Error("Unknown kind");
@@ -383,9 +382,15 @@ export function isCareKind(k: unknown): k is CareKind {
   return k === "dose" || k === "temp" || k === "question";
 }
 
-/** A care entry's note (a question's text lives here): at most 1000 characters. */
+/** Trimmed text cut to 2000 characters, like a note in Maple's log. */
+function clipped(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  return v.trim().slice(0, 2000) || null;
+}
+
+/** A care entry's note (a question's text lives here), cut to 2000 characters like Maple's notes. */
 export function cleanCareNote(v: unknown): string | null {
-  return text(v, 1000, "Note");
+  return clipped(v);
 }
 
 const ANSWER = (v: unknown, label: string): 0 | 1 | 2 | 3 => {
@@ -492,14 +497,3 @@ export function cleanCareSettings(raw: unknown, opts: { self: boolean; name?: st
   return { settings: out, acks };
 }
 
-/** Who she shares with: current owners or members only; never "admin", never a viewer, never her. */
-export function cleanSharedWith(raw: unknown, members: Member[], person: string): string[] {
-  if (!Array.isArray(raw)) throw new Error("shared_with must be a list");
-  const out: string[] = [];
-  for (const id of raw) {
-    const m = members.find((x) => x.email === id);
-    if (!m || m.email === "admin" || m.role === "viewer" || m.email === person) throw new Error("Share only with current owners or members.");
-    if (!out.includes(m.email)) out.push(m.email);
-  }
-  return out;
-}

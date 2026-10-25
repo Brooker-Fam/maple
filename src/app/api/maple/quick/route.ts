@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { careErrorResponse, errorResponse, json } from "@/lib/maple/api";
 import { listMembers, memberFor } from "@/lib/maple/auth";
-import { careTime, matchPlan, unitCount, unitsOf, unreviewed } from "@/lib/maple/care";
+import { careTime, countedAs, matchPlan } from "@/lib/maple/care";
 import { spokenLine } from "@/lib/maple/care-mcp";
 import { carePersonName, carePlanViews, careSession, logCareDose } from "@/lib/maple/care-store";
 import { describeEntry } from "@/lib/maple/describe";
@@ -22,7 +22,7 @@ import {
 } from "@/lib/maple/store";
 import { formatTime } from "@/lib/maple/time";
 import { ozToMl } from "@/lib/maple/units";
-import type { DoseEntry, Entry, FeedData, Member } from "@/lib/maple/types";
+import type { Entry, FeedData, Member } from "@/lib/maple/types";
 
 export const dynamic = "force-dynamic";
 
@@ -35,10 +35,10 @@ export const dynamic = "force-dynamic";
  * Mom's medicines ride the same URL (one "Mom meds" Shortcut for every plan,
  * any phone): mom_status lists her plans as { id, label } for Choose from
  * List, and mom_dose { med, minutes_ago?, skipped?, units?, confirm?,
- * client_id? } logs one. Nothing early, recent, over her limit or missing
- * its count is saved without asking: those answer ok:false with
- * needs_units or needs_confirm and a question to speak. Only she sees her
- * Only me plans (her own token); access is careAccess on the Siri channel.
+ * client_id? } logs one, like Maple's own actions: it saves (a name that
+ * isn't on her list as a one-time medicine), and early or over her limit
+ * is said after. Only a likely duplicate (the same medicine within 30
+ * minutes) answers ok:false with needs_confirm and a question to speak.
  */
 
 const ACTIONS = [
@@ -225,10 +225,7 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     // A personal token is its member's own phone: never the admin path.
     const s = await careSession({ id: me.email, role: me.role, viaAdmin: false, channel: "siri" }, { members, baby });
     const help = { help_now: MOM_HELP.now };
-    if (!s.person) {
-      return json({ error: "Not set up", speak: "There's no area for mom in Maple's log yet. Someone can set it up in the app under Family.", ...help }, 404);
-    }
-    const name = carePersonName(s.person, members);
+    const name = carePersonName(s.person!, members);
     if (!s.access.read || !s.access.write) return json({ error: "Not shared", speak: `You can't change ${name}'s medicines from this account.`, ...help }, 403);
     const self = s.access.self;
     const whose = self ? "your" : "her";
@@ -241,63 +238,51 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
       return json({ ok: true, speak, plans });
     }
 
-    const listLine = views.length ? `${self ? "Your" : "Her"} list has ${andList(views.map((v) => v.plan.name))}.` : `${self ? "Your" : "Her"} list is empty.`;
     const med = typeof body.med === "string" ? body.med.trim() : "";
-    const m = med ? matchPlan(med, views.map((v) => v.plan), { includePrivate: s.access.private }) : null;
-    if (!m || m.kind === "none") {
-      return json({ ok: false, not_found: true, speak: `I couldn't find that in ${self ? "your" : `${name}'s`} medicines. ${listLine}`, plans });
-    }
+    if (!med) return json({ ok: false, not_found: true, speak: "Which medicine?", plans });
+    const m = matchPlan(med, views.map((v) => v.plan), { includePrivate: true });
     if (m.kind === "ambiguous") {
       return json({ ok: false, not_found: true, speak: `Which one: ${andList(m.plans.map((p) => p.name)).replace(/ and ([^,]*)$/, " or $1")}?`, plans: m.plans.map((p) => ({ id: `p${p.id}`, label: views.find((v) => v.plan.id === p.id)!.line })) });
     }
-    const plan = m.plan;
+    // On her list it counts toward that plan; any other name is saved as a one-time medicine, like Maple's log.
+    const plan = m.kind === "match" ? m.plan : null;
     const mins = Number(body.minutes_ago);
     const at = Number.isFinite(mins) && mins > 0 && mins <= 4320 ? new Date(now.getTime() - mins * 60_000) : now;
     const units = body.units == null || body.units === "" ? null : Number(body.units);
     const clientId = typeof body.client_id === "string" ? `shortcut-care:${body.client_id}` : null;
     const res = await logCareDose(s, {
-      planId: plan.id,
+      planId: plan?.id ?? null,
+      name: plan ? undefined : med.slice(0, 80),
       at: at.toISOString(),
       units: units != null && Number.isFinite(units) ? units : null,
       skipped: body.skipped === true,
       allowDuplicate: body.confirm === true,
       clientId,
       source: "shortcut",
-      strict: true,
     });
+    const label = plan?.name ?? med;
 
     if (!res.created && !res.deduped) {
-      const st = res.status;
-      const unit = plan.limit_unit ?? "doses";
-      if (res.reason === "units") {
-        return json({ ok: false, needs_units: true, speak: `How many ${unit} this time?${plan.units_per_dose ? ` ${self ? "Your" : "Her"} plan says ${plan.units_per_dose}.` : ""}` });
-      }
-      let speak: string;
       const dup = res.possible_duplicate;
-      if (res.reason === "recent" && dup) {
-        const who = dup.created_by === me.email ? "You" : memberName(dup.created_by, members);
-        speak = `${who} logged ${plan.name} at ${sayTime(dup.at, now, tz)}. Is this another dose?`;
-      } else if (res.reason === "at_limit" && st) {
-        const would = st.count24 + unitsOf({ data: { units } } as DoseEntry, plan);
-        speak = `That would be ${would} of ${unitCount(plan.max_24h ?? 0, plan.limit_unit)} in 24 hours. Log it anyway?`;
-      } else if (res.reason === "early" && st?.nextOkAt) {
-        speak = `${self ? "Your" : "Her"} schedule says OK after ${sayTime(st.nextOkAt, now, tz)}. Log it anyway?`;
-      } else speak = `That's sooner than ${whose} schedule allows. Log it anyway?`;
+      const who = dup ? (dup.created_by === me.email ? "You" : memberName(dup.created_by, members)) : null;
+      const speak = dup ? `${who} logged ${label} at ${sayTime(dup.at, now, tz)}. Is this another dose?` : "That didn't save. Try again.";
       return json({ ok: false, needs_confirm: true, reason: res.reason ?? "recent", speak });
     }
 
     const entry = res.entry!;
     const st = res.status;
-    const said = self ? plan.name : `${name}'s ${plan.name}`;
+    const said = self ? label : `${name}'s ${label}`;
     const bits: string[] = [];
     if (res.deduped) bits.push(`Already logged, ${said} at ${sayTime(entry.at, now, tz)}.`);
     else if (entry.kind === "dose" && entry.data.skipped) bits.push(`Got it, ${said} skipped.`);
     else bits.push(`Got it, ${said} at ${sayTime(entry.at, now, tz)}.`);
     // "Next one's OK after" only on a gap; As needed with none set, Each day and set times say nothing more.
-    const next = st && st.nextOkAt && plan.schedule.type !== "daily" && plan.schedule.type !== "times" && st.state !== "unknown" ? st.nextOkAt : null;
+    const next = plan && st && st.nextOkAt && plan.schedule.type !== "daily" && plan.schedule.type !== "times" && st.state !== "unknown" ? st.nextOkAt : null;
     if (next && !res.deduped) bits.push(`Next one's OK after ${sayTime(next, now, tz)}.`);
-    if (unreviewed(plan)) bits.push("This plan isn't checked against the label yet.");
-    // After a confirmed early or over-the-limit dose: that note's own words.
+    if (!plan && !res.deduped) bits.push(`It isn't on ${whose} list, so it's saved as a one-time medicine.`);
+    const counted = plan && res.created && entry.kind === "dose" && !entry.data.skipped ? countedAs(plan, entry.data.units) : null;
+    if (counted) bits.push(`Counted as ${counted}.`);
+    // An early or over-the-limit dose still saves: that note's own words.
     for (const n of res.notes) if (n.tier === "nudge" || n.label === "Call Poison Help now") bits.push(`${n.title}. ${n.body}`);
     // Hands-free at 3am is when she's least likely to open the card, so the nursing note is said too, with its label.
     for (const n of res.notes) if (n.label === LABEL_NOT_WHILE_NURSING.label) bits.push(`${n.label}: ${n.title}. ${n.body}`);
@@ -305,7 +290,7 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
       ok: true,
       speak: bits.join(" "),
       next_ok_at: next,
-      reminder_title: body.name_in_reminder === true ? `${plan.name}: OK by ${whose} schedule` : "Medicine",
+      reminder_title: body.name_in_reminder === true ? `${label}: OK by ${whose} schedule` : "Medicine",
       entry: { id: `c${entry.id}` },
     });
   } catch (error) {

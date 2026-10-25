@@ -378,14 +378,12 @@ check("T-ENG-7 finished and stopped sentences", () => {
   eq(planSentence(s, st(s, [], D(31, "09:00")), her(D(31, "09:00"))), "Stopped Oct 30.");
 });
 
-check("T-ENG-7 suffixes: on this phone, not synced; not checked against the label", () => {
+check("T-ENG-7 suffixes: on this phone, not synced; a plan Claude added reads like any other", () => {
   const p = plan();
   const now = D(25, "16:00");
   const s = st(p, [dose(p, L(25, "15:10"))], now);
   eq(planLine(p, s, her(now, { pending: true })), "Ibuprofen OK after 9:10 PM · on this phone, not synced");
-  const ai = plan({ source: "claude" });
-  eq(planLine(ai, s, her(now)), "Ibuprofen OK after 9:10 PM · not checked against the label");
-  eq(planLine({ ...ai, reviewed_at: L(25, "15:00"), reviewed_by: SAM }, s, her(now)), "Ibuprofen OK after 9:10 PM", "reviewed");
+  eq(planLine(plan({ source: "claude" }), s, her(now)), "Ibuprofen OK after 9:10 PM", "no label-check tag");
 });
 
 check("T-ENG-7 meta lines: Last · who · via, the 24-hour count, the course day", () => {
@@ -423,34 +421,36 @@ check("T-ENG-8 oneTapDecision: save for ok, unknown, none and day_open", () => {
   eq(oneTapDecision(daily, st(daily, y, now), y, now, SAM), "save", "day_open");
 });
 
-check("T-ENG-8 oneTapDecision asks: early, at_limit, recent (same and other member, gap and 30 min), units, logged today", () => {
+check("T-ENG-8 oneTapDecision saves like Maple's buttons: early, at the limit and an unknown count all save", () => {
   const now = D(25, "12:00");
   const p = plan();
   const own = [dose(p, L(25, "08:00"), { by: SAM })];
-  eq(oneTapDecision(p, st(p, own, now), own, now, SAM), { ask: { reason: "early", at: own[0].at } }, "early (her own, 4 h ago)");
+  eq(oneTapDecision(p, st(p, own, now), own, now, SAM), "save", "early (her own, 4 h ago)");
+  const other = [dose(p, L(25, "10:00"), { by: ALEX })];
+  eq(oneTapDecision(p, st(p, other, now), other, now, SAM), "save", "someone else's, 2 h ago inside the gap");
   const lim = plan({ schedule: { type: "as_needed", min_gap_min: null }, max_24h: 2, limit_unit: "doses" });
   const limD = [dose(lim, L(25, "06:00")), dose(lim, L(25, "08:00"))];
-  eq(oneTapDecision(lim, st(lim, limD, now), limD, now, SAM), { ask: { reason: "at_limit", at: limD[1].at } }, "at_limit");
+  eq(oneTapDecision(lim, st(lim, limD, now), limD, now, SAM), "save", "at the limit");
+  const caps = plan({ max_24h: 6, limit_unit: "caplets", units_per_dose: null });
+  eq(oneTapDecision(caps, st(caps, [], now), [], now, SAM), "save", "units unknown (counted high)");
+  const times = plan({ name: "Iron", schedule: { type: "times", times: ["08:00", "20:00"] } });
+  const am = [dose(times, L(25, "08:05"))];
+  eq(oneTapDecision(times, st(times, am, now), am, now, SAM), "save", "next slot hours away");
+});
+
+check("T-ENG-8 oneTapDecision asks only for a likely duplicate (anyone's within 30 minutes) or a once-a-day medicine already logged today", () => {
+  const now = D(25, "12:00");
+  const p = plan();
   const same = [dose(p, L(25, "11:50"), { by: SAM })];
   eq(oneTapDecision(p, st(p, same, now), same, now, SAM), { ask: { reason: "recent", by: SAM, at: same[0].at } }, "same member, 10 min");
-  const other = [dose(p, L(25, "10:00"), { by: ALEX })];
-  eq(oneTapDecision(p, st(p, other, now), other, now, SAM), { ask: { reason: "recent", by: ALEX, at: other[0].at } }, "other member inside the gap");
+  const near = [dose(p, L(25, "11:40"), { by: ALEX })];
+  eq(oneTapDecision(p, st(p, near, now), near, now, SAM), { ask: { reason: "recent", by: ALEX, at: near[0].at } }, "other member, 20 min");
   const un = plan({ schedule: { type: "as_needed", min_gap_min: null } });
-  const twice = [dose(un, L(25, "11:55"), { by: SAM })];
-  eq(oneTapDecision(un, st(un, twice, now), twice, now, SAM), { ask: { reason: "recent", by: SAM, at: twice[0].at } }, "no gap, 5 min: the 30-minute fallback");
   const later = [dose(un, L(25, "11:20"), { by: ALEX })];
-  eq(oneTapDecision(un, st(un, later, now), later, now, SAM), "save", "no gap, 40 min");
-  const caps = plan({ max_24h: 6, limit_unit: "caplets", units_per_dose: null });
-  eq(oneTapDecision(caps, st(caps, [], now), [], now, SAM), { ask: { reason: "units" } }, "units unknown");
-  const choice = plan({ max_24h: 6, limit_unit: "caplets", units_per_dose: "1 or 2" });
-  eq(oneTapDecision(choice, st(choice, [], now), [], now, SAM), { ask: { reason: "units" } }, "a choice is unknown too");
+  eq(oneTapDecision(un, st(un, later, now), later, now, SAM), "save", "40 min");
   const daily = plan({ name: "Iron", schedule: { type: "daily", per_day: 1 } });
   const today = [dose(daily, L(25, "08:00"))];
   eq(oneTapDecision(daily, st(daily, today, now), today, now, SAM), { ask: { reason: "logged_today" } }, "logged today");
-  const times = plan({ name: "Iron", schedule: { type: "times", times: ["08:00", "20:00"] } });
-  const am = [dose(times, L(25, "08:05"))];
-  eq(oneTapDecision(times, st(times, am, now), am, now, SAM), { ask: { reason: "early" } }, "next slot hours away");
-  eq(oneTapDecision(times, st(times, am, D(25, "19:30")), am, D(25, "19:30"), SAM), "save", "next slot within the hour");
 });
 
 // ── T-ENG-9 early and over-limit notes ───────────────────────────────────
@@ -778,7 +778,7 @@ check("T-ENG-15 planView: one view per plan (line, sentence, meta, summary, note
   const p = plan();
   const v = planView(p, [dose(p, L(25, "15:10"))], { ...her(D(25, "16:00")), ...noteCtx() });
   eq([v.line, v.sentence, v.summary], ["Ibuprofen OK after 9:10 PM", "OK after 9:10 PM, by your schedule.", "As needed · no sooner than every 6 hours"]);
-  eq(v.oneTap, { ask: { reason: "early", at: L(25, "15:10") } }, "her own dose 50 minutes ago, inside the gap");
+  eq(v.oneTap, "save", "her own dose 50 minutes ago, inside the gap: saves (the toast says it's early)");
   const fresh = planView(p, [dose(p, L(25, "15:40"), { by: ALEX })], { ...her(D(25, "16:00")), ...noteCtx() });
   eq(fresh.oneTap, { ask: { reason: "recent", by: ALEX, at: L(25, "15:40") } }, "Alex's dose 20 minutes ago");
 });

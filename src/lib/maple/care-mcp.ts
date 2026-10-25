@@ -4,20 +4,14 @@ import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/m
 import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
-import { ADMIN_ID } from "./auth";
-import { careTime, forMom, hoursText, listNotes, matchPlan, planActive, planMeta, planSentence, planView, scheduleSummary, sortPlans, unitCount, unitsOf, unreviewed, type CareViewer, type PlanView } from "./care";
+import { careTime, countedAs, forMom, listNotes, matchPlan, planActive, planMeta, planSentence, planView, scheduleSummary, sortPlans, unitCount, type CareViewer, type PlanView } from "./care";
 import {
   CareConflict,
   CareForbidden,
   addCareQuestion,
   careSession,
-  carePersonName,
-  careTarget,
-  createCarePerson,
   deleteCarePlan,
   deleteCareEntry,
-  eligible,
-  getCarePerson,
   listCareEntries,
   logCareDose,
   logCareTemp,
@@ -34,7 +28,7 @@ import {
 } from "./care-store";
 import { ALERT_TIERS, HELP_NOW_LINE, MOM_DISCLAIMER, MOM_HELP, MOM_TIER_LABEL, assessMomTemp, type AlertTier, type Assessment } from "./guidelines";
 import { memberName } from "./insights";
-import { READ_ANN, ToolError, VIEWER_MESSAGE, WRITE_ANN, context, fail, isoLocal, ok, startFrom, whenText, type Annotations, type Ctx, type Extra } from "./mcp-tools";
+import { READ_ANN, ToolError, WRITE_ANN, context, fail, isoLocal, ok, startFrom, whenText, type Annotations, type Ctx, type Extra } from "./mcp-tools";
 import { NotFound, StoreUnavailable } from "./store";
 import { addDays, dayKey } from "./time";
 import type { CareEntry, CarePlan, DoseEntry, MedReason, MedSchedule, PlanInput, Source } from "./types";
@@ -74,11 +68,11 @@ async function careFor(ctx: Ctx): Promise<CareSession> {
   return careSession(viewer, { members: ctx.members, baby: ctx.baby });
 }
 
-/** The access errors: a viewer, or no page yet. Everyone else can do everything here. */
+/** The one access error: a view-only guest. Everyone else can do everything here. */
 function needAccess(ctx: Ctx, s: CareSession, write: boolean) {
-  if (ctx.who.role === "viewer") throw new CareAccessError(VIEWER_MESSAGE);
-  if (!s.person) throw new CareAccessError("There's no page for mom in Maple's Log yet. set_up_mom creates it, or someone can in the app under Family.");
-  if (!s.access.read || (write && !s.access.write)) throw new CareAccessError("You can't change her medicines from this account.");
+  if (ctx.who.role === "viewer" || !s.access.read || (write && !s.access.write)) {
+    throw new CareAccessError("You're a viewer on Maple's Log, so her mom's page isn't open to you. An owner can make you a member in Maple's Log → Family.");
+  }
 }
 
 function accessFail(message: string): CallToolResult {
@@ -250,24 +244,17 @@ function planJson({ view: v, doses }: Viewed, ctx: Ctx, days: number) {
     units_per_dose: p.units_per_dose,
     course_day: st.courseDays != null ? st.courseDay : null,
     course_days: st.courseDays,
-    checked_against_label: !unreviewed(p),
     notes: alertsOf(v.notes),
     ...(days > 0 ? { doses: doses.filter((d) => Date.parse(d.at) >= since).sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).map((d) => doseJson(d, ctx)) } : {}),
   };
 }
 
-/**
- * "Ibuprofen: OK after 8:10 AM, by her schedule. Last: 2:10 AM · Matt. 1 of 4 tablets in the last 24 hours."
- * An assistant-added plan nobody has checked ends " · not checked against the label", as its line does.
- */
-const fullSentence = (v: PlanView) =>
-  `${v.plan.name}: ${[v.sentence, ...v.meta].map((t) => t.replace(/\.$/, "")).join(". ")}${unreviewed(v.plan) ? " · not checked against the label" : ""}.`;
+/** "Ibuprofen: OK after 8:10 AM, by her schedule. Last: 2:10 AM · Matt. 1 of 4 tablets in the last 24 hours." */
+const fullSentence = (v: PlanView) => `${v.plan.name}: ${[v.sentence, ...v.meta].map((t) => t.replace(/\.$/, "")).join(". ")}.`;
 
 /** "Acetaminophen: OK since 4:10 AM" (speak; and Siri's). */
 export function spokenLine(v: PlanView, now: Date, tz: string): string {
-  const line = spokenStatus(v, now, tz);
-  // As on the compact line: an assistant-added plan nobody has checked yet says so out loud too.
-  return unreviewed(v.plan) ? `${line} (not checked against the label)` : line;
+  return spokenStatus(v, now, tz);
 }
 
 function spokenStatus(v: PlanView, now: Date, tz: string): string {
@@ -303,12 +290,12 @@ function listLine(s: CareSession, plans: CarePlan[]): string {
   return plans.length ? `${whose} list has ${listNames(plans.map((p) => p.name))}.` : `${whose} list is empty so far.`;
 }
 
-/** One of her active plans by name, Also called or p id; anything else is an error that lists her medicines. */
-function pickPlan(query: string, s: CareSession, active: Viewed[]): Viewed {
+/** One of her active plans by name, Also called or p id; null when none matches (it's logged as a one-off); ambiguous asks which. */
+function pickPlan(query: string, active: Viewed[]): Viewed | null {
   const m = matchPlan(query, active.map((x) => x.view.plan), { includePrivate: true });
   if (m.kind === "match") return active.find((x) => x.view.plan.id === m.plan.id)!;
   if (m.kind === "ambiguous") throw new ToolError(`"${query}" could be ${listNames(m.plans.map((p) => p.name))}. Ask which one, then pass its name or id.`);
-  throw new ToolError(`I couldn't find "${query}" in ${s.access.self ? "your" : `${s.name}'s`} medicines. ${listLine(s, active.map((x) => x.view.plan))} Ask which one; for a one-time medicine not on the list, pass one_off: true.`);
+  return null;
 }
 
 /** Idempotency for client_ref, namespaced per member (care-store's id format is strict). */
@@ -349,7 +336,7 @@ const inputs = {
     z
       .boolean()
       .nullish()
-      .describe("Only after the user confirms she really took it (a second dose, early by her schedule, or over her limit): true saves it anyway."),
+      .describe("Only after the user confirms a possible_duplicate is really another dose: true saves it anyway."),
 };
 
 const HOW = ["as_needed", "every", "daily", "times"] as const;
@@ -377,53 +364,117 @@ export async function momStatusLine(ctx: Ctx): Promise<string | null> {
   }
 }
 
+type MomDoseArgs = {
+  medicine: string;
+  at?: string | null;
+  minutes_ago?: number | null;
+  skipped?: boolean | null;
+  units?: number | null;
+  dose?: string | null;
+  note?: string | null;
+  one_off?: boolean | null;
+  client_ref?: string | null;
+  allow_duplicate?: boolean | null;
+};
+
+/** log_mom_medicine itself: a name on her list counts toward it, any other is a one-off; only a likely duplicate isn't saved. */
+async function momDose(a: MomDoseArgs, ctx: Ctx, s: CareSession): Promise<{ summary: string; data: Record<string, unknown> }> {
+  const assumed: string[] = [];
+  const at = timeArg(a, ctx, assumed);
+  const { active } = await viewsFor(s);
+  const clientId = clientIdFor(ctx, a.client_ref);
+  const source = ctx.who.via;
+  const whose = s.access.self ? "your" : "her";
+
+  // On her list it counts toward that plan; anything else is saved as a one-time medicine, like Maple's log_medicine.
+  const target = a.one_off ? null : pickPlan(a.medicine, active);
+
+  const plan = target?.view.plan ?? null;
+  const res = await logCareDose(s, {
+    planId: plan?.id ?? null,
+    name: plan ? undefined : a.medicine.trim(),
+    at: at.toISOString(),
+    units: a.units ?? null,
+    dose: a.dose ?? null,
+    note: a.note ?? null,
+    skipped: a.skipped === true,
+    allowDuplicate: a.allow_duplicate === true,
+    clientId,
+    source,
+  });
+  const name = plan?.name ?? a.medicine.trim();
+  const tctx = textCtx(s);
+
+  if (!res.created && !res.deduped) {
+    const st = res.status;
+    const dup = res.possible_duplicate;
+    const who = dup ? byWord(dup.created_by, ctx) : null;
+    const why = dup
+      ? `${who === "you" ? "You" : who} logged ${name} at ${whenText(dup.at, ctx)}, which looks like the same one. If she took another, call again with allow_duplicate: true.`
+      : "It wasn't saved. Try again.";
+    return { summary: `Not saved: ${why}`, data: {
+      created: false,
+      reason: res.reason ?? null,
+      medicine: plan ? { id: `p${plan.id}`, name: plan.name, line: target!.view.line, sentence: st ? planSentence(plan, st, tctx) : target!.view.sentence } : { name },
+      ...(dup ? { possible_duplicate: doseJson(dup, ctx) } : {}),
+    } };
+  }
+
+  const entry = res.entry as DoseEntry;
+  const who = `logged by ${memberName(entry.created_by, ctx.members)} via ${viaWord(entry.source)}`;
+  const lines: string[] = [];
+  if (res.deduped) lines.push(`Already saved c${entry.id}: ${name} at ${whenText(entry.at, ctx)} (${who}), so it wasn't added twice.`);
+  else lines.push(`Saved c${entry.id}: ${name}${entry.data.skipped ? " skipped" : ""} at ${whenText(entry.at, ctx)} (${who})${plan ? "" : `, as a one-time medicine (it isn't on ${whose} list)`}.`);
+  let after: Record<string, unknown> = {};
+  if (plan && res.status) {
+    const st = res.status;
+    const sentence = planSentence(plan, st, tctx).replace(/\.$/, "");
+    // Who logged it is already said; the count and course day follow the sentence.
+    const meta = planMeta(plan, st, tctx).filter((m) => !m.startsWith("Last:") && !(st.state === "at_limit" && m.includes("in the last 24 hours")));
+    lines[0] += ` ${[sentence, ...meta].join(" · ")}.`;
+    const counted = res.created && !entry.data.skipped ? countedAs(plan, entry.data.units) : null;
+    if (counted) lines.push(`How many wasn't said, so it counts as ${counted} toward ${whose} 24-hour limit. If she took more, change it with fix_mom_entry (units).`);
+    after = { next_ok_at: st.nextOkAt ? isoLocal(st.nextOkAt, ctx.tz) : null, count24: st.count24, max24: st.max24, limit_unit: plan.limit_unit, sentence: planSentence(plan, st, tctx) };
+  }
+  const alerts = alertsOf(res.notes);
+  lines.push(...assumedLines(assumed), ...alertLines(alerts));
+  return { summary: lines.join("\n"), data: {
+    created: !!res.created,
+    ...(res.deduped ? { deduped: true } : {}),
+    entry: doseJson(entry, ctx),
+    ...(plan ? { medicine: { id: `p${plan.id}`, name: plan.name } } : { one_off: true }),
+    ...after,
+    alerts,
+  } };
+}
+
+/**
+ * Maple's log_medicine (and log_many) with a name on her mom's list: it's her
+ * dose, so it goes on her list (unless the user said it was Maple's, for_maple).
+ */
+export async function momDoseFromMaple(a: MomDoseArgs, ctx: Ctx, label: string): Promise<{ summary: string; data: Record<string, unknown>; created: boolean }> {
+  const s = await careFor(ctx);
+  needAccess(ctx, s, true);
+  const r = await momDose(a, ctx, s);
+  const why = `${label} is on ${s.name}'s medicine list, so it's logged there. If Maple was the one given it, remove this with undo_last and call log_medicine again with for_maple: true.`;
+  return { summary: `${r.summary}\n${why}`, data: { ...r.data, for: s.name, logged_for_mom: true }, created: r.data.created === true };
+}
+
 export function registerCareTools(server: McpServer) {
-  // Before her page exists there's no care session to check, so this one does the app's own rule (POST
-  // /api/maple/care/person): she can set it up for herself, or an owner can for her; one per log.
-  const setUpTitle = "Set up her mom's medicines page";
-  server.registerTool(
+  // Her page always exists (getCarePerson makes it), so there's nothing to set up. This stays for chats
+  // that still remember the tool from before: it just says so.
+  addCareTool(
+    server,
     "set_up_mom",
     {
-      title: setUpTitle,
-      description:
-        'Use this when the mom tools say there\'s no page for her yet and the user wants one, e.g. "set up Brittany\'s medicines". It creates her page in Maple\'s Log for the person named (she doesn\'t need her own sign-in); there\'s one per log, and everyone signed in can see and log on it. Then add each medicine with set_mom_medicine.',
-      inputSchema: {
-        person: z.string().min(1).max(120).nullish().describe("Who it's for: her name (or a family member's email)."),
-      },
-      annotations: { title: setUpTitle, ...WRITE_ANN },
-      _meta: { "openai/toolInvocation/invoking": "Setting up her page…", "openai/toolInvocation/invoked": "Her page is set up" },
+      title: "Her mom's medicines page",
+      description: "Not needed: her mom's page in Maple's Log always exists, like Maple's own log. Add medicines with set_mom_medicine and log doses with log_mom_medicine.",
+      inputSchema: { person: z.string().max(120).nullish().describe("Ignored.") },
+      annotations: READ_ANN,
+      invoking: "Checking her page…",
+      invoked: "Her page is ready",
     },
-    (async (a: { person?: string | null }, extra: Extra): Promise<CallToolResult> => {
-      try {
-        const ctx = await context(extra);
-        if (ctx.who.role === "viewer") throw new CareAccessError(VIEWER_MESSAGE);
-        // The admin login logging as nobody is the family's password: it sets up like an owner, for someone it names.
-        const admin = ctx.who.id === ADMIN_ID;
-        const member = ctx.members.find((m) => m.email === ctx.who.id);
-        const caller = admin ? { email: ADMIN_ID, role: "owner" as const } : eligible(member) ? member : null;
-        if (!caller) throw new CareForbidden("Only a family member can set this up.");
-        let target: { email: string } = caller;
-        if (a.person?.trim()) {
-          // A family member, or just her name: she doesn't need her own sign-in.
-          const t = careTarget(a.person, ctx.members);
-          if (!t) throw new ToolError("Who is it for? Pass her name.");
-          if ("ambiguous" in t) throw new ToolError(`"${a.person}" matches more than one person: ${t.ambiguous.join(", ")}. Which one?`);
-          target = { email: t.id };
-        } else if (admin) {
-          throw new ToolError("Who is it for? Pass her name.");
-        }
-        const who = memberName(target.email, ctx.members);
-        const existing = await getCarePerson();
-        if (existing) {
-          if (existing.member === target.email) return ok(`${who}'s medicines page is already set up. Add medicines with set_mom_medicine.`, { created: false, for: who });
-          throw new ToolError(`Maple's Log already has a page for ${carePersonName(existing, ctx.members)}, and there's one per log.`);
-        }
-        await createCarePerson(target.email, caller.email, ctx.members);
-        return ok(`Set up ${who}'s medicines page. Next, add each medicine with set_mom_medicine, typed from her label or discharge papers.`, { created: true, for: who });
-      } catch (err) {
-        return careToolError("set_up_mom", err);
-      }
-    }) as unknown as ToolCallback<{ person: z.ZodOptional<z.ZodNullable<z.ZodString>> }>
+    async (_a, _ctx, s) => ok(`${s.name}'s medicines page is ready; there's nothing to set up. Add medicines with set_mom_medicine and log doses with log_mom_medicine.`, { created: false, for: s.name })
   );
 
   addCareTool(
@@ -499,7 +550,7 @@ export function registerCareTools(server: McpServer) {
     {
       title: "Log a dose of her mom's medicine",
       description:
-        "Log a dose of her mom's own medicine (not Maple's: Maple's medicines use log_medicine). Match `medicine` to a name or also-called name on her list; on no match the error lists her medicines, so ask which one. If her plan counts its limit in tablets, caplets, capsules or mL and doesn't fix how many each time, pass `units` only as the user said it, and if they didn't say, ask them. Pass `dose` only if the user said something different from her plan. Never fill in a dose. If the result says created:false (too soon by her schedule, at her limit, or someone already logged it), tell the user why and call again with allow_duplicate: true only if they confirm she took it (still passing units, if they gave a count). Repeat the result's alerts word for word with their labels.",
+        "Log a dose of her mom's own medicine (not Maple's: Maple's medicines use log_medicine). It saves, like Maple's log: a name on her list counts toward that medicine, and any other name is saved as a one-time medicine. Pass `units` (how many tablets, caplets, capsules or mL) only if the user said it, and `dose` only if they said something different from her plan; never fill either in. created:false with possible_duplicate means someone logged the same medicine within 30 minutes: ask whether it's another dose, and only then call again with allow_duplicate: true. If it was early or over her limit it still saves; repeat the result's alerts word for word with their labels.",
       inputSchema: {
         medicine: z.string().min(1).max(80).describe("The medicine as the user said it: a name or also-called name on her list, or its p id."),
         at: inputs.at("When she took it"),
@@ -510,10 +561,10 @@ export function registerCareTools(server: McpServer) {
           .positive()
           .max(1000)
           .nullish()
-          .describe("How many tablets, caplets, capsules or mL she took this time, only as the user said it. Never guess or fill it in; if her plan needs it and they didn't say, ask."),
+          .describe("How many tablets, caplets, capsules or mL she took this time, only as the user said it. Never guess or fill it in; left out, the result says what it counted as toward her limit."),
         dose: z.string().max(80).nullish().describe("Only if the user said she took something different from her plan's dose, in their words. Never fill it in."),
         note: z.string().max(500).nullish().describe("Optional short note in the family's own words."),
-        one_off: z.boolean().nullish().describe("True when `medicine` isn't on her list: a one-time medicine, logged by the name the user gave."),
+        one_off: z.boolean().nullish().describe("True when the user said it's a different medicine from the one on her list with that name: it's logged as a one-time medicine by the name given."),
         client_ref: inputs.clientRef(),
         allow_duplicate: inputs.allowDuplicate(),
       },
@@ -523,92 +574,8 @@ export function registerCareTools(server: McpServer) {
       write: true,
     },
     async (a, ctx, s) => {
-      const assumed: string[] = [];
-      const at = timeArg(a, ctx, assumed);
-      const { active } = await viewsFor(s);
-      const clientId = clientIdFor(ctx, a.client_ref);
-      const source = ctx.who.via;
-      const whose = s.access.self ? "your" : "her";
-
-      let target: Viewed | null = null;
-      if (a.one_off) {
-        // A name that is on her list goes there, unless the user said it's something else.
-        const m = matchPlan(a.medicine, active.map((x) => x.view.plan), { includePrivate: true });
-        if (m.kind === "match" && !a.allow_duplicate) {
-          throw new ToolError(
-            `"${a.medicine}" matches ${m.plan.name} on ${whose} list. If that's what she took, call again without one_off; if it's something else, call again with one_off and allow_duplicate: true.`
-          );
-        }
-      } else target = pickPlan(a.medicine, s, active);
-
-      const plan = target?.view.plan ?? null;
-      const res = await logCareDose(s, {
-        planId: plan?.id ?? null,
-        name: plan ? undefined : a.medicine.trim(),
-        at: at.toISOString(),
-        units: a.units ?? null,
-        dose: a.dose ?? null,
-        note: a.note ?? null,
-        skipped: a.skipped === true,
-        allowDuplicate: a.allow_duplicate === true,
-        clientId,
-        source,
-        strict: true,
-      });
-      const name = plan?.name ?? a.medicine.trim();
-      const tctx = textCtx(s);
-
-      if (!res.created && !res.deduped) {
-        const st = res.status;
-        let why: string;
-        const dup = res.possible_duplicate;
-        if (res.reason === "recent" && dup) {
-          const who = byWord(dup.created_by, ctx);
-          why = `${who === "you" ? "You" : who} logged ${name} at ${whenText(dup.at, ctx)}. Is this another dose? Only if she took another one, call again with allow_duplicate: true.`;
-        } else if (res.reason === "at_limit" && plan && st) {
-          const would = st.count24 + unitsOf({ data: { units: a.units ?? null } } as DoseEntry, plan);
-          why = `That would be ${would} of ${unitCount(plan.max_24h ?? 0, plan.limit_unit)} in 24 hours, over ${whose} limit. If she took it anyway, call again with allow_duplicate: true.`;
-        } else if (res.reason === "early" && plan && st) {
-          const last = st.last ? ` (${byWord(st.last.created_by, ctx)} logged the last one at ${whenText(st.last.at, ctx)})` : "";
-          const gap = plan.schedule.type === "as_needed" ? plan.schedule.min_gap_min : plan.schedule.type === "every" ? plan.schedule.every_min : null;
-          why = `That's sooner than ${whose} schedule allows${gap ? `: no sooner than every ${hoursText(gap)}` : ""}${last}. If she took it anyway, call again with allow_duplicate: true.`;
-        } else if (res.reason === "units" && plan) {
-          const unit = plan.limit_unit ?? "doses";
-          why = `${s.access.self ? "Your" : "Her"} plan counts ${name} in ${unit} and doesn't fix how many each time${plan.units_per_dose ? ` (it says "${plan.units_per_dose}")` : ""}. Ask how many ${unit} she took, then call again with units.`;
-        } else why = "It wasn't saved. Ask the user, then try again.";
-        return ok(`Not saved: ${why}`, {
-          created: false,
-          reason: res.reason ?? null,
-          medicine: plan ? { id: `p${plan.id}`, name: plan.name, line: target!.view.line, sentence: st ? planSentence(plan, st, tctx) : target!.view.sentence } : { name },
-          ...(dup ? { possible_duplicate: doseJson(dup, ctx) } : {}),
-        });
-      }
-
-      const entry = res.entry as DoseEntry;
-      const who = `logged by ${memberName(entry.created_by, ctx.members)} via ${viaWord(entry.source)}`;
-      const lines: string[] = [];
-      if (res.deduped) lines.push(`Already saved c${entry.id}: ${name} at ${whenText(entry.at, ctx)} (${who}), so it wasn't added twice.`);
-      else lines.push(`Saved c${entry.id}: ${name}${entry.data.skipped ? " skipped" : ""} at ${whenText(entry.at, ctx)} (${who}).`);
-      let after: Record<string, unknown> = {};
-      if (plan && res.status) {
-        const st = res.status;
-        const sentence = planSentence(plan, st, tctx).replace(/\.$/, "");
-        // Who logged it is already said; the count and course day follow the sentence.
-        const meta = planMeta(plan, st, tctx).filter((m) => !m.startsWith("Last:") && !(st.state === "at_limit" && m.includes("in the last 24 hours")));
-        lines[0] += ` ${[sentence, ...meta].join(" · ")}.`;
-        if (unreviewed(plan)) lines.push(`${s.access.self ? "Your" : "Her"} plan for ${plan.name} isn't checked against the label yet: ask them to check it in the app ("Matches the label").`);
-        after = { next_ok_at: st.nextOkAt ? isoLocal(st.nextOkAt, ctx.tz) : null, count24: st.count24, max24: st.max24, limit_unit: plan.limit_unit, sentence: planSentence(plan, st, tctx) };
-      }
-      const alerts = alertsOf(res.notes);
-      lines.push(...assumedLines(assumed), ...alertLines(alerts));
-      return ok(lines.join("\n"), {
-        created: !!res.created,
-        ...(res.deduped ? { deduped: true } : {}),
-        entry: doseJson(entry, ctx),
-        ...(plan ? { medicine: { id: `p${plan.id}`, name: plan.name } } : { one_off: true }),
-        ...after,
-        alerts,
-      });
+      const r = await momDose(a, ctx, s);
+      return ok(r.summary, r.data);
     }
   );
 
@@ -618,13 +585,13 @@ export function registerCareTools(server: McpServer) {
     {
       title: "Add or change her mom's medicine",
       description:
-        'Add, change, stop or delete a medicine on her mom\'s list. Use only what the user read from her label, discharge papers or clinician. Never fill in, suggest or use a typical dose, interval or limit; leave any field the user didn\'t say empty. A 24-hour limit needs limit_unit exactly as the label counts it (tablets, caplets, capsules, doses or mL). Plans you add show "Check this against the label" in the app until someone confirms them.',
+        'Add, change, stop or delete a medicine on her mom\'s list. Use only what the user read from her label, discharge papers or clinician. Never fill in, suggest or use a typical dose, interval or limit; leave any field the user didn\'t say empty. A 24-hour limit needs limit_unit exactly as the label counts it (tablets, caplets, capsules, doses or mL).',
       inputSchema: {
         id: z.string().max(20).nullish().describe("To change, stop or delete one: its p id from mom_status. Leave out to add a new one."),
         name: z.string().max(80).nullish().describe("The medicine's name as on the label (needed to add one)."),
         also_called: z.string().max(80).nullish().describe("Other names the family uses for it, like the brand on the box, comma-separated, only as they said them."),
         dose_text: z.string().max(80).nullish().describe("The dose as prescribed, copied from the label in its words (strength and how many). Never fill it in."),
-        how: z.enum(HOW).nullish().describe("How often, as the label says: as_needed, every (every few hours), daily (a number of times a day) or times (set clock times). Needed to add one."),
+        how: z.enum(HOW).nullish().describe("How often, as the label says: as_needed, every (every few hours), daily (a number of times a day) or times (set clock times). Left out, it's As needed with no gap."),
         min_gap_hours: z
           .number()
           .min(0.25)
@@ -671,7 +638,6 @@ export function registerCareTools(server: McpServer) {
 
       const cur = id != null ? await readablePlan(s, id) : null;
       if (!cur && !a.name?.trim()) throw new ToolError("Give the medicine's name as on the label.");
-      if (!cur && !a.how) throw new ToolError("Say how often the label says to take it: as_needed, every, daily or times.");
 
       // Only what was given: on a change, everything left out stays as it was.
       const patch: Record<string, unknown> = {};
@@ -703,6 +669,9 @@ export function registerCareTools(server: McpServer) {
         else if (type === "daily") schedule = { type, per_day: a.per_day ?? (prev?.type === "daily" ? prev.per_day : undefined) };
         else schedule = { type, times: a.times ?? (prev?.type === "times" ? prev.times : undefined) };
         patch.schedule = schedule;
+      } else if (!cur) {
+        // How often wasn't said: As needed with no gap until someone adds it, never a typical interval.
+        patch.schedule = { type: "as_needed", min_gap_min: null };
       }
       if (a.days != null) {
         if (a.end_date) throw new ToolError("Give either end_date or days, not both.");
@@ -714,7 +683,7 @@ export function registerCareTools(server: McpServer) {
       const saved = await saveCarePlan(s, { ...(patch as unknown as PlanInput), ...(id != null ? { id } : {}) }, { source });
       const plan = saved.plan;
       const summary = scheduleSummary(plan).replace(/^./, (c) => c.toLowerCase());
-      const lines = [`Saved p${plan.id}: ${plan.name} · ${summary}.${unreviewed(plan) ? " Ask them to check it against the label." : ""}`];
+      const lines = [`Saved p${plan.id}: ${plan.name} · ${summary}.`];
       // Two medicines with acetaminophen: the app's list note, said when this save makes (or keeps) the pair.
       const overlap = plan.contains_apap && planActive(plan, s.now, s.tz)
         ? listNotes((await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz)), { name: s.name, self: s.access.self, settings: s.person?.settings ?? {} })
@@ -730,7 +699,6 @@ export function registerCareTools(server: McpServer) {
         max24: plan.max_24h,
         limit_unit: plan.limit_unit,
         units_per_dose: plan.units_per_dose,
-        checked_against_label: !unreviewed(plan),
         alerts,
       });
     }

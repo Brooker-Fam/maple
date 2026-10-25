@@ -34,7 +34,6 @@ import { memberName } from "./insights";
 import { addDays, dayKey, daysBetween, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "./time";
 import type {
   CareAccess,
-  CareAskReason,
   CarePerson,
   CarePlan,
   CareSettings,
@@ -53,7 +52,7 @@ import type {
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
-/** With no gap on the plan, a second dose this close to another reads as the same one (two phones, Siri). */
+/** A second dose this close to another reads as the same one (two phones, Siri), like Maple's possible duplicates. */
 export const RECENT_MS = 30 * MIN;
 
 const ms = (iso: string) => Date.parse(iso);
@@ -147,6 +146,16 @@ export function nextUnits(plan: CarePlan): number {
   if (countsDoses(plan)) return 1;
   const p = parseUnits(plan.units_per_dose);
   return p.fixed ?? (p.options ? Math.min(...p.options) : 1);
+}
+
+/**
+ * A dose saved without its count, on a plan whose limit counts tablets,
+ * caplets, capsules or mL and doesn't fix how many: what it counted as
+ * ("1 caplet", or the most of a choice), so whoever logged it can fix it.
+ */
+export function countedAs(plan: CarePlan, units: number | null | undefined): string | null {
+  if (plan.max_24h == null || countsDoses(plan) || (units != null && units > 0) || parseUnits(plan.units_per_dose).fixed != null) return null;
+  return unitCount(unitsOf({ data: {} } as DoseEntry, plan), plan.limit_unit);
 }
 
 /** Whether a one-tap knows how much this dose is: no limit, a limit in Doses, or one fixed number each time. */
@@ -281,51 +290,34 @@ export type OneTapDecision = "save" | { ask: OneTapAsk };
 
 /**
  * The dose a new one at `at` may repeat: any non-skipped dose of the plan,
- * by anyone, within its gap (30 minutes when it has none), either side of
- * `at`. The server's duplicate check and the one-tap use this same rule.
+ * by anyone, within 30 minutes either side of `at`. Further apart it's
+ * another dose, early or not (doseNotes says so). The server's duplicate
+ * check and the one-tap use this same rule.
  */
 export function recentDose(plan: CarePlan, doses: DoseEntry[], at: Date, opts: { exceptId?: number } = {}): DoseEntry | null {
-  const windowMs = (gapMinutes(plan) ?? 0) * MIN || RECENT_MS;
+  void plan;
   let best: DoseEntry | null = null;
   for (const d of doses) {
     if (d.data.skipped || d.id === opts.exceptId) continue;
     const off = Math.abs(ms(d.at) - at.getTime());
-    if (off >= windowMs) continue;
+    if (off >= RECENT_MS) continue;
     if (!best || off < Math.abs(ms(best.at) - at.getTime())) best = d;
   }
   return best;
 }
 
 /**
- * `by` (optional) is who's tapping. A dose someone else logged within the
- * gap, or anyone's within 30 minutes, asks "Matt logged … Is this another
- * dose?"; her own older dose inside the gap reads as early instead ("OK after
- * 5:10 AM, by your schedule."). Without `by`, only the 30 minutes count as
- * recent. Order: recent, at the limit, early, already logged today, units.
+ * "Took it" saves at once, like Maple's own buttons. It asks only when it's
+ * probably a dose someone already logged (anyone's within 30 minutes, "Matt
+ * logged … Is this another dose?") or a once-a-day medicine already logged
+ * today. Early, at the limit or with its count unknown it still saves; the
+ * toast carries doseNotes. `by` is unused, kept for callers.
  */
 export function oneTapDecision(plan: CarePlan, status: PlanStatus, doses: DoseEntry[], now: Date, by?: string): OneTapDecision {
-  const t = now.getTime();
-  const taken = doses.filter(isTaken);
-  const near = recentDose(plan, taken, now);
-  if (near && (Math.abs(ms(near.at) - t) < RECENT_MS || (by !== undefined && near.created_by !== by))) {
-    return { ask: { reason: "recent", by: near.created_by, at: near.at } };
-  }
-  const s = plan.schedule;
-  const ask = (reason: CareAskReason, at?: string | null): OneTapDecision => ({ ask: { reason, ...(at ? { at } : {}) } });
-  switch (status.state) {
-    case "at_limit":
-      return ask("at_limit", status.last?.at);
-    case "wait":
-      return ask("early", status.last?.at);
-    case "day_done":
-      return ask("logged_today");
-    case "slot_next":
-      // A set time more than an hour off reads as early ("Next 8:00 PM.").
-      if (status.nextSlotAt && ms(status.nextSlotAt) - t > HOUR) return ask("early");
-      break;
-  }
-  void s;
-  if (!unitsKnown(plan)) return ask("units");
+  void by;
+  const near = recentDose(plan, doses.filter(isTaken), now);
+  if (near) return { ask: { reason: "recent", by: near.created_by, at: near.at } };
+  if (status.state === "day_done") return { ask: { reason: "logged_today" } };
   return "save";
 }
 
@@ -458,13 +450,13 @@ function andList(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-/** Added by Claude or ChatGPT, and nobody has tapped "Matches the label" yet. */
+/** Every plan reads the same, whoever typed it in (an assistant's too): nothing waits on a check against the label. */
 export function unreviewed(plan: CarePlan): boolean {
-  return !plan.reviewed_at && (plan.source === "claude" || plan.source === "chatgpt" || plan.source === "mcp");
+  void plan;
+  return false;
 }
 
-const suffixes = (plan: CarePlan, ctx: PlanTextCtx) =>
-  `${ctx.pending ? " · on this phone, not synced" : ""}${unreviewed(plan) ? " · not checked against the label" : ""}`;
+const suffixes = (plan: CarePlan, ctx: PlanTextCtx) => (ctx.pending ? " · on this phone, not synced" : "");
 
 /** The compact line (Today, the Lantern, picker rows, the More subline, Siri, maple_status): "Ibuprofen OK after 9:10 PM". */
 export function planLine(plan: CarePlan, status: PlanStatus, ctx: PlanTextCtx): string {

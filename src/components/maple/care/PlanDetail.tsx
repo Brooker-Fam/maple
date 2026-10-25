@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { parseUnits, unreviewed as needsReview } from "@/lib/maple/care";
+import { parseUnits } from "@/lib/maple/care";
 import { DEFAULT_TZ, dayKey, formatDayLabel } from "@/lib/maple/time";
 import type { CarePlan, DoseEntry } from "@/lib/maple/types";
 import { Icon } from "../icons";
@@ -9,15 +9,15 @@ import { Label, MoreDetails, NoteField, SheetFooter, useOpenCount } from "../she
 import { Button, Chip, Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
 import MedPlanSheet from "./MedPlanSheet";
-import { ConfirmSheet, GROUP, Problem, errorText, useDoseText } from "./parts";
+import { GROUP, Problem, errorText, useDoseText } from "./parts";
 import type { UseCare } from "./useCare";
 
 /**
  * One medicine (§5.8, step 1): her schedule as typed, "As prescribed", the
  * label's words, and the last 7 days by local day ("Today · 3"), each dose a
- * row to fix ("3:05 AM · 2 caplets · Matt", "8:00 PM · skipped"). Edit,
- * "Stop taking it", and "Matches the label" while an assistant's plan is
- * unchecked. There's no "Start again": to take it again, add it again.
+ * row to fix ("3:05 AM · 2 caplets · Matt", "8:00 PM · skipped"). Edit and
+ * "Stop taking it" (at once, with Undo). There's no "Start again": to take
+ * it again, add it again.
  */
 export default function PlanDetail({ planId, onClose, care }: { planId: number | null; onClose: () => void; care: UseCare }) {
   // Keep the last plan while the sheet animates closed.
@@ -26,9 +26,7 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
   const id = planId ?? last;
   const open = planId != null;
   const view = id == null ? undefined : [...care.plans, ...care.finished].find((v) => v.plan.id === id);
-  const [sub, setSub] = useState<"edit" | "stop" | { dose: DoseEntry } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [sub, setSub] = useState<"edit" | { dose: DoseEntry } | null>(null);
   const { state, now } = useMaple();
   const text = useDoseText();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
@@ -36,7 +34,6 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
   const { plan, status } = view;
   const active = care.plans.some((v) => v.plan.id === plan.id);
   const write = care.access.write;
-  const unreviewed = needsReview(plan);
 
   const doses = care
     .doses(plan.id, 7)
@@ -49,19 +46,6 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
     if (days[days.length - 1]?.key === k) days[days.length - 1].doses.push(d);
     else days.push({ key: k, doses: [d] });
   }
-
-  const act = async (fn: () => Promise<void>, after?: () => void) => {
-    setBusy(true);
-    setProblem(null);
-    try {
-      await fn();
-      after?.();
-    } catch (e) {
-      setProblem(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <>
@@ -78,18 +62,6 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
             </p>
           ))}
         </div>
-
-        {unreviewed && (
-          <div className="flex items-center gap-3 rounded-xl bg-mp-sunken px-3.5 py-2">
-            <Icon name="circle-alert" size={18} className="shrink-0 text-mp-ink-2" />
-            <span className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug")}>Check this against the label</span>
-            {write && (
-              <Button variant="ghost" size="sm" className="-mr-2" disabled={busy} onClick={() => void act(() => care.act.reviewPlan(plan.id))}>
-                Matches the label
-              </Button>
-            )}
-          </div>
-        )}
 
         <section className="space-y-4">
           {days.length ? (
@@ -123,7 +95,6 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
           )}
         </section>
 
-        <Problem>{problem}</Problem>
         {write && (
           <div className="flex flex-wrap gap-2 pb-1">
             <Button variant="soft" className="flex-1" onClick={() => setSub("edit")}>
@@ -131,7 +102,15 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
               Edit
             </Button>
             {active && status.state !== "stopped" && (
-              <Button variant="soft" className="flex-1" onClick={() => setSub("stop")}>
+              <Button
+                variant="soft"
+                className="flex-1"
+                onClick={() => {
+                  // Close first so "{name} stopped" and its Undo land on her screen (useCare says it, and any refusal).
+                  onClose();
+                  void care.act.stopPlan(plan.id).catch(() => {});
+                }}
+              >
                 Stop taking it
               </Button>
             )}
@@ -140,20 +119,6 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
       </Sheet>
 
       <MedPlanSheet open={open && sub === "edit"} onClose={() => setSub(null)} care={care} plan={plan} onDeleted={onClose} />
-      <ConfirmSheet
-        open={open && sub === "stop"}
-        onClose={() => setSub(null)}
-        title={`Stop ${plan.name}?`}
-        body="It moves to Finished, with its history."
-        confirm="Stop"
-        busy={busy}
-        onConfirm={() => {
-          // Close first so "{name} stopped" and its Undo land on her screen (useCare says it, and any refusal).
-          setSub(null);
-          onClose();
-          void care.act.stopPlan(plan.id).catch(() => {});
-        }}
-      />
       <DoseEdit
         open={open && typeof sub === "object" && sub !== null}
         dose={typeof sub === "object" && sub !== null ? sub.dose : null}
@@ -191,9 +156,8 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
   const [problem, setProblem] = useState<string | null>(null);
   const counted = !!plan.limit_unit && plan.limit_unit !== "doses";
   const options = parseUnits(plan.units_per_dose).options;
-  const decimals = plan.limit_unit === "mL";
   const u = units.trim() === "" ? null : Number(units);
-  const unitsBad = u != null && (!Number.isFinite(u) || u <= 0 || u > 1000 || (!decimals && !Number.isInteger(u)));
+  const unitsBad = u != null && (!Number.isFinite(u) || u <= 0 || u > 1000);
 
   // Someone else's delete getting there first is said by useCare ("Matt removed this, so your change wasn't saved.").
   const failText = (e: unknown) => {
@@ -267,14 +231,14 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
             </div>
           ) : (
             <input
-              inputMode={decimals ? "decimal" : "numeric"}
+              inputMode="decimal"
               aria-label={`How many ${plan.limit_unit}`}
               value={units}
-              onChange={(e) => setUnits(e.target.value.replace(",", ".").replace(decimals ? /[^\d.]/g : /\D/g, ""))}
+              onChange={(e) => setUnits(e.target.value.replace(",", ".").replace(/[^\d.]/g, ""))}
               className={cx(tone.input, "w-32! text-center text-xl font-semibold tabular-nums")}
             />
           )}
-          {unitsBad && <Problem>{decimals ? "Check this number." : "Enter a whole number."}</Problem>}
+          {unitsBad && <Problem>Check this number.</Problem>}
         </div>
       )}
       <MoreDetails label="Note and dose" summary={[note.trim() && "Note", doseText.trim() && doseText.trim()].filter(Boolean).join(" · ")}>

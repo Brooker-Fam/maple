@@ -11,7 +11,7 @@ import type { Entry, EntryOf, Member, Role } from "@/lib/maple/types";
 import BirthSheet from "./BirthSheet";
 import { useCareNav } from "./care/CareNav";
 import { NavRow } from "./care/parts";
-import { useCare, useCareSetup } from "./care/useCare";
+import { useCare } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
 import { useNightPref, type NightPref } from "./nightLook";
 import { CARE_COLOR } from "./palette";
@@ -1010,22 +1010,19 @@ function BabyDetails({ after }: { after?: ReactNode }) {
 // ── After the birth ──────────────────────────────────────────────────────
 
 /**
- * Mom's rows (§11.1). Her medicines and recovery for whoever she shares
- * them with; before it's set up, the setup row for the people who may set
- * it up; Support and help lines for everyone signed in, viewers included.
- * It never says more than the reader can see: without access it's the
- * Support row alone, so nothing here confirms an area exists.
+ * Mom's rows (§11.1): her medicines and recovery for everyone signed in
+ * (her page always exists), and Support and help lines for everyone,
+ * viewers included.
  */
 function AfterTheBirth() {
   const care = useCare();
-  const setup = useCareSetup();
   const nav = useCareNav();
   // Her first plan as the list sorts them.
   const first = care?.plans[0]?.line;
   return (
     <Section title="After the birth">
       <div className={GROUP}>
-        {care ? (
+        {care && (
           <NavRow
             icon="pill"
             iconColor={CARE_COLOR}
@@ -1033,16 +1030,6 @@ function AfterTheBirth() {
             note={first ?? (care.plans.length ? undefined : "No medicines yet")}
             onClick={nav.openCare}
           />
-        ) : (
-          setup && (
-            <NavRow
-              icon="pill"
-              iconColor={CARE_COLOR}
-              label="Medicines and support for mom"
-              note="Her medicine schedule and help lines for the weeks after birth"
-              onClick={nav.openSetup}
-            />
-          )
         )}
         <NavRow icon="life-buoy" label="Support and help lines" note="Warning signs, hotlines, and how to help" onClick={nav.openSupport} />
       </div>
@@ -1641,9 +1628,9 @@ function HandsFree() {
 
 /**
  * The one "Mom meds" shortcut (§10.5) for every medicine on her list, from
- * any phone, for whoever she shares them with. Asks come back as
- * needs_units / needs_confirm, so nothing early or over her limit is saved
- * without a yes; reminders go to Apple Reminders, never a family calendar.
+ * any phone. A dose saves like Maple's actions; only a likely duplicate
+ * comes back as needs_confirm. Reminders go to Apple Reminders, never a
+ * family calendar.
  */
 function MomShortcut({ url }: { url: string }) {
   const care = useCare();
@@ -1672,12 +1659,8 @@ function MomShortcut({ url }: { url: string }) {
           set to the chosen item&apos;s <Code>id</Code>.
         </li>
         <li>
-          If <Code>needs_units</Code> is true: <strong className={strong}>Ask for Number</strong> with <Code>speak</Code> as the prompt, then call again
-          with a Number field <Code>units</Code>.
-        </li>
-        <li>
-          If <Code>needs_confirm</Code> is true: <strong className={strong}>Choose from Menu</strong> with <Code>speak</Code> as the prompt, Yes and No.
-          On Yes, call again with a Boolean field <Code>confirm</Code> set to true (and the same <Code>units</Code>, if step 3 asked).
+          If <Code>needs_confirm</Code> is true (someone logged it in the last half hour): <strong className={strong}>Choose from Menu</strong> with{" "}
+          <Code>speak</Code> as the prompt, Yes and No. On Yes, call again with a Boolean field <Code>confirm</Code> set to true.
         </li>
         <li>
           <strong className={strong}>Speak Text</strong> with <Code>speak</Code>.

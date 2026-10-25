@@ -14,7 +14,7 @@ import {
 import { isVitaminD } from "@/lib/maple/insights";
 import type { CarePlan, EntryOf } from "@/lib/maple/types";
 import { useCareNav } from "../care/CareNav";
-import { useCare, useCareSetup } from "../care/useCare";
+import { useCare } from "../care/useCare";
 import { Icon } from "../icons";
 import { Chip, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
@@ -26,10 +26,9 @@ import { ContextNote, Label, LoggedBy, NoteField, SheetFooter, presetStart, pstr
  * label wins if the drops say otherwise). Logging vitamin D twice in a day
  * gets a gentle heads-up so two caregivers don't double up.
  *
- * Mom's medicines live apart (§5.10): before her list is set up, the fever
- * caution offers to keep hers separate; once it is, a name on her list says
- * so here, with a way over to her Dose sheet, and an existing entry can be
- * moved across. The fever copy itself (AAP / Seattle Children's: no fever
+ * Mom's medicines live apart (§5.10): a name on her list says so here, with
+ * a way over to her Dose sheet; the fever caution on any other name offers
+ * her one-off sheet instead; and an existing entry can be moved across. The fever copy itself (AAP / Seattle Children's: no fever
  * medicine under 3 months, and no ibuprofen under 6 months, without the
  * doctor's OK) lives in guidelines.ts.
  */
@@ -52,7 +51,6 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   const e = entry?.kind === "med" ? entry : undefined;
   const care = useCare();
   const careNav = useCareNav();
-  const setupMode = useCareSetup();
 
   const [name, setName] = useState(() => e?.data.name ?? pstr(preset, "name") ?? VITAMIN_D_DEFAULT.name);
   const [dose, setDose] = useState(() => e?.data.dose ?? pstr(preset, "dose") ?? (isVitaminD(pstr(preset, "name") ?? VITAMIN_D_DEFAULT.name) ? VITAMIN_D_DEFAULT.dose : ""));
@@ -82,8 +80,6 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
 
   const givenToday = !e && vitD ? summary?.vitaminD : null;
   const feverCaution = BABY_FEVER_MED_NAMES.test(name) && (ageMonths < 3 || (BABY_IBUPROFEN_NAMES.test(name) && ageMonths < 6));
-  // Before her list exists: anyone who could set it up gets the way to.
-  const canSetUp = !care && setupMode != null;
   const herPlan = care ? herPlanNamed(name, care.plans.map((v) => v.plan)) : undefined;
   const careWrite = !!care?.access.write;
   const [moving, setMoving] = useState(false);
@@ -231,9 +227,9 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
             <Icon name="triangle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
             <span>{ageMonths < 3 ? BABY_FEVER_MED_UNDER_3M_HINT : BABY_IBUPROFEN_UNDER_6M_HINT}</span>
           </p>
-          {canSetUp && !e && (
-            <button type="button" onClick={() => toCare(careNav.openSetup)} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
-              Is this for mom? Keep her medicines separate
+          {careWrite && !herPlan && !e && care && (
+            <button type="button" onClick={() => toCare(() => careNav.openOneOff(name.trim()))} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+              Is this for {care.self ? "you" : care.name}? Log it on {care.self ? "your" : "her"} medicines
             </button>
           )}
         </div>

@@ -533,8 +533,8 @@ export function assessMomTemp(tempC: number): Assessment | null {
 
 // ── Medicines ────────────────────────────────────────────────────────────
 // The app records what her clinician prescribed and keeps time against it.
-// Name matching only adds sourced notes or a privacy default; it never
-// changes or blocks a dose.
+// Name matching only adds sourced notes and puts a dose on the plan with
+// that name; it never blocks a dose.
 
 export const MOM_MED_NOTE =
   "Type each medicine exactly as your label or discharge papers say: the dose, how often, and the most you can take in 24 hours, in the label's own unit. Maple's Log only keeps time against the schedule you enter. It never suggests a dose.";

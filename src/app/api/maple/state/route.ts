@@ -1,6 +1,6 @@
 import { listMembers } from "@/lib/maple/auth";
 import { json, withMember } from "@/lib/maple/api";
-import { careRev, careSession, careStateFor, eligible, viewerFor } from "@/lib/maple/care-store";
+import { careRev, careSession, careStateFor, viewerFor } from "@/lib/maple/care-store";
 import { getBaby, lifetimeCounts, listEntries, rev, toClientEntry, touchLastSeen } from "@/lib/maple/store";
 import { pushTickQuietly } from "@/lib/maple/push";
 import type { MapleState, MapleStateUnchanged } from "@/lib/maple/types";
@@ -49,11 +49,6 @@ export const GET = withMember("GET /api/maple/state", async (request, me) => {
     careStateFor(care),
   ]);
 
-  // Before setup: who may set it up (an owner for anyone, a member for herself) sees the setup rows.
-  const caller = members.find((m) => m.email === care.viewer.id);
-  const adminLogin = care.viewer.id === "admin";
-  const canSetUp = !care.person && (adminLogin || eligible(caller));
-
   const body: MapleState = {
     now: now.toISOString(),
     baby,
@@ -65,7 +60,6 @@ export const GET = withMember("GET /api/maple/state", async (request, me) => {
     rev: current,
     seen_at: seenAt,
     ...(careState ? { care: careState } : {}),
-    ...(canSetUp ? { care_setup: "anyone" } : {}),
   };
   return json(body);
 });

@@ -229,12 +229,6 @@ export type MapleState = {
   seen_at: string | null;
   /** Mom's area, filtered by careAccess for this reader; absent when they can't read anything there. */
   care?: CareState;
-  /**
-   * Before mom's area is set up, for someone who may set it up: "anyone"
-   * (an owner, for any owner or member) or "self" (a member, for herself).
-   * Absent once it exists, and for viewers.
-   */
-  care_setup?: "anyone" | "self";
 };
 
 export type MapleStateUnchanged = { unchanged: true; now: string; rev: string };

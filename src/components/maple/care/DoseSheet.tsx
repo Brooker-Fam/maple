@@ -13,15 +13,16 @@ import { type UseCare, useCare } from "./useCare";
 
 /**
  * Logging one dose (§5.2–5.6): the status sentence, the ask that brought it
- * up (early, recent, at the limit, units, already logged today), the units
- * ask, When, a note, and the live early and over-limit notes before Save.
- * With no `planId` it's the one-off "Another medicine".
+ * up (a likely duplicate, or already logged today), how many (optional),
+ * When, a note, and the live early and over-limit notes before Save. With
+ * no `planId` it's the one-off "Another medicine" (`name` fills it in).
  *
  * Nothing here is ever blocked: an early or over-limit dose shows its note
- * and still saves. Every number on screen is hers (care.ts arithmetic on her
- * plan); the units chips are her own typed choice, never preselected.
+ * and still saves, and a count left out counts high. Every number on screen
+ * is hers (care.ts arithmetic on her plan); the units chips are her own
+ * typed choice, never preselected.
  */
-export type DoseSheetProps = { open: boolean; onClose: () => void; planId?: number; ask?: OneTapAsk };
+export type DoseSheetProps = { open: boolean; onClose: () => void; planId?: number; ask?: OneTapAsk; name?: string };
 
 /** A dose can be logged up to 10 minutes ahead (her phone's clock vs. the kitchen's); further is a typo. */
 const FUTURE_SLACK_MS = 10 * 60_000;
@@ -31,7 +32,7 @@ export default function DoseSheet(props: DoseSheetProps) {
   return <DoseForm key={n} {...props} />;
 }
 
-function DoseForm({ open, onClose, planId: startPlan, ask }: DoseSheetProps) {
+function DoseForm({ open, onClose, planId: startPlan, ask, name }: DoseSheetProps) {
   const care = useCare();
   // "Is this your Ibuprofen?" → "Yes, log it there" turns the one-off into that plan's sheet, keeping the time.
   const [planId, setPlanId] = useState(startPlan);
@@ -43,6 +44,7 @@ function DoseForm({ open, onClose, planId: startPlan, ask }: DoseSheetProps) {
         care={care}
         open={open}
         onClose={onClose}
+        startName={name}
         onUsePlan={(id, when) => {
           setCarried(when);
           setPlanId(id);
@@ -104,8 +106,7 @@ function PlanDose({
   const parsed = parseUnits(plan.units_per_dose);
   const counted = !!plan.limit_unit && plan.limit_unit !== "doses";
   const needUnits = counted && parsed.fixed == null;
-  const decimals = plan.limit_unit === "mL";
-  const unitsBad = needUnits && unitsTyped !== "" && (units == null || units <= 0 || units > 1000 || (!decimals && !Number.isInteger(units)));
+  const unitsBad = needUnits && unitsTyped !== "" && (units == null || units <= 0 || units > 1000);
   const future = when != null && when.getTime() > nowFn().getTime() + FUTURE_SLACK_MS;
 
   const notes = doseNotes(plan, doses, { at: at.toISOString(), units: needUnits ? units : (parsed.fixed ?? null) }, { ...ctx, now: tick });
@@ -114,13 +115,11 @@ function PlanDose({
     ? doses.filter((d) => !d.data.skipped && Date.parse(d.at) <= at.getTime() && Date.parse(d.at) > at.getTime() - 24 * 3600_000).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     : [];
 
-  // The dose this one could repeat (inside her gap, or 30 minutes with none set), as the one-tap reads it: anyone's
-  // within 30 minutes, or someone else's inside the gap, asks; her own earlier one inside the gap is the early note.
+  // The dose this one could repeat (anyone's within 30 minutes), as the one-tap reads it; further back it's the early note.
   const near = recentDose(plan, doses, at);
-  const asksNear = near && (Math.abs(Date.parse(near.at) - at.getTime()) < RECENT_MS || near.created_by !== ctx.me);
-  const showDup = !confirmed && (dup ?? (asksNear && near ? { by: near.created_by, at: near.at } : null));
-  // Whatever the sheet showed about an earlier dose (the ask, or the early note) was the question; Save is the answer.
-  const sawEarlier = confirmed || !!near;
+  const showDup = !confirmed && (dup ?? (near ? { by: near.created_by, at: near.at } : null));
+  // Once "Yes, another dose" answered the ask, Save is that answer.
+  const sawEarlier = confirmed;
 
   /**
    * The sheet closes first, so the dose's toast (when the next one is OK, the
@@ -157,13 +156,13 @@ function PlanDose({
   const yesAnother = () => {
     setConfirmed(true);
     setDup(null);
-    if (!needUnits || units != null) void save({ allow: true });
+    void save({ allow: true });
   };
 
   const whoText = (by: string | null) => loggedBy(by, ctx);
   const label = when ? `Took it at ${careTime(when.toISOString(), tick, ctx.tz)}` : "Took it";
   const skippable = plan.schedule.type !== "as_needed";
-  const ready = !future && !unitsBad && (!needUnits || units != null);
+  const ready = !future && !unitsBad;
 
   return (
     <Sheet
@@ -174,9 +173,6 @@ function PlanDose({
       footer={
         showDup ? undefined : (
           <div>
-            {needUnits && units == null && (
-              <p className={cx(tone.muted, "mb-2 text-center text-xs")}>{parsed.options?.length ? "How many this time? Choose above." : "Type how many above."}</p>
-            )}
             <div className="flex items-center gap-3">
               {skippable && (
                 <Button variant="soft" size="lg" onClick={() => void save({ skipped: true })} disabled={busy || future}>
@@ -232,7 +228,7 @@ function PlanDose({
 
       {needUnits && plan.limit_unit && (
         <div>
-          <Label>How many {plan.limit_unit} this time?</Label>
+          <Label optional>How many {plan.limit_unit} this time?</Label>
           {parsed.options?.length ? (
             <div className="flex flex-wrap gap-2">
               {parsed.options.map((o) => (
@@ -251,13 +247,13 @@ function PlanDose({
             </div>
           ) : (
             <input
-              inputMode={decimals ? "decimal" : "numeric"}
+              inputMode="decimal"
               // Opened to ask for the count: the keyboard's already up for one thumb.
               autoFocus={ask?.reason === "units"}
               aria-label={`How many ${plan.limit_unit} this time`}
               value={unitsTyped}
               onChange={(e) => {
-                const t = e.target.value.replace(",", ".").replace(decimals ? /[^\d.]/g : /\D/g, "");
+                const t = e.target.value.replace(",", ".").replace(/[^\d.]/g, "");
                 setUnitsTyped(t);
                 const v = t === "" ? null : Number(t);
                 setUnits(v != null && Number.isFinite(v) ? v : null);
@@ -265,7 +261,7 @@ function PlanDose({
               className={cx(tone.input, "w-32! text-center text-xl font-semibold tabular-nums", unitsBad && "border-mp-danger! ring-2! ring-mp-danger/25!")}
             />
           )}
-          {unitsBad && <Problem>{decimals ? "Check this number." : "Enter a whole number."}</Problem>}
+          {unitsBad && <Problem>Check this number.</Problem>}
         </div>
       )}
 
@@ -287,14 +283,28 @@ function PlanDose({
 
 /**
  * "Another medicine" (§5.3, step 1): a one-time dose that isn't on her list.
- * A name that matches one of her plans asks "Is this your Ibuprofen?" first,
- * and an acetaminophen name while a plan contains it shows the overlap note.
+ * A name that matches one of her plans is logged on that plan ("It's on your
+ * list as Ibuprofen", with "It's something else" to keep it a one-off), and
+ * an acetaminophen name while a plan contains it shows the overlap note.
  */
-function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: boolean; onClose: () => void; onUsePlan: (planId: number, when: Date | null) => void }) {
+function OneOffDose({
+  care,
+  open,
+  onClose,
+  onUsePlan,
+  startName,
+}: {
+  care: UseCare;
+  open: boolean;
+  onClose: () => void;
+  onUsePlan: (planId: number, when: Date | null) => void;
+  startName?: string;
+}) {
   const { now: nowFn, toast } = useMaple();
+  const nav = useCareNav();
   const tick = useNow(30_000);
   const ctx = useCareCtx(care);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(startName ?? "");
   const [dose, setDose] = useState("");
   const [when, setWhen] = useState<Date | null>(null);
   const [notMatch, setNotMatch] = useState<string | null>(null);
@@ -304,12 +314,12 @@ function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: b
   const typed = name.trim();
   const active = care.plans.map((v) => v.plan);
   const match = typed ? matchPlan(typed, active, { includePrivate: true }) : null;
-  const askMatch = match?.kind === "match" && notMatch !== normName(typed) ? match.plan : null;
+  const onPlan = match?.kind === "match" && notMatch !== normName(typed) ? match.plan : null;
   const notes = typed ? oneOffNotes(typed, active, ctx) : [];
   const future = when != null && when.getTime() > nowFn().getTime() + FUTURE_SLACK_MS;
   // The same one-off (by its normalized name), by anyone, within 30 minutes: ask before saving, as the server would.
   const at = when ?? tick;
-  const near = typed
+  const near = typed && !onPlan
     ? care.state.entries.find(
         (e): e is DoseEntry =>
           e.kind === "dose" && e.med_id == null && !e.data.skipped && normName(e.data.name) === normName(typed) && Math.abs(Date.parse(e.at) - at.getTime()) < RECENT_MS
@@ -323,6 +333,21 @@ function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: b
     if (busy || !typed) return;
     setBusy(true);
     onClose();
+    if (onPlan) {
+      // On her list: a dose of that plan, so it counts toward her schedule. A likely duplicate comes back as its sheet.
+      try {
+        const r = await care.act.logDose({ planId: onPlan.id, at: (when ?? nowFn()).toISOString(), dose: dose.trim() || undefined });
+        if (!r.created && !r.deduped) {
+          const d = r.possible_duplicate;
+          nav.openDose(onPlan.id, d ? { reason: "recent", by: d.created_by, at: d.at } : { reason: r.reason ?? "recent" });
+        }
+      } catch (e) {
+        toast(errorText(e), { tone: "error" });
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const input = {
       oneOff: { name: typed, dose: dose.trim() || undefined },
       at: (when ?? nowFn()).toISOString(),
@@ -351,7 +376,7 @@ function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: b
       onClose={onClose}
       title="Another medicine"
       footer={
-        dup || askMatch ? undefined : (
+        dup ? undefined : (
           <div>
             {!typed && <p className={cx(tone.muted, "mb-2 text-center text-xs")}>What was it?</p>}
             <Button size="lg" className="w-full" onClick={() => void save(confirmed || !!near)} disabled={busy || !typed || future}>
@@ -368,16 +393,18 @@ function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: b
         <input value={name} maxLength={80} onChange={(e) => setName(e.target.value)} aria-label="Name" autoComplete="off" className={tone.input} />
       </div>
 
-      {askMatch && (
-        <div className={cx(tone.card, "p-4")} role="group" aria-label={`Is this your ${askMatch.name}?`}>
-          <p className={cx(tone.heading, "text-[17px] leading-snug")}>Is this your {askMatch.name}?</p>
-          <div className="mt-3 flex flex-col gap-2">
-            <Button size="md" onClick={() => onUsePlan(askMatch.id, when)}>
-              Yes, log it there
-            </Button>
-            <Button size="md" variant="soft" onClick={() => setNotMatch(normName(typed))}>
-              No, something else
-            </Button>
+      {onPlan && (
+        <div className={cx(tone.inset, "px-4 py-3")} role="status">
+          <p className={cx(tone.body, "text-[15px] leading-snug")}>
+            It&apos;s on {care.self ? "your" : "her"} list as {onPlan.name}, so it&apos;s logged there.
+          </p>
+          <div className="mt-1 flex flex-wrap gap-x-4">
+            <button type="button" onClick={() => onUsePlan(onPlan.id, when)} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+              Open {onPlan.name}
+            </button>
+            <button type="button" onClick={() => setNotMatch(normName(typed))} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+              It&apos;s something else
+            </button>
           </div>
         </div>
       )}

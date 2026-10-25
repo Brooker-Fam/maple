@@ -4,7 +4,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { OneTapAsk } from "@/lib/maple/types";
 import { useMaple } from "../useMaple";
 import CareScreen from "./CareScreen";
-import CareSetup from "./CareSetup";
 import DoseSheet from "./DoseSheet";
 import PlanPicker from "./PlanPicker";
 import SupportScreen from "./SupportScreen";
@@ -13,7 +12,7 @@ import WarningSignsSheet from "./WarningSigns";
 /**
  * One place to open mom's full-height sheets from anywhere (Today, the
  * Lantern, More, Family, her own screen): her screen, Support, warning
- * signs, setup, the plan picker and the Dose sheet. CareNavProvider is
+ * signs, the plan picker and the Dose sheet. CareNavProvider is
  * mounted once in MapleApp, around SheetProvider (so Maple's MedSheet can
  * reach it too), and holds the sheets themselves.
  */
@@ -21,11 +20,11 @@ export type CareNav = {
   openCare(): void;
   openSupport(): void;
   openSigns(): void;
-  openSetup(): void;
   openPicker(): void;
   /** No planId: the one-off "Another medicine". `ask`: why "Took it" stopped to ask. */
   openDose(planId?: number, ask?: OneTapAsk): void;
-  openOneOff(): void;
+  /** "Another medicine", with the name filled in when it's known (Maple's medicine sheet). */
+  openOneOff(name?: string): void;
 };
 
 // Outside a provider (a stray render in a test, say) every open does nothing.
@@ -33,7 +32,6 @@ const NONE: CareNav = {
   openCare: () => {},
   openSupport: () => {},
   openSigns: () => {},
-  openSetup: () => {},
   openPicker: () => {},
   openDose: () => {},
   openOneOff: () => {},
@@ -45,7 +43,7 @@ export function useCareNav(): CareNav {
   return useContext(CareNavContext) ?? NONE;
 }
 
-type Simple = "care" | "support" | "signs" | "setup" | "picker";
+type Simple = "care" | "support" | "signs" | "picker";
 
 /**
  * The sheets are siblings after the app, in stacking order: what opens from
@@ -60,15 +58,15 @@ type Simple = "care" | "support" | "signs" | "setup" | "picker";
  */
 export function CareNavProvider({ children }: { children: ReactNode }) {
   const { state } = useMaple();
-  const [open, setOpen] = useState<Record<Simple, boolean>>({ care: false, support: false, signs: false, setup: false, picker: false });
+  const [open, setOpen] = useState<Record<Simple, boolean>>({ care: false, support: false, signs: false, picker: false });
   // The last Dose target stays mounted while its sheet slides away.
-  const [dose, setDose] = useState<{ planId?: number; ask?: OneTapAsk; seq: number } | null>(null);
+  const [dose, setDose] = useState<{ planId?: number; ask?: OneTapAsk; name?: string; seq: number } | null>(null);
   const [doseOpen, setDoseOpen] = useState(false);
 
   const show = useCallback((k: Simple) => setOpen((o) => ({ ...o, [k]: true })), []);
   const hide = useCallback((k: Simple) => setOpen((o) => ({ ...o, [k]: false })), []);
-  const openDose = useCallback((planId?: number, ask?: OneTapAsk) => {
-    setDose((d) => ({ planId, ask, seq: (d?.seq ?? 0) + 1 }));
+  const openDose = useCallback((planId?: number, ask?: OneTapAsk, name?: string) => {
+    setDose((d) => ({ planId, ask, name, seq: (d?.seq ?? 0) + 1 }));
     setDoseOpen(true);
   }, []);
 
@@ -77,10 +75,9 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
       openCare: () => show("care"),
       openSupport: () => show("support"),
       openSigns: () => show("signs"),
-      openSetup: () => show("setup"),
       openPicker: () => show("picker"),
       openDose,
-      openOneOff: () => openDose(undefined),
+      openOneOff: (name?: string) => openDose(undefined, undefined, name),
     }),
     [openDose, show]
   );
@@ -99,7 +96,6 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
   const closeCare = useCallback(() => hide("care"), [hide]);
   const closeSupport = useCallback(() => hide("support"), [hide]);
   const closeSigns = useCallback(() => hide("signs"), [hide]);
-  const closeSetup = useCallback(() => hide("setup"), [hide]);
   const closePicker = useCallback(() => hide("picker"), [hide]);
   const closeDose = useCallback(() => setDoseOpen(false), []);
 
@@ -113,8 +109,7 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
           <SupportScreen open={open.support} onClose={closeSupport} />
           <WarningSignsSheet open={open.signs} onClose={closeSigns} />
           <PlanPicker open={open.picker} onClose={closePicker} />
-          <CareSetup open={open.setup} onClose={closeSetup} />
-          {dose && <DoseSheet key={dose.seq} open={doseOpen} onClose={closeDose} planId={dose.planId} ask={dose.ask} />}
+          {dose && <DoseSheet key={dose.seq} open={doseOpen} onClose={closeDose} planId={dose.planId} ask={dose.ask} name={dose.name} />}
         </>
       )}
     </CareNavContext.Provider>
