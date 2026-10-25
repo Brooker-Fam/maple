@@ -304,7 +304,7 @@ function listLine(s: CareSession, plans: CarePlan[]): string {
 
 /** One of her active plans by name, Also called or p id; anything else is an error that lists her medicines. */
 function pickPlan(query: string, s: CareSession, active: Viewed[]): Viewed {
-  const m = matchPlan(query, active.map((x) => x.view.plan), { includePrivate: false });
+  const m = matchPlan(query, active.map((x) => x.view.plan), { includePrivate: true });
   if (m.kind === "match") return active.find((x) => x.view.plan.id === m.plan.id)!;
   if (m.kind === "ambiguous") throw new ToolError(`"${query}" could be ${listNames(m.plans.map((p) => p.name))}. Ask which one, then pass its name or id.`);
   throw new ToolError(`I couldn't find "${query}" in ${s.access.self ? "your" : `${s.name}'s`} medicines. ${listLine(s, active.map((x) => x.view.plan))} Ask which one; for a one-time medicine not on the list, pass one_off: true.`);
@@ -448,7 +448,7 @@ export function registerCareTools(server: McpServer) {
       let shown = active;
       if (a.medicine?.trim()) {
         const pool = [...active, ...finished];
-        const m = matchPlan(a.medicine, pool.map((x) => x.view.plan), { includePrivate: false });
+        const m = matchPlan(a.medicine, pool.map((x) => x.view.plan), { includePrivate: true });
         if (m.kind === "none") throw new ToolError(`I couldn't find "${a.medicine}" in ${s.access.self ? "your" : `${s.name}'s`} medicines. ${listLine(s, active.map((x) => x.view.plan))}`);
         const ids = new Set(m.kind === "match" ? [m.plan.id] : m.plans.map((p) => p.id));
         shown = pool.filter((x) => ids.has(x.view.plan.id));
@@ -534,7 +534,7 @@ export function registerCareTools(server: McpServer) {
       let target: Viewed | null = null;
       if (a.one_off) {
         // A name that is on her list goes there, unless the user said it's something else.
-        const m = matchPlan(a.medicine, active.map((x) => x.view.plan), { includePrivate: false });
+        const m = matchPlan(a.medicine, active.map((x) => x.view.plan), { includePrivate: true });
         if (m.kind === "match" && !a.allow_duplicate) {
           throw new ToolError(
             `"${a.medicine}" matches ${m.plan.name} on ${whose} list. If that's what she took, call again without one_off; if it's something else, call again with one_off and allow_duplicate: true.`

@@ -690,7 +690,7 @@ export async function logCareDose(s: CareSession, input: DoseInput): Promise<Dos
     const dup = (await oneOffsNear(s, at)).find((d) => !d.data.skipped && normName(d.data.name) === key && Math.abs(Date.parse(d.at) - at.getTime()) < RECENT_MS);
     if (dup) return { created: false, entry: null, notes, possible_duplicate: dup, reason: "recent" };
   }
-  const saved = await insertEntry(p.member, { kind: "dose", medId: null, at, data, note: cleanCareNote(input.note), priv: input.private === true, by: s.viewer.id, source: input.source, clientId });
+  const saved = await insertEntry(p.member, { kind: "dose", medId: null, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId });
   return { created: !saved.deduped, deduped: saved.deduped || undefined, entry: saved.entry, notes: saved.deduped ? [] : notes };
 }
 
@@ -739,7 +739,7 @@ export async function addCareQuestion(s: CareSession, input: { text: string; pri
   if (input.private && !s.access.private) throw new CareForbidden(`Only ${s.name} can mark a question Only me.`);
   const note = cleanCareNote(input.text);
   if (!note) throw new Error("Add the question.");
-  return insertEntry(p.member, { kind: "question", medId: null, at: s.now, data: {}, note, priv: input.private === true, by: s.viewer.id, source: input.source, clientId: cleanClientId(input.clientId) });
+  return insertEntry(p.member, { kind: "question", medId: null, at: s.now, data: {}, note, priv: false, by: s.viewer.id, source: input.source, clientId: cleanClientId(input.clientId) });
 }
 
 /** POST /care/entries in one call: the kind decides which write runs. */
@@ -821,12 +821,8 @@ export async function updateCareEntry(s: CareSession, id: number, patch: CareEnt
   const data = cleanCareData(cur.kind, merged, cur.kind === "dose" ? { unit: plan ? plan.limit_unit : (cur.data as CareDataByKind["dose"]).unit ?? null } : {});
   const note = patch.note !== undefined ? cleanCareNote(patch.note) : cur.note;
   if (cur.kind === "question" && !note) throw new Error("Add the question.");
-  let priv = cur.private;
-  if (patch.private !== undefined) {
-    if (!s.access.private) throw new CareForbidden(`Only ${s.name} can mark this Only me.`);
-    // A plan's dose follows its plan; a temperature is never private.
-    priv = cur.kind === "temp" || cur.med_id != null ? false : patch.private;
-  }
+  // Nothing is hidden anymore ("Only me" is gone): an edit clears any old flag.
+  const priv = false;
   const params: unknown[] = [id, p.member, at.toISOString(), JSON.stringify(data), note, priv, s.viewer.id];
   let expect = "";
   if (patch.expect_updated_at) {
@@ -1112,7 +1108,7 @@ export async function momMedicineClash(viewer: CareViewer, name: string, ctx: { 
   const key = normName(name);
   if (!key) return null;
   // A plan's own name first, then Also called: ids are random, so plan order alone would pick either.
-  const all = (await listCarePlans(s.person.member)).filter((p) => !p.private && planActive(p, s.now, s.tz));
+  const all = (await listCarePlans(s.person.member)).filter((p) => planActive(p, s.now, s.tz));
   const plan = all.find((p) => normName(p.name) === key) ?? all.find((p) => planNames(p).includes(key));
   return plan ? { name: s.name, plan } : null;
 }

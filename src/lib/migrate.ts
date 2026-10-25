@@ -691,6 +691,9 @@ async function migrate() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_time ON maple_care_entries(person, at DESC) WHERE deleted_at IS NULL`;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_med ON maple_care_entries(med_id, at DESC) WHERE deleted_at IS NULL AND kind = 'dose'`;
+  // "Only me" is gone (one rule: everyone signed in sees her whole page), so no row stays hidden.
+  await sql`UPDATE maple_care_meds SET private = FALSE WHERE private`;
+  await sql`UPDATE maple_care_entries SET private = FALSE WHERE private`;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_updated ON maple_care_entries(person, updated_at DESC)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_entries_client ON maple_care_entries(client_id) WHERE client_id IS NOT NULL`;
 

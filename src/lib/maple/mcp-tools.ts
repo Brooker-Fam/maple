@@ -3939,11 +3939,11 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
            ORDER BY created_at DESC, id DESC LIMIT 1`,
           [ctx.baby.id, ctx.who.id, MCP_SOURCES]
         ),
-        // Your newest write to her medicines, temperature or questions (never an Only me one, which assistants don't see):
+        // Your newest write to her medicines, temperature or questions:
         // if it's newer, "undo that" means it, and removing Maple's entry would undo the wrong thing.
         query(
           `SELECT e.id, e.kind, e.created_at, e.data->>'name' AS name FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
-           WHERE e.created_by = $1 AND e.source = ANY($2::text[]) AND e.deleted_at IS NULL AND NOT e.private AND NOT COALESCE(m.private, FALSE)
+           WHERE e.created_by = $1 AND e.source = ANY($2::text[]) AND e.deleted_at IS NULL
              AND e.created_at >= NOW() - INTERVAL '30 minutes'
            ORDER BY e.created_at DESC, e.id DESC LIMIT 1`,
           [ctx.who.id, MCP_SOURCES]

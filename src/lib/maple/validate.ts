@@ -308,7 +308,8 @@ export function cleanPlan(input: Record<string, unknown>, opts: { creating: bool
     reason = input.reason as MedReason;
   }
 
-  const priv = input.private === true;
+  // "Only me" is gone: nothing is saved hidden, whatever a caller sends.
+  const priv = false;
   const alsoCalled = text(input.also_called, 80, "Also called");
   const containsApap =
     typeof input.contains_apap === "boolean"
@@ -316,7 +317,7 @@ export function cleanPlan(input: Record<string, unknown>, opts: { creating: bool
       : opts.creating && [name, ...(alsoCalled ?? "").split(",")].some((n) => ACETAMINOPHEN_NAMES.test(n));
   // Show on Today: on for As needed and Every few hours, off for Each day and At set times (P7).
   const showOnToday =
-    typeof input.show_on_today === "boolean" ? input.show_on_today : !priv && (schedule.type === "as_needed" || schedule.type === "every");
+    typeof input.show_on_today === "boolean" ? input.show_on_today : schedule.type === "as_needed" || schedule.type === "every";
 
   const sort = typeof input.sort === "number" && Number.isInteger(input.sort) ? Math.max(-1e6, Math.min(1e6, input.sort)) : 0;
 
