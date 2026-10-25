@@ -189,7 +189,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           <Icon name="x" size={26} />
         </button>
       </div>
-      {/* Mom's medicine for whoever she shares it with: read-only, as dim as the line above, never an Only me plan. */}
+      {/* Mom's medicine: read-only, as dim as the line above. */}
       <div className="-mt-1.5 px-4">
         <CareLanternLine />
       </div>

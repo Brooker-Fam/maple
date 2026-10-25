@@ -56,12 +56,6 @@ export default function PlanCard({ view, care, onOpen, finished }: { view: PlanV
           <span className="min-w-0 flex-1">
             <span className={cx(tone.heading, "flex items-center gap-1.5 text-[17px] leading-snug")}>
               <span className="min-w-0 break-words">{plan.name}</span>
-              {plan.private && (
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-mp-sunken px-2 py-0.5 text-[12px] font-medium text-mp-ink-2">
-                  <Icon name="lock" size={12} strokeWidth={2} />
-                  Only me
-                </span>
-              )}
             </span>
             {plan.dose_text && <span className={cx(tone.muted, "mt-0.5 block text-[14px] leading-snug")}>As prescribed: {plan.dose_text}</span>}
             <span className={cx(tone.faint, "mt-0.5 block text-[13px] leading-snug")}>{view.summary}</span>

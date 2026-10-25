@@ -30,7 +30,6 @@ import {
   sortPlans,
   recentDose,
   RECENT_MS,
-  startsPrivate,
   unitsKnown,
   type CareChannel,
   type CareNote,
@@ -329,7 +328,7 @@ function personOf(s: CareSession): CarePerson {
 
 function needWrite(s: CareSession): CarePerson {
   const p = personOf(s);
-  if (!s.access.write) throw new CareForbidden(`${s.name}'s medicines aren't shared with you.`);
+  if (!s.access.write) throw new CareForbidden(`You can't change ${s.name}'s medicines from this account.`);
   return p;
 }
 
@@ -343,7 +342,7 @@ export async function listCarePlans(person: string): Promise<CarePlan[]> {
   return rows.map(rowToPlan);
 }
 
-/** The plans this session may see (Only me ones only for her). */
+/** Her plans (everyone signed in sees them all). */
 export async function visiblePlans(s: CareSession): Promise<CarePlan[]> {
   const p = personOf(s);
   return (await listCarePlans(p.member)).filter((x) => s.access.private || !x.private);
@@ -443,12 +442,7 @@ export async function saveCarePlan(
   }
 
   const fields = cleanPlan(raw, { creating: true, parseUnits });
-  let madePrivate = false;
-  if (raw.private === undefined && startsPrivate(fields, s.access.self)) {
-    fields.private = true;
-    madePrivate = true;
-    if (raw.show_on_today === undefined) fields.show_on_today = false;
-  }
+  const madePrivate = false;
   const clientId = cleanClientId(input.client_id);
   const { row, deduped } = await insertRandom(
     "maple_care_meds",

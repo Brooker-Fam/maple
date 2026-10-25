@@ -65,7 +65,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me) => {
     rev: current,
     seen_at: seenAt,
     ...(careState ? { care: careState } : {}),
-    ...(canSetUp ? { care_setup: adminLogin || caller?.role === "owner" ? "anyone" : "self" } : {}),
+    ...(canSetUp ? { care_setup: "anyone" } : {}),
   };
   return json(body);
 });

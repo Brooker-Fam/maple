@@ -105,7 +105,7 @@ export type UseCare = {
   /** Active, visible plans in sortPlans order. */
   plans: PlanView[];
   finished: PlanView[];
-  /** The first Show on Today plan, never an Only me one (nor on the Lantern). */
+  /** The first Show on Today plan (the Lantern shows it too). */
   todayLine: { view: PlanView; more: number } | null;
   lanternLine: string | null;
   doses(planId: number, days: number): CareEntry[];
@@ -180,8 +180,7 @@ export function useCare(): UseCare | null {
     const finished = views
       .filter((v) => !planActive(v.plan, now, tz))
       .sort((a, b) => (b.plan.stopped_at ?? b.plan.course_end ?? "").localeCompare(a.plan.stopped_at ?? a.plan.course_end ?? ""));
-    // Never an Only me plan, even on her own phone (§9.2 rule 8): Today and the Lantern are screens others glance at.
-    const onToday = plans.filter((v) => v.plan.show_on_today && !v.plan.private);
+    const onToday = plans.filter((v) => v.plan.show_on_today);
     const lantern = onToday[0];
     const moodRows = care.mood ? [...care.mood].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id) : null;
     const latestScreen = (moodRows?.find((m) => m.kind === "screen") ?? null) as Extract<MoodEntry, { kind: "screen" }> | null;
@@ -373,7 +372,7 @@ export function useCare(): UseCare | null {
   const logDose = useCallback<CareActions["logDose"]>(
     async (i) => {
       const c = careRef.current;
-      if (!c) throw new Error("Not shared with you");
+      if (!c) throw new Error("That page isn't available.");
       const plan = i.planId != null ? planOf(i.planId) : null;
       if (i.planId != null && !plan) throw new Error("That medicine isn't on the list anymore.");
       const name = plan ? plan.name : i.oneOff?.name?.trim() ?? "";

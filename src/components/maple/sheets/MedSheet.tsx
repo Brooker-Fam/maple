@@ -39,7 +39,7 @@ function herPlanNamed(name: string, plans: CarePlan[]): CarePlan | undefined {
   if (!name.trim() || isVitaminD(name)) return undefined;
   const n = normName(name);
   if (!n) return undefined;
-  return plans.find((p) => !p.private && planNames(p).includes(n));
+  return plans.find((p) => planNames(p).includes(n));
 }
 
 export default function MedSheet(props: SheetProps) {

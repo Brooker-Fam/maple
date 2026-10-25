@@ -314,7 +314,7 @@ export function cleanPlan(input: Record<string, unknown>, opts: { creating: bool
     typeof input.contains_apap === "boolean"
       ? input.contains_apap
       : opts.creating && [name, ...(alsoCalled ?? "").split(",")].some((n) => ACETAMINOPHEN_NAMES.test(n));
-  // Show on Today: on for As needed and Every few hours, off for Each day, At set times and Only me plans (P7).
+  // Show on Today: on for As needed and Every few hours, off for Each day and At set times (P7).
   const showOnToday =
     typeof input.show_on_today === "boolean" ? input.show_on_today : !priv && (schedule.type === "as_needed" || schedule.type === "every");
 

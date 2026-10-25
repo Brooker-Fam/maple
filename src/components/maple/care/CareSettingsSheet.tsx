@@ -4,23 +4,26 @@ import { useState, type InputHTMLAttributes } from "react";
 import type { CareSettings } from "@/lib/maple/types";
 import { SheetFooter, useOpenCount } from "../sheets/parts";
 import { Segmented, Sheet, cx, tone } from "../ui";
-import { Footnote, GROUP, Problem, SwitchRow, errorText } from "./parts";
+import { useMaple } from "../useMaple";
+import { ConfirmSheet, Footnote, GROUP, Problem, SwitchRow, errorText } from "./parts";
 import type { UseCare } from "./useCare";
 
 /**
- * "Settings for this page" (§11.3, step 1). Her and the people she shares
- * with set the care team, the next OB visit and nursing; only she sets her
- * therapist and the check-in suggestions. A shared reader's save carries only
- * the keys they can see, so her therapist's number is never touched by it.
+ * "Settings for this page": the care team (her therapist too), the next OB
+ * visit, nursing, check-in suggestions, and deleting the whole page.
  */
 type Feeding = "unset" | "yes" | "no";
 
-export default function CareSettingsSheet(props: { open: boolean; onClose: () => void; care: UseCare }) {
+/** `onDeleted` (her screen only) adds "Delete this page"; opened from Support or warning signs it's just the settings. */
+export default function CareSettingsSheet(props: { open: boolean; onClose: () => void; care: UseCare; onDeleted?: () => void }) {
   const n = useOpenCount(props.open);
   return <SettingsForm key={n} {...props} />;
 }
 
-function SettingsForm({ open, onClose, care }: { open: boolean; onClose: () => void; care: UseCare }) {
+function SettingsForm({ open, onClose, care, onDeleted }: { open: boolean; onClose: () => void; care: UseCare; onDeleted?: () => void }) {
+  const { api, refresh } = useMaple();
+  const [confirm, setConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const s = care.state.settings;
   const team = s.care_team ?? {};
   const her = care.access.therapist;
@@ -56,65 +59,99 @@ function SettingsForm({ open, onClose, care }: { open: boolean; onClose: () => v
     }
   };
 
+  const deleteAll = async () => {
+    setDeleting(true);
+    try {
+      await api("care/person", { method: "DELETE", body: JSON.stringify({ confirm: true }) });
+      setConfirm(false);
+      onDeleted?.();
+      await refresh();
+    } catch (e) {
+      setConfirm(false);
+      setProblem(errorText(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title="Settings for this page"
-      footer={
-        <div>
-          <Problem className="mt-0 mb-2 text-center">{problem}</Problem>
-          <SheetFooter onClose={onClose} onPrimary={() => void save()} label="Save" busy={busy} />
-        </div>
-      }
-    >
-      <section>
-        <h3 className={cx(tone.label, "mb-1.5 px-1")}>Care team</h3>
-        <div className={GROUP}>
-          <PhoneRow label="OB or midwife" value={ob} onChange={setOb} />
-          <PhoneRow label="After-hours or labor and delivery line" value={after} onChange={setAfter} />
-          <PhoneRow label="Pharmacy" value={pharmacy} onChange={setPharmacy} />
-          {her && <PhoneRow label="Therapist" value={therapist} onChange={setTherapist} />}
-        </div>
-        {her && <Footnote>Only you see your therapist&apos;s number. It never goes to anyone else or to any assistant.</Footnote>}
-      </section>
+    <>
+      <Sheet
+        open={open && !confirm}
+        onClose={onClose}
+        title="Settings for this page"
+        footer={
+          <div>
+            <Problem className="mt-0 mb-2 text-center">{problem}</Problem>
+            <SheetFooter onClose={onClose} onPrimary={() => void save()} label="Save" busy={busy} />
+          </div>
+        }
+      >
+        <section>
+          <h3 className={cx(tone.label, "mb-1.5 px-1")}>Care team</h3>
+          <div className={GROUP}>
+            <PhoneRow label="OB or midwife" value={ob} onChange={setOb} />
+            <PhoneRow label="After-hours or labor and delivery line" value={after} onChange={setAfter} />
+            <PhoneRow label="Pharmacy" value={pharmacy} onChange={setPharmacy} />
+            {her && <PhoneRow label="Therapist" value={therapist} onChange={setTherapist} />}
+          </div>
+        </section>
 
-      <section>
-        <div className={GROUP}>
-          <label className="flex min-h-[52px] items-center gap-3 px-4 py-1">
-            <span className={cx(tone.body, "shrink-0 text-[15px]")}>Next OB visit</span>
-            <input
-              type="date"
-              value={visit}
-              onChange={(e) => setVisit(e.target.value)}
-              aria-label="Next OB visit"
-              className="ml-auto min-h-[44px] min-w-0 bg-transparent py-2 text-right text-base text-mp-ink outline-none"
-            />
-          </label>
-        </div>
-      </section>
+        <section>
+          <div className={GROUP}>
+            <label className="flex min-h-[52px] items-center gap-3 px-4 py-1">
+              <span className={cx(tone.body, "shrink-0 text-[15px]")}>Next OB visit</span>
+              <input
+                type="date"
+                value={visit}
+                onChange={(e) => setVisit(e.target.value)}
+                aria-label="Next OB visit"
+                className="ml-auto min-h-[44px] min-w-0 bg-transparent py-2 text-right text-base text-mp-ink outline-none"
+              />
+            </label>
+          </div>
+        </section>
 
-      <section>
-        <h3 className={cx(tone.label, "mb-1.5 px-1")}>Nursing or pumping</h3>
-        <Segmented
-          aria-label="Nursing or pumping"
-          value={feeding}
-          onChange={setFeeding}
-          options={[
-            { value: "unset", label: "Not set" },
-            { value: "yes", label: "Yes" },
-            { value: "no", label: "No" },
-          ]}
-        />
-        <Footnote>While it&apos;s not set, the notes about nursing still show.</Footnote>
-      </section>
+        <section>
+          <h3 className={cx(tone.label, "mb-1.5 px-1")}>Nursing or pumping</h3>
+          <Segmented
+            aria-label="Nursing or pumping"
+            value={feeding}
+            onChange={setFeeding}
+            options={[
+              { value: "unset", label: "Not set" },
+              { value: "yes", label: "Yes" },
+              { value: "no", label: "No" },
+            ]}
+          />
+          <Footnote>While it&apos;s not set, the notes about nursing still show.</Footnote>
+        </section>
 
-      {care.access.mood && (
-        <div className={GROUP}>
-          <SwitchRow label="Check-in suggestions" note="Suggest a fuller check-in now and then. Only you see these." checked={suggest} onChange={setSuggest} />
-        </div>
-      )}
-    </Sheet>
+        {care.access.mood && (
+          <div className={GROUP}>
+            <SwitchRow label="Check-in suggestions" note="Suggest a fuller check-in now and then." checked={suggest} onChange={setSuggest} />
+          </div>
+        )}
+
+        {onDeleted && (
+          <div className={GROUP}>
+            <button type="button" onClick={() => setConfirm(true)} className={cx(tone.row, "min-h-[52px] py-2.5 text-[15px] font-medium text-mp-danger")}>
+              Delete this page and everything on it
+            </button>
+          </div>
+        )}
+      </Sheet>
+      <ConfirmSheet
+        open={open && confirm}
+        onClose={() => setConfirm(false)}
+        title="Delete everything here for good?"
+        body="Her medicines, readings, check-ins and questions will be deleted. This can't be undone."
+        confirm="Delete for good"
+        danger
+        busy={deleting}
+        onConfirm={() => void deleteAll()}
+      />
+    </>
   );
 }
 

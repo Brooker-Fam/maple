@@ -229,7 +229,7 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
       return json({ error: "Not set up", speak: "There's no area for mom in Maple's log yet. Someone can set it up in the app under Family.", ...help }, 404);
     }
     const name = carePersonName(s.person, members);
-    if (!s.access.read || !s.access.write) return json({ error: "Not shared", speak: `${name}'s medicines aren't shared with you.`, ...help }, 403);
+    if (!s.access.read || !s.access.write) return json({ error: "Not shared", speak: `You can't change ${name}'s medicines from this account.`, ...help }, 403);
     const self = s.access.self;
     const whose = self ? "your" : "her";
     const views = await carePlanViews(s);

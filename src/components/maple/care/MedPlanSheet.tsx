@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { forMom, parseUnits } from "@/lib/maple/care";
-import { ACETAMINOPHEN_NAMES, MOM_MED_NOTE, OPIOID_NAMES, OPIOID_NOTE, ZURANOLONE_NAMES } from "@/lib/maple/guidelines";
+import { ACETAMINOPHEN_NAMES, MOM_MED_NOTE, OPIOID_NAMES, OPIOID_NOTE } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, addDays, dayKey } from "@/lib/maple/time";
 import type { CarePlan, LimitUnit, MedReason, MedSchedule, PlanInput } from "@/lib/maple/types";
 import { Icon } from "../icons";
@@ -92,7 +92,6 @@ type Form = {
   start: string;
   instructions: string;
   showToday: boolean | null;
-  priv: boolean | null;
 };
 
 const hoursText = (min: number | null | undefined) => (min == null ? "" : String(Math.round((min / 60) * 100) / 100));
@@ -121,7 +120,6 @@ function fromPlan(p: CarePlan | undefined, today: string): Form {
     start: p?.course_start ?? today,
     instructions: p?.instructions ?? "",
     showToday: p ? p.show_on_today : null,
-    priv: p ? p.private : null,
   };
 }
 
@@ -159,9 +157,8 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   // Her own past plan names, for autocomplete (names only; never a drug list).
   const pastNames = [...new Set(care.state.plans.map((p) => p.name))];
 
-  const onlyMe = care.access.private && (f.priv ?? (!base && (f.reason === "mood" || ZURANOLONE_NAMES.test(f.name))));
   const apap = f.apap ?? (!base && ACETAMINOPHEN_NAMES.test(`${f.name} ${f.also}`));
-  const showToday = f.showToday ?? ((f.how === "as_needed" || f.how === "every") && !onlyMe);
+  const showToday = f.showToday ?? (f.how === "as_needed" || f.how === "every");
   const eachShown = !!f.unit && f.unit !== "doses";
   // §5.7: an opioid name gets its note here as well as on the card, so it's read once at save (a name hint, never a gate).
   const opioid = [f.name, ...f.also.split(",")].some((n) => n.trim() && OPIOID_NAMES.test(n));
@@ -227,7 +224,6 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
       course_end: end,
       instructions: f.instructions.trim() || null,
       show_on_today: showToday,
-      ...(care.access.private ? { private: onlyMe } : {}),
     };
     try {
       await care.act.savePlan(input, base?.updated_at);
@@ -413,7 +409,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
 
         {opioid && <NoteCard note={forMom(OPIOID_NOTE, care.name, care.self)} care={care} />}
 
-        <MoreDetails summary={[f.reason && REASONS.find((r) => r.value === f.reason)?.label, onlyMe && "Only me"].filter(Boolean).join(" · ")}>
+        <MoreDetails summary={f.reason ? (REASONS.find((r) => r.value === f.reason)?.label ?? "") : ""}>
           <FieldBlock label="The label's words" optional hint="Copy how the label says it, so it's here to check.">
             <input value={f.label} maxLength={120} aria-label="The label's words" onChange={(e) => set("label", e.target.value)} className={tone.input} />
           </FieldBlock>
@@ -442,16 +438,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
           <FieldBlock label="Instructions" optional hint="Anything else the label says, like taking it with food.">
             <input value={f.instructions} maxLength={120} aria-label="Instructions" onChange={(e) => set("instructions", e.target.value)} className={tone.input} />
           </FieldBlock>
-          {/* An Only me plan never shows on Today, so the switch would do nothing. */}
-          {!onlyMe && <ToggleRow label="Show on Today" checked={showToday} onChange={(v) => set("showToday", v)} />}
-          {care.access.private && (
-            <ToggleRow
-              label="Only me"
-              note="Hidden from everyone else, their assistants and the admin login, and kept off Today."
-              checked={onlyMe}
-              onChange={(v) => set("priv", v)}
-            />
-          )}
+          <ToggleRow label="Show on Today" checked={showToday} onChange={(v) => set("showToday", v)} />
         </MoreDetails>
       </Sheet>
       <ConfirmSheet

@@ -24,9 +24,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     const caller = admin ? { email: "admin", role: "owner" } : eligible(member) ? member : null;
     const target = s.members.find((m) => m.email === body.member);
     if (!eligible(target)) return json({ error: "Choose an owner or member of Maple's Log." }, 400);
-    if (!caller || (caller.role !== "owner" && caller.email !== target.email)) {
-      return json({ error: "Only she, or an owner, can set this up." }, 403);
-    }
+    if (!caller) return json({ error: "Only a family member can set this up." }, 403);
     const person = await createCarePerson(target.email, caller.email, s.members);
     return json({ person: { member: person.member, created_by: person.created_by } }, 201);
   } catch (error) {

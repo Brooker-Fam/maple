@@ -19,28 +19,24 @@ import PlanCard from "./PlanCard";
 import PlanDetail from "./PlanDetail";
 import { QuestionsSection } from "./Questions";
 import RemindersSheet, { remindersValue, usePhoneReminders } from "./Reminders";
-import SharingSheet from "./SharingSheet";
 import { SupportRow } from "./SupportScreen";
 import { VisitSummaryRow } from "./VisitSummary";
 import { WarningSignsCard } from "./WarningSigns";
-import { GROUP, NavRow, NoteCard, joinNames, useCareCtx } from "./parts";
+import { GROUP, NavRow, NoteCard, useCareCtx } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
 /**
  * Her screen (§11.2): a full-height sheet opened through useCareNav().openCare(),
- * not a tab. Medicines first, then check-ins (hers only), temperature,
- * questions, warning signs, support, care team and who sees this.
- *
- * Readers who aren't her see the same page minus check-ins, the therapist,
- * Who sees this and Only me items (the state they get already leaves those
- * out). If access goes while it's open, it closes and says so.
+ * not a tab. Medicines first, then check-ins, temperature, questions, warning
+ * signs, support, care team and settings. Everyone signed in sees all of it.
+ * If access goes while it's open, it closes and says so.
  */
 export type CareScreenProps = { open: boolean; onClose: () => void };
 
 export default function CareScreen({ open, onClose }: CareScreenProps) {
   const care = useCare();
   const { toast } = useMaple();
-  // Access lost while open (unshared, demoted) closes it with a word; deleting it herself closes it quietly.
+  // Access lost while open (demoted to a viewer, deleted elsewhere) closes it with a word; deleting it here closes it quietly.
   const had = useRef(false);
   const deleted = useRef(false);
   useEffect(() => {
@@ -52,7 +48,7 @@ export default function CareScreen({ open, onClose }: CareScreenProps) {
       had.current = true;
       return;
     }
-    if (had.current && !deleted.current) toast("That page isn't shared with you anymore.", { tone: "info" });
+    if (had.current && !deleted.current) toast("That page isn't available anymore.", { tone: "info" });
     had.current = false;
     deleted.current = false;
     onClose();
@@ -61,10 +57,10 @@ export default function CareScreen({ open, onClose }: CareScreenProps) {
   return <Screen care={care} open={open} onClose={onClose} onDeleted={() => (deleted.current = true)} />;
 }
 
-type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "sharing" } | { kind: "settings" } | { kind: "questions" } | { kind: "reminders" } | null;
+type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "settings" } | { kind: "questions" } | { kind: "reminders" } | null;
 
 function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boolean; onClose: () => void; onDeleted: () => void }) {
-  const { state, memberName } = useMaple();
+  const { state } = useMaple();
   const nav = useCareNav();
   const now = useNow(60_000);
   const ctx = useCareCtx(care);
@@ -79,7 +75,6 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
   }
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const baby = state?.baby;
-  const { person, settings } = care.state;
   const write = care.access.write;
 
   const day = baby?.born_at ? daysSinceBirth(baby.born_at, now, tz) : null;
@@ -88,13 +83,6 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
     care.plans.map((v) => v.plan),
     ctx
   );
-
-  // §9.3: her first open after someone else set it up. "Change" and the X both mark it seen.
-  const shared = care.state.shared_with ?? [];
-  const sharedNames = joinNames(shared.map((id) => memberName(id)));
-  const banner = care.self && person.created_by && person.created_by !== person.member && !settings.sharing_seen_at;
-  const creator = person.created_by ? memberName(person.created_by) : "Someone";
-  const seen = () => void care.act.patchPerson({ settings: { sharing_seen_at: new Date().toISOString() } });
 
   return (
     <>
@@ -115,32 +103,6 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
         <div className="min-h-[76dvh] space-y-6 pb-2">
           <div className="space-y-3 empty:hidden">
             <CrisisStrip />
-            {banner && (
-              <div className={cx(tone.card, "flex items-start gap-3 py-3 pr-1.5 pl-4")} role="status">
-                <Icon name="users" size={20} className="mt-0.5 shrink-0 text-mp-ink-2" />
-                <div className="min-w-0 flex-1">
-                  <p className={cx(tone.body, "text-[15px] leading-snug")}>
-                    {shared.length
-                      ? `${creator} set this up. ${sharedNames} can see and log your medicines. Check-ins stay private to you.`
-                      : `${creator} set this up. Only you can see it.`}
-                  </p>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="-ml-3"
-                    onClick={() => {
-                      seen();
-                      setSub({ kind: "sharing" });
-                    }}
-                  >
-                    Change
-                  </Button>
-                </div>
-                <button type="button" onClick={seen} aria-label="Close" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mp-ink-3">
-                  <Icon name="x" size={18} />
-                </button>
-              </div>
-            )}
           </div>
 
           <section>
@@ -210,18 +172,9 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
           <CareTeam care={care} onEdit={() => setSub({ kind: "settings" })} />
           <VisitSummaryRow />
 
-          {(care.access.manage || write) && (
+          {write && (
             <div className={GROUP}>
-              {care.access.manage && (
-                <NavRow
-                  icon="lock"
-                  label="Who sees this"
-                  note="Check-ins: only you"
-                  value={shared.length ? `Shared with ${sharedNames}` : "Only you"}
-                  onClick={() => setSub({ kind: "sharing" })}
-                />
-              )}
-              {write && <NavRow icon="pencil" label="Settings for this page" note="Care team, nursing, next OB visit" onClick={() => setSub({ kind: "settings" })} />}
+              <NavRow icon="pencil" label="Settings for this page" note="Care team, nursing, next OB visit" onClick={() => setSub({ kind: "settings" })} />
             </div>
           )}
 
@@ -232,19 +185,16 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
       <PlanDetail planId={open && sub?.kind === "detail" ? sub.planId : null} onClose={() => setSub(null)} care={care} />
       <MedPlanSheet open={open && sub?.kind === "add"} onClose={() => setSub(null)} care={care} />
       <MedQuestionsSheet open={open && sub?.kind === "questions"} onClose={() => setSub(null)} care={care} />
-      <CareSettingsSheet open={open && sub?.kind === "settings"} onClose={() => setSub(null)} care={care} />
+      <CareSettingsSheet
+        open={open && sub?.kind === "settings"}
+        onClose={() => setSub(null)}
+        care={care}
+        onDeleted={() => {
+          onDeleted();
+          setSub(null);
+        }}
+      />
       <RemindersSheet open={open && sub?.kind === "reminders"} onClose={() => setSub(null)} care={care} phone={phone} />
-      {care.access.manage && (
-        <SharingSheet
-          open={open && sub?.kind === "sharing"}
-          onClose={() => setSub(null)}
-          care={care}
-          onDeleted={() => {
-            onDeleted();
-            setSub(null);
-          }}
-        />
-      )}
     </>
   );
 }

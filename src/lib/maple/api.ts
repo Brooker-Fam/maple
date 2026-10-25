@@ -110,7 +110,7 @@ export function withCare(route: string, handler: CareHandler, opts: { write?: bo
       if (!member) return json({ error: "Not signed in" }, 401);
       const s = await sessionCare(member);
       if (!s.person || !s.access.read || (opts.mood && !s.access.mood)) return json({ error: "Not found" }, 404);
-      if (opts.write && !s.access.write) return json({ error: `${s.name}'s medicines aren't shared with you.` }, 403);
+      if (opts.write && !s.access.write) return json({ error: `You can't change ${s.name}'s medicines from this account.` }, 403);
       if (opts.manage && !s.access.manage) return json({ error: `Only ${s.name} can change that.` }, 403);
       return await handler(request, member, s);
     } catch (error) {

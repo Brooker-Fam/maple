@@ -2,14 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { RECENT_MS, type PlanView, careTime, doseNotes, loggedBy, matchPlan, normName, oneOffNotes, parseUnits, planView, recentDose } from "@/lib/maple/care";
-import { ZURANOLONE_NAMES } from "@/lib/maple/guidelines";
 import type { DoseEntry, DoseResult, OneTapAsk } from "@/lib/maple/types";
 import { ContextNote, Label, MoreDetails, NoteField, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, WhenField, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { useCareNav } from "./CareNav";
 import OverLimitList from "./OverLimitList";
-import { NoteCard, Problem, Switch, errorText, isOverLimit, useCareCtx } from "./parts";
+import { NoteCard, Problem, errorText, isOverLimit, useCareCtx } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
 /**
@@ -298,18 +297,15 @@ function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: b
   const [name, setName] = useState("");
   const [dose, setDose] = useState("");
   const [when, setWhen] = useState<Date | null>(null);
-  const [priv, setPriv] = useState<boolean | null>(null);
   const [notMatch, setNotMatch] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const typed = name.trim();
   const active = care.plans.map((v) => v.plan);
-  const match = typed ? matchPlan(typed, active, { includePrivate: care.access.private }) : null;
+  const match = typed ? matchPlan(typed, active, { includePrivate: true }) : null;
   const askMatch = match?.kind === "match" && notMatch !== normName(typed) ? match.plan : null;
   const notes = typed ? oneOffNotes(typed, active, ctx) : [];
-  // Only me starts on for a mood medicine she names (S9); once she touches it, it's hers.
-  const onlyMe = care.access.private && (priv ?? ZURANOLONE_NAMES.test(typed));
   const future = when != null && when.getTime() > nowFn().getTime() + FUTURE_SLACK_MS;
   // The same one-off (by its normalized name), by anyone, within 30 minutes: ask before saving, as the server would.
   const at = when ?? tick;
@@ -328,7 +324,7 @@ function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: b
     setBusy(true);
     onClose();
     const input = {
-      oneOff: { name: typed, dose: dose.trim() || undefined, private: care.access.private ? onlyMe : undefined },
+      oneOff: { name: typed, dose: dose.trim() || undefined },
       at: (when ?? nowFn()).toISOString(),
     };
     try {
@@ -423,16 +419,6 @@ function OneOffDose({ care, open, onClose, onUsePlan }: { care: UseCare; open: b
         <WhenField value={when} onChange={setWhen} tz={ctx.tz} />
         {future && <Problem>That time is in the future.</Problem>}
       </div>
-
-      {care.access.private && (
-        <div className={cx(tone.card, "flex min-h-[52px] items-center gap-3 px-4 py-2.5")}>
-          <div className="min-w-0 flex-1">
-            <div className={cx(tone.body, "text-[15px]")}>Only me</div>
-            <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>Hidden from everyone else, their assistants and the admin login.</p>
-          </div>
-          <Switch checked={onlyMe} onChange={setPriv} label="Only me" />
-        </div>
-      )}
     </Sheet>
   );
 }

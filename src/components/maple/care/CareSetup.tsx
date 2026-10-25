@@ -6,7 +6,7 @@ import { Icon } from "../icons";
 import { Avatar, Button, Sheet, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
 import { useCareNav } from "./CareNav";
-import { Footnote, GROUP, Problem, eligibleMembers, errorText, joinNames } from "./parts";
+import { Footnote, GROUP, Problem, eligibleMembers, errorText } from "./parts";
 import { useCareSetup } from "./useCare";
 
 /**
@@ -16,8 +16,8 @@ import { useCareSetup } from "./useCare";
  *
  * Before setup there's no care state to act through (useCare is null), so
  * this posts to /api/maple/care/person itself and then opens her screen.
- * Who may set it up comes from the server (state.care_setup): an owner for
- * anyone eligible, a member for herself, nobody once it exists.
+ * Who may set it up comes from the server (state.care_setup): any owner,
+ * member or the admin login, for any owner or member; nobody once it exists.
  */
 export type CareSetupProps = { open: boolean; onClose: () => void };
 
@@ -58,7 +58,6 @@ export default function CareSetup({ open, onClose }: CareSetupProps) {
   };
 
   // The default sharing (§9.1): every other current owner, never admin, never a viewer.
-  const sharedWith = (her: Member) => joinNames(eligible.filter((m) => m.role === "owner" && m.email !== her.email).map((m) => memberName(m.email)));
 
   return (
     <>
@@ -86,7 +85,7 @@ export default function CareSetup({ open, onClose }: CareSetupProps) {
                 </button>
               ))}
             </div>
-            <Footnote>One person per log. She decides who else sees it.</Footnote>
+            <Footnote>One person per log. Everyone signed in to Maple&apos;s Log can see it and log on it.</Footnote>
           </div>
         ) : (
           <p className={cx(tone.muted, "text-[15px]")}>An owner of this log can set this up.</p>
@@ -109,12 +108,7 @@ export default function CareSetup({ open, onClose }: CareSetupProps) {
         }
       >
         {pick && (
-          <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
-            {sharedWith(pick)
-              ? `Her medicines and temperature will be shared with ${sharedWith(pick)} to start.`
-              : "Her medicines and temperature will stay with her to start."}{" "}
-            Her check-ins stay private to her. She can change this.
-          </p>
+          <p className={cx(tone.body, "text-[15px] leading-relaxed")}>A page for her medicines, temperature, questions and check-ins.</p>
         )}
       </Sheet>
     </>

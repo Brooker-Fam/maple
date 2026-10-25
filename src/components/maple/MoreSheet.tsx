@@ -235,8 +235,7 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const weight = summary?.weight;
 
   // Mom's row: her plan picker for anyone who can log her doses, or setup for anyone who could set it up.
-  // The subline never shows an Only me plan, even to her (§9.2).
-  const careLine = care?.plans.find((v) => !v.plan.private)?.line;
+  const careLine = care?.plans[0]?.line;
   const openCare = (fn: () => void) => {
     onClose();
     window.setTimeout(fn, 120);

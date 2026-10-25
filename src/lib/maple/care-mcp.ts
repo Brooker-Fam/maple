@@ -46,8 +46,8 @@ import { cToF, fToC } from "./units";
  *
  * - Registration needs no database; every call resolves the caller's care
  *   access (careAccess, through careSession) on the MCP channel. An
- *   assistant gets its person's access minus Only me, check-ins and the
- *   therapist's number, even on her own token. There are no mood tools.
+ *   assistant gets everything on her page except check-ins: there are no
+ *   mood tools.
  * - Ids print as c12345678 (entries) and p12345678 (plans): Maple's tools
  *   take plain numbers, so neither set reaches the other's rows.
  * - Every number comes from her plan, typed by the family from her label or
@@ -73,20 +73,11 @@ async function careFor(ctx: Ctx): Promise<CareSession> {
   return careSession(viewer, { members: ctx.members, baby: ctx.baby });
 }
 
-/** §10.2's access errors, in this order: a viewer, no area yet, the admin login while she shares with no owner, not shared. */
+/** The access errors: a viewer, or no page yet. Everyone else can do everything here. */
 function needAccess(ctx: Ctx, s: CareSession, write: boolean) {
   if (ctx.who.role === "viewer") throw new CareAccessError(VIEWER_MESSAGE);
-  if (!s.person) {
-    throw new CareAccessError("There's no area for mom in Maple's Log yet. set_up_mom creates it (she can for herself, or an owner can for her), or someone can in the app under Family.");
-  }
-  if (!s.access.read || (write && !s.access.write)) {
-    if (ctx.who.id === ADMIN_ID) {
-      throw new CareAccessError(
-        `${carePersonName(s.person, ctx.members)} keeps her medicines to herself right now (Who sees this is set to only her), so the admin login can't see them.`
-      );
-    }
-    throw new CareAccessError(`${carePersonName(s.person, ctx.members)}'s medicines aren't shared with you.`);
-  }
+  if (!s.person) throw new CareAccessError("There's no page for mom in Maple's Log yet. set_up_mom creates it, or someone can in the app under Family.");
+  if (!s.access.read || (write && !s.access.write)) throw new CareAccessError("You can't change her medicines from this account.");
 }
 
 function accessFail(message: string): CallToolResult {
@@ -114,7 +105,7 @@ async function careToolError(name: string, err: unknown): Promise<CallToolResult
   if (err instanceof CareAccessError || err instanceof CareForbidden) return accessFail(err.message);
   if (err instanceof ToolError) return fail(err.message);
   if (err instanceof StoreUnavailable) return fail("Maple's Log can't reach its database right now, so nothing was saved. Try again in a minute.");
-  if (err instanceof NotFound) return fail("That isn't on her list or in her log (or it isn't shared with you). Call mom_status for her medicines and their ids.");
+  if (err instanceof NotFound) return fail("That isn't on her list or in her log. Call mom_status for her medicines and their ids.");
   if (err instanceof CareConflict) {
     const plan = err.current.plan;
     return fail(`${err.message}${plan ? ` It now reads: ${plan.name} · ${scheduleSummary(plan)}.` : ""} Nothing was saved; call mom_status, then try again.`);
@@ -202,7 +193,7 @@ const textCtx = (s: CareSession) => ({
 
 type Viewed = { view: PlanView; doses: DoseEntry[] };
 
-/** Her plans this caller may see (never Only me on the MCP), as the app shows them; active ones in sortPlans order. */
+/** Her plans, as the app shows them; active ones in sortPlans order. */
 async function viewsFor(s: CareSession, days = 0): Promise<{ active: Viewed[]; finished: Viewed[] }> {
   const plans = await visiblePlans(s);
   // Eight days covers the gap, the 24-hour limit and plan detail's week.
@@ -377,7 +368,7 @@ export async function momStatusLine(ctx: Ctx): Promise<string | null> {
     const s = await careFor(ctx);
     if (!s.person || !s.access.read || ctx.who.role === "viewer") return null;
     const { active } = await viewsFor(s);
-    const v = active.find((x) => x.view.plan.show_on_today && !x.view.plan.private);
+    const v = active.find((x) => x.view.plan.show_on_today);
     return v ? `${s.name}: ${v.view.line}` : null;
   } catch (err) {
     await captureServerException(new Error(errorCode(err)), { route: ROUTE });
@@ -394,7 +385,7 @@ export function registerCareTools(server: McpServer) {
     {
       title: setUpTitle,
       description:
-        'Use this when the mom tools say there\'s no area for her yet and the user wants one, e.g. "set up Brittany\'s medicines". It creates her page in Maple\'s Log for one family member: she can set it up for herself, or an owner can for her. There\'s one per log, and it starts shared with the other owners (she can change that in the app). Then add each medicine with set_mom_medicine.',
+        'Use this when the mom tools say there\'s no page for her yet and the user wants one, e.g. "set up Brittany\'s medicines". It creates her page in Maple\'s Log for one family member; there\'s one per log, and everyone signed in can see and log on it. Then add each medicine with set_mom_medicine.',
       inputSchema: {
         person: z.string().min(1).max(120).nullish().describe("Who it's for: a family member's name or email. Leave it out to set it up for yourself."),
       },
@@ -409,7 +400,7 @@ export function registerCareTools(server: McpServer) {
         const admin = ctx.who.id === ADMIN_ID;
         const member = ctx.members.find((m) => m.email === ctx.who.id);
         const caller = admin ? { email: ADMIN_ID, role: "owner" as const } : eligible(member) ? member : null;
-        if (!caller) throw new CareForbidden("Only she, or an owner, can set this up.");
+        if (!caller) throw new CareForbidden("Only a family member can set this up.");
         const pool = ctx.members.filter(eligible);
         let target: { email: string } = caller;
         const asked = a.person?.trim().toLowerCase();
@@ -422,20 +413,14 @@ export function registerCareTools(server: McpServer) {
           if (hits.length > 1) throw new ToolError(`"${a.person}" matches more than one person: ${hits.map((m) => memberName(m.email, ctx.members)).join(", ")}. Which one?`);
           target = hits[0];
         }
-        if (caller.role !== "owner" && caller.email !== target.email) throw new CareForbidden("Only she, or an owner, can set this up.");
         const who = memberName(target.email, ctx.members);
         const existing = await getCarePerson();
         if (existing) {
           if (existing.member === target.email) return ok(`${who}'s medicines page is already set up. Add medicines with set_mom_medicine.`, { created: false, for: who });
           throw new ToolError(`Maple's Log already has a page for ${carePersonName(existing, ctx.members)}, and there's one per log.`);
         }
-        const person = await createCarePerson(target.email, caller.email, ctx.members);
-        const shared = person.shared_with.map((e) => (e === ctx.who.id ? "you" : memberName(e, ctx.members)));
-        const sharing = shared.length ? `It's shared with ${shared.join(" and ")} to start` : "Only she can see it to start";
-        return ok(
-          `Set up ${who}'s medicines page. ${sharing}; she can change that in Maple's Log. Next, add each medicine with set_mom_medicine, typed from her label or discharge papers.`,
-          { created: true, for: who, shared_with: shared }
-        );
+        await createCarePerson(target.email, caller.email, ctx.members);
+        return ok(`Set up ${who}'s medicines page. Next, add each medicine with set_mom_medicine, typed from her label or discharge papers.`, { created: true, for: who });
       } catch (err) {
         return careToolError("set_up_mom", err);
       }
@@ -475,8 +460,7 @@ export function registerCareTools(server: McpServer) {
       const temp = temps[0]?.kind === "temp" ? temps[0] : null;
       const open = questions.filter((q) => q.kind === "question" && !q.data.done);
       const team = s.person?.settings.care_team ?? {};
-      // Never the therapist: assistants don't get it, even on her own token.
-      const care_team = { ob: team.ob ?? null, after_hours: team.after_hours ?? null, pharmacy: team.pharmacy ?? null };
+      const care_team = { ob: team.ob ?? null, after_hours: team.after_hours ?? null, pharmacy: team.pharmacy ?? null, therapist: team.therapist ?? null };
 
       const whose = s.access.self ? "Your" : `${s.name}'s`;
       const lines: string[] = [];
@@ -730,11 +714,6 @@ export function registerCareTools(server: McpServer) {
 
       const saved = await saveCarePlan(s, { ...(patch as unknown as PlanInput), ...(id != null ? { id } : {}) }, { source });
       const plan = saved.plan;
-      // Only me plans never come back to an assistant, not even its id: the one that added it gets the name it gave.
-      if (plan.private) {
-        const why = saved.madePrivate ? " Saved as Only me because it's a mood medicine, so it won't show to anyone else or to assistants. She can change that in the app." : "";
-        return ok(`Saved ${plan.name}.${why}`, { saved: true, private: true });
-      }
       const summary = scheduleSummary(plan).replace(/^./, (c) => c.toLowerCase());
       const lines = [`Saved p${plan.id}: ${plan.name} · ${summary}.${unreviewed(plan) ? " Ask them to check it against the label." : ""}`];
       // Two medicines with acetaminophen: the app's list note, said when this save makes (or keeps) the pair.

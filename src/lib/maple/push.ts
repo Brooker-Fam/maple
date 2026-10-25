@@ -19,8 +19,8 @@ import type { CarePlan, DoseEntry, Member } from "./types";
  * so a dose deleted or moved never leaves a stale reminder behind, and each
  * reminder is sent once (maple_push_sent) however many ticks see it.
  *
- * What's sent, to every phone whose member can see the plan (careAccess:
- * Only me plans reach her phones only):
+ * What's sent, to every phone signed in as a family member (careAccess;
+ * viewers get nothing):
  *   - "OK again": an as-needed or every-few-hours medicine's next-OK time
  *     (her gap and 24-hour limit, from planStatus), once it arrives;
  *   - set times: an "At set times" medicine at each of its times, unless a

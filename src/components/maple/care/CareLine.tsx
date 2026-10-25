@@ -12,7 +12,7 @@ import { useCare } from "./useCare";
 
 /**
  * Mom's glanceable lines (§11.1), only for readers with a Show on Today plan
- * they can see, never an Only me one: the Today row inside StatusCard (badge,
+ * they can see: the Today row inside StatusCard (badge,
  * the first plan's compact line, "+{n} more", "Took it") and the Lantern's
  * one dim, read-only line.
  */
@@ -74,7 +74,7 @@ export function CareTodayRow() {
   );
 }
 
-/** The Lantern's line: the same compact line (named for whoever isn't her), dim amber like its "swipe down to close", no buttons, never Only me. Two lines at most, so the time isn't the part cut off. */
+/** The Lantern's line: the same compact line (named for whoever isn't her), dim amber like its "swipe down to close", no buttons. Two lines at most, so the time isn't the part cut off. */
 export function CareLanternLine() {
   const care = useCare();
   const line = care?.lanternLine;

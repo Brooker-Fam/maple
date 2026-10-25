@@ -554,7 +554,7 @@ export const LABEL_NOT_WHILE_NURSING_NAMES = /\b(codeine|tramadol|ultram|ultrace
 /** FDA https://www.fda.gov/consumers/consumer-updates/dont-overuse-acetaminophen: many products contain it; labels may say APAP. A hint only: she can untick it. */
 export const ACETAMINOPHEN_NAMES =
   /\b(acetaminophen|paracetamol|apap|tylenol|percocet|endocet|norco|vicodin|lortab|ultracet|excedrin|nyquil|dayquil|theraflu|mucinex|midol|vicks|robitussin)\b/i;
-/** Zuranolone (Zurzuvae), FDA-approved for postpartum depression (FDA, Aug 4 2023). Used only to default a plan to "Only me". */
+/** Zuranolone (Zurzuvae), FDA-approved for postpartum depression (FDA, Aug 4 2023). */
 export const ZURANOLONE_NAMES = /\b(zuranolone|zurzuvae)\b/i;
 
 /** Percocet label https://www.accessdata.fda.gov/drugsatfda_docs/label/2018/040330s052lbl.pdf ("until they know how they will react");
@@ -609,7 +609,7 @@ export const overDailyMax = (name: string, count: string, max: string): Assessme
 
 // ── Mood: daily check-in (never scored, never shared) ────────────────────
 export const CHECKIN_TITLE = "How are you doing?";
-export const CHECKIN_SUB = "Just for you. Only you can see this.";
+export const CHECKIN_SUB = "One tap is enough.";
 export const MOOD_OPTIONS = [
   { value: 5, label: "Good" },
   { value: 4, label: "Okay" },
@@ -632,7 +632,7 @@ export const MOOD_TAGS = {
   supported: "Felt supported",
 } as const;
 export type MoodTag = keyof typeof MOOD_TAGS;
-export const CHECKIN_NOTE_PLACEHOLDER = "Anything on your mind? Only you can see this.";
+export const CHECKIN_NOTE_PLACEHOLDER = "Anything on your mind?";
 export const CHECKIN_SAVED = "Saved. Thanks for checking in.";
 
 /** Days 0–14. ACOG FAQ091; NIMH. */
@@ -666,7 +666,7 @@ export const CHECKIN_SUGGEST = {
 
 export const FULL_INTRO = {
   title: "A fuller check-in",
-  body: "Two short sets of questions doctors use after a baby: the PHQ-9 for depression and the GAD-7 for anxiety. They ask about the last 2 weeks and take about 3 minutes. This isn't a diagnosis, and no one is notified. Only you can see your answers.",
+  body: "Two short sets of questions doctors use after a baby: the PHQ-9 for depression and the GAD-7 for anxiety. They ask about the last 2 weeks and take about 3 minutes. This isn't a diagnosis, and no one is notified.",
   credit: "Developed by Drs. Robert L. Spitzer, Janet B.W. Williams, Kurt Kroenke and colleagues, with an educational grant from Pfizer Inc. No permission required to reproduce, translate, display or distribute.",
 };
 export const FREQ = ["Not at all", "Several days", "More than half the days", "Nearly every day"] as const; // 0–3
@@ -702,7 +702,7 @@ export const DIFFICULTY = ["Not difficult at all", "Somewhat difficult", "Very d
 
 // ── Mood: results ────────────────────────────────────────────────────────
 export const RESULTS_HEADER = (date: string) => `Your check-in, ${date}`;
-export const RESULTS_SUB = "Not a diagnosis. Only you can see this.";
+export const RESULTS_SUB = "Not a diagnosis.";
 
 /** PHQ-9 bands (manual; ACOG CPG 4). Show "PHQ-9: {score} of 27". Never show .low or .some when item 9 was ever above 0. */
 export const PHQ9_RESULT = {
@@ -798,7 +798,7 @@ export const SUPPORT = {
     trauma: "After a hard birth: flashbacks, nightmares, or avoiding reminders of it. Treatable. Call your OB or a therapist.",
     psychosis: "Seeing or hearing things, believing things that aren't true, or barely sleeping with racing energy, usually in the first two weeks. This is an emergency: call 911.",
   }, // ACOG FAQ091; NIMH; PSI; ACOG CPG 4
-  privacy: "Private here means no one else in Maple's Log can see your check-ins or anything you mark Only me, including family and connected AI tools. Whoever runs Maple's Log's server could technically reach the database, so this protects what shows in the app, not the server itself.",
+  privacy: "Everyone who signs in to Maple's Log can see this page, check-ins included. Connected AI tools see her medicines, temperature and questions, but not check-ins.",
 } as const;
 
 /** Partner section. NIMH; ACOG CPG 4; PSI (psychosis, family, fathers); ACOG FAQ091; HRSA; Paulson 2010; AAP. */

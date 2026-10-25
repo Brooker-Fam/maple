@@ -40,7 +40,6 @@ import {
   scoreScreen,
   screenResults,
   sortPlans,
-  startsPrivate,
   suggestAckKey,
   suggestFullCheckin,
   todayCheckin,
@@ -538,10 +537,6 @@ check("T-ENG-10 acetaminophen overlap: two plans, and a one-off NyQuil with an A
 check("T-ENG-10 mood medicine note; a mood or zuranolone plan she adds starts Only me, Alex's doesn't", () => {
   const p = plan({ name: "Sertraline", reason: "mood" });
   ok(planNotes(p, st(p, [], D(25, "09:00")), noteCtx()).some((n) => n.title === "Medicine for mood"), "mood note");
-  eq(startsPrivate({ name: "Sertraline", reason: "mood", also_called: null }, true), true, "mood by her");
-  eq(startsPrivate({ name: "Zurzuvae", reason: null, also_called: null }, true), true, "zuranolone by her");
-  eq(startsPrivate({ name: "Sertraline", reason: "mood", also_called: null }, false), false, "by Alex");
-  eq(startsPrivate({ name: "Ibuprofen", reason: "pain", also_called: null }, true), false, "pain");
 });
 
 // ── T-ENG-11 names (step 1) ──────────────────────────────────────────────
@@ -735,22 +730,18 @@ check("T-ENG-14 PHQ-9 and GAD-7 stems, items, difficulty and credit match the de
 
 // ── T-ENG-15 who sees what (§9.1) ────────────────────────────────────────
 
-check("T-ENG-15 careAccess: the §9.1 matrix", () => {
-  const person: CarePerson = { member: SAM, shared_with: [ALEX], settings: {}, created_by: ALEX, created_at: L(24, "10:00"), updated_at: L(24, "10:00") };
+check("T-ENG-15 careAccess: one rule, everyone signed in does everything; viewers nothing", () => {
+  const person: CarePerson = { member: SAM, shared_with: [], settings: {}, created_by: ALEX, created_at: L(24, "10:00"), updated_at: L(24, "10:00") };
   const v = (id: string, o: Partial<CareViewer> = {}): CareViewer => ({ id, role: members.find((m) => m.email === id)?.role ?? "viewer", viaAdmin: false, channel: "app", ...o });
   const flags = (a: ReturnType<typeof careAccess>) => (["self", "read", "write", "private", "mood", "therapist", "manage"] as const).filter((k) => a[k]).join(",");
-  eq(flags(careAccess(v(SAM), person, members)), "self,read,write,private,mood,therapist,manage", "her session");
-  eq(flags(careAccess(v(SAM, { channel: "siri" }), person, members)), "self,read,write,private", "her Siri token");
-  eq(flags(careAccess(v(SAM, { channel: "mcp" }), person, members)), "self,read,write", "her MCP token");
-  eq(flags(careAccess(v(ALEX), person, members)), "read,write", "shared owner");
-  eq(flags(careAccess(v(JO), person, members)), "", "not shared");
-  eq(flags(careAccess(v(VI), { ...person, shared_with: [ALEX, VI] }, members)), "", "viewer, even if listed");
-  eq(flags(careAccess(v("admin", { viaAdmin: true }), person, members)), "read,write", "admin, admin_as unset: like an owner she shares with");
-  eq(flags(careAccess(v("admin", { viaAdmin: true }), { ...person, shared_with: [JO] }, members)), "", "admin, admin_as unset, shared with no owner");
-  eq(flags(careAccess(v("admin", { viaAdmin: true }), { ...person, shared_with: [] }, members)), "", "admin, admin_as unset, only her");
-  eq(flags(careAccess(v(ALEX, { viaAdmin: true }), person, members)), "read,write", "admin_as = Alex");
-  eq(flags(careAccess(v(SAM, { viaAdmin: true }), person, members)), "read,write", "admin_as = Sam: no mood, private, therapist or manage");
-  eq(flags(careAccess(v(JO, { viaAdmin: true }), person, members)), "", "admin_as = Jo (not shared)");
+  const all = "read,write,private,mood,therapist,manage";
+  eq(flags(careAccess(v(SAM), person, members)), `self,${all}`, "her session");
+  eq(flags(careAccess(v(SAM, { channel: "mcp" }), person, members)), `self,${all}`, "her MCP token");
+  eq(flags(careAccess(v(ALEX), person, members)), all, "an owner, never listed anywhere");
+  eq(flags(careAccess(v(JO), person, members)), all, "a member");
+  eq(flags(careAccess(v("admin", { viaAdmin: true }), person, members)), all, "the admin login, admin_as unset");
+  eq(flags(careAccess(v(SAM, { viaAdmin: true }), person, members)), all, "admin_as = her: not 'self' (it's the family password)");
+  eq(flags(careAccess(v(VI), person, members)), "", "a viewer");
   const demoted = members.map((m) => (m.email === ALEX ? { ...m, role: "viewer" as const } : m));
   eq(flags(careAccess(v(ALEX), person, demoted)), "", "a demoted member");
   eq(flags(careAccess(v(ALEX), person, members.filter((m) => m.email !== ALEX))), "", "a removed member");

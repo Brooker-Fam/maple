@@ -1020,8 +1020,8 @@ function AfterTheBirth() {
   const care = useCare();
   const setup = useCareSetup();
   const nav = useCareNav();
-  // Her first plan as the list sorts them; never an Only me one on a glanceable row.
-  const first = care?.plans.find((v) => !v.plan.private)?.line;
+  // Her first plan as the list sorts them.
+  const first = care?.plans[0]?.line;
   return (
     <Section title="After the birth">
       <div className={GROUP}>

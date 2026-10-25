@@ -24,7 +24,6 @@ import {
   PHQ9_ITEM9,
   PHQ9_RESULT,
   STRUGGLING,
-  ZURANOLONE_NAMES,
   acetaminophenOverlap,
   earlyDose,
   overDailyMax,
@@ -65,11 +64,7 @@ const isoAt = (t: number) => new Date(t).toISOString();
 /** How the reader came in: the app (Google, invite or password session), a personal Siri token, or an MCP token. */
 export type CareChannel = "app" | "siri" | "mcp";
 
-/**
- * The reader, after the admin login's `admin_as` swap: `id` is the member it
- * acts as (or "admin" when unset) and `viaAdmin` says the swap happened, so
- * the admin path never gets private, mood, therapist or manage.
- */
+/** The reader, after the admin login's `admin_as` swap: `id` is the member it acts as (or "admin" when unset). */
 export type CareViewer = { id: string; role: Role; viaAdmin: boolean; channel: CareChannel };
 
 export const NO_CARE_ACCESS: CareAccess = {
@@ -82,41 +77,19 @@ export const NO_CARE_ACCESS: CareAccess = {
   manage: false,
 };
 
-/** Shared with: medicines, temperature and questions, read and write; never Only me, check-ins or the therapist. */
-const SHARED_ACCESS: CareAccess = { ...NO_CARE_ACCESS, read: true, write: true };
-
 /**
- * The §9.1 matrix. Roles are checked on every call, so a demoted or removed
- * member loses access at once: the role comes from `members` (read fresh
- * from the database), never from the session.
+ * One rule: everyone who can sign in to Maple's Log (owners, members, the
+ * family's admin login and the calendar connector) sees and does everything
+ * on her page. View-only guests don't see it. Roles are read fresh from
+ * `members`, so a demoted or removed member loses it at once. `self` only
+ * picks the wording ("your" or "Brittany's").
  */
 export function careAccess(viewer: CareViewer, person: CarePerson | null, members: Member[]): CareAccess {
   if (!person) return { ...NO_CARE_ACCESS };
-  // The admin login acting as nobody (admin_as unset) is the family's own password, the calendar connector
-  // included: it reads and logs her medicines like an owner she shares with, whenever she shares with any
-  // owner. Only me items, check-ins and the therapist stay hers (SHARED_ACCESS has none of them).
-  if (viewer.id === "admin") {
-    const owners = new Set(members.filter((x) => x.role === "owner" && x.email !== "admin").map((x) => x.email));
-    return person.shared_with.some((e) => owners.has(e)) ? { ...SHARED_ACCESS } : { ...NO_CARE_ACCESS };
-  }
-  const m = members.find((x) => x.email === viewer.id);
+  const m = viewer.id === "admin" ? { role: "owner" as const } : members.find((x) => x.email === viewer.id);
   if (!m || m.role === "viewer") return { ...NO_CARE_ACCESS };
-  if (viewer.id === person.member) {
-    // The admin login with admin_as = her is a shared reader: the password is Matt's.
-    if (viewer.viaAdmin) return { ...SHARED_ACCESS };
-    const app = viewer.channel === "app";
-    return {
-      self: true,
-      read: true,
-      write: true,
-      // Her own Siri token is her own phone; an assistant never sees Only me.
-      private: app || viewer.channel === "siri",
-      mood: app,
-      therapist: app,
-      manage: app,
-    };
-  }
-  return person.shared_with.includes(viewer.id) ? { ...SHARED_ACCESS } : { ...NO_CARE_ACCESS };
+  const self = viewer.id === person.member && !viewer.viaAdmin;
+  return { self, read: true, write: true, private: true, mood: true, therapist: true, manage: true };
 }
 
 /**
@@ -659,15 +632,6 @@ const nursingNotesOn = (settings: CareSettings) => nursingNotesShown(settings);
 
 /** The nursing-dependent notes (codeine/tramadol, MED_BABY_WATCH) show unless she said she isn't nursing or pumping (S10). */
 export const nursingNotesShown = (settings: CareSettings) => settings.feeding !== "no";
-
-/**
- * A new plan starts as Only me when she adds it herself (from any channel)
- * and it's For: Mood or a zuranolone name (S9). Anyone else's stays shared.
- */
-export function startsPrivate(fields: { reason: CarePlan["reason"]; name: string; also_called: string | null }, addedByHer: boolean): boolean {
-  if (!addedByHer) return false;
-  return fields.reason === "mood" || [fields.name, ...(fields.also_called ?? "").split(",")].some((n) => ZURANOLONE_NAMES.test(n));
-}
 
 /** Not stopped or past its end date. */
 export function planActive(plan: CarePlan, now: Date, tz: string): boolean {

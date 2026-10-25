@@ -7,14 +7,13 @@ import type { CareEntry } from "@/lib/maple/types";
 import { Icon } from "../icons";
 import { Button, SectionTitle, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { GROUP, Problem, SwitchRow, errorText, joinNames } from "./parts";
+import { GROUP, Problem, errorText } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
 /**
  * "Questions for your OB" / "Questions for her OB" (§7.2): add, Asked, What
- * they said, Only me (hers). Open ones first, then the ones asked lately.
- * Her Only me questions stay out of everyone else's state, so the list only
- * ever holds what this reader may see. Deleting one is soft, with Undo.
+ * they said. Open ones first, then the ones asked lately. Deleting one is
+ * soft, with Undo.
  */
 
 type Question = Extract<CareEntry, { kind: "question" }>;
@@ -26,18 +25,15 @@ export function QuestionsSection() {
 }
 
 function Questions({ care }: { care: UseCare }) {
-  const { memberName } = useMaple();
   const her = care.self;
   const write = care.access.write;
   const [text, setText] = useState("");
-  const [priv, setPriv] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
   const all = care.state.entries.filter((e): e is Question => e.kind === "question");
   const open = all.filter((q) => !q.data.done).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const asked = all.filter((q) => q.data.done).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-  const shared = (care.state.shared_with ?? []).map((id) => memberName(id));
 
   const add = async () => {
     const t = text.trim();
@@ -45,9 +41,8 @@ function Questions({ care }: { care: UseCare }) {
     setBusy(true);
     setProblem(null);
     try {
-      await care.act.addQuestion(t, her && priv);
+      await care.act.addQuestion(t, false);
       setText("");
-      setPriv(false);
     } catch (e) {
       setProblem(errorText(e));
     } finally {
@@ -89,14 +84,6 @@ function Questions({ care }: { care: UseCare }) {
             </form>
             <Problem>{problem}</Problem>
           </div>
-        )}
-        {write && her && (
-          <SwitchRow
-            label="Only me"
-            note={shared.length ? `Shared with ${joinNames(shared)}. Turn on Only me for anything private.` : "Hidden from everyone else, their assistants and the admin login."}
-            checked={priv}
-            onChange={setPriv}
-          />
         )}
       </div>
     </section>
@@ -153,15 +140,6 @@ function QuestionRow({ q, care }: { q: Question; care: UseCare }) {
           {done ? "Asked" : day}
           <span aria-hidden>·</span>
           {who}
-          {q.private && (
-            <>
-              <span aria-hidden>·</span>
-              <span className="inline-flex items-center gap-1">
-                <Icon name="lock" size={13} />
-                Only me
-              </span>
-            </>
-          )}
           {q.pending && (
             <>
               <span aria-hidden>·</span>
