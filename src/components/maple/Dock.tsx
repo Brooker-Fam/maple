@@ -107,7 +107,7 @@ function useCooldowns(): [Record<string, boolean>, (key: string, ms: number) => 
 }
 
 export default function Dock() {
-  const { state, summary, log, remove, update, now, readOnly, memberLabel, units } = useMaple();
+  const { state, summary, log, remove, update, now, readOnly, memberLabel, units, toast } = useMaple();
   const { open } = useSheets();
   const actions = useTimerActions();
   const clock = useNow(1000);
@@ -234,6 +234,42 @@ export default function Dock() {
     return [...new Set([...used, ...DEFAULT_SWATCHES])].slice(0, 4);
   };
 
+  /** A diaper's icon in its own toasts: the drop, the pile, or both as the dock shows them. */
+  const diaperIcon = (poop: boolean): IconName => (poop ? "poop" : "droplet");
+
+  /** Move a diaper just logged to an earlier time (Undo puts it back). Its toast keeps Edit for anything else. */
+  const moveDiaper = async (saved: Entry, to: number, name: string, pee: boolean, poop: boolean) => {
+    const from = saved.started_at;
+    const moved = await update(saved.id, { started_at: new Date(to).toISOString() }, { toast: "" });
+    if (!moved) return;
+    toast(`${cap(name)} · ${formatTime(to, tz)}`, {
+      icon: diaperIcon(poop),
+      undo: () => void update(saved.id, { started_at: from }, { toast: `${cap(name)} · back to ${formatTime(from, tz)}` }),
+      actions: [{ label: "Edit", ariaLabel: `Edit this ${name}`, onClick: () => open({ kind: "diaper", entry: moved }) }],
+    });
+  };
+
+  /**
+   * After a quick diaper: "15 min ago", "1 hr ago", "2 hr ago" (each with the
+   * time it sets), for one changed a while back, and Edit for the rest.
+   */
+  const diaperFixes = (saved: Entry, name: string, pee: boolean, poop: boolean): ToastAction[] => {
+    const base = Date.parse(saved.started_at);
+    return [
+      ...[15, 60, 120].map((m) => {
+        const to = base - m * 60_000;
+        const ago = m < 60 ? `${m} min ago` : `${m / 60} hr ago`;
+        return {
+          label: ago,
+          sub: formatTimeNear(to, base, tz),
+          ariaLabel: `${cap(name)} ${m < 60 ? `${m} minutes` : m === 60 ? "an hour" : `${m / 60} hours`} ago, at ${formatTime(to, tz)}`,
+          onClick: () => void moveDiaper(saved, to, name, pee, poop),
+        };
+      }),
+      { label: "Edit", ariaLabel: `Edit this ${name}`, onClick: () => open({ kind: "diaper", entry: saved }) },
+    ];
+  };
+
   const logDiaper = async (id: string, pee: boolean, poop: boolean) => {
     if (!flash(id)) return;
     tick();
@@ -264,15 +300,19 @@ export default function Dock() {
               { label: "Keep both", onClick: () => {} },
             ];
           }
-          if (!poop) return [];
+          if (!poop) return diaperFixes(saved, name, pee, poop);
+          // A poop asks its color first; once it's picked, the next toast offers the earlier times.
           return [
             ...swatches().map((c) => ({
               label: SHORT_COLOR[c],
               color: STOOL_COLOR_INFO[c].hex,
               ariaLabel: `Poop color: ${STOOL_COLOR_INFO[c].label}`,
-              onClick: () => void update(saved.id, { data: { color: c } }, { toast: `${cap(name)} · ${SHORT_COLOR[c].toLowerCase()}` }),
+              onClick: () =>
+                void update(saved.id, { data: { color: c } }, { toast: "" }).then((colored) => {
+                  if (colored) toast(`${cap(name)} · ${SHORT_COLOR[c].toLowerCase()}`, { icon: diaperIcon(poop), actions: diaperFixes(colored, name, pee, poop) });
+                }),
             })),
-            { label: "More…", ariaLabel: "More diaper details", onClick: () => open({ kind: "diaper", entry: saved }) },
+            { label: "Edit", ariaLabel: `Edit this ${name}`, onClick: () => open({ kind: "diaper", entry: saved }) },
           ];
         },
       }
