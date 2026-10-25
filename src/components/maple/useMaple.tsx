@@ -27,6 +27,7 @@ import {
 } from "@/lib/maple/feed";
 import { memberLabel as labelOf, summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
+import { deviceHeaders } from "@/lib/maple/device";
 import type {
   CareEntry,
   CareEntryInput,
@@ -305,7 +306,8 @@ const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status >= 500 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path.startsWith("/") ? path : `/api/maple/${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    // This install's id (src/lib/maple/device.ts): lets a notification skip the phone that did the action.
+    headers: { "Content-Type": "application/json", ...deviceHeaders(), ...(init?.headers ?? {}) },
     cache: "no-store",
   });
   let body: unknown = null;

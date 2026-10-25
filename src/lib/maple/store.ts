@@ -39,6 +39,7 @@ import type {
   TimerResponse,
 } from "./types";
 import { captureServerException } from "@/lib/posthog-server";
+import { nursingChanged } from "./push-hooks";
 
 /**
  * Database access for Maple's Log. Every function throws StoreUnavailable when
@@ -262,6 +263,8 @@ export type NewEntry<K extends EntryKind = EntryKind> = {
   source: Source;
   /** Idempotency key: a retry with the same id returns the first save. */
   clientId?: string | null;
+  /** The phone's per-install id (X-Maple-Device), for notifications only; nothing in Maple's views reads it. */
+  device?: string | null;
 };
 
 /** A finished nursing session logged by minutes (no segments) ends when its minutes do. */
@@ -293,9 +296,11 @@ export async function createEntryOnce(e: NewEntry): Promise<{ entry: Entry; dedu
     throw new Error("End time is before the start time");
   }
   const clientId = cleanClientId(e.clientId);
+  // The device column only when there's an id (a database a step behind on migrations still saves).
+  const device = e.device ?? null;
   const rows = await q(
-    `INSERT INTO maple_entries (baby_id, kind, started_at, ended_at, active, data, note, created_by, source, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+    `INSERT INTO maple_entries (baby_id, kind, started_at, ended_at, active, data, note, created_by, source, client_id${device ? ", device" : ""})
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10${device ? ", $11" : ""})
      ON CONFLICT (client_id) WHERE client_id IS NOT NULL DO NOTHING
      RETURNING *`,
     [
@@ -309,6 +314,7 @@ export async function createEntryOnce(e: NewEntry): Promise<{ entry: Entry; dedu
       e.createdBy,
       e.source,
       clientId,
+      ...(device ? [device] : []),
     ]
   );
   if (rows.length) return { entry: rowToEntry(rows[0]), deduped: false };
@@ -461,7 +467,10 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
     if (!now) throw new NotFound(`Entry ${id} not found`);
     throw new Conflict("Someone else just changed this. Have another look and try again.", now, "changed");
   }
-  return rowToEntry(rows[0]);
+  const updated = rowToEntry(rows[0]);
+  // A running nursing feed's start moved (update_entry with at): its lock-screen notice says so.
+  if (cur.active) nursingSoon(updated);
+  return updated;
 }
 
 /**
@@ -475,7 +484,14 @@ export async function softDeleteEntry(id: number, by?: string): Promise<Entry> {
     [id, by ?? null]
   );
   if (!rows.length) throw new NotFound(`Entry ${id} not found`);
-  return rowToEntry(rows[0]);
+  const entry = rowToEntry(rows[0]);
+  if (entry.active) nursingSoon(entry);
+  return entry;
+}
+
+/** A nursing timer changed: its lock-screen notice follows, after the response (push-hooks.ts). Other kinds: nothing. */
+function nursingSoon(e: Entry): void {
+  if (e.kind === "feed" && (e.data as FeedData).segments?.length) nursingChanged(e.id);
 }
 
 /**
@@ -500,7 +516,9 @@ export async function restoreEntryDetailed(id: number, by?: string): Promise<{ e
       [id, by ?? null]
     );
     if (!rows.length) throw new NotFound(`Entry ${id} not found or not deleted`);
-    return { entry: rowToEntry(rows[0]), stoppedAt: null };
+    const entry = rowToEntry(rows[0]);
+    if (entry.active) nursingSoon(entry);
+    return { entry, stoppedAt: null };
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
     const deletedAt = await q(`SELECT deleted_at FROM maple_entries WHERE id = $1`, [id]);
@@ -620,7 +638,12 @@ async function mutateTimer(
        RETURNING *`,
       [id, JSON.stringify(cleanData(cur.kind, data)), startedAt, endedAt, active, opts.by ?? null, cur.active, cur.updated_at]
     );
-    if (rows.length) return { entry: rowToEntry(rows[0]), ...w.flags, ...(cur.kind === "feed" ? { before: beforeOf(cur) } : {}) };
+    if (rows.length) {
+      const entry = rowToEntry(rows[0]);
+      // Running before or after (a tap, a fix while it runs, Done, Undo of Done): the nursing notice follows. A finished feed's fix doesn't.
+      if (cur.active || entry.active) nursingSoon(entry);
+      return { entry, ...w.flags, ...(cur.kind === "feed" ? { before: beforeOf(cur) } : {}) };
+    }
   }
   const latest = await getEntry(id);
   if (!latest) throw new NotFound(`Timer ${id} not found`);
@@ -640,6 +663,8 @@ export async function startTimer(opts: {
   createdBy: string;
   source: Source;
   clientId?: string | null;
+  /** The phone's per-install id (X-Maple-Device). */
+  device?: string | null;
 }): Promise<{ entry: Entry; alreadyRunning: boolean }> {
   const existing = async () => {
     const running = (await activeTimers(opts.babyId)).find((e) => e.kind === opts.kind);
@@ -664,7 +689,9 @@ export async function startTimer(opts: {
       createdBy: opts.createdBy,
       source: opts.source,
       clientId: opts.clientId,
+      device: opts.device,
     });
+    if (!deduped) nursingSoon(entry);
     return { entry, alreadyRunning: deduped };
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
@@ -915,7 +942,11 @@ export async function discardTimer(id: number, by?: string, opts: { expectUpdate
      RETURNING *`,
     [id, by ?? null, opts.expectUpdatedAt]
   );
-  if (rows.length) return rowToEntry(rows[0]);
+  if (rows.length) {
+    const entry = rowToEntry(rows[0]);
+    nursingSoon(entry);
+    return entry;
+  }
   // Lost the race: stopped, discarded or changed in between.
   const now = await getEntry(id);
   if (!now) throw new NotFound(`Timer ${id} not found`);

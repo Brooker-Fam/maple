@@ -741,6 +741,35 @@ async function migrate() {
     )
   `;
 
+  // Notifications, round two (src/lib/maple/push.ts, push-wake.ts, notify.ts).
+  // Per phone: a per-install id (only to tell "the other phone" apart, never a
+  // person), the receipt token its worker sends back, delivery and test
+  // health, and a flag when the push service says its keys no longer match.
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS device_id TEXT`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS receipt_token TEXT`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_push_subs_receipt ON maple_push_subs(receipt_token) WHERE receipt_token IS NOT NULL`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS last_delivered_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS last_delivered_key TEXT`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS undelivered INT NOT NULL DEFAULT 0`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS needs_resubscribe BOOLEAN NOT NULL DEFAULT FALSE`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS test_due_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS test_sent_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS test_via TEXT`;
+  await sql`ALTER TABLE maple_push_subs ADD COLUMN IF NOT EXISTS test_key TEXT`;
+  // Send-once per phone that survives a failed send: a claim is 'sending', then
+  // 'sent' or 'failed' (claimable again, up to 3 attempts). sub_id and ref
+  // ("med:<planId>", "nurse:<entryId>") say who got what, for "Logged".
+  await sql`ALTER TABLE maple_push_sent ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'sent'`;
+  await sql`ALTER TABLE maple_push_sent ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 1`;
+  await sql`ALTER TABLE maple_push_sent ADD COLUMN IF NOT EXISTS sub_id BIGINT`;
+  await sql`ALTER TABLE maple_push_sent ADD COLUMN IF NOT EXISTS ref TEXT`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_push_sent_ref ON maple_push_sent(ref, sent_at DESC) WHERE ref IS NOT NULL`;
+  // Reminders due before this deploy were claimed under the old per-member keys: don't send them again.
+  await sql`INSERT INTO maple_push_sent (key, sent_at) VALUES ('floor:v2', NOW()) ON CONFLICT (key) DO NOTHING`;
+  // The phone (per-install id) that made a write: her doses and Maple's timers. Nothing in Maple's views reads it.
+  await sql`ALTER TABLE maple_care_entries ADD COLUMN IF NOT EXISTS device TEXT`;
+  await sql`ALTER TABLE maple_entries ADD COLUMN IF NOT EXISTS device TEXT`;
+
   console.log("Migrations complete.");
 }
 

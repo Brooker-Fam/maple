@@ -7,15 +7,18 @@ import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
 import { photoUrl } from "./EntryRow";
 import { SIDE_NAME } from "./TimerCard";
+import { Icon } from "./icons";
 import { Avatar, Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
- * The hand-off card for the parent who just woke up (or got back from work):
- * everything logged since their last visit, as the few sentences the other
- * parent would leave on the counter ("5 feeds, the last at 12:05 PM. Left is
- * next."), signed by whoever logged it. So they don't have to rebuild the
- * night from the timeline. Shown after a 3h+ gap, until "Got it".
+ * The hand-off for the parent who just woke up (or got back from work):
+ * everything logged since their last visit. On Today it's one line under
+ * "Right now" that keeps the key facts in view ("While you slept · 1 feed ·
+ * 2 wet · a nap · by Matt"), so it never pushes the 3am answers down; a tap
+ * opens the few sentences the other parent would leave on the counter ("5
+ * feeds, the last at 12:05 PM. Left is next."), signed by whoever logged it,
+ * with "Got it". Shown after a 3h+ gap, until "Got it".
  */
 
 const GAP_MS = 3 * 3600_000;
@@ -37,6 +40,7 @@ function overlapsNight(from: number, to: number, tz: string): boolean {
 export default function WhileYouSlept() {
   const { state, summary, seenAt, memberName, member, now } = useMaple();
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     try {
       setDismissed(localStorage.getItem(KEY));
@@ -107,7 +111,21 @@ export default function WhileYouSlept() {
   if (reached.length) extra.push(reached.map((c) => c.title).join(" · "));
   if (moments.length) extra.push(`${moments.length} new moment${moments.length === 1 ? "" : "s"}`);
 
+  // The line: a few counts, then who.
+  const facts: string[] = [];
+  if (feeds.length) facts.push(`${feeds.length} feed${plural(feeds.length)}`);
+  if (nursing) facts.push("nursing now");
+  if (wet) facts.push(`${wet} wet`);
+  if (dirty.length) facts.push(`${dirty.length} dirty`);
+  if (slept.length) facts.push(slept.length === 1 ? "a nap" : `${slept.length} naps`);
+  if (napping) facts.push("asleep now");
+  if (vitD) facts.push("vitamin D");
+  if (!facts.length && moments.length) facts.push(`${moments.length} new moment${plural(moments.length)}`);
+  const names = who.map((w) => memberName(w).split(" ")[0]);
+  const by = names.length ? `by ${names.length < 3 ? names.join(" and ") : `${names.slice(0, 2).join(", ")} and more`}` : null;
+
   const overnight = overlapsNight(since, nowMs, tz);
+  const lead = overnight ? "While you slept" : `Since ${formatTime(since, tz)}`;
   // Keep "9:12 AM" together when the title wraps.
   const title = overnight ? (
     "While you slept"
@@ -126,46 +144,85 @@ export default function WhileYouSlept() {
   };
 
   return (
-    <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} aria-labelledby="wys" className={cx(tone.card, "p-4")}>
-      <h2 id="wys" className={cx(tone.heading, "text-[17px] leading-snug")}>
-        {title}
-      </h2>
-      {lines.length > 0 && (
-        <div className="mt-2 space-y-0.5">
-          {lines.map((l) => (
-            <p key={l} className="text-[15px] leading-snug text-mp-ink">
-              {l}
-            </p>
-          ))}
-        </div>
-      )}
-      {(extra.length > 0 || photo) && (
-        <div className="mt-3 flex items-center gap-2.5">
-          {photo && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={photoUrl(photo.id, 0)} alt="" className="h-10 w-10 shrink-0 rounded-[10px] object-cover [.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]" />
-          )}
-          <p className="text-sm text-mp-ink-2">{extra.join(" · ")}</p>
-        </div>
-      )}
-      <div className="mt-3 flex items-center justify-between gap-3">
-        {/* Signed, like a note: each person's initial disc and name ("Brittany", "Brittany and Grandma"). */}
-        <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-mp-ink-2">
-          {who.map((w, i) => (
-            <span key={w} className="inline-flex items-center gap-1.5">
-              <Avatar member={member(w) ?? { email: w, display_name: memberName(w), role: "member", emoji: null, color: null }} size={18} />
-              <span>
-                {memberName(w)}
-                {i < who.length - 2 && ","}
-              </span>
-              {i === who.length - 2 && <span>and</span>}
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      aria-labelledby="wys"
+      className={cx(tone.card, "overflow-hidden")}
+    >
+      <button
+        type="button"
+        onClick={(ev) => {
+          // Opened on a short phone, the sentences land under the dock: bring them up into view.
+          const sec = ev.currentTarget.closest("section");
+          if (!open && sec)
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                const dock = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--maple-dock-h")) || 0;
+                const over = sec.getBoundingClientRect().bottom - (window.innerHeight - dock - 16);
+                if (over > 0) window.scrollBy({ top: over, behavior: "smooth" });
+              })
+            );
+          setOpen(!open);
+        }}
+        aria-expanded={open}
+        aria-controls="wys-more"
+        className={cx(tone.row, "min-h-[52px] py-2")}
+      >
+        <Icon name={overnight ? "moon" : "history"} size={20} className="shrink-0 text-mp-ink-2" />
+        <span id="wys" className="min-w-0 flex-1 truncate text-[15px] text-mp-ink">
+          <span className="font-semibold">{lead}</span>
+          {[...facts, ...(by ? [by] : [])].map((f) => (
+            <span key={f} className="text-mp-ink-2">
+              {" · "}
+              {f}
             </span>
           ))}
-        </p>
-        <Button variant="soft" className="shrink-0" onClick={gotIt}>
-          Got it
-        </Button>
-      </div>
+        </span>
+        <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div id="wys-more" className="border-t border-mp-line px-4 pt-3 pb-4">
+          {/* The line above already says "While you slept"; the daytime one says when ("Since you checked in at 9:12 AM"). */}
+          {!overnight && <h3 className={cx(tone.heading, "mb-2 text-[17px] leading-snug")}>{title}</h3>}
+          {lines.length > 0 && (
+            <div className="space-y-0.5">
+              {lines.map((l) => (
+                <p key={l} className="text-[15px] leading-snug text-mp-ink">
+                  {l}
+                </p>
+              ))}
+            </div>
+          )}
+          {(extra.length > 0 || photo) && (
+            <div className="mt-3 flex items-center gap-2.5">
+              {photo && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={photoUrl(photo.id, 0)} alt="" className="h-10 w-10 shrink-0 rounded-[10px] object-cover [.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]" />
+              )}
+              <p className="text-sm text-mp-ink-2">{extra.join(" · ")}</p>
+            </div>
+          )}
+          <div className="mt-3 flex items-center justify-between gap-3">
+            {/* Signed, like a note: each person's initial disc and name ("Brittany", "Brittany and Grandma"). */}
+            <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-mp-ink-2">
+              {who.map((w, i) => (
+                <span key={w} className="inline-flex items-center gap-1.5">
+                  <Avatar member={member(w) ?? { email: w, display_name: memberName(w), role: "member", emoji: null, color: null }} size={18} />
+                  <span>
+                    {memberName(w)}
+                    {i < who.length - 2 && ","}
+                  </span>
+                  {i === who.length - 2 && <span>and</span>}
+                </span>
+              ))}
+            </p>
+            <Button variant="soft" className="shrink-0" onClick={gotIt}>
+              Got it
+            </Button>
+          </div>
+        </div>
+      )}
     </motion.section>
   );
 }

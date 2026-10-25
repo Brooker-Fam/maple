@@ -17,8 +17,8 @@ import { WarningSignsCard } from "./WarningSigns";
 
 /**
  * Support (§8.2): help lines, warning signs and the partner section, as a
- * full-height sheet. Every signed-in member can open it, viewers included,
- * even before setup.
+ * full-height sheet ("Supporting Brittany"), opened from her tab's Help group
+ * and from Help. Every signed-in member can open it, viewers included.
  *
  * Her page leads with help now, people to talk to, and her care team. Anyone
  * else reads the partner guide first. Without access to her page it's
@@ -110,8 +110,8 @@ export default function SupportScreen({ open, onClose }: SupportScreenProps) {
   );
 }
 
-/** "Talk to someone who knows postpartum": the maternal hotline, PSI and New York's helpline. */
-function TalkSection() {
+/** "Talk to someone who knows postpartum": the maternal hotline, PSI and New York's helpline (here and in Help). */
+export function TalkSection() {
   return (
     <section>
       <SectionTitle>Talk to someone who knows postpartum</SectionTitle>
@@ -132,7 +132,8 @@ function lineActions(line: HelpLine): { label: string; href: string; external?: 
 
 const PILL = "inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3.5 text-[15px] font-semibold transition active:scale-[0.97]";
 
-function HelpLines({ lines }: { lines: readonly HelpLine[] }) {
+/** Each help line with its call, text and page buttons (here and in Help). */
+export function HelpLines({ lines }: { lines: readonly HelpLine[] }) {
   return (
     <div className={GROUP}>
       {lines.map((line) => (
@@ -269,7 +270,7 @@ function PartnerYou() {
   );
 }
 
-/** The "Support for you" / "Supporting {Name}" row on her screen. */
+/** The "Support for you" / "Supporting {Name}" row (her tab's Help group, and Help). */
 export function SupportRow() {
   const care = useCare();
   const nav = useCareNav();

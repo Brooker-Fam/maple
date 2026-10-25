@@ -10,12 +10,14 @@ import { Icon } from "../icons";
 import { AssessmentCard, CHECK_NUMBER_HINT, Label, SheetFooter, useNumberChecks, useOpenCount } from "../sheets/parts";
 import { Segmented, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { OnTop } from "./CrisisSheet";
+import { useCareNav } from "./CareNav";
 import { GROUP, Problem, errorText } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
 /**
- * Her temperature (§7.1): the tile on her screen, and the sheet it opens.
+ * Her temperature (§7.1): the row on her tab, and the sheet it opens (one
+ * sheet, held by CareNav: the row, her tab's action tile, More and Maple's
+ * temperature sheet all open it with useCareNav().openTemp()).
  * assessMomTemp checks the reading as it's typed (100.4°F or higher, or
  * 96.8°F or lower, is a call to her OB now), before Save, and the toast and
  * the MCP repeat it. Stored in °C; shown in °F unless the phone is metric.
@@ -32,8 +34,8 @@ function temps(care: UseCare): TempEntry[] {
 
 export function TemperatureTile() {
   const care = useCare();
+  const nav = useCareNav();
   const { state, now, units } = useMaple();
-  const [open, setOpen] = useState(false);
   if (!care) return null;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const last = temps(care)[0];
@@ -41,7 +43,7 @@ export function TemperatureTile() {
   return (
     <div>
       <div className={GROUP}>
-        <button type="button" onClick={() => setOpen(true)} className={cx(tone.row, "min-h-[52px] py-2.5")}>
+        <button type="button" onClick={nav.openTemp} className={cx(tone.row, "min-h-[52px] py-2.5")}>
           <Icon name="thermometer" size={20} className="shrink-0 text-mp-ink-2" />
           <span className={cx(tone.body, "min-w-0 flex-1 text-[15px]")}>Temperature</span>
           {last ? (
@@ -55,14 +57,12 @@ export function TemperatureTile() {
           <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
         </button>
       </div>
-      <OnTop>
-        <MomTempSheet open={open} onClose={() => setOpen(false)} care={care} />
-      </OnTop>
     </div>
   );
 }
 
-function MomTempSheet(props: { open: boolean; onClose: () => void; care: UseCare }) {
+/** Her temperature sheet (mounted once, in CareNavProvider). */
+export function MomTempSheet(props: { open: boolean; onClose: () => void; care: UseCare }) {
   const n = useOpenCount(props.open);
   return <TempForm key={n} {...props} />;
 }

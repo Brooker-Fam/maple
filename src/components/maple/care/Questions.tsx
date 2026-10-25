@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { loggedBy } from "@/lib/maple/care";
 import { DEFAULT_TZ, dayKey, formatDayLabel } from "@/lib/maple/time";
 import type { CareEntry } from "@/lib/maple/types";
@@ -18,6 +18,18 @@ import { type UseCare, useCare } from "./useCare";
 
 type Question = Extract<CareEntry, { kind: "question" }>;
 
+/**
+ * "Question for her OB" from elsewhere (More, Maple's note sheet): her tab
+ * opens and the add field takes focus, with the words already typed when
+ * there are some. Kept here until the section mounts (it may be on its way in).
+ */
+let pending: { text?: string } | null = null;
+const subs = new Set<() => void>();
+export function requestQuestion(text?: string) {
+  pending = { text: text?.trim() || undefined };
+  for (const cb of subs) cb();
+}
+
 export function QuestionsSection() {
   const care = useCare();
   if (!care) return null;
@@ -30,6 +42,26 @@ function Questions({ care }: { care: UseCare }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const field = useRef<HTMLInputElement>(null);
+
+  // A request from elsewhere: bring the field into view and focus it (after the tab's fade-in).
+  useEffect(() => {
+    const take = () => {
+      const p = pending;
+      if (!p) return;
+      pending = null;
+      if (p.text) setText((t) => (t.trim() ? t : p.text!));
+      window.setTimeout(() => {
+        field.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+        field.current?.focus({ preventScroll: true });
+      }, 250);
+    };
+    take();
+    subs.add(take);
+    return () => {
+      subs.delete(take);
+    };
+  }, []);
 
   const all = care.state.entries.filter((e): e is Question => e.kind === "question");
   const open = all.filter((q) => !q.data.done).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
@@ -52,7 +84,7 @@ function Questions({ care }: { care: UseCare }) {
 
   if (!write && !all.length) return null;
   return (
-    <section>
+    <section className="scroll-mt-4">
       <SectionTitle>{her ? "Questions for your OB" : "Questions for her OB"}</SectionTitle>
       <div className={GROUP}>
         {open.map((q) => (
@@ -71,6 +103,8 @@ function Questions({ care }: { care: UseCare }) {
               }}
             >
               <input
+                ref={field}
+                id="her-ob-question"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 maxLength={2000}

@@ -5,6 +5,8 @@ import { describeEntry } from "@/lib/maple/describe";
 import { EMERGENCY_SIGNS, assessTemperature, assessVitals, earThermometerOk } from "@/lib/maple/guidelines";
 import { cToF, fToC, formatTemp } from "@/lib/maple/units";
 import { TEMP_METHODS, type EntryOf, type TempMethod } from "@/lib/maple/types";
+import { useCareNav } from "../care/CareNav";
+import { useCare } from "../care/useCare";
 import { Icon } from "../icons";
 import { Chip, Segmented, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
@@ -32,6 +34,10 @@ import {
  * guidelines.ts shows as you type; nothing shows when there's nothing to say
  * (never an "all clear"). Heart rate, breathing and oxygen live under "Other
  * readings" and save as their own vitals entry.
+ *
+ * It's Maple's: a postpartum reading logged here would land on the newborn's
+ * record (and could raise her fever alert), so for anyone who can log her
+ * mom's, a row at the end offers "Taking Brittany's temperature? Log hers".
  */
 
 const METHOD_LABEL: Record<TempMethod, string> = { rectal: "Rectal", armpit: "Armpit", forehead: "Forehead", ear: "Ear" };
@@ -45,6 +51,8 @@ export default function TempSheet(props: SheetProps) {
 function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, units, state, log, update, remove, now, ageMonths, clock } = useSheetBase();
   const e = entry?.kind === "temp" ? entry : undefined;
+  const care = useCare();
+  const careNav = useCareNav();
   const [unit, setUnit] = useState<"F" | "C">(units === "metric" ? "C" : "F");
 
   const temps = useMemo(
@@ -243,6 +251,25 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
           ))}
           <ContextNote icon="siren">{EMERGENCY_SIGNS}</ContextNote>
         </MoreDetails>
+      )}
+
+      {!e && care?.access.write && (
+        <button
+          type="button"
+          onClick={() => {
+            // Close first, so hers opens on top of the screen, not under this one.
+            onClose();
+            window.setTimeout(careNav.openTemp, 120);
+          }}
+          className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
+        >
+          <Icon name="thermometer" size={20} className="shrink-0 text-mp-ink-2" />
+          <span className={cx(tone.body, "min-w-0 flex-1 text-[15px]")}>
+            {care.self ? "Taking your own temperature?" : `Taking ${care.name}'s temperature?`}{" "}
+            <span className="font-medium whitespace-nowrap text-mp-accent-fg">{care.self ? "Log yours" : "Log hers"}</span>
+          </span>
+          <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
+        </button>
       )}
     </Sheet>
   );

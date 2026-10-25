@@ -33,6 +33,7 @@ import {
 } from "./care";
 import { adminActsAs, isVitaminD, memberName } from "./insights";
 import { NotFound, StoreUnavailable, getBaby } from "./store";
+import { careChanged } from "./push-hooks";
 import { DEFAULT_TZ, dayBounds } from "./time";
 import { cleanCareData, cleanCareNote, cleanCareSettings, cleanMoodData, cleanPlan, cleanUnits, type PlanFields } from "./validate";
 import { scoreScreen } from "./care";
@@ -430,6 +431,8 @@ export async function saveCarePlan(
       throw new CareConflict(`${memberName(now.updated_by ?? now.created_by, s.members)} changed this plan a moment ago. Here's the latest.`, { plan: now });
     }
     const plan = rowToPlan(rows[0]);
+    // Its times or gap may have moved: the wake-ups follow (push-hooks.ts, after the response).
+    careChanged();
     return { plan, deduped: false, notes: await notesOnSave(s, plan), madePrivate: false };
   }
 
@@ -454,6 +457,7 @@ export async function saveCarePlan(
     clientId
   );
   const plan = deduped ? (await readablePlan(s, Number(row.id))) : rowToPlan(row);
+  if (!deduped) careChanged();
   return { plan, deduped, notes: deduped ? [] : await notesOnSave(s, plan), madePrivate: madePrivate && !deduped };
 }
 
@@ -478,6 +482,7 @@ export async function stopCarePlan(s: CareSession, id: number, stop: boolean): P
     [id, p.member, s.viewer.id]
   );
   if (!rows.length) throw new NotFound("Not found");
+  careChanged();
   return rowToPlan(rows[0]);
 }
 
@@ -504,6 +509,7 @@ export async function deleteCarePlan(s: CareSession, id: number, restore = false
     [id, p.member, s.viewer.id]
   );
   if (!rows.length) throw new NotFound("Not found");
+  careChanged();
   return rowToPlan(rows[0]);
 }
 
@@ -605,6 +611,8 @@ export type DoseInput = {
   allowDuplicate?: boolean;
   clientId?: string | null;
   source: Source;
+  /** The phone's per-install id (X-Maple-Device), so "Logged" skips that phone. Siri and assistants have none. */
+  device?: string | null;
 };
 
 /**
@@ -641,11 +649,13 @@ export async function logCareDose(s: CareSession, input: DoseInput): Promise<Dos
       units,
       skipped: input.skipped === true,
     }, { unit: plan.limit_unit });
-    const saved = await insertEntry(p.member, { kind: "dose", medId: plan.id, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId });
+    const saved = await insertEntry(p.member, { kind: "dose", medId: plan.id, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId, device: input.device });
     if (!saved.deduped && !input.allowDuplicate && !input.skipped) {
       const lost = await lostRace(plan, saved.entry as DoseEntry, at);
       if (lost) return { created: false, entry: null, notes, possible_duplicate: lost, reason: "recent", status: before };
     }
+    // "Logged" to the phones it answers, and the wake-ups re-armed (after the response).
+    if (!saved.deduped) careChanged({ doseId: saved.entry.id, device: input.device ?? null });
     const after = planStatus(plan, saved.deduped ? doses : [...doses, saved.entry as DoseEntry], s.now, s.tz);
     return { created: !saved.deduped, deduped: saved.deduped || undefined, entry: saved.entry, notes: saved.deduped ? [] : notes, status: after };
   }
@@ -661,7 +671,8 @@ export async function logCareDose(s: CareSession, input: DoseInput): Promise<Dos
     const dup = (await oneOffsNear(s, at)).find((d) => !d.data.skipped && normName(d.data.name) === key && Math.abs(Date.parse(d.at) - at.getTime()) < RECENT_MS);
     if (dup) return { created: false, entry: null, notes, possible_duplicate: dup, reason: "recent" };
   }
-  const saved = await insertEntry(p.member, { kind: "dose", medId: null, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId });
+  const saved = await insertEntry(p.member, { kind: "dose", medId: null, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId, device: input.device });
+  if (!saved.deduped) careChanged({ doseId: saved.entry.id, device: input.device ?? null });
   return { created: !saved.deduped, deduped: saved.deduped || undefined, entry: saved.entry, notes: saved.deduped ? [] : notes };
 }
 
@@ -716,7 +727,8 @@ export async function addCareQuestion(s: CareSession, input: { text: string; pri
 export async function createCareEntry(
   s: CareSession,
   body: { kind?: unknown; at?: unknown; med_id?: unknown; data?: unknown; note?: unknown; private?: unknown; client_id?: unknown; allow_duplicate?: unknown },
-  source: Source
+  source: Source,
+  opts: { device?: string | null } = {}
 ): Promise<DoseResult> {
   const d = (body.data ?? {}) as Record<string, unknown>;
   const clientId = typeof body.client_id === "string" ? body.client_id : null;
@@ -733,6 +745,7 @@ export async function createCareEntry(
       allowDuplicate: body.allow_duplicate === true,
       clientId,
       source,
+      device: opts.device ?? null,
     });
   }
   if (body.kind === "temp") {
@@ -745,16 +758,30 @@ export async function createCareEntry(
   throw new Error("Unknown kind");
 }
 
-type NewCareEntry = { kind: CareKind; medId: number | null; at: Date; data: unknown; note: string | null; priv: boolean; by: string; source: Source; clientId: string | null };
+type NewCareEntry = {
+  kind: CareKind;
+  medId: number | null;
+  at: Date;
+  data: unknown;
+  note: string | null;
+  priv: boolean;
+  by: string;
+  source: Source;
+  clientId: string | null;
+  /** The phone's per-install id, for notifications only. */
+  device?: string | null;
+};
 
 async function insertEntry(person: string, e: NewCareEntry): Promise<{ entry: CareEntry; deduped: boolean }> {
+  // The device column only when there's an id (a database a step behind on migrations still saves).
+  const device = e.device ?? null;
   const { row, deduped } = await insertRandom(
     "maple_care_entries",
     (id) => ({
-      sql: `INSERT INTO maple_care_entries (id, person, kind, med_id, at, data, note, private, created_by, source, client_id)
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
+      sql: `INSERT INTO maple_care_entries (id, person, kind, med_id, at, data, note, private, created_by, source, client_id${device ? ", device" : ""})
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11${device ? ", $12" : ""})
             ON CONFLICT DO NOTHING RETURNING *`,
-      params: [id, person, e.kind, e.medId, e.at.toISOString(), JSON.stringify(e.data), e.note, e.priv, e.by, e.source, e.clientId],
+      params: [id, person, e.kind, e.medId, e.at.toISOString(), JSON.stringify(e.data), e.note, e.priv, e.by, e.source, e.clientId, ...(device ? [device] : [])],
     }),
     e.clientId
   );
@@ -798,6 +825,8 @@ export async function updateCareEntry(s: CareSession, id: number, patch: CareEnt
   // Deleted on the other phone between the read and the write.
   if (!rows.length) throw new NotFound("Not found");
   const entry = rowToCareEntry(rows[0]);
+  // A dose moved or turned into a skip: what's due moves with it.
+  if (entry.kind === "dose") careChanged();
   if (entry.kind === "dose" && plan) {
     const doses = await planDoses(plan.id, new Date(Math.min(at.getTime(), s.now.getTime()) - 3 * 86400_000));
     const others = doses.filter((d) => d.id !== entry.id);
@@ -820,7 +849,9 @@ export async function deleteCareEntry(s: CareSession, id: number): Promise<CareE
     [id, p.member, s.viewer.id]
   );
   if (!rows.length) throw new NotFound("Not found");
-  return rowToCareEntry(rows[0]);
+  const entry = rowToCareEntry(rows[0]);
+  if (entry.kind === "dose") careChanged();
+  return entry;
 }
 
 export async function restoreCareEntry(s: CareSession, id: number): Promise<CareEntry> {
@@ -831,7 +862,9 @@ export async function restoreCareEntry(s: CareSession, id: number): Promise<Care
     [id, p.member, s.viewer.id]
   );
   if (!rows.length) throw new NotFound("Not found");
-  return rowToCareEntry(rows[0]);
+  const entry = rowToCareEntry(rows[0]);
+  if (entry.kind === "dose") careChanged();
+  return entry;
 }
 
 // ── mood (her session only) ───────────────────────────────────────────
@@ -1096,7 +1129,10 @@ export async function moveFromMaple(s: CareSession, input: { entryId: number; pl
        FROM src RETURNING *`,
       [input.entryId, id, s.viewer.id, p.member, plan?.id ?? null, plan?.name ?? null, plan?.dose_text ?? null, plan?.limit_unit ?? null]
     );
-    if (rows.length) return { entry: rowToCareEntry(rows[0]), maple_entry_id: input.entryId };
+    if (rows.length) {
+      careChanged();
+      return { entry: rowToCareEntry(rows[0]), maple_entry_id: input.entryId };
+    }
     const left = await q(`SELECT 1 FROM maple_entries WHERE id = $1 AND kind = 'med' AND deleted_at IS NULL`, [input.entryId]);
     if (!left.length) throw new NotFound("That medicine entry isn't in Maple's log anymore.");
   }
@@ -1118,4 +1154,5 @@ export async function undoMoveFromMaple(s: CareSession, input: { entryId: number
     [input.entryId, input.doseId, s.viewer.id, p.member]
   );
   if (!rows.length) throw new NotFound("Not found");
+  careChanged();
 }

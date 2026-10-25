@@ -1,13 +1,16 @@
 "use client";
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AppNavProvider, useAppNav, type NavTarget, type TabId } from "./AppNav";
 import { WelcomeHost } from "./BirthSheet";
+import CareScreen from "./care/CareScreen";
 import { CareNavProvider } from "./care/CareNav";
+import { useCare } from "./care/useCare";
 import FamilyTab from "./FamilyTab";
-import LogTab from "./LogTab";
+import HistoryTab from "./HistoryTab";
 import MomentsTab from "./MomentsTab";
-import PatternsTab from "./PatternsTab";
+import { NotificationsProvider } from "./notify";
 import SignIn from "./SignIn";
 import TodayTab from "./TodayTab";
 import { MAPLE_LEAF_PATH } from "./Hero";
@@ -22,37 +25,45 @@ import { MapleProvider, useMaple } from "./useMaple";
  * Logging never waits on the birth form: before she's born, Today shows the
  * waiting hero ("She's here!") above the same logging dock.
  *
+ * Tabs: Today, hers (Brittany's page, for anyone who can read it), History
+ * (Timeline | Patterns), Moments and Family. Which one shows lives in
+ * AppNav, so her strip, a reminder's link or More can switch it.
+ *
  * The shell also owns the night look (html.maple-night, styled in
  * src/app/maple/maple.css), the browser theme-color, the sync chip, and the
  * birth welcome celebration.
  */
 
-export type TabId = "today" | "log" | "patterns" | "moments" | "family";
+export type { NavTarget, TabId } from "./AppNav";
 
+/** The bar, left to right. Her tab is labelled with her first name and only shows for readers of her page. */
 const TABS: { id: TabId; label: string; icon: IconName }[] = [
   { id: "today", label: "Today", icon: "house" },
-  { id: "log", label: "Timeline", icon: "list" },
-  { id: "patterns", label: "Patterns", icon: "chart-column" },
+  { id: "care", label: "", icon: "heart" },
+  { id: "history", label: "History", icon: "history" },
   { id: "moments", label: "Moments", icon: "image" },
   { id: "family", label: "Family", icon: "users" },
 ];
-
-const TAB_KEY = "maple-tab";
 
 export default function MapleApp() {
   return (
     <MapleProvider>
       {/* Reduce Motion turns every slide and spring into a fade (framer drops transforms, keeps opacity). Outside
-          SheetProvider, so the sheets it renders beside the shell follow it too. Mom's sheets (her screen, Support,
-          warning signs, setup, the picker, the Dose sheet) wrap SheetProvider: Maple's sheets (MedSheet's "Log it for
-          {Name} instead") render beside the shell, so they only reach useCareNav from inside it, and hers come after
-          them, on top. */}
+          SheetProvider, so the sheets it renders beside the shell follow it too. AppNav (the tab) sits outside
+          everything that switches it. Mom's sheets (Support, warning signs, the picker, the Dose sheet, her
+          temperature, Help, For the doctor) wrap SheetProvider: Maple's sheets (MedSheet's "Log it for {Name}
+          instead") render beside the shell, so they only reach useCareNav from inside it, and hers come after
+          them, on top. The notifications sheet wraps both. */}
       <MotionConfig reducedMotion="user">
-        <CareNavProvider>
-          <SheetProvider>
-            <Shell />
-          </SheetProvider>
-        </CareNavProvider>
+        <AppNavProvider>
+          <NotificationsProvider>
+            <CareNavProvider>
+              <SheetProvider>
+                <Shell />
+              </SheetProvider>
+            </CareNavProvider>
+          </NotificationsProvider>
+        </AppNavProvider>
       </MotionConfig>
     </MapleProvider>
   );
@@ -68,27 +79,29 @@ function Shell() {
 }
 
 function Screens() {
-  const { status, state, error, refresh } = useMaple();
-  const [tab, setTab] = useState<TabId>("today");
+  const { status, state, error, refresh, toast } = useMaple();
+  const care = useCare();
+  const { tab, go } = useAppNav();
+  const hasCare = !!care;
 
+  // Her tab without access (demoted to a viewer, the page deleted elsewhere, or a saved tab from before): back to
+  // Today, saying so only when her page was showing here.
+  const shown = useRef(false);
+  const loaded = !!state;
   useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem(TAB_KEY) as TabId | null;
-      if (saved && TABS.some((t) => t.id === saved)) setTab(saved);
-    } catch {
-      // storage blocked
+    if (!loaded) return;
+    if (tab !== "care") {
+      shown.current = false;
+      return;
     }
-  }, []);
-
-  const go = (t: TabId) => {
-    setTab(t);
-    window.scrollTo({ top: 0 });
-    try {
-      sessionStorage.setItem(TAB_KEY, t);
-    } catch {
-      // storage blocked
+    if (hasCare) {
+      shown.current = true;
+      return;
     }
-  };
+    if (shown.current) toast("That page isn't available anymore.", { tone: "info" });
+    shown.current = false;
+    go("today");
+  }, [loaded, tab, hasCare, go, toast]);
 
   if (status === "loading") return <Splash />;
   if (status === "signedOut") return <SignIn />;
@@ -103,25 +116,28 @@ function Screens() {
     );
   }
 
+  const showing: TabId = tab === "care" && !care ? "today" : tab;
+  const tabs = TABS.flatMap((t) => (t.id !== "care" ? [t] : care ? [{ ...t, label: care.name.split(" ")[0] || care.name }] : []));
+
   return (
     <div className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
       <SyncChip />
       <AnimatePresence mode="wait">
         <motion.div
-          key={tab}
+          key={showing}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
           transition={{ duration: 0.18 }}
         >
-          {tab === "today" && <TodayTab onNavigate={go} />}
-          {tab === "log" && <LogTab />}
-          {tab === "patterns" && <PatternsTab onNavigate={go} />}
-          {tab === "moments" && <MomentsTab />}
-          {tab === "family" && <FamilyTab />}
+          {showing === "today" && <TodayTab onNavigate={go} />}
+          {showing === "care" && <CareScreen />}
+          {showing === "history" && <HistoryTab />}
+          {showing === "moments" && <MomentsTab />}
+          {showing === "family" && <FamilyTab />}
         </motion.div>
       </AnimatePresence>
-      <TabBar tab={tab} onChange={go} />
+      <TabBar tabs={tabs} tab={showing} onChange={go} />
       <ToastHost />
       <WelcomeHost />
     </div>
@@ -233,7 +249,7 @@ function SyncChip() {
   );
 }
 
-function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void }) {
+function TabBar({ tabs, tab, onChange }: { tabs: typeof TABS; tab: TabId; onChange: (t: NavTarget) => void }) {
   return (
     <nav
       aria-label="Maple's Log"
@@ -241,7 +257,7 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
       className="fixed inset-x-0 bottom-0 z-[70] border-t border-mp-line bg-mp-bg/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none"
     >
       <div className="mx-auto flex max-w-lg">
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const active = t.id === tab;
           return (
             <button
@@ -250,12 +266,12 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
               onClick={() => onChange(t.id)}
               aria-current={active ? "page" : undefined}
               className={cx(
-                "flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 text-[11px] font-medium transition",
+                "flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 text-[11px] font-medium transition",
                 active ? "text-mp-accent-fg" : "text-mp-ink-3"
               )}
             >
               <Icon name={t.icon} size={24} strokeWidth={active ? 2.1 : 1.75} />
-              {t.label}
+              <span className="max-w-full truncate px-0.5">{t.label}</span>
             </button>
           );
         })}

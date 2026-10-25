@@ -1,79 +1,90 @@
 "use client";
 
-import { useState } from "react";
+import { planTitle } from "@/lib/maple/care";
 import { KindBadge } from "../icons";
 import { CARE_COLOR } from "../palette";
-import { cx, tone } from "../ui";
-import { useMaple } from "../useMaple";
 import { useCareNav } from "./CareNav";
-import { TookItButton, errorText } from "./parts";
+import { GlanceMark, PlanName, TookIt } from "./parts";
 import { useCare } from "./useCare";
 
 /**
- * Mom's glanceable lines (§11.1), only for readers with a Show on Today plan
- * they can see: the Today row inside StatusCard (badge,
- * the first plan's compact line, "+{n} more", "Took it") and the Lantern's
- * one dim, read-only line.
+ * Her strip, pinned on top of Today's dock (§11.1): at most 44px, so her
+ * next medicine is always in thumb reach without taking anything of
+ * Maple's. A pill badge, her name and the medicine (with its Also called
+ * name), the glance ("OK now · last 2:24 AM", "Not yet · OK after 10:55
+ * AM"), "+n" for the rest, and Took it. The medicine is her most pressing
+ * one by the one rule (pressingPlan), or the one just logged on this phone
+ * while it holds its slot ("Logged 6:56 AM"), so a second tap never lands on
+ * another medicine. Tapping the line opens her picker.
+ *
+ * Nothing shows for view-only guests (no care at all), or when she has no
+ * active medicines. Neutral ink in every state: it's a fact, never an alert.
  */
-
-/**
- * The Today row: at most 48px, so it stays above the dock on a small phone
- * with a feed running. The line is neutral ink in every state (it's a fact,
- * never an alert). Tapping it opens the picker, or the Dose sheet when this
- * is the only plan on Today; "Took it" saves at once only when nothing needs
- * asking (§5.2), else it opens the Dose sheet with the reason on top.
- */
-export function CareTodayRow() {
+export function CareStrip() {
   const care = useCare();
   const nav = useCareNav();
-  const { toast } = useMaple();
-  const [busy, setBusy] = useState(false);
   const line = care?.todayLine;
   if (!care || !line) return null;
   const { view, more } = line;
-  const id = view.plan.id;
-
-  const took = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const r = await care.act.tookIt(id);
-      if (r !== "saved") nav.openDose(id, r.ask);
-    } catch (e) {
-      toast(errorText(e), { tone: "error" });
-    } finally {
-      setBusy(false);
-    }
-  };
+  const g = view.glance;
+  const whose = care.self ? "Your" : `${care.name}'s`;
 
   return (
-    <div className="flex min-h-[48px] items-center gap-1 pr-4">
+    <div
+      role="group"
+      aria-label={`${whose} medicines`}
+      className="-mt-0.5 mb-1.5 flex h-11 items-center gap-1 rounded-2xl border border-(--mp-edge) bg-mp-surface pr-2 shadow-[0_1px_2px_rgb(28_38_25/0.06)]"
+    >
       <button
         type="button"
-        onClick={() => (more ? nav.openPicker() : nav.openDose(id))}
-        aria-label={`${care.self ? "Your" : `${care.name}'s`} medicine: ${view.line}${more ? `, and ${more} more` : ""}. Open ${more ? "the list" : "it"}.`}
-        className={cx(tone.row, "min-h-[48px] min-w-0 flex-1 py-1.5 pr-1")}
+        onClick={() => nav.openPicker()}
+        aria-label={`${whose} medicines: ${planTitle(view.plan)}, ${g.text}${more ? `, and ${more} more` : ""}. Open the list.`}
+        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-2xl pl-2 text-left transition active:bg-mp-ink/[0.04]"
       >
-        <KindBadge icon="pill" color={CARE_COLOR} size={24} />
-        {/* Name, then status, each cut on its own line: a long name never pushes "OK after 3:10 AM" out of the 48px. */}
-        <span className="min-w-0 flex-1 text-[15px] leading-[18px] tabular-nums">
-          <span className="flex min-w-0 items-center gap-1 text-mp-ink">
-            <span className="truncate">{view.plan.name}</span>
+        <KindBadge icon="pill" color={CARE_COLOR} size={28} />
+        {/* Two cut lines: a long name never pushes the time out of the 44px, and the Also called name goes first. */}
+        <span className="min-w-0 flex-1 text-[13px] leading-[17px] tabular-nums">
+          <PlanName
+            plan={view.plan}
+            className="text-[14px] text-mp-ink"
+            lead={
+              <>
+                <span className="shrink-0 font-semibold">{care.name}</span>
+                <span aria-hidden className="shrink-0 px-1 text-mp-ink-3">
+                  ·
+                </span>
+              </>
+            }
+          />
+          {/* The mark says OK now or not yet; "Not yet" itself would cut "OK after 12:36 PM" at 375px (the picker says it). */}
+          <span className="flex min-w-0 items-center gap-1 text-mp-ink-2">
+            <GlanceMark ready={g.ready} size={13} />
+            <GlanceParts text={g.ready === false ? g.detail : g.text} />
           </span>
-          <span className="block truncate text-mp-ink-2">{view.lineStatus}</span>
         </span>
-        {/* "+1" (the aria-label says "and 1 more"): "+1 more" would take the status's room. */}
-        {more > 0 && <span className={cx(tone.faint, "shrink-0 text-[13px] tabular-nums")}>+{more}</span>}
+        {/* "+1" (the label says "and 1 more"): "+1 more" would take the time's room. */}
+        {more > 0 && <span className="shrink-0 text-[13px] text-mp-ink-3 tabular-nums">+{more}</span>}
       </button>
-      {care.access.write && <TookItButton busy={busy} onClick={() => void took()} />}
+      <TookIt view={view} care={care} onAsk={(ask) => nav.openDose(view.plan.id, ask)} />
     </div>
   );
 }
 
-/** The Lantern's line: the same compact line (named for whoever isn't her), dim amber like its "swipe down to close", no buttons. Two lines at most, so the time isn't the part cut off. */
-export function CareLanternLine() {
-  const care = useCare();
-  const line = care?.lanternLine;
-  if (!line) return null;
-  return <p className="line-clamp-2 text-[13px] tabular-nums opacity-50">{line}</p>;
+/**
+ * The glance on one line, part by part ("OK after 10:55 AM", "last 4:55 AM"):
+ * a part that doesn't fit drops out whole onto a hidden second line, so a
+ * time is never cut ("last 4:…"). Only the first part can be cut.
+ */
+function GlanceParts({ text }: { text: string }) {
+  const [first, ...rest] = text.split(" · ");
+  return (
+    <span className="flex h-[1lh] min-w-0 flex-1 flex-wrap overflow-hidden">
+      <span className="max-w-full min-w-0 truncate">{first}</span>
+      {rest.map((part, i) => (
+        <span key={i} className="shrink-0 whitespace-nowrap">
+          {` · ${part}`}
+        </span>
+      ))}
+    </span>
+  );
 }

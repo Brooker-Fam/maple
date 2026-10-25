@@ -9,6 +9,7 @@ import { other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, FeedData, Side, StoolColor } from "@/lib/maple/types";
+import { CareStrip } from "./care/CareLine";
 import { fixPreset, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import MoreSheet, { usePress } from "./MoreSheet";
@@ -302,6 +303,8 @@ export default function Dock() {
       >
         {/* Opaque at night: through the blur, the page's amber text ghosted under the tiles. */}
         <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none">
+          {/* Her strip (her next medicine, 44px) rides on top; Maple's eight tiles stay exactly where they were. */}
+          <CareStrip />
           {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Hold a button to log an earlier one.</p>}
           <div className="grid grid-cols-4 gap-2">
             {/* Row 1: feeding, which becomes the nursing controls while a feed runs. No tile shows a feed clock (the card has it). */}

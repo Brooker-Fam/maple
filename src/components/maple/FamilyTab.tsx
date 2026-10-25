@@ -1,28 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, type InputHTMLAttributes, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { useTheme } from "@/components/ThemeProvider";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
 import { adminActsAs, alertsOn } from "@/lib/maple/insights";
 import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatLength, formatWeight } from "@/lib/maple/units";
-import type { Entry, EntryOf, Member, Role } from "@/lib/maple/types";
+import type { Member, Role } from "@/lib/maple/types";
 import BirthSheet from "./BirthSheet";
 import { useCareNav } from "./care/CareNav";
 import { NavRow } from "./care/parts";
 import { useCare } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
 import { useNightPref, type NightPref } from "./nightLook";
-import { CARE_COLOR } from "./palette";
-import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, TextArea, cx, memberColor, tone } from "./ui";
+import { NotificationsRow, useNotifications } from "./notify";
+import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, cx, memberColor, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
- * Family: who's in the log (and inviting more), Maple's details and her
- * doctor, after the birth (mom's medicines and recovery, and support for
- * everyone), questions for the next checkup, this phone's preferences,
- * connecting Claude/ChatGPT and Siri, and the CSV export. Viewers get a
+ * Family: settings, and the people in the log. Who's in it (and inviting
+ * more), Maple's details and her doctor's numbers, what shows on Today, this
+ * phone's own settings (units, night look, theme, notifications, Add to Home
+ * Screen), Shortcuts & assistants (one row: connecting Claude or ChatGPT and
+ * the Siri shortcuts, for Maple and for her mom), Help, and the CSV export
+ * and sign-out. Nothing here is an everyday thing: her page is its own tab,
+ * and the doctor questions live in "For the doctor". Viewers get a
  * read-only version.
  *
  * Laid out like iOS Settings: one card per group, rows with the label on the
@@ -42,8 +45,6 @@ type Invite = {
 
 type PersonalToken = { id: number; label: string | null; created_at: string; last_used_at: string | null };
 
-type Question = EntryOf<"note">;
-
 // Avatar choices after the initial (the default). Members pick their own mark, so these stay emoji.
 const EMOJIS = ["🌲", "🌸", "🦊", "🍄", "🦉", "🐻", "🐿️", "🦔", "🌻", "🐝", "🦌", "🐞", "🌼", "🌙", "⭐", "🐸", "🪺", "🍂", "🌰", "🍁"];
 
@@ -56,6 +57,8 @@ const ROLE_LINE: Record<Role, string> = {
 const MCP_URL = "https://brooker.family/api/maple/mcp";
 
 const EXAMPLES = ["“Log a wet diaper.”", "“Start a feed on the right.”", "“Which side next?”", "“How did last night go?”", "“Add a question for the doctor.”"];
+/** Her side of the connector, with her name (no real medicine names: the repo is public). */
+const momExamples = (name: string) => [`“When is ${name}'s medicine OK again?”`, `“${name} took her pill.”`, `“Here's a photo of her discharge sheet.”`];
 
 // ── Small pieces ─────────────────────────────────────────────────────────
 
@@ -342,10 +345,6 @@ function SaveBar({ busy, onSave, onCancel }: { busy: boolean; onSave: () => void
 
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, "")}`;
 
-function isQuestion(e: Entry): e is Question {
-  return e.kind === "note" && !!e.data.for_doctor;
-}
-
 // ── The tab ──────────────────────────────────────────────────────────────
 
 export default function FamilyTab() {
@@ -357,11 +356,10 @@ export default function FamilyTab() {
         <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Family</h1>
       </header>
       <People />
-      <BabyDetails after={<AfterTheBirth />} />
-      <DoctorQuestions />
+      <BabyDetails />
       <Preferences />
-      {!readOnly && <ConnectAI />}
-      {!readOnly && <HandsFree />}
+      {!readOnly && <Assistants />}
+      <HelpSection />
       <DataAndAccount />
       <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
     </div>
@@ -806,8 +804,7 @@ const numOrNull = (s: string) => {
   return Number.isFinite(n) ? n : NaN;
 };
 
-/** `after`: what comes after "Her doctor" (After the birth). */
-function BabyDetails({ after }: { after?: ReactNode }) {
+function BabyDetails() {
   const { state, api, refresh, toast, readOnly, units, now } = useMaple();
   const baby = state!.baby;
   const tz = baby.timezone;
@@ -924,7 +921,6 @@ function BabyDetails({ after }: { after?: ReactNode }) {
             )}
           </div>
         </Section>
-        {after}
       </>
     );
   }
@@ -976,8 +972,6 @@ function BabyDetails({ after }: { after?: ReactNode }) {
         {dDirty && <SaveBar busy={busy === "doctor"} onSave={() => void save("doctor")} onCancel={() => setDEdits({})} />}
       </Section>
 
-      {after}
-
       <Section title="On Today">
         <div className={GROUP}>
           <Toggle
@@ -1007,31 +1001,15 @@ function BabyDetails({ after }: { after?: ReactNode }) {
   );
 }
 
-// ── After the birth ──────────────────────────────────────────────────────
+// ── Help ─────────────────────────────────────────────────────────────────
 
-/**
- * Mom's rows (§11.1): her medicines and recovery for everyone signed in
- * (her page always exists), and Support and help lines for everyone,
- * viewers included.
- */
-function AfterTheBirth() {
-  const care = useCare();
+/** One row to Help: Maple's emergency signs and her doctor, the warning signs after the birth, help lines (viewers too). */
+function HelpSection() {
   const nav = useCareNav();
-  // Her first plan as the list sorts them.
-  const first = care?.plans[0]?.line;
   return (
-    <Section title="After the birth">
+    <Section title="Help">
       <div className={GROUP}>
-        {care && (
-          <NavRow
-            icon="pill"
-            iconColor={CARE_COLOR}
-            label={care.self ? "Your medicines and recovery" : `${care.name}'s medicines and recovery`}
-            note={first ?? (care.plans.length ? undefined : "No medicines yet")}
-            onClick={nav.openCare}
-          />
-        )}
-        <NavRow icon="life-buoy" label="Support and help lines" note="Warning signs, hotlines, and how to help" onClick={nav.openSupport} />
+        <NavRow icon="life-buoy" label="Help and doctor numbers" note="When to call 911, warning signs after the birth, help lines" onClick={nav.openHelp} />
       </div>
     </Section>
   );
@@ -1060,195 +1038,6 @@ function PhoneRow({ label, value, saved, onChange }: { label: string; value: str
         ) : undefined
       }
     />
-  );
-}
-
-// ── Questions for the doctor ─────────────────────────────────────────────
-
-function DoctorQuestions() {
-  const { state, api, log, update, remove, readOnly, memberName, now } = useMaple();
-  const tz = state!.baby.timezone;
-  const rev = state!.rev;
-  const [fetched, setFetched] = useState<Question[]>([]);
-  const [text, setText] = useState("");
-  const [showDone, setShowDone] = useState(false);
-
-  // Questions can be weeks old, older than the app's 72-hour window, so load
-  // them all; reload whenever the log changes.
-  useEffect(() => {
-    let live = true;
-    api<{ entries: Entry[] }>("/api/maple/entries?kind=note&limit=500")
-      .then((r) => live && setFetched(r.entries.filter(isQuestion)))
-      .catch(() => {
-        // keep what we have
-      });
-    return () => {
-      live = false;
-    };
-  }, [api, rev]);
-
-  // Fresh local saves (incl. not-yet-synced ones) win over the last fetch.
-  const all = useMemo(() => {
-    const byId = new Map<number, Question>();
-    for (const q of fetched) byId.set(q.id, q);
-    for (const e of state!.entries) if (isQuestion(e)) byId.set(e.id, e);
-    return [...byId.values()].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
-  }, [fetched, state]);
-  const open = all.filter((q) => !q.data.done);
-  const done = all.filter((q) => q.data.done);
-
-  const add = async () => {
-    const t = text.trim();
-    if (!t) return;
-    setText("");
-    await log({ kind: "note", data: { for_doctor: true }, note: t }, { toast: "Added to the list for the doctor" });
-  };
-
-  const patchLocal = (saved: Entry | null) => {
-    if (saved && isQuestion(saved)) setFetched((list) => list.map((q) => (q.id === saved.id ? saved : q)));
-  };
-
-  return (
-    <Section
-      title="Questions for the doctor"
-      footnote={readOnly ? "What the family plans to ask at her next checkup." : "Jot them down as they come up; tick them off at her checkup."}
-    >
-      <div className={GROUP}>
-        {!readOnly && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void add();
-            }}
-            className="flex items-center gap-1 py-1.5 pr-2 pl-1.5"
-          >
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center text-mp-accent-fg" aria-hidden>
-              <Icon name="plus" size={20} strokeWidth={2} />
-            </span>
-            <input
-              className="min-h-[44px] min-w-0 flex-1 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
-              value={text}
-              maxLength={300}
-              placeholder="Is her cheek rash okay?"
-              aria-label="New question for the doctor"
-              onChange={(e) => setText(e.target.value)}
-            />
-            <Button type="submit" size="sm" disabled={!text.trim()}>
-              Add
-            </Button>
-          </form>
-        )}
-
-        {open.length === 0 ? (
-          <p className={cx(tone.muted, "px-4 py-4 text-center text-sm")}>{done.length ? "All asked." : "No questions yet."}</p>
-        ) : (
-          <ul className={tone.divide}>
-            {open.map((q) => (
-              <QuestionRow
-                key={q.id}
-                q={q}
-                readOnly={readOnly}
-                by={`${memberName(q.created_by)} · ${formatDayLabel(dayKey(new Date(q.started_at), tz), dayKey(now(), tz))}`}
-                onDone={async (answer) =>
-                  patchLocal(await update(q.id, { data: { done: true, ...(answer ? { answer } : {}) } }, { toast: "Ticked off" }))
-                }
-                onRemove={() => void remove(q.id)}
-              />
-            ))}
-          </ul>
-        )}
-
-        {done.length > 0 && (
-          <Disclosure label="Asked" summary={done.length} open={showDone} onToggle={() => setShowDone((v) => !v)}>
-            <ul className="-ml-2.5 space-y-1">
-              {done.map((q) => (
-                <li key={q.id} className="flex items-start gap-1">
-                  <button
-                    type="button"
-                    disabled={readOnly}
-                    onClick={async () => patchLocal(await update(q.id, { data: { done: false } }, { toast: "Back on the list" }))}
-                    aria-label="Put back on the list"
-                    className="flex h-11 w-11 shrink-0 items-center justify-center"
-                  >
-                    <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-mp-accent text-mp-on-accent">
-                      <Icon name="check" size={14} strokeWidth={2.75} />
-                    </span>
-                  </button>
-                  <div className="min-w-0 flex-1 py-2.5">
-                    <p className={cx(tone.muted, "text-[15px] leading-snug line-through decoration-mp-ink-3/60")}>{q.note}</p>
-                    {q.data.answer && (
-                      <p className={cx(tone.body, "mt-1 flex gap-1.5 text-sm leading-snug")}>
-                        <Icon name="stethoscope" size={15} className="mt-[2px] shrink-0 text-mp-ink-3" label="Doctor's answer" />
-                        <span>{q.data.answer}</span>
-                      </p>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Disclosure>
-        )}
-      </div>
-    </Section>
-  );
-}
-
-function QuestionRow({
-  q,
-  by,
-  readOnly,
-  onDone,
-  onRemove,
-}: {
-  q: Question;
-  by: string;
-  readOnly: boolean;
-  onDone: (answer: string) => Promise<void>;
-  onRemove: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [answer, setAnswer] = useState("");
-  return (
-    <li>
-      <div className="flex items-start gap-1 pr-4 pl-1.5">
-        <button
-          type="button"
-          disabled={readOnly}
-          onClick={() => setOpen((v) => !v)}
-          aria-label="Tick off"
-          aria-expanded={open}
-          className="flex h-11 w-11 shrink-0 items-center justify-center"
-        >
-          <span
-            className={cx(
-              "h-[22px] w-[22px] rounded-full border-[1.5px] transition",
-              open ? "border-mp-accent-fg bg-mp-accent/10" : "border-mp-ink-3"
-            )}
-          />
-        </button>
-        <div className="min-w-0 flex-1 py-2.5">
-          <p className={cx(tone.body, "text-[15px] leading-snug")}>{q.note || "(no text)"}</p>
-          <p className={cx(tone.faint, "mt-0.5 text-xs")}>{by}</p>
-        </div>
-      </div>
-      {open && (
-        <div className="mr-4 mb-3 ml-[54px] space-y-2">
-          <TextArea value={answer} onChange={setAnswer} placeholder="What did the doctor say? (optional)" />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={() => void onDone(answer.trim())}>
-              <Icon name="check" size={16} strokeWidth={2.25} />
-              Asked
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-              Not yet
-            </Button>
-            <button type="button" onClick={onRemove} className={cx(DANGER_TEXT, "ml-auto text-sm")}>
-              Delete
-            </button>
-          </div>
-        </div>
-      )}
-    </li>
   );
 }
 
@@ -1321,6 +1110,8 @@ function Preferences() {
             ]}
           />
         </SegmentRow>
+        {/* Her medicines' notices and the nursing timer on the lock screen, for this phone (its own sheet). */}
+        <NotificationsRow />
         {!standalone && (
           <div className="flex gap-3 px-4 py-3.5">
             <Icon name="share" size={20} className="mt-0.5 shrink-0 text-mp-accent-fg" />
@@ -1336,10 +1127,46 @@ function Preferences() {
   );
 }
 
+// ── Shortcuts & assistants ───────────────────────────────────────────────
+
+/** One row to everything that logs without the app: the Claude / ChatGPT connector and the Siri shortcuts, for both people. */
+function Assistants() {
+  const { state } = useMaple();
+  const care = useCare();
+  const [open, setOpen] = useState(false);
+  const baby = (state?.baby.nickname || state?.baby.name || "Maple").split(" ")[0];
+  return (
+    <Section title="Shortcuts & assistants">
+      <div className={GROUP}>
+        <NavRow
+          icon="message-square"
+          label="Claude, ChatGPT and Siri"
+          note={`Log and ask without opening the app, for ${baby}${care ? ` and ${care.name}` : ""}`}
+          onClick={() => setOpen(true)}
+        />
+      </div>
+      <Sheet open={open} onClose={() => setOpen(false)} title="Shortcuts & assistants">
+        <ConnectAI />
+        <HandsFree />
+      </Sheet>
+    </Section>
+  );
+}
+
 // ── Claude / ChatGPT ─────────────────────────────────────────────────────
 
 function ConnectAI() {
   const [manual, setManual] = useState(false);
+  const care = useCare();
+  const examples = (label: string, list: string[]) => (
+    <ul className="space-y-1 border-l-2 border-mp-line pl-3" aria-label={label}>
+      {list.map((s) => (
+        <li key={s} className={cx(tone.muted, "text-[15px] leading-snug")}>
+          {s}
+        </li>
+      ))}
+    </ul>
+  );
   return (
     <Section title="Talk to Maple's Log">
       <div className={GROUP}>
@@ -1347,13 +1174,17 @@ function ConnectAI() {
           <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
             Connect Claude or ChatGPT and just say what happened. It lands here with your name on it, and you can ask questions too.
           </p>
-          <ul className="space-y-1 border-l-2 border-mp-line pl-3" aria-label="Things you can say">
-            {EXAMPLES.map((s) => (
-              <li key={s} className={cx(tone.muted, "text-[15px] leading-snug")}>
-                {s}
-              </li>
-            ))}
-          </ul>
+          {examples("Things you can say", EXAMPLES)}
+          {care && (
+            <>
+              <p className={cx(tone.label, "pt-1")}>For {care.name}</p>
+              {examples(`Things you can say for ${care.name}`, momExamples(care.name))}
+              <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+                From a photo of a label or discharge sheet, Claude reads every medicine and number back to you and adds them only after you say yes. It
+                never fills in a number that isn&apos;t on the paper.
+              </p>
+            </>
+          )}
         </div>
         <Link href="/maple/connect" className={cx(tone.row, "min-h-[52px]")}>
           <Icon name="list-checks" size={20} className="shrink-0 text-mp-accent-fg" />
@@ -1495,10 +1326,17 @@ function HandsFree() {
   return (
     <Section title="Hands-free with Siri">
       <div className={GROUP}>
-        <p className={cx(tone.body, "px-4 py-3.5 text-[15px] leading-relaxed")}>
-          Say <strong className="font-semibold">“Hey Siri, Maple pee”</strong> and it&apos;s logged, no unlocking or tapping. Works with the Action
-          Button and Back Tap too. Each grown-up makes their own key, so entries carry their name.
+        <p className={cx(tone.body, "px-4 pt-3.5 text-[15px] leading-relaxed")}>
+          Say <strong className="font-semibold">“Hey Siri, Maple pee”</strong> and it&apos;s logged, no unlocking or tapping. Each grown-up makes their
+          own key, so entries carry their name.
         </p>
+        <div className="flex gap-3 px-4 pt-2.5 pb-3.5">
+          <Icon name="lightbulb" size={18} className="mt-0.5 shrink-0 text-mp-ink-3" />
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+            One press, phone locked: put a shortcut on the Action Button (Settings → Action Button → Shortcut) or on the Lock Screen (press and hold
+            it, Customize, then add a control), or use Back Tap (Settings → Accessibility → Touch → Back Tap).
+          </p>
+        </div>
 
         {tokens &&
           tokens.map((t) => (
@@ -1666,11 +1504,13 @@ function MomShortcut({ url }: { url: string }) {
           <strong className={strong}>Speak Text</strong> with <Code>speak</Code>.
         </li>
         <li>
-          Optional: if <Code>next_ok_at</Code> has a value, <strong className={strong}>Add New Reminder</strong> titled <Code>reminder_title</Code>, due
-          at <Code>next_ok_at</Code>.
+          Optional, for an alarm that rings through Silent: if <Code>next_ok_in_minutes</Code> is a number, <strong className={strong}>Start Timer</strong>{" "}
+          for that many minutes.
         </li>
       </ol>
-      <p className={cx(tone.muted, "mt-3 text-[13px] leading-snug")}>Use Apple Reminders, not a calendar: family calendars show on the kitchen display.</p>
+      <p className={cx(tone.muted, "mt-3 text-[13px] leading-snug")}>
+        A timer, or Apple Reminders at <Code>next_ok_at</Code>, not a calendar: family calendars show on the kitchen display.
+      </p>
     </Disclosure>
   );
 }
@@ -1679,9 +1519,12 @@ function MomShortcut({ url }: { url: string }) {
 
 function DataAndAccount() {
   const { api, refresh, state, memberName } = useMaple();
+  const notify = useNotifications();
   const [busy, setBusy] = useState(false);
   const signOut = async () => {
     setBusy(true);
+    // This phone stops getting notices first (it tells the server and unsubscribes), while the session still works.
+    await notify.forgetThisPhone();
     try {
       await api("/api/maple/auth/signout", { method: "POST" });
     } catch {

@@ -7,7 +7,9 @@ import { tick } from "@/components/atlas/haptics";
 import { minutesText, other, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatClock, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, Side } from "@/lib/maple/types";
-import { CareLanternLine } from "./care/CareLine";
+import { careTime, planTitle } from "@/lib/maple/care";
+import { errorText } from "./care/parts";
+import { useCare } from "./care/useCare";
 import { fixPreset, SIDE_NAME, timerNumbers, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import { useSheets } from "./sheets";
@@ -44,7 +46,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   // The card's "Still nursing?" (a long side, not snoozed): Done asks when instead of ending the feed now.
   const still = useStillGoing(live, n, now);
   const askWhen = still.forgotten && still.check === "side";
-  const [hint, setHint] = useState<string | null>(null);
+  // The line over the buttons: what a tap would need, what a hold did, or why it didn't (with Undo after her dose).
+  const [hint, setHint] = useState<{ text: string; undo?: () => void } | null>(null);
   const hintTimer = useRef<number | null>(null);
   const swipe = useRef<{ y: number; t: number } | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -104,8 +107,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     []
   );
 
-  const showHint = (text: string, ms = 1800) => {
-    setHint(text);
+  const showHint = (text: string, ms = 1800, undo?: () => void) => {
+    setHint({ text, undo });
     if (hintTimer.current) window.clearTimeout(hintTimer.current);
     hintTimer.current = window.setTimeout(() => setHint(null), ms);
   };
@@ -127,9 +130,11 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     const fail = fresh.filter((t) => t.group !== "timer" && t.tone !== "ok").at(-1);
     if (!fail) return;
     failHintAt.current = Date.now();
-    setHint(fail.text);
+    // Her dose saved with a note to read (it carries who to call): the note, with the toast's Undo, a while longer.
+    const dose = fail.icon === "pill" && !!fail.undo;
+    setHint({ text: fail.text, undo: dose ? fail.undo : undefined });
     if (hintTimer.current) window.clearTimeout(hintTimer.current);
-    hintTimer.current = window.setTimeout(() => setHint(null), 6000);
+    hintTimer.current = window.setTimeout(() => setHint(null), dose ? 12000 : 6000);
   }, [toasts]);
 
   const isFeed = live.kind === "feed" && n.parts.length > 0;
@@ -189,9 +194,9 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           <Icon name="x" size={26} />
         </button>
       </div>
-      {/* Mom's medicine: read-only, as dim as the line above. */}
+      {/* Her mom's medicine: a hold-to-log row when one tap would just save it, else read-only, as dim as the line above. */}
       <div className="-mt-1.5 px-4">
-        <CareLanternLine />
+        <CareLanternRow onHint={showHint} />
       </div>
 
       <div
@@ -227,7 +232,21 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           </p>
         )}
         <p className="mt-6 h-5 text-sm opacity-60" aria-live="polite">
-          {hint ?? ""}
+          {hint?.text ?? ""}
+          {hint?.undo && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const undo = hint.undo;
+                setHint(null);
+                undo?.();
+              }}
+              className="-my-3 ml-1 inline-flex min-h-[44px] items-center px-2 font-semibold underline underline-offset-2"
+            >
+              Undo
+            </button>
+          )}
         </p>
       </div>
 
@@ -301,25 +320,90 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   );
 }
 
-/** A big button that only fires after a 500ms press-and-hold, with a ring that fills (around a side letter or an icon, when given). */
-function HoldButton({
-  label,
-  sub,
-  aria,
-  mark,
-  icon,
-  onConfirm,
-  onHint,
-}: {
-  label: string;
-  sub?: string;
-  aria?: string;
-  /** The side letter inside the ring (the sides' order follows the feed, so the letter says which is which). */
-  mark?: Side;
-  icon?: IconName;
-  onConfirm: () => void;
-  onHint: () => void;
-}) {
+/**
+ * Her mom's line in the Lantern (the one rule's medicine, as on Today's
+ * strip). When her Took it would just save ("save" by the one-tap: nothing
+ * to ask), it's a hold-to-log row behind the same half-second hold as the
+ * feed buttons, and what happened shows in the Lantern's own hint line,
+ * since toasts draw under it: "Ibuprofen logged 2:58 AM · Undo". Otherwise
+ * (a dose someone logged in the last 30 minutes, a once-a-day one already
+ * logged, or one just logged here) it's the dim read-only line. Two lines
+ * at most, so the time isn't the part cut off.
+ */
+function CareLanternRow({ onHint }: { onHint: (text: string, ms?: number, undo?: () => void) => void }) {
+  const care = useCare();
+  const { state, now } = useMaple();
+  const careRef = useRef(care);
+  useEffect(() => {
+    careRef.current = care;
+  });
+  const line = care?.todayLine;
+  const view = line?.view;
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const title = view ? planTitle(view.plan) : "";
+  const canHold = !!care && !!view && care.access.write && !line?.held && view.oneTap === "save";
+
+  const confirm = () => {
+    const c = careRef.current;
+    if (!c || !view) return;
+    const planId = view.plan.id;
+    void c.act
+      .tookIt(planId)
+      .then((r) => {
+        if (r === "ignored") return;
+        if (r === "saved") {
+          const h = careRef.current?.held(planId);
+          const at = h?.at ?? now().toISOString();
+          return onHint(`${title} logged ${careTime(at, now(), tz)}`, 10_000, () => {
+            // The hold's dose as it stands when Undo is tapped (its id is the saved one by then).
+            const id = careRef.current?.held(planId)?.entryId;
+            if (id == null) return;
+            void careRef.current?.act
+              .deleteEntry(id)
+              .then(() => onHint("Removed", 3000))
+              .catch(() => onHint("That didn't change. Close the lantern to see why.", 4000));
+          });
+        }
+        onHint(r.ask.at ? `Already logged at ${careTime(r.ask.at, now(), tz)}. Nothing saved.` : "Nothing saved. Check her page after the feed.", 6000);
+      })
+      .catch((e) => onHint(errorText(e), 6000));
+  };
+  const who = care && !care.self ? `${care.name} · ` : "";
+  const { progress, handlers } = useHold(confirm, () => onHint(`Hold to log ${care?.self ? "your" : `${care?.name}'s`} ${title}`));
+
+  if (!care || !line || !view) return null;
+  if (!canHold) return <p className="line-clamp-2 text-[13px] tabular-nums opacity-50">{care.lanternLine}</p>;
+  return (
+    <button
+      type="button"
+      aria-label={`Log ${care.self ? "your" : `${care.name}'s`} ${title}: ${view.glance.text} (press and hold)`}
+      {...handlers}
+      className="-mx-1 flex min-h-[44px] w-[calc(100%+0.5rem)] items-center gap-3 rounded-2xl px-1 text-left"
+      style={{ WebkitTouchCallout: "none" }}
+    >
+      <span className="line-clamp-2 min-w-0 flex-1 text-[15px] leading-snug tabular-nums opacity-70">
+        {who}
+        {title} <span className="whitespace-nowrap">{view.glance.ready ? "OK now" : `· ${view.glance.text}`}</span>
+      </span>
+      {/* The hold fills the pill from the left, as the big buttons' rings fill. */}
+      <span
+        aria-hidden
+        className="relative shrink-0 overflow-hidden rounded-full border px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap"
+        style={{ borderColor: "rgba(224,169,59,0.3)", color: "rgba(224,169,59,0.85)" }}
+      >
+        <span className="absolute inset-y-0 left-0" style={{ width: `${progress * 100}%`, backgroundColor: "rgba(224,169,59,0.22)" }} />
+        <span className="relative">Hold to log</span>
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The Lantern's half-second press-and-hold: `progress` runs 0 → 1 while the
+ * finger is down, and `onConfirm` fires when it fills; a shorter press is a
+ * tap, which only says how (`onHint`). Spread `handlers` on the button.
+ */
+function useHold(onConfirm: () => void, onHint: () => void) {
   const [progress, setProgress] = useState(0);
   const raf = useRef<number | null>(null);
   const start = useRef<number | null>(null);
@@ -355,28 +439,55 @@ function HoldButton({
     if (raf.current) cancelAnimationFrame(raf.current);
   }, []);
 
+  const handlers = {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      fired.current = false;
+      start.current = e.timeStamp;
+      raf.current = requestAnimationFrame(loop);
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      cancel(true, e.timeStamp);
+    },
+    onPointerLeave: () => cancel(false),
+    onPointerCancel: () => cancel(false),
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      // Keyboard users can't "hold": Enter confirms directly.
+      if (e.key === "Enter") onConfirm();
+    },
+  };
+  return { progress, handlers };
+}
+
+/** A big button that only fires after a 500ms press-and-hold, with a ring that fills (around a side letter or an icon, when given). */
+function HoldButton({
+  label,
+  sub,
+  aria,
+  mark,
+  icon,
+  onConfirm,
+  onHint,
+}: {
+  label: string;
+  sub?: string;
+  aria?: string;
+  /** The side letter inside the ring (the sides' order follows the feed, so the letter says which is which). */
+  mark?: Side;
+  icon?: IconName;
+  onConfirm: () => void;
+  onHint: () => void;
+}) {
+  const { progress, handlers } = useHold(onConfirm, onHint);
   const C = 2 * Math.PI * 26;
   return (
     <button
       type="button"
       aria-label={`${aria ?? label} (press and hold)`}
-      onPointerDown={(e) => {
-        e.stopPropagation();
-        fired.current = false;
-        start.current = e.timeStamp;
-        raf.current = requestAnimationFrame(loop);
-      }}
-      onPointerUp={(e) => {
-        e.stopPropagation();
-        cancel(true, e.timeStamp);
-      }}
-      onPointerLeave={() => cancel(false)}
-      onPointerCancel={() => cancel(false)}
-      onContextMenu={(e) => e.preventDefault()}
-      onKeyDown={(e) => {
-        // Keyboard users can't "hold": Enter confirms directly.
-        if (e.key === "Enter") onConfirm();
-      }}
+      {...handlers}
       className="relative flex flex-1 flex-col items-center justify-center gap-3 rounded-[28px] border text-xl font-semibold"
       style={{ borderColor: "rgba(224,169,59,0.18)", backgroundColor: "rgba(224,169,59,0.05)", color: "rgba(224,169,59,0.8)", WebkitTouchCallout: "none" }}
     >

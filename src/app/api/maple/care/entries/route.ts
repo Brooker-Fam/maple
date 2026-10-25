@@ -8,6 +8,7 @@ import {
   updateCareEntry,
   type CareSession,
 } from "@/lib/maple/care-store";
+import { deviceOf } from "@/lib/maple/device";
 import { NotFound } from "@/lib/maple/store";
 import { dayKey, daysBetween, isDayKey } from "@/lib/maple/time";
 import { isCareKind } from "@/lib/maple/validate";
@@ -61,7 +62,8 @@ export const GET = withCare(`GET ${ROUTE}`, async (request, _me, s) => {
 export const POST = withCare(`POST ${ROUTE}`, async (request, _me, s) => {
   const body = await readJson(request);
   if (!isCareKind(body.kind)) throw new BadRequest("Unknown kind");
-  const result = await createCareEntry(s, body, "web");
+  // This phone's id (X-Maple-Device): "Logged" goes to the other phones, not this one.
+  const result = await createCareEntry(s, body, "web", { device: deviceOf(request) });
   return json(result, result.created ? 201 : 200);
 }, { write: true });
 

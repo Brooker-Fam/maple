@@ -9,8 +9,6 @@ import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, EntryOf, Side } from "@/lib/maple/types";
-import { CareTodayRow } from "./care/CareLine";
-import { useCare } from "./care/useCare";
 import { Icon, KindBadge, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
@@ -117,15 +115,14 @@ function NextSide({ side }: { side: Side }) {
 /**
  * The "Right now" card. While she nurses, the timer card above it already has
  * the side, the start and the running clock, so the feed block steps aside
- * and this card keeps only what the timer doesn't say. Mom's medicine line
- * (when she shares it with this reader) sits right under the Since tiles.
+ * and this card keeps only what the timer doesn't say. Her mom's medicines
+ * aren't here: they're on the strip on top of the dock (care/CareLine).
  */
 export default function StatusCard() {
   const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
   const { open } = useSheets();
   const now = useNow(20_000);
   const [info, setInfo] = useState(false);
-  const care = useCare();
   if (!state || !summary) return null;
   const tz = state.baby.timezone ?? DEFAULT_TZ;
 
@@ -136,14 +133,8 @@ export default function StatusCard() {
   const lastSleepEnd = summary.lastSleep && !summary.lastSleep.active ? summary.lastSleep.ended_at : null;
   const hasAnything = state.entries.length > 0;
 
-  // Nothing of Maple's logged yet: mom's line can still stand on its own.
-  if (!hasAnything) {
-    return care?.todayLine ? (
-      <div className={cx(tone.card, "overflow-hidden")}>
-        <CareTodayRow />
-      </div>
-    ) : null;
-  }
+  // Nothing of Maple's logged yet (her mom's medicines ride on the dock's strip).
+  if (!hasAnything) return null;
 
   // The big answer: how long since she last ate.
   let feedSub: string[] | null = null;
@@ -162,6 +153,9 @@ export default function StatusCard() {
   }
 
   const next = !nursing ? summary.nextSide : null;
+  // A sleep (or tummy or pump) timer above this card on a short phone: the Last fed block keeps its answer and the next
+  // side but folds its details, so the Since tiles still clear the dock (and her strip on it) at 375x667.
+  const fold = summary.active.length > 0;
 
   const logVitD = () => {
     tick();
@@ -186,7 +180,7 @@ export default function StatusCard() {
     <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
       {/* Feeding: the most-asked question at 3am, and which side is next. */}
       {!nursing && (
-        <div className="relative p-4">
+        <div className={cx("relative p-4", fold && "[@media(max-height:719px)]:py-2.5")}>
           {last && (
             // The whole block opens that feed, so a wrong Done is fixed right where its wrong number shows. It lies
             // over the text; the next side and the info button sit above it.
@@ -204,7 +198,7 @@ export default function StatusCard() {
                 {last && <Icon name="chevron-right" size={14} className="text-mp-ink-3" />}
               </p>
               {last ? (
-                <p className="mt-0.5 text-[28px] leading-tight font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">
+                <p className={cx("mt-0.5 text-[28px] leading-tight font-semibold tracking-[-0.02em] text-mp-ink tabular-nums", fold && "[@media(max-height:719px)]:text-[24px]")}>
                   {formatRelative(last.started_at, now)}
                 </p>
               ) : (
@@ -214,7 +208,7 @@ export default function StatusCard() {
             {next && <NextSide side={next} />}
           </div>
           {feedSub && (
-            <p className="mt-0.5 text-[13px] leading-snug text-mp-ink-2">
+            <p className={cx("mt-0.5 text-[13px] leading-snug text-mp-ink-2", fold && "[@media(max-height:719px)]:hidden")}>
               {feedSub.slice(0, -1).map((b) => `${b} · `).join("")}
               {/* The info button rides with the last bit, so a wrap never leaves it alone on a line. */}
               <span className="whitespace-nowrap">
@@ -270,9 +264,6 @@ export default function StatusCard() {
           />
         )}
       </div>
-
-      {/* Her medicine: a 48px row, so with a feed timer running it still clears the dock on a small phone. */}
-      <CareTodayRow />
 
       {showVitD &&
         (vitD || readOnly ? (

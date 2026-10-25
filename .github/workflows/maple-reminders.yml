@@ -1,11 +1,13 @@
-# Maple's Log pill reminders: works out what's due and sends it (src/lib/maple/push.ts).
-# Vercel's Hobby cron only runs daily, so this pokes the tick every 5 minutes.
-# GitHub can run scheduled jobs a few minutes late; an open app also ticks.
+# Maple's Log notifications: a best-effort backstop for the tick (src/lib/maple/push.ts).
+# The real clock is Upstash QStash (exact-time wake-ups plus a safety-net schedule, see
+# docs/maple.md → Notifications); without QStash this and an open app's polls are all
+# there is. GitHub runs scheduled jobs late or skips them under load (about 3 runs in
+# 7 hours were seen overnight), so never rely on this alone for a dose that matters.
 name: Maple reminders
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "4,34 * * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -15,4 +17,4 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: curl -fsS -X POST --max-time 60 https://brooker.family/api/maple/push/tick
+      - run: curl -fsS -X POST --max-time 60 -H "X-Maple-Via: gh" https://brooker.family/api/maple/push/tick

@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import type { PlanView } from "@/lib/maple/care";
+import { notYet, planAlso, type PlanView } from "@/lib/maple/care";
 import { Icon } from "../icons";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { useCareNav } from "./CareNav";
 import OverLimitList from "./OverLimitList";
-import { NoteCard, errorText, isOverLimit } from "./parts";
+import { LoggedSlot, NoteCard, errorText, isOverLimit, tookItLabel } from "./parts";
 import type { UseCare } from "./useCare";
 
 /**
@@ -18,7 +18,11 @@ import type { UseCare } from "./useCare";
  *
  * "Took it" follows the one-tap contract (§5.2): it saves at once, like
  * Maple's buttons, unless it's probably a dose someone already logged (or a
- * once-a-day one already logged today); then the Dose sheet asks.
+ * once-a-day one already logged today); then the Dose sheet asks. It wears
+ * its quiet look while it isn't OK yet, and after a save on this phone the
+ * buttons give way to "Logged 6:56 AM" for a minute: the cards re-sort by
+ * status, so a second tap must not land on the card that moved up (taps
+ * inside the cooldown after any care save do nothing either).
  */
 export default function PlanCard({ view, care, onOpen, finished }: { view: PlanView; care: UseCare; onOpen: (planId: number) => void; finished?: boolean }) {
   const { now, toast } = useMaple();
@@ -28,8 +32,11 @@ export default function PlanCard({ view, care, onOpen, finished }: { view: PlanV
   const write = care.access.write && !finished;
   const skippable = plan.schedule.type !== "as_needed";
 
+  const held = care.held(plan.id);
+  const also = planAlso(plan);
+
   const run = async (what: "took" | "skip", fn: () => Promise<void>) => {
-    if (busy) return;
+    if (busy || care.coolingDown()) return;
     setBusy(what);
     try {
       await fn();
@@ -42,7 +49,7 @@ export default function PlanCard({ view, care, onOpen, finished }: { view: PlanV
   const took = () =>
     run("took", async () => {
       const r = await care.act.tookIt(plan.id);
-      if (r !== "saved") nav.openDose(plan.id, r.ask);
+      if (r !== "saved" && r !== "ignored") nav.openDose(plan.id, r.ask);
     });
   const skip = () =>
     run("skip", async () => {
@@ -55,7 +62,10 @@ export default function PlanCard({ view, care, onOpen, finished }: { view: PlanV
         <span className="flex items-start gap-2">
           <span className="min-w-0 flex-1">
             <span className={cx(tone.heading, "flex items-center gap-1.5 text-[17px] leading-snug")}>
-              <span className="min-w-0 break-words">{plan.name}</span>
+              <span className="min-w-0 break-words">
+                {plan.name}
+                {also && <span className="font-normal text-mp-ink-3"> ({also})</span>}
+              </span>
             </span>
             {plan.dose_text && <span className={cx(tone.muted, "mt-0.5 block text-[14px] leading-snug")}>As prescribed: {plan.dose_text}</span>}
             <span className={cx(tone.faint, "mt-0.5 block text-[13px] leading-snug")}>{view.summary}</span>
@@ -71,18 +81,30 @@ export default function PlanCard({ view, care, onOpen, finished }: { view: PlanV
         ))}
       </button>
 
-      {write && (
-        <div className="flex items-center justify-end gap-2 px-4 pb-3.5">
-          {skippable && (
-            <Button variant="soft" size="sm" disabled={!!busy} onClick={skip}>
-              Skipped
+      {write &&
+        (held ? (
+          <div className="flex items-center justify-end px-4 pb-3.5">
+            <LoggedSlot held={held} />
+          </div>
+        ) : (
+          <div className="flex items-center justify-end gap-2 px-4 pb-3.5">
+            {skippable && (
+              <Button variant="soft" size="sm" disabled={!!busy} onClick={skip}>
+                Skipped
+              </Button>
+            )}
+            <Button
+              variant={notYet(status) ? "soft" : "primary"}
+              size="sm"
+              className="min-w-[96px]"
+              disabled={!!busy}
+              onClick={took}
+              aria-label={tookItLabel(care, plan)}
+            >
+              Took it
             </Button>
-          )}
-          <Button size="sm" className="min-w-[96px]" disabled={!!busy} onClick={took}>
-            Took it
-          </Button>
-        </div>
-      )}
+          </div>
+        ))}
 
       {view.notes.length > 0 && (
         <div className="space-y-3 px-4 pb-4">

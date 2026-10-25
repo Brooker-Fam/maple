@@ -8,6 +8,7 @@ import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, dayKey, daysBetween, formatTime, formatTimeNear, parseDayKey } from "@/lib/maple/time";
 import type { Entry, EntryKind, EntryOf } from "@/lib/maple/types";
 import { formatTemp, formatVolume, formatWeight } from "@/lib/maple/units";
+import { careTime } from "@/lib/maple/care";
 import { useCareNav } from "./care/CareNav";
 import { useCare } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
@@ -19,14 +20,15 @@ import { useMaple } from "./useMaple";
 
 /**
  * "More": everything that isn't one of the eight everyday dock buttons, as
- * a short list in three groups (the daily things, health, words), each with
- * when it was last done ("1.2 oz · Fri 11:05 PM", "4 min today", "2 to ask")
- * instead of a grid of icon tiles. Tap logs one now; hold one to log it from
- * earlier.
- *
- * Mom's medicines get their own row (her plan picker, or setting it up),
- * and Maple's "Medicine" says "For Maple" beside it, so nobody logs one of
- * hers in Maple's log by mistake.
+ * a short list headed by whose it is. Maple: three groups (the daily things,
+ * health, words), each with when it was last done ("1.2 oz · Fri 11:05 PM",
+ * "4 min today", "2 to ask") instead of a grid of icon tiles; tap logs one
+ * now, hold one to log it from earlier. "Maple's medicine" opens on a blank
+ * name (vitamin D has its own row), and "For the doctor" opens that sheet
+ * at its add field. Then Brittany (for anyone who can log hers): her
+ * medicines (the picker), her temperature, and a question for her OB, so
+ * nobody logs one of hers in Maple's log by mistake. The sheet scrolls when
+ * it doesn't fit.
  */
 
 export const LONG_PRESS_MS = 450;
@@ -233,22 +235,50 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const lastMoment = latest("moment");
   const weight = summary?.weight;
 
-  // Mom's row: her plan picker for anyone who can log her doses.
-  const careLine = care?.plans[0]?.line;
+  // Her group: for anyone who can log her doses. The launcher closes before opening hers.
   const openCare = (fn: () => void) => {
     onClose();
     window.setTimeout(fn, 120);
   };
-  const mom: Item | null = care?.access.write
-    ? {
-        id: "mom",
-        label: care.self ? "My medicine" : `${care.name}'s medicine`,
-        sub: careLine ?? (care.plans.length ? undefined : care.self ? "Add your medicines" : "Add her medicines"),
-        icon: "pill",
-        color: CARE_COLOR,
-        onTap: () => openCare(careNav.openPicker),
-      }
-    : null;
+  const baby = (state?.baby.nickname || state?.baby.name || "Maple").split(" ")[0];
+  const line = care?.todayLine;
+  const lastHerTemp = care?.state.entries
+    .filter((e) => e.kind === "temp")
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  const herQuestions = care?.state.entries.filter((e) => e.kind === "question" && !e.data.done).length ?? 0;
+  const mom: Item[] = care?.access.write
+    ? [
+        {
+          id: "mom-meds",
+          label: care.self ? "My medicines" : "Her medicines",
+          // A half-width cell: the name alone and the glance's first part ("Acetaminophen · OK after 10:55 AM · 4 more").
+          sub: line
+            ? `${line.view.plan.name} · ${line.view.glance.ready === true ? (line.view.glance.word ?? "") : line.view.glance.detail.split(" · ")[0]}${line.more ? ` · ${line.more} more` : ""}`
+            : care.self
+              ? "Add your medicines"
+              : "Add her medicines",
+          icon: "pill",
+          color: CARE_COLOR,
+          onTap: () => openCare(careNav.openPicker),
+        },
+        {
+          id: "mom-temp",
+          label: care.self ? "My temperature" : "Her temperature",
+          sub: lastHerTemp?.kind === "temp" ? `${formatTemp(lastHerTemp.data.temp_c, units)} · ${careTime(lastHerTemp.at, n, tz)}` : care.self ? "Log yours" : "Log hers",
+          icon: "thermometer",
+          color: CARE_COLOR,
+          onTap: () => openCare(careNav.openTemp),
+        },
+        {
+          id: "mom-ob",
+          label: care.self ? "Question for my OB" : "Question for her OB",
+          sub: herQuestions ? `${herQuestions} to ask` : undefined,
+          icon: "message-square",
+          color: CARE_COLOR,
+          onTap: () => openCare(() => careNav.openQuestion()),
+        },
+      ]
+    : [];
 
   const vitaminD: Item = {
     id: "vitd",
@@ -325,12 +355,13 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
       },
       {
         id: "med",
-        label: "Medicine",
-        sub: mom ? "For Maple" : lastMed && `${lastMed.data.name} · ${when(lastMed.started_at)}`,
+        label: `${baby}'s medicine`,
+        sub: lastMed && `${lastMed.data.name} · ${when(lastMed.started_at)}`,
         icon: "pill",
         color: KIND_COLOR.med,
-        onTap: () => go("med"),
-        onHold: earlier("med"),
+        // A blank name: vitamin D has its own row, so this one is for anything else.
+        onTap: () => go("med", { name: "" }),
+        onHold: earlier("med", { name: "" }),
       },
       {
         id: "vitals",
@@ -347,11 +378,9 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
         sub: questions ? `${questions} to ask` : undefined,
         icon: "stethoscope",
         color: KIND_COLOR.vitals,
-        onTap: () => go("note", { for_doctor: true }),
+        onTap: () => openCare(() => careNav.openDoctor({ ask: true })),
       },
     ],
-    // Mom's medicines, next to Maple's.
-    ...(mom ? [[mom]] : []),
     // Words.
     [
       {
@@ -369,18 +398,41 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
 
   return (
     <Sheet open={open} onClose={onClose} title="More to log">
-      <div className="space-y-3 pb-1">
+      <section aria-label={baby} className="space-y-3 pb-1">
+        {mom.length > 0 && <GroupHeading>{baby}</GroupHeading>}
         {groups.map((g) => (
-          <div key={g[0].id} className={cx(tone.card, "grid grid-cols-2 overflow-hidden")}>
-            {g.map((it, i) => (
-              // Hairlines between cells: a right edge on the left column, a bottom edge on all but the last row.
-              <MoreRow key={it.id} item={it} className={cx(g.length === 1 ? "col-span-2" : i % 2 === 0 && "border-r", i < g.length - 2 && "border-b")} />
-            ))}
-          </div>
+          <Cells key={g[0].id} items={g} />
         ))}
-      </div>
-      {!held && <p className={cx(tone.faint, "pt-2 pb-1 text-center text-xs")}>Hold one to log an earlier one.</p>}
+        {!held && <p className={cx(tone.faint, "pt-1 text-center text-xs")}>Hold one to log an earlier one.</p>}
+      </section>
+      {mom.length > 0 && care && (
+        <section aria-label={care.name} className="space-y-3 pb-1">
+          <GroupHeading>{care.name}</GroupHeading>
+          <Cells items={mom} />
+        </section>
+      )}
     </Sheet>
+  );
+}
+
+function GroupHeading({ children }: { children: React.ReactNode }) {
+  return <h3 className={cx(tone.heading, "-mb-1 px-1 text-[15px]")}>{children}</h3>;
+}
+
+/** One card of cells, two to a row: hairlines between them, and an odd last one across the whole row. */
+function Cells({ items }: { items: Item[] }) {
+  const lastRowStart = items.length - (items.length % 2 === 0 ? 2 : 1);
+  return (
+    <div className={cx(tone.card, "grid grid-cols-2 overflow-hidden")}>
+      {items.map((it, i) => (
+        // Hairlines between cells: a right edge on the left column, a bottom edge on all but the last row.
+        <MoreRow
+          key={it.id}
+          item={it}
+          className={cx(i === items.length - 1 && i % 2 === 0 ? "col-span-2" : i % 2 === 0 && "border-r", i < lastRowStart && "border-b")}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -406,7 +458,8 @@ function MoreRow({ item, className }: { item: Item; className?: string }) {
             {item.sub.split(" · ").map((part, i) => (
               <Fragment key={i}>
                 {i > 0 && " · "}
-                <span className="whitespace-nowrap">{part}</span>
+                {/* A part wider than the cell is cut, never spilled into the next cell. */}
+                <span className="inline-block max-w-full truncate align-top">{part}</span>
               </Fragment>
             ))}
           </span>

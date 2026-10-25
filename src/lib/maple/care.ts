@@ -771,6 +771,8 @@ export type PlanView = {
   line: string;
   /** `line` without the name, for Today's two-line row. */
   lineStatus: string;
+  /** The app's glance (planGlance): "OK now · last 2:24 AM", "Not yet · OK after 10:55 AM · …". */
+  glance: ReturnType<typeof planGlance>;
   sentence: string;
   meta: string[];
   summary: string;
@@ -786,12 +788,107 @@ export function planView(plan: CarePlan, doses: DoseEntry[], ctx: PlanTextCtx & 
     status,
     line: planLine(plan, status, ctx),
     lineStatus: planLineStatus(plan, status, ctx),
+    glance: planGlance(plan, status, ctx),
     sentence: planSentence(plan, status, ctx),
     meta: planMeta(plan, status, ctx),
     summary: scheduleSummary(plan),
     notes: planNotes(plan, status, ctx),
     oneTap: oneTapDecision(plan, status, doses, ctx.now, by ?? ctx.me),
   };
+}
+
+// ── Medicines: how the app shows them ────────────────────────────────────
+
+/**
+ * The first Also called name that isn't just the name again ("Tylenol" for
+ * Acetaminophen with Also called "Tylenol, APAP"), or null.
+ */
+export function planAlso(plan: Pick<CarePlan, "name" | "also_called">): string | null {
+  const own = normName(plan.name);
+  for (const n of (plan.also_called ?? "").split(",")) {
+    const t = n.trim();
+    if (t && normName(t) !== own) return t;
+  }
+  return null;
+}
+
+/**
+ * The app's name for a medicine: "Acetaminophen (Tylenol)" when it has an
+ * Also called name, so the box in her hand and the line on the screen match;
+ * otherwise just the name. Used by Today's strip, the picker, her cards,
+ * toasts and the Lantern. Siri and the MCP keep plan.name.
+ */
+export function planTitle(plan: Pick<CarePlan, "name" | "also_called">): string {
+  const also = planAlso(plan);
+  return also ? `${plan.name} (${also})` : plan.name;
+}
+
+/**
+ * A list of rows with a Took it each (the picker) in one fixed order: her
+ * list's order (plan.sort), then the order they were added (ids are random,
+ * so by created_at, then id). A save never moves another medicine under the
+ * thumb, as re-sorting by status would.
+ */
+export function listOrder<T extends { plan: CarePlan }>(items: T[]): T[] {
+  return [...items].sort((a, b) => a.plan.sort - b.plan.sort || ms(a.plan.created_at) - ms(b.plan.created_at) || a.plan.id - b.plan.id);
+}
+
+/**
+ * Her most pressing medicine, by the one rule every glanceable line uses
+ * (Today's strip, the Lantern, maple_status): something she can log now
+ * comes before something that isn't OK yet. A set time that's passed and
+ * isn't logged first, then OK again, then a medicine with doses left today,
+ * then the soonest wait, then as-needed with no gap, then the next set time;
+ * within a group, sortPlans' order. Null with none.
+ */
+const PRESSING: Partial<Record<PlanState, number>> = { slot_open: 0, ok: 1, day_open: 2, wait: 3, at_limit: 3, unknown: 4, none: 5, slot_next: 6, day_done: 7 };
+export function pressingPlan<T extends { plan: CarePlan; status: PlanStatus }>(items: T[]): T | null {
+  const sorted = sortPlans(items);
+  const rank = (x: T) => PRESSING[x.status.state] ?? 8;
+  return sorted.reduce<T | null>((best, x) => (best === null || rank(x) < rank(best) ? x : best), null);
+}
+
+/** Not OK by her schedule yet, or nothing left to log today: Took it wears its quiet look (it still saves). */
+export function notYet(status: PlanStatus): boolean {
+  return status.state === "wait" || status.state === "at_limit" || status.state === "slot_next" || status.state === "day_done";
+}
+
+/**
+ * The app's glance at one medicine, led by a word you can read half asleep:
+ * "OK now · last 2:24 AM" or "Not yet · OK after 10:55 AM · last 4:55 AM".
+ * `ready` is true for OK now, false for not yet, null where her schedule has
+ * no gap to keep (the other states read as planLineStatus does). The time
+ * the reader is after comes first after the word, so a narrow line clips
+ * the rest. UI only: Siri's and the MCP's sentences don't change.
+ */
+export function planGlance(plan: CarePlan, status: PlanStatus, ctx: PlanTextCtx): { ready: boolean | null; word: string | null; detail: string; text: string } {
+  // A wrapped line keeps "12:48 PM" together.
+  const at = (iso: string | null | undefined) => (iso ? careTime(iso, ctx.now, ctx.tz).replace(/\s(AM|PM)\b/g, "\u00a0$1") : "");
+  const tail = suffixes(plan, ctx);
+  let ready: boolean | null = null;
+  let word: string | null = null;
+  let detail: string;
+  switch (status.state) {
+    case "ok":
+      ready = true;
+      word = "OK now";
+      detail = `last ${at(status.last?.at)}`;
+      break;
+    case "wait":
+      ready = false;
+      word = "Not yet";
+      detail = `OK after ${at(status.nextOkAt)}${status.last ? ` · last ${at(status.last.at)}` : ""}`;
+      break;
+    case "at_limit":
+      ready = false;
+      word = "Not yet";
+      detail = `OK after ${at(status.nextOkAt)} · ${ofMax(status)} in 24 h`;
+      break;
+    default:
+      detail = planLineStatus(plan, status, { ...ctx, pending: false });
+  }
+  detail += tail;
+  return { ready, word, detail, text: word ? `${word} · ${detail}` : detail };
 }
 
 // ── Medicines: names (§5.4) ──────────────────────────────────────────────

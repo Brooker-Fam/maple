@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { forMom, parseUnits } from "@/lib/maple/care";
-import { ACETAMINOPHEN_NAMES, MOM_MED_NOTE, OPIOID_NAMES, OPIOID_NOTE } from "@/lib/maple/guidelines";
+import { forMom, parseUnits, planTitle } from "@/lib/maple/care";
+import { ACETAMINOPHEN_NAMES, OPIOID_NAMES, OPIOID_NOTE } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, addDays, dayKey } from "@/lib/maple/time";
 import type { CarePlan, LimitUnit, MedReason, MedSchedule, PlanInput } from "@/lib/maple/types";
 import { Icon } from "../icons";
@@ -13,11 +13,15 @@ import { LIMIT_UNITS, NoteCard, Problem, Switch, UNIT_LABEL, errorText } from ".
 import type { UseCare } from "./useCare";
 
 /**
- * "Add a medicine" / "Edit {name}" (§5.1): five rows, the rest folded under
- * "More details". Every number is typed from her label, discharge papers or
- * clinician: fields start blank, no placeholder or hint holds a digit, and no
- * unit is preselected. The limit is kept in the label's own unit, so the
- * 24-hour count adds up what each dose counts, not taps.
+ * "Add a medicine" / "Edit {name}" (§5.1): the name and its Also called
+ * names, then a few rows, the rest folded under "More details". Every number
+ * is typed from her label, discharge papers or clinician: fields start
+ * blank, no placeholder or hint holds a digit, and no unit is preselected.
+ * The limit is kept in the label's own unit, so the 24-hour count adds up
+ * what each dose counts, not taps. A save says "Added Docusate" (with Undo);
+ * "Save and add another" keeps the sheet open on a blank form, for copying a
+ * discharge list one line at a time. There's no Show on Today switch: one
+ * rule picks her line on Today.
  */
 export type MedPlanSheetProps = {
   open: boolean;
@@ -91,7 +95,6 @@ type Form = {
   apap: boolean | null;
   start: string;
   instructions: string;
-  showToday: boolean | null;
 };
 
 const hoursText = (min: number | null | undefined) => (min == null ? "" : String(Math.round((min / 60) * 100) / 100));
@@ -119,7 +122,6 @@ function fromPlan(p: CarePlan | undefined, today: string): Form {
     apap: p ? p.contains_apap : null,
     start: p?.course_start ?? today,
     instructions: p?.instructions ?? "",
-    showToday: p ? p.show_on_today : null,
   };
 }
 
@@ -129,7 +131,8 @@ export default function MedPlanSheet(props: MedPlanSheetProps) {
 }
 
 function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
-  const { state, now, memberName, refresh } = useMaple();
+  const { state, now, memberName, refresh, toast } = useMaple();
+  const nameRef = useRef<HTMLInputElement>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const today = dayKey(now(), tz);
   const [base, setBase] = useState<CarePlan | undefined>(plan);
@@ -157,7 +160,6 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   const pastNames = [...new Set(care.state.plans.map((p) => p.name))];
 
   const apap = f.apap ?? (!base && ACETAMINOPHEN_NAMES.test(`${f.name} ${f.also}`));
-  const showToday = f.showToday ?? (f.how === "as_needed" || f.how === "every");
   const eachShown = !!f.unit && f.unit !== "doses";
   // §5.7: an opioid name gets its note here as well as on the card, so it's read once at save (a name hint, never a gate).
   const opioid = [f.name, ...f.also.split(",")].some((n) => n.trim() && OPIOID_NAMES.test(n));
@@ -200,7 +202,8 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
     return { type: "as_needed", min_gap_min: g == null ? null : Math.round(g * 60) };
   };
 
-  const save = async () => {
+  /** `another`: a new one saved, the form starts over blank for the next (the toast says what was added). */
+  const save = async (another = false) => {
     setTried(true);
     if (firstProblem || busy) return;
     setBusy(true);
@@ -222,11 +225,18 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
       course_start: f.start || today,
       course_end: end,
       instructions: f.instructions.trim() || null,
-      show_on_today: showToday,
     };
     try {
-      await care.act.savePlan(input, base?.updated_at);
-      onClose();
+      const saved = await care.act.savePlan(input, base?.updated_at);
+      if (base) toast(`Saved ${planTitle(saved)}`);
+      else toast(`Added ${planTitle(saved)}`, { icon: "pill", undo: () => void care.act.deletePlan(saved.id).catch(() => {}) });
+      if (another && !base) {
+        setF(fromPlan(undefined, today));
+        setTried(false);
+        setProblem(null);
+        nameRef.current?.focus();
+        nameRef.current?.scrollIntoView({ block: "center" });
+      } else onClose();
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && base) {
         // "Matt changed this plan a moment ago. Here's the latest." (the server's words), and the form shows theirs.
@@ -262,14 +272,29 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
         footer={
           <div>
             <Problem className="mt-0 mb-2 text-center">{problem}</Problem>
-            <SheetFooter
-              onClose={onClose}
-              onDelete={base ? del : undefined}
-              onPrimary={() => void save()}
-              label="Save"
-              busy={busy}
-              hint={tried && firstProblem ? firstProblem : undefined}
-            />
+            {base ? (
+              <SheetFooter
+                onClose={onClose}
+                onDelete={del}
+                onPrimary={() => void save()}
+                label="Save"
+                busy={busy}
+                hint={tried && firstProblem ? firstProblem : undefined}
+              />
+            ) : (
+              <div>
+                {tried && firstProblem && <p className={cx(tone.muted, "mb-2 text-center text-xs")}>{firstProblem}</p>}
+                <div className="flex items-center gap-3">
+                  {/* Text only, so Save stays the one filled button. */}
+                  <Button variant="ghost" size="lg" className="-ml-2 px-3" onClick={() => void save(true)} disabled={busy}>
+                    Save and add another
+                  </Button>
+                  <Button size="lg" className="flex-1" onClick={() => void save()} disabled={busy}>
+                    {busy ? "Saving…" : "Save"}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         }
       >
@@ -279,10 +304,14 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
             <span>{conflict}</span>
           </p>
         )}
-        <p className={cx(tone.muted, "text-[13px] leading-relaxed")}>{MOM_MED_NOTE}</p>
+        <div>
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>Copy each one from the label or discharge papers.</p>
+          {!base && <p className={cx(tone.faint, "mt-0.5 text-[13px] leading-snug")}>Or photograph the discharge sheet and ask Claude to add them.</p>}
+        </div>
 
         <FieldBlock label="Name" hint="As on the label." problem={shown("name")}>
           <input
+            ref={nameRef}
             value={f.name}
             maxLength={80}
             list="care-plan-names"
@@ -296,6 +325,10 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
               <option key={n} value={n} />
             ))}
           </datalist>
+        </FieldBlock>
+
+        <FieldBlock label="Also called" optional hint="Other names you'll say, like the brand on the box.">
+          <input value={f.also} maxLength={80} aria-label="Also called" onChange={(e) => set("also", e.target.value)} className={tone.input} />
         </FieldBlock>
 
         <FieldBlock label="Dose as prescribed" optional hint="Copy it from the label: the strength and how many.">
@@ -411,9 +444,6 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
           <FieldBlock label="The label's words" optional hint="Copy how the label says it, so it's here to check.">
             <input value={f.label} maxLength={120} aria-label="The label's words" onChange={(e) => set("label", e.target.value)} className={tone.input} />
           </FieldBlock>
-          <FieldBlock label="Also called" optional hint="Other names you'll say, like the brand on the box.">
-            <input value={f.also} maxLength={80} aria-label="Also called" onChange={(e) => set("also", e.target.value)} className={tone.input} />
-          </FieldBlock>
           <div>
             <Label optional>For</Label>
             <div className="flex flex-wrap gap-2">
@@ -436,7 +466,6 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
           <FieldBlock label="Instructions" optional hint="Anything else the label says, like taking it with food.">
             <input value={f.instructions} maxLength={120} aria-label="Instructions" onChange={(e) => set("instructions", e.target.value)} className={tone.input} />
           </FieldBlock>
-          <ToggleRow label="Show on Today" checked={showToday} onChange={(v) => set("showToday", v)} />
         </MoreDetails>
       </Sheet>
     </>

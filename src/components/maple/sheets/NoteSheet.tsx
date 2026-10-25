@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { NOTE_TAG_LABELS, describeEntry } from "@/lib/maple/describe";
 import { NOTE_TAGS, type NoteData, type NoteTag } from "@/lib/maple/types";
+import { useCareNav } from "../care/CareNav";
+import { useCare } from "../care/useCare";
 import { Icon } from "../icons";
 import { Chip, Segmented, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
@@ -11,7 +13,9 @@ import { Label, LoggedBy, SheetFooter, pbool, presetStart, pstr, useOpenCount, u
 /**
  * Everyday notes (spit-up, hiccups, fussy spells, nail trims, cord care) and
  * questions for the doctor. A question is a note with for_doctor: it shows on
- * the visit checklist until someone marks it asked and jots the answer.
+ * the visit checklist ("For the doctor") until someone marks it asked and
+ * jots the answer. A question that's for her mom's OB belongs on her page:
+ * "For her OB? Add it to her questions" takes the words there.
  */
 
 type Amount = NonNullable<NoteData["amount"]>;
@@ -25,6 +29,8 @@ export default function NoteSheet(props: SheetProps) {
 function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, now, clock } = useSheetBase();
   const e = entry?.kind === "note" ? entry : undefined;
+  const care = useCare();
+  const careNav = useCareNav();
   const d: Partial<NoteData> = e?.data ?? {};
 
   const [doctor, setDoctor] = useState(() => d.for_doctor ?? pbool(preset, "for_doctor") ?? false);
@@ -102,6 +108,24 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
             <TextArea value={text} onChange={setText} rows={3} placeholder="Ask about the rash on her cheek…" />
             {!e && <p className={cx(tone.muted, "mt-1.5 text-xs")}>It goes on the list for her next checkup. Anyone can add to it.</p>}
           </div>
+          {!e && care?.access.write && (
+            <button
+              type="button"
+              onClick={() => {
+                // Close first; her tab opens at her questions with the words typed in (nothing is saved here).
+                onClose();
+                window.setTimeout(() => careNav.openQuestion(words), 120);
+              }}
+              className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
+            >
+              <Icon name="message-square" size={20} className="shrink-0 text-mp-ink-2" />
+              <span className={cx(tone.body, "min-w-0 flex-1 text-[15px]")}>
+                {care.self ? "For your OB?" : "For her OB?"}{" "}
+                <span className="font-medium text-mp-accent-fg">{care.self ? "Add it to your questions" : "Add it to her questions"}</span>
+              </span>
+              <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
+            </button>
+          )}
           {e && (
             <>
               <div>

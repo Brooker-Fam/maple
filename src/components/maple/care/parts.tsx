@@ -1,15 +1,28 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { type CareNote, type CareNoteCtx, type PlanTextCtx, careTime, loggedBy, unitCount, unitsOf, viaText } from "@/lib/maple/care";
+import {
+  type CareNote,
+  type CareNoteCtx,
+  type PlanTextCtx,
+  type PlanView,
+  careTime,
+  loggedBy,
+  notYet,
+  planAlso,
+  planTitle,
+  unitCount,
+  unitsOf,
+  viaText,
+} from "@/lib/maple/care";
 import { overDailyMax, type Assessment } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, formatTime } from "@/lib/maple/time";
-import type { CarePlan, DoseEntry, LimitUnit } from "@/lib/maple/types";
+import type { CarePlan, DoseEntry, LimitUnit, OneTapAsk } from "@/lib/maple/types";
 import { Icon, type IconName } from "../icons";
 import { AssessmentCard } from "../sheets/parts";
 import { Button, Sheet, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
-import type { UseCare } from "./useCare";
+import type { CareHeld, UseCare } from "./useCare";
 
 /**
  * Small pieces shared by mom's medicine screens (B): list rows in the Family
@@ -126,22 +139,133 @@ export function NavRow({
 }
 
 /**
- * The trailing "Took it": a 36px accent pill inside a 44px target, like
- * vitamin D's "Log" on Today. `busy` holds it while the tap is out.
+ * The trailing "Took it": a 36px pill inside a 44px target. Filled accent
+ * when it's OK by her schedule (or there's no gap to keep); `quiet` while
+ * it isn't yet, the sunken pill of vitamin D's "Log" on Today, so the state
+ * shows without reading. Quiet still saves at once (an early dose gets its
+ * note). `busy` holds it while the tap is out. `aria-label` names the
+ * medicine ("Took it: Brittany's Ibuprofen").
  */
-export function TookItButton({ onClick, busy, label = "Took it", className }: { onClick: () => void; busy?: boolean; label?: string; className?: string }) {
+export function TookItButton({
+  onClick,
+  busy,
+  quiet,
+  label = "Took it",
+  className,
+  "aria-label": ariaLabel,
+}: {
+  onClick: () => void;
+  busy?: boolean;
+  quiet?: boolean;
+  label?: string;
+  className?: string;
+  "aria-label"?: string;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={busy}
+      aria-label={ariaLabel}
       className={cx("-my-1 flex min-h-[44px] shrink-0 items-center disabled:opacity-50", className)}
     >
-      <span className="inline-flex min-h-[36px] items-center gap-1.5 rounded-[10px] bg-mp-accent px-3.5 text-sm font-semibold whitespace-nowrap text-mp-on-accent active:scale-[0.97]">
+      <span
+        className={cx(
+          "inline-flex min-h-[36px] items-center gap-1.5 rounded-[10px] px-3.5 text-sm font-semibold whitespace-nowrap active:scale-[0.97]",
+          quiet ? "bg-mp-sunken text-mp-ink" : "bg-mp-accent text-mp-on-accent"
+        )}
+      >
         {label}
       </span>
     </button>
   );
+}
+
+/** "Logged 6:56 AM" with a check, in Took it's place while the dose just logged here holds its slot (not a button). */
+export function LoggedSlot({ held, className }: { held: CareHeld; className?: string }) {
+  const { state, now } = useMaple();
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  return (
+    <span role="status" className={cx("flex min-h-[44px] shrink-0 items-center gap-1 text-[13px] font-medium whitespace-nowrap text-mp-ink-2 tabular-nums", className)}>
+      <Icon name="check" size={16} strokeWidth={2.2} className="shrink-0" />
+      {held.skipped ? "Skipped" : "Logged"} {careTime(held.at, now(), tz)}
+    </span>
+  );
+}
+
+/** "Took it: Brittany's Ibuprofen (Advil)", or "your" on her own phone. */
+export function tookItLabel(care: UseCare, plan: CarePlan): string {
+  return `Took it: ${care.self ? "your" : `${care.name}'s`} ${planTitle(plan)}`;
+}
+
+/**
+ * One medicine's Took it, with the safety rules (the strip, the picker):
+ * quiet while it isn't OK yet, "Logged 6:56 AM" for a minute after a save on
+ * this phone, and nothing at all for a tap inside the cooldown after any
+ * care save. `onAsk` opens the Dose sheet with the reason (a likely
+ * duplicate); `onSaved` runs after a save (the picker closes).
+ */
+export function TookIt({
+  view,
+  care,
+  onAsk,
+  onSaved,
+  className,
+}: {
+  view: PlanView;
+  care: UseCare;
+  onAsk: (ask: OneTapAsk) => void;
+  onSaved?: () => void;
+  className?: string;
+}) {
+  const { toast } = useMaple();
+  const [busy, setBusy] = useState(false);
+  if (!care.access.write) return null;
+  const held = care.held(view.plan.id);
+  if (held) return <LoggedSlot held={held} className={className} />;
+  const took = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await care.act.tookIt(view.plan.id);
+      if (r === "saved") onSaved?.();
+      else if (r !== "ignored") onAsk(r.ask);
+    } catch (e) {
+      toast(errorText(e), { tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <TookItButton busy={busy} quiet={notYet(view.status)} onClick={() => void took()} aria-label={tookItLabel(care, view.plan)} className={className} />;
+}
+
+/**
+ * A medicine's title on one line: the name (after `lead`, like "Brittany ·"),
+ * then its Also called name muted. When both don't fit, the Also called name
+ * drops out whole (it wraps onto a hidden second line) and only then is the
+ * name cut, so it's never "Acetaminoph… (…".
+ */
+export function PlanName({ plan, lead, className }: { plan: CarePlan; lead?: ReactNode; className?: string }) {
+  const also = planAlso(plan);
+  return (
+    <span className={cx("flex h-[1lh] min-w-0 flex-wrap items-baseline overflow-hidden", className)}>
+      <span className="flex max-w-full min-w-0 items-baseline">
+        {lead}
+        <span className="min-w-0 truncate">{plan.name}</span>
+      </span>
+      {also && <span className="shrink-0 pl-1 whitespace-nowrap text-mp-ink-3">({also})</span>}
+    </span>
+  );
+}
+
+/**
+ * The glance's state as a mark you can see without reading: a check for OK
+ * now, a timer for not yet, nothing where there's no gap to keep. Neutral
+ * ink in every state: it's a fact, never an alert.
+ */
+export function GlanceMark({ ready, size = 14, className }: { ready: boolean | null; size?: number; className?: string }) {
+  if (ready === null) return null;
+  return <Icon name={ready ? "check" : "timer"} size={size} strokeWidth={2} className={cx("shrink-0 text-mp-ink-2", className)} />;
 }
 
 // ── Words ────────────────────────────────────────────────────────────────

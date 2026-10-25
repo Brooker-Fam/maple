@@ -21,7 +21,8 @@ import type { SheetProps } from "./index";
 import { ContextNote, Label, LoggedBy, NoteField, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase, withNulls } from "./parts";
 
 /**
- * Vitamin D and any other medicine. The app never suggests a dose: the dose
+ * Vitamin D and any other medicine ("Maple's medicine" in More opens it on a
+ * blank name, since vitamin D has its own row). The app never suggests a dose: the dose
  * box is free text, filled in only for vitamin D's standard 400 IU (and the
  * label wins if the drops say otherwise). Logging vitamin D twice in a day
  * gets a gentle heads-up so two caregivers don't double up.
@@ -137,7 +138,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       onClose={onClose}
-      title={e ? describeEntry(e).title : vitD ? "Vitamin D" : "Medicine"}
+      title={e ? describeEntry(e).title : vitD ? "Vitamin D" : `${state ? (state.baby.nickname || state.baby.name).split(" ")[0] : "Her"}'s medicine`}
       footer={
         <SheetFooter
           onClose={onClose}

@@ -1,4 +1,5 @@
 import { BadRequest, json, readJson, withMember } from "@/lib/maple/api";
+import { deviceOf } from "@/lib/maple/device";
 import {
   adjustTimerStart,
   discardedBy,
@@ -146,6 +147,7 @@ export const POST = withMember("POST /api/maple/timer", async (request, me) => {
       createdBy: me.email,
       source: "web",
       clientId: body.client_id,
+      device: deviceOf(request),
     });
     return json({ entry: toClientEntry(entry), alreadyRunning });
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { statsFor, type DayStats } from "@/lib/maple/insights";
 import {
@@ -298,15 +298,26 @@ export function daySummaryParts(s: DayStats, units: UnitSystem): string[] {
   return parts;
 }
 
-// Patterns → Timeline: "show me that day". The Timeline reads it when it mounts.
+// Patterns → Timeline: "show me that day". The Timeline reads it when it mounts, or at once if it's already there
+// (History keeps both segments mounted).
 let pendingDay: string | null = null;
+const daySubs = new Set<() => void>();
 export function requestTimelineDay(key: string) {
   pendingDay = key;
+  for (const cb of daySubs) cb();
 }
 
 // ── The tab ──────────────────────────────────────────────────────────────
 
-export default function LogTab() {
+export default function LogTab({
+  title = "Timeline",
+  below,
+}: {
+  /** The page title ("History" when it's History's segment). */
+  title?: string;
+  /** What sits under the title (History's Timeline | Patterns switch). */
+  below?: ReactNode;
+} = {}) {
   const { state, units, readOnly } = useMaple();
   // On the clock minute, so a running feed's minutes in the day's totals flip with the card's.
   const now = useClockMinute();
@@ -360,10 +371,17 @@ export default function LogTab() {
 
   // Arriving from Patterns ("show this day").
   useEffect(() => {
-    if (!pendingDay) return;
-    const k = pendingDay;
-    pendingDay = null;
-    jumpTo(k);
+    const take = () => {
+      if (!pendingDay) return;
+      const k = pendingDay;
+      pendingDay = null;
+      jumpTo(k);
+    };
+    take();
+    daySubs.add(take);
+    return () => {
+      daySubs.delete(take);
+    };
   }, [jumpTo]);
 
   // Group entries by local day (a sleep across midnight belongs to the day it started).
@@ -438,7 +456,7 @@ export default function LogTab() {
       {/* px-1 lines the title up with the section and day titles below it. */}
       <header className="mb-4 px-1 pt-[max(1.25rem,env(safe-area-inset-top))]">
         <div className="flex min-h-[44px] items-center justify-between gap-3">
-          <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Timeline</h1>
+          <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>{title}</h1>
           <div className="flex items-center gap-1">
             {/* The open date field needs the room at phone width; the trash comes back when it closes. */}
             {!readOnly && <RecentlyRemoved onRestore={touch} hidden={picking} />}
@@ -452,6 +470,7 @@ export default function LogTab() {
           </div>
         </div>
       </header>
+      {below}
 
       {/* Six chips don't fit at phone width; the right edge fades so "Other" reads as a scroll away. */}
       <div
@@ -576,11 +595,12 @@ function DaySection({
   const groupLabel = KIND_GROUPS.find((g) => g.id === group)?.label.toLowerCase();
 
   return (
-    <section id={`maple-day-${key}`} aria-label={label} className="scroll-mt-[env(safe-area-inset-top)]">
+    <section id={`maple-day-${key}`} aria-label={label} className="scroll-mt-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px))]">
       {/* Opaque so rows scroll cleanly under it; a jumped-to day's header warms for a moment. */}
       <div
         className={cx(
-          "sticky top-[env(safe-area-inset-top)] z-10 -mx-4 mb-1 px-5 pt-2 pb-2 transition-colors duration-700",
+          // Under History's Timeline | Patterns bar while that's pinned (--maple-history-bar is its height).
+          "sticky top-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px))] z-10 -mx-4 mb-1 px-5 pt-2 pb-2 transition-colors duration-700",
           highlighted ? "bg-mp-sunken" : "bg-mp-bg"
         )}
       >

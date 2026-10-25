@@ -1,17 +1,20 @@
 "use client";
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   aheadOfSlot,
   careTime,
   countedAs,
   crisisToday,
   doseNotes,
+  listOrder,
   nextUnits,
   oneOffNotes,
   oneTapDecision,
   planActive,
+  planTitle,
   planView,
+  pressingPlan,
   scoreScreen,
   sortPlans,
   suggestAckKey,
@@ -40,6 +43,7 @@ import type {
   PlanStatus,
 } from "@/lib/maple/types";
 import { ApiError, useMaple, useNow, type ToastAction } from "../useMaple";
+import { useRemindChip } from "../notify/context";
 
 /**
  * Mom's area for the signed-in reader, from the care part of Maple's state:
@@ -63,7 +67,12 @@ export type CareActions = {
   stopPlan(id: number): Promise<void>;
   /** "Take it again": a finished plan back on her list, with its history. */
   resumePlan(id: number): Promise<void>;
-  tookIt(planId: number): Promise<"saved" | { ask: OneTapAsk }>;
+  /**
+   * The one-tap: "saved" (its toast is up), { ask } (open the Dose sheet with
+   * the reason on top), or "ignored" when it came within the tap cooldown
+   * after a care save (a double tap), so nothing happens at all.
+   */
+  tookIt(planId: number): Promise<"saved" | "ignored" | { ask: OneTapAsk }>;
   logDose(i: {
     planId?: number;
     oneOff?: { name: string; dose?: string; private?: boolean };
@@ -98,18 +107,38 @@ export type CareActions = {
   moveFromMaple(entryId: number, planId?: number): Promise<void>;
 };
 
+/**
+ * A medicine just logged on this phone: for a minute its Took it everywhere
+ * (Today's strip, the picker, her cards, the Lantern) reads "Logged 6:56 AM"
+ * and can't be tapped, so a second tap never lands on it or on another
+ * medicine that moved into its place. Undo stays in the toast. `at` is the
+ * dose's time as it now stands (a "5 min earlier" fix moves it).
+ */
+export type CareHeld = { entryId: number; at: string; skipped: boolean };
+
 export type UseCare = {
   state: CareState;
   self: boolean;
   access: CareAccess;
   /** memberName(person): never a hard-coded name. */
   name: string;
-  /** Active, visible plans in sortPlans order. */
+  /** Active, visible plans in sortPlans order (her page's cards; spoken text). */
   plans: PlanView[];
+  /** The same plans in a fixed order (listOrder), for lists with a Took it on every row: a save never re-sorts them. */
+  rows: PlanView[];
   finished: PlanView[];
-  /** The first Show on Today plan (the Lantern shows it too). */
-  todayLine: { view: PlanView; more: number } | null;
+  /**
+   * Her line on Today's strip and the Lantern: the medicine just logged on
+   * this phone while it's held, else her most pressing one (pressingPlan, the
+   * one rule), with how many others are active.
+   */
+  todayLine: { view: PlanView; more: number; held: CareHeld | null } | null;
+  /** The same line as text, named for whoever isn't her ("Brittany: Ibuprofen (Advil) · OK now · last 2:24 AM"). */
   lanternLine: string | null;
+  /** The hold on a plan just logged on this phone, or null. */
+  held(planId: number): CareHeld | null;
+  /** A care save is on its way or finished under 1.5 s ago: a Took it tap now is ignored (act.tookIt says "ignored"). For other quick buttons, like a card's Skipped. */
+  coolingDown(): boolean;
   doses(planId: number, days: number): CareEntry[];
   /**
    * Hers only. `checkins` newest first (the last 14 days); `todayCheckin` her
@@ -149,12 +178,65 @@ const moodSaved = new Map<number, number>();
 /** "Call Poison Help now: Ibuprofen: over your daily limit" (a note, in one toast line). */
 const noteLine = (n: Assessment) => `${n.label ?? MOM_TIER_LABEL[n.tier]}: ${n.title}`;
 
+// Took-it safety, shared by every useCare() on the page (the strip, the
+// picker, her cards and the Lantern each call it). A save re-sorts what's
+// pressing, so a second tap could land on a different medicine: every care
+// Took it ignores taps while a dose is saving and for 1.5 s after (only
+// care's: the dock's own buttons never wait on it), and the plan just
+// logged holds its place for a minute. On the monotonic clock, since the
+// server-synced now() jumps on polls.
+const TAP_COOL_MS = 1500;
+const HOLD_MS = 60_000;
+type Hold = { planId: number; entryId: number; at: string; seq: number };
+const taps = { inflight: 0, coolUntil: 0, seq: 0, timers: new Map<number, number>(), subs: new Set<() => void>() };
+const NO_HOLDS: ReadonlyMap<number, Hold> = new Map();
+let holds: ReadonlyMap<number, Hold> = NO_HOLDS;
+const tapCooling = () => taps.inflight > 0 || performance.now() < taps.coolUntil;
+const subscribeHolds = (fn: () => void) => {
+  taps.subs.add(fn);
+  return () => void taps.subs.delete(fn);
+};
+const getHolds = () => holds;
+const getNoHolds = () => NO_HOLDS;
+function setHolds(next: ReadonlyMap<number, Hold>) {
+  holds = next;
+  for (const fn of taps.subs) fn();
+}
+/** Undo (or any delete) ends the hold on that dose: its Took it is back at once. */
+function unholdEntry(entryId: number) {
+  const hit = [...holds.values()].find((h) => h.entryId === entryId);
+  if (!hit) return;
+  const rest = new Map(holds);
+  rest.delete(hit.planId);
+  setHolds(rest);
+}
+function holdPlan(planId: number, entryId: number, at: string) {
+  const h: Hold = { planId, entryId, at, seq: ++taps.seq };
+  const next = new Map(holds);
+  next.set(planId, h);
+  setHolds(next);
+  window.clearTimeout(taps.timers.get(planId));
+  taps.timers.set(
+    planId,
+    window.setTimeout(() => {
+      taps.timers.delete(planId);
+      if (holds.get(planId)?.seq !== h.seq) return;
+      const rest = new Map(holds);
+      rest.delete(planId);
+      setHolds(rest);
+    }, HOLD_MS)
+  );
+}
+
 export function useCare(): UseCare | null {
   const { state, api, toast, now: clock, refresh, units, care: store } = useMaple();
+  // "Remind me at 12:56 PM" in a dose toast, on a phone whose notifications are off (src/components/maple/notify).
+  const remindChip = useRemindChip();
   // Statuses move with the clock ("OK since", "Last one 2 h ago"), not only with polls.
   const now = useNow(30_000);
   const care = state?.care ?? null;
   const tz = state?.baby.timezone ?? "America/New_York";
+  const holdMap = useSyncExternalStore(subscribeHolds, getHolds, getNoHolds);
 
   /** Who the server credits this reader's writes to: the admin login logs as its admin_as member. */
   const viewerId = useMemo(() => {
@@ -182,8 +264,16 @@ export function useCare(): UseCare | null {
     const finished = views
       .filter((v) => !planActive(v.plan, now, tz))
       .sort((a, b) => (b.plan.stopped_at ?? b.plan.course_end ?? "").localeCompare(a.plan.stopped_at ?? a.plan.course_end ?? ""));
-    const onToday = plans.filter((v) => v.plan.show_on_today);
-    const lantern = onToday[0];
+    // A hold lasts while its dose is still there (an Undo ends it); matched by plan and time too, since a dose saved
+    // offline changes id when it syncs.
+    const heldBy = new Map<number, CareHeld & { seq: number }>();
+    for (const h of holdMap.values()) {
+      const e = (dosesBy.get(h.planId) ?? []).find((d) => d.id === h.entryId || d.at === h.at);
+      if (e && plans.some((v) => v.plan.id === h.planId)) heldBy.set(h.planId, { entryId: e.id, at: e.at, skipped: !!e.data.skipped, seq: h.seq });
+    }
+    const lastHeld = [...heldBy.entries()].sort((a, b) => b[1].seq - a[1].seq)[0];
+    const lead = (lastHeld && plans.find((v) => v.plan.id === lastHeld[0])) || pressingPlan(plans);
+    const leadHeld = lead ? (heldBy.get(lead.plan.id) ?? null) : null;
     const moodRows = care.mood ? [...care.mood].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id) : null;
     const latestScreen = (moodRows?.find((m) => m.kind === "screen") ?? null) as Extract<MoodEntry, { kind: "screen" }> | null;
     const mood = moodRows
@@ -195,16 +285,21 @@ export function useCare(): UseCare | null {
           suggestion: suggestFullCheckin({ now, tz, bornAt: state.baby.born_at, settings: care.settings, lastScreenAt: latestScreen?.at ?? null }),
         }
       : undefined;
+    const leadText = lead
+      ? `${planTitle(lead.plan)} · ${leadHeld ? `${leadHeld.skipped ? "skipped" : "logged"} ${careTime(leadHeld.at, now, tz)}` : lead.glance.text}`
+      : null;
     return {
       dosesBy,
       plans,
+      rows: listOrder(plans),
       finished,
-      todayLine: onToday.length ? { view: onToday[0], more: onToday.length - 1 } : null,
+      heldBy,
+      todayLine: lead ? { view: lead, more: plans.length - 1, held: leadHeld ? { entryId: leadHeld.entryId, at: leadHeld.at, skipped: leadHeld.skipped } : null } : null,
       // On anyone else's Lantern, whose medicine it is: the rest of that screen is all Maple.
-      lanternLine: lantern ? (self ? lantern.line : `${care.person.name}: ${lantern.line}`) : null,
+      lanternLine: leadText ? (self ? leadText : `${care.person.name}: ${leadText}`) : null,
       mood,
     };
-  }, [care, state, now, tz, viewerId]);
+  }, [care, state, now, tz, viewerId, holdMap]);
 
   // Actions read the latest state when they run, not the render they were made in.
   const careRef = useRef(care);
@@ -246,7 +341,7 @@ export function useCare(): UseCare | null {
   /** "Ibuprofen at 3:05 AM · OK after 9:05 AM" (or the unknown, daily or times variant). */
   const doseText = useCallback(
     (plan: CarePlan | null, entry: DoseEntry): string => {
-      const name = entry.data.name;
+      const name = plan ? planTitle(plan) : entry.data.name;
       if (entry.data.skipped) return `${name} skipped`;
       const base = `${name} at ${formatTime(entry.at, tz)}`;
       if (!plan) return base;
@@ -292,6 +387,7 @@ export function useCare(): UseCare | null {
     async (id) => {
       // Still on this phone only: just drop it.
       if (store.unqueue(id)) {
+        unholdEntry(id);
         toast("Removed");
         return;
       }
@@ -301,6 +397,7 @@ export function useCare(): UseCare | null {
       }
       const before = careRef.current?.entries.find((e) => e.id === id);
       patchEntries((es) => es.filter((e) => e.id !== id));
+      unholdEntry(id);
       try {
         await call(`/api/maple/care/entries?id=${id}`, { method: "DELETE" });
         toast("Deleted", { undo: () => void restoreEntry(id).catch(() => {}) });
@@ -361,20 +458,28 @@ export function useCare(): UseCare | null {
             return {
               label: `${n} min earlier`,
               sub: formatTimeNear(to, recorded, tz),
-              ariaLabel: `${entry.data.name} ${n} minutes earlier, at ${formatTime(to, tz)}`,
+              ariaLabel: `${plan ? planTitle(plan) : entry.data.name} ${n} minutes earlier, at ${formatTime(to, tz)}`,
               onClick: () => void editEntry(entry.id, { at: new Date(to).toISOString() }, entry.updated_at).catch((e) => toast(e.message, { tone: "error" })),
             };
           });
       // A call-now note carries its whole text (who to call, the number): there's no sheet to read it in after a one-tap.
       const urgentText = urgent ? `${noteLine(urgent)}${urgent.tier === "now" || urgent.tier === "emergency" ? `. ${urgent.body}` : ""}` : "";
+      // The time-fix chips first; any other chip for this dose goes after them: "Remind me at 12:56 PM" when this
+      // medicine has a next time by her schedule (never beside a call-now note).
+      let remind: ToastAction | null = null;
+      if (plan && !entry.data.skipped && entry.id > 0 && (!urgent || urgent.tier === "nudge")) {
+        const after = statusOf(plan, [...dosesOf(plan.id).filter((d) => (d.id > 0 || d.pending) && d.id !== entry.id), entry]);
+        remind = remindChip(plan, after.state === "wait" || after.state === "at_limit" ? after.nextOkAt : after.state === "slot_next" ? after.nextSlotAt : null);
+      }
+      const actions: ToastAction[] = entry.id > 0 ? [...chips, ...(remind ? [remind] : [])] : [];
       toast(urgent ? `${text}. ${urgentText}` : text, {
         tone: urgent ? "info" : "ok",
         icon: "pill",
-        actions: entry.id > 0 ? chips : undefined,
+        actions: actions.length ? actions : undefined,
         undo: () => void deleteEntry(entry.id).catch(() => {}),
       });
     },
-    [deleteEntry, doseText, dosesOf, editEntry, toast, tz]
+    [deleteEntry, doseText, dosesOf, editEntry, remindChip, statusOf, toast, tz]
   );
 
   const logDose = useCallback<CareActions["logDose"]>(
@@ -412,13 +517,20 @@ export function useCare(): UseCare | null {
       patchEntries((es) => [early, ...es]);
       const settings = c.settings;
       const nctx = { name: c.person.name, self: c.person.self, settings, now: clock(), tz };
+      // Every care Took it waits while this saves, and for a moment after (tapCooling); the plan holds its place from
+      // the first frame, so the line never flicks to another medicine while the save is out.
+      taps.inflight++;
+      if (plan) holdPlan(plan.id, early.id, early.at);
       try {
         const res = await call<DoseResult>("/api/maple/care/entries", { method: "POST", body: JSON.stringify(input) });
         patchEntries((es) => {
           const rest = es.filter((e) => e.id !== early.id && e.id !== res.entry?.id);
           return res.entry && (res.created || res.deduped) ? [res.entry, ...rest] : rest;
         });
-        if ((res.created || res.deduped) && res.entry?.kind === "dose") doseToast(plan, res.entry, res.notes);
+        if ((res.created || res.deduped) && res.entry?.kind === "dose") {
+          if (plan) holdPlan(plan.id, res.entry.id, res.entry.at);
+          doseToast(plan, res.entry, res.notes);
+        } else unholdEntry(early.id);
         return res;
       } catch (e) {
         patchEntries((es) => es.filter((x) => x.id !== early.id));
@@ -429,7 +541,11 @@ export function useCare(): UseCare | null {
           const notes = plan ? doseNotes(plan, dosesOf(plan.id), { at: i.at, units: i.units, skipped: i.skipped }, nctx) : oneOffNotes(name, c.plans, nctx);
           return { created: true, entry: { ...early, pending: true }, notes };
         }
+        unholdEntry(early.id);
         throw fail(e, "Couldn't save that");
+      } finally {
+        taps.inflight--;
+        taps.coolUntil = performance.now() + TAP_COOL_MS;
       }
     },
     [call, clock, dosesOf, doseToast, fail, patchEntries, planOf, store, toast, tz, viewerId]
@@ -437,6 +553,8 @@ export function useCare(): UseCare | null {
 
   const tookIt = useCallback<CareActions["tookIt"]>(
     async (planId) => {
+      // A second tap while the first saves, or just after: the list may have moved under the thumb.
+      if (tapCooling()) return "ignored";
       const plan = planOf(planId);
       if (!plan) throw new Error("That medicine isn't on the list anymore.");
       const t = clock();
@@ -496,7 +614,7 @@ export function useCare(): UseCare | null {
     async (id) => {
       try {
         const plan = await planPatch(id, { stopped: true });
-        toast(`${plan.name} stopped`, { undo: () => void planPatch(id, { stopped: false }).catch((e) => toast(e.message, { tone: "error" })) });
+        toast(`${planTitle(plan)} stopped`, { undo: () => void planPatch(id, { stopped: false }).catch((e) => toast(e.message, { tone: "error" })) });
       } catch (e) {
         toast(e instanceof Error ? e.message : "Couldn't stop it", { tone: "error" });
         throw fail(e, "Couldn't stop it");
@@ -509,7 +627,7 @@ export function useCare(): UseCare | null {
     async (id) => {
       try {
         const plan = await planPatch(id, { stopped: false });
-        toast(`${plan.name} is back on the list`, { undo: () => void planPatch(id, { stopped: true }).catch((e) => toast(e.message, { tone: "error" })) });
+        toast(`${planTitle(plan)} is back on the list`, { undo: () => void planPatch(id, { stopped: true }).catch((e) => toast(e.message, { tone: "error" })) });
       } catch (e) {
         toast(e instanceof Error ? e.message : "Couldn't do that", { tone: "error" });
         throw fail(e, "Couldn't do that");
@@ -523,7 +641,7 @@ export function useCare(): UseCare | null {
       try {
         const { plan } = await call<{ plan: CarePlan }>(`/api/maple/care/meds?id=${id}`, { method: "DELETE" });
         store.patch((c) => ({ ...c, plans: c.plans.filter((p) => p.id !== id) }));
-        toast(`Deleted ${plan.name}`, { undo: () => void planPatch(id, { deleted: false }).catch((e) => toast(e.message, { tone: "error" })) });
+        toast(`Deleted ${planTitle(plan)}`, { undo: () => void planPatch(id, { deleted: false }).catch((e) => toast(e.message, { tone: "error" })) });
       } catch (e) {
         toast(e instanceof Error ? e.message : "Couldn't delete", { tone: "error" });
         throw fail(e, "Couldn't delete");
@@ -832,9 +950,15 @@ export function useCare(): UseCare | null {
       access: care.access,
       name: care.person.name,
       plans: derived.plans,
+      rows: derived.rows,
       finished: derived.finished,
       todayLine: derived.todayLine,
       lanternLine: derived.lanternLine,
+      held: (planId: number) => {
+        const h = derived.heldBy.get(planId);
+        return h ? { entryId: h.entryId, at: h.at, skipped: h.skipped } : null;
+      },
+      coolingDown: tapCooling,
       doses,
       ...(derived.mood ? { mood: derived.mood } : {}),
       act,

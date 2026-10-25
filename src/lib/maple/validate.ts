@@ -264,7 +264,7 @@ const LIMIT_UNIT_MSG = "Choose what the label counts: tablets, caplets, capsules
 /**
  * Validate a whole plan (a new one, or an existing one with a patch merged
  * over it). `creating` applies the create-only defaults: "Contains
- * acetaminophen" from the names, and Show on Today by type and privacy.
+ * acetaminophen" from the names (and the stored, unread Show on Today).
  * Whether it starts as Only me is the caller's call (it depends on who's
  * adding it); `private` is taken as given here.
  */
@@ -316,7 +316,8 @@ export function cleanPlan(input: Record<string, unknown>, opts: { creating: bool
     typeof input.contains_apap === "boolean"
       ? input.contains_apap
       : opts.creating && [name, ...(alsoCalled ?? "").split(",")].some((n) => ACETAMINOPHEN_NAMES.test(n));
-  // Show on Today: on for As needed and Every few hours, off for Each day and At set times (P7).
+  // Show on Today: still accepted and stored (older app versions and Claude chats send it), but nothing reads it any
+  // more: one rule picks her line on Today, the Lantern and maple_status (care.ts pressingPlan).
   const showOnToday =
     typeof input.show_on_today === "boolean" ? input.show_on_today : schedule.type === "as_needed" || schedule.type === "every";
 

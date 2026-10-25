@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
 import { careErrorResponse, errorResponse, json } from "@/lib/maple/api";
 import { listMembers, memberFor } from "@/lib/maple/auth";
-import { aheadOfSlot, careTime, countedAs, matchPlan } from "@/lib/maple/care";
-import { spokenLine } from "@/lib/maple/care-mcp";
+import { aheadOfSlot, careTime, countedAs, matchPlan, type PlanMatch, type PlanView } from "@/lib/maple/care";
+import { momSpeak, samePlans, spokenLine } from "@/lib/maple/care-mcp";
 import { carePersonName, carePlanViews, careSession, logCareDose, planDoses } from "@/lib/maple/care-store";
 import { describeEntry } from "@/lib/maple/describe";
 import { staleFeed } from "@/lib/maple/feed";
@@ -22,7 +22,8 @@ import {
 } from "@/lib/maple/store";
 import { formatTime } from "@/lib/maple/time";
 import { ozToMl } from "@/lib/maple/units";
-import type { Entry, FeedData, Member } from "@/lib/maple/types";
+import type { Baby, Entry, FeedData, Member } from "@/lib/maple/types";
+import { captureServerException } from "@/lib/posthog-server";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +34,16 @@ export const dynamic = "force-dynamic";
  * Answers { speak } — one sentence for the Shortcut's "Speak Text".
  *
  * Mom's medicines ride the same URL (one "Mom meds" Shortcut for every plan,
- * any phone): mom_status lists her plans as { id, label } for Choose from
- * List, and mom_dose { med, minutes_ago?, skipped?, units?, confirm?,
- * client_id? } logs one, like Maple's own actions: it saves (a name that
- * isn't on her list as a one-time medicine), and early or over her limit
- * is said after. Only a likely duplicate (the same medicine within 30
- * minutes) answers ok:false with needs_confirm and a question to speak.
+ * any phone): mom_status lists her plans as { id, label, ok_now } for Choose
+ * from List, OK-now ones first, and mom_dose { med, minutes_ago?, skipped?,
+ * units?, confirm?, client_id? } logs one, like Maple's own actions: it saves
+ * (its brand or generic name counts toward the one on her list; any other
+ * name is a one-time medicine), and early or over her limit is said after.
+ * Only a likely duplicate (the same medicine within 30 minutes) answers
+ * ok:false with needs_confirm and a question to speak. A save returns
+ * next_ok_at and next_ok_in_minutes, so a Shortcut can Start Timer (which
+ * rings through Silent) in one action. "Maple status" adds her medicines,
+ * capped at two, for anyone who can read them.
  */
 
 const ACTIONS = [
@@ -196,6 +201,9 @@ export async function POST(request: NextRequest) {
         const urgent = s.alerts.find((a) => a.tier === "emergency" || a.tier === "now" || a.tier === "today");
         // Say who to call, not just what happened ("Call your pediatrician now: No wet diaper in 8 hours.").
         if (urgent) bits.push(`${TIER_LABEL[urgent.tier]}: ${urgent.title.replace(/[.:]?$/, "")}.`);
+        // Her medicines after Maple's, capped at two; never for a viewer.
+        const mom = me.role === "viewer" ? null : await momForStatus(me, members, baby);
+        if (mom) bits.push(mom);
         speak = bits.join(" ");
         break;
       }
@@ -218,6 +226,26 @@ const sayTime = (iso: string, now: Date, tz: string) => careTime(iso, now, tz).r
 
 const andList = (names: string[]) => (names.length <= 1 ? names[0] ?? "" : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 
+/** Her plans for Choose from List: OK now first (so the top row is usually the one), then the rest in sortPlans order. */
+const okFirst = (views: PlanView[]) => [...views.filter((v) => v.status.state === "ok"), ...views.filter((v) => v.status.state !== "ok")];
+
+/**
+ * Her medicines for "Maple status" ("Brittany's medicines: Ibuprofen OK
+ * since 2:10 AM; Tylenol OK after 10:55 AM."), most pressing first, capped at
+ * two: only for someone who can read her page, and never an error (Maple's
+ * status never waits on hers; a failure is reported as a code only).
+ */
+async function momForStatus(me: Member, members: Member[], baby: Baby): Promise<string | null> {
+  try {
+    const s = await careSession({ id: me.email, role: me.role, viaAdmin: false, channel: "siri" }, { members, baby });
+    if (!s.person || !s.access.read) return null;
+    return momSpeak(await carePlanViews(s), { name: carePersonName(s.person, members), self: s.access.self, now: s.now, tz: s.tz });
+  } catch {
+    await captureServerException(new Error("care_status"), { route: "POST /api/maple/quick" });
+    return null;
+  }
+}
+
 /** mom_status / mom_dose: her token reads "your", anyone she shares with "Brittany's". Errors are scrubbed (careErrorResponse). */
 async function momAction(action: "mom_status" | "mom_dose", me: Member, body: MomBody): Promise<Response> {
   try {
@@ -229,18 +257,28 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     if (!s.access.read || !s.access.write) return json({ error: "Not shared", speak: `You can't change ${name}'s medicines from this account.`, ...help }, 403);
     const self = s.access.self;
     const whose = self ? "your" : "her";
-    const views = await carePlanViews(s);
-    const plans = views.map((v) => ({ id: `p${v.plan.id}`, label: v.line }));
+    const views = okFirst(await carePlanViews(s));
+    const plans = views.map((v) => ({ id: `p${v.plan.id}`, label: v.line, ok_now: v.status.state === "ok" }));
     const { now, tz } = s;
 
     if (action === "mom_status") {
+      // Leads with what's OK now, like the list.
       const speak = views.length ? `${views.slice(0, 3).map((v) => spokenLine(v, now, tz)).join(". ")}.` : `There are no medicines on ${whose} list yet.`;
       return json({ ok: true, speak, plans });
     }
 
     const med = typeof body.med === "string" ? body.med.trim() : "";
     if (!med) return json({ ok: false, not_found: true, speak: "Which medicine?", plans });
-    const m = matchPlan(med, views.map((v) => v.plan), { includePrivate: true });
+    let m: PlanMatch = matchPlan(med, views.map((v) => v.plan), { includePrivate: true });
+    // Not by her own names: its brand or generic name ("acetaminophen" for a Tylenol plan) counts toward that one; two ask which.
+    let sameAs: string | null = null;
+    if (m.kind === "none" && !/^p?\d{8}$/i.test(med)) {
+      const same = samePlans(med, views.map((v) => v.plan));
+      if (same.length === 1) {
+        m = { kind: "match", plan: same[0] };
+        sameAs = med;
+      } else if (same.length > 1) m = { kind: "ambiguous", plans: same };
+    }
     if (m.kind === "ambiguous") {
       return json({ ok: false, not_found: true, speak: `Which one: ${andList(m.plans.map((p) => p.name)).replace(/ and ([^,]*)$/, " or $1")}?`, plans: m.plans.map((p) => ({ id: `p${p.id}`, label: views.find((v) => v.plan.id === p.id)!.line })) });
     }
@@ -280,6 +318,7 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     const bits: string[] = [];
     if (res.deduped) bits.push(`Already logged, ${said} at ${sayTime(entry.at, now, tz)}.`);
     else if (entry.kind === "dose" && entry.data.skipped) bits.push(`Got it, ${said} skipped.`);
+    else if (sameAs) bits.push(`Got it, ${sameAs} at ${sayTime(entry.at, now, tz)}, counted toward ${said}.`);
     else bits.push(`Got it, ${said} at ${sayTime(entry.at, now, tz)}.`);
     // "Next one's OK after" only on a gap; As needed with none set, Each day and set times say nothing more.
     const next = plan && st && st.nextOkAt && plan.schedule.type !== "daily" && plan.schedule.type !== "times" && st.state !== "unknown" ? st.nextOkAt : null;
@@ -298,10 +337,15 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     }
     // Hands-free at 3am is when she's least likely to open the card, so the nursing note is said too, with its label.
     for (const n of res.notes) if (n.label === LABEL_NOT_WHILE_NURSING.label) bits.push(`${n.label}: ${n.title}. ${n.body}`);
+    // Whole minutes until her schedule's next OK time, for one Start Timer action (a Clock timer rings through
+    // Silent); null when there's nothing to wait for.
+    const inMin = next ? Math.ceil((Date.parse(next) - now.getTime()) / 60_000) : null;
     return json({
       ok: true,
       speak: bits.join(" "),
       next_ok_at: next,
+      next_ok_in_minutes: inMin != null && inMin > 0 ? inMin : null,
+      ...(sameAs && plan ? { counted_toward: plan.name } : {}),
       reminder_title: body.name_in_reminder === true ? `${label}: OK by ${whose} schedule` : "Medicine",
       entry: { id: `c${entry.id}` },
     });

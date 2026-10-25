@@ -28,7 +28,9 @@ import {
 } from "@/lib/maple/time";
 import { formatTempBoth, formatVolume, formatWeightBoth, formatLengthBoth, mlToOz } from "@/lib/maple/units";
 import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/maple/types";
-import type { TabId } from "./MapleApp";
+import type { NavTarget } from "./AppNav";
+import { useCareNav } from "./care/CareNav";
+import { NavRow } from "./care/parts";
 import { Icon, KindBadge } from "./icons";
 import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
 import { useNightActive } from "./nightLook";
@@ -38,10 +40,13 @@ import { Button, Card, EmptyState, HowToRead, SectionTitle, Segmented, cx, tone 
 import { useMaple, useNow } from "./useMaple";
 
 /**
- * Patterns: the rhythm of her days (ribbons), daily totals, growth on the WHO
- * curves, and a plain-text summary for the pediatrician. Everything here
- * describes what was logged; nothing scores it. Charts are hand-rolled SVG
- * (no chart library), sized to the card with a ResizeObserver.
+ * Patterns (History's second segment): the rhythm of her days (ribbons),
+ * daily totals and growth on the WHO curves, under a row to "For the doctor"
+ * (questions, the plain-text visit summary, her doctor's numbers; the
+ * summary card itself, VisitSummary, lives here and shows in that sheet).
+ * Everything here describes what was logged; nothing scores it. Charts are
+ * hand-rolled SVG (no chart library), sized to the card with a
+ * ResizeObserver.
  */
 
 // The growth chart carries ~60 KB of WHO tables: load it only when Patterns renders it.
@@ -99,9 +104,20 @@ type RibbonMode = "days" | "nights";
 
 // ── Tab ──────────────────────────────────────────────────────────────────
 
-export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) => void } = {}) {
+export default function PatternsTab({
+  onNavigate,
+  title = "Patterns",
+  below,
+}: {
+  onNavigate?: (t: NavTarget) => void;
+  /** The page title ("History" when it's History's segment). */
+  title?: string;
+  /** What sits under the title (History's Timeline | Patterns switch). */
+  below?: ReactNode;
+} = {}) {
   const { state, units, readOnly } = useMaple();
   const { open } = useSheets();
+  const careNav = useCareNav();
   const now = useNow(60_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const todayKey = dayKey(now, tz);
@@ -139,8 +155,20 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
   return (
     <div className={cx("px-4 pt-[max(1.25rem,env(safe-area-inset-top))]", VIZ_VARS)}>
       <header className="mb-4 px-1">
-        <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Patterns</h1>
+        <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>{title}</h1>
       </header>
+      {below}
+
+      {/* Her checkup things, one tap from the top: questions, the visit summary, her doctor's numbers. */}
+      <div className={cx(tone.card, "mb-5 overflow-hidden")}>
+        <NavRow
+          icon="stethoscope"
+          iconColor={KIND_COLOR.vitals}
+          label="For her pediatrician"
+          note="Questions to ask, the visit summary, her doctor's numbers"
+          onClick={() => careNav.openDoctor()}
+        />
+      </div>
 
       <Segmented
         className="mb-6"
@@ -199,7 +227,7 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
           </>
         )}
 
-        <section aria-labelledby="maple-growth">
+        <section aria-labelledby="maple-growth" id="maple-growth-chart" className="scroll-mt-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px)+12px)]">
           <SectionTitle>
             <span id="maple-growth">Growth</span>
           </SectionTitle>
@@ -214,8 +242,6 @@ export default function PatternsTab({ onNavigate }: { onNavigate?: (t: TabId) =>
             />
           </Card>
         </section>
-
-        <VisitSummary state={state} todayKey={todayKey} tz={tz} now={now} />
 
         <p className={cx(tone.muted, "px-2 pb-4 text-center text-xs leading-snug")}>{DISCLAIMER}</p>
       </div>
@@ -558,7 +584,7 @@ function Ribbons({
       <div className={cx(tone.card, "px-3 pb-3")}>
         <RibbonLegend night={night} />
         {/* Sticky clock: stays put while the rows scroll under it. */}
-        <div className="sticky top-[env(safe-area-inset-top)] z-10 -mx-3 bg-mp-surface px-3 pt-1.5 pb-1">
+        <div className="sticky top-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px))] z-10 -mx-3 bg-mp-surface px-3 pt-1.5 pb-1">
           <div className="relative h-4" aria-hidden>
             {ticks.map((t, i) => (
               <span
@@ -1776,7 +1802,8 @@ export async function buildVisitSummary(opts: {
   return out.join("\n");
 }
 
-function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; todayKey: string; tz: string; now: Date }) {
+/** The visit summary card (copy as plain text, or the CSV), shown in "For the doctor". */
+export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; todayKey: string; tz: string; now: Date }) {
   const { api, toast } = useMaple();
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState<string | null>(null);

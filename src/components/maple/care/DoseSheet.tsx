@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RECENT_MS, type PlanView, careTime, countedAs, doseNotes, loggedBy, matchPlan, normName, oneOffNotes, parseUnits, planView, recentDose } from "@/lib/maple/care";
+import { RECENT_MS, type PlanView, careTime, countedAs, doseNotes, loggedBy, matchPlan, normName, oneOffNotes, parseUnits, planTitle, planView, recentDose } from "@/lib/maple/care";
 import type { DoseEntry, DoseResult, OneTapAsk } from "@/lib/maple/types";
 import { ContextNote, Label, MoreDetails, NoteField, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, WhenField, cx, tone } from "../ui";
@@ -180,7 +180,7 @@ function PlanDose({
     <Sheet
       open={open}
       onClose={onClose}
-      title={plan.name}
+      title={planTitle(plan)}
       subtitle={plan.dose_text ? `As prescribed: ${plan.dose_text}` : undefined}
       footer={
         showDup ? undefined : (
@@ -211,7 +211,7 @@ function PlanDose({
       {showDup && (
         <div className={cx(tone.card, "p-4")} role="group" aria-label="Is this another dose?">
           <p className={cx(tone.heading, "text-[17px] leading-snug")}>
-            {whoText(showDup.by)} logged {plan.name} at {careTime(showDup.at, tick, ctx.tz)}
+            {whoText(showDup.by)} logged {planTitle(plan)} at {careTime(showDup.at, tick, ctx.tz)}
           </p>
           <p className={cx(tone.muted, "mt-1 text-[15px]")}>Is this another dose?</p>
           <div className="mt-3 flex flex-col gap-2">
@@ -426,11 +426,11 @@ function OneOffDose({
       {onPlan && (
         <div className={cx(tone.inset, "px-4 py-3")} role="status">
           <p className={cx(tone.body, "text-[15px] leading-snug")}>
-            It&apos;s on {care.self ? "your" : "her"} list as {onPlan.name}, so it&apos;s logged there.
+            It&apos;s on {care.self ? "your" : "her"} list as {planTitle(onPlan)}, so it&apos;s logged there.
           </p>
           <div className="mt-1 flex flex-wrap gap-x-4">
             <button type="button" onClick={() => onUsePlan(onPlan.id, when, dose)} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
-              Open {onPlan.name}
+              Open {planTitle(onPlan)}
             </button>
             <button
               type="button"
@@ -452,7 +452,7 @@ function OneOffDose({
           <div className="mt-3 flex flex-col gap-2">
             {choices.map((p) => (
               <Button key={p.id} size="md" onClick={() => setPicked({ key, id: p.id })}>
-                {p.name}
+                {planTitle(p)}
               </Button>
             ))}
             <Button size="md" variant="soft" onClick={() => setNotMatch(key)}>
