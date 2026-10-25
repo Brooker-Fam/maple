@@ -4,7 +4,7 @@ import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/m
 import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
-import { careTime, countedAs, forMom, listNotes, matchPlan, planActive, planMeta, planSentence, planView, scheduleSummary, sortPlans, unitCount, type CareViewer, type PlanView } from "./care";
+import { aheadOfSlot, careTime, countedAs, forMom, listNotes, matchPlan, normName, planActive, planMeta, planSentence, planView, scheduleSummary, sortPlans, unitCount, type CareViewer, type PlanView } from "./care";
 import {
   CareConflict,
   CareForbidden,
@@ -31,7 +31,7 @@ import { memberName } from "./insights";
 import { READ_ANN, ToolError, WRITE_ANN, context, fail, isoLocal, ok, startFrom, whenText, type Annotations, type Ctx, type Extra } from "./mcp-tools";
 import { NotFound, StoreUnavailable } from "./store";
 import { addDays, dayKey } from "./time";
-import type { CareEntry, CarePlan, DoseEntry, MedReason, MedSchedule, PlanInput, Source } from "./types";
+import type { CareEntry, DoseEntry, MedReason, PlanInput, Source } from "./types";
 import { cToF, fToC } from "./units";
 
 /**
@@ -284,17 +284,18 @@ function spokenStatus(v: PlanView, now: Date, tz: string): string {
 
 const listNames = (names: string[]) => (names.length <= 1 ? names[0] ?? "" : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 
-/** "Her list has Ibuprofen and Acetaminophen." / "Her list is empty." */
-function listLine(s: CareSession, plans: CarePlan[]): string {
-  const whose = s.access.self ? "Your" : "Her";
-  return plans.length ? `${whose} list has ${listNames(plans.map((p) => p.name))}.` : `${whose} list is empty so far.`;
-}
-
 /** One of her active plans by name, Also called or p id; null when none matches (it's logged as a one-off); ambiguous asks which. */
-function pickPlan(query: string, active: Viewed[]): Viewed | null {
+function pickPlan(query: string, active: Viewed[], finished: Viewed[]): Viewed | null {
   const m = matchPlan(query, active.map((x) => x.view.plan), { includePrivate: true });
   if (m.kind === "match") return active.find((x) => x.view.plan.id === m.plan.id)!;
   if (m.kind === "ambiguous") throw new ToolError(`"${query}" could be ${listNames(m.plans.map((p) => p.name))}. Ask which one, then pass its name or id.`);
+  // A p id is never a medicine's name: a finished or stopped plan's id logs on that plan, an unknown one asks.
+  const id = /^p?(\d{8})$/i.exec(query.trim());
+  if (id) {
+    const old = finished.find((x) => x.view.plan.id === Number(id[1]));
+    if (old) return old;
+    throw new ToolError(`"${query}" isn't one of her medicine ids. ${listNames(active.map((x) => x.view.plan.name)) ? `Her list has ${listNames(active.map((x) => x.view.plan.name))}.` : "Her list is empty so far."} Call mom_status for the ids.`);
+  }
   return null;
 }
 
@@ -381,13 +382,13 @@ type MomDoseArgs = {
 async function momDose(a: MomDoseArgs, ctx: Ctx, s: CareSession): Promise<{ summary: string; data: Record<string, unknown> }> {
   const assumed: string[] = [];
   const at = timeArg(a, ctx, assumed);
-  const { active } = await viewsFor(s);
+  const { active, finished } = await viewsFor(s);
   const clientId = clientIdFor(ctx, a.client_ref);
   const source = ctx.who.via;
   const whose = s.access.self ? "your" : "her";
 
   // On her list it counts toward that plan; anything else is saved as a one-time medicine, like Maple's log_medicine.
-  const target = a.one_off ? null : pickPlan(a.medicine, active);
+  const target = a.one_off ? null : pickPlan(a.medicine, active, finished);
 
   const plan = target?.view.plan ?? null;
   const res = await logCareDose(s, {
@@ -425,6 +426,10 @@ async function momDose(a: MomDoseArgs, ctx: Ctx, s: CareSession): Promise<{ summ
   const lines: string[] = [];
   if (res.deduped) lines.push(`Already saved c${entry.id}: ${name} at ${whenText(entry.at, ctx)} (${who}), so it wasn't added twice.`);
   else lines.push(`Saved c${entry.id}: ${name}${entry.data.skipped ? " skipped" : ""} at ${whenText(entry.at, ctx)} (${who})${plan ? "" : `, as a one-time medicine (it isn't on ${whose} list)`}.`);
+  // A brand or generic name of one on her list doesn't count toward it: say what's there so it can be moved.
+  if (!plan && !res.deduped && !a.one_off && active.length) {
+    lines.push(`${s.access.self ? "Your" : "Her"} list has ${listNames(active.map((x) => x.view.plan.name))}. If it was one of those, remove this with fix_mom_entry (id c${entry.id}, action delete) and log it by that name.`);
+  }
   let after: Record<string, unknown> = {};
   if (plan && res.status) {
     const st = res.status;
@@ -434,6 +439,8 @@ async function momDose(a: MomDoseArgs, ctx: Ctx, s: CareSession): Promise<{ summ
     lines[0] += ` ${[sentence, ...meta].join(" · ")}.`;
     const counted = res.created && !entry.data.skipped ? countedAs(plan, entry.data.units) : null;
     if (counted) lines.push(`How many wasn't said, so it counts as ${counted} toward ${whose} 24-hour limit. If she took more, change it with fix_mom_entry (units).`);
+    const slot = res.created && !entry.data.skipped && target ? aheadOfSlot(plan, target.doses, new Date(entry.at), s.tz) : null;
+    if (slot) lines.push(`That's more than an hour before ${whose} ${careTime(slot, s.now, s.tz)} time, so it counts for that one.`);
     after = { next_ok_at: st.nextOkAt ? isoLocal(st.nextOkAt, ctx.tz) : null, count24: st.count24, max24: st.max24, limit_unit: plan.limit_unit, sentence: planSentence(plan, st, tctx) };
   }
   const alerts = alertsOf(res.notes);
@@ -446,18 +453,6 @@ async function momDose(a: MomDoseArgs, ctx: Ctx, s: CareSession): Promise<{ summ
     ...after,
     alerts,
   } };
-}
-
-/**
- * Maple's log_medicine (and log_many) with a name on her mom's list: it's her
- * dose, so it goes on her list (unless the user said it was Maple's, for_maple).
- */
-export async function momDoseFromMaple(a: MomDoseArgs, ctx: Ctx, label: string): Promise<{ summary: string; data: Record<string, unknown>; created: boolean }> {
-  const s = await careFor(ctx);
-  needAccess(ctx, s, true);
-  const r = await momDose(a, ctx, s);
-  const why = `${label} is on ${s.name}'s medicine list, so it's logged there. If Maple was the one given it, remove this with undo_last and call log_medicine again with for_maple: true.`;
-  return { summary: `${r.summary}\n${why}`, data: { ...r.data, for: s.name, logged_for_mom: true }, created: r.data.created === true };
 }
 
 export function registerCareTools(server: McpServer) {
@@ -496,17 +491,29 @@ export function registerCareTools(server: McpServer) {
       const days = a.days ?? 0;
       const { active, finished } = await viewsFor(s, days);
       let shown = active;
-      if (a.medicine?.trim()) {
+      let offList: string | null = null;
+      const asked = a.medicine?.trim() ?? "";
+      if (asked) {
         const pool = [...active, ...finished];
-        const m = matchPlan(a.medicine, pool.map((x) => x.view.plan), { includePrivate: true });
-        if (m.kind === "none") throw new ToolError(`I couldn't find "${a.medicine}" in ${s.access.self ? "your" : `${s.name}'s`} medicines. ${listLine(s, active.map((x) => x.view.plan))}`);
-        const ids = new Set(m.kind === "match" ? [m.plan.id] : m.plans.map((p) => p.id));
-        shown = pool.filter((x) => ids.has(x.view.plan.id));
+        const m = matchPlan(asked, pool.map((x) => x.view.plan), { includePrivate: true });
+        if (m.kind === "none") {
+          // Not on her list: say so and show the list (and any one-time doses by that name below), not an error.
+          offList = asked;
+        } else {
+          const ids = new Set(m.kind === "match" ? [m.plan.id] : m.plans.map((p) => p.id));
+          shown = pool.filter((x) => ids.has(x.view.plan.id));
+        }
       }
-      const [temps, questions] = await Promise.all([
+      const [temps, questions, recent] = await Promise.all([
         listCareEntries(s, { kinds: ["temp"], limit: 1 }),
         listCareEntries(s, { kinds: ["question"], limit: 200 }),
+        listCareEntries(s, { kinds: ["dose"], from: new Date(s.now.getTime() - 2 * DAY) }),
       ]);
+      // One-time medicines from the last two days (they belong to no plan, so no plan line shows them).
+      const oneOffs = recent
+        .filter((d): d is DoseEntry => d.kind === "dose" && d.med_id == null && !d.data.skipped)
+        .filter((d) => !offList || normName(d.data.name).includes(normName(offList)) || normName(offList).includes(normName(d.data.name)))
+        .sort((x, y) => Date.parse(y.at) - Date.parse(x.at));
       const temp = temps[0]?.kind === "temp" ? temps[0] : null;
       const open = questions.filter((q) => q.kind === "question" && !q.data.done);
       const team = s.person?.settings.care_team ?? {};
@@ -514,10 +521,14 @@ export function registerCareTools(server: McpServer) {
 
       const whose = s.access.self ? "Your" : `${s.name}'s`;
       const lines: string[] = [];
+      if (offList) lines.push(`"${offList}" isn't on ${s.access.self ? "your" : "her"} list.`);
       if (!shown.length) lines.push(`${whose} medicine list is empty so far. Medicines are added in the app (or with set_mom_medicine) from her label or discharge papers.`);
       else lines.push(`${whose} medicines, by the schedule the family typed in from ${s.access.self ? "your" : "her"} label or clinician:`, ...shown.map((x) => `- ${fullSentence(x.view)}`));
       // A reading from today keeps its card (a fever makes the breast and peeing signs urgent too).
       const tempAlert = temp && dayKey(new Date(temp.at), s.tz) === dayKey(s.now, s.tz) ? assessMomTemp(temp.data.temp_c) : null;
+      if (oneOffs.length) {
+        lines.push(`One-time medicines in the last two days: ${oneOffs.slice(0, 10).map((d) => `${d.data.name}${d.data.dose ? ` ${d.data.dose}` : ""} at ${whenText(d.at, ctx)} (${memberName(d.created_by, ctx.members)}, c${d.id})`).join("; ")}.`);
+      } else if (offList) lines.push(`No one-time doses of it in the last two days.`);
       if (temp) lines.push(`Latest temperature: ${tempText(temp.data.temp_c)} at ${whenText(temp.at, ctx)}.`);
       if (open.length) lines.push(`Open questions for ${s.access.self ? "your" : "her"} OB: ${open.map((q) => `"${q.note ?? ""}"`).join("; ")}.`);
       // The app's list note (two medicines with acetaminophen) too, over the whole active list as it reads there.
@@ -533,6 +544,8 @@ export function registerCareTools(server: McpServer) {
         self: s.access.self,
         now: { local: whenText(s.now, ctx), iso: isoLocal(s.now, s.tz) },
         plans: shown.map((x) => planJson(x, ctx, days)),
+        one_offs: oneOffs.map((d) => doseJson(d, ctx)),
+        ...(offList ? { not_on_list: offList } : {}),
         temp: temp ? { id: `c${temp.id}`, temp_f: Math.round(cToF(temp.data.temp_c) * 10) / 10, temp_c: temp.data.temp_c, local: whenText(temp.at, ctx) } : null,
         questions_open: open.map((q) => ({ id: `c${q.id}`, text: q.note, added: whenText(q.at, ctx), by: memberName(q.created_by, ctx.members) })),
         care_team,
@@ -603,7 +616,7 @@ export function registerCareTools(server: McpServer) {
         times: z.array(z.string().max(5)).max(8).nullish().describe("times: the set local clock times as HH:MM on a twenty-four-hour clock, as her clinician gave them."),
         max_per_24h: z.number().positive().max(1000).nullish().describe("The label's most in twenty-four hours, only if the user read it, counted in limit_unit. Never a typical number."),
         limit_unit: z.enum(UNITS).nullish().describe("What the label counts its limit in: tablets, caplets, capsules, doses or mL. Needed whenever a limit is given."),
-        units_per_dose: z.string().max(20).nullish().describe("How many each time, the way the label says it (a single number or a choice), only if the user read it. Leave out to have them asked each time."),
+        units_per_dose: z.string().max(20).nullish().describe("How many each time, the way the label says it (a single number or a choice), only if the user read it. Left out, a dose logged without a count counts as one toward her limit."),
         label_text: z.string().max(120).nullish().describe("The label's own words for the schedule, copied as written."),
         for: z.enum(REASONS).nullish().describe("What it's for: pain, constipation, bp (blood pressure), iron, infection, mood, vitamin or other."),
         contains_acetaminophen: z.boolean().nullish().describe("Whether its Drug Facts label lists acetaminophen (APAP), only if the user checked."),
@@ -612,8 +625,9 @@ export function registerCareTools(server: McpServer) {
         days: z.number().int().min(1).max(365).nullish().describe("Or: the course length in days, as the label says. Use instead of end_date."),
         instructions: z.string().max(120).nullish().describe("Anything else the label says, like taking it with food, in its words."),
         show_on_today: z.boolean().nullish().describe("Show it on Maple's Today screen. Leave out for the app's default."),
-        stop: z.boolean().nullish().describe("True to stop it (it moves to Finished, with its history). Needs id."),
+        stop: z.boolean().nullish().describe("True to stop it (it moves to Finished, with its history); false to take a finished one again. Needs id."),
         delete: z.boolean().nullish().describe("True to delete a plan added by mistake (its logged doses stay). Needs id."),
+        restore: z.boolean().nullish().describe("True to bring back a deleted plan, with its history. Needs id."),
       },
       annotations: { ...WRITE_ANN, destructiveHint: true },
       invoking: "Updating her list…",
@@ -623,7 +637,15 @@ export function registerCareTools(server: McpServer) {
     async (a, ctx, s) => {
       const source = ctx.who.via;
       const id = a.id?.trim() ? planId(a.id) : null;
-      if ((a.stop || a.delete) && id == null) throw new ToolError("To stop or delete a medicine, pass its id (p…) from mom_status.");
+      if ((a.stop != null || a.delete || a.restore) && id == null) throw new ToolError("To stop, delete or bring back a medicine, pass its id (p…) from mom_status.");
+      if (a.restore && id != null) {
+        const plan = await deleteCarePlan(s, id, true);
+        return ok(`Brought back p${plan.id}: ${plan.name}, with its history.`, { restored: true, id: `p${plan.id}`, name: plan.name });
+      }
+      if (a.stop === false && id != null) {
+        const plan = await stopCarePlan(s, id, false);
+        return ok(`Taking p${plan.id} again: ${plan.name}. It's back on her list, with its history.`, { stopped: false, id: `p${plan.id}`, name: plan.name });
+      }
       if (a.delete && id != null) {
         const plan = await deleteCarePlan(s, id);
         return ok(`Deleted p${plan.id}: ${plan.name}. Doses already logged stay in her history.`, { deleted: true, id: `p${plan.id}`, name: plan.name });
@@ -659,16 +681,24 @@ export function registerCareTools(server: McpServer) {
       set("course_end", a.end_date);
 
       const scheduleGiven = a.how || a.min_gap_hours != null || a.every_hours != null || a.per_day != null || a.times != null;
+      const kept: string[] = [];
       if (scheduleGiven) {
-        const type = a.how ?? cur!.schedule.type;
-        const prev = cur?.schedule.type === type ? cur.schedule : null;
+        // How often follows the number given when `how` isn't said ("every 6 hours" → every); never a made-up number.
+        const type =
+          a.how ?? (a.every_hours != null ? "every" : a.per_day != null ? "daily" : a.times != null ? "times" : a.min_gap_hours != null ? "as_needed" : cur?.schedule.type ?? "as_needed");
+        const prev = cur?.schedule ?? null;
         const hrs = (h: number | null | undefined) => (h == null ? undefined : Math.round(h * 60));
-        let schedule: MedSchedule | Record<string, unknown>;
-        if (type === "as_needed") schedule = { type, min_gap_min: hrs(a.min_gap_hours) ?? (prev?.type === "as_needed" ? prev.min_gap_min ?? null : null) };
-        else if (type === "every") schedule = { type, every_min: hrs(a.every_hours) ?? (prev?.type === "every" ? prev.every_min : undefined) };
+        // Switching between As needed and Every few hours keeps the hours already there.
+        const prevGap = prev?.type === "as_needed" ? prev.min_gap_min ?? undefined : prev?.type === "every" ? prev.every_min : undefined;
+        let schedule: Record<string, unknown>;
+        if (type === "as_needed") schedule = { type, min_gap_min: hrs(a.min_gap_hours) ?? prevGap ?? null };
+        else if (type === "every") schedule = { type, every_min: hrs(a.every_hours) ?? prevGap };
         else if (type === "daily") schedule = { type, per_day: a.per_day ?? (prev?.type === "daily" ? prev.per_day : undefined) };
         else schedule = { type, times: a.times ?? (prev?.type === "times" ? prev.times : undefined) };
-        patch.schedule = schedule;
+        const missing = (type === "every" && schedule.every_min == null) || (type === "daily" && schedule.per_day == null) || (type === "times" && !schedule.times);
+        // On a change, a new type without its number keeps the schedule she has rather than wiping it.
+        if (missing && cur) kept.push(`How often stays ${scheduleSummary(cur).replace(/^./, (c) => c.toLowerCase())}: say the ${type === "daily" ? "times a day" : type === "times" ? "clock times" : "hours"} too to change it.`);
+        else patch.schedule = schedule;
       } else if (!cur) {
         // How often wasn't said: As needed with no gap until someone adds it, never a typical interval.
         patch.schedule = { type: "as_needed", min_gap_min: null };
@@ -683,7 +713,7 @@ export function registerCareTools(server: McpServer) {
       const saved = await saveCarePlan(s, { ...(patch as unknown as PlanInput), ...(id != null ? { id } : {}) }, { source });
       const plan = saved.plan;
       const summary = scheduleSummary(plan).replace(/^./, (c) => c.toLowerCase());
-      const lines = [`Saved p${plan.id}: ${plan.name} · ${summary}.`];
+      const lines = [`Saved p${plan.id}: ${plan.name} · ${summary}.`, ...kept];
       // Two medicines with acetaminophen: the app's list note, said when this save makes (or keeps) the pair.
       const overlap = plan.contains_apap && planActive(plan, s.now, s.tz)
         ? listNotes((await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz)), { name: s.name, self: s.access.self, settings: s.person?.settings ?? {} })

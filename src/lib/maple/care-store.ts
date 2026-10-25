@@ -201,11 +201,14 @@ export const DEFAULT_CARE_PERSON = "Brittany";
  * there's no setup step, so the first read makes it.
  */
 export async function getCarePerson(): Promise<CarePerson> {
-  const rows = await q(`SELECT * FROM maple_care_people LIMIT 1`);
-  if (rows.length) return rowToPerson(rows[0]);
-  await q(`INSERT INTO maple_care_people (member) VALUES ($1) ON CONFLICT DO NOTHING`, [DEFAULT_CARE_PERSON]);
-  const made = await q(`SELECT * FROM maple_care_people LIMIT 1`);
-  return rowToPerson(made[0]);
+  // A delete can land between the insert and the read (two phones, "delete everything"): try again.
+  for (let i = 0; i < 3; i++) {
+    const rows = await q(`SELECT * FROM maple_care_people LIMIT 1`);
+    if (rows.length) return rowToPerson(rows[0]);
+    const made = await q(`INSERT INTO maple_care_people (member) VALUES ($1) ON CONFLICT DO NOTHING RETURNING *`, [DEFAULT_CARE_PERSON]);
+    if (made.length) return rowToPerson(made[0]);
+  }
+  throw new Error("care_person_unavailable");
 }
 
 /** Eligible to be the care person, or to be shared with: a current owner or member, never "admin". */
@@ -611,7 +614,7 @@ export type DoseInput = {
  * minutes): created: false with possible_duplicate unless allowDuplicate.
  * The same client_id comes back deduped. Early or over her limit still
  * saves; `notes` say so (earlyDose, overDailyMax), and a count left out
- * counts high toward the limit.
+ * counts as the most of a choice, or one (countedAs), toward the limit.
  */
 export async function logCareDose(s: CareSession, input: DoseInput): Promise<DoseResult> {
   const p = needWrite(s);

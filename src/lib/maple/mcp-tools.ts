@@ -34,7 +34,7 @@ import {
   type Assessment,
 } from "./guidelines";
 import { careSession, deleteCareEntry, momMedicineClash } from "./care-store";
-import { momDoseFromMaple, momStatusLine, registerCareTools } from "./care-mcp";
+import { momStatusLine, registerCareTools } from "./care-mcp";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, summarize, type Summary } from "./insights";
 import { milestoneLabel, MILESTONES } from "./milestones";
 import {
@@ -1207,7 +1207,7 @@ export const fields = {
     z
       .boolean()
       .nullish()
-      .describe("True only when Maple was given it and her mom has a medicine by that name on her list (otherwise it's logged on her mom's list)."),
+      .describe("True when the user said Maple was given it: leaves out the note that her mom has a medicine by that name. It's logged for Maple either way."),
 };
 
 export const WRITE_ANN = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
@@ -1512,31 +1512,22 @@ type MedArgs = TimeArgs & { name?: string | null; dose?: string | null; note?: s
 
 /**
  * Her mom's plan with exactly this name (or an Also called name), when the
- * caller can read her medicines: an assistant that heard "she took her
- * ibuprofen" means mom's, so it goes on her list. Vitamin D never trips it.
- * A failure here never stops Maple's log.
+ * caller can read her medicines: Maple's dose still saves (log_medicine is
+ * Maple's, with her own age cautions), and the result says her mom has one
+ * by that name in case it was hers. Vitamin D never trips it. A failure
+ * here never stops Maple's log.
  */
-async function momPlanNamed(name: string, ctx: Ctx): Promise<{ id: number; name: string } | null> {
+async function momNamesake(name: string, ctx: Ctx): Promise<string | null> {
   try {
     const viewer = { id: ctx.who.id, role: ctx.who.role, viaAdmin: ctx.who.viaAdmin, channel: "mcp" as const };
     const hit = await momMedicineClash(viewer, name, { members: ctx.members, baby: ctx.baby });
-    return hit ? { id: hit.plan.id, name: hit.plan.name } : null;
+    return hit
+      ? `${hit.name} has ${hit.plan.name} on her medicine list. If this dose was hers, not Maple's, take it back with undo_last and log it with log_mom_medicine.`
+      : null;
   } catch {
     await captureServerException(new Error("care_guard"), { route: "/api/maple/mcp" });
     return null;
   }
-}
-
-/** log_medicine / a log_many medicine item that's on her mom's list: logged there instead (for_maple keeps it Maple's). */
-async function momInstead(a: MedArgs, ctx: Ctx, w: WriteOpts) {
-  if (a.for_maple === true) return null;
-  const plan = await momPlanNamed(a.name?.trim() || "Vitamin D", ctx);
-  if (!plan) return null;
-  return momDoseFromMaple(
-    { medicine: `p${plan.id}`, at: a.at, minutes_ago: a.minutes_ago, dose: a.dose, note: a.note, client_ref: w.client_ref, allow_duplicate: w.allow_duplicate },
-    ctx,
-    plan.name
-  );
 }
 
 async function doMedicine(a: MedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
@@ -1546,6 +1537,10 @@ async function doMedicine(a: MedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
   const start = startFrom(a, ctx, assumed) ?? ctx.now;
   const core = await save(ctx, { kind: "med", start, end: null, data: { name, dose }, note: a.note, ...w });
   const sv = await finish(ctx, core, assumed);
+  if (core.status === "created" && a.for_maple !== true) {
+    const mom = await momNamesake(name, ctx);
+    if (mom) sv.lines.push(mom);
+  }
   const months = monthsAt(ctx.baby, start, ctx.tz);
   if (BABY_IBUPROFEN_NAMES.test(name) && months < 6) {
     sv.alerts.push(alertOut(BABY_IBUPROFEN_UNDER_6M));
@@ -3476,10 +3471,7 @@ export function registerMapleTools(server: McpServer) {
       invoked: "Medicine noted ☀️",
       write: true,
     },
-    async (a, ctx) => {
-      const mom = await momInstead(a, ctx, w(a));
-      return mom ? ok(mom.summary, mom.data) : writeResult(ctx, await doMedicine(a, ctx, w(a)));
-    }
+    async (a, ctx) => writeResult(ctx, await doMedicine(a, ctx, w(a)))
   );
 
   addTool(
@@ -3642,7 +3634,7 @@ export function registerMapleTools(server: McpServer) {
     place: z.enum(SLEEP_PLACES).nullish().describe("sleep: where."),
     name: z.string().max(80).nullish().describe('medicine: name (default "Vitamin D").'),
     dose: z.string().max(80).nullish().describe("medicine: dose as given (default 400 IU only for vitamin D)."),
-    for_maple: z.boolean().nullish().describe("medicine: true only when Maple was given it and her mom has a medicine by that name on her list (otherwise it's logged on her mom's list)."),
+    for_maple: z.boolean().nullish().describe("medicine: true when the user said Maple was given it (leaves out the note about her mom's medicine by that name)."),
     value: z.number().min(20).max(115).nullish().describe("temperature: the reading."),
     method: z.enum(["rectal", "armpit", "forehead", "ear", "unknown"]).nullish().describe("temperature: how it was taken."),
     tag: z.enum(NOTE_TAGS).nullish().describe("note: spitup, hiccups, fussy, gas, nails, cord, other."),
@@ -3669,7 +3661,7 @@ export function registerMapleTools(server: McpServer) {
       write: true,
     },
     async (a, ctx) => {
-      const results: { index: number; saved?: Saved; mom?: { summary: string; data: Record<string, unknown>; created: boolean }; error?: string }[] = [];
+      const results: { index: number; saved?: Saved; error?: string }[] = [];
       for (const [i, item] of a.entries.entries()) {
         const opts: WriteOpts = {
           // Keyed by content, so a re-sent batch with fewer or fixed items still lines up.
@@ -3695,15 +3687,9 @@ export function registerMapleTools(server: McpServer) {
             case "pump":
               sv = await doPump({ ...item, total_amount: item.amount }, ctx, opts);
               break;
-            case "medicine": {
-              const mom = await momInstead(item, ctx, opts);
-              if (mom) {
-                results.push({ index: i, mom });
-                continue;
-              }
+            case "medicine":
               sv = await doMedicine(item, ctx, opts);
               break;
-            }
             case "tummy_time":
             case "bath":
               sv = await doActivity({ ...item, activity: item.kind }, ctx, opts);
@@ -3732,13 +3718,12 @@ export function registerMapleTools(server: McpServer) {
       const lines: string[] = [];
       for (const r of results) {
         if (r.saved) lines.push(savedLine(r.saved, ctx), ...(r.saved.status === "duplicate" ? [] : r.saved.lines));
-        else if (r.mom) lines.push(r.mom.summary);
         else lines.push(`Not saved (item ${r.index + 1}, ${a.entries[r.index].kind}): ${r.error}`);
       }
       if (s) lines.push(...tallyLines(s, kinds));
       lines.push(...assumedLine(saved.flatMap((x) => x.assumed)));
       lines.push(...alertLines(alerts, { emergencySigns: saved.some((x) => x.emergencySigns) }));
-      const created = saved.filter((x) => x.status === "created").length + results.filter((r) => r.mom?.created).length;
+      const created = saved.filter((x) => x.status === "created").length;
       const count = (st: Saved["status"]) => saved.filter((x) => x.status === st).length;
       const failed = results.filter((r) => r.error).length;
       const head =
@@ -3753,9 +3738,7 @@ export function registerMapleTools(server: McpServer) {
       const out = ok([head, ...lines].join("\n"), {
         saved: created,
         of: a.entries.length,
-        results: results.map((r) =>
-          r.saved ? { item: r.index + 1, ...savedJson(r.saved, ctx) } : r.mom ? { item: r.index + 1, ...r.mom.data } : { item: r.index + 1, created: false, error: r.error }
-        ),
+        results: results.map((r) => (r.saved ? { item: r.index + 1, ...savedJson(r.saved, ctx) } : { item: r.index + 1, created: false, error: r.error })),
         ...(s ? talliesJson(s) : {}),
         ...(s && kinds.has("feed") ? { next_side: s.nextSide ? sideWord(s.nextSide) : null } : {}),
         alerts,
@@ -3951,7 +3934,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       write: true,
     },
     async (_a, ctx) => {
-      const [rows, mom, changed] = await Promise.all([
+      const [rows, mom, changed, momChange, planChange] = await Promise.all([
         query(
           `SELECT * FROM maple_entries
            WHERE baby_id = $1 AND created_by = $2 AND source = ANY($3::text[]) AND deleted_at IS NULL
@@ -3978,12 +3961,47 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
           [ctx.baby.id, ctx.who.id]
         ),
+        // Your latest edit to one of her entries (fix_mom_entry): creating one leaves updated_by empty.
+        query(
+          `SELECT id, kind, updated_at, data->>'name' AS name FROM maple_care_entries
+           WHERE updated_by = $1 AND deleted_at IS NULL AND updated_at >= NOW() - INTERVAL '30 minutes'
+           ORDER BY updated_at DESC, id DESC LIMIT 1`,
+          [ctx.who.id]
+        ),
+        // Your latest add, change, stop or delete of one of her medicines (set_mom_medicine).
+        query(
+          `SELECT id, name, updated_at, created_at, deleted_at, stopped_at FROM maple_care_meds
+           WHERE updated_by = $1 AND updated_at >= NOW() - INTERVAL '30 minutes'
+           ORDER BY updated_at DESC, id DESC LIMIT 1`,
+          [ctx.who.id]
+        ),
       ]);
-      if (rows === null || changed === null || mom === null) throw new StoreUnavailable();
+      if (rows === null || changed === null || mom === null || momChange === null || planChange === null) throw new StoreUnavailable();
       const created = rows.length ? rowToEntry(rows[0] as Record<string, unknown>) : null;
       const edited = changed.length ? rowToEntry(changed[0] as Record<string, unknown>) : null;
       const momRow = mom[0] as { id: string | number; kind: string; created_at: string | Date; name: string | null } | undefined;
       const momAt = momRow ? new Date(momRow.created_at).getTime() : 0;
+      // A change to her medicines or one of her entries is newer than anything added: say how to undo that instead.
+      const fix = momChange[0] as { id: string | number; kind: string; updated_at: string | Date; name: string | null } | undefined;
+      const plan = planChange[0] as { id: string | number; name: string; updated_at: string | Date; created_at: string | Date; deleted_at: unknown; stopped_at: unknown } | undefined;
+      const fixAt = fix ? new Date(fix.updated_at).getTime() : 0;
+      const planAt = plan ? new Date(plan.updated_at).getTime() : 0;
+      const latestOther = Math.max(momAt, created ? Date.parse(created.created_at) : 0, edited ? Date.parse(edited.updated_at) : 0);
+      if (planAt > latestOther && planAt >= fixAt && plan) {
+        const added = Math.abs(new Date(plan.created_at).getTime() - planAt) < 2000;
+        const how = plan.deleted_at
+          ? `set_mom_medicine with id p${plan.id} and restore: true brings it back.`
+          : plan.stopped_at
+            ? `set_mom_medicine with id p${plan.id} and stop: false takes it again.`
+            : added
+              ? `set_mom_medicine with id p${plan.id} and delete: true removes it.`
+              : `set_mom_medicine with id p${plan.id} changes it back.`;
+        throw new ToolError(`Nothing was removed. Your last action was to her medicine ${plan.name} (p${plan.id}), not a new entry. ${how}`);
+      }
+      if (fixAt > latestOther && fix) {
+        const what = fix.kind === "dose" ? `her ${fix.name ?? "medicine"} dose` : fix.kind === "temp" ? "her temperature reading" : "one of her questions";
+        throw new ToolError(`Nothing was removed. Your last action was a change to ${what} (c${fix.id}), not a new entry. To change it back use fix_mom_entry with id c${fix.id}; to remove it, action delete.`);
+      }
       if (momRow && momAt > Math.max(created ? Date.parse(created.created_at) : 0, edited ? Date.parse(edited.updated_at) : 0)) {
         // Her entry is the newest: "undo that" takes it back, the same as one of Maple's.
         const what = momRow.kind === "dose" ? (momRow.name ?? "a medicine") : momRow.kind === "temp" ? "a temperature" : "a question";

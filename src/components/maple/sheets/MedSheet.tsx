@@ -228,7 +228,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
             <span>{ageMonths < 3 ? BABY_FEVER_MED_UNDER_3M_HINT : BABY_IBUPROFEN_UNDER_6M_HINT}</span>
           </p>
           {careWrite && !herPlan && !e && care && (
-            <button type="button" onClick={() => toCare(() => careNav.openOneOff(name.trim()))} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+            <button type="button" onClick={() => toCare(() => careNav.openOneOff(name.trim(), { at: when?.toISOString(), dose: dose.trim() || undefined }))} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
               Is this for {care.self ? "you" : care.name}? Log it on {care.self ? "your" : "her"} medicines
             </button>
           )}

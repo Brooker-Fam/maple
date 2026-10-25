@@ -73,7 +73,7 @@ function Questions({ care }: { care: UseCare }) {
               <input
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                maxLength={1000}
+                maxLength={2000}
                 placeholder={her ? "A question for your OB" : "A question for her OB"}
                 aria-label={her ? "A question for your OB" : "A question for her OB"}
                 className={cx(tone.input, "min-w-0 flex-1 py-2.5")}
@@ -154,7 +154,7 @@ function QuestionRow({ q, care }: { q: Question; care: UseCare }) {
               <textarea
                 value={answer}
                 rows={2}
-                maxLength={1000}
+                maxLength={2000}
                 onFocus={() => setTyping(true)}
                 onChange={(e) => setAnswer(e.target.value)}
                 onBlur={() => {

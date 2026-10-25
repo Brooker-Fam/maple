@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
 import { careErrorResponse, errorResponse, json } from "@/lib/maple/api";
 import { listMembers, memberFor } from "@/lib/maple/auth";
-import { careTime, countedAs, matchPlan } from "@/lib/maple/care";
+import { aheadOfSlot, careTime, countedAs, matchPlan } from "@/lib/maple/care";
 import { spokenLine } from "@/lib/maple/care-mcp";
-import { carePersonName, carePlanViews, careSession, logCareDose } from "@/lib/maple/care-store";
+import { carePersonName, carePlanViews, careSession, logCareDose, planDoses } from "@/lib/maple/care-store";
 import { describeEntry } from "@/lib/maple/describe";
 import { staleFeed } from "@/lib/maple/feed";
-import { LABEL_NOT_WHILE_NURSING, MOM_HELP, TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
+import { LABEL_NOT_WHILE_NURSING, MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { memberName, summarize } from "@/lib/maple/insights";
 import {
   activeTimers,
@@ -244,8 +244,13 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     if (m.kind === "ambiguous") {
       return json({ ok: false, not_found: true, speak: `Which one: ${andList(m.plans.map((p) => p.name)).replace(/ and ([^,]*)$/, " or $1")}?`, plans: m.plans.map((p) => ({ id: `p${p.id}`, label: views.find((v) => v.plan.id === p.id)!.line })) });
     }
+    // A p id is never a name: one that's no longer on her list answers like an unknown pick.
+    if (m.kind === "none" && /^p?\d{8}$/i.test(med)) {
+      return json({ ok: false, not_found: true, speak: `That medicine isn't on ${whose} list anymore. Pick it again.`, plans });
+    }
     // On her list it counts toward that plan; any other name is saved as a one-time medicine, like Maple's log.
     const plan = m.kind === "match" ? m.plan : null;
+    const before = plan ? await planDoses(plan.id, new Date(now.getTime() - 3 * 86400_000)) : [];
     const mins = Number(body.minutes_ago);
     const at = Number.isFinite(mins) && mins > 0 && mins <= 4320 ? new Date(now.getTime() - mins * 60_000) : now;
     const units = body.units == null || body.units === "" ? null : Number(body.units);
@@ -282,8 +287,15 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     if (!plan && !res.deduped) bits.push(`It isn't on ${whose} list, so it's saved as a one-time medicine.`);
     const counted = plan && res.created && entry.kind === "dose" && !entry.data.skipped ? countedAs(plan, entry.data.units) : null;
     if (counted) bits.push(`Counted as ${counted}.`);
-    // An early or over-the-limit dose still saves: that note's own words.
-    for (const n of res.notes) if (n.tier === "nudge" || n.label === "Call Poison Help now") bits.push(`${n.title}. ${n.body}`);
+    const slot = plan && res.created && entry.kind === "dose" && !entry.data.skipped ? aheadOfSlot(plan, before, new Date(entry.at), tz) : null;
+    if (slot) bits.push(`That counts for the ${sayTime(slot, now, tz)} time.`);
+    // An early or over-the-limit dose still saves: that note's own words. A one-time medicine says all of its notes
+    // (the acetaminophen overlap is a mention), since nobody saw them before it saved.
+    for (const n of res.notes) {
+      if (n.label === LABEL_NOT_WHILE_NURSING.label) continue;
+      if (n.tier === "nudge" || n.label === "Call Poison Help now") bits.push(`${n.title}. ${n.body}`);
+      else if (!plan) bits.push(`${n.label ?? MOM_TIER_LABEL[n.tier]}: ${n.title}. ${n.body}`);
+    }
     // Hands-free at 3am is when she's least likely to open the card, so the nursing note is said too, with its label.
     for (const n of res.notes) if (n.label === LABEL_NOT_WHILE_NURSING.label) bits.push(`${n.label}: ${n.title}. ${n.body}`);
     return json({

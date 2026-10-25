@@ -15,9 +15,9 @@ import type { UseCare } from "./useCare";
 /**
  * One medicine (§5.8, step 1): her schedule as typed, "As prescribed", the
  * label's words, and the last 7 days by local day ("Today · 3"), each dose a
- * row to fix ("3:05 AM · 2 caplets · Matt", "8:00 PM · skipped"). Edit and
- * "Stop taking it" (at once, with Undo). There's no "Start again": to take
- * it again, add it again.
+ * row to fix ("3:05 AM · 2 caplets · Matt", "8:00 PM · skipped"). Edit,
+ * "Stop taking it" and, once stopped, "Take it again" (each at once, with
+ * Undo; history stays with the plan).
  */
 export default function PlanDetail({ planId, onClose, care }: { planId: number | null; onClose: () => void; care: UseCare }) {
   // Keep the last plan while the sheet animates closed.
@@ -112,6 +112,18 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
                 }}
               >
                 Stop taking it
+              </Button>
+            )}
+            {plan.stopped_at && (
+              <Button
+                variant="soft"
+                className="flex-1"
+                onClick={() => {
+                  onClose();
+                  void care.act.resumePlan(plan.id).catch(() => {});
+                }}
+              >
+                Take it again
               </Button>
             )}
           </div>

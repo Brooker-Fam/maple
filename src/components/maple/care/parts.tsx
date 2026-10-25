@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { type CareNote, type CareNoteCtx, type PlanTextCtx, careTime, loggedBy, unitCount, unitsOf, viaText } from "@/lib/maple/care";
 import { overDailyMax, type Assessment } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, formatTime } from "@/lib/maple/time";
-import type { CarePlan, DoseEntry, LimitUnit, Member } from "@/lib/maple/types";
+import type { CarePlan, DoseEntry, LimitUnit } from "@/lib/maple/types";
 import { Icon, type IconName } from "../icons";
 import { AssessmentCard } from "../sheets/parts";
 import { Button, Sheet, cx, tone } from "../ui";
@@ -154,11 +154,6 @@ export const LIMIT_UNITS: LimitUnit[] = ["tablets", "caplets", "capsules", "dose
 export function joinNames(names: string[]): string {
   if (names.length <= 1) return names[0] ?? "";
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
-/** Who can be the care person or be shared with: current owners and members, never the admin login, never a viewer. */
-export function eligibleMembers(members: Member[]): Member[] {
-  return members.filter((m) => m.email !== "admin" && (m.role === "owner" || m.role === "member"));
 }
 
 /**

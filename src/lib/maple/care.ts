@@ -56,6 +56,8 @@ const DAY = 24 * HOUR;
 export const RECENT_MS = 30 * MIN;
 
 const ms = (iso: string) => Date.parse(iso);
+/** Sums of half tablets and mL to two places, so 2.2 + 2.2 + 2.2 is 6.6 at a 6.6 limit, not over it. */
+const r2 = (n: number) => Math.round(n * 100) / 100;
 const isoAt = (t: number) => new Date(t).toISOString();
 
 // ── Access (§9) ──────────────────────────────────────────────────────────
@@ -158,6 +160,17 @@ export function countedAs(plan: CarePlan, units: number | null | undefined): str
   return unitCount(unitsOf({ data: {} } as DoseEntry, plan), plan.limit_unit);
 }
 
+/**
+ * A dose of an "At set times" medicine logged more than an hour before the
+ * next time it fills: that time (ISO), so the toast, Siri and the MCP can
+ * say which one it counted for. `before` is the plan's doses without it.
+ */
+export function aheadOfSlot(plan: CarePlan, before: DoseEntry[], at: Date, tz: string): string | null {
+  if (plan.schedule.type !== "times") return null;
+  const st = planStatus(plan, before, at, tz);
+  return st.state === "slot_next" && st.nextSlotAt && ms(st.nextSlotAt) - at.getTime() > HOUR ? st.nextSlotAt : null;
+}
+
 /** Whether a one-tap knows how much this dose is: no limit, a limit in Doses, or one fixed number each time. */
 export function unitsKnown(plan: CarePlan): boolean {
   return plan.max_24h == null || countsDoses(plan) || parseUnits(plan.units_per_dose).fixed != null;
@@ -208,7 +221,7 @@ export function planStatus(plan: CarePlan, doses: DoseEntry[], now: Date, tz: st
   const taken = sorted.filter(isTaken);
   const last = taken.length ? taken[taken.length - 1] : null;
   const window = taken.filter((d) => ms(d.at) > t - DAY);
-  const count24 = window.reduce((sum, d) => sum + unitsOf(d, plan), 0);
+  const count24 = r2(window.reduce((sum, d) => sum + unitsOf(d, plan), 0));
   const nu = nextUnits(plan);
   const max = plan.max_24h;
 
@@ -217,13 +230,13 @@ export function planStatus(plan: CarePlan, doses: DoseEntry[], now: Date, tz: st
 
   // At the limit: the in-window doses that must age out (oldest first) before one more fits.
   let limitOkAt: number | null = null;
-  const atLimit = max != null && count24 + nu > max;
+  const atLimit = max != null && r2(count24 + nu) > max;
   if (atLimit) {
     let left = count24;
     for (const d of window) {
-      left -= unitsOf(d, plan);
+      left = r2(left - unitsOf(d, plan));
       limitOkAt = ms(d.at) + DAY;
-      if (left + nu <= max) break;
+      if (r2(left + nu) <= max) break;
     }
   }
   const nextOk = gapOkAt === null ? limitOkAt : limitOkAt === null ? gapOkAt : Math.max(gapOkAt, limitOkAt);
@@ -658,7 +671,7 @@ function peak24(plan: CarePlan, taken: DoseEntry[], at: number, units: number): 
       const t = ms(d.at);
       if (t > end - DAY && t <= end) sum += unitsOf(d, plan);
     }
-    peak = Math.max(peak, sum);
+    peak = Math.max(peak, r2(sum));
   }
   return peak;
 }

@@ -381,7 +381,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
           <FieldBlock
             label="How many each time"
             optional
-            hint="If the label gives a choice, type it the way the label says. Leave it blank to be asked each time."
+            hint="If the label gives a choice, type it the way the label says. Left blank, a dose logged without a count counts as one."
             problem={shown("each")}
           >
             <input value={f.each} maxLength={20} aria-label="How many each time" onChange={(e) => set("each", e.target.value)} className={cx(tone.input, "w-40!", shown("each") && BAD)} />

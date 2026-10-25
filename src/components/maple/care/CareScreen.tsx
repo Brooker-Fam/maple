@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { daysSinceBirth, listNotes } from "@/lib/maple/care";
 import { MOM_DISCLAIMER } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ } from "@/lib/maple/time";
+import type { DoseEntry } from "@/lib/maple/types";
 import { Icon } from "../icons";
 import { Button, EmptyState, SectionTitle, Sheet, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
@@ -22,7 +23,7 @@ import RemindersSheet, { remindersValue, usePhoneReminders } from "./Reminders";
 import { SupportRow } from "./SupportScreen";
 import { VisitSummaryRow } from "./VisitSummary";
 import { WarningSignsCard } from "./WarningSigns";
-import { GROUP, NavRow, NoteCard, useCareCtx } from "./parts";
+import { GROUP, NavRow, NoteCard, useCareCtx, useDoseText } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
 /**
@@ -138,6 +139,7 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
                   )}
                 </div>
               )}
+              <OneOffs care={care} write={write} />
               <div className={GROUP}>
                 {write && <NavRow icon="plus" accent label="Something else" note="A one-time medicine" onClick={() => nav.openOneOff()} />}
                 {care.finished.length > 0 && (
@@ -196,5 +198,45 @@ function Screen({ care, open, onClose, onDeleted }: { care: UseCare; open: boole
       />
       <RemindersSheet open={open && sub?.kind === "reminders"} onClose={() => setSub(null)} care={care} phone={phone} />
     </>
+  );
+}
+
+/**
+ * One-time medicines from the last few days (the state's window): they
+ * belong to no plan, so no card shows them. Each can be removed (with Undo).
+ */
+function OneOffs({ care, write }: { care: UseCare; write: boolean }) {
+  const text = useDoseText();
+  const doses = care.state.entries
+    .filter((e): e is DoseEntry => e.kind === "dose" && e.med_id == null && !e.data.skipped)
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+    .slice(0, 8);
+  if (!doses.length) return null;
+  return (
+    <div>
+      <p className={cx(tone.label, "mb-1.5 px-1")}>One-time medicines</p>
+      <div className={GROUP}>
+        {doses.map((d) => (
+          <div key={d.id} className={cx(tone.row, "min-h-[48px] py-2")}>
+            <span className={cx(tone.body, "min-w-0 flex-1 text-[15px] tabular-nums")}>
+              {d.data.name}
+              {d.data.dose ? ` ${d.data.dose}` : ""}
+              <span className="text-mp-ink-2"> · {text(d, null)}</span>
+              {d.pending && <span className={tone.faint}> · on this phone, not synced</span>}
+            </span>
+            {write && d.id > 0 && (
+              <button
+                type="button"
+                aria-label={`Remove ${d.data.name}`}
+                onClick={() => void care.act.deleteEntry(d.id).catch(() => {})}
+                className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mp-ink-3 active:bg-mp-sunken"
+              >
+                <Icon name="trash-2" size={18} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

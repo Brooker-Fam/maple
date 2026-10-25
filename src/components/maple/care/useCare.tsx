@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef } from "react";
 import {
+  aheadOfSlot,
   careTime,
   countedAs,
   crisisToday,
@@ -51,17 +52,17 @@ import { ApiError, useMaple, useNow, type ToastAction } from "../useMaple";
  * Undo; a deleted or stopped plan offers Undo. When one didn't happen they
  * reject with the server's words (err.message: the plan sheet's validation
  * copy, "Matt changed this plan a moment ago. Here's the latest."), except
- * logDose and tookIt, which resolve with the ask instead (nothing is ever
- * blocked, but nothing early, recent or over the limit saves silently).
+ * logDose and tookIt, which resolve with the ask instead (only a likely
+ * duplicate asks: early or over the limit saves, and the toast says so).
  */
 
 export type CareActions = {
-  setup(member: string): Promise<void>;
   patchPerson(p: Partial<{ shared_with: string[]; settings: CareSettings }>): Promise<void>;
   savePlan(input: PlanInput, expectUpdatedAt?: string): Promise<CarePlan>;
   deletePlan(id: number): Promise<void>;
   stopPlan(id: number): Promise<void>;
-  reviewPlan(id: number): Promise<void>;
+  /** "Take it again": a finished plan back on her list, with its history. */
+  resumePlan(id: number): Promise<void>;
   tookIt(planId: number): Promise<"saved" | { ask: OneTapAsk }>;
   logDose(i: {
     planId?: number;
@@ -348,7 +349,9 @@ export function useCare(): UseCare | null {
     (plan: CarePlan | null, entry: DoseEntry, notes: Assessment[]) => {
       // A count left out on a plan that counts units: say what it counted as, so a wrong one gets fixed.
       const counted = plan && !entry.data.skipped ? countedAs(plan, entry.data.units) : null;
-      const text = `${doseText(plan, entry)}${counted ? ` · counted as ${counted}` : ""}`;
+      // An "At set times" dose more than an hour early counts for the next time: say which.
+      const slot = plan && !entry.data.skipped ? aheadOfSlot(plan, dosesOf(plan.id).filter((d) => d.id !== entry.id && d.at !== entry.at), new Date(entry.at), tz) : null;
+      const text = `${doseText(plan, entry)}${counted ? ` · counted as ${counted}` : ""}${slot ? ` · for the ${formatTimeNear(Date.parse(slot), Date.parse(entry.at), tz)} time` : ""}`;
       const urgent = notes.find((n) => n.tier === "now" || n.tier === "emergency") ?? notes.find((n) => n.tier === "nudge");
       const recorded = Date.parse(entry.at);
       const chips: ToastAction[] = entry.data.skipped
@@ -362,14 +365,16 @@ export function useCare(): UseCare | null {
               onClick: () => void editEntry(entry.id, { at: new Date(to).toISOString() }, entry.updated_at).catch((e) => toast(e.message, { tone: "error" })),
             };
           });
-      toast(urgent ? `${text}. ${noteLine(urgent)}` : text, {
+      // A call-now note carries its whole text (who to call, the number): there's no sheet to read it in after a one-tap.
+      const urgentText = urgent ? `${noteLine(urgent)}${urgent.tier === "now" || urgent.tier === "emergency" ? `. ${urgent.body}` : ""}` : "";
+      toast(urgent ? `${text}. ${urgentText}` : text, {
         tone: urgent ? "info" : "ok",
         icon: "pill",
         actions: entry.id > 0 ? chips : undefined,
         undo: () => void deleteEntry(entry.id).catch(() => {}),
       });
     },
-    [deleteEntry, doseText, editEntry, toast, tz]
+    [deleteEntry, doseText, dosesOf, editEntry, toast, tz]
   );
 
   const logDose = useCallback<CareActions["logDose"]>(
@@ -500,11 +505,17 @@ export function useCare(): UseCare | null {
     [fail, planPatch, toast]
   );
 
-  const reviewPlan = useCallback<CareActions["reviewPlan"]>(
+  const resumePlan = useCallback<CareActions["resumePlan"]>(
     async (id) => {
-      await planPatch(id, { reviewed: true });
+      try {
+        const plan = await planPatch(id, { stopped: false });
+        toast(`${plan.name} is back on the list`, { undo: () => void planPatch(id, { stopped: true }).catch((e) => toast(e.message, { tone: "error" })) });
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Couldn't do that", { tone: "error" });
+        throw fail(e, "Couldn't do that");
+      }
     },
-    [planPatch]
+    [fail, planPatch, toast]
   );
 
   const deletePlan = useCallback<CareActions["deletePlan"]>(
@@ -519,17 +530,6 @@ export function useCare(): UseCare | null {
       }
     },
     [call, fail, planPatch, store, toast]
-  );
-
-  const setup = useCallback<CareActions["setup"]>(
-    async (member) => {
-      try {
-        await call("/api/maple/care/person", { method: "POST", body: JSON.stringify({ member }) });
-      } catch (e) {
-        throw fail(e, "Couldn't set that up");
-      }
-    },
-    [call, fail]
   );
 
   const patchPerson = useCallback<CareActions["patchPerson"]>(
@@ -794,12 +794,11 @@ export function useCare(): UseCare | null {
 
   const act = useMemo<CareActions>(
     () => ({
-      setup,
       patchPerson,
       savePlan,
       deletePlan,
       stopPlan,
-      reviewPlan,
+      resumePlan,
       tookIt,
       logDose,
       editEntry,
@@ -814,7 +813,7 @@ export function useCare(): UseCare | null {
       dismissSuggestion,
       moveFromMaple,
     }),
-    [setup, patchPerson, savePlan, deletePlan, stopPlan, reviewPlan, tookIt, logDose, editEntry, deleteEntry, restoreEntry, logTemp, addQuestion, checkin, updateCheckin, deleteMood, saveScreen, dismissSuggestion, moveFromMaple]
+    [patchPerson, savePlan, deletePlan, stopPlan, resumePlan, tookIt, logDose, editEntry, deleteEntry, restoreEntry, logTemp, addQuestion, checkin, updateCheckin, deleteMood, saveScreen, dismissSuggestion, moveFromMaple]
   );
 
   const doses = useCallback(

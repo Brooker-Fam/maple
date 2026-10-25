@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RECENT_MS, type PlanView, careTime, doseNotes, loggedBy, matchPlan, normName, oneOffNotes, parseUnits, planView, recentDose } from "@/lib/maple/care";
+import { RECENT_MS, type PlanView, careTime, countedAs, doseNotes, loggedBy, matchPlan, normName, oneOffNotes, parseUnits, planView, recentDose } from "@/lib/maple/care";
 import type { DoseEntry, DoseResult, OneTapAsk } from "@/lib/maple/types";
 import { ContextNote, Label, MoreDetails, NoteField, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, WhenField, cx, tone } from "../ui";
@@ -18,11 +18,19 @@ import { type UseCare, useCare } from "./useCare";
  * no `planId` it's the one-off "Another medicine" (`name` fills it in).
  *
  * Nothing here is ever blocked: an early or over-limit dose shows its note
- * and still saves, and a count left out counts high. Every number on screen
+ * and still saves, and a count left out counts as countedAs says. Every number on screen
  * is hers (care.ts arithmetic on her plan); the units chips are her own
  * typed choice, never preselected.
  */
-export type DoseSheetProps = { open: boolean; onClose: () => void; planId?: number; ask?: OneTapAsk; name?: string };
+export type DoseSheetProps = {
+  open: boolean;
+  onClose: () => void;
+  planId?: number;
+  ask?: OneTapAsk;
+  name?: string;
+  /** What she'd already picked when this reopens as a plan's sheet (Maple's medicine sheet, the one-off sheet). */
+  start?: { at?: string; dose?: string };
+};
 
 /** A dose can be logged up to 10 minutes ahead (her phone's clock vs. the kitchen's); further is a typo. */
 const FUTURE_SLACK_MS = 10 * 60_000;
@@ -32,11 +40,11 @@ export default function DoseSheet(props: DoseSheetProps) {
   return <DoseForm key={n} {...props} />;
 }
 
-function DoseForm({ open, onClose, planId: startPlan, ask, name }: DoseSheetProps) {
+function DoseForm({ open, onClose, planId: startPlan, ask, name, start }: DoseSheetProps) {
   const care = useCare();
-  // "Is this your Ibuprofen?" → "Yes, log it there" turns the one-off into that plan's sheet, keeping the time.
+  // "Open Ibuprofen" turns the one-off into that plan's sheet, keeping the time and dose text.
   const [planId, setPlanId] = useState(startPlan);
-  const [carried, setCarried] = useState<Date | null>(null);
+  const [carried, setCarried] = useState<{ when: Date | null; dose: string }>({ when: start?.at ? new Date(start.at) : null, dose: start?.dose ?? "" });
   if (!care) return null;
   if (planId == null) {
     return (
@@ -45,8 +53,10 @@ function DoseForm({ open, onClose, planId: startPlan, ask, name }: DoseSheetProp
         open={open}
         onClose={onClose}
         startName={name}
-        onUsePlan={(id, when) => {
-          setCarried(when);
+        startWhen={carried.when}
+        startDose={carried.dose}
+        onUsePlan={(id, when, dose) => {
+          setCarried({ when, dose });
           setPlanId(id);
         }}
       />
@@ -54,7 +64,7 @@ function DoseForm({ open, onClose, planId: startPlan, ask, name }: DoseSheetProp
   }
   const view = [...care.plans, ...care.finished].find((v) => v.plan.id === planId);
   if (!view) return <Gone open={open} onClose={onClose} />;
-  return <PlanDose care={care} view={view} open={open} onClose={onClose} ask={planId === startPlan ? ask : undefined} startWhen={carried} />;
+  return <PlanDose care={care} view={view} open={open} onClose={onClose} ask={planId === startPlan ? ask : undefined} startWhen={carried.when} startDose={carried.dose} />;
 }
 
 /** The plan went away while the sheet was opening (deleted on the other phone, or no longer shared). */
@@ -74,6 +84,7 @@ function PlanDose({
   onClose,
   ask,
   startWhen,
+  startDose,
 }: {
   care: UseCare;
   view: PlanView;
@@ -81,6 +92,7 @@ function PlanDose({
   onClose: () => void;
   ask?: OneTapAsk;
   startWhen: Date | null;
+  startDose: string;
 }) {
   const { now: nowFn, toast } = useMaple();
   const nav = useCareNav();
@@ -92,7 +104,7 @@ function PlanDose({
   const [units, setUnits] = useState<number | null>(null);
   const [unitsTyped, setUnitsTyped] = useState("");
   const [note, setNote] = useState("");
-  const [doseText, setDoseText] = useState("");
+  const [doseText, setDoseText] = useState(startDose);
   // The duplicate ask: from "Took it" (recent), or the server's answer (the other phone's dose, not synced here yet).
   const [dup, setDup] = useState<{ by: string | null; at: string } | null>(ask?.reason === "recent" && ask.at ? { by: ask.by ?? null, at: ask.at } : null);
   const [confirmed, setConfirmed] = useState(false);
@@ -248,8 +260,6 @@ function PlanDose({
           ) : (
             <input
               inputMode="decimal"
-              // Opened to ask for the count: the keyboard's already up for one thumb.
-              autoFocus={ask?.reason === "units"}
               aria-label={`How many ${plan.limit_unit} this time`}
               value={unitsTyped}
               onChange={(e) => {
@@ -262,6 +272,7 @@ function PlanDose({
             />
           )}
           {unitsBad && <Problem>Check this number.</Problem>}
+          {units == null && !unitsBad && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Left blank, it counts as {countedAs(plan, null)} toward the limit.</p>}
         </div>
       )}
 
@@ -293,38 +304,55 @@ function OneOffDose({
   onClose,
   onUsePlan,
   startName,
+  startWhen,
+  startDose,
 }: {
   care: UseCare;
   open: boolean;
   onClose: () => void;
-  onUsePlan: (planId: number, when: Date | null) => void;
+  onUsePlan: (planId: number, when: Date | null, dose: string) => void;
   startName?: string;
+  startWhen: Date | null;
+  startDose: string;
 }) {
   const { now: nowFn, toast } = useMaple();
   const nav = useCareNav();
   const tick = useNow(30_000);
   const ctx = useCareCtx(care);
   const [name, setName] = useState(startName ?? "");
-  const [dose, setDose] = useState("");
-  const [when, setWhen] = useState<Date | null>(null);
+  const [dose, setDose] = useState(startDose);
+  const [when, setWhen] = useState<Date | null>(startWhen);
   const [notMatch, setNotMatch] = useState<string | null>(null);
+  // A name that fits more than one plan: which one she picked.
+  const [picked, setPicked] = useState<{ key: string; id: number } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const typed = name.trim();
   const active = care.plans.map((v) => v.plan);
+  const key = normName(typed);
   const match = typed ? matchPlan(typed, active, { includePrivate: true }) : null;
-  const onPlan = match?.kind === "match" && notMatch !== normName(typed) ? match.plan : null;
-  const notes = typed ? oneOffNotes(typed, active, ctx) : [];
+  const kept = notMatch === key;
+  const choices = match?.kind === "ambiguous" && !kept ? match.plans : [];
+  const onPlan = kept
+    ? null
+    : match?.kind === "match"
+      ? match.plan
+      : (picked?.key === key ? choices.find((p) => p.id === picked.id) : undefined) ?? null;
+  const asking = choices.length > 0 && !onPlan;
+  // Its notes are the plan's own once it's going on the plan (no "two acetaminophen medicines" about itself).
+  const notes = typed && !onPlan ? oneOffNotes(typed, active, ctx) : [];
   const future = when != null && when.getTime() > nowFn().getTime() + FUTURE_SLACK_MS;
-  // The same one-off (by its normalized name), by anyone, within 30 minutes: ask before saving, as the server would.
+  // The same medicine, by anyone, within 30 minutes: ask before saving, as the server would (on her list: that plan's doses).
   const at = when ?? tick;
-  const near = typed && !onPlan
-    ? care.state.entries.find(
-        (e): e is DoseEntry =>
-          e.kind === "dose" && e.med_id == null && !e.data.skipped && normName(e.data.name) === normName(typed) && Math.abs(Date.parse(e.at) - at.getTime()) < RECENT_MS
-      )
-    : undefined;
+  const near = !typed
+    ? undefined
+    : onPlan
+      ? (recentDose(onPlan, care.doses(onPlan.id, 2).filter(isDose), at) ?? undefined)
+      : care.state.entries.find(
+          (e): e is DoseEntry =>
+            e.kind === "dose" && e.med_id == null && !e.data.skipped && normName(e.data.name) === key && Math.abs(Date.parse(e.at) - at.getTime()) < RECENT_MS
+        );
   const dup = !confirmed && near ? { by: near.created_by, at: near.at } : null;
 
   // Closes first, like a plan's dose, so its toast lands on the screen underneath. A dose the server knew of and this
@@ -334,12 +362,14 @@ function OneOffDose({
     setBusy(true);
     onClose();
     if (onPlan) {
-      // On her list: a dose of that plan, so it counts toward her schedule. A likely duplicate comes back as its sheet.
+      // On her list: a dose of that plan, so it counts toward her schedule. One the server knew of and this phone didn't
+      // comes back as that plan's sheet, with the time and dose text she picked.
+      const pickedAt = (when ?? nowFn()).toISOString();
       try {
-        const r = await care.act.logDose({ planId: onPlan.id, at: (when ?? nowFn()).toISOString(), dose: dose.trim() || undefined });
+        const r = await care.act.logDose({ planId: onPlan.id, at: pickedAt, dose: dose.trim() || undefined, allowDuplicate });
         if (!r.created && !r.deduped) {
           const d = r.possible_duplicate;
-          nav.openDose(onPlan.id, d ? { reason: "recent", by: d.created_by, at: d.at } : { reason: r.reason ?? "recent" });
+          nav.openDose(onPlan.id, d ? { reason: "recent", by: d.created_by, at: d.at } : { reason: r.reason ?? "recent" }, undefined, { at: pickedAt, dose: dose.trim() });
         }
       } catch (e) {
         toast(errorText(e), { tone: "error" });
@@ -376,7 +406,7 @@ function OneOffDose({
       onClose={onClose}
       title="Another medicine"
       footer={
-        dup ? undefined : (
+        dup || asking ? undefined : (
           <div>
             {!typed && <p className={cx(tone.muted, "mb-2 text-center text-xs")}>What was it?</p>}
             <Button size="lg" className="w-full" onClick={() => void save(confirmed || !!near)} disabled={busy || !typed || future}>
@@ -399,12 +429,35 @@ function OneOffDose({
             It&apos;s on {care.self ? "your" : "her"} list as {onPlan.name}, so it&apos;s logged there.
           </p>
           <div className="mt-1 flex flex-wrap gap-x-4">
-            <button type="button" onClick={() => onUsePlan(onPlan.id, when)} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+            <button type="button" onClick={() => onUsePlan(onPlan.id, when, dose)} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
               Open {onPlan.name}
             </button>
-            <button type="button" onClick={() => setNotMatch(normName(typed))} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+            <button
+              type="button"
+              onClick={() => {
+                setPicked(null);
+                setNotMatch(key);
+              }}
+              className="min-h-[44px] text-sm font-semibold text-mp-accent-fg"
+            >
               It&apos;s something else
             </button>
+          </div>
+        </div>
+      )}
+
+      {asking && (
+        <div className={cx(tone.card, "p-4")} role="group" aria-label="Which one?">
+          <p className={cx(tone.heading, "text-[17px] leading-snug")}>Which one?</p>
+          <div className="mt-3 flex flex-col gap-2">
+            {choices.map((p) => (
+              <Button key={p.id} size="md" onClick={() => setPicked({ key, id: p.id })}>
+                {p.name}
+              </Button>
+            ))}
+            <Button size="md" variant="soft" onClick={() => setNotMatch(key)}>
+              Something else
+            </Button>
           </div>
         </div>
       )}
