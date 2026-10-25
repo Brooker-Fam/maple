@@ -11,13 +11,13 @@ import { useCareSetup } from "./useCare";
 
 /**
  * "Medicines and support after the birth" (§9.3): one explicit tap picks who
- * it's for (an owner or member, never admin or a viewer), with a confirm when
- * it's someone else. The app never guesses who gave birth.
+ * it's for (an owner or member), with a confirm when it's someone else, or
+ * her name is typed (she needn't sign in). The app never guesses who gave birth.
  *
  * Before setup there's no care state to act through (useCare is null), so
  * this posts to /api/maple/care/person itself and then opens her screen.
  * Who may set it up comes from the server (state.care_setup): any owner,
- * member or the admin login, for any owner or member; nobody once it exists.
+ * member or the admin login; nobody once it exists.
  */
 export type CareSetupProps = { open: boolean; onClose: () => void };
 
@@ -26,6 +26,7 @@ export default function CareSetup({ open, onClose }: CareSetupProps) {
   const nav = useCareNav();
   const mode = useCareSetup();
   const [pick, setPick] = useState<Member | null>(null);
+  const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const me = state?.me;
@@ -39,25 +40,24 @@ export default function CareSetup({ open, onClose }: CareSetupProps) {
     onClose();
   };
 
-  const setup = async (m: Member) => {
+  // A member from the list, or just her name: she doesn't need her own sign-in (the family may share one login).
+  const setup = async (m: Member | { name: string }) => {
     if (busy) return;
     setBusy(true);
     setProblem(null);
     try {
-      await api("care/person", { method: "POST", body: JSON.stringify({ member: m.email }) });
+      await api("care/person", { method: "POST", body: JSON.stringify("name" in m ? { name: m.name } : { member: m.email }) });
       await refresh();
       close();
       // Her screen next, with the empty list and "Add a medicine" (let this sheet start closing first).
       window.setTimeout(() => nav.openCare(), 150);
     } catch (e) {
       setPick(null);
-      setProblem(e instanceof ApiError && e.status === 409 ? "This is already set up. She decides who sees it." : errorText(e));
+      setProblem(e instanceof ApiError && e.status === 409 ? "This is already set up." : errorText(e));
     } finally {
       setBusy(false);
     }
   };
-
-  // The default sharing (§9.1): every other current owner, never admin, never a viewer.
 
   return (
     <>
@@ -85,8 +85,31 @@ export default function CareSetup({ open, onClose }: CareSetupProps) {
                 </button>
               ))}
             </div>
-            <Footnote>One person per log. Everyone signed in to Maple&apos;s Log can see it and log on it.</Footnote>
           </div>
+        ) : null}
+        {mode && (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (typed.trim()) void setup({ name: typed.trim() });
+            }}
+          >
+            <input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              maxLength={60}
+              aria-label="Her name"
+              placeholder={choices.length ? "Or type her name" : "Her name"}
+              className={cx(tone.input, "min-w-0 flex-1")}
+            />
+            <Button type="submit" disabled={busy || !typed.trim()}>
+              {busy ? "Setting up…" : "Set up"}
+            </Button>
+          </form>
+        )}
+        {mode ? (
+          <Footnote>One person per log. Everyone signed in to Maple&apos;s Log can see it and log on it.</Footnote>
         ) : (
           <p className={cx(tone.muted, "text-[15px]")}>An owner of this log can set this up.</p>
         )}

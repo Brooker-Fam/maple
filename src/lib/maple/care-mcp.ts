@@ -12,6 +12,7 @@ import {
   addCareQuestion,
   careSession,
   carePersonName,
+  careTarget,
   createCarePerson,
   deleteCarePlan,
   deleteCareEntry,
@@ -385,9 +386,9 @@ export function registerCareTools(server: McpServer) {
     {
       title: setUpTitle,
       description:
-        'Use this when the mom tools say there\'s no page for her yet and the user wants one, e.g. "set up Brittany\'s medicines". It creates her page in Maple\'s Log for one family member; there\'s one per log, and everyone signed in can see and log on it. Then add each medicine with set_mom_medicine.',
+        'Use this when the mom tools say there\'s no page for her yet and the user wants one, e.g. "set up Brittany\'s medicines". It creates her page in Maple\'s Log for the person named (she doesn\'t need her own sign-in); there\'s one per log, and everyone signed in can see and log on it. Then add each medicine with set_mom_medicine.',
       inputSchema: {
-        person: z.string().min(1).max(120).nullish().describe("Who it's for: a family member's name or email. Leave it out to set it up for yourself."),
+        person: z.string().min(1).max(120).nullish().describe("Who it's for: her name (or a family member's email)."),
       },
       annotations: { title: setUpTitle, ...WRITE_ANN },
       _meta: { "openai/toolInvocation/invoking": "Setting up her page…", "openai/toolInvocation/invoked": "Her page is set up" },
@@ -401,17 +402,15 @@ export function registerCareTools(server: McpServer) {
         const member = ctx.members.find((m) => m.email === ctx.who.id);
         const caller = admin ? { email: ADMIN_ID, role: "owner" as const } : eligible(member) ? member : null;
         if (!caller) throw new CareForbidden("Only a family member can set this up.");
-        const pool = ctx.members.filter(eligible);
         let target: { email: string } = caller;
-        const asked = a.person?.trim().toLowerCase();
-        if (admin && !asked) throw new ToolError(`Who is it for? Pass person: ${pool.map((m) => memberName(m.email, ctx.members)).join(", ")}.`);
-        if (asked) {
-          const name = (m: (typeof pool)[number]) => memberName(m.email, ctx.members).toLowerCase();
-          const hits = pool.filter((m) => m.email.toLowerCase() === asked || name(m) === asked || name(m).split(" ")[0] === asked);
-          const names = pool.map((m) => memberName(m.email, ctx.members)).join(", ");
-          if (!hits.length) throw new ToolError(`I couldn't find "${a.person}" among the family members who can have one: ${names}.`);
-          if (hits.length > 1) throw new ToolError(`"${a.person}" matches more than one person: ${hits.map((m) => memberName(m.email, ctx.members)).join(", ")}. Which one?`);
-          target = hits[0];
+        if (a.person?.trim()) {
+          // A family member, or just her name: she doesn't need her own sign-in.
+          const t = careTarget(a.person, ctx.members);
+          if (!t) throw new ToolError("Who is it for? Pass her name.");
+          if ("ambiguous" in t) throw new ToolError(`"${a.person}" matches more than one person: ${t.ambiguous.join(", ")}. Which one?`);
+          target = { email: t.id };
+        } else if (admin) {
+          throw new ToolError("Who is it for? Pass her name.");
         }
         const who = memberName(target.email, ctx.members);
         const existing = await getCarePerson();

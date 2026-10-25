@@ -211,6 +211,24 @@ export async function getCarePerson(): Promise<CarePerson | null> {
 /** Eligible to be the care person, or to be shared with: a current owner or member, never "admin". */
 export const eligible = (m: Member | undefined): m is Member => !!m && m.email !== "admin" && m.role !== "viewer";
 
+/**
+ * Who a page is for, from what someone typed: a family member by email, name
+ * or first name, or else just the name itself. She doesn't have to have her
+ * own sign-in (the family may all use the one admin login), so a name with no
+ * member behind it is fine and is stored as typed. Null when it's blank or
+ * matches more than one member (`ambiguous` lists them).
+ */
+export function careTarget(typed: string, members: Member[]): { id: string } | { ambiguous: string[] } | null {
+  const t = typed.trim().replace(/\s+/g, " ").slice(0, 60);
+  if (!/\p{L}/u.test(t)) return null;
+  const q = t.toLowerCase();
+  const pool = members.filter(eligible);
+  const name = (m: Member) => memberName(m.email, members).toLowerCase();
+  const hits = pool.filter((m) => m.email.toLowerCase() === q || name(m) === q || name(m).split(" ")[0] === q);
+  if (hits.length > 1) return { ambiguous: hits.map((m) => memberName(m.email, members)) };
+  return { id: hits[0]?.email ?? t };
+}
+
 /** Every other current owner (not admin, not her): who sees her medicines to start. */
 export function defaultShares(member: string, members: Member[]): string[] {
   return members.filter((m) => m.role === "owner" && eligible(m) && m.email !== member).map((m) => m.email);

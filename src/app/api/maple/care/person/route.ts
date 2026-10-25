@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { careErrorResponse, json, readJson, sessionCare, withCare } from "@/lib/maple/api";
 import { sessionMember } from "@/lib/maple/auth";
-import { careRowCount, createCarePerson, deleteCarePerson, eligible, patchCareSettings } from "@/lib/maple/care-store";
+import { careRowCount, careTarget, createCarePerson, deleteCarePerson, eligible, patchCareSettings } from "@/lib/maple/care-store";
 
 export const dynamic = "force-dynamic";
 
@@ -22,10 +22,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     const admin = s.viewer.id === "admin";
     const member = s.members.find((m) => m.email === s.viewer.id);
     const caller = admin ? { email: "admin", role: "owner" } : eligible(member) ? member : null;
-    const target = s.members.find((m) => m.email === body.member);
-    if (!eligible(target)) return json({ error: "Choose an owner or member of Maple's Log." }, 400);
     if (!caller) return json({ error: "Only a family member can set this up." }, 403);
-    const person = await createCarePerson(target.email, caller.email, s.members);
+    // A member's email, or just her name (she doesn't need her own sign-in).
+    const picked = s.members.find((m) => m.email === body.member);
+    const t = eligible(picked) ? { id: picked.email } : careTarget(typeof body.name === "string" ? body.name : typeof body.member === "string" ? body.member : "", s.members);
+    if (!t) return json({ error: "Type her name." }, 400);
+    if ("ambiguous" in t) return json({ error: `That matches more than one person: ${t.ambiguous.join(", ")}.` }, 400);
+    const person = await createCarePerson(t.id, caller.email, s.members);
     return json({ person: { member: person.member, created_by: person.created_by } }, 201);
   } catch (error) {
     return careErrorResponse(`POST ${ROUTE}`, error);
