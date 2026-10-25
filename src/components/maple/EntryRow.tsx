@@ -146,16 +146,24 @@ export function ClusterRow({
             <span className={cx(tone.body, "min-w-0 flex-1 truncate text-[15px] font-medium")}>
               Cluster · {runs.length} feed{runs.length === 1 ? "" : "s"}
             </span>
-            {/* Its span where a row's time goes: the row sits at its newest feed, so the rows under it read in order. */}
+            {/* Its newest feed's time, where it sits in the list (newest first), so the rows around it read in order; the
+                span goes in the line under it, so a span across noon or midnight never squeezes the count. */}
             <span className={cx(tone.body, "inline-flex shrink-0 items-center gap-1 self-center text-sm tabular-nums")}>
-              {spanText(start, end, tz)}
+              {formatTime(entries[0].started_at, tz)}
               <Icon name="chevron-down" size={15} className={cx("text-mp-ink-3 transition", expanded && "rotate-180")} />
             </span>
           </span>
-          {/* Wraps between its parts, never inside the side minutes. */}
+          {/* Wraps between its parts, never inside the span or the side minutes. */}
           <span className={cx(tone.muted, "block text-[13px] leading-snug")}>
-            <span className="whitespace-nowrap">nursed {minutesShort(min.total)}</span>
-            {sides && <span className="whitespace-nowrap"> ({sides})</span>}
+            {/* The spaces between the parts sit outside them: those are where the line may wrap. */}
+            <span className="whitespace-nowrap">{spanText(start, end, tz)}</span>{" "}
+            <span className="whitespace-nowrap">· nursed {minutesShort(min.total)}</span>
+            {sides && (
+              <>
+                {" "}
+                <span className="whitespace-nowrap">({sides})</span>
+              </>
+            )}
           </span>
         </span>
       </button>

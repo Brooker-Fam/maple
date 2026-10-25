@@ -1865,9 +1865,9 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
 }
 
 /**
- * maple_status's last_feed: the feed as counted, and when "last fed" counts from. `id` is the entry whose start is
- * `local` (a feed of several entries, a Done and a new one within 10 minutes, starts on its first), so a fix to the
- * feed's start goes on it; `ended_id`, with several entries, is the one whose end is `ended_local`.
+ * maple_status's last_feed: the feed as counted, and when "last fed" counts from. `id` is its newest entry (the one
+ * reopen_timer, delete_entry or a fix to its end acts on). A feed of several entries (a Done and a new one within 10
+ * minutes) starts on its first: `started_id`, whose start is `local`, is where a fix to the feed's start goes.
  */
 function lastFeedJson(s: Summary, ctx: Ctx): Record<string, unknown> | null {
   const fed = s.lastFed;
@@ -1876,8 +1876,8 @@ function lastFeedJson(s: Summary, ctx: Ctx): Record<string, unknown> | null {
   // Runs list their entries oldest first: the first one's start is the feed's start.
   const several = !!run && run.entries.length > 1;
   return {
-    id: run ? run.entries[0].id : fed.entry.id,
-    ...(several ? { ended_id: fed.entry.id } : {}),
+    id: fed.entry.id,
+    ...(several ? { started_id: run!.entries[0].id } : {}),
     local: localWhen(fed.start, ctx),
     ...(fed.end && !run?.live ? { ended_local: localWhen(fed.end, ctx) } : {}),
     minutes_ago: s.minutesSinceFeed,
@@ -2655,7 +2655,7 @@ async function switchResult(
 }
 
 /** fix_nursing_time's feed: the id given, else the running one, else the latest timed one that ended in the last 12 hours. */
-async function fixTarget(id: number | null | undefined, ctx: Ctx, part?: FixPart | null): Promise<FeedEntry> {
+async function fixTarget(id: number | null | undefined, ctx: Ctx, startAt?: Date | null): Promise<FeedEntry> {
   if (id != null) {
     const e = await getEntry(id);
     if (!e) {
@@ -2678,11 +2678,16 @@ async function fixTarget(id: number | null | undefined, ctx: Ctx, part?: FixPart
       "There's no nursing feed to fix: none is running and none was timed in the last 12 hours. For an older one pass its id (from list_entries); for one logged by minutes use update_entry."
     );
   }
-  // One feed of several entries (a Done and a new one within 10 minutes) starts on its first, as maple_status's
-  // last_feed.id: its start moves there, never the later entry's (that would overlap the first).
-  if (part === "feed_start") {
-    const first = nursingRuns(recent, ctx.now).find((r) => r.entries.some((x) => x.id === done.id))?.entries[0];
-    if (first && first.id !== done.id && isTimedFeed(first) && !first.active) return first;
+  // One feed of several entries (a Done and a new one within 10 minutes) starts on its first (maple_status's
+  // last_feed.started_id). A start given as a time before the entry ahead of the latest one ended belongs to the feed's
+  // first entry (moving the latest there would overlap it); anything else, add_minutes included, stays on the latest,
+  // as it does while that feed is still running.
+  if (startAt) {
+    const run = nursingRuns(recent, ctx.now).find((r) => r.entries.some((x) => x.id === done.id));
+    const i = run ? run.entries.findIndex((x) => x.id === done.id) : -1;
+    const prev = i > 0 ? run!.entries[i - 1] : undefined;
+    const first = run?.entries[0];
+    if (prev?.ended_at && startAt.getTime() < Date.parse(prev.ended_at) && first && isTimedFeed(first) && !first.active) return first;
   }
   return done;
 }
@@ -2776,7 +2781,7 @@ export function registerMapleTools(server: McpServer) {
     {
       title: "How's Maple right now?",
       description:
-        'Call this first for anything about right now: the local time and day, her age, running timers, when she last ate and which side to offer next (a cluster of feeds close together comes as one line and a cluster object, and a long back-and-forth feed says when "last fed" counts from), last wet/dirty diaper, today\'s and last-24-hour counts (vs what\'s expected for her age, if the family has warnings on), vitamin D today, latest weight vs birth weight, and any health alerts (relay those word for word). next_side is always the next feed\'s side; on a break mid-feed, back_on_side is the side to go back on now. last_feed.id is the entry the feed started on and, when the feed is several entries, ended_id the one it ended on: fix its start on id and its end on ended_id. Includes `speak`, one short sentence for voice. A nursing timer lists its timeline (each side and break, in order); its elapsed is since the feed started, breaks included, while total_nursing_minutes leaves the breaks out. Pass since: "last_seen" for a "while you slept" recap. E.g. "which side next?", "when did she last eat?", "how did the night go?". Before she\'s born it says so and gives the due date. One line about her mom\'s medicines when she has one on Today (mom_status has the rest).',
+        'Call this first for anything about right now: the local time and day, her age, running timers, when she last ate and which side to offer next (a cluster of feeds close together comes as one line and a cluster object, and a long back-and-forth feed says when "last fed" counts from), last wet/dirty diaper, today\'s and last-24-hour counts (vs what\'s expected for her age, if the family has warnings on), vitamin D today, latest weight vs birth weight, and any health alerts (relay those word for word). next_side is always the next feed\'s side; on a break mid-feed, back_on_side is the side to go back on now. last_feed.id is its newest entry (to reopen, delete or fix its end); when the feed is several entries, started_id is the one it started on: fix its start there. Includes `speak`, one short sentence for voice. A nursing timer lists its timeline (each side and break, in order); its elapsed is since the feed started, breaks included, while total_nursing_minutes leaves the breaks out. Pass since: "last_seen" for a "while you slept" recap. E.g. "which side next?", "when did she last eat?", "how did the night go?". Before she\'s born it says so and gives the due date. One line about her mom\'s medicines when she has one on Today (mom_status has the rest).',
       inputSchema: {
         since: z
           .string()
@@ -3585,7 +3590,9 @@ export function registerMapleTools(server: McpServer) {
         });
       }
 
-      const feed = await fixTarget(a.id, ctx, a.undo_last_tap ? null : a.part);
+      // Only a feed start given as a time can belong to an earlier entry of the same feed (fixTarget).
+      const startAt = !a.undo_last_tap && a.part === "feed_start" && a.add_minutes == null && (a.at || a.minutes_ago != null) ? startFrom(a, ctx, []) : null;
+      const feed = await fixTarget(a.id, ctx, startAt);
 
       if (a.undo_last_tap) {
         if (!feed.active) {

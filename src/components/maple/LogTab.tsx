@@ -622,7 +622,7 @@ function DaySection({
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const label = formatDayLabel(key, todayKey, { long: false });
   // A cluster with two or more of this day's feeds is one row, where its newest feed would be (rows are newest first,
-  // as Claude's list_entries places it), with the cluster's own feeds (runs) that have an entry on this day.
+  // as Claude's list_entries places it), with the cluster's own finished feeds (runs) that have an entry on this day.
   const items = useMemo(() => {
     const byCluster = new Map<number, EntryOf<"feed">[]>();
     for (const e of rows) {
@@ -639,12 +639,15 @@ function DaySection({
       if (c === undefined || !feeds || feeds.length < 2) out.push({ type: "entry", e });
       else if (feeds[0].id === e.id) {
         const here = new Set(feeds.map((f) => f.id));
-        const runs = (clusters[c]?.runs ?? []).filter((r) => r.entries.some((x) => here.has(x.id)));
+        // From the cluster's finished feeds only: a side tapped under 10 minutes after its last Done is the same run, but
+        // it's running (under Happening now), so its minutes and open end mustn't land on this row.
+        const done = (clusters[c]?.entries ?? []).filter((x) => !x.active);
+        const runs = nursingRuns(done, now).filter((r) => r.entries.some((x) => here.has(x.id)));
         out.push({ type: "cluster", id: c, feeds, runs });
       }
     }
     return out;
-  }, [rows, clusters, clusterOf]);
+  }, [rows, clusters, clusterOf, now]);
   const dst = dstNote(key, tz);
   const summary = total ? daySummaryParts(stats, units) : null;
   const groupLabel = KIND_GROUPS.find((g) => g.id === group)?.label.toLowerCase();

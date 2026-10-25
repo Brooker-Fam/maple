@@ -57,7 +57,9 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   // The line over the buttons: what a tap would need, what a hold did, or why it didn't (with Undo after her dose).
   const [hint, setHint] = useState<{ text: string; undo?: () => void } | null>(null);
   const hintTimer = useRef<number | null>(null);
-  const swipe = useRef<{ y: number; t: number } | null>(null);
+  // The swipe to close: one finger's start ("off" once a second finger lands, until every finger is up).
+  const swipe = useRef<{ id: number; y: number; t: number } | "off" | null>(null);
+  const fingers = useRef(new Set<number>());
   const [mounted, setMounted] = useState(false);
   // The parent re-renders every second; keep the latest onClose without re-running effects.
   const closeRef = useRef(onClose);
@@ -187,14 +189,23 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-[120] flex touch-none flex-col bg-black select-none"
       style={{ color: AMBER }}
-      // In the capture phase, so a swipe that starts on a hold row (her medicine, back and forth) still closes it.
+      // In the capture phase, so a swipe that starts on a hold row (her medicine, back and forth) still closes it. Only
+      // one finger swipes: a second touch (her hand, a cheek) during a hold never turns the thumb's lift into a close.
       onPointerDownCapture={(e) => {
-        swipe.current = { y: e.clientY, t: Date.now() };
+        fingers.current.add(e.pointerId);
+        swipe.current = fingers.current.size === 1 ? { id: e.pointerId, y: e.clientY, t: Date.now() } : "off";
       }}
       onPointerUpCapture={(e) => {
+        fingers.current.delete(e.pointerId);
         const s = swipe.current;
-        swipe.current = null;
-        if (s && e.clientY - s.y > 110 && Date.now() - s.t < 900) onClose();
+        if (s && s !== "off" && s.id === e.pointerId) {
+          swipe.current = null;
+          if (e.clientY - s.y > 110 && Date.now() - s.t < 900) onClose();
+        } else if (!fingers.current.size) swipe.current = null;
+      }}
+      onPointerCancelCapture={(e) => {
+        fingers.current.delete(e.pointerId);
+        if (!fingers.current.size) swipe.current = null;
       }}
     >
       <div className="flex items-center justify-between px-4 pt-[max(12px,env(safe-area-inset-top))]">
