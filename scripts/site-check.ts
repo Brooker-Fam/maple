@@ -1,9 +1,9 @@
 /**
  * Assertions for the public site's waitlist (src/lib/waitlist.ts and
- * POST /api/waitlist): email and month validation, the honeypot, the
- * 204/400/429/503/500 answers, that a second sign-up with the same address
- * (in any case or spacing) adds nothing, and that nothing sent ever reaches
- * a log or an error report.
+ * POST /api/waitlist): email validation, the honeypot, the 204/303/400/403/
+ * 429/503/500 answers, the daily cap, that a second sign-up with the same
+ * address (in any case or spacing) adds nothing, and that nothing sent ever
+ * reaches a log or an error report (scrubError included).
  *
  *   npx tsx scripts/site-check.ts      (or pnpm check:site)
  *
@@ -40,7 +40,6 @@ function ok(cond: unknown, what: string) {
   if (!cond) throw new Error(what);
 }
 
-const NOW = new Date("2026-10-26T15:00:00Z");
 const PERSON = "June.Parent@Example.com";
 
 async function main() {
@@ -80,41 +79,9 @@ async function main() {
     for (const b of [undefined, null, 42, ["june@example.com"], { email: "june@example.com" }]) eq(w.normalizeEmail(b), null, JSON.stringify(b));
   });
 
-  // ── month ─────────────────────────────────────────────────────────────
-  await check("a month inside the window is stored as its first day", () => {
-    eq(w.babyMonthFrom("2026-11", NOW), "2026-11-01");
-    eq(w.babyMonthFrom("2024-10", NOW), "2024-10-01", "24 months back");
-    eq(w.babyMonthFrom("2027-10", NOW), "2027-10-01", "12 months ahead");
-  });
-  await check("no month is fine", () => {
-    eq(w.babyMonthFrom(undefined, NOW), null);
-    eq(w.babyMonthFrom(null, NOW), null);
-    eq(w.babyMonthFrom("", NOW), null);
-  });
-  await check("a bad or far-off month is refused", () => {
-    for (const b of ["2026-13", "2026-00", "2026-1", "26-11", "2026-11-05", "November", "2024-09", "2027-11", 202611, {}]) {
-      eq(w.babyMonthFrom(b, NOW), "invalid", JSON.stringify(b));
-    }
-  });
-  await check("every month the form offers is one the server takes", () => {
-    const { expecting, born } = w.babyMonthOptions(NOW);
-    eq(expecting.length, 10, "expecting");
-    eq(born.length, 12, "born");
-    eq(expecting[0], { value: "2026-10", label: "October 2026" }, "first expecting");
-    eq(born[0].value, "2026-09", "first born");
-    eq(born[11].value, "2025-10", "last born");
-    for (const o of [...expecting, ...born]) ok(w.babyMonthFrom(o.value, NOW) !== "invalid", `${o.value} refused`);
-    eq(new Set([...expecting, ...born].map((o) => o.value)).size, 22, "no month twice");
-  });
-  await check("the options roll over the year end", () => {
-    const { expecting, born } = w.babyMonthOptions(new Date("2026-12-31T23:30:00Z"));
-    eq(expecting.slice(0, 2).map((o) => o.value), ["2026-12", "2027-01"]);
-    eq(born[0].value, "2026-11");
-  });
-
   // ── the POST ──────────────────────────────────────────────────────────
-  type Row = { email: string; babyMonth: string | null; at: number };
-  function harness(opts: { allowed?: boolean; offline?: boolean; throws?: boolean } = {}) {
+  type Row = { email: string; at: number };
+  function harness(opts: { allowed?: boolean; offline?: boolean; full?: boolean; throws?: boolean } = {}) {
     const table = new Map<string, Row>();
     const reports: Error[] = [];
     let limited = 0;
@@ -125,23 +92,23 @@ async function main() {
         limited++;
         return { allowed: opts.allowed ?? true };
       },
-      save: async (entry: { email: string; babyMonth: string | null }) => {
+      save: async (entry: { email: string }) => {
         saves++;
         if (opts.throws) throw Object.assign(new Error(`duplicate key value (email)=(${entry.email})`), { name: "NeonDbError" });
         if (opts.offline) return "offline" as const;
+        if (opts.full) return "full" as const;
         if (!table.has(entry.email)) table.set(entry.email, { ...entry, at: ++clock });
         return "saved" as const;
       },
       report: (e: Error) => {
         reports.push(e);
       },
-      now: () => NOW,
     };
-    const post = (body: unknown, type = "application/json") =>
+    const post = (body: unknown, type = "application/json", headers: Record<string, string> = {}) =>
       w.handleWaitlist(
         new Request("https://site.invalid/api/waitlist", {
           method: "POST",
-          headers: { "content-type": type },
+          headers: { "content-type": type, ...headers },
           body: typeof body === "string" ? body : JSON.stringify(body),
         }),
         deps
@@ -149,27 +116,48 @@ async function main() {
     return { table, reports, post, counts: () => ({ limited, saves }) };
   }
 
-  await check("a sign-up is 204 with no body, and saves the normalized address and month", async () => {
+  await check("a sign-up is 204 with no body, and saves only the normalized address", async () => {
     const h = harness();
     const res = await h.post({ email: ` ${PERSON} `, baby_month: "2026-12" });
     eq(res.status, 204, "status");
     eq(await res.text(), "", "body");
-    eq([...h.table.values()].map(({ email, babyMonth }) => ({ email, babyMonth })), [{ email: "june.parent@example.com", babyMonth: "2026-12-01" }]);
+    eq([...h.table.values()].map(({ email, ...rest }) => ({ email, keys: Object.keys(rest) })), [{ email: "june.parent@example.com", keys: ["at"] }]);
   });
   await check("signing up again, in another case, adds nothing and still says 204", async () => {
     const h = harness();
     eq((await h.post({ email: PERSON })).status, 204, "first");
-    eq((await h.post({ email: PERSON.toUpperCase(), baby_month: "2027-01" })).status, 204, "second");
+    eq((await h.post({ email: PERSON.toUpperCase() })).status, 204, "second");
     eq((await h.post({ email: PERSON.toLowerCase() })).status, 204, "third");
     eq(h.table.size, 1, "rows");
     eq(h.table.get("june.parent@example.com")?.at, 1, "first row kept");
-    eq(h.table.get("june.parent@example.com")?.babyMonth, null, "first answer kept");
   });
-  await check("a form-encoded sign-up works too", async () => {
+  const FORM = "application/x-www-form-urlencoded";
+  await check("a form posted before the script loaded is saved and sent on to /waitlist", async () => {
     const h = harness();
-    const res = await h.post("email=june%40example.org&baby_month=2026-10&website=", "application/x-www-form-urlencoded");
-    eq(res.status, 204);
+    const res = await h.post("email=june%40example.org&website=", FORM);
+    eq(res.status, 303);
+    eq(res.headers.get("location"), "/waitlist?r=joined");
     ok(h.table.has("june@example.org"), "saved");
+  });
+  await check("a form post that fails says why on /waitlist, by a known word only", async () => {
+    eq((await harness().post("email=nope", FORM)).headers.get("location"), "/waitlist?r=email");
+    eq((await harness({ allowed: false }).post("email=june%40example.org", FORM)).headers.get("location"), "/waitlist?r=limit");
+    eq((await harness({ full: true }).post("email=june%40example.org", FORM)).headers.get("location"), "/waitlist?r=full");
+    eq((await harness({ throws: true }).post("email=june%40example.org", FORM)).headers.get("location"), "/waitlist?r=failed");
+    for (const r of ["email", "limit", "full", "failed", "offline", "body", "cross"]) ok(r in w.WAITLIST_ERRORS, `${r} has no words`);
+  });
+  await check("a cross-site post is 403 and isn't counted or saved", async () => {
+    const h = harness();
+    const res = await h.post({ email: PERSON }, "application/json", { "sec-fetch-site": "cross-site" });
+    eq(res.status, 403);
+    eq(await res.json(), { error: w.WAITLIST_ERRORS.cross });
+    eq(h.counts(), { limited: 0, saves: 0 });
+    for (const site of ["same-origin", "same-site", "none"]) eq((await harness().post({ email: PERSON }, "application/json", { "sec-fetch-site": site })).status, 204, site);
+  });
+  await check("a full day is 503 with its own words, not a false success", async () => {
+    const res = await harness({ full: true }).post({ email: PERSON });
+    eq(res.status, 503);
+    eq(await res.json(), { error: w.WAITLIST_ERRORS.full });
   });
   await check("a filled honeypot gets 204 and saves nothing", async () => {
     const h = harness();
@@ -183,12 +171,6 @@ async function main() {
     eq(res.status, 400);
     eq(await res.json(), { error: w.WAITLIST_ERRORS.email });
     eq(h.counts().saves, 0, "saves");
-  });
-  await check("a bad month is 400", async () => {
-    const h = harness();
-    const res = await h.post({ email: PERSON, baby_month: "2031-01" });
-    eq(res.status, 400);
-    eq(await res.json(), { error: w.WAITLIST_ERRORS.month });
   });
   await check("a body that isn't an object is 400", async () => {
     for (const body of ["not json", "[]", "null", '"june@example.com"', "", "x".repeat(2001)]) {
@@ -230,7 +212,7 @@ async function main() {
     try {
       for (const opts of [{}, { offline: true }, { throws: true }, { allowed: false }]) {
         const h = harness(opts);
-        await h.post({ email: PERSON, baby_month: "2026-12" });
+        await h.post({ email: PERSON });
         await h.post({ email: "june@example" });
         await h.post({ email: PERSON, website: "bot" });
       }
@@ -241,28 +223,47 @@ async function main() {
   });
 
   // ── the store ─────────────────────────────────────────────────────────
-  await check("the insert is one idempotent statement with the address and month as parameters", async () => {
+  await check("the insert is one statement: the address as a parameter, the daily cap checked, a repeat adding nothing", async () => {
     const calls: { sql: string; params: unknown[] }[] = [];
     const run = async (sql: string, params: unknown[]) => {
       calls.push({ sql, params });
-      return [];
+      return [{ n: 3 }];
     };
-    eq(await w.addToWaitlist({ email: "june@example.com", babyMonth: "2026-12-01" }, run), "saved");
+    eq(await w.addToWaitlist({ email: "june@example.com" }, run), "saved");
     eq(calls.length, 1, "statements");
     ok(/ON CONFLICT \(email\) DO NOTHING/.test(calls[0].sql), "no ON CONFLICT DO NOTHING");
+    ok(/WHERE n < \$2/.test(calls[0].sql), "no cap in the insert");
+    ok(/INSERT INTO maple_waitlist \(email\)/.test(calls[0].sql), "inserts more than the address");
     ok(!calls[0].sql.includes("june"), "address inlined in SQL");
-    eq(calls[0].params, ["june@example.com", "2026-12-01"]);
+    eq(calls[0].params, ["june@example.com", w.WAITLIST_DAILY_MAX]);
+  });
+  await check("at the daily cap the store says full", async () => {
+    eq(await w.addToWaitlist({ email: "june@example.com" }, async () => [{ n: w.WAITLIST_DAILY_MAX }]), "full");
+    eq(await w.addToWaitlist({ email: "june@example.com" }, async () => [{ n: String(w.WAITLIST_DAILY_MAX - 1) }]), "saved");
   });
   await check("no database: the store says offline", async () => {
-    eq(await w.addToWaitlist({ email: "june@example.com", babyMonth: null }, async () => null), "offline");
+    eq(await w.addToWaitlist({ email: "june@example.com" }, async () => null), "offline");
   });
-  await check("the migration creates the table with a unique email, additively", () => {
+  await check("the migration creates the table with a unique email, additively, and keeps no baby month", () => {
     const sql = readFileSync(join(__dirname, "../src/lib/migrate.ts"), "utf8");
     const m = /CREATE TABLE IF NOT EXISTS maple_waitlist \(([\s\S]*?)\n\s*\)/.exec(sql);
     ok(m, "no CREATE TABLE IF NOT EXISTS maple_waitlist");
     ok(/email TEXT NOT NULL UNIQUE/.test(m![1]), "email isn't unique");
-    ok(/baby_month DATE,/.test(m![1]), "baby_month isn't an optional DATE");
     ok(/created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/.test(m![1]), "created_at has no default");
+    ok(/UPDATE maple_waitlist SET baby_month = NULL/.test(sql), "old baby months aren't cleared");
+  });
+
+  // ── error reports ─────────────────────────────────────────────────────
+  await check("scrubError keeps the class, code and frames, never the message", async () => {
+    const { scrubError } = await import("../src/lib/posthog-server");
+    const pg = Object.assign(new Error('new row violates check constraint\nFailing row contains (12, june@example.com, "3350 g")'), { name: "NeonDbError", code: "23514" });
+    const out = scrubError(pg);
+    eq(out.message, "NeonDbError 23514");
+    ok(!/june|3350|Failing/.test(out.stack ?? ""), `stack leaks: ${out.stack}`);
+    ok(/\n\s+at /.test(out.stack ?? ""), "no frames kept");
+    eq(scrubError(new SyntaxError('Unexpected token \'j\', "june@example.com" is not valid JSON')).message, "SyntaxError");
+    eq(scrubError(new Error("care_error")).message, "care_error");
+    eq(scrubError("june@example.com").message, "Error");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

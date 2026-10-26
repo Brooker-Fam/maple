@@ -2,7 +2,7 @@
 
 A private, collaborative newborn tracker for Maple Jane: nursing (left/right timers), bottles, pumping, diapers with stool colors, sleep, tummy time, baths, temperature, vitals and skin checks, growth with WHO percentiles, notes and questions for the doctor, photos and milestones. Matt and Brittany (and anyone they invite) log from their phones, from Claude or ChatGPT (MCP), or hands-free with Siri. A separate area "for mom" keeps her own medicines, temperature, questions for her OB and check-ins, with warning signs and help lines (see [For mom](#for-mom)).
 
-It's a family side project: unlinked from the public site and `noindex`.
+It's a family side project. The public site at `/` (home, terms, privacy and a waitlist; see CLAUDE.md, "The public site") links to it as "Family sign-in"; the app itself is `noindex`.
 
 ## Setup checklist (production)
 
@@ -11,6 +11,8 @@ It's a family side project: unlinked from the public site and `noindex`.
 3. **Private photo storage (recommended).** Vercel → Storage → create a Blob store with **Private** access (e.g. `maple-private`). Copy its read-write token into a new env var `MAPLE_BLOB_READ_WRITE_TOKEN`. Don't connect it with the default `BLOB_*` names, or it will shadow the guest-photo store.
    Without it, photos go to the existing public store under `maple/…` with random names. They're still only ever served through the signed-in proxy (`/api/maple/photo`), but the underlying files aren't access-controlled.
 4. **`MCP_SECRET`.** Set it to a long random string. Otherwise MCP tokens are derived from `ADMIN_PASS`, and changing the admin password would disconnect Claude and ChatGPT.
+5. **The contact inbox.** `/privacy` and `/terms` name `hello@maplebaby.app` (`CONTACT_EMAIL` in `src/components/site/legal.tsx`) as the way to have a log deleted or leave the waitlist. The domain's DNS is Vercel's, and it needs MX records for a mailbox or a forwarding service (Vercel → Domains → maplebaby.app → DNS records) before that address receives anything. Send a test message and see it arrive.
+6. **AI Gateway credit for the chat.** The chat runs on the team's AI Gateway Credits through the project's OIDC token. On the free tier the chat's model is refused (403 "Free tier users do not have access to this model"). Top up: Vercel dashboard → AI Gateway (sidebar) → the credit balance button (upper right) → choose an amount → Continue to Payment → Confirm and Pay. The same dialog has auto top-up (Change, then a threshold and amount). Per-request zero data retention, which every chat request asks for, is listed for Pro and Enterprise teams only. A team or project budget (`vercel ai-gateway budgets set …`) is a hard cap above the app's own `MAPLE_CHAT_*_BUDGET_MICRO` limits.
 
 Migrations run on build (`maple_babies` is seeded with Maple Jane, due 2026-10-20).
 

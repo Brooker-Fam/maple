@@ -1,5 +1,5 @@
 import { Icon, type IconName } from "@/components/maple/icons";
-import { DETAIL_COLOR, KIND_COLOR, MAPLE, SIDE_COLOR, SIDE_INK } from "@/components/maple/palette";
+import { KIND_COLOR, MAPLE, SIDE_COLOR, SIDE_INK } from "@/components/maple/palette";
 import Ticker from "./Ticker";
 
 /** A drawn phone holding a sample screen. The screen is decorative; `label` says what it shows. */
@@ -14,10 +14,10 @@ export function Phone({ label, night, children, className = "" }: { label: strin
   );
 }
 
-function StatusBar({ time }: { time: string }) {
+function StatusBar({ at }: { at: number }) {
   return (
     <div className="flex items-center justify-between px-6 pt-3.5 pb-1 text-[13px] font-semibold tabular-nums text-mp-ink">
-      <span>{time}</span>
+      <Ticker from={at} format="clock" />
       <span className="flex items-center gap-1 opacity-80">
         <span className="h-2 w-3.5 rounded-[3px] border border-current" />
       </span>
@@ -65,7 +65,7 @@ function RecentRow({ icon, color, title, time }: { icon: IconName; color: string
 export function TodayMock() {
   return (
     <div className="flex h-full flex-col bg-mp-bg">
-      <StatusBar time="2:27" />
+      <StatusBar at={2 * 3600 + 27 * 60 + 12} />
       <div className="flex items-end justify-between px-5 pt-3">
         <div>
           <p className="font-display text-[34px] leading-none font-semibold text-mp-ink">June</p>
@@ -98,7 +98,7 @@ export function TodayMock() {
           <Ticker from={252} className="text-[52px] leading-none font-semibold tracking-[-0.03em] text-mp-ink tabular-nums" />
           <p className="pb-1 text-right text-[12px] leading-tight whitespace-nowrap text-mp-ink-3">
             Total nursing
-            <span className="block text-[15px] font-semibold text-mp-ink-2">16 min</span>
+            <Ticker from={12 * 60 + 252} format="minutes" className="block text-[15px] font-semibold text-mp-ink-2" />
           </p>
         </div>
       </div>
@@ -117,7 +117,6 @@ export function TodayMock() {
       <div className="mx-3.5 mt-4">
         <p className="px-1 text-[13px] font-semibold text-mp-ink-2">Recent</p>
         <div className="mt-1.5 divide-y divide-[var(--mp-line)] rounded-[18px] bg-mp-surface px-3.5">
-          <RecentRow icon="droplet" color={DETAIL_COLOR.pee} title="Wet diaper" time="1:22 PM" />
           <RecentRow icon="moon" color={KIND_COLOR.sleep} title="Nap · 1h 25m" time="11:50 AM" />
         </div>
       </div>
@@ -179,7 +178,9 @@ export function LanternMock() {
         </p>
         <Ticker from={408} className="text-[68px] leading-none font-semibold tracking-[-0.03em] tabular-nums" />
         <p className="mt-3 text-[15px] tabular-nums opacity-65">Since 3:05 AM</p>
-        <p className="mt-1 text-[14px] tabular-nums opacity-60">Total nursing 18 min</p>
+        <p className="mt-1 text-[14px] tabular-nums opacity-60">
+          Total nursing <Ticker from={12 * 60 + 408} format="minutes" />
+        </p>
       </div>
       <p className="pb-3 text-center text-[12px] opacity-50">Hold a button to use it</p>
       <div className="flex h-[34%] gap-2.5 px-3.5 pb-5">

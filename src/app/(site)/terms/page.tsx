@@ -1,18 +1,22 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CONTACT_EMAIL, HelpLines, LegalPage } from "@/components/site/legal";
+import { siteOpenGraph } from "@/components/site/meta";
+
+const DESCRIPTION = "The terms for using Maple: a newborn tracker, not medical advice, offered as is.";
 
 export const metadata: Metadata = {
   title: "Terms",
-  description: "The terms for using Maple: a newborn tracker, not medical advice, offered as is.",
+  description: DESCRIPTION,
   alternates: { canonical: "/terms" },
+  openGraph: siteOpenGraph("Terms | Maple", DESCRIPTION, "/terms"),
 };
 
 export default function Terms() {
   return (
     <LegalPage
       title="Terms"
-      lead="These are the terms for using Maple, at maplebaby.app and in its iPhone and Android apps. Using Maple means you agree to them. They're short on purpose."
+      lead="These are the terms for using Maple, at maplebaby.app and in its iPhone and Android apps. Using Maple means you agree to them. They’re short on purpose."
       other={{ href: "/privacy", label: "privacy page" }}
     >
       <h2>Maple is a tracker, not medical advice</h2>
@@ -66,8 +70,9 @@ export default function Terms() {
       <h2>No warranty</h2>
       <p>
         Maple is a small project, offered as it is. It can be down, slow, or wrong, and data can be lost, so keep anything
-        you can&rsquo;t lose somewhere else too: you can download every entry as a CSV at any time. Maple&rsquo;s code is open
-        source under the MIT license, which also comes with no warranty.
+        you can&rsquo;t lose somewhere else too. You can download every entry in the baby&rsquo;s log as a CSV at any time;
+        mom&rsquo;s page and photos aren&rsquo;t in that file. Maple&rsquo;s code is open source under the MIT license, which
+        also comes with no warranty.
       </p>
       <p>
         As far as the law allows, Maple and the people who make it aren&rsquo;t responsible for losses that come from using it or

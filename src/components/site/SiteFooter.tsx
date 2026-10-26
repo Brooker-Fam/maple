@@ -29,7 +29,7 @@ export default function SiteFooter() {
             Source code
           </a>
           <a className="site-link-quiet" href="/maple" rel="nofollow">
-            Sign in
+            Family sign-in
           </a>
         </nav>
       </div>

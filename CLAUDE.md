@@ -15,13 +15,14 @@ Maple's Log: the Brooker family's newborn tracker for **Maple Jane** (Matt and B
 
 ```bash
 pnpm install
-pnpm dev               # http://localhost:3000 (redirects to /maple)
+pnpm dev               # http://localhost:3000 (the public site; the app is /maple)
 pnpm build             # runs migrations, then next build
 pnpm typecheck
 pnpm lint
 pnpm check:maple-feed  # the nursing engine's checks
 pnpm check:maple-care  # Brittany's medicines' checks
 pnpm check:maple-chat  # the in-app chat's checks
+pnpm check:site        # the waitlist's checks
 ```
 
 ## Git workflow
@@ -46,6 +47,13 @@ Maple's tables (`maple_*`, plus `upload_rate_limit`) live in brooker-wedding's N
 - Both deployments can send notifications from the same tables. Sends are claimed per phone in `maple_push_sent`, so a notice still goes out once.
 - The family is in `America/New_York`; all "today"/clock logic goes through `src/lib/maple/time.ts`, never the server's zone.
 
+## The public site
+
+`/` (the home page), `/privacy`, `/terms` and `/waitlist` live in `src/app/(site)/`, with parts in `src/components/site/`, drawn in the app's `mp-*` tokens (`site.css`). The header and footer link to the app as "Family sign-in"; `/maple*` is `noindex` (meta and `X-Robots-Tag`) and stays crawlable so that can be read.
+
+- **Waitlist:** `POST /api/waitlist` (`src/lib/waitlist.ts`, table `maple_waitlist`) keeps an email address and nothing else. It has its own hourly bucket per connection (`checkWaitlistRateLimit`), a daily cap on new addresses (`WAITLIST_DAILY_MAX`), refuses cross-site posts (`Sec-Fetch-Site`), answers 204 whether or not the address was already there, and sends a form posted before the script loaded to `/waitlist?r=<outcome>`. `pnpm check:site`.
+- **Legal copy follows the code.** Any change to what Maple keeps, sends, shows on a lock screen or deletes needs the matching change to `/privacy` or `/terms`, and a new `LEGAL_VERSION` / `LEGAL_UPDATED` in `src/components/site/legal.tsx`. `CONTACT_EMAIL` there is the only deletion and waitlist-removal route, so it must reach a real inbox.
+
 ## The app
 
 Private, collaborative newborn tracker: nursing L/R timers, bottles, pumping, diapers + stool colors, sleep, tummy time, temperature/vitals/skin checks, growth on WHO girls percentiles, notes and doctor questions, photos and milestones. Full design and ops notes: `docs/maple.md`.
@@ -61,5 +69,5 @@ Private, collaborative newborn tracker: nursing L/R timers, bottles, pumping, di
 - **Dock:** Today's logging buttons (`Dock.tsx`, with her strip on top); every timer action lives there and in the Lantern, with `useTimerActions.tsx` saying what each tap did (Undo puts back exactly what the server had). Going back and forth (a `"B"` part: both sides, not tracked) is offered from a feed's second Switch, on a start within 30 minutes of the last feed, and in the card's … menu; then Switch's place only asks "Which side is she on now?" and saves nothing until answered. Family → On Today has log-wide Bottles and Pumping switches (`settings.feeds_bottle` / `track_pump`, on unless switched off; `logSwitches` in `MoreSheet.tsx`): off hides the Bottle tile (Left and Right take its room) or Pump in More, never anything logged, and Claude and Siri can still log either. Feeds are counted from the log, never stored (`nursingRuns`, `feedClusters`, `lastFedAnchor`, `nextSideFor` in `feed.ts`, used by Today, History, Patterns, Claude and Siri alike): under 10 minutes off the breast is the same feed whether Pause or Done was tapped, 3+ feeds each starting under 30 minutes after the last ended are a cluster (each feed counts), and Last fed after a long back-and-forth feed counts from 40 minutes before it ended. The cluster copy and its sources live in `guidelines.ts`; there's no cluster alert. Details in `docs/maple.md` ("The nursing screen", "Medical guidance", "How it works").
 - **Look:** its own calm, native-feeling skin, not the site's storybook one. Use the semantic `mp-*` colors (values in `src/app/maple/maple.css` cover day, dark and the night look, so no `dark:` variants), icons from `src/components/maple/icons.tsx`, and the kit in `ui.tsx`. No emoji in the app's chrome (members' avatar emoji and family-typed text are fine). Details in `docs/maple.md`.
 - **Photos:** Vercel Blob under `maple/`, private store via `MAPLE_BLOB_READ_WRITE_TOKEN` (falls back to the public `brooker-wedding-photos` store via `BLOB_READ_WRITE_TOKEN`); always served through the auth proxy `/api/maple/photo`, never by blob URL.
-- **Privacy:** no client analytics or session replay. `captureServerException` (PostHog, off unless `NEXT_PUBLIC_POSTHOG_KEY` is set) gets error context only, never entry contents.
+- **Privacy:** no client analytics or session replay. `captureServerException` (PostHog, off unless `NEXT_PUBLIC_POSTHOG_KEY` is set) sends only an error's class, code and stack frames (`scrubError`), never its message or entry contents; `errorResponse` logs the same scrubbed error. Rate-limit buckets are an HMAC of the IP under the server secret, cleared after a day.
 - **For mom:** Her page works like Maple's log: it always exists (no setup), anyone signed in except view-only guests can use it, and doses just save (only a likely duplicate within 30 minutes asks); a dose within her "Early doses" grace (`settings.early_grace_min`, 30 minutes by default, capped at an eighth of the gap, never for opioids (`EARLY_GRACE_EXACT_NAMES`), and not adding up past it over a day's doses in a row; `earlyGraceMin` in `care.ts`) gets no early note, and the 24-hour limit is always checked. Her data lives only in `maple_care_*` and never shows in Maple's views; every read goes through `careAccess`; no dose numbers anywhere by default; limits are in the label's own unit. Her next medicine rides on a 44px strip on top of Today's dock (one rule picks it, `pressingPlan`); after a Took it, that medicine holds its slot as "Logged 6:56 AM" for a minute and the strip's and Lantern's taps wait 1.5 s, so a double tap never logs a second medicine (her tab's fixed list takes two quick taps on two medicines). A name with extra words beyond a plan's ("Tylenol 3", "Tylenol PM") is another product and never counts toward that plan (`matchPlan`). Claude knows her by name (`MAPLE_INSTRUCTIONS`), takes "she" as Maple and asks "Maple's or Brittany's?" before logging a medicine that's also on her list, counts a brand or generic name toward the medicine on her list (`SAME_MEDICINE` in `care-mcp.ts`, exact single-ingredient names only), and may copy a photographed label or discharge sheet into her list (`add_mom_medicines`, which needs `read_back_confirmed: true`) only after reading every value back and an explicit yes, never filling in a number that isn't on the paper and never adding a second plan for a medicine she has. Details in `docs/maple.md` ("For mom").

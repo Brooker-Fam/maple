@@ -35,6 +35,11 @@
     background: var(--mp-bg);
     color: var(--mp-ink);
   }
+  /* The dark page is nearly the band's own black, so the band needs an edge to read as the night. */
+  .dark .site-night-band {
+    border-block: 1px solid rgb(224 169 59 / 0.16);
+    background: radial-gradient(70% 120px at 50% 0, rgb(232 162 63 / 0.07), transparent), var(--mp-bg);
+  }
 
   .site-italic {
     font-family: var(--font-site-italic), var(--font-display);
@@ -165,6 +170,12 @@
     box-shadow:
       0 40px 90px -30px rgb(232 162 63 / 0.18),
       inset 0 0 0 1px rgb(224 169 59 / 0.12);
+  }
+  /* The screens inside are drawn for 300px, and in the auto grid column a percentage width comes out narrower. */
+  @media (min-width: 1024px) {
+    .site-phone {
+      width: 300px;
+    }
   }
   .site-phone-screen {
     height: 100%;

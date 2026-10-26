@@ -12,7 +12,7 @@ export default function SiteHeader() {
         <span className="font-display text-[1.7rem] leading-none font-semibold tracking-[-0.01em] text-mp-ink">Maple</span>
       </Link>
       <a href="/maple" rel="nofollow" className="site-focus -mr-2 rounded-xl px-3 py-2.5 text-[15px] text-mp-ink-2 hover:text-mp-ink">
-        Sign in
+        Family sign-in
       </a>
     </header>
   );

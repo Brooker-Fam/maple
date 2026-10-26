@@ -385,6 +385,17 @@ async function migrate() {
     )
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_waitlist (
+      id BIGSERIAL PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      baby_month DATE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  // A due month can say someone is pregnant, so the waitlist keeps none.
+  await sql`UPDATE maple_waitlist SET baby_month = NULL WHERE baby_month IS NOT NULL`;
+
   console.log("Migrations complete.");
 }
 

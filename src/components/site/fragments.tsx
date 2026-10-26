@@ -67,7 +67,7 @@ export function StoolFragment() {
           <span
             key={c}
             className={`mp-swatch aspect-square rounded-full ${c === "mustard" ? "site-swatch-picked" : ""}`}
-            style={{ backgroundColor: STOOL_COLOR_INFO[c].hex, boxShadow: "inset 0 0 0 1px rgb(28 38 25 / 0.12)" }}
+            style={{ backgroundColor: STOOL_COLOR_INFO[c].hex, boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--mp-ink) 18%, transparent)" }}
           />
         ))}
       </div>
@@ -139,7 +139,7 @@ export function GrowthFragment() {
 
 export function QuestionsFragment() {
   const qs: { q: string; a?: string }[] = [
-    { q: "Is all the sneezing normal?", a: "Yes, she's clearing her nose." },
+    { q: "Is all the sneezing normal?", a: "Yes, she’s clearing her nose." },
     { q: "When should her cord stump fall off?" },
     { q: "Which vitamin D drops do you recommend?" },
   ];

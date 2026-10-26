@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { captureServerException } from "@/lib/posthog-server";
+import { captureServerException, scrubError } from "@/lib/posthog-server";
 import { listMembers, sessionMember } from "./auth";
 import { CareConflict, CareForbidden, careSession, viewerFor, type CareSession } from "./care-store";
 import { FeedEditError, feedEditCopy } from "./feed";
@@ -58,7 +58,7 @@ export async function errorResponse(route: string, error: unknown): Promise<Resp
   if (error instanceof Error && !("code" in error) && isUserFacing(error)) {
     return json({ error: error.message }, 400);
   }
-  console.error(`${route} error:`, error);
+  console.error(`${route} error:`, scrubError(error));
   await captureServerException(error, { route });
   return json({ error: "Something went wrong" }, 500);
 }

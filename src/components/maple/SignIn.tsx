@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import Link from "next/link";
 import { useEffect, useState, type FormEvent, type MouseEvent } from "react";
 import { isNativeApp, postToNative } from "@/lib/maple/native";
 import { MapleLeaf, useStill } from "./art";
@@ -16,7 +17,7 @@ import { useMaple } from "./useMaple";
  */
 
 const AUTH_MESSAGES: Record<string, string> = {
-  not_invited: "That Google account isn't on Maple's list yet — ask Matt or Brittany to add it, then try again.",
+  not_invited: "That Google account isn't on Maple's list yet. Ask the person who invited you to add it, then try again.",
   bad_state: "That sign-in took a wrong turn (it may have sat open too long). Please try once more.",
   denied: "Google sign-in was cancelled. No harm done; try again whenever you're ready.",
   failed: "Something went wrong signing in with Google. Please try again.",
@@ -181,9 +182,17 @@ export default function SignIn() {
 
         <p className={cx(tone.faint, "mx-auto mt-10 max-w-[18rem] text-[13px] leading-relaxed")}>
           {inApp
-            ? "An invite link from Matt or Brittany opens Maple in the browser for now, not in this app."
-            : <>Got an invite link from Matt or Brittany? Just open it on this phone and you&apos;re in.</>}
+            ? "An invite link opens Maple in the browser for now, not in this app."
+            : <>Got an invite link? Just open it on this phone and you&apos;re in.</>}
         </p>
+        {!inApp && (
+          <p className={cx(tone.faint, "mx-auto mt-3 max-w-[18rem] text-[13px] leading-relaxed")}>
+            Not in the family? Maple is open to one family for now.{" "}
+            <Link href="/#join" className="font-medium text-mp-accent-fg underline underline-offset-2">
+              Join the waitlist
+            </Link>
+          </p>
+        )}
         <TrackerNote className="mt-6" />
       </motion.div>
     </div>

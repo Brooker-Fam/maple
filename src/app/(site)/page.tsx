@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteFooter from "@/components/site/SiteFooter";
 import SiteHeader from "@/components/site/SiteHeader";
 import WaitlistForm from "@/components/site/WaitlistForm";
@@ -81,7 +82,7 @@ const HOURS: Hour[] = [
     body: (
       <>
         Her own medicines on the schedule her clinician gave, when each one is OK again, her temperature, questions for her OB, and
-        the warning signs worth a call, with the numbers to call. Maple never suggests a dose.
+        the warning signs worth a call, with the numbers to call. The app never suggests a dose, and its chat is told not to.
       </>
     ),
     visual: <MomFragment />,
@@ -107,12 +108,23 @@ const HOURS: Hour[] = [
 
 const NIGHT_FACTS = [
   { title: "The next side, remembered", body: "It says which side to start on, from the side she started on last time." },
-  { title: "Back and forth", body: "Going both sides? Say so once, and there's no need to tap Switch." },
+  { title: "Back and forth", body: "Going both sides? Say so once, and there’s no need to tap Switch." },
   { title: "Forgot to stop?", body: "When a side runs long, Done asks when she finished instead of guessing." },
 ];
 
 const PROMISES = [
-  { title: "Private to your family", body: "Only the people you invite can see your log. No ads, and your data is never sold." },
+  {
+    title: "Private to your family",
+    body: (
+      <>
+        Only the people you invite can see your log in Maple. No ads, and your data is never sold. The{" "}
+        <Link className="site-link" href="/privacy">
+          privacy page
+        </Link>{" "}
+        says who else handles it, and why.
+      </>
+    ),
+  },
   { title: "Nothing watching you", body: "No analytics or session replay in the app." },
   {
     title: "Open source",
@@ -184,7 +196,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section aria-labelledby="lantern" className="site-night">
+        <section aria-labelledby="lantern" className="site-night site-night-band">
           <div className="mx-auto grid w-full max-w-[76rem] items-center gap-14 px-4 py-20 sm:px-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-24 lg:py-28">
             <div>
               <p className="site-italic text-[clamp(4.5rem,2.5rem+9vw,9.5rem)] leading-[0.9] tracking-[-0.02em] text-[#e8a23f]">
@@ -203,7 +215,7 @@ export default function Home() {
                 {NIGHT_FACTS.map((f) => (
                   <div key={f.title} className="border-t border-mp-line pt-4">
                     <dt className="text-[16px] font-semibold text-mp-ink">{f.title}</dt>
-                    <dd className="mt-1 text-[15px] leading-relaxed text-mp-ink-3">{f.body}</dd>
+                    <dd className="mt-1 text-[15px] leading-relaxed text-mp-ink-2">{f.body}</dd>
                   </div>
                 ))}
               </dl>

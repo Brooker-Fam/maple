@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond } from "next/font/google";
+import { siteOpenGraph } from "@/components/site/meta";
 import "../maple/maple.css";
 import "./site.css";
 
@@ -19,13 +20,7 @@ export const metadata: Metadata = {
   description: DESCRIPTION,
   applicationName: "Maple",
   robots: { index: true, follow: true },
-  openGraph: {
-    type: "website",
-    siteName: "Maple",
-    locale: "en_US",
-    title: "Maple: the newborn log for both of you, built for 3am",
-    description: DESCRIPTION,
-  },
+  openGraph: siteOpenGraph("Maple: the newborn log for both of you, built for 3am", DESCRIPTION, "/"),
   twitter: { card: "summary_large_image" },
 };
 

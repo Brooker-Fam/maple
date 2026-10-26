@@ -1,17 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useState } from "react";
-import { babyMonthOptions, type MonthOption } from "@/lib/waitlist";
+import { useId, useState } from "react";
+import { WAITLIST_ERRORS } from "@/lib/waitlist";
 
 type Status = { kind: "idle" } | { kind: "sending" } | { kind: "done" } | { kind: "error"; message: string; invalid?: boolean };
 
 export default function WaitlistForm() {
   const id = useId();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [months, setMonths] = useState<{ expecting: MonthOption[]; born: MonthOption[] } | null>(null);
-
-  useEffect(() => setMonths(babyMonthOptions(new Date())), []);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -22,17 +19,13 @@ export default function WaitlistForm() {
       const res = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          email: form.get("email"),
-          baby_month: form.get("baby_month") || null,
-          website: form.get("website"),
-        }),
+        body: JSON.stringify({ email: form.get("email"), website: form.get("website") }),
       });
       if (res.status === 204) return setStatus({ kind: "done" });
       const body = (await res.json().catch(() => null)) as { error?: string } | null;
-      setStatus({ kind: "error", message: body?.error ?? "Couldn't add you just now. Try again in a minute.", invalid: res.status === 400 });
+      setStatus({ kind: "error", message: body?.error ?? WAITLIST_ERRORS.failed, invalid: res.status === 400 });
     } catch {
-      setStatus({ kind: "error", message: "Couldn't reach Maple. Check your connection and try again." });
+      setStatus({ kind: "error", message: "Couldn’t reach Maple. Check your connection and try again." });
     }
   }
 
@@ -70,32 +63,6 @@ export default function WaitlistForm() {
         <button type="submit" disabled={status.kind === "sending"} className="site-button shrink-0">
           {status.kind === "sending" ? "Joining…" : "Join the waitlist"}
         </button>
-      </div>
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <label htmlFor={`${id}-month`} className="text-[15px] text-mp-ink-2">
-          Baby due or born
-        </label>
-        <select id={`${id}-month`} name="baby_month" defaultValue="" className="site-select">
-          <option value="">Rather not say</option>
-          {months && (
-            <>
-              <optgroup label="Expecting">
-                {months.expecting.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Already here">
-                {months.born.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </optgroup>
-            </>
-          )}
-        </select>
       </div>
       <div className="site-honeypot" aria-hidden>
         <label htmlFor={`${id}-website`}>Leave this empty</label>
