@@ -1,7 +1,7 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.net.Uri
-import family.brooker.maple.MapleSite
+import app.maplebaby.MapleSite
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith

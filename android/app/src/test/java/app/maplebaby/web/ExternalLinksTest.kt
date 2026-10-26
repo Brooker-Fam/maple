@@ -1,4 +1,4 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.content.Intent
 import android.net.Uri

@@ -1,4 +1,4 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.net.Uri
 import android.webkit.ValueCallback

@@ -75,7 +75,7 @@ xcodebuild -project Maple.xcodeproj -scheme Maple -sdk iphonesimulator \
   -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
 xcrun simctl boot "Maple iPhone"; open -a Simulator
 xcrun simctl install "Maple iPhone" build/Build/Products/Debug-iphonesimulator/Maple.app
-xcrun simctl launch "Maple iPhone" family.brooker.maple
+xcrun simctl launch "Maple iPhone" app.maplebaby
 xcodebuild -project Maple.xcodeproj -scheme Maple -sdk iphonesimulator \
   -destination 'platform=iOS Simulator,name=Maple iPhone' CODE_SIGNING_ALLOWED=NO test
 ```
@@ -91,7 +91,7 @@ export ANDROID_HOME=~/Library/Android/sdk
 ./gradlew assembleDebug test lint                       # -PmapleBaseUrl=https://<deployment>, or http://10.0.2.2:3000 for pnpm dev
 ~/Library/Android/sdk/emulator/emulator -avd Medium_Phone_API_36.0 &
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n family.brooker.maple/.MainActivity
+adb shell am start -n app.maplebaby/.MainActivity
 ```
 
 If the emulator has no internet, send it through a host proxy: `adb shell settings put global http_proxy 10.0.2.2:8888` with a proxy listening on the Mac's port 8888 (and `adb shell settings put global http_proxy :0` to undo it).
@@ -113,18 +113,18 @@ Sizes are relative; each phase ships on its own, in this order.
 Depends on Phase 1, the Apple team decision (for APNs) and a Firebase project (for FCM).
 
 - **Server.** Generalize `maple_push_subs` rather than building a second system: add `kind` (`web` | `apns` | `fcm`), keep the device token in `endpoint`, let `p256dh` and `auth` be null, and add `la_token` for the Live Activity token, all as additive migrations (brooker-wedding still reads these tables). `deliver()` in `push.ts` dispatches on `kind`; claims, retries, prefs, the per-phone `device_id` skip, health and the 3-hour cutoff stay as they are. APNs 410 / `BadDeviceToken` and FCM `UNREGISTERED` mean "needs resubscribe"; 429 and 5xx retry.
-- **APNs.** A token-based `.p8` key from the paid team; env `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_KEY_P8` (secret), `APNS_BUNDLE_ID=family.brooker.maple`, `APNS_ENV` (sandbox for development builds, production for TestFlight). An ES256 JWT from `node:crypto` over `node:http2`, no new dependency, cached under an hour. `apns-collapse-id` = the notice's tag (iOS then replaces "OK again" with "Logged" itself), `interruption-level: time-sensitive` for her medicines so they get through Focus.
-- **FCM.** A free Firebase project owned by the family's Google account with `family.brooker.maple` registered (`google-services.json`), and a service account for FCM HTTP v1 as `FCM_SERVICE_ACCOUNT_JSON`. Send with an access token from `google-auth-library` (already a dependency). High-priority data messages; the app builds the notice, with channels `maple_meds` (high) and `maple_nursing` (low, ongoing) and tag-based replacement. Never reuse Moku's `guava-tri` Firebase project.
+- **APNs.** A token-based `.p8` key from the paid team; env `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_KEY_P8` (secret), `APNS_BUNDLE_ID=app.maplebaby`, `APNS_ENV` (sandbox for development builds, production for TestFlight). An ES256 JWT from `node:crypto` over `node:http2`, no new dependency, cached under an hour. `apns-collapse-id` = the notice's tag (iOS then replaces "OK again" with "Logged" itself), `interruption-level: time-sensitive` for her medicines so they get through Focus.
+- **FCM.** A free Firebase project owned by the family's Google account with `app.maplebaby` registered (`google-services.json`), and a service account for FCM HTTP v1 as `FCM_SERVICE_ACCOUNT_JSON`. Send with an access token from `google-auth-library` (already a dependency). High-priority data messages; the app builds the notice, with channels `maple_meds` (high) and `maple_nursing` (low, ongoing) and tag-based replacement. Never reuse Moku's `guava-tri` Firebase project.
 - **Apps.** The permission prompt, then the token goes to the web over the bridge and the web POSTs it to `/api/maple/push` with its cookie and `X-Maple-Device`, the same path a browser subscription takes. Token refreshes re-register the same way. A tapped notice fires the existing `maple-open` window event, which CareNav already routes. Receipts are posted from the app.
 - **Web.** The Notifications sheet uses the native path when `isNativeApp()`, and the `app` status gives way to the usual on/off.
 - **Dedupe.** A phone with notifications on in both the web app and the native app would get every reminder twice: `deliver()` must skip a web subscription whose `device_id` also has a native one, or the app turns the web one off when it turns on.
-- **Checks.** Payload builders and outcome mapping as `tsx` checks with stubbed HTTP; `xcrun simctl push <udid> family.brooker.maple payload.apns` for rendering, collapse and taps (no account needed); FCM end to end on the emulator once `google-services.json` exists.
+- **Checks.** Payload builders and outcome mapping as `tsx` checks with stubbed HTTP; `xcrun simctl push <udid> app.maplebaby payload.apns` for rendering, collapse and taps (no account needed); FCM end to end on the emulator once `google-services.json` exists.
 
 ### Phase 3: Live Activity, App Intents, Android's running timer (large)
 
 Depends on Phase 2 for updates from the server.
 
-- **iOS Live Activity** for the nursing timer: a widget extension `family.brooker.maple.LiveActivity` with the entry id and a content state (side, side start, feed start, on a break, both sides). It counts by itself with `Text(timerInterval:)`, starts and updates from a `NURSING_TIMER` bridge message, and gets `liveactivity` pushes from `nursingChanged()` (`push-hooks.ts`) on phones with a Live Activity token, instead of nurse notices. Push-to-start (iOS 17.2+) lets a feed started on one phone or by Siri show on the other.
+- **iOS Live Activity** for the nursing timer: a widget extension `app.maplebaby.LiveActivity` with the entry id and a content state (side, side start, feed start, on a break, both sides). It counts by itself with `Text(timerInterval:)`, starts and updates from a `NURSING_TIMER` bridge message, and gets `liveactivity` pushes from `nursingChanged()` (`push-hooks.ts`) on phones with a Live Activity token, instead of nurse notices. Push-to-start (iOS 17.2+) lets a feed started on one phone or by Siri show on the other.
 - **iOS App Intents and App Shortcuts** for the `/api/maple/quick` actions (pee, poop, both, nurse left/right, switch, stop, sleep, wake, status, mom status, mom dose). The app makes its own token with `POST /api/maple/tokens` (cookie auth), keeps it in the Keychain, labelled "Maple app (iPhone)" so Family can revoke it; `status` speaks its `speak` text.
 - **Android** ongoing notification with a running clock, ported from gt-android's `WorkoutTimerNotifier`, fed by `NURSING_TIMER` and FCM nursing messages.
 - **Small bridge messages** alongside: `KEEP_AWAKE` for the Lantern (`isIdleTimerDisabled`, `FLAG_KEEP_SCREEN_ON`) and `HAPTIC` (the Vibration API is silent in both web views).
@@ -153,7 +153,7 @@ Recommendation: Android by sideload or Firebase App Distribution. For iOS, weigh
 
 Before Phase 2, whichever is chosen:
 
-1. Apple: register the App ID `family.brooker.maple` with Push Notifications and Time Sensitive, create an APNs `.p8` key and add it to Vercel (team guava-tri, project maple) as the `APNS_*` variables, and create an App Store Connect API key for uploads.
-2. Android: a free Firebase project under the family's Google account, `family.brooker.maple` registered, `google-services.json` downloaded, and an FCM service-account secret in Vercel.
+1. Apple: register the App ID `app.maplebaby` with Push Notifications and Time Sensitive, create an APNs `.p8` key and add it to Vercel (team guava-tri, project maple) as the `APNS_*` variables, and create an App Store Connect API key for uploads.
+2. Android: a free Firebase project under the family's Google account, `app.maplebaby` registered, `google-services.json` downloaded, and an FCM service-account secret in Vercel.
 3. Which phones and OS versions the family uses (push-to-start needs iOS 17.2+).
 4. Real-phone checks once built: sign in, the 1-minute test with the phone locked, a nursing Live Activity, a time-sensitive reminder through the Sleep Focus, "Hey Siri, Maple status", and `tel:911` opening the dialer.

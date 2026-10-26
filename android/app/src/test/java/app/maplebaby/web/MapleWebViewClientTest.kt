@@ -1,10 +1,10 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.content.Intent
 import android.net.Uri
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
-import family.brooker.maple.MapleSite
+import app.maplebaby.MapleSite
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

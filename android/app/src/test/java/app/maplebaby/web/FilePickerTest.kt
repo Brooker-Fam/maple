@@ -1,4 +1,4 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse

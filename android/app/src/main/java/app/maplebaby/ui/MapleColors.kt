@@ -1,4 +1,4 @@
-package family.brooker.maple.ui
+package app.maplebaby.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable

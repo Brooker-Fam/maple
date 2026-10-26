@@ -1,6 +1,6 @@
 # Maple for iPhone
 
-A small SwiftUI app that shows Maple's Log (`{BASE}/maple`) full screen in a `WKWebView`. Bundle id `family.brooker.maple`, display name "Maple", iOS 17+. No third-party packages.
+A small SwiftUI app that shows Maple's Log (`{BASE}/maple`) full screen in a `WKWebView`. Bundle id `app.maplebaby`, display name "Maple", iOS 17+. No third-party packages.
 
 ## What the app adds to the web app
 
@@ -45,7 +45,7 @@ xcrun simctl boot "Maple Test"
 xcodebuild -project ios/Maple.xcodeproj -scheme Maple -sdk iphonesimulator \
   -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/maple-ios CODE_SIGNING_ALLOWED=NO build
 xcrun simctl install "Maple Test" /tmp/maple-ios/Build/Products/Debug-iphonesimulator/Maple.app
-xcrun simctl launch "Maple Test" family.brooker.maple
+xcrun simctl launch "Maple Test" app.maplebaby
 ```
 
 Or open `ios/Maple.xcodeproj` in Xcode and press Run.

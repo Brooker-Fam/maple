@@ -1,3 +1,3 @@
--keepclassmembers class family.brooker.maple.web.NativeBridge {
+-keepclassmembers class app.maplebaby.web.NativeBridge {
     @android.webkit.JavascriptInterface <methods>;
 }

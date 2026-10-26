@@ -1,4 +1,4 @@
-package family.brooker.maple
+package app.maplebaby
 
 import android.content.Context
 import org.junit.Assert.assertEquals

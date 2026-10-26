@@ -1,4 +1,4 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
@@ -7,7 +7,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
-import family.brooker.maple.R
+import app.maplebaby.R
 
 object ExternalLinks {
     fun intentFor(url: Uri): Intent? = when (url.scheme?.lowercase()) {

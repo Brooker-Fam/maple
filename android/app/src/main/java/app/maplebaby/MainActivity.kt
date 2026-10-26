@@ -1,4 +1,4 @@
-package family.brooker.maple
+package app.maplebaby
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -13,7 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
-import family.brooker.maple.ui.MapleScreen
+import app.maplebaby.ui.MapleScreen
 
 class MainActivity : ComponentActivity() {
     private val site = MapleSite.current

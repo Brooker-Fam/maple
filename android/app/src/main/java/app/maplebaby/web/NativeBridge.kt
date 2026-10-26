@@ -1,11 +1,11 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.net.Uri
 import android.webkit.WebView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
-import family.brooker.maple.MapleSite
+import app.maplebaby.MapleSite
 import org.json.JSONException
 import org.json.JSONObject
 

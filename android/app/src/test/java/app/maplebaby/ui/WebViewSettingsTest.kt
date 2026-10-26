@@ -1,4 +1,4 @@
-package family.brooker.maple.ui
+package app.maplebaby.ui
 
 import android.webkit.WebView
 import org.junit.Assert.assertEquals

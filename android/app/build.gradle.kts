@@ -21,11 +21,11 @@ val mapleBaseUrl: String = (findProperty("mapleBaseUrl") as String? ?: "https://
     }
 
 android {
-    namespace = "family.brooker.maple"
+    namespace = "app.maplebaby"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "family.brooker.maple"
+        applicationId = "app.maplebaby"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

@@ -1,4 +1,4 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.app.DownloadManager
 import android.content.Context
@@ -8,7 +8,7 @@ import android.webkit.CookieManager
 import android.webkit.URLUtil
 import android.widget.Toast
 import androidx.core.net.toUri
-import family.brooker.maple.R
+import app.maplebaby.R
 
 object Downloads {
     fun start(context: Context, url: String, userAgent: String, contentDisposition: String?, mimeType: String?) {

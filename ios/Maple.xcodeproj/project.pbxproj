@@ -288,7 +288,7 @@
 				);
 				MAPLE_BASE_URL = "https://maplebaby.app";
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = family.brooker.maple;
+				PRODUCT_BUNDLE_IDENTIFIER = app.maplebaby;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -323,7 +323,7 @@
 				);
 				MAPLE_BASE_URL = "https://maplebaby.app";
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = family.brooker.maple;
+				PRODUCT_BUNDLE_IDENTIFIER = app.maplebaby;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -342,7 +342,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 8N7DMHRM69;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = family.brooker.maple.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = app.maplebaby.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
@@ -358,7 +358,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 8N7DMHRM69;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = family.brooker.maple.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = app.maplebaby.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;

@@ -1,4 +1,4 @@
-package family.brooker.maple.ui
+package app.maplebaby.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -24,7 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import family.brooker.maple.R
+import app.maplebaby.R
 
 @Composable
 fun OfflineScreen(retrying: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {

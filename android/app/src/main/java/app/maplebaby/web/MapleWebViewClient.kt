@@ -1,4 +1,4 @@
-package family.brooker.maple.web
+package app.maplebaby.web
 
 import android.graphics.Bitmap
 import android.webkit.RenderProcessGoneDetail
@@ -6,7 +6,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import family.brooker.maple.MapleSite
+import app.maplebaby.MapleSite
 
 class MapleWebViewClient(
     private val site: MapleSite,

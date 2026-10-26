@@ -1,6 +1,6 @@
 # Maple for Android
 
-A Kotlin + Jetpack Compose shell around Maple's web app: one full-screen WebView on `{BASE}/maple`. Package `family.brooker.maple`, minSdk 26, target and compile SDK 36. Gradle setup comes from `~/dev/gt-android`, with Firebase, analytics and signing removed.
+A Kotlin + Jetpack Compose shell around Maple's web app: one full-screen WebView on `{BASE}/maple`. Package `app.maplebaby`, minSdk 26, target and compile SDK 36. Gradle setup comes from `~/dev/gt-android`, with Firebase, analytics and signing removed.
 
 ## Build
 
@@ -60,7 +60,7 @@ The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. There is no releas
 ~/Library/Android/sdk/emulator/emulator -avd <avd> -no-window -no-audio &
 adb wait-for-device
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n family.brooker.maple/.MainActivity
+adb shell am start -n app.maplebaby/.MainActivity
 adb exec-out screencap -p > shot.png
 ```
 

@@ -1,4 +1,4 @@
-package family.brooker.maple.ui
+package app.maplebaby.ui
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
@@ -40,14 +40,14 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import family.brooker.maple.BuildConfig
-import family.brooker.maple.MapleSite
-import family.brooker.maple.PageLoad
-import family.brooker.maple.web.Downloads
-import family.brooker.maple.web.FilePicker
-import family.brooker.maple.web.MapleWebChromeClient
-import family.brooker.maple.web.MapleWebViewClient
-import family.brooker.maple.web.NativeBridge
+import app.maplebaby.BuildConfig
+import app.maplebaby.MapleSite
+import app.maplebaby.PageLoad
+import app.maplebaby.web.Downloads
+import app.maplebaby.web.FilePicker
+import app.maplebaby.web.MapleWebChromeClient
+import app.maplebaby.web.MapleWebViewClient
+import app.maplebaby.web.NativeBridge
 
 private class LoadState {
     var lastUrl: String? = null
