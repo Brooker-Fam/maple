@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { MAPLE_ORIGIN } from "@/lib/maple/origin";
 
 // AES-256-GCM keyed by GOOGLE_CLIENT_SECRET, the same derivation brooker-wedding uses, so a
 // session sealed by either deployment opens in the other while they share the database.
@@ -26,11 +27,11 @@ export function decryptSecret(ciphertext: string): string {
   return decipher.update(Buffer.from(encB64, "base64")) + decipher.final("utf8");
 }
 
+// Production always answers on MAPLE_ORIGIN, so Google's redirect URI stays the registered one
+// whichever alias (a *.vercel.app URL) the request came in on.
 export function getAppBaseUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null) ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-    "http://localhost:3000"
-  );
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL;
+  if (process.env.VERCEL_ENV === "production") return MAPLE_ORIGIN;
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return "http://localhost:3000";
 }
