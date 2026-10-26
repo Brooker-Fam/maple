@@ -3,7 +3,8 @@
  * sent with every app request as X-Maple-Device. It exists only so a
  * notification can go to "the other phone" and skip the phone that did the
  * action. It is never shown to anyone, never names a person and never
- * decides access. Siri and assistant writes carry none.
+ * decides access. Siri and Claude's writes carry none; the in-app chat
+ * passes on the phone's.
  *
  * Safe to import from the client and the server (no Node or Next imports).
  */

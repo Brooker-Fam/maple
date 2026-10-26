@@ -6,7 +6,7 @@ import { useCareNav } from "../care/CareNav";
 import { Icon } from "../icons";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { MessageView } from "./ChatParts";
+import { HelpCard, MessageView } from "./ChatParts";
 import { useChatThread } from "./useChatThread";
 
 /**
@@ -26,7 +26,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
   const tailLength = tail ? JSON.stringify(tail.parts).length : 0;
   useEffect(() => {
     if (open) end.current?.scrollIntoView({ block: "end" });
-  }, [open, count, tailLength, t.problem]);
+  }, [open, count, tailLength, t.problem, t.help]);
 
   const waiting = t.status === "submitted" || (t.status === "streaming" && tail?.role === "user");
   const suggestions = readOnly ? ["How did the night go?", "When did she last eat?"] : ["How did the night go?", "Which side next?", "Log a wet diaper"];
@@ -47,7 +47,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
           </button>
         </>
       }
-      footer={<Composer t={t} disabled={!t.ready || !online} offline={!online} />}
+      footer={<Composer t={t} disabled={!t.ready} offline={!online} />}
     >
       {count === 0 ? (
         <div className="space-y-4 pt-2">
@@ -56,7 +56,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
           </p>
           <div className="flex flex-wrap gap-2">
             {suggestions.map((s) => (
-              <Chip key={s} onClick={() => t.setDraft(s)}>
+              <Chip key={s} onClick={() => t.setDraft(s)} className="min-h-[44px]!">
                 {s}
               </Chip>
             ))}
@@ -81,9 +81,10 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
       {t.problem && (
         <p role="status" className={cx(tone.inset, "flex items-start gap-2 px-3.5 py-3 text-[14px] leading-snug text-mp-ink")}>
           <Icon name="info" size={16} className="mt-0.5 shrink-0 text-mp-ink-2" />
-          <span className="flex-1">{t.problem}</span>
+          <span className="min-w-0 flex-1 wrap-anywhere">{t.problem}</span>
         </p>
       )}
+      {t.help && <HelpCard reason="crisis" />}
       {count > 0 && !t.busy && (
         <div className="pt-2 text-center">
           {confirmDelete ? (

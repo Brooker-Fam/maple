@@ -20,8 +20,8 @@ import { useMaple } from "../useMaple";
  * One message in the chat. The person's words sit in a bubble; the reply is
  * plain text, then what the tools did as compact receipts (Undo for an entry
  * this reply added), each health alert as its card word for word, a Delete /
- * Keep card before anything is deleted, and the help card when it's called
- * for. Reasoning and the app's context line are never shown.
+ * Keep card before delete_entry or a delete of hers, and the help card when
+ * it's called for. Reasoning and the app's context line are never shown.
  */
 
 type Part = ChatMessage["parts"][number];
@@ -33,7 +33,7 @@ export function MessageView({ message, last, busy, onApprove }: { message: ChatM
     const text = message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
     return (
       <div className="flex justify-end pl-10">
-        <p className="rounded-[18px] rounded-br-[6px] bg-mp-accent px-3.5 py-2.5 text-[16px] leading-snug whitespace-pre-wrap text-mp-on-accent">{text}</p>
+        <p className="rounded-[18px] rounded-br-[6px] bg-mp-accent px-3.5 py-2.5 text-[16px] leading-snug whitespace-pre-wrap wrap-anywhere text-mp-on-accent">{text}</p>
       </div>
     );
   }
@@ -42,7 +42,7 @@ export function MessageView({ message, last, busy, onApprove }: { message: ChatM
     <div className="space-y-2.5 pr-4">
       {message.parts.map((p, i) => {
         if (p.type === "data-help") return <HelpCard key={i} reason={p.data.reason} />;
-        if (p.type === "text") return p.text.trim() ? <p key={i} className={cx(tone.body, "text-[16px] leading-relaxed whitespace-pre-wrap")}>{p.text.trim()}</p> : null;
+        if (p.type === "text") return p.text.trim() ? <p key={i} className={cx(tone.body, "text-[16px] leading-relaxed whitespace-pre-wrap wrap-anywhere")}>{p.text.trim()}</p> : null;
         if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} last={last} busy={busy} onApprove={onApprove} />;
         return null;
       })}
@@ -68,7 +68,7 @@ function uniqueAlerts(parts: Part[]): { title: string; body: string; alert: Chat
 const Muted = ({ icon, children }: { icon?: "clock-3" | "circle-alert" | "info" | "check"; children: React.ReactNode }) => (
   <p className={cx(tone.muted, "flex items-start gap-2 text-[14px] leading-snug")}>
     {icon && <Icon name={icon} size={16} className="mt-0.5 shrink-0" />}
-    <span>{children}</span>
+    <span className="min-w-0 wrap-anywhere">{children}</span>
   </p>
 );
 
@@ -86,7 +86,8 @@ function ToolView({ part, last, busy, onApprove }: { part: ToolPart; last: boole
       if (busy) return null;
       return <ApprovalCard name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
     case "approval-responded":
-      return part.approval.approved ? <Muted icon="clock-3">Deleting…</Muted> : <Muted icon="info">Kept. Nothing was deleted.</Muted>;
+      if (!part.approval.approved) return <Muted icon="info">Kept. Nothing was deleted.</Muted>;
+      return last && busy ? <Muted icon="clock-3">Deleting…</Muted> : <Muted icon="circle-alert">That didn&apos;t finish. Check the log to see whether it was deleted.</Muted>;
     case "output-denied":
       return <Muted icon="info">Kept. Nothing was deleted.</Muted>;
     case "output-error":
@@ -123,7 +124,7 @@ function Receipt({ receipt }: { receipt: ChatReceipt }) {
   return (
     <div className="flex min-h-[52px] items-center gap-2.5 px-3.5 py-2">
       <Icon name={undone ? "x" : "check"} size={18} strokeWidth={2.25} className={cx("shrink-0", undone ? "text-mp-ink-3" : "text-mp-accent-fg")} />
-      <p className={cx(undone ? tone.faint : tone.body, "min-w-0 flex-1 text-[14px] leading-snug", undone && "line-through")}>{receiptText(receipt.line)}</p>
+      <p className={cx(undone ? tone.faint : tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere", undone && "line-through")}>{receiptText(receipt.line)}</p>
       {!undone && (
         <Button
           size="sm"
@@ -146,7 +147,7 @@ function Restorable({ id, line }: { id: number; line: string }) {
   return (
     <div className={cx(GROUP, "flex min-h-[52px] items-center gap-2.5 px-3.5 py-2")}>
       <Icon name={back ? "check" : "trash-2"} size={18} className="shrink-0 text-mp-ink-2" />
-      <p className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug")}>{back ? `Brought back #${id}` : line}</p>
+      <p className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere")}>{back ? `Brought back #${id}` : line}</p>
       {!back && (
         <Button
           size="sm"

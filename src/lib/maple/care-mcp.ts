@@ -640,6 +640,7 @@ async function momDose(a: MomDoseArgs, ctx: Ctx, s: CareSession): Promise<{ summ
     allowDuplicate: a.allow_duplicate === true,
     clientId,
     source,
+    device: ctx.device,
   });
   const name = plan?.name ?? a.medicine.trim();
   const tctx = textCtx(s);

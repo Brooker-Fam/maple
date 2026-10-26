@@ -23,6 +23,38 @@ export function readIncoming(raw: unknown): Incoming {
   throw new ChatInputError("Expected a message");
 }
 
+/**
+ * Whatever text a user message carries, valid or not, so the crisis check can
+ * read it before anything (a cap, a busy thread, a bad part) turns it away.
+ */
+export function roughText(raw: unknown): string {
+  const m = raw as { role?: unknown; parts?: unknown } | null;
+  if (!m || typeof m !== "object" || m.role !== "user" || !Array.isArray(m.parts)) return "";
+  const texts = m.parts.slice(0, 20).flatMap((p) => {
+    const t = (p as { text?: unknown } | null)?.text;
+    return typeof t === "string" ? [t] : [];
+  });
+  return texts.join("\n").slice(0, 10 * CHAT_MAX_CHARS);
+}
+
+/** A turned-away request's JSON body with the help marker added, so the sheet shows the help card though no answer came. A streamed answer carries its own card. */
+export async function withCrisisHelp(res: Response): Promise<Response> {
+  if (res.ok || !res.headers.get("content-type")?.includes("application/json")) return res;
+  const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  const headers = new Headers(res.headers);
+  headers.delete("content-length");
+  return new Response(JSON.stringify({ error: "Something went wrong", ...body, help: "crisis" }), { status: res.status, headers });
+}
+
+/**
+ * Text without control characters (tab and newlines stay) or lone surrogate
+ * halves: Postgres's jsonb refuses \u0000 and a lone surrogate, and its error
+ * quotes the text around it.
+ */
+export function storable(text: string): string {
+  return text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]|[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, (c) => (c.length === 2 ? c : ""));
+}
+
 /** The text of a user message: text parts only, at most CHAT_MAX_CHARS once trimmed. */
 export function userText(parts: unknown[]): string {
   if (!parts.length || parts.length > 20) throw new ChatInputError("Type a message first.");
@@ -31,15 +63,20 @@ export function userText(parts: unknown[]): string {
     if (!part || part.type !== "text" || typeof part.text !== "string") throw new ChatInputError("Messages here are text only.");
     return part.text;
   });
-  const text = texts.join("\n").trim();
+  const text = storable(texts.join("\n")).trim();
   if (!text) throw new ChatInputError("Type a message first.");
   if (text.length > CHAT_MAX_CHARS) throw new ChatInputError(`That's over ${CHAT_MAX_CHARS.toLocaleString("en-US")} characters. Try a shorter message.`);
   return text;
 }
 
-/** The user message as stored: their words, then the app's context line for the model. */
+/** The user message as stored: the app's context line for the model, then their words. */
 export function userMessage(id: string, text: string, line: string): ChatMessage {
-  return { id, role: "user", parts: [{ type: "text", text }, { type: "data-context", data: { line } }] };
+  return { id, role: "user", parts: [{ type: "data-context", data: { line } }, { type: "text", text }] };
+}
+
+/** How many model steps a stored reply has run, so an approval's continuation shares the turn's step cap. */
+export function stepsTaken(m: ChatMessage): number {
+  return m.parts.filter((p) => p.type === "step-start").length;
 }
 
 /** A thread's title: the first line of its first message. */
@@ -67,7 +104,8 @@ export function mergeApprovals(stored: ChatMessage, incoming: { id: string; part
     const t = asTool(p);
     const a = t?.approval as { id?: unknown; approved?: unknown; reason?: unknown } | undefined;
     if (!t || !a || typeof a.id !== "string" || typeof a.approved !== "boolean") continue;
-    answers.set(`${t.toolCallId}\n${a.id}`, { approved: a.approved, ...(typeof a.reason === "string" && a.reason.trim() ? { reason: a.reason.trim().slice(0, 200) } : {}) });
+    const reason = typeof a.reason === "string" ? storable(a.reason.trim().slice(0, 200)).trim() : "";
+    answers.set(`${t.toolCallId}\n${a.id}`, { approved: a.approved, ...(reason ? { reason } : {}) });
   }
   let changed = 0;
   const parts = stored.parts.map((p) => {

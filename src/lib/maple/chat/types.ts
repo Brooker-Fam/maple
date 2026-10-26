@@ -8,6 +8,9 @@ import type { AlertTier } from "../guidelines";
 
 export const CHAT_MAX_CHARS = 2000;
 
+export const CHAT_OFF = "The chat isn't available right now. Logging works as usual.";
+export const CHAT_FAILED = "Something went wrong, so the answer stopped. Check Today before trying again, so nothing is logged twice.";
+
 /** useChat's id for a thread: made on the phone, checked on the server. */
 export const THREAD_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -47,7 +50,8 @@ export type ChatData = {
 
 export type ChatMessage = UIMessage<unknown, ChatData>;
 
-export type ChatThread = { id: string; title: string | null; updated_at: string };
+/** `busy`: a turn is still running (GET of one thread only), so its reply isn't saved yet. */
+export type ChatThread = { id: string; title: string | null; updated_at: string; busy?: boolean };
 
-/** A refused POST: `code` says what the sheet should do about it. */
-export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off" };
+/** A refused POST: `code` says what the sheet should do about it; `help` that the message mentioned a crisis, so the help card shows anyway. */
+export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off"; help?: "crisis" };

@@ -6,10 +6,12 @@ import type { ChatMessage, ChatThread } from "./types";
 
 /**
  * The chat's tables (src/lib/migrate.ts). A thread belongs to one member and
- * every query is filtered by them. Messages are append-only UIMessages; only
- * an assistant message is ever rewritten, by its own continuation after an
- * approval. Usage rows hold counts and cost, never content, and outlive a
- * deleted thread.
+ * every query is filtered by them; a viewer reaches only threads that ran as
+ * a viewer throughout (`viewer_only`). Messages are append-only UIMessages; only
+ * an assistant message is ever rewritten: by its own continuation after an
+ * approval, or when a new message turns its unanswered request into a no.
+ * Usage rows hold counts and cost, never content, and like the daily message
+ * count they outlive a deleted thread.
  */
 
 async function rows(sql: string, params: unknown[]): Promise<Record<string, unknown>[]> {
@@ -22,14 +24,17 @@ const iso = (v: unknown) => new Date(v as string).toISOString();
 
 const threadOf = (r: Record<string, unknown>): ChatThread => ({ id: String(r.id), title: (r.title as string | null) ?? null, updated_at: iso(r.updated_at) });
 
-export async function listThreads(member: string): Promise<ChatThread[]> {
-  const r = await rows(`SELECT id, title, updated_at FROM maple_chat_threads WHERE member = $1 ORDER BY updated_at DESC LIMIT 20`, [member]);
+export async function listThreads(member: string, viewer: boolean): Promise<ChatThread[]> {
+  const r = await rows(`SELECT id, title, updated_at FROM maple_chat_threads WHERE member = $1 AND (viewer_only OR NOT $2) ORDER BY updated_at DESC LIMIT 20`, [member, viewer]);
   return r.map(threadOf);
 }
 
-export async function getThread(id: string, member: string): Promise<ChatThread | null> {
-  const r = await rows(`SELECT id, title, updated_at FROM maple_chat_threads WHERE id = $1 AND member = $2`, [id, member]);
-  return r.length ? threadOf(r[0]) : null;
+export async function getThread(id: string, member: string, viewer: boolean): Promise<ChatThread | null> {
+  const r = await rows(
+    `SELECT id, title, updated_at, COALESCE(busy_until > NOW(), FALSE) AS busy FROM maple_chat_threads WHERE id = $1 AND member = $2 AND (viewer_only OR NOT $3)`,
+    [id, member, viewer]
+  );
+  return r.length ? { ...threadOf(r[0]), busy: r[0].busy === true } : null;
 }
 
 export async function deleteThread(id: string, member: string): Promise<boolean> {
@@ -43,21 +48,21 @@ export type LockedThread = { id: string; title: string | null; userMessages: num
  * seconds, longer than a turn can run. "busy" while another turn has it;
  * "missing" for another member's thread, said the same as one that isn't there.
  */
-export async function lockThread(id: string, member: string, model: string): Promise<LockedThread | "busy" | "missing"> {
-  await rows(`INSERT INTO maple_chat_threads (id, member, model) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [id, member, model]);
+export async function lockThread(id: string, member: string, model: string, viewer: boolean): Promise<LockedThread | "busy" | "missing"> {
+  await rows(`INSERT INTO maple_chat_threads (id, member, model, viewer_only) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING`, [id, member, model, viewer]);
   const r = await rows(
-    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds'
-     WHERE t.id = $1 AND t.member = $2 AND (t.busy_until IS NULL OR t.busy_until < NOW())
+    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = $3
+     WHERE t.id = $1 AND t.member = $2 AND (t.viewer_only OR NOT $3) AND (t.busy_until IS NULL OR t.busy_until < NOW())
      RETURNING t.id, t.title,
        (SELECT COUNT(*) FROM maple_chat_messages m WHERE m.thread_id = t.id AND m.role = 'user') AS user_messages,
        (SELECT u.input_tokens + u.cache_read_tokens + u.cache_write_tokens FROM maple_ai_usage u WHERE u.thread_id = t.id ORDER BY u.id DESC LIMIT 1) AS last_prompt`,
-    [id, member]
+    [id, member, viewer]
   );
   if (r.length) {
     return { id: String(r[0].id), title: (r[0].title as string | null) ?? null, userMessages: Number(r[0].user_messages ?? 0), lastPrompt: Number(r[0].last_prompt ?? 0) };
   }
-  const owner = await rows(`SELECT member FROM maple_chat_threads WHERE id = $1`, [id]);
-  return owner.length && owner[0].member === member ? "busy" : "missing";
+  const owner = await rows(`SELECT member, viewer_only FROM maple_chat_threads WHERE id = $1`, [id]);
+  return owner.length && owner[0].member === member && (owner[0].viewer_only === true || !viewer) ? "busy" : "missing";
 }
 
 export async function releaseThread(id: string): Promise<void> {
@@ -84,17 +89,26 @@ export async function saveMessage(threadId: string, member: string, m: ChatMessa
   );
 }
 
-/** Today's (and this month's) chat so far: this member's messages and the family's spend. */
-export async function usageSince(member: string, day: [Date, Date], monthStart: Date): Promise<Usage> {
+/** Today's (and this month's) chat so far: this member's messages on `day` (a family day key) and the family's spend. */
+export async function usageSince(member: string, day: string, dayStart: Date, monthStart: Date): Promise<Usage> {
   const r = await rows(
     `SELECT
-       (SELECT COUNT(*) FROM maple_chat_messages WHERE member = $1 AND role = 'user' AND created_at >= $2 AND created_at < $3) AS mine,
-       (SELECT COALESCE(SUM(cost_micro_usd), 0) FROM maple_ai_usage WHERE created_at >= $2) AS day,
+       (SELECT COALESCE(MAX(messages), 0) FROM maple_chat_daily WHERE member = $1 AND day = $2::date) AS mine,
+       (SELECT COALESCE(SUM(cost_micro_usd), 0) FROM maple_ai_usage WHERE created_at >= $3) AS day,
        (SELECT COALESCE(SUM(cost_micro_usd), 0) FROM maple_ai_usage WHERE created_at >= $4) AS month`,
-    [member, day[0].toISOString(), day[1].toISOString(), monthStart.toISOString()]
+    [member, day, dayStart.toISOString(), monthStart.toISOString()]
   );
   const u = r[0] ?? {};
   return { mine: Number(u.mine ?? 0), day: BigInt(String(u.day ?? 0)), month: BigInt(String(u.month ?? 0)) };
+}
+
+/** One more message from this member on `day`. Kept apart from the messages, so deleting a chat doesn't give the day's messages back. */
+export async function countMessage(member: string, day: string): Promise<void> {
+  await rows(
+    `INSERT INTO maple_chat_daily (member, day, messages) VALUES ($1, $2::date, 1)
+     ON CONFLICT (member, day) DO UPDATE SET messages = maple_chat_daily.messages + 1`,
+    [member, day]
+  );
 }
 
 export type UsageRow = {

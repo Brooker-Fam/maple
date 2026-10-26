@@ -299,9 +299,11 @@ async function migrate() {
 
   // The in-app chat (src/lib/maple/chat/). A thread is one member's and nobody
   // else's; deleting it deletes its messages. Messages are the AI SDK's
-  // UIMessage parts as sent, never rewritten (an approval's continuation
-  // replaces its own assistant message). Usage rows carry token counts and
-  // integer micro-dollar cost only, no content, and outlive their thread.
+  // UIMessage parts as sent, never trimmed. Two rewrites: an approval's
+  // continuation replaces its own assistant message, and a new message sent
+  // instead of a tap stores that pending request as a no. Usage rows carry
+  // token counts and integer micro-dollar cost only, no content, and outlive
+  // their thread, as does the daily message count.
   await sql`
     CREATE TABLE IF NOT EXISTS maple_chat_threads (
       id TEXT PRIMARY KEY,
@@ -314,6 +316,8 @@ async function migrate() {
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_chat_threads_member ON maple_chat_threads(member, updated_at DESC)`;
+  // Every turn in it ran as a viewer. A viewer opens only these, so someone made a viewer can't reread her data from older chats.
+  await sql`ALTER TABLE maple_chat_threads ADD COLUMN IF NOT EXISTS viewer_only BOOLEAN NOT NULL DEFAULT FALSE`;
   await sql`
     CREATE TABLE IF NOT EXISTS maple_chat_messages (
       id TEXT PRIMARY KEY,
@@ -351,6 +355,14 @@ async function migrate() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_ai_usage_time ON maple_ai_usage(created_at DESC)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_ai_usage_thread ON maple_ai_usage(thread_id, id DESC)`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_chat_daily (
+      member TEXT NOT NULL,
+      day DATE NOT NULL,
+      messages INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (member, day)
+    )
+  `;
 
   console.log("Migrations complete.");
 }

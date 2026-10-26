@@ -86,13 +86,14 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
 
 const HELP_TEXT = "The help card is showing under your reply.";
 
-export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: boolean }): ToolSet {
+/** `device`: the phone's X-Maple-Device id, so a dose logged here sends "Logged" to the other phones only. */
+export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: boolean; device?: string | null }): ToolSet {
   const { all, mom } = registrations();
   const sub = member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`;
   const extra = {
     signal: new AbortController().signal,
     requestId: "maple-chat",
-    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, via: "chat" } },
+    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, via: "chat", device: opts.device ?? null } },
     sendNotification: async () => {},
     sendRequest: async () => {
       throw new Error("unsupported");
@@ -132,7 +133,12 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: 
   return set;
 }
 
-/** A tap on a card before anything is deleted: the model's word is never enough for that. */
+/**
+ * The only calls that wait for a tap: delete_entry, and fix_mom_entry deleting
+ * one of hers. undo_last (her doses too), restore_entry, update_entry and
+ * fix_mom_entry's update (a dose's time, or skipped) run on the model's word,
+ * and can move her next "OK after" time.
+ */
 export const TOOL_APPROVAL = {
   delete_entry: "user-approval" as const,
   fix_mom_entry: (input: { action?: unknown } | undefined) => (input?.action === "delete" ? ("user-approval" as const) : undefined),

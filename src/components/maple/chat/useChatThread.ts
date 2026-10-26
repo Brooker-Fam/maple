@@ -3,28 +3,25 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CHAT_MAX_CHARS, type ChatMessage, type ChatRefusal, type ChatThread } from "@/lib/maple/chat/types";
+import { mentionsCrisis } from "@/lib/maple/chat/crisis";
+import { CHAT_MAX_CHARS, type ChatMessage, type ChatThread } from "@/lib/maple/chat/types";
+import { deviceHeaders } from "@/lib/maple/device";
 import { useMaple } from "../useMaple";
+import { DROPPED, needsHelpCard, problemFor, refusalOf, textOf, unanswered } from "./stopped";
 
 /** A thread touched within this long reopens with the sheet; after it, a new one starts. */
 const REOPEN_MS = 6 * 60 * 60_000;
 
+/** After an answer stops early, the server's copy is looked for this often, for about as long as a turn can hold the thread. */
+const RESYNC_MS = 5_000;
+const RESYNC_TRIES = 16;
+
 const newThreadId = () => crypto.randomUUID();
-
-/** A refused POST arrives as the response body's text (DefaultChatTransport); an error mid-answer is plain text. */
-function refusalOf(message: string): ChatRefusal | null {
-  try {
-    const b = JSON.parse(message) as Partial<ChatRefusal>;
-    return typeof b?.error === "string" ? (b as ChatRefusal) : null;
-  } catch {
-    return null;
-  }
-}
-
-const textOf = (m: ChatMessage) => m.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/maple/chat",
+  // This install's id, so her "Logged" notice skips the phone the chat ran on.
+  headers: () => deviceHeaders(),
   // Only the newest message goes up: the server keeps the thread and never takes history from the phone.
   prepareSendMessagesRequest: ({ id, messages }) => ({ body: { threadId: id, message: messages[messages.length - 1] } }),
 });
@@ -33,19 +30,26 @@ export function useChatThread(open: boolean) {
   const { api, refresh, online } = useMaple();
   const [thread, setThread] = useState<{ id: string; initial: ChatMessage[] } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [help, setHelp] = useState(false);
+  const helpArrived = useRef(false);
   const [draft, setDraft] = useState("");
   const usedAt = useRef(0);
   const lastSent = useRef<string | null>(null);
   const carry = useRef<string | null>(null);
+  const shown = useRef<{ id: string | null; busy: boolean }>({ id: null, busy: false });
 
   const chat = useChat<ChatMessage>({
     id: thread?.id,
     messages: thread?.initial,
     transport,
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
-    onFinish: () => {
+    onData: (part) => {
+      if (part.type === "data-help") helpArrived.current = true;
+    },
+    onFinish: ({ isError }) => {
       usedAt.current = Date.now();
-      void refresh();
+      // An answer that stopped early refreshes once the server has saved it (resync).
+      if (!isError) void refresh();
     },
     onError: (err) => {
       const refusal = refusalOf(err.message);
@@ -54,17 +58,52 @@ export function useChatThread(open: boolean) {
         setThread({ id: newThreadId(), initial: [] });
         return;
       }
-      setProblem(refusal?.error ?? (err.message || "Something went wrong. Check Today before trying again."));
+      setProblem(problemFor(err.message));
+      // No answer, or one cut off before its card: the help card shows here instead.
+      if (!helpArrived.current && (refusal?.help === "crisis" || (lastSent.current != null && mentionsCrisis(lastSent.current)))) setHelp(true);
+      if (thread) void resync(thread.id);
       if (!refusal) return;
-      // Turned away before it was saved: the message comes back to the box to send again later.
       chat.setMessages((ms) => {
         const last = ms[ms.length - 1];
+        if (last?.role === "assistant") return [...ms.slice(0, -1), unanswered(last)];
         if (last?.role !== "user") return ms;
+        // Turned away before it was saved: the message comes back to the box to send again later.
         setDraft(textOf(last));
         return ms.slice(0, -1);
       });
     },
   });
+
+  const busy = chat.status === "submitted" || chat.status === "streaming";
+  useEffect(() => {
+    shown.current = { id: thread?.id ?? null, busy };
+  }, [thread, busy]);
+
+  /** After an answer stopped early: the thread as the server saved it, once its turn is over, unless the phone has moved on. */
+  const resync = useCallback(
+    async (id: string) => {
+      const moved = () => shown.current.id !== id || shown.current.busy;
+      for (let i = 0; i < RESYNC_TRIES; i++) {
+        await new Promise((r) => setTimeout(r, i ? RESYNC_MS : 1_000));
+        if (moved()) return;
+        let saved: { thread: ChatThread; messages: ChatMessage[] };
+        try {
+          saved = await api<{ thread: ChatThread; messages: ChatMessage[] }>(`/api/maple/chat?thread=${encodeURIComponent(id)}`);
+        } catch {
+          // Never saved (404), or offline: what's on screen stays.
+          return;
+        }
+        if (saved.thread.busy) continue;
+        if (moved()) return;
+        chat.setMessages(saved.messages);
+        setProblem((p) => (p === DROPPED ? null : p));
+        setHelp(needsHelpCard(saved.messages, lastSent.current));
+        void refresh();
+        return;
+      }
+    },
+    [api, chat, refresh]
+  );
 
   // Opening: the thread from the last six hours, else a new one.
   useEffect(() => {
@@ -94,21 +133,24 @@ export function useChatThread(open: boolean) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, api]);
 
-  const busy = chat.status === "submitted" || chat.status === "streaming";
-
   const send = useCallback(
     (raw: string) => {
       const text = raw.trim();
       if (!text || busy || !thread) return;
+      const crisis = mentionsCrisis(text);
       if (!online) {
         setProblem("Needs a connection. Logging still works from the buttons.");
+        setHelp(crisis);
         return;
       }
       if (text.length > CHAT_MAX_CHARS) {
         setProblem(`That's over ${CHAT_MAX_CHARS.toLocaleString("en-US")} characters. Try a shorter message.`);
+        setHelp(crisis);
         return;
       }
       setProblem(null);
+      setHelp(false);
+      helpArrived.current = false;
       setDraft("");
       usedAt.current = Date.now();
       lastSent.current = text;
@@ -123,12 +165,14 @@ export function useChatThread(open: boolean) {
     if (!text || !thread || thread.initial.length) return;
     carry.current = null;
     setProblem(null);
+    helpArrived.current = false;
     void chat.sendMessage({ text });
   }, [thread, chat]);
 
   const newChat = useCallback(() => {
     if (busy) return;
     setProblem(null);
+    setHelp(false);
     usedAt.current = Date.now();
     setThread({ id: newThreadId(), initial: [] });
   }, [busy]);
@@ -145,6 +189,7 @@ export function useChatThread(open: boolean) {
       }
     }
     setProblem(null);
+    setHelp(false);
     setThread({ id: newThreadId(), initial: [] });
   }, [api, busy, thread]);
 
@@ -154,6 +199,7 @@ export function useChatThread(open: boolean) {
     status: chat.status,
     busy,
     problem,
+    help,
     clearProblem: () => setProblem(null),
     draft,
     setDraft,

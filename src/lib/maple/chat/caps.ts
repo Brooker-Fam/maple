@@ -22,10 +22,10 @@ export const CHAT_MAX_STEPS = 6;
 export const CHAT_MAX_OUTPUT_TOKENS = 1500;
 export const CHAT_TIMEOUT = { totalMs: 55_000, stepMs: 25_000, toolMs: 15_000 };
 
-/** A thread this long starts over in a new one, so no prompt nears the 100K-token price step. */
+/** A thread this long starts over in a new one, which keeps prompts well under the 100K-token price step. */
 export const THREAD_MAX_USER_MESSAGES = 40;
 export const THREAD_MAX_PROMPT_TOKENS = 60_000;
-/** A step whose prompt passed this gets no more tool calls: the turn ends with an answer. */
+/** A step whose prompt passed this ends the turn, even with its tool results unread. */
 export const STEP_PROMPT_LIMIT = 60_000;
 
 export const DAILY_MESSAGES: Record<Role, number> = { owner: 60, member: 60, viewer: 20 };

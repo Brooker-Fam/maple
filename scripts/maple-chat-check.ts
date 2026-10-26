@@ -2,7 +2,8 @@
  * Assertions for the in-app chat (src/lib/maple/chat/): the tool adapter
  * (every registered tool captured, gated for members and viewers, excluded
  * tools, approvals), cost arithmetic in BigInt micro-dollars, the crisis
- * matcher, the context line, and message validation.
+ * matcher, the context line, message validation, whole turns against a
+ * stand-in model, and the POST against an in-memory store.
  *
  *   npx tsx scripts/maple-chat-check.ts      (or pnpm check:maple-chat)
  *
@@ -12,16 +13,21 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { budgetFrom, capsVerdict, chatModel, chatProviderOptions, GATEWAY_PRIVACY, LIMIT_MESSAGE, MONTH_MESSAGE, threadFull } from "../src/lib/maple/chat/caps";
 import { mentionsCrisis } from "../src/lib/maple/chat/crisis";
-import { ChatInputError, denyPending, mergeApprovals, readIncoming, titleFrom, userMessage, userText } from "../src/lib/maple/chat/messages";
+import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, storable, titleFrom, userMessage, userText, withCrisisHelp } from "../src/lib/maple/chat/messages";
 import { costMicro, dollars, priceFor, stepTokens } from "../src/lib/maple/chat/prices";
+import { answerPost, BUSY, FULL, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
 import { CHAT_ADDENDUM, contextLine, markTailForCache, systemBlocks } from "../src/lib/maple/chat/prompt";
+import type { LockedThread, UsageRow } from "../src/lib/maple/chat/store";
 import { chatTools, EXCLUDED_TOOLS, forModel, MODEL_TEXT_MAX, registrations, TOOL_APPROVAL, toOutput } from "../src/lib/maple/chat/tools";
 import type { ChatMessage, ChatToolOutput } from "../src/lib/maple/chat/types";
 import { CRISIS_REPLY } from "../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
-import { CHAT_OFF, chatTurn } from "../src/lib/maple/chat/turn";
+import { CHAT_CUT, CHAT_FAILED, CHAT_OFF, chatTurn, friendlyError } from "../src/lib/maple/chat/turn";
+import { StoreUnavailable } from "../src/lib/maple/store";
+import type { Baby, Member } from "../src/lib/maple/types";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
+import { DROPPED, needsHelpCard, problemFor, unanswered } from "../src/components/maple/chat/stopped";
 
 let passed = 0;
 let failed = 0;
@@ -218,6 +224,40 @@ check("the crisis matcher catches harm to oneself or someone else", () => {
   ]) ok(mentionsCrisis(t), `caught: ${t}`);
 });
 
+check("the crisis matcher catches a report about someone else", () => {
+  for (const t of [
+    "my wife said she wants to hurt herself",
+    "Robin said she wants to kill herself",
+    "my husband said he'd hurt the baby",
+    "my partner keeps saying she wants to die",
+    "she told me she's been thinking about ending it",
+    "he said everyone would be better off without him",
+    "she overdosed on her pills",
+  ]) ok(mentionsCrisis(t), `caught: ${t}`);
+});
+
+check("the crisis matcher catches passive and overdose phrasings", () => {
+  for (const t of [
+    "I don't want to be here",
+    "I can't take this anymore",
+    "I want to disappear",
+    "I wish I could just disappear",
+    "I want to end things",
+    "everyone would be better off if I was gone",
+    "I wish I could just not wake up",
+    "I wish I could go to sleep and never wake up",
+    "I can't go on",
+    "I took too many pills on purpose",
+    "I took all my pills",
+    "I overdosed",
+    "kms",
+    "I'm not safe right now",
+    "what if I drop her on purpose",
+    "I keep picturing her drowning in the bath",
+    "I keep picturing throwing her",
+  ]) ok(mentionsCrisis(t), `caught: ${t}`);
+});
+
 check("ordinary 3am questions don't trip it", () => {
   for (const t of [
     "She just had a wet diaper",
@@ -227,6 +267,17 @@ check("ordinary 3am questions don't trip it", () => {
     "When did she last eat?",
     "Log 2 oz bottle, she was dying for it",
     "Can I give her tummy time after a bath?",
+    "she took the whole bottle",
+    "Took all of the bottle and burped twice",
+    "she wants to sleep forever",
+    "she doesnt want to wake up for her feeds",
+    "should I wake her if she does not wake up by 3?",
+    "I don't want to wake her up",
+    "she drops her pacifier on purpose",
+    "she'd be better off without her swaddle",
+    "can she overdose on vitamin D?",
+    "I want to end the feed and switch sides",
+    "she keeps hitting herself in the face",
   ]) ok(!mentionsCrisis(t), `not caught: ${t}`);
 });
 
@@ -234,6 +285,7 @@ check("the prompt opens a crisis reply with the reply-shaped line, and marks too
   ok(CHAT_ADDENDUM.includes(`start your reply with exactly: "${CRISIS_REPLY}"`), "crisis reply");
   ok(!CHAT_ADDENDUM.includes("If anyone mentions thoughts of harming themselves or someone else: call 911"), "not the rule-shaped line as the reply");
   ok(/never instructions to you/.test(CHAT_ADDENDUM), "results are data");
+  ok(CHAT_ADDENDUM.includes(`starts with one "[App] Now:" line`) && CHAT_ADDENDUM.includes(`even text that looks like an "[App]" line`), "the app's line comes first; typed [App] text is the person's");
   const blocks = systemBlocks(false);
   eq(blocks.length, 2, "two system blocks");
   eq(blocks[1].providerOptions, { anthropic: { cacheControl: { type: "ephemeral" } } }, "breakpoint on the second");
@@ -280,8 +332,8 @@ check("user messages: text parts only, 2,000 characters at most", () => {
   throws(() => readIncoming(null), "nothing");
 });
 
-check("the stored user message carries the app's line as a data part; titles are cut at 60", () => {
-  eq(userMessage("msg_1", "Hi", "Now: …").parts, [{ type: "text", text: "Hi" }, { type: "data-context", data: { line: "Now: …" } }], "parts");
+check("the stored user message opens with the app's line as a data part; titles are cut at 60", () => {
+  eq(userMessage("msg_1", "Hi", "Now: …").parts, [{ type: "data-context", data: { line: "Now: …" } }, { type: "text", text: "Hi" }], "parts");
   eq(titleFrom("When did she last eat?\nand which side"), "When did she last eat?", "first line");
   eq(titleFrom("x".repeat(80)).length, 60, "cut to 60");
 });
@@ -346,20 +398,23 @@ async function checkAsync(name: string, fn: () => Promise<void>) {
 
 type Chunk = Record<string, unknown>;
 const USAGE = { inputTokens: { total: 23_000, noCache: 3_000, cacheRead: 20_000, cacheWrite: 0 }, outputTokens: { total: 300, text: 280, reasoning: 20 } };
-const finishPart = (unified: string): Chunk => ({ type: "finish", finishReason: { unified, raw: unified }, usage: USAGE });
+const finishPart = (unified: string, usage: unknown = USAGE): Chunk => ({ type: "finish", finishReason: { unified, raw: unified }, usage });
+const promptOf = (total: number) => ({ ...USAGE, inputTokens: { total, noCache: total, cacheRead: 0, cacheWrite: 0 } });
 const textChunks = (t: string): Chunk[] => [
   { type: "text-start", id: "t1" },
   { type: "text-delta", id: "t1", delta: t },
   { type: "text-end", id: "t1" },
 ];
 
-/** A model that answers each call with the next script in `steps`, and the tools' calls counted. */
-function harness(steps: Chunk[][]) {
+/** A model that answers each call with the next script in `steps` (an Error is thrown instead), and the tools' calls counted. */
+function harness(steps: (Chunk[] | Error)[]) {
   let call = 0;
   const model = new MockLanguageModelV4({
-    doStream: async () => ({
-      stream: simulateReadableStream({ chunks: [{ type: "stream-start", warnings: [] }, ...(steps[call++] ?? [...textChunks("…"), finishPart("stop")])] as never[] }),
-    }),
+    doStream: async () => {
+      const script = steps[call++] ?? [...textChunks("…"), finishPart("stop")];
+      if (script instanceof Error) throw script;
+      return { stream: simulateReadableStream({ chunks: [{ type: "stream-start", warnings: [] }, ...script] as never[] }) };
+    },
   });
   const ran: string[] = [];
   const stub = (name: string) =>
@@ -374,12 +429,16 @@ function harness(steps: Chunk[][]) {
   const tools: ToolSet = { delete_entry: stub("delete_entry"), maple_status: stub("maple_status") };
   const saved: ChatMessage[] = [];
   const usage: bigint[] = [];
+  const rows: { step: number; costMicro: bigint; finishReason: string | null; tokens: { prompt: number } }[] = [];
   const waits: Promise<unknown>[] = [];
   let released = 0;
   const reported: unknown[] = [];
   const deps = {
     save: async (m: ChatMessage) => void saved.push(structuredClone(m)),
-    record: async (u: { costMicro: bigint }) => void usage.push(u.costMicro),
+    record: async (u: (typeof rows)[number]) => {
+      usage.push(u.costMicro);
+      rows.push(u);
+    },
     release: async () => void released++,
     report: (e: unknown) => void reported.push(e),
     waitUntil: (p: Promise<unknown>) => void waits.push(p),
@@ -390,7 +449,7 @@ function harness(steps: Chunk[][]) {
     await Promise.all(waits);
     await new Promise((r) => setTimeout(r, 20));
   };
-  return { run, settle, saved, usage, ran, reported, released: () => released };
+  return { model, tools, run, settle, saved, usage, rows, ran, reported, released: () => released };
 }
 
 const ask = (text: string): ChatMessage => userMessage("msg_u1", text, "Now: 3:10 AM EDT on Monday, Oct 26 (America/New_York). June is 6 days old (Day 7). Signed in: Alex (owner).");
@@ -468,6 +527,81 @@ async function turnChecks() {
     eq(h.saved[0].parts.filter((p) => p.type === "data-help"), [{ type: "data-help", data: { reason: "refusal" } }], "refusal card");
   });
 
+  await checkAsync("a refusal partway through an answer still gets the fixed card", async () => {
+    const h = harness([
+      [{ type: "tool-call", toolCallId: "call_1", toolName: "maple_status", input: "{}" }, ...textChunks("Let me check the log."), finishPart("tool-calls")],
+      [...textChunks("Here is what"), finishPart("content-filter")],
+    ]);
+    await (await h.run([ask("made-up question the filter declines halfway")], "msg_r7")).text();
+    await h.settle();
+    eq(h.saved[0].parts.filter((p) => p.type === "data-help"), [{ type: "data-help", data: { reason: "refusal" } }], "refusal card");
+  });
+
+  await checkAsync("a crisis message that's turned away still carries the help card", async () => {
+    const long = { role: "user", parts: [{ type: "text", text: "x".repeat(2500) }, { type: "text", text: "I want to die" }] };
+    ok(mentionsCrisis(roughText(long)), "read from an over-long message");
+    ok(mentionsCrisis(roughText({ role: "user", parts: [{ type: "text", text: "kms" }, { type: "file", url: "x" }] })), "read from a message with a bad part");
+    eq(roughText({ role: "assistant", parts: [{ type: "text", text: "I want to die" }] }), "", "never the model's own words");
+    for (const [body, status] of [
+      [{ error: LIMIT_MESSAGE, code: "limit" }, 429],
+      [{ error: MONTH_MESSAGE, code: "limit" }, 429],
+      [{ error: CHAT_OFF, code: "off" }, 503],
+      [{ error: "One message at a time", code: "busy" }, 409],
+      [{ error: "Maple's log is offline right now" }, 503],
+      [{ error: "That's over 2,000 characters." }, 400],
+    ] as const) {
+      const res = await withCrisisHelp(Response.json(body, { status }));
+      eq([res.status, await res.json()], [status, { ...body, help: "crisis" }], `${status} ${body.error}`);
+    }
+    const stream = new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } });
+    eq(await withCrisisHelp(stream), stream, "a streamed answer passes through");
+  });
+
+  await checkAsync("a step whose prompt passes 60K ends the turn with its tools still on, and says why", async () => {
+    const h = harness([
+      [{ type: "tool-call", toolCallId: "call_1", toolName: "maple_status", input: "{}" }, finishPart("tool-calls", promptOf(61_000))],
+      [...textChunks("never asked"), finishPart("stop")],
+    ]);
+    await (await h.run([ask("made-up question with a long answer")], "msg_r8")).text();
+    await h.settle();
+    eq(h.model.doStreamCalls.length, 1, "no request after the long step");
+    ok(h.model.doStreamCalls.every((c) => c.tools?.length && c.toolChoice?.type !== "none"), "every request kept its tools");
+    eq(h.ran, ["maple_status"], "the step's own call ran");
+    const words = h.saved[0].parts.flatMap((p) => (p.type === "text" ? [p.text] : []));
+    eq(words, [CHAT_CUT], "the reply says it stopped");
+  });
+
+  await checkAsync("a step that never finished still counts against the budget; a refused request doesn't", async () => {
+    const h = harness([[{ type: "tool-call", toolCallId: "call_1", toolName: "maple_status", input: "{}" }, finishPart("tool-calls")], new Error("made-up stream failure")]);
+    await (await h.run([ask("made-up question")], "msg_r9")).text();
+    await h.settle();
+    eq(h.rows.map((r) => [r.step, r.finishReason]), [[0, "tool-calls"], [1, "unfinished"]], "rows");
+    const est = h.rows[1];
+    ok(est.tokens.prompt >= 23_000 && est.costMicro > BigInt(0), "the unfinished step is priced from at least the last prompt");
+    const refused = harness([Object.assign(new Error("made-up"), { statusCode: 403 })]);
+    await (await refused.run([ask("made-up question")], "msg_r10")).text();
+    await refused.settle();
+    eq(refused.rows, [], "a 403 costs nothing");
+  });
+
+  await checkAsync("an approval's continuation shares the message's six steps", async () => {
+    const loop = (n: number) => Array.from({ length: n }, (_, i) => [{ type: "tool-call", toolCallId: `call_${i + 2}`, toolName: "maple_status", input: "{}" }, finishPart("tool-calls")]);
+    const h = harness(loop(6));
+    const asked = stored();
+    asked.parts.unshift(...(Array.from({ length: 4 }, () => ({ type: "step-start" })) as ChatMessage["parts"]));
+    eq(stepsTaken(asked), 5, "five steps so far");
+    const merged = mergeApprovals(asked, { id: asked.id, parts: [{ type: "tool-delete_entry", toolCallId: "call_1", approval: { id: "appr_1", approved: true } }] })!;
+    const res = await chatTurn({ model: h.model, modelKey: HAIKU, price: priceFor(HAIKU)!, tools: h.tools, viewer: false, messages: [ask("Delete #12"), merged], responseId: merged.id, crisis: false, stepsDone: stepsTaken(merged), deps: { save: async () => {}, record: async () => {}, release: async () => {}, report: () => {}, waitUntil: () => {} } });
+    await res.text();
+    eq(h.model.doStreamCalls.length, 1, "one more model step, to report the delete");
+  });
+
+  check("a retried gateway error reads by its last attempt's status", () => {
+    eq(friendlyError({ name: "AI_RetryError", lastError: { statusCode: 429 } }), LIMIT_MESSAGE, "429 after retries");
+    eq(friendlyError({ name: "AI_RetryError", lastError: { statusCode: 403 } }), CHAT_OFF, "403 after retries");
+    eq(friendlyError(new Error("made-up")), CHAT_FAILED, "anything else");
+  });
+
   await checkAsync("a gateway refusal mid-turn reads as a friendly line and is reported without its message", async () => {
     const failing = new MockLanguageModelV4({
       doStream: async () => {
@@ -496,7 +630,264 @@ async function turnChecks() {
   });
 }
 
-turnChecks().then(() => {
-  console.log(`\n${passed} passed, ${failed} failed`);
-  if (failed) process.exit(1);
+// ── one POST, against an in-memory store ─────────────────────────────────
+
+type FakeThread = { member: string; viewerOnly: boolean; busy: boolean; title: string | null; lastPrompt: number; messages: ChatMessage[] };
+
+/** The route's storage in memory: threads with their lock, the daily count, usage rows. `fail` makes one call throw. */
+function fakeStore(fail?: keyof ChatStore) {
+  const threads = new Map<string, FakeThread>();
+  const daily = new Map<string, number>();
+  const usage: UsageRow[] = [];
+  const calls: string[] = [];
+  const guard = (name: keyof ChatStore) => {
+    calls.push(name);
+    if (fail === name) throw new StoreUnavailable();
+  };
+  const store: ChatStore = {
+    usageSince: async (member, day) => {
+      guard("usageSince");
+      const spent = usage.reduce((n, u) => n + u.costMicro, BigInt(0));
+      return { mine: daily.get(`${member} ${day}`) ?? 0, day: spent, month: spent };
+    },
+    lockThread: async (id, member, _model, viewer): Promise<LockedThread | "busy" | "missing"> => {
+      guard("lockThread");
+      if (!threads.has(id)) threads.set(id, { member, viewerOnly: viewer, busy: false, title: null, lastPrompt: 0, messages: [] });
+      const t = threads.get(id)!;
+      if (t.member !== member || (viewer && !t.viewerOnly)) return "missing";
+      if (t.busy) return "busy";
+      t.busy = true;
+      return { id, title: t.title, userMessages: t.messages.filter((m) => m.role === "user").length, lastPrompt: t.lastPrompt };
+    },
+    releaseThread: async (id) => {
+      guard("releaseThread");
+      threads.get(id)!.busy = false;
+    },
+    loadMessages: async (id) => {
+      guard("loadMessages");
+      return structuredClone(threads.get(id)?.messages ?? []);
+    },
+    saveMessage: async (id, _member, m) => {
+      guard("saveMessage");
+      const ms = threads.get(id)!.messages;
+      const i = ms.findIndex((x) => x.id === m.id);
+      if (i >= 0) ms[i] = structuredClone(m);
+      else ms.push(structuredClone(m));
+    },
+    setTitle: async (id, title) => {
+      guard("setTitle");
+      threads.get(id)!.title ??= title;
+    },
+    countMessage: async (member, day) => {
+      guard("countMessage");
+      daily.set(`${member} ${day}`, (daily.get(`${member} ${day}`) ?? 0) + 1);
+    },
+    recordUsage: async (u) => {
+      guard("recordUsage");
+      usage.push(u);
+    },
+  };
+  return { store, threads, daily, usage, calls, deleteAll: () => threads.clear() };
+}
+
+const ALEX_MEMBER: Member = { email: ALEX.email, role: "owner", display_name: "Alex", emoji: null, color: null };
+const THREAD = "thread_made_up_1";
+const say = (text: string) => ({ threadId: THREAD, message: { id: "x", role: "user", parts: [{ type: "text", text }] } });
+
+function post(f: ReturnType<typeof fakeStore>, h: ReturnType<typeof harness>, over: Partial<PostDeps> = {}) {
+  const waits: Promise<unknown>[] = [];
+  const deps: PostDeps = {
+    store: f.store,
+    household: async () => ({ baby: BABY as unknown as Baby, members: [ALEX_MEMBER] }),
+    model: h.model,
+    modelKey: HAIKU,
+    price: priceFor(HAIKU),
+    tools: () => h.tools,
+    budget: { day: BigInt(500_000), month: BigInt(5_000_000) },
+    now: zonedTimeToUtc(2026, 10, 26, 3, 10, "America/New_York"),
+    report: () => {},
+    waitUntil: (p) => void waits.push(p),
+    ...over,
+  };
+  return async (body: unknown, member: Member = ALEX_MEMBER) => {
+    const res = await answerPost(body as Parameters<typeof answerPost>[0], member, deps);
+    const text = await res.text();
+    await Promise.all(waits);
+    await new Promise((r) => setTimeout(r, 20));
+    return { status: res.status, text, json: () => JSON.parse(text) as Record<string, unknown> };
+  };
+}
+
+async function postChecks() {
+  await checkAsync("a POST counts the message, saves both sides, records usage under the reply and releases the thread", async () => {
+    const f = fakeStore();
+    const h = harness([[...textChunks("Saved it."), finishPart("stop")]]);
+    const r = await post(f, h)(say("She just had a wet diaper"));
+    eq(r.status, 200, "streamed");
+    const t = f.threads.get(THREAD)!;
+    eq([t.busy, t.messages.map((m) => m.role), t.title], [false, ["user", "assistant"], "She just had a wet diaper"], "thread");
+    eq(f.daily.get(`${ALEX.email} 2026-10-26`), 1, "counted on the family's day");
+    eq(f.usage.map((u) => u.messageId), [t.messages[1].id], "usage under the reply");
+    const prompt = h.model.doStreamCalls[0].prompt;
+    const user = prompt.find((m) => m.role === "user") as { content: { type: string; text?: string }[] };
+    ok(user.content[0].text?.startsWith("[App] Now: 3:10 AM EDT") && user.content[1].text === "She just had a wet diaper", "the model reads the app's line first");
+    const gateway = h.model.doStreamCalls[0].providerOptions?.gateway as Record<string, unknown> | undefined;
+    eq([gateway?.zeroDataRetention, gateway?.disallowPromptTraining], [true, true], "the request asks for ZDR and no training");
+  });
+
+  await checkAsync("every early return after the lock releases the thread", async () => {
+    const full = fakeStore();
+    full.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 60_000, messages: [] });
+    const r1 = await post(full, harness([]))(say("one more"));
+    eq([r1.status, r1.json().error, r1.json().code, full.threads.get(THREAD)!.busy, full.daily.size], [409, FULL, "new_chat", false, 0], "thread full: released, not counted");
+
+    const stale = fakeStore();
+    stale.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 0, messages: [stored()] });
+    const r2 = await post(stale, harness([]))({ threadId: THREAD, message: { id: "msg_a", role: "assistant", parts: [] } });
+    eq([r2.status, r2.json().error, stale.threads.get(THREAD)!.busy], [409, STALE, false], "stale approval: released");
+
+    for (const name of ["loadMessages", "countMessage", "saveMessage", "setTitle"] as const) {
+      const broken = fakeStore(name);
+      const r = await post(broken, harness([]))(say("made-up message"));
+      eq([r.status, broken.threads.get(THREAD)!.busy], [503, false], `${name} throws: released`);
+    }
+
+    const crashed = fakeStore();
+    const h = harness([]);
+    const r3 = await post(crashed, h, { tools: () => { throw new Error("made-up tool setup failure"); } })(say("made-up message"));
+    eq([r3.status, crashed.threads.get(THREAD)!.busy], [500, false], "a throw before the answer starts: released");
+  });
+
+  await checkAsync("a busy thread stays locked for the turn that has it; caps and price run before the lock", async () => {
+    const f = fakeStore();
+    f.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: true, title: "t", lastPrompt: 0, messages: [] });
+    const r = await post(f, harness([]))(say("made-up message"));
+    eq([r.status, r.json().error, f.threads.get(THREAD)!.busy], [409, BUSY, true], "busy");
+
+    const spent = fakeStore();
+    spent.usage.push({ member: "b@example.com", threadId: "other", messageId: "m", step: 0, model: HAIKU, tokens: stepTokens(usage(0, 0, 0, 0, 0)), costMicro: BigInt(500_000), priceKey: HAIKU, finishReason: "stop", generationId: null });
+    const r2 = await post(spent, harness([]))(say("I want to die"));
+    eq([r2.status, r2.json().error, r2.json().help], [429, LIMIT_MESSAGE, "crisis"], "spent day: refused with the help card");
+    ok(!spent.calls.includes("lockThread"), "never locked");
+
+    const off = fakeStore();
+    const r3 = await post(off, harness([]), { price: null })(say("made-up message"));
+    eq([r3.status, r3.json().code, off.calls], [503, "off", []], "unpriced: no store calls");
+  });
+
+  await checkAsync("deleting chats doesn't give the day's messages back", async () => {
+    const f = fakeStore();
+    const h = harness([]);
+    const send = post(f, h);
+    for (let i = 0; i < 60; i++) {
+      f.deleteAll();
+      eq((await send(say(`made-up message ${i}`))).status, 200, `message ${i + 1}`);
+    }
+    f.deleteAll();
+    const r = await send(say("one more"));
+    eq([r.status, r.json().error], [429, LIMIT_MESSAGE], "the 61st is refused");
+  });
+
+  await checkAsync("an approval through the POST runs at most the message's remaining steps", async () => {
+    const f = fakeStore();
+    const asked = stored();
+    asked.parts.unshift(...(Array.from({ length: 5 }, () => ({ type: "step-start" })) as ChatMessage["parts"]));
+    f.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 0, messages: [ask("Delete #12"), asked] });
+    const h = harness(Array.from({ length: 6 }, (_, i) => [{ type: "tool-call", toolCallId: `call_${i + 2}`, toolName: "maple_status", input: "{}" }, finishPart("tool-calls")]));
+    const r = await post(f, h)({ threadId: THREAD, message: { id: "msg_a", role: "assistant", parts: [{ type: "tool-delete_entry", toolCallId: "call_1", approval: { id: "appr_1", approved: true } }] } });
+    eq([r.status, h.model.doStreamCalls.length, f.threads.get(THREAD)!.busy], [200, 1, false], "one step, then released");
+    eq(f.daily.size, 0, "a tap isn't a new message");
+  });
+}
+
+check("an answer that stopped early: the server's own line, else a fixed one, never the browser's or a proxy's text", () => {
+  eq(problemFor(JSON.stringify({ error: LIMIT_MESSAGE, code: "limit" })), LIMIT_MESSAGE, "a refusal");
+  for (const line of [CHAT_FAILED, CHAT_OFF, LIMIT_MESSAGE]) eq(problemFor(line), line, "the server's line mid-answer");
+  for (const raw of ["Load failed", "Failed to fetch", "network error", "An error occurred with your deployment\n\nFUNCTION_INVOCATION_TIMEOUT", "<html><body>504</body></html>", ""]) {
+    eq(problemFor(raw), DROPPED, JSON.stringify(raw));
+  }
 });
+
+check("after a reload, the sheet's own help card stays unless the saved thread answered that crisis message with one", () => {
+  const sent = "I want to die";
+  const asked = (text: string) => ({ id: "u", role: "user", parts: [{ type: "data-context", data: { line: "made-up line" } }, { type: "text", text }] }) as ChatMessage;
+  const reply = (help: boolean) =>
+    ({ id: "a", role: "assistant", parts: [...(help ? [{ type: "data-help", data: { reason: "crisis" } }] : []), { type: "text", text: "made-up reply" }] }) as ChatMessage;
+  eq(needsHelpCard([asked(sent), reply(true)], sent), false, "answered with its card");
+  eq(needsHelpCard([asked(sent)], sent), true, "its reply was never saved");
+  eq(needsHelpCard([asked(sent), reply(false)], sent), true, "a reply without the card");
+  eq(needsHelpCard([asked("an earlier made-up question"), reply(true)], sent), true, "turned away: an older reply's card doesn't count");
+  eq(needsHelpCard([asked("made-up question"), reply(false)], "made-up question"), false, "no crisis");
+  eq(needsHelpCard([], null), false, "nothing sent");
+});
+
+check("a turned-away tap puts its card back to asking; answered and finished parts stay", () => {
+  const m = {
+    id: "msg_a",
+    role: "assistant",
+    parts: [
+      { type: "text", text: "Delete the 3:10 AM bath?" },
+      { type: "tool-delete_entry", toolCallId: "c1", state: "approval-responded", input: { id: 12 }, approval: { id: "a1", approved: true } },
+      { type: "tool-maple_status", toolCallId: "c2", state: "output-available", input: {}, output: { ok: true, write: false, text: "made-up" } },
+    ],
+  } as unknown as ChatMessage;
+  const back = unanswered(m);
+  eq(back.parts[1], { type: "tool-delete_entry", toolCallId: "c1", state: "approval-requested", input: { id: 12 }, approval: { id: "a1" } }, "asks again");
+  eq([back.parts[0], back.parts[2]], [m.parts[0], m.parts[2]], "the rest untouched");
+});
+
+async function privacyChecks() {
+  await checkAsync("the chat's tools carry this phone's id, so her Logged notice skips it", async () => {
+    const r = registrations().all.find((x) => x.name === "maple_status")!;
+    const real = r.handler;
+    const seen: unknown[] = [];
+    r.handler = async (_args, extra) => {
+      seen.push((extra.authInfo?.extra as { device?: unknown } | undefined)?.device);
+      return { content: [{ type: "text", text: "made-up status" }] };
+    };
+    try {
+      const run = (device?: string | null) => (chatTools(ALEX, { born: true, device }).maple_status.execute as (i: unknown, o: unknown) => Promise<unknown>)({}, { toolCallId: "c1", messages: [] });
+      await run("made-up-device-1");
+      await run();
+    } finally {
+      r.handler = real;
+    }
+    eq(seen, ["made-up-device-1", null], "the id, or none");
+  });
+
+  await checkAsync("an error before the answer is reported as its class only, never the words Postgres quotes", async () => {
+    const f = fakeStore();
+    const words = "made-up secret words";
+    f.store.saveMessage = async () => {
+      throw Object.assign(new Error(`invalid input syntax for type json: ${words}`), { name: "NeonDbError", code: "22P02", where: `JSON data, line 1: ...${words}` });
+    };
+    const reported: Error[] = [];
+    const r = await post(f, harness([]), { report: (e) => void reported.push(e) })(say(words));
+    eq([r.status, r.json().error], [500, "Something went wrong"], "a plain 500");
+    ok(!r.text.includes(words), "not in the response");
+    eq(reported.map((e) => [e.message, Object.keys(e)]), [["NeonDbError", []]], "reported once, class only");
+    const leaked = JSON.stringify(reported.map((e) => ({ ...e, message: e.message, stack: e.stack })));
+    ok(!leaked.includes(words), "no words anywhere on what was reported");
+    eq(scrub(Object.assign(new Error(words), { name: "GatewayError", statusCode: 403 })).message, "GatewayError 403", "class and status");
+    eq(scrub({ name: words }).message, "chat_error", "a name that isn't a class name");
+  });
+
+  check("message text can always be stored: no NUL, other control characters or lone surrogates", () => {
+    eq(storable("a\u0000b\u0007c\td\ne\r"), "abc\td\ne\r", "controls out, whitespace kept");
+    eq(storable("x\uD83Dy\uDE00z \uD83D\uDE00"), "xyz \uD83D\uDE00", "lone halves out, a pair kept");
+    eq(userText([{ type: "text", text: "\u0000 wet diaper \uD800" }]), "wet diaper", "userText cleans before trimming");
+    throws(() => userText([{ type: "text", text: "\u0000\u0000" }]), "nothing but NULs is empty");
+    const stored = { id: "msg_a", role: "assistant", parts: [{ type: "tool-delete_entry", toolCallId: "c1", state: "approval-requested", input: { id: 1 }, approval: { id: "a1" } }] } as unknown as ChatMessage;
+    const merged = mergeApprovals(stored, { id: "msg_a", parts: [{ type: "tool-delete_entry", toolCallId: "c1", approval: { id: "a1", approved: false, reason: `${"r".repeat(199)}\uD83D\uDE00\u0000` } }] })!;
+    const reason = (merged.parts[0] as unknown as { approval: { reason: string } }).approval.reason;
+    eq([reason.length, /[\u0000\uD800-\uDFFF]/.test(reason)], [199, false], "a reason cut through a pair is cleaned after the cut");
+  });
+}
+
+turnChecks()
+  .then(postChecks)
+  .then(privacyChecks)
+  .then(() => {
+    console.log(`\n${passed} passed, ${failed} failed`);
+    if (failed) process.exit(1);
+  });

@@ -7,6 +7,7 @@ import type { CallToolResult, ServerNotification, ServerRequest } from "@modelco
 import { query } from "@/lib/db";
 import { captureServerException } from "@/lib/posthog-server";
 import { ADMIN_ID, ensureAdminMember, isRemoved, listMembers } from "./auth";
+import { cleanDevice } from "./device";
 import { describeEntry } from "./describe";
 import {
   clusterLine,
@@ -285,10 +286,12 @@ export type Ctx = {
    * login itself) is behind it, so mom's area never treats it as her.
    */
   who: { id: string; via: Source; role: Role; name: string; viaAdmin: boolean };
+  /** The in-app chat's phone (device.ts), so her "Logged" notice skips it; null for every other caller. */
+  device: string | null;
 };
 
 export async function context(extra: Extra): Promise<Ctx> {
-  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; via?: unknown };
+  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; via?: unknown; device?: unknown };
   const sub = typeof auth.sub === "string" ? auth.sub : "";
   if (!sub) throw new ToolError("You're not signed in to Maple's Log. Reconnect the connector and sign in again.");
   let id = sub.startsWith("maple:") ? sub.slice("maple:".length) : sub;
@@ -318,6 +321,7 @@ export async function context(extra: Extra): Promise<Ctx> {
     tz: baby.timezone || DEFAULT_TZ,
     members,
     who: { id, via, role, name: memberName(id, members), viaAdmin },
+    device: via === "chat" ? cleanDevice(auth.device) : null,
   };
 }
 
@@ -377,8 +381,11 @@ async function toolError(name: string, err: unknown, ctx: Ctx | null): Promise<C
   ) {
     return fail(`${err.message.replace(/\.$/, "")}. Nothing was saved; fix that and try again.`);
   }
-  console.error(`Maple MCP ${name} error:`, err);
-  await captureServerException(err, { tool: name, route: "/api/maple/mcp" });
+  // Its code or class only: Postgres quotes the row (entry data, the family's words) in its message and fields.
+  const code = (err as { code?: unknown } | null)?.code;
+  const scrubbed = new Error(typeof code === "string" && /^[A-Za-z0-9_]{1,40}$/.test(code) ? code : err instanceof Error && /^[A-Za-z0-9_]{1,60}$/.test(err.name) ? err.name : "mcp_error");
+  console.error(`Maple MCP ${name} error: ${scrubbed.message}`);
+  await captureServerException(scrubbed, { tool: name, route: "/api/maple/mcp" });
   return fail(
     "Something went wrong inside Maple's Log. Check maple_status or list_entries before trying again, so nothing gets logged twice."
   );
