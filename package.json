@@ -12,7 +12,8 @@
     "check:maple-feed": "tsx scripts/maple-feed-check.ts",
     "check:maple-care": "tsx scripts/maple-care-check.ts",
     "check:maple-native": "tsx scripts/maple-native-check.ts",
-    "check:maple-chat": "tsx scripts/maple-chat-check.ts"
+    "check:maple-chat": "tsx scripts/maple-chat-check.ts",
+    "check:site": "tsx scripts/site-check.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",

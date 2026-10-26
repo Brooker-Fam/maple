@@ -14,8 +14,14 @@ const cormorantGaramond = Cormorant_Garamond({
 export const metadata: Metadata = {
   metadataBase: new URL(MAPLE_ORIGIN),
   title: "Maple",
-  description: "A family newborn tracker.",
-  robots: { index: false, follow: false },
+  description: "A calm newborn tracker for both parents.",
+  icons: {
+    icon: [
+      { url: "/maple-icon.svg", type: "image/svg+xml" },
+      { url: "/maple-icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: { url: "/maple-apple-touch-icon.png", sizes: "180x180" },
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
