@@ -660,9 +660,11 @@ export const MED_BABY_WATCH =
 export const OPIOID_NAMES =
   /\b(oxycodone|hydrocodone|percocet|endocet|roxicodone|oxycontin|norco|vicodin|lortab|morphine|hydromorphone|dilaudid|tapentadol|nucynta|codeine|tramadol|ultram|ultracet)\b/i;
 export const LABEL_NOT_WHILE_NURSING_NAMES = /\b(codeine|tramadol|ultram|ultracet)\b|tylenol\s*(#|no\.?)?\s*[34]\b/i;
-/** FDA https://www.fda.gov/consumers/consumer-updates/dont-overuse-acetaminophen: many products contain it; labels may say APAP. A hint only: she can untick it. */
+/** FDA https://www.fda.gov/consumers/consumer-updates/dont-overuse-acetaminophen: many products contain it; labels may say APAP. A hint only: she can untick it.
+ *  The opioid combinations (Roxicet, Tylox, Primlev, Xartemis: oxycodone; Lorcet, Hycet, Xodol: hydrocodone; Apadaz:
+ *  benzhydrocodone; Trezix: dihydrocodeine) and Fioricet / Esgic (butalbital) list acetaminophen on their DailyMed labels. */
 export const ACETAMINOPHEN_NAMES =
-  /\b(acetaminophen|paracetamol|apap|tylenol|percocet|endocet|norco|vicodin|lortab|ultracet|excedrin|nyquil|dayquil|theraflu|mucinex|midol|vicks|robitussin)\b/i;
+  /\b(acetaminophen|paracetamol|apap|tylenol|percocet|endocet|norco|vicodin|lortab|ultracet|excedrin|nyquil|dayquil|theraflu|mucinex|midol|vicks|robitussin|roxicet|tylox|primlev|xartemis|lorcet|hycet|xodol|apadaz|trezix|fioricet|esgic)\b/i;
 /** Zuranolone (Zurzuvae), FDA-approved for postpartum depression (FDA, Aug 4 2023). */
 export const ZURANOLONE_NAMES = /\b(zuranolone|zurzuvae)\b/i;
 
@@ -737,8 +739,11 @@ export const EARLY_GRACE_RUN_MS = 24 * 3600_000;
  */
 export const MORE_OPIOID_NAMES =
   /\b(roxicet|tylox|percodan|primlev|xartemis|oxaydo|roxybond|xtampza|oxy\s*ir|oxyfast|lorcet|hycet|xodol|zohydro|hysingla|apadaz|benzhydrocodone|dihydrocodeine|oxymorphone|opana|methadone|dolophine|methadose|buprenorphine|subutex|suboxone|zubsolv|belbuca|butrans|sublocade|fentanyl|duragesic|actiq|meperidine|demerol|pentazocine|talwin|butorphanol|stadol|nalbuphine|nubain|levorphanol|exalgo|kadian|ms\s*contin|conzip|seglentis|trezix|oliceridine|olinvyk|opium|paregoric)\b/i;
+/** Every opioid name we know (codeine named by number, "Tylenol #3", included): OPIOID_NOTE shows for each, and the
+ *  early-dose grace never applies to them (earlyGraceMin). */
+export const ALL_OPIOID_NAMES: readonly RegExp[] = [OPIOID_NAMES, LABEL_NOT_WHILE_NURSING_NAMES, MORE_OPIOID_NAMES];
 /** Every name the early-dose grace never applies to (earlyGraceMin): checked exactly, whatever her setting. */
-export const EARLY_GRACE_EXACT_NAMES: readonly RegExp[] = [OPIOID_NAMES, LABEL_NOT_WHILE_NURSING_NAMES, MORE_OPIOID_NAMES];
+export const EARLY_GRACE_EXACT_NAMES: readonly RegExp[] = ALL_OPIOID_NAMES;
 
 /** Her own interval, her own words. Poison Help https://www.poisonhelp.org/ (911 line verbatim in spirit:
  *  "If an individual has collapsed, had a seizure, has trouble breathing, or can't be awakened, call 911 immediately"). */

@@ -11,6 +11,7 @@
  */
 import {
   ACETAMINOPHEN_NAMES,
+  ALL_OPIOID_NAMES,
   CRISIS,
   CRISIS_PARTNER,
   DIFFICULTY_HARD,
@@ -24,7 +25,6 @@ import {
   LABEL_NOT_WHILE_NURSING,
   LABEL_NOT_WHILE_NURSING_NAMES,
   MOOD_MED_NOTE,
-  OPIOID_NAMES,
   OPIOID_NOTE,
   PHQ9_ITEM9,
   PHQ9_RESULT,
@@ -744,7 +744,7 @@ export function planNotes(plan: CarePlan, status: PlanStatus, ctx: CareNoteCtx):
   if (nursingNotesOn(ctx.settings) && anyName(plan, LABEL_NOT_WHILE_NURSING_NAMES)) {
     add(LABEL_NOT_WHILE_NURSING, `nursing:${pid}`, "I've checked with my OB or pharmacist");
   }
-  if (anyName(plan, OPIOID_NAMES)) add(OPIOID_NOTE, `opioid:${pid}`, "Got it");
+  if (ALL_OPIOID_NAMES.some((re) => anyName(plan, re))) add(OPIOID_NOTE, `opioid:${pid}`, "Got it");
   if (plan.reason === "mood") add(MOOD_MED_NOTE, `mood:${pid}`, "Got it");
   return out;
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { forMom, parseUnits, planTitle } from "@/lib/maple/care";
-import { ACETAMINOPHEN_NAMES, OPIOID_NAMES, OPIOID_NOTE } from "@/lib/maple/guidelines";
+import { ACETAMINOPHEN_NAMES, ALL_OPIOID_NAMES, OPIOID_NOTE } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, addDays, dayKey } from "@/lib/maple/time";
 import type { CarePlan, LimitUnit, MedReason, MedSchedule, PlanInput } from "@/lib/maple/types";
 import { Icon } from "../icons";
@@ -162,7 +162,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   const apap = f.apap ?? (!base && ACETAMINOPHEN_NAMES.test(`${f.name} ${f.also}`));
   const eachShown = !!f.unit && f.unit !== "doses";
   // §5.7: an opioid name gets its note here as well as on the card, so it's read once at save (a name hint, never a gate).
-  const opioid = [f.name, ...f.also.split(",")].some((n) => n.trim() && OPIOID_NAMES.test(n));
+  const opioid = [f.name, ...f.also.split(",")].some((n) => n.trim() && ALL_OPIOID_NAMES.some((re) => re.test(n)));
 
   // ── Validation (§11.3) ──
   const errs: Partial<Record<"name" | "gap" | "every" | "perDay" | "times" | "limit" | "unit" | "each" | "end" | "days", string>> = {};

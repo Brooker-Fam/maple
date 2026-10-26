@@ -572,9 +572,14 @@ check("T-ENG-9b codeine by number and opioids OPIOID_NAMES misses are checked ex
   }
   const aka = plan({ name: "Pain pill", also_called: "Roxicet", schedule: { type: "as_needed", min_gap_min: 360 } });
   eq(earlyTitles(aka, [dose(aka, L(25, "00:00"))], L(25, "05:55")), ["Pain pill came early"], "Also called Roxicet");
-  // Matching only takes the grace away: no opioid card of its own for these names.
-  const rox = plan({ name: "Roxicet", schedule: { type: "as_needed", min_gap_min: 360 } });
-  eq(planNotes(rox, st(rox, [], D(25, "07:00")), noteCtx()).map((n) => n.title), [], "no new note");
+  // Every one of these gets the opioid card too (ALL_OPIOID_NAMES), not only OPIOID_NAMES' list.
+  for (const name of ["Roxicet", "Tylenol #3", "Methadone", "Buprenorphine", "Lorcet"]) {
+    const p = plan({ name, schedule: { type: "as_needed", min_gap_min: 360 } });
+    ok(planNotes(p, st(p, [], D(25, "07:00")), noteCtx()).some((n) => n.title === G.OPIOID_NOTE.title), `${name} opioid card`);
+  }
+  // The acetaminophen combinations are spotted as acetaminophen (the plan sheet's hint and the two-medicines note).
+  for (const name of ["Roxicet", "Tylox", "Lorcet", "Hycet", "Xodol", "Fioricet"]) ok(G.ACETAMINOPHEN_NAMES.test(name), `${name} contains acetaminophen`);
+  for (const name of ["Oxycodone", "Methadone", "Advil", "Motrin"]) ok(!G.ACETAMINOPHEN_NAMES.test(name), `${name} has none`);
   // Not opioids: the grace stands.
   for (const name of ["Tylenol", "Tylenol Extra Strength", "Advil", "Ibuprofen 600"]) eq(earlyGraceMin(plan({ name }), {}), 30, name);
 });
