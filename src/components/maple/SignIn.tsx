@@ -79,8 +79,10 @@ export default function SignIn() {
   };
 
   // Google refuses sign-in inside an app's web view, so the app opens the system sign-in sheet itself.
-  const googleInApp = (e: MouseEvent<HTMLAnchorElement>) => {
-    if (postToNative({ type: "google-sign-in" })) e.preventDefault();
+  const startGoogle = (e: MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    if (postToNative({ type: "google-sign-in" })) return;
+    window.location.assign(`/api/maple/auth/start?return=%2Fmaple&site=${encodeURIComponent(window.location.origin)}`);
   };
 
   const google = auth?.google ?? false;
@@ -117,7 +119,7 @@ export default function SignIn() {
             // eslint-disable-next-line @next/next/no-html-link-for-pages
             <a
               href="/api/maple/auth/start?return=%2Fmaple"
-              onClick={googleInApp}
+              onClick={startGoogle}
               className="flex min-h-[52px] w-full items-center justify-center gap-3 rounded-[14px] bg-mp-accent px-5 text-base font-semibold text-mp-on-accent transition hover:opacity-90 active:scale-[0.98]"
             >
               {/* Google's mark on its own white chip, as their dark-button style asks. */}

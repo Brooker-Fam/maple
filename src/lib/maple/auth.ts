@@ -5,6 +5,7 @@ import { query } from "@/lib/db";
 import { getAppBaseUrl, encryptSecret, decryptSecret } from "@/lib/secret-box";
 import { verifyAdminCreds } from "@/lib/mcp/auth";
 import type { Member, Role } from "./types";
+import { LEGACY_ORIGIN, MAPLE_ORIGIN } from "./origin";
 
 /**
  * Identity for Maple's Log at /maple: sign in with Google (identity scopes only), and an encrypted cookie holds
@@ -38,16 +39,24 @@ export function isPasswordConfigured(): boolean {
   return !!(process.env.ADMIN_USER && process.env.ADMIN_PASS && process.env.GOOGLE_CLIENT_SECRET);
 }
 
-function redirectUri(): string {
-  return `${getAppBaseUrl()}${STATE_COOKIE_PATH}`;
+/**
+ * The origin a sign-in runs on: the one the browser is on when it's this app or the old
+ * address that forwards here, else this deployment's own. Google's redirect, the state
+ * cookie and the session cookie must all be on the host the browser sees.
+ */
+export function signInSite(raw: string | null | undefined): string {
+  const own = getAppBaseUrl();
+  if (!raw) return own;
+  const site = raw.replace(/\/+$/, "");
+  return site === own || site === MAPLE_ORIGIN || site === LEGACY_ORIGIN ? site : own;
 }
 
-function client() {
-  return new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, redirectUri());
+function client(site: string) {
+  return new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, `${site}${STATE_COOKIE_PATH}`);
 }
 
-export function authorizeUrl(state: string): string {
-  return client().generateAuthUrl({
+export function authorizeUrl(state: string, site: string = getAppBaseUrl()): string {
+  return client(site).generateAuthUrl({
     access_type: "online",
     prompt: "select_account",
     // Name for "logged by Brittany"; nothing beyond identity.
@@ -59,8 +68,8 @@ export function authorizeUrl(state: string): string {
 export type GoogleIdentity = { email: string; name: string | null };
 
 /** Exchanges the callback code for a verified identity. */
-export async function identityFromCode(code: string): Promise<GoogleIdentity | null> {
-  const c = client();
+export async function identityFromCode(code: string, site: string = getAppBaseUrl()): Promise<GoogleIdentity | null> {
+  const c = client(site);
   const { tokens } = await c.getToken(code);
   if (!tokens.id_token) return null;
   const ticket = await c.verifyIdToken({

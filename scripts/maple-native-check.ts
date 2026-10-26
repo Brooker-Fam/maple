@@ -188,16 +188,38 @@ async function main() {
   };
   const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
-  await check("start without native: the state cookie is exactly { state, back }", async () => {
+  await check("start without native: the state cookie is exactly { state, back, site }", async () => {
     for (const qs of ["?return=%2Fmaple%3Fcare%3D1", "?return=%2Fmaple%3Fcare%3D1&native=", "?return=%2Fmaple%3Fcare%3D1&native=desktop", "?return=%2Fmaple%3Fcare%3D1&native=IOS"]) {
       const { raw, cookie, google } = await startWith(qs);
       const state = String(cookie.state);
       ok(new RegExp(`^maple\\.${UUID}$`).test(state), `${qs}: web state ${state}`);
-      eq(raw, JSON.stringify({ state, back: "/maple?care=1" }), `${qs}: cookie`);
+      eq(raw, JSON.stringify({ state, back: "/maple?care=1", site: "http://localhost:3000" }), `${qs}: cookie`);
       eq(google.origin + google.pathname, "https://accounts.google.com/o/oauth2/v2/auth", `${qs}: Google`);
       eq(google.searchParams.get("state"), state, `${qs}: state sent to Google`);
       eq(google.searchParams.get("redirect_uri"), "http://localhost:3000/api/maple/auth/callback", `${qs}: redirect_uri`);
     }
+  });
+
+  await check("start: ?site= picks Google's redirect only for this app's origins", async () => {
+    for (const [site, want] of [
+      ["https://brooker.family", "https://brooker.family"],
+      ["https://brooker.family/", "https://brooker.family"],
+      ["https://maple.brooker.family", "https://maple.brooker.family"],
+      ["https://evil.example", "http://localhost:3000"],
+      ["https://brooker.family.evil.example", "http://localhost:3000"],
+      ["http://brooker.family", "http://localhost:3000"],
+      ["", "http://localhost:3000"],
+    ] as const) {
+      const { cookie, google } = await startWith(`?return=%2Fmaple&site=${encodeURIComponent(site)}`);
+      eq(google.searchParams.get("redirect_uri"), `${want}/api/maple/auth/callback`, `${site || "(none)"}: redirect_uri`);
+      eq(cookie.site, want, `${site || "(none)"}: cookie site`);
+    }
+  });
+
+  await check("start: an app sign-in ignores ?site=", async () => {
+    const { cookie, google } = await startWith(`?native=ios&challenge=${CHALLENGE}&site=${encodeURIComponent("https://brooker.family")}`);
+    eq(google.searchParams.get("redirect_uri"), "http://localhost:3000/api/maple/auth/callback", "redirect_uri");
+    ok(!("site" in cookie), "no site in an app's cookie");
   });
 
   await check("start with native=ios / android: native and the challenge ride in the cookie", async () => {
@@ -258,6 +280,11 @@ async function main() {
   await check("callback with the state cookie lost: an app's state still lands in the app", async () => {
     eq(location(await callback("?state=maple.native-android.x&code=y")), "maple://auth?error=bad_state");
     eq(location(await callback("?error=access_denied&state=maple.native-ios.x")), "maple://auth?error=denied");
+  });
+
+  await check("callback: a sign-in started on the old address goes back there, and only there", async () => {
+    eq(location(await callback(`?error=access_denied&state=${W}`, { state: W, back: "/maple", site: "https://brooker.family" })), "https://brooker.family/maple?auth=denied");
+    eq(location(await callback(`?error=access_denied&state=${W}`, { state: W, back: "/maple", site: "https://evil.example" })), "http://localhost:3000/maple?auth=denied");
   });
 
   await check("callback errors on the web are unchanged", async () => {

@@ -5,6 +5,7 @@ import {
   joinWithGoogle,
   safeReturnPath,
   setSessionCookies,
+  signInSite,
   STATE_COOKIE,
   STATE_COOKIE_PATH,
 } from "@/lib/maple/auth";
@@ -20,7 +21,7 @@ function withAuthParam(base: string, path: string, value: string): string {
 }
 
 export async function handleMapleGoogleCallback(request: NextRequest): Promise<NextResponse> {
-  const base = getAppBaseUrl();
+  let base = getAppBaseUrl();
   const { searchParams } = new URL(request.url);
 
   let back = "/maple";
@@ -30,11 +31,12 @@ export async function handleMapleGoogleCallback(request: NextRequest): Promise<N
   try {
     const raw = request.cookies.get(STATE_COOKIE)?.value;
     if (raw) {
-      const parsed = JSON.parse(raw) as { state?: string; back?: string; native?: string; challenge?: string };
+      const parsed = JSON.parse(raw) as { state?: string; back?: string; native?: string; challenge?: string; site?: string };
       expected = parsed.state ?? null;
       back = safeReturnPath(parsed.back);
       native = parseNativeFlag(parsed.native);
       challenge = parseNativeChallenge(parsed.challenge);
+      if (!native) base = signInSite(parsed.site);
     }
   } catch {
     // fall through to bad_state
@@ -57,7 +59,7 @@ export async function handleMapleGoogleCallback(request: NextRequest): Promise<N
     const code = searchParams.get("code");
     if (!code) return fail("no_code");
 
-    const who = await identityFromCode(code);
+    const who = await identityFromCode(code, base);
     if (!who) return fail("no_email");
 
     // Resolve membership before minting a session, so an uninvited account
