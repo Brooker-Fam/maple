@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Ports Maple commits that landed in brooker-wedding since the last sync, until the family
-# moves to maple.brooker.family and Maple's code leaves brooker-wedding. Delete this script then.
+# moves to maplebaby.app and Maple's code leaves brooker-wedding. Delete this script then.
 set -euo pipefail
 BW="${BW:-$HOME/dev/brooker-wedding}"
 MARK="$(dirname "$0")/../.brooker-wedding-sync"

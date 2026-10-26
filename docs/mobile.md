@@ -1,6 +1,6 @@
 # Maple on iPhone and Android (`ios/`, `android/`)
 
-Two small native apps that wrap the web app: SwiftUI with a `WKWebView` on iOS, Kotlin with Compose and a `WebView` on Android. They load `https://maple.brooker.family/maple`, so every screen, rule and fix still lives in `src/` and ships with a normal deploy. Neither folder is deployed: `.vercelignore` leaves out `ios/` and `android/`.
+Two small native apps that wrap the web app: SwiftUI with a `WKWebView` on iOS, Kotlin with Compose and a `WebView` on Android. They load `https://maplebaby.app/maple`, so every screen, rule and fix still lives in `src/` and ships with a normal deploy. Neither folder is deployed: `.vercelignore` leaves out `ios/` and `android/`.
 
 ## Phase 1: the shell apps
 
@@ -63,7 +63,7 @@ App                           Maple server                                 Googl
 
 ## Building and running on this Mac
 
-Base URL: iOS reads the `MAPLE_BASE_URL` build setting (into `Info.plist`); Android reads the `mapleBaseUrl` Gradle property (into `BuildConfig.MAPLE_BASE_URL`: an https origin, or `http://10.0.2.2:<port>` for a dev server on this Mac, which only debug builds let through). Both default to `https://maple.brooker.family`. Until that domain serves the deployment, point a build at a deployment URL that isn't behind Vercel's login, or at `pnpm dev`. Google sign-in only works against the production base (its redirect URI is registered there); the admin password, downloads, uploads and `tel:` links can be tried against `pnpm dev`.
+Base URL: iOS reads the `MAPLE_BASE_URL` build setting (into `Info.plist`); Android reads the `mapleBaseUrl` Gradle property (into `BuildConfig.MAPLE_BASE_URL`: an https origin, or `http://10.0.2.2:<port>` for a dev server on this Mac, which only debug builds let through). Both default to `https://maplebaby.app`. Until that domain serves the deployment, point a build at a deployment URL that isn't behind Vercel's login, or at `pnpm dev`. Google sign-in only works against the production base (its redirect URI is registered there); the admin password, downloads, uploads and `tel:` links can be tried against `pnpm dev`.
 
 **iOS** (Xcode 26, Swift packages only; CocoaPods is broken on this Mac):
 
@@ -133,7 +133,7 @@ Depends on Phase 2 for updates from the server.
 
 - **iOS:** archive and upload with fastlane `upload_to_testflight` and a new App Store Connect API key for the chosen team, then internal testers; or an ad hoc build for registered devices.
 - **Android:** a new Maple upload keystore (back it up: losing it blocks updates on Play), then sideload, Firebase App Distribution, or Play's internal track.
-- **Links:** `apple-app-site-association` and `assetlinks.json` from maple.brooker.family, so invite links open in the app and sign-in can return over HTTPS.
+- **Links:** `apple-app-site-association` and `assetlinks.json` from maplebaby.app, so invite links open in the app and sign-in can return over HTTPS.
 - **Not recommended:** public App Store or Play listings. Review needs a demo login into a demo baby, never Maple's real log, which means multi-baby or demo-tenant work.
 
 ## Accounts and cost

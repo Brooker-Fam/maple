@@ -13,8 +13,8 @@ import org.robolectric.annotation.Config
 class NativeBridgeTest {
     private var signIns = 0
     private val themes = mutableListOf<Int>()
-    private val bridge = NativeBridge(MapleSite("https://maple.brooker.family"), { signIns++ }, { themes += it })
-    private val maple = Uri.parse("https://maple.brooker.family")
+    private val bridge = NativeBridge(MapleSite("https://maplebaby.app"), { signIns++ }, { themes += it })
+    private val maple = Uri.parse("https://maplebaby.app")
 
     @Test
     fun startsGoogleSignInFromTheAppsMainFrame() {
@@ -32,7 +32,7 @@ class NativeBridgeTest {
 
     @Test
     fun ignoresOtherOrigins() {
-        for (origin in listOf("https://maple.brooker.family.evil.example", "http://maple.brooker.family", "https://maple.brooker.family:8443", "null")) {
+        for (origin in listOf("https://maplebaby.app.evil.example", "http://maplebaby.app", "https://maplebaby.app:8443", "null")) {
             bridge.receive("""{"type":"google-sign-in"}""", Uri.parse(origin), isMainFrame = true)
         }
         assertEquals(0, signIns)

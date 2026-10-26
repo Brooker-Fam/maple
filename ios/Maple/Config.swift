@@ -1,7 +1,7 @@
 import Foundation
 
 enum Config {
-    static let fallbackBaseURL = URL(string: "https://maple.brooker.family")!
+    static let fallbackBaseURL = URL(string: "https://maplebaby.app")!
 
     static let baseURL: URL = baseURL(from: Bundle.main.object(forInfoDictionaryKey: "MapleBaseURL") as? String)
 

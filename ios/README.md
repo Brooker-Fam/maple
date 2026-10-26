@@ -54,7 +54,7 @@ To run on a phone, pick a team under Signing & Capabilities. `DEVELOPMENT_TEAM` 
 
 ## Pointing at another server
 
-The server comes from the `MAPLE_BASE_URL` build setting, default `https://maple.brooker.family`. The build writes it into Info.plist as `MapleBaseURL`, and the app loads `{MAPLE_BASE_URL}/maple`. Override it on the command line:
+The server comes from the `MAPLE_BASE_URL` build setting, default `https://maplebaby.app`. The build writes it into Info.plist as `MapleBaseURL`, and the app loads `{MAPLE_BASE_URL}/maple`. Override it on the command line:
 
 ```bash
 # The old copy at brooker.family/maple (Google sign-in there predates the native flow)

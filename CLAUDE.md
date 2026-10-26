@@ -29,7 +29,7 @@ Solo family project: commit and push to `main`, no PRs unless asked. Vercel auto
 
 ## Hosting, origin and env
 
-- The public origin comes from `NEXT_PUBLIC_MAPLE_ORIGIN` (default `https://maple.brooker.family`) via `src/lib/maple/origin.ts`. Use `MAPLE_ORIGIN` / `MAPLE_HOST` / `MCP_URL` from there; never hard-code a host.
+- The public origin comes from `NEXT_PUBLIC_MAPLE_ORIGIN` (default `https://maplebaby.app`) via `src/lib/maple/origin.ts`. Use `MAPLE_ORIGIN` / `MAPLE_HOST` / `MCP_URL` from there; never hard-code a host.
 - Production env (Vercel): `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_USER`, `ADMIN_PASS`, `CRON_SECRET`, `BLOB_READ_WRITE_TOKEN` (the connected Blob store), `NEXT_PUBLIC_MAPLE_ORIGIN`. Optional: `MCP_SECRET`, `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`, `QSTASH_*`, `MAPLE_TICK_NET_MIN`, `MAPLE_ALLOWED_EMAILS`, `MAPLE_BLOB_READ_WRITE_TOKEN`, `NEXT_PUBLIC_POSTHOG_KEY`.
 - Session cookies, MCP tokens and VAPID keys are derived from `GOOGLE_CLIENT_SECRET` / `ADMIN_PASS` (or `MCP_SECRET`), which match brooker-wedding's on purpose: while both deployments serve Maple, a session or push subscription made on one works on the other.
 

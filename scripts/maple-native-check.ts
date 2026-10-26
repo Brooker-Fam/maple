@@ -204,7 +204,7 @@ async function main() {
     for (const [site, want] of [
       ["https://brooker.family", "https://brooker.family"],
       ["https://brooker.family/", "https://brooker.family"],
-      ["https://maple.brooker.family", "https://maple.brooker.family"],
+      ["https://maplebaby.app", "https://maplebaby.app"],
       ["https://evil.example", "http://localhost:3000"],
       ["https://brooker.family.evil.example", "http://localhost:3000"],
       ["http://brooker.family", "http://localhost:3000"],

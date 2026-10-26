@@ -14,7 +14,7 @@ export ANDROID_HOME=~/Library/Android/sdk
 ./gradlew assembleDebug -PmapleBaseUrl=http://10.0.2.2:3000     # pnpm dev on this Mac, from the emulator
 ```
 
-`BASE` is `BuildConfig.MAPLE_BASE_URL`. It defaults to `https://maple.brooker.family`, and `-PmapleBaseUrl` overrides it. The build accepts an `https://` origin, or plain http to `10.0.2.2`, `localhost` or `127.0.0.1` for a dev server. Only debug builds allow that cleartext (`src/debug/res/xml/network_security_config.xml`); a release build pointed at it can't load. Google sign-in only works against the production base, whose redirect URI Google knows.
+`BASE` is `BuildConfig.MAPLE_BASE_URL`. It defaults to `https://maplebaby.app`, and `-PmapleBaseUrl` overrides it. The build accepts an `https://` origin, or plain http to `10.0.2.2`, `localhost` or `127.0.0.1` for a dev server. Only debug builds allow that cleartext (`src/debug/res/xml/network_security_config.xml`); a release build pointed at it can't load. Google sign-in only works against the production base, whose redirect URI Google knows.
 
 The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. There is no release signing yet. Before the first sideload or Play upload, create a Maple upload keystore and back it up, because losing it blocks every later update. Keep it, and any `keystore.properties`, out of git; `.gitignore` already covers both.
 

@@ -3,7 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val mapleBaseUrl: String = (findProperty("mapleBaseUrl") as String? ?: "https://maple.brooker.family")
+val mapleBaseUrl: String = (findProperty("mapleBaseUrl") as String? ?: "https://maplebaby.app")
     .trimEnd('/')
     .also {
         // Plain http only for a dev server on this Mac, which only debug builds' network config lets through.
