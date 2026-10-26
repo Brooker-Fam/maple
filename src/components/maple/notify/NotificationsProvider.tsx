@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { careTime, planTitle } from "@/lib/maple/care";
+import { isNativeApp } from "@/lib/maple/native";
 import { DEFAULT_TZ } from "@/lib/maple/time";
 import { ApiError, useMaple } from "../useMaple";
 import { MAPLE_OPEN_EVENT, NotificationsContext, OfferContext, type MapleOpenEvent, type Notifications, type Offer } from "./context";
@@ -70,6 +71,10 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     const who = live.current.me;
     if (!who) return "loading";
     const started = epoch.current;
+    if (isNativeApp()) {
+      setStatus("app");
+      return "app";
+    }
     if (!phone.supported()) {
       const s: NotifyStatus = phone.isIos() && !phone.standalone() ? "install" : "unsupported";
       setStatus(s);
@@ -147,6 +152,10 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const turnOn = useCallback((): Promise<boolean> => {
+    if (isNativeApp()) {
+      setOpen(true);
+      return Promise.resolve(false);
+    }
     // Asked first, inside the tap, before anything awaits: iOS only shows the prompt for a user's gesture.
     let asked: Promise<NotificationPermission>;
     try {

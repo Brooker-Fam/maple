@@ -1,7 +1,8 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type MouseEvent } from "react";
+import { isNativeApp, postToNative } from "@/lib/maple/native";
 import { MapleLeaf, useStill } from "./art";
 import { Icon } from "./icons";
 import { Button, cx, tone } from "./ui";
@@ -33,6 +34,10 @@ export default function SignIn() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inApp, setInApp] = useState(false);
+  useEffect(() => {
+    setInApp(isNativeApp());
+  }, []);
 
   // Read (then tidy away) the callback's ?auth= so a reload doesn't repeat it.
   useEffect(() => {
@@ -73,6 +78,11 @@ export default function SignIn() {
     setBusy(false);
   };
 
+  // Google refuses sign-in inside an app's web view, so the app opens the system sign-in sheet itself.
+  const googleInApp = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (postToNative({ type: "google-sign-in" })) e.preventDefault();
+  };
+
   const google = auth?.google ?? false;
   const passwordOk = auth?.password ?? false;
   const nothing = auth && !google && !passwordOk;
@@ -107,6 +117,7 @@ export default function SignIn() {
             // eslint-disable-next-line @next/next/no-html-link-for-pages
             <a
               href="/api/maple/auth/start?return=%2Fmaple"
+              onClick={googleInApp}
               className="flex min-h-[52px] w-full items-center justify-center gap-3 rounded-[14px] bg-mp-accent px-5 text-base font-semibold text-mp-on-accent transition hover:opacity-90 active:scale-[0.98]"
             >
               {/* Google's mark on its own white chip, as their dark-button style asks. */}
@@ -166,7 +177,9 @@ export default function SignIn() {
         )}
 
         <p className={cx(tone.faint, "mx-auto mt-10 max-w-[18rem] text-[13px] leading-relaxed")}>
-          Got an invite link from Matt or Brittany? Just open it on this phone and you&apos;re in.
+          {inApp
+            ? "An invite link from Matt or Brittany opens Maple in the browser for now, not in this app."
+            : <>Got an invite link from Matt or Brittany? Just open it on this phone and you&apos;re in.</>}
         </p>
       </motion.div>
     </div>

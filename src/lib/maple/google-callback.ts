@@ -9,6 +9,8 @@ import {
   STATE_COOKIE_PATH,
 } from "@/lib/maple/auth";
 import { captureServerException } from "@/lib/posthog-server";
+import { mintNativeTicket, nativeFromState, nativeReturnUrl, parseNativeChallenge, parseNativeFlag } from "./native-auth";
+import type { NativePlatform } from "./native";
 
 function withAuthParam(base: string, path: string, value: string): string {
   const url = new URL(path, base);
@@ -23,19 +25,27 @@ export async function handleMapleGoogleCallback(request: NextRequest): Promise<N
 
   let back = "/maple";
   let expected: string | null = null;
+  let native: NativePlatform | null = null;
+  let challenge: string | null = null;
   try {
     const raw = request.cookies.get(STATE_COOKIE)?.value;
     if (raw) {
-      const parsed = JSON.parse(raw) as { state?: string; back?: string };
+      const parsed = JSON.parse(raw) as { state?: string; back?: string; native?: string; challenge?: string };
       expected = parsed.state ?? null;
       back = safeReturnPath(parsed.back);
+      native = parseNativeFlag(parsed.native);
+      challenge = parseNativeChallenge(parsed.challenge);
     }
   } catch {
     // fall through to bad_state
   }
+  // Picks only where an error goes, so a lost cookie still lands back in the app rather than on a web page inside its sign-in sheet.
+  const failToApp = native ?? (expected ? null : nativeFromState(searchParams.get("state")));
 
   const fail = (why: string) => {
-    const res = NextResponse.redirect(withAuthParam(base, back.startsWith("/maple") ? back : "/maple", why));
+    const res = NextResponse.redirect(
+      failToApp ? nativeReturnUrl({ error: why }) : withAuthParam(base, back.startsWith("/maple") ? back : "/maple", why)
+    );
     res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
     return res;
   };
@@ -54,6 +64,13 @@ export async function handleMapleGoogleCallback(request: NextRequest): Promise<N
     // never holds a cookie for a log it can't reach.
     const { member, reason } = await joinWithGoogle(who);
     if (!member) return fail(reason ?? "not_invited");
+
+    if (native) {
+      if (!challenge) return fail("bad_state");
+      const res = NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(member.email, back, challenge) }));
+      res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
+      return res;
+    }
 
     const res = NextResponse.redirect(withAuthParam(base, back, "ok"));
     // res.cookies.* rewrites every Set-Cookie header, so it must run before

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type InputHTMLAttributes, type ReactN
 import { useTheme } from "@/components/ThemeProvider";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
 import { adminActsAs, alertsOn } from "@/lib/maple/insights";
+import { isNativeApp } from "@/lib/maple/native";
 import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatLength, formatWeight } from "@/lib/maple/units";
 import type { Member, Role } from "@/lib/maple/types";
@@ -1076,7 +1077,7 @@ function Preferences() {
   const [standalone, setStandalone] = useState(true);
   useEffect(() => {
     const nav = navigator as Navigator & { standalone?: boolean };
-    setStandalone(window.matchMedia("(display-mode: standalone)").matches || nav.standalone === true);
+    setStandalone(isNativeApp() || window.matchMedia("(display-mode: standalone)").matches || nav.standalone === true);
   }, []);
 
   return (

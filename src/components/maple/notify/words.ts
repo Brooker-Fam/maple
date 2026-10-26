@@ -9,21 +9,23 @@ import { formatTimeNear } from "@/lib/maple/time";
  * own plan's.
  */
 
-/** This phone, as the sheet and its row see it. */
-export type NotifyStatus = "loading" | "unsupported" | "install" | "denied" | "off" | "on" | "stopped";
+/** This phone, as the sheet and its row see it. "app": inside the iOS or Android app, which can't use Web Push (its own notifications come later). */
+export type NotifyStatus = "loading" | "unsupported" | "install" | "app" | "denied" | "off" | "on" | "stopped";
 
 /** What one of her medicines can notify about (GET /api/maple/push `reminders`). */
 export type ReminderFact = { plan_id: number; kind: "ok" | "at" | null; why?: "daily" | "no_gap" };
 
 export type { PushHealth, PushPrefs };
 
-/** The row's value on Family and her tab: On, Off, Stopped, "Home Screen app first" (and "On · may be late" while the server's clock is behind). */
+/** The row's value on Family and her tab: On, Off, Stopped, "Home Screen app first", "Not in the app yet" (and "On · may be late" while the server's clock is behind). */
 export function notificationsValue(status: NotifyStatus, opts: { late?: boolean } = {}): string | undefined {
   switch (status) {
     case "loading":
       return undefined;
     case "install":
       return "Home Screen app first";
+    case "app":
+      return "Not in the app yet";
     case "stopped":
       return "Stopped";
     case "on":

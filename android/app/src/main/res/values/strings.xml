@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Maple</string>
+    <string name="offline_title">Can\'t reach Maple</string>
+    <string name="offline_body">Check the phone\'s Wi-Fi or data, then try again. Nothing you logged is lost.</string>
+    <string name="offline_retry">Try again</string>
+    <string name="offline_retrying">Trying again…</string>
+    <string name="download_started">Downloading %1$s</string>
+    <string name="download_failed">Couldn\'t download that file</string>
+    <string name="no_app_for_link">No app on this phone can open that</string>
+</resources>

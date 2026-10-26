@@ -9,23 +9,29 @@ import {
   STATE_COOKIE,
   STATE_COOKIE_PATH,
 } from "@/lib/maple/auth";
+import { nativeReturnUrl, nativeState, parseNativeChallenge, parseNativeFlag } from "@/lib/maple/native-auth";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Begin Google sign-in. `?return=` (our own path only: /maple… or the MCP
  * consent page) rides along in the state cookie so the callback can send
- * people back where they were.
+ * people back where they were. `?native=ios|android&challenge=` is the apps'
+ * sign-in (src/lib/maple/native-auth.ts): the callback answers on maple://auth.
  */
 export async function GET(request: NextRequest) {
   const base = getAppBaseUrl();
+  const { searchParams } = new URL(request.url);
+  const native = parseNativeFlag(searchParams.get("native"));
   if (!isGoogleConfigured()) {
-    return NextResponse.redirect(`${base}/maple?auth=not_configured`);
+    return NextResponse.redirect(native ? nativeReturnUrl({ error: "not_configured" }) : `${base}/maple?auth=not_configured`);
   }
-  const back = safeReturnPath(new URL(request.url).searchParams.get("return"));
-  const state = `${MAPLE_STATE_PREFIX}${randomUUID()}`;
+  const challenge = parseNativeChallenge(searchParams.get("challenge"));
+  if (native && !challenge) return NextResponse.redirect(nativeReturnUrl({ error: "failed" }));
+  const back = safeReturnPath(searchParams.get("return"));
+  const state = native ? nativeState(native, randomUUID()) : `${MAPLE_STATE_PREFIX}${randomUUID()}`;
   const res = NextResponse.redirect(authorizeUrl(state));
-  res.cookies.set(STATE_COOKIE, JSON.stringify({ state, back }), {
+  res.cookies.set(STATE_COOKIE, JSON.stringify(native ? { state, back, native, challenge } : { state, back }), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

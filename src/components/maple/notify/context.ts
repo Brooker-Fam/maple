@@ -14,7 +14,7 @@ export type Notifications = {
   health: PushHealth | null;
   /** What each of her current medicines can notify about; null for anyone who can't see them. */
   reminders: ReminderFact[] | null;
-  /** The row's value: "On", "Off", "Stopped", "Home Screen app first", "On · may be late". */
+  /** The row's value: "On", "Off", "Stopped", "Home Screen app first", "Not in the app yet", "On · may be late". */
   value: string | undefined;
   busy: boolean;
   problem: string | null;

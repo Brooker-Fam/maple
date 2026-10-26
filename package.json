@@ -10,7 +10,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "check:maple-feed": "tsx scripts/maple-feed-check.ts",
-    "check:maple-care": "tsx scripts/maple-care-check.ts"
+    "check:maple-care": "tsx scripts/maple-care-check.ts",
+    "check:maple-native": "tsx scripts/maple-native-check.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

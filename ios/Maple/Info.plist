@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>MapleBaseURL</key>
+	<string>$(MAPLE_BASE_URL)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Maple uses the camera so you can take a photo for Maple's moments.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Maple opens your photo library so you can add photos to Maple's moments.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Maple saves a photo to your library only when you ask it to.</string>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>MapleBackground</string>
+	</dict>
+</dict>
+</plist>

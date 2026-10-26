@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { planTitle } from "@/lib/maple/care";
+import { isNativeApp } from "@/lib/maple/native";
 import { DEFAULT_TZ } from "@/lib/maple/time";
 import { Icon } from "../icons";
 import { Button, Sheet, cx, tone } from "../ui";
@@ -17,7 +18,8 @@ import { healthLines, medicineNote, testView, type PushPrefs } from "./words";
  * kind of notice, names hidden, each medicine, honest rows for the ones that
  * can't notify), Maple's nursing timer on the lock screen, "Check it works"
  * (the server's clock, the last delivery, "Send a test in 1 minute"), and
- * what a phone's own settings decide (Silent, Focus). Rendered by
+ * what a phone's own settings decide (Silent, Focus). Inside the iOS or
+ * Android app, only that its notifications come later. Rendered by
  * NotificationsProvider; open it with useNotifications().open().
  */
 
@@ -103,6 +105,20 @@ function Body() {
     if (res && all)
       toast(res.phones === 1 ? "Test set for the one phone with notifications on." : `Test set for ${res.phones} phones.`, { tone: "info", icon: "bell" });
   };
+
+  if (isNativeApp()) {
+    return (
+      <div className={cx(tone.card, "flex gap-3 px-4 py-3.5")}>
+        <Icon name="bell" size={20} className="mt-0.5 shrink-0 text-mp-ink-2" />
+        <div className="min-w-0">
+          <p className={cx(tone.body, "text-[15px] font-medium")}>Notifications come to the app in a later update</p>
+          <p className={cx(tone.muted, "mt-0.5 text-sm leading-relaxed")}>
+            Until then, they keep arriving wherever they&apos;re already on: Maple&apos;s web app from the Home Screen on iPhone, or Chrome on Android.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 pb-2">

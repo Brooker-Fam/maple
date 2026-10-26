@@ -2,6 +2,7 @@
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
+import { postToNative } from "@/lib/maple/native";
 import { AppNavProvider, useAppNav, type NavTarget, type TabId } from "./AppNav";
 import { WelcomeHost } from "./BirthSheet";
 import CareScreen from "./care/CareScreen";
@@ -195,6 +196,7 @@ function NightLook() {
     const root = document.documentElement;
     const metas = () => Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
     const originals = metas().map((m) => [m, m.content] as const);
+    let toldApp: string | null = null;
     const apply = () => {
       const color = root.classList.contains("maple-night")
         ? THEME_COLORS.night
@@ -209,6 +211,7 @@ function NightLook() {
         list.push(m);
       }
       for (const m of list) if (m.content !== color) m.content = color;
+      if (color !== toldApp && postToNative({ type: "theme", color })) toldApp = color;
     };
     apply();
     const watch = new MutationObserver(apply);
