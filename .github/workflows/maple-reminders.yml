@@ -5,6 +5,7 @@
 # 7 hours were seen overnight), so never rely on this alone for a dose that matters.
 # Once QStash is set up, the tick ignores runs away from :04 and :34 (the safety net's
 # minutes) without touching the database.
+# Runs only when the repo variable MAPLE_TICK_URL is set (the production tick URL).
 name: Maple reminders
 
 on:
@@ -16,7 +17,8 @@ permissions: {}
 
 jobs:
   tick:
+    if: vars.MAPLE_TICK_URL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: curl -fsS -X POST --max-time 60 -H "X-Maple-Via: gh" https://maple.brooker.family/api/maple/push/tick
+      - run: curl -fsS -X POST --max-time 60 -H "X-Maple-Via: gh" "${{ vars.MAPLE_TICK_URL }}"

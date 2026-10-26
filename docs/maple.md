@@ -6,8 +6,8 @@ It's a family side project: unlinked from the public site and `noindex`.
 
 ## Setup checklist (production)
 
-1. **Google sign-in: nothing to set up.** Maple reuses the OAuth client the calendar, photos and `/birth` already use, and signs in through `/birth`'s redirect URI (`/api/birth/auth/callback`), which is already registered. That callback hands any sign-in whose `state` starts with `maple.` to `handleMapleGoogleCallback` in `src/lib/maple/google-callback.ts`. The site admin username/password also works on the sign-in screen (you'll appear as "Admin"; rename yourself in Family).
-2. **Who can join.** The first Google account to sign in becomes the owner. To be explicit, set `MAPLE_ALLOWED_EMAILS` (comma-separated). If it's unset, `BIRTH_ALLOWED_EMAILS` is used. Owners can also invite by Google email or with a one-time link (no Google needed) from the Family tab.
+1. **Google sign-in.** Maple uses `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (the same OAuth client brooker-wedding uses). Google only redirects to registered URIs, so `https://maple.brooker.family/api/maple/auth/callback` (and `http://localhost:3000/api/maple/auth/callback` for local dev) must be an authorized redirect URI on that client: Google Cloud Console → APIs & Services → Credentials → the OAuth 2.0 client → Authorized redirect URIs. The admin username/password also works on the sign-in screen (you'll appear as "Admin"; rename yourself in Family).
+2. **Who can join.** The first Google account to sign in becomes the owner. To be explicit, set `MAPLE_ALLOWED_EMAILS` (comma-separated). Owners can also invite by Google email or with a one-time link (no Google needed) from the Family tab.
 3. **Private photo storage (recommended).** Vercel → Storage → create a Blob store with **Private** access (e.g. `maple-private`). Copy its read-write token into a new env var `MAPLE_BLOB_READ_WRITE_TOKEN`. Don't connect it with the default `BLOB_*` names, or it will shadow the guest-photo store.
    Without it, photos go to the existing public store under `maple/…` with random names. They're still only ever served through the signed-in proxy (`/api/maple/photo`), but the underlying files aren't access-controlled.
 4. **`MCP_SECRET`.** Set it to a long random string. Otherwise MCP tokens are derived from `ADMIN_PASS`, and changing the admin password would disconnect Claude and ChatGPT.
@@ -16,29 +16,29 @@ Migrations run on build (`maple_babies` is seeded with Maple Jane, due 2026-10-2
 
 ## Connecting Claude and ChatGPT
 
-Full instructions with copy buttons are at `/maple/connect`. The MCP server URL is `https://brooker.family/api/maple/mcp` (Streamable HTTP; there is no SSE).
+Full instructions with copy buttons are at `/maple/connect`. The MCP server URL is `https://maple.brooker.family/api/maple/mcp` (Streamable HTTP; there is no SSE).
 
 - **Claude** (web, desktop, mobile): Settings → Connectors → Add custom connector → paste the URL → Connect → Continue with Google.
 - **ChatGPT** (web, developer mode / custom connectors): add a custom MCP server with the same URL and OAuth.
-- **Claude Code:** `claude mcp add --transport http maple https://brooker.family/api/maple/mcp`.
-- **The existing "Brooker Family Calendar" connector** (`/api/mcp`, admin login) carries Maple's tools too, next to `calendar_exec`, so Matt doesn't need a second connector. Its entries are credited to "Admin" unless an owner signed in with Google turns on Family → Talk to Maple's Log → "Calendar connector logs as me" (`settings.admin_as`, which can only be set to yourself). The Admin row appears in Family after the connector's first Maple call, so an owner can turn it off there. If an owner turns off the admin login for Maple, those tools refuse but the calendar keeps working.
+- **Claude Code:** `claude mcp add --transport http maple https://maple.brooker.family/api/maple/mcp`.
+- **brooker-wedding's "Brooker Family Calendar" connector** (`brooker.family/api/mcp`, admin login) still carries Maple's tools next to `calendar_exec`, from its own copy of this code, until Maple is removed from brooker-wedding. Its entries are credited to "Admin" unless an owner signed in with Google turns on Family → Talk to Maple's Log → "Calendar connector logs as me" (`settings.admin_as`, which can only be set to yourself). If an owner turns off the admin login for Maple, those tools refuse.
 
 OAuth reuses the site's `/oauth/*` shim. A Maple connection (detected by the RFC 8707 `resource` parameter, or the `maple` scope) signs in with the same Google session as the app, and the token is minted for `maple:<email>`, so entries show "via Claude / via ChatGPT" under the right person.
 
-- **Bound to this server.** Tokens are bound to exactly `https://brooker.family/api/maple/mcp`. Any other resource is refused at consent, so another MCP server can't obtain or replay a parent's token.
-- **Calendar and RSVP stay admin-only.** Those MCP servers only accept admin tokens, so a family member's Maple token can't open them.
+- **Bound to this server.** Tokens are bound to exactly `https://maple.brooker.family/api/maple/mcp`. Any other resource is refused at consent, so another MCP server can't obtain or replay a parent's token.
+- **One server per token.** A Maple token names this server's URL, so brooker-wedding's calendar and RSVP servers refuse it, and Maple refuses theirs.
 - **Refresh tokens, for Claude, ChatGPT and local apps only.** A code sent anywhere else (say, a phishing page) gets a 30-day token and no renewal. Each refresh hands out a new refresh token, so connectors in use don't expire. They're stateless, so an old one stays valid until it expires. Admin-login ones last 90 days (the admin login can run code on the calendar and RSVP servers) and die when `ADMIN_PASS` or `MCP_SECRET` changes. Family members' last a year and are re-checked against membership.
 
 ## Access and revocation
 
 - **Removing someone** (Family tab) ends everything at once: their sessions, MCP connections (checked on every request and every refresh) and Siri tokens. Removal leaves a tombstone, so an address on `MAPLE_ALLOWED_EMAILS` can't simply sign back in. Inviting them again lifts it.
-- **The admin password login** shows up in Family as "Admin". A Google owner can remove it, which turns off the admin password and admin MCP access for Maple only; the calendar and RSVP are unaffected. Delete the `admin` row from `maple_removed` to turn it back on.
+- **The admin password login** shows up in Family as "Admin". A Google owner can remove it, which turns off the admin password and admin MCP access for Maple only. Delete the `admin` row from `maple_removed` to turn it back on.
 - **Changing `ADMIN_PASS`** signs Admin out of Maple, and revokes admin MCP tokens issued since this change.
 - **The session cookie** is scoped to `/api/maple` and `/oauth/authorize`, so the `/ingest` analytics proxy never sees it.
 
 ## Hands-free (Siri / Shortcuts)
 
-Family → Shortcuts & assistants → Hands-free with Siri creates a personal token. An iOS Shortcut does *Get Contents of URL* (`POST https://brooker.family/api/maple/quick`, header `Authorization: Bearer maple_…`, JSON `{"action":"pee"}`), then *Speak Text* with the response's `speak` field.
+Family → Shortcuts & assistants → Hands-free with Siri creates a personal token. An iOS Shortcut does *Get Contents of URL* (`POST https://maple.brooker.family/api/maple/quick`, header `Authorization: Bearer maple_…`, JSON `{"action":"pee"}`), then *Speak Text* with the response's `speak` field.
 
 Actions: `pee`, `poop`, `both`, `nurse_left`, `nurse_right`, `switch`, `back_and_forth`, `stop`, `sleep`, `wake`, `vitamin_d`, `bottle` (with `amount_oz`), `status`, and mom's `mom_status` and `mom_dose` (see [For mom](#for-mom)).
 
@@ -243,17 +243,17 @@ Nothing else notifies: no "timer left running", no morning summary, no readings,
 
 ### Setting it up (the family's part)
 
-1. **Check the Neon plan** before anything runs on a schedule: console.neon.tech → the brooker-wedding project → Billing (or Usage). Note the plan and this month's compute hours. On Free, keep `MAPLE_TICK_NET_MIN` at its default of 30; on Launch or higher, 15 is fine.
-2. **Add QStash (free):** Vercel dashboard → brooker-wedding → Integrations → Browse Marketplace → Upstash → add **QStash** and connect it to the brooker-wedding project for Production. That adds `QSTASH_URL`, `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY`. Or: console.upstash.com → QStash → copy those four into Vercel → brooker-wedding → Settings → Environment Variables → Production.
-3. **Optional:** `MAPLE_TICK_NET_MIN` (15 or 30) in Vercel Production. `CRON_SECRET` already exists for the calendar sync; a cron that calls the tick with it is trusted.
+1. **Check the Neon plan** before anything runs on a schedule: console.neon.tech → the project that holds Maple's database (shared with brooker-wedding) → Billing (or Usage). Note the plan and this month's compute hours. On Free, keep `MAPLE_TICK_NET_MIN` at its default of 30; on Launch or higher, 15 is fine.
+2. **Add QStash (free):** Vercel dashboard → maple → Integrations → Browse Marketplace → Upstash → add **QStash** and connect it to the maple project for Production. That adds `QSTASH_URL`, `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY`. Or: console.upstash.com → QStash → copy those four into Vercel → maple → Settings → Environment Variables → Production.
+3. **Optional:** `MAPLE_TICK_NET_MIN` (15 or 30) in Vercel Production. `CRON_SECRET` is set; a cron that calls the tick with it is trusted.
 4. **Redeploy** so the variables apply: Vercel → Deployments → latest Production → ⋯ → Redeploy (or push any commit to `main`).
 5. **Pin the push keys** once, and always before changing `MCP_SECRET`: from the repo, run `MCP_SECRET='<the production value>' npx tsx -e 'import("./src/lib/maple/push").then((m) => console.log((m.vapidKeys ? m : m.default).vapidKeys()))'`, add the printed `publicKey` and `privateKey` as `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` in Vercel Production, and redeploy. They're the same keys the phones already use, so nothing changes for them.
 6. **Check the clock:** console.upstash.com → QStash → Schedules lists `maple-tick-net` (it appears after the first write or tick once a phone has notifications on), and Logs show 2xx deliveries to `/api/maple/push/tick`.
-7. **On each iPhone:** Settings → General → About should say iOS 16.4 or later (18.4+ is better). In Safari open brooker.family/maple → Share → Add to Home Screen, open Maple from the new icon and sign in again (the Home Screen app keeps its own storage), open Family → On this phone → Notifications (or the Notifications row on her tab), turn it on → Allow, then **Send a test in 1 minute** and lock the phone.
+7. **On each iPhone:** Settings → General → About should say iOS 16.4 or later (18.4+ is better). In Safari open maple.brooker.family/maple → Share → Add to Home Screen, open Maple from the new icon and sign in again (the Home Screen app keeps its own storage), open Family → On this phone → Notifications (or the Notifications row on her tab), turn it on → Allow, then **Send a test in 1 minute** and lock the phone.
    - Settings → Notifications → Maple: Allow Notifications, with Lock Screen, Notification Center, Banners and Sounds.
    - Settings → Focus → Sleep → Apps (under Allow Notifications) → Add → Maple, and the same for Do Not Disturb or any Focus used at night. Maple shows up in that list only after it has been opened from its Home Screen icon once.
    - Nothing rings through the Ring/Silent switch. For a dose that must not be missed overnight, also set a Clock alarm (or, on iOS 26.2+, a Reminder marked Urgent).
    - If others can see the lock screen: Settings → Notifications → Show Previews → When Unlocked, or turn on Hide medicine names.
-8. **On an Android:** in Chrome open brooker.family/maple → ⋮ → Add to Home screen → Install, open it from the icon, sign in, turn notifications on → Allow → send a test. Settings → Apps → Maple → Notifications: allowed; add Maple to Do Not Disturb's apps if you use it.
-9. **Leave the GitHub backup on:** GitHub → the brooker-wedding repo → Actions → Maple reminders, not disabled.
+8. **On an Android:** in Chrome open maple.brooker.family/maple → ⋮ → Add to Home screen → Install, open it from the icon, sign in, turn notifications on → Allow → send a test. Settings → Apps → Maple → Notifications: allowed; add Maple to Do Not Disturb's apps if you use it.
+9. **Leave the GitHub backup on:** GitHub → Brooker-Fam/maple → Settings → Secrets and variables → Actions → Variables: `MAPLE_TICK_URL` = `https://maple.brooker.family/api/maple/push/tick`, and Actions → Maple reminders not disabled.
 10. Whenever a phone shows Stopped (the row, or the "Notifications stopped on this phone" toast), is reset, or has its Home Screen icon removed: open Maple from the icon, tap Turn on, and run the 1-minute test with the phone locked.

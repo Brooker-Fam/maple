@@ -1,0 +1,59 @@
+# Maple
+
+Maple's Log: the Brooker family's newborn tracker for **Maple Jane** (Matt and Brittany's daughter, due October 20, 2026). Split out of [Brooker-Fam/brooker-wedding](https://github.com/Brooker-Fam/brooker-wedding), where it lived at `brooker.family/maple`. Full design and ops notes: `docs/maple.md`.
+
+**This repo is public.** Never commit secrets, `.env*` files, real log entries, screenshots of the signed-in app, or anything about Maple's or Brittany's health beyond what the code itself says.
+
+## Stack
+
+- **Next.js 16** (App Router), TypeScript, **Tailwind CSS v4**, Framer Motion
+- **Neon Postgres** (`@neondatabase/serverless`), **Vercel Blob**, Web Push (`web-push`), MCP (`mcp-handler`)
+- **pnpm** 11, Node 22+
+- **Vercel** project `maple` in the `guava-tri` team. Pushing to `main` deploys production.
+
+## Commands
+
+```bash
+pnpm install
+pnpm dev               # http://localhost:3000 (redirects to /maple)
+pnpm build             # runs migrations, then next build
+pnpm typecheck
+pnpm lint
+pnpm check:maple-feed  # the nursing engine's checks
+pnpm check:maple-care  # Brittany's medicines' checks
+```
+
+## Git workflow
+
+Solo family project: commit and push to `main`, no PRs unless asked. Vercel auto-deploys `main`.
+
+## Hosting, origin and env
+
+- The public origin comes from `NEXT_PUBLIC_MAPLE_ORIGIN` (default `https://maple.brooker.family`) via `src/lib/maple/origin.ts`. Use `MAPLE_ORIGIN` / `MAPLE_HOST` / `MCP_URL` from there; never hard-code a host.
+- Production env (Vercel): `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_USER`, `ADMIN_PASS`, `CRON_SECRET`, `BLOB_READ_WRITE_TOKEN` (the connected Blob store), `NEXT_PUBLIC_MAPLE_ORIGIN`. Optional: `MCP_SECRET`, `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`, `QSTASH_*`, `MAPLE_TICK_NET_MIN`, `MAPLE_ALLOWED_EMAILS`, `MAPLE_BLOB_READ_WRITE_TOKEN`, `NEXT_PUBLIC_POSTHOG_KEY`.
+- Session cookies, MCP tokens and VAPID keys are derived from `GOOGLE_CLIENT_SECRET` / `ADMIN_PASS` (or `MCP_SECRET`), which match brooker-wedding's on purpose: while both deployments serve Maple, a session or push subscription made on one works on the other.
+
+## Shared database (read before any schema change)
+
+Maple's tables (`maple_*`, plus `upload_rate_limit`) live in brooker-wedding's Neon database, and brooker-wedding still runs the same Maple migrations on each of its builds until its copy of Maple is removed. Until then:
+
+- Migrations (`src/lib/migrate.ts`) stay additive and idempotent: `CREATE ... IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`. Never drop, rename or retype a column, and never add a `NOT NULL` column without a default: brooker-wedding's older code still reads and writes these tables.
+- Both deployments can send notifications from the same tables. Sends are claimed per phone in `maple_push_sent`, so a notice still goes out once.
+- The family is in `America/New_York`; all "today"/clock logic goes through `src/lib/maple/time.ts`, never the server's zone.
+
+## The app
+
+Private, collaborative newborn tracker: nursing L/R timers, bottles, pumping, diapers + stool colors, sleep, tummy time, temperature/vitals/skin checks, growth on WHO girls percentiles, notes and doctor questions, photos and milestones. Full design and ops notes: `docs/maple.md`.
+
+- **Access:** Google sign-in (identity only) + `maple_members` (roles owner / member / viewer). First Google sign-in claims owner unless `MAPLE_ALLOWED_EMAILS` is set. Fallback sign-in with `ADMIN_USER`/`ADMIN_PASS` as the "admin" member. One-time invite links for family without Google. Google redirects to `{origin}/api/maple/auth/callback`, which must be an authorized redirect URI on the OAuth client (`GOOGLE_CLIENT_ID`).
+- **Data:** `maple_entries` (one row per event: `kind` + JSONB `data`, metric units; running timers have `active = TRUE`; soft deletes; `client_id` for idempotent retries). The family is in `America/New_York`; all "today"/clock logic goes through `src/lib/maple/time.ts`, never the server's zone.
+- **Medical guidance** lives only in `src/lib/maple/guidelines.ts` (thresholds + exact copy, sourced from AAP/CDC/WHO/ABM). Alerts always say who to call; never suggest medicine doses. `insights.ts` applies the rules for both the app and the MCP tools. Warnings and reminders are off unless `settings.show_alerts` is true (Family → On Today → Warnings & reminders; the family doesn't log consistently enough for them), but readings are still checked as they're entered.
+- **AI:** MCP server at `/api/maple/mcp` (Streamable HTTP, discrete tools in `src/lib/maple/mcp-tools.ts`). OAuth goes through the `/oauth/*` shim; connections (RFC 8707 `resource` = `{origin}/api/maple/mcp`) sign in with Google and get `maple:<email>` tokens, bound to that exact URL. Refresh tokens go only to codes redirected to Claude, ChatGPT or loopback (`trustedRedirect`); admin ones lapse after 90 idle days. Setup page: `/maple/connect`.
+- **Hands-free:** `POST /api/maple/quick` with a personal token (Family → Shortcuts & assistants) for iOS Shortcuts / Siri. Her `mom_dose` returns `next_ok_in_minutes` for a one-action Start Timer; "Maple status" includes her medicines for anyone who can read them. `back_and_forth` (with a feed running) goes both sides from now; `switch` while she's going both says there's nothing to switch.
+- **Notifications:** Web Push, opt-in per phone (iPhone needs the Home Screen app): her medicines (OK again, set times, "Logged" that closes the loop on the other phones, never a dose or "take it now") and an opt-in nursing timer on the lock screen; nothing else notifies. `src/lib/maple/push.ts` sends (claimed once per phone, retried on failure, 3 h cutoff), `push-wake.ts` decides when (`dueMoments`) and is the clock: Upstash QStash wake-ups at the exact moments plus a safety-net schedule (`MAPLE_TICK_NET_MIN`, default 30), published from writes (`push-hooks.ts`, via `after()` in the stores, so the app, Siri and Claude all count) and scheduled ticks, never from polls. Without `QSTASH_*` env vars, `.github/workflows/maple-reminders.yml` (every 5 min, when GitHub runs it, and only once the repo variable `MAPLE_TICK_URL` is set) and open apps' polls drive `/api/maple/push/tick`; with them, the tick ignores GitHub runs away from :04/:34. The app sends a per-install `X-Maple-Device` id (`device.ts`) only so "Logged" skips the phone that did it; no person is ever named. The app's side is `src/components/maple/notify/`: one provider (mounted in `MapleApp`) owns this phone's state and the one Notifications sheet (`useNotifications().open()`, `NotificationsRow`), re-checks the subscription on each open (a dropped one reads "Stopped" with a one-tap Turn on), offers "Remind me at …" in a dose toast on a phone that's off (at most 3 times), and sign-out turns the phone off. VAPID keys derive from `MCP_SECRET` (else `GOOGLE_CLIENT_SECRET`) unless `VAPID_*` are set; changing that secret makes every phone turn notifications on again. Family setup steps and copy: `docs/maple.md` → Notifications.
+- **Tabs:** Today, Brittany (her page; hidden for view-only guests), History (Timeline | Patterns behind one pinned switch), Moments, Family (settings only). Which tab shows lives in `AppNav.tsx` (`useAppNav().go()`; "log"/"patterns" open History on that segment); `useCareNav()` opens her tab and the shared sheets: Help (`HelpSheet.tsx`, every "who do we call"), For the doctor (`DoctorSheet.tsx`: questions, visit summary, her doctor's numbers), her temperature, the picker and the Dose sheet. Today keeps one order in every state (the hero folds while a timer runs; "While you slept" is one line). More is headed by person. Details in `docs/maple.md` ("Where things live").
+- **Dock:** Today's logging buttons (`Dock.tsx`, with her strip on top); every timer action lives there and in the Lantern, with `useTimerActions.tsx` saying what each tap did (Undo puts back exactly what the server had). Going back and forth (a `"B"` part: both sides, not tracked) is offered from a feed's second Switch, on a start within 30 minutes of the last feed, and in the card's … menu; then Switch's place only asks "Which side is she on now?" and saves nothing until answered. Family → On Today has log-wide Bottles and Pumping switches (`settings.feeds_bottle` / `track_pump`, on unless switched off; `logSwitches` in `MoreSheet.tsx`): off hides the Bottle tile (Left and Right take its room) or Pump in More, never anything logged, and Claude and Siri can still log either. Feeds are counted from the log, never stored (`nursingRuns`, `feedClusters`, `lastFedAnchor`, `nextSideFor` in `feed.ts`, used by Today, History, Patterns, Claude and Siri alike): under 10 minutes off the breast is the same feed whether Pause or Done was tapped, 3+ feeds each starting under 30 minutes after the last ended are a cluster (each feed counts), and Last fed after a long back-and-forth feed counts from 40 minutes before it ended. The cluster copy and its sources live in `guidelines.ts`; there's no cluster alert. Details in `docs/maple.md` ("The nursing screen", "Medical guidance", "How it works").
+- **Look:** its own calm, native-feeling skin, not the site's storybook one. Use the semantic `mp-*` colors (values in `src/app/maple/maple.css` cover day, dark and the night look, so no `dark:` variants), icons from `src/components/maple/icons.tsx`, and the kit in `ui.tsx`. No emoji in the app's chrome (members' avatar emoji and family-typed text are fine). Details in `docs/maple.md`.
+- **Photos:** Vercel Blob under `maple/`, private store via `MAPLE_BLOB_READ_WRITE_TOKEN` (falls back to the public `brooker-wedding-photos` store via `BLOB_READ_WRITE_TOKEN`); always served through the auth proxy `/api/maple/photo`, never by blob URL.
+- **Privacy:** no client analytics or session replay. `captureServerException` (PostHog, off unless `NEXT_PUBLIC_POSTHOG_KEY` is set) gets error context only, never entry contents.
+- **For mom:** Her page works like Maple's log: it always exists (no setup), anyone signed in except view-only guests can use it, and doses just save (only a likely duplicate within 30 minutes asks). Her data lives only in `maple_care_*` and never shows in Maple's views; every read goes through `careAccess`; no dose numbers anywhere by default; limits are in the label's own unit. Her next medicine rides on a 44px strip on top of Today's dock (one rule picks it, `pressingPlan`); after a Took it, that medicine holds its slot as "Logged 6:56 AM" for a minute and the strip's and Lantern's taps wait 1.5 s, so a double tap never logs a second medicine (her tab's fixed list takes two quick taps on two medicines). A name with extra words beyond a plan's ("Tylenol 3", "Tylenol PM") is another product and never counts toward that plan (`matchPlan`). Claude knows her by name (`MAPLE_INSTRUCTIONS`), takes "she" as Maple and asks "Maple's or Brittany's?" before logging a medicine that's also on her list, counts a brand or generic name toward the medicine on her list (`SAME_MEDICINE` in `care-mcp.ts`, exact single-ingredient names only), and may copy a photographed label or discharge sheet into her list (`add_mom_medicines`, which needs `read_back_confirmed: true`) only after reading every value back and an explicit yes, never filling in a number that isn't on the paper and never adding a second plan for a medicine she has. Details in `docs/maple.md` ("For mom").
