@@ -254,10 +254,11 @@ const VIA_LABEL: Record<string, string> = {
   chatgpt: "ChatGPT",
   mcp: "an AI assistant",
   shortcut: "a Shortcut",
+  chat: "Maple chat",
 };
 const viaLabel = (s: string | null | undefined) => VIA_LABEL[s ?? "web"] ?? String(s);
 
-const MCP_SOURCES = ["claude", "chatgpt", "mcp"];
+const MCP_SOURCES = ["claude", "chatgpt", "mcp", "chat"];
 
 const sideWord = (s: Side) => (s === "L" ? "left" : "right");
 const toSide = (s: "left" | "right") => (s === "left" ? "L" : "R") as Side;
@@ -291,7 +292,7 @@ export async function context(extra: Extra): Promise<Ctx> {
   const sub = typeof auth.sub === "string" ? auth.sub : "";
   if (!sub) throw new ToolError("You're not signed in to Maple's Log. Reconnect the connector and sign in again.");
   let id = sub.startsWith("maple:") ? sub.slice("maple:".length) : sub;
-  const via: Source = auth.via === "claude" || auth.via === "chatgpt" ? auth.via : "mcp";
+  const via: Source = auth.via === "claude" || auth.via === "chatgpt" || auth.via === "chat" ? auth.via : "mcp";
   // Before the admin_as swap below: the password is Matt's, so it never reads as her own.
   const viaAdmin = id === ADMIN_ID;
   const [baby, members] = await Promise.all([getBaby(), listMembers()]);

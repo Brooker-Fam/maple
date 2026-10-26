@@ -11,12 +11,15 @@
     "typecheck": "tsc --noEmit",
     "check:maple-feed": "tsx scripts/maple-feed-check.ts",
     "check:maple-care": "tsx scripts/maple-care-check.ts",
-    "check:maple-native": "tsx scripts/maple-native-check.ts"
+    "check:maple-native": "tsx scripts/maple-native-check.ts",
+    "check:maple-chat": "tsx scripts/maple-chat-check.ts"
   },
   "dependencies": {
+    "@ai-sdk/react": "4.0.45",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@neondatabase/serverless": "^1.0.2",
     "@vercel/blob": "^2.5.0",
+    "ai": "7.0.42",
     "framer-motion": "^12.34.3",
     "google-auth-library": "^10.6.2",
     "mcp-handler": "^1.1.0",

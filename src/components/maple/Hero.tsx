@@ -221,7 +221,7 @@ function useFreshLeaf(leaves: number, night: boolean): number | undefined {
   return fresh;
 }
 
-export default function Hero() {
+export default function Hero({ action }: { action?: ReactNode }) {
   const { state, summary, isNight, toast } = useMaple();
   const now = useNow(60_000);
   const nightLook = useNightActive();
@@ -261,6 +261,7 @@ export default function Hero() {
           </p>
         )}
       </div>
+      {action}
       <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} ${leaves === 1 ? "leaf" : "leaves"}, one for each week`} className="relative shrink-0 rounded-2xl active:scale-[0.98]">
         {/* Still, not swaying: nothing on Today moves unless something happened. */}
         <Sapling leaves={leaves} season={season} fresh={fresh} className="h-[72px] w-[66px]" />

@@ -7,6 +7,7 @@ import { AppNavProvider, useAppNav, type NavTarget, type TabId } from "./AppNav"
 import { WelcomeHost } from "./BirthSheet";
 import CareScreen from "./care/CareScreen";
 import { CareNavProvider } from "./care/CareNav";
+import { ChatNavProvider } from "./chat/ChatNav";
 import { useCare } from "./care/useCare";
 import FamilyTab from "./FamilyTab";
 import HistoryTab from "./HistoryTab";
@@ -54,13 +55,16 @@ export default function MapleApp() {
           everything that switches it. Mom's sheets (Support, warning signs, the picker, the Dose sheet, her
           temperature, Help, For the doctor) wrap SheetProvider: Maple's sheets (MedSheet's "Log it for {Name}
           instead") render beside the shell, so they only reach useCareNav from inside it, and hers come after
-          them, on top. The notifications sheet wraps both. */}
+          them, on top. The notifications sheet wraps both. The chat (Ask) sits inside them all, so Help and Maple's
+          sheets open over it. */}
       <MotionConfig reducedMotion="user">
         <AppNavProvider>
           <NotificationsProvider>
             <CareNavProvider>
               <SheetProvider>
-                <Shell />
+                <ChatNavProvider>
+                  <Shell />
+                </ChatNavProvider>
               </SheetProvider>
             </CareNavProvider>
           </NotificationsProvider>

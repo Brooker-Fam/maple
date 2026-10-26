@@ -405,6 +405,7 @@ export const when = (v: Voice, at: string | number) => careTime(at, v.now, v.tz)
 function viaWords(source: Source): string {
   if (source === "shortcut") return ", with Siri";
   if (source === "chatgpt") return ", from ChatGPT";
+  if (source === "chat") return ", from Maple chat";
   if (source === "claude" || source === "mcp") return ", from Claude";
   return "";
 }

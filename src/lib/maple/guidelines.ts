@@ -566,6 +566,15 @@ export const HELP_ROW = "Need to talk now? Call or text 988 · Call 911";
 /** Appended to every care access error from the MCP (with MOM_HELP.now as data). */
 export const HELP_NOW_LINE =
   "If anyone mentions thoughts of harming themselves or someone else: call 911 if anyone is in immediate danger; otherwise call or text 988, any time.";
+/** HELP_NOW_LINE as said to the person: the in-app chat opens its reply with it. */
+export const CRISIS_REPLY = "Please call 911 if anyone is in immediate danger. Otherwise, call or text 988, any time.";
+/** The in-app chat's card when the model declines to answer (a safety filter), always with the help lines under it. */
+export const CHAT_REFUSAL = {
+  tier: "mention",
+  label: "Help is a call away",
+  title: "Couldn't answer that here",
+  body: "If anyone may be in danger, call 911. For thoughts of harming yourself or someone else, call or text 988. For anything about Maple's health, call her pediatrician.",
+} satisfies Assessment;
 
 // ── Warning signs ────────────────────────────────────────────────────────
 // Tiers: AWHONN's 911 list → emergency; AWHONN's provider list and CDC Hear

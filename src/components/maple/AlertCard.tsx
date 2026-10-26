@@ -353,6 +353,53 @@ function AlertCard({
   );
 }
 
+/**
+ * An alert as a tool result carries it (the chat's cards), in its tier's
+ * look with its own label, word for word. The call is 911 for an emergency;
+ * for "call now" or "today", the pediatrician, or her OB for one of hers.
+ */
+export function AlertNote({ alert, mom }: { alert: { tier: AlertTier; label: string; title: string; body: string }; mom?: boolean }) {
+  const { state } = useMaple();
+  const babyPhones = usePhones();
+  const team = state?.care?.settings.care_team;
+  const momPhone = (v: string | undefined) => (v && v.replace(/\D/g, "").length >= 3 ? v.trim() : null);
+  const phones = mom ? { pediatrician: momPhone(team?.ob), afterHours: momPhone(team?.after_hours) } : babyPhones;
+  const st = STYLE[alert.tier] ?? STYLE.mention;
+  const urgent = URGENT.includes(alert.tier);
+  const call: { href: string; label: string } | null =
+    alert.tier === "emergency"
+      ? { href: "tel:911", label: "Call 911" }
+      : urgent && phones.pediatrician
+        ? { href: telHref(phones.pediatrician), label: mom ? "Call her OB" : "Call pediatrician" }
+        : null;
+  return (
+    <section role={urgent ? "alert" : "status"} className={cx("rounded-[20px] border p-4", st.card)}>
+      <p className={cx("flex min-w-0 items-center gap-1.5 text-[13px] font-semibold", st.mark)}>
+        <Icon name={st.icon} size={16} strokeWidth={2} className="shrink-0" />
+        {alert.label}
+      </p>
+      <h3 className={cx("mt-1.5 text-[17px] leading-snug font-semibold", st.ink)}>{alert.title}</h3>
+      <p className={cx("mt-1 text-[15px] leading-relaxed", st.body)}>{alert.body}</p>
+      {(call || (urgent && phones.afterHours)) && (
+        <div className="mt-3.5 space-y-2">
+          {call && (
+            <a href={call.href} className={cx(BTN, "min-h-[48px] w-full", st.solid)}>
+              <Icon name="phone" size={18} />
+              {call.label}
+            </a>
+          )}
+          {urgent && phones.afterHours && (
+            <a href={telHref(phones.afterHours)} className={cx(BTN, st.soft)}>
+              <Icon name="phone" size={17} />
+              After-hours line
+            </a>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** The always-there footer: "When to call 911" and the disclaimer. */
 export function EmergencyHelp() {
   const [open, setOpen] = useState(false);

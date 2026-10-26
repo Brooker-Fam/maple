@@ -394,7 +394,7 @@ export async function saveCarePlan(
   const p = needWrite(s);
   const raw = input as unknown as Record<string, unknown>;
   const by = s.viewer.id;
-  const assistant = opts.source === "claude" || opts.source === "chatgpt" || opts.source === "mcp";
+  const assistant = opts.source === "claude" || opts.source === "chatgpt" || opts.source === "mcp" || opts.source === "chat";
 
   if (input.id != null) {
     const cur = await readablePlan(s, input.id);

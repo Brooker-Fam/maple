@@ -297,6 +297,61 @@ async function migrate() {
   await sql`ALTER TABLE maple_care_entries ADD COLUMN IF NOT EXISTS device TEXT`;
   await sql`ALTER TABLE maple_entries ADD COLUMN IF NOT EXISTS device TEXT`;
 
+  // The in-app chat (src/lib/maple/chat/). A thread is one member's and nobody
+  // else's; deleting it deletes its messages. Messages are the AI SDK's
+  // UIMessage parts as sent, never rewritten (an approval's continuation
+  // replaces its own assistant message). Usage rows carry token counts and
+  // integer micro-dollar cost only, no content, and outlive their thread.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_chat_threads (
+      id TEXT PRIMARY KEY,
+      member TEXT NOT NULL,
+      title TEXT,
+      model TEXT NOT NULL,
+      busy_until TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_chat_threads_member ON maple_chat_threads(member, updated_at DESC)`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_chat_messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES maple_chat_threads(id) ON DELETE CASCADE,
+      member TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      parts JSONB NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (thread_id, seq)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_chat_messages_daily ON maple_chat_messages(member, created_at DESC) WHERE role = 'user'`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_ai_usage (
+      id BIGSERIAL PRIMARY KEY,
+      member TEXT NOT NULL,
+      thread_id TEXT,
+      message_id TEXT,
+      step INTEGER NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_micro_usd BIGINT NOT NULL,
+      price_key TEXT NOT NULL,
+      finish_reason TEXT,
+      generation_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_ai_usage_time ON maple_ai_usage(created_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_ai_usage_thread ON maple_ai_usage(thread_id, id DESC)`;
+
   console.log("Migrations complete.");
 }
 

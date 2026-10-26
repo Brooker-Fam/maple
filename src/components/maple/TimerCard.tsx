@@ -43,7 +43,7 @@ export const SWITCH_STYLE: Record<Side, { bg: string; fg: string }> = {
   R: { bg: SIDE_COLOR.R, fg: SIDE_INK.R },
 };
 
-const VIA: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT", mcp: "Claude" };
+const VIA: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT", mcp: "Claude", chat: "Maple chat" };
 /** What a Discard would lose, for "Discard 20 min of sleep?" (a timed feed says "nursing"). */
 const DISCARD_WHAT: Record<TimerKind, string> = { feed: "feeding", sleep: "sleep", tummy: "tummy time", pump: "pumping" };
 

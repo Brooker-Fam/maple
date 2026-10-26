@@ -791,6 +791,7 @@ export function Sheet({
   locked,
   actions,
   display,
+  tall,
 }: {
   open: boolean;
   onClose: () => void;
@@ -815,6 +816,8 @@ export function Sheet({
   actions?: ReactNode;
   /** The title in the display serif, larger: her screen's name, the one place it's used (§11.5). */
   display?: boolean;
+  /** The chat: always 92% of the screen, so it doesn't grow under the thumb with every reply. */
+  tall?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -948,7 +951,7 @@ export function Sheet({
             }
             className={cx(
               "relative flex w-full max-w-lg flex-col rounded-t-[24px] bg-mp-bg outline-none sm:rounded-[24px]",
-              calm ? "max-h-[90dvh]" : "max-h-[92dvh]"
+              calm ? "max-h-[90dvh]" : tall ? "h-[92dvh]" : "max-h-[92dvh]"
             )}
           >
             <SheetArmed.Provider value={armed}>

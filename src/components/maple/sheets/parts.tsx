@@ -69,6 +69,7 @@ const VIA: Partial<Record<Source, string>> = {
   chatgpt: "ChatGPT",
   mcp: "an AI assistant",
   shortcut: "Siri",
+  chat: "Maple chat",
 };
 
 /** A Done can land after the end it records (at the pause, or a time given), but a change this long after the end is an edit. */

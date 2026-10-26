@@ -14,6 +14,7 @@ const VIA: Record<string, string> = {
   chatgpt: "ChatGPT",
   mcp: "AI",
   shortcut: "Siri",
+  chat: "Maple chat",
 };
 
 /** Photo thumbnail URL for a moment's photo by position (served through the auth proxy). */

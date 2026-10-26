@@ -166,7 +166,7 @@ export type EntryDataByKind = {
   note: NoteData;
 };
 
-export type Source = "web" | "claude" | "chatgpt" | "mcp" | "shortcut";
+export type Source = "web" | "claude" | "chatgpt" | "mcp" | "shortcut" | "chat";
 
 type EntryBase<K extends EntryKind> = {
   id: number;
