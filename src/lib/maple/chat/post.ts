@@ -10,7 +10,7 @@ import type { ModelPrice } from "./prices";
 import { contextLine } from "./prompt";
 import type { LockedThread, UsageRow } from "./store";
 import { CHAT_OFF, chatTurn } from "./turn";
-import { THREAD_ID_RE, type ChatMessage, type ChatRefusal } from "./types";
+import { CHAT_TERMS_NEEDED, THREAD_ID_RE, type ChatConsent, type ChatMessage, type ChatRefusal } from "./types";
 
 /**
  * One POST to the chat, from the raw body to a streamed answer or a refusal.
@@ -19,8 +19,9 @@ import { THREAD_ID_RE, type ChatMessage, type ChatRefusal } from "./types";
  */
 
 export type ChatStore = {
+  consent: (member: Member) => Promise<ChatConsent>;
   usageSince: (member: string, day: string, dayStart: Date, monthStart: Date) => Promise<Usage>;
-  lockThread: (id: string, member: string, model: string, viewer: boolean) => Promise<LockedThread | "busy" | "missing">;
+  lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean) => Promise<LockedThread | "busy" | "missing">;
   releaseThread: (id: string) => Promise<void>;
   loadMessages: (threadId: string) => Promise<ChatMessage[]>;
   saveMessage: (threadId: string, member: string, m: ChatMessage) => Promise<void>;
@@ -36,7 +37,8 @@ export type PostDeps = {
   model: LanguageModel;
   modelKey: string;
   price: ModelPrice | null;
-  tools: (opts: { born: boolean }) => ToolSet;
+  /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). */
+  tools: (opts: { born: boolean; care: boolean }) => ToolSet;
   budget: { day: bigint; month: bigint };
   now: Date;
   /** Gets every error already scrubbed (`scrub`), so whatever it logs carries no message text. */
@@ -48,6 +50,7 @@ export type PostBody = { threadId?: unknown; message?: unknown };
 
 export const BUSY = "One message at a time: the last answer is still coming.";
 export const FULL = "This chat is long, so a new one starts here.";
+export const CARE_CLOSED = "Her page is closed to the chat now, so a new chat starts here.";
 export const STALE = "That question has moved on. Ask again if you still want it.";
 
 const newMessageId = createIdGenerator({ prefix: "msg", size: 16 });
@@ -98,6 +101,10 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     return refuse({ error: CHAT_OFF, code: "off" }, 503);
   }
 
+  const consent = await store.consent(member);
+  if (!consent.terms) return refuse({ error: CHAT_TERMS_NEEDED, code: "terms" }, 403);
+  const care = consent.care && member.role !== "viewer";
+
   const { baby, members } = await deps.household();
   const tz = baby.timezone || DEFAULT_TZ;
   const today = dayKey(deps.now, tz);
@@ -106,7 +113,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   if (limit) return refuse({ error: limit, code: "limit" }, 429);
 
   const viewer = member.role === "viewer";
-  const thread = await store.lockThread(body.threadId, member.email, deps.modelKey, viewer);
+  const thread = await store.lockThread(body.threadId, member.email, deps.modelKey, viewer, care);
   if (thread === "busy") return refuse({ error: BUSY, code: "busy" }, 409);
   if (thread === "missing") return reply({ error: "Not found" }, 404);
 
@@ -119,6 +126,8 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   // Every way out of here releases the thread, except a started answer: its stream releases it once the reply is saved.
   let streaming = false;
   try {
+    // Its history can quote her page (results and the replies that repeat them), which she has since closed to the chat.
+    if (thread.careOpen && !care) return refuse({ error: CARE_CLOSED, code: "new_chat" }, 409);
     const history = await store.loadMessages(thread.id);
     let messages: ChatMessage[];
     let responseId: string;
@@ -146,8 +155,9 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       model: deps.model,
       modelKey: deps.modelKey,
       price,
-      tools: deps.tools({ born: !!baby.born_at }),
+      tools: deps.tools({ born: !!baby.born_at, care }),
       viewer,
+      care,
       messages,
       responseId,
       crisis,

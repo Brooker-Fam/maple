@@ -2,21 +2,31 @@ import type { LanguageModelUsage } from "ai";
 
 /**
  * Model prices in integer micro-dollars per million tokens (BigInt; never a
- * float). `long` applies once a single request's prompt passes `longAbove`
- * tokens. Cache writes are the 5-minute kind. Requests aren't pinned to US-only
- * inference, so its surcharge doesn't apply. A model with no row here can't
- * be priced, and the chat refuses to run on it.
+ * float). `long` applies once a single request's prompt passes `long.above`
+ * tokens. Anthropic's cache writes are the 5-minute kind; a model that lists
+ * no cache-write price is billed for writes at its input price. Requests
+ * aren't pinned to US-only inference, so its surcharge doesn't apply. A
+ * model with no row here can't be priced, and the chat refuses to run on it.
+ *
+ * `providers` is the Gateway's `only` for the model: each one keeps nothing,
+ * trains on nothing and charges at most the row, so what the budgets count
+ * is what's billed. A provider missing from it is never asked.
  */
 
 export type Price = { input: bigint; cacheRead: bigint; cacheWrite: bigint; output: bigint };
-export type ModelPrice = { base: Price; longAbove: number; long: Price };
+export type ModelPrice = { base: Price; long?: { above: number; price: Price }; providers: readonly string[] };
 
-// AI Gateway /v1/models and Anthropic's pricing page, checked 2026-10-26.
+// AI Gateway /v1/models and /v1/models/{model}/endpoints, and Anthropic's pricing page, checked 2026-10-26.
 export const PRICES: Record<string, ModelPrice> = {
+  "zai/glm-5.3-flash": {
+    base: { input: BigInt(150_000), cacheRead: BigInt(30_000), cacheWrite: BigInt(150_000), output: BigInt(500_000) },
+    // Not deepinfra, though it's cheaper: at its 10 tokens a second a reply outlasts the 25-second step.
+    providers: ["baseten", "digitalocean", "fireworks", "parasail", "particle", "relace", "runware", "togetherai"],
+  },
   "anthropic/claude-haiku-5.5": {
     base: { input: BigInt(100_000), cacheRead: BigInt(10_000), cacheWrite: BigInt(125_000), output: BigInt(500_000) },
-    longAbove: 100_000,
-    long: { input: BigInt(500_000), cacheRead: BigInt(50_000), cacheWrite: BigInt(625_000), output: BigInt(2_500_000) },
+    long: { above: 100_000, price: { input: BigInt(500_000), cacheRead: BigInt(50_000), cacheWrite: BigInt(625_000), output: BigInt(2_500_000) } },
+    providers: ["anthropic", "bedrock", "vertexAnthropic"],
   },
 };
 
@@ -47,10 +57,10 @@ export function stepTokens(u: Pick<LanguageModelUsage, "inputTokens" | "inputTok
 
 /** The step's cost, rounded to the nearest micro-dollar, and which price row it used. */
 export function costMicro(model: string, price: ModelPrice, t: StepTokens): { micro: bigint; key: string } {
-  const long = t.prompt > price.longAbove;
-  const p = long ? price.long : price.base;
+  const long = price.long && t.prompt > price.long.above ? price.long : null;
+  const p = long ? long.price : price.base;
   const num = BigInt(t.fresh) * p.input + BigInt(t.cacheRead) * p.cacheRead + BigInt(t.cacheWrite) * p.cacheWrite + BigInt(t.output) * p.output;
-  return { micro: (num + MILLION / BigInt(2)) / MILLION, key: long ? `${model}>${price.longAbove}` : model };
+  return { micro: (num + MILLION / BigInt(2)) / MILLION, key: long ? `${model}>${long.above}` : model };
 }
 
 /** "$0.00295" for a cost in micro-dollars (display only). */

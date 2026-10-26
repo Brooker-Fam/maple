@@ -29,6 +29,8 @@ export const TIER_LABEL: Record<AlertTier, string> = {
 export type Assessment = { tier: AlertTier; title: string; body: string; label?: string };
 
 export const DISCLAIMER = "Maple's Log isn't medical advice. When in doubt, call your pediatrician.";
+/** The quiet line by the Terms and Privacy links (Family's About, sign-in, the chat's terms). */
+export const TRACKER_NOTE = "Maple is a tracker, not medical advice.";
 
 export const EMERGENCY_SIGNS =
   "Call 911 if she has blue or gray lips or face, stops breathing for 20 seconds or more, is struggling to breathe (grunting, flaring nostrils, skin pulling in around the ribs), can't be woken, or is limp.";
@@ -575,6 +577,9 @@ export const CHAT_REFUSAL = {
   title: "Couldn't answer that here",
   body: "If anyone may be in danger, call 911. For thoughts of harming yourself or someone else, call or text 988. For anything about Maple's health, call her pediatrician.",
 } satisfies Assessment;
+/** On the chat's terms card, before a first message; the maternal hotline isn't a crisis line (HRSA, above). */
+export const CHAT_TERMS_HELP =
+  "In an emergency, call 911. For thoughts of harming yourself or someone else, call or text 988. For support after the birth, call or text the National Maternal Mental Health Hotline at 1-833-852-6262.";
 
 // ── Warning signs ────────────────────────────────────────────────────────
 // Tiers: AWHONN's 911 list → emergency; AWHONN's provider list and CDC Hear

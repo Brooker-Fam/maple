@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent, type MouseEvent } from "react";
 import { isNativeApp, postToNative } from "@/lib/maple/native";
 import { MapleLeaf, useStill } from "./art";
 import { Icon } from "./icons";
+import { TrackerNote } from "./Legal";
 import { Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
@@ -183,6 +184,7 @@ export default function SignIn() {
             ? "An invite link from Matt or Brittany opens Maple in the browser for now, not in this app."
             : <>Got an invite link from Matt or Brittany? Just open it on this phone and you&apos;re in.</>}
         </p>
+        <TrackerNote className="mt-6" />
       </motion.div>
     </div>
   );

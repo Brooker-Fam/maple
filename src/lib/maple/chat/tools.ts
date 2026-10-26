@@ -41,14 +41,16 @@ export function registrations(): { all: Registration[]; mom: Set<string> } {
 /** Her medicine list changes only in the app, where adding one is a real tap, not the model's word. */
 export const EXCLUDED_TOOLS = new Set(["set_mom_medicine", "add_mom_medicines"]);
 
-export function allowed(r: Registration, opts: { viewer: boolean; born: boolean; mom: Set<string> }): boolean {
+/** `care`: she has let the chat see her page (chat_care); until then none of her tools are in. */
+export function allowed(r: Registration, opts: { viewer: boolean; born: boolean; care: boolean; mom: Set<string> }): boolean {
   if (EXCLUDED_TOOLS.has(r.name)) return false;
   if (r.name === "record_birth" && opts.born) return false;
-  if (opts.viewer) return r.ann.readOnlyHint && !opts.mom.has(r.name);
+  if (opts.mom.has(r.name) && (opts.viewer || !opts.care)) return false;
+  if (opts.viewer) return r.ann.readOnlyHint;
   return true;
 }
 
-/** A tool result past this is cut before the model reads it: it keeps every prompt under Haiku's 100K price step. */
+/** A tool result past this is cut before the model reads it, so one long answer can't balloon a step's prompt and its cost. */
 export const MODEL_TEXT_MAX = 20_000;
 const CUT = "\n[Cut off here: the result was too long. Ask for a shorter time window.]";
 
@@ -86,14 +88,18 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
 
 const HELP_TEXT = "The help card is showing under your reply.";
 
-/** `device`: the phone's X-Maple-Device id, so a dose logged here sends "Logged" to the other phones only. */
-export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: boolean; device?: string | null }): ToolSet {
+/**
+ * `device`: the phone's X-Maple-Device id, so a dose logged here sends "Logged"
+ * to the other phones only. `care` also rides on every call, so Maple's tools
+ * leave her out of their results until she has turned it on (context() in mcp-tools.ts).
+ */
+export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: boolean; care: boolean; device?: string | null }): ToolSet {
   const { all, mom } = registrations();
   const sub = member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`;
   const extra = {
     signal: new AbortController().signal,
     requestId: "maple-chat",
-    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, via: "chat", device: opts.device ?? null } },
+    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, via: "chat", device: opts.device ?? null, care: opts.care } },
     sendNotification: async () => {},
     sendRequest: async () => {
       throw new Error("unsupported");
@@ -103,7 +109,7 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: 
   const viewer = member.role === "viewer";
   const set: ToolSet = {};
   for (const r of all) {
-    if (!allowed(r, { viewer, born: opts.born, mom })) continue;
+    if (!allowed(r, { viewer, born: opts.born, care: opts.care, mom })) continue;
     const parser = z.object(r.shape);
     const write = !r.ann.readOnlyHint;
     const isMom = mom.has(r.name);

@@ -318,6 +318,9 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_chat_threads_member ON maple_chat_threads(member, updated_at DESC)`;
   // Every turn in it ran as a viewer. A viewer opens only these, so someone made a viewer can't reread her data from older chats.
   await sql`ALTER TABLE maple_chat_threads ADD COLUMN IF NOT EXISTS viewer_only BOOLEAN NOT NULL DEFAULT FALSE`;
+  // Some turn in it ran with her page open to the chat (chat_care), so its history can carry her data; older threads all did.
+  // While her page is closed, these never go back to the model.
+  await sql`ALTER TABLE maple_chat_threads ADD COLUMN IF NOT EXISTS care_open BOOLEAN NOT NULL DEFAULT TRUE`;
   await sql`
     CREATE TABLE IF NOT EXISTS maple_chat_messages (
       id TEXT PRIMARY KEY,
@@ -361,6 +364,15 @@ async function migrate() {
       day DATE NOT NULL,
       messages INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (member, day)
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_consents (
+      member TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (member, kind)
     )
   `;
 

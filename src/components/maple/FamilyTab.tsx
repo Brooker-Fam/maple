@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { useTheme } from "@/components/ThemeProvider";
-import { DISCLAIMER } from "@/lib/maple/guidelines";
+import { DISCLAIMER, TRACKER_NOTE } from "@/lib/maple/guidelines";
 import { adminActsAs, alertsOn } from "@/lib/maple/insights";
 import { isNativeApp } from "@/lib/maple/native";
 import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
@@ -13,7 +13,9 @@ import BirthSheet from "./BirthSheet";
 import { useCareNav } from "./care/CareNav";
 import { NavRow } from "./care/parts";
 import { useCare } from "./care/useCare";
+import { ChatCareRow } from "./chat/ChatTerms";
 import { Icon, type IconName } from "./icons";
+import { LegalLinks } from "./Legal";
 import { useNightPref, type NightPref } from "./nightLook";
 import { NotificationsRow, useNotifications } from "./notify";
 import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, cx, memberColor, tone } from "./ui";
@@ -25,9 +27,10 @@ import { MAPLE_HOST, MAPLE_ORIGIN, MCP_URL } from "@/lib/maple/origin";
  * more), Maple's details and her doctor's numbers, what shows on Today, this
  * phone's own settings (units, night look, theme, notifications, Add to Home
  * Screen), Shortcuts & assistants (one row: connecting Claude or ChatGPT and
- * the Siri shortcuts, for Maple and for her mom), Help, and the CSV export
- * and sign-out. Nothing here is an everyday thing: her page is its own tab,
- * and the doctor questions live in "For the doctor". Viewers get a
+ * the Siri shortcuts, for Maple and for her mom), her own switch for what the
+ * chat may see (hers alone), Help, the CSV export and sign-out, and About
+ * (Terms and Privacy). Nothing here is an everyday thing: her page is its own
+ * tab, and the doctor questions live in "For the doctor". Viewers get a
  * read-only version.
  *
  * Laid out like iOS Settings: one card per group, rows with the label on the
@@ -360,8 +363,10 @@ export default function FamilyTab() {
       <BabyDetails />
       <Preferences />
       {!readOnly && <Assistants />}
+      <ChatPrivacy />
       <HelpSection />
       <DataAndAccount />
+      <About />
       <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
     </div>
   );
@@ -1015,6 +1020,20 @@ function BabyDetails() {
   );
 }
 
+// ── The chat and her page ────────────────────────────────────────────────
+
+function ChatPrivacy() {
+  const care = useCare();
+  if (!care?.self) return null;
+  return (
+    <Section title="Ask">
+      <div className={GROUP}>
+        <ChatCareRow />
+      </div>
+    </Section>
+  );
+}
+
 // ── Help ─────────────────────────────────────────────────────────────────
 
 /** One row to Help: Maple's emergency signs and her doctor, the warning signs after the birth, help lines (viewers too). */
@@ -1528,6 +1547,19 @@ function MomShortcut({ url }: { url: string }) {
         A timer, or Apple Reminders at <Code>next_ok_at</Code>, not a calendar: family calendars show on the kitchen display.
       </p>
     </Disclosure>
+  );
+}
+
+// ── About ────────────────────────────────────────────────────────────────
+
+function About() {
+  return (
+    <Section title="About">
+      <div className={cx(GROUP, "flex items-center gap-3 py-1 pr-2 pl-4")}>
+        <p className={cx(tone.muted, "min-w-0 flex-1 text-[13px] leading-snug")}>{TRACKER_NOTE}</p>
+        <LegalLinks className="shrink-0" />
+      </div>
+    </Section>
   );
 }
 

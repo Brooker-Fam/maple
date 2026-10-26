@@ -7,6 +7,7 @@ import { mentionsCrisis } from "@/lib/maple/chat/crisis";
 import { CHAT_MAX_CHARS, type ChatMessage, type ChatThread } from "@/lib/maple/chat/types";
 import { deviceHeaders } from "@/lib/maple/device";
 import { useMaple } from "../useMaple";
+import { useChatNav } from "./ChatNav";
 import { DROPPED, needsHelpCard, problemFor, refusalOf, textOf, unanswered } from "./stopped";
 
 /** A thread touched within this long reopens with the sheet; after it, a new one starts. */
@@ -28,6 +29,7 @@ const transport = new DefaultChatTransport<ChatMessage>({
 
 export function useChatThread(open: boolean) {
   const { api, refresh, online } = useMaple();
+  const { termsNeeded } = useChatNav();
   const [thread, setThread] = useState<{ id: string; initial: ChatMessage[] } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
@@ -58,6 +60,7 @@ export function useChatThread(open: boolean) {
         setThread({ id: newThreadId(), initial: [] });
         return;
       }
+      if (refusal?.code === "terms") termsNeeded();
       setProblem(problemFor(err.message));
       // No answer, or one cut off before its card: the help card shows here instead.
       if (!helpArrived.current && (refusal?.help === "crisis" || (lastSent.current != null && mentionsCrisis(lastSent.current)))) setHelp(true);

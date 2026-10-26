@@ -288,10 +288,15 @@ export type Ctx = {
   who: { id: string; via: Source; role: Role; name: string; viaAdmin: boolean };
   /** The in-app chat's phone (device.ts), so her "Logged" notice skips it; null for every other caller. */
   device: string | null;
+  /** Her page is open here: false only in the in-app chat until she lets it see her page (chat_care). */
+  care: boolean;
 };
 
+/** A chat call without the flag counts as closed. */
+export const careOpen = (auth: { via?: unknown; care?: unknown }): boolean => auth.via !== "chat" || auth.care === true;
+
 export async function context(extra: Extra): Promise<Ctx> {
-  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; via?: unknown; device?: unknown };
+  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; via?: unknown; device?: unknown; care?: unknown };
   const sub = typeof auth.sub === "string" ? auth.sub : "";
   if (!sub) throw new ToolError("You're not signed in to Maple's Log. Reconnect the connector and sign in again.");
   let id = sub.startsWith("maple:") ? sub.slice("maple:".length) : sub;
@@ -322,6 +327,7 @@ export async function context(extra: Extra): Promise<Ctx> {
     members,
     who: { id, via, role, name: memberName(id, members), viaAdmin },
     device: via === "chat" ? cleanDevice(auth.device) : null,
+    care: careOpen(auth),
   };
 }
 
@@ -1676,6 +1682,11 @@ async function doTemperature(a: TempArgs, ctx: Ctx, w: WriteOpts): Promise<Saved
 
 type MedArgs = TimeArgs & { name?: string | null; dose?: string | null; note?: string | null; for_maple?: boolean | null };
 
+/** A read of her tables, or no rows where her page is closed to this caller (ctx.care). */
+function hers(ctx: Ctx, sql: string, params: unknown[]): ReturnType<typeof query> {
+  return ctx.care ? query(sql, params) : Promise.resolve([]);
+}
+
 /**
  * Her mom's plan with exactly this name (or an Also called name), or the same
  * medicine by its other name (SAME_MEDICINE: acetaminophen for a Tylenol plan),
@@ -1685,6 +1696,7 @@ type MedArgs = TimeArgs & { name?: string | null; dose?: string | null; note?: s
  * here never stops Maple's log.
  */
 async function momNamesake(name: string, ctx: Ctx): Promise<string | null> {
+  if (!ctx.care) return null;
   const move = "If this dose was hers, not Maple's, take it back with undo_last and log it with log_mom_medicine.";
   try {
     const viewer = { id: ctx.who.id, role: ctx.who.role, viaAdmin: ctx.who.viaAdmin, channel: "mcp" as const };
@@ -4397,7 +4409,8 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         ),
         // Your newest write to her medicines, temperature or questions:
         // if it's newer, "undo that" means it, and removing Maple's entry would undo the wrong thing.
-        query(
+        hers(
+          ctx,
           `SELECT e.id, e.kind, e.created_at, e.data->>'name' AS name FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
            WHERE e.created_by = $1 AND e.source = ANY($2::text[]) AND e.deleted_at IS NULL
              AND e.created_at >= NOW() - INTERVAL '30 minutes'
@@ -4415,14 +4428,16 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
           [ctx.baby.id, ctx.who.id]
         ),
         // Your latest edit to one of her entries (fix_mom_entry): creating one leaves updated_by empty.
-        query(
+        hers(
+          ctx,
           `SELECT id, kind, updated_at, data->>'name' AS name FROM maple_care_entries
            WHERE updated_by = $1 AND deleted_at IS NULL AND updated_at >= NOW() - INTERVAL '30 minutes'
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
           [ctx.who.id]
         ),
         // Your latest add, change, stop or delete of one of her medicines (set_mom_medicine).
-        query(
+        hers(
+          ctx,
           `SELECT id, name, updated_at, created_at, deleted_at, stopped_at FROM maple_care_meds
            WHERE updated_by = $1 AND updated_at >= NOW() - INTERVAL '30 minutes'
            ORDER BY updated_at DESC, id DESC LIMIT 1`,

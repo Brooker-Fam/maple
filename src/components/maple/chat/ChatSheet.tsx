@@ -6,18 +6,24 @@ import { useCareNav } from "../care/CareNav";
 import { Icon } from "../icons";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { useChatNav } from "./ChatNav";
 import { HelpCard, MessageView } from "./ChatParts";
+import { CareNote, TermsCard } from "./ChatTerms";
 import { useChatThread } from "./useChatThread";
 
 /**
  * Ask: the in-app chat, a tall sheet over Today. The newest thread from the
  * last six hours reopens with it; New chat starts over. What the assistant
  * logs shows under its reply with Undo, and Today updates once it's done.
+ * Until this member accepts the chat's terms, the terms card shows and the
+ * composer waits.
  */
 export default function ChatSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { readOnly, online } = useMaple();
   const nav = useCareNav();
+  const { consent } = useChatNav();
   const t = useChatThread(open);
+  const needsTerms = consent?.terms === false;
   const end = useRef<HTMLDivElement>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -26,7 +32,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
   const tailLength = tail ? JSON.stringify(tail.parts).length : 0;
   useEffect(() => {
     if (open) end.current?.scrollIntoView({ block: "end" });
-  }, [open, count, tailLength, t.problem, t.help]);
+  }, [open, count, tailLength, t.problem, t.help, needsTerms]);
 
   const waiting = t.status === "submitted" || (t.status === "streaming" && tail?.role === "user");
   const suggestions = readOnly ? ["How did the night go?", "When did she last eat?"] : ["How did the night go?", "Which side next?", "Log a wet diaper"];
@@ -47,24 +53,27 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
           </button>
         </>
       }
-      footer={<Composer t={t} disabled={!t.ready} offline={!online} />}
+      footer={<Composer t={t} disabled={!t.ready || needsTerms} offline={!online} />}
     >
       {count === 0 ? (
-        <div className="space-y-4 pt-2">
-          <p className={cx(tone.body, "text-[16px] leading-relaxed")}>
-            {readOnly ? "Ask how Maple's doing, in your own words." : "Tell it what happened, or ask how Maple's doing, in your own words."}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {suggestions.map((s) => (
-              <Chip key={s} onClick={() => t.setDraft(s)} className="min-h-[44px]!">
-                {s}
-              </Chip>
-            ))}
+        !needsTerms && (
+          <div className="space-y-4 pt-2">
+            <p className={cx(tone.body, "text-[16px] leading-relaxed")}>
+              {readOnly ? "Ask how Maple's doing, in your own words." : "Tell it what happened, or ask how Maple's doing, in your own words."}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {suggestions.map((s) => (
+                <Chip key={s} onClick={() => t.setDraft(s)} className="min-h-[44px]!">
+                  {s}
+                </Chip>
+              ))}
+            </div>
+            <CareNote consent={consent} />
+            <p className={cx(tone.faint, "text-[13px] leading-snug")}>
+              Answers come from an AI and can be wrong; it never gives medical advice. Each saved entry shows here with Undo.
+            </p>
           </div>
-          <p className={cx(tone.faint, "text-[13px] leading-snug")}>
-            Answers come from an AI and can be wrong; it never gives medical advice. Each saved entry shows here with Undo.
-          </p>
-        </div>
+        )
       ) : (
         <div className="space-y-4 pt-1">
           {t.messages.map((m, i) => (
@@ -78,6 +87,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
           )}
         </div>
       )}
+      {needsTerms && consent && <TermsCard key={`${consent.self}-${consent.care}`} consent={consent} onAccepted={t.clearProblem} />}
       {t.problem && (
         <p role="status" className={cx(tone.inset, "flex items-start gap-2 px-3.5 py-3 text-[14px] leading-snug text-mp-ink")}>
           <Icon name="info" size={16} className="mt-0.5 shrink-0 text-mp-ink-2" />
@@ -85,7 +95,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
         </p>
       )}
       {t.help && <HelpCard reason="crisis" />}
-      {count > 0 && !t.busy && (
+      {count > 0 && !t.busy && !needsTerms && (
         <div className="pt-2 text-center">
           {confirmDelete ? (
             <div className="flex items-center justify-center gap-2">

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { listNotes, planTitle, type PlanView } from "@/lib/maple/care";
 import { MOM_DISCLAIMER } from "@/lib/maple/guidelines";
 import type { DoseEntry } from "@/lib/maple/types";
+import { ChatCareRow } from "../chat/ChatTerms";
 import { Icon, KindBadge, type IconName } from "../icons";
 import { NotificationsRow, useNotifications } from "../notify";
 import { CARE_COLOR } from "../palette";
@@ -214,6 +215,7 @@ function Page({ care }: { care: UseCare }) {
         </SectionTitle>
         <div className={GROUP}>
           <NotificationsRow />
+          <ChatCareRow />
           {write && <NavRow icon="pencil" label="Settings for this page" note="Care team, nursing, early doses, next OB visit" onClick={() => setSub({ kind: "settings" })} />}
         </div>
         <Footnote>

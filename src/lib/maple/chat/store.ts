@@ -7,7 +7,8 @@ import type { ChatMessage, ChatThread } from "./types";
 /**
  * The chat's tables (src/lib/migrate.ts). A thread belongs to one member and
  * every query is filtered by them; a viewer reaches only threads that ran as
- * a viewer throughout (`viewer_only`). Messages are append-only UIMessages; only
+ * a viewer throughout (`viewer_only`), and a thread that ever ran with her
+ * page open says so (`care_open`). Messages are append-only UIMessages; only
  * an assistant message is ever rewritten: by its own continuation after an
  * approval, or when a new message turns its unanswered request into a no.
  * Usage rows hold counts and cost, never content, and like the daily message
@@ -41,25 +42,33 @@ export async function deleteThread(id: string, member: string): Promise<boolean>
   return (await rows(`DELETE FROM maple_chat_threads WHERE id = $1 AND member = $2 RETURNING id`, [id, member])).length > 0;
 }
 
-export type LockedThread = { id: string; title: string | null; userMessages: number; lastPrompt: number };
+/** `careOpen`: some turn in it, this one included, ran with her page open to the chat (`care_open`). */
+export type LockedThread = { id: string; title: string | null; userMessages: number; lastPrompt: number; careOpen: boolean };
 
 /**
  * One turn at a time per thread: claims it (making it on first use) for 70
  * seconds, longer than a turn can run. "busy" while another turn has it;
  * "missing" for another member's thread, said the same as one that isn't there.
+ * `care`: this turn runs with her page open to the chat.
  */
-export async function lockThread(id: string, member: string, model: string, viewer: boolean): Promise<LockedThread | "busy" | "missing"> {
-  await rows(`INSERT INTO maple_chat_threads (id, member, model, viewer_only) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING`, [id, member, model, viewer]);
+export async function lockThread(id: string, member: string, model: string, viewer: boolean, care: boolean): Promise<LockedThread | "busy" | "missing"> {
+  await rows(`INSERT INTO maple_chat_threads (id, member, model, viewer_only, care_open) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`, [id, member, model, viewer, care]);
   const r = await rows(
-    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = $3
+    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = $3, care_open = t.care_open OR $4
      WHERE t.id = $1 AND t.member = $2 AND (t.viewer_only OR NOT $3) AND (t.busy_until IS NULL OR t.busy_until < NOW())
-     RETURNING t.id, t.title,
+     RETURNING t.id, t.title, t.care_open,
        (SELECT COUNT(*) FROM maple_chat_messages m WHERE m.thread_id = t.id AND m.role = 'user') AS user_messages,
        (SELECT u.input_tokens + u.cache_read_tokens + u.cache_write_tokens FROM maple_ai_usage u WHERE u.thread_id = t.id ORDER BY u.id DESC LIMIT 1) AS last_prompt`,
-    [id, member, viewer]
+    [id, member, viewer, care]
   );
   if (r.length) {
-    return { id: String(r[0].id), title: (r[0].title as string | null) ?? null, userMessages: Number(r[0].user_messages ?? 0), lastPrompt: Number(r[0].last_prompt ?? 0) };
+    return {
+      id: String(r[0].id),
+      title: (r[0].title as string | null) ?? null,
+      userMessages: Number(r[0].user_messages ?? 0),
+      lastPrompt: Number(r[0].last_prompt ?? 0),
+      careOpen: r[0].care_open !== false,
+    };
   }
   const owner = await rows(`SELECT member, viewer_only FROM maple_chat_threads WHERE id = $1`, [id]);
   return owner.length && owner[0].member === member && (owner[0].viewer_only === true || !viewer) ? "busy" : "missing";

@@ -54,4 +54,14 @@ export type ChatMessage = UIMessage<unknown, ChatData>;
 export type ChatThread = { id: string; title: string | null; updated_at: string; busy?: boolean };
 
 /** A refused POST: `code` says what the sheet should do about it; `help` that the message mentioned a crisis, so the help card shows anyway. */
-export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off"; help?: "crisis" };
+export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off" | "terms"; help?: "crisis" };
+
+export const CHAT_TERMS_NEEDED = "Accept the chat's terms first. Logging works as usual.";
+
+/**
+ * Where this member stands with the chat: `terms`, they accepted its terms
+ * (consent kind chat); `care`, the care person let it see her page: her
+ * medicines and doses, temperatures and questions for her OB (chat_care);
+ * `self`, this member is her, so the switch is theirs.
+ */
+export type ChatConsent = { terms: boolean; care: boolean; self: boolean };

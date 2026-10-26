@@ -12,7 +12,7 @@ import {
 } from "ai";
 import { chatProviderOptions, CHAT_MAX_OUTPUT_TOKENS, CHAT_MAX_STEPS, CHAT_TIMEOUT, LIMIT_MESSAGE, STEP_PROMPT_LIMIT } from "./caps";
 import { costMicro, stepTokens, type ModelPrice, type StepTokens } from "./prices";
-import { markTailForCache, systemBlocks } from "./prompt";
+import { markTailForCache, systemBlocks, usesCacheBreakpoints } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
 import { CHAT_FAILED, CHAT_OFF, type ChatMessage } from "./types";
 
@@ -70,6 +70,8 @@ export async function chatTurn(opts: {
   price: ModelPrice;
   tools: ToolSet;
   viewer: boolean;
+  /** She has let the chat see her page (chat_care); `tools` must match. */
+  care: boolean;
   messages: ChatMessage[];
   responseId: string;
   crisis: boolean;
@@ -79,7 +81,8 @@ export async function chatTurn(opts: {
 }): Promise<Response> {
   const { tools, messages, responseId, deps } = opts;
   const stepsDone = opts.stepsDone ?? 0;
-  const instructions = systemBlocks(opts.viewer);
+  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey });
+  const breakpoints = usesCacheBreakpoints(opts.modelKey);
   const prefixChars = JSON.stringify([instructions, Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
 
   const record = (step: number, tokens: StepTokens, finishReason: string | null, generationId: string | null) => {
@@ -106,10 +109,10 @@ export async function chatTurn(opts: {
     maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
     reasoning: "low",
     timeout: CHAT_TIMEOUT,
-    providerOptions: chatProviderOptions(),
+    providerOptions: chatProviderOptions(opts.price.providers),
     prepareStep: ({ steps, stepNumber, messages: stepMessages }) => {
       inFlight = { step: stepNumber, prompt: Math.max(lastPrompt(steps), roughTokens(prefixChars + JSON.stringify(stepMessages).length)) };
-      return { messages: markTailForCache(stepMessages) };
+      return breakpoints ? { messages: markTailForCache(stepMessages) } : {};
     },
     onStepEnd: async (step) => {
       inFlight = null;

@@ -21,14 +21,23 @@ Don't name tools to the user; say what you did.`;
 export const CHAT_ADDENDUM_VIEWER = `${CHAT_ADDENDUM}
 This person can look but not log or change anything, and ${MOM}'s page isn't open to them. If they ask to log something, say an owner can make them a member in Family.`;
 
+export const CHAT_ADDENDUM_CARE_CLOSED = `${CHAT_ADDENDUM}
+${MOM} hasn't let this chat see her medicines, temperatures or questions for her OB, so none of the mom tools are here and results leave her out. If asked about them, say the chat can't see them until ${MOM} turns that on in the app (Family, or Settings on her page). Never log anything of hers with Maple's tools, and don't answer about her from earlier messages.
+You can't see her medicine list here, so before logging any medicine other than vitamin D, ask "Maple's or ${MOM}'s?" unless the person already named whose it was ("she" or "her" alone doesn't). If it's ${MOM}'s, say to log it on her page in the app.`;
+
+/** Cache breakpoints are Anthropic's: GLM's providers on the Gateway cache a repeated prefix on their own. */
+export const usesCacheBreakpoints = (model: string) => model.startsWith("anthropic/");
+
 /**
- * Tools, then these two blocks, are the cached prefix: the breakpoint on the
- * second covers all of it, and nothing in it changes between requests.
+ * Tools, then these two blocks, are the cached prefix (on Anthropic, the
+ * breakpoint on the second covers all of it), and nothing in it changes
+ * between requests. `care`: she has let the chat see her medicines (chat_care).
  */
-export function systemBlocks(viewer: boolean): SystemModelMessage[] {
+export function systemBlocks(opts: { viewer: boolean; care: boolean; model: string }): SystemModelMessage[] {
+  const addendum = opts.viewer ? CHAT_ADDENDUM_VIEWER : opts.care ? CHAT_ADDENDUM : CHAT_ADDENDUM_CARE_CLOSED;
   return [
     { role: "system", content: MAPLE_INSTRUCTIONS },
-    { role: "system", content: viewer ? CHAT_ADDENDUM_VIEWER : CHAT_ADDENDUM, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
+    { role: "system", content: addendum, ...(usesCacheBreakpoints(opts.model) ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } } : {}) },
   ];
 }
 

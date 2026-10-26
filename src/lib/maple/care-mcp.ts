@@ -160,9 +160,10 @@ function alreadyOnList(m: { name?: string | null; also_called?: string | null },
 /** An access problem: its text gets HELP_NOW_LINE and the result help_now. */
 class CareAccessError extends Error {}
 
+/** No page at all where she hasn't opened it to this caller (ctx.care): every read and write here then finds nothing. */
 async function careFor(ctx: Ctx): Promise<CareSession> {
   const viewer: CareViewer = { id: ctx.who.id, role: ctx.who.role, viaAdmin: ctx.who.viaAdmin, channel: "mcp" };
-  return careSession(viewer, { members: ctx.members, baby: ctx.baby });
+  return careSession(viewer, { members: ctx.members, baby: ctx.baby, ...(ctx.care ? {} : { person: null }) });
 }
 
 /** The one access error: a view-only guest. Everyone else can do everything here. */

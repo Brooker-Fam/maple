@@ -5,7 +5,7 @@ import type { Role } from "../types";
  * can't be read, the chat says no and logging carries on as usual.
  */
 
-export const CHAT_MODEL_DEFAULT = "anthropic/claude-haiku-5.5";
+export const CHAT_MODEL_DEFAULT = "zai/glm-5.3-flash";
 
 export function chatModel(env: Record<string, string | undefined> = process.env): string {
   return env.MAPLE_CHAT_MODEL?.trim() || CHAT_MODEL_DEFAULT;
@@ -14,15 +14,16 @@ export function chatModel(env: Record<string, string | undefined> = process.env)
 /** Applied to every chat request, so no call can reach a provider that keeps prompts or trains on them. */
 export const GATEWAY_PRIVACY = { zeroDataRetention: true, disallowPromptTraining: true } as const;
 
-export function chatProviderOptions() {
-  return { gateway: { tags: ["maple-chat"], ...GATEWAY_PRIVACY } };
+/** `providers`: the model's price row's (prices.ts), the only ones the Gateway may route to. */
+export function chatProviderOptions(providers: readonly string[]) {
+  return { gateway: { tags: ["maple-chat"], only: [...providers], ...GATEWAY_PRIVACY } };
 }
 
 export const CHAT_MAX_STEPS = 6;
 export const CHAT_MAX_OUTPUT_TOKENS = 1500;
 export const CHAT_TIMEOUT = { totalMs: 55_000, stepMs: 25_000, toolMs: 15_000 };
 
-/** A thread this long starts over in a new one, which keeps prompts well under the 100K-token price step. */
+/** A thread this long starts over in a new one, which keeps every request's prompt, and so its cost, bounded. */
 export const THREAD_MAX_USER_MESSAGES = 40;
 export const THREAD_MAX_PROMPT_TOKENS = 60_000;
 /** A step whose prompt passed this ends the turn, even with its tool results unread. */

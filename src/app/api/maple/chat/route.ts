@@ -10,6 +10,7 @@ import { priceFor } from "@/lib/maple/chat/prices";
 import { countMessage, deleteThread, getThread, listThreads, loadMessages, lockThread, recordUsage, releaseThread, saveMessage, setTitle, usageSince } from "@/lib/maple/chat/store";
 import { chatTools } from "@/lib/maple/chat/tools";
 import { THREAD_ID_RE } from "@/lib/maple/chat/types";
+import { chatConsent } from "@/lib/maple/consent";
 import { captureServerException } from "@/lib/posthog-server";
 
 /**
@@ -55,7 +56,7 @@ export const POST = withMember("POST /api/maple/chat", async (request: NextReque
   const body = await readJson<PostBody>(request);
   const model = chatModel();
   return answerPost(body, member, {
-    store: { usageSince, lockThread, releaseThread, loadMessages, saveMessage, setTitle, countMessage, recordUsage },
+    store: { consent: chatConsent, usageSince, lockThread, releaseThread, loadMessages, saveMessage, setTitle, countMessage, recordUsage },
     household: async () => {
       const [baby, members] = await Promise.all([getBaby(), listMembers()]);
       return { baby, members };

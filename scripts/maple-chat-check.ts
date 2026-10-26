@@ -1,25 +1,29 @@
 /**
  * Assertions for the in-app chat (src/lib/maple/chat/): the tool adapter
  * (every registered tool captured, gated for members and viewers, excluded
- * tools, approvals), cost arithmetic in BigInt micro-dollars, the crisis
- * matcher, the context line, message validation, whole turns against a
- * stand-in model, and the POST against an in-memory store.
+ * tools, approvals), consent (no terms is refused; her tools and her lines
+ * stay out without chat_care), cost arithmetic in BigInt micro-dollars, the
+ * crisis matcher, the context line, message validation, whole turns against
+ * a stand-in model, and the POST against an in-memory store.
  *
  *   npx tsx scripts/maple-chat-check.ts      (or pnpm check:maple-chat)
  *
  * Pure: no database and no network (no tool runs). Made-up people only:
- * owner Alex, viewer Vi. One PASS/FAIL line per case, exit 1 on any failure.
+ * owner Alex, viewer Vi, and Robin as the care person. One PASS/FAIL line per case, exit 1 on any failure.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { budgetFrom, capsVerdict, chatModel, chatProviderOptions, GATEWAY_PRIVACY, LIMIT_MESSAGE, MONTH_MESSAGE, threadFull } from "../src/lib/maple/chat/caps";
+import { budgetFrom, capsVerdict, CHAT_MODEL_DEFAULT, chatModel, chatProviderOptions, GATEWAY_PRIVACY, LIMIT_MESSAGE, MONTH_MESSAGE, threadFull } from "../src/lib/maple/chat/caps";
 import { mentionsCrisis } from "../src/lib/maple/chat/crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, storable, titleFrom, userMessage, userText, withCrisisHelp } from "../src/lib/maple/chat/messages";
-import { costMicro, dollars, priceFor, stepTokens } from "../src/lib/maple/chat/prices";
-import { answerPost, BUSY, FULL, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
-import { CHAT_ADDENDUM, contextLine, markTailForCache, systemBlocks } from "../src/lib/maple/chat/prompt";
+import { costMicro, dollars, priceFor, PRICES, stepTokens } from "../src/lib/maple/chat/prices";
+import { answerPost, BUSY, CARE_CLOSED, FULL, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
+import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, markTailForCache, systemBlocks } from "../src/lib/maple/chat/prompt";
 import type { LockedThread, UsageRow } from "../src/lib/maple/chat/store";
 import { chatTools, EXCLUDED_TOOLS, forModel, MODEL_TEXT_MAX, registrations, TOOL_APPROVAL, toOutput } from "../src/lib/maple/chat/tools";
-import type { ChatMessage, ChatToolOutput } from "../src/lib/maple/chat/types";
+import { CHAT_TERMS_NEEDED, type ChatConsent, type ChatMessage, type ChatToolOutput } from "../src/lib/maple/chat/types";
+import { momSameMedicine } from "../src/lib/maple/care-mcp";
+import { consentCurrent, CONSENT_VERSION, isCarePerson } from "../src/lib/maple/consent";
+import { careOpen, type Ctx } from "../src/lib/maple/mcp-tools";
 import { CRISIS_REPLY } from "../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
 import { CHAT_CUT, CHAT_FAILED, CHAT_OFF, chatTurn, friendlyError } from "../src/lib/maple/chat/turn";
@@ -79,21 +83,45 @@ check("captures every registered tool (29 Maple + 7 of hers)", () => {
 
 check("a member gets every tool but the excluded ones (and record_birth once she's born), plus show_help", () => {
   const names = registrations().all.map((r) => r.name);
-  const born = Object.keys(chatTools(ALEX, { born: true }));
+  const born = Object.keys(chatTools(ALEX, { born: true, care: true }));
   eq(born.length, 36 - EXCLUDED_TOOLS.size - 1 + 1, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
-  ok(Object.keys(chatTools(ALEX, { born: false })).includes("record_birth"), "record_birth before she's born");
+  ok(Object.keys(chatTools(ALEX, { born: false, care: true })).includes("record_birth"), "record_birth before she's born");
   eq([...EXCLUDED_TOOLS].sort(), ["add_mom_medicines", "set_mom_medicine"], "excluded");
 });
 
 check("a viewer gets Maple's five reads and show_help, nothing else", () => {
-  eq(Object.keys(chatTools(VI, { born: true })).sort(), [...READS, "show_help"].sort(), "viewer set");
-  eq(Object.keys(chatTools(VI, { born: false })).sort(), [...READS, "show_help"].sort(), "viewer set before birth");
+  eq(Object.keys(chatTools(VI, { born: true, care: true })).sort(), [...READS, "show_help"].sort(), "viewer set");
+  eq(Object.keys(chatTools(VI, { born: false, care: true })).sort(), [...READS, "show_help"].sort(), "viewer set before birth");
+});
+
+check("her tools stay out of the chat until she lets it see her medicines (chat_care)", () => {
+  const { mom } = registrations();
+  const hers = [...mom].filter((n) => !EXCLUDED_TOOLS.has(n)).sort();
+  eq(hers, ["add_mom_question", "fix_mom_entry", "log_mom_medicine", "log_mom_temperature", "mom_status"], "her tools the chat can have");
+  const closed = Object.keys(chatTools(ALEX, { born: true, care: false }));
+  eq(closed.filter((n) => mom.has(n)), [], "closed: none of hers");
+  ok(closed.includes("maple_status") && closed.includes("log_medicine"), "closed: Maple's tools stay");
+  eq(Object.keys(chatTools(ALEX, { born: true, care: true })).filter((n) => mom.has(n)).sort(), hers, "open: hers are in");
+  eq(Object.keys(chatTools(VI, { born: true, care: true })).filter((n) => mom.has(n)), [], "a viewer never gets them");
+});
+
+check("a chat call without her say-so reads her page as closed; other callers keep it", () => {
+  eq([careOpen({ via: "chat" }), careOpen({ via: "chat", care: false }), careOpen({ via: "chat", care: "true" }), careOpen({ via: "chat", care: true })], [false, false, false, true], "chat");
+  eq([careOpen({ via: "claude" }), careOpen({ via: "mcp" }), careOpen({})], [true, true, true], "Claude, ChatGPT, Siri's MCP");
+});
+
+check("consent: a row counts at its kind's current version; only her own account is her", () => {
+  eq([consentCurrent("chat", CONSENT_VERSION.chat), consentCurrent("chat", CONSENT_VERSION.chat + 1), consentCurrent("chat", CONSENT_VERSION.chat - 1), consentCurrent("chat", null)], [true, true, false, false], "versions");
+  eq(consentCurrent("chat_care", undefined), false, "no row");
+  const her = { email: "robin@example.com", role: "member" as const };
+  eq([isCarePerson(her, "robin@example.com"), isCarePerson(her, "Robin"), isCarePerson(her, null)], [true, false, false], "her account, a plain name, no page");
+  eq([isCarePerson({ email: "admin", role: "owner" }, "admin"), isCarePerson({ ...her, role: "viewer" }, her.email)], [false, false], "never the admin login or a viewer");
 });
 
 check("every tool has a description and a JSON object schema", () => {
-  const set = chatTools(ALEX, { born: false });
+  const set = chatTools(ALEX, { born: false, care: true });
   for (const [name, t] of Object.entries(set)) {
     ok(typeof t.description === "string" && t.description.length > 20, `${name} description`);
     const schema = (t.inputSchema as { jsonSchema: unknown }).jsonSchema as { type?: string };
@@ -145,6 +173,7 @@ check("a long result is cut before the model reads it", () => {
 // ── cost (BigInt micro-dollars) ──────────────────────────────────────────
 
 const HAIKU = "anthropic/claude-haiku-5.5";
+const GLM = "zai/glm-5.3-flash";
 const usage = (input: number, noCache: number, read: number, write: number, out: number, reasoning = 0) => ({
   inputTokens: input,
   inputTokenDetails: { noCacheTokens: noCache, cacheReadTokens: read, cacheWriteTokens: write },
@@ -152,7 +181,22 @@ const usage = (input: number, noCache: number, read: number, write: number, out:
   outputTokenDetails: { textTokens: out - reasoning, reasoningTokens: reasoning },
 });
 
-check("costMicro on fixed usage numbers", () => {
+check("costMicro on fixed usage numbers: GLM-5.3-Flash, the default, with cache writes at its input price", () => {
+  const p = priceFor(GLM)!;
+  ok(p, "GLM-5.3-Flash is priced");
+  // Warm: 3,000 fresh × $0.15/M + 20,000 read × $0.03/M + 300 out × $0.50/M = 450 + 600 + 150 µ$.
+  eq(costMicro(GLM, p, stepTokens(usage(23_000, 3_000, 20_000, 0, 300))), { micro: BigInt(1200), key: GLM }, "warm step");
+  // Cold: the same with 20,000 written at the input price, $0.15/M = 3,000 + 450 + 150 µ$.
+  eq(costMicro(GLM, p, stepTokens(usage(23_000, 3_000, 0, 20_000, 300))).micro, BigInt(3600), "cold step");
+  // No long-prompt price: 120,000 × $0.15/M + 1,000 × $0.50/M = 18,000 + 500 µ$, on the one row.
+  eq(costMicro(GLM, p, stepTokens(usage(120_000, 120_000, 0, 0, 1_000))), { micro: BigInt(18_500), key: GLM }, "long step");
+  // 3 tokens at $0.15/M are 0.45 µ$, 4 are 0.6 µ$.
+  eq(costMicro(GLM, p, stepTokens(usage(3, 3, 0, 0, 0))).micro, BigInt(0), "rounds down");
+  eq(costMicro(GLM, p, stepTokens(usage(4, 4, 0, 0, 0))).micro, BigInt(1), "rounds up");
+  eq(dollars(BigInt(1200)), "$0.0012", "display");
+});
+
+check("costMicro on fixed usage numbers: Haiku 5.5, still priced for MAPLE_CHAT_MODEL", () => {
   const p = priceFor(HAIKU)!;
   ok(p, "Haiku 5.5 is priced");
   // Warm: 3,000 fresh × $0.10/M + 20,000 read × $0.01/M + 300 out × $0.50/M = 300 + 200 + 150 µ$.
@@ -177,16 +221,25 @@ check("stepTokens fills in a missing no-cache count and never goes negative", ()
 check("an unpriced model has no price (the chat refuses it)", () => {
   eq(priceFor("anthropic/claude-sonnet-5.5"), null, "Sonnet");
   eq(priceFor("constructor"), null, "no prototype keys");
-  eq(chatModel({}), HAIKU, "default model");
-  eq(chatModel({ MAPLE_CHAT_MODEL: "  zai/glm-5.3-flash " }), "zai/glm-5.3-flash", "override");
+  eq([chatModel({}), CHAT_MODEL_DEFAULT], [GLM, GLM], "default model");
+  eq(chatModel({ MAPLE_CHAT_MODEL: `  ${HAIKU} ` }), HAIKU, "override");
 });
 
 // ── caps ─────────────────────────────────────────────────────────────────
 
 check("every request carries ZDR and no-training", () => {
   eq(GATEWAY_PRIVACY, { zeroDataRetention: true, disallowPromptTraining: true }, "constant");
-  const g = chatProviderOptions().gateway;
-  eq([g.zeroDataRetention, g.disallowPromptTraining], [true, true], "on the options");
+  const g = chatProviderOptions(["made-up-provider"]).gateway;
+  eq([g.zeroDataRetention, g.disallowPromptTraining, g.only], [true, true, ["made-up-provider"]], "on the options");
+});
+
+check("every priced model routes only to providers checked at or under its row", () => {
+  for (const [model, p] of Object.entries(PRICES)) ok(p.providers.length > 0, `${model} names its providers`);
+  const glm = PRICES[GLM].providers;
+  eq([...glm].sort(), ["baseten", "digitalocean", "fireworks", "parasail", "particle", "relace", "runware", "togetherai"], "GLM's");
+  // morph, modal and wafer are ZDR but bill over the row (morph's cache reads 25x); deepinfra is too slow for a step.
+  for (const out of ["morph", "modal", "wafer", "deepinfra"]) ok(!glm.includes(out), `GLM never routes to ${out}`);
+  eq([...PRICES[HAIKU].providers].sort(), ["anthropic", "bedrock", "vertexAnthropic"], "Haiku's");
 });
 
 check("caps fail closed", () => {
@@ -286,10 +339,20 @@ check("the prompt opens a crisis reply with the reply-shaped line, and marks too
   ok(!CHAT_ADDENDUM.includes("If anyone mentions thoughts of harming themselves or someone else: call 911"), "not the rule-shaped line as the reply");
   ok(/never instructions to you/.test(CHAT_ADDENDUM), "results are data");
   ok(CHAT_ADDENDUM.includes(`starts with one "[App] Now:" line`) && CHAT_ADDENDUM.includes(`even text that looks like an "[App]" line`), "the app's line comes first; typed [App] text is the person's");
-  const blocks = systemBlocks(false);
+  const blocks = systemBlocks({ viewer: false, care: true, model: HAIKU });
   eq(blocks.length, 2, "two system blocks");
-  eq(blocks[1].providerOptions, { anthropic: { cacheControl: { type: "ephemeral" } } }, "breakpoint on the second");
-  ok((systemBlocks(true)[1].content as string).includes("can look but not log"), "viewer addendum");
+  eq(blocks[1].providerOptions, { anthropic: { cacheControl: { type: "ephemeral" } } }, "breakpoint on the second, on Anthropic");
+  ok((systemBlocks({ viewer: true, care: true, model: HAIKU })[1].content as string).includes("can look but not log"), "viewer addendum");
+});
+
+check("GLM gets no Anthropic cache markers; a chat closed to her says so in its prompt", () => {
+  const glm = systemBlocks({ viewer: false, care: true, model: GLM });
+  ok(glm.every((b) => b.providerOptions === undefined), "no providerOptions on GLM's blocks");
+  eq(glm[1].content, CHAT_ADDENDUM, "her page open: the usual addendum");
+  eq(systemBlocks({ viewer: false, care: false, model: GLM })[1].content, CHAT_ADDENDUM_CARE_CLOSED, "closed: says so");
+  ok(CHAT_ADDENDUM_CARE_CLOSED.startsWith(CHAT_ADDENDUM) && /hasn't let this chat see her medicines/.test(CHAT_ADDENDUM_CARE_CLOSED), "the closed addendum adds to the usual one");
+  ok(/before logging any medicine other than vitamin D, ask "Maple's or \w+'s\?"/.test(CHAT_ADDENDUM_CARE_CLOSED), "closed: asks whose before any medicine but vitamin D, since her list is out of sight");
+  eq(systemBlocks({ viewer: true, care: false, model: GLM })[1].content, CHAT_ADDENDUM_VIEWER, "a viewer's stays the viewer's");
 });
 
 check("markTailForCache leaves exactly one message breakpoint, on the newest", () => {
@@ -407,7 +470,7 @@ const textChunks = (t: string): Chunk[] => [
 ];
 
 /** A model that answers each call with the next script in `steps` (an Error is thrown instead), and the tools' calls counted. */
-function harness(steps: (Chunk[] | Error)[]) {
+function harness(steps: (Chunk[] | Error)[], modelKey = GLM) {
   let call = 0;
   const model = new MockLanguageModelV4({
     doStream: async () => {
@@ -444,7 +507,7 @@ function harness(steps: (Chunk[] | Error)[]) {
     waitUntil: (p: Promise<unknown>) => void waits.push(p),
   };
   const run = (messages: ChatMessage[], responseId: string, crisis = false) =>
-    chatTurn({ model, modelKey: HAIKU, price: priceFor(HAIKU)!, tools, viewer: false, messages, responseId, crisis, deps });
+    chatTurn({ model, modelKey, price: priceFor(modelKey)!, tools, viewer: false, care: true, messages, responseId, crisis, deps });
   const settle = async () => {
     await Promise.all(waits);
     await new Promise((r) => setTimeout(r, 20));
@@ -464,8 +527,19 @@ async function turnChecks() {
     const m = h.saved[0];
     eq([m.id, m.role, m.parts[0]], ["msg_r1", "assistant", { type: "data-help", data: { reason: "crisis" } }], "help card first");
     ok(m.parts.some((p) => p.type === "text" && p.text === CRISIS_REPLY), "the reply");
-    eq(h.usage, [BigInt(650)], "one step at 650 micro-dollars");
+    eq(h.usage, [BigInt(1200)], "one step at 1,200 micro-dollars");
     eq(h.released(), 1, "thread released");
+  });
+
+  await checkAsync("a GLM request carries no Anthropic cache markers; a Haiku one marks the system prompt and the newest message", async () => {
+    const marks = (h: ReturnType<typeof harness>) =>
+      h.model.doStreamCalls[0].prompt.map((m) => !!(m.providerOptions?.anthropic as { cacheControl?: unknown } | undefined)?.cacheControl);
+    const glm = harness([[...textChunks("made-up reply"), finishPart("stop")]]);
+    await (await glm.run([ask("made-up question")], "msg_c1")).text();
+    eq(marks(glm).filter(Boolean).length, 0, "GLM: none");
+    const haiku = harness([[...textChunks("made-up reply"), finishPart("stop")]], HAIKU);
+    await (await haiku.run([ask("made-up question")], "msg_c2")).text();
+    eq(marks(haiku), [false, true, true], "Haiku: the second system block and the newest message");
   });
 
   await checkAsync("the whole reply is saved even when the phone stops reading after the first chunk", async () => {
@@ -591,7 +665,7 @@ async function turnChecks() {
     asked.parts.unshift(...(Array.from({ length: 4 }, () => ({ type: "step-start" })) as ChatMessage["parts"]));
     eq(stepsTaken(asked), 5, "five steps so far");
     const merged = mergeApprovals(asked, { id: asked.id, parts: [{ type: "tool-delete_entry", toolCallId: "call_1", approval: { id: "appr_1", approved: true } }] })!;
-    const res = await chatTurn({ model: h.model, modelKey: HAIKU, price: priceFor(HAIKU)!, tools: h.tools, viewer: false, messages: [ask("Delete #12"), merged], responseId: merged.id, crisis: false, stepsDone: stepsTaken(merged), deps: { save: async () => {}, record: async () => {}, release: async () => {}, report: () => {}, waitUntil: () => {} } });
+    const res = await chatTurn({ model: h.model, modelKey: GLM, price: priceFor(GLM)!, tools: h.tools, viewer: false, care: true, messages: [ask("Delete #12"), merged], responseId: merged.id, crisis: false, stepsDone: stepsTaken(merged), deps: { save: async () => {}, record: async () => {}, release: async () => {}, report: () => {}, waitUntil: () => {} } });
     await res.text();
     eq(h.model.doStreamCalls.length, 1, "one more model step, to report the delete");
   });
@@ -613,10 +687,11 @@ async function turnChecks() {
     const waits: Promise<unknown>[] = [];
     const res = await chatTurn({
       model: failing,
-      modelKey: HAIKU,
-      price: priceFor(HAIKU)!,
+      modelKey: GLM,
+      price: priceFor(GLM)!,
       tools: {},
       viewer: false,
+      care: true,
       messages: [ask("hi")],
       responseId: "msg_r6",
       crisis: false,
@@ -632,10 +707,11 @@ async function turnChecks() {
 
 // ── one POST, against an in-memory store ─────────────────────────────────
 
-type FakeThread = { member: string; viewerOnly: boolean; busy: boolean; title: string | null; lastPrompt: number; messages: ChatMessage[] };
+/** `careOpen` unset is an older row, which counts as open (care_open's default). */
+type FakeThread = { member: string; viewerOnly: boolean; careOpen?: boolean; busy: boolean; title: string | null; lastPrompt: number; messages: ChatMessage[] };
 
-/** The route's storage in memory: threads with their lock, the daily count, usage rows. `fail` makes one call throw. */
-function fakeStore(fail?: keyof ChatStore) {
+/** The route's storage in memory: consents, threads with their lock, the daily count, usage rows. `fail` makes one call throw. */
+function fakeStore(fail?: keyof ChatStore, consent: ChatConsent = { terms: true, care: true, self: false }) {
   const threads = new Map<string, FakeThread>();
   const daily = new Map<string, number>();
   const usage: UsageRow[] = [];
@@ -645,19 +721,24 @@ function fakeStore(fail?: keyof ChatStore) {
     if (fail === name) throw new StoreUnavailable();
   };
   const store: ChatStore = {
+    consent: async () => {
+      guard("consent");
+      return consent;
+    },
     usageSince: async (member, day) => {
       guard("usageSince");
       const spent = usage.reduce((n, u) => n + u.costMicro, BigInt(0));
       return { mine: daily.get(`${member} ${day}`) ?? 0, day: spent, month: spent };
     },
-    lockThread: async (id, member, _model, viewer): Promise<LockedThread | "busy" | "missing"> => {
+    lockThread: async (id, member, _model, viewer, care): Promise<LockedThread | "busy" | "missing"> => {
       guard("lockThread");
-      if (!threads.has(id)) threads.set(id, { member, viewerOnly: viewer, busy: false, title: null, lastPrompt: 0, messages: [] });
+      if (!threads.has(id)) threads.set(id, { member, viewerOnly: viewer, careOpen: care, busy: false, title: null, lastPrompt: 0, messages: [] });
       const t = threads.get(id)!;
       if (t.member !== member || (viewer && !t.viewerOnly)) return "missing";
       if (t.busy) return "busy";
       t.busy = true;
-      return { id, title: t.title, userMessages: t.messages.filter((m) => m.role === "user").length, lastPrompt: t.lastPrompt };
+      t.careOpen = (t.careOpen ?? true) || care;
+      return { id, title: t.title, userMessages: t.messages.filter((m) => m.role === "user").length, lastPrompt: t.lastPrompt, careOpen: t.careOpen };
     },
     releaseThread: async (id) => {
       guard("releaseThread");
@@ -700,8 +781,8 @@ function post(f: ReturnType<typeof fakeStore>, h: ReturnType<typeof harness>, ov
     store: f.store,
     household: async () => ({ baby: BABY as unknown as Baby, members: [ALEX_MEMBER] }),
     model: h.model,
-    modelKey: HAIKU,
-    price: priceFor(HAIKU),
+    modelKey: GLM,
+    price: priceFor(GLM),
     tools: () => h.tools,
     budget: { day: BigInt(500_000), month: BigInt(5_000_000) },
     now: zonedTimeToUtc(2026, 10, 26, 3, 10, "America/New_York"),
@@ -731,8 +812,11 @@ async function postChecks() {
     const prompt = h.model.doStreamCalls[0].prompt;
     const user = prompt.find((m) => m.role === "user") as { content: { type: string; text?: string }[] };
     ok(user.content[0].text?.startsWith("[App] Now: 3:10 AM EDT") && user.content[1].text === "She just had a wet diaper", "the model reads the app's line first");
-    const gateway = h.model.doStreamCalls[0].providerOptions?.gateway as Record<string, unknown> | undefined;
+    const call = h.model.doStreamCalls[0];
+    const gateway = call.providerOptions?.gateway as Record<string, unknown> | undefined;
     eq([gateway?.zeroDataRetention, gateway?.disallowPromptTraining], [true, true], "the request asks for ZDR and no training");
+    eq(gateway?.only, [...PRICES[GLM].providers], "and only the price row's providers");
+    eq([call.reasoning, call.maxOutputTokens], ["low", 1500], "low reasoning, 1,500 output tokens");
   });
 
   await checkAsync("every early return after the lock releases the thread", async () => {
@@ -765,7 +849,7 @@ async function postChecks() {
     eq([r.status, r.json().error, f.threads.get(THREAD)!.busy], [409, BUSY, true], "busy");
 
     const spent = fakeStore();
-    spent.usage.push({ member: "b@example.com", threadId: "other", messageId: "m", step: 0, model: HAIKU, tokens: stepTokens(usage(0, 0, 0, 0, 0)), costMicro: BigInt(500_000), priceKey: HAIKU, finishReason: "stop", generationId: null });
+    spent.usage.push({ member: "b@example.com", threadId: "other", messageId: "m", step: 0, model: GLM, tokens: stepTokens(usage(0, 0, 0, 0, 0)), costMicro: BigInt(500_000), priceKey: GLM, finishReason: "stop", generationId: null });
     const r2 = await post(spent, harness([]))(say("I want to die"));
     eq([r2.status, r2.json().error, r2.json().help], [429, LIMIT_MESSAGE, "crisis"], "spent day: refused with the help card");
     ok(!spent.calls.includes("lockThread"), "never locked");
@@ -773,6 +857,88 @@ async function postChecks() {
     const off = fakeStore();
     const r3 = await post(off, harness([]), { price: null })(say("made-up message"));
     eq([r3.status, r3.json().code, off.calls], [503, "off", []], "unpriced: no store calls");
+  });
+
+  await checkAsync("no accepted terms: refused with code terms before anything is counted or locked, and a crisis still gets its card", async () => {
+    const f = fakeStore(undefined, { terms: false, care: true, self: false });
+    const h = harness([]);
+    const r = await post(f, h)(say("She just had a wet diaper"));
+    eq([r.status, r.json().error, r.json().code], [403, CHAT_TERMS_NEEDED, "terms"], "refused");
+    eq([f.calls, f.daily.size, f.threads.size, h.model.doStreamCalls.length], [["consent"], 0, 0, 0], "nothing else ran");
+    const crisis = await post(fakeStore(undefined, { terms: false, care: false, self: false }), harness([]))(say("I want to die"));
+    eq([crisis.status, crisis.json().code, crisis.json().help], [403, "terms", "crisis"], "the help card still shows");
+    const tap = await post(fakeStore(undefined, { terms: false, care: false, self: false }), harness([]))({ threadId: THREAD, message: { id: "msg_a", role: "assistant", parts: [] } });
+    eq([tap.status, tap.json().code], [403, "terms"], "an approval tap too");
+  });
+
+  await checkAsync("her tools reach the model only once she's let the chat see them, and never for a viewer", async () => {
+    const { mom } = registrations();
+    const sent = async (consent: ChatConsent, member: Member = ALEX_MEMBER) => {
+      const h = harness([[...textChunks("made-up reply"), finishPart("stop")]]);
+      const asked: boolean[] = [];
+      const r = await post(fakeStore(undefined, consent), h, {
+        tools: (opts) => {
+          asked.push(opts.care);
+          return chatTools(member, { ...opts, device: null });
+        },
+      })(say("made-up question"), member);
+      eq(r.status, 200, "answered");
+      const call = h.model.doStreamCalls[0];
+      const system = call.prompt.filter((m) => m.role === "system").map((m) => m.content).join("\n");
+      return { asked, hers: (call.tools ?? []).map((t) => t.name).filter((n) => mom.has(n)), closed: system.includes(CHAT_ADDENDUM_CARE_CLOSED) };
+    };
+    const closed = await sent({ terms: true, care: false, self: false });
+    eq([closed.asked, closed.hers, closed.closed], [[false], [], true], "without chat_care: none of hers, and the prompt says so");
+    const open = await sent({ terms: true, care: true, self: false });
+    eq([open.asked, open.hers.length, open.closed], [[true], 5, false], "with chat_care: hers are in");
+    const viewer = await sent({ terms: true, care: true, self: false }, { ...ALEX_MEMBER, email: VI.email, role: "viewer" });
+    eq([viewer.asked, viewer.hers], [[false], []], "a viewer: never");
+  });
+
+  await checkAsync("a chat that ever ran with her page open never goes back to the model once she's closed it", async () => {
+    const secret = "made-up-secret: Robin's medicines: Examplex OK after 9:10 AM";
+    const hersBefore = (): ChatMessage[] => [
+      ask("can Robin take more Examplex"),
+      {
+        id: "msg_a1",
+        role: "assistant",
+        parts: [
+          { type: "step-start" },
+          { type: "tool-mom_status", toolCallId: "call_1", state: "output-available", input: {}, output: { ok: true, write: false, text: secret } },
+          { type: "text", text: "Examplex is OK after 9:10." },
+        ] as ChatMessage["parts"],
+      },
+    ];
+    const closed = { terms: true, care: false, self: false };
+    const sent = (h: ReturnType<typeof harness>) => h.model.doStreamCalls.some((c) => JSON.stringify(c.prompt).includes("made-up-secret"));
+
+    for (const [what, careOpen] of [["an older thread", undefined], ["a thread that ran open", true]] as const) {
+      const f = fakeStore(undefined, closed);
+      f.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, careOpen, busy: false, title: "t", lastPrompt: 0, messages: hersBefore() });
+      const h = harness([[...textChunks("made-up reply"), finishPart("stop")]]);
+      const r = await post(f, h)(say("log a wet diaper"));
+      eq([h.model.doStreamCalls.length, sent(h), f.threads.get(THREAD)!.busy, f.daily.size], [0, false, false, 0], `${what}: nothing sent or counted, released`);
+      eq([r.status, r.json().error, r.json().code], [409, CARE_CLOSED, "new_chat"], `${what}: a new chat starts`);
+    }
+
+    const tap = fakeStore(undefined, closed);
+    const asked = stored();
+    tap.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 0, messages: [...hersBefore(), ask("Delete #12"), asked] });
+    const ht = harness([]);
+    const rt = await post(tap, ht)({ threadId: THREAD, message: { id: "msg_a", role: "assistant", parts: [{ type: "tool-delete_entry", toolCallId: "call_1", approval: { id: "appr_1", approved: true } }] } });
+    eq([rt.status, rt.json().code, ht.model.doStreamCalls.length], [409, "new_chat", 0], "an approval tap there too");
+
+    const consent = { ...closed };
+    const f = fakeStore(undefined, consent);
+    const send = post(f, harness([]));
+    eq((await send(say("log a wet diaper"))).status, 200, "a chat that's only run closed: answered");
+    eq(f.threads.get(THREAD)!.careOpen, false, "and stays marked closed");
+    consent.care = true;
+    eq((await send(say("made-up question"))).status, 200, "she opens her page: answered");
+    eq(f.threads.get(THREAD)!.careOpen, true, "now marked open");
+    consent.care = false;
+    const again = await send(say("made-up question"));
+    eq([again.status, again.json().code], [409, "new_chat"], "closed again: that chat is done");
   });
 
   await checkAsync("deleting chats doesn't give the day's messages back", async () => {
@@ -837,22 +1003,37 @@ check("a turned-away tap puts its card back to asking; answered and finished par
 });
 
 async function privacyChecks() {
-  await checkAsync("the chat's tools carry this phone's id, so her Logged notice skips it", async () => {
+  await checkAsync("the chat's tools carry this phone's id, so her Logged notice skips it, and whether her page is open", async () => {
     const r = registrations().all.find((x) => x.name === "maple_status")!;
     const real = r.handler;
     const seen: unknown[] = [];
     r.handler = async (_args, extra) => {
-      seen.push((extra.authInfo?.extra as { device?: unknown } | undefined)?.device);
+      const auth = extra.authInfo?.extra as { device?: unknown; care?: unknown } | undefined;
+      seen.push([auth?.device, auth?.care]);
       return { content: [{ type: "text", text: "made-up status" }] };
     };
     try {
-      const run = (device?: string | null) => (chatTools(ALEX, { born: true, device }).maple_status.execute as (i: unknown, o: unknown) => Promise<unknown>)({}, { toolCallId: "c1", messages: [] });
-      await run("made-up-device-1");
-      await run();
+      const run = (care: boolean, device?: string | null) =>
+        (chatTools(ALEX, { born: true, care, device }).maple_status.execute as (i: unknown, o: unknown) => Promise<unknown>)({}, { toolCallId: "c1", messages: [] });
+      await run(true, "made-up-device-1");
+      await run(false);
     } finally {
       r.handler = real;
     }
-    eq(seen, ["made-up-device-1", null], "the id, or none");
+    eq(seen, [["made-up-device-1", true], [null, false]], "the id, or none; open, or closed");
+  });
+
+  await checkAsync("with her page closed to the chat, Maple's tools never read it", async () => {
+    const ctx: Ctx = {
+      now: zonedTimeToUtc(2026, 10, 26, 3, 10, "America/New_York"),
+      baby: BABY as unknown as Baby,
+      tz: "America/New_York",
+      members: [ALEX_MEMBER],
+      who: { id: ALEX.email, via: "chat", role: "owner", name: "Alex", viaAdmin: false },
+      device: null,
+      care: false,
+    };
+    eq(await momSameMedicine(ctx, "acetaminophen"), null, "log_medicine's her-namesake line: nothing, and no read");
   });
 
   await checkAsync("an error before the answer is reported as its class only, never the words Postgres quotes", async () => {
