@@ -14,6 +14,11 @@ import {
   CRISIS,
   CRISIS_PARTNER,
   DIFFICULTY_HARD,
+  EARLY_GRACE_CHOICES,
+  EARLY_GRACE_DEFAULT_MIN,
+  EARLY_GRACE_EXACT_NAMES,
+  EARLY_GRACE_MAX_FRACTION,
+  EARLY_GRACE_RUN_MS,
   GAD7_RESULT,
   INTRUSIVE,
   LABEL_NOT_WHILE_NURSING,
@@ -644,21 +649,64 @@ export function planActive(plan: CarePlan, now: Date, tz: string): boolean {
 }
 
 /**
+ * "Early doses" (her settings): how many minutes before its OK time a dose can
+ * come and still get no early note. Her choice (EARLY_GRACE_CHOICES; unset is
+ * EARLY_GRACE_DEFAULT_MIN, 0 is off), never more than an eighth of the plan's
+ * own gap, and 0 for an opioid (EARLY_GRACE_EXACT_NAMES, by its name or an
+ * Also called name: "Tylenol #3", Roxicet, methadone too), which is always
+ * checked exactly. Only the early note uses it: the OK time, the duplicate
+ * check and the 24-hour limit don't move.
+ */
+export function earlyGraceMin(plan: CarePlan, settings: CareSettings): number {
+  const gap = gapMinutes(plan);
+  if (!gap || EARLY_GRACE_EXACT_NAMES.some((re) => anyName(plan, re))) return 0;
+  const set = settings.early_grace_min;
+  const want = typeof set === "number" && (EARLY_GRACE_CHOICES as readonly number[]).includes(set) ? set : EARLY_GRACE_DEFAULT_MIN;
+  return Math.min(want, gap / EARLY_GRACE_MAX_FRACTION);
+}
+
+/**
+ * Whether the grace covers the dose at `times[i]` (all taken doses' times,
+ * sorted, this one among them): every run of doses in a row through it is no
+ * more than `grace` early in all, so slightly early doses one after another
+ * can't add up past it. A run counts when it spans under EARLY_GRACE_RUN_MS,
+ * and a dose and its neighbor always do. `gap` and `grace` in ms.
+ */
+function graceCovers(times: number[], i: number, gap: number, grace: number): boolean {
+  for (let j = i; j >= 0; j--) {
+    if (j < i - 1 && times[i] - times[j] >= EARLY_GRACE_RUN_MS) break;
+    for (let l = Math.max(i, j + 1); l < times.length; l++) {
+      const span = times[l] - times[j];
+      if (l - j > 1 && span >= EARLY_GRACE_RUN_MS) break;
+      if (span < (l - j) * gap - grace) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * The early note for the dose at `at` against the dose just before or just
  * after it (a back-filled dose can land inside a later one's gap), or null.
+ * Inside that gap, it's early unless the grace covers it (earlyGraceMin,
+ * graceCovers: by no more than the grace, and not on top of other early doses
+ * that add up past it). The note's time is to the neighbor it's early against.
  */
-function earlyAgainst(plan: CarePlan, taken: DoseEntry[], at: number): Assessment | null {
-  const gap = gapMinutes(plan);
-  if (!gap) return null;
-  let before: DoseEntry | null = null;
-  let after: DoseEntry | null = null;
-  for (const d of taken) {
-    const t = ms(d.at);
-    if (t <= at && (!before || t > ms(before.at))) before = d;
-    if (t > at && (!after || t < ms(after.at))) after = d;
-  }
-  const near = before && at - ms(before.at) < gap * MIN ? at - ms(before.at) : after && ms(after.at) - at < gap * MIN ? ms(after.at) - at : null;
-  return near === null ? null : earlyDose(plan.name, spanText(near), hoursText(gap));
+function earlyAgainst(plan: CarePlan, taken: DoseEntry[], at: number, settings: CareSettings): Assessment | null {
+  const gapMin = gapMinutes(plan);
+  if (!gapMin) return null;
+  const gap = gapMin * MIN;
+  const grace = earlyGraceMin(plan, settings) * MIN;
+  const earlier = taken.map((d) => ms(d.at)).filter((t) => t <= at);
+  const later = taken.map((d) => ms(d.at)).filter((t) => t > at);
+  const times = [...earlier.sort((a, b) => a - b), at, ...later.sort((a, b) => a - b)];
+  const i = earlier.length;
+  const since = i > 0 ? at - times[i - 1] : null;
+  const until = i + 1 < times.length ? times[i + 1] - at : null;
+  const inside = (span: number | null, by: number) => span !== null && span < gap - by;
+  // Prefer a neighbor it's early against by more than the grace; else one whose gap it's inside, for a run that adds up.
+  const near = inside(since, grace) ? since : inside(until, grace) ? until : inside(since, 0) ? since : inside(until, 0) ? until : null;
+  if (near === null || (grace > 0 && graceCovers(times, i, gap, grace))) return null;
+  return earlyDose(plan.name, spanText(near), hoursText(gapMin));
 }
 
 /** The most units in any rolling 24 hours that contains `at`, counting a dose of `units` there. */
@@ -676,7 +724,7 @@ function peak24(plan: CarePlan, taken: DoseEntry[], at: number, units: number): 
   return peak;
 }
 
-/** On a plan card: OPIOID_NOTE, LABEL_NOT_WHILE_NURSING, MOOD_MED_NOTE, the early note while it applies, and overDailyMax while she's over. Acked ones left out. */
+/** On a plan card: OPIOID_NOTE, LABEL_NOT_WHILE_NURSING, MOOD_MED_NOTE, the early note while it applies (earlier than the grace), and overDailyMax while she's over. Acked ones left out. */
 export function planNotes(plan: CarePlan, status: PlanStatus, ctx: CareNoteCtx): CareNote[] {
   const acks = ctx.settings.acks ?? {};
   const out: CareNote[] = [];
@@ -690,7 +738,7 @@ export function planNotes(plan: CarePlan, status: PlanStatus, ctx: CareNoteCtx):
   }
   if (status.state === "wait" && status.last) {
     const before = status.window.filter((d) => d.id !== status.last!.id);
-    const early = earlyAgainst(plan, before, ms(status.last.at));
+    const early = earlyAgainst(plan, before, ms(status.last.at), ctx.settings);
     if (early) add(early, `early:c${status.last.id}`);
   }
   if (nursingNotesOn(ctx.settings) && anyName(plan, LABEL_NOT_WHILE_NURSING_NAMES)) {
@@ -712,9 +760,10 @@ export function listNotes(plans: CarePlan[], ctx: CareNoteCtx): CareNote[] {
 
 /**
  * Live in the Dose sheet before Save, then in the toast and the MCP result:
- * earlyDose (inside the gap of the dose before or after it), overDailyMax
- * (over the limit with this one), LABEL_NOT_WHILE_NURSING. `doses` is the
- * plan's doses without the one being edited (`next.id`).
+ * earlyDose (inside the gap of the dose before or after it by more than the
+ * grace, earlyGraceMin), overDailyMax (over the limit with this one, no
+ * grace), LABEL_NOT_WHILE_NURSING. `doses` is the plan's doses without the
+ * one being edited (`next.id`).
  */
 export function doseNotes(
   plan: CarePlan,
@@ -723,7 +772,7 @@ export function doseNotes(
   ctx: CareNoteCtx & { now: Date; tz: string }
 ): Assessment[] {
   if (next.skipped) return [];
-  const { early, over } = doseFlags(plan, doses, next);
+  const { early, over } = doseFlags(plan, doses, next, ctx.settings);
   const out = [early, over].filter((a): a is Assessment => a !== null);
   if (nursingNotesOn(ctx.settings) && anyName(plan, LABEL_NOT_WHILE_NURSING_NAMES)) out.push(LABEL_NOT_WHILE_NURSING);
   return out.map((a) => forMom(a, ctx.name, ctx.self));
@@ -731,13 +780,15 @@ export function doseNotes(
 
 /**
  * The two checks behind doseNotes, unprefixed: `early` (earlyDose, inside the
- * gap of the dose before or after it) and `over` (overDailyMax, over the
- * limit in some rolling 24 hours with this one; units not given count high).
+ * gap of the dose before or after it by more than the grace her `settings`
+ * give, earlyGraceMin) and `over` (overDailyMax, over the limit in some
+ * rolling 24 hours with this one; units not given count high; no grace).
  */
 export function doseFlags(
   plan: CarePlan,
   doses: DoseEntry[],
-  next: { at: string; units?: number | null; skipped?: boolean; id?: number }
+  next: { at: string; units?: number | null; skipped?: boolean; id?: number },
+  settings: CareSettings
 ): { early: Assessment | null; over: Assessment | null } {
   if (next.skipped) return { early: null, over: null };
   const taken = doses.filter((d) => isTaken(d) && d.id !== next.id);
@@ -748,7 +799,7 @@ export function doseFlags(
     const peak = peak24(plan, taken, at, units);
     if (peak > plan.max_24h) over = overDailyMax(plan.name, unitCount(peak, plan.limit_unit), unitCount(plan.max_24h, plan.limit_unit));
   }
-  return { early: earlyAgainst(plan, taken, at), over };
+  return { early: earlyAgainst(plan, taken, at, settings), over };
 }
 
 /** A one-off whose name matches ACETAMINOPHEN_NAMES while an active plan contains acetaminophen (and the codeine/tramadol label note). */

@@ -4,7 +4,7 @@
  * newborn, a 140°F fever) out of the log.
  */
 import { z } from "zod";
-import { ACETAMINOPHEN_NAMES, MOOD_TAGS, type MoodTag } from "./guidelines";
+import { ACETAMINOPHEN_NAMES, EARLY_GRACE_CHOICES, MOOD_TAGS, type MoodTag } from "./guidelines";
 import {
   DIAPER_SIZES,
   ENTRY_KINDS,
@@ -475,6 +475,14 @@ export function cleanCareSettings(raw: unknown, opts: { self: boolean; name?: st
   if ("feeding" in r) {
     if (r.feeding !== null && r.feeding !== "yes" && r.feeding !== "no") throw new Error("feeding must be yes, no or null");
     out.feeding = r.feeding;
+  }
+  if ("early_grace_min" in r) {
+    // "Early doses": anyone who can write her page, like feeding. Only the choices (or null, back to the default).
+    const v = r.early_grace_min;
+    if (v !== null && !(EARLY_GRACE_CHOICES as readonly unknown[]).includes(v)) {
+      throw new Error(`early_grace_min must be ${EARLY_GRACE_CHOICES.slice(0, -1).join(", ")} or ${EARLY_GRACE_CHOICES[EARLY_GRACE_CHOICES.length - 1]} (minutes), or null`);
+    }
+    out.early_grace_min = v;
   }
   if ("next_visit" in r) {
     const v = r.next_visit;

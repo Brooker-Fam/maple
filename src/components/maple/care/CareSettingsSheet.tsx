@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type InputHTMLAttributes } from "react";
+import { EARLY_GRACE_CHOICES, EARLY_GRACE_DEFAULT_MIN } from "@/lib/maple/guidelines";
 import type { CareSettings } from "@/lib/maple/types";
 import { SheetFooter, useOpenCount } from "../sheets/parts";
 import { Segmented, Sheet, cx, tone } from "../ui";
@@ -10,9 +11,15 @@ import type { UseCare } from "./useCare";
 
 /**
  * "Settings for this page": the care team (her therapist too), the next OB
- * visit, nursing, check-in suggestions, and deleting the whole page.
+ * visit, nursing, early doses, check-in suggestions, and deleting the whole page.
  */
 type Feeding = "unset" | "yes" | "no";
+
+/** "Early doses" (earlyGraceMin in care.ts): the choices as the row shows them, and in words for its line. */
+const graceLabel = (min: number) => (min === 0 ? "Off" : min < 60 ? `${min} min` : min === 60 ? "1 hour" : `${min / 60} hours`);
+const graceWords = (min: number) => (min < 60 ? `${min} minutes` : min === 60 ? "an hour" : `${min / 60} hours`);
+const GRACE_OPTIONS = EARLY_GRACE_CHOICES.map((m) => ({ value: String(m), label: graceLabel(m) }));
+const graceOf = (v: number | null | undefined) => String(typeof v === "number" && (EARLY_GRACE_CHOICES as readonly number[]).includes(v) ? v : EARLY_GRACE_DEFAULT_MIN);
 
 /** `onDeleted` (her screen only) adds "Delete this page"; opened from Support or warning signs it's just the settings. */
 export default function CareSettingsSheet(props: { open: boolean; onClose: () => void; care: UseCare; onDeleted?: () => void }) {
@@ -33,6 +40,7 @@ function SettingsForm({ open, onClose, care, onDeleted }: { open: boolean; onClo
   const [therapist, setTherapist] = useState(team.therapist ?? "");
   const [visit, setVisit] = useState(s.next_visit ?? "");
   const [feeding, setFeeding] = useState<Feeding>(s.feeding ?? "unset");
+  const [grace, setGrace] = useState(graceOf(s.early_grace_min));
   const [suggest, setSuggest] = useState(s.checkin_suggestions !== false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -47,6 +55,8 @@ function SettingsForm({ open, onClose, care, onDeleted }: { open: boolean; onClo
       care_team,
       next_visit: visit || null,
       feeding: feeding === "unset" ? null : feeding,
+      // The default is stored as no setting, so it follows the default.
+      early_grace_min: Number(grace) === EARLY_GRACE_DEFAULT_MIN ? null : Number(grace),
       ...(care.access.mood ? { checkin_suggestions: suggest } : {}),
     };
     try {
@@ -125,6 +135,16 @@ function SettingsForm({ open, onClose, care, onDeleted }: { open: boolean; onClo
             ]}
           />
           <Footnote>While it&apos;s not set, the notes about nursing still show.</Footnote>
+        </section>
+
+        <section>
+          <h3 className={cx(tone.label, "mb-1.5 px-1")}>Early doses</h3>
+          <Segmented aria-label="Early doses" value={grace} onChange={setGrace} options={GRACE_OPTIONS} />
+          <Footnote>
+            {grace === "0"
+              ? "Any dose logged before its OK time gets an early note. The 24-hour limit is always checked too."
+              : `Doses logged a little before their OK time don't get an early note, up to ${graceWords(Number(grace))} early in all over a day (or an eighth of the time between doses, if that's less). Opioids are always checked exactly, and so is the 24-hour limit.`}
+          </Footnote>
         </section>
 
         {care.access.mood && (

@@ -214,7 +214,7 @@ function Page({ care }: { care: UseCare }) {
         </SectionTitle>
         <div className={GROUP}>
           <NotificationsRow />
-          {write && <NavRow icon="pencil" label="Settings for this page" note="Care team, nursing, next OB visit" onClick={() => setSub({ kind: "settings" })} />}
+          {write && <NavRow icon="pencil" label="Settings for this page" note="Care team, nursing, early doses, next OB visit" onClick={() => setSub({ kind: "settings" })} />}
         </div>
         <Footnote>
           A notification can&apos;t ring through Silent. For an alarm, the Mom meds shortcut can start a timer (Family → Shortcuts &amp; assistants).

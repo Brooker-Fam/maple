@@ -699,6 +699,47 @@ export const acetaminophenOverlap = (a: string, b: string): Assessment => ({
   body: `${a} and ${b} both contain acetaminophen (labels may say APAP). Taking more than one acetaminophen medicine can add up to more than is safe for your liver. Ask your pharmacist or OB whether taking both is part of your plan.`,
 });
 
+/**
+ * The early-dose grace ("Early doses" in her settings), in minutes: a dose
+ * logged no more than this before its OK time gets no earlyDose note. ISMP,
+ * "Acute Care Guidelines for Timely Administration of Scheduled Medications"
+ * (2011) https://www.ismp.org/guidelines/timely-administration-scheduled-medications-acute,
+ * and CMS's matching guidance (State Operations Manual, Appendix A, §482.23(c);
+ * S&C 12-05-Hospital) treat a scheduled dose given within 30 minutes of its
+ * time (time-critical medicines) or within 1–2 hours (non-time-critical) as on
+ * time. For acetaminophen and ibuprofen the safety line is the label's 24-hour
+ * maximum (FDA, https://www.fda.gov/consumers/consumer-updates/dont-overuse-acetaminophen),
+ * which overDailyMax checks with no grace. The grace never applies to opioids
+ * (EARLY_GRACE_EXACT_NAMES): an early opioid dose matters more for her and for
+ * a nursing baby, so those are checked exactly. It's never more than an eighth
+ * of the plan's own gap, so a short-interval plan isn't swallowed by it. And it
+ * doesn't add up: ISMP's and CMS's windows sit around fixed scheduled times, so
+ * they never drift, while each of her doses is timed from the one before. So
+ * doses in a row within a day (EARLY_GRACE_RUN_MS) may come no more than the
+ * grace early in all; a run of slightly early doses that adds up to more gets
+ * the note, even with no 24-hour limit typed. 0 turns it off. No copy of its
+ * own: a dose that isn't covered gets earlyDose as is.
+ */
+export const EARLY_GRACE_DEFAULT_MIN = 30;
+export const EARLY_GRACE_CHOICES = [0, 15, 30, 60] as const;
+/** The plan's gap is divided by this for the grace's ceiling (an eighth). */
+export const EARLY_GRACE_MAX_FRACTION = 8;
+/** How far back (and forward, for a back-filled dose) a run of doses adds up against the grace: a day, like the 24-hour limit. */
+export const EARLY_GRACE_RUN_MS = 24 * 3600_000;
+/**
+ * Opioids OPIOID_NAMES doesn't list (more brand and combination names, and
+ * ones less common after a birth). FDA, Opioid Medications
+ * https://www.fda.gov/drugs/information-drug-class/opioid-medications and the
+ * products' labels on DailyMed https://dailymed.nlm.nih.gov/. With
+ * OPIOID_NAMES and LABEL_NOT_WHILE_NURSING_NAMES (codeine as "Tylenol #3",
+ * tramadol), these are the names the grace never applies to. Matching only
+ * takes the grace away; it adds no note of its own.
+ */
+export const MORE_OPIOID_NAMES =
+  /\b(roxicet|tylox|percodan|primlev|xartemis|oxaydo|roxybond|xtampza|oxy\s*ir|oxyfast|lorcet|hycet|xodol|zohydro|hysingla|apadaz|benzhydrocodone|dihydrocodeine|oxymorphone|opana|methadone|dolophine|methadose|buprenorphine|subutex|suboxone|zubsolv|belbuca|butrans|sublocade|fentanyl|duragesic|actiq|meperidine|demerol|pentazocine|talwin|butorphanol|stadol|nalbuphine|nubain|levorphanol|exalgo|kadian|ms\s*contin|conzip|seglentis|trezix|oliceridine|olinvyk|opium|paregoric)\b/i;
+/** Every name the early-dose grace never applies to (earlyGraceMin): checked exactly, whatever her setting. */
+export const EARLY_GRACE_EXACT_NAMES: readonly RegExp[] = [OPIOID_NAMES, LABEL_NOT_WHILE_NURSING_NAMES, MORE_OPIOID_NAMES];
+
 /** Her own interval, her own words. Poison Help https://www.poisonhelp.org/ (911 line verbatim in spirit:
  *  "If an individual has collapsed, had a seizure, has trouble breathing, or can't be awakened, call 911 immediately"). */
 export const earlyDose = (name: string, sinceText: string, everyText: string): Assessment => ({

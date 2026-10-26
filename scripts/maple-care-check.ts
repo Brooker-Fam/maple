@@ -20,7 +20,9 @@ import {
   checkinResponse,
   crisisToday,
   daysSinceBirth,
+  doseFlags,
   doseNotes,
+  earlyGraceMin,
   forMom,
   listNotes,
   matchPlan,
@@ -49,6 +51,7 @@ import {
 } from "../src/lib/maple/care";
 import * as G from "../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
+import { cleanCareSettings } from "../src/lib/maple/validate";
 import type { CarePerson, CarePlan, CareSettings, DoseEntry, Member, MoodEntry, Source } from "../src/lib/maple/types";
 
 const TZ = "America/New_York";
@@ -496,6 +499,196 @@ check("T-ENG-9 the plan card shows overDailyMax while over, and the early note a
   const g = plan();
   const early = [dose(g, L(25, "01:00")), dose(g, L(25, "04:00"))];
   ok(planNotes(g, st(g, early, D(25, "05:00")), noteCtx()).some((n) => n.title === "Ibuprofen came early"), "early note on the card");
+});
+
+// ── T-ENG-9b the early-dose grace ("Early doses") ─────────────────────────
+
+const earlyTitles = (p: CarePlan, ds: DoseEntry[], at: string, settings: CareSettings = {}) =>
+  doseNotes(p, ds, { at }, { ...noteCtx(settings), now: D(25, "12:00"), tz: TZ }).map((n) => n.title).filter((t) => t.endsWith("came early"));
+
+check("T-ENG-9b grace: guidelines.ts defaults (30 minutes; Off, 15, 30, 60; an eighth of the gap)", () => {
+  eq([G.EARLY_GRACE_DEFAULT_MIN, [...G.EARLY_GRACE_CHOICES], G.EARLY_GRACE_MAX_FRACTION], [30, [0, 15, 30, 60], 8]);
+  const src = fs.readFileSync(path.join(ROOT, "src/lib/maple/guidelines.ts"), "utf8");
+  const at = src.indexOf("export const EARLY_GRACE_DEFAULT_MIN");
+  const comment = src.slice(src.lastIndexOf("/**", at), at);
+  ok(/ISMP/.test(comment) && /CMS/.test(comment) && /FDA/.test(comment) && /https:\/\//.test(comment), "a source comment (ISMP, CMS, FDA, a link)");
+});
+
+check("T-ENG-9b grace by default: 5 and 25 minutes early on a 6-hour plan get no early note; 31 minutes early does; exactly 30 doesn't", () => {
+  const p = plan();
+  const ds = [dose(p, L(25, "00:00"))];
+  eq(earlyTitles(p, ds, L(25, "05:55")), [], "5 min early");
+  eq(earlyTitles(p, ds, L(25, "05:35")), [], "25 min early");
+  eq(earlyTitles(p, ds, L(25, "05:30")), [], "exactly 30 min early");
+  eq(earlyTitles(p, ds, L(25, "05:29")), ["Ibuprofen came early"], "31 min early");
+  const n = doseNotes(p, ds, { at: L(25, "05:29") }, { ...noteCtx(), now: D(25, "12:00"), tz: TZ })[0];
+  has(n.body, "That's 5 hours 29 minutes after the last one, and your schedule says no sooner than every 6 hours.");
+  eq(earlyGraceMin(p, {}), 30, "earlyGraceMin");
+  eq(earlyGraceMin(p, { early_grace_min: null }), 30, "null is the default");
+  eq(earlyGraceMin(p, { early_grace_min: 45 }), 30, "a stored value that isn't a choice reads as the default");
+  eq(earlyGraceMin(plan({ schedule: { type: "every", every_min: 360 } }), {}), 30, "Every 6 hours too");
+  eq(earlyGraceMin(plan({ schedule: { type: "as_needed", min_gap_min: null } }), {}), 0, "no gap, no grace");
+  eq(earlyGraceMin(plan({ schedule: { type: "daily", per_day: 2 } }), {}), 0, "Each day: no gap");
+});
+
+check("T-ENG-9b grace Off (0): 5 minutes early is noted, as before", () => {
+  const p = plan();
+  const ds = [dose(p, L(25, "00:00"))];
+  eq(earlyTitles(p, ds, L(25, "05:55"), { early_grace_min: 0 }), ["Ibuprofen came early"]);
+  eq(earlyTitles(p, ds, L(25, "06:00"), { early_grace_min: 0 }), [], "on time");
+  eq(earlyGraceMin(p, { early_grace_min: 0 }), 0);
+});
+
+check("T-ENG-9b grace 15 and 60: 15 is 15; 60 is capped at an eighth of a 6-hour gap (45) and is the whole 60 on an 8-hour one", () => {
+  const p = plan();
+  const ds = [dose(p, L(25, "00:00"))];
+  eq(earlyTitles(p, ds, L(25, "05:46"), { early_grace_min: 15 }), [], "14 min early, grace 15");
+  eq(earlyTitles(p, ds, L(25, "05:44"), { early_grace_min: 15 }), ["Ibuprofen came early"], "16 min early, grace 15");
+  eq(earlyGraceMin(p, { early_grace_min: 60 }), 45, "6 h / 8");
+  eq(earlyTitles(p, ds, L(25, "05:16"), { early_grace_min: 60 }), [], "44 min early");
+  eq(earlyTitles(p, ds, L(25, "05:14"), { early_grace_min: 60 }), ["Ibuprofen came early"], "46 min early");
+  const e8 = plan({ name: "Naproxen", schedule: { type: "every", every_min: 480 } });
+  const d8 = [dose(e8, L(25, "00:00"))];
+  eq(earlyGraceMin(e8, { early_grace_min: 60 }), 60, "8 h / 8");
+  eq(earlyTitles(e8, d8, L(25, "07:01"), { early_grace_min: 60 }), [], "59 min early");
+  eq(earlyTitles(e8, d8, L(25, "06:59"), { early_grace_min: 60 }), ["Naproxen came early"], "61 min early");
+});
+
+check("T-ENG-9b an opioid is always checked exactly: 5 minutes early is noted, by its name or an Also called name, whatever the setting", () => {
+  const oxy = plan({ name: "Oxycodone", schedule: { type: "every", every_min: 240 } });
+  const ds = [dose(oxy, L(25, "00:00"))];
+  eq(earlyGraceMin(oxy, { early_grace_min: 60 }), 0);
+  eq(earlyTitles(oxy, ds, L(25, "03:55")), ["Oxycodone came early"], "default");
+  eq(earlyTitles(oxy, ds, L(25, "03:55"), { early_grace_min: 60 }), ["Oxycodone came early"], "60");
+  const pain = plan({ name: "Pain pill", also_called: "Percocet", schedule: { type: "as_needed", min_gap_min: 360 } });
+  eq(earlyTitles(pain, [dose(pain, L(25, "00:00"))], L(25, "05:55")), ["Pain pill came early"], "Also called Percocet");
+});
+
+check("T-ENG-9b codeine by number and opioids OPIOID_NAMES misses are checked exactly too (EARLY_GRACE_EXACT_NAMES)", () => {
+  for (const name of ["Tylenol #3", "Tylenol 3", "Tylenol No. 4", "Roxicet", "Tylox", "Lorcet", "Oxymorphone", "Methadone", "Buprenorphine", "Fentanyl", "Meperidine", "MS Contin", "Tramadol"]) {
+    const p = plan({ name, schedule: { type: "as_needed", min_gap_min: 240 } });
+    eq(earlyGraceMin(p, { early_grace_min: 60 }), 0, `${name} grace`);
+    eq(earlyTitles(p, [dose(p, L(25, "00:00"))], L(25, "03:55"), { feeding: "no" }), [`${name} came early`], `${name} 5 min early`);
+  }
+  const aka = plan({ name: "Pain pill", also_called: "Roxicet", schedule: { type: "as_needed", min_gap_min: 360 } });
+  eq(earlyTitles(aka, [dose(aka, L(25, "00:00"))], L(25, "05:55")), ["Pain pill came early"], "Also called Roxicet");
+  // Matching only takes the grace away: no opioid card of its own for these names.
+  const rox = plan({ name: "Roxicet", schedule: { type: "as_needed", min_gap_min: 360 } });
+  eq(planNotes(rox, st(rox, [], D(25, "07:00")), noteCtx()).map((n) => n.title), [], "no new note");
+  // Not opioids: the grace stands.
+  for (const name of ["Tylenol", "Tylenol Extra Strength", "Advil", "Ibuprofen 600"]) eq(earlyGraceMin(plan({ name }), {}), 30, name);
+});
+
+check("T-ENG-9b a 1-hour plan's grace is capped at its eighth (7.5 minutes)", () => {
+  const p = plan({ name: "Lozenge", schedule: { type: "as_needed", min_gap_min: 60 } });
+  const ds = [dose(p, L(25, "00:00"))];
+  eq(earlyGraceMin(p, {}), 7.5);
+  eq(earlyTitles(p, ds, L(25, "00:53")), [], "7 min early");
+  eq(earlyTitles(p, ds, L(25, "00:52")), ["Lozenge came early"], "8 min early");
+  eq(earlyTitles(p, ds, L(25, "00:30")), ["Lozenge came early"], "30 min early isn't swallowed");
+});
+
+check("T-ENG-9b a back-filled dose inside a later dose's gap honors the grace", () => {
+  const p = plan();
+  const later = [dose(p, L(25, "06:00"))];
+  eq(earlyTitles(p, later, L(25, "00:05")), [], "5 h 55 m before the later one");
+  eq(earlyTitles(p, later, L(25, "00:31")), ["Ibuprofen came early"], "5 h 29 m before the later one");
+  eq(earlyTitles(p, later, L(25, "00:05"), { early_grace_min: 0 }), ["Ibuprofen came early"], "Off");
+  // Between two doses: a little early for the one after, on time after the one before.
+  const both = [dose(p, L(25, "00:00")), dose(p, L(25, "12:00"))];
+  eq(earlyTitles(p, both, L(25, "06:05")), [], "5 h 55 m before the later, 6 h 5 m after the earlier");
+});
+
+check("T-ENG-9b the grace doesn't add up: doses in a row more than the grace early in all get the note, even with no 24-hour limit", () => {
+  const p = plan({ name: "Tylenol" }); // as needed, no sooner than every 6 hours, no limit typed
+  const at = (min: number) => shift(L(25, "00:00"), min / 60);
+  // Each 29 minutes early: the second is covered, the third adds up to 58 and is noted, and so is every one after it.
+  const ds = [dose(p, at(0))];
+  const seen: string[][] = [];
+  for (let k = 1; k <= 5; k++) {
+    seen.push(earlyTitles(p, ds, at(k * 331)));
+    ds.push(dose(p, at(k * 331)));
+  }
+  eq(seen, [[], ["Tylenol came early"], ["Tylenol came early"], ["Tylenol came early"], ["Tylenol came early"]], "29 min early each time");
+  const third = doseNotes(p, ds.slice(0, 2), { at: at(662) }, { ...noteCtx(), now: D(26, "12:00"), tz: TZ })[0];
+  has(third.body, "That's 5 hours 31 minutes after the last one, and your schedule says no sooner than every 6 hours.");
+  // One 5 minutes early after on-time ones stays quiet.
+  eq(earlyTitles(p, [dose(p, at(0)), dose(p, at(360)), dose(p, at(720))], at(1075)), [], "5 min early after on-time doses");
+  // 5 minutes early every time stays quiet: a day holds at most 20 minutes of it on a 6-hour plan.
+  const five = [dose(p, at(0))];
+  for (let k = 1; k <= 8; k++) {
+    eq(earlyTitles(p, five, at(k * 355)), [], `5 min early, dose ${k + 1}`);
+    five.push(dose(p, at(k * 355)));
+  }
+  // 15 minutes early each time: the fourth in a row (45 in all) is noted.
+  const fifteen = [dose(p, at(0)), dose(p, at(345)), dose(p, at(690))];
+  eq(earlyTitles(p, fifteen.slice(0, 2), at(690)), [], "the third: 30 in all");
+  eq(earlyTitles(p, fifteen, at(1035)), ["Tylenol came early"], "the fourth: 45 in all");
+  // On top of an early one: 5 minutes early right after one 60 minutes early is noted.
+  eq(earlyTitles(p, [dose(p, at(0)), dose(p, at(300))], at(655)), ["Tylenol came early"], "5 min early after an early one");
+  // A dose on time after an early one isn't inside any gap: no note, as with Off.
+  eq(earlyTitles(p, [dose(p, at(0)), dose(p, at(300))], at(660)), [], "on time after an early one");
+  eq(earlyTitles(p, [dose(p, at(0)), dose(p, at(300))], at(660), { early_grace_min: 0 }), [], "on time after an early one, Off");
+  // A late one in between starts over.
+  eq(earlyTitles(p, [dose(p, at(0)), dose(p, at(331)), dose(p, at(331 + 480))], at(331 + 480 + 331)), [], "after a late one");
+  // A run reaches back under a day: 29 minutes early more than a day back doesn't count.
+  const old = [dose(p, at(0)), dose(p, at(331)), dose(p, at(691)), dose(p, at(1051)), dose(p, at(1411))];
+  eq(earlyTitles(p, old, at(1766)), [], "5 min early; the 29 is 29 h 26 m back");
+  eq(earlyTitles(p, old.slice(1), at(1766), { early_grace_min: 15 }), [], "grace 15: 5 in all within the day");
+});
+
+check("T-ENG-9b the run adds up for a back-filled dose too, and the plan card follows it", () => {
+  const p = plan({ name: "Tylenol" });
+  const at = (min: number) => shift(L(25, "00:00"), min / 60);
+  // Back-filled before two later doses, each 29 minutes early: 58 in all.
+  eq(earlyTitles(p, [dose(p, at(360)), dose(p, at(691))], at(29)), ["Tylenol came early"], "back-filled at the front of a run");
+  eq(earlyTitles(p, [dose(p, at(360)), dose(p, at(720))], at(29)), [], "back-filled 29 min early before on-time doses");
+  // Back-filled between two doses: 20 and 20 minutes early, 40 in all.
+  eq(earlyTitles(p, [dose(p, at(0)), dose(p, at(680))], at(340)), ["Tylenol came early"], "back-filled in the middle");
+  eq(earlyTitles(p, [dose(p, at(0)), dose(p, at(680))], at(340), { early_grace_min: 60 }), [], "45 covers 40");
+  // The card: the third in a row, 29 minutes early each time.
+  const run = [dose(p, at(0)), dose(p, at(331)), dose(p, at(662))];
+  ok(planNotes(p, st(p, run, new Date(at(700))), noteCtx()).some((n) => n.title === "Tylenol came early"), "card for the third");
+  ok(!planNotes(p, st(p, run.slice(0, 2), new Date(at(340))), noteCtx()).some((n) => n.title === "Tylenol came early"), "no card for the second");
+});
+
+check("T-ENG-9b the plan card follows the same rule: no early card 5 minutes early; a card 35 minutes early, or 5 with Off", () => {
+  const p = plan();
+  const card = (ds: DoseEntry[], settings: CareSettings = {}) => planNotes(p, st(p, ds, D(25, "07:00")), noteCtx(settings)).some((n) => n.title === "Ibuprofen came early");
+  const little = [dose(p, L(25, "00:00")), dose(p, L(25, "05:55"))];
+  eq(st(p, little, D(25, "07:00")).state, "wait", "still Not yet: the OK time doesn't move");
+  eq(st(p, little, D(25, "07:00")).nextOkAt, L(25, "11:55"), "OK after 6 hours from the dose");
+  eq(card(little), false, "5 min early");
+  eq(card([dose(p, L(25, "00:00")), dose(p, L(25, "05:25"))]), true, "35 min early");
+  eq(card(little, { early_grace_min: 0 }), true, "Off");
+  const oxy = plan({ name: "Oxycodone", schedule: { type: "every", every_min: 240 } });
+  ok(planNotes(oxy, st(oxy, [dose(oxy, L(25, "00:00")), dose(oxy, L(25, "03:55"))], D(25, "05:00")), noteCtx()).some((n) => n.title === "Oxycodone came early"), "an opioid's card");
+});
+
+check("T-ENG-9b the over-the-24-hour-limit note still fires inside the grace; doseFlags takes the settings", () => {
+  const p = plan({ max_24h: 2, limit_unit: "doses" });
+  const ds = [dose(p, L(25, "00:00")), dose(p, L(25, "06:00"))];
+  const notes = doseNotes(p, ds, { at: L(25, "11:55") }, { ...noteCtx(), now: D(25, "12:00"), tz: TZ });
+  eq(notes.map((n) => n.title), ["Ibuprofen: over your daily limit"], "over, and no early note 5 min early");
+  eq(notes[0].label, "Call Poison Help now");
+  const f = doseFlags(p, ds, { at: L(25, "11:55") }, {});
+  eq([f.early, f.over?.title], [null, "Ibuprofen: over your daily limit"], "doseFlags default");
+  const off = doseFlags(p, ds, { at: L(25, "11:55") }, { early_grace_min: 0 });
+  eq([off.early?.title, off.over?.title], ["Ibuprofen came early", "Ibuprofen: over your daily limit"], "doseFlags Off");
+});
+
+check("T-ENG-9b cleanCareSettings: early_grace_min takes Off, 15, 30, 60 or null from anyone who can write her page; anything else is refused", () => {
+  for (const v of [0, 15, 30, 60, null]) eq(cleanCareSettings({ early_grace_min: v }, { self: false, name: "Sam" }).settings, { early_grace_min: v }, String(v));
+  for (const v of [45, -1, "30", true, 30.5, 120]) {
+    let msg = "";
+    try {
+      cleanCareSettings({ early_grace_min: v }, { self: true });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    eq(msg, "early_grace_min must be 0, 15, 30 or 60 (minutes), or null", JSON.stringify(v));
+  }
+  eq(cleanCareSettings({ feeding: "yes" }, { self: false }).settings, { feeding: "yes" }, "left out, left alone");
 });
 
 // ── T-ENG-10 name and plan notes (step 1) ────────────────────────────────

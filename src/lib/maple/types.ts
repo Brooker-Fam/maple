@@ -432,6 +432,8 @@ export type DoseEntry = Extract<CareEntry, { kind: "dose" }>;
 export type CareSettings = {
   care_team?: { ob?: string; after_hours?: string; pharmacy?: string; therapist?: string }; // therapist: hers only
   feeding?: "yes" | "no" | null;
+  /** "Early doses": minutes before a dose's OK time that get no early note (EARLY_GRACE_CHOICES; absent or null = EARLY_GRACE_DEFAULT_MIN; 0 = off). */
+  early_grace_min?: number | null;
   next_visit?: string | null;        // 'YYYY-MM-DD'
   checkin_suggestions?: boolean;     // hers only; default true
   sharing_seen_at?: string | null;   // hers only
