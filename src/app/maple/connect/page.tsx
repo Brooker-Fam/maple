@@ -5,6 +5,7 @@ import Link from "next/link";
 import { MapleLeaf } from "@/components/maple/art";
 import { Icon, type IconName } from "@/components/maple/icons";
 import { cx, tone } from "@/components/maple/ui";
+import { MCP_URL } from "@/lib/maple/origin";
 
 /**
  * /maple/connect — how to hook Maple's Log up to Claude and ChatGPT (the MCP
@@ -14,7 +15,6 @@ import { cx, tone } from "@/components/maple/ui";
  * background), plain cards, line icons.
  */
 
-const MCP_URL = "https://brooker.family/api/maple/mcp";
 const CLAUDE_CODE_CMD = `claude mcp add --transport http maple ${MCP_URL}`;
 
 const PROMPTS: { when: string; icon: IconName; lines: string[] }[] = [

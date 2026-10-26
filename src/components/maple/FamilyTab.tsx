@@ -17,6 +17,7 @@ import { useNightPref, type NightPref } from "./nightLook";
 import { NotificationsRow, useNotifications } from "./notify";
 import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, cx, memberColor, tone } from "./ui";
 import { useMaple } from "./useMaple";
+import { MAPLE_HOST, MAPLE_ORIGIN, MCP_URL } from "@/lib/maple/origin";
 
 /**
  * Family: settings, and the people in the log. Who's in it (and inviting
@@ -54,7 +55,6 @@ const ROLE_LINE: Record<Role, string> = {
   viewer: "View only",
 };
 
-const MCP_URL = "https://brooker.family/api/maple/mcp";
 
 const EXAMPLES = ["“Log a wet diaper.”", "“Start a feed on the right.”", "“Which side next?”", "“How did last night go?”", "“Add a question for the doctor.”"];
 /** Her side of the connector, with her name (no real medicine names: the repo is public). */
@@ -570,7 +570,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
         <div className="mt-3 space-y-3 pb-1.5">
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>
             This is the site&apos;s admin password. Turning it off here means it no longer opens Maple&apos;s Log (or connects
-            Claude/ChatGPT to it); the rest of brooker.family is unaffected. Google sign-in keeps working for everyone else.
+            Claude/ChatGPT to it). Google sign-in keeps working for everyone else.
           </p>
           {!confirmRemove ? (
             <Button variant="danger" size="sm" className="w-full" onClick={() => setConfirmRemove(true)}>
@@ -618,7 +618,7 @@ function InviteByEmail() {
     try {
       await api("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role }) });
       await refresh();
-      toast(`Added ${email.trim()}. They can sign in with Google at brooker.family/maple`, { duration: 6000 });
+      toast(`Added ${email.trim()}. They can sign in with Google at ${MAPLE_HOST}/maple`, { duration: 6000 });
       setEmail("");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't add them", { tone: "error" });
@@ -1112,7 +1112,7 @@ function Preferences() {
             ]}
           />
         </SegmentRow>
-        <SegmentRow label="Theme" note="Same setting as the rest of brooker.family.">
+        <SegmentRow label="Theme">
           <Segmented
             value={theme}
             onChange={setTheme}
@@ -1296,7 +1296,7 @@ function HandsFree() {
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [howTo, setHowTo] = useState(false);
-  const [origin, setOrigin] = useState("https://brooker.family");
+  const [origin, setOrigin] = useState(MAPLE_ORIGIN);
 
   useEffect(() => {
     setOrigin(window.location.origin);

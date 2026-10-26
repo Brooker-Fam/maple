@@ -9,7 +9,9 @@ export function useVisiblePoll(
   intervalMs: number = DEFAULT_POLL_INTERVAL_MS
 ) {
   const cbRef = useRef(callback);
-  cbRef.current = callback;
+  useEffect(() => {
+    cbRef.current = callback;
+  });
 
   useEffect(() => {
     let timerId: ReturnType<typeof setInterval> | null = null;

@@ -143,6 +143,7 @@ import {
   ozToMl,
 } from "./units";
 import { cleanData } from "./validate";
+import { MAPLE_HOST } from "./origin";
 
 /**
  * Maple's Log as MCP tools, for Claude and ChatGPT custom connectors (served
@@ -299,7 +300,7 @@ export async function context(extra: Extra): Promise<Ctx> {
     // only in the Maple route. A database blip doesn't lock anyone out.
     if (await isRemoved(ADMIN_ID).catch(() => false)) {
       throw new ToolError(
-        "The admin login is turned off for Maple's Log, so these tools are off on this connection. Connect Maple's Log with Google instead: brooker.family/maple/connect."
+        "The admin login is turned off for Maple's Log, so these tools are off on this connection. Connect Maple's Log with Google instead: " + MAPLE_HOST + "/maple/connect."
       );
     }
     // Show the admin login in Family (where an owner can turn it off) once

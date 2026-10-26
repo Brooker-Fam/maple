@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { MapleLeaf } from "@/components/maple/art";
 import { Icon } from "@/components/maple/icons";
 import { Button, cx, tone } from "@/components/maple/ui";
+import { MAPLE_HOST } from "@/lib/maple/origin";
 
 /**
  * /maple/join#<token> — where a one-time invite link lands (for grandparents
@@ -134,7 +135,7 @@ export default function JoinPage() {
 
         {phase.kind === "missing" && (
           <Stuck title="This link is missing its key">
-            Invite links look like <span className="rounded-md bg-mp-sunken px-1.5 py-0.5 font-mono text-[13px]">brooker.family/maple/join#…</span> with a long
+            Invite links look like <span className="rounded-md bg-mp-sunken px-1.5 py-0.5 font-mono text-[13px]">{MAPLE_HOST}/maple/join#…</span> with a long
             code at the end. Try copying the whole link again, or ask Matt or Brittany to send a fresh one.
           </Stuck>
         )}

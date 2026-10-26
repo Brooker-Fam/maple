@@ -1,9 +1,7 @@
-import type { Metadata, Viewport } from "next";
-import { Cormorant_Garamond, Quicksand } from "next/font/google";
-import Navigation from "@/components/Navigation";
+import type { Metadata } from "next";
+import { Cormorant_Garamond } from "next/font/google";
 import ThemeProvider from "@/components/ThemeProvider";
-import PostHogProvider from "@/components/PostHogProvider";
-import MainLandmark from "./MainLandmark";
+import { MAPLE_ORIGIN } from "@/lib/maple/origin";
 import "./globals.css";
 
 const cormorantGaramond = Cormorant_Garamond({
@@ -13,59 +11,16 @@ const cormorantGaramond = Cormorant_Garamond({
   display: "swap",
 });
 
-const quicksand = Quicksand({
-  variable: "--font-quicksand",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
-});
-
 export const metadata: Metadata = {
-  title: "Matt & Brittany",
-  description:
-    "Thank you for celebrating with us on our farm on June 27, 2026. The photos, the playlist, and the party games are all here.",
-  authors: [{ name: "Matt & Brittany Brooker" }],
-  openGraph: {
-    title: "Matt & Brittany",
-    description:
-      "Thank you for celebrating with us on our farm on June 27, 2026. The photos, the playlist, and the party games are all here.",
-    type: "website",
-    locale: "en_US",
-    siteName: "Matt & Brittany",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Matt & Brittany",
-    description: "Thank you for celebrating with us on our farm on June 27, 2026.",
-  },
-  icons: {
-    icon: "/favicon.svg",
-    apple: "/apple-touch-icon.png",
-  },
-  manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    title: "Brooker",
-    statusBarStyle: "black-translucent",
-  },
+  metadataBase: new URL(MAPLE_ORIGIN),
+  title: "Maple",
+  description: "A family newborn tracker.",
+  robots: { index: false, follow: false },
 };
 
-export const viewport: Viewport = {
-  themeColor: "#1D4420",
-};
-
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      data-scroll-behavior="smooth"
-      className={`${cormorantGaramond.variable} ${quicksand.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="en" className={cormorantGaramond.variable} suppressHydrationWarning>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -73,13 +28,8 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="enchanted-bg min-h-screen font-[family-name:var(--font-quicksand)] antialiased">
-        <PostHogProvider>
-          <ThemeProvider>
-            <Navigation />
-            <MainLandmark>{children}</MainLandmark>
-          </ThemeProvider>
-        </PostHogProvider>
+      <body className="min-h-screen antialiased">
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAppBaseUrl } from "@/lib/google";
+import { getAppBaseUrl } from "@/lib/secret-box";
 import {
   identityFromCode,
   joinWithGoogle,
@@ -17,11 +17,6 @@ function withAuthParam(base: string, path: string, value: string): string {
   return url.toString();
 }
 
-/**
- * Google's redirect back after Maple sign-in. It arrives at the /birth
- * callback (the URI already registered with Google; see redirectUri in
- * auth.ts), which hands it here when the state carries MAPLE_STATE_PREFIX.
- */
 export async function handleMapleGoogleCallback(request: NextRequest): Promise<NextResponse> {
   const base = getAppBaseUrl();
   const { searchParams } = new URL(request.url);
@@ -68,7 +63,7 @@ export async function handleMapleGoogleCallback(request: NextRequest): Promise<N
     return res;
   } catch (error) {
     console.error("Maple auth callback error:", error);
-    await captureServerException(error, { route: "GET /api/birth/auth/callback (maple)" });
+    await captureServerException(error, { route: "GET /api/maple/auth/callback" });
     return fail("failed");
   }
 }

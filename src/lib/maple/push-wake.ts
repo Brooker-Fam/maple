@@ -5,6 +5,7 @@ import { planStatus } from "./care";
 import { getCarePerson, listCarePlans, rowToCareEntry } from "./care-store";
 import { addDays, dayKey, parseDayKey, zonedTimeToUtc } from "./time";
 import type { CarePerson, CarePlan, DoseEntry } from "./types";
+import { MAPLE_ORIGIN } from "./origin";
 
 /**
  * The clock for notifications (src/lib/maple/push.ts sends them).
@@ -154,11 +155,7 @@ const qstashBase = () => (process.env.QSTASH_URL || "https://qstash.upstash.io")
 
 /** The production tick URL QStash calls (a preview deploy's wakes still go to production, where QStash is set up). */
 export function tickUrl(): string {
-  const base =
-    process.env.MAPLE_PUBLIC_URL ||
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "https://brooker.family");
-  return `${base.replace(/\/+$/, "")}/api/maple/push/tick`;
+  return `${MAPLE_ORIGIN}/api/maple/push/tick`;
 }
 
 /** The ways the tick is run; QStash passes it as X-Maple-Via (Upstash-Forward-X-Maple-Via). */

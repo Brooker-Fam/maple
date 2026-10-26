@@ -20,6 +20,7 @@ import {
   type Via,
 } from "./push-wake";
 import type { CarePlan, Member, Source } from "./types";
+import { MAPLE_ORIGIN } from "./origin";
 
 /**
  * Notifications by Web Push.
@@ -108,7 +109,7 @@ const LATE_MS = 10 * MIN;
 /** A gap between ticks this long is kept for the health line. */
 const GAP_MS = 45 * MIN;
 const MAX_ATTEMPTS = 3;
-const SUBJECT = "https://brooker.family/maple";
+const SUBJECT = `${MAPLE_ORIGIN}/maple`;
 
 async function q(sql: string, params: unknown[] = []): Promise<Row[]> {
   const rows = await query(sql, params);

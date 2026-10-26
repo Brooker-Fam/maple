@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { getAppBaseUrl } from "@/lib/google";
+import { getAppBaseUrl } from "@/lib/secret-box";
 import {
   authorizeUrl,
   isGoogleConfigured,

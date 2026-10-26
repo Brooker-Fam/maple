@@ -1,14 +1,13 @@
-import { google } from "googleapis";
+import { OAuth2Client } from "google-auth-library";
 import { createHash } from "crypto";
 import type { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getAppBaseUrl, encryptSecret, decryptSecret } from "@/lib/google";
+import { getAppBaseUrl, encryptSecret, decryptSecret } from "@/lib/secret-box";
 import { verifyAdminCreds } from "@/lib/mcp/auth";
 import type { Member, Role } from "./types";
 
 /**
- * Identity for Maple's Log at /maple. Mirrors the birth plan's pattern:
- * sign in with Google (identity scopes only), and an encrypted cookie holds
+ * Identity for Maple's Log at /maple: sign in with Google (identity scopes only), and an encrypted cookie holds
  * just who you are. What you can reach comes from maple_members, so nothing
  * secret ever travels in a URL.
  *
@@ -19,15 +18,14 @@ import type { Member, Role } from "./types";
  * Fallback: the site admin login (ADMIN_USER/ADMIN_PASS) signs in as the
  * pseudo-member "admin", so the log works before Google is set up.
  *
- * Reuses GOOGLE_CLIENT_ID/SECRET and the /birth sign-in's redirect URI, which
- * is already registered with Google, so there's nothing to set up.
+ * Uses GOOGLE_CLIENT_ID/SECRET; Google only redirects to URIs registered on
+ * that OAuth client, so {origin}/api/maple/auth/callback must be listed there.
  */
 
 export const SESSION_COOKIE = "maple_session";
 export const STATE_COOKIE = "maple_oauth_state";
 /** Where Google sends people back, so where the state cookie must reach. */
-export const STATE_COOKIE_PATH = "/api/birth/auth/callback";
-/** Marks a sign-in as Maple's, so the shared callback hands it to Maple. */
+export const STATE_COOKIE_PATH = "/api/maple/auth/callback";
 export const MAPLE_STATE_PREFIX = "maple.";
 const SESSION_DAYS = 180;
 export const ADMIN_ID = "admin";
@@ -40,18 +38,12 @@ export function isPasswordConfigured(): boolean {
   return !!(process.env.ADMIN_USER && process.env.ADMIN_PASS && process.env.GOOGLE_CLIENT_SECRET);
 }
 
-// Google only redirects to URIs registered on the OAuth client. The /birth
-// sign-in's callback already is, so Maple shares it (handleMapleGoogleCallback).
 function redirectUri(): string {
   return `${getAppBaseUrl()}${STATE_COOKIE_PATH}`;
 }
 
 function client() {
-  return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    redirectUri()
-  );
+  return new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, redirectUri());
 }
 
 export function authorizeUrl(state: string): string {
@@ -188,7 +180,7 @@ export async function listMembers(): Promise<Member[]> {
 }
 
 function allowlist(): string[] {
-  return (process.env.MAPLE_ALLOWED_EMAILS || process.env.BIRTH_ALLOWED_EMAILS || "")
+  return (process.env.MAPLE_ALLOWED_EMAILS || "")
     .split(",")
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
@@ -198,8 +190,7 @@ function allowlist(): string[] {
  * Resolves a Google sign-in to a member, adding them when allowed.
  *
  * Narrow on purpose so a stray Google account can't get in: invited members
- * always can; an allowlisted address (MAPLE_ALLOWED_EMAILS, else the birth
- * plan's BIRTH_ALLOWED_EMAILS) may join; with no allowlist only the very first
+ * always can; an allowlisted address (MAPLE_ALLOWED_EMAILS) may join; with no allowlist only the very first
  * Google sign-in may claim the log, as its owner.
  */
 export async function joinWithGoogle(

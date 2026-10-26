@@ -20,7 +20,7 @@ export async function GET(req: Request) {
       token_endpoint_auth_methods_supported: ["none"],
       // No offline_access: Claude only asks for it when it's advertised.
       // Refresh tokens go to Claude, ChatGPT and local apps (admin ones lapse after 90 idle days).
-      scopes_supported: ["calendar", "rsvp", "maple"],
+      scopes_supported: ["maple"],
     },
     {
       headers: {

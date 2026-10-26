@@ -19,4 +19,4 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: curl -fsS -X POST --max-time 60 -H "X-Maple-Via: gh" https://brooker.family/api/maple/push/tick
+      - run: curl -fsS -X POST --max-time 60 -H "X-Maple-Via: gh" https://maple.brooker.family/api/maple/push/tick

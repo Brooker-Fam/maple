@@ -82,9 +82,7 @@ html.maple-night {
   accent-color: #e8a23f;
 }
 
-/* body.enchanted-bg too: the site's `.dark .enchanted-bg` would otherwise win in dark mode. */
-html.maple-ui body,
-html.maple-ui body.enchanted-bg {
+html.maple-ui body {
   font-family: var(--mp-font);
   background: var(--mp-bg);
   color: var(--mp-ink);
