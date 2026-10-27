@@ -19,4 +19,3 @@ export function captureSitePage(pathname: string): void {
   const page = sitePage(pathname);
   if (page) void siteClient().then((ph) => ph?.capture("$pageview", { $pathname: page }));
 }
-
