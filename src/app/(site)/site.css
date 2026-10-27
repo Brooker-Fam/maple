@@ -121,6 +121,12 @@
     font-weight: 600;
     cursor: pointer;
   }
+  .site-button-sm {
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
   .site-button:hover {
     filter: brightness(1.12);
   }

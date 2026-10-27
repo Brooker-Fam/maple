@@ -25,7 +25,7 @@ export default function Privacy() {
           Maple, and the AI model behind its chat, are listed below.
         </li>
         <li>No ads. Your data is never sold or shared for advertising.</li>
-        <li>No analytics or session replay, in the app or on this site.</li>
+        <li>Limited usage counts help improve Maple. No session replay, and no names, email addresses or log contents in analytics.</li>
         <li>
           If you use Maple&rsquo;s chat, your messages go to an AI model through Vercel AI Gateway, and every request asks for zero
           data retention and no training.
@@ -46,6 +46,17 @@ export default function Privacy() {
       <p>
         When someone is removed from a family&rsquo;s log, Maple keeps their email address so they can&rsquo;t sign back
         in. Inviting them again clears it.
+      </p>
+      <h3>Invites and welcome emails</h3>
+      <p>
+        When an owner invites you by email, Maple keeps your address with the invite and sends its link through Resend.
+        The email includes the inviter&rsquo;s name, the baby&rsquo;s name if set, and when the link expires. A new family&rsquo;s
+        owner also gets a welcome email, with their first name and a link to Maple.
+      </p>
+      <p>
+        An invite link works once and expires after seven days. Using it or letting it expire does not delete its record or
+        address. They stay until the family&rsquo;s log is deleted, unless the unused invite is revoked or replaced by a new
+        invite to that address. Accepting an email invite also keeps your address as part of your membership.
       </p>
       <h3>What your family logs</h3>
       <p>
@@ -74,13 +85,20 @@ export default function Privacy() {
         If you join the waitlist, Maple keeps your email address and the date you joined. It is used only to tell you when Maple
         opens to more families.
       </p>
+      <h3>Feedback and support</h3>
+      <p>
+        &ldquo;Send feedback&rdquo; opens your email app. It sends nothing until you send the email yourself. What you choose to
+        send, including your email address, reaches the person who makes Maple at{" "}
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. Keep health details out unless they are needed for your question.
+        These emails are separate from your family&rsquo;s log. Write to the same address to ask for a feedback message to be removed.
+      </p>
       <h3>To keep things working</h3>
       <ul>
         <li>A sign-in cookie, so you stay signed in. Your theme and a few app settings are saved on your own phone.</li>
         <li>
-          A keyed hash of your IP address, which can&rsquo;t be turned back into the address without Maple&rsquo;s secret key,
-          counted per hour to limit how often one connection can try to sign in, upload or join the waitlist. Maple
-          doesn&rsquo;t keep the address itself, and clears out counts more than a day old.
+          A keyed hash of your IP address, counted per hour to limit how often one connection can try to sign in, upload or
+          join the waitlist. Invite email limits use a keyed hash of the sender&rsquo;s member id. These counters keep neither
+          the IP address nor the sender&rsquo;s email address, and counts more than a day old are cleared out.
         </li>
         <li>For each phone that turns on notifications, the address its browser gave Maple for sending them.</li>
         <li>
@@ -92,7 +110,8 @@ export default function Privacy() {
       <h2>Where it&rsquo;s kept</h2>
       <ul>
         <li>
-          <strong>Neon</strong> runs Maple&rsquo;s Postgres database, which holds everything above except photos.
+          <strong>Neon</strong> runs Maple&rsquo;s Postgres database, which holds your family&rsquo;s log, chats, membership,
+          invites, waitlist addresses and the records that keep Maple working.
         </li>
         <li>
           <strong>Vercel Blob</strong> stores photos. They are only ever shown through Maple to someone signed in to your log.
@@ -105,10 +124,48 @@ export default function Privacy() {
           <strong>Upstash</strong>, when Maple uses it to send notifications on time, gets only the times to wake up. What you
           logged isn&rsquo;t sent to it.
         </li>
+        <li>
+          <strong>Resend</strong> sends invites and welcome emails. It receives the recipient&rsquo;s address and the message,
+          and keeps email and delivery records under its <a href="https://resend.com/security">retention policy</a>.
+          Email open and click tracking are off.
+        </li>
+        <li>
+          <strong>Forward Email</strong> receives emails you send to Maple&rsquo;s contact address, including
+          feedback and replies to an invite or welcome email.
+        </li>
+        <li>
+          <strong>PostHog</strong> receives the limited usage events described below and scrubbed error reports.
+        </li>
       </ul>
       <p>
         If error reporting is turned on, a server error is sent to PostHog as the kind of error and where in Maple&rsquo;s code it
         happened. The contents of your log and your messages aren&rsquo;t sent.
+      </p>
+
+      <h2>Usage counts</h2>
+      <p>
+        Maple uses PostHog to see whether people can get started and which features are used. The public site sends pageviews
+        (<code>$pageview</code>). Maple&rsquo;s server sends <code>signup_started</code> when it accepts a new-family sign-up form,
+        and <code>signup_completed</code> when a new family is created. Pageviews contain only a public page path; blog articles are grouped together. Query
+        strings, invite tokens, page titles and referring pages are left out.
+      </p>
+      <p>
+        The app sends only <code>signed_up</code>, <code>onboarding_completed</code>, <code>invite_sent</code>,
+        {" "}<code>chat_used</code>, <code>entry_logged</code> and <code>app_opened</code>. These say that an action happened,
+        without names, email addresses, the type of entry, health details, chat text or anything else from the log.
+        App pageviews are off.
+      </p>
+      <p>
+        Site visits use a random id kept only in the page&rsquo;s memory, with no analytics cookies or
+        persistent analytics storage. It changes when the page reloads. Each sign-up start gets a fresh random id on the server.
+        Completed sign-ups and app events use a keyed hash of the family id,
+        so usage can be counted for one family without sending its name or anyone&rsquo;s email address. Maple does not create
+        PostHog person profiles or send IP addresses in these events, and asks PostHog not to look up a location. A direct
+        browser request still exposes its connection information to the receiving service.
+      </p>
+      <p>
+        Automatic click and form tracking, session replay, surveys and heatmaps are off. PostHog does not receive what you
+        type, a recording of your screen, or the contents of your family&rsquo;s log.
       </p>
 
       <h2>Who can see it</h2>
@@ -127,8 +184,9 @@ export default function Privacy() {
       <h3>Maple&rsquo;s chat</h3>
       <p>
         When you use the chat, your message, the recent conversation, and whatever it looks up in your log to answer are sent to
-        an AI model chosen by Maple, through Vercel AI Gateway. For members who can see mom&rsquo;s page, that can include her
-        medicines and doses, her temperatures and her questions for her OB, but never her check-ins. Every request asks the
+        an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
+        see her page can use the chat with her medicines and doses, temperatures and questions for her OB. Her check-ins never
+        reach the chat. Every request asks the
         Gateway for zero data retention and no training on your data, and names the only providers it may be sent to, each one
         the Gateway lists as keeping no data. Nothing about your messages goes into Maple&rsquo;s logs or error reports.
       </p>

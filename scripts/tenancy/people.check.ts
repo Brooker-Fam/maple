@@ -84,6 +84,20 @@ async function main() {
     const s = await seedFamilies();
     const { alpha, beta } = s;
 
+    await test(`${shape}: sign-in reports the configured signup mode for visitors and members`, async () => {
+      const previous = process.env.MAPLE_SIGNUP;
+      try {
+        for (const mode of ["off", "invite", "open"]) {
+          process.env.MAPLE_SIGNUP = mode;
+          eq((await call(routes.me.GET, "/api/maple/auth/me", null)).body.signup, mode, "visitor");
+          eq((await call(routes.me.GET, "/api/maple/auth/me", { id: alpha.owner })).body.signup, mode, "member");
+        }
+      } finally {
+        if (previous === undefined) delete process.env.MAPLE_SIGNUP;
+        else process.env.MAPLE_SIGNUP = previous;
+      }
+    });
+
     await test(`${shape}: a session opens its own family, and one from before families opens family 1 only`, async () => {
       eq((await call(routes.me.GET, "/api/maple/auth/me", { id: alpha.owner })).body.member, { email: alpha.owner, role: "owner", display_name: "Avery", emoji: null, color: null }, "Alpha's old cookie");
       eq(((await call(routes.me.GET, "/api/maple/auth/me", as(s, "owner", "beta"))).body.member as { email: string }).email, beta.owner, "Beta's cookie");

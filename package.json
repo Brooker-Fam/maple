@@ -15,6 +15,9 @@
     "check:maple-chat": "tsx scripts/maple-chat-check.ts",
     "check:site": "tsx scripts/site-check.ts",
     "check:email": "tsx scripts/email-check.ts",
+    "check:analytics": "tsx scripts/analytics-check.ts",
+    "check:usage-alerts": "tsx scripts/usage-alerts-check.ts",
+    "check:usage-health": "node --test scripts/usage-health-monitor.check.mjs",
     "check:maple-growth": "tsx scripts/maple-growth-check.ts",
     "check:maple-tenancy": "tsx scripts/tenancy/run.ts",
     "check:maple-parity": "tsx scripts/tenancy/parity/run.ts"
@@ -30,6 +33,7 @@
     "marked": "18.1.1",
     "mcp-handler": "^1.1.0",
     "next": "16.1.6",
+    "posthog-js": "1.438.9",
     "posthog-node": "^5.29.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",

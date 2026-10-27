@@ -3,7 +3,10 @@
  * POST /api/waitlist): email validation, the honeypot, the 204/303/400/403/
  * 429/503/500 answers, the daily cap, that a second sign-up with the same
  * address (in any case or spacing) adds nothing, and that nothing sent ever
- * reaches a log or an error report (scrubError included).
+ * reaches a log or an error report (scrubError included). Also the sign-up
+ * entry points: the header's and footer's Sign in and Get started, and the
+ * home page's Get started buttons, which reach the waitlist on /signup while
+ * sign-up is off.
  *
  *   npx tsx scripts/site-check.ts      (or pnpm check:site)
  *
@@ -251,6 +254,58 @@ async function main() {
     ok(/email TEXT NOT NULL UNIQUE/.test(m![1]), "email isn't unique");
     ok(/created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/.test(m![1]), "created_at has no default");
     ok(/UPDATE maple_waitlist SET baby_month = NULL/.test(sql), "old baby months aren't cleared");
+  });
+
+  // ── sign-up entry points ──────────────────────────────────────────────
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { default: SiteHeader } = await import("../src/components/site/SiteHeader");
+  const { default: SiteFooter } = await import("../src/components/site/SiteFooter");
+  const { default: Home } = await import("../src/app/(site)/page");
+  const { default: Signup } = await import("../src/app/(site)/signup/page");
+
+  type Anchor = { href: string; rel: string | null; text: string };
+  const anchors = (html: string): Anchor[] =>
+    [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map(([, attrs, inner]) => ({
+      href: /\bhref="([^"]*)"/.exec(attrs)?.[1] ?? "",
+      rel: /\brel="([^"]*)"/.exec(attrs)?.[1] ?? null,
+      text: inner.replace(/<[^>]+>/g, "").trim(),
+    }));
+  const named = (html: string, text: string) => anchors(html).filter((a) => a.text === text);
+  const header = renderToStaticMarkup(createElement(SiteHeader));
+  const footer = renderToStaticMarkup(createElement(SiteFooter));
+  const home = renderToStaticMarkup(createElement(Home));
+
+  await check("the header has Sign in to the app and Get started to /signup", () => {
+    eq(named(header, "Sign in"), [{ href: "/maple", rel: "nofollow", text: "Sign in" }], "Sign in");
+    eq(named(header, "Get started").map((a) => a.href), ["/signup"], "Get started");
+    ok(!/Family sign-in/.test(header), "still says Family sign-in");
+  });
+  await check("the footer has the same two, Sign in kept out of search", () => {
+    eq(named(footer, "Sign in"), [{ href: "/maple", rel: "nofollow", text: "Sign in" }], "Sign in");
+    eq(named(footer, "Get started").map((a) => a.href), ["/signup"], "Get started");
+    ok(!/Family sign-in/.test(footer), "still says Family sign-in");
+  });
+  await check("the home page has no waitlist form, and its Get started buttons go to /signup", () => {
+    ok(!/<form\b/.test(home), "a form on the home page");
+    ok(!/type="email"/.test(home), "an email field on the home page");
+    ok(!/waitlist/i.test(home), "the home page mentions the waitlist");
+    eq(named(home, "Get started").map((a) => a.href), ["/signup", "/signup", "/signup", "/signup"], "header, hero, join, footer");
+  });
+  await check("with sign-up off, Get started lands on the waitlist", async () => {
+    const before = process.env.MAPLE_SIGNUP;
+    delete process.env.MAPLE_SIGNUP;
+    try {
+      ok(named(home, "Get started").length && named(home, "Get started").every((a) => a.href === "/signup"), "Get started doesn't go to /signup");
+      const page = renderToStaticMarkup(await Signup({ searchParams: Promise.resolve({}) }));
+      const forms = page.match(/<form\b[^>]*>/g) ?? [];
+      ok(forms.some((f) => f.includes('action="/api/waitlist"') && f.includes('method="post"')), "no waitlist form on /signup");
+      ok(/Sign-up isn’t open yet/.test(page), "doesn't say sign-up isn't open");
+      ok(!/signup\/start/.test(page), "offers Google sign-up while it's off");
+    } finally {
+      if (before === undefined) delete process.env.MAPLE_SIGNUP;
+      else process.env.MAPLE_SIGNUP = before;
+    }
   });
 
   // ── error reports ─────────────────────────────────────────────────────

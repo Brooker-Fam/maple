@@ -22,6 +22,7 @@ const ref = process.argv[2] ?? git("merge-base", "HEAD", "origin/main");
 
 /** What the new code may add for family 1 (`added`: only it has the path) or answer differently, each with why. Everything else must match exactly. */
 const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
+  { path: /^out\.me\.(owner|none|stranger)\.body\.signup$/, added: true, why: "sign-in receives the signup switch" },
   { path: /^out\..+\.body\.family$/, added: true, why: "the state names its family (id, and who a viewer asks)" },
   { path: /^out\.invites\..+\.invite\.email$/, added: true, why: "an invite says whose address it's for (none for a link)" },
   { path: /^db\.[^.]+$/, added: true, why: "a table new code made" },

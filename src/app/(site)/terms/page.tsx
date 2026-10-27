@@ -46,9 +46,17 @@ export default function Terms() {
 
       <h2>Who can use Maple</h2>
       <p>
-        Maple is for adults. Today it&rsquo;s open to one family, by invitation; others can{" "}
-        <Link href="/#join">join the waitlist</Link>. The owner of a family&rsquo;s log decides who is in it and can remove anyone.
-        You&rsquo;re responsible for who you invite and for keeping your sign-in to yourself.
+        Maple is for adults 18 and older. The <Link href="/signup">sign-up page</Link> says whether new families can join or
+        leave an email address on the waitlist. The owner of a family&rsquo;s log decides who is in it and can remove anyone.
+        Invite only people who expect an invitation from you, and check their email address before sending it. You&rsquo;re
+        responsible for who you invite and for keeping your sign-in to yourself.
+      </p>
+
+      <h2>Email and feedback</h2>
+      <p>
+        Maple sends invite links and a new owner&rsquo;s welcome email through Resend. Feedback and replies go to{" "}
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. The <Link href="/privacy">privacy page</Link> explains what
+        these emails contain, how invite addresses are kept, and the limited usage events sent to PostHog.
       </p>
 
       <h2>Who owns what you log</h2>

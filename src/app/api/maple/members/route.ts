@@ -1,3 +1,4 @@
+import { captureAppEventSoon } from "@/lib/analytics/server";
 import { BadRequest, familyName, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
 import {
   addMember,
@@ -12,6 +13,7 @@ import {
   removeMember,
   updateMember,
 } from "@/lib/maple/auth";
+import { babyNameFor, emailInvite } from "@/lib/email/notices";
 import { FAMILY_ONE } from "@/lib/maple/family";
 import { publicOrigin } from "@/lib/mcp/auth";
 
@@ -22,14 +24,6 @@ const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 export const GET = withMember("GET /api/maple/members", async (_request, _me, ctx) => json({ members: await listMembers(ctx) }));
 
-/**
- * POST { email, role? } — owners invite family by Google address. Family 1
- * adds them at once, as it always has. Any other family gets a pending
- * invite for that address, answered with { invite, url }: they join only by
- * opening the link and signing in with that Google account, so no family
- * can put someone in its log, or in their switcher, without them. (For
- * people without Google, see /api/maple/invites for one-time links.)
- */
 export const POST = withMember("POST /api/maple/members", async (request, me, ctx) => {
   if (me.role !== "owner") throw new Forbidden("Only an owner can invite people");
   const body = await readJson(request);
@@ -42,8 +36,22 @@ export const POST = withMember("POST /api/maple/members", async (request, me, ct
     const open = (await listInvites(ctx)).filter((i) => i.email !== email);
     if (current.length + open.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
     const { invite, token } = await createInvite(ctx, { role, displayName: null, emoji: null, createdBy: me.email, email });
+    captureAppEventSoon(ctx.familyId, "invite_sent");
+    const origin = publicOrigin(request);
     // The token rides in the #fragment, which browsers never send to servers or logs.
-    return json({ members: current, invite, url: `${publicOrigin(request)}/signup#join=${token}` }, 201);
+    const url = `${origin}/signup#join=${token}`;
+    const emailed = await emailInvite({
+      inviteId: invite.id,
+      to: email,
+      sender: me.email,
+      inviter: me.display_name,
+      baby: await babyNameFor(ctx),
+      link: url,
+      expiresAt: invite.expires_at,
+      timeZone: ctx.tz,
+      origin,
+    });
+    return json({ members: current, invite, url, emailed }, 201);
   }
   if (current.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
   // Their initial until they pick an emoji (Family tab), like every other way in.

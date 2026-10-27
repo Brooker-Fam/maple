@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
+import GetStarted from "@/components/site/GetStarted";
 import SiteFooter from "@/components/site/SiteFooter";
 import SiteHeader from "@/components/site/SiteHeader";
-import WaitlistForm from "@/components/site/WaitlistForm";
 import {
   AskFragment,
   GrowthFragment,
@@ -84,9 +84,7 @@ export default function Home() {
               Left boob or right boob?
             </h1>
             <p className="site-prose mt-6 text-[19px] leading-[1.55]">You knew an hour ago. Maple remembers.</p>
-            <div className="mt-9">
-              <WaitlistForm />
-            </div>
+            <GetStarted className="mt-9" />
           </div>
           <Phone
             className="mx-auto lg:mr-4"
@@ -152,10 +150,8 @@ export default function Home() {
             <h2 id="join" className="site-display max-w-[22ch] text-[clamp(2.4rem,1.6rem+3.2vw,4rem)] leading-[1.02] text-mp-ink">
               Want in?
             </h2>
-            <p className="site-prose mt-4">Maple is one family right now. Leave your email and you&rsquo;ll hear when that changes.</p>
-            <div className="mt-8">
-              <WaitlistForm />
-            </div>
+            <p className="site-prose mt-4">Maple is free while it&rsquo;s in early access.</p>
+            <GetStarted className="mt-8" />
           </div>
         </section>
       </main>

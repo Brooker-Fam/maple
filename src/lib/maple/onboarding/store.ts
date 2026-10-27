@@ -1,4 +1,5 @@
 import { query, transaction } from "@/lib/db";
+import { captureAppEventSoon } from "@/lib/analytics/server";
 import { createInvite, familyOf, listInvites, listMembers, type Fam } from "../auth";
 import { CareConflict, createCarePerson, patchCarePerson } from "../care-store";
 import { ADMIN_MEMBER_ID, type FamilyCtx } from "../family";
@@ -252,6 +253,7 @@ export async function answerStep(ctx: FamilyCtx, member: Member, step: StepId, r
       out.invites = [];
       for (const p of a.people) {
         const { token } = await createInvite(fam, { role: p.role, displayName: p.name, emoji: null, createdBy: member.email });
+        captureAppEventSoon(ctx.familyId, "invite_sent");
         out.invites.push({ name: p.name, role: p.role, token });
       }
       await mark(fam, step, "answered");
@@ -326,6 +328,7 @@ export async function finishOnboarding(ctx: FamilyCtx, member: Member, now = new
     [familyOf(fam), now.toISOString()]
   );
   if (!r.length) throw new OnboardingClosed();
+  captureAppEventSoon(ctx.familyId, "onboarding_completed");
   return readView({ ...ctx, status: "active" });
 }
 

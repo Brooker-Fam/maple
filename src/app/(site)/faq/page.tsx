@@ -99,7 +99,7 @@ const FAQS: Faq[] = [
     q: "Is my data sold?",
     a: [
       [
-        "No. Maple shows no ads, and your data is never sold, rented or shared for advertising. There are no analytics or session replay in the app or on this site. The ",
+        "No. Maple shows no ads, and your data is never sold, rented or shared for advertising. Limited usage counts help improve Maple, without names, email addresses or log contents. There is no session replay. The ",
         { text: "privacy page", href: "/privacy" },
         " lists each service that stores or carries your data, and why.",
       ],

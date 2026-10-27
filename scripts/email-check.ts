@@ -314,6 +314,90 @@ async function main() {
     );
   });
 
+  const n = await import("../src/lib/email/notices");
+  const notice = (over: Partial<Parameters<typeof n.emailInvite>[0]> = {}) => ({
+    inviteId: 42,
+    to: RECIPIENT,
+    sender: "alex@example.com",
+    inviter: "Alex",
+    baby: "Robin",
+    link: LINK,
+    expiresAt: EXPIRES.toISOString(),
+    timeZone: "America/New_York",
+    origin: "https://maplebaby.app",
+    ...over,
+  });
+  const allowing = (answer: boolean) => {
+    const asked: string[] = [];
+    return { asked, allow: async (sender: string) => (asked.push(sender), answer) };
+  };
+
+  await check("an invite email goes once per invite, after the sender's cap says yes", async () => {
+    const h = harness();
+    const cap = allowing(true);
+    eq(await n.emailInvite(notice(), { ...h.deps, allow: cap.allow }), true, "emailed");
+    eq(cap.asked, ["alex@example.com"], "the cap is asked for the sender");
+    eq(h.calls.length, 1, "one send");
+    eq(h.calls[0].options, { idempotencyKey: "invite/42" }, "keyed by the invite's id");
+    eq(h.calls[0].payload.to, "june.parent@example.com", "to the invited address");
+    eq(h.calls[0].payload.subject, invite().subject, "the invite template");
+    ok(h.calls[0].payload.text === invite().text, "the same text the template makes");
+  });
+  await check("without a Resend key an invite isn't emailed, and the cap isn't spent", async () => {
+    const h = harness();
+    const cap = allowing(true);
+    eq(await n.emailInvite(notice(), { ...h.deps, env: {}, allow: cap.allow }), false);
+    eq([cap.asked.length, h.made()], [0, 0], "no cap, no client");
+  });
+  await check("a sender over the cap gets the link to copy instead", async () => {
+    const h = harness();
+    eq(await n.emailInvite(notice(), { ...h.deps, allow: allowing(false).allow }), false);
+    eq(h.calls.length, 0, "not sent");
+  });
+  await check("a failed, thrown or slow send answers false and never throws", async () => {
+    const refused = harness({ data: null, error: { name: "validation_error", statusCode: 422, message: "no" } });
+    eq(await n.emailInvite(notice(), { ...refused.deps, allow: allowing(true).allow }), false, "refused");
+    const thrown = harness(new Error("socket hang up"));
+    eq(await n.emailInvite(notice(), { ...thrown.deps, allow: allowing(true).allow }), false, "thrown");
+    const slow = harness();
+    const started = Date.now();
+    const hung = await n.emailInvite(notice(), {
+      ...slow.deps,
+      transport: () => () => new Promise(() => {}),
+      allow: allowing(true).allow,
+      waitMs: 30,
+    });
+    eq(hung, false, "a send that never answers");
+    ok(Date.now() - started < 1000, "answered at the wait, not later");
+  });
+  await check("a link that isn't http(s) sends nothing, spends no cap, and reports no link", async () => {
+    const h = harness();
+    const cap = allowing(true);
+    eq(await n.emailInvite(notice({ link: "javascript:alert(1)" }), { ...h.deps, allow: cap.allow }), false);
+    eq([cap.asked.length, h.calls.length], [0, 0], "nothing spent or sent");
+    eq(h.reports.length, 1, "reported");
+    eq(h.reports[0].props, { where: "email", kind: "invite" }, "as an invite email");
+    ok(!JSON.stringify([h.reports[0].error.message, h.reports[0].error.stack]).includes("alert"), "the link stays out");
+  });
+  await check("the welcome greets by first name, links the app and is keyed by the family", async () => {
+    const h = harness();
+    const r = await n.emailWelcome({ familyId: 7, to: RECIPIENT, name: "  Alex   Rivera ", origin: "https://maplebaby.app" }, h.deps);
+    eq(r, { sent: true, id: "em_1" });
+    eq(h.calls[0].options, { idempotencyKey: "welcome/7" }, "key");
+    eq(h.calls[0].payload.subject, "Your family’s log on Maple is ready", "subject");
+    ok(h.calls[0].payload.text.startsWith("Hi Alex,\n\nYour family’s log is ready."), "first name only");
+    ok(h.calls[0].payload.text.includes("https://maplebaby.app/maple\n"), "the app's link");
+    const nameless = harness();
+    await n.emailWelcome({ familyId: 8, to: RECIPIENT, name: null, origin: "https://maplebaby.app" }, nameless.deps);
+    ok(nameless.calls[0].payload.text.startsWith("Your family’s log is ready."), "no greeting without a name");
+  });
+  await check("the welcome is off without a key and never throws on a bad origin", async () => {
+    const h = harness();
+    eq(await n.emailWelcome({ familyId: 7, to: RECIPIENT, name: "Alex", origin: "https://maplebaby.app" }, { ...h.deps, env: {} }), { sent: false, reason: "off" });
+    eq(await n.emailWelcome({ familyId: 7, to: RECIPIENT, name: "Alex", origin: "not a url" }, h.deps), { sent: false, reason: "failed" });
+    eq(h.calls.length, 0, "nothing sent");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

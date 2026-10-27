@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { captureAppEventSoon } from "@/lib/analytics/server";
 import {
   addPart,
   FeedEditError,
@@ -349,7 +350,10 @@ export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ en
       ...(device ? [device] : []),
     ]
   );
-  if (rows.length) return { entry: rowToEntry(rows[0]), deduped: false };
+  if (rows.length) {
+    captureAppEventSoon(familyId, "entry_logged");
+    return { entry: rowToEntry(rows[0]), deduped: false };
+  }
   const existing = clientId ? await q(`SELECT * FROM maple_entries WHERE client_id = $1 AND family_id = $2`, [clientId, familyId]) : [];
   if (existing.length) return { entry: rowToEntry(existing[0]), deduped: true };
   if (!(await q(`SELECT 1 FROM maple_babies WHERE id = $1 AND family_id = $2`, [e.babyId, familyId])).length) throw new NotFound("Baby not found");

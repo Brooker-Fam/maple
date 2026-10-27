@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/maple/usage-alerts", "schedule": "4 12 * * *" }
+  ]
+}

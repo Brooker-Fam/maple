@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { SIGN_IN_PATH, SIGNUP_PATH } from "./GetStarted";
 import Leaf from "./Leaf";
+import { CONTACT_EMAIL } from "./legal";
 
 export default function SiteFooter() {
   return (
@@ -34,12 +36,18 @@ export default function SiteFooter() {
           <Link className="site-link-quiet" href="/terms">
             Terms
           </Link>
+          <a className="site-link-quiet" href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent("Maple feedback")}`}>
+            Send feedback
+          </a>
           <a className="site-link-quiet" href="https://github.com/Brooker-Fam/maple">
             Source code
           </a>
-          <a className="site-link-quiet" href="/maple" rel="nofollow">
-            Family sign-in
+          <a className="site-link-quiet" href={SIGN_IN_PATH} rel="nofollow">
+            Sign in
           </a>
+          <Link className="site-link-quiet" href={SIGNUP_PATH} prefetch={false}>
+            Get started
+          </Link>
         </nav>
       </div>
     </footer>

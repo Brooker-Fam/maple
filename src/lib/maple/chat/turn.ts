@@ -1,3 +1,4 @@
+import { alertGatewayCredit } from "../usage-alerts/gateway";
 import {
   convertToModelMessages,
   createUIMessageStream,
@@ -127,6 +128,7 @@ export async function chatTurn(opts: {
     // Set, so the SDK's own handler never prints the failed request (it carries the prompt) to the logs.
     onError: ({ error }) => {
       failedStatus = errorStatus(error);
+      deps.waitUntil(alertGatewayCredit(error));
       deps.report(error);
     },
   });

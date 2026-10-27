@@ -1,4 +1,5 @@
 import Link from "next/link";
+import GetStarted, { SIGN_IN_PATH } from "./GetStarted";
 import Leaf from "./Leaf";
 
 const LINKS = [
@@ -24,9 +25,12 @@ export default function SiteHeader() {
           </Link>
         ))}
       </nav>
-      <a href="/maple" rel="nofollow" className="site-focus -mr-2 rounded-xl px-3 py-2.5 text-[15px] text-mp-ink-2 hover:text-mp-ink">
-        Family sign-in
-      </a>
+      <div className="flex items-center gap-1 sm:ml-2">
+        <a href={SIGN_IN_PATH} rel="nofollow" className="site-focus rounded-xl px-3 py-2.5 text-[15px] font-medium whitespace-nowrap text-mp-ink hover:underline hover:underline-offset-4">
+          Sign in
+        </a>
+        <GetStarted size="small" />
+      </div>
     </header>
   );
 }

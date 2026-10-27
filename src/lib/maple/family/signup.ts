@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { captureAppEvent, captureSignupCompleted, captureSignupStartedSoon } from "@/lib/analytics/server";
 import { LEGAL_VERSION } from "@/components/site/legal";
+import { emailWelcome } from "@/lib/email/notices";
 import { captureServerException } from "@/lib/posthog-server";
 import { encryptSecret, getAppBaseUrl, openSecret } from "@/lib/secret-box";
 import {
@@ -16,6 +18,7 @@ import {
   type GoogleIdentity,
 } from "../auth";
 import { effectiveSignupMode } from "../family";
+import { later } from "../push-hooks";
 import { DEFAULT_TZ } from "../time";
 import { normalizeCode, codeUsable } from "./codes";
 import { createFamily, homeFamily, joinByInvite } from "./create";
@@ -147,6 +150,7 @@ export async function startSignup(req: NextRequest): Promise<NextResponse> {
     maxAge: 600,
     path: STATE_COOKIE_PATH,
   });
+  if (intent.kind === "create") captureSignupStartedSoon();
   return res;
 }
 
@@ -223,6 +227,10 @@ export async function handleSignupCallback(req: NextRequest, deps: SignupCallbac
         return fail(created.reason);
       } else {
         familyId = created.familyId;
+        const made = { familyId, to: who.email, name: who.name, origin: getAppBaseUrl() };
+        later(async () => {
+          await Promise.all([emailWelcome(made), captureAppEvent(familyId, "signed_up"), captureSignupCompleted(familyId)]);
+        }, "maple signup notices");
       }
     }
 

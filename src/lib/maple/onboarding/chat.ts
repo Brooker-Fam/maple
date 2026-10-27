@@ -1,3 +1,4 @@
+import { alertGatewayCredit } from "../usage-alerts/gateway";
 import { createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, toUIMessageStream, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
 import { capsVerdict, chatProviderOptions, CHAT_TIMEOUT, type Usage } from "../chat/caps";
 import { mentionsCrisis } from "../chat/crisis";
@@ -193,6 +194,7 @@ function stream(
     // Set, so the SDK's own handler never prints the failed request (it carries the prompt) to the logs.
     onError: ({ error }) => {
       failedStatus = errorStatus(error);
+      deps.waitUntil(alertGatewayCredit(error));
       deps.report(error);
     },
   });

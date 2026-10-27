@@ -528,13 +528,6 @@ async function familyKey(table: string, onDelete: string) {
   if (!rows[0]?.convalidated) await alter(`ALTER TABLE ${table} VALIDATE CONSTRAINT ${name}`);
 }
 
-/**
- * CONCURRENTLY never blocks the family's writes; a build that failed half-way
- * leaves an invalid index, rebuilt here. Another build creating the same
- * index at the same time is left to finish it (a later build rebuilds it if
- * that one stopped). A driver that runs every statement in a transaction
- * block gets the plain build: a short write lock on a small table.
- */
 async function index(name: string, on: string, unique = false) {
   const rows = await sql`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(${name})`;
   if (rows[0]?.indisvalid) return;
@@ -545,11 +538,13 @@ async function index(name: string, on: string, unique = false) {
   } catch (err) {
     const code = codeOf(err);
     const constraint = (err as { constraint?: unknown })?.constraint;
-    if (code === "42P07" || (code === "23505" && constraint === "pg_class_relname_nsp_index")) return;
-    if (code !== "25001") throw err;
-    if (rows.length) await alter(`DROP INDEX IF EXISTS ${name}`);
-    await alter(`${make} IF NOT EXISTS ${name} ON ${on}`);
+    if (code === "25001") {
+      if (rows.length) await alter(`DROP INDEX IF EXISTS ${name}`);
+      await alter(`${make} IF NOT EXISTS ${name} ON ${on}`);
+    } else if (code !== "42P07" && !(code === "23505" && constraint === "pg_class_relname_nsp_index")) throw err;
   }
+  const created = await sql`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(${name})`;
+  if (!created[0]?.indisvalid) throw new Error(`migration_index_invalid:${name}`);
 }
 
 /** Each ALTER waits at most 3 s for its lock (a queued ALTER would stall every request behind it), then retries. */

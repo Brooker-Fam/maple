@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond } from "next/font/google";
 import { siteOpenGraph } from "@/components/site/meta";
+import SiteAnalytics from "@/components/analytics/SiteAnalytics";
 import "../maple/maple.css";
 import "./site.css";
 
@@ -32,5 +33,10 @@ export const viewport: Viewport = {
 };
 
 export default function SiteLayout({ children }: { children: React.ReactNode }) {
-  return <div className={`site ${cormorantItalic.variable}`}>{children}</div>;
+  return (
+    <div className={`site ${cormorantItalic.variable}`}>
+      <SiteAnalytics />
+      {children}
+    </div>
+  );
 }

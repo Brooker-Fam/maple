@@ -29,6 +29,7 @@ import {
 import { memberLabel as labelOf, summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
 import { deviceHeaders } from "@/lib/maple/device";
+import { keepConfirmed, stampOutbox } from "@/lib/maple/client-state";
 import { FAMILY_MOVED_EVENT, setShownFamily, shownFamilyHeaders } from "./shownFamily";
 import type {
   CareEntry,
@@ -96,6 +97,7 @@ export type Toast = {
   watch?: { entryId: number; updatedAt: string };
   /** The mark in place of the check: a saved diaper wears its drop or pile (toastIcon). */
   icon?: IconName;
+  owner?: Owner;
 };
 
 /** A diaper's toast says what was saved by its mark: the pile if it had poop, else the drop (a dry one keeps the check). */
@@ -489,40 +491,6 @@ function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date, by?: 
   return undefined;
 }
 
-/**
- * A poll that left before a mutation answered can come back after it with
- * the older row. Entries a mutation confirmed (`confirmed`: id → updated_at,
- * and when it was confirmed) keep this phone's copy until a poll returns that
- * version or newer; one the poll doesn't have yet stays if the poll left
- * before it was confirmed.
- */
-function keepConfirmed(next: MapleState, prev: MapleState | null, confirmed: Map<number, { updatedAt: string; at: number }>, sentAt: number): MapleState {
-  if (!confirmed.size || !prev) return next;
-  let changed = false;
-  const entries = next.entries.map((e) => {
-    const c = confirmed.get(e.id);
-    if (!c) return e;
-    if (Date.parse(e.updated_at) >= Date.parse(c.updatedAt)) {
-      confirmed.delete(e.id);
-      return e;
-    }
-    const mine = prev.entries.find((x) => x.id === e.id);
-    if (!mine) return e;
-    changed = true;
-    return mine;
-  });
-  for (const [id, c] of confirmed) {
-    if (entries.some((e) => e.id === id)) continue;
-    const mine = prev.entries.find((x) => x.id === id);
-    if (mine && sentAt < c.at) {
-      entries.push(mine);
-      changed = true;
-    } else confirmed.delete(id);
-  }
-  if (!changed) return next;
-  return { ...next, entries: entries.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at)) };
-}
-
 export function MapleProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -741,8 +709,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
 
   /** Replace the outbox everywhere at once (state, storage, ref). A new item is stamped with the session it was made in. */
   const setQueue = useCallback((items: OutboxItem[]) => {
-    const s = stateRef.current;
-    const stamped = items.map((i) => (i.family != null || !s ? i : { ...i, family: s.family?.id ?? 1, member: s.me.email }));
+    const stamped = stampOutbox(items, outboxRef.current, stateRef.current);
     setOutbox(stamped);
     writeOutbox(stamped);
     outboxRef.current = stamped;
@@ -765,21 +732,25 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const careDuplicateToast = useCallback(
     (item: CareItem, dup: DoseEntry) => {
       const s = stateRef.current;
+      if (!ownedBy(item, s)) return;
       const who = dup.created_by && dup.created_by === s?.me.email ? "You" : nameOf(dup.created_by, s?.members ?? []);
       const text = `${who} logged ${dup.data.name} at ${formatTime(dup.at, tzRef.current)}. Is this another dose?`;
       toast(text, {
         tone: "info",
         duration: 20_000,
+        owner: { family: item.family ?? 1, member: item.member },
         actions: [
           {
             label: "Yes, another dose",
-            onClick: () =>
-              void fetchJson("/api/maple/care/entries", { method: "POST", body: JSON.stringify({ ...item.input, allow_duplicate: true }) })
+            onClick: () => {
+              if (!ownedBy(item, stateRef.current)) return;
+              void fetchJson("/api/maple/care/entries", { method: "POST", headers: { "X-Maple-Family": String(item.family ?? 1) }, body: JSON.stringify({ ...item.input, allow_duplicate: true }) })
                 .then(() => toast("Logged"))
                 .catch((e) => toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" }))
-                .finally(() => void forceRefreshRef.current()),
+                .finally(() => void forceRefreshRef.current());
+            },
           },
-          { label: "No, same one", onClick: () => toast("Not saved: it's the same dose", { tone: "info" }) },
+          { label: "No, same one", onClick: () => { if (ownedBy(item, stateRef.current)) toast("Not saved: it's the same dose", { tone: "info" }); } },
         ],
       });
     },
@@ -810,7 +781,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             {
               method: change ? "PATCH" : "POST",
               body: JSON.stringify(item.input),
-              ...(item.family != null ? { headers: { "X-Maple-Family": String(item.family) } } : {}),
+              headers: { "X-Maple-Family": String(item.family ?? 1) },
             }
           );
           done.add(item.client_id);
@@ -828,14 +799,14 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             const patch = { data: later.input.data, ...(later.input.note !== undefined ? { note: later.input.note } : {}) };
             setQueue([
               ...outboxRef.current.filter((i) => i.client_id !== item.client_id),
-              { target: "mood", client_id: newClientId(), input: patch, entry: { ...later.entry, id: res.entry.id } as MoodEntry, id: res.entry.id, tries: 1 },
+              { target: "mood", client_id: newClientId(), input: patch, entry: { ...later.entry, id: res.entry.id } as MoodEntry, id: res.entry.id, tries: 1, family: item.family ?? 1, member: item.member },
             ]);
             continue;
           }
           // Deleted on this phone while it was uploading: take it back out.
           if (res.entry && !current) {
             const del = target === "care" ? `/api/maple/care/entries?id=${res.entry.id}` : target === "mood" ? `/api/maple/care/mood?id=${res.entry.id}` : `/api/maple/entries?id=${res.entry.id}`;
-            await fetchJson(del, { method: "DELETE" }).catch(() => {});
+            await fetchJson(del, { method: "DELETE", headers: { "X-Maple-Family": String(item.family ?? 1) } }).catch(() => {});
           }
         } catch (e) {
           if (isFamilyMismatch(e)) continue;
@@ -1323,9 +1294,9 @@ export function MapleProvider({ children }: { children: ReactNode }) {
 
   // A timer toast built from an older version of its entry closes once someone else changes it.
   useEffect(() => {
-    if (!state) return;
     const stale = toasts.filter((t) => {
-      if (!t.watch) return false;
+      if (t.owner && !ownedBy(t.owner, state)) return true;
+      if (!state || !t.watch) return false;
       const live = state.entries.find((e) => e.id === t.watch!.entryId);
       return !live || Date.parse(live.updated_at) > Date.parse(t.watch.updatedAt);
     });

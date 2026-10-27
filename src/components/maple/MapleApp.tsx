@@ -23,6 +23,7 @@ import { THEME_COLORS, setNightActive, useNightPref } from "./nightLook";
 import { SheetProvider } from "./sheets";
 import { ToastHost, cx, tone } from "./ui";
 import { MapleProvider, useMaple } from "./useMaple";
+import AppAnalytics from "./AppAnalytics";
 
 /**
  * Maple's Log app shell: provider, sign-in gate, and the bottom tab bar.
@@ -86,6 +87,7 @@ function Shell() {
   return (
     <>
       <NightLook />
+      <AppAnalytics />
       <OnboardingGate>
         <Screens />
       </OnboardingGate>

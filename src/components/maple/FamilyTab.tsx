@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { useTheme } from "@/components/ThemeProvider";
+import { CONTACT_EMAIL } from "@/components/site/legal";
 import { DISCLAIMER, TRACKER_NOTE } from "@/lib/maple/guidelines";
 import { adminActsAs, alertsOn } from "@/lib/maple/insights";
 import { isNativeApp } from "@/lib/maple/native";
@@ -30,9 +31,9 @@ import { MAPLE_HOST, MAPLE_ORIGIN, MCP_URL } from "@/lib/maple/origin";
  * Screen), Shortcuts & assistants (one row: connecting Claude or ChatGPT and
  * the Siri shortcuts, for Maple and for her mom), her own switch for what the
  * chat may see (hers alone), Help, the CSV export and sign-out, and About
- * (Terms and Privacy). Nothing here is an everyday thing: her page is its own
- * tab, and the doctor questions live in "For the doctor". Viewers get a
- * read-only version.
+ * (Send feedback, Terms and Privacy). Nothing here is an everyday thing: her
+ * page is its own tab, and the doctor questions live in "For the doctor".
+ * Viewers get a read-only version.
  *
  * Laid out like iOS Settings: one card per group, rows with the label on the
  * left and the control or value on the right, hairlines between rows, and
@@ -450,7 +451,7 @@ function People() {
       {owner && (
         <Section title="Invite someone">
           <div className={GROUP}>
-            <InviteByEmail />
+            <InviteByEmail onInvited={() => void loadInvites()} />
             <ActionRow
               icon="link"
               label="Invite someone without Google"
@@ -616,24 +617,26 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
   );
 }
 
-function InviteByEmail() {
+function InviteByEmail({ onInvited }: { onInvited: () => void }) {
   const { api, refresh, toast } = useMaple();
   const one = useFamilyOne();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "viewer">("member");
   const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState<{ email: string; url: string } | null>(null);
+  const [pending, setPending] = useState<{ email: string; url: string; emailed: boolean } | null>(null);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   const add = async () => {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const r = await api<{ url?: string }>("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role }) });
+      const r = await api<{ url?: string; emailed?: boolean }>("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role }) });
       await refresh();
       // Outside the Brookers' log an address only gets an invite: they join by its link, signed in as that address.
-      if (r.url) setPending({ email: email.trim(), url: r.url });
-      else toast(`Added ${email.trim()}. They can sign in with Google at ${MAPLE_HOST}/maple`, { duration: 6000 });
+      if (r.url) {
+        setPending({ email: email.trim(), url: r.url, emailed: r.emailed === true });
+        onInvited();
+      } else toast(`Added ${email.trim()}. They can sign in with Google at ${MAPLE_HOST}/maple`, { duration: 6000 });
       setEmail("");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't add them", { tone: "error" });
@@ -677,7 +680,15 @@ function InviteByEmail() {
           Add
         </Button>
       </div>
-      {pending && (
+      {pending?.emailed && (
+        <div className="space-y-2 pt-1" aria-live="polite">
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+            Invite emailed to {pending.email}. They join once they open its link and sign in with that Google account. It works once, for 7 days.
+          </p>
+          <CopyButton text={pending.url} label="Copy link" className="min-h-[44px] w-full text-[15px]" />
+        </div>
+      )}
+      {pending && !pending.emailed && (
         <div className="space-y-2 pt-1" aria-live="polite">
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>
             Send {pending.email} this link. They join once they open it and sign in with that Google account. It works once, for 7 days.
@@ -1608,12 +1619,23 @@ function MomShortcut({ url }: { url: string }) {
 
 // ── About ────────────────────────────────────────────────────────────────
 
+const FEEDBACK_HREF = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent("Maple feedback")}`;
+
 function About() {
   return (
     <Section title="About">
-      <div className={cx(GROUP, "flex items-center gap-3 py-1 pr-2 pl-4")}>
-        <p className={cx(tone.muted, "min-w-0 flex-1 text-[13px] leading-snug")}>{TRACKER_NOTE}</p>
-        <LegalLinks className="shrink-0" />
+      <div className={GROUP}>
+        <a href={FEEDBACK_HREF} className={cx(tone.row, "min-h-[52px] py-2.5")}>
+          <Icon name="lightbulb" size={20} className="shrink-0 text-mp-accent-fg" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-medium text-mp-accent-fg">Send feedback</span>
+            <span className={cx(tone.muted, "block truncate text-[13px] leading-snug")}>{CONTACT_EMAIL}</span>
+          </span>
+        </a>
+        <div className="flex items-center gap-3 py-1 pr-2 pl-4">
+          <p className={cx(tone.muted, "min-w-0 flex-1 text-[13px] leading-snug")}>{TRACKER_NOTE}</p>
+          <LegalLinks className="shrink-0" />
+        </div>
       </div>
     </Section>
   );

@@ -20,4 +20,15 @@ export async function migrateSignup() {
       last_used_at TIMESTAMPTZ
     )
   `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS maple_usage_alerts (
+      key TEXT PRIMARY KEY,
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      claim_token TEXT,
+      claim_until TIMESTAMPTZ,
+      sent_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }

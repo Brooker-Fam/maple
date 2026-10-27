@@ -1,6 +1,7 @@
 import { BadRequest, familyName, Forbidden, idParam, json, readJson, withMember } from "@/lib/maple/api";
 import { createInvite, listInvites, listMembers, revokeInvite } from "@/lib/maple/auth";
 import { publicOrigin } from "@/lib/mcp/auth";
+import { captureAppEventSoon } from "@/lib/analytics/server";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ export const POST = withMember("POST /api/maple/invites", async (request, me, ct
     emoji: emoji || null,
     createdBy: me.email,
   });
+  captureAppEventSoon(ctx.familyId, "invite_sent");
   // The token rides in the #fragment, which browsers never send to servers or logs.
   return json({ invite, url: `${publicOrigin(request)}/maple/join#${token}` }, 201);
 });

@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { migrate, migrateFamilies } from "../../src/lib/migrate";
 import { FAMILY_OPTIONAL_TABLES, FAMILY_TABLES, FAMILY_KEYED_TABLES } from "../../src/lib/maple/family-tables";
 import { done, eq, freshDb, ok, quietly, seedFamilies, sql, sqlError, test } from "./harness";
@@ -81,6 +83,30 @@ async function idempotency() {
     await sql(`UPDATE pg_index SET indisvalid = FALSE WHERE indexrelid = 'uniq_maple_members_family_email'::regclass`);
     await quietly(migrate);
     eq(await sql(`SELECT indisvalid FROM pg_index WHERE indexrelid = 'uniq_maple_members_family_email'::regclass`), [{ indisvalid: true }]);
+  });
+
+  await test("every index creation path rejects an index left missing or invalid by a concurrent build", async () => {
+    const source = ts.createSourceFile("migrate.ts", readFileSync(join(ROOT, "src/lib/migrate.ts"), "utf8"), ts.ScriptTarget.Latest, true);
+    const declaration = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "index");
+    if (!declaration) throw new Error("index_helper_missing");
+    const js = ts.transpileModule(`(${declaration.getText(source)})`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+    for (const code of [null, "25001", "42P07", "23505"] as const) {
+      for (const validity of [undefined, false, true]) {
+        let reads = 0;
+        let fallback = false;
+        const build = runInNewContext(js, {
+          sql: async () => ++reads === 1 || validity === undefined ? [] : [{ indisvalid: validity }],
+          query: async () => { if (code) throw { code, constraint: code === "23505" ? "pg_class_relname_nsp_index" : undefined }; },
+          alter: async () => { fallback = true; },
+          codeOf: (error: { code?: string }) => error.code ?? "",
+        }) as (name: string, on: string, unique: boolean) => Promise<void>;
+        let refusal: string | null = null;
+        await build("synthetic_family_email", "synthetic_members (family_id, email)", true).catch((error: Error) => { refusal = error.message; });
+        eq(refusal, validity ? null : "migration_index_invalid:synthetic_family_email", `${code ?? "concurrent"}: ${validity}`);
+        eq(reads, 2, "index validity checked after creation");
+        eq(fallback, code === "25001", "plain create is only the transaction fallback");
+      }
+    }
   });
 
   await test("every family table has family_id: DEFAULT 1 on 15, nullable without a default on push_sent and ai_usage", async () => {

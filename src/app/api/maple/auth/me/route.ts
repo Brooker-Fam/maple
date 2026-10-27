@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isGoogleConfigured, isPasswordConfigured, sessionContext } from "@/lib/maple/auth";
+import { signupMode } from "@/lib/maple/family";
 import { captureServerException } from "@/lib/posthog-server";
 
 export const dynamic = "force-dynamic";
 
-/** Who am I, and which sign-in buttons should the app offer? */
 export async function GET(request: NextRequest) {
-  const base = { google: isGoogleConfigured(), password: isPasswordConfigured() };
+  const base = { google: isGoogleConfigured(), password: isPasswordConfigured(), signup: signupMode() };
   try {
     const signedIn = await sessionContext(request);
     return NextResponse.json(
