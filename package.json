@@ -16,6 +16,7 @@
     "check:site": "tsx scripts/site-check.ts",
     "check:email": "tsx scripts/email-check.ts",
     "check:analytics": "tsx scripts/analytics-check.ts",
+    "check:read-only": "tsx scripts/read-only-check.ts",
     "check:usage-alerts": "tsx scripts/usage-alerts-check.ts",
     "check:usage-health": "node --test scripts/usage-health-monitor.check.mjs",
     "check:maple-growth": "tsx scripts/maple-growth-check.ts",
