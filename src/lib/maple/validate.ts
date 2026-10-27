@@ -516,16 +516,8 @@ export function cleanCareSettings(raw: unknown, opts: { self: boolean; name?: st
 
 // ── Maple's log settings (maple_babies.settings) ─────────────────────────
 
-/**
- * The log-wide switches in Family → On Today: "feeds_bottle" (Bottles: the
- * dock's Bottle tile) and "track_pump" (Pumping: Pump in More). Both read as
- * on unless set to false (the client reads them through MoreSheet's
- * logSwitches), so a new log has them; switching one off hides buttons only,
- * never anything logged, and Claude and Siri log either regardless.
- */
-export const LOG_SWITCH_KEYS = ["feeds_bottle", "track_pump"] as const;
+export const LOG_SWITCH_KEYS = ["feeds_bottle", "track_pump", "track_nursing"] as const;
 
-/** A settings patch's log switches: true, false, or null (back to the default, on). Throws on anything else. */
 export function checkLogSwitches(patch: Record<string, unknown>): void {
   for (const k of LOG_SWITCH_KEYS) {
     if (!(k in patch)) continue;

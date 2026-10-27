@@ -199,6 +199,7 @@ export function birthProblem(a: Answer["birth"], tz: string, now: Date): string 
 }
 
 export type OnboardingView = {
+  familyId: number;
   status: "onboarding" | "active" | "deleting";
   owner: boolean;
   done: Partial<Record<StepId, Progress>>;

@@ -16,7 +16,7 @@ import { Icon } from "../icons";
 import { LegalLinks } from "../Legal";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { latestProposals, proposalState } from "./proposals";
+import { latestProposals, missingConfirmation, proposalState } from "./proposals";
 import { answerLine } from "./describe";
 import { useSetupFrame } from "./SetupPage";
 import type { Onboarding } from "./useOnboarding";
@@ -48,12 +48,13 @@ const FALLBACK: readonly string[] = ["form", "off", "limit"];
 const STOPPED = "The chat stopped there. Your answers so far are kept; carry on with the card below.";
 const UNAVAILABLE = "The chat isn't available right now, so the questions carry on here with buttons.";
 
-export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { ob: Onboarding; onCare: () => void; onReview: () => void; onFallback: (why: string) => void }) {
+export default function OnboardingChat({ ob, onCare, onReview, onDecline, onFallback }: { ob: Onboarding; onCare: () => void; onReview: () => void; onDecline: () => void; onFallback: (why: string) => void }) {
   const { api, online } = useMaple();
   const [consent, setConsent] = useState<ChatConsent | null>(null);
   const [requestVersions, setRequestVersions] = useState(ob.versions);
   const [draft, setDraft] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const [confirmationNeeded, setConfirmationNeeded] = useState(false);
   const [help, setHelp] = useState(false);
   const lastSent = useRef<string | null>(null);
   const frame = useSetupFrame();
@@ -70,6 +71,9 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
 
   const chat = useChat<OnboardingMessage>({
     transport,
+    onFinish: ({ message, isAbort, isDisconnect, isError }) => {
+      setConfirmationNeeded(!isAbort && !isDisconnect && !isError && missingConfirmation(message));
+    },
     onError: (err) => {
       const refusal = refusalOf(err.message) as OnboardingRefusal | null;
       if (refusal?.code === "terms") setConsent((c) => (c ? { ...c, terms: false } : c));
@@ -81,13 +85,14 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
   });
   const busy = chat.status === "submitted" || chat.status === "streaming";
 
-  const send = () => {
-    const text = draft.trim();
+  const send = (value: string, clearDraft = true) => {
+    const text = value.trim();
     if (!text || busy) return;
     if (!online) return setProblem("Needs a connection. The card below works offline once it's loaded.");
     setProblem(null);
+    setConfirmationNeeded(false);
     setHelp(false);
-    setDraft("");
+    if (clearDraft) setDraft("");
     lastSent.current = text;
     setRequestVersions(ob.versions);
     void chat.sendMessage({ text });
@@ -96,7 +101,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
   const latest = latestProposals(chat.messages);
 
   if (!consent) return null;
-  if (!consent.terms) return <ChatTerms onAccepted={setConsent} onDecline={() => onFallback("")} />;
+  if (!consent.terms) return <ChatTerms onAccepted={setConsent} onDecline={onDecline} />;
 
   return (
     <>
@@ -126,10 +131,18 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
           {problem}
         </p>
       )}
+      {confirmationNeeded && !busy && !problem && requestVersions === ob.versions && (
+        <div className={cx(tone.inset, "space-y-2 px-3.5 py-3")}>
+          <p role="status" className={cx(tone.body, "text-[14px] leading-snug")}>That reply didn&apos;t include an answer to confirm. Use the question below, or ask for a confirmation.</p>
+          <Button size="sm" variant="soft" disabled={!online} onClick={() => send("Please prepare a confirmation for my last answer. If something is unclear, ask me first.", false)}>
+            Prepare a confirmation
+          </Button>
+        </div>
+      )}
       {help && <HelpCard reason="crisis" />}
       <p className={cx(tone.faint, "px-1 text-[13px] leading-snug")}>Answers come from an AI and can be wrong; nothing is saved until you tap it.</p>
       {frame.composer &&
-        createPortal(<Composer draft={draft} setDraft={setDraft} send={send} busy={busy} online={online} keyboard={frame.keyboard} />, frame.composer)}
+        createPortal(<Composer draft={draft} setDraft={setDraft} send={() => send(draft)} busy={busy} online={online} keyboard={frame.keyboard} />, frame.composer)}
     </>
   );
 }

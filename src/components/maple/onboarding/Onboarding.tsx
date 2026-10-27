@@ -10,6 +10,7 @@ import { InviteLinks } from "./MoreSteps";
 import { SetupPage } from "./SetupPage";
 import { SavedAnswers, StepCard, Summary } from "./StepCard";
 import { useOnboarding } from "./useOnboarding";
+import { useAnswerMode } from "./useAnswerMode";
 
 const OnboardingChat = lazy(() => import("./OnboardingChat"));
 
@@ -26,7 +27,7 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
   const ob = useOnboarding(initial);
   const { online } = useMaple();
   const [acknowledgment, setAcknowledgment] = useState<string | null>(null);
-  const [mode, setMode] = useState<"chat" | "form">("chat");
+  const { mode, chooseMode, fallbackToForm } = useAnswerMode(initial.familyId);
   const [note, setNote] = useState<string | null>(null);
   const [editing, setEditing] = useState<StepId | null>(null);
   const [reviewing, setReviewing] = useState(false);
@@ -76,7 +77,7 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
           value={mode}
           onChange={(m) => {
             setNote(null);
-            setMode(m);
+            chooseMode(m);
           }}
           options={[
             { value: "chat", label: "Questions and chat" },
@@ -102,8 +103,9 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
               setEditing(null);
               setReviewing(true);
             }}
+            onDecline={() => chooseMode("form")}
             onFallback={(why) => {
-              setMode("form");
+              fallbackToForm();
               setNote(why || null);
             }}
           />

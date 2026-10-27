@@ -176,8 +176,7 @@ export default function Dock() {
   const next = summary.nextSide;
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
   const showHint = (!summary.age || summary.age.dayOfLife <= 3) && !summary.active.length;
-  // Family → On Today: no Bottle tile, so Left and Right share its room.
-  const { bottles } = logSwitches(state.baby);
+  const { nursing: nursingOn, bottles } = logSwitches(state.baby);
   // The part she's on (or came off) goes back and forth; the side the paused tiles count from is the last one tracked.
   const both = !!feedN?.both;
   const sideNow: Side = feedN ? (isTracked(feedN.side) ? feedN.side : feedN.tracked ?? "L") : "L";
@@ -533,7 +532,7 @@ export default function Dock() {
               </>
             ) : (
               <>
-                {(["L", "R"] as Side[]).map((s) => (
+                {nursingOn && (["L", "R"] as Side[]).map((s) => (
                   <Tile
                     key={s}
                     id={s}
@@ -552,6 +551,7 @@ export default function Dock() {
                 {bottles && (
                   <Tile
                     id="bottle"
+                    span={nursingOn ? 2 : 6}
                     label="Bottle"
                     sub={lastBottleLabel}
                     inline={!!lastBottleLabel}
@@ -563,7 +563,7 @@ export default function Dock() {
                 )}
               </>
             )}
-            <Tile id="more" label="More" icon="plus" onTap={tap(() => setMoreOpen(true))} />
+            <Tile id="more" span={!feed && !nursingOn && !bottles ? 8 : 2} label="More" icon="plus" onTap={tap(() => setMoreOpen(true))} />
 
             {/* Row 2: diapers and sleep. */}
             <Tile
@@ -658,6 +658,7 @@ function Tile({
   bigLetter,
   stack,
   wide,
+  span = 2,
 }: {
   id: string;
   label: string;
@@ -691,6 +692,7 @@ function Tile({
   stack?: boolean;
   /** Three of the grid's eight columns instead of two (Left and Right with Bottles off). */
   wide?: boolean;
+  span?: 2 | 6 | 8;
 }) {
   const press = usePress(onTap, onHold);
   // At night a filled tile glows softly instead of blazing, in the amber like
@@ -711,7 +713,7 @@ function Tile({
       className={cx(
         "relative flex min-h-[64px] flex-col items-center justify-center rounded-2xl border px-1 text-center transition select-none active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100",
         stack ? "py-1" : "py-1.5",
-        wide ? "col-span-3" : "col-span-2",
+        wide ? "col-span-3" : span === 6 ? "col-span-6" : span === 8 ? "col-span-8" : "col-span-2",
         accent
           ? "border-transparent bg-mp-accent text-mp-on-accent"
           : strong

@@ -34,18 +34,10 @@ import { useMaple } from "./useMaple";
 
 export const LONG_PRESS_MS = 450;
 
-/**
- * The log-wide switches in Family → On Today (maple_babies.settings, like
- * show_alerts): Bottles ("feeds_bottle": the dock's Bottle tile and the new
- * feed form's Breast/Bottle choice) and Pumping ("track_pump": Pump in
- * More). Both are on unless switched off, so a new log has them. Off only
- * hides the buttons: anything already logged still shows where it is, and
- * Claude and Siri can still log either. (The API checks the same keys:
- * validate.ts LOG_SWITCH_KEYS.)
- */
-export function logSwitches(baby: Pick<Baby, "settings"> | null | undefined): { bottles: boolean; pumping: boolean } {
-  const s = (baby?.settings ?? {}) as Record<string, unknown>;
-  return { bottles: s.feeds_bottle !== false, pumping: s.track_pump !== false };
+export function logSwitches(baby: Pick<Baby, "settings"> | null | undefined): { nursing: boolean; bottles: boolean; pumping: boolean } {
+  const s = baby?.settings ?? {};
+  const methods = s.feeding_methods && typeof s.feeding_methods === "object" ? s.feeding_methods as Record<string, unknown> : {};
+  return { nursing: typeof s.track_nursing === "boolean" ? s.track_nursing : methods.nursing !== false, bottles: s.feeds_bottle !== false, pumping: s.track_pump !== false };
 }
 
 /**

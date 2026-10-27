@@ -12,6 +12,7 @@ import { useMilestoneWords } from "./familyWords";
 import { useClockMinute } from "./FeedParts";
 import { MAPLE_LEAF_PATH } from "./Hero";
 import { DROPLET_PATH, Icon, KindBadge } from "./icons";
+import { logSwitches } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, SIDE_COLOR } from "./palette";
 import { useSheets } from "./sheets";
@@ -709,7 +710,7 @@ export default function DayDial() {
           ))}
         </ul>
 
-        <Legend pal={pal} night={night} both={arcs.some((a) => a.both)} cluster={brackets.length > 0} bottle={arcs.some((a) => a.lane === "bottle")} />
+        <Legend pal={pal} night={night} nursing={logSwitches(state.baby).nursing || arcs.some((a) => a.lane === "feed")} both={arcs.some((a) => a.both)} cluster={brackets.length > 0} bottle={arcs.some((a) => a.lane === "bottle")} />
 
         {/* One range for the dial and the tallies under it. */}
         <div className="mt-4 flex items-center justify-center gap-1">
@@ -769,20 +770,24 @@ const LEGEND_STOOLS = [STOOL_COLOR_INFO.black.hex, STOOL_COLOR_INFO.green.hex, S
  * Back and forth, the cluster bracket and bottles join the key only when the dial shows them (a family with
  * Bottles off never sees a Bottle key).
  */
-function Legend({ pal, night, both, cluster, bottle }: { pal: Palette; night: boolean; both?: boolean; cluster?: boolean; bottle?: boolean }) {
+function Legend({ pal, night, nursing, both, cluster, bottle }: { pal: Palette; night: boolean; nursing: boolean; both?: boolean; cluster?: boolean; bottle?: boolean }) {
   const dot = "h-[7px] w-[7px] rounded-full";
   // Sleep, and the sides at night, are short bands as on the ring (Right striped); a bottle is a hollow pill.
   const band = "h-2 w-4 rounded-full";
   const items: { label: string; mark: React.ReactNode }[] = [
-    { label: "Left", mark: <i className={cx("shrink-0", night ? band : dot)} style={{ backgroundColor: pal.left }} /> },
-    {
-      label: "Right",
-      mark: night ? (
-        <i className={cx("shrink-0", band)} style={{ backgroundImage: `repeating-linear-gradient(135deg, ${pal.right} 0 1.7px, transparent 1.7px 2.8px)` }} />
-      ) : (
-        <i className={cx("shrink-0", dot)} style={{ backgroundColor: pal.right }} />
-      ),
-    },
+    ...(nursing
+      ? [
+          { label: "Left", mark: <i className={cx("shrink-0", night ? band : dot)} style={{ backgroundColor: pal.left }} /> },
+          {
+            label: "Right",
+            mark: night ? (
+              <i className={cx("shrink-0", band)} style={{ backgroundImage: `repeating-linear-gradient(135deg, ${pal.right} 0 1.7px, transparent 1.7px 2.8px)` }} />
+            ) : (
+              <i className={cx("shrink-0", dot)} style={{ backgroundColor: pal.right }} />
+            ),
+          },
+        ]
+      : []),
     ...(both
       ? [
           {

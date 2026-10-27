@@ -89,6 +89,7 @@ export async function readView(ctx: FamilyCtx): Promise<OnboardingView> {
   const status = row.status === "active" || row.status === "deleting" ? row.status : "onboarding";
   const missing = missingSteps(done);
   return {
+    familyId: familyOf(ctx),
     status,
     owner: ctx.role === "owner",
     done,

@@ -18,6 +18,7 @@ import { ChatCareRow } from "./chat/ChatTerms";
 import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import { Icon, type IconName } from "./icons";
 import { LegalLinks } from "./Legal";
+import { logSwitches } from "./MoreSheet";
 import { useNightPref, type NightPref } from "./nightLook";
 import { NotificationsRow, useNotifications } from "./notify";
 import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, cx, memberColor, tone } from "./ui";
@@ -1063,10 +1064,15 @@ function BabyDetails() {
             checked={flag("show_brigade")}
             onChange={(v) => void setSetting("show_brigade", v)}
           />
-          {/* What the family logs at all (logSwitches): off only hides the buttons, never anything already logged. */}
+          <Toggle
+            label="Nursing"
+            hint="Left and Right on Today. Running feeds and nursing already logged still show."
+            checked={toggles.track_nursing ?? logSwitches(baby).nursing}
+            onChange={(v) => void setSetting("track_nursing", v)}
+          />
           <Toggle
             label="Bottles"
-            hint="The dock's Bottle button. Off, Left and Right take its room; bottles already logged still show."
+            hint="The Bottle button on Today. Bottles already logged still show."
             checked={flag("feeds_bottle")}
             onChange={(v) => void setSetting("feeds_bottle", v)}
           />
