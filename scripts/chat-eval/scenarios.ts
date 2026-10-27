@@ -1,10 +1,10 @@
 import { CRISIS_REPLY } from "../../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../../src/lib/maple/time";
 import { at, called, firstTurnUndone, helpCard, momDose, noNew, notCalled, noWrites, oneNew, onSide, running, says, saysNot, stopped, type Asks, type Check } from "./checks";
-import { MIN, Sim, TZ, type Side } from "./sim";
+import { MIN, Sim, TZ, type Entry, type Side } from "./sim";
 
 /**
- * Twenty made-up moments with a made-up log. Each one: when it is, what the
+ * Twenty-three made-up moments with a made-up log. Each one: when it is, what the
  * log holds, what Alex (the signed-in parent) types, and what counts as a
  * right answer. Nothing here is real family data.
  */
@@ -51,6 +51,10 @@ export class Builder {
     this.sim.add({ kind: "sleep", start, end: minutes == null ? null : start + minutes * MIN, active: minutes == null, by, via: "app", data: {} });
   }
 
+  bottle(ago: number, oz: number, milk?: "breastmilk" | "formula" | "mixed", by = "Alex") {
+    this.sim.add({ kind: "feed", start: this.ago(ago), end: null, active: false, by, via: "app", data: { method: "bottle", amount_ml: Math.round(oz * 295.735) / 10, ...(milk ? { milk } : {}) } });
+  }
+
   vitaminD(ago: number) {
     this.sim.add({ kind: "med", start: this.ago(ago), end: null, active: false, by: "Brittany", via: "app", data: { name: "Vitamin D", dose: "400 IU" } });
   }
@@ -93,6 +97,15 @@ const NIGHT: Scenario["now"] = [2026, 10, 27, 3, 14];
 const wet = (e: { data: Record<string, unknown> }) => (e.data.pee && !e.data.poop ? null : "not a wet-only diaper");
 const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const MILK_WORDS = /\b(?:breast ?milk|formula|pumped|mixed)\b/i;
+const bottleOf = (oz: number, minutesAgo: number, milk?: string) => (e: Entry, sim: Sim) =>
+  e.data.method !== "bottle"
+    ? "not a bottle"
+    : Math.abs(Number(e.data.amount_ml) - oz * 29.5735) > 2
+      ? `${e.data.amount_ml} ml`
+      : e.data.milk !== milk
+        ? `milk ${e.data.milk ?? "unset"}, wanted ${milk ?? "unset"}`
+        : at(minutesAgo, 2)(e, sim);
 
 /** A feed running: 16 minutes on the right, on the left since 22 minutes ago. */
 const midFeed = (b: Builder) => {
@@ -162,7 +175,26 @@ export const SCENARIOS: Scenario[] = [
     seed: (b) => b.day(120, "L"),
     turns: [{ say: "2 oz bottle at 8" }],
     asks: "never",
-    expect: [oneNew("feed", "2 oz bottle at 8:00 AM", (e, sim) => (e.data.method !== "bottle" ? "not a bottle" : Math.abs(Number(e.data.amount_ml) - 59) > 2 ? `${e.data.amount_ml} ml` : at(40, 2)(e, sim)))],
+    expect: [oneNew("feed", "2 oz bottle at 8:00 AM, milk unset", bottleOf(2, 40)), saysNot(MILK_WORDS, "a milk type")],
+  },
+  {
+    id: "bottle_milk_unsaid",
+    now: NIGHT,
+    seed: (b) => {
+      b.day(320, "L");
+      b.bottle(150, 2, "formula");
+    },
+    turns: [{ say: "she had a 3 oz bottle 20 minutes ago" }],
+    asks: "never",
+    expect: [oneNew("feed", "3 oz bottle ~20 min ago, milk unset", bottleOf(3, 20)), saysNot(MILK_WORDS, "a milk type")],
+  },
+  {
+    id: "bottle_formula_said",
+    now: NIGHT,
+    seed: (b) => b.day(150, "L"),
+    turns: [{ say: "gave her 1.5 oz of formula at 3" }],
+    asks: "never",
+    expect: [oneNew("feed", "1.5 oz formula bottle at 3:00 AM", bottleOf(1.5, 14, "formula"))],
   },
   {
     id: "when_did_she_last_eat",
@@ -195,6 +227,14 @@ export const SCENARIOS: Scenario[] = [
     turns: [{ say: "she's asleep" }],
     asks: "never",
     expect: [running("sleep", 0, 3), noNew("feed")],
+  },
+  {
+    id: "asleep_stop_when_she_wakes",
+    now: NIGHT,
+    seed: (b) => b.day(40, "L"),
+    turns: [{ say: "she's asleep, stop it when she wakes up" }],
+    asks: "never",
+    expect: [running("sleep", 0, 3), noNew("feed"), says(/\b(?:tell me|let me know|say|send|message|text)\b/i, "to tell it when she wakes")],
   },
   {
     id: "she_woke_up",
