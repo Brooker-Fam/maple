@@ -87,7 +87,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onDecline, onFall
 
   const send = (value: string, clearDraft = true) => {
     const text = value.trim();
-    if (!text || busy) return;
+    if (!text || busy || ob.busy) return;
     if (!online) return setProblem("Needs a connection. The card below works offline once it's loaded.");
     setProblem(null);
     setConfirmationNeeded(false);
@@ -134,7 +134,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onDecline, onFall
       {confirmationNeeded && !busy && !problem && requestVersions === ob.versions && (
         <div className={cx(tone.inset, "space-y-2 px-3.5 py-3")}>
           <p role="status" className={cx(tone.body, "text-[14px] leading-snug")}>That reply didn&apos;t include an answer to confirm. Use the question below, or ask for a confirmation.</p>
-          <Button size="sm" variant="soft" disabled={!online} onClick={() => send("Please prepare a confirmation for my last answer. If something is unclear, ask me first.", false)}>
+          <Button size="sm" variant="soft" disabled={!online || ob.busy} onClick={() => send("Please prepare a confirmation for my last answer. If something is unclear, ask me first.", false)}>
             Prepare a confirmation
           </Button>
         </div>
@@ -142,7 +142,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onDecline, onFall
       {help && <HelpCard reason="crisis" />}
       <p className={cx(tone.faint, "px-1 text-[13px] leading-snug")}>Answers come from an AI and can be wrong; nothing is saved until you tap it.</p>
       {frame.composer &&
-        createPortal(<Composer draft={draft} setDraft={setDraft} send={() => send(draft)} busy={busy} online={online} keyboard={frame.keyboard} />, frame.composer)}
+        createPortal(<Composer draft={draft} setDraft={setDraft} send={() => send(draft)} busy={busy || ob.busy} online={online} keyboard={frame.keyboard} />, frame.composer)}
     </>
   );
 }
