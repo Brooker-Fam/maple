@@ -37,7 +37,7 @@ export function roughText(raw: unknown): string {
   return texts.join("\n").slice(0, 10 * CHAT_MAX_CHARS);
 }
 
-/** A turned-away request's JSON body with the help marker added, so the sheet shows the help card though no answer came. A streamed answer carries its own card. */
+/** A turned-away request's JSON body with the help marker added, so the Chat tab shows the help card though no answer came. A streamed answer carries its own card. */
 export async function withCrisisHelp(res: Response): Promise<Response> {
   if (res.ok || !res.headers.get("content-type")?.includes("application/json")) return res;
   const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;

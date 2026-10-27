@@ -13,16 +13,16 @@
  * owner Alex, viewer Vi, and Robin as the care person. One PASS/FAIL line per case, exit 1 on any failure.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { budgetFrom, capsVerdict, CHAT_MODEL_DEFAULT, chatModel, chatProviderOptions, GATEWAY_PRIVACY, LIMIT_MESSAGE, MONTH_MESSAGE, threadFull } from "../src/lib/maple/chat/caps";
+import { budgetFrom, capsVerdict, CHAT_MODEL_DEFAULT, chatModel, chatProviderOptions, GATEWAY_PRIVACY, LIMIT_MESSAGE, MONTH_MESSAGE, STEP_PROMPT_LIMIT, DAILY_BUDGET_DEFAULT } from "../src/lib/maple/chat/caps";
 import { mentionsCrisis } from "../src/lib/maple/chat/crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, storable, titleFrom, userMessage, userText, withCrisisHelp } from "../src/lib/maple/chat/messages";
 import { costMicro, dollars, priceFor, PRICES, stepTokens } from "../src/lib/maple/chat/prices";
-import { answerPost, BUSY, CARE_CLOSED, FULL, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
+import { answerPost, BUSY, CARE_CLOSED, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
 import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, contextText, markTailForCache, stateLines, systemBlocks } from "../src/lib/maple/chat/prompt";
 import { dashFilter, withoutDashes } from "../src/lib/maple/chat/dashes";
 import type { LockedThread, UsageRow } from "../src/lib/maple/chat/store";
 import { chatTools, EXCLUDED_TOOLS, forModel, MODEL_TEXT_MAX, registrations, TOOL_APPROVAL, toOutput } from "../src/lib/maple/chat/tools";
-import { CHAT_TERMS_NEEDED, type ChatConsent, type ChatMessage, type ChatToolOutput } from "../src/lib/maple/chat/types";
+import { CHAT_MAX_CHARS, CHAT_TERMS_NEEDED, type ChatConsent, type ChatMessage, type ChatToolOutput } from "../src/lib/maple/chat/types";
 import { momSameMedicine } from "../src/lib/maple/care-mcp";
 import { consentCurrent, CONSENT_VERSION, isCarePerson } from "../src/lib/maple/consent";
 import { careOpen, logStateLines, type Ctx } from "../src/lib/maple/mcp-tools";
@@ -35,6 +35,7 @@ import type { Baby, Entry, Member } from "../src/lib/maple/types";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { DROPPED, needsHelpCard, problemFor, unanswered } from "../src/components/maple/chat/stopped";
+import { messageTokens, modelWindow, streamPage, WINDOW_MESSAGES, WINDOW_TOKENS, type StreamItem } from "../src/lib/maple/chat/window";
 
 let passed = 0;
 let failed = 0;
@@ -258,7 +259,6 @@ check("caps fail closed", () => {
   eq(budgetFrom("1200000", BigInt(7)), BigInt(1_200_000), "a whole number");
   eq(budgetFrom("0.50", BigInt(7)), BigInt(0), "dollars aren't micro-dollars: closed");
   eq(budgetFrom("-5", BigInt(7)), BigInt(0), "negative: closed");
-  eq([threadFull({ userMessages: 39, lastPrompt: 59_999 }), threadFull({ userMessages: 40, lastPrompt: 0 }), threadFull({ userMessages: 1, lastPrompt: 60_000 })], [false, true, true], "rollover");
 });
 
 // ── crisis ───────────────────────────────────────────────────────────────
@@ -515,6 +515,67 @@ check("a new message turns an unanswered approval into a no", () => {
   eq([part.state, part.approval.approved], ["approval-responded", false], "denied");
   eq(messages[0], user, "the user message untouched");
   eq(denyPending([user]).changed.length, 0, "nothing pending");
+});
+
+// ── the window: one endless chat, a bounded prompt ───────────────────────
+
+const LINE = "Now: 3:10 AM EDT on Monday, Oct 26 (America/New_York). June is 6 days old (Day 7). Signed in: Alex (owner).";
+
+/** A made-up exchange: a question, then a reply that read the log and said something. */
+function exchange(n: number): ChatMessage[] {
+  return [
+    userMessage(`msg_u${n}`, `made-up question #${n}.`, LINE, ["Today so far: 4 feeds, 3 wet diapers."]),
+    {
+      id: `msg_a${n}`,
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        { type: "tool-maple_status", toolCallId: `call_${n}`, state: "output-available", input: {}, output: { ok: true, write: false, text: "made-up status ".repeat(40) } },
+        { type: "text", text: `made-up reply #${n}.` },
+      ] as ChatMessage["parts"],
+    },
+  ];
+}
+const longThread = (exchanges: number) => Array.from({ length: exchanges }, (_, i) => exchange(i + 1)).flat();
+const sizeOf = (ms: ChatMessage[]) => ms.reduce((n, m) => n + messageTokens(m), 0);
+
+check("the window: a long chat sends only its recent end, in whole exchanges, the newest always", () => {
+  for (const n of [1, 5, 50, 500]) {
+    const all = longThread(n);
+    const w = modelWindow(all);
+    ok(w.length <= WINDOW_MESSAGES, `${n}: at most ${WINDOW_MESSAGES} messages, got ${w.length}`);
+    ok(sizeOf(w) <= WINDOW_TOKENS, `${n}: at most ${WINDOW_TOKENS} tokens, got ${sizeOf(w)}`);
+    eq([w[0].role, w.at(-1)!.id], ["user", all.at(-1)!.id], `${n}: opens with a question, ends with the newest`);
+    eq(all.slice(-w.length).map((m) => m.id), w.map((m) => m.id), `${n}: one run from the end`);
+  }
+  eq(modelWindow(longThread(5)).length, 10, "a short chat goes whole");
+  eq(modelWindow(longThread(500)).length, modelWindow(longThread(50)).length, "a longer one doesn't grow it");
+  const huge: ChatMessage = { id: "msg_huge", role: "assistant", parts: [{ type: "text", text: "y".repeat(6 * WINDOW_TOKENS) }] };
+  eq(modelWindow([...longThread(3), userMessage("msg_last", "made-up", LINE), huge]).map((m) => m.id), ["msg_last", "msg_huge"], "an exchange past the limit goes alone");
+  eq(modelWindow([]), [], "nothing");
+});
+
+check("the window leaves room under the step cap for the cached prefix, a full message and a whole tool result", () => {
+  const tools = chatTools(ALEX, { born: true, care: true, device: null });
+  const prefixChars = JSON.stringify([systemBlocks({ viewer: false, care: true, model: GLM }), Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
+  const prefix = Math.ceil(prefixChars / 3);
+  const newest = messageTokens(userMessage("msg_u", "x".repeat(CHAT_MAX_CHARS), LINE, Array.from({ length: 12 }, () => "A made-up line of the log as it stands now, as long as most.")));
+  const first = prefix + WINDOW_TOKENS + newest;
+  ok(first + Math.ceil(MODEL_TEXT_MAX / 3) <= STEP_PROMPT_LIMIT, `prefix ${prefix} + window ${WINDOW_TOKENS} + message ${newest} + a cut result is over ${STEP_PROMPT_LIMIT}`);
+  const cost = costMicro(GLM, priceFor(GLM)!, { prompt: first, fresh: first, cacheRead: 0, cacheWrite: 0, output: 1500, reasoning: 0 }).micro;
+  ok(cost * BigInt(50) <= DAILY_BUDGET_DEFAULT, `a first step with nothing cached costs ${dollars(cost)}, over a fiftieth of the day's budget`);
+});
+
+check("a page of the chat opens with a question; replies cut off from theirs come with the next page", () => {
+  const newestFirst: StreamItem[] = longThread(30)
+    .map((message) => ({ thread: "thread_made_up_1", message }))
+    .reverse();
+  const page = streamPage(newestFirst.slice(0, 41), 40);
+  eq([page.more, page.items.length, page.items[0].message.id, page.items.at(-1)!.message.id], [true, 40, "msg_u11", "msg_a30"], "a full page");
+  const cut = streamPage(newestFirst.slice(0, 40), 39);
+  eq([cut.more, cut.items.length, cut.items[0].message.id], [true, 38, "msg_u12"], "a reply without its question waits for the next page");
+  const start = streamPage(newestFirst.slice(0, 10), 40);
+  eq([start.more, start.items.length, start.items[0].message.id], [false, 10, "msg_u26"], "the start of the chat comes whole");
 });
 
 // ── one turn, with a stand-in model ──────────────────────────────────────
@@ -929,12 +990,41 @@ async function postChecks() {
     eq([r2.status, down.daily.size, down.threads.get(THREAD)!.busy, down.threads.get(THREAD)!.messages.length], [503, 0, false, 0], "503, not counted, released, nothing saved");
   });
 
-  await checkAsync("every early return after the lock releases the thread", async () => {
-    const full = fakeStore();
-    full.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 60_000, messages: [] });
-    const r1 = await post(full, harness([]))(say("one more"));
-    eq([r1.status, r1.json().error, r1.json().code, full.threads.get(THREAD)!.busy, full.daily.size], [409, FULL, "new_chat", false, 0], "thread full: released, not counted");
+  await checkAsync("one endless chat: the model reads the same recent window however long the chat grows", async () => {
+    const sent: string[] = [];
+    for (const n of [30, 300]) {
+      const f = fakeStore();
+      f.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 0, messages: longThread(n) });
+      const h = harness([[...textChunks("made-up reply"), finishPart("stop")]]);
+      const r = await post(f, h)(say("made-up newest question"));
+      eq(r.status, 200, `${n}: answered`);
+      const prompt = JSON.stringify(h.model.doStreamCalls[0].prompt.filter((m) => m.role !== "system"));
+      ok(prompt.includes(`question #${n}.`) && prompt.includes("made-up newest question"), `${n}: the newest exchanges go`);
+      ok(!prompt.includes("question #1."), `${n}: the oldest don't`);
+      eq(f.threads.get(THREAD)!.messages.length, 2 * n + 2, `${n}: and the whole chat is still stored`);
+      sent.push(prompt);
+    }
+    ok(sent[1].length <= sent[0].length * 1.05, `300 exchanges sent ${sent[1].length} characters, 30 sent ${sent[0].length}`);
+  });
 
+  await checkAsync("one chat across her page closing: a long thread that ran open never reaches the model, and the next starts clean", async () => {
+    const consent = { terms: true, care: true, self: false };
+    const f = fakeStore(undefined, consent);
+    const before = longThread(40);
+    before.at(-1)!.parts.push({ type: "text", text: "made-up-secret: Robin's Examplex is OK after 9:10 AM." });
+    f.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, careOpen: true, busy: false, title: "t", lastPrompt: 0, messages: before });
+    consent.care = false;
+    const h = harness([[...textChunks("made-up reply"), finishPart("stop")]]);
+    const send = post(f, h);
+    const r = await send(say("log a wet diaper"));
+    eq([r.status, r.json().code, h.model.doStreamCalls.length, f.daily.size], [409, "new_chat", 0, 0], "the old thread is turned away, uncounted");
+    const next = await send({ ...say("log a wet diaper"), threadId: "thread_made_up_2" });
+    eq(next.status, 200, "the new thread answers");
+    const prompt = JSON.stringify(h.model.doStreamCalls.map((c) => c.prompt));
+    ok(!prompt.includes("made-up-secret") && !prompt.includes("question #40."), "nothing from the old thread");
+  });
+
+  await checkAsync("every early return after the lock releases the thread", async () => {
     const stale = fakeStore();
     stale.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 0, messages: [stored()] });
     const r2 = await post(stale, harness([]))({ threadId: THREAD, message: { id: "msg_a", role: "assistant", parts: [] } });

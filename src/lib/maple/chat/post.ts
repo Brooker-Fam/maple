@@ -3,7 +3,7 @@ import { memberName } from "../insights";
 import { dayBounds, dayKey, DEFAULT_TZ, startOfDay } from "../time";
 import { StoreUnavailable } from "../store";
 import type { Baby, Member } from "../types";
-import { capsVerdict, threadFull, type Usage } from "./caps";
+import { capsVerdict, type Usage } from "./caps";
 import { mentionsCrisis } from "./crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, titleFrom, userMessage, withCrisisHelp, type Incoming } from "./messages";
 import type { ModelPrice } from "./prices";
@@ -51,7 +51,6 @@ export type PostDeps = {
 export type PostBody = { threadId?: unknown; message?: unknown };
 
 export const BUSY = "One message at a time: the last answer is still coming.";
-export const FULL = "This chat is long, so a new one starts here.";
 export const CARE_CLOSED = "Her page is closed to the chat now, so a new chat starts here.";
 export const STALE = "That question has moved on. Ask again if you still want it.";
 
@@ -146,7 +145,6 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     let responseId: string;
     let stepsDone = 0;
     if (incoming.kind === "user") {
-      if (threadFull(thread)) return refuse({ error: FULL, code: "new_chat" }, 409);
       const line = contextLine({ now: deps.now, baby, name: memberName(member.email, members), role: member.role });
       const stored = userMessage(newMessageId(), incoming.text, line, stateLines(await logStateOrNone(deps, care)));
       const prior = denyPending(history);

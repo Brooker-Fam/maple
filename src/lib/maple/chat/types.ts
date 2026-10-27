@@ -2,8 +2,8 @@ import type { UIMessage } from "ai";
 import type { AlertTier } from "../guidelines";
 
 /**
- * What the in-app chat's server and sheet share. No server imports: the
- * sheet bundles this file.
+ * What the in-app chat's server and the Chat tab share. No server imports: the
+ * tab bundles this file.
  */
 
 export const CHAT_MAX_CHARS = 2000;
@@ -20,7 +20,7 @@ export type ChatAlert = { tier: AlertTier; label: string; title: string; body: s
 export type ChatReceipt = { id: number; line: string };
 
 /**
- * A tool's result as the sheet reads it. `text` is what the model gets;
+ * A tool's result as the Chat tab reads it. `text` is what the model gets;
  * the rest is for the cards under the reply.
  */
 export type ChatToolOutput = {
@@ -53,7 +53,7 @@ export type ChatMessage = UIMessage<unknown, ChatData>;
 /** `busy`: a turn is still running (GET of one thread only), so its reply isn't saved yet. */
 export type ChatThread = { id: string; title: string | null; updated_at: string; busy?: boolean };
 
-/** A refused POST: `code` says what the sheet should do about it; `help` that the message mentioned a crisis, so the help card shows anyway. */
+/** A refused POST: `code` says what the Chat tab should do about it; `help` that the message mentioned a crisis, so the help card shows anyway. */
 export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off" | "terms"; help?: "crisis" };
 
 export const CHAT_TERMS_NEEDED = "Accept the chat's terms first. Logging works as usual.";

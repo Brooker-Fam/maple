@@ -7,16 +7,17 @@ import type { Member } from "@/lib/maple/types";
 import { budgets, chatModel } from "@/lib/maple/chat/caps";
 import { answerPost, type PostBody } from "@/lib/maple/chat/post";
 import { priceFor } from "@/lib/maple/chat/prices";
-import { countMessage, deleteThread, getThread, listThreads, loadMessages, lockThread, recordUsage, releaseThread, saveMessage, setTitle, usageSince } from "@/lib/maple/chat/store";
+import { chatStream, deleteChats, loadRecentMessages } from "@/lib/maple/chat/history";
+import { countMessage, lockThread, recordUsage, releaseThread, saveMessage, setTitle, usageSince } from "@/lib/maple/chat/store";
 import { chatLogState, chatTools } from "@/lib/maple/chat/tools";
-import { THREAD_ID_RE } from "@/lib/maple/chat/types";
 import { chatConsent } from "@/lib/maple/consent";
 import { captureServerException } from "@/lib/posthog-server";
 
 /**
  * The in-app chat: Maple's MCP tools, run by the model as the signed-in
- * member ("via Maple chat"). POST streams one turn; GET lists this member's
- * threads (or one thread's messages); DELETE removes a thread for good.
+ * member ("via Maple chat"). POST streams one turn; GET reads this member's
+ * one chat a page at a time, newest first (`before`: the oldest message
+ * shown); DELETE removes all of it for good.
  *
  * Privacy: message text never reaches logs or PostHog. A POST's errors, in
  * the stream or before it, are logged and reported as their class name and
@@ -27,10 +28,7 @@ export const maxDuration = 60;
 
 const ROUTE = "/api/maple/chat";
 
-function threadParam(raw: unknown): string {
-  if (typeof raw !== "string" || !THREAD_ID_RE.test(raw)) throw new BadRequest("thread is required");
-  return raw;
-}
+const MESSAGE_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
 function report(scrubbed: Error) {
   console.error(`${ROUTE} error: ${scrubbed.message}`);
@@ -38,17 +36,13 @@ function report(scrubbed: Error) {
 }
 
 export const GET = withMember("GET /api/maple/chat", async (request, member) => {
-  const raw = new URL(request.url).searchParams.get("thread");
-  const viewer = member.role === "viewer";
-  if (raw == null) return json({ threads: await listThreads(member.email, viewer) });
-  const thread = await getThread(threadParam(raw), member.email, viewer);
-  if (!thread) return json({ error: "Not found" }, 404);
-  return json({ thread, messages: await loadMessages(thread.id) });
+  const before = new URL(request.url).searchParams.get("before");
+  if (before != null && !MESSAGE_ID_RE.test(before)) throw new BadRequest("before is not a message");
+  return json(await chatStream(member.email, member.role === "viewer", before));
 });
 
-export const DELETE = withMember("DELETE /api/maple/chat", async (request, member) => {
-  const id = threadParam(new URL(request.url).searchParams.get("thread"));
-  if (!(await deleteThread(id, member.email))) return json({ error: "Not found" }, 404);
+export const DELETE = withMember("DELETE /api/maple/chat", async (_request, member) => {
+  await deleteChats(member.email, member.role === "viewer");
   return json({ ok: true });
 });
 
@@ -57,7 +51,7 @@ export const POST = withMember("POST /api/maple/chat", async (request: NextReque
   const model = chatModel();
   const now = new Date();
   return answerPost(body, member, {
-    store: { consent: chatConsent, usageSince, lockThread, releaseThread, loadMessages, saveMessage, setTitle, countMessage, recordUsage },
+    store: { consent: chatConsent, usageSince, lockThread, releaseThread, loadMessages: loadRecentMessages, saveMessage, setTitle, countMessage, recordUsage },
     household: async () => {
       const [baby, members] = await Promise.all([getBaby(), listMembers()]);
       return { baby, members };

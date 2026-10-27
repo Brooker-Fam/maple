@@ -16,6 +16,7 @@ import { dashFilter } from "./dashes";
 import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
 import { CHAT_FAILED, CHAT_OFF, type ChatData, type ChatMessage } from "./types";
+import { modelWindow } from "./window";
 
 /**
  * One chat turn as a streamed response: the model with the member's tools,
@@ -26,7 +27,7 @@ import { CHAT_FAILED, CHAT_OFF, type ChatData, type ChatMessage } from "./types"
  */
 
 export { CHAT_FAILED, CHAT_OFF };
-export const CHAT_CUT = "This chat got too long to finish that answer. Ask again and it carries on in a new chat.";
+export const CHAT_CUT = "That answer got too long to finish. Try asking again.";
 
 /** An error's HTTP status, or the last attempt's once the SDK's retries ran out. */
 export function errorStatus(error: unknown): number | null {
@@ -99,7 +100,7 @@ export async function chatTurn(opts: {
   const result = streamText({
     model: opts.model,
     instructions,
-    messages: await convertToModelMessages(messages, {
+    messages: await convertToModelMessages(modelWindow(messages), {
       tools,
       ignoreIncompleteToolCalls: true,
       convertDataPart: (p) => (p.type === "data-context" ? { type: "text", text: contextText(p.data as ChatData["context"]) } : undefined),

@@ -9,12 +9,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
  * opens her tab) and the shell (which draws the tab bar).
  *
  * Tabs: Today, hers ("care", hidden without access), History (Timeline |
- * Patterns), Moments and Family. "log" and "patterns" are still good targets:
+ * Patterns), Moments, Chat and Family. "log" and "patterns" are still good targets:
  * they open History on that segment, and a tab saved by an older version of
  * the app ("log", "patterns") lands there too.
  */
 
-export type TabId = "today" | "care" | "history" | "moments" | "family";
+export type TabId = "today" | "care" | "history" | "moments" | "chat" | "family";
 export type HistorySeg = "timeline" | "patterns";
 /** A tab, or a History segment by its old tab name. */
 export type NavTarget = TabId | "log" | "patterns";
@@ -46,7 +46,7 @@ function resolve(t: NavTarget): { tab: TabId; seg?: HistorySeg } {
 }
 
 const isTarget = (s: string | null): s is NavTarget =>
-  s === "today" || s === "care" || s === "history" || s === "moments" || s === "family" || s === "log" || s === "patterns";
+  s === "today" || s === "care" || s === "history" || s === "moments" || s === "chat" || s === "family" || s === "log" || s === "patterns";
 
 function save(key: string, value: string) {
   try {

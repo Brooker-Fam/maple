@@ -4,18 +4,20 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mentionsCrisis } from "@/lib/maple/chat/crisis";
-import { CHAT_MAX_CHARS, type ChatMessage, type ChatThread } from "@/lib/maple/chat/types";
+import { CHAT_MAX_CHARS, type ChatMessage } from "@/lib/maple/chat/types";
+import type { StreamItem } from "@/lib/maple/chat/window";
 import { deviceHeaders } from "@/lib/maple/device";
 import { useMaple } from "../useMaple";
 import { useChatNav } from "./ChatNav";
 import { DROPPED, needsHelpCard, problemFor, refusalOf, textOf, unanswered } from "./stopped";
 
-/** A thread touched within this long reopens with the sheet; after it, a new one starts. */
-const REOPEN_MS = 6 * 60 * 60_000;
-
 /** After an answer stops early, the server's copy is looked for this often, for about as long as a turn can hold the thread. */
 const RESYNC_MS = 5_000;
 const RESYNC_TRIES = 16;
+/** Coming back to the tab after this long reads the chat again, so a reply from this person's other phone shows. */
+const STALE_MS = 60_000;
+
+type Stream = { current: { id: string; busy: boolean } | null; items: StreamItem[]; more: boolean };
 
 const newThreadId = () => crypto.randomUUID();
 
@@ -27,15 +29,30 @@ const transport = new DefaultChatTransport<ChatMessage>({
   prepareSendMessagesRequest: ({ id, messages }) => ({ body: { threadId: id, message: messages[messages.length - 1] } }),
 });
 
-export function useChatThread(open: boolean) {
+/** Where the current thread's messages start: the newest run of items from it. */
+function splitAt(items: StreamItem[], id: string): number {
+  let i = items.length;
+  while (i > 0 && items[i - 1].thread === id) i--;
+  return i;
+}
+
+/**
+ * This member's one chat: `earlier` is everything above the thread new
+ * messages go to (older pages, and threads before her page closed to the
+ * chat), read-only; `messages` is that thread, live.
+ */
+export function useChatThread(active: boolean) {
   const { api, refresh, online } = useMaple();
   const { termsNeeded } = useChatNav();
   const [thread, setThread] = useState<{ id: string; initial: ChatMessage[] } | null>(null);
+  const [earlier, setEarlier] = useState<StreamItem[]>([]);
+  const [more, setMore] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
   const helpArrived = useRef(false);
   const [draft, setDraft] = useState("");
-  const usedAt = useRef(0);
+  const readAt = useRef(0);
   const lastSent = useRef<string | null>(null);
   const carry = useRef<string | null>(null);
   const shown = useRef<{ id: string | null; busy: boolean }>({ id: null, busy: false });
@@ -49,14 +66,18 @@ export function useChatThread(open: boolean) {
       if (part.type === "data-help") helpArrived.current = true;
     },
     onFinish: ({ isError }) => {
-      usedAt.current = Date.now();
       // An answer that stopped early refreshes once the server has saved it (resync).
       if (!isError) void refresh();
     },
     onError: (err) => {
       const refusal = refusalOf(err.message);
-      if (refusal?.code === "new_chat") {
-        carry.current = lastSent.current;
+      if (refusal?.code === "new_chat" && thread) {
+        // Her page closed to the chat: this thread stays on screen above, and the message that was turned away goes to a new one.
+        const ms = chat.messages;
+        const turnedAway = ms[ms.length - 1]?.role === "user";
+        carry.current = turnedAway ? lastSent.current : null;
+        const kept = turnedAway ? ms.slice(0, -1) : ms;
+        setEarlier((e) => [...e, ...kept.map((message) => ({ thread: thread.id, message }))]);
         setThread({ id: newThreadId(), initial: [] });
         return;
       }
@@ -82,59 +103,68 @@ export function useChatThread(open: boolean) {
     shown.current = { id: thread?.id ?? null, busy };
   }, [thread, busy]);
 
-  /** After an answer stopped early: the thread as the server saved it, once its turn is over, unless the phone has moved on. */
+  /** The newest page as the server has it: the current thread live, the rest above it. */
+  const apply = useCallback(
+    (s: Stream) => {
+      const id = s.current?.id ?? newThreadId();
+      const at = splitAt(s.items, id);
+      const mine = s.items.slice(at).map((i) => i.message);
+      setEarlier(s.items.slice(0, at));
+      setMore(s.more);
+      readAt.current = Date.now();
+      if (shown.current.id === id) chat.setMessages(mine);
+      else setThread({ id, initial: mine });
+      return s.current?.busy ? id : null;
+    },
+    [chat]
+  );
+
+  /** After an answer stopped early: the chat as the server saved it, once its turn is over, unless the phone has moved on. */
   const resync = useCallback(
     async (id: string) => {
       const moved = () => shown.current.id !== id || shown.current.busy;
       for (let i = 0; i < RESYNC_TRIES; i++) {
         await new Promise((r) => setTimeout(r, i ? RESYNC_MS : 1_000));
         if (moved()) return;
-        let saved: { thread: ChatThread; messages: ChatMessage[] };
+        let s: Stream;
         try {
-          saved = await api<{ thread: ChatThread; messages: ChatMessage[] }>(`/api/maple/chat?thread=${encodeURIComponent(id)}`);
+          s = await api<Stream>("/api/maple/chat");
         } catch {
-          // Never saved (404), or offline: what's on screen stays.
+          // Offline, or the log is down: what's on screen stays.
           return;
         }
-        if (saved.thread.busy) continue;
+        if (s.current?.id === id && s.current.busy) continue;
         if (moved()) return;
-        chat.setMessages(saved.messages);
+        apply(s);
         setProblem((p) => (p === DROPPED ? null : p));
-        setHelp(needsHelpCard(saved.messages, lastSent.current));
+        setHelp(needsHelpCard(s.items.map((x) => x.message), lastSent.current));
         void refresh();
         return;
       }
     },
-    [api, chat, refresh]
+    [api, apply, refresh]
   );
 
-  // Opening: the thread from the last six hours, else a new one.
+  // Showing the tab: the chat as the server has it, first time and after a while away. A turn still running there is waited for.
   useEffect(() => {
-    if (!open) return;
-    if (thread && Date.now() - usedAt.current < REOPEN_MS) return;
+    if (!active || busy || (thread && Date.now() - readAt.current < STALE_MS)) return;
     let live = true;
-    (async () => {
-      try {
-        const { threads } = await api<{ threads: ChatThread[] }>("/api/maple/chat");
-        const latest = threads[0];
-        if (latest && Date.now() - Date.parse(latest.updated_at) < REOPEN_MS) {
-          const { messages } = await api<{ messages: ChatMessage[] }>(`/api/maple/chat?thread=${encodeURIComponent(latest.id)}`);
-          if (live) setThread({ id: latest.id, initial: messages });
-          usedAt.current = Date.parse(latest.updated_at);
-          return;
-        }
-      } catch {
-        // No list (offline, or the log is down): a new thread, and sending will say what's wrong.
-      }
-      if (live) setThread({ id: newThreadId(), initial: [] });
-      usedAt.current = Date.now();
-    })();
+    api<Stream>("/api/maple/chat")
+      .then((s) => {
+        if (!live || shown.current.busy) return;
+        const running = apply(s);
+        if (running) void resync(running);
+      })
+      .catch(() => {
+        // Offline, or the log is down: a new thread if there's none yet, and sending says what's wrong.
+        if (live && !thread) setThread({ id: newThreadId(), initial: [] });
+      });
     return () => {
       live = false;
     };
-    // `thread` only decides whether to look; it changes because of this.
+    // `thread` and `busy` only decide whether to look; reading changes them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, api]);
+  }, [active, api]);
 
   const send = useCallback(
     (raw: string) => {
@@ -155,14 +185,13 @@ export function useChatThread(open: boolean) {
       setHelp(false);
       helpArrived.current = false;
       setDraft("");
-      usedAt.current = Date.now();
       lastSent.current = text;
       void chat.sendMessage({ text });
     },
     [busy, chat, online, thread]
   );
 
-  // A thread that filled up hands the message that didn't fit to the new one.
+  // A new thread (her page closed to the chat) takes the message the old one turned away.
   useEffect(() => {
     const text = carry.current;
     if (!text || !thread || thread.initial.length) return;
@@ -172,32 +201,43 @@ export function useChatThread(open: boolean) {
     void chat.sendMessage({ text });
   }, [thread, chat]);
 
-  const newChat = useCallback(() => {
-    if (busy) return;
-    setProblem(null);
-    setHelp(false);
-    usedAt.current = Date.now();
-    setThread({ id: newThreadId(), initial: [] });
-  }, [busy]);
+  const loadEarlier = useCallback(async () => {
+    const oldest = earlier[0]?.message.id ?? chat.messages[0]?.id;
+    if (!oldest || loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      const s = await api<Stream>(`/api/maple/chat?before=${encodeURIComponent(oldest)}`);
+      setEarlier((e) => [...s.items, ...e]);
+      setMore(s.more);
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : "Couldn't load earlier messages.");
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [api, chat.messages, earlier, loadingEarlier]);
 
   const remove = useCallback(async () => {
-    if (!thread || busy) return;
+    if (busy) return;
     try {
-      await api(`/api/maple/chat?thread=${encodeURIComponent(thread.id)}`, { method: "DELETE" });
+      await api("/api/maple/chat", { method: "DELETE" });
     } catch (e) {
-      // Never saved (nothing was sent yet), or already gone: either way it's off this phone too.
-      if (!(e instanceof Error && /not found/i.test(e.message))) {
-        setProblem(e instanceof Error ? e.message : "Couldn't delete that chat.");
-        return;
-      }
+      setProblem(e instanceof Error ? e.message : "Couldn't delete the chat.");
+      return;
     }
     setProblem(null);
     setHelp(false);
+    setEarlier([]);
+    setMore(false);
     setThread({ id: newThreadId(), initial: [] });
-  }, [api, busy, thread]);
+  }, [api, busy]);
 
   return {
     ready: !!thread,
+    threadId: thread?.id ?? null,
+    earlier,
+    more,
+    loadingEarlier,
+    loadEarlier,
     messages: chat.messages,
     status: chat.status,
     busy,
@@ -207,7 +247,6 @@ export function useChatThread(open: boolean) {
     draft,
     setDraft,
     send,
-    newChat,
     remove,
     approve: (id: string, approved: boolean) => void chat.addToolApprovalResponse({ id, approved }),
   };
