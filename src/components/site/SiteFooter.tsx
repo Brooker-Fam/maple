@@ -11,14 +11,23 @@ export default function SiteFooter() {
             <span className="font-display text-xl font-semibold text-mp-ink">Maple</span>
           </p>
           <p className="mt-4 text-[15px] leading-relaxed text-mp-ink-2">
-            Maple is a tracker, not medical advice. If you think your baby or you need help now, call{" "}
+            Maple is a tracker and doesn&rsquo;t give medical advice. If you think your baby or you need help now, call{" "}
             <a className="site-link" href="tel:911">
               911
             </a>
             .
           </p>
         </div>
-        <nav aria-label="Site" className="flex flex-wrap content-start gap-x-6 gap-y-3 text-[15px] text-mp-ink-2">
+        <nav aria-label="Site" className="flex max-w-[30rem] flex-wrap content-start gap-x-6 gap-y-3 text-[15px] text-mp-ink-2">
+          <Link className="site-link-quiet" href="/faq">
+            FAQ
+          </Link>
+          <Link className="site-link-quiet" href="/pricing">
+            Pricing
+          </Link>
+          <Link className="site-link-quiet" href="/blog">
+            Blog
+          </Link>
           <Link className="site-link-quiet" href="/privacy">
             Privacy
           </Link>

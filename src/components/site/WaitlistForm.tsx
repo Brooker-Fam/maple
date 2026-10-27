@@ -33,7 +33,7 @@ export default function WaitlistForm() {
     return (
       <div role="status" className="max-w-[34rem] rounded-[18px] border border-mp-line bg-mp-surface px-5 py-4">
         <p className="font-display text-[1.6rem] leading-tight font-semibold text-mp-ink">You&rsquo;re on the list.</p>
-        <p className="mt-1 text-[15px] leading-relaxed text-mp-ink-2">We&rsquo;ll email you when Maple opens to more families. Nothing else.</p>
+        <p className="mt-1 text-[15px] leading-relaxed text-mp-ink-2">You&rsquo;ll get one email when Maple opens to more families, and no others.</p>
       </div>
     );
   }
@@ -72,7 +72,7 @@ export default function WaitlistForm() {
         {error}
       </p>
       <p id={`${id}-note`} className="text-[14px] leading-relaxed text-mp-ink-3">
-        Families can&rsquo;t sign up yet. We&rsquo;ll use your email only to tell you when you can.{" "}
+        Your email is used only to tell you when families can sign up.{" "}
         <Link href="/privacy" className="site-link">
           Privacy
         </Link>

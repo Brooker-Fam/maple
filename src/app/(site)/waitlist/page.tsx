@@ -3,11 +3,16 @@ import Link from "next/link";
 import SiteFooter from "@/components/site/SiteFooter";
 import SiteHeader from "@/components/site/SiteHeader";
 import WaitlistForm from "@/components/site/WaitlistForm";
+import { siteOpenGraph } from "@/components/site/meta";
 import { WAITLIST_ERRORS, type WaitlistError } from "@/lib/waitlist";
+
+const DESCRIPTION = "Leave your email to hear when Maple opens to more families. One family uses Maple today.";
 
 export const metadata: Metadata = {
   title: "Waitlist",
+  description: DESCRIPTION,
   robots: { index: false, follow: true },
+  openGraph: siteOpenGraph("Waitlist | Maple", DESCRIPTION, "/waitlist"),
 };
 
 const isError = (r: unknown): r is WaitlistError => typeof r === "string" && Object.hasOwn(WAITLIST_ERRORS, r);
@@ -26,8 +31,8 @@ export default async function Waitlist({ searchParams }: { searchParams: Promise
         </h1>
         <p className={`site-prose mt-4 ${error ? "text-mp-danger" : ""}`} role={error ? "alert" : undefined}>
           {joined
-            ? "We’ll email you when Maple opens to more families. Nothing else."
-            : (error ?? "Maple is open to one family for now. Leave your email and you’ll hear when it opens.")}
+            ? "You’ll get one email when Maple opens to more families, and no others."
+            : (error ?? "Maple is open to one family for now. Leave your email to hear when other families can sign up.")}
         </p>
         {!joined && (
           <div className="mt-8">

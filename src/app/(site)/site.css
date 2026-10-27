@@ -283,6 +283,7 @@
     font-weight: 600;
     line-height: 1.15;
     color: var(--mp-ink);
+    text-wrap: balance;
   }
   .site-legal h3 {
     margin-top: 1.75rem;

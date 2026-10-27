@@ -1,5 +1,5 @@
 import { Icon, type IconName } from "@/components/maple/icons";
-import { KIND_COLOR, MAPLE, SIDE_COLOR, SIDE_INK } from "@/components/maple/palette";
+import { DETAIL_COLOR, KIND_COLOR, MAPLE, SIDE_COLOR, SIDE_INK } from "@/components/maple/palette";
 import Ticker from "./Ticker";
 
 /** A drawn phone holding a sample screen. The screen is decorative; `label` says what it shows. */
@@ -36,14 +36,20 @@ function SideMark({ side, size = 26 }: { side: "L" | "R"; size?: number }) {
   );
 }
 
-function DockTile({ icon, label, filled }: { icon: IconName; label: string; filled?: boolean }) {
+type Mark = { icon: IconName; color?: string };
+
+function DockTile({ marks, label, filled }: { marks: Mark[]; label: string; filled?: boolean }) {
   return (
     <span
       className={`flex flex-1 flex-col items-center justify-center gap-1 rounded-[16px] py-2.5 text-[12px] font-semibold ${
         filled ? "bg-mp-accent text-mp-on-accent" : "bg-mp-surface text-mp-ink"
       }`}
     >
-      <Icon name={icon} size={22} />
+      <span className="flex items-center">
+        {marks.map((m) => (
+          <Icon key={m.icon} name={m.icon} size={22} className={m.color ? "mp-kind-ink" : undefined} style={m.color ? { color: m.color } : undefined} />
+        ))}
+      </span>
       {label}
     </span>
   );
@@ -61,20 +67,11 @@ function RecentRow({ icon, color, title, time }: { icon: IconName; color: string
   );
 }
 
-/** Today in the daytime, mid-feed: the card shows what happened, the dock holds every action. */
+/** Today in the daytime, mid-feed: the hero folds away, the card shows what happened, the dock holds every action. */
 export function TodayMock() {
   return (
     <div className="flex h-full flex-col bg-mp-bg">
       <StatusBar at={2 * 3600 + 27 * 60 + 12} />
-      <div className="flex items-end justify-between px-5 pt-3">
-        <div>
-          <p className="font-display text-[34px] leading-none font-semibold text-mp-ink">June</p>
-          <p className="mt-1 text-[13px] text-mp-ink-3">Day 15 · two weeks old</p>
-        </div>
-        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-mp-surface text-mp-accent-fg">
-          <Icon name="message-square" size={19} />
-        </span>
-      </div>
 
       <div className="mx-3.5 mt-4 rounded-[22px] border border-[var(--mp-edge)] bg-mp-surface p-4">
         <div className="flex items-center justify-between">
@@ -82,7 +79,10 @@ export function TodayMock() {
             <span className="mp-kind-fill h-2.5 w-2.5 rounded-full" style={{ backgroundColor: MAPLE.ember }} />
             Nursing
           </p>
-          <Icon name="ellipsis" size={20} className="text-mp-ink-3" />
+          <span className="flex items-center gap-3 text-mp-ink-3">
+            <Icon name="lamp" size={19} />
+            <Icon name="ellipsis" size={20} />
+          </span>
         </div>
         <div className="mt-3 space-y-2 text-[14px] tabular-nums">
           <p className="flex items-center gap-2.5 text-mp-ink-2">
@@ -121,12 +121,24 @@ export function TodayMock() {
         </div>
       </div>
 
-      <div className="mt-auto bg-mp-sunken px-2.5 pt-2.5 pb-5">
+      <div className="mt-auto space-y-2 bg-mp-sunken px-2.5 pt-2.5 pb-5">
         <div className="flex gap-2">
-          <DockTile icon="arrow-left-right" label="Switch" />
-          <DockTile icon="pause" label="Pause" />
-          <DockTile icon="check" label="Done" filled />
-          <DockTile icon="ellipsis" label="More" />
+          <DockTile marks={[{ icon: "arrow-left-right" }]} label="Switch" />
+          <DockTile marks={[{ icon: "pause" }]} label="Pause" />
+          <DockTile marks={[{ icon: "check" }]} label="Done" filled />
+          <DockTile marks={[{ icon: "plus" }]} label="More" />
+        </div>
+        <div className="flex gap-2">
+          <DockTile marks={[{ icon: "droplet", color: DETAIL_COLOR.pee }]} label="Pee" />
+          <DockTile marks={[{ icon: "poop", color: DETAIL_COLOR.poop }]} label="Poop" />
+          <DockTile
+            marks={[
+              { icon: "droplet", color: DETAIL_COLOR.pee },
+              { icon: "poop", color: DETAIL_COLOR.poop },
+            ]}
+            label="Both"
+          />
+          <DockTile marks={[{ icon: "moon", color: DETAIL_COLOR.sleep }]} label="Sleep" />
         </div>
       </div>
     </div>

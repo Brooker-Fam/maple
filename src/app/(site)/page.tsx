@@ -25,11 +25,11 @@ const HOURS: Hour[] = [
   {
     time: "6:40",
     half: "am",
-    title: "Both of you, one log",
+    title: "See what the other parent logged",
     body: (
       <>
-        Whoever was up at 2am, the other one wakes to a single line: what happened, and who did it. Two phones, or three with a
-        grandparent, all on the same log. View-only guests can follow along without changing anything.
+        After you&rsquo;ve been away three hours or more, Today shows one line with what the others logged and who logged it.
+        Grandparents can join as view-only guests and follow along without changing anything.
       </>
     ),
     visual: <HandoffFragment />,
@@ -37,11 +37,11 @@ const HOURS: Hour[] = [
   {
     time: "9:15",
     half: "am",
-    title: "Diapers and naps in a tap",
+    title: "Log a diaper or a nap with one tap",
     body: (
       <>
-        Pee, poop or both from the dock. Pick the color from real swatches and Maple says what it usually means, including the few
-        that mean calling your pediatrician today. Naps, bottles and pumping work the same way.
+        Pee, Poop and Both log a diaper at the current time, and Sleep starts a nap timer. Hold a button to open the full form
+        and log one from earlier. In the diaper form, each poop color shows a line about what it usually means.
       </>
     ),
     visual: <StoolFragment />,
@@ -49,11 +49,11 @@ const HOURS: Hour[] = [
   {
     time: "11:30",
     half: "am",
-    title: "Ready for the checkup",
+    title: "Growth charts and questions for the pediatrician",
     body: (
       <>
-        Weight, length and head size land on the WHO growth curves as you enter them. The questions you thought of at 4am wait on
-        one list, and a visit summary is ready to copy for the pediatrician.
+        Weight, length and head size go on the WHO growth curves as you enter them. Questions for the pediatrician go on one list,
+        and the For the doctor sheet has a visit summary you can copy.
       </>
     ),
     visual: (
@@ -66,23 +66,19 @@ const HOURS: Hour[] = [
   {
     time: "4:30",
     half: "pm",
-    title: "The firsts, kept",
-    body: (
-      <>
-        Add a photo to a moment and it stays in your family&rsquo;s log, not on a feed. First bath, first smile, the first night
-        she slept four hours in a row.
-      </>
-    ),
+    title: "Photos and firsts stay in your log",
+    body: <>Add a photo to a moment, such as a first bath. Only the people in your family&rsquo;s log can see it.</>,
     visual: <MomentFragment />,
   },
   {
     time: "5:45",
     half: "pm",
-    title: "A page for mom, too",
+    title: "Mom has her own page",
     body: (
       <>
-        Her own medicines on the schedule her clinician gave, when each one is OK again, her temperature, questions for her OB, and
-        the warning signs worth a call, with the numbers to call. The app never suggests a dose, and its chat is told not to.
+        It shows when each of her medicines is OK again, on the schedule her clinician gave. It also keeps her temperature, her
+        questions for her OB, and the warning signs to watch for, with the numbers to call. The app never suggests a dose, and
+        its chat is told not to.
       </>
     ),
     visual: <MomFragment />,
@@ -90,11 +86,11 @@ const HOURS: Hour[] = [
   {
     time: "8:20",
     half: "pm",
-    title: "Hands full? Say it instead",
+    title: "Log by voice with Siri, or type in the chat",
     body: (
       <>
-        Ask Siri while you rock her. Or tell Maple&rsquo;s chat in plain words and it saves the entries, each with an Undo, for you
-        to check. You can also connect your own Claude or ChatGPT account and ask how the week went.
+        On an iPhone, a Siri shortcut logs a diaper or starts a timer by voice. In the app&rsquo;s chat, type what happened and it
+        saves each entry with an Undo. You can also connect your own Claude or ChatGPT account and ask how the week went.
       </>
     ),
     visual: (
@@ -106,31 +102,48 @@ const HOURS: Hour[] = [
   },
 ];
 
-const NIGHT_FACTS = [
-  { title: "The next side, remembered", body: "It says which side to start on, from the side she started on last time." },
-  { title: "Back and forth", body: "Going both sides? Say so once, and there’s no need to tap Switch." },
-  { title: "Forgot to stop?", body: "When a side runs long, Done asks when she finished instead of guessing." },
+const NIGHT_FACTS: { title: string; body: React.ReactNode }[] = [
+  {
+    title: "Next side",
+    body: (
+      <>
+        Today shows which side to offer next. The rule is explained in{" "}
+        <Link className="site-link" href="/blog/how-maple-counts-a-feed">
+          How Maple counts a feed
+        </Link>
+        .
+      </>
+    ),
+  },
+  { title: "Back and forth", body: "Mark a feed as back and forth once, and you don’t need to tap Switch for the rest of it." },
+  { title: "Forgotten timer", body: "Once a side has run 45 minutes, Done lets you pick when she finished." },
+];
+
+const SOURCES = [
+  { text: "AAP", href: "https://www.healthychildren.org/" },
+  { text: "CDC", href: "https://www.cdc.gov/infant-toddler-nutrition/breastfeeding/newborn-basics.html" },
+  { text: "WHO", href: "https://www.who.int/tools/child-growth-standards/standards" },
 ];
 
 const PROMISES = [
   {
-    title: "Private to your family",
+    title: "Who can see it",
     body: (
       <>
-        Only the people you invite can see your log in Maple. No ads, and your data is never sold. The{" "}
+        Only the people you invite can see your log in Maple. Maple shows no ads and never sells your data. The{" "}
         <Link className="site-link" href="/privacy">
           privacy page
         </Link>{" "}
-        says who else handles it, and why.
+        lists the services that store or carry it.
       </>
     ),
   },
-  { title: "Nothing watching you", body: "No analytics or session replay in the app." },
+  { title: "Analytics", body: "The app and this site have no analytics or session replay." },
   {
-    title: "Open source",
+    title: "Source code",
     body: (
       <>
-        Every line of Maple is public under the MIT license, on{" "}
+        Maple&rsquo;s code is public under the MIT license, on{" "}
         <a className="site-link" href="https://github.com/Brooker-Fam/maple">
           GitHub
         </a>
@@ -138,7 +151,7 @@ const PROMISES = [
       </>
     ),
   },
-  { title: "Made by a family", body: "Maple began as the log one family kept for their own newborn. They still use it every day." },
+  { title: "Who makes it", body: "Matt Brooker makes Maple; he and his wife use it every day." },
 ];
 
 export default function Home() {
@@ -149,11 +162,11 @@ export default function Home() {
         <section className="mx-auto grid w-full max-w-[76rem] items-center gap-12 px-4 pt-12 pb-20 sm:px-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-20 lg:pt-20 lg:pb-28">
           <div>
             <h1 className="site-display max-w-[13ch] text-[clamp(2.85rem,1.4rem+6vw,5.75rem)] leading-[0.98] text-mp-ink">
-              The newborn log for both of you, built for 3am.
+              A newborn log you and your partner share.
             </h1>
             <p className="site-prose mt-6 text-[19px] leading-[1.55]">
-              Maple keeps feeds, diapers, sleep and the small firsts in one log you share. The timer works with one thumb, the
-              buttons are big, and after dark the whole thing dims to a low amber glow.
+              Each of you logs from your own phone, into the same log. The buttons sit at the bottom of the screen, and one tap
+              starts a feed or logs a diaper.
             </p>
             <div className="mt-9">
               <WaitlistForm />
@@ -161,7 +174,7 @@ export default function Home() {
           </div>
           <Phone
             className="mx-auto lg:mr-4"
-            label="Sample screen: June's Today page mid-feed. The left side ran 12 minutes, she has been on the right for 4 minutes, and the dock holds Switch, Pause, Done and More."
+            label="Sample screen: Today mid-feed. The left side ran 12 minutes, she has been on the right for 4 minutes, and the dock holds Switch, Pause, Done and More above Pee, Poop, Both and Sleep."
           >
             <TodayMock />
           </Phone>
@@ -172,9 +185,7 @@ export default function Home() {
             <h2 id="day" className="site-display text-[clamp(2.1rem,1.5rem+2.4vw,3.2rem)] leading-[1.05] text-mp-ink">
               One day with June
             </h2>
-            <p className="site-prose mt-4">
-              June is made up, and so is everything on these screens. What they do is real: this is the app as it works today.
-            </p>
+            <p className="site-prose mt-4">Sample data.</p>
           </div>
 
           <div className="site-rail mt-14 space-y-20 lg:space-y-28">
@@ -207,9 +218,9 @@ export default function Home() {
                 The Lantern
               </h2>
               <p className="site-prose mt-4 text-mp-ink-2">
-                From 8pm to 7am Maple dims to amber on near-black, and photos dim with it. Open a feed and the Lantern fills the
-                screen: one big clock and three buttons, and the screen stays awake. Each button needs a half-second hold, so a
-                flailing hand can&rsquo;t end the feed.
+                From 8pm to 7am the app turns dim amber on near-black, and photos dim with it. During a feed, the Lantern button on
+                the timer card opens a full-screen timer with a large clock and the dock&rsquo;s buttons, and asks the phone to keep
+                the screen on. Each button needs a half-second hold, so a stray tap doesn&rsquo;t end the feed.
               </p>
               <dl className="mt-10 grid max-w-[40rem] gap-x-8 gap-y-6 sm:grid-cols-3">
                 {NIGHT_FACTS.map((f) => (
@@ -234,12 +245,20 @@ export default function Home() {
           <div className="grid gap-12 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-20">
             <div>
               <h2 id="honest" className="site-display text-[clamp(2.1rem,1.5rem+2.4vw,3.2rem)] leading-[1.05] text-mp-ink">
-                A tracker, not a doctor
+                Medical advice comes from your pediatrician
               </h2>
               <p className="site-prose mt-4">
-                Maple helps you remember. It doesn&rsquo;t diagnose anything, and it isn&rsquo;t medical advice. Its notes follow
-                public guidance from the AAP, CDC and WHO for healthy full-term babies, and your pediatrician&rsquo;s word comes
-                first. In an emergency, call{" "}
+                Maple is a log. It doesn&rsquo;t diagnose anything or give medical advice. Its notes follow public guidance from
+                the{" "}
+                {SOURCES.map((src, i) => (
+                  <span key={src.text}>
+                    {i === SOURCES.length - 1 ? " and " : i > 0 ? ", " : ""}
+                    <a className="site-link" href={src.href}>
+                      {src.text}
+                    </a>
+                  </span>
+                ))}{" "}
+                for healthy full-term babies. In an emergency, call{" "}
                 <a className="site-link" href="tel:911">
                   911
                 </a>
@@ -262,7 +281,7 @@ export default function Home() {
             <h2 id="join" className="site-display max-w-[16ch] text-[clamp(2.4rem,1.6rem+3.2vw,4rem)] leading-[1.02] text-mp-ink">
               Maple is open to one family for now.
             </h2>
-            <p className="site-prose mt-4">It&rsquo;s getting ready for more. Leave your email and you&rsquo;ll hear when it opens.</p>
+            <p className="site-prose mt-4">Leave your email to hear when other families can sign up.</p>
             <div className="mt-8">
               <WaitlistForm />
             </div>

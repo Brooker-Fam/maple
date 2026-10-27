@@ -12,15 +12,14 @@ const cormorantItalic = Cormorant_Garamond({
   display: "swap",
 });
 
-const DESCRIPTION =
-  "Maple is a calm newborn tracker for both parents: a one-thumb nursing timer, diapers, sleep, growth and a page for mom's recovery, with a dim Lantern for 3am feeds.";
+const DESCRIPTION = "A newborn tracker two parents share, with a nursing timer, diapers, sleep, growth and a page for mom's medicines.";
 
 export const metadata: Metadata = {
-  title: { default: "Maple: the newborn log for both of you", template: "%s | Maple" },
+  title: { default: "Maple | A newborn log for two parents", template: "%s | Maple" },
   description: DESCRIPTION,
   applicationName: "Maple",
   robots: { index: true, follow: true },
-  openGraph: siteOpenGraph("Maple: the newborn log for both of you, built for 3am", DESCRIPTION, "/"),
+  openGraph: siteOpenGraph("Maple | A newborn log for two parents", DESCRIPTION, "/"),
   twitter: { card: "summary_large_image" },
 };
 

@@ -15,10 +15,10 @@ export default function Privacy() {
   return (
     <LegalPage
       title="Privacy"
-      lead="Maple is a newborn tracker. This page says what it keeps, where, who can see it, and how to have it deleted. It covers maplebaby.app and Maple’s iPhone and Android apps, which show the same app."
+      lead="Maple is a newborn tracker. This page says what it keeps, where, who can see it, and how to have it deleted. It covers maplebaby.app, and Maple’s iPhone and Android apps once they’re released."
       other={{ href: "/terms", label: "terms" }}
     >
-      <h2>The short version</h2>
+      <h2>Summary</h2>
       <ul>
         <li>
           What you log stays in your family&rsquo;s log, and in Maple only the people in it can see it. The services that run
@@ -27,22 +27,24 @@ export default function Privacy() {
         <li>No ads. Your data is never sold or shared for advertising.</li>
         <li>No analytics or session replay, in the app or on this site.</li>
         <li>
-          If you use Maple&rsquo;s chat, your messages go to an AI model through Vercel AI Gateway, which Maple asks to keep
-          nothing and train on nothing.
+          If you use Maple&rsquo;s chat, your messages go to an AI model through Vercel AI Gateway, and every request asks for zero
+          data retention and no training.
         </li>
-        <li>Ask, and your family&rsquo;s log is deleted.</li>
+        <li>
+          Email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and your family&rsquo;s log is deleted within 30 days.
+        </li>
       </ul>
 
       <h2>What Maple keeps</h2>
       <h3>About you</h3>
       <p>
         When you sign in with Google, Google shares your name, email address and profile photo with Maple. Maple keeps your
-        email address and your first name (or your full name, if Google has no first name for you), and nothing else from your
-        Google account: not your photo, contacts, calendar or files. Someone invited with a one-time link instead of Google is
-        known by the name on their invite.
+        email address and your first name (or your full name, if Google has no first name for you). It doesn&rsquo;t keep your
+        photo or anything else from your Google account. Someone invited with a one-time link instead of Google is known by the
+        name on their invite.
       </p>
       <p>
-        When someone is removed from a family&rsquo;s log, Maple keeps their email address so they can&rsquo;t simply sign back
+        When someone is removed from a family&rsquo;s log, Maple keeps their email address so they can&rsquo;t sign back
         in. Inviting them again clears it.
       </p>
       <h3>What your family logs</h3>
@@ -69,8 +71,8 @@ export default function Privacy() {
       </p>
       <h3>The waitlist</h3>
       <p>
-        If you join the waitlist: your email address and when you joined. It is used only to tell you when Maple opens to more
-        families.
+        If you join the waitlist, Maple keeps your email address and the date you joined. It is used only to tell you when Maple
+        opens to more families.
       </p>
       <h3>To keep things working</h3>
       <ul>
@@ -82,7 +84,7 @@ export default function Privacy() {
         </li>
         <li>For each phone that turns on notifications, the address its browser gave Maple for sending them.</li>
         <li>
-          A hashed copy of each personal key behind a Siri shortcut, so Maple knows who is logging. Claude and ChatGPT
+          A hashed copy of each personal key behind a Siri shortcut, so each entry from a shortcut records who logged it. Claude and ChatGPT
           connections use signed keys that Maple doesn&rsquo;t store.
         </li>
       </ul>
@@ -100,13 +102,13 @@ export default function Privacy() {
           for) under its own policy.
         </li>
         <li>
-          <strong>Upstash</strong>, when Maple uses it to send notifications on time, gets only the times to wake up, never what
-          you logged.
+          <strong>Upstash</strong>, when Maple uses it to send notifications on time, gets only the times to wake up. What you
+          logged isn&rsquo;t sent to it.
         </li>
       </ul>
       <p>
         If error reporting is turned on, a server error is sent to PostHog as the kind of error and where in Maple&rsquo;s code it
-        happened, never the contents of your log or your messages.
+        happened. The contents of your log and your messages aren&rsquo;t sent.
       </p>
 
       <h2>Who can see it</h2>
@@ -127,8 +129,8 @@ export default function Privacy() {
         When you use the chat, your message, the recent conversation, and whatever it looks up in your log to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. For members who can see mom&rsquo;s page, that can include her
         medicines and doses, her temperatures and her questions for her OB, but never her check-ins. Every request asks the
-        Gateway for zero data retention and no training on your data. Vercel says it then sends requests only to providers that
-        keep nothing and don&rsquo;t train on it. Nothing about your messages goes into Maple&rsquo;s logs or error reports.
+        Gateway for zero data retention and no training on your data, and names the only providers it may be sent to, each one
+        the Gateway lists as keeping no data. Nothing about your messages goes into Maple&rsquo;s logs or error reports.
       </p>
       <h3>Claude and ChatGPT</h3>
       <p>
@@ -139,7 +141,8 @@ export default function Privacy() {
       <h3>Siri</h3>
       <p>
         A Siri shortcut uses a personal key you make in Maple and sends short actions such as &ldquo;pee&rdquo; or
-        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. Delete the key in Maple to stop it.
+        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. Revoke the key in Maple (Family &rarr;
+        Shortcuts &amp; assistants) to stop it.
       </p>
 
       <h2>Notifications</h2>
@@ -152,7 +155,7 @@ export default function Privacy() {
         out turns them off on that phone.
       </p>
 
-      <h2>No ads, no selling</h2>
+      <h2>Ads and selling data</h2>
       <p>
         Maple shows no ads and has no advertising or tracking cookies. Your data is never sold, rented or shared for advertising.
       </p>
@@ -174,7 +177,7 @@ export default function Privacy() {
       <h2>Open source</h2>
       <p>
         Maple&rsquo;s code is public under the MIT license at{" "}
-        <a href="https://github.com/Brooker-Fam/maple">github.com/Brooker-Fam/maple</a>, so you can read exactly what it does.
+        <a href="https://github.com/Brooker-Fam/maple">github.com/Brooker-Fam/maple</a>, so you can read what it does with your data.
         Your family&rsquo;s data is never part of it.
       </p>
 

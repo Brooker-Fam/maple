@@ -1,0 +1,91 @@
+@layer components {
+  .site-post h2 {
+    margin-top: 2.6rem;
+  }
+  .site-post > :first-child {
+    margin-top: 0;
+  }
+  .site-post ol {
+    margin-top: 0.85rem;
+    padding-left: 1.35rem;
+    list-style: decimal;
+    color: var(--mp-ink-2);
+  }
+  .site-post ol li::marker {
+    color: var(--mp-ink-3);
+    font-weight: 600;
+  }
+  .site-post li > p {
+    margin-top: 0.35rem;
+  }
+  .site-post code {
+    padding: 0.08em 0.38em;
+    border-radius: 6px;
+    background: var(--mp-sunken);
+    color: var(--mp-ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.86em;
+    overflow-wrap: anywhere;
+  }
+  .site-post pre {
+    margin-top: 1rem;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+    border-radius: 14px;
+    background: var(--mp-sunken);
+  }
+  .site-post pre code {
+    padding: 0;
+    background: none;
+    overflow-wrap: normal;
+  }
+  .site-post blockquote {
+    margin-top: 1.1rem;
+    padding: 0.2rem 0 0.2rem 1.05rem;
+    border-left: 3px solid var(--mp-maple);
+  }
+  .site-post blockquote p {
+    margin-top: 0.4rem;
+    color: var(--mp-ink);
+  }
+  .site-post .site-table {
+    margin-top: 1.1rem;
+    overflow-x: auto;
+  }
+  .site-post table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.94rem;
+  }
+  .site-post th code,
+  .site-post td code {
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+  .site-post .site-swatch {
+    display: inline-block;
+    width: 0.95em;
+    height: 0.95em;
+    margin-right: 0.45em;
+    border-radius: 999px;
+    vertical-align: -0.12em;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mp-ink) 18%, transparent);
+  }
+  .site-post th,
+  .site-post td {
+    padding: 0.55rem 0.75rem 0.55rem 0;
+    border-bottom: 1px solid var(--mp-line);
+    text-align: left;
+    vertical-align: top;
+    color: var(--mp-ink-2);
+  }
+  .site-post th {
+    font-weight: 600;
+    color: var(--mp-ink);
+  }
+  .site-post hr {
+    margin-top: 2.2rem;
+    border: 0;
+    border-top: 1px solid var(--mp-line);
+  }
+}

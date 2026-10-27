@@ -43,7 +43,7 @@ export function HandoffFragment() {
     <Fragment label="Sample screen: a 'While you slept' line saying Theo gave a bottle, changed two wet diapers and put June down for a nap, with each entry below it.">
       <div className="rounded-[16px] bg-mp-sunken px-4 py-3 text-[14px] text-mp-ink">
         <span className="font-semibold">While you slept</span>
-        <span className="text-mp-ink-2"> · a feed · 2 wet · a nap · by Theo</span>
+        <span className="text-mp-ink-2"> · 1 feed · 2 wet · a nap · by Theo</span>
       </div>
       <div className="mt-2 divide-y divide-[var(--mp-line)]">
         <Row icon="moon" color={KIND_COLOR.sleep} title="Slept 2h 25m" meta="by Theo" time="2:15 AM" />
@@ -75,9 +75,7 @@ export function StoolFragment() {
         <p className="text-[15px] font-semibold text-mp-ink">{picked.label}</p>
         <p className="mt-0.5 text-[14px] leading-snug text-mp-ink-2">{picked.note}</p>
       </div>
-      <p className="mt-3 text-[13px] leading-snug text-mp-ink-3">
-        Pale, gray, white or red: {STOOL_COLOR_INFO.gray.note.toLowerCase()}
-      </p>
+      <p className="mt-3 text-[13px] leading-snug text-mp-ink-3">Pale, gray, white and red each show a card that says to call your pediatrician today.</p>
     </Fragment>
   );
 }
@@ -174,7 +172,7 @@ export function MomentFragment() {
         <div>
           <p className="text-[15px] font-semibold text-mp-ink">First bath</p>
           <p className="text-[13px] text-mp-ink-3">Day 15 · 4:30 PM</p>
-          <p className="mt-1.5 text-[14px] leading-snug text-mp-ink-2">Furious for one minute, then very calm about the whole thing.</p>
+          <p className="mt-1.5 text-[14px] leading-snug text-mp-ink-2">Cried at first, then settled.</p>
         </div>
       </div>
     </Fragment>

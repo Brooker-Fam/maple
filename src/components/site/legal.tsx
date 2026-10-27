@@ -4,7 +4,7 @@ import SiteHeader from "./SiteHeader";
 
 export const LEGAL_UPDATED = "2026-10-26";
 export const LEGAL_UPDATED_TEXT = "October 26, 2026";
-export const LEGAL_VERSION = "1.1";
+export const LEGAL_VERSION = "1.2";
 export const CONTACT_EMAIL = "hello@maplebaby.app";
 
 export function LegalPage({
@@ -29,11 +29,11 @@ export function LegalPage({
         <p className="mt-8 text-[19px] leading-[1.6] text-mp-ink-2">{lead}</p>
         <div className="site-legal mt-10">{children}</div>
         <p className="mt-14 border-t border-mp-line pt-6 text-[15px] text-mp-ink-2">
-          Questions? Write to{" "}
+          Write to{" "}
           <a className="site-link" href={`mailto:${CONTACT_EMAIL}`}>
             {CONTACT_EMAIL}
-          </a>
-          . See also the{" "}
+          </a>{" "}
+          with any question about this page. See also the{" "}
           <Link className="site-link" href={other.href}>
             {other.label}
           </Link>

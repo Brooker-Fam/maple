@@ -3,7 +3,7 @@ import Link from "next/link";
 import { CONTACT_EMAIL, HelpLines, LegalPage } from "@/components/site/legal";
 import { siteOpenGraph } from "@/components/site/meta";
 
-const DESCRIPTION = "The terms for using Maple: a newborn tracker, not medical advice, offered as is.";
+const DESCRIPTION = "The terms for using Maple, a newborn tracker that gives no medical advice and comes with no warranty.";
 
 export const metadata: Metadata = {
   title: "Terms",
@@ -16,22 +16,22 @@ export default function Terms() {
   return (
     <LegalPage
       title="Terms"
-      lead="These are the terms for using Maple, at maplebaby.app and in its iPhone and Android apps. Using Maple means you agree to them. They’re short on purpose."
+      lead="These are the terms for using Maple at maplebaby.app, and in its iPhone and Android apps once they’re released. Using Maple means you agree to them."
       other={{ href: "/privacy", label: "privacy page" }}
     >
-      <h2>Maple is a tracker, not medical advice</h2>
+      <h2>Maple doesn&rsquo;t give medical advice</h2>
       <p>
-        Maple helps a family write down a newborn&rsquo;s days and a parent&rsquo;s recovery. It is not medical advice, it
-        doesn&rsquo;t diagnose or treat anything, and it isn&rsquo;t a medical device or a medical record.
+        Maple is for writing down a newborn&rsquo;s days and a parent&rsquo;s recovery. It doesn&rsquo;t diagnose or treat
+        anything, and it isn&rsquo;t a medical device or a medical record.
       </p>
       <p>
-        Its notes and reminders are general information drawn from public guidance (such as the AAP, CDC and WHO) for healthy,
-        full-term babies. They can&rsquo;t know your baby. Your pediatrician&rsquo;s and your own clinician&rsquo;s advice always
-        comes first, and nothing in Maple is a reason to wait before calling them.
+        Its notes and reminders come from public guidance (such as the AAP, CDC and WHO) for healthy, full-term babies. They are
+        general and don&rsquo;t account for your baby&rsquo;s health. Your pediatrician&rsquo;s and your own clinician&rsquo;s
+        advice always comes first, and nothing in Maple is a reason to wait before calling them.
       </p>
       <div className="site-callout">
         <p className="mt-0">
-          <strong>If you think your baby or you need help now, don&rsquo;t use Maple. Call.</strong>
+          <strong>If you think your baby or you need help now, call one of these numbers instead of using Maple.</strong>
         </p>
         <HelpLines />
         <p>Maple can&rsquo;t call anyone for you, and no one is told automatically.</p>
@@ -51,9 +51,9 @@ export default function Terms() {
         You&rsquo;re responsible for who you invite and for keeping your sign-in to yourself.
       </p>
 
-      <h2>Your log is yours</h2>
+      <h2>Who owns what you log</h2>
       <p>
-        What you add to Maple stays yours. You let Maple store it, show it to the members of your family&rsquo;s log, and process
+        You own what you add to Maple. You let Maple store it, show it to the members of your family&rsquo;s log, and process
         it to run the features you use, such as sending a chat message to an AI model. The{" "}
         <Link href="/privacy">privacy page</Link> says exactly how.
       </p>
@@ -65,12 +65,15 @@ export default function Terms() {
       </p>
 
       <h2>Price</h2>
-      <p>Maple doesn&rsquo;t charge anything today. If that changes, you&rsquo;ll be told first, and nothing is charged without your agreement.</p>
+      <p>
+        Maple doesn&rsquo;t charge anything today. Any price will be posted on the <Link href="/pricing">pricing page</Link> before it
+        applies to anyone, and nothing is charged without your agreement.
+      </p>
 
       <h2>No warranty</h2>
       <p>
-        Maple is a small project, offered as it is. It can be down, slow, or wrong, and data can be lost, so keep anything
-        you can&rsquo;t lose somewhere else too. You can download every entry in the baby&rsquo;s log as a CSV at any time;
+        Maple is a small project, offered as it is. It can go down or show something wrong, and data can be lost, so keep
+        anything you can&rsquo;t lose somewhere else too. You can download every entry in the baby&rsquo;s log as a CSV at any time;
         mom&rsquo;s page and photos aren&rsquo;t in that file. Maple&rsquo;s code is open source under the MIT license, which
         also comes with no warranty.
       </p>

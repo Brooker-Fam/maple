@@ -30,9 +30,9 @@ export const WAITLIST_ERRORS = {
   body: "Send an email address to join.",
   cross: "Join from Maple’s own page at maplebaby.app.",
   limit: "Too many tries from this connection. Try again in an hour.",
-  full: "The waitlist has taken all it can for today. Try again tomorrow.",
+  full: "The waitlist is full for today. Try again tomorrow.",
   offline: "The waitlist is offline right now. Try again later.",
-  failed: "Couldn’t add you just now. Try again in a minute.",
+  failed: "Couldn’t add you. Try again in a minute.",
 } as const;
 
 export type WaitlistError = keyof typeof WAITLIST_ERRORS;

@@ -23,6 +23,7 @@
     "ai": "7.0.42",
     "framer-motion": "^12.34.3",
     "google-auth-library": "^10.6.2",
+    "marked": "18.1.1",
     "mcp-handler": "^1.1.0",
     "next": "16.1.6",
     "posthog-node": "^5.29.2",
