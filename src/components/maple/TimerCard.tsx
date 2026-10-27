@@ -6,6 +6,7 @@ import { adminActsAs } from "@/lib/maple/insights";
 import { minutesText, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
 import type { Entry, FeedData, Side, TimerKind } from "@/lib/maple/types";
+import { useBabyWords } from "./familyWords";
 import { fixPreset, KIND_TITLE, LiveBlock, PartRows, SIDE_NAME, timerNumbers, useCompact, useStillGoing, type FixExpand, type FixTarget, type TimerNumbers } from "./FeedParts";
 import { Icon, KindBadge, type IconName } from "./icons";
 import Lantern from "./Lantern";
@@ -75,6 +76,7 @@ function useSlow(on: boolean, ms: number): boolean {
 
 export default function TimerCard({ entry }: { entry: Entry }) {
   const { state, memberLabel, isNight, readOnly, timerBusy, toasts } = useMaple();
+  const w = useBabyWords();
   const { open, current: sheetOpen } = useSheets();
   const now = useNow(1000);
   const actions = useTimerActions();
@@ -274,7 +276,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
           </div>
           {isFeed && n.paused && controls && (
             <p className={cx("text-[13px] text-mp-ink-2", compact ? "leading-[15px]" : "mt-1 leading-snug")}>
-              {n.both ? "When she latches, tap Back on in the dock below." : "When she latches, tap her side in the dock below."}
+              {n.both ? `When ${w.he} latches, tap Back on in the dock below.` : `When ${w.he} latches, tap ${w.his} side in the dock below.`}
             </p>
           )}
           {/*
@@ -286,7 +288,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
             <button
               type="button"
               onClick={() => clusterInfo.open()}
-              aria-label="No need to tap Switch while she goes back and forth. About back and forth"
+              aria-label={`No need to tap Switch while ${w.he} goes back and forth. About back and forth`}
               className="-mx-2 flex min-h-[44px] w-[calc(100%+16px)] items-center gap-1.5 rounded-xl px-2 text-left text-[13px] text-mp-ink-2 active:bg-mp-ink/5"
             >
               <span className="min-w-0 flex-1 truncate">No need to tap Switch.</span>
@@ -346,6 +348,7 @@ function TimerMenu({
   confirm: string | null;
   onInfo: () => void;
 }) {
+  const w = useBabyWords();
   const ref = useRef<HTMLDivElement>(null);
   const [askedAt, setAskedAt] = useState<number | null>(null);
   // The question takes the menu's place: focus moves to Keep, the safe answer.
@@ -396,13 +399,13 @@ function TimerMenu({
                 <div className="flex min-h-[60px] items-center gap-2 px-4 py-2">
                   <span className="min-w-0 flex-1">
                     <span className="block text-[15px] font-semibold text-mp-ink">Track sides</span>
-                    <span className="block text-[13px] text-mp-ink-2">{n.paused ? "Back on the…" : "She's on the…"}</span>
+                    <span className="block text-[13px] text-mp-ink-2">{n.paused ? "Back on the…" : `${w.Hes} on the…`}</span>
                   </span>
                   {(["L", "R"] as Side[]).map((s) => (
                     <button
                       key={s}
                       type="button"
-                      aria-label={`She's ${n.paused ? "back " : ""}on the ${SIDE_NAME[s]}: track sides again from now`}
+                      aria-label={`${w.Hes} ${n.paused ? "back " : ""}on the ${SIDE_NAME[s]}: track sides again from now`}
                       onClick={() => {
                         close();
                         void actions.trackSides(entry, s);
@@ -500,6 +503,7 @@ function ForgottenPrompt({
   disabled?: boolean;
   className?: string;
 }) {
+  const w = useBabyWords();
   const kind = entry.kind as TimerKind;
   const isFeed = kind === "feed" && n.parts.length > 0;
   const lastSide = [...n.parts].reverse().find((p) => p.kind === "side");
@@ -519,8 +523,8 @@ function ForgottenPrompt({
         {stale ? (
           <>
             {/* Over an hour: she's most likely done, and the dock's sides now start a new feed, so ending this one leads. */}
-            <Button size="lg" onClick={onDone} aria-label={`She's done: end the feed at ${formatTime(n.current.since, tz)}, when the break began`} className={cx("w-full", compact ? "mt-2.5" : "mt-4", btn)}>
-              She&apos;s done · ends {ends}
+            <Button size="lg" onClick={onDone} aria-label={`${w.Hes} done: end the feed at ${formatTime(n.current.since, tz)}, when the break began`} className={cx("w-full", compact ? "mt-2.5" : "mt-4", btn)}>
+              {w.Hes} done · ends {ends}
             </Button>
             <div className="mt-2 flex gap-2">
               <Button variant="soft" size="lg" disabled={disabled} onClick={onBackOn} className={cx("flex-1 px-2 text-[15px]", btn)}>
@@ -530,26 +534,26 @@ function ForgottenPrompt({
                 Still on a break
               </Button>
             </div>
-            <p className={cx("text-[13px] text-mp-ink-2", compact ? "mt-1.5 leading-[15px]" : "mt-2 leading-snug")}>When she latches, tap her side in the dock to start a new feed.</p>
+            <p className={cx("text-[13px] text-mp-ink-2", compact ? "mt-1.5 leading-[15px]" : "mt-2 leading-snug")}>When {w.he} latches, tap {w.his} side in the dock to start a new feed.</p>
           </>
         ) : (
           <>
             <Button size="lg" disabled={disabled} onClick={onBackOn} className={cx("w-full", compact ? "mt-2.5" : "mt-4", btn)}>
-              She&apos;s back on…
+              {w.Hes} back on…
             </Button>
             <div className="mt-2 flex gap-2">
               <Button variant="soft" size="lg" onClick={onSnooze} className={cx("flex-1 px-2 text-[15px]", btn)}>
                 Still on a break
               </Button>
               {/* Done while paused ends the feed at the pause, as the dock's Done says ("ends 4:10" under it, like the tile). */}
-              <Button variant="soft" size="lg" onClick={onDone} aria-label={`She's done: end the feed at ${formatTime(n.current.since, tz)}, when the break began`} className={cx("flex-1 px-2 text-[15px]", btn)}>
+              <Button variant="soft" size="lg" onClick={onDone} aria-label={`${w.Hes} done: end the feed at ${formatTime(n.current.since, tz)}, when the break began`} className={cx("flex-1 px-2 text-[15px]", btn)}>
                 <span className="flex flex-col items-center leading-tight">
-                  <span>She&apos;s done</span>
+                  <span>{w.Hes} done</span>
                   <span className="text-[12px] font-normal text-mp-ink-2 tabular-nums">ends {ends}</span>
                 </span>
               </Button>
             </div>
-            <p className={cx("text-[13px] text-mp-ink-2", compact ? "mt-1.5 leading-[15px]" : "mt-2 leading-snug")}>When she latches, tap her side in the dock below.</p>
+            <p className={cx("text-[13px] text-mp-ink-2", compact ? "mt-1.5 leading-[15px]" : "mt-2 leading-snug")}>When {w.he} latches, tap {w.his} side in the dock below.</p>
           </>
         )}
       </div>
@@ -561,7 +565,7 @@ function ForgottenPrompt({
     const since = formatTime(n.current.since, tz);
     const began = formatTime(entry.started_at, tz);
     sub = `${n.both ? "Back and forth" : `${SIDE_NAME[n.current.side ?? "L"]} side`} for ${minutesText(n.current.min)}, since ${since}${began === since ? "" : ` · feed started ${began}`}`;
-    primary = { label: "She finished earlier…", onClick: onEarlier };
+    primary = { label: `${w.He} finished earlier…`, onClick: onEarlier };
   } else {
     question = kind === "sleep" ? "Still asleep? Lucky you." : kind === "tummy" ? "Still doing tummy time?" : "Still pumping?";
     sub = `The timer says ${formatDuration(n.wallSec)}, since ${formatTime(entry.started_at, tz)}.`;

@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { LATE_BLACK_STOOL, PALE_STOOL, RED_STOOL, STOOL_COLOR_INFO, STOOL_TIMELINE } from "@/lib/maple/guidelines";
+import { PALE_STOOL, RED_STOOL, STOOL_COLOR_INFO, STOOL_TIMELINE, lateBlackStool } from "@/lib/maple/guidelines";
 import { DIAPER_SIZES, STOOL_TEXTURES, type DiaperData, type DiaperSize, type StoolColor, type StoolTexture } from "@/lib/maple/types";
+import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Chip, Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
@@ -80,6 +81,7 @@ export default function DiaperSheet(props: SheetProps) {
 
 function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, clock, age, now } = useSheetBase();
+  const voice = useVoice();
   const e = entry?.kind === "diaper" ? entry : undefined;
   const d: Partial<DiaperData> = e?.data ?? {};
 
@@ -103,7 +105,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const pee = type === "pee" || type === "both";
   const info = color ? STOOL_COLOR_INFO[color] : null;
   // Black after Day 4 is worth a call (once stools should have turned yellow).
-  const flag = !poop || !color ? null : info?.group === "pale" ? PALE_STOOL : info?.group === "red" ? RED_STOOL : color === "black" && age && age.dayOfLife >= 5 ? LATE_BLACK_STOOL : null;
+  const flag = !poop || !color ? null : info?.group === "pale" ? PALE_STOOL : info?.group === "red" ? RED_STOOL : color === "black" && age && age.dayOfLife >= 5 ? lateBlackStool(voice) : null;
 
   const details = [texture && TEXTURE_LABEL[texture], size && SIZE_LABEL[size], rash && "rash"].filter(Boolean).join(", ");
 

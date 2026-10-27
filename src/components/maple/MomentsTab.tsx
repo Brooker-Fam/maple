@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { statsFor } from "@/lib/maple/insights";
-import { MILESTONES, milestoneLabel, monthlyId, monthlyNumber } from "@/lib/maple/milestones";
+import { milestoneLabel, milestonesFor, monthlyId, monthlyNumber, type MilestoneWords } from "@/lib/maple/milestones";
 import {
   addDays,
   babyAge,
@@ -23,6 +23,7 @@ import { Icon, KindBadge } from "./icons";
 import { LeafMark, ageShort, keptDate } from "./keepsake";
 import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
+import { useBabyWords, useMilestoneWords, type BabyWords } from "./familyWords";
 import { Avatar, Button, Chip, EmptyState, SectionTitle, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
@@ -52,15 +53,15 @@ const TO_COME_COLLAPSED = 4;
 
 const isMoment = (e: Entry): e is Moment => e.kind === "moment";
 const photoCount = (m: Moment) => (m.id > 0 ? m.data.photos?.length ?? 0 : 0);
-const captionOf = (m: Moment) => m.data.title || milestoneLabel(m.data.milestone) || m.note || "A little moment";
+const captionOf = (m: Moment, mw: MilestoneWords) => m.data.title || milestoneLabel(m.data.milestone, mw) || m.note || "A little moment";
 /** The note, when it says something the caption doesn't. */
-const extraNote = (m: Moment) => (m.note && captionOf(m) !== m.note ? m.note : null);
+const extraNote = (m: Moment, mw: MilestoneWords) => (m.note && captionOf(m, mw) !== m.note ? m.note : null);
 /**
  * A photo-less slide in the lightbox shows a short note as its picture. A
  * long one would be cut off there, so it goes in the caption, in full.
  */
-const pictureNote = (s: Slide) => {
-  const note = s.photo == null ? extraNote(s.entry) : null;
+const pictureNote = (s: Slide, mw: MilestoneWords) => {
+  const note = s.photo == null ? extraNote(s.entry, mw) : null;
   return note && note.length <= 120 && !note.includes("\n") ? note : null;
 };
 
@@ -78,9 +79,9 @@ function rangeLabel(a: string, b: string, todayKey: string): string {
 }
 
 /** "3 days old", "2 weeks, 3 days old", "5 hours old"; null before she's born. */
-function ageAt(bornAt: string | null, at: string, tz: string): string | null {
+function ageAt(bornAt: string | null, at: string, tz: string, w: BabyWords): string | null {
   if (!bornAt) return null;
-  if (Date.parse(at) < Date.parse(bornAt)) return "Before she arrived";
+  if (Date.parse(at) < Date.parse(bornAt)) return `Before ${w.he} arrived`;
   const age = babyAge(bornAt, new Date(at), tz);
   if (age.days < 1) return age.label;
   if (age.days < 14) return `${age.days} day${age.days === 1 ? "" : "s"} old`;
@@ -153,7 +154,7 @@ export default function MomentsTab() {
   const bornAt = state?.baby.born_at ?? null;
   // Viewers (read-only role) can look at everything but add or edit nothing.
   const viewer = readOnly;
-  const babyName = state?.baby.name?.split(" ")[0] || "Maple";
+  const babyName = state?.baby.name?.split(" ")[0] || "Baby";
 
   // The fetched list plus what the shared state already knows (an optimistic
   // save, a delete a moment ago) so the scrapbook doesn't lag the toast.
@@ -274,6 +275,7 @@ function MonthlyPrompt({
   name: string;
   onTake: (preset: Record<string, unknown>) => void;
 }) {
+  const w = useBabyWords();
   const months = babyAge(bornAt, now, tz).months;
   const skipKey = `maple-monthly-skip-${months}`;
   const [skipped, setSkipped] = useState(false);
@@ -309,7 +311,7 @@ function MonthlyPrompt({
           {since === 0 ? "Today" : "This week"} is {name}&apos;s <span className="whitespace-nowrap">{months}-month day</span>
         </p>
         <p className={cx(tone.muted, "mt-0.5 text-sm leading-snug")}>
-          Take her monthly photo? Same spot, same blanket, and she lines up under “Growing up.”
+          Take {w.his} monthly photo? Same spot, same blanket, and {w.he} lines up under “Growing up.”
         </p>
         <Button
           size="sm"
@@ -335,16 +337,16 @@ function MonthlyPrompt({
 // ── Firsts ───────────────────────────────────────────────────────────────
 
 /** Shorter names for the "still to come" chips (the found list has room for the full label). */
-const SHORT: Record<string, string> = {
+const short = (w: BabyWords): Record<string, string> => ({
   "met-bruce": "Bruce (eventually)",
-  "emmett-held": "Emmett held her",
-  "sapphire-read": "Sapphire read to her",
+  "emmett-held": `Emmett held ${w.him}`,
+  "sapphire-read": `Sapphire read to ${w.him}`,
   "cord-stump": "Cord stump off",
   "first-outing": "First walk",
   "met-grandparents": "Grandparents",
   "first-smile": "First smile",
   "crib-night": "Crib night",
-};
+});
 
 function FirstsShelf({
   moments,
@@ -362,17 +364,19 @@ function FirstsShelf({
   onAdd: (milestone: string) => void;
 }) {
   const [all, setAll] = useState(false);
+  const shortLabels = short(useBabyWords());
+  const presets = milestonesFor(useMilestoneWords());
   // The earliest moment for each first.
   const found = new Map<string, Moment>();
   for (const m of moments) if (m.data.milestone && m.id > 0) found.set(m.data.milestone, m);
-  const achieved = MILESTONES.filter((p) => found.has(p.id)).sort(
+  const achieved = presets.filter((p) => found.has(p.id)).sort(
     (a, b) => Date.parse(found.get(a.id)!.started_at) - Date.parse(found.get(b.id)!.started_at)
   );
-  const upcoming = MILESTONES.filter((p) => !found.has(p.id));
+  const upcoming = presets.filter((p) => !found.has(p.id));
   const ordered = [...achieved, ...upcoming];
   // Found ones as a list (with when), the rest as light chips to tap and add.
   // Folded, the list keeps its first few and only the next few to come show
-  // (MILESTONES runs roughly in the order they happen); the rest wait behind "Show all".
+  // (the presets run roughly in the order they happen); the rest wait behind "Show all".
   const shownFound = all ? achieved : achieved.slice(0, SHELF_COLLAPSED);
   const shownToCome = all ? upcoming : upcoming.slice(0, TO_COME_COLLAPSED);
   const folds = achieved.length > SHELF_COLLAPSED || upcoming.length > TO_COME_COLLAPSED;
@@ -416,7 +420,7 @@ function FirstsShelf({
             {achieved.length > 0 && <p className={cx(tone.label, "mb-2.5")}>Still to come</p>}
             <ul className="flex flex-wrap gap-2">
               {shownToCome.map((p) => {
-                const label = SHORT[p.id] ?? p.label;
+                const label = shortLabels[p.id] ?? p.label;
                 return (
                   <li key={p.id}>
                     {viewer ? (
@@ -473,6 +477,7 @@ function GrowingUp({
   onOpen: (m: Moment) => void;
   onAdd: (preset: Record<string, unknown>) => void;
 }) {
+  const w = useBabyWords();
   const months = babyAge(bornAt, now, tz).months;
   const byMonth = new Map<number, Moment>();
   // Newest first, so the latest photo for a month wins.
@@ -515,7 +520,7 @@ function GrowingUp({
                         Month {k} · {date}
                       </span>
                       <span className={cx(tone.faint, "block text-[13px]")}>
-                        {viewer ? "Her next monthly photo" : "Take her photo that day"}
+                        {viewer ? `${w.His} next monthly photo` : `Take ${w.his} photo that day`}
                       </span>
                     </span>
                   </div>
@@ -560,7 +565,7 @@ function GrowingUp({
                   <button
                     type="button"
                     onClick={() => onAdd({ title: `${k} month${k === 1 ? "" : "s"} old`, milestone: monthlyId(k) })}
-                    aria-label={`${label}: add her month ${k} photo`}
+                    aria-label={`${label}: add ${w.his} month ${k} photo`}
                     className="block active:scale-[0.97]"
                   >
                     {tile}
@@ -598,13 +603,15 @@ function Scrapbook({
   onOpen: (m: Moment) => void;
 }) {
   const weeks = useMemo(() => groupByWeek(moments, bornAt, tz), [moments, bornAt, tz]);
+  const words = useBabyWords();
+  const before = `Before ${words.he} arrived`;
   return (
     <div className="space-y-6">
       {weeks.map((w) => (
-        <section key={w.id} aria-label={w.n ? `Week ${w.n}` : "Before she arrived"}>
+        <section key={w.id} aria-label={w.n ? `Week ${w.n}` : before}>
           <div className="mb-2.5 px-1">
             <div className="flex items-baseline gap-2">
-              <h2 className={cx(tone.heading, "text-[17px]")}>{w.n ? `Week ${w.n}` : "Before she arrived"}</h2>
+              <h2 className={cx(tone.heading, "text-[17px]")}>{w.n ? `Week ${w.n}` : before}</h2>
               {w.startKey && w.endKey && <span className={cx(tone.faint, "text-[13px]")}>{rangeLabel(w.startKey, w.endKey, todayKey)}</span>}
             </div>
             {w.n && w.startKey && w.endKey && (
@@ -711,19 +718,20 @@ function MomentCard({
   todayKey: string;
   onOpen: () => void;
 }) {
+  const mw = useMilestoneWords();
   const count = photoCount(m);
   const saving = m.id < 0;
   const p = m.data.photos?.[0];
   const landscape = !!(p?.w && p?.h && p.w > p.h * 1.1);
   const aspect = landscape ? "aspect-[5/4]" : "aspect-[4/5]";
-  const caption = captionOf(m);
+  const caption = captionOf(m, mw);
   // "Day 3 · Thu, Oct 22": the same age as the Firsts list, plus the day it happened.
   const meta = [ageShort(bornAt, m.started_at, tz), keptDate(dayKey(new Date(m.started_at), tz), todayKey)].filter(Boolean).join(" · ");
   // A first (or a monthly photo, a kept celebration) is named above the
   // caption, as in the lightbox, unless the caption already is its name.
-  const first = milestoneLabel(m.data.milestone);
+  const first = milestoneLabel(m.data.milestone, mw);
   const tag = first && first !== caption ? first : null;
-  const note = count ? null : extraNote(m);
+  const note = count ? null : extraNote(m, mw);
   const photosOnTheWay = saving && !!m.data.photos?.length;
   const words = !count && !photosOnTheWay;
 
@@ -793,10 +801,11 @@ function SafeImg({ src, className, alt = "" }: { src: string; className?: string
 // ── Empty & loading ──────────────────────────────────────────────────────
 
 function EmptyScrapbook({ viewer, onAdd }: { viewer: boolean; onAdd: () => void }) {
+  const w = useBabyWords();
   return (
     <div className={tone.card}>
       <EmptyState icon="camera" title="No moments yet">
-        <p>Her first photo goes here.</p>
+        <p>{w.His} first photo goes here.</p>
         {!viewer && (
           <Button className="mt-4" onClick={onAdd}>
             <Icon name="camera" size={18} />
@@ -844,6 +853,7 @@ function Lightbox({
   tz: string;
 }) {
   const { memberName, member, now } = useMaple();
+  const mw = useMilestoneWords();
   const reduce = useReducedMotion();
   const openNow = index >= 0;
   const [dir, setDir] = useState(0);
@@ -959,7 +969,7 @@ function Lightbox({
                   // No photo: the words are the picture (the caption below skips what's shown here).
                   <div className="flex aspect-square max-h-full w-full max-w-xs flex-col items-center justify-center overflow-hidden rounded-[20px] border border-mp-line bg-mp-surface p-7 text-center">
                     <span className={cx(tone.display, "line-clamp-6 text-[24px] leading-tight lining-nums")}>
-                      {pictureNote(slide) ? `“${pictureNote(slide)}”` : captionOf(slide.entry)}
+                      {pictureNote(slide, mw) ? `“${pictureNote(slide, mw)}”` : captionOf(slide.entry, mw)}
                     </span>
                   </div>
                 )}
@@ -1044,16 +1054,18 @@ function Caption({
   who: string;
   avatar: Member | null;
 }) {
+  const w = useBabyWords();
+  const mw = useMilestoneWords();
   const m = slide.entry;
   const at = new Date(m.started_at);
   // "Day 4" in her first two weeks, as the cards and Firsts say it; "2 weeks, 3 days old" after that.
   const short = ageShort(bornAt, m.started_at, tz);
-  const age = short?.startsWith("Day ") ? short : ageAt(bornAt, m.started_at, tz);
-  const milestone = m.data.milestone ? milestoneLabel(m.data.milestone) : null;
-  const title = captionOf(m);
+  const age = short?.startsWith("Day ") ? short : ageAt(bornAt, m.started_at, tz, w);
+  const milestone = m.data.milestone ? milestoneLabel(m.data.milestone, mw) : null;
+  const title = captionOf(m, mw);
   // A photo-less slide already shows its (short) note as the picture, or else its title: say each once.
-  const showNote = m.note && m.note !== title && !pictureNote(slide);
-  const showTitle = slide.photo != null || !!pictureNote(slide);
+  const showNote = m.note && m.note !== title && !pictureNote(slide, mw);
+  const showTitle = slide.photo != null || !!pictureNote(slide, mw);
   const via = m.source === "claude" ? " via Claude" : m.source === "chatgpt" ? " via ChatGPT" : m.source === "mcp" ? " via AI" : m.source === "chat" ? " via Maple chat" : "";
   return (
     <div className="max-h-[42%] shrink-0 overflow-y-auto px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">

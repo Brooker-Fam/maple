@@ -2,14 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { del } from "@vercel/blob";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { query } from "@/lib/db";
-import { sessionMember } from "@/lib/maple/auth";
+import { STILL_SETTING_UP } from "@/lib/maple/api";
+import { sessionContext } from "@/lib/maple/auth";
 import {
+  blobBelongsTo,
   blobToken,
+  familyBlobPrefix,
   MAPLE_PHOTO_MAX_BYTES,
   MAPLE_PHOTO_TYPES,
   MAPLE_UPLOAD_PATH_RE,
   uploadStore,
 } from "@/lib/maple/blob";
+import type { FamilyCtx } from "@/lib/maple/family";
+import { claimUpload, QUOTA_MESSAGE } from "@/lib/maple/upload-quota";
 import { MAPLE_BLOB_RE } from "@/lib/maple/validate";
 import { captureServerException } from "@/lib/posthog-server";
 import { checkUploadRateLimit } from "@/lib/rate-limit";
@@ -25,7 +30,8 @@ export const dynamic = "force-dynamic";
  *
  * Access handshake: the store decides public vs private (fixed at creation), and
  * the client must call upload() with the matching `access`. So:
- *   1. GET  → { ready, access } tells the client which mode to use.
+ *   1. GET  → { ready, access, prefix } tells the client which mode to use, and
+ *      the family's path prefix (maple/f<id>/) to upload under.
  *   2. POST → the client echoes it as clientPayload {"access": ...}; a mismatch
  *      (the private store was added between GET and POST) is rejected up front
  *      instead of failing later at Blob with a vaguer error.
@@ -39,14 +45,15 @@ function noStore(body: unknown, status = 200) {
 }
 
 export async function GET(request: NextRequest) {
-  const denied = await writerCheck(request);
-  if (denied) return denied;
+  const writer = await writerCheck(request);
+  if (writer instanceof NextResponse) return writer;
   const store = uploadStore();
   return noStore({
     ready: !!store,
     access: store?.access ?? null,
     maxBytes: MAPLE_PHOTO_MAX_BYTES,
     types: MAPLE_PHOTO_TYPES,
+    prefix: familyBlobPrefix(writer.familyId),
   });
 }
 
@@ -64,8 +71,8 @@ export async function POST(request: NextRequest) {
   // Token requests are the only event: no callback URL is ever registered, so
   // a "blob.upload-completed" here is noise (no cookies, nothing to do).
   if (body?.type !== "blob.generate-client-token") return noStore({ error: "Unexpected event" }, 400);
-  const denied = await writerCheck(request);
-  if (denied) return denied;
+  const writer = await writerCheck(request);
+  if (writer instanceof NextResponse) return writer;
 
   const store = uploadStore();
   if (!store) return noStore({ error: "Photo storage isn't set up yet" }, 503);
@@ -76,7 +83,7 @@ export async function POST(request: NextRequest) {
       request,
       body,
       onBeforeGenerateToken: async (pathname, clientPayload) => {
-        if (!MAPLE_UPLOAD_PATH_RE.test(pathname)) throw new UploadRejected("Unexpected upload path");
+        if (!MAPLE_UPLOAD_PATH_RE.test(pathname) || !blobBelongsTo(pathname, writer.familyId)) throw new UploadRejected("Unexpected upload path");
         let wanted: unknown = null;
         try {
           wanted = clientPayload ? (JSON.parse(clientPayload) as { access?: unknown }).access : null;
@@ -86,6 +93,7 @@ export async function POST(request: NextRequest) {
         if (wanted !== store.access) {
           throw new UploadRejected("Photo storage changed. Close the sheet and try again.");
         }
+        if (!(await claimUpload(writer.familyId))) throw new UploadRejected(QUOTA_MESSAGE, 429);
         return {
           allowedContentTypes: [...MAPLE_PHOTO_TYPES],
           maximumSizeInBytes: MAPLE_PHOTO_MAX_BYTES,
@@ -96,31 +104,40 @@ export async function POST(request: NextRequest) {
     });
     return noStore(result);
   } catch (error) {
-    if (error instanceof UploadRejected) return noStore({ error: error.message }, 400);
+    if (error instanceof UploadRejected) return noStore({ error: error.message }, error.status);
     console.error("POST /api/maple/upload error:", error);
     await captureServerException(error, { route: "POST /api/maple/upload" });
     return noStore({ error: "Couldn't start the upload" }, 400);
   }
 }
 
-class UploadRejected extends Error {}
+class UploadRejected extends Error {
+  constructor(
+    message: string,
+    readonly status = 400
+  ) {
+    super(message);
+  }
+}
 
-/** Uploading (and tidying up) is for members who can log: viewers are read-only. */
-async function writerCheck(request: NextRequest): Promise<NextResponse | null> {
-  const me = await sessionMember(request);
-  if (!me) return noStore({ error: "Sign in first" }, 401);
-  if (me.role === "viewer") return noStore({ error: "You have view-only access" }, 403);
-  return null;
+/** Uploading (and tidying up) is for members who can log, in their own family: viewers are read-only. */
+async function writerCheck(request: NextRequest): Promise<FamilyCtx | NextResponse> {
+  const signedIn = await sessionContext(request);
+  if (!signedIn) return noStore({ error: "Sign in first" }, 401);
+  if (signedIn.member.role === "viewer") return noStore({ error: "You have view-only access" }, 403);
+  if (signedIn.ctx.status === "onboarding") return noStore(STILL_SETTING_UP, 403);
+  return signedIn.ctx;
 }
 
 /**
  * DELETE { urls } — tidy up photos uploaded for a moment that was never saved
- * (removed from the sheet, or the sheet was closed). Only Maple paths, and
- * never a blob any moment (deleted ones included, for undo) still points at.
+ * (removed from the sheet, or the sheet was closed). Only this family's Maple
+ * paths, and never a blob one of its moments (deleted ones included, for
+ * undo) still points at.
  */
 export async function DELETE(request: NextRequest) {
-  const denied = await writerCheck(request);
-  if (denied) return denied;
+  const writer = await writerCheck(request);
+  if (writer instanceof NextResponse) return writer;
   let urls: string[] = [];
   try {
     const body = (await request.json()) as { urls?: unknown };
@@ -128,15 +145,15 @@ export async function DELETE(request: NextRequest) {
   } catch {
     return noStore({ error: "Expected a JSON body" }, 400);
   }
-  urls = [...new Set(urls.filter((u) => MAPLE_BLOB_RE.test(u)))].slice(0, 48);
+  urls = [...new Set(urls.filter((u) => MAPLE_BLOB_RE.test(u) && blobBelongsTo(u, writer.familyId)))].slice(0, 48);
   if (!urls.length) return noStore({ deleted: 0 });
 
   try {
     const rows = await query(
       `SELECT p->>'key' AS k, p->>'thumb_key' AS t
        FROM maple_entries, jsonb_array_elements(COALESCE(data->'photos', '[]'::jsonb)) AS p
-       WHERE kind = 'moment' AND (p->>'key' = ANY($1::text[]) OR p->>'thumb_key' = ANY($1::text[]))`,
-      [urls]
+       WHERE family_id = $2 AND kind = 'moment' AND (p->>'key' = ANY($1::text[]) OR p->>'thumb_key' = ANY($1::text[]))`,
+      [urls, writer.familyId]
     );
     if (rows === null) return noStore({ deleted: 0 });
     const inUse = new Set(rows.flatMap((r) => [r.k, r.t]).filter(Boolean));

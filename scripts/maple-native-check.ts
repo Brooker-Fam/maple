@@ -7,10 +7,10 @@
  *
  *   npx tsx scripts/maple-native-check.ts      (or pnpm check:maple-native)
  *
- * No database, no network: secrets and people are made up here, nothing
- * reaches Google (only the redirect URL is read), and the one member lookup
- * is answered by a fetch stand-in on a .invalid host. One PASS/FAIL line per
- * case, exit 1 on any failure.
+ * No network: secrets and people are made up here, nothing reaches Google
+ * (only the redirect URL is read), and the member lookups run against an
+ * in-memory Postgres (scripts/tenancy/harness.ts) holding two made-up
+ * families. One PASS/FAIL line per case, exit 1 on any failure.
  */
 import type { NextRequest } from "next/server";
 
@@ -106,15 +106,16 @@ async function main() {
   // ── the ticket ─────────────────────────────────────────────────────────
 
   const now = Date.parse("2026-10-26T14:00:00Z");
-  const ticket = mintNativeTicket(JO, "/maple", CHALLENGE, now);
-  const opened = { id: JO, back: "/maple", challenge: CHALLENGE };
+  const ticket = mintNativeTicket(JO, 1, "/maple", CHALLENGE, now);
+  const opened = { id: JO, fam: 1, back: "/maple", challenge: CHALLENGE };
 
-  await check("a ticket opens to its member, return path and challenge", () => {
+  await check("a ticket opens to its member, family, return path and challenge", () => {
     eq(openNativeTicket(ticket, now), opened);
-    eq(openNativeTicket(mintNativeTicket(JO, "/maple?care=1", CHALLENGE, now), now), { ...opened, back: "/maple?care=1" });
+    eq(openNativeTicket(mintNativeTicket(JO, 1, "/maple?care=1", CHALLENGE, now), now), { ...opened, back: "/maple?care=1" });
+    eq(openNativeTicket(mintNativeTicket(JO, 2, "/maple", CHALLENGE, now), now), { ...opened, fam: 2 });
     ok(/^mnt1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(ticket), `URL-safe shape: ${ticket}`);
     ok(ticket.split(".").slice(1).every((p) => !Buffer.from(p, "base64url").toString("latin1").includes(JO)), "the email isn't readable in the ticket");
-    ok(mintNativeTicket(JO, "/maple", CHALLENGE, now) !== ticket, "two tickets for the same sign-in differ");
+    ok(mintNativeTicket(JO, 1, "/maple", CHALLENGE, now) !== ticket, "two tickets for the same sign-in differ");
   });
 
   await check("a ticket lasts two minutes", () => {
@@ -145,7 +146,7 @@ async function main() {
 
   await check("other sealed values can't pass for a ticket", () => {
     const wrap = (sealed: string) => ["mnt1", ...sealed.split(":").map((p) => Buffer.from(p, "base64").toString("base64url"))].join(".");
-    eq(openNativeTicket(wrap(sealSession(JO)), now), null, "a session cookie");
+    eq(openNativeTicket(wrap(sealSession(JO, 1)), now), null, "a session cookie");
     const k = "maple-native-ticket";
     eq(openNativeTicket(wrap(encryptSecret(JSON.stringify({ id: JO, back: "/maple", c: CHALLENGE, exp: now + MIN }))), now), null, "no kind");
     eq(openNativeTicket(wrap(encryptSecret(JSON.stringify({ k, id: "", back: "/maple", c: CHALLENGE, exp: now + MIN }))), now), null, "no member");
@@ -165,8 +166,8 @@ async function main() {
   });
 
   await check("a ticket's return path still follows safeReturnPath", () => {
-    for (const bad of ["//evil.example", "https://evil.example/maple", "/maple\\..", "/admin"]) eq(openNativeTicket(mintNativeTicket(JO, bad, CHALLENGE, now), now)?.back, "/maple", bad);
-    eq(openNativeTicket(mintNativeTicket(JO, "/oauth/authorize?client_id=x", CHALLENGE, now), now)?.back, "/oauth/authorize?client_id=x");
+    for (const bad of ["//evil.example", "https://evil.example/maple", "/maple\\..", "/admin"]) eq(openNativeTicket(mintNativeTicket(JO, 1, bad, CHALLENGE, now), now)?.back, "/maple", bad);
+    eq(openNativeTicket(mintNativeTicket(JO, 1, "/oauth/authorize?client_id=x", CHALLENGE, now), now)?.back, "/oauth/authorize?client_id=x");
   });
 
   await check("garbage is refused without throwing", () => {
@@ -302,13 +303,13 @@ async function main() {
   const sessionSet = (res: Response) => /maple_session=[^;]/.test(res.headers.get("set-cookie") ?? "");
 
   await check("native: a bad, tampered or expired ticket lands on /maple?auth=failed with no session", async () => {
-    const fresh = mintNativeTicket(JO, "/maple", CHALLENGE);
+    const fresh = mintNativeTicket(JO, 1, "/maple", CHALLENGE);
     const parts = fresh.split(".");
     for (const [what, t] of [
       ["missing", null],
       ["empty", ""],
       ["tampered", [...parts.slice(0, 3), (parts[3][0] === "A" ? "B" : "A") + parts[3].slice(1)].join(".")],
-      ["expired", mintNativeTicket(JO, "/maple", CHALLENGE, Date.now() - 3 * MIN)],
+      ["expired", mintNativeTicket(JO, 1, "/maple", CHALLENGE, Date.now() - 3 * MIN)],
       ["wrong prefix", `mcpcode${fresh.slice(4)}`],
     ] as const) {
       const res = await trade(t);
@@ -319,42 +320,33 @@ async function main() {
   });
 
   await check("native: a good ticket with Maple's log unreachable signs no one in", async () => {
-    const res = await trade(mintNativeTicket(JO, "/maple", CHALLENGE));
+    const res = await trade(mintNativeTicket(JO, 1, "/maple", CHALLENGE));
     eq(location(res), "http://localhost:3000/maple?auth=failed");
     ok(!sessionSet(res), "no session");
   });
 
-  // A stand-in for Neon's HTTP endpoint (on .invalid, which never resolves): Jo is the one member.
-  const realFetch = globalThis.fetch;
-  process.env.DATABASE_URL = "postgresql://check:check@check.invalid/check";
-  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    const href = String(url instanceof Request ? url.url : url);
-    if (!/^https:\/\/[a-z.]+\.invalid\/sql$/.test(href)) throw new Error(`unexpected fetch ${href}`);
-    const { query, params } = JSON.parse(String(init?.body)) as { query: string; params: unknown[] };
-    const member = /FROM maple_members WHERE email = \$1/.test(query) && params[0] === JO;
-    const fields = ["email", "role", "display_name", "emoji", "color"].map((name) => ({ name, dataTypeID: 25 }));
-    const rows = member ? [[JO, "member", "Jo", null, null]] : [];
-    return new Response(JSON.stringify({ command: "SELECT", rowCount: rows.length, rows, fields, rowAsArray: true }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }) as typeof fetch;
+  // Jo joins made-up family 1 (Alpha); Beta is family 2.
+  const { freshDb, seedFamilies, sql } = await import("./tenancy/harness");
+  await freshDb();
+  const { beta } = await seedFamilies();
+  await sql(`INSERT INTO maple_members (family_id, email, role, display_name, added_by) VALUES (1, $1, 'member', 'Jo', 'self')`, [JO]);
+  const cookieOf = (res: Response) => decodeURIComponent(/^maple_session=([^;]+)/.exec(res.headers.getSetCookie().find((c) => /^maple_session=[^;]/.test(c)) ?? "")?.[1] ?? "");
   try {
     await check("native: a good ticket sets the usual session cookies and lands on its return path", async () => {
-      const res = await trade(mintNativeTicket(JO, "/maple", CHALLENGE));
+      const res = await trade(mintNativeTicket(JO, 1, "/maple", CHALLENGE));
       eq([res.status, location(res)], [307, "http://localhost:3000/maple"]);
       const set = res.headers.getSetCookie();
       const paths = set.filter((c) => /^maple_session=[^;]/.test(c)).map((c) => /Path=([^;]+)/.exec(c)?.[1]);
       eq(paths, ["/api/maple", "/oauth/authorize"], "session paths");
       const value = decodeURIComponent(/^maple_session=([^;]+)/.exec(set[0])?.[1] ?? "");
-      eq(openSession(value), JO, "the session opens to Jo");
+      eq(openSession(value), { id: JO, fam: 1 }, "the session opens to Jo in family 1");
       ok(set.some((c) => /^maple_session=;/.test(c) && /Path=\/;/.test(c)), "an old cookie at / is expired");
-      eq(location(await trade(mintNativeTicket(JO, "/maple?care=1", CHALLENGE))), "http://localhost:3000/maple?care=1", "return path");
+      eq(location(await trade(mintNativeTicket(JO, 1, "/maple?care=1", CHALLENGE))), "http://localhost:3000/maple?care=1", "return path");
     });
 
     await check("native: a good ticket without the app's verifier signs no one in (a link from another site)", async () => {
-      const t = mintNativeTicket(JO, "/maple", CHALLENGE);
-      const victim = { maple_session: sealSession("victim@example.com") };
+      const t = mintNativeTicket(JO, 1, "/maple", CHALLENGE);
+      const victim = { maple_session: sealSession("victim@example.com", 1) };
       for (const [what, verifier] of [
         ["no header", null],
         ["an empty header", ""],
@@ -368,12 +360,39 @@ async function main() {
     });
 
     await check("native: a ticket for someone no longer a member signs no one in", async () => {
-      const res = await trade(mintNativeTicket("gone@example.com", "/maple", CHALLENGE));
+      const res = await trade(mintNativeTicket("gone@example.com", 1, "/maple", CHALLENGE));
       eq(location(res), "http://localhost:3000/maple?auth=failed");
       ok(!sessionSet(res), "no session");
     });
+
+    await check("native: a ticket signs in to the family it names, for a member of that family only", async () => {
+      const res = await trade(mintNativeTicket(beta.owner, 2, "/maple", CHALLENGE));
+      eq(location(res), "http://localhost:3000/maple", "Beta's owner in family 2");
+      eq(openSession(cookieOf(res)), { id: beta.owner, fam: 2 }, "the session names family 2");
+      for (const [what, t] of [
+        ["Jo naming family 2", mintNativeTicket(JO, 2, "/maple", CHALLENGE)],
+        ["Beta's owner naming family 1", mintNativeTicket(beta.owner, 1, "/maple", CHALLENGE)],
+        ["a family that doesn't exist", mintNativeTicket(JO, 999, "/maple", CHALLENGE)],
+      ] as const) {
+        const r = await trade(t);
+        eq(location(r), "http://localhost:3000/maple?auth=failed", what);
+        ok(!sessionSet(r), `${what}: no session`);
+      }
+    });
+
+    await check("native: a ticket from before families (no fam) opens family 1, and only for a member there", async () => {
+      const old = (id: string) => {
+        const sealed = encryptSecret(JSON.stringify({ k: "maple-native-ticket", id, back: "/maple", c: CHALLENGE, exp: Date.now() + MIN }));
+        return ["mnt1", ...sealed.split(":").map((p) => Buffer.from(p, "base64").toString("base64url"))].join(".");
+      };
+      const res = await trade(old(JO));
+      eq(location(res), "http://localhost:3000/maple", "Jo");
+      eq(openSession(cookieOf(res)), { id: JO, fam: 1 }, "family 1");
+      const other = await trade(old(beta.owner));
+      eq(location(other), "http://localhost:3000/maple?auth=failed", "Beta's owner");
+      ok(!sessionSet(other), "no session for Beta's owner");
+    });
   } finally {
-    globalThis.fetch = realFetch;
     delete process.env.DATABASE_URL;
   }
 

@@ -8,6 +8,7 @@ import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from
 import { statsFor } from "@/lib/maple/insights";
 import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Entry, FeedData } from "@/lib/maple/types";
+import { useMilestoneWords } from "./familyWords";
 import { useClockMinute } from "./FeedParts";
 import { MAPLE_LEAF_PATH } from "./Hero";
 import { DROPLET_PATH, Icon, KindBadge } from "./icons";
@@ -211,6 +212,7 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
 
 export default function DayDial() {
   const { state, summary, api, units, readOnly } = useMaple();
+  const words = useMilestoneWords();
   const { open } = useSheets();
   // On the clock minute, so a running feed's minutes in the list flip with the card's and the Timeline's.
   const now = useClockMinute();
@@ -661,7 +663,7 @@ export default function DayDial() {
                   // Capped to the room on its side of the tap (placePop), scrolling inside, so it never runs under the dock.
                   <div ref={listRef} className={cx(tone.divide, "overflow-y-auto overscroll-contain border-t border-mp-line")} style={{ maxHeight: pop.maxList }}>
                     {pop.items.map((e) => {
-                      const d = describeEntry(e, { units, now });
+                      const d = describeEntry(e, { units, now, words });
                       return (
                         <button
                           key={e.id}
@@ -702,7 +704,7 @@ export default function DayDial() {
           ))}
           {plotted.map((e) => (
             <li key={e.id}>
-              {formatTime(e.started_at, tz)}: {describeEntry(e, { units, now }).text}
+              {formatTime(e.started_at, tz)}: {describeEntry(e, { units, now, words }).text}
             </li>
           ))}
         </ul>

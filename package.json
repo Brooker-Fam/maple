@@ -13,7 +13,10 @@
     "check:maple-care": "tsx scripts/maple-care-check.ts",
     "check:maple-native": "tsx scripts/maple-native-check.ts",
     "check:maple-chat": "tsx scripts/maple-chat-check.ts",
-    "check:site": "tsx scripts/site-check.ts"
+    "check:site": "tsx scripts/site-check.ts",
+    "check:maple-growth": "tsx scripts/maple-growth-check.ts",
+    "check:maple-tenancy": "tsx scripts/tenancy/run.ts",
+    "check:maple-parity": "tsx scripts/tenancy/parity/run.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",
@@ -33,6 +36,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

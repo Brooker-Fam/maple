@@ -22,8 +22,8 @@ export const textOf = (m: ChatMessage) => m.parts.flatMap((p) => (p.type === "te
  * no card answering it (turned away, or its reply was never saved). An older
  * reply's card doesn't count.
  */
-export function needsHelpCard(saved: ChatMessage[], sent: string | null): boolean {
-  if (sent == null || !mentionsCrisis(sent)) return false;
+export function needsHelpCard(saved: ChatMessage[], sent: string | null, names: readonly (string | null | undefined)[] = []): boolean {
+  if (sent == null || !mentionsCrisis(sent, names)) return false;
   const reply = saved.at(-1);
   const asked = saved.at(-2);
   return !(reply?.role === "assistant" && reply.parts.some((p) => p.type === "data-help") && asked?.role === "user" && textOf(asked) === sent);

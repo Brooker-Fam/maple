@@ -27,10 +27,18 @@ const AUTH_MESSAGES: Record<string, string> = {
   not_configured: "Google sign-in isn't set up yet. Use the site admin password below, or ask Matt.",
 };
 
+/** With sign-up open the page serves every family, so nothing names this one. */
+const OPEN_MESSAGES: Record<string, string> = {
+  ...AUTH_MESSAGES,
+  not_invited: "That Google account isn't in a family's log yet. Ask the person who invited you to add it, then try again.",
+  unavailable: "Maple is offline for a moment. Please try again shortly.",
+  not_configured: "Google sign-in isn't set up yet. Use the site admin password below.",
+};
+
 export default function SignIn() {
   const { auth, refresh } = useMaple();
   const still = useStill();
-  const [notice, setNotice] = useState<string | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -45,10 +53,10 @@ export default function SignIn() {
   useEffect(() => {
     try {
       const url = new URL(window.location.href);
-      const reason = url.searchParams.get("auth");
-      if (!reason) return;
-      if (reason !== "ok") setNotice(AUTH_MESSAGES[reason] ?? AUTH_MESSAGES.failed);
-      if (reason === "not_configured") setShowPassword(true);
+      const code = url.searchParams.get("auth");
+      if (!code) return;
+      if (code !== "ok") setReason(code);
+      if (code === "not_configured") setShowPassword(true);
       url.searchParams.delete("auth");
       window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
     } catch {
@@ -90,6 +98,9 @@ export default function SignIn() {
   const google = auth?.google ?? false;
   const passwordOk = auth?.password ?? false;
   const nothing = auth && !google && !passwordOk;
+  const open = !!auth?.signup && auth.signup !== "off";
+  const messages = open ? OPEN_MESSAGES : AUTH_MESSAGES;
+  const notice = reason ? (messages[reason] ?? messages.failed) : null;
 
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center px-5 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))]">
@@ -105,7 +116,7 @@ export default function SignIn() {
         </div>
         <h1 className={cx(tone.display, "mt-6 text-[34px] leading-[1.05]")}>Maple&apos;s Log</h1>
         <p className={cx(tone.muted, "mx-auto mt-2 max-w-[18rem] text-[15px] leading-relaxed text-balance")}>
-          Just for Maple&apos;s family.
+          {open ? "Your family's newborn log." : <>Just for Maple&apos;s family.</>}
         </p>
 
         {notice && (
@@ -131,7 +142,11 @@ export default function SignIn() {
               Continue with Google
             </a>
           )}
-          {nothing && <p className={cx(tone.muted, "text-sm")}>Sign-in isn&apos;t set up yet. Ask Matt to finish setting up Maple&apos;s Log.</p>}
+          {nothing && (
+            <p className={cx(tone.muted, "text-sm")}>
+              {open ? "Sign-in isn't set up yet." : <>Sign-in isn&apos;t set up yet. Ask Matt to finish setting up Maple&apos;s Log.</>}
+            </p>
+          )}
         </div>
 
         {passwordOk && (
@@ -187,9 +202,9 @@ export default function SignIn() {
         </p>
         {!inApp && (
           <p className={cx(tone.faint, "mx-auto mt-3 max-w-[18rem] text-[13px] leading-relaxed")}>
-            Not in the family? Maple is open to one family for now.{" "}
-            <Link href="/#join" className="font-medium text-mp-accent-fg underline underline-offset-2">
-              Join the waitlist
+            {open ? "New to Maple?" : "Not in the family? Maple is open to one family for now."}{" "}
+            <Link href={open ? "/signup" : "/#join"} className="font-medium text-mp-accent-fg underline underline-offset-2">
+              {open ? "Get started" : "Join the waitlist"}
             </Link>
           </p>
         )}

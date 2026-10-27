@@ -5,17 +5,18 @@ import { normName, planNames } from "@/lib/maple/care";
 import { describeEntry } from "@/lib/maple/describe";
 import {
   BABY_FEVER_MED_NAMES,
-  BABY_FEVER_MED_UNDER_3M_HINT,
   BABY_IBUPROFEN_NAMES,
   BABY_IBUPROFEN_UNDER_6M_HINT,
   VITAMIN_D_DEFAULT,
-  VITAMIN_D_NOTE,
+  babyFeverMedUnder3mHint,
+  vitaminDNote,
 } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import type { CarePlan, EntryOf } from "@/lib/maple/types";
 import { useCareNav } from "../care/CareNav";
 import { useCare } from "../care/useCare";
 import { Icon } from "../icons";
+import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import { ContextNote, Label, LoggedBy, NoteField, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase, withNulls } from "./parts";
@@ -49,6 +50,8 @@ export default function MedSheet(props: SheetProps) {
 
 function MedForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, state, summary, log, update, remove, now, ageMonths, clock, memberName } = useSheetBase();
+  const w = useBabyWords();
+  const voice = useVoice();
   const e = entry?.kind === "med" ? entry : undefined;
   const care = useCare();
   const careNav = useCareNav();
@@ -138,7 +141,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       onClose={onClose}
-      title={e ? describeEntry(e).title : vitD ? "Vitamin D" : `${state ? (state.baby.nickname || state.baby.name).split(" ")[0] : "Her"}'s medicine`}
+      title={e ? describeEntry(e).title : vitD ? "Vitamin D" : `${w.Name}'s medicine`}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -207,7 +210,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
             <Icon name="pill" size={18} className="mt-px shrink-0 text-mp-ink-2" />
             <span>
               {care.self ? `You have ${herPlan.name} on your list.` : `${care.name} has ${herPlan.name} on her list.`} Logging it here is for{" "}
-              {state ? (state.baby.nickname || state.baby.name).split(" ")[0] : "the baby"}.
+              {w.name}.
             </span>
           </p>
           {careWrite && !e && (
@@ -226,7 +229,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
         <div role="status" className={cx(tone.body, "rounded-xl border-l-[3px] border-mp-maple bg-mp-maple/[0.08] px-4 py-3 text-sm leading-relaxed")}>
           <p className="flex gap-2.5">
             <Icon name="triangle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
-            <span>{ageMonths < 3 ? BABY_FEVER_MED_UNDER_3M_HINT : BABY_IBUPROFEN_UNDER_6M_HINT}</span>
+            <span>{ageMonths < 3 ? babyFeverMedUnder3mHint(voice) : BABY_IBUPROFEN_UNDER_6M_HINT}</span>
           </p>
           {careWrite && !herPlan && !e && care && (
             <button type="button" onClick={() => toCare(() => careNav.openOneOff(name.trim(), { at: when?.toISOString(), dose: dose.trim() || undefined }))} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
@@ -238,7 +241,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
 
       <WhenField value={when} onChange={setWhen} tz={tz} />
       <NoteField value={note} onChange={setNote} />
-      {vitD && <ContextNote icon="sun">{VITAMIN_D_NOTE}</ContextNote>}
+      {vitD && <ContextNote icon="sun">{vitaminDNote(voice)}</ContextNote>}
       {e && care && careWrite && !isVitaminD(e.data.name) && e.id > 0 && (
         <button
           type="button"

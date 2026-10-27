@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { EMERGENCY_SIGNS, JAUNDICE_HOWTO, JAUNDICE_LABEL, assessJaundice, assessVitals } from "@/lib/maple/guidelines";
+import { JAUNDICE_LABEL, assessJaundice, assessVitals, emergencySigns, jaundiceHowto } from "@/lib/maple/guidelines";
 import { JAUNDICE_LEVELS, type EntryOf, type JaundiceLevel, type VitalsData } from "@/lib/maple/types";
 import { Icon } from "../icons";
+import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -42,6 +43,8 @@ export default function VitalsSheet(props: SheetProps) {
 
 function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, state, log, update, remove, now, ageMonths, bornAt, clock } = useSheetBase();
+  const w = useBabyWords();
+  const voice = useVoice();
   const e = entry?.kind === "vitals" ? entry : undefined;
   const d: Partial<VitalsData> = e?.data ?? {};
   const presetLevel = pstr(preset, "jaundice") as JaundiceLevel | undefined;
@@ -73,11 +76,11 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const vitalNotes = (["spo2", "resp_rate", "heart_bpm"] as const).flatMap((f) => {
     if (vitals[f] == null) return [];
     const prev = prevOf(f);
-    return assessVitals({ [f]: vitals[f] }, ageMonths, prev ? { [f]: prev.data[f], minutesBefore: ago(prev) } : null);
+    return assessVitals({ [f]: vitals[f] }, ageMonths, prev ? { [f]: prev.data[f], minutesBefore: ago(prev) } : null, voice);
   });
   // Without a birth time we can't tell her first day from her fifth, so skip that one rule.
   const ageHours = bornAt ? (t.getTime() - Date.parse(bornAt)) / H : 24;
-  const skinNote = level ? assessJaundice(level, ageHours, prevJ ? { level: prevJ.data.jaundice!, minutesBefore: ago(prevJ) } : null) : null;
+  const skinNote = level ? assessJaundice(level, ageHours, prevJ ? { level: prevJ.data.jaundice!, minutesBefore: ago(prevJ) } : null, voice) : null;
 
   const hasVitals = heart != null || resp != null || spo2 != null;
   const hasAny = hasVitals || level != null;
@@ -129,7 +132,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
       <div>
         <Label optional>Breathing</Label>
         <Stepper value={resp} onChange={setResp} onInvalid={checks.watch("resp")} step={1} min={5} max={150} suffix="/min" ariaLabel="breaths per minute" />
-        <p className={cx(tone.muted, "mt-1 text-xs")}>Count for a full minute while she&apos;s calm or asleep.</p>
+        <p className={cx(tone.muted, "mt-1 text-xs")}>Count for a full minute while {w.hes} calm or asleep.</p>
       </div>
       <div>
         <Label optional>Oxygen (SpO₂)</Label>
@@ -156,9 +159,11 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
       </div>
       {skinNote && <AssessmentCard a={skinNote} />}
       {!bornAt && level && level !== "none" && (
-        <ContextNote>Add her birth time so the app can tell whether this is her first day (yellow in the first 24 hours needs a call right away).</ContextNote>
+        <ContextNote>
+          Add {w.his} birth time so the app can tell whether this is {w.his} first day (yellow in the first 24 hours needs a call right away).
+        </ContextNote>
       )}
-      <ContextNote icon="sun">{JAUNDICE_HOWTO}</ContextNote>
+      <ContextNote icon="sun">{jaundiceHowto(voice)}</ContextNote>
     </>
   );
 
@@ -199,11 +204,11 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
         </>
       )}
       <WhenField value={when} onChange={setWhen} tz={tz} />
-      <NoteField value={note} onChange={setNote} placeholder="How is she acting?" />
+      <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting?`} />
       {/* Always on this sheet, so it stays quiet: a hairline in the danger color, not a filled alert. */}
       <p className={cx(tone.muted, "flex gap-2.5 rounded-xl border border-mp-danger/25 px-3.5 py-3 text-[13px] leading-relaxed")}>
         <Icon name="siren" size={16} className="mt-[2px] shrink-0 text-mp-danger" />
-        <span>{EMERGENCY_SIGNS}</span>
+        <span>{emergencySigns(voice)}</span>
       </p>
     </Sheet>
   );

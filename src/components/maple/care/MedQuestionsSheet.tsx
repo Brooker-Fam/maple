@@ -1,6 +1,7 @@
 "use client";
 
-import { MED_BABY_WATCH, MED_NURSING_NOTE, MOM_HELP, type HelpLine } from "@/lib/maple/guidelines";
+import { medBabyWatch, medNursingNote, momHelp, type HelpLine } from "@/lib/maple/guidelines";
+import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Sheet, cx, tone } from "../ui";
 import { telHref } from "./CareTeam";
@@ -15,19 +16,20 @@ import type { UseCare } from "./useCare";
  * pieces show unless Settings says she isn't nursing or pumping (S10).
  */
 export default function MedQuestionsSheet({ open, onClose, care }: { open: boolean; onClose: () => void; care: UseCare }) {
+  const voice = useVoice();
   const nursing = care.state.settings.feeding !== "no";
   const pharmacy = care.state.settings.care_team?.pharmacy?.trim();
   // By name, not position: MotherToBaby and InfantRisk are the nursing ones.
   const NURSING_LINES = ["MotherToBaby", "InfantRisk Center"];
-  const lines = MOM_HELP.medicine.filter((h) => nursing || !NURSING_LINES.includes(h.name));
+  const lines = momHelp(voice).medicine.filter((h) => nursing || !NURSING_LINES.includes(h.name));
 
   return (
     <Sheet open={open} onClose={onClose} title="Medicine questions">
-      <p className={cx(tone.body, "text-[15px] leading-relaxed")}>{MED_NURSING_NOTE}</p>
+      <p className={cx(tone.body, "text-[15px] leading-relaxed")}>{medNursingNote(voice)}</p>
       {nursing && (
         <p className={cx(tone.inset, tone.body, "flex gap-2.5 px-3.5 py-3 text-[14px] leading-relaxed")}>
           <Icon name="baby" size={18} className="mt-0.5 shrink-0 text-mp-ink-2" />
-          <span>{MED_BABY_WATCH}</span>
+          <span>{medBabyWatch(voice)}</span>
         </p>
       )}
       <div className={GROUP}>

@@ -4,6 +4,7 @@ import { describeEntry } from "@/lib/maple/describe";
 import { minutesShort, nursingRuns, sideMinutesText, spanText, type NursingRun } from "@/lib/maple/feed";
 import { formatRelative, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
+import { useMilestoneWords } from "./familyWords";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
 import { Avatar, cx, tone } from "./ui";
@@ -40,8 +41,9 @@ export default function EntryRow({
   now: Date;
 }) {
   const { units, state, member } = useMaple();
+  const words = useMilestoneWords();
   const tz = state?.baby.timezone ?? "America/New_York";
-  const d = describeEntry(entry, { units, now });
+  const d = describeEntry(entry, { units, now, words });
   const who = member(entry.created_by);
   const firstPhoto = entry.kind === "moment" && entry.data.photos?.length && entry.id > 0;
 

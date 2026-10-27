@@ -21,6 +21,7 @@ import type { CarePlan, DoseEntry, LimitUnit, OneTapAsk } from "@/lib/maple/type
 import { Icon, type IconName } from "../icons";
 import { AssessmentCard } from "../sheets/parts";
 import { Button, Sheet, cx, tone } from "../ui";
+import { useVoice } from "../familyWords";
 import { ApiError, useMaple } from "../useMaple";
 import type { CareHeld, UseCare } from "./useCare";
 
@@ -311,7 +312,9 @@ export const isOverLimit = (a: Assessment) => a.label === OVER_LIMIT_LABEL;
 /** The engine contexts every care.ts text and note call needs, for this reader. */
 export function useCareCtx(care: UseCare): PlanTextCtx & CareNoteCtx & { tz: string } {
   const { state, now } = useMaple();
+  const voice = useVoice();
   return {
+    voice,
     now: now(),
     tz: state?.baby.timezone ?? DEFAULT_TZ,
     self: care.self,

@@ -12,6 +12,7 @@
  * owner Alex, owner Sam (the care person), member Jo, viewer Vi, and the
  * admin login. Times are wall clock in America/New_York.
  */
+import { FAMILY_ONE_VOICE } from "../src/lib/maple/voice";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -160,7 +161,7 @@ function dose(pl: CarePlan, at: string, o: { units?: number; skipped?: boolean; 
 }
 const her = (now: Date, extra: Partial<PlanTextCtx> = {}): PlanTextCtx => ({ now, tz: TZ, self: true, members, me: SAM, ...extra });
 const them = (now: Date, extra: Partial<PlanTextCtx> = {}): PlanTextCtx => ({ now, tz: TZ, self: false, members, me: ALEX, ...extra });
-const noteCtx = (settings: CareSettings = {}, self = true) => ({ name: "Sam", self, settings });
+const noteCtx = (settings: CareSettings = {}, self = true) => ({ name: "Sam", self, settings, voice: FAMILY_ONE_VOICE });
 const st = (pl: CarePlan, doses: DoseEntry[], now: Date) => planStatus(pl, doses, now, TZ);
 
 // ── T-ENG-1 planStatus ───────────────────────────────────────────────────
@@ -794,13 +795,13 @@ check("T-ENG-12 screenResults (S6): item 9 = 1, total 3 → CRISIS then PHQ9_ITE
   const phq = [1, 1, 0, 0, 0, 0, 0, 0, 1] as (0 | 1 | 2 | 3)[];
   const d = scoreScreen({ phq9: phq, gad7: zeros(7), item9_ever: false });
   eq([d.phq9_score, d.item9, d.item9_ever], [3, true, true]);
-  const cards = screenResults(d);
+  const cards = screenResults(d, FAMILY_ONE_VOICE);
   eq(cards.map((c) => c.key), ["crisis", "phq9", "gad7"]);
   eq(cards[1].title, G.PHQ9_ITEM9.title);
   ok(!cards.some((c) => c.title === G.PHQ9_RESULT.low.title), "never few signs");
   const back = scoreScreen({ phq9: [...phq.slice(0, 8), 0], gad7: zeros(7), item9_ever: true });
   eq([back.item9, back.item9_ever], [false, true], "changed back");
-  const backCards = screenResults(back);
+  const backCards = screenResults(back, FAMILY_ONE_VOICE);
   eq([backCards[0].key, backCards[1].title], ["crisis", G.PHQ9_ITEM9.title], "still CRISIS first");
 });
 
@@ -815,24 +816,24 @@ check("T-ENG-12 band edges 4/5 and 9/10 for both scales; DIFFICULTY_HARD only wi
     for (let i = 0; i < n; i++) a[i % 7] = (a[i % 7] + 1) as 0 | 1 | 2 | 3;
     return a;
   };
-  const p = (n: number) => screenResults(scoreScreen({ phq9: phq(n), gad7: zeros(7), item9_ever: false }))[0];
-  const g = (n: number) => screenResults(scoreScreen({ phq9: zeros(9), gad7: gad(n), item9_ever: false }))[1];
+  const p = (n: number) => screenResults(scoreScreen({ phq9: phq(n), gad7: zeros(7), item9_ever: false }), FAMILY_ONE_VOICE)[0];
+  const g = (n: number) => screenResults(scoreScreen({ phq9: zeros(9), gad7: gad(n), item9_ever: false }), FAMILY_ONE_VOICE)[1];
   eq([p(4).title, p(5).title, p(9).title, p(10).title], [G.PHQ9_RESULT.low.title, G.PHQ9_RESULT.some.title, G.PHQ9_RESULT.some.title, G.PHQ9_RESULT.positive.title]);
   eq([p(4).tier, p(5).tier, p(10).tier], [null, "mention", "today"]);
   eq([g(4).title, g(5).title, g(9).title, g(10).title], [G.GAD7_RESULT.low.title, G.GAD7_RESULT.some.title, G.GAD7_RESULT.some.title, G.GAD7_RESULT.positive.title]);
   eq(p(4).heading, "PHQ-9: 4 of 27");
   eq(g(10).heading, "GAD-7: 10 of 21");
-  const hard = screenResults(scoreScreen({ phq9: phq(3), gad7: zeros(7), difficulty: 2, item9_ever: false }));
+  const hard = screenResults(scoreScreen({ phq9: phq(3), gad7: zeros(7), difficulty: 2, item9_ever: false }), FAMILY_ONE_VOICE);
   eq(hard.map((c) => c.key), ["phq9", "gad7", "difficulty"], "hard, nothing else today");
-  const hardToo = screenResults(scoreScreen({ phq9: phq(12), gad7: zeros(7), difficulty: 3, item9_ever: false }));
+  const hardToo = screenResults(scoreScreen({ phq9: phq(12), gad7: zeros(7), difficulty: 3, item9_ever: false }), FAMILY_ONE_VOICE);
   ok(!hardToo.some((c) => c.key === "difficulty"), "not with a today result");
 });
 
 check("T-ENG-13 checkinResponse: harm → crisis; scary → INTRUSIVE; Really struggling → STRUGGLING; blues on days 0–14", () => {
-  eq(checkinResponse({ level: 2, tags: ["harm_self"] }, { daysSinceBirth: 9 }).crisis, true);
-  eq(checkinResponse({ level: 2, tags: ["scary_thoughts"] }, { daysSinceBirth: 9 }).cards.map((c) => c.title), [G.INTRUSIVE.title]);
-  eq(checkinResponse({ level: 1 }, { daysSinceBirth: 9 }).cards.map((c) => c.title), [G.STRUGGLING.title]);
-  eq([0, 14, 15, null].map((d) => checkinResponse({ level: 4 }, { daysSinceBirth: d }).blues), [true, true, false, false]);
+  eq(checkinResponse({ level: 2, tags: ["harm_self"] }, { daysSinceBirth: 9, voice: FAMILY_ONE_VOICE }).crisis, true);
+  eq(checkinResponse({ level: 2, tags: ["scary_thoughts"] }, { daysSinceBirth: 9, voice: FAMILY_ONE_VOICE }).cards.map((c) => c.title), [G.INTRUSIVE.title]);
+  eq(checkinResponse({ level: 1 }, { daysSinceBirth: 9, voice: FAMILY_ONE_VOICE }).cards.map((c) => c.title), [G.STRUGGLING.title]);
+  eq([0, 14, 15, null].map((d) => checkinResponse({ level: 4 }, { daysSinceBirth: d, voice: FAMILY_ONE_VOICE }).blues), [true, true, false, false]);
 });
 
 check("T-ENG-13 suggestFullCheckin: day 14 yes, 13 no; the visit window; not within 14 days of the last; Not now acks", () => {
@@ -859,7 +860,7 @@ check("T-ENG-13 crisisToday only on that local day", () => {
 });
 
 check("T-ENG-12 item 9 with a PHQ-9 of 10 or more → the positive band after CRISIS (not PHQ9_ITEM9)", () => {
-  const cards = screenResults(scoreScreen({ phq9: [2, 2, 2, 2, 1, 0, 0, 0, 1], gad7: zeros(7), item9_ever: false }));
+  const cards = screenResults(scoreScreen({ phq9: [2, 2, 2, 2, 1, 0, 0, 0, 1], gad7: zeros(7), item9_ever: false }), FAMILY_ONE_VOICE);
   eq(cards.map((c) => [c.key, c.title]), [["crisis", G.CRISIS.title], ["phq9", G.PHQ9_RESULT.positive.title], ["gad7", G.GAD7_RESULT.low.title]]);
   eq(cards[0].label, "Call 911 or 988 now");
 });
@@ -867,15 +868,15 @@ check("T-ENG-12 item 9 with a PHQ-9 of 10 or more → the positive band after CR
 check('T-ENG-12 "Stop here": no band for a scale she didn\'t finish; item 9 still CRISIS then PHQ9_ITEM9', () => {
   const stopped = scoreScreen({ phq9: [0, 0, 0, 0, 0, 0, 0, 0, 1], gad7: [], item9_ever: true });
   eq([stopped.complete, stopped.gad7_score], [false, null]);
-  const cards = screenResults(stopped);
+  const cards = screenResults(stopped, FAMILY_ONE_VOICE);
   eq(cards.map((c) => c.key), ["crisis", "phq9"], "no GAD-7 card");
   eq([cards[1].title, cards[1].heading], [G.PHQ9_ITEM9.title, "PHQ-9: 1 of 27"]);
   // Partway through the GAD-7: its partial total never says "few signs".
-  const half = screenResults(scoreScreen({ phq9: zeros(9), gad7: [0, 0, 0], item9_ever: false }));
+  const half = screenResults(scoreScreen({ phq9: zeros(9), gad7: [0, 0, 0], item9_ever: false }), FAMILY_ONE_VOICE);
   eq(half.map((c) => c.key), ["phq9"], "GAD-7 partway");
   // Partway through the PHQ-9 (no item 9): nothing to reassure with.
-  eq(screenResults(scoreScreen({ phq9: [0, 0, 0, 0, 0], gad7: [], item9_ever: false })).length, 0, "PHQ-9 partway");
-  const early = screenResults(scoreScreen({ phq9: [3, 3, 3, 3, 3], gad7: [], item9_ever: true }));
+  eq(screenResults(scoreScreen({ phq9: [0, 0, 0, 0, 0], gad7: [], item9_ever: false }), FAMILY_ONE_VOICE).length, 0, "PHQ-9 partway");
+  const early = screenResults(scoreScreen({ phq9: [3, 3, 3, 3, 3], gad7: [], item9_ever: true }), FAMILY_ONE_VOICE);
   eq([early.map((c) => c.key), early[1].title, early[1].heading], [["crisis", "phq9"], G.PHQ9_ITEM9.title, undefined], "item 9 ever, PHQ-9 partway");
 });
 
@@ -901,12 +902,12 @@ check("T-ENG-13 todayCheckin: her newest check-in on today's local date", () => 
 });
 
 check("T-ENG-13 checkinResponse: several chips give several cards, INTRUSIVE (now) before STRUGGLING (today)", () => {
-  const r = checkinResponse({ level: 1, tags: ["scary_thoughts", "harm_self", "tearful"] }, { daysSinceBirth: 30 });
+  const r = checkinResponse({ level: 1, tags: ["scary_thoughts", "harm_self", "tearful"] }, { daysSinceBirth: 30, voice: FAMILY_ONE_VOICE });
   eq([r.crisis, r.cards.map((x) => x.title), r.blues], [true, [G.INTRUSIVE.title, G.STRUGGLING.title], false]);
   eq(G.STRUGGLING.tier, "today");
   eq(G.MOM_TIER_LABEL[G.STRUGGLING.tier], "Call your OB today");
   eq(G.MOM_TIER_LABEL[G.INTRUSIVE.tier], "Call your OB now");
-  eq(checkinResponse({ level: 5 }, { daysSinceBirth: 30 }), { crisis: false, cards: [], blues: false }, "Good, day 30");
+  eq(checkinResponse({ level: 5 }, { daysSinceBirth: 30, voice: FAMILY_ONE_VOICE }), { crisis: false, cards: [], blues: false }, "Good, day 30");
 });
 
 // ── T-ENG-14 the official forms, word for word (S11) ─────────────────────

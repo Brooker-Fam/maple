@@ -3,7 +3,7 @@
 import { getToolName, isToolUIPart } from "ai";
 import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { CHAT_REFUSAL, EMERGENCY_SIGNS, MOM_HELP } from "@/lib/maple/guidelines";
+import { chatRefusal, emergencySigns, momHelp } from "@/lib/maple/guidelines";
 import { careTime } from "@/lib/maple/care";
 import { formatTime } from "@/lib/maple/time";
 import type { ChatAlert, ChatMessage, ChatReceipt, ChatToolOutput, HelpAbout } from "@/lib/maple/chat/types";
@@ -12,6 +12,7 @@ import { useCareNav } from "../care/CareNav";
 import { telHref } from "../care/CareTeam";
 import { GROUP, NavRow } from "../care/parts";
 import { HelpLines } from "../care/SupportScreen";
+import { useVoice } from "../familyWords";
 import { Icon, KindBadge } from "../icons";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -225,6 +226,8 @@ function ApprovalCard({ name, input, onAnswer }: { name: string; input: unknown;
  * about Maple: her 911 signs, Call 911 and her doctor's numbers.
  */
 export function HelpCard({ reason, about }: { reason?: "crisis" | "refusal"; about?: HelpAbout }) {
+  const voice = useVoice();
+  const help = momHelp(voice);
   const nav = useCareNav();
   const phones = usePhones();
   const numbers = [
@@ -256,7 +259,7 @@ export function HelpCard({ reason, about }: { reason?: "crisis" | "refusal"; abo
             <Icon name="siren" size={16} strokeWidth={2} className="shrink-0" />
             When to call 911
           </p>
-          <p className={cx(tone.body, "mt-1.5 text-[15px] leading-relaxed")}>{EMERGENCY_SIGNS}</p>
+          <p className={cx(tone.body, "mt-1.5 text-[15px] leading-relaxed")}>{emergencySigns(voice)}</p>
           <a href="tel:911" className={cx("mt-3.5 flex min-h-[52px] items-center justify-center gap-2 rounded-[14px] text-[17px] font-semibold active:scale-[0.98]", EMERGENCY_FILL)}>
             <Icon name="phone" size={20} />
             Call 911
@@ -269,8 +272,8 @@ export function HelpCard({ reason, about }: { reason?: "crisis" | "refusal"; abo
   }
   return (
     <div className="space-y-2.5">
-      {reason === "refusal" && <AlertNote alert={CHAT_REFUSAL} />}
-      <HelpLines lines={[...MOM_HELP.now, MOM_HELP.talk[0]]} />
+      {reason === "refusal" && <AlertNote alert={chatRefusal(voice)} />}
+      <HelpLines lines={[...help.now, help.talk[0]]} />
       {reason === "refusal" && doctor}
       {more}
     </div>

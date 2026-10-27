@@ -45,7 +45,7 @@ const optNum = (min: number, max: number, label: string) =>
 
 /** Blob URLs we issued for Maple uploads (keeps the photo proxy from fetching anything else). */
 export const MAPLE_BLOB_RE =
-  /^https:\/\/[A-Za-z0-9]+\.(?:public|private)\.blob\.vercel-storage\.com\/maple\/[A-Za-z0-9._\-/]+$/;
+  /^https:\/\/[A-Za-z0-9]+\.(?:public|private)\.blob\.vercel-storage\.com\/(?!.*(?:\/\/|\.\.))maple\/[A-Za-z0-9._\-/]+$/;
 
 const photo = z.object({
   key: z.string().regex(MAPLE_BLOB_RE, "photo must be a Maple upload"),

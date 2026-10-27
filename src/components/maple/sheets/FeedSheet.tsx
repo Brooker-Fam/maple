@@ -20,7 +20,7 @@ import {
   spanMinutes,
   type Part,
 } from "@/lib/maple/feed";
-import { BOTTLE_CUES, typicalBottle } from "@/lib/maple/guidelines";
+import { bottleCues, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
 import type { Entry, EntryOf, FeedData, Side, StretchSide, UpdateEntryInput } from "@/lib/maple/types";
@@ -28,6 +28,8 @@ import { BreakMark, LinkRow, MomentEditor, partAria, ROW_NAME, SIDE_NAME, SideFi
 import { logSwitches } from "../MoreSheet";
 import { Icon } from "../icons";
 import { Button, Chip, Segmented, Sheet, TimeRange, TimeScrubber, WhenField, cx, tone } from "../ui";
+import { useBabyWords, useVoice } from "../familyWords";
+import type { Voice } from "@/lib/maple/voice";
 import { ApiError, useMaple } from "../useMaple";
 import { doneText, nextSideWords } from "../useTimerActions";
 import type { SheetProps } from "./index";
@@ -131,6 +133,8 @@ export default function FeedSheet(props: SheetProps) {
 function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const base = useSheetBase();
   const { tz, units, state, summary, log, update, remove, clock, now, ageDays, age, api, refresh, toast, memberLabel, readOnly } = base;
+  const w = useBabyWords();
+  const voice = useVoice();
   const bottlesOn = logSwitches(state?.baby).bottles;
   const e = entry?.kind === "feed" ? entry : undefined;
   const running = !!e?.active;
@@ -369,8 +373,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       created_at: t.toISOString(),
       updated_at: t.toISOString(),
     };
-    const next = nextSideWords(draft, t, state?.entries);
-    const toastText = l + r + b > 0 ? doneText(draft, t, undefined, state?.entries).text : `Nursed · ${clock(s)}${next ? ` · ${next}` : ""}`;
+    const next = nextSideWords(draft, t, w, state?.entries);
+    const toastText = l + r + b > 0 ? doneText(draft, t, w, undefined, state?.entries).text : `Nursed · ${clock(s)}${next ? ` · ${next}` : ""}`;
     void log(
       {
         kind: "feed",
@@ -590,7 +594,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   : !running && checks.invalid
                   ? CHECK_NUMBER_HINT
                   : empty
-                    ? "Add how long she nursed."
+                    ? `Add how long ${w.he} nursed.`
                     : addOnly
                     ? "Pick Left or Right to add a side."
                     : conflict
@@ -744,8 +748,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 </div>
               </MoreDetails>
               <ContextNote>
-                {age ? <>Typical at her age: {typicalBottle(ageDays)}. </> : null}
-                {BOTTLE_CUES}
+                {age ? <>Typical at {w.his} age: {typicalBottle(ageDays)}. </> : null}
+                {bottleCues(voice)}
               </ContextNote>
             </>
           )}
@@ -879,6 +883,8 @@ function TimesSection({
   onAddPending: (pending: boolean) => void;
 }) {
   const { now: nowFn } = useMaple();
+  const w = useBabyWords();
+  const vo = useVoice();
   const [row, setRow] = useState<Row | null>(null);
   const [editor, setEditor] = useState<StagedEditor | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -912,7 +918,7 @@ function TimesSection({
   const openRow = (next: Row | null) => {
     if (add && next?.kind !== "add") {
       // Leaving Add a side: a side she set that fits stays staged (and shows as a row); times that don't fit go. The untouched guess staged nothing.
-      if (add.form.touched && !tryAdd(add.base, add.form, nowFn(), tz).result) onStage(restOf(add.base), add.base);
+      if (add.form.touched && !tryAdd(add.base, add.form, nowFn(), tz, vo).result) onStage(restOf(add.base), add.base);
       onAddBlocked(false);
       onAddPending(false);
     }
@@ -961,7 +967,7 @@ function TimesSection({
       onStage({ data: r.data, startedAt: r.startedAt, endedAt: working.ended_at }, working);
       openRow({ kind: "side", index: found.i, side });
     } catch (err) {
-      setError(err instanceof FeedEditError ? feedEditCopy(err, "ui", tz) : "That part changed; have another look.");
+      setError(err instanceof FeedEditError ? feedEditCopy(err, "ui", tz, vo) : "That part changed; have another look.");
     }
   };
   const pickRow = (p: Part, i: number) => {
@@ -991,7 +997,7 @@ function TimesSection({
   const putAdd = (on: FeedEntry, form: AddForm) => {
     onAddPending(!form.touched);
     if (form.touched) {
-      const r = tryAdd(on, form, nowFn(), tz);
+      const r = tryAdd(on, form, nowFn(), tz, vo);
       onStage(r.result ?? restOf(on), on);
       onAddBlocked(!r.result);
     }
@@ -1107,7 +1113,7 @@ function TimesSection({
               <Icon name="plus" size={14} strokeWidth={2.2} />
             </span>
           }
-          name="Add a side she nursed on"
+          name={`Add a side ${w.he} nursed on`}
           accent
           open={!!add}
           onClick={toggleAdd}
@@ -1291,14 +1297,14 @@ function addDefaults(feed: FeedEntry, now: Date): AddForm {
 }
 
 /** What the form adds: the feed with the side in it, or why it can't ("That overlaps Left 4:00–4:10."). */
-function tryAdd(feed: FeedEntry, form: AddForm, now: Date, tz: string): { end: Date; result: Staged | null; error: string | null } {
+function tryAdd(feed: FeedEntry, form: AddForm, now: Date, tz: string, vo: Voice): { end: Date; result: Staged | null; error: string | null } {
   const end = form.end ?? new Date(Math.min(form.start.getTime() + 5 * MIN, form.at.getTime()));
   if (end.getTime() < form.start.getTime() + 1000) return { end, result: null, error: "Ended must be after Started." };
   try {
     const r = addPart(feed.data, { side: form.side, start: form.start, end }, feedCtx(feed, now));
     return { end, result: { data: r.data, startedAt: r.startedAt, endedAt: r.endedAt }, error: null };
   } catch (err) {
-    return { end, result: null, error: err instanceof FeedEditError ? feedEditCopy(err, "ui", tz) : err instanceof Error ? err.message : "That side doesn't fit this feed." };
+    return { end, result: null, error: err instanceof FeedEditError ? feedEditCopy(err, "ui", tz, vo) : err instanceof Error ? err.message : "That side doesn't fit this feed." };
   }
 }
 
@@ -1327,8 +1333,9 @@ function AddSide({
   onDrop: () => void;
 }) {
   const { now: nowFn } = useMaple();
+  const vo = useVoice();
   const n = nowFn();
-  const { end, result, error } = tryAdd(feed, form, n, tz);
+  const { end, result, error } = tryAdd(feed, form, n, tz, vo);
   const set = (patch: Partial<AddForm>) => onForm({ ...form, ...patch, touched: true });
 
   // The guess's own trouble (say, a feed that only just ended) waits until she sets something.

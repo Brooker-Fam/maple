@@ -1,5 +1,6 @@
 import { BadRequest, json, readJson, withMember } from "@/lib/maple/api";
 import { deviceOf } from "@/lib/maple/device";
+import type { FamilyCtx } from "@/lib/maple/family";
 import {
   adjustTimerStart,
   discardedBy,
@@ -141,7 +142,7 @@ const timerJson = (r: TimerResponse) =>
  * was discarded answers 404 { reason: "discarded", deleted_by } so the app
  * can name who did it.
  */
-export const POST = withMember("POST /api/maple/timer", async (request, me) => {
+export const POST = withMember("POST /api/maple/timer", async (request, me, ctx) => {
   const body = await readJson<TimerInput & { expect_updated_at?: unknown }>(request);
   const now = new Date();
 
@@ -151,8 +152,8 @@ export const POST = withMember("POST /api/maple/timer", async (request, me) => {
     if (body.side !== undefined && !isSide(body.side)) throw new BadRequest("side must be L or R (where she started; add back_and_forth: true for both sides)");
     if (body.back_and_forth !== undefined && typeof body.back_and_forth !== "boolean") throw new BadRequest("back_and_forth must be true or false");
     if (body.back_and_forth && (body.kind !== "feed" || !body.side)) throw new BadRequest("back_and_forth goes with a feed and the side she started on");
-    const baby = await getBaby();
-    const { entry, alreadyRunning } = await startTimer({
+    const baby = await getBaby(ctx);
+    const { entry, alreadyRunning } = await startTimer(ctx, {
       babyId: baby.id,
       kind: body.kind,
       side: body.side,
@@ -170,39 +171,39 @@ export const POST = withMember("POST /api/maple/timer", async (request, me) => {
   if (!Number.isSafeInteger(id) || id <= 0) throw new BadRequest("id is required");
   const at = body.at ? instant(body.at, "at") : undefined;
   try {
-    return await act(body, id, at, me.email);
+    return await act(ctx, body, id, at, me.email);
   } catch (err) {
     if (!(err instanceof NotFound)) throw err;
-    const who = await discardedBy(id);
+    const who = await discardedBy(ctx, id);
     if (who === undefined) throw err;
     return json({ error: err.message, reason: "discarded", deleted_by: who }, 404);
   }
 }, { write: true });
 
-async function act(body: TimerInput & { expect_updated_at?: unknown }, id: number, at: Date | undefined, by: string): Promise<Response> {
+async function act(ctx: FamilyCtx, body: TimerInput & { expect_updated_at?: unknown }, id: number, at: Date | undefined, by: string): Promise<Response> {
   switch (body.action) {
     case "switch":
     case "resume": {
       // B: back and forth from now (or, on resume, back on going both); L/R while going both: tracking sides again.
       if (!isStretchSide(body.side)) throw new BadRequest("side must be L, R or B (back and forth)");
-      return timerJson(await switchSide(id, body.side, at, by, { resume: body.action === "resume" }));
+      return timerJson(await switchSide(ctx, id, body.side, at, by, { resume: body.action === "resume" }));
     }
     case "pause":
-      return timerJson(await pauseTimer(id, at, by));
+      return timerJson(await pauseTimer(ctx, id, at, by));
     case "stop": {
       // expect_updated_at: end it only if it's still the feed this phone saw (Fix times' quiet re-stop on close).
       const expect = body.expect_updated_at;
       const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
-      return json({ entry: toClientEntry(await stopTimer(id, at, by, { expectUpdatedAt })) });
+      return json({ entry: toClientEntry(await stopTimer(ctx, id, at, by, { expectUpdatedAt })) });
     }
     case "retime":
-      return timerJson(await retimeFeed(id, feedEdit(body.edit), by));
+      return timerJson(await retimeFeed(ctx, id, feedEdit(body.edit), by));
     case "adjust":
-      return json({ entry: toClientEntry(await adjustTimerStart(id, instant(body.at, "at"), by)) });
+      return json({ entry: toClientEntry(await adjustTimerStart(ctx, id, instant(body.at, "at"), by)) });
     case "discard": {
       const expect = body.expect_updated_at;
       const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
-      return json({ entry: toClientEntry(await discardTimer(id, by, { expectUpdatedAt })) });
+      return json({ entry: toClientEntry(await discardTimer(ctx, id, by, { expectUpdatedAt })) });
     }
     case "join": {
       // "Same feed as 8:30": `id` (just started) is that feed going on, on `side` from its start. One request.
@@ -210,7 +211,7 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
       const into = Number(body.into);
       if (!Number.isSafeInteger(into) || into <= 0 || into === id) throw new BadRequest("into must be the earlier feed's id");
       const exp = (v: unknown, name: string) => (v == null ? undefined : instant(v, name).toISOString());
-      const res = await joinFeeds(id, into, body.side, by, { expectNew: exp(body.expect_updated_at, "expect_updated_at"), expectInto: exp(body.expect_into_updated_at, "expect_into_updated_at") });
+      const res = await joinFeeds(ctx, id, into, body.side, by, { expectNew: exp(body.expect_updated_at, "expect_updated_at"), expectInto: exp(body.expect_into_updated_at, "expect_into_updated_at") });
       return timerJson(res);
     }
     case "reopen": {
@@ -219,7 +220,7 @@ async function act(body: TimerInput & { expect_updated_at?: unknown }, id: numbe
       if (at && body.side === undefined) throw new BadRequest("at goes with side (when she went back on)");
       const expect = body.expect_updated_at;
       const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();
-      return timerJson(await reopenTimerDetailed(id, by, { side: body.side, at, expectUpdatedAt }));
+      return timerJson(await reopenTimerDetailed(ctx, id, by, { side: body.side, at, expectUpdatedAt }));
     }
     default:
       throw new BadRequest("Unknown timer action");

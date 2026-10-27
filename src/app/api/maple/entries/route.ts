@@ -2,6 +2,7 @@ import { BadRequest, idParam, json, readJson, withMember } from "@/lib/maple/api
 import { createEntryOnce, discardedBy, getBaby, listDeleted, listEntries, NotFound, softDeleteEntry, toClientEntry, updateEntry } from "@/lib/maple/store";
 import { dayBounds, dayKey, daysBetween, isDayKey } from "@/lib/maple/time";
 import { isEntryKind } from "@/lib/maple/validate";
+import type { FamilyCtx } from "@/lib/maple/family";
 import type { CreateEntryInput, EntryKind, UpdateEntryInput } from "@/lib/maple/types";
 
 export const dynamic = "force-dynamic";
@@ -24,12 +25,12 @@ function instant(value: unknown, label: string): Date {
  * it ({ reason: "discarded", deleted_by }), so the sheet can say "Brittany
  * removed this feed" instead of a bare "not found".
  */
-async function orGone(id: number, run: () => Promise<Response>): Promise<Response> {
+async function orGone(ctx: FamilyCtx, id: number, run: () => Promise<Response>): Promise<Response> {
   try {
     return await run();
   } catch (err) {
     if (!(err instanceof NotFound)) throw err;
-    const who = await discardedBy(id);
+    const who = await discardedBy(ctx, id);
     if (who === undefined) throw err;
     return json({ error: err.message, reason: "discarded", deleted_by: who }, 404);
   }
@@ -48,11 +49,11 @@ function kindsParam(raw: string | null): EntryKind[] | undefined {
  * all time (moments, exports), capped by `limit`. `?deleted=1` lists what was
  * removed in the last 24 hours ("Recently removed", with updated_by = who).
  */
-export const GET = withMember("GET /api/maple/entries", async (request) => {
-  const baby = await getBaby();
+export const GET = withMember("GET /api/maple/entries", async (request, _me, ctx) => {
+  const baby = await getBaby(ctx);
   const sp = new URL(request.url).searchParams;
   if (sp.get("deleted") === "1") {
-    const removed = await listDeleted(baby.id, new Date(Date.now() - 24 * 3600_000));
+    const removed = await listDeleted(ctx, baby.id, new Date(Date.now() - 24 * 3600_000));
     return json({ entries: removed.map(toClientEntry), tz: baby.timezone });
   }
   const kinds = kindsParam(sp.get("kind"));
@@ -71,7 +72,7 @@ export const GET = withMember("GET /api/maple/entries", async (request) => {
     to = dayBounds(toKey, baby.timezone)[1];
   }
 
-  const entries = await listEntries({ babyId: baby.id, kinds, from, to, limit });
+  const entries = await listEntries(ctx, { babyId: baby.id, kinds, from, to, limit });
   // Hitting the limit means there's more (newest first): page with a narrower range.
   return json({ entries: entries.map(toClientEntry), tz: baby.timezone, truncated: entries.length >= limit });
 });
@@ -80,13 +81,13 @@ export const GET = withMember("GET /api/maple/entries", async (request) => {
  * POST /api/maple/entries — log something. Send a client_id (UUID) and a
  * retried request returns the first save (`deduped: true`) instead of a twin.
  */
-export const POST = withMember("POST /api/maple/entries", async (request, me) => {
+export const POST = withMember("POST /api/maple/entries", async (request, me, ctx) => {
   const body = await readJson<CreateEntryInput>(request);
   if (!isEntryKind(body.kind)) throw new BadRequest("Unknown kind");
-  const baby = await getBaby();
+  const baby = await getBaby(ctx);
   const startedAt = body.started_at ? instant(body.started_at, "Start time") : new Date();
   const endedAt = body.ended_at ? instant(body.ended_at, "End time") : undefined;
-  const { entry, deduped } = await createEntryOnce({
+  const { entry, deduped } = await createEntryOnce(ctx, {
     babyId: baby.id,
     kind: body.kind,
     startedAt,
@@ -105,7 +106,7 @@ export const POST = withMember("POST /api/maple/entries", async (request, me) =>
  * expect_updated_at (FeedSheet's Times), a newer edit by someone else answers
  * 409 "changed" instead of being overwritten.
  */
-export const PATCH = withMember("PATCH /api/maple/entries", async (request, me) => {
+export const PATCH = withMember("PATCH /api/maple/entries", async (request, me, ctx) => {
   const id = idParam(request);
   const body = await readJson<UpdateEntryInput>(request);
   const expect = body.expect_updated_at;
@@ -118,11 +119,11 @@ export const PATCH = withMember("PATCH /api/maple/entries", async (request, me) 
     data: body.data && typeof body.data === "object" ? body.data : undefined,
     note: body.note === undefined ? undefined : typeof body.note === "string" ? body.note : null,
   };
-  return orGone(id, async () => json({ entry: toClientEntry(await updateEntry(id, patch, me.email, { expectUpdatedAt: expect })) }));
+  return orGone(ctx, id, async () => json({ entry: toClientEntry(await updateEntry(ctx, id, patch, me.email, { expectUpdatedAt: expect })) }));
 }, { write: true });
 
 /** DELETE /api/maple/entries?id= — soft delete (restorable for undo). */
-export const DELETE = withMember("DELETE /api/maple/entries", async (request, me) => {
+export const DELETE = withMember("DELETE /api/maple/entries", async (request, me, ctx) => {
   const id = idParam(request);
-  return orGone(id, async () => json({ entry: toClientEntry(await softDeleteEntry(id, me.email)) }));
+  return orGone(ctx, id, async () => json({ entry: toClientEntry(await softDeleteEntry(ctx, id, me.email)) }));
 }, { write: true });

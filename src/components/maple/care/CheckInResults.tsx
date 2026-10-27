@@ -15,6 +15,7 @@ import {
 import { DEFAULT_TZ, dayKey, parseDayKey } from "@/lib/maple/time";
 import type { MoodDataByKind, MoodEntry } from "@/lib/maple/types";
 import { Icon, type IconName } from "../icons";
+import { useVoice } from "../familyWords";
 import { AssessmentCard } from "../sheets/parts";
 import { Button, Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -99,7 +100,7 @@ export function useCopyForOb() {
 
 /** The cards, in §6.3's order, then the caveat, the footer and HELP_ROW. */
 export function ScreenResults({ data }: { data: Screen }) {
-  const cards = screenResults(data);
+  const cards = screenResults(data, useVoice());
   const phqDone = data.phq9.length === 9;
   const gadDone = data.gad7.length === 7;
   return (

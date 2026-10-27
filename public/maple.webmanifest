@@ -1,7 +1,7 @@
 {
   "name": "Maple's Log",
   "short_name": "Maple",
-  "description": "Feeds, diapers, sleep and little moments for Maple Jane.",
+  "description": "Feeds, diapers, sleep and little moments, for the whole family.",
   "id": "/maple",
   "start_url": "/maple",
   "scope": "/maple",

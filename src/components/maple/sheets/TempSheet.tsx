@@ -2,12 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { EMERGENCY_SIGNS, assessTemperature, assessVitals, earThermometerOk } from "@/lib/maple/guidelines";
+import { assessTemperature, assessVitals, earThermometerOk, emergencySigns } from "@/lib/maple/guidelines";
 import { cToF, fToC, formatTemp } from "@/lib/maple/units";
 import { TEMP_METHODS, type EntryOf, type TempMethod } from "@/lib/maple/types";
 import { useCareNav } from "../care/CareNav";
 import { useCare } from "../care/useCare";
 import { Icon } from "../icons";
+import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Segmented, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -50,6 +51,8 @@ export default function TempSheet(props: SheetProps) {
 
 function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, units, state, log, update, remove, now, ageMonths, clock } = useSheetBase();
+  const w = useBabyWords();
+  const voice = useVoice();
   const e = entry?.kind === "temp" ? entry : undefined;
   const care = useCare();
   const careNav = useCareNav();
@@ -96,7 +99,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const t = when ?? now();
   const prev = temps.find((x) => Date.parse(x.started_at) < t.getTime());
   const previous = prev ? { tempC: prev.data.temp_c, minutesBefore: (t.getTime() - Date.parse(prev.started_at)) / 60_000 } : null;
-  const assessment = plausible ? assessTemperature(tempC!, method, ageMonths, previous) : null;
+  const assessment = plausible ? assessTemperature(tempC!, method, ageMonths, previous, voice) : null;
 
   const vitals = { heart_bpm: heart ?? undefined, resp_rate: resp ?? undefined, spo2: spo2 ?? undefined };
   const hasVitals = heart != null || resp != null || spo2 != null;
@@ -104,7 +107,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const vitalNotes = (["spo2", "resp_rate", "heart_bpm"] as const).flatMap((f) => {
     if (vitals[f] == null) return [];
     const p = earlierVitals.find((x) => Date.parse(x.started_at) < t.getTime() && x.data[f] != null);
-    return assessVitals({ [f]: vitals[f] }, ageMonths, p ? { [f]: p.data[f], minutesBefore: (t.getTime() - Date.parse(p.started_at)) / 60_000 } : null);
+    return assessVitals({ [f]: vitals[f] }, ageMonths, p ? { [f]: p.data[f], minutesBefore: (t.getTime() - Date.parse(p.started_at)) / 60_000 } : null, voice);
   });
 
   const methods = TEMP_METHODS.filter((m) => m !== "ear" || earThermometerOk(ageMonths) || method === "ear");
@@ -223,13 +226,13 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
             </Chip>
           ))}
         </div>
-        {!earThermometerOk(ageMonths) && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Rectal is the most accurate at her age. Ear thermometers aren&apos;t reliable before 6 months.</p>}
+        {!earThermometerOk(ageMonths) && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Rectal is the most accurate at {w.his} age. Ear thermometers aren&apos;t reliable before 6 months.</p>}
       </div>
 
       {assessment && <AssessmentCard a={assessment} />}
 
       <WhenField value={when} onChange={setWhen} tz={tz} />
-      <NoteField value={note} onChange={setNote} placeholder="How is she acting? Feeding, sleepy, fussy…" />
+      <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting? Feeding, sleepy, fussy…`} />
 
       {!e && (
         <MoreDetails label="Other readings" summary={hasVitals ? "saved as vitals" : "heart, breathing, oxygen"}>
@@ -240,7 +243,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
           <div>
             <Label optional>Breathing</Label>
             <Stepper value={resp} onChange={setResp} onInvalid={checks.watch("resp")} step={1} min={5} max={150} suffix="/min" ariaLabel="breaths per minute" />
-            <p className={cx(tone.muted, "mt-1 text-xs")}>Count for a full minute while she&apos;s calm or asleep.</p>
+            <p className={cx(tone.muted, "mt-1 text-xs")}>Count for a full minute while {w.hes} calm or asleep.</p>
           </div>
           <div>
             <Label optional>Oxygen (SpO₂)</Label>
@@ -249,7 +252,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
           {vitalNotes.map((a) => (
             <AssessmentCard key={a.title} a={a} />
           ))}
-          <ContextNote icon="siren">{EMERGENCY_SIGNS}</ContextNote>
+          <ContextNote icon="siren">{emergencySigns(voice)}</ContextNote>
         </MoreDetails>
       )}
 

@@ -39,7 +39,7 @@ export type Notifications = {
    * Sign-out: this phone's notifications off (DELETE, then unsubscribe), before
    * the session goes. Resolves true when something was turned off. Never throws.
    */
-  forgetThisPhone(): Promise<boolean>;
+  forgetThisPhone(opts?: { everywhere?: boolean }): Promise<boolean>;
 };
 
 /** A tapped notice's URL, for the app to go to: `window.addEventListener(MAPLE_OPEN_EVENT, (e) => { route(e.detail.url); e.preventDefault(); })`. */

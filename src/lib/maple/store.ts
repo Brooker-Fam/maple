@@ -21,6 +21,7 @@ import {
   type TapFeedData,
 } from "./feed";
 import { cleanData } from "./validate";
+import { blobBelongsTo } from "./blob";
 import type {
   Baby,
   Entry,
@@ -29,9 +30,7 @@ import type {
   FeedData,
   FeedEdit,
   Lifetime,
-  Member,
   MomentData,
-  Role,
   Segment,
   Side,
   Source,
@@ -40,13 +39,28 @@ import type {
   TimerResponse,
 } from "./types";
 import { captureServerException } from "@/lib/posthog-server";
+import { parseFamilyId, type FamilyScope } from "./family";
 import { nursingChanged } from "./push-hooks";
 
 /**
  * Database access for Maple's Log. Every function throws StoreUnavailable when
  * DATABASE_URL is missing (query() returns null), so routes can answer 503
  * instead of pretending an entry was saved.
+ *
+ * Every function takes the family it acts in first, and every statement
+ * filters by it: another family's row reads exactly like a missing one
+ * (NotFound), and every insert files its row under that family.
  */
+
+/** The family a store call acts in: its id, or a FamilyCtx / FamilyScope. */
+export type FamilyRef = number | Pick<FamilyScope, "familyId">;
+
+/** Fails closed: a missing or malformed family never falls back to family 1. */
+export function famId(fam: FamilyRef): number {
+  const id = parseFamilyId(typeof fam === "number" ? fam : fam?.familyId);
+  if (id === null) throw new Error("family_required");
+  return id;
+}
 
 export class StoreUnavailable extends Error {
   constructor() {
@@ -118,8 +132,12 @@ export function toClientEntry(e: Entry): Entry {
 
 // ── baby ──────────────────────────────────────────────────────────────
 
-export async function getBaby(): Promise<Baby> {
-  const rows = await q(`SELECT ${BABY_COLS} FROM maple_babies ORDER BY id LIMIT 1`);
+/** The family's active baby (the same one FamilyCtx.babyId names). */
+export async function getBaby(fam: FamilyRef): Promise<Baby> {
+  const rows = await q(
+    `SELECT ${BABY_COLS} FROM maple_babies WHERE family_id = $1 AND archived_at IS NULL ORDER BY id LIMIT 1`,
+    [famId(fam)]
+  );
   if (!rows.length) throw new NotFound("No baby profile yet");
   return rowToBaby(rows[0]);
 }
@@ -135,6 +153,7 @@ export type BabyPatch = Partial<
     | "birth_length_cm"
     | "birth_head_cm"
     | "timezone"
+    | "sex"
   >
 > & {
   /** Settings keys to set (shallow); a null value removes the key. */
@@ -152,15 +171,16 @@ const BABY_FIELDS = [
   "birth_length_cm",
   "birth_head_cm",
   "timezone",
+  "sex",
 ] as const;
 
 /**
  * Update only the fields given, and merge settings in SQL, so two parents
  * saving different things at once (a birth time, an alert ack) both stick.
  */
-export async function updateBaby(id: number, patch: BabyPatch): Promise<Baby> {
+export async function updateBaby(fam: FamilyRef, id: number, patch: BabyPatch): Promise<Baby> {
   const sets: string[] = [];
-  const params: unknown[] = [id];
+  const params: unknown[] = [id, famId(fam)];
   for (const f of BABY_FIELDS) {
     if (!(f in patch)) continue;
     let v = patch[f] ?? null;
@@ -185,7 +205,7 @@ export async function updateBaby(id: number, patch: BabyPatch): Promise<Baby> {
   }
   const rows = await q(
     `UPDATE maple_babies SET ${[...sets, "updated_at = NOW()"].join(", ")}
-     WHERE id = $1 RETURNING ${BABY_COLS}`,
+     WHERE id = $1 AND family_id = $2 RETURNING ${BABY_COLS}`,
     params
   );
   if (!rows.length) throw new NotFound("Baby not found");
@@ -209,10 +229,10 @@ export type ListOptions = {
   after?: { startedAt: string; id: number };
 };
 
-export async function listEntries(opts: ListOptions): Promise<Entry[]> {
+export async function listEntries(fam: FamilyRef, opts: ListOptions): Promise<Entry[]> {
   const rows = await q(
     `SELECT * FROM maple_entries
-     WHERE baby_id = $1 AND deleted_at IS NULL
+     WHERE family_id = $9 AND baby_id = $1 AND deleted_at IS NULL
        AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
        AND (
          ($3::timestamptz IS NULL OR COALESCE(ended_at, started_at) >= $3::timestamptz)
@@ -231,23 +251,25 @@ export async function listEntries(opts: ListOptions): Promise<Entry[]> {
       Math.min(Math.max(opts.limit ?? 2000, 1), 5000),
       opts.after?.startedAt ?? null,
       opts.after?.id ?? 0,
+      famId(fam),
     ]
   );
   return rows.map(rowToEntry);
 }
 
-export async function getEntry(id: number, opts: { includeDeleted?: boolean } = {}): Promise<Entry | null> {
+/** An entry by id, or null when it doesn't exist, is deleted (unless asked), or is another family's. */
+export async function getEntry(fam: FamilyRef, id: number, opts: { includeDeleted?: boolean } = {}): Promise<Entry | null> {
   const rows = await q(
-    `SELECT * FROM maple_entries WHERE id = $1 ${opts.includeDeleted ? "" : "AND deleted_at IS NULL"}`,
-    [id]
+    `SELECT * FROM maple_entries WHERE id = $1 AND family_id = $2 ${opts.includeDeleted ? "" : "AND deleted_at IS NULL"}`,
+    [id, famId(fam)]
   );
   return rows.length ? rowToEntry(rows[0]) : null;
 }
 
-export async function activeTimers(babyId: number): Promise<Entry[]> {
+export async function activeTimers(fam: FamilyRef, babyId: number): Promise<Entry[]> {
   const rows = await q(
-    `SELECT * FROM maple_entries WHERE baby_id = $1 AND active AND deleted_at IS NULL ORDER BY started_at`,
-    [babyId]
+    `SELECT * FROM maple_entries WHERE family_id = $2 AND baby_id = $1 AND active AND deleted_at IS NULL ORDER BY started_at`,
+    [babyId, famId(fam)]
   );
   return rows.map(rowToEntry);
 }
@@ -290,9 +312,15 @@ function isUniqueViolation(err: unknown, index: string): boolean {
   return !!e && e.code === "23505" && (e.constraint === index || !!e.message?.includes(index));
 }
 
-/** Create an entry. With a clientId it's idempotent: `deduped` marks a replayed save. */
-export async function createEntryOnce(e: NewEntry): Promise<{ entry: Entry; deduped: boolean }> {
+/**
+ * Create an entry. With a clientId it's idempotent within the family:
+ * `deduped` marks a replayed save. A baby that isn't the family's saves
+ * nothing (NotFound).
+ */
+export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ entry: Entry; deduped: boolean }> {
+  const familyId = famId(fam);
   const data = cleanData(e.kind, e.data);
+  if (e.kind === "moment") ownPhotosOnly(familyId, data as MomentData);
   if (e.endedAt === undefined && !e.active) e = { ...e, endedAt: manualFeedEnd(e.kind, data, e.startedAt) };
   if (e.endedAt && e.endedAt.getTime() < e.startedAt.getTime()) {
     throw new Error("End time is before the start time");
@@ -301,9 +329,10 @@ export async function createEntryOnce(e: NewEntry): Promise<{ entry: Entry; dedu
   // The device column only when there's an id (a database a step behind on migrations still saves).
   const device = e.device ?? null;
   const rows = await q(
-    `INSERT INTO maple_entries (baby_id, kind, started_at, ended_at, active, data, note, created_by, source, client_id${device ? ", device" : ""})
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10${device ? ", $11" : ""})
-     ON CONFLICT (client_id) WHERE client_id IS NOT NULL DO NOTHING
+    `INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, active, data, note, created_by, source, client_id${device ? ", device" : ""})
+     SELECT $11::bigint, $1::integer, $2::text, $3::timestamptz, $4::timestamptz, $5::boolean, $6::jsonb, $7::text, $8::text, $9::text, $10::text${device ? ", $12::text" : ""}
+     WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $1::integer AND family_id = $11::bigint)
+     ON CONFLICT (family_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
      RETURNING *`,
     [
       e.babyId,
@@ -316,17 +345,27 @@ export async function createEntryOnce(e: NewEntry): Promise<{ entry: Entry; dedu
       e.createdBy,
       e.source,
       clientId,
+      familyId,
       ...(device ? [device] : []),
     ]
   );
   if (rows.length) return { entry: rowToEntry(rows[0]), deduped: false };
-  const existing = await q(`SELECT * FROM maple_entries WHERE client_id = $1`, [clientId]);
-  if (!existing.length) throw new Error("Couldn't save that, please try again");
-  return { entry: rowToEntry(existing[0]), deduped: true };
+  const existing = clientId ? await q(`SELECT * FROM maple_entries WHERE client_id = $1 AND family_id = $2`, [clientId, familyId]) : [];
+  if (existing.length) return { entry: rowToEntry(existing[0]), deduped: true };
+  if (!(await q(`SELECT 1 FROM maple_babies WHERE id = $1 AND family_id = $2`, [e.babyId, familyId])).length) throw new NotFound("Baby not found");
+  throw new Error("Couldn't save that, please try again");
 }
 
-export async function createEntry(e: NewEntry): Promise<Entry> {
-  return (await createEntryOnce(e)).entry;
+function ownPhotosOnly(familyId: number, data: MomentData): void {
+  for (const p of data.photos ?? []) {
+    if (!p.key || !blobBelongsTo(p.key, familyId) || (p.thumb_key !== undefined && !blobBelongsTo(p.thumb_key, familyId))) {
+      throw new Error("photo must be a Maple upload");
+    }
+  }
+}
+
+export async function createEntry(fam: FamilyRef, e: NewEntry): Promise<Entry> {
+  return (await createEntryOnce(fam, e)).entry;
 }
 
 export type EntryPatch = {
@@ -356,8 +395,8 @@ function noFutureEnds(segments: Segment[], now: Date) {
  * `expectUpdatedAt`: the updated_at the edit was made against (FeedSheet's
  * Save, a nap's restore); anything newer is someone else's change, 409.
  */
-export async function updateEntry(id: number, patch: EntryPatch, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
-  const cur = await getEntry(id);
+export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
+  const cur = await getEntry(fam, id);
   if (!cur) throw new NotFound(`Entry ${id} not found`);
   if (opts.expectUpdatedAt !== undefined && !sameInstant(opts.expectUpdatedAt, cur.updated_at)) {
     throw new Conflict("Someone else just changed this. Have another look and try again.", cur, "changed");
@@ -451,7 +490,7 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
   const rows = await q(
     `UPDATE maple_entries SET started_at = $2, ended_at = $3, data = $4::jsonb, note = $5,
        updated_by = COALESCE($6, updated_by), updated_at = NOW()
-     WHERE id = $1 AND deleted_at IS NULL AND active = $7
+     WHERE id = $1 AND family_id = $9 AND deleted_at IS NULL AND active = $7
        -- JS dates carry milliseconds; the column has microseconds.
        AND updated_at BETWEEN $8::timestamptz - INTERVAL '1 millisecond' AND $8::timestamptz + INTERVAL '1 millisecond'
      RETURNING *`,
@@ -464,16 +503,17 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
       by ?? null,
       cur.active,
       cur.updated_at,
+      famId(fam),
     ]
   );
   if (!rows.length) {
-    const now = await getEntry(id);
+    const now = await getEntry(fam, id);
     if (!now) throw new NotFound(`Entry ${id} not found`);
     throw new Conflict("Someone else just changed this. Have another look and try again.", now, "changed");
   }
   const updated = rowToEntry(rows[0]);
   // A running nursing feed's start moved (update_entry with at): its lock-screen notice says so.
-  if (cur.active) nursingSoon(updated);
+  if (cur.active) nursingSoon(fam, updated);
   return updated;
 }
 
@@ -481,21 +521,21 @@ export async function updateEntry(id: number, patch: EntryPatch, by?: string, op
  * Soft delete. A running timer keeps `active` (the running-timer index ignores
  * deleted rows), so Undo brings it back still running.
  */
-export async function softDeleteEntry(id: number, by?: string): Promise<Entry> {
+export async function softDeleteEntry(fam: FamilyRef, id: number, by?: string): Promise<Entry> {
   const rows = await q(
     `UPDATE maple_entries SET deleted_at = NOW(), updated_by = COALESCE($2, updated_by), updated_at = NOW()
-     WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
-    [id, by ?? null]
+     WHERE id = $1 AND family_id = $3 AND deleted_at IS NULL RETURNING *`,
+    [id, by ?? null, famId(fam)]
   );
   if (!rows.length) throw new NotFound(`Entry ${id} not found`);
   const entry = rowToEntry(rows[0]);
-  if (entry.active) nursingSoon(entry);
+  if (entry.active) nursingSoon(fam, entry);
   return entry;
 }
 
 /** A nursing timer changed: its lock-screen notice follows, after the response (push-hooks.ts). Other kinds: nothing. */
-function nursingSoon(e: Entry): void {
-  if (e.kind === "feed" && (e.data as FeedData).segments?.length) nursingChanged(e.id);
+function nursingSoon(fam: FamilyRef, e: Entry): void {
+  if (e.kind === "feed" && (e.data as FeedData).segments?.length) nursingChanged(e.id, famId(fam));
 }
 
 /**
@@ -503,29 +543,30 @@ function nursingSoon(e: Entry): void {
  * timer of its kind started in the meantime (only one may run): then it comes
  * back stopped at the moment it was deleted.
  */
-export async function restoreEntry(id: number, by?: string): Promise<Entry> {
-  return (await restoreEntryDetailed(id, by)).entry;
+export async function restoreEntry(fam: FamilyRef, id: number, by?: string): Promise<Entry> {
+  return (await restoreEntryDetailed(fam, id, by)).entry;
 }
 
 /** restoreEntry, plus when a running timer had to come back stopped (else null). */
-export async function restoreEntryDetailed(id: number, by?: string): Promise<{ entry: Entry; stoppedAt: string | null }> {
-  const prev = await getEntry(id, { includeDeleted: true });
+export async function restoreEntryDetailed(fam: FamilyRef, id: number, by?: string): Promise<{ entry: Entry; stoppedAt: string | null }> {
+  const familyId = famId(fam);
+  const prev = await getEntry(familyId, id, { includeDeleted: true });
   if (!prev) throw new NotFound(`Entry ${id} not found`);
   // Moved to mom's medicines (care-store moveFromMaple): back only through the Undo there, never as Maple's too.
   if ((prev.data as Record<string, unknown>).moved_to != null) throw new Error("That one moved to her own medicines, so it can't come back here. Undo the move from there.");
   try {
     const rows = await q(
       `UPDATE maple_entries SET deleted_at = NULL, data = data - 'joined_into', updated_by = COALESCE($2, updated_by), updated_at = NOW()
-       WHERE id = $1 AND deleted_at IS NOT NULL AND NOT (data ? 'moved_to') RETURNING *`,
-      [id, by ?? null]
+       WHERE id = $1 AND family_id = $3 AND deleted_at IS NOT NULL AND NOT (data ? 'moved_to') RETURNING *`,
+      [id, by ?? null, familyId]
     );
     if (!rows.length) throw new NotFound(`Entry ${id} not found or not deleted`);
     const entry = rowToEntry(rows[0]);
-    if (entry.active) nursingSoon(entry);
+    if (entry.active) nursingSoon(familyId, entry);
     return { entry, stoppedAt: null };
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
-    const deletedAt = await q(`SELECT deleted_at FROM maple_entries WHERE id = $1`, [id]);
+    const deletedAt = await q(`SELECT deleted_at FROM maple_entries WHERE id = $1 AND family_id = $2`, [id, familyId]);
     let stopAt = new Date(isoOrNull(deletedAt[0]?.deleted_at) ?? Date.now());
     let data: unknown = prev.data;
     if (prev.kind === "feed" && (prev.data as FeedData).segments?.length) {
@@ -541,8 +582,8 @@ export async function restoreEntryDetailed(id: number, by?: string): Promise<{ e
     const rows = await q(
       `UPDATE maple_entries SET deleted_at = NULL, active = FALSE, ended_at = COALESCE(ended_at, $3::timestamptz),
          data = $4::jsonb, updated_by = COALESCE($2, updated_by), updated_at = NOW()
-       WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *`,
-      [id, by ?? null, stopAt.toISOString(), JSON.stringify(data)]
+       WHERE id = $1 AND family_id = $5 AND deleted_at IS NOT NULL RETURNING *`,
+      [id, by ?? null, stopAt.toISOString(), JSON.stringify(data), familyId]
     );
     if (!rows.length) throw new NotFound(`Entry ${id} not found or not deleted`);
     return { entry: rowToEntry(rows[0]), stoppedAt: stopAt.toISOString() };
@@ -550,11 +591,11 @@ export async function restoreEntryDetailed(id: number, by?: string): Promise<{ e
 }
 
 /** Soft-deleted entries since a time, newest first ("Recently removed"). */
-export async function listDeleted(babyId: number, since: Date): Promise<Entry[]> {
+export async function listDeleted(fam: FamilyRef, babyId: number, since: Date): Promise<Entry[]> {
   const rows = await q(
-    `SELECT * FROM maple_entries WHERE baby_id = $1 AND deleted_at IS NOT NULL AND deleted_at >= $2 AND NOT (data ? 'moved_to')
+    `SELECT * FROM maple_entries WHERE family_id = $3 AND baby_id = $1 AND deleted_at IS NOT NULL AND deleted_at >= $2 AND NOT (data ? 'moved_to')
      ORDER BY deleted_at DESC LIMIT 100`,
-    [babyId, since.toISOString()]
+    [babyId, since.toISOString(), famId(fam)]
   );
   return rows.map(rowToEntry);
 }
@@ -604,12 +645,14 @@ function beforeOf(cur: Entry): TimerResponse["before"] {
  * when there's nothing to do (already on that side, already paused).
  */
 async function mutateTimer(
+  fam: FamilyRef,
   id: number,
   fn: (cur: Entry) => TimerWrite | null,
   opts: { by?: string; allowFinished?: boolean; expectUpdatedAt?: string } = {}
 ): Promise<TimerResponse> {
+  const familyId = famId(fam);
   for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
-    const cur = await getEntry(id);
+    const cur = await getEntry(familyId, id);
     if (!cur) throw new NotFound(`Timer ${id} not found`);
     if (!cur.active && !opts.allowFinished) throw new Conflict("That timer already stopped", cur, "stopped");
     if (opts.expectUpdatedAt !== undefined && !sameInstant(opts.expectUpdatedAt, cur.updated_at)) throw changed(cur);
@@ -636,20 +679,20 @@ async function mutateTimer(
     const rows = await q(
       `UPDATE maple_entries SET data = $2::jsonb, started_at = $3, ended_at = $4, active = $5,
          updated_by = COALESCE($6, updated_by), updated_at = NOW()
-       WHERE id = $1 AND deleted_at IS NULL AND active = $7
+       WHERE id = $1 AND family_id = $9 AND deleted_at IS NULL AND active = $7
          -- JS dates carry milliseconds; the column has microseconds.
          AND updated_at BETWEEN $8::timestamptz - INTERVAL '1 millisecond' AND $8::timestamptz + INTERVAL '1 millisecond'
        RETURNING *`,
-      [id, JSON.stringify(cleanData(cur.kind, data)), startedAt, endedAt, active, opts.by ?? null, cur.active, cur.updated_at]
+      [id, JSON.stringify(cleanData(cur.kind, data)), startedAt, endedAt, active, opts.by ?? null, cur.active, cur.updated_at, familyId]
     );
     if (rows.length) {
       const entry = rowToEntry(rows[0]);
       // Running before or after (a tap, a fix while it runs, Done, Undo of Done): the nursing notice follows. A finished feed's fix doesn't.
-      if (cur.active || entry.active) nursingSoon(entry);
+      if (cur.active || entry.active) nursingSoon(familyId, entry);
       return { entry, ...w.flags, ...(cur.kind === "feed" ? { before: beforeOf(cur) } : {}) };
     }
   }
-  const latest = await getEntry(id);
+  const latest = await getEntry(familyId, id);
   if (!latest) throw new NotFound(`Timer ${id} not found`);
   throw changed(latest);
 }
@@ -665,7 +708,7 @@ async function mutateTimer(
  * back and forth from now instead (a part under a minute old turns both,
  * switchTo), or resumes going both if it was paused.
  */
-export async function startTimer(opts: {
+export async function startTimer(fam: FamilyRef, opts: {
   babyId: number;
   kind: TimerKind;
   side?: Side;
@@ -679,13 +722,13 @@ export async function startTimer(opts: {
 }): Promise<{ entry: Entry; alreadyRunning: boolean }> {
   const both = opts.kind === "feed" && !!opts.backAndForth;
   const existing = async () => {
-    const running = (await activeTimers(opts.babyId)).find((e) => e.kind === opts.kind);
+    const running = (await activeTimers(fam, opts.babyId)).find((e) => e.kind === opts.kind);
     if (!running) return null;
     // A different side switches (now: this is a tap, not a time someone gave); the same side resumes a paused feed.
     // Back and forth goes both from now (or resumes going both).
     const want: StretchSide | undefined = both ? "B" : opts.side;
     if (running.kind === "feed" && want && want !== openSegment((running.data as FeedData).segments)?.side) {
-      return { entry: (await switchSide(running.id, want, undefined, opts.createdBy)).entry, alreadyRunning: true };
+      return { entry: (await switchSide(fam, running.id, want, undefined, opts.createdBy)).entry, alreadyRunning: true };
     }
     return { entry: running, alreadyRunning: true };
   };
@@ -694,7 +737,7 @@ export async function startTimer(opts: {
   const data: EntryDataByKind[TimerKind] =
     opts.kind === "feed" ? startBreast(opts.side ?? "L", opts.at, { both }) : {};
   try {
-    const { entry, deduped } = await createEntryOnce({
+    const { entry, deduped } = await createEntryOnce(fam, {
       babyId: opts.babyId,
       kind: opts.kind,
       startedAt: opts.at,
@@ -705,7 +748,7 @@ export async function startTimer(opts: {
       clientId: opts.clientId,
       device: opts.device,
     });
-    if (!deduped) nursingSoon(entry);
+    if (!deduped) nursingSoon(fam, entry);
     return { entry, alreadyRunning: deduped };
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
@@ -748,10 +791,10 @@ export type SwitchResponse = TimerResponse & { moved?: true };
  * side tap took going both back. Undo is retime undo_tap, as for any tap:
  * it gives a re-sided part its side back, or drops the part the tap added.
  */
-export async function switchSide(id: number, side: StretchSide, at: Date | undefined, by?: string, opts: { resume?: boolean } = {}): Promise<SwitchResponse> {
+export async function switchSide(fam: FamilyRef, id: number, side: StretchSide, at: Date | undefined, by?: string, opts: { resume?: boolean } = {}): Promise<SwitchResponse> {
   const now = new Date();
   const t = tapTime(at, now);
-  return mutateTimer(id, (cur) => {
+  return mutateTimer(fam, id, (cur) => {
     if (cur.kind !== "feed") throw new Error("Only nursing timers have sides");
     const { data, noop, ...flags } = switchTo(cur.data, side, t, { explicit: at !== undefined, resume: opts.resume, now, by });
     return noop ? null : { data, flags };
@@ -759,10 +802,10 @@ export async function switchSide(id: number, side: StretchSide, at: Date | undef
 }
 
 /** Pause the open side now or at `at` (when she came off). Already paused: noop. */
-export async function pauseTimer(id: number, at: Date | undefined, by?: string): Promise<TimerResponse> {
+export async function pauseTimer(fam: FamilyRef, id: number, at: Date | undefined, by?: string): Promise<TimerResponse> {
   const now = new Date();
   const t = tapTime(at, now);
-  return mutateTimer(id, (cur) => {
+  return mutateTimer(fam, id, (cur) => {
     if (cur.kind !== "feed") throw new Error("Only nursing timers can pause");
     const paused = pauseFeed(cur.data, t, { explicit: at !== undefined, now, by });
     return paused.noop ? null : { data: paused.data };
@@ -777,10 +820,10 @@ export async function pauseTimer(id: number, at: Date | undefined, by?: string):
  * earlier, which trims the last side to it. Other timers end at `at`, kept
  * between their start and now.
  */
-export async function stopTimer(id: number, at: Date | undefined, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
+export async function stopTimer(fam: FamilyRef, id: number, at: Date | undefined, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
   if (at && Number.isNaN(at.getTime())) throw new Error("That time isn't a valid time");
   const now = new Date();
-  const res = await mutateTimer(id, (cur) => {
+  const res = await mutateTimer(fam, id, (cur) => {
     // When Done was tapped, beside when it ended: the sheet's "edited" tells a later fix from the Done itself.
     const tapped = { stopped_at: now.toISOString() };
     if (cur.kind === "feed" && cur.data.segments?.length) {
@@ -804,33 +847,34 @@ function timedFeed(cur: Entry): FeedData {
  * tap, or put back what a fix replaced (the `before` it answered with). Each
  * names the stretch it means, so it merges with the other phone's taps.
  */
-export async function retimeFeed(id: number, edit: FeedEdit, by?: string): Promise<TimerResponse> {
-  return retime(id, edit, by, true);
+export async function retimeFeed(fam: FamilyRef, id: number, edit: FeedEdit, by?: string): Promise<TimerResponse> {
+  return retime(fam, id, edit, by, true);
 }
 
-async function retime(id: number, edit: FeedEdit, by: string | undefined, allowFinished: boolean): Promise<TimerResponse> {
+async function retime(fam: FamilyRef, id: number, edit: FeedEdit, by: string | undefined, allowFinished: boolean): Promise<TimerResponse> {
   switch (edit.op) {
     case "move": {
       // The moment the winning attempt moved (a retry re-reads the feed).
       const last: { moment?: Moment } = {};
-      const res = await mutateTimer(id, (cur) => {
+      const res = await mutateTimer(fam, id, (cur) => {
         const moved = moveEdge(timedFeed(cur), { edge: edit.edge, ref: edit.ref, to: new Date(edit.to) }, feedCtx(cur, new Date()));
         last.moment = moved.moment;
         return { data: moved.data, startedAt: moved.startedAt, endedAt: moved.endedAt };
       }, { by, allowFinished });
       const was = res.before?.started_at;
       if (last.moment !== "feed_start" || !was || Date.parse(res.entry.started_at) >= Date.parse(was)) return res;
-      const nap = await followNap(id, was, res.entry.started_at, by);
+      const nap = await followNap(fam, id, was, res.entry.started_at, by);
       return nap ? { ...res, nap } : res;
     }
     case "set_side":
-      return mutateTimer(id, (cur) => ({ data: setSide(timedFeed(cur), edit.ref, edit.side, feedCtx(cur, new Date())).data }), { by, allowFinished });
+      return mutateTimer(fam, id, (cur) => ({ data: setSide(timedFeed(cur), edit.ref, edit.side, feedCtx(cur, new Date())).data }), { by, allowFinished });
     case "undo_tap":
       // Running feeds only: a finished one comes back with reopen (the Done toast's Undo).
-      return mutateTimer(id, (cur) => ({ data: undoLastTap(timedFeed(cur), edit.expect, { active: cur.active }).data }), { by });
+      return mutateTimer(fam, id, (cur) => ({ data: undoLastTap(timedFeed(cur), edit.expect, { active: cur.active }).data }), { by });
     case "add_part":
       // "She went back on…" after a Done: asked of the finished feed this phone saw, so one reopened or changed since is 409 "changed".
       return mutateTimer(
+        fam,
         id,
         (cur) => {
           if (cur.active) throw changed(cur);
@@ -840,9 +884,9 @@ async function retime(id: number, edit: FeedEdit, by: string | undefined, allowF
         { by, allowFinished: true, expectUpdatedAt: edit.expect_updated_at }
       );
     case "restore": {
-      const res = await mutateTimer(id, (cur) => restoreWrite(cur, edit), { by, allowFinished: true, expectUpdatedAt: edit.expect_updated_at });
+      const res = await mutateTimer(fam, id, (cur) => restoreWrite(cur, edit), { by, allowFinished: true, expectUpdatedAt: edit.expect_updated_at });
       // The nap only goes back once the feed has.
-      return edit.nap ? { ...res, ...(await restoreNap(edit.nap, by)) } : res;
+      return edit.nap ? { ...res, ...(await restoreNap(fam, edit.nap, by)) } : res;
     }
   }
 }
@@ -890,20 +934,20 @@ function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): T
  * it (she woke and latched), as long as the nap keeps a minute. The nap is
  * written with its own CAS and left alone if it changed meanwhile.
  */
-async function followNap(feedId: number, wasStart: string, newStart: string, by?: string): Promise<TimerResponse["nap"]> {
+async function followNap(fam: FamilyRef, feedId: number, wasStart: string, newStart: string, by?: string): Promise<TimerResponse["nap"]> {
   const rows = await q(
     `SELECT * FROM maple_entries
-     WHERE baby_id = (SELECT baby_id FROM maple_entries WHERE id = $1)
+     WHERE family_id = $3 AND baby_id = (SELECT baby_id FROM maple_entries WHERE id = $1 AND family_id = $3)
        AND kind = 'sleep' AND NOT active AND deleted_at IS NULL
        AND ended_at BETWEEN $2::timestamptz - INTERVAL '60 seconds' AND $2::timestamptz + INTERVAL '60 seconds'
      ORDER BY ABS(EXTRACT(EPOCH FROM ended_at - $2::timestamptz)), id DESC LIMIT 1`,
-    [feedId, wasStart]
+    [feedId, wasStart, famId(fam)]
   );
   if (!rows.length) return undefined;
   const nap = rowToEntry(rows[0]);
   if (Date.parse(newStart) - Date.parse(nap.started_at) < 60 * SEC) return undefined;
   try {
-    const entry = await updateEntry(nap.id, { endedAt: new Date(newStart) }, by, { expectUpdatedAt: nap.updated_at });
+    const entry = await updateEntry(fam, nap.id, { endedAt: new Date(newStart) }, by, { expectUpdatedAt: nap.updated_at });
     return { entry, before_ended_at: nap.ended_at!, before_updated_at: nap.updated_at };
   } catch (err) {
     if (!(err instanceof Conflict || err instanceof NotFound)) console.error("Maple nap follow failed:", err);
@@ -913,13 +957,14 @@ async function followNap(feedId: number, wasStart: string, newStart: string, by?
 
 /** Put a followed nap's end back, only if nobody changed the nap since. */
 async function restoreNap(
+  fam: FamilyRef,
   nap: { id: number; ended_at: string; expect_updated_at: string },
   by?: string
 ): Promise<Pick<TimerResponse, "nap" | "nap_restored">> {
   try {
-    const cur = await getEntry(nap.id);
+    const cur = await getEntry(fam, nap.id);
     if (!cur || cur.kind !== "sleep" || cur.active || !cur.ended_at) return { nap_restored: false };
-    const entry = await updateEntry(nap.id, { endedAt: new Date(nap.ended_at) }, by, { expectUpdatedAt: nap.expect_updated_at });
+    const entry = await updateEntry(fam, nap.id, { endedAt: new Date(nap.ended_at) }, by, { expectUpdatedAt: nap.expect_updated_at });
     return { nap: { entry, before_ended_at: cur.ended_at, before_updated_at: cur.updated_at }, nap_restored: true };
   } catch (err) {
     // The feed is already back; a nap someone changed meanwhile stays as it is.
@@ -934,15 +979,15 @@ async function restoreNap(
  * REST "adjust" alias that cached PWA clients still send. Other timers: not
  * in the future, at most 12 hours back.
  */
-export async function adjustTimerStart(id: number, at: Date, by?: string): Promise<Entry> {
+export async function adjustTimerStart(fam: FamilyRef, id: number, at: Date, by?: string): Promise<Entry> {
   if (Number.isNaN(at.getTime())) throw new Error("Start time must be a valid time");
-  const e = await getEntry(id);
+  const e = await getEntry(fam, id);
   if (!e) throw new NotFound(`Timer ${id} not found`);
-  if (e.kind === "feed") return (await retime(id, { op: "move", edge: "start", to: at.toISOString() }, by, false)).entry;
+  if (e.kind === "feed") return (await retime(fam, id, { op: "move", edge: "start", to: at.toISOString() }, by, false)).entry;
   const now = Date.now();
   if (at.getTime() > now) throw new Error("Start time can't be in the future");
   if (at.getTime() < now - 12 * HOUR) throw new Error("That's more than 12 hours ago.");
-  return (await mutateTimer(id, (cur) => ({ data: cur.data, startedAt: at.toISOString() }), { by })).entry;
+  return (await mutateTimer(fam, id, (cur) => ({ data: cur.data, startedAt: at.toISOString() }), { by })).entry;
 }
 
 /**
@@ -951,27 +996,28 @@ export async function adjustTimerStart(id: number, at: Date, by?: string): Promi
  * only that version goes: if someone switched, paused or fixed it since,
  * 409 "changed" and nothing is thrown away.
  */
-export async function discardTimer(id: number, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
+export async function discardTimer(fam: FamilyRef, id: number, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
+  const familyId = famId(fam);
   // Already discarded is a 404 (who did it: discardedBy), never a 409 carrying the deleted row.
-  const cur = await getEntry(id);
+  const cur = await getEntry(familyId, id);
   if (!cur) throw new NotFound(`Timer ${id} not found`);
   if (!cur.active) throw new Conflict("That timer already stopped", cur);
-  if (opts.expectUpdatedAt === undefined) return softDeleteEntry(id, by);
+  if (opts.expectUpdatedAt === undefined) return softDeleteEntry(familyId, id, by);
   if (!sameInstant(opts.expectUpdatedAt, cur.updated_at)) throw changed(cur);
   const rows = await q(
     `UPDATE maple_entries SET deleted_at = NOW(), updated_by = COALESCE($2, updated_by), updated_at = NOW()
-     WHERE id = $1 AND deleted_at IS NULL AND active
+     WHERE id = $1 AND family_id = $4 AND deleted_at IS NULL AND active
        AND updated_at BETWEEN $3::timestamptz - INTERVAL '1 millisecond' AND $3::timestamptz + INTERVAL '1 millisecond'
      RETURNING *`,
-    [id, by ?? null, opts.expectUpdatedAt]
+    [id, by ?? null, opts.expectUpdatedAt, familyId]
   );
   if (rows.length) {
     const entry = rowToEntry(rows[0]);
-    nursingSoon(entry);
+    nursingSoon(familyId, entry);
     return entry;
   }
   // Lost the race: stopped, discarded or changed in between.
-  const now = await getEntry(id);
+  const now = await getEntry(familyId, id);
   if (!now) throw new NotFound(`Timer ${id} not found`);
   if (!now.active) throw new Conflict("That timer already stopped", now, "stopped");
   throw changed(now);
@@ -982,8 +1028,8 @@ export async function discardTimer(id: number, by?: string, opts: { expectUpdate
  * which the delete wrote): for a 404 that can say "Brittany discarded this
  * feed". undefined when it isn't deleted (or doesn't exist).
  */
-export async function discardedBy(id: number): Promise<string | null | undefined> {
-  const rows = await q(`SELECT updated_by FROM maple_entries WHERE id = $1 AND deleted_at IS NOT NULL`, [id]);
+export async function discardedBy(fam: FamilyRef, id: number): Promise<string | null | undefined> {
+  const rows = await q(`SELECT updated_by FROM maple_entries WHERE id = $1 AND family_id = $2 AND deleted_at IS NOT NULL`, [id, famId(fam)]);
   if (!rows.length) return undefined;
   return rows[0].updated_by == null ? null : String(rows[0].updated_by);
 }
@@ -1008,11 +1054,11 @@ export async function discardedBy(id: number): Promise<string | null | undefined
  * "changed" and nothing is written. The answer's `before` is the finished
  * feed (with paused_at_stop), which a retime restore puts back exactly.
  */
-export async function reopenTimerDetailed(id: number, by?: string, opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string } = {}): Promise<TimerResponse> {
+export async function reopenTimerDetailed(fam: FamilyRef, id: number, by?: string, opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string } = {}): Promise<TimerResponse> {
   const now = new Date();
   const t = tapTime(opts.at, now);
   try {
-    return await mutateTimer(id, (e) => {
+    return await mutateTimer(fam, id, (e) => {
       if (e.active) return null;
       if (!["feed", "sleep", "tummy", "pump"].includes(e.kind)) throw new Error("Only a timer can be reopened");
       if (e.kind !== "feed") return { data: e.data, active: true, endedAt: null };
@@ -1058,7 +1104,7 @@ export async function reopenTimerDetailed(id: number, by?: string, opts: { side?
     }, { by, allowFinished: true, expectUpdatedAt: opts.expectUpdatedAt });
   } catch (err) {
     if (!isUniqueViolation(err, "uniq_maple_entries_running")) throw err;
-    const cur = await getEntry(id);
+    const cur = await getEntry(fam, id);
     if (!cur) throw new NotFound(`Timer ${id} not found`);
     throw new Conflict("Another timer of that kind is running now", cur, "clash");
   }
@@ -1072,8 +1118,9 @@ export async function reopenTimerDetailed(id: number, by?: string, opts: { side?
  * and the old one is carried on, on `side`, from the new one's start. If
  * carrying on fails, the new one comes back as it was.
  */
-export async function joinFeeds(newId: number, intoId: number, side: StretchSide, by: string | undefined, opts: { expectNew?: string; expectInto?: string } = {}): Promise<TimerResponse & { joined: Entry }> {
-  const cur = await getEntry(newId);
+export async function joinFeeds(fam: FamilyRef, newId: number, intoId: number, side: StretchSide, by: string | undefined, opts: { expectNew?: string; expectInto?: string } = {}): Promise<TimerResponse & { joined: Entry }> {
+  const familyId = famId(fam);
+  const cur = await getEntry(familyId, newId);
   if (!cur) throw new NotFound(`Timer ${newId} not found`);
   if (cur.kind !== "feed" || !cur.active) throw new Conflict("That feed already stopped", cur, "stopped");
   if (opts.expectNew !== undefined && !sameInstant(opts.expectNew, cur.updated_at)) throw changed(cur);
@@ -1082,90 +1129,33 @@ export async function joinFeeds(newId: number, intoId: number, side: StretchSide
   const rows = await q(
     `UPDATE maple_entries SET deleted_at = NOW(), data = data || jsonb_build_object('joined_into', $3::bigint),
        updated_by = COALESCE($2, updated_by), updated_at = NOW()
-     WHERE id = $1 AND deleted_at IS NULL AND active
+     WHERE id = $1 AND family_id = $5 AND deleted_at IS NULL AND active
        AND updated_at BETWEEN $4::timestamptz - INTERVAL '1 millisecond' AND $4::timestamptz + INTERVAL '1 millisecond'
      RETURNING *`,
-    [newId, by ?? null, intoId, cur.updated_at]
+    [newId, by ?? null, intoId, cur.updated_at, familyId]
   );
   if (!rows.length) {
-    const now = await getEntry(newId);
+    const now = await getEntry(familyId, newId);
     if (!now) throw new NotFound(`Timer ${newId} not found`);
     throw now.active ? changed(now) : new Conflict("That feed already stopped", now, "stopped");
   }
   const joined = rowToEntry(rows[0]);
   try {
-    const res = await reopenTimerDetailed(intoId, by, { side, at: new Date(cur.started_at), expectUpdatedAt: opts.expectInto });
+    const res = await reopenTimerDetailed(familyId, intoId, by, { side, at: new Date(cur.started_at), expectUpdatedAt: opts.expectInto });
     return { ...res, joined };
   } catch (err) {
     // Put the new one back exactly (still running), then say why.
-    await q(`UPDATE maple_entries SET deleted_at = NULL, data = data - 'joined_into', updated_at = NOW() WHERE id = $1`, [newId]);
+    await q(`UPDATE maple_entries SET deleted_at = NULL, data = data - 'joined_into', updated_at = NOW() WHERE id = $1 AND family_id = $2`, [newId, familyId]);
     throw err;
   }
 }
 
 /** reopenTimerDetailed's entry. */
-export async function reopenTimer(id: number, by?: string, opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string } = {}): Promise<Entry> {
-  return (await reopenTimerDetailed(id, by, opts)).entry;
+export async function reopenTimer(fam: FamilyRef, id: number, by?: string, opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string } = {}): Promise<Entry> {
+  return (await reopenTimerDetailed(fam, id, by, opts)).entry;
 }
 
-// ── members ───────────────────────────────────────────────────────────
-
-export async function addMember(email: string, addedBy: string, emoji: string | null, role: "member" | "viewer" = "member"): Promise<void> {
-  await q(`DELETE FROM maple_removed WHERE email = $1`, [email]);
-  await q(
-    `INSERT INTO maple_members (email, role, emoji, added_by) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (email) DO NOTHING`,
-    [email, role, emoji, addedBy]
-  );
-}
-
-/**
- * Remove someone: their session, MCP tokens and Siri tokens stop working at
- * once, and a tombstone keeps an allowlisted address from simply signing back
- * in with Google. Inviting them again (addMember) lifts it.
- */
-export async function removeMember(email: string, by: string): Promise<boolean> {
-  // Owners stay, except the "admin" pseudo-owner, which a real owner may remove.
-  const rows = await q(
-    `DELETE FROM maple_members WHERE email = $1 AND (role <> 'owner' OR email = 'admin') RETURNING email`,
-    [email]
-  );
-  if (!rows.length) return false;
-  await q(`UPDATE maple_tokens SET revoked_at = NOW() WHERE member = $1 AND revoked_at IS NULL`, [email]);
-  await q(
-    `INSERT INTO maple_removed (email, removed_by) VALUES ($1, $2)
-     ON CONFLICT (email) DO UPDATE SET removed_at = NOW(), removed_by = EXCLUDED.removed_by`,
-    [email, by]
-  );
-  // Nobody removed keeps a place on her share list (careAccess turns them away anyway).
-  await q(`UPDATE maple_care_people SET shared_with = shared_with - $1::text, updated_at = NOW() WHERE shared_with ? $1::text`, [email]);
-  return true;
-}
-
-export async function wasRemoved(email: string): Promise<boolean> {
-  return (await q(`SELECT 1 FROM maple_removed WHERE email = $1`, [email])).length > 0;
-}
-
-export async function updateMember(
-  email: string,
-  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: "member" | "viewer" }
-): Promise<void> {
-  const rows = await q(`SELECT display_name, emoji, color, role FROM maple_members WHERE email = $1`, [email]);
-  if (!rows.length) throw new NotFound("Member not found");
-  const cur = rows[0];
-  // Owners stay owners; only members and viewers swap roles.
-  const role = patch.role && cur.role !== "owner" ? patch.role : cur.role;
-  await q(
-    `UPDATE maple_members SET display_name = $2, emoji = $3, color = $4, role = $5, updated_at = NOW() WHERE email = $1`,
-    [
-      email,
-      patch.display_name !== undefined ? patch.display_name : cur.display_name,
-      patch.emoji !== undefined ? patch.emoji : cur.emoji,
-      patch.color !== undefined ? patch.color : cur.color,
-      role,
-    ]
-  );
-}
+// ── lifetime and presence ─────────────────────────────────────────────
 
 /** How far back the app's entries reach (the state route's window): the brigade's week is split here. */
 const LOADED_MS = 72 * 3600_000;
@@ -1177,7 +1167,8 @@ const LOADED_MS = 72 * 3600_000;
  * diaper brigade's week before that window (Lifetime.week), so "this week"
  * counts seven days, not three.
  */
-export async function lifetimeCounts(babyId: number): Promise<Lifetime> {
+export async function lifetimeCounts(fam: FamilyRef, babyId: number): Promise<Lifetime> {
+  const familyId = famId(fam);
   const before = new Date(Date.now() - LOADED_MS);
   const [rows, week] = await Promise.all([
     q(
@@ -1186,20 +1177,20 @@ export async function lifetimeCounts(babyId: number): Promise<Lifetime> {
               MIN(e.started_at) FILTER (WHERE e.kind = 'diaper' AND e.data->>'poop' = 'true' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_poop,
               MIN(e.started_at) FILTER (WHERE e.kind = 'bath' AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_bath,
               MIN(e.started_at) FILTER (WHERE e.kind = 'tummy' AND NOT e.active AND e.started_at >= b.born_at - INTERVAL '1 hour') AS first_tummy
-       FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id
-       WHERE e.baby_id = $1 AND e.deleted_at IS NULL`,
-      [babyId]
+       FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id AND b.family_id = e.family_id
+       WHERE e.family_id = $2 AND e.baby_id = $1 AND e.deleted_at IS NULL`,
+      [babyId, familyId]
     ),
     // Diapers from 7 days ago up to `before`, per person; night = 10pm–6am in
     // her timezone. Best effort: without it the summary counts what's loaded.
     q(
       `SELECT e.created_by AS by, COUNT(*)::int AS diapers, COUNT(*) FILTER (WHERE l.hour >= 22 OR l.hour < 6)::int AS night
-       FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id,
+       FROM maple_entries e JOIN maple_babies b ON b.id = e.baby_id AND b.family_id = e.family_id,
             LATERAL (SELECT EXTRACT(HOUR FROM e.started_at AT TIME ZONE COALESCE(NULLIF(b.timezone, ''), 'America/New_York')) AS hour) l
-       WHERE e.baby_id = $1 AND e.deleted_at IS NULL AND e.kind = 'diaper'
+       WHERE e.family_id = $3 AND e.baby_id = $1 AND e.deleted_at IS NULL AND e.kind = 'diaper'
          AND e.started_at > $2::timestamptz - INTERVAL '96 hours' AND e.started_at < $2::timestamptz
        GROUP BY e.created_by`,
-      [babyId, before.toISOString()]
+      [babyId, before.toISOString(), familyId]
     ).catch((e) => {
       // Best effort (the card falls back to what's loaded), but never silent.
       void captureServerException(e, { where: "lifetimeCounts.week" });
@@ -1225,20 +1216,21 @@ export async function lifetimeCounts(babyId: number): Promise<Lifetime> {
  * Mark a member as here now (at most once a minute) and return when they were
  * here before, for the "While you slept" recap.
  */
-export async function touchLastSeen(id: string): Promise<string | null> {
+export async function touchLastSeen(fam: FamilyRef, id: string): Promise<string | null> {
+  const familyId = famId(fam);
   const rows = await q(
-    `WITH prev AS (SELECT last_seen_at FROM maple_members WHERE email = $1)
+    `WITH prev AS (SELECT last_seen_at FROM maple_members WHERE email = $1 AND family_id = $2)
      UPDATE maple_members SET last_seen_at = NOW()
-     WHERE email = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - INTERVAL '1 minute')
+     WHERE email = $1 AND family_id = $2 AND (last_seen_at IS NULL OR last_seen_at < NOW() - INTERVAL '1 minute')
      RETURNING (SELECT last_seen_at FROM prev) AS prev`,
-    [id]
+    [id, familyId]
   );
   if (rows.length) return isoOrNull(rows[0].prev);
-  const cur = await q(`SELECT last_seen_at FROM maple_members WHERE email = $1`, [id]);
+  const cur = await q(`SELECT last_seen_at FROM maple_members WHERE email = $1 AND family_id = $2`, [id, familyId]);
   return isoOrNull(cur[0]?.last_seen_at);
 }
 
-// ── invite links (family without Google) ──────────────────────────────
+// ── personal tokens (iOS Shortcuts) ───────────────────────────────────
 
 const sha256 = async (s: string) => {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -1250,91 +1242,17 @@ function randomToken(): string {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-export type Invite = {
-  id: number;
-  role: Role;
-  display_name: string | null;
-  emoji: string | null;
-  created_by: string | null;
-  expires_at: string;
-  used_at: string | null;
-};
-
-const INVITE_DAYS = 7;
-
-export async function createInvite(opts: {
-  role: Role;
-  displayName: string | null;
-  emoji: string | null;
-  createdBy: string;
-}): Promise<{ invite: Invite; token: string }> {
-  const token = randomToken();
-  const rows = await q(
-    `INSERT INTO maple_invites (token_hash, role, display_name, emoji, created_by, expires_at)
-     VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(days => $6))
-     RETURNING id, role, display_name, emoji, created_by, expires_at, used_at`,
-    [await sha256(token), opts.role, opts.displayName, opts.emoji, opts.createdBy, INVITE_DAYS]
-  );
-  return { invite: rowToInvite(rows[0]), token };
-}
-
-function rowToInvite(r: Row): Invite {
-  return {
-    id: Number(r.id),
-    role: (r.role === "owner" || r.role === "viewer" ? r.role : "member") as Role,
-    display_name: r.display_name == null ? null : String(r.display_name),
-    emoji: r.emoji == null ? null : String(r.emoji),
-    created_by: r.created_by == null ? null : String(r.created_by),
-    expires_at: isoOrNull(r.expires_at)!,
-    used_at: isoOrNull(r.used_at),
-  };
-}
-
-export async function listInvites(): Promise<Invite[]> {
-  const rows = await q(
-    `SELECT id, role, display_name, emoji, created_by, expires_at, used_at FROM maple_invites
-     WHERE used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC`
-  );
-  return rows.map(rowToInvite);
-}
-
-export async function revokeInvite(id: number): Promise<void> {
-  await q(`DELETE FROM maple_invites WHERE id = $1 AND used_at IS NULL`, [id]);
-}
-
-/**
- * Redeem a one-time invite: creates the member "invite:<id>" with the name,
- * emoji and role the owner chose. Returns null if the link is used/expired.
- */
-export async function redeemInvite(token: string): Promise<string | null> {
-  if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return null;
-  const rows = await q(
-    `UPDATE maple_invites SET used_at = NOW(), used_by = 'invite:' || id
-     WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
-     RETURNING id, role, display_name, emoji, created_by`,
-    [await sha256(token)]
-  );
-  if (!rows.length) return null;
-  const r = rows[0];
-  const id = `invite:${r.id}`;
-  await q(
-    `INSERT INTO maple_members (email, role, display_name, emoji, added_by) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (email) DO NOTHING`,
-    [id, r.role === "viewer" ? "viewer" : "member", r.display_name, r.emoji, r.created_by]
-  );
-  return id;
-}
-
-// ── personal tokens (iOS Shortcuts) ───────────────────────────────────
+/** A member id with the family its row belongs to: what familyForRow resolves. */
+export type FamilyMemberRow = { member: string; family_id: number };
 
 export type PersonalToken = { id: number; label: string | null; created_at: string; last_used_at: string | null };
 
-export async function createPersonalToken(member: string, label: string | null): Promise<{ token: string; record: PersonalToken }> {
+export async function createPersonalToken(fam: FamilyRef, member: string, label: string | null): Promise<{ token: string; record: PersonalToken }> {
   const token = `maple_${randomToken()}`;
   const rows = await q(
-    `INSERT INTO maple_tokens (member, token_hash, label) VALUES ($1, $2, $3)
+    `INSERT INTO maple_tokens (family_id, member, token_hash, label) VALUES ($4, $1, $2, $3)
      RETURNING id, label, created_at, last_used_at`,
-    [member, await sha256(token), label]
+    [member, await sha256(token), label, famId(fam)]
   );
   const r = rows[0];
   return {
@@ -1343,10 +1261,10 @@ export async function createPersonalToken(member: string, label: string | null):
   };
 }
 
-export async function listPersonalTokens(member: string): Promise<PersonalToken[]> {
+export async function listPersonalTokens(fam: FamilyRef, member: string): Promise<PersonalToken[]> {
   const rows = await q(
-    `SELECT id, label, created_at, last_used_at FROM maple_tokens WHERE member = $1 AND revoked_at IS NULL ORDER BY created_at DESC`,
-    [member]
+    `SELECT id, label, created_at, last_used_at FROM maple_tokens WHERE family_id = $2 AND member = $1 AND revoked_at IS NULL ORDER BY created_at DESC`,
+    [member, famId(fam)]
   );
   return rows.map((r) => ({
     id: Number(r.id),
@@ -1356,33 +1274,34 @@ export async function listPersonalTokens(member: string): Promise<PersonalToken[
   }));
 }
 
-export async function revokePersonalToken(member: string, id: number): Promise<boolean> {
+export async function revokePersonalToken(fam: FamilyRef, member: string, id: number): Promise<boolean> {
   const rows = await q(
-    `UPDATE maple_tokens SET revoked_at = NOW() WHERE id = $1 AND member = $2 AND revoked_at IS NULL RETURNING id`,
-    [id, member]
+    `UPDATE maple_tokens SET revoked_at = NOW() WHERE id = $1 AND family_id = $3 AND member = $2 AND revoked_at IS NULL RETURNING id`,
+    [id, member, famId(fam)]
   );
   return rows.length > 0;
 }
 
-/** The member a personal token belongs to (and stamps last use), or null. */
-export async function memberForPersonalToken(token: string): Promise<string | null> {
+/** The member a personal token belongs to and its family (familyForRow resolves it), stamping last use; or null. */
+export async function memberForPersonalToken(token: string): Promise<FamilyMemberRow | null> {
   if (!/^maple_[A-Za-z0-9_-]{20,64}$/.test(token)) return null;
   const rows = await q(
-    `UPDATE maple_tokens SET last_used_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL RETURNING member`,
+    `UPDATE maple_tokens SET last_used_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL RETURNING member, family_id`,
     [await sha256(token)]
   );
-  return rows.length ? String(rows[0].member) : null;
+  const familyId = rows.length ? parseFamilyId(rows[0].family_id) : null;
+  return familyId === null ? null : { member: String(rows[0].member), family_id: familyId };
 }
 
 // ── change token for cheap polling ────────────────────────────────────
 
-export async function rev(babyId: number): Promise<string> {
+export async function rev(fam: FamilyRef, babyId: number): Promise<string> {
   const rows = await q(
     `SELECT
-       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_entries WHERE baby_id = $1) AS e,
-       (SELECT COALESCE(updated_at::text, '') FROM maple_babies WHERE id = $1) AS b,
-       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_members) AS m`,
-    [babyId]
+       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_entries WHERE family_id = $2 AND baby_id = $1) AS e,
+       (SELECT COALESCE(updated_at::text, '') FROM maple_babies WHERE id = $1 AND family_id = $2) AS b,
+       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_members WHERE family_id = $2) AS m`,
+    [babyId, famId(fam)]
   );
   const r = rows[0] ?? {};
   // The hour too: a full state at least hourly, so the server's older-week diaper count (lifetime.week) never goes

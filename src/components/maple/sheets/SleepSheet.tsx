@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { SAFE_SLEEP_TIPS, SLEEP_TOTAL_NOTE } from "@/lib/maple/guidelines";
+import { SLEEP_TOTAL_NOTE, safeSleepTips } from "@/lib/maple/guidelines";
 import { formatDuration } from "@/lib/maple/time";
 import { SLEEP_PLACES, type SleepPlace } from "@/lib/maple/types";
+import { useVoice } from "../familyWords";
 import { Chip, Sheet, TimeRange } from "../ui";
 import type { SheetProps } from "./index";
 import {
@@ -48,6 +49,7 @@ export default function SleepSheet(props: SheetProps) {
 
 function SleepForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, now } = useSheetBase();
+  const voice = useVoice();
   const e = entry?.kind === "sleep" ? entry : undefined;
   const running = !!e?.active;
 
@@ -65,7 +67,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
   const [busy, setBusy] = useState(false);
 
   const [start, end] = range;
-  const tip = place ? SAFE_SLEEP_TIPS[place] : undefined;
+  const tip = place ? safeSleepTips(voice)[place] : undefined;
 
   const save = async () => {
     const noteVal = note.trim() || null;

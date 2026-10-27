@@ -1,5 +1,6 @@
 import { json, readJson, withMember } from "@/lib/maple/api";
-import { HELLO_NOTICE, scheduleTest, sendPush, subFor, subsOf } from "@/lib/maple/push";
+import type { FamilyCtx } from "@/lib/maple/family";
+import { HELLO_NOTICE, pushFamily, scheduleTest, sendPush, subFor, subsOf } from "@/lib/maple/push";
 
 /**
  * POST { endpoint, in_seconds?, all? }
@@ -10,15 +11,18 @@ import { HELLO_NOTICE, scheduleTest, sendPush, subFor, subsOf } from "@/lib/mapl
  *   all: true (owners): every phone signed in on this login gets one, the
  *   shared login's phones included.
  *   Without in_seconds: "Send one now", straight from here → { ok }.
+ * Only phones on in the signed-in member's family.
  */
-export const POST = withMember("POST /api/maple/push/test", async (request, me) => {
+export const POST = withMember("POST /api/maple/push/test", async (request, me, ctx?: FamilyCtx) => {
+  const fam = await pushFamily(me, ctx);
+  if (!fam) return json({ error: "Not signed in" }, 401);
   const body = await readJson<{ endpoint?: unknown; in_seconds?: unknown; all?: unknown }>(request);
-  const sub = typeof body.endpoint === "string" ? await subFor(me.email, body.endpoint) : null;
-  const all = body.all === true && me.role === "owner";
+  const sub = typeof body.endpoint === "string" ? await subFor(fam, me.email, body.endpoint) : null;
+  const all = body.all === true && fam.role === "owner";
   if (!sub && !all) return json({ error: "Notifications aren't on for this phone" }, 404);
   const secs = Number(body.in_seconds);
   if (body.in_seconds !== undefined && Number.isFinite(secs) && secs > 0) {
-    const phones = all ? await subsOf(me.email) : [sub!];
+    const phones = all ? await subsOf(fam, me.email) : [sub!];
     if (!phones.length) return json({ error: "No phone has notifications on yet" }, 404);
     let last: Awaited<ReturnType<typeof scheduleTest>> | null = null;
     for (const p of phones) last = await scheduleTest(p, secs);
@@ -27,4 +31,4 @@ export const POST = withMember("POST /api/maple/push/test", async (request, me) 
   if (!sub) return json({ error: "Notifications aren't on for this phone" }, 404);
   const ok = await sendPush(sub, HELLO_NOTICE);
   return ok ? json({ ok: true }) : json({ error: "Couldn't reach this phone. Turn notifications off and on again." }, 502);
-});
+}, { setup: true });

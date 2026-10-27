@@ -1,4 +1,5 @@
-import { BadRequest, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
+import { BadRequest, familyName, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
+import { FAMILY_ONE } from "@/lib/maple/family";
 import { getBaby, updateBaby, type BabyPatch } from "@/lib/maple/store";
 import { isDayKey } from "@/lib/maple/time";
 import { checkLogSwitches } from "@/lib/maple/validate";
@@ -13,22 +14,25 @@ function num(v: unknown, label: string, min: number, max: number): number | null
 }
 
 /**
- * PATCH /api/maple/baby — profile edits and the big one: "She's here!"
- * (born_at + birth measurements). Any family member can update it.
+ * PATCH /api/maple/baby — profile edits (sex included, for the growth
+ * charts) and the big one: "She's here!" (born_at + birth measurements). Any member who can log may update their
+ * own family's baby.
  */
-export const PATCH = withMember("PATCH /api/maple/baby", async (request, me) => {
+export const PATCH = withMember("PATCH /api/maple/baby", async (request, me, ctx) => {
   const body = await readJson<Record<string, unknown>>(request);
-  const baby = await getBaby();
+  const baby = await getBaby(ctx);
   const patch: BabyPatch = {};
 
   if ("name" in body) {
-    const name = String(body.name ?? "").trim();
+    const name = ctx.familyId === FAMILY_ONE ? String(body.name ?? "").trim() : familyName(ctx, body.name, 80, "The baby's name");
     if (!name || name.length > 80) throw new BadRequest("Name is required");
     patch.name = name;
   }
-  if ("nickname" in body) {
-    const nick = String(body.nickname ?? "").trim();
-    patch.nickname = nick ? nick.slice(0, 40) : null;
+  if ("nickname" in body) patch.nickname = familyName(ctx, body.nickname, 40, "The nickname");
+  if ("sex" in body) {
+    // For the growth charts: WHO's standards differ for girls and boys; null shows the measurements alone.
+    if (body.sex !== null && body.sex !== "female" && body.sex !== "male") throw new BadRequest("sex must be female, male or null");
+    patch.sex = body.sex;
   }
   if ("due_date" in body) {
     if (body.due_date !== null && !isDayKey(body.due_date)) throw new BadRequest("due_date must be YYYY-MM-DD");
@@ -85,5 +89,5 @@ export const PATCH = withMember("PATCH /api/maple/baby", async (request, me) => 
     patch.settings = incoming;
   }
 
-  return json({ baby: await updateBaby(baby.id, patch) });
+  return json({ baby: await updateBaby(ctx, baby.id, patch) });
 }, { write: true });

@@ -7,6 +7,7 @@ import { MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, overDailyMax, type AlertTier, typ
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryKind, Source, StretchSide } from "@/lib/maple/types";
 import { fixPreset } from "../FeedParts";
+import { useAskWho, useBabyWords } from "../familyWords";
 import { Icon, type IconName } from "../icons";
 import { SIDE_COLOR } from "../palette";
 import { Avatar, Button, NumberProblem, RepeatButton, TextArea, cx, parseTypedNumber, tone, useTypedNumber } from "../ui";
@@ -165,12 +166,13 @@ export function SheetFooter({
   onClose: () => void;
 }) {
   const { readOnly } = useMaple();
+  const ask = useAskWho();
   if (readOnly) {
     return (
       <div className="flex items-center gap-3">
         <p className={cx(tone.muted, "flex flex-1 items-center gap-2 text-sm")}>
           <Icon name="lock" size={16} className="shrink-0 text-mp-ink-3" />
-          View only. Ask Matt or Brittany to change this.
+          View only. Ask {ask} to change this.
         </p>
         <Button variant="soft" size="lg" onClick={onClose}>
           Close
@@ -428,12 +430,15 @@ export function AssessmentCard({
   );
 }
 
-const RUNNING_LABEL: Partial<Record<EntryKind, string>> = {
-  feed: "This feed is still going",
-  sleep: "She's still asleep",
-  tummy: "Tummy time is still going",
-  pump: "Still pumping",
-};
+function runningLabel(kind: EntryKind, hes: string): string | undefined {
+  const labels: Partial<Record<EntryKind, string>> = {
+    feed: "This feed is still going",
+    sleep: `${hes} still asleep`,
+    tummy: "Tummy time is still going",
+    pump: "Still pumping",
+  };
+  return labels[kind];
+}
 
 /** Where the running timer's buttons are (the dock has the feed and sleep ones). */
 const RUNNING_WHERE: Partial<Record<EntryKind, string>> = {
@@ -450,6 +455,7 @@ const RUNNING_WHERE: Partial<Record<EntryKind, string>> = {
  */
 export function RunningNote({ kind, entry }: { kind: EntryKind; entry?: Entry }) {
   const { state, readOnly } = useMaple();
+  const w = useBabyWords();
   const { open } = useSheets();
   const running = entry?.active ? entry : state?.entries.find((e) => e.active && e.kind === kind);
   return (
@@ -457,7 +463,7 @@ export function RunningNote({ kind, entry }: { kind: EntryKind; entry?: Entry })
       <div className="flex gap-3">
         <Icon name="timer" size={20} className="mt-0.5 shrink-0 text-mp-ink-2" />
         <p className={cx(tone.body, "text-sm leading-relaxed")}>
-          <span className="font-semibold">{RUNNING_LABEL[kind] ?? "This timer is running"}.</span> {RUNNING_WHERE[kind] ?? "It's on Today."} You can add
+          <span className="font-semibold">{runningLabel(kind, w.Hes) ?? "This timer is running"}.</span> {RUNNING_WHERE[kind] ?? "It's on Today."} You can add
           a note here.
         </p>
       </div>

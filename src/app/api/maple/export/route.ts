@@ -3,6 +3,7 @@ import { listMembers } from "@/lib/maple/auth";
 import { withMember } from "@/lib/maple/api";
 import { describeEntry } from "@/lib/maple/describe";
 import { memberName } from "@/lib/maple/insights";
+import { milestoneWordsOf } from "@/lib/maple/milestones";
 import { getBaby, listEntries, toClientEntry } from "@/lib/maple/store";
 import { dayKey, formatTime } from "@/lib/maple/time";
 
@@ -15,27 +16,28 @@ function csvCell(v: unknown): string {
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
-/** GET /api/maple/export — every entry as CSV, oldest first (for the pediatrician or a backup). */
-export const GET = withMember("GET /api/maple/export", async () => {
-  const baby = await getBaby();
-  const members = await listMembers();
+/** GET /api/maple/export — every entry of the session's family as CSV, oldest first (for the pediatrician or a backup). */
+export const GET = withMember("GET /api/maple/export", async (_request, _me, ctx) => {
+  const baby = await getBaby(ctx);
+  const members = await listMembers(ctx);
   // Page through everything (a busy year is well over one page).
   const entries = [];
   for (let after: { startedAt: string; id: number } | undefined; ; ) {
-    const page = await listEntries({ babyId: baby.id, ascending: true, limit: 5000, after });
+    const page = await listEntries(ctx, { babyId: baby.id, ascending: true, limit: 5000, after });
     entries.push(...page);
     if (page.length < 5000) break;
     const last = page[page.length - 1];
     after = { startedAt: last.started_at, id: last.id };
   }
   const tz = baby.timezone;
+  const words = milestoneWordsOf(ctx.familyId, baby);
   const header = ["id", "date", "start", "end", "minutes", "kind", "summary", "note", "logged_by", "via", "data_json"];
   const lines = [header.map(csvCell).join(",")];
   for (const raw of entries) {
     const e = toClientEntry(raw);
     const start = new Date(e.started_at);
     const end = e.ended_at ? new Date(e.ended_at) : null;
-    const d = describeEntry(e, { units: "us" });
+    const d = describeEntry(e, { units: "us", words });
     lines.push(
       [
         e.id,

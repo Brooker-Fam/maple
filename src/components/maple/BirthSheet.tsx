@@ -6,6 +6,7 @@ import { formatTime } from "@/lib/maple/time";
 import { cmToIn, formatLength, formatWeight, gramsToLbOz, inToCm, lbOzToGrams } from "@/lib/maple/units";
 import type { UnitSystem } from "@/lib/maple/types";
 import { MapleLeaf, useStill } from "./art";
+import { useBabyWords } from "./familyWords";
 import { Icon } from "./icons";
 import { useSheets } from "./sheets";
 import { MiniStepper } from "./sheets/parts";
@@ -49,6 +50,7 @@ export function birthLine(
 
 export default function BirthSheet({ open, onClose, mode = "birth" }: { open: boolean; onClose: () => void; mode?: Mode }) {
   const { state, units, now, api, log, refresh, toast } = useMaple();
+  const words = useBabyWords();
   const baby = state?.baby;
   const tz = baby?.timezone ?? "America/New_York";
 
@@ -87,7 +89,7 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
   const weightG = !showStats ? null : units === "us" ? (lb == null && oz == null ? null : lbOzToGrams(lb ?? 0, oz ?? 0)) : grams;
   const lengthCm = showStats ? fromShown(length, units) : null;
   const headCm = showStats ? fromShown(head, units) : null;
-  const firstName = baby.nickname || baby.name.split(" ")[0] || "Maple";
+  const firstName = baby.nickname || baby.name.split(" ")[0] || "Baby";
 
   const check = (): string | null => {
     if (weightG != null && (weightG < WEIGHT_G[0] || weightG > WEIGHT_G[1])) return "That weight looks off. Check the numbers?";
@@ -189,7 +191,7 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
       <Sheet
         open={open}
         onClose={onClose}
-        title={mode === "birth" ? "She's here!" : "Birth details"}
+        title={mode === "birth" ? `${words.Hes} here!` : "Birth details"}
         footer={
           <Button size="lg" className="w-full" onClick={() => void submit()} disabled={saving || hasInvalid}>
             {saving ? "Saving…" : mode === "birth" ? `Welcome ${firstName}` : "Save"}
@@ -198,7 +200,7 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
       >
         {mode === "birth" && (
           <p className={cx(tone.muted, "text-[15px] leading-relaxed")}>
-            Congratulations! Just her birth time for now. Everything else can wait.
+            Congratulations! Just {words.his} birth time for now. Everything else can wait.
           </p>
         )}
 
@@ -285,6 +287,7 @@ const subscribe = (cb: () => void) => {
 export function WelcomeHost() {
   const w = useSyncExternalStore(subscribe, () => welcome, () => null);
   const { open } = useSheets();
+  const words = useBabyWords();
   const still = useStill();
   const actions = useRef<HTMLDivElement>(null);
 
@@ -346,7 +349,7 @@ export function WelcomeHost() {
                 }}
               >
                 <Icon name="camera" size={20} />
-                Add her first photo
+                Add {words.his} first photo
               </Button>
               <Button variant="ghost" className="w-full" onClick={closeWelcome}>
                 Later

@@ -5,6 +5,7 @@ import { dayKey, formatDayLabel } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
 import { usePhones } from "./AlertCard";
 import { useAppNav } from "./AppNav";
+import { useBabyWords } from "./familyWords";
 import { telHref } from "./care/CareTeam";
 import { GROUP, NavRow } from "./care/parts";
 import { Icon } from "./icons";
@@ -32,6 +33,7 @@ const DANGER_TEXT =
 
 export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onClose: () => void; ask?: number }) {
   const { state, readOnly } = useMaple();
+  const w = useBabyWords();
   const now = useNow(60_000);
   const app = useAppNav();
   const phones = usePhones();
@@ -63,7 +65,7 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
       <VisitSummary state={state} todayKey={todayKey} tz={tz} now={now} />
 
       <section>
-        <SectionTitle>Her doctor</SectionTitle>
+        <SectionTitle>{w.His} doctor</SectionTitle>
         <div className={GROUP}>
           {numbers.map((n) => (
             <a key={n.label} href={telHref(n.phone)} className={cx(tone.row, "min-h-[52px] py-2.5")}>
@@ -77,9 +79,14 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
           ))}
           {/* Viewers can't fill them in (Family → Her doctor is read-only for them). */}
           {!numbers.length && !readOnly && (
-            <NavRow icon="phone" label="Add her doctor's numbers" note="In Family → Her doctor, for one-tap calling" onClick={() => then(() => app.go("family"))} />
+            <NavRow icon="phone" label={`Add ${w.his} doctor's numbers`} note={`In Family → ${w.His} doctor, for one-tap calling`} onClick={() => then(() => app.go("family"))} />
           )}
-          <NavRow icon="ruler" label="Growth chart" note="Weights and lengths on the WHO curves" onClick={toGrowth} />
+          <NavRow
+            icon="ruler"
+            label="Growth chart"
+            note={state && state.baby.sex == null ? "Weights and lengths over time" : "Weights and lengths on the WHO curves"}
+            onClick={toGrowth}
+          />
         </div>
       </section>
     </Sheet>
@@ -103,6 +110,7 @@ function Disclosure({ label, summary, open, onToggle, children }: { label: strin
 /** Questions for the next checkup (moved here from Family): add, tick off with the answer, put back, delete. */
 function DoctorQuestions({ open: sheetOpen, focus }: { open: boolean; focus: boolean }) {
   const { state, api, log, update, remove, readOnly, memberName, now } = useMaple();
+  const w = useBabyWords();
   const tz = state!.baby.timezone;
   const rev = state!.rev;
   const [fetched, setFetched] = useState<Question[]>([]);
@@ -173,7 +181,7 @@ function DoctorQuestions({ open: sheetOpen, focus }: { open: boolean; focus: boo
               className="min-h-[44px] min-w-0 flex-1 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
               value={text}
               maxLength={300}
-              placeholder="Is her cheek rash okay?"
+              placeholder={`Is ${w.his} cheek rash okay?`}
               aria-label="New question for the doctor"
               onChange={(e) => setText(e.target.value)}
             />
@@ -232,7 +240,7 @@ function DoctorQuestions({ open: sheetOpen, focus }: { open: boolean; focus: boo
         )}
       </div>
       <p className={cx(tone.faint, "mt-2 px-1 text-[13px] leading-snug")}>
-        {readOnly ? "What the family plans to ask at her next checkup." : "Jot them down as they come up; tick them off at her checkup."}
+        {readOnly ? `What the family plans to ask at ${w.his} next checkup.` : `Jot them down as they come up; tick them off at ${w.his} checkup.`}
       </p>
     </section>
   );

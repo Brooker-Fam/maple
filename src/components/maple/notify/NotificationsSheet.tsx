@@ -9,6 +9,7 @@ import { Button, Sheet, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { Footnote, GROUP, Problem, SwitchRow } from "../care/parts";
 import { useCare } from "../care/useCare";
+import { useBabyWords } from "../familyWords";
 import { useNotifications } from "./context";
 import { healthLines, medicineNote, testView, type PushPrefs } from "./words";
 
@@ -39,6 +40,7 @@ function Body() {
   const n = useNotifications();
   const care = useCare();
   const { state, toast } = useMaple();
+  const w = useBabyWords();
   const now = useNow(15_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const owner = state?.me.role === "owner";
@@ -279,7 +281,7 @@ function Body() {
 
       {on && (
         <section>
-          <h3 className={cx(tone.label, "mb-1.5 px-1")}>Maple</h3>
+          <h3 className={cx(tone.label, "mb-1.5 px-1")}>{w.name}</h3>
           <div className={GROUP}>
             <SwitchRow
               label="Nursing timer on the lock screen"

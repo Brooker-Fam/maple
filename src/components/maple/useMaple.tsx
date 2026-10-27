@@ -1,5 +1,6 @@
 "use client";
 
+import { voiceFor } from "@/lib/maple/voice";
 import {
   createContext,
   useCallback,
@@ -28,6 +29,7 @@ import {
 import { memberLabel as labelOf, summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
 import { deviceHeaders } from "@/lib/maple/device";
+import { FAMILY_MOVED_EVENT, setShownFamily, shownFamilyHeaders } from "./shownFamily";
 import type {
   CareEntry,
   CareEntryInput,
@@ -64,6 +66,8 @@ export type AuthInfo = {
   google: boolean;
   password: boolean;
   reason?: string | null;
+  /** MAPLE_SIGNUP, when the server says; absent reads as "off". */
+  signup?: "off" | "invite" | "open";
 };
 
 export type ToastAction = {
@@ -300,14 +304,18 @@ function discardedLine(err: unknown, kind: string | undefined, label: (id: strin
   return who ? `${who} already ${done} this ${thing}.` : `This ${thing} was already ${done} on another device or through Claude.`;
 }
 
-/** Network down or server hiccup: worth keeping and retrying, unlike a 4xx. */
-const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status >= 500 || e.status === 408 || e.status === 429;
+/** A queued write sent while the session is in another family (the server's 409): it waits until the session is back there. */
+const isFamilyMismatch = (e: unknown) => e instanceof ApiError && e.status === 409 && (e.body as { code?: unknown } | null)?.code === "family_mismatch";
+
+/** Network down or server hiccup (or a write waiting for its own family): worth keeping and retrying, unlike a 4xx. */
+const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status >= 500 || e.status === 408 || e.status === 429 || isFamilyMismatch(e);
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const write = (init?.method ?? "GET").toUpperCase() !== "GET";
   const res = await fetch(path.startsWith("/") ? path : `/api/maple/${path}`, {
     ...init,
     // This install's id (src/lib/maple/device.ts): lets a notification skip the phone that did the action.
-    headers: { "Content-Type": "application/json", ...deviceHeaders(), ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...deviceHeaders(), ...(write ? shownFamilyHeaders() : {}), ...(init?.headers ?? {}) },
     cache: "no-store",
   });
   let body: unknown = null;
@@ -318,7 +326,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const msg = (body as { error?: string } | null)?.error ?? `Request failed (${res.status})`;
-    throw new ApiError(msg, res.status, body);
+    const error = new ApiError(msg, res.status, body);
+    if (isFamilyMismatch(error)) window.dispatchEvent(new Event(FAMILY_MOVED_EVENT));
+    throw error;
   }
   return body as T;
 }
@@ -327,13 +337,26 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
  * One write waiting for a connection. `target` says where it goes: Maple's
  * entries (the default, so items saved before targets existed still post to
  * /api/maple/entries), mom's care entries, or her check-ins. The key stays
- * maple-outbox-v1.
+ * maple-outbox-v1. `family` and `member` say whose it is: it's sent (with
+ * X-Maple-Family, which the server checks) and shown only while this phone
+ * is signed in as that member of that family, so a switch, a join or
+ * someone else signing in here never files it under the wrong log or person.
+ * Items from before families carry neither and are family 1's.
  */
-type OutboxItem =
-  | { target?: "entries"; client_id: string; input: CreateEntryInput; entry: Entry; tries: number }
-  | { target: "care"; client_id: string; input: CareEntryInput; entry: CareEntry; tries: number }
-  // `id`: a change to a saved check-in (PATCH ?id=); without it, a new one (POST, `entry` has a temporary id).
-  | { target: "mood"; client_id: string; input: Record<string, unknown>; entry: MoodEntry; id?: number; tries: number };
+type Owner = { family?: number; member?: string };
+type OutboxItem = Owner &
+  (
+    | { target?: "entries"; client_id: string; input: CreateEntryInput; entry: Entry; tries: number }
+    | { target: "care"; client_id: string; input: CareEntryInput; entry: CareEntry; tries: number }
+    // `id`: a change to a saved check-in (PATCH ?id=); without it, a new one (POST, `entry` has a temporary id).
+    | { target: "mood"; client_id: string; input: Record<string, unknown>; entry: MoodEntry; id?: number; tries: number }
+  );
+
+/** Whether a queued item belongs to the session `s` is signed in as (an unstamped one is family 1's). */
+function ownedBy(i: Owner, s: Pick<MapleState, "family" | "me"> | null | undefined): boolean {
+  if (!s) return false;
+  return (i.family ?? 1) === (s.family?.id ?? 1) && (i.member == null || i.member === s.me.email);
+}
 type EntryItem = Extract<OutboxItem, { input: CreateEntryInput }>;
 type CareItem = Extract<OutboxItem, { target: "care" }>;
 type MoodItem = Extract<OutboxItem, { target: "mood" }>;
@@ -630,7 +653,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** Server entries plus anything still waiting in the outbox (care items as pending care entries). */
-  const withPending = useCallback((s: MapleState, items: OutboxItem[]): MapleState => {
+  const withPending = useCallback((s: MapleState, all: OutboxItem[]): MapleState => {
+    const items = all.filter((i) => ownedBy(i, s));
     if (!items.length) return s;
     const ids = new Set(s.entries.map((e) => e.id));
     const extra = items.filter(isEntryItem).map((i) => i.entry).filter((e) => !ids.has(e.id));
@@ -684,12 +708,14 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       if (inflight.current > 0) return;
       revRef.current = res.rev;
       tzRef.current = res.baby.timezone;
+      setShownFamily(res.family?.id ?? null);
       setState((prev) => keepConfirmed(withPending(res, outboxRef.current), prev, confirmedRef.current, sentAt));
       setStatus("ready");
       setError(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         revRef.current = null;
+        setShownFamily(null);
         setState(null);
         setStatus("signedOut");
         // Signed out: her doses and check-ins waiting on this phone go, so nothing about her stays behind.
@@ -713,15 +739,23 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     await refresh();
   }, [refresh]);
 
-  /** Replace the outbox everywhere at once (state, storage, ref). */
+  /** Replace the outbox everywhere at once (state, storage, ref). A new item is stamped with the session it was made in. */
   const setQueue = useCallback((items: OutboxItem[]) => {
-    setOutbox(items);
-    writeOutbox(items);
-    outboxRef.current = items;
+    const s = stateRef.current;
+    const stamped = items.map((i) => (i.family != null || !s ? i : { ...i, family: s.family?.id ?? 1, member: s.me.email }));
+    setOutbox(stamped);
+    writeOutbox(stamped);
+    outboxRef.current = stamped;
   }, []);
 
   const forceRefreshRef = useRef(forceRefresh);
   forceRefreshRef.current = forceRefresh;
+
+  useEffect(() => {
+    const moved = () => void forceRefreshRef.current();
+    window.addEventListener(FAMILY_MOVED_EVENT, moved);
+    return () => window.removeEventListener(FAMILY_MOVED_EVENT, moved);
+  }, []);
 
   /**
    * A dose saved on this phone offline turned out to repeat one logged
@@ -766,12 +800,18 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       for (const item of [...outboxRef.current]) {
         // Removed from the queue while we were busy (the parent deleted it).
         if (!outboxRef.current.some((i) => i.client_id === item.client_id)) continue;
+        // Another family's or person's: it waits until this phone is signed in as them again.
+        if (!ownedBy(item, stateRef.current)) continue;
         try {
           const target = item.target ?? "entries";
           const change = isMoodItem(item) && item.id != null;
           const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; possible_duplicate?: DoseEntry }>(
             change ? `${OUTBOX_URL.mood}?id=${(item as MoodItem).id}` : OUTBOX_URL[target],
-            { method: change ? "PATCH" : "POST", body: JSON.stringify(item.input) }
+            {
+              method: change ? "PATCH" : "POST",
+              body: JSON.stringify(item.input),
+              ...(item.family != null ? { headers: { "X-Maple-Family": String(item.family) } } : {}),
+            }
           );
           done.add(item.client_id);
           if (isCareItem(item) && res.created === false && res.possible_duplicate) {
@@ -798,6 +838,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             await fetchJson(del, { method: "DELETE" }).catch(() => {});
           }
         } catch (e) {
+          if (isFamilyMismatch(e)) continue;
           if (isTransient(e)) bumped.add(item.client_id);
           else {
             done.add(item.client_id);
@@ -860,6 +901,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       members: state.members,
       now: now(),
       lifetime: state.lifetime,
+      vo: voiceFor(state.family?.id ?? 0, state.baby, state.care?.person.name ?? null),
     });
   }, [state, tick, now]);
 
@@ -1373,7 +1415,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       units,
       setUnits,
       refresh: forceRefresh,
-      pending: outbox.length,
+      pending: outbox.filter((i) => ownedBy(i, state)).length,
       online,
       seenAt,
       log,
@@ -1396,7 +1438,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       readOnly,
       care,
     }),
-    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox.length, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care]
+    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care]
   );
 
   return <MapleContext.Provider value={value}>{children}</MapleContext.Provider>;

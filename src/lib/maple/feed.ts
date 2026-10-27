@@ -18,6 +18,9 @@
 import { FEED_LENGTH_MIN } from "./guidelines";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatRange, formatTime, formatTimeNear } from "./time";
 import type { Entry, EntryOf, FeedData, Segment, Side, StretchRef, StretchSide } from "./types";
+import { makeVoice, type Voice } from "./voice";
+
+const NO_FAMILY_VOICE = makeVoice({ name: "the baby", pronoun: "they" });
 
 export type { StretchRef, StretchSide } from "./types";
 
@@ -67,8 +70,8 @@ export class FeedEditError extends Error {
   constructor(readonly code: FeedEditCode, readonly params: Record<string, string> = {}) {
     super(code);
     this.name = "FeedEditError";
-    // Readable as-is wherever only err.message is shown (the family's zone).
-    this.message = feedEditCopy(this, "ui", DEFAULT_TZ);
+    // Readable as-is wherever only err.message is shown; every surface that knows the family words it with feedEditCopy.
+    this.message = feedEditCopy(this, "ui", DEFAULT_TZ, NO_FAMILY_VOICE);
   }
 }
 
@@ -514,20 +517,21 @@ export function partTotals(parts: Part[]): {
  * when she goes back on the side she came off, else "When did she go on the
  * Right?". Both sides ("B") reads as going back and forth.
  */
-export function momentQuestion(moment: Moment, side: StretchSide, prev?: StretchSide | null): string {
+export function momentQuestion(moment: Moment, side: StretchSide, prev: StretchSide | null | undefined, vo: Voice): string {
   const name = side === "B" ? "" : SIDE_NAME[side];
+  const they = vo.they;
   switch (moment) {
     case "feed_start":
       return "When did the feed start?";
     case "switch":
-      if (side === "B") return "When did she start going back and forth?";
+      if (side === "B") return `When did ${they} start going back and forth?`;
       // Tracking sides again after back and forth: she went on a side, she didn't switch to it.
-      return prev === "B" ? `When did she go on the ${name}?` : `When did she switch to ${name}?`;
+      return prev === "B" ? `When did ${they} go on the ${name}?` : `When did ${they} switch to ${name}?`;
     case "pause":
-      return side === "B" ? "When did she come off?" : `When did she come off the ${name}?`;
+      return side === "B" ? `When did ${they} come off?` : `When did ${they} come off the ${name}?`;
     case "resume":
-      if (side === "B") return prev === "B" ? "When did she go back on?" : "When did she start going back and forth?";
-      return prev && prev !== side ? `When did she go on the ${name}?` : `When did she go back on the ${name}?`;
+      if (side === "B") return prev === "B" ? `When did ${they} go back on?` : `When did ${they} start going back and forth?`;
+      return prev && prev !== side ? `When did ${they} go on the ${name}?` : `When did ${they} go back on the ${name}?`;
     case "feed_end":
       return "When did the feed end?";
   }
@@ -1180,7 +1184,7 @@ export function describeChange(beforeParts: Part[], afterParts: Part[]): string 
  * Claude and ChatGPT (which can act on a tool name). before_own_start on MCP
  * ends "then {params.then}" ("try again" unless the caller names a tool).
  */
-export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: string = DEFAULT_TZ): string {
+export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: string, vo: Voice): string {
   const p = err.params;
   const mcp = surface === "mcp";
   const t = p.t ? formatTime(p.t, tz) : "";
@@ -1188,7 +1192,7 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
   const name = (k: string) => (p[k] === "L" || p[k] === "R" ? SIDE_NAME[p[k] as Side] : p[k] === "B" ? "back and forth" : "");
   switch (err.code) {
     case "future":
-      return mcp ? `That time is in the future; it's ${formatTime(p.now ?? new Date(), tz)} for Maple.` : "That's in the future.";
+      return mcp ? `That time is in the future; it's ${formatTime(p.now ?? new Date(), tz)} for ${vo.name}.` : "That's in the future.";
     case "too_early":
       return "That's more than 6 hours before the feed started.";
     case "before_prev_start":
@@ -1196,7 +1200,7 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
     case "before_break":
       return mcp
         ? `The break began at ${t}. For no break, use at: "${t}".`
-        : `Can't be before she came off (${t}). For no break, pick ${formatTimeNear(p.t, p.t, tz)}.`;
+        : `Can't be before ${vo.they} came off (${t}). For no break, pick ${formatTimeNear(p.t, p.t, tz)}.`;
     case "after_next":
       return p.next === "end" ? `Can't be after the feed ended (${t}).` : `Can't be after ${name("next")} started (${t}).`;
     case "after_own_end":
@@ -1217,7 +1221,7 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
     case "overlap":
       return `That overlaps ${name("side")} ${formatRange(p.start, p.end || null, tz, { compact: true })}.`;
     case "use_stop":
-      return mcp ? "The feed is still going; to end it earlier use stop_timer with at." : "Use She already finished to end the feed.";
+      return mcp ? "The feed is still going; to end it earlier use stop_timer with at." : `Use ${vo.pronoun === "they" ? vo.Name : vo.They} already finished to end the feed.`;
     case "nothing_to_undo":
       if (p.why === "taken_back") {
         return mcp
@@ -1236,12 +1240,12 @@ export function feedEditCopy(err: FeedEditError, surface: "ui" | "mcp", tz: stri
       // Paused at the limit: nothing can go back on, so the feed ends and a new one starts (under 10 minutes off is the same feed).
       if (p.paused) {
         return mcp
-          ? "This feed has 60 parts, the most one can hold, so it can't go back on. Use stop_timer, then start_timer on the side she's on: back on within 10 minutes still counts as the same feed."
-          : "That's 60 parts, the most one feed holds. Tap Done and start her again: back on within 10 minutes still counts as the same feed.";
+          ? `This feed has 60 parts, the most one can hold, so it can't go back on. Use stop_timer, then start_timer on the side ${vo.they}${vo.verb("'s")} on: back on within 10 minutes still counts as the same feed.`
+          : `That's 60 parts, the most one feed holds. Tap Done and start ${vo.them} again: back on within 10 minutes still counts as the same feed.`;
       }
       // Going back and forth stops adding parts (at the limit, the open part turns both sides).
       return mcp
-        ? 'This feed has 60 parts, the most one can hold. If she\'s going back and forth, use switch_side with to: "both" to stop tracking sides.'
+        ? `This feed has 60 parts, the most one can hold. If ${vo.they}${vo.verb("'s")} going back and forth, use switch_side with to: "both" to stop tracking sides.`
         : "That's 60 parts, the most one feed holds. Going back and forth? Tap Back and forth to stop tracking sides.";
     case "not_found":
     case "not_newest":
@@ -1683,5 +1687,5 @@ export function clusterLine(c: FeedCluster, tz: string = DEFAULT_TZ): string {
 export const FEED_COUNT_RULE =
   "Off the breast for under 10 minutes is the same feed, whether Pause or Done was tapped. Three or more feeds, each starting less than 30 minutes after the last one ended, make a cluster, and each feed in it counts.";
 /** Last fed's info line, when a feed can count from 40 minutes before it ended. */
-export const LAST_FED_RULE =
-  "Counted from when her last feed began. A long back-and-forth stretch counts from 40 minutes before she finished, or from when she went on her last side if that side alone ran longer.";
+export const lastFedRule = (vo: Voice) =>
+  `Counted from when ${vo.their} last feed began. A long back-and-forth stretch counts from 40 minutes before ${vo.they} finished, or from when ${vo.they} went on ${vo.their} last side if that side alone ran longer.`;

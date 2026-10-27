@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { memberFor, setSessionCookies } from "@/lib/maple/auth";
-import { redeemInvite } from "@/lib/maple/store";
+import { inviteFamily, memberFor, redeemInvite, setSessionCookies } from "@/lib/maple/auth";
+import { FAMILY_ONE, signupMode } from "@/lib/maple/family";
 import { checkUploadRateLimit } from "@/lib/rate-limit";
 import { captureServerException } from "@/lib/posthog-server";
 
 export const dynamic = "force-dynamic";
 
+
 /**
- * POST { token } — redeem a one-time invite link and sign in. The token rides
+ * POST { token } — redeem a one-time invite link and sign in to the family it
+ * was made in. The token rides
  * in the link's #fragment (never sent to servers or logs by the browser) and
  * the /maple/join page posts it here.
  */
@@ -16,19 +18,23 @@ export async function POST(request: NextRequest) {
     const { allowed } = await checkUploadRateLimit(request);
     if (!allowed) return NextResponse.json({ error: "Too many tries. Take a break and try later." }, { status: 429 });
     const body = (await request.json().catch(() => ({}))) as { token?: unknown };
-    const id = typeof body.token === "string" ? await redeemInvite(body.token.trim()) : null;
-    if (!id) {
-      return NextResponse.json(
-        { error: "This invite link has already been used or has expired. Ask Matt or Brittany for a fresh one." },
-        { status: 400 }
-      );
+    const joined = typeof body.token === "string" ? await redeemInvite(body.token.trim()) : null;
+    if (joined === "google") {
+      return NextResponse.json({ error: "This invite is for a Google account. Join with Google, as the address it was sent to.", google: true }, { status: 400 });
     }
-    const member = await memberFor(id);
+    if (!joined) return NextResponse.json({ error: usedCopy(await inviteFamily(body.token)) }, { status: 400 });
+    const member = await memberFor({ familyId: joined.familyId }, joined.id);
     const res = NextResponse.json({ ok: true, member });
-    setSessionCookies(res, id);
+    setSessionCookies(res, joined.id, joined.familyId);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "POST /api/maple/auth/join" });
     return NextResponse.json({ error: "Couldn't join right now" }, { status: 500 });
   }
+}
+
+/** Only the Brookers' owners are Matt and Brittany; a link nobody can place reads as theirs only while they're the only family. */
+function usedCopy(familyId: number | null): string {
+  const theirs = familyId === FAMILY_ONE || (familyId === null && signupMode() === "off");
+  return `This invite link has already been used or has expired. Ask ${theirs ? "Matt or Brittany" : "whoever sent it"} for a fresh one.`;
 }

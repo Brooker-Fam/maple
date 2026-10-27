@@ -27,6 +27,7 @@ import {
 } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, FeedEdit, Side, StretchSide, TimerKind, TimerResponse } from "@/lib/maple/types";
+import { useBabyWords, type BabyWords } from "./familyWords";
 import { fixPreset, KIND_TITLE, SIDE_NAME } from "./FeedParts";
 import type { IconName } from "./icons";
 import { useSheets } from "./sheets";
@@ -69,13 +70,13 @@ const minutesWord = (n: number) => `${n} minute${n === 1 ? "" : "s"}`;
  * last on ("if she wants more"); otherwise the opposite of the side the feed
  * started on ("next time").
  */
-export function doneText(e: Entry, now: Date, ended?: string, all?: readonly Entry[]): { text: string } {
+export function doneText(e: Entry, now: Date, w: BabyWords, ended?: string, all?: readonly Entry[]): { text: string } {
   const dur = e.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / 1000 : 0;
   if (e.kind === "feed" && e.data.method === "breast") {
     // The card's rows added up (feedMinutes), so the sides always sum to the total ("L 12 · R 9 · both 38").
     const t = feedMinutes(e, now);
     const sides = ended ? "" : sideMinutesText(t);
-    const next = nextSideWords(e, now, all);
+    const next = nextSideWords(e, now, w, all);
     return {
       text: `Nursed ${minutesShort(t.total)}${sides ? ` (${sides})` : ""}${ended ? ` · ${ended}` : ""}${next ? ` · ${next}` : ""}`,
     };
@@ -93,13 +94,13 @@ export function doneText(e: Entry, now: Date, ended?: string, all?: readonly Ent
  * entries) it's the side Today's card and the dock show (nextSideFor); "" if
  * there's none to say. The feed sheet words a feed logged by minutes with it.
  */
-export function nextSideWords(e: Entry, now: Date, all?: readonly Entry[]): string {
+export function nextSideWords(e: Entry, now: Date, w: BabyWords, all?: readonly Entry[]): string {
   if (e.kind !== "feed" || e.data.method !== "breast") return "";
   const ns = all ? nextSideFor(nursingRuns([...all.filter((x) => x.id !== e.id), e], now), now) : null;
   const next = ns?.side ?? suggestNextSide(e.data);
   if (!next) return "";
   const fuller = ns ? ns.fuller : feedMinutes(e, now).has.B;
-  return `${SIDE_NAME[next]} ${ns?.rule === "relatch" ? "if she wants more" : "next time"}${fuller ? ", or the fuller side" : ""}`;
+  return `${SIDE_NAME[next]} ${ns?.rule === "relatch" ? `if ${w.he} wants more` : "next time"}${fuller ? ", or the fuller side" : ""}`;
 }
 
 /** The side parts of a timed feed as it stands at `now` (none for anything else). */
@@ -140,6 +141,7 @@ function pauseWords(e: Entry, me: string | undefined): string {
 export function useTimerActions() {
   const { state, timerCall, timerBusy, toast, now, isNight, memberName, restore, dismissTimerToast, holdTimerToasts } = useMaple();
   const me = state?.me.email;
+  const w = useBabyWords();
   const { open } = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const entries = state?.entries;
@@ -527,34 +529,34 @@ export function useTimerActions() {
       const timed = saved.kind === "feed" && saved.data.method === "breast" && !!saved.data.segments?.length;
       const undo = () => void reopen(saved);
       if (!timed) {
-        const d = doneText(saved, now(), undefined, entriesRef.current);
+        const d = doneText(saved, now(), w, undefined, entriesRef.current);
         timerToast(at ? `${d.text} · ended ${short(ended)}` : d.text, saved, {
           undo,
           actions: [{ label: "Edit", onClick: () => open({ kind: saved.kind, entry: saved }) }],
         });
       } else if (at) {
-        timerToast(`${doneText(saved, now(), undefined, entriesRef.current).text} · ended ${short(ended)}`, saved, { undo });
+        timerToast(`${doneText(saved, now(), w, undefined, entriesRef.current).text} · ended ${short(ended)}`, saved, { undo });
       } else if (saved.kind === "feed" && saved.data.paused_at_stop === true) {
         // Ended at its pause (the server's word for it, even if this phone still showed her on).
-        timerToast(doneText(saved, now(), `ended ${short(ended)}, ${pauseWords(saved, me)}`, entriesRef.current).text, saved, {
+        timerToast(doneText(saved, now(), w, `ended ${short(ended)}, ${pauseWords(saved, me)}`, entriesRef.current).text, saved, {
           undo,
           actions: [
             {
-              label: "She went back on…",
+              label: `${w.He} went back on…`,
               // Asked of the finished feed: the sheet's answer is one write (backOnAfterDone), so nothing is reopened to ask.
               onClick: () => open({ kind: "feed", entry: saved, preset: fixPreset("current", "backOn", doneAt) }),
             },
           ],
         });
       } else {
-        timerToast(doneText(saved, now(), undefined, entriesRef.current).text, saved, {
+        timerToast(doneText(saved, now(), w, undefined, entriesRef.current).text, saved, {
           undo,
           actions: [{ label: "Ended earlier…", onClick: () => open({ kind: "feed", entry: saved, preset: fixPreset("finish") }) }],
         });
       }
       return saved;
     },
-    [me, now, open, reopen, short, timerCall, timerToast]
+    [me, now, open, reopen, short, timerCall, timerToast, w]
   );
 
   /**
@@ -752,7 +754,7 @@ export function useTimerActions() {
         // Asleep at the breast is the likelier story, so this question wins over "Fell asleep earlier?".
         timerToast("Stop the feed too?", null, {
           actions: [
-            { label: "Yes, she fell asleep", onClick: () => void stop(feed, new Date(e.started_at)) },
+            { label: `Yes, ${w.he} fell asleep`, onClick: () => void stop(feed, new Date(e.started_at)) },
             { label: "Keep both", onClick: () => {} },
           ],
         });
@@ -772,7 +774,7 @@ export function useTimerActions() {
       });
       return e;
     },
-    [adjust, clock, earlierChips, running, stop, timerCall, timerToast, unstart]
+    [adjust, clock, earlierChips, running, stop, timerCall, timerToast, unstart, w]
   );
 
   /** Fell asleep at the breast: stop the feed (by the stop rule) and start sleep at the same instant. */
@@ -787,7 +789,7 @@ export function useTimerActions() {
         s = (await timerCall({ action: "adjust", id: s.id, at: at.toISOString() }))?.entry ?? s;
       }
       const sleep = s;
-      timerToast(`${doneText(stopped, now(), undefined, entriesRef.current).text} · sleep timer on`, stopped, {
+      timerToast(`${doneText(stopped, now(), w, undefined, entriesRef.current).text} · sleep timer on`, stopped, {
         undo: async () => {
           // The feed only comes back once the sleep is gone, and the sleep only goes as it was started.
           if (sleep && !(await timerCall({ action: "discard", id: sleep.id, expect_updated_at: sleep.updated_at }))) return;
@@ -795,7 +797,7 @@ export function useTimerActions() {
         },
       });
     },
-    [now, reopen, timerCall, timerToast]
+    [now, reopen, timerCall, timerToast, w]
   );
 
   /**
@@ -899,12 +901,12 @@ export function useTimerActions() {
           const t = short(s.cur.start);
           const both = s.cur.side === "B";
           const name = SIDE_NAME[s.cur.side];
-          if (!f.who) return both ? `She's already going back and forth · since ${t}` : `She's already on the ${name} side · since ${t}`;
+          if (!f.who) return both ? `${w.Hes} already going back and forth · since ${t}` : `${w.Hes} already on the ${name} side · since ${t}`;
           const tap = (s.e.data as TapFeedData).last_tap;
           // Brittany's "Keep Left going" took back the pause this phone still showed.
           if ((tap?.kind === "pause" && tap.undone) || s.cur.startMoment === "feed_start") return `${f.who} took back the pause · ${both ? "back and forth" : `${name} side`} since ${t}`;
-          if (both) return `${f.who} already put her back on, back and forth, at ${t}`;
-          return s.cur.startMoment === "switch" ? `${f.who} already switched her to the ${name} at ${t}` : `${f.who} already put her back on the ${name} at ${t}`;
+          if (both) return `${f.who} already put ${w.him} back on, back and forth, at ${t}`;
+          return s.cur.startMoment === "switch" ? `${f.who} already switched ${w.him} to the ${name} at ${t}` : `${f.who} already put ${w.him} back on the ${name} at ${t}`;
         },
         failActions: (f) => {
           const s = stillOn(f);
@@ -913,7 +915,7 @@ export function useTimerActions() {
         },
       };
     },
-    [continueAction, now, short, switchSide]
+    [continueAction, now, short, switchSide, w]
   );
 
   /**
@@ -995,18 +997,18 @@ export function useTimerActions() {
   const askSide = useCallback(
     (e: Entry) => {
       const paused = pausedBoth(live(e));
-      timerToast("Which side is she on now?", live(e), {
+      timerToast(`Which side is ${w.he} on now?`, live(e), {
         // A question, not a saved thing: no check mark.
         icon: "arrow-left-right",
         actions: (["L", "R"] as Side[]).map((s) => ({
           label: SIDE_NAME[s],
           sub: paused ? "back on now" : "from now",
-          ariaLabel: `She's ${paused ? "back " : ""}on the ${SIDE_NAME[s]} now: track sides again`,
+          ariaLabel: `${w.Hes} ${paused ? "back " : ""}on the ${SIDE_NAME[s]} now: track sides again`,
           onClick: () => void trackSides(e, s),
         })),
       });
     },
-    [live, timerToast, trackSides]
+    [live, timerToast, trackSides, w]
   );
 
   const discard = useCallback(

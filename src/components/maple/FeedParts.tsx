@@ -19,6 +19,8 @@ import {
 import { DEFAULT_TZ, formatClock, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, Side, StretchRef, StretchSide, TimerKind } from "@/lib/maple/types";
 import { Icon } from "./icons";
+import { useBabyWords, useVoice } from "./familyWords";
+import type { Voice } from "@/lib/maple/voice";
 import { SIDE_COLOR, SIDE_INK } from "./palette";
 import { cx, TimeScrubber } from "./ui";
 import { useMaple } from "./useMaple";
@@ -646,6 +648,7 @@ export function SideFixRow({
   disabled?: boolean;
   busy?: StretchSide | null;
 }) {
+  const w = useBabyWords();
   const options: StretchSide[] = side === "B" ? ["L", "R"] : [side === "L" ? "R" : "L", "B"];
   return (
     <div className="flex min-h-[48px] flex-wrap items-center gap-x-3 gap-y-1.5 py-1">
@@ -657,7 +660,7 @@ export function SideFixRow({
             type="button"
             onClick={() => onPick(to)}
             disabled={disabled}
-            aria-label={to === "B" ? "It was both sides: she went back and forth" : `It was ${SIDE_NAME[to]}`}
+            aria-label={to === "B" ? `It was both sides: ${w.he} went back and forth` : `It was ${SIDE_NAME[to]}`}
             className="min-h-[44px] shrink-0 rounded-xl bg-mp-sunken px-3 text-[14px] font-semibold whitespace-nowrap text-mp-ink disabled:opacity-45 [.maple-night_&]:text-[#E8A23F]"
           >
             {busy === to ? "Saving…" : to === "B" ? "Both sides" : `It was ${SIDE_NAME[to]}`}
@@ -747,7 +750,8 @@ type MomentEditorProps = {
  */
 export function MomentEditor(props: MomentEditorProps) {
   const { now } = useMaple();
-  const info = useMemo(() => momentInfo(props.entry, props.edge, props.free, now()), [props.entry, props.edge, props.free, now]);
+  const vo = useVoice();
+  const info = useMemo(() => momentInfo(props.entry, props.edge, props.free, now(), vo), [props.entry, props.edge, props.free, now, vo]);
   const key = info ? `${info.keyBase}|${info.recorded.toISOString()}` : "none";
   const [first] = useState(key);
   const changed = key !== first;
@@ -765,7 +769,7 @@ type MomentInfo = {
   notes?: { low?: string; high?: string };
 };
 
-function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEditorProps["free"], now: Date): MomentInfo | null {
+function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEditorProps["free"], now: Date, vo: Voice): MomentInfo | null {
   if (free) return { keyBase: `free|${free.title}`, title: free.title, recorded: free.recorded, min: free.min, max: free.max, notes: free.notes };
   if (!edge || entry.kind !== "feed") return null;
   try {
@@ -789,7 +793,7 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
     return {
       keyBase: `${edge.ref?.side ?? ""}|${edge.ref?.start ?? ""}|${edge.edge}|${b.moment}`,
       // "go back on the Right" only if she was on the Right before the break.
-      title: momentQuestion(b.moment, side ?? "L", b.moment === "resume" && i > 0 ? sides[i - 1]?.side : undefined),
+      title: momentQuestion(b.moment, side ?? "L", b.moment === "resume" && i > 0 ? sides[i - 1]?.side : undefined, vo),
       recorded: b.recorded,
       min: b.uiMin,
       max: soft ? new Date(ceiling) : b.max,
@@ -821,6 +825,8 @@ function MomentEditorInner({
   changed,
 }: MomentEditorProps & { info: MomentInfo; changed: boolean }) {
   const { state, now } = useMaple();
+  const w = useBabyWords();
+  const vo = useVoice();
   const [local, setLocal] = useState(info.recorded);
   const [touched, setTouched] = useState(false);
   const draft = mode === "staged" ? controlled ?? info.recorded : local;
@@ -849,9 +855,9 @@ function MomentEditorInner({
       if (prev?.ended_at && to < Date.parse(prev.ended_at) - NEAR_MS) text += ` · overlaps the ${formatTimeNear(prev.started_at, prev.started_at, tz)} feed`;
       return text;
     } catch (err) {
-      return err instanceof FeedEditError ? feedEditCopy(err, "ui", tz) : null;
+      return err instanceof FeedEditError ? feedEditCopy(err, "ui", tz, vo) : null;
     }
-  }, [draftMs, entry, info, now, state?.entries, tz]);
+  }, [draftMs, entry, info, now, state?.entries, tz, vo]);
 
   // The limit line, from the engine's own copy for one step past the limit.
   const limitNote = (side: "low" | "high"): string | null => {
@@ -865,8 +871,8 @@ function MomentEditorInner({
     } catch (err) {
       if (!(err instanceof FeedEditError)) return null;
       // At the floor already (the low note only shows there): "For no break, pick 5:15" would ask for what's picked.
-      if (side === "low" && err.code === "before_break" && err.params.t) return `Can't be before she came off (${formatTime(err.params.t, tz)}), so this is no break.`;
-      return feedEditCopy(err, "ui", tz);
+      if (side === "low" && err.code === "before_break" && err.params.t) return `Can't be before ${w.he} came off (${formatTime(err.params.t, tz)}), so this is no break.`;
+      return feedEditCopy(err, "ui", tz, vo);
     }
   };
   const atLow = draftMs <= info.min.getTime() + 999;

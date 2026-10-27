@@ -17,11 +17,13 @@ export interface WhoLmsTable {
   readonly rows: readonly WhoLmsRow[];
 }
 
-export const WHO_GIRLS: {
+export interface WhoTables {
   readonly weight: WhoLmsTable;
   readonly length: WhoLmsTable;
   readonly head: WhoLmsTable;
-} = {
+}
+
+export const WHO_GIRLS: WhoTables = {
   weight: {
     unit: 'kg',
     step: 'day',

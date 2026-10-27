@@ -23,8 +23,8 @@ import {
   ALERT_TIERS,
   BIRTH_WEIGHT_REGAIN_DAY,
   FEEDS_PER_DAY,
-  FIRST_CHECKUP_NOTE,
-  LATE_BLACK_STOOL,
+  firstCheckupNote,
+  lateBlackStool,
   PALE_STOOL,
   RED_STOOL,
   WEIGHT_LOSS_CALL_PCT,
@@ -40,6 +40,7 @@ import {
 } from "./guidelines";
 import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatTime, localParts, zonedTimeToUtc, type BabyAge } from "./time";
 import type { Baby, Entry, EntryOf, Lifetime, Member, Side } from "./types";
+import type { Voice } from "./voice";
 
 export type Alert = {
   /** Stable id (e.g. "fever-123") so a family can mark it handled. */
@@ -382,8 +383,10 @@ export function summarize(opts: {
   members?: Member[];
   now: Date;
   lifetime?: Lifetime;
+  /** The family's words for the baby (voice.ts): FAMILY_ONE_VOICE for the Brookers. */
+  vo: Voice;
 }): Summary {
-  const { baby, now } = opts;
+  const { baby, now, vo } = opts;
   const members = opts.members ?? [];
   const tz = baby.timezone || DEFAULT_TZ;
   const entries = opts.entries;
@@ -468,7 +471,8 @@ export function summarize(opts: {
         t.data.temp_c,
         t.data.method,
         months,
-        prev ? { tempC: prev.data.temp_c, minutesBefore: (ts(t) - ts(prev)) / 60000 } : null
+        prev ? { tempC: prev.data.temp_c, minutesBefore: (ts(t) - ts(prev)) / 60000 } : null,
+        vo
       );
     };
     let worstTemp: { e: EntryOf<"temp">; a: NonNullable<ReturnType<typeof assessTemperature>> } | null = null;
@@ -500,7 +504,8 @@ export function summarize(opts: {
       assessVitals(
         { [f]: e.data[f] },
         months,
-        prev ? { [f]: prev.data[f], minutesBefore: (ts(e) - ts(prev)) / 60000 } : null
+        prev ? { [f]: prev.data[f], minutesBefore: (ts(e) - ts(prev)) / 60000 } : null,
+        vo
       ).forEach((a) => push(`vitals-${e.id}-${f}`, a, e.id));
     }
     // Skin checks: the most urgent in the last 48 hours (a later "looks fine"
@@ -512,7 +517,8 @@ export function summarize(opts: {
       const a = assessJaundice(
         e.data.jaundice,
         (ts(e) - Date.parse(baby.born_at!)) / H,
-        prev ? { level: prev.data.jaundice!, minutesBefore: (ts(e) - ts(prev)) / 60000 } : null
+        prev ? { level: prev.data.jaundice!, minutesBefore: (ts(e) - ts(prev)) / 60000 } : null,
+        vo
       );
       if (!a) continue;
       const worse = !worstSkin || ALERT_TIERS.indexOf(a.tier) < ALERT_TIERS.indexOf(worstSkin.a.tier);
@@ -527,7 +533,7 @@ export function summarize(opts: {
     const hoursOld = baby.born_at ? (ts(e) - Date.parse(baby.born_at)) / H : 0;
     if (e.data.color === "white" || e.data.color === "gray" || e.data.color === "pale_yellow") push(`pale-${e.id}`, PALE_STOOL, e.id);
     else if (e.data.color === "red") push(`red-${e.id}`, RED_STOOL, e.id);
-    else if (e.data.color === "black" && hoursOld >= 96) push(`black-${e.id}`, LATE_BLACK_STOOL, e.id);
+    else if (e.data.color === "black" && hoursOld >= 96) push(`black-${e.id}`, lateBlackStool(vo), e.id);
   }
 
   // Episode alerts get an id suffix (the entry or day they're about), so
@@ -542,13 +548,13 @@ export function summarize(opts: {
       push("no-pee-24h", {
         tier: "now",
         title: "No wet diaper logged yet",
-        body: "Babies should pee by 24 hours of life. If she really hasn't, call your pediatrician (or tell your nurse) now.",
+        body: `Babies should pee by 24 hours of life. If ${vo.they} really ${vo.verb("hasn't")}, call your pediatrician (or tell your nurse) now.`,
       });
     } else if (age.dayOfLife >= 3 && lastPee && nowMs - ts(lastPee) > 8 * H && loggedSince(nowMs - 8 * H) >= 2) {
       push(`no-pee-8h:${lastPee.id}`, {
         tier: "now",
         title: "No wet diaper in 8 hours",
-        body: "No wet diaper in 8 hours can mean she needs more milk. Please call your pediatrician now, especially if her pee was dark or her mouth looks dry.",
+        body: `No wet diaper in 8 hours can mean ${vo.they} ${vo.verb("needs")} more milk. Please call your pediatrician now, especially if ${vo.their} pee was dark or ${vo.their} mouth looks dry.`,
       });
     } else if (ageHours >= 48 && loggingFor24h) {
       // The last 24 hours are mostly the previous day of life: judge them
@@ -575,7 +581,7 @@ export function summarize(opts: {
       push(`low-stool:${age.dayOfLife}`, {
         tier: "today",
         title: `${last24h.dirty} poop${last24h.dirty === 1 ? "" : "s"} in the last 24 hours`,
-        body: "From about Day 5 to 6 weeks, breastfed babies usually have 3 or more yellow poops a day. Fewer can mean she needs more milk: call your pediatrician within the day.",
+        body: `From about Day 5 to 6 weeks, breastfed babies usually have 3 or more yellow poops a day. Fewer can mean ${vo.they} ${vo.verb("needs")} more milk: call your pediatrician within the day.`,
       });
     }
 
@@ -594,15 +600,15 @@ export function summarize(opts: {
       if (rule.firmMin && minutesSinceFeed >= rule.firmMin) {
         push(`feed-gap:${gapFeed.id}:firm`, {
           tier: "nudge",
-          title: `${gap} since her last feed`,
-          body: "Please wake her to feed: undress her, change her diaper, or try skin-to-skin. If she's too sleepy to feed, call your pediatrician.",
+          title: `${gap} since ${vo.their} last feed`,
+          body: `Please wake ${vo.them} to feed: undress ${vo.them}, change ${vo.their} diaper, or try skin-to-skin. If ${vo.they}${vo.verb("'s")} too sleepy to feed, call your pediatrician.`,
         });
       } else if (minutesSinceFeed >= rule.nudgeMin) {
         push(`feed-gap:${gapFeed.id}`, {
           tier: "nudge",
-          title: `${gap} since her last feed`,
+          title: `${gap} since ${vo.their} last feed`,
           body: rule.firmMin
-            ? "Time to gently wake Maple for a feed. Undressing her, a diaper change, or skin-to-skin can help."
+            ? `Time to gently wake ${vo.name} for a feed. Undressing ${vo.them}, a diaper change, or skin-to-skin can help.`
             : "Might be time to offer a feed.",
         });
       }
@@ -611,7 +617,7 @@ export function summarize(opts: {
       push(`few-feeds:${age.dayOfLife}`, {
         tier: "nudge",
         title: `${last24h.feeds} feed${last24h.feeds === 1 ? "" : "s"} in the last 24 hours`,
-        body: "Aim for 8–12 feeds a day. If she's hard to wake, not interested in feeding, or you're worried she's not getting enough, call your pediatrician or lactation consultant.",
+        body: `Aim for 8–12 feeds a day. If ${vo.they}${vo.verb("'s")} hard to wake, not interested in feeding, or you're worried ${vo.they}${vo.verb("'s")} not getting enough, call your pediatrician or lactation consultant.`,
       });
     }
 
@@ -623,7 +629,7 @@ export function summarize(opts: {
       push(`weight-10:${latest.id}`, {
         tier: "today",
         title: `Down ${Math.abs(weight.changePct)}% from birth weight`,
-        body: `Maple has lost ${Math.abs(weight.changePct)}% of her birth weight. That's more than expected, so please call your pediatrician today.`,
+        body: `${vo.Name} has lost ${Math.abs(weight.changePct)}% of ${vo.their} birth weight. That's more than expected, so please call your pediatrician today.`,
       });
     } else if (weightFresh && weight?.changePct != null && weight.changePct <= -WEIGHT_LOSS_CHECK_PCT) {
       push(`weight-7:${latest.id}`, {
@@ -676,12 +682,12 @@ export function summarize(opts: {
       });
     }
 
-    if (age.days < 5) push("first-checkup", { tier: "mention", title: "First checkup", body: FIRST_CHECKUP_NOTE });
+    if (age.days < 5) push("first-checkup", { tier: "mention", title: "First checkup", body: firstCheckupNote(vo) });
     if (needsOwnPlan(num(settings.gestational_age_weeks), baby.birth_weight_g)) {
       push("own-plan", {
         tier: "mention",
         title: "Your pediatrician's plan comes first",
-        body: "These reminders are tuned for healthy full-term babies. If Maple arrived early or small, follow the feeding and weight plan your pediatrician gives you.",
+        body: `These reminders are tuned for healthy full-term babies. If ${vo.name} arrived early or small, follow the feeding and weight plan your pediatrician gives you.`,
       });
     }
   }
@@ -722,7 +728,7 @@ export function summarize(opts: {
     feeds: ofKind(entries, "feed").length,
   };
 
-  const celebrations = milestonesReached({ entries, weights, baby, now, totals, firsts: opts.lifetime?.firsts, tz });
+  const celebrations = milestonesReached({ entries, weights, baby, now, totals, firsts: opts.lifetime?.firsts, tz, vo });
   return {
     now: now.toISOString(),
     tz,
@@ -771,8 +777,9 @@ function milestonesReached(o: {
   totals: { diapers: number; feeds: number };
   firsts?: Lifetime["firsts"];
   tz: string;
+  vo: Voice;
 }): Celebration[] {
-  const { entries, baby, now, totals, tz } = o;
+  const { entries, baby, now, totals, tz, vo } = o;
   if (!baby.born_at) return [];
   const out: Celebration[] = [];
   const nowMs = now.getTime();
@@ -814,18 +821,18 @@ function milestonesReached(o: {
   // Meconium comes in her first days: a "first" poop logged later is just when the logging started.
   const isPoop = (e: Entry) => e.kind === "diaper" && !!e.data.poop;
   const firstPoop = firstAt("poop", isPoop);
-  if (firstPoop !== null && firstPoop - bornMs <= FIRST_POOP_DAYS * 24 * 3600_000) add({ id: "first-poop", emoji: "🌰", title: "Her first poop", entryId: entryAt(firstPoop, isPoop) }, firstPoop);
+  if (firstPoop !== null && firstPoop - bornMs <= FIRST_POOP_DAYS * 24 * 3600_000) add({ id: "first-poop", emoji: "🌰", title: `${vo.Their} first poop`, entryId: entryAt(firstPoop, isPoop) }, firstPoop);
   const isBath = (e: Entry) => e.kind === "bath";
   const firstBath = firstAt("bath", isBath);
-  if (firstBath !== null) add({ id: "first-bath", emoji: "🛁", title: "Her first bath", milestone: "First bath", entryId: entryAt(firstBath, isBath) }, firstBath);
+  if (firstBath !== null) add({ id: "first-bath", emoji: "🛁", title: `${vo.Their} first bath`, milestone: "First bath", entryId: entryAt(firstBath, isBath) }, firstBath);
   const isTummy = (e: Entry) => e.kind === "tummy" && !e.active;
   const firstTummy = firstAt("tummy", isTummy);
-  if (firstTummy !== null) add({ id: "first-tummy", emoji: "🐢", title: "Her first tummy time", milestone: "First tummy time", entryId: entryAt(firstTummy, isTummy) }, firstTummy);
+  if (firstTummy !== null) add({ id: "first-tummy", emoji: "🐢", title: `${vo.Their} first tummy time`, milestone: "First tummy time", entryId: entryAt(firstTummy, isTummy) }, firstTummy);
 
   if (baby.birth_weight_g) {
     const back = o.weights.find((w) => w.data.weight_g! >= baby.birth_weight_g! && ts(w) > bornMs + 24 * 3600_000);
     const dippedFirst = back && o.weights.some((w) => ts(w) < ts(back) && w.data.weight_g! < baby.birth_weight_g!);
-    if (back && dippedFirst) add({ id: `regained-${back.id}`, emoji: "🎈", title: "Back to her birth weight", milestone: "Back to birth weight", entryId: back.id }, ts(back));
+    if (back && dippedFirst) add({ id: `regained-${back.id}`, emoji: "🎈", title: `Back to ${vo.their} birth weight`, milestone: "Back to birth weight", entryId: back.id }, ts(back));
   }
 
   // "100 diapers" / "500 feeds": date it by the entry that was the Nth.

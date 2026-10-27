@@ -6,8 +6,15 @@
  * also turn up: "monthly-N" (her monthly photo, lined up in "Growing up") and
  * celebration ids from insights.ts kept as moments ("week-1", "month-2", ...).
  *
+ * Four presets name the Brookers' own people and pets, so only family 1
+ * gets them (and only family 1's labels read them); every other family
+ * gets the rest, and its baby's name where a label has one.
+ *
  * Isomorphic: used by the app, describe.ts and the MCP tools.
  */
+
+import type { Baby } from "./types";
+import { babyFirstName } from "./voice";
 
 export type MilestonePreset = {
   id: string;
@@ -38,10 +45,33 @@ export const MILESTONES: readonly MilestonePreset[] = [
   { id: "rolled-over", label: "Rolled over", emoji: "🔄" },
 ];
 
+const FAMILY_ONE_ONLY = new Set(["met-zoe", "met-bruce", "emmett-held", "sapphire-read"]);
+
+/** Whose presets a list or label uses, and the baby's first name ("the baby" before one is picked). */
+export type MilestoneWords = { familyOne: boolean; name: string };
+
+export const FAMILY_ONE_MILESTONE_WORDS: MilestoneWords = { familyOne: true, name: "Maple" };
+
+/** One family's words, on the server: family 1's are fixed, every other family's name comes from its baby. */
+export function milestoneWordsOf(familyId: number, baby: Pick<Baby, "name" | "nickname"> | null | undefined): MilestoneWords {
+  return familyId === 1 ? FAMILY_ONE_MILESTONE_WORDS : { familyOne: false, name: babyFirstName(baby) };
+}
+
+/** No family to go by: no family's own presets or names. */
+export const NEUTRAL_MILESTONE_WORDS: MilestoneWords = { familyOne: false, name: "the baby" };
+
+const GENERIC = MILESTONES.filter((m) => !FAMILY_ONE_ONLY.has(m.id));
+
+/** The presets this family gets, in shelf order. */
+export function milestonesFor(w: MilestoneWords): readonly MilestonePreset[] {
+  return w.familyOne ? MILESTONES : GENERIC;
+}
+
 const BY_ID = new Map(MILESTONES.map((m) => [m.id, m]));
 
-export function milestonePreset(id: string | null | undefined): MilestonePreset | null {
-  return id ? BY_ID.get(id) ?? null : null;
+export function milestonePreset(id: string | null | undefined, w: MilestoneWords): MilestonePreset | null {
+  if (!id || (!w.familyOne && FAMILY_ONE_ONLY.has(id))) return null;
+  return BY_ID.get(id) ?? null;
 }
 
 /** Monthly photo tag: "monthly-3" for her 3-month day. */
@@ -58,9 +88,9 @@ export function monthlyNumber(id: string | null | undefined): number | null {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** A readable label for any milestone id ("first-bath" → "First bath"). */
-export function milestoneLabel(id: string | null | undefined): string {
+export function milestoneLabel(id: string | null | undefined, w: MilestoneWords): string {
   if (!id) return "";
-  const preset = BY_ID.get(id);
+  const preset = milestonePreset(id, w);
   if (preset) return preset.label;
   const monthly = monthlyNumber(id);
   if (monthly != null) return `Month ${monthly} photo`;
@@ -68,7 +98,7 @@ export function milestoneLabel(id: string | null | undefined): string {
   if (id === "born") return "Hello, world";
   if ((m = /^week-(\d+)$/.exec(id))) return `${plural(Number(m[1]), "week")} old`;
   if ((m = /^month-(\d+)$/.exec(id))) return `${plural(Number(m[1]), "month")} old`;
-  if ((m = /^day-(\d+)$/.exec(id))) return `${m[1]} days of Maple`;
+  if ((m = /^day-(\d+)$/.exec(id))) return w.familyOne ? `${m[1]} days of Maple` : w.name === "the baby" ? `${m[1]} days old` : `${m[1]} days of ${w.name}`;
   if ((m = /^diapers-(\d+)$/.exec(id))) return `Diaper #${m[1]}`;
   if ((m = /^feeds-(\d+)$/.exec(id))) return `Feed #${m[1]}`;
   if (/^regained-/.test(id)) return "Back to birth weight";
@@ -78,9 +108,9 @@ export function milestoneLabel(id: string | null | undefined): string {
 }
 
 /** Emoji for a milestone id, if it has one. */
-export function milestoneEmoji(id: string | null | undefined): string | null {
+export function milestoneEmoji(id: string | null | undefined, w: MilestoneWords): string | null {
   if (!id) return null;
-  const preset = BY_ID.get(id);
+  const preset = milestonePreset(id, w);
   if (preset) return preset.emoji;
   if (monthlyNumber(id) != null) return "🧸";
   if (id === "born") return "🍁";

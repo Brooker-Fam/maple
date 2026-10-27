@@ -24,6 +24,7 @@ import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { useClusterInfo } from "./sheets/ClusterInfoSheet";
+import { babyFirstName, useMilestoneWords } from "./familyWords";
 import { Button, Chip, EmptyState, SectionTitle, Sheet, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
@@ -567,7 +568,7 @@ export default function LogTab({
             <p className={cx(tone.faint, "flex flex-col items-center gap-1.5 text-[13px]")}>
               <Icon name="sprout" size={22} className="text-mp-accent-fg" />
               {bornKey && reachedBirth
-                ? `${formatDayLabel(bornKey, todayKey)} · Day 1 · Maple's story starts here`
+                ? `${formatDayLabel(bornKey, todayKey)} · Day 1 · ${babyFirstName(state?.baby)}'s story starts here`
                 : "That's the very first page."}
             </p>
           )
@@ -814,6 +815,7 @@ function RunningNow({ entries }: { entries: Entry[] }) {
  */
 function RecentlyRemoved({ onRestore, hidden }: { onRestore: (e: Entry) => void; hidden?: boolean }) {
   const { api, state, restore: restoreEntry, memberName, units } = useMaple();
+  const words = useMilestoneWords();
   const now = useNow(60_000);
   const [items, setItems] = useState<Entry[]>([]);
   const [open, setOpen] = useState(false);
@@ -874,7 +876,7 @@ function RecentlyRemoved({ onRestore, hidden }: { onRestore: (e: Entry) => void;
         <ul className={cx(tone.card, tone.divide, "overflow-hidden")}>
           {items.map((e) => {
             // Which one it was: its sides and minutes too (a timer removed while it ran, counted to when it was removed).
-            const d = describeEntry(e, { units, now, removed: true });
+            const d = describeEntry(e, { units, now, removed: true, words });
             return (
               <li key={e.id} className="flex items-center gap-3 py-2.5 pr-3 pl-4">
                 <KindBadge entry={e} className="opacity-60" />

@@ -2,8 +2,9 @@
 
 import { useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { CRISIS, CRISIS_LEAD, CRISIS_PARTNER, HELP_ROW, NO_AUTO_NOTIFY, TRUSTED_TEXT } from "@/lib/maple/guidelines";
+import { CRISIS_LEAD, HELP_ROW, NO_AUTO_NOTIFY, TRUSTED_TEXT, crisis, crisisPartner } from "@/lib/maple/guidelines";
 import { EMERGENCY_FILL } from "../AlertCard";
+import { useVoice } from "../familyWords";
 import { Icon, type IconName } from "../icons";
 import { Sheet, cx, tone, useSheetArmed } from "../ui";
 import { useCare } from "./useCare";
@@ -126,8 +127,9 @@ export function OnTop({ children }: { children: ReactNode }) {
 
 export default function CrisisSheet({ open, onClose, audience, from, onContinue, onStop, onBack }: CrisisSheetProps) {
   const her = audience === "her";
+  const voice = useVoice();
   // Readers who aren't her get the partner card as written, never forMom's "For {Name}: ".
-  const a = her ? CRISIS : CRISIS_PARTNER;
+  const a = her ? crisis(voice) : crisisPartner(voice);
   const screen = from === "screen" && her;
   const actions = screen ? (
     <>

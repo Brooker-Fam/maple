@@ -13,6 +13,7 @@ import { useCare } from "./care/useCare";
 import { fixPreset, SIDE_NAME, timerNumbers, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import { useSheets } from "./sheets";
+import { useBabyWords } from "./familyWords";
 import { cx } from "./ui";
 import { useHoldTimerToasts, useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
@@ -42,6 +43,7 @@ const AMBER = "#E0A93B";
 
 export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose: () => void; dim?: boolean }) {
   const { state, readOnly, now: serverNow, toasts } = useMaple();
+  const w = useBabyWords();
   const now = useNow(1000);
   const actions = useTimerActions();
   const { open } = useSheets();
@@ -253,7 +255,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         {isFeed && !n.paused && n.parts.filter((p) => p.kind === "side").length > 1 && <p className="mt-1 text-base tabular-nums opacity-60">Total nursing {minutesText(n.totalMin)}</p>}
         {isFeed && n.paused && (
           <p className="mt-1 text-base tabular-nums opacity-60">
-            {stale ? "Over an hour: her side starts a new feed" : n.current.sec >= 20 * 60 ? `Still on a break? Nursed ${minutesText(n.totalMin)} so far` : `Nursed ${minutesText(n.totalMin)} so far`}
+            {stale ? `Over an hour: ${w.his} side starts a new feed` : n.current.sec >= 20 * 60 ? `Still on a break? Nursed ${minutesText(n.totalMin)} so far` : `Nursed ${minutesText(n.totalMin)} so far`}
           </p>
         )}
         <p className="mt-6 h-5 text-sm opacity-60" aria-live="polite">
@@ -347,7 +349,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
             // Done during a break ends the feed at the pause, as the dock's tile says; past "Still nursing?" it asks when.
             sub={isFeed && n.paused ? `ends ${short(n.current.since)}` : askWhen ? "when?" : undefined}
             aria={isFeed && n.paused ? `Done: end the feed at ${formatTime(n.current.since, tz)}, when you paused` : askWhen ? "Done: choose when the feed ended" : undefined}
-            onHint={() => showHint(live.kind === "sleep" ? "Hold to stop sleep" : askWhen ? "Hold, then pick when she finished" : "Hold to finish")}
+            onHint={() => showHint(live.kind === "sleep" ? "Hold to stop sleep" : askWhen ? `Hold, then pick when ${w.he} finished` : "Hold to finish")}
             onConfirm={() => {
               if (askWhen) {
                 onClose();

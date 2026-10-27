@@ -35,6 +35,7 @@ import {
   type FixTarget,
   type MomentEdge,
 } from "../FeedParts";
+import { useAskWho, useBabyWords, useVoice } from "../familyWords";
 import { useNightActive } from "../nightLook";
 import { Sheet, cx } from "../ui";
 import { useHoldTimerToasts, useMaple, useNow, type TimerCallOptions, type TimerFailure } from "../useMaple";
@@ -317,6 +318,8 @@ function FixBody({
   onCommitting: (on: boolean) => void;
 }) {
   const { state, now: nowFn, memberLabel, readOnly, timerBusy, refresh, whoDiscarded } = useMaple();
+  const words = useBabyWords();
+  const ask = useAskWho();
   const actions = useTimerActions();
   const now = useNow(1000);
   const e = live ?? start;
@@ -451,10 +454,10 @@ function FixBody({
           const both = last.side === "B";
           const text =
             change === "merged"
-              ? byWho((w) => `${w} put her back on${both ? "" : ` the ${s}`} (no break)`, `Back on${both ? "" : ` the ${s}`} (no break)`)
+              ? byWho((w) => `${w} put ${words.him} back on${both ? "" : ` the ${s}`} (no break)`, `Back on${both ? "" : ` the ${s}`} (no break)`)
               : change === "resumed"
                 ? both
-                  ? byWho((w) => `${w} put her back on, back and forth, at ${t}`, `Back on, back and forth, at ${t}`)
+                  ? byWho((w) => `${w} put ${words.him} back on, back and forth, at ${t}`, `Back on, back and forth, at ${t}`)
                   : byWho((w) => `${w} resumed on ${s} at ${t}`, `Resumed on ${s} at ${t}`)
                 : both
                   ? byWho((w) => `${w} stopped tracking sides at ${t}`, `Back and forth from ${t}`)
@@ -478,7 +481,7 @@ function FixBody({
       if (o) {
         const on = putOn(o.side, sidesOf(partsOf(live, now)).at(-2)?.side);
         const t = clock(o.start);
-        banner = { kind: "current", text: byWho((w) => `${w} put her ${on} at ${t}`, `She's ${on} since ${t}`), actions: [toCurrent(`Show ${o.side === "B" ? "back and forth" : SIDE_NAME[o.side]}`)] };
+        banner = { kind: "current", text: byWho((w) => `${w} put ${words.him} ${on} at ${t}`, `${words.Hes} ${on} since ${t}`), actions: [toCurrent(`Show ${o.side === "B" ? "back and forth" : SIDE_NAME[o.side]}`)] };
       } else if (live.active) {
         banner = { kind: "current", text: byWho((w) => `${w} reopened this feed`, "This feed was reopened"), actions: [toCurrent("Show current")] };
       } else if (!endedAtPause(live) || !sameRecorded(live.ended_at ?? "", snap.recorded)) {
@@ -547,8 +550,8 @@ function FixBody({
       const t = clock(o.start);
       const brk = partsOf(x, now).some((p) => p.kind === "break" && p.end === o.start);
       const did =
-        brk || o.side === a.ref.side ? `put her ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : o.side === "B" ? `stopped tracking sides at ${t}` : `switched her to the ${s} at ${t}`;
-      const plain = o.side === "B" ? `She's going back and forth since ${t}` : `She's on the ${s} since ${t}`;
+        brk || o.side === a.ref.side ? `put ${words.him} ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : o.side === "B" ? `stopped tracking sides at ${t}` : `switched ${words.him} to the ${s} at ${t}`;
+      const plain = o.side === "B" ? `${words.Hes} going back and forth since ${t}` : `${words.Hes} on the ${s} since ${t}`;
       return { kind: "already", text: `${name ? `${name} ${did}` : plain}, so nothing was saved. Pick again.` };
     }
     const s = SIDE_NAME[o.side];
@@ -556,8 +559,8 @@ function FixBody({
     const sameSide = o.side === a.side;
     // Worded as the dock's toast for the same race ("Brittany already put her back on the Left at 7:08").
     // (The same side agrees with this phone, unless this phone said she'd finished by its Done.)
-    const plain = o.side === "B" ? `She's already going back and forth, since ${t}` : `She's already on the ${s} side, since ${t}`;
-    const text = `${name ? `${name} already put her ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : plain}${sameSide && a.until === undefined ? "." : ", so nothing was saved."}`;
+    const plain = o.side === "B" ? `${words.Hes} already going back and forth, since ${t}` : `${words.Hes} already on the ${s} side, since ${t}`;
+    const text = `${name ? `${name} already put ${words.him} ${putOn(o.side, sides.at(-2)?.side)} at ${t}` : plain}${sameSide && a.until === undefined ? "." : ", so nothing was saved."}`;
     const acts: BannerAction[] = [];
     // (Not for "until Done" from panel E: the other phone says she's still on, so a time of this phone's would be half of each.)
     if (sameSide && a.until === undefined && a.at !== null && Math.abs(a.at - Date.parse(o.start)) >= MIN) {
@@ -779,7 +782,7 @@ function FixBody({
           {notice.text}
         </p>
       )}
-      {readOnly ? <p className="text-[15px] text-mp-ink-2">View only. Ask Matt or Brittany to fix the times.</p> : panel}
+      {readOnly ? <p className="text-[15px] text-mp-ink-2">View only. Ask {ask} to fix the times.</p> : panel}
     </>
   );
 }
@@ -1063,6 +1066,7 @@ function OpenSidePanel({
   actions,
 }: PanelProps & { pin: Extract<Pin, { kind: "side" }>; finished: boolean; setFinished: (v: boolean) => void; fromDone?: boolean; actions: Actions }) {
   const { state } = useMaple();
+  const words = useBabyWords();
   // Expanded by a tap (not by the sheet opening with it): that one scrolls into view and takes focus.
   const [tapped, setTapped] = useState(false);
   // Folded back by "Fix when Right started": focus goes to this panel's question (the row that had it is gone).
@@ -1089,7 +1093,7 @@ function OpenSidePanel({
   // chips under that question (a "10 min" meant "she finished 10 min ago" would move the start back instead).
   const fin = finished ? (stillOn ? s : e.active ? (sides.find((x) => x.end === null) ?? null) : null) : null;
   if (finished && !fin) {
-    return <Caption>{e.active ? "She's on a break now, so Done ends the feed at its pause." : `This feed already ended${e.ended_at ? ` at ${formatTime(e.ended_at, tz)}` : ""}.`}</Caption>;
+    return <Caption>{e.active ? `${words.Hes} on a break now, so Done ends the feed at its pause.` : `This feed already ended${e.ended_at ? ` at ${formatTime(e.ended_at, tz)}` : ""}.`}</Caption>;
   }
   if (finished && fin) {
     // "Left", or "back and forth" for a part going both sides (no "likely" end there: it isn't one side's 15 minutes).
@@ -1099,7 +1103,7 @@ function OpenSidePanel({
     const likely = !fBoth && fFrom + 15 * MIN < now.getTime() - 2 * MIN ? fFrom + 15 * MIN : null;
     return (
       <FinishQuestion
-        title="When did she finish?"
+        title={`When did ${words.he} finish?`}
         sub={`${partName(fin.side)} since ${formatTime(fin.start, tz)} (${minutesText(fin.min)}).`}
         focus={tapped}
         back={
@@ -1118,7 +1122,7 @@ function OpenSidePanel({
           sinceStart={fFrom + MIN}
           mins={[5, 10, 20, 30]}
           likely={likely}
-          likelyWhy={`15 min after she went on the ${fName}`}
+          likelyWhy={`15 min after ${words.he} went on the ${fName}`}
           verb="Ended"
           tooSoon={`${fBoth ? "Back and forth" : fName} only started ${formatTime(fin.start, tz)}, so use Other time…`}
           // Opened by Done (the dock's or the Lantern's, past "Still nursing?"): she may have just finished. Not from
@@ -1175,7 +1179,7 @@ function OpenSidePanel({
     chips.push({ id: `a-${n}`, to, line1: `${n} min earlier`, aria: `${name} started ${minutesWord(n)} earlier, at ${formatTime(to, tz)}` });
   }
   // Any break, even one under a minute, can be no break at all.
-  if (floor !== null && brk) chips.push({ id: "a-floor", to: floor, line1: "No break", aria: `No break: ${name} from ${formatTime(floor, tz)}, when she came off` });
+  if (floor !== null && brk) chips.push({ id: "a-floor", to: floor, line1: "No break", aria: `No break: ${name} from ${formatTime(floor, tz)}, when ${words.he} came off` });
   // (Not when the last chip kept already lands within a minute of it.)
   const lastTo = chips.at(-1)?.to ?? recorded;
   if (clipped && feedFloor !== null && lastTo - feedFloor >= MIN && feedFloor >= uiMin) {
@@ -1224,7 +1228,11 @@ function OpenSidePanel({
     <div className="space-y-4">
       {/* (The feed's first side: the dock's tile is the side's name, never "Start".) */}
       <Title sub={`${name} shows since ${formatTime(s.start, tz)}.`} focusRef={titleRef}>
-        {k === 0 ? `Was she nursing before you tapped ${startTile}?` : s.side === "B" ? "Was she going back and forth before you tapped?" : `Was she on the ${name} before you tapped?`}
+        {k === 0
+          ? `Was ${words.he} nursing before you tapped ${startTile}?`
+          : s.side === "B"
+            ? `Was ${words.he} going back and forth before you tapped?`
+            : `Was ${words.he} on the ${name} before you tapped?`}
       </Title>
       {shown.length ? (
         <div className="space-y-2">
@@ -1262,7 +1270,7 @@ function OpenSidePanel({
         </LinkRow>
         {pin.fromBreak && prev && (
           <LinkRow disabled={disabled} onClick={() => openEditor({ id: "editor", edge: { edge: "end", ref: prev.ref } })}>
-            Or she came off later: fix when {prev.side === "B" ? "back and forth" : SIDE_NAME[prev.side]} ended
+            Or {words.he} came off later: fix when {prev.side === "B" ? "back and forth" : SIDE_NAME[prev.side]} ended
           </LinkRow>
         )}
         <SideFixRow
@@ -1301,7 +1309,7 @@ function OpenSidePanel({
               setFinished(true);
             }}
           >
-            She already finished
+            {words.He} already finished
           </LinkRow>
         </div>
       )}
@@ -1427,6 +1435,8 @@ function BreakPanel({
   actions: Actions;
 }) {
   const { now: nowFn } = useMaple();
+  const words = useBabyWords();
+  const vo = useVoice();
   const [cameOff, setCameOff] = useState(false);
   if (!timed(e)) return null;
   const parts = partsOf(e, now);
@@ -1469,7 +1479,7 @@ function BreakPanel({
       </Title>
       <div className="space-y-3">
         <p className="text-[15px] font-medium text-mp-ink">Already back on?</p>
-        <SidePicker side={backSide} label="Which side is she on" disabled={disabled} onPick={setBackSide} withBoth={offBoth} />
+        <SidePicker side={backSide} label={`Which side is ${words.he} on`} disabled={disabled} onPick={setBackSide} withBoth={offBoth} />
         {backSide && (
           <>
             <Grid>
@@ -1496,11 +1506,11 @@ function BreakPanel({
                 openEditor({
                   id: "editor",
                   free: {
-                    title: momentQuestion("resume", backSide, last.side),
+                    title: momentQuestion("resume", backSide, last.side, vo),
                     recorded: now,
                     min: new Date(pauseAt),
                     max: now,
-                    notes: { low: `Can't be before she came off (${formatTime(pauseAt, tz)}).`, high: "That's in the future." },
+                    notes: { low: `Can't be before ${words.he} came off (${formatTime(pauseAt, tz)}).`, high: "That's in the future." },
                   },
                   commit: (to, o) => actions.resume(e, backSide, to, o),
                   meta: (to) => ({ backOn: { side: backSide, at: to.getTime() } }),
@@ -1538,7 +1548,7 @@ function BreakPanel({
         // Opened to say she's back on: when she came off is one quiet row, so its chips never sit beside the back-on ones.
         <div className="border-t border-mp-line pt-2">
           <LinkRow disabled={!!busy} onClick={() => setCameOff(true)}>
-            Fix when she came off
+            Fix when {words.he} came off
           </LinkRow>
         </div>
       )}
@@ -1586,6 +1596,8 @@ function AfterDonePanel({
   setBackSide: (s: StretchSide) => void;
   actions: Actions;
 }) {
+  const words = useBabyWords();
+  const vo = useVoice();
   const [stillOn, setStillOn] = useState(false);
   const last = endedAtPause(e) ? sidesOf(partsOf(e, now)).at(-1) : undefined;
   // The other phone carried it on, added a side or moved the end: the banner says what, and how to see it.
@@ -1614,9 +1626,17 @@ function AfterDonePanel({
   const tail = until !== null ? `until ${done}` : "and still on";
   return (
     <div className="space-y-4">
-      <Title sub={until !== null ? `You tapped Done at ${done}; the feed ended at ${formatTime(pauseAt, tz)}, when she came off.` : "She's still on, so the feed goes on from then."}>When did she go back on?</Title>
+      <Title
+        sub={
+          until !== null
+            ? `You tapped Done at ${done}; the feed ended at ${formatTime(pauseAt, tz)}, when ${words.he} came off.`
+            : `${words.Hes} still on, so the feed goes on from then.`
+        }
+      >
+        When did {words.he} go back on?
+      </Title>
       <div className="space-y-3">
-        <SidePicker side={side} label="Which side she went back on" disabled={disabled} onPick={setBackSide} withBoth={last.side === "B"} />
+        <SidePicker side={side} label={`Which side ${words.he} went back on`} disabled={disabled} onPick={setBackSide} withBoth={last.side === "B"} />
         <Grid>
           {chips.map((c) => (
             <TimeChip
@@ -1624,7 +1644,7 @@ function AfterDonePanel({
               tall
               line1={c.line1}
               line2={c.line2}
-              ariaLabel={`${cap(on)} ${c.id === "after-floor" ? "when she came off (no break)" : c.id === "after-now" ? "now" : c.line1}, ${formatTime(c.at, tz)}, ${tail}`}
+              ariaLabel={`${cap(on)} ${c.id === "after-floor" ? `when ${words.he} came off (no break)` : c.id === "after-now" ? "now" : c.line1}, ${formatTime(c.at, tz)}, ${tail}`}
               disabled={disabled}
               busy={busy === c.id}
               onClick={() => void run(c.id, (o) => commit(new Date(c.at), o), meta(c.at))}
@@ -1637,11 +1657,14 @@ function AfterDonePanel({
             openEditor({
               id: "editor",
               free: {
-                title: momentQuestion("resume", side, last.side),
+                title: momentQuestion("resume", side, last.side, vo),
                 recorded: new Date(until ?? n),
                 min: new Date(pauseAt),
                 max: new Date(until ?? n),
-                notes: { low: `Can't be before she came off (${formatTime(pauseAt, tz)}).`, high: until !== null ? `That's when she finished (${done}).` : "That's in the future." },
+                notes: {
+                  low: `Can't be before ${words.he} came off (${formatTime(pauseAt, tz)}).`,
+                  high: until !== null ? `That's when ${words.he} finished (${done}).` : "That's in the future.",
+                },
               },
               commit,
               meta: (to) => meta(to.getTime()),
@@ -1653,7 +1676,7 @@ function AfterDonePanel({
       </div>
       <div className="border-t border-mp-line pt-2">
         <LinkRow disabled={!!busy} onClick={() => setStillOn(!stillOn)}>
-          {stillOn ? `She finished at ${done}` : "She's still on"}
+          {stillOn ? `${words.He} finished at ${done}` : `${words.Hes} still on`}
         </LinkRow>
       </div>
     </div>
@@ -1720,6 +1743,7 @@ function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: P
 
 /** Sleep, tummy time and pumping: when it started, and (folded) when it already ended. */
 function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, setFinished, actions }: PanelProps & { finished: boolean; setFinished: (v: boolean) => void; actions: Actions }) {
+  const words = useBabyWords();
   const [tapped, setTapped] = useState(false);
   const sleep = e.kind === "sleep";
   const start = Date.parse(e.started_at);
@@ -1733,7 +1757,7 @@ function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, set
         openEditor({
           id: "editor",
           free: {
-            title: sleep ? "When did she wake up?" : `When did ${what.toLowerCase()} end?`,
+            title: sleep ? `When did ${words.he} wake up?` : `When did ${what.toLowerCase()} end?`,
             recorded: now,
             min: new Date(start + MIN),
             max: now,
@@ -1749,12 +1773,12 @@ function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, set
   if (finished) {
     return (
       <FinishQuestion
-        title={sleep ? "When did she wake up?" : `When did ${what.toLowerCase()} end?`}
+        title={sleep ? `When did ${words.he} wake up?` : `When did ${what.toLowerCase()} end?`}
         sub={`${sleep ? "Asleep" : what} since ${formatTime(start, tz)}.`}
         focus={tapped}
         back={
           <LinkRow disabled={!!busy} onClick={() => setFinished(false)}>
-            {sleep ? "Fix when she fell asleep" : `Fix when ${what.toLowerCase()} started`}
+            {sleep ? `Fix when ${words.he} fell asleep` : `Fix when ${what.toLowerCase()} started`}
           </LinkRow>
         }
       >
@@ -1799,7 +1823,7 @@ function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, set
           openEditor({
             id: "editor",
             free: {
-              title: sleep ? "When did she fall asleep?" : `When did ${what.toLowerCase()} start?`,
+              title: sleep ? `When did ${words.he} fall asleep?` : `When did ${what.toLowerCase()} start?`,
               recorded: new Date(start),
               min: new Date(start - 6 * 3600_000),
               max: now,
@@ -1819,7 +1843,7 @@ function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, set
             setFinished(true);
           }}
         >
-          {sleep ? "She's already awake" : "Already done"}
+          {sleep ? `${words.Hes} already awake` : "Already done"}
         </LinkRow>
       </div>
     </div>

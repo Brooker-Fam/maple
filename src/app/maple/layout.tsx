@@ -1,10 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import MapleUiScope from "@/components/maple/MapleUiScope";
+import { signupMode } from "@/lib/maple/family";
 import "./maple.css";
 
-export const metadata: Metadata = {
+/** Names the Brookers' baby only while theirs is the only family. */
+export const generateMetadata = (): Metadata => ({
   title: "Maple's Log",
-  description: "Feeds, diapers, sleep and little moments for Maple Jane.",
+  description: signupMode() === "off" ? "Feeds, diapers, sleep and little moments for Maple Jane." : "Feeds, diapers, sleep and little moments, for the whole family.",
   manifest: "/maple.webmanifest",
   appleWebApp: {
     capable: true,
@@ -20,7 +22,7 @@ export const metadata: Metadata = {
     apple: { url: "/maple-apple-touch-icon.png", sizes: "180x180" },
   },
   robots: { index: false, follow: false },
-};
+});
 
 export const viewport: Viewport = {
   themeColor: [

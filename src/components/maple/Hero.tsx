@@ -236,7 +236,7 @@ export default function Hero({ action }: { action?: ReactNode }) {
   const monthDay = !!(born && age && age.months >= 1 && p.day === born.day);
   const birthday = !!(born && age && age.months >= 12 && p.month === born.month && p.day === born.day);
   const season = seasonFor(p.month, birthday);
-  const first = (state.baby.name || "Maple").split(" ")[0];
+  const first = (state.baby.name || "Baby").split(" ")[0];
   // One fact under her name: "Day 5" for her first two weeks, then her
   // month-day on its day ("1 month old today", "1 year old today"), otherwise her age.
   const years = age && age.months % 12 === 0 ? age.months / 12 : 0;

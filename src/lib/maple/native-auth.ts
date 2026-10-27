@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { decryptSecret, encryptSecret } from "@/lib/secret-box";
+import { encryptSecret, openSecret } from "@/lib/secret-box";
 import { MAPLE_STATE_PREFIX, safeReturnPath } from "./auth";
+import { carrierFamily, FAMILY_ONE } from "./family";
 import type { NativePlatform } from "./native";
 
 /**
@@ -12,10 +13,11 @@ import type { NativePlatform } from "./native";
  * /api/maple/auth/native for the usual session cookies.
  *
  * The ticket is stateless: sealed with the session key (AES-256-GCM, so it
- * can't be read or altered), and good for two minutes. It is also bound to
- * the app that asked for it, PKCE style: the app sends `challenge`
- * (base64url SHA-256 of a random verifier only it holds) to start, the
- * ticket carries it, and the trade needs the verifier in the
+ * can't be read or altered), and good for two minutes. It names the member
+ * and the family they signed in to (`fam`, checked again at the trade). It
+ * is also bound to the app that asked for it, PKCE style: the app sends
+ * `challenge` (base64url SHA-256 of a random verifier only it holds) to
+ * start, the ticket carries it, and the trade needs the verifier in the
  * X-Maple-Verifier header. A page on another site can't add that header to a
  * navigation, so a ticket can't be planted in someone else's browser or app.
  */
@@ -57,10 +59,10 @@ export function nativeVerifierMatches(verifier: string | null | undefined, chall
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
-export type NativeTicket = { id: string; back: string; challenge: string };
+export type NativeTicket = { id: string; fam?: unknown; back: string; challenge: string };
 
-export function mintNativeTicket(id: string, back: string, challenge: string, now = Date.now()): string {
-  const sealed = encryptSecret(JSON.stringify({ k: KIND, id, back, c: challenge, exp: now + NATIVE_TICKET_TTL_MS }));
+export function mintNativeTicket(id: string, familyId: number, back: string, challenge: string, now = Date.now()): string {
+  const sealed = encryptSecret(JSON.stringify({ k: KIND, id, fam: familyId, back, c: challenge, exp: now + NATIVE_TICKET_TTL_MS }));
   const parts = sealed.split(":").map((p) => Buffer.from(p, "base64").toString("base64url"));
   return [NATIVE_TICKET_PREFIX, ...parts].join(".");
 }
@@ -71,11 +73,13 @@ export function openNativeTicket(raw: string | null | undefined, now = Date.now(
   if (prefix !== NATIVE_TICKET_PREFIX || parts.length !== 3 || parts.some((p) => !/^[A-Za-z0-9_-]+$/.test(p))) return null;
   try {
     const sealed = parts.map((p) => Buffer.from(p, "base64url").toString("base64")).join(":");
-    const { k, id, back, c, exp } = JSON.parse(decryptSecret(sealed));
+    const opened = openSecret(sealed);
+    const { k, id, fam, back, c, exp } = JSON.parse(opened.text);
     if (k !== KIND || typeof id !== "string" || !id || typeof exp !== "number" || now > exp) return null;
+    if (opened.prev && carrierFamily(fam) !== FAMILY_ONE) return null;
     const challenge = parseNativeChallenge(typeof c === "string" ? c : null);
     if (!challenge) return null;
-    return { id, back: safeReturnPath(typeof back === "string" ? back : null), challenge };
+    return { id, ...(fam === undefined ? {} : { fam }), back: safeReturnPath(typeof back === "string" ? back : null), challenge };
   } catch {
     return null;
   }

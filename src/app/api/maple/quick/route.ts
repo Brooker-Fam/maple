@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { careErrorResponse, errorResponse, json } from "@/lib/maple/api";
 import { listMembers, memberFor } from "@/lib/maple/auth";
+import { familyForRow, type FamilyCtx } from "@/lib/maple/family";
 import { aheadOfSlot, careTime, countedAs, matchPlan, pressingFirst, type PlanMatch, type PlanView } from "@/lib/maple/care";
 import { momSpeak, samePlans, spokenLine } from "@/lib/maple/care-mcp";
 import { carePersonName, carePlanViews, careSession, logCareDose, planDoses } from "@/lib/maple/care-store";
@@ -22,6 +23,7 @@ import {
   toClientEntry,
 } from "@/lib/maple/store";
 import { formatTime } from "@/lib/maple/time";
+import { voiceFor } from "@/lib/maple/voice";
 import { ozToMl } from "@/lib/maple/units";
 import type { Baby, Entry, FeedData, Member } from "@/lib/maple/types";
 import { captureServerException } from "@/lib/posthog-server";
@@ -76,11 +78,14 @@ type Action = (typeof ACTIONS)[number];
 const side = (s: "L" | "R") => (s === "L" ? "left" : "right");
 
 export async function POST(request: NextRequest) {
+  let scope: FamilyCtx | undefined;
   try {
     const auth = request.headers.get("authorization") ?? "";
-    const memberId = auth.startsWith("Bearer ") ? await memberForPersonalToken(auth.slice(7).trim()) : null;
-    const me = memberId ? await memberFor(memberId) : null;
-    if (!me) return json({ error: "Unknown or revoked token", speak: "That shortcut isn't connected to Maple's log anymore." }, 401);
+    const row = auth.startsWith("Bearer ") ? await memberForPersonalToken(auth.slice(7).trim()) : null;
+    const fam = await familyForRow(row);
+    scope = fam ?? undefined;
+    const me = fam ? await memberFor(fam, fam.member) : null;
+    if (!fam || !me) return json({ error: "Unknown or revoked token", speak: "That shortcut isn't connected to Maple's log anymore." }, 401);
 
     const body = (await request.json().catch(() => ({}))) as { action?: unknown; amount_oz?: unknown; client_id?: unknown } & MomBody;
     const action = body.action as Action;
@@ -91,14 +96,15 @@ export async function POST(request: NextRequest) {
     if (me.role === "viewer" && action !== "status") {
       return json({ error: "View-only", speak: "You have view-only access to Maple's log.", ...(mom ? { help_now: MOM_HELP.now } : {}) }, 403);
     }
-    if (mom) return momAction(action, me, body);
+    if (mom) return momAction(action, me, fam, body);
 
-    const baby = await getBaby();
+    const baby = await getBaby(fam);
+    const vo = voiceFor(fam.familyId, baby);
     const tz = baby.timezone;
     const now = new Date();
     const base = { babyId: baby.id, createdBy: me.email, source: "shortcut" as const };
     const clientId = typeof body.client_id === "string" ? `shortcut:${body.client_id}` : null;
-    const running = await activeTimers(baby.id);
+    const running = await activeTimers(fam, baby.id);
     const runningFeed = running.find((e) => e.kind === "feed");
     const runningSleep = running.find((e) => e.kind === "sleep");
     const at = formatTime(now, tz);
@@ -110,7 +116,7 @@ export async function POST(request: NextRequest) {
       case "poop":
       case "both": {
         const data = { pee: action !== "poop", poop: action !== "pee" };
-        ({ entry } = await createEntryOnce({ ...base, kind: "diaper", startedAt: now, data, clientId }));
+        ({ entry } = await createEntryOnce(fam, { ...base, kind: "diaper", startedAt: now, data, clientId }));
         speak = `Logged a ${action === "both" ? "wet and dirty" : action === "pee" ? "wet" : "dirty"} diaper at ${at}.`;
         break;
       }
@@ -129,11 +135,11 @@ export async function POST(request: NextRequest) {
               : `A feed from ${formatTime(runningFeed.started_at, tz)} is still running. Stop that one first, then start the new feed.`;
           break;
         }
-        if (runningSleep) await stopTimer(runningSleep.id, undefined, me.email);
+        if (runningSleep) await stopTimer(fam, runningSleep.id, undefined, me.email);
         // Going back and forth until now: this side is tracking sides again.
         const wasBoth = !!d && openSegment(d.segments)?.side === "B";
-        ({ entry } = await startTimer({ ...base, kind: "feed", side: s, at: now, clientId }));
-        speak = wasBoth ? `Tracking sides again: she's on the ${side(s)}.` : `Nursing timer running on the ${side(s)}.`;
+        ({ entry } = await startTimer(fam, { ...base, kind: "feed", side: s, at: now, clientId }));
+        speak = wasBoth ? `Tracking sides again: ${vo.they}${vo.verb("'s")} on the ${side(s)}.` : `Nursing timer running on the ${side(s)}.`;
         break;
       }
       case "switch": {
@@ -144,11 +150,11 @@ export async function POST(request: NextRequest) {
         const d = runningFeed.data as FeedData;
         // Going back and forth (or on a break from it): no side to flip to, and never a guess from the last side tracked.
         if (d.segments?.at(-1)?.side === "B") {
-          speak = "She's going back and forth, so there's nothing to switch.";
+          speak = `${vo.They}${vo.verb("'s")} going back and forth, so there's nothing to switch.`;
           break;
         }
         const to = d.last_side === "L" ? "R" : "L";
-        entry = (await switchSide(runningFeed.id, to, undefined, me.email)).entry;
+        entry = (await switchSide(fam, runningFeed.id, to, undefined, me.email)).entry;
         speak = `Switched to the ${side(to)}.`;
         break;
       }
@@ -169,10 +175,10 @@ export async function POST(request: NextRequest) {
           break;
         }
         const paused = !openSegment(d.segments);
-        const r = await switchSide(runningFeed.id, "B", undefined, me.email);
+        const r = await switchSide(fam, runningFeed.id, "B", undefined, me.email);
         entry = r.entry;
         const open = openSegment((r.entry.data as FeedData).segments);
-        if (r.noop) speak = "She's already going back and forth.";
+        if (r.noop) speak = `${vo.They}${vo.verb("'s")} already going back and forth.`;
         else if (paused) speak = r.merged ? "Back on, still going back and forth." : "Back on, going back and forth.";
         else speak = `Going back and forth from ${formatTime(open?.start ?? now, tz)}, so there's nothing to switch.`;
         break;
@@ -185,36 +191,37 @@ export async function POST(request: NextRequest) {
           break;
         }
         // No time: "now" under the stop rule (a paused feed ends at its pause).
-        entry = await stopTimer(target.id, undefined, me.email);
+        entry = await stopTimer(fam, target.id, undefined, me.email);
         speak = `Stopped. ${describeEntry(entry, { now }).text}.`;
         break;
       }
       case "sleep": {
-        if (runningFeed) await stopTimer(runningFeed.id, undefined, me.email);
-        ({ entry } = await startTimer({ ...base, kind: "sleep", at: now, clientId }));
-        speak = runningFeed ? "Feed stopped and sleep timer started. Sweet dreams, Maple." : "Sleep timer started. Sweet dreams, Maple.";
+        if (runningFeed) await stopTimer(fam, runningFeed.id, undefined, me.email);
+        ({ entry } = await startTimer(fam, { ...base, kind: "sleep", at: now, clientId }));
+        const dreams = vo.named ? `Sweet dreams, ${vo.name}.` : "Sweet dreams.";
+        speak = runningFeed ? `Feed stopped and sleep timer started. ${dreams}` : `Sleep timer started. ${dreams}`;
         break;
       }
       case "vitamin_d": {
-        ({ entry } = await createEntryOnce({ ...base, kind: "med", startedAt: now, data: VITAMIN_D_DEFAULT, clientId }));
+        ({ entry } = await createEntryOnce(fam, { ...base, kind: "med", startedAt: now, data: VITAMIN_D_DEFAULT, clientId }));
         speak = `Vitamin D logged at ${at}.`;
         break;
       }
       case "bottle": {
         const oz = Number(body.amount_oz);
         const data = Number.isFinite(oz) && oz > 0 && oz <= 12 ? { method: "bottle", amount_ml: Math.round(ozToMl(oz)) } : { method: "bottle" };
-        ({ entry } = await createEntryOnce({ ...base, kind: "feed", startedAt: now, data, clientId }));
+        ({ entry } = await createEntryOnce(fam, { ...base, kind: "feed", startedAt: now, data, clientId }));
         speak = `Logged a ${"amount_ml" in data ? `${oz} ounce ` : ""}bottle at ${at}.`;
         break;
       }
       case "status": {
         const [entries, growth, members, lifetime] = await Promise.all([
-          listEntries({ babyId: baby.id, from: new Date(now.getTime() - 72 * 3600_000), includeActive: true }),
-          listEntries({ babyId: baby.id, kinds: ["growth"], ascending: true }),
-          listMembers(),
-          lifetimeCounts(baby.id),
+          listEntries(fam, { babyId: baby.id, from: new Date(now.getTime() - 72 * 3600_000), includeActive: true }),
+          listEntries(fam, { babyId: baby.id, kinds: ["growth"], ascending: true }),
+          listMembers(fam),
+          lifetimeCounts(fam, baby.id),
         ]);
-        const s = summarize({ entries, growth, baby, members, now, lifetime });
+        const s = summarize({ entries, growth, baby, members, now, lifetime, vo: voiceFor(fam.familyId, baby) });
         const bits: string[] = [];
         const name = baby.nickname || baby.name;
         const nursing = s.active.find((e) => e.kind === "feed");
@@ -231,7 +238,7 @@ export async function POST(request: NextRequest) {
           if (c) bits.push(`It's feed ${c.feeds} of a cluster since ${formatTime(c.start, tz)}.`);
         } else {
           // The cluster line after a cluster, else when she last ate and the side to start on (insights' lastFed and next).
-          bits.push(lastFedSpeak(s, name, tz));
+          bits.push(lastFedSpeak(s, name, tz, vo));
         }
         bits.push(`${s.last24h.wet} wet and ${s.last24h.dirty} dirty diapers in the last 24 hours.`);
         const others = s.active.filter((e) => e.kind !== "feed");
@@ -241,7 +248,7 @@ export async function POST(request: NextRequest) {
         // Say who to call, not just what happened ("Call your pediatrician now: No wet diaper in 8 hours.").
         if (urgent) bits.push(`${TIER_LABEL[urgent.tier]}: ${urgent.title.replace(/[.:]?$/, "")}.`);
         // Her medicines after Maple's, capped at two; never for a viewer.
-        const mom = me.role === "viewer" ? null : await momForStatus(me, members, baby);
+        const mom = me.role === "viewer" ? null : await momForStatus(me, fam, members, baby);
         if (mom) bits.push(mom);
         speak = bits.join(" ");
         break;
@@ -250,7 +257,7 @@ export async function POST(request: NextRequest) {
 
     return json({ speak, entry: entry ? toClientEntry(entry) : null });
   } catch (error) {
-    const res = await errorResponse("POST /api/maple/quick", error);
+    const res = await errorResponse("POST /api/maple/quick", error, scope);
     const body = (await res.clone().json().catch(() => ({}))) as { error?: string };
     return json({ error: body.error ?? "Something went wrong", speak: "Sorry, Maple's log didn't save that. Try the app." }, res.status);
   }
@@ -276,9 +283,9 @@ const okFirst = (views: PlanView[]) => [...views.filter((v) => v.status.state ==
  * never an error (Maple's status never waits on hers; a failure is reported
  * as a code only).
  */
-async function momForStatus(me: Member, members: Member[], baby: Baby): Promise<string | null> {
+async function momForStatus(me: Member, fam: FamilyCtx, members: Member[], baby: Baby): Promise<string | null> {
   try {
-    const s = await careSession({ id: me.email, role: me.role, viaAdmin: false, channel: "siri" }, { members, baby });
+    const s = await careSession({ id: me.email, role: me.role, viaAdmin: false, channel: "siri" }, { familyId: fam.familyId, members, baby });
     if (!s.person || !s.access.read) return null;
     return momSpeak(pressingFirst(await carePlanViews(s)), { name: carePersonName(s.person, members), self: s.access.self, now: s.now, tz: s.tz });
   } catch {
@@ -288,13 +295,14 @@ async function momForStatus(me: Member, members: Member[], baby: Baby): Promise<
 }
 
 /** mom_status / mom_dose: her token reads "your", anyone she shares with "Brittany's". Errors are scrubbed (careErrorResponse). */
-async function momAction(action: "mom_status" | "mom_dose", me: Member, body: MomBody): Promise<Response> {
+async function momAction(action: "mom_status" | "mom_dose", me: Member, fam: FamilyCtx, body: MomBody): Promise<Response> {
   try {
-    const [baby, members] = await Promise.all([getBaby(), listMembers()]);
+    const [baby, members] = await Promise.all([getBaby(fam), listMembers(fam)]);
     // A personal token is its member's own phone: never the admin path.
-    const s = await careSession({ id: me.email, role: me.role, viaAdmin: false, channel: "siri" }, { members, baby });
+    const s = await careSession({ id: me.email, role: me.role, viaAdmin: false, channel: "siri" }, { familyId: fam.familyId, members, baby });
     const help = { help_now: MOM_HELP.now };
-    const name = carePersonName(s.person!, members);
+    if (!s.person) return json({ error: "Not found", speak: "There's no page for mom's medicines in this log.", ...help }, 404);
+    const name = carePersonName(s.person, members);
     if (!s.access.read || !s.access.write) return json({ error: "Not shared", speak: `You can't change ${name}'s medicines from this account.`, ...help }, 403);
     const self = s.access.self;
     const whose = self ? "your" : "her";
@@ -334,7 +342,7 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, body: Mo
     }
     // On her list it counts toward that plan; any other name is saved as a one-time medicine, like Maple's log.
     const plan = m.kind === "match" ? m.plan : null;
-    const before = plan ? await planDoses(plan.id, new Date(now.getTime() - 3 * 86400_000)) : [];
+    const before = plan ? await planDoses(s, plan.id, new Date(now.getTime() - 3 * 86400_000)) : [];
     const mins = Number(body.minutes_ago);
     const at = Number.isFinite(mins) && mins > 0 && mins <= 4320 ? new Date(now.getTime() - mins * 60_000) : now;
     const units = body.units == null || body.units === "" ? null : Number(body.units);

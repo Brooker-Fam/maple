@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppBaseUrl } from "@/lib/secret-box";
-import { memberFor, setSessionCookies } from "@/lib/maple/auth";
+import { setSessionCookies, signedInAs } from "@/lib/maple/auth";
 import { NATIVE_VERIFIER_HEADER, nativeVerifierMatches, openNativeTicket } from "@/lib/maple/native-auth";
 import { captureServerException } from "@/lib/posthog-server";
 
@@ -24,10 +24,10 @@ export async function GET(request: NextRequest) {
     if (!ticket || !nativeVerifierMatches(request.headers.get(NATIVE_VERIFIER_HEADER), ticket.challenge)) {
       return redirect("/maple?auth=failed");
     }
-    const member = await memberFor(ticket.id);
-    if (!member) return redirect("/maple?auth=failed");
+    const signedIn = await signedInAs(ticket);
+    if (!signedIn) return redirect("/maple?auth=failed");
     const res = redirect(ticket.back);
-    setSessionCookies(res, member.email);
+    setSessionCookies(res, signedIn.member.email, signedIn.ctx.familyId);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "GET /api/maple/auth/native" });

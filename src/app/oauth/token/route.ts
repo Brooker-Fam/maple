@@ -10,7 +10,8 @@ import {
   ACCESS_TOKEN_TTL,
   type AccessTokenPayload,
 } from "@/lib/mcp/auth";
-import { isRemoved, memberFor } from "@/lib/maple/auth";
+import { isRemoved } from "@/lib/maple/auth";
+import { ADMIN_MEMBER_ID, adminFamilyId, carrierFamily, familyForAuth } from "@/lib/maple/family";
 
 /**
  * OAuth 2.1 token endpoint: authorization_code + PKCE, and refresh_token.
@@ -23,9 +24,10 @@ import { isRemoved, memberFor } from "@/lib/maple/auth";
  * out a new one, so connectors don't lapse monthly. They only go to codes
  * sent to Claude, ChatGPT or a local app (trustedRedirect). Admin ones die when
  * ADMIN_PASS changes or after 90 idle days. For Maple family members (sub
- * "maple:<email>") a refresh re-checks membership, so someone removed from the
- * family loses the connector at the next refresh (and every MCP call checks
- * membership anyway).
+ * "maple:<email>") a refresh re-checks membership in the grant's family (`fam`;
+ * none means family 1), so someone removed from the family loses the connector
+ * at the next refresh (and every MCP call checks membership anyway). The
+ * family carries over to every token the grant hands out.
  */
 
 const HEADERS = {
@@ -63,6 +65,7 @@ function isMapleGrant(grant: AccessTokenPayload): boolean {
 function issue(grant: AccessTokenPayload, opts: { refresh: boolean }) {
   const payload: AccessTokenPayload = {
     sub: grant.sub,
+    ...(grant.fam !== undefined ? { fam: grant.fam } : {}),
     scope: grant.scope,
     client_id: grant.client_id,
     ...(grant.resource ? { resource: grant.resource } : {}),
@@ -138,6 +141,7 @@ export async function POST(request: NextRequest) {
   return issue(
     {
       sub: payload.sub,
+      fam: payload.fam,
       scope: payload.scope,
       client_id: payload.client_id,
       resource: payload.resource,
@@ -164,15 +168,17 @@ async function refresh(params: URLSearchParams) {
     return err("invalid_grant", "resource does not match this grant");
   }
 
-  if (grant.sub === "admin" && isMapleGrant(grant)) {
+  const fam = carrierFamily(grant.fam);
+  if (fam === null) return err("invalid_grant", "refresh_token is invalid or expired");
+  if (grant.sub === ADMIN_MEMBER_ID && isMapleGrant(grant)) {
+    if (fam !== adminFamilyId()) return err("invalid_grant", "refresh_token is invalid or expired");
     // An owner turned off the admin login for Maple. (The calendar connector
     // stays connected; its Maple tools refuse instead.)
-    if (await isRemoved("admin").catch(() => false)) return err("invalid_grant", "the admin login is turned off for Maple's Log");
+    if (await isRemoved({ familyId: fam }, ADMIN_MEMBER_ID).catch(() => false)) return err("invalid_grant", "the admin login is turned off for Maple's Log");
   }
   if (grant.sub.startsWith("maple:")) {
     try {
-      const member = await memberFor(grant.sub.slice("maple:".length));
-      if (!member) return err("invalid_grant", "no longer a member of Maple's Log");
+      if (!(await familyForAuth({ sub: grant.sub, fam }))) return err("invalid_grant", "no longer a member of Maple's Log");
     } catch (error) {
       // A database blip shouldn't disconnect a parent at 3am; membership is
       // checked again on every MCP request.
@@ -180,7 +186,8 @@ async function refresh(params: URLSearchParams) {
     }
   }
 
-  return issue(grant, { refresh: true });
+  // A grant from before families gets its family written into the tokens it hands out.
+  return issue({ ...grant, fam }, { refresh: true });
 }
 
 export async function OPTIONS() {

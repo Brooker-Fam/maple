@@ -5,7 +5,7 @@
  */
 import { feedMinutes, minutesShort } from "./feed";
 import { JAUNDICE_LABEL, STOOL_COLOR_INFO } from "./guidelines";
-import { milestoneLabel } from "./milestones";
+import { milestoneLabel, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import { formatDuration } from "./time";
 import { formatLength, formatTemp, formatVolume, formatWeight } from "./units";
 import type { Entry, EntryKind, UnitSystem } from "./types";
@@ -79,7 +79,7 @@ function durationOf(e: Entry, now: Date): number | null {
  */
 export function describeEntry(
   e: Entry,
-  opts: { units?: UnitSystem; now?: Date; removed?: boolean } = {}
+  opts: { units?: UnitSystem; now?: Date; removed?: boolean; words?: MilestoneWords } = {}
 ): { title: string; detail: string; text: string } {
   const units = opts.units ?? "us";
   const stopped = !!opts.removed && e.active;
@@ -188,7 +188,7 @@ export function describeEntry(
       break;
     }
     case "moment": {
-      const milestone = milestoneLabel(e.data.milestone);
+      const milestone = milestoneLabel(e.data.milestone, opts.words ?? NEUTRAL_MILESTONE_WORDS);
       title = e.data.title || milestone || "A moment";
       if (milestone && e.data.title && milestone !== e.data.title) bits.push(milestone);
       if (e.data.photos?.length) bits.push(`${e.data.photos.length} photo${e.data.photos.length === 1 ? "" : "s"}`);

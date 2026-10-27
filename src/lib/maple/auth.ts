@@ -1,11 +1,13 @@
 import { OAuth2Client } from "google-auth-library";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import type { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getAppBaseUrl, encryptSecret, decryptSecret } from "@/lib/secret-box";
+import { getAppBaseUrl, encryptSecret, openSecret } from "@/lib/secret-box";
 import { verifyAdminCreds } from "@/lib/mcp/auth";
 import type { Member, Role } from "./types";
 import { LEGACY_ORIGIN, MAPLE_ORIGIN } from "./origin";
+import { NotFound, StoreUnavailable } from "./store";
+import { adminFamilyId, carrierFamily, familyForSession, FAMILY_ONE, homeFamilyOf, parseFamilyId, signupMode, type FamilyCtx, type FamilyScope } from "./family";
 
 /**
  * Identity for Maple's Log at /maple: sign in with Google (identity scopes only), and an encrypted cookie holds
@@ -96,21 +98,26 @@ function adminFingerprint(): string {
   return createHash("sha256").update(`maple-admin:${process.env.ADMIN_PASS ?? ""}`).digest("hex").slice(0, 16);
 }
 
-export function sealSession(id: string): string {
-  const body: { id: string; iat: number; pf?: string } = { id, iat: Date.now() };
+export function sealSession(id: string, familyId: number): string {
+  const body: { id: string; fam: number; iat: number; pf?: string } = { id, fam: familyId, iat: Date.now() };
   if (id === ADMIN_ID) body.pf = adminFingerprint();
   return encryptSecret(JSON.stringify(body));
 }
 
-/** The member id in a session cookie (an email, "admin" or "invite:<n>"), or null. */
-export function openSession(raw: string | undefined | null): string | null {
+/** Who a session cookie names (an email, "admin" or "invite:<n>") and its family claim, as sealed. */
+export type SessionBody = { id: string; fam?: unknown };
+
+/** A session cookie's body, or null. Its `fam` is checked by familyForSession, never trusted here. */
+export function openSession(raw: string | undefined | null): SessionBody | null {
   if (!raw) return null;
   try {
-    const { id, iat, pf } = JSON.parse(decryptSecret(raw));
+    const opened = openSecret(raw);
+    const { id, fam, iat, pf } = JSON.parse(opened.text);
     if (typeof id !== "string" || !id) return null;
+    if (opened.prev && carrierFamily(fam) !== FAMILY_ONE) return null;
     if (typeof iat !== "number" || Date.now() - iat > SESSION_DAYS * 864e5) return null;
     if (id === ADMIN_ID && pf !== adminFingerprint()) return null;
-    return id;
+    return fam === undefined ? { id } : { id, fam };
   } catch {
     return null;
   }
@@ -135,8 +142,8 @@ function sessionCookieHeader(value: string, path: string, maxAge: number): strin
   return attrs.join("; ");
 }
 
-export function setSessionCookies(res: NextResponse, id: string): void {
-  const value = sealSession(id);
+export function setSessionCookies(res: NextResponse, id: string, familyId: number): void {
+  const value = sealSession(id, familyId);
   for (const path of SESSION_PATHS) res.headers.append("Set-Cookie", sessionCookieHeader(value, path, SESSION_MAX_AGE));
   // An old cookie at "/" (early builds) would be sent alongside and could
   // shadow the new one, so expire it.
@@ -162,6 +169,16 @@ export function safeReturnPath(raw: string | null | undefined): string {
 
 // ── membership ────────────────────────────────────────────────────────
 
+/** The family a call acts in: a FamilyCtx, a job's FamilyScope or just `{ familyId }`. */
+export type Fam = Pick<FamilyScope, "familyId">;
+
+/** Fails closed: a missing or malformed family never falls back to family 1. */
+export function familyOf(fam: Fam): number {
+  const id = parseFamilyId(fam?.familyId);
+  if (id === null) throw Object.assign(new Error("family_required"), { code: "family_required" });
+  return id;
+}
+
 function rowToMember(r: Record<string, unknown>): Member {
   return {
     email: String(r.email),
@@ -172,18 +189,19 @@ function rowToMember(r: Record<string, unknown>): Member {
   };
 }
 
-export async function memberFor(id: string): Promise<Member | null> {
+export async function memberFor(fam: Fam, id: string): Promise<Member | null> {
   const rows = await query(
-    `SELECT email, role, display_name, emoji, color FROM maple_members WHERE email = $1`,
-    [id]
+    `SELECT email, role, display_name, emoji, color FROM maple_members WHERE family_id = $1 AND email = $2`,
+    [familyOf(fam), id]
   );
   if (!rows || !rows.length) return null;
   return rowToMember(rows[0]);
 }
 
-export async function listMembers(): Promise<Member[]> {
+export async function listMembers(fam: Fam): Promise<Member[]> {
   const rows = await query(
-    `SELECT email, role, display_name, emoji, color FROM maple_members ORDER BY added_at, email`
+    `SELECT email, role, display_name, emoji, color FROM maple_members WHERE family_id = $1 ORDER BY added_at, email`,
+    [familyOf(fam)]
   );
   return rows ? rows.map(rowToMember) : [];
 }
@@ -195,78 +213,315 @@ function allowlist(): string[] {
     .filter(Boolean);
 }
 
+export type GoogleJoin = { member: Member; familyId: number; reason?: undefined } | { member: null; familyId?: undefined; reason: "not_invited" | "unavailable" };
+
 /**
- * Resolves a Google sign-in to a member, adding them when allowed.
+ * Resolves a Google sign-in to a member and the family it opens, adding them
+ * to family 1 when allowed.
  *
- * Narrow on purpose so a stray Google account can't get in: invited members
- * always can; an allowlisted address (MAPLE_ALLOWED_EMAILS) may join; with no allowlist only the very first
- * Google sign-in may claim the log, as its owner.
+ * Someone who already belongs signs in to their home family (homeFamilyOf:
+ * the one they used last, never one someone else put them in). Joining by
+ * Google alone only ever reaches family 1, and narrowly, so a stray Google
+ * account can't get in: an allowlisted address (MAPLE_ALLOWED_EMAILS) may
+ * join; with no allowlist only the very first Google sign-in may claim the
+ * log, as its owner, and never once sign-up is switched on (a stranger could
+ * otherwise claim an empty family 1 from maplebaby.app).
  */
-export async function joinWithGoogle(
-  who: GoogleIdentity
-): Promise<{ member: Member | null; reason?: "not_invited" | "unavailable" }> {
-  const existing = await memberFor(who.email);
-  if (existing) {
-    if (!existing.display_name && who.name) {
-      await query(`UPDATE maple_members SET display_name = $2 WHERE email = $1`, [who.email, who.name]);
-      return { member: { ...existing, display_name: who.name } };
+export async function joinWithGoogle(who: GoogleIdentity): Promise<GoogleJoin> {
+  const home = await homeFamilyOf(who.email);
+  if (home === null) return { member: null, reason: "unavailable" };
+  if (home !== undefined) {
+    const fam = { familyId: home };
+    const existing = await memberFor(fam, who.email);
+    if (existing) {
+      await query(
+        `UPDATE maple_members SET accepted_at = COALESCE(accepted_at, NOW()), display_name = COALESCE(display_name, $3)
+         WHERE family_id = $1 AND email = $2 AND (accepted_at IS NULL OR (display_name IS NULL AND $3::text IS NOT NULL))`,
+        [fam.familyId, who.email, who.name]
+      );
+      if (!existing.display_name && who.name) return { member: { ...existing, display_name: who.name }, familyId: fam.familyId };
+      return { member: existing, familyId: fam.familyId };
     }
-    return { member: existing };
   }
 
   // Someone an owner removed stays out until they're invited again.
-  const removed = await query(`SELECT 1 FROM maple_removed WHERE email = $1`, [who.email]);
+  const removed = await query(`SELECT 1 FROM maple_removed WHERE family_id = $1 AND email = $2`, [FAMILY_ONE, who.email]);
   if (removed === null) return { member: null, reason: "unavailable" };
   if (removed.length) return { member: null, reason: "not_invited" };
 
-  const people = await query(`SELECT COUNT(*)::int AS n FROM maple_members WHERE email <> $1`, [ADMIN_ID]);
+  const people = await query(`SELECT COUNT(*)::int AS n FROM maple_members WHERE family_id = $1 AND email <> $2`, [FAMILY_ONE, ADMIN_ID]);
   if (people === null) return { member: null, reason: "unavailable" };
   const noOneYet = Number(people[0]?.n ?? 0) === 0;
 
   const allowed = allowlist();
-  if (allowed.length ? !allowed.includes(who.email) : !noOneYet) {
+  if (allowed.length ? !allowed.includes(who.email) : !noOneYet || signupMode() !== "off") {
     return { member: null, reason: "not_invited" };
   }
 
   const role: Role = noOneYet ? "owner" : "member";
   // No emoji: avatars show the initial in the member's color until they pick one in Family.
   const inserted = await query(
-    `INSERT INTO maple_members (email, role, display_name, emoji, added_by)
-     VALUES ($1, $2, $3, NULL, 'self')
-     ON CONFLICT (email) DO NOTHING`,
-    [who.email, role, who.name]
+    `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at)
+     VALUES ($1, $2, $3, $4, NULL, 'self', NOW())
+     ON CONFLICT (family_id, email) DO NOTHING`,
+    [FAMILY_ONE, who.email, role, who.name]
   );
   if (inserted === null) return { member: null, reason: "unavailable" };
-  return { member: await memberFor(who.email) };
+  const member = await memberFor({ familyId: FAMILY_ONE }, who.email);
+  return member ? { member, familyId: FAMILY_ONE } : { member: null, reason: "unavailable" };
 }
 
-/** True if an owner removed this member (they stay out until invited again). */
-export async function isRemoved(id: string): Promise<boolean> {
-  const rows = await query(`SELECT 1 FROM maple_removed WHERE email = $1`, [id]);
+/** True if an owner of this family removed this member (they stay out until invited again). */
+export async function isRemoved(fam: Fam, id: string): Promise<boolean> {
+  const rows = await query(`SELECT 1 FROM maple_removed WHERE family_id = $1 AND email = $2`, [familyOf(fam), id]);
   return !!rows && rows.length > 0;
 }
 
 /**
- * The admin password signs in as an owner pseudo-member named "Admin",
- * unless a real owner removed it (then the password no longer opens Maple).
+ * The admin password signs in as an owner pseudo-member named "Admin" of its
+ * one family (adminFamilyId), unless a real owner there removed it (then the
+ * password no longer opens Maple).
  */
 export async function ensureAdminMember(): Promise<Member | "removed" | null> {
-  if (await isRemoved(ADMIN_ID)) return "removed";
+  const fam = { familyId: adminFamilyId() };
+  if (await isRemoved(fam, ADMIN_ID)) return "removed";
   const done = await query(
-    `INSERT INTO maple_members (email, role, display_name, emoji, added_by)
-     VALUES ($1, 'owner', 'Admin', '🗝️', 'self')
-     ON CONFLICT (email) DO NOTHING`,
-    [ADMIN_ID]
+    `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at)
+     VALUES ($1, $2, 'owner', 'Admin', '🗝️', 'self', NOW())
+     ON CONFLICT (family_id, email) DO NOTHING`,
+    [fam.familyId, ADMIN_ID]
   );
   if (done === null) return null;
-  return memberFor(ADMIN_ID);
+  return memberFor(fam, ADMIN_ID);
 }
 
-/** The signed-in member behind a request's cookie, or null. */
-export async function sessionMember(request: NextRequest): Promise<Member | null> {
-  const id = openSession(request.cookies.get(SESSION_COOKIE)?.value);
-  if (!id) return null;
-  return memberFor(id);
+export type SignedIn = { member: Member; ctx: FamilyCtx };
+
+/**
+ * The member and family a session body or native ticket names, read fresh:
+ * null unless they're a member of that family right now. A body without
+ * `fam` (from before families) means family 1.
+ */
+export async function signedInAs(body: SessionBody | null | undefined): Promise<SignedIn | null> {
+  if (!body) return null;
+  const familyId = carrierFamily(body.fam);
+  if (familyId === null) return null;
+  const [ctx, member] = await Promise.all([familyForSession(body), memberFor({ familyId }, body.id)]);
+  return ctx && member && ctx.familyId === familyId ? { member, ctx } : null;
+}
+
+/** The signed-in member behind a request's cookie, and their family, or null. */
+export function sessionContext(request: NextRequest): Promise<SignedIn | null> {
+  return signedInAs(openSession(request.cookies.get(SESSION_COOKIE)?.value));
+}
+
+// ── people in a family (Family → People) ──────────────────────────────
+
+/**
+ * Adds someone by Google address straight to family 1 (and lifts a removal
+ * there), as its owners always have. Every other family invites by address
+ * instead (createInvite with `email`), so nobody lands in a family they
+ * didn't accept.
+ */
+export async function addMember(fam: Fam, email: string, addedBy: string, emoji: string | null, role: "member" | "viewer" = "member"): Promise<void> {
+  const familyId = familyOf(fam);
+  if (familyId !== FAMILY_ONE) throw Object.assign(new Error("invite_by_email"), { code: "invite_by_email" });
+  await q(`DELETE FROM maple_removed WHERE family_id = $1 AND email = $2`, [familyId, email]);
+  await q(
+    `INSERT INTO maple_members (family_id, email, role, emoji, added_by) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (family_id, email) DO NOTHING`,
+    [familyId, email, role, emoji, addedBy]
+  );
+}
+
+/**
+ * Remove someone from this family: their session, MCP tokens and Siri tokens
+ * here stop working at once, and a tombstone keeps an allowlisted address from
+ * simply signing back in with Google. Inviting them again (addMember) lifts it.
+ */
+export async function removeMember(fam: Fam, email: string, by: string): Promise<boolean> {
+  const familyId = familyOf(fam);
+  // Owners stay, except the "admin" pseudo-owner, which a real owner may remove.
+  const rows = await q(
+    `DELETE FROM maple_members WHERE family_id = $1 AND email = $2 AND (role <> 'owner' OR email = 'admin') RETURNING email`,
+    [familyId, email]
+  );
+  if (!rows.length) return false;
+  await q(`UPDATE maple_tokens SET revoked_at = NOW() WHERE family_id = $1 AND member = $2 AND revoked_at IS NULL`, [familyId, email]);
+  await q(
+    `INSERT INTO maple_removed (family_id, email, removed_by) VALUES ($1, $2, $3)
+     ON CONFLICT (family_id, email) DO UPDATE SET removed_at = NOW(), removed_by = EXCLUDED.removed_by`,
+    [familyId, email, by]
+  );
+  // Nobody removed keeps a place on her share list (careAccess turns them away anyway).
+  await q(
+    `UPDATE maple_care_people SET shared_with = shared_with - $2::text, updated_at = NOW() WHERE family_id = $1 AND shared_with ? $2::text`,
+    [familyId, email]
+  );
+  return true;
+}
+
+export type LeaveRefusal = "family_one" | "last_owner" | "not_member";
+
+/**
+ * Leaves a family for good (Family → Leave): the membership, and with it the
+ * Siri tokens, phones and chats here, stop at once; entries already logged
+ * stay. Nobody is left without an owner, and family 1 keeps its rule that
+ * people don't remove themselves. No tombstone: an owner can invite them again.
+ */
+export async function leaveFamily(fam: Fam, email: string): Promise<LeaveRefusal | null> {
+  const familyId = familyOf(fam);
+  if (familyId === FAMILY_ONE || email === ADMIN_ID) return "family_one";
+  const rows = await q(
+    `DELETE FROM maple_members m WHERE m.family_id = $1 AND m.email = $2
+       AND (m.role <> 'owner' OR EXISTS (SELECT 1 FROM maple_members o WHERE o.family_id = $1 AND o.role = 'owner' AND o.email <> $2 AND o.email <> 'admin'))
+     RETURNING m.email`,
+    [familyId, email]
+  );
+  if (!rows.length) return (await memberFor(fam, email)) ? "last_owner" : "not_member";
+  await q(`UPDATE maple_tokens SET revoked_at = NOW() WHERE family_id = $1 AND member = $2 AND revoked_at IS NULL`, [familyId, email]);
+  await q(`DELETE FROM maple_push_subs WHERE family_id = $1 AND member = $2`, [familyId, email]);
+  await q(`DELETE FROM maple_chat_threads WHERE family_id = $1 AND member = $2`, [familyId, email]);
+  await q(
+    `UPDATE maple_care_people SET shared_with = shared_with - $2::text, updated_at = NOW() WHERE family_id = $1 AND shared_with ? $2::text`,
+    [familyId, email]
+  );
+  return null;
+}
+
+export async function updateMember(
+  fam: Fam,
+  email: string,
+  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: "member" | "viewer" }
+): Promise<void> {
+  const familyId = familyOf(fam);
+  const rows = await q(`SELECT display_name, emoji, color, role FROM maple_members WHERE family_id = $1 AND email = $2`, [familyId, email]);
+  if (!rows.length) throw new NotFound("Member not found");
+  const cur = rows[0];
+  // Owners stay owners; only members and viewers swap roles.
+  const role = patch.role && cur.role !== "owner" ? patch.role : cur.role;
+  await q(
+    `UPDATE maple_members SET display_name = $3, emoji = $4, color = $5, role = $6, updated_at = NOW() WHERE family_id = $1 AND email = $2`,
+    [
+      familyId,
+      email,
+      patch.display_name !== undefined ? patch.display_name : cur.display_name,
+      patch.emoji !== undefined ? patch.emoji : cur.emoji,
+      patch.color !== undefined ? patch.color : cur.color,
+      role,
+    ]
+  );
+}
+
+// ── invite links (family without Google) ──────────────────────────────
+
+export type Invite = {
+  id: number;
+  role: Role;
+  /** Set on an invite by Google address: only that account can take it up, and only by signing in with it. */
+  email: string | null;
+  display_name: string | null;
+  emoji: string | null;
+  created_by: string | null;
+  expires_at: string;
+  used_at: string | null;
+};
+
+const INVITE_DAYS = 7;
+const INVITE_COLS = "id, role, email, display_name, emoji, created_by, expires_at, used_at";
+const inviteHash = (token: string) => createHash("sha256").update(token).digest("hex");
+const isoOrNull = (v: unknown): string | null => (v == null ? null : new Date(v as string | Date).toISOString());
+
+function rowToInvite(r: Record<string, unknown>): Invite {
+  return {
+    id: Number(r.id),
+    role: (r.role === "owner" || r.role === "viewer" ? r.role : "member") as Role,
+    email: r.email == null ? null : String(r.email),
+    display_name: r.display_name == null ? null : String(r.display_name),
+    emoji: r.emoji == null ? null : String(r.emoji),
+    created_by: r.created_by == null ? null : String(r.created_by),
+    expires_at: isoOrNull(r.expires_at)!,
+    used_at: isoOrNull(r.used_at),
+  };
+}
+
+/**
+ * A one-time link into the caller's family; only its hash is kept, so the
+ * token is shown once. With `email` it's a pending invite for that Google
+ * account: it opens only through Google sign-in as that address (joinByInvite),
+ * never as a link member, and replaces an open one for the same address.
+ */
+export async function createInvite(
+  fam: Fam,
+  opts: { role: Role; displayName: string | null; emoji: string | null; createdBy: string; email?: string | null }
+): Promise<{ invite: Invite; token: string }> {
+  const familyId = familyOf(fam);
+  const token = randomBytes(24).toString("base64url");
+  if (opts.email) await q(`DELETE FROM maple_invites WHERE family_id = $1 AND email = $2 AND used_at IS NULL`, [familyId, opts.email]);
+  const rows = await q(
+    `INSERT INTO maple_invites (family_id, token_hash, role, display_name, emoji, created_by, expires_at, email)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW() + make_interval(days => $7), $8)
+     RETURNING ${INVITE_COLS}`,
+    [familyId, inviteHash(token), opts.role, opts.displayName, opts.emoji, opts.createdBy, INVITE_DAYS, opts.email ?? null]
+  );
+  return { invite: rowToInvite(rows[0]), token };
+}
+
+export async function listInvites(fam: Fam): Promise<Invite[]> {
+  const rows = await q(
+    `SELECT ${INVITE_COLS} FROM maple_invites
+     WHERE family_id = $1 AND used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC`,
+    [familyOf(fam)]
+  );
+  return rows.map(rowToInvite);
+}
+
+/** The family an invite link (used or not) was made in, for its error copy; null when there's no such link. */
+export async function inviteFamily(token: unknown): Promise<number | null> {
+  if (typeof token !== "string" || !/^[A-Za-z0-9_-]{20,64}$/.test(token.trim())) return null;
+  const rows = await query(`SELECT family_id FROM maple_invites WHERE token_hash = $1`, [inviteHash(token.trim())]);
+  return parseFamilyId(rows?.[0]?.family_id);
+}
+
+export async function revokeInvite(fam: Fam, id: number): Promise<void> {
+  await q(`DELETE FROM maple_invites WHERE id = $1 AND family_id = $2 AND used_at IS NULL`, [id, familyOf(fam)]);
+}
+
+/**
+ * Redeem a one-time invite: creates the member "invite:<id>", with the name,
+ * emoji and role the owner chose, in the family the link was made in. Null if
+ * the link is used, expired, or its family is being deleted; "google" for an
+ * invite made for one Google address, which only that account can take up.
+ */
+export async function redeemInvite(token: string): Promise<{ id: string; familyId: number } | "google" | null> {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return null;
+  const rows = await q(
+    `UPDATE maple_invites i SET used_at = NOW(), used_by = 'invite:' || i.id
+     WHERE i.token_hash = $1 AND i.used_at IS NULL AND i.expires_at > NOW() AND i.email IS NULL
+       AND EXISTS (SELECT 1 FROM maple_families f WHERE f.id = i.family_id AND f.status <> 'deleting')
+     RETURNING i.id, i.family_id, i.role, i.display_name, i.emoji, i.created_by`,
+    [inviteHash(token)]
+  );
+  if (!rows.length) {
+    const forGoogle = await q(`SELECT 1 FROM maple_invites WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW() AND email IS NOT NULL`, [inviteHash(token)]);
+    return forGoogle.length ? "google" : null;
+  }
+  const r = rows[0];
+  const familyId = parseFamilyId(r.family_id);
+  if (familyId === null) return null;
+  const id = `invite:${r.id}`;
+  await q(
+    `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     ON CONFLICT (family_id, email) DO NOTHING`,
+    [familyId, id, r.role === "viewer" ? "viewer" : "member", r.display_name, r.emoji, r.created_by]
+  );
+  return { id, familyId };
+}
+
+async function q(sql: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+  const rows = await query(sql, params);
+  if (rows === null) throw new StoreUnavailable();
+  return rows as Record<string, unknown>[];
 }
 
 /** Member ids are lowercased emails, "admin", or "invite:<n>" for link invites. */

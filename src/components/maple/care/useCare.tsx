@@ -42,6 +42,7 @@ import type {
   PlanInput,
   PlanStatus,
 } from "@/lib/maple/types";
+import { useVoice } from "../familyWords";
 import { ApiError, useMaple, useNow, type ToastAction } from "../useMaple";
 import { useRemindChip } from "../notify/context";
 
@@ -239,6 +240,7 @@ export function useCare(): UseCare | null {
   const now = useNow(30_000);
   const care = state?.care ?? null;
   const tz = state?.baby.timezone ?? "America/New_York";
+  const voice = useVoice();
   const holdMap = useSyncExternalStore(subscribeHolds, getHolds, getNoHolds);
 
   /** Who the server credits this reader's writes to: the admin login logs as its admin_as member. */
@@ -258,7 +260,7 @@ export function useCare(): UseCare | null {
       dosesBy.set(e.med_id, list);
     }
     const self = care.person.self;
-    const ctx = { now, tz, self, members: state.members, me: viewerId, name: care.person.name, settings: care.settings };
+    const ctx = { now, tz, self, members: state.members, me: viewerId, name: care.person.name, settings: care.settings, voice };
     const views = care.plans.map((plan) => {
       const doses = dosesBy.get(plan.id) ?? [];
       return planView(plan, doses, { ...ctx, pending: doses.some((d) => d.pending) }, viewerId);
@@ -302,7 +304,7 @@ export function useCare(): UseCare | null {
       lanternLine: leadText ? (self ? leadText : `${care.person.name}: ${leadText}`) : null,
       mood,
     };
-  }, [care, state, now, tz, viewerId, holdMap]);
+  }, [care, state, now, tz, viewerId, holdMap, voice]);
 
   // Actions read the latest state when they run, not the render they were made in.
   const careRef = useRef(care);
@@ -336,9 +338,9 @@ export function useCare(): UseCare | null {
   const statusOf = useCallback(
     (plan: CarePlan, doses: DoseEntry[] = dosesOf(plan.id)): PlanStatus => {
       const c = careRef.current;
-      return planView(plan, doses, { now: clock(), tz, self: !!c?.person.self, members: membersRef.current, me: viewerId, name: c?.person.name ?? "mom", settings: c?.settings ?? {} }).status;
+      return planView(plan, doses, { now: clock(), tz, self: !!c?.person.self, members: membersRef.current, me: viewerId, name: c?.person.name ?? "mom", settings: c?.settings ?? {}, voice }).status;
     },
-    [clock, dosesOf, tz, viewerId]
+    [clock, dosesOf, tz, viewerId, voice]
   );
 
   /** "Ibuprofen at 3:05 AM · OK after 9:05 AM" (or the unknown, daily or times variant). */
@@ -519,7 +521,7 @@ export function useCare(): UseCare | null {
       };
       patchEntries((es) => [early, ...es]);
       const settings = c.settings;
-      const nctx = { name: c.person.name, self: c.person.self, settings, now: clock(), tz };
+      const nctx = { name: c.person.name, self: c.person.self, settings, now: clock(), tz, voice };
       // Every care Took it waits while this saves, and for a moment after (tapCooling); the plan holds its place from
       // the first frame, so the line never flicks to another medicine while the save is out.
       taps.inflight++;
@@ -551,7 +553,7 @@ export function useCare(): UseCare | null {
         taps.coolUntil = performance.now() + TAP_COOL_MS;
       }
     },
-    [call, clock, dosesOf, doseToast, fail, patchEntries, planOf, store, toast, tz, viewerId]
+    [call, clock, dosesOf, doseToast, fail, patchEntries, planOf, store, toast, tz, viewerId, voice]
   );
 
   const tookIt = useCallback<CareActions["tookIt"]>(

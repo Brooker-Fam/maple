@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 const ROUTE = "/api/maple/care/person";
 
-// There's no POST: her page always exists (getCarePerson makes it on first read).
+// There's no POST: family 1's page always exists (getCarePerson makes it on first read); another family's is opt-in.
 
 /** PATCH { shared_with?, settings? } — her: sharing and every setting; shared writers: the shared settings. */
 export const PATCH = withCare(`PATCH ${ROUTE}`, async (request, _me, s) => {
@@ -16,11 +16,11 @@ export const PATCH = withCare(`PATCH ${ROUTE}`, async (request, _me, s) => {
 
 /**
  * DELETE { confirm: true } — everything on her page, for good (hard delete,
- * cascades). An empty page takes its place on the next read.
+ * cascades). In family 1 an empty page takes its place on the next read.
  */
 export const DELETE = withCare(`DELETE ${ROUTE}`, async (request, _me, s) => {
   const body = await readJson(request).catch(() => ({}) as Record<string, unknown>);
   if (body.confirm !== true) return json({ error: "Confirm to delete everything here." }, 400);
-  await deleteCarePerson(s.person!.member);
+  await deleteCarePerson(s, s.person!.member);
   return json({ ok: true });
 }, { write: true });

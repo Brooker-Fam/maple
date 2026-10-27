@@ -35,6 +35,7 @@ import { Icon, KindBadge } from "./icons";
 import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
 import { useNightActive } from "./nightLook";
 import { KIND_COLOR } from "./palette";
+import { familyBabyWords, useBabyWords } from "./familyWords";
 import { useSheets } from "./sheets";
 import { Button, Card, EmptyState, HowToRead, SectionTitle, Segmented, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -127,6 +128,7 @@ export default function PatternsTab({
   below?: ReactNode;
 } = {}) {
   const { state, units, readOnly } = useMaple();
+  const w = useBabyWords();
   const { open } = useSheets();
   const careNav = useCareNav();
   const now = useNow(60_000);
@@ -207,8 +209,8 @@ export default function PatternsTab({
         <NavRow
           icon="stethoscope"
           iconColor={KIND_COLOR.vitals}
-          label="For her pediatrician"
-          note="Questions to ask, the visit summary, her doctor's numbers"
+          label={`For ${w.his} pediatrician`}
+          note={`Questions to ask, the visit summary, ${w.his} doctor's numbers`}
           onClick={() => careNav.openDoctor()}
         />
       </div>
@@ -233,7 +235,7 @@ export default function PatternsTab({
             {loggedDays < 2 && ready && (
               <Card>
                 <EmptyState title="Patterns show up after two days">
-                  {loggedDays > 0 && `Day ${loggedDays} of 2. `}Keep logging and her rhythms will appear here.
+                  {loggedDays > 0 && `Day ${loggedDays} of 2. `}Keep logging and {w.his} rhythms will appear here.
                 </EmptyState>
               </Card>
             )}
@@ -1358,6 +1360,7 @@ function DailyCharts({
   now: Date;
 }) {
   const night = useNightActive();
+  const w = useBabyWords();
   const [asTable, setAsTable] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const keys = days.map((d) => d.key);
@@ -1463,7 +1466,7 @@ function DailyCharts({
               title="Diapers"
               how={
                 <>
-                  <p>Each dot is one wet diaper. The short line is the least to expect for her day of life.</p>
+                  <p>Each dot is one wet diaper. The short line is the least to expect for {w.his} day of life.</p>
                   <p>Each dot is one dirty diaper, in its color: black at first, then green, then mustard yellow.</p>
                 </>
               }
@@ -1595,7 +1598,7 @@ function DailyCharts({
                 {anyTummy && (
                   <ChartBlock
                     title="Tummy time per day"
-                    how={bornAge ? <p>{`A goal of about ${tummyGoalMinutes(bornAge.days)} minutes a day at her age, in short sessions.`}</p> : undefined}
+                    how={bornAge ? <p>{`A goal of about ${tummyGoalMinutes(bornAge.days)} minutes a day at ${w.his} age, in short sessions.`}</p> : undefined}
                   >
                     <Columns
                       keys={keys}
@@ -1723,12 +1726,13 @@ export async function buildVisitSummary(opts: {
   let from = addDays(todayKey, -6);
   if (bornKey && bornKey > from) from = bornKey;
   const name = baby.nickname || baby.name;
+  const words = familyBabyWords(state);
   const out: string[] = [];
 
   out.push(`${baby.name}: visit summary (${from === todayKey ? dayRuns([from]) : `${dayRuns([from])} to ${dayRuns([todayKey])}`})`);
   if (born != null) {
     const age = babyAge(baby.born_at!, now, tz);
-    out.push(`Born ${shortDay(bornKey!)} at ${formatTime(born, tz)} · today she's ${age.label.replace(/ old$/, "")} old (Day ${age.dayOfLife})`);
+    out.push(`Born ${shortDay(bornKey!)} at ${formatTime(born, tz)} · today ${words.hes} ${age.label.replace(/ old$/, "")} old (Day ${age.dayOfLife})`);
   }
   const birthBits = [
     baby.birth_weight_g ? `weight ${formatWeightBoth(baby.birth_weight_g)}` : null,
@@ -1820,7 +1824,7 @@ export async function buildVisitSummary(opts: {
           const pct = Math.round(((e.data.weight_g - baby.birth_weight_g) / baby.birth_weight_g) * 1000) / 10;
           w += `, ${pct > 0 ? "+" : pct < 0 ? "−" : "±"}${Math.abs(pct)}% vs birth`;
         }
-        const p = g && ageDays != null ? g.percentileFor("weight", e.data.weight_g, ageDays) : null;
+        const p = g && ageDays != null ? g.percentileFor("weight", e.data.weight_g, ageDays, g.whoChartFor(baby.sex)) : null;
         if (p && !p.implausible) w += `, about the ${p.label} percentile (WHO)`;
         bits.push(w);
       }
@@ -1838,6 +1842,7 @@ export async function buildVisitSummary(opts: {
 /** The visit summary card (copy as plain text, or the CSV), shown in "For the doctor". */
 export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; todayKey: string; tz: string; now: Date }) {
   const { api, toast } = useMaple();
+  const w = familyBabyWords(state);
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -1877,7 +1882,7 @@ export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; 
   return (
     <section aria-labelledby="maple-visit">
       <SectionTitle>
-        <span id="maple-visit">For her pediatrician</span>
+        <span id="maple-visit">For {w.his} pediatrician</span>
       </SectionTitle>
       <Card>
         <div className="flex gap-3">

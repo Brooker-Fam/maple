@@ -14,6 +14,7 @@ import { useCareNav } from "./care/CareNav";
 import { NavRow } from "./care/parts";
 import { useCare } from "./care/useCare";
 import { ChatCareRow } from "./chat/ChatTerms";
+import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import { Icon, type IconName } from "./icons";
 import { LegalLinks } from "./Legal";
 import { useNightPref, type NightPref } from "./nightLook";
@@ -41,6 +42,8 @@ import { MAPLE_HOST, MAPLE_ORIGIN, MCP_URL } from "@/lib/maple/origin";
 type Invite = {
   id: number;
   role: Role;
+  /** A pending invite for one Google address (outside family 1). */
+  email?: string | null;
   display_name: string | null;
   emoji: string | null;
   created_by: string | null;
@@ -376,6 +379,8 @@ export default function FamilyTab() {
 
 function People() {
   const { state, api, toast, now } = useMaple();
+  const w = useBabyWords();
+  const care = useCare();
   const me = state!.me;
   const owner = me.role === "owner";
   const members = state!.members;
@@ -400,7 +405,7 @@ function People() {
     try {
       const r = await api<{ invites: Invite[] }>(`/api/maple/invites?id=${inv.id}`, { method: "DELETE" });
       setInvites(r.invites);
-      toast(`Invite for ${inv.display_name ?? "them"} revoked`);
+      toast(`Invite for ${inv.display_name ?? inv.email ?? "them"} revoked`);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't revoke that", { tone: "error" });
     }
@@ -411,8 +416,8 @@ function People() {
   return (
     <>
       <Section
-        title="Maple's people"
-        footnote={members.length === 1 ? "It's just you so far. Invite Brittany, grandparents, or anyone helping out." : undefined}
+        title={`${w.name}'s people`}
+        footnote={members.length === 1 ? `It's just you so far. Invite ${care && !care.self ? care.name : "family"}, grandparents, or anyone helping out.` : undefined}
       >
         <ul className={GROUP}>
           {members.map((m) => (
@@ -428,7 +433,7 @@ function People() {
                     {inv.emoji ?? <Icon name="link" size={18} />}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className={cx(tone.body, "truncate text-[15px] font-medium")}>{inv.display_name ?? "Someone"}</p>
+                    <p className={cx(tone.body, "truncate text-[15px] font-medium")}>{inv.display_name ?? inv.email ?? "Someone"}</p>
                     <p className={cx(tone.muted, "text-[13px] leading-snug")}>
                       Invite link waiting · {inv.role === "viewer" ? "View only" : "Can log"} · expires {d <= 1 ? "within a day" : `in ${d} days`}
                     </p>
@@ -613,18 +618,22 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
 
 function InviteByEmail() {
   const { api, refresh, toast } = useMaple();
+  const one = useFamilyOne();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "viewer">("member");
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<{ email: string; url: string } | null>(null);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   const add = async () => {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      await api("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role }) });
+      const r = await api<{ url?: string }>("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role }) });
       await refresh();
-      toast(`Added ${email.trim()}. They can sign in with Google at ${MAPLE_HOST}/maple`, { duration: 6000 });
+      // Outside the Brookers' log an address only gets an invite: they join by its link, signed in as that address.
+      if (r.url) setPending({ email: email.trim(), url: r.url });
+      else toast(`Added ${email.trim()}. They can sign in with Google at ${MAPLE_HOST}/maple`, { duration: 6000 });
       setEmail("");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't add them", { tone: "error" });
@@ -649,7 +658,7 @@ function InviteByEmail() {
         autoCapitalize="none"
         autoComplete="off"
         spellCheck={false}
-        placeholder="brittany@gmail.com"
+        placeholder={one ? "brittany@gmail.com" : "name@gmail.com"}
         aria-label="Their Google email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
@@ -668,12 +677,24 @@ function InviteByEmail() {
           Add
         </Button>
       </div>
+      {pending && (
+        <div className="space-y-2 pt-1" aria-live="polite">
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+            Send {pending.email} this link. They join once they open it and sign in with that Google account. It works once, for 7 days.
+          </p>
+          <div className={cx(tone.inset, "p-3")}>
+            <p className="font-mono text-[13px] leading-relaxed break-all text-mp-ink select-all">{pending.url}</p>
+          </div>
+          <CopyButton text={pending.url} label="Copy link" className="min-h-[44px] w-full text-[15px]" />
+        </div>
+      )}
     </form>
   );
 }
 
 function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
   const { state, api, toast } = useMaple();
+  const w = useBabyWords();
   const [name, setName] = useState("");
   const [emoji, setEmoji] = useState("");
   const [role, setRole] = useState<"member" | "viewer">("viewer");
@@ -769,7 +790,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
             />
             <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>
               {role === "viewer"
-                ? "Viewers see Maple's day and her moments, but can't log or change anything."
+                ? `Viewers see ${w.name}'s day and ${w.his} moments, but can't log or change anything.`
                 : "Members can log feeds, diapers and sleep, just like you."}
             </p>
           </div>
@@ -812,6 +833,8 @@ const numOrNull = (s: string) => {
 
 function BabyDetails() {
   const { state, api, refresh, toast, readOnly, units, now } = useMaple();
+  const w = useBabyWords();
+  const one = useFamilyOne();
   const baby = state!.baby;
   const tz = baby.timezone;
   const settings = baby.settings;
@@ -838,7 +861,7 @@ function BabyDetails() {
   const save = async (which: "profile" | "doctor") => {
     let body: Record<string, unknown>;
     if (which === "profile") {
-      if (!p.name.trim()) return toast("She needs a name!", { tone: "error" });
+      if (!p.name.trim()) return toast(`${baby.sex ? w.He : "The baby"} needs a name!`, { tone: "error" });
       body = { name: p.name.trim(), nickname: p.nickname.trim() || null, due_date: p.due || null };
     } else {
       const ga = numOrNull(d.gaWeeks);
@@ -879,6 +902,18 @@ function BabyDetails() {
     }
   };
   const flag = (key: string) => toggles[key] ?? settings[key] !== false;
+  const [sex, setSex] = useState<"female" | "male" | "unset" | null>(null);
+  const saveSex = async (value: "female" | "male" | "unset") => {
+    setSex(value);
+    try {
+      await api("/api/maple/baby", { method: "PATCH", body: JSON.stringify({ sex: value === "unset" ? null : value }) });
+      await refresh();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Couldn't save", { tone: "error" });
+    } finally {
+      setSex(null);
+    }
+  };
   // Off unless switched on (the others default on).
   const warnings = toggles.show_alerts ?? alertsOn(baby);
 
@@ -901,7 +936,7 @@ function BabyDetails() {
       </div>
       {!readOnly && (
         <Button variant={born ? "ghost" : "primary"} size="sm" className={born ? "-mr-3" : undefined} onClick={() => setBirthOpen(true)}>
-          {born ? "Edit" : "She's here!"}
+          {born ? "Edit" : `${w.Hes} here!`}
         </Button>
       )}
     </div>
@@ -911,7 +946,7 @@ function BabyDetails() {
     const phone = doctorSrc.pedPhone;
     return (
       <>
-        <Section title="Maple">
+        <Section title={w.name}>
           <div className={GROUP}>
             <p className="flex flex-wrap items-baseline gap-x-2 px-4 py-3.5">
               <span className={cx(tone.display, "text-[24px] leading-tight")}>{baby.name}</span>
@@ -933,23 +968,40 @@ function BabyDetails() {
 
   return (
     <>
-      <Section title="Maple">
+      <Section title={w.name}>
         <div className={GROUP}>
           <InputRow label="Name" value={p.name} maxLength={80} onChange={(e) => setPEdits((x) => ({ ...x, name: e.target.value }))} />
           <InputRow
             label="Nickname"
             value={p.nickname}
             maxLength={40}
-            placeholder="Maple"
+            placeholder={baby.name.split(" ")[0]}
             onChange={(e) => setPEdits((x) => ({ ...x, nickname: e.target.value }))}
           />
           <InputRow label="Due date" type="date" value={p.due} onChange={(e) => setPEdits((x) => ({ ...x, due: e.target.value }))} />
           {birthRow}
+          {!one && (
+            <div className="px-4 py-3">
+              <p className={cx(tone.body, "text-[15px]")}>Growth charts</p>
+              <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>WHO&apos;s charts are separate for girls and boys. Not set shows the measurements alone.</p>
+              <Segmented
+                aria-label="Growth charts"
+                className="mt-2.5"
+                value={sex ?? baby.sex ?? "unset"}
+                onChange={(v) => void saveSex(v)}
+                options={[
+                  { value: "female", label: "Girl" },
+                  { value: "male", label: "Boy" },
+                  { value: "unset", label: "Not set" },
+                ]}
+              />
+            </div>
+          )}
         </div>
         {pDirty && <SaveBar busy={busy === "profile"} onSave={() => void save("profile")} onCancel={() => setPEdits({})} />}
       </Section>
 
-      <Section title="Her doctor" footnote="Her doctor's numbers, for the middle of the night.">
+      <Section title={`${w.His} doctor`} footnote={`${w.His} doctor's numbers, for the middle of the night.`}>
         <div className={GROUP}>
           <PhoneRow label="Pediatrician" value={d.pedPhone} saved={doctorSrc.pedPhone} onChange={(v) => setDEdits((x) => ({ ...x, pedPhone: v }))} />
           <PhoneRow label="After-hours line" value={d.afterHours} saved={doctorSrc.afterHours} onChange={(v) => setDEdits((x) => ({ ...x, afterHours: v }))} />
@@ -966,7 +1018,7 @@ function BabyDetails() {
               />
               <InputRow
                 label="Feed every … hours (optional)"
-                note="Only if her pediatrician gave you a number. It replaces the built-in feeding reminders."
+                note={`Only if ${w.his} pediatrician gave you a number. It replaces the built-in feeding reminders.`}
                 inputMode="decimal"
                 placeholder="e.g. 3"
                 value={d.feedHours}
@@ -1167,7 +1219,7 @@ function Assistants() {
   const { state } = useMaple();
   const care = useCare();
   const [open, setOpen] = useState(false);
-  const baby = (state?.baby.nickname || state?.baby.name || "Maple").split(" ")[0];
+  const baby = babyFirstName(state?.baby);
   return (
     <Section title="Shortcuts & assistants">
       <div className={GROUP}>
@@ -1256,9 +1308,11 @@ function ConnectAI() {
  */
 function CalendarConnectorAsMe() {
   const { state, api, refresh, toast, memberName } = useMaple();
+  const w = useBabyWords();
+  const one = useFamilyOne();
   const [busy, setBusy] = useState(false);
   const me = state?.me;
-  if (!state || !me || me.role !== "owner" || me.email === "admin") return null;
+  if (!one || !state || !me || me.role !== "owner" || me.email === "admin") return null;
   const raw = (state.baby.settings as { admin_as?: unknown }).admin_as;
   const stored = typeof raw === "string" ? raw : null;
   const someoneElse = stored && stored !== me.email && adminActsAs(state.baby, state.members) ? stored : null;
@@ -1280,7 +1334,7 @@ function CalendarConnectorAsMe() {
   return (
     <Toggle
       label="Calendar connector logs as me"
-      hint={`The Brooker Family Calendar connector (the site's admin login) can log Maple too. ${
+      hint={`The Brooker Family Calendar connector (the site's admin login) can log ${w.name} too. ${
         someoneElse ? `Right now it logs as ${memberName(someoneElse)}.` : "Turn this on so what it logs counts as you, not “Admin”."
       }`}
       checked={stored === me.email}
@@ -1311,6 +1365,8 @@ const KEY_MARK = "flex h-9 w-9 shrink-0 items-center justify-center rounded-full
 
 function HandsFree() {
   const { api, toast, now } = useMaple();
+  const w = useBabyWords();
+  const one = useFamilyOne();
   const [tokens, setTokens] = useState<PersonalToken[] | null>(null);
   const [fresh, setFresh] = useState<string | null>(null);
   const [label, setLabel] = useState("");
@@ -1421,7 +1477,7 @@ function HandsFree() {
               className="min-h-[44px] min-w-0 flex-1 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
               value={label}
               maxLength={40}
-              placeholder="Matt's iPhone"
+              placeholder={one ? "Matt's iPhone" : "My iPhone"}
               aria-label="Key name"
               onChange={(e) => setLabel(e.target.value)}
             />
@@ -1487,7 +1543,7 @@ function HandsFree() {
                 </tbody>
               </table>
               <span className={cx(tone.muted, "mt-2 block text-xs leading-snug")}>
-                Also: <Code>vitamin_d</Code>, and <Code>bottle</Code> (add a Number field <Code>amount_oz</Code>). “Maple status” reads back when she last
+                Also: <Code>vitamin_d</Code>, and <Code>bottle</Code> (add a Number field <Code>amount_oz</Code>). “Maple status” reads back when {w.he} last
                 ate and which side is next.
               </span>
             </li>
@@ -1566,17 +1622,33 @@ function About() {
 // ── Data and account ─────────────────────────────────────────────────────
 
 function DataAndAccount() {
-  const { api, refresh, state, memberName } = useMaple();
+  const { api, refresh, state, memberName, toast } = useMaple();
+  const one = useFamilyOne();
+  const [leaving, setLeaving] = useState(false);
+  const w = useBabyWords();
   const notify = useNotifications();
   const [busy, setBusy] = useState(false);
   const signOut = async () => {
     setBusy(true);
     // This phone stops getting notices first (it tells the server and unsubscribes), while the session still works.
-    await notify.forgetThisPhone();
+    await notify.forgetThisPhone({ everywhere: true });
     try {
       await api("/api/maple/auth/signout", { method: "POST" });
     } catch {
       // the next poll will tell
+    }
+    await refresh();
+    setBusy(false);
+  };
+  // What you logged stays in their log; this phone stops its notices first, as signing out does.
+  const leave = async () => {
+    setBusy(true);
+    await notify.forgetThisPhone();
+    try {
+      await api(`/api/maple/members?email=${encodeURIComponent(state!.me.email)}`, { method: "DELETE" });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Couldn't leave just now", { tone: "error" });
+      setLeaving(false);
     }
     await refresh();
     setBusy(false);
@@ -1588,7 +1660,7 @@ function DataAndAccount() {
           <Icon name="download" size={20} className="shrink-0 text-mp-accent-fg" />
           <span className="min-w-0 flex-1">
             <span className="block text-[15px] font-medium text-mp-accent-fg">Download everything (CSV)</span>
-            <span className={cx(tone.muted, "block text-[13px] leading-snug")}>Every entry, for a spreadsheet or her pediatrician.</span>
+            <span className={cx(tone.muted, "block text-[13px] leading-snug")}>Every entry, for a spreadsheet or {w.his} pediatrician.</span>
           </span>
         </a>
         <Row label={<span className="block truncate">Signed in as {memberName(state!.me.email)}</span>}>
@@ -1596,6 +1668,19 @@ function DataAndAccount() {
             Sign out
           </button>
         </Row>
+        {!one && state!.me.email !== "admin" && (
+          <Row label={<span className="block truncate">Leave this family&apos;s log</span>}>
+            {leaving ? (
+              <button type="button" disabled={busy} onClick={() => void leave()} className={DANGER_TEXT}>
+                Leave for good
+              </button>
+            ) : (
+              <button type="button" disabled={busy} onClick={() => setLeaving(true)} className={DANGER_TEXT}>
+                Leave
+              </button>
+            )}
+          </Row>
+        )}
       </div>
     </Section>
   );

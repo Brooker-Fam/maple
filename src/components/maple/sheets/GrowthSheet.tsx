@@ -5,6 +5,7 @@ import { describeEntry } from "@/lib/maple/describe";
 import { WEIGHT_GAIN_NOTE } from "@/lib/maple/guidelines";
 import { cmToIn, formatLength, formatWeight, gramsToLbOz, inToCm, lbOzToGrams } from "@/lib/maple/units";
 import type { GrowthData, UnitSystem } from "@/lib/maple/types";
+import { useBabyWords } from "../familyWords";
 import { Icon } from "../icons";
 import { Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
@@ -29,9 +30,10 @@ import {
  * Log or edit measurements: weight as lb + oz side by side (the way a
  * pediatric scale reads out) or grams, length and head in inches or cm, and
  * whether it was the doctor's scale or home. Each number shows its WHO
- * percentile for her age as you type; the percentile tables (~60 KB) load
- * only when this sheet opens. A number far outside the charts gets a gentle
- * "double-check" (usually a lb/kg or in/cm mix-up).
+ * percentile as you type, on the girls' or boys' standard (none with no sex
+ * set); the percentile tables (~120 KB) load only when this sheet opens. A
+ * number far outside the charts gets a gentle "double-check" (usually a
+ * lb/kg or in/cm mix-up).
  */
 
 type Growth = typeof import("@/lib/maple/growth");
@@ -45,7 +47,8 @@ export default function GrowthSheet(props: SheetProps) {
 }
 
 function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
-  const { tz, units, log, update, remove, now, bornAt, clock } = useSheetBase();
+  const { tz, units, log, update, remove, now, bornAt, clock, state } = useSheetBase();
+  const w = useBabyWords();
   const e = entry?.kind === "growth" ? entry : undefined;
   const d: Partial<GrowthData> = e?.data ?? {};
   const [sys, setSys] = useState<UnitSystem>(units);
@@ -105,13 +108,17 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
 
   const t = when ?? now();
   const ageDays = bornAt ? Math.max(0, (t.getTime() - Date.parse(bornAt)) / 86_400_000) : null;
-  const pct = (measure: "weight" | "length" | "head", v: number | undefined) =>
-    v != null && v > 0 && growth && ageDays != null ? growth.percentileFor(measure, v, ageDays) : null;
-  const pW = pct("weight", weightG);
-  const pL = pct("length", lenCm);
-  const pH = pct("head", headCm);
-  const off = (measure: keyof typeof SANE, v: number | undefined, p: ReturnType<typeof pct>) =>
-    v != null && v > 0 && (p?.implausible || v < SANE[measure][0] || v > SANE[measure][1]);
+  const sex = state?.baby.sex ?? null;
+  const read = (measure: keyof typeof SANE, v: number | undefined) =>
+    v != null && v > 0 && growth && ageDays != null ? growth.readingFor(measure, v, ageDays, sex) : null;
+  const rW = read("weight", weightG);
+  const rL = read("length", lenCm);
+  const rH = read("head", headCm);
+  const pW = rW?.pct ?? null;
+  const pL = rL?.pct ?? null;
+  const pH = rH?.pct ?? null;
+  const off = (measure: keyof typeof SANE, v: number | undefined, r: ReturnType<typeof read>) =>
+    v != null && v > 0 && (r?.implausible || v < SANE[measure][0] || v > SANE[measure][1]);
   const hasAny = weightG != null || lenCm != null || headCm != null;
 
   const data = {
@@ -242,23 +249,29 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
         ) : (
           <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={edit("weight", setGrams)} step={10} max={30000} onInvalid={checks.watch("grams")} />
         )}
-        <Reading p={pW} warn={off("weight", weightG, pW)} extra={!us && weightG ? `${(weightG / 1000).toFixed(2)} kg` : undefined} />
+        <Reading p={pW} warn={off("weight", weightG, rW)} extra={!us && weightG ? `${(weightG / 1000).toFixed(2)} kg` : undefined} />
       </section>
 
       <div className="grid grid-cols-2 gap-3">
         <section aria-label="Length">
           <MiniStepper label={`Length`} unit={lenUnit} ariaLabel={`length in ${us ? "inches" : "centimetres"}`} value={length} onChange={edit("length", setLength)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 50 : 130} onInvalid={checks.watch("length")} />
-          <Reading p={pL} warn={off("length", lenCm, pL)} compact />
+          <Reading p={pL} warn={off("length", lenCm, rL)} compact />
         </section>
         <section aria-label="Head">
           <MiniStepper label={`Head`} unit={lenUnit} ariaLabel={`head circumference in ${us ? "inches" : "centimetres"}`} value={head} onChange={edit("head", setHead)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 25 : 60} onInvalid={checks.watch("head")} />
-          <Reading p={pH} warn={off("head", headCm, pH)} compact />
+          <Reading p={pH} warn={off("head", headCm, rH)} compact />
         </section>
       </div>
 
       <WhenField value={when} onChange={setWhen} tz={tz} offsets={[30, 60, 120, 240]} />
       <NoteField value={note} onChange={setNote} placeholder="Anything the doctor said?" />
-      {!bornAt && <ContextNote>Percentiles show up once her birth time is added.</ContextNote>}
+      {sex == null ? (
+        <ContextNote>
+          WHO&apos;s growth standards are separate for girls and boys. {w.Name}&apos;s sex isn&apos;t set, so there are no percentiles here.
+        </ContextNote>
+      ) : (
+        !bornAt && <ContextNote>Percentiles show up once {w.his} birth time is added.</ContextNote>
+      )}
       <ContextNote icon="scale">{WEIGHT_GAIN_NOTE}</ContextNote>
     </Sheet>
   );
@@ -276,6 +289,7 @@ function Reading({
   extra?: string;
   compact?: boolean;
 }) {
+  const w = useBabyWords();
   if (warn) {
     // Colored like NumberProblem's "Check this number": a number to look at again, not an alert.
     return (
@@ -290,7 +304,7 @@ function Reading({
     <p className={cx(tone.muted, "mt-1.5 text-xs")}>
       {extra}
       {extra && p ? " · " : ""}
-      {p ? (compact ? `${p.label} percentile` : `About the ${p.label} percentile for her age (WHO)`) : ""}
+      {p ? (compact ? `${p.label} percentile` : `About the ${p.label} percentile for ${w.his} age (WHO)`) : ""}
     </p>
   );
 }

@@ -1,11 +1,12 @@
 import { query } from "@/lib/db";
 import { captureServerException } from "@/lib/posthog-server";
-import { listMembers } from "./auth";
 import { planStatus } from "./care";
-import { careSession, getCarePerson, rowToCareEntry, rowToPlan, viewerFor } from "./care-store";
+import { rowToCareEntry } from "./care-store";
 import { cleanDevice } from "./device";
+import { familyScope, type FamilyScope } from "./family";
 import { feedMinutes, minutesText, openSegment, sideMinutesText } from "./feed";
 import {
+  audienceOf,
   errCode,
   forHer,
   liveSubs,
@@ -13,15 +14,15 @@ import {
   runPushTick,
   sendOnce,
   vapidKeys,
-  voiceOf,
+  voiceFor,
   when,
   whose,
   type Notice,
   type PushSub,
   type Voice,
 } from "./push";
-import { DOSE_LOOKBACK_MS, dueMoments, ensureSafetyNet } from "./push-wake";
-import { getBaby, rowToEntry } from "./store";
+import { DOSE_LOOKBACK_MS, anyPhoneOn, dueMoments, ensureSafetyNet, familyDoses, familyMembers, familyPlan, familySent } from "./push-wake";
+import { rowToEntry } from "./store";
 import { formatTime, parseDayKey, dayKey, zonedTimeToUtc } from "./time";
 import type { CarePlan, DoseEntry, Entry, FeedData, Source } from "./types";
 
@@ -40,6 +41,10 @@ import type { CarePlan, DoseEntry, Entry, FeedData, Source } from "./types";
  * phone that turned it on, the one that started the feed included, gets the
  * running feed as it changes (start, switch, break, back on, done, removed),
  * one silent notice per feed (tag nurse:<id>) that replaces the last.
+ *
+ * Both are one family's: the dose or feed is read in the writer's family,
+ * and only that family's phones hear about it. A dose or feed id from
+ * another family reads as missing and sends nothing.
  */
 
 type Row = Record<string, unknown>;
@@ -54,25 +59,27 @@ async function q(sql: string, params: unknown[] = []): Promise<Row[]> {
   return rows as Row[];
 }
 
-/** After a care write: "Logged" for a new dose or skip, then a tick that re-arms the wake-ups. */
-export async function afterCareWrite(opts: { doseId?: number; device?: string | null } = {}): Promise<void> {
+/** After a care write in `familyId`: "Logged" for a new dose or skip, then that family's tick, which re-arms its wake-ups. */
+export async function afterCareWrite(familyId: number, opts: { doseId?: number; device?: string | null } = {}): Promise<void> {
   if (!vapidKeys()) return;
   const now = new Date();
-  const any = await q(`SELECT 1 FROM maple_push_subs WHERE NOT needs_resubscribe LIMIT 1`);
-  if (!any.length) {
+  const scope = await familyScope(familyId);
+  if (!scope) return;
+  const mine = await q(`SELECT 1 FROM maple_push_subs WHERE family_id = $1 AND NOT needs_resubscribe LIMIT 1`, [scope.familyId]);
+  if (!mine.length) {
     // No phone to tell: only make sure the safety net isn't running for nobody (one small read most days).
-    await ensureSafetyNet(false, now);
+    if (!(await anyPhoneOn())) await ensureSafetyNet(false, now);
     return;
   }
   if (opts.doseId) {
     // Its own try: a hiccup here must not cost the dose its wake-ups.
     try {
-      await notifyDoseLogged(opts.doseId, opts.device ?? null, now);
+      await notifyDoseLogged(scope, opts.doseId, opts.device ?? null, now);
     } catch (err) {
       void captureServerException(new Error(errCode(err)), { route: "maple notify logged" });
     }
   }
-  await runPushTick(now, { via: "write", trusted: true, schedule: true });
+  await runPushTick(now, { via: "write", trusted: true, schedule: true, familyId: scope.familyId });
 }
 
 // ── Logged ────────────────────────────────────────────────────────────
@@ -118,42 +125,35 @@ export type Sends = { sent: number; failed: number };
 const NONE: Sends = { sent: 0, failed: 0 };
 
 /**
- * Send "Logged" for dose `doseId` (taken or skipped), logged on the phone
+ * Send "Logged" for the family's dose `doseId` (taken or skipped), logged on the phone
  * `device` (null: Siri, Claude, or a phone that sent no id, which the dose
  * row may still name). A send the push service refused gets a retry wake
  * (`retry`, default on; the tick's own retries pass false), and the tick
  * sends it again (retryWriteNotices in push.ts).
  */
-export async function notifyDoseLogged(doseId: number, device: string | null, now = new Date(), opts: { retry?: boolean } = {}): Promise<Sends> {
-  const rows = await q(`SELECT * FROM maple_care_entries WHERE id = $1 AND kind = 'dose' AND deleted_at IS NULL`, [doseId]);
+export async function notifyDoseLogged(scope: FamilyScope, doseId: number, device: string | null, now = new Date(), opts: { retry?: boolean } = {}): Promise<Sends> {
+  const rows = await q(`SELECT * FROM maple_care_entries WHERE id = $1 AND family_id = $2 AND kind = 'dose' AND deleted_at IS NULL`, [doseId, scope.familyId]);
   if (!rows.length) return NONE;
   const dose = rowToCareEntry(rows[0]) as DoseEntry;
   const from = device ?? cleanDevice(rows[0].device);
-  const subs = await liveSubs();
+  const subs = await liveSubs(scope);
   if (!subs.length) return NONE;
 
   let plan: CarePlan | null = null;
   let next: AfterDose = {};
   const reminded = new Set<number>();
-  const [baby, members, person] = await Promise.all([getBaby(), listMembers(), getCarePerson()]);
-  const tz = baby.timezone;
-  if (dose.med_id != null) {
-    const p = await q(`SELECT m.*, to_char(m.course_start, 'YYYY-MM-DD') AS course_start_text, to_char(m.course_end, 'YYYY-MM-DD') AS course_end_text FROM maple_care_meds m WHERE m.id = $1`, [dose.med_id]);
-    if (p.length) plan = rowToPlan(p[0]);
-  }
+  const audience = await audienceOf(scope);
+  const tz = scope.tz;
+  if (dose.med_id != null) plan = await familyPlan(scope.familyId, dose.med_id);
   if (plan) {
-    const doseRows = await q(`SELECT * FROM maple_care_entries WHERE med_id = $1 AND kind = 'dose' AND deleted_at IS NULL AND at >= $2::timestamptz ORDER BY at`, [
-      plan.id,
-      new Date(Math.min(now.getTime(), Date.parse(dose.at)) - DOSE_LOOKBACK_MS).toISOString(),
-    ]);
-    const doses = doseRows.map(rowToCareEntry) as DoseEntry[];
+    const doses = await familyDoses(scope.familyId, [plan.id], new Date(Math.min(now.getTime(), Date.parse(dose.at)) - DOSE_LOOKBACK_MS));
     // The reminders this dose answers: sent since the dose before it was logged.
     const before = doses.filter((d) => d.id !== dose.id && Date.parse(d.at) <= Date.parse(dose.at)).at(-1);
     const since = Math.max(now.getTime() - LOGGED_WINDOW_MS, before ? Date.parse(before.created_at) : 0);
     const got = await q(
       `SELECT DISTINCT sub_id FROM maple_push_sent WHERE ref = $1 AND state = 'sent' AND sent_at >= $2::timestamptz AND sub_id IS NOT NULL
-         AND (key LIKE '%|ok:%' OR key LIKE '%|at:%')`,
-      [`med:${plan.id}`, new Date(since).toISOString()]
+         AND (key LIKE '%|ok:%' OR key LIKE '%|at:%') AND ${familySent(3)}`,
+      [`med:${plan.id}`, new Date(since).toISOString(), scope.familyId]
     );
     for (const r of got) reminded.add(Number(r.sub_id));
     const st = planStatus(plan, doses, now, tz);
@@ -178,19 +178,16 @@ export async function notifyDoseLogged(doseId: number, device: string | null, no
   const byMember = new Map<string, PushSub[]>();
   for (const sub of wanted) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
   for (const [email, phones] of byMember) {
-    const member = members.find((m) => m.email === email);
-    if (!member) continue;
-    const s = await careSession(viewerFor(member, baby, members), { members, baby, person });
     // Viewers never hear about her medicines.
-    if (!s.access.read) continue;
-    const v = voiceOf(s, now);
+    const v = voiceFor(audience, email, now);
+    if (!v) continue;
     for (const phone of phones) {
       const o = await sendOnce(phone, `log:${dose.id}`, plan ? `med:${plan.id}` : null, loggedNotice(dose, plan, v, phone.prefs.hide_names === true, next), { ttlS: HOUR / 1000 });
       if (o === "sent") out.sent++;
       else if (o === "failed") out.failed++;
     }
   }
-  if (out.failed && opts.retry !== false) await retrySoon();
+  if (out.failed && opts.retry !== false) await retrySoon(scope.familyId);
   return out;
 }
 
@@ -226,16 +223,16 @@ export function nurseNotice(e: Entry, state: NurseState, tz: string, now: Date):
 }
 
 /**
- * Update feed `entryId`'s notice on every phone that turned the nursing
+ * Update the family's feed `entryId`'s notice on every one of its phones that turned the nursing
  * timer on. Worked out from the feed as it is now, so two quick taps send
  * the newest state (once per version of the row). "Done" and "Feed
  * removed" only go to phones that were showing this feed.
  */
-export async function notifyNursing(entryId: number, now = new Date(), opts: { retry?: boolean } = {}): Promise<Sends> {
+export async function notifyNursing(scope: FamilyScope, entryId: number, now = new Date(), opts: { retry?: boolean } = {}): Promise<Sends> {
   if (!vapidKeys()) return NONE;
-  const subs = (await liveSubs()).filter((s) => s.prefs.nursing === true);
+  const subs = (await liveSubs(scope)).filter((s) => s.prefs.nursing === true);
   if (!subs.length) return NONE;
-  const rows = await q(`SELECT * FROM maple_entries WHERE id = $1`, [entryId]);
+  const rows = await q(`SELECT * FROM maple_entries WHERE id = $1 AND family_id = $2`, [entryId, scope.familyId]);
   if (!rows.length) return NONE;
   const e = rowToEntry(rows[0]);
   const d = e.data as FeedData & { joined_into?: number };
@@ -244,10 +241,10 @@ export async function notifyNursing(entryId: number, now = new Date(), opts: { r
   // Joined into the feed before it: that feed's own notice replaces this one.
   if (deleted && d.joined_into != null) return NONE;
   const state: NurseState = deleted ? "removed" : e.active ? (openSegment(d.segments) ? "running" : "break") : "done";
-  const [baby, members] = await Promise.all([getBaby(), listMembers()]);
-  const n = nurseNotice(e, state, baby.timezone, now);
+  const members = await familyMembers(scope.familyId);
+  const n = nurseNotice(e, state, scope.tz, now);
   const key = `nurse:${e.id}:${Date.parse(e.updated_at)}${deleted ? ":x" : ""}`;
-  const shown = state === "done" || state === "removed" ? await phonesShowing(e.id) : null;
+  const shown = state === "done" || state === "removed" ? await phonesShowing(scope, e.id) : null;
   const out = { sent: 0, failed: 0 };
   for (const phone of subs) {
     if (!members.some((m) => m.email === phone.member)) continue;
@@ -256,11 +253,14 @@ export async function notifyNursing(entryId: number, now = new Date(), opts: { r
     if (o === "sent") out.sent++;
     else if (o === "failed") out.failed++;
   }
-  if (out.failed && opts.retry !== false) await retrySoon();
+  if (out.failed && opts.retry !== false) await retrySoon(scope.familyId);
   return out;
 }
 
-async function phonesShowing(entryId: number): Promise<Set<number>> {
-  const rows = await q(`SELECT DISTINCT sub_id FROM maple_push_sent WHERE ref = $1 AND state = 'sent' AND sub_id IS NOT NULL`, [`nurse:${entryId}`]);
+async function phonesShowing(scope: FamilyScope, entryId: number): Promise<Set<number>> {
+  const rows = await q(`SELECT DISTINCT sub_id FROM maple_push_sent WHERE ref = $1 AND state = 'sent' AND sub_id IS NOT NULL AND ${familySent(2)}`, [
+    `nurse:${entryId}`,
+    scope.familyId,
+  ]);
   return new Set(rows.map((r) => Number(r.sub_id)));
 }

@@ -7,9 +7,12 @@
  *
  * Every read goes through the reader's CareAccess (careAccess() in care.ts):
  * everyone signed in reads and writes everything; a viewer gets NotFound.
+ * Every statement is scoped to the session's family, lookups by id
+ * included: another family's row answers exactly like a missing one.
  */
 import { createHash, randomInt } from "node:crypto";
 import { query } from "@/lib/db";
+import { FAMILY_ONE, parseFamilyId, type FamilyScope } from "./family";
 import { assessMomTemp, type Assessment } from "./guidelines";
 import {
   careAccess,
@@ -32,9 +35,10 @@ import {
   type PlanView,
 } from "./care";
 import { adminActsAs, isVitaminD, memberName } from "./insights";
-import { NotFound, StoreUnavailable, getBaby } from "./store";
+import { NotFound, StoreUnavailable } from "./store";
 import { careChanged } from "./push-hooks";
 import { DEFAULT_TZ, dayBounds } from "./time";
+import { voiceFor, type Voice } from "./voice";
 import { cleanCareData, cleanCareNote, cleanCareSettings, cleanMoodData, cleanPlan, cleanUnits, type PlanFields } from "./validate";
 import { scoreScreen } from "./care";
 import type {
@@ -60,6 +64,16 @@ import type {
 } from "./types";
 
 type Row = Record<string, unknown>;
+
+/** The family a call acts in: a CareSession, a FamilyCtx or a job's FamilyScope all fit. */
+type Fam = Pick<FamilyScope, "familyId">;
+
+/** Fails closed (a 500 with a bare code): a missing family never reads or files anything, least of all as family 1. */
+function familyOf(fam: Fam): number {
+  const id = parseFamilyId(fam?.familyId);
+  if (id === null) throw Object.assign(new Error("family_required"), { code: "family_required" });
+  return id;
+}
 
 async function q(sql: string, params: unknown[] = []): Promise<Row[]> {
   const rows = await query(sql, params);
@@ -162,6 +176,9 @@ function rowToPerson(r: Row): CarePerson {
  */
 const visibleSql = (n: number) => `($${n}::boolean OR (NOT e.private AND NOT COALESCE(m.private, FALSE)))`;
 
+/** An entry's plan, for visibleSql; always the entry's own family's. */
+const PLAN_JOIN = `LEFT JOIN maple_care_meds m ON m.id = e.med_id AND m.family_id = e.family_id`;
+
 // ── random ids (§12.1) ────────────────────────────────────────────────
 
 const newId = () => randomInt(10_000_000, 100_000_000);
@@ -172,6 +189,7 @@ const newId = () => randomInt(10_000_000, 100_000_000);
  * new one, up to 5 times).
  */
 async function insertRandom(
+  fam: Fam,
   table: "maple_care_meds" | "maple_care_entries",
   build: (id: number) => { sql: string; params: unknown[] },
   clientId: string | null
@@ -181,7 +199,7 @@ async function insertRandom(
     const rows = await q(sql, params);
     if (rows.length) return { row: rows[0], deduped: false };
     if (clientId) {
-      const prior = await q(`SELECT * FROM ${table} WHERE client_id = $1`, [clientId]);
+      const prior = await q(`SELECT * FROM ${table} WHERE family_id = $1 AND client_id = $2`, [familyOf(fam), clientId]);
       // A retry, whoever sends it (an offline dose re-sent after a sign-in change too), like Maple's own entries.
       if (prior.length) return { row: prior[0], deduped: true };
     }
@@ -198,15 +216,19 @@ const cleanClientId = (raw: unknown): string | null => (typeof raw === "string" 
 export const DEFAULT_CARE_PERSON = "Brittany";
 
 /**
- * The one care person on this log. Her page always exists, like Maple's log:
- * there's no setup step, so the first read makes it.
+ * The family's one care person, or null when it has none. Family 1's page
+ * always exists, like Maple's log: there's no setup step, so the first read
+ * makes it. Any other family's exists only once it's been turned on
+ * (createCarePerson): her page is opt-in there.
  */
-export async function getCarePerson(): Promise<CarePerson> {
+export async function getCarePerson(fam: Fam): Promise<CarePerson | null> {
+  const familyId = familyOf(fam);
   // A delete can land between the insert and the read (two phones, "delete everything"): try again.
   for (let i = 0; i < 3; i++) {
-    const rows = await q(`SELECT * FROM maple_care_people LIMIT 1`);
+    const rows = await q(`SELECT * FROM maple_care_people WHERE family_id = $1 LIMIT 1`, [familyId]);
     if (rows.length) return rowToPerson(rows[0]);
-    const made = await q(`INSERT INTO maple_care_people (member) VALUES ($1) ON CONFLICT DO NOTHING RETURNING *`, [DEFAULT_CARE_PERSON]);
+    if (familyId !== FAMILY_ONE) return null;
+    const made = await q(`INSERT INTO maple_care_people (family_id, member) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING *`, [FAMILY_ONE, DEFAULT_CARE_PERSON]);
     if (made.length) return rowToPerson(made[0]);
   }
   throw new Error("care_person_unavailable");
@@ -220,12 +242,12 @@ export function defaultShares(member: string, members: Member[]): string[] {
   return members.filter((m) => m.role === "owner" && eligible(m) && m.email !== member).map((m) => m.email);
 }
 
-/** Name whose page it is, before anything else made it (scripts and tests; one per log: a second answers CareConflict "exists"). */
-export async function createCarePerson(member: string, createdBy: string, members: Member[]): Promise<CarePerson> {
+/** Name whose page it is, before anything else made it (one per family: a second answers CareConflict "exists"). */
+export async function createCarePerson(fam: Fam, member: string, createdBy: string, members: Member[]): Promise<CarePerson> {
   const rows = await q(
-    `INSERT INTO maple_care_people (member, shared_with, created_by) VALUES ($1, $2::jsonb, $3)
+    `INSERT INTO maple_care_people (family_id, member, shared_with, created_by) VALUES ($1, $2, $3::jsonb, $4)
      ON CONFLICT DO NOTHING RETURNING *`,
-    [member, JSON.stringify(defaultShares(member, members)), createdBy]
+    [familyOf(fam), member, JSON.stringify(defaultShares(member, members)), createdBy]
   );
   if (!rows.length) throw new CareConflict("There's already a page for mom in Maple's Log.", {}, "exists");
   return rowToPerson(rows[0]);
@@ -236,8 +258,8 @@ export async function createCarePerson(member: string, createdBy: string, member
  * different things both stick). Nulls remove a key; care_team merges one
  * level down; acks add to what's stored.
  */
-export async function patchCarePerson(member: string, patch: { shared_with?: string[]; settings?: Record<string, unknown>; acks?: Record<string, string> | null }): Promise<CarePerson> {
-  const params: unknown[] = [member];
+export async function patchCarePerson(fam: Fam, member: string, patch: { shared_with?: string[]; settings?: Record<string, unknown>; acks?: Record<string, string> | null }): Promise<CarePerson> {
+  const params: unknown[] = [familyOf(fam), member];
   const sets: string[] = [];
   if (patch.shared_with) {
     params.push(JSON.stringify(patch.shared_with));
@@ -258,14 +280,14 @@ export async function patchCarePerson(member: string, patch: { shared_with?: str
     }
     sets.push(`settings = jsonb_strip_nulls(${expr})`);
   }
-  const rows = await q(`UPDATE maple_care_people SET ${[...sets, "updated_at = NOW()"].join(", ")} WHERE member = $1 RETURNING *`, params);
+  const rows = await q(`UPDATE maple_care_people SET ${[...sets, "updated_at = NOW()"].join(", ")} WHERE family_id = $1 AND member = $2 RETURNING *`, params);
   if (!rows.length) throw new NotFound("Not found");
   return rowToPerson(rows[0]);
 }
 
 /** Everything about her, for good (the tables cascade). */
-export async function deleteCarePerson(member: string): Promise<void> {
-  await q(`DELETE FROM maple_care_people WHERE member = $1`, [member]);
+export async function deleteCarePerson(fam: Fam, member: string): Promise<void> {
+  await q(`DELETE FROM maple_care_people WHERE family_id = $1 AND member = $2`, [familyOf(fam), member]);
 }
 
 // ── who's asking ──────────────────────────────────────────────────────
@@ -287,6 +309,7 @@ export function viewerFor(member: Member, baby: Baby, members: Member[], channel
 
 /** Everything a care read or write needs, resolved once per request. */
 export type CareSession = {
+  familyId: number;
   viewer: CareViewer;
   person: CarePerson | null;
   access: CareAccess;
@@ -298,11 +321,18 @@ export type CareSession = {
   now: Date;
 };
 
-/** Resolve the person and the viewer's access (roles read fresh: a demoted member loses access at once). */
-export async function careSession(viewer: CareViewer, ctx: { members: Member[]; baby?: Baby; person?: CarePerson | null }): Promise<CareSession> {
-  const [baby, person] = await Promise.all([ctx.baby ?? getBaby(), ctx.person !== undefined ? ctx.person : getCarePerson()]);
+/**
+ * Resolve the family's person and the viewer's access (roles read fresh: a
+ * demoted member loses access at once). `members` and `baby` are that
+ * family's; a `person` passed in must be too.
+ */
+export async function careSession(viewer: CareViewer, ctx: { familyId: number; members: Member[]; baby: Baby; person?: CarePerson | null }): Promise<CareSession> {
+  const { baby } = ctx;
+  const familyId = familyOf(ctx);
+  const person = ctx.person !== undefined ? ctx.person : await getCarePerson({ familyId });
   const access = careAccess(viewer, person, ctx.members);
   return {
+    familyId,
     viewer,
     person,
     access,
@@ -326,32 +356,41 @@ function needWrite(s: CareSession): CarePerson {
   return p;
 }
 
-const noteCtx = (s: CareSession) => ({ name: s.name, self: s.access.self, settings: s.person?.settings ?? {} });
+/** The family's words for the baby and her mom (voice.ts): the Brookers' always read as they have. */
+export const careVoice = (s: CareSession): Voice => voiceFor(s.familyId, s.baby, s.person ? carePersonName(s.person, s.members) : null);
+
+export const noteCtx = (s: CareSession) => ({ name: s.name, self: s.access.self, settings: s.person?.settings ?? {}, voice: careVoice(s) });
 
 // ── plans ─────────────────────────────────────────────────────────────
 
 /** Her plans that aren't deleted, private ones included (filter by access before showing them). */
-export async function listCarePlans(person: string): Promise<CarePlan[]> {
-  const rows = await q(`SELECT ${PLAN_COLS} FROM maple_care_meds m WHERE m.person = $1 AND m.deleted_at IS NULL ORDER BY m.sort, m.id`, [person]);
+export async function listCarePlans(fam: Fam, person: string): Promise<CarePlan[]> {
+  const rows = await q(
+    `SELECT ${PLAN_COLS} FROM maple_care_meds m WHERE m.family_id = $1 AND m.person = $2 AND m.deleted_at IS NULL ORDER BY m.sort, m.id`,
+    [familyOf(fam), person]
+  );
   return rows.map(rowToPlan);
 }
 
 /** Her plans (everyone signed in sees them all). */
 export async function visiblePlans(s: CareSession): Promise<CarePlan[]> {
   const p = personOf(s);
-  return (await listCarePlans(p.member)).filter((x) => s.access.private || !x.private);
+  return (await listCarePlans(s, p.member)).filter((x) => s.access.private || !x.private);
 }
 
-async function planRow(id: number, opts: { includeDeleted?: boolean } = {}): Promise<{ plan: CarePlan; person: string; deleted: boolean } | null> {
-  const rows = await q(`SELECT ${PLAN_COLS} FROM maple_care_meds m WHERE m.id = $1 ${opts.includeDeleted ? "" : "AND m.deleted_at IS NULL"}`, [id]);
+async function planRow(fam: Fam, id: number, opts: { includeDeleted?: boolean } = {}): Promise<{ plan: CarePlan; person: string; deleted: boolean } | null> {
+  const rows = await q(
+    `SELECT ${PLAN_COLS} FROM maple_care_meds m WHERE m.id = $1 AND m.family_id = $2 ${opts.includeDeleted ? "" : "AND m.deleted_at IS NULL"}`,
+    [id, familyOf(fam)]
+  );
   if (!rows.length) return null;
   return { plan: rowToPlan(rows[0]), person: String(rows[0].person), deleted: rows[0].deleted_at != null };
 }
 
-/** A plan this session can read, else NotFound (private, deleted and missing look the same). */
+/** A plan this session can read, else NotFound (private, deleted, another family's and missing look the same). */
 export async function readablePlan(s: CareSession, id: number, opts: { includeDeleted?: boolean } = {}): Promise<CarePlan> {
   const p = personOf(s);
-  const r = await planRow(id, opts);
+  const r = await planRow(s, id, opts);
   if (!r || r.person !== p.member || (r.plan.private && !s.access.private)) throw new NotFound("Not found");
   return r.plan;
 }
@@ -406,7 +445,7 @@ export async function saveCarePlan(
     if (opts.expectUpdatedAt && Date.parse(cur.updated_at) > Date.parse(opts.expectUpdatedAt)) {
       throw new CareConflict(`${memberName(cur.updated_by ?? cur.created_by, s.members)} changed this plan a moment ago. Here's the latest.`, { plan: cur });
     }
-    const params: unknown[] = [input.id, p.member, by];
+    const params: unknown[] = [input.id, p.member, by, s.familyId];
     const sets = PLAN_WRITE_COLS.map((k) => {
       params.push(planParam(fields, k));
       return `${k} = $${params.length}${planCast(k)}`;
@@ -423,7 +462,7 @@ export async function saveCarePlan(
     }
     const rows = await q(
       `UPDATE maple_care_meds m SET ${sets.join(", ")}, updated_by = $3, updated_at = NOW()${reviewed}
-       WHERE m.id = $1 AND m.person = $2 AND m.deleted_at IS NULL${expect} RETURNING ${PLAN_COLS}`,
+       WHERE m.id = $1 AND m.family_id = $4 AND m.person = $2 AND m.deleted_at IS NULL${expect} RETURNING ${PLAN_COLS}`,
       params
     );
     if (!rows.length) {
@@ -432,7 +471,7 @@ export async function saveCarePlan(
     }
     const plan = rowToPlan(rows[0]);
     // Its times or gap may have moved: the wake-ups follow (push-hooks.ts, after the response).
-    careChanged();
+    careChanged({ familyId: s.familyId });
     return { plan, deduped: false, notes: await notesOnSave(s, plan), madePrivate: false };
   }
 
@@ -440,16 +479,17 @@ export async function saveCarePlan(
   const madePrivate = false;
   const clientId = cleanClientId(input.client_id);
   const { row, deduped } = await insertRandom(
+    s,
     "maple_care_meds",
     (id) => {
-      const params: unknown[] = [id, p.member, by, opts.source, clientId];
+      const params: unknown[] = [id, p.member, by, opts.source, clientId, s.familyId];
       const cols = PLAN_WRITE_COLS.map((k) => {
         params.push(planParam(fields, k));
         return { k, v: `$${params.length}${planCast(k)}` };
       });
       return {
-        sql: `INSERT INTO maple_care_meds AS m (id, person, created_by, updated_by, source, client_id, ${cols.map((c) => c.k).join(", ")})
-              VALUES ($1, $2, $3, $3, $4, $5, ${cols.map((c) => c.v).join(", ")})
+        sql: `INSERT INTO maple_care_meds AS m (id, person, created_by, updated_by, source, client_id, family_id, ${cols.map((c) => c.k).join(", ")})
+              VALUES ($1, $2, $3, $3, $4, $5, $6, ${cols.map((c) => c.v).join(", ")})
               ON CONFLICT DO NOTHING RETURNING ${PLAN_COLS}`,
         params,
       };
@@ -457,7 +497,7 @@ export async function saveCarePlan(
     clientId
   );
   const plan = deduped ? (await readablePlan(s, Number(row.id))) : rowToPlan(row);
-  if (!deduped) careChanged();
+  if (!deduped) careChanged({ familyId: s.familyId });
   return { plan, deduped, notes: deduped ? [] : await notesOnSave(s, plan), madePrivate: madePrivate && !deduped };
 }
 
@@ -467,7 +507,7 @@ function stripUndefined(o: Record<string, unknown>): Record<string, unknown> {
 
 /** The plan notes as of its save (the opioid note shows "once on save", acked or not). */
 async function notesOnSave(s: CareSession, plan: CarePlan): Promise<CareNote[]> {
-  const doses = await planDoses(plan.id, new Date(s.now.getTime() - 2 * 86400_000));
+  const doses = await planDoses(s, plan.id, new Date(s.now.getTime() - 2 * 86400_000));
   const status = planStatus(plan, doses, s.now, s.tz);
   return planNotes(plan, status, { ...noteCtx(s), settings: { ...(s.person?.settings ?? {}), acks: {} } });
 }
@@ -478,11 +518,11 @@ export async function stopCarePlan(s: CareSession, id: number, stop: boolean): P
   await readablePlan(s, id);
   const rows = await q(
     `UPDATE maple_care_meds m SET stopped_at = ${stop ? "COALESCE(stopped_at, NOW())" : "NULL"}, updated_by = $3, updated_at = NOW()
-     WHERE m.id = $1 AND m.person = $2 AND m.deleted_at IS NULL RETURNING ${PLAN_COLS}`,
-    [id, p.member, s.viewer.id]
+     WHERE m.id = $1 AND m.family_id = $4 AND m.person = $2 AND m.deleted_at IS NULL RETURNING ${PLAN_COLS}`,
+    [id, p.member, s.viewer.id, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
-  careChanged();
+  careChanged({ familyId: s.familyId });
   return rowToPlan(rows[0]);
 }
 
@@ -492,8 +532,8 @@ export async function reviewCarePlan(s: CareSession, id: number): Promise<CarePl
   await readablePlan(s, id);
   const rows = await q(
     `UPDATE maple_care_meds m SET reviewed_at = NOW(), reviewed_by = $3, updated_by = $3, updated_at = NOW()
-     WHERE m.id = $1 AND m.person = $2 AND m.deleted_at IS NULL RETURNING ${PLAN_COLS}`,
-    [id, p.member, s.viewer.id]
+     WHERE m.id = $1 AND m.family_id = $4 AND m.person = $2 AND m.deleted_at IS NULL RETURNING ${PLAN_COLS}`,
+    [id, p.member, s.viewer.id, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
   return rowToPlan(rows[0]);
@@ -505,22 +545,22 @@ export async function deleteCarePlan(s: CareSession, id: number, restore = false
   await readablePlan(s, id, { includeDeleted: restore });
   const rows = await q(
     `UPDATE maple_care_meds m SET deleted_at = ${restore ? "NULL" : "NOW()"}, updated_by = $3, updated_at = NOW()
-     WHERE m.id = $1 AND m.person = $2 AND m.deleted_at IS ${restore ? "NOT NULL" : "NULL"} RETURNING ${PLAN_COLS}`,
-    [id, p.member, s.viewer.id]
+     WHERE m.id = $1 AND m.family_id = $4 AND m.person = $2 AND m.deleted_at IS ${restore ? "NOT NULL" : "NULL"} RETURNING ${PLAN_COLS}`,
+    [id, p.member, s.viewer.id, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
-  careChanged();
+  careChanged({ familyId: s.familyId });
   return rowToPlan(rows[0]);
 }
 
 // ── entries ───────────────────────────────────────────────────────────
 
 /** A plan's doses (taken and skipped, not deleted), since `since` if given. */
-export async function planDoses(planId: number, since?: Date): Promise<DoseEntry[]> {
+export async function planDoses(fam: Fam, planId: number, since?: Date): Promise<DoseEntry[]> {
   const rows = await q(
-    `SELECT * FROM maple_care_entries WHERE med_id = $1 AND kind = 'dose' AND deleted_at IS NULL
+    `SELECT * FROM maple_care_entries WHERE family_id = $3 AND med_id = $1 AND kind = 'dose' AND deleted_at IS NULL
        AND ($2::timestamptz IS NULL OR at >= $2::timestamptz) ORDER BY at`,
-    [planId, since ? since.toISOString() : null]
+    [planId, since ? since.toISOString() : null, familyOf(fam)]
   );
   return rows.map(rowToCareEntry) as DoseEntry[];
 }
@@ -529,10 +569,10 @@ export async function planDoses(planId: number, since?: Date): Promise<DoseEntry
 async function oneOffsNear(s: CareSession, at: Date): Promise<DoseEntry[]> {
   const p = personOf(s);
   const rows = await q(
-    `SELECT e.* FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
-     WHERE e.person = $1 AND e.kind = 'dose' AND e.med_id IS NULL AND e.deleted_at IS NULL
+    `SELECT e.* FROM maple_care_entries e ${PLAN_JOIN}
+     WHERE e.family_id = $4 AND e.person = $1 AND e.kind = 'dose' AND e.med_id IS NULL AND e.deleted_at IS NULL
        AND e.at > $2::timestamptz - INTERVAL '30 minutes' AND e.at < $2::timestamptz + INTERVAL '30 minutes' AND ${visibleSql(3)}`,
-    [p.member, at.toISOString(), s.access.private]
+    [p.member, at.toISOString(), s.access.private, s.familyId]
   );
   return rows.map(rowToCareEntry) as DoseEntry[];
 }
@@ -541,9 +581,9 @@ async function oneOffsNear(s: CareSession, at: Date): Promise<DoseEntry[]> {
 export async function readableEntry(s: CareSession, id: number, opts: { includeDeleted?: boolean } = {}): Promise<CareEntry> {
   const p = personOf(s);
   const rows = await q(
-    `SELECT e.* FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
-     WHERE e.id = $1 AND e.person = $2 ${opts.includeDeleted ? "" : "AND e.deleted_at IS NULL"} AND ${visibleSql(3)}`,
-    [id, p.member, s.access.private]
+    `SELECT e.* FROM maple_care_entries e ${PLAN_JOIN}
+     WHERE e.id = $1 AND e.family_id = $4 AND e.person = $2 ${opts.includeDeleted ? "" : "AND e.deleted_at IS NULL"} AND ${visibleSql(3)}`,
+    [id, p.member, s.access.private, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
   return rowToCareEntry(rows[0]);
@@ -557,9 +597,9 @@ export async function careDiscardedBy(s: CareSession, id: number): Promise<strin
   try {
     const p = personOf(s);
     const rows = await q(
-      `SELECT e.updated_by FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
-       WHERE e.id = $1 AND e.person = $2 AND e.deleted_at IS NOT NULL AND ${visibleSql(3)}`,
-      [id, p.member, s.access.private]
+      `SELECT e.updated_by FROM maple_care_entries e ${PLAN_JOIN}
+       WHERE e.id = $1 AND e.family_id = $4 AND e.person = $2 AND e.deleted_at IS NOT NULL AND ${visibleSql(3)}`,
+      [id, p.member, s.access.private, s.familyId]
     );
     return rows.length ? strOrNull(rows[0].updated_by) : undefined;
   } catch {
@@ -571,12 +611,20 @@ export async function careDiscardedBy(s: CareSession, id: number): Promise<strin
 export async function listCareEntries(s: CareSession, opts: { from?: Date; to?: Date; kinds?: CareKind[]; limit?: number }): Promise<CareEntry[]> {
   const p = personOf(s);
   const rows = await q(
-    `SELECT e.* FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
-     WHERE e.person = $1 AND e.deleted_at IS NULL AND ${visibleSql(2)}
+    `SELECT e.* FROM maple_care_entries e ${PLAN_JOIN}
+     WHERE e.family_id = $7 AND e.person = $1 AND e.deleted_at IS NULL AND ${visibleSql(2)}
        AND ($3::timestamptz IS NULL OR e.at >= $3::timestamptz) AND ($4::timestamptz IS NULL OR e.at < $4::timestamptz)
        AND ($5::text[] IS NULL OR e.kind = ANY($5::text[]))
      ORDER BY e.at DESC, e.id DESC LIMIT $6`,
-    [p.member, s.access.private, opts.from?.toISOString() ?? null, opts.to?.toISOString() ?? null, opts.kinds?.length ? opts.kinds : null, Math.min(Math.max(opts.limit ?? 2000, 1), 5000)]
+    [
+      p.member,
+      s.access.private,
+      opts.from?.toISOString() ?? null,
+      opts.to?.toISOString() ?? null,
+      opts.kinds?.length ? opts.kinds : null,
+      Math.min(Math.max(opts.limit ?? 2000, 1), 5000),
+      s.familyId,
+    ]
   );
   return rows.map(rowToCareEntry);
 }
@@ -633,11 +681,11 @@ export async function logCareDose(s: CareSession, input: DoseInput): Promise<Dos
   if (input.planId != null) {
     const plan = await readablePlan(s, input.planId);
     const units = input.skipped ? null : cleanUnits(input.units, plan.limit_unit);
-    const doses = await planDoses(plan.id, new Date(at.getTime() - 3 * 86400_000));
+    const doses = await planDoses(s, plan.id, new Date(at.getTime() - 3 * 86400_000));
     const before = planStatus(plan, doses, s.now, s.tz);
     const notes = doseNotes(plan, doses, { at: at.toISOString(), units, skipped: input.skipped }, ctx);
     if (!input.allowDuplicate && !input.skipped) {
-      const prior = clientId ? await priorByClient(clientId) : null;
+      const prior = clientId ? await priorByClient(s, clientId) : null;
       if (prior) return { created: false, deduped: true, entry: prior, notes: [], status: before };
       const dup = recentDose(plan, doses, at);
       if (dup) return { created: false, entry: null, notes, possible_duplicate: dup, reason: "recent", status: before };
@@ -649,13 +697,13 @@ export async function logCareDose(s: CareSession, input: DoseInput): Promise<Dos
       units,
       skipped: input.skipped === true,
     }, { unit: plan.limit_unit });
-    const saved = await insertEntry(p.member, { kind: "dose", medId: plan.id, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId, device: input.device });
+    const saved = await insertEntry(s, p.member, { kind: "dose", medId: plan.id, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId, device: input.device });
     if (!saved.deduped && !input.allowDuplicate && !input.skipped) {
-      const lost = await lostRace(plan, saved.entry as DoseEntry, at);
+      const lost = await lostRace(s, plan, saved.entry as DoseEntry, at);
       if (lost) return { created: false, entry: null, notes, possible_duplicate: lost, reason: "recent", status: before };
     }
     // "Logged" to the phones it answers, and the wake-ups re-armed (after the response).
-    if (!saved.deduped) careChanged({ doseId: saved.entry.id, device: input.device ?? null });
+    if (!saved.deduped) careChanged({ familyId: s.familyId, doseId: saved.entry.id, device: input.device ?? null });
     const after = planStatus(plan, saved.deduped ? doses : [...doses, saved.entry as DoseEntry], s.now, s.tz);
     return { created: !saved.deduped, deduped: saved.deduped || undefined, entry: saved.entry, notes: saved.deduped ? [] : notes, status: after };
   }
@@ -665,14 +713,14 @@ export async function logCareDose(s: CareSession, input: DoseInput): Promise<Dos
   const plans = await visiblePlans(s);
   const notes = oneOffNotes(data.name, plans.filter((x) => planActive(x, s.now, s.tz)), noteCtx(s));
   if (!input.allowDuplicate && !input.skipped) {
-    const prior = clientId ? await priorByClient(clientId) : null;
+    const prior = clientId ? await priorByClient(s, clientId) : null;
     if (prior) return { created: false, deduped: true, entry: prior, notes: [] };
     const key = normName(data.name);
     const dup = (await oneOffsNear(s, at)).find((d) => !d.data.skipped && normName(d.data.name) === key && Math.abs(Date.parse(d.at) - at.getTime()) < RECENT_MS);
     if (dup) return { created: false, entry: null, notes, possible_duplicate: dup, reason: "recent" };
   }
-  const saved = await insertEntry(p.member, { kind: "dose", medId: null, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId, device: input.device });
-  if (!saved.deduped) careChanged({ doseId: saved.entry.id, device: input.device ?? null });
+  const saved = await insertEntry(s, p.member, { kind: "dose", medId: null, at, data, note: cleanCareNote(input.note), priv: false, by: s.viewer.id, source: input.source, clientId, device: input.device });
+  if (!saved.deduped) careChanged({ familyId: s.familyId, doseId: saved.entry.id, device: input.device ?? null });
   return { created: !saved.deduped, deduped: saved.deduped || undefined, entry: saved.entry, notes: saved.deduped ? [] : notes };
 }
 
@@ -684,9 +732,9 @@ const RACE_MS = 15_000;
  * later of two such doses (by created_at, then id) takes itself back out and
  * answers like a duplicate, so exactly one stays and the other phone asks.
  */
-async function lostRace(plan: CarePlan, mine: DoseEntry, at: Date): Promise<DoseEntry | null> {
+async function lostRace(fam: Fam, plan: CarePlan, mine: DoseEntry, at: Date): Promise<DoseEntry | null> {
   const t = Date.parse(mine.created_at);
-  const doses = await planDoses(plan.id, new Date(at.getTime() - 3 * 86400_000));
+  const doses = await planDoses(fam, plan.id, new Date(at.getTime() - 3 * 86400_000));
   const earlier = doses.filter((d) => {
     if (d.id === mine.id) return false;
     const c = Date.parse(d.created_at);
@@ -695,13 +743,13 @@ async function lostRace(plan: CarePlan, mine: DoseEntry, at: Date): Promise<Dose
   const dup = recentDose(plan, earlier, at);
   if (!dup) return null;
   // Never shown to anyone as a dose of its own, so it goes for good rather than to Recently removed.
-  await q(`DELETE FROM maple_care_entries WHERE id = $1 AND created_by IS NOT DISTINCT FROM $2`, [mine.id, mine.created_by]);
+  await q(`DELETE FROM maple_care_entries WHERE id = $1 AND family_id = $3 AND created_by IS NOT DISTINCT FROM $2`, [mine.id, mine.created_by, familyOf(fam)]);
   return dup;
 }
 
 /** An earlier write with this client_id (a retry). */
-async function priorByClient(clientId: string): Promise<CareEntry | null> {
-  const rows = await q(`SELECT * FROM maple_care_entries WHERE client_id = $1`, [clientId]);
+async function priorByClient(fam: Fam, clientId: string): Promise<CareEntry | null> {
+  const rows = await q(`SELECT * FROM maple_care_entries WHERE family_id = $1 AND client_id = $2`, [familyOf(fam), clientId]);
   return rows.length ? rowToCareEntry(rows[0]) : null;
 }
 
@@ -710,7 +758,7 @@ export async function logCareTemp(s: CareSession, input: { tempC: number; at: st
   const p = needWrite(s);
   const at = cleanAt(input.at, s.now);
   const data = cleanCareData("temp", { temp_c: input.tempC });
-  const saved = await insertEntry(p.member, { kind: "temp", medId: null, at, data, note: null, priv: false, by: s.viewer.id, source: input.source, clientId: cleanClientId(input.clientId) });
+  const saved = await insertEntry(s, p.member, { kind: "temp", medId: null, at, data, note: null, priv: false, by: s.viewer.id, source: input.source, clientId: cleanClientId(input.clientId) });
   const a = assessMomTemp(data.temp_c);
   return { created: !saved.deduped, deduped: saved.deduped || undefined, entry: saved.entry, notes: a ? [forMom(a, s.name, s.access.self)] : [] };
 }
@@ -720,7 +768,7 @@ export async function addCareQuestion(s: CareSession, input: { text: string; pri
   const p = needWrite(s);
   const note = cleanCareNote(input.text);
   if (!note) throw new Error("Add the question.");
-  return insertEntry(p.member, { kind: "question", medId: null, at: s.now, data: {}, note, priv: false, by: s.viewer.id, source: input.source, clientId: cleanClientId(input.clientId) });
+  return insertEntry(s, p.member, { kind: "question", medId: null, at: s.now, data: {}, note, priv: false, by: s.viewer.id, source: input.source, clientId: cleanClientId(input.clientId) });
 }
 
 /** POST /care/entries in one call: the kind decides which write runs. */
@@ -772,16 +820,17 @@ type NewCareEntry = {
   device?: string | null;
 };
 
-async function insertEntry(person: string, e: NewCareEntry): Promise<{ entry: CareEntry; deduped: boolean }> {
+async function insertEntry(fam: Fam, person: string, e: NewCareEntry): Promise<{ entry: CareEntry; deduped: boolean }> {
   // The device column only when there's an id (a database a step behind on migrations still saves).
   const device = e.device ?? null;
   const { row, deduped } = await insertRandom(
+    fam,
     "maple_care_entries",
     (id) => ({
-      sql: `INSERT INTO maple_care_entries (id, person, kind, med_id, at, data, note, private, created_by, source, client_id${device ? ", device" : ""})
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11${device ? ", $12" : ""})
+      sql: `INSERT INTO maple_care_entries (id, family_id, person, kind, med_id, at, data, note, private, created_by, source, client_id${device ? ", device" : ""})
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12${device ? ", $13" : ""})
             ON CONFLICT DO NOTHING RETURNING *`,
-      params: [id, person, e.kind, e.medId, e.at.toISOString(), JSON.stringify(e.data), e.note, e.priv, e.by, e.source, e.clientId, ...(device ? [device] : [])],
+      params: [id, familyOf(fam), person, e.kind, e.medId, e.at.toISOString(), JSON.stringify(e.data), e.note, e.priv, e.by, e.source, e.clientId, ...(device ? [device] : [])],
     }),
     e.clientId
   );
@@ -819,16 +868,16 @@ export async function updateCareEntry(s: CareSession, id: number, patch: CareEnt
   const priv = false;
   const rows = await q(
     `UPDATE maple_care_entries SET at = $3, data = $4::jsonb, note = $5, private = $6, updated_by = $7, updated_at = NOW()
-     WHERE id = $1 AND person = $2 AND deleted_at IS NULL RETURNING *`,
-    [id, p.member, at.toISOString(), JSON.stringify(data), note, priv, s.viewer.id]
+     WHERE id = $1 AND family_id = $8 AND person = $2 AND deleted_at IS NULL RETURNING *`,
+    [id, p.member, at.toISOString(), JSON.stringify(data), note, priv, s.viewer.id, s.familyId]
   );
   // Deleted on the other phone between the read and the write.
   if (!rows.length) throw new NotFound("Not found");
   const entry = rowToCareEntry(rows[0]);
   // A dose moved or turned into a skip: what's due moves with it.
-  if (entry.kind === "dose") careChanged();
+  if (entry.kind === "dose") careChanged({ familyId: s.familyId });
   if (entry.kind === "dose" && plan) {
-    const doses = await planDoses(plan.id, new Date(Math.min(at.getTime(), s.now.getTime()) - 3 * 86400_000));
+    const doses = await planDoses(s, plan.id, new Date(Math.min(at.getTime(), s.now.getTime()) - 3 * 86400_000));
     const others = doses.filter((d) => d.id !== entry.id);
     const notes = doseNotes(plan, others, { at: entry.at, units: entry.data.units, skipped: entry.data.skipped, id: entry.id }, { ...noteCtx(s), now: s.now, tz: s.tz });
     return { entry, notes, status: planStatus(plan, doses, s.now, s.tz) };
@@ -845,12 +894,13 @@ export async function deleteCareEntry(s: CareSession, id: number): Promise<CareE
   const p = needWrite(s);
   await readableEntry(s, id);
   const rows = await q(
-    `UPDATE maple_care_entries SET deleted_at = NOW(), updated_by = $3, updated_at = NOW() WHERE id = $1 AND person = $2 AND deleted_at IS NULL RETURNING *`,
-    [id, p.member, s.viewer.id]
+    `UPDATE maple_care_entries SET deleted_at = NOW(), updated_by = $3, updated_at = NOW()
+     WHERE id = $1 AND family_id = $4 AND person = $2 AND deleted_at IS NULL RETURNING *`,
+    [id, p.member, s.viewer.id, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
   const entry = rowToCareEntry(rows[0]);
-  if (entry.kind === "dose") careChanged();
+  if (entry.kind === "dose") careChanged({ familyId: s.familyId });
   return entry;
 }
 
@@ -858,12 +908,13 @@ export async function restoreCareEntry(s: CareSession, id: number): Promise<Care
   const p = needWrite(s);
   await readableEntry(s, id, { includeDeleted: true });
   const rows = await q(
-    `UPDATE maple_care_entries SET deleted_at = NULL, updated_by = $3, updated_at = NOW() WHERE id = $1 AND person = $2 AND deleted_at IS NOT NULL RETURNING *`,
-    [id, p.member, s.viewer.id]
+    `UPDATE maple_care_entries SET deleted_at = NULL, updated_by = $3, updated_at = NOW()
+     WHERE id = $1 AND family_id = $4 AND person = $2 AND deleted_at IS NOT NULL RETURNING *`,
+    [id, p.member, s.viewer.id, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
   const entry = rowToCareEntry(rows[0]);
-  if (entry.kind === "dose") careChanged();
+  if (entry.kind === "dose") careChanged({ familyId: s.familyId });
   return entry;
 }
 
@@ -878,9 +929,9 @@ function needMood(s: CareSession): CarePerson {
 export async function listMood(s: CareSession, opts: { from?: Date; to?: Date } = {}): Promise<MoodEntry[]> {
   const p = needMood(s);
   const rows = await q(
-    `SELECT * FROM maple_care_mood WHERE person = $1 AND ($2::timestamptz IS NULL OR at >= $2::timestamptz) AND ($3::timestamptz IS NULL OR at < $3::timestamptz)
+    `SELECT * FROM maple_care_mood WHERE family_id = $4 AND person = $1 AND ($2::timestamptz IS NULL OR at >= $2::timestamptz) AND ($3::timestamptz IS NULL OR at < $3::timestamptz)
      ORDER BY at DESC, id DESC LIMIT 2000`,
-    [p.member, opts.from?.toISOString() ?? null, opts.to?.toISOString() ?? null]
+    [p.member, opts.from?.toISOString() ?? null, opts.to?.toISOString() ?? null, s.familyId]
   );
   return rows.map(rowToMood);
 }
@@ -892,27 +943,27 @@ export async function createMood(s: CareSession, body: { kind?: unknown; at?: un
   const data = cleanMoodData(body.kind, body.data, scoreScreen);
   const clientId = cleanClientId(body.client_id);
   const rows = await q(
-    `INSERT INTO maple_care_mood (person, kind, at, data, note, client_id) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-     ON CONFLICT (client_id) WHERE client_id IS NOT NULL DO NOTHING RETURNING *`,
-    [p.member, body.kind, at.toISOString(), JSON.stringify(data), cleanCareNote(body.note), clientId]
+    `INSERT INTO maple_care_mood (family_id, person, kind, at, data, note, client_id) VALUES ($7, $1, $2, $3, $4::jsonb, $5, $6)
+     ON CONFLICT (family_id, client_id) WHERE client_id IS NOT NULL DO NOTHING RETURNING *`,
+    [p.member, body.kind, at.toISOString(), JSON.stringify(data), cleanCareNote(body.note), clientId, s.familyId]
   );
   if (rows.length) return { entry: rowToMood(rows[0]), deduped: false };
-  const prior = await q(`SELECT * FROM maple_care_mood WHERE client_id = $1 AND person = $2`, [clientId, p.member]);
+  const prior = await q(`SELECT * FROM maple_care_mood WHERE family_id = $3 AND client_id = $1 AND person = $2`, [clientId, p.member, s.familyId]);
   if (!prior.length) throw new Error("Couldn't save that, please try again");
   return { entry: rowToMood(prior[0]), deduped: true };
 }
 
 export async function updateMood(s: CareSession, id: number, patch: { data?: Record<string, unknown>; note?: string | null }): Promise<MoodEntry> {
   const p = needMood(s);
-  const cur = await q(`SELECT * FROM maple_care_mood WHERE id = $1 AND person = $2`, [id, p.member]);
+  const cur = await q(`SELECT * FROM maple_care_mood WHERE id = $1 AND family_id = $3 AND person = $2`, [id, p.member, s.familyId]);
   if (!cur.length) throw new NotFound("Not found");
   const prev = rowToMood(cur[0]);
   const data = patch.data ? cleanMoodData(prev.kind, { ...(prev.data as Record<string, unknown>), ...patch.data }, scoreScreen) : prev.data;
   if (prev.kind === "screen" && (prev.data as MoodDataByKind["screen"]).item9_ever) (data as MoodDataByKind["screen"]).item9_ever = true;
   if (prev.kind === "checkin" && (prev.data as MoodDataByKind["checkin"]).harm_ever) (data as MoodDataByKind["checkin"]).harm_ever = true;
   const rows = await q(
-    `UPDATE maple_care_mood SET data = $3::jsonb, note = $4, updated_at = NOW() WHERE id = $1 AND person = $2 RETURNING *`,
-    [id, p.member, JSON.stringify(data), patch.note !== undefined ? cleanCareNote(patch.note) : prev.note]
+    `UPDATE maple_care_mood SET data = $3::jsonb, note = $4, updated_at = NOW() WHERE id = $1 AND family_id = $5 AND person = $2 RETURNING *`,
+    [id, p.member, JSON.stringify(data), patch.note !== undefined ? cleanCareNote(patch.note) : prev.note, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
   return rowToMood(rows[0]);
@@ -921,7 +972,7 @@ export async function updateMood(s: CareSession, id: number, patch: { data?: Rec
 /** Hard delete: the row is gone, not hidden. */
 export async function deleteMood(s: CareSession, id: number): Promise<void> {
   const p = needMood(s);
-  const rows = await q(`DELETE FROM maple_care_mood WHERE id = $1 AND person = $2 RETURNING id`, [id, p.member]);
+  const rows = await q(`DELETE FROM maple_care_mood WHERE id = $1 AND family_id = $3 AND person = $2 RETURNING id`, [id, p.member, s.familyId]);
   if (!rows.length) throw new NotFound("Not found");
 }
 
@@ -941,7 +992,7 @@ export async function patchCareSettings(s: CareSession, body: { shared_with?: un
     out.settings = settings;
     out.acks = acks;
   }
-  return patchCarePerson(p.member, out);
+  return patchCarePerson(s, p.member, out);
 }
 
 // ── the reader's state and rev (§9.2) ─────────────────────────────────
@@ -958,8 +1009,8 @@ function ackPlanIds(key: string): number[] {
 }
 
 /** Her Only me plans (deleted ones too), whose note acks no one else may see. */
-async function privatePlanIds(person: string): Promise<Set<number>> {
-  const rows = await q(`SELECT id FROM maple_care_meds WHERE person = $1 AND private`, [person]);
+async function privatePlanIds(fam: Fam, person: string): Promise<Set<number>> {
+  const rows = await q(`SELECT id FROM maple_care_meds WHERE family_id = $1 AND person = $2 AND private`, [familyOf(fam), person]);
   return new Set(rows.map((r) => Number(r.id)));
 }
 
@@ -1000,31 +1051,32 @@ export async function careStateFor(s: CareSession): Promise<CareState | null> {
   const now = s.now.getTime();
   const [plans, hidden, entryRows, mood] = await Promise.all([
     visiblePlans(s),
-    s.access.private ? new Set<number>() : privatePlanIds(p.member),
+    s.access.private ? new Set<number>() : privatePlanIds(s, p.member),
     q(
-      `SELECT e.* FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
-       WHERE e.person = $1 AND e.deleted_at IS NULL AND ${visibleSql(2)} AND (
+      `SELECT e.* FROM maple_care_entries e ${PLAN_JOIN}
+       WHERE e.family_id = $5 AND e.person = $1 AND e.deleted_at IS NULL AND ${visibleSql(2)} AND (
          e.at >= $3::timestamptz
          OR (e.kind IN ('dose', 'question') AND e.at >= $4::timestamptz)
          OR (e.kind = 'question' AND NOT COALESCE((e.data->>'done')::boolean, FALSE))
          OR e.id IN (SELECT DISTINCT ON (med_id) id FROM maple_care_entries
-                     WHERE person = $1 AND kind = 'dose' AND med_id IS NOT NULL AND deleted_at IS NULL
+                     WHERE family_id = $5 AND person = $1 AND kind = 'dose' AND med_id IS NOT NULL AND deleted_at IS NULL
                        AND NOT COALESCE((data->>'skipped')::boolean, FALSE)
                      ORDER BY med_id, at DESC)
-         OR e.id = (SELECT id FROM maple_care_entries x WHERE x.person = $1 AND x.kind = 'temp' AND x.deleted_at IS NULL ORDER BY x.at DESC LIMIT 1)
+         OR e.id = (SELECT id FROM maple_care_entries x
+                    WHERE x.family_id = $5 AND x.person = $1 AND x.kind = 'temp' AND x.deleted_at IS NULL ORDER BY x.at DESC LIMIT 1)
        )
        ORDER BY e.at DESC, e.id DESC LIMIT 2000`,
-      [p.member, s.access.private, new Date(now - WINDOW_HOURS * 3600_000).toISOString(), new Date(now - DOSE_DAYS * 86400_000).toISOString()]
+      [p.member, s.access.private, new Date(now - WINDOW_HOURS * 3600_000).toISOString(), new Date(now - DOSE_DAYS * 86400_000).toISOString(), s.familyId]
     ),
     s.access.mood
       ? q(
           // Every screen of the 14 days, not only the newest: an earlier one today with
           // item 9 keeps the crisis strip up even after a later one without it.
-          `SELECT * FROM maple_care_mood WHERE person = $1 AND (
+          `SELECT * FROM maple_care_mood WHERE family_id = $3 AND person = $1 AND (
              at >= $2::timestamptz
-             OR id = (SELECT id FROM maple_care_mood WHERE person = $1 AND kind = 'screen' ORDER BY at DESC, id DESC LIMIT 1)
+             OR id = (SELECT id FROM maple_care_mood WHERE family_id = $3 AND person = $1 AND kind = 'screen' ORDER BY at DESC, id DESC LIMIT 1)
            ) ORDER BY at DESC, id DESC`,
-          [p.member, new Date(now - 14 * 86400_000).toISOString()]
+          [p.member, new Date(now - 14 * 86400_000).toISOString(), s.familyId]
         )
       : Promise.resolve(null),
   ]);
@@ -1051,16 +1103,17 @@ export async function careRev(s: CareSession): Promise<string | null> {
   // keys (a suggestion's "Not now", the check-in switch, the banner) never
   // move anyone else's token.
   const p = s.person;
-  const hidden = s.access.private ? new Set<number>() : await privatePlanIds(p.member);
+  const hidden = s.access.private ? new Set<number>() : await privatePlanIds(s, p.member);
   const seen = JSON.stringify([p.member, p.created_by, settingsFor(p.settings, s.access, hidden), s.access.manage ? p.shared_with : null, s.access]);
   const person = createHash("sha1").update(seen).digest("base64url").slice(0, 16);
   const rows = await q(
     `SELECT
-       (SELECT COALESCE(MAX(m.updated_at)::text, '') || '/' || COUNT(*) FROM maple_care_meds m WHERE m.person = $1 AND ($2::boolean OR NOT m.private)) AS m,
-       (SELECT COALESCE(MAX(e.updated_at)::text, '') || '/' || COUNT(*) FROM maple_care_entries e LEFT JOIN maple_care_meds m ON m.id = e.med_id
-          WHERE e.person = $1 AND ${visibleSql(2)}) AS e,
-       ${s.access.mood ? `(SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_care_mood WHERE person = $1)` : `''`} AS o`,
-    [s.person.member, s.access.private]
+       (SELECT COALESCE(MAX(m.updated_at)::text, '') || '/' || COUNT(*) FROM maple_care_meds m
+          WHERE m.family_id = $3 AND m.person = $1 AND ($2::boolean OR NOT m.private)) AS m,
+       (SELECT COALESCE(MAX(e.updated_at)::text, '') || '/' || COUNT(*) FROM maple_care_entries e ${PLAN_JOIN}
+          WHERE e.family_id = $3 AND e.person = $1 AND ${visibleSql(2)}) AS e,
+       ${s.access.mood ? `(SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_care_mood WHERE family_id = $3 AND person = $1)` : `''`} AS o`,
+    [s.person.member, s.access.private, s.familyId]
   );
   const r = rows[0] ?? {};
   return `${person}/${r.m}/${r.e}/${r.o}`;
@@ -1078,7 +1131,7 @@ export async function carePlanViews(s: CareSession, opts: { finished?: boolean }
   const plans = await visiblePlans(s);
   const since = new Date(s.now.getTime() - DOSE_DAYS * 86400_000);
   const ctx = { now: s.now, tz: s.tz, members: s.members, me: s.viewer.id, ...noteCtx(s) };
-  const views = await Promise.all(plans.map(async (plan) => planView(plan, await planDoses(plan.id, since), ctx, s.viewer.id)));
+  const views = await Promise.all(plans.map(async (plan) => planView(plan, await planDoses(s, plan.id, since), ctx, s.viewer.id)));
   const active = sortPlans(views.filter((v) => planActive(v.plan, s.now, s.tz)));
   return opts.finished ? [...active, ...views.filter((v) => !planActive(v.plan, s.now, s.tz))] : active;
 }
@@ -1090,14 +1143,14 @@ export async function carePlanViews(s: CareSession, opts: { finished?: boolean }
  * her list never refuses Maple's vitamin D), and nothing about her is read
  * for anyone who can't see it. Null: log it for Maple.
  */
-export async function momMedicineClash(viewer: CareViewer, name: string, ctx: { members: Member[]; baby?: Baby }): Promise<{ name: string; plan: CarePlan } | null> {
+export async function momMedicineClash(viewer: CareViewer, name: string, ctx: { familyId: number; members: Member[]; baby: Baby }): Promise<{ name: string; plan: CarePlan } | null> {
   if (isVitaminD(name)) return null;
   const s = await careSession(viewer, ctx);
   if (!s.person || !s.access.read) return null;
   const key = normName(name);
   if (!key) return null;
   // A plan's own name first, then Also called: ids are random, so plan order alone would pick either.
-  const all = (await listCarePlans(s.person.member)).filter((p) => planActive(p, s.now, s.tz));
+  const all = (await listCarePlans(s, s.person.member)).filter((p) => planActive(p, s.now, s.tz));
   const plan = all.find((p) => normName(p.name) === key) ?? all.find((p) => planNames(p).includes(key));
   return plan ? { name: s.name, plan } : null;
 }
@@ -1118,22 +1171,23 @@ export async function moveFromMaple(s: CareSession, input: { entryId: number; pl
       `WITH src AS (
          -- moved_to keeps it out of Maple's Recently removed and its restore: her dose's Undo is the only way back.
          UPDATE maple_entries SET deleted_at = NOW(), data = data || jsonb_build_object('moved_to', $2::bigint), updated_by = $3, updated_at = NOW()
-         WHERE id = $1 AND kind = 'med' AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maple_care_entries WHERE id = $2)
+         -- Care ids are one space shared by every family, so a taken one is looked for across all of them.
+         WHERE id = $1 AND family_id = $9 AND kind = 'med' AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maple_care_entries WHERE id = $2)
          RETURNING started_at, data, note
        )
-       INSERT INTO maple_care_entries (id, person, kind, med_id, at, data, note, private, created_by, source)
-       SELECT $2, $4, 'dose', $5, src.started_at,
+       INSERT INTO maple_care_entries (id, family_id, person, kind, med_id, at, data, note, private, created_by, source)
+       SELECT $2, $9, $4, 'dose', $5, src.started_at,
               jsonb_strip_nulls(jsonb_build_object('name', COALESCE($6::text, src.data->>'name'), 'dose', COALESCE(NULLIF(src.data->>'dose', ''), $7::text),
                 'unit', $8::text, 'moved_from', $1::bigint)),
               src.note, FALSE, $3, 'web'
        FROM src RETURNING *`,
-      [input.entryId, id, s.viewer.id, p.member, plan?.id ?? null, plan?.name ?? null, plan?.dose_text ?? null, plan?.limit_unit ?? null]
+      [input.entryId, id, s.viewer.id, p.member, plan?.id ?? null, plan?.name ?? null, plan?.dose_text ?? null, plan?.limit_unit ?? null, s.familyId]
     );
     if (rows.length) {
-      careChanged();
+      careChanged({ familyId: s.familyId });
       return { entry: rowToCareEntry(rows[0]), maple_entry_id: input.entryId };
     }
-    const left = await q(`SELECT 1 FROM maple_entries WHERE id = $1 AND kind = 'med' AND deleted_at IS NULL`, [input.entryId]);
+    const left = await q(`SELECT 1 FROM maple_entries WHERE id = $1 AND family_id = $2 AND kind = 'med' AND deleted_at IS NULL`, [input.entryId, s.familyId]);
     if (!left.length) throw new NotFound("That medicine entry isn't in Maple's log anymore.");
   }
   throw new Error("id_exhausted");
@@ -1146,13 +1200,13 @@ export async function undoMoveFromMaple(s: CareSession, input: { entryId: number
   const rows = await q(
     `WITH d AS (
        UPDATE maple_care_entries SET deleted_at = NOW(), updated_by = $3, updated_at = NOW()
-       WHERE id = $2 AND person = $4 AND deleted_at IS NULL AND (data->>'moved_from')::bigint = $1
+       WHERE id = $2 AND family_id = $5 AND person = $4 AND deleted_at IS NULL AND (data->>'moved_from')::bigint = $1
        RETURNING id
      )
      UPDATE maple_entries SET deleted_at = NULL, data = data - 'moved_to', updated_by = $3, updated_at = NOW()
-     WHERE id = $1 AND deleted_at IS NOT NULL AND EXISTS (SELECT 1 FROM d) RETURNING id`,
-    [input.entryId, input.doseId, s.viewer.id, p.member]
+     WHERE id = $1 AND family_id = $5 AND deleted_at IS NOT NULL AND EXISTS (SELECT 1 FROM d) RETURNING id`,
+    [input.entryId, input.doseId, s.viewer.id, p.member, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
-  careChanged();
+  careChanged({ familyId: s.familyId });
 }

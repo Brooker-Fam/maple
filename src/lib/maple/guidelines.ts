@@ -10,6 +10,10 @@
  */
 import { cToF } from "./units";
 import type { JaundiceLevel, StoolColor, TempMethod } from "./types";
+import { FAMILY_ONE_VOICE, type Voice } from "./voice";
+
+// Copy about the baby takes a Voice (voice.ts): the family's own name and
+// pronouns. Each UPPER_CASE constant is the same copy in family 1's words.
 
 // ── Alert tiers ──────────────────────────────────────────────────────────
 
@@ -32,8 +36,9 @@ export const DISCLAIMER = "Maple's Log isn't medical advice. When in doubt, call
 /** The quiet line by the Terms and Privacy links (Family's About, sign-in, the chat's terms). */
 export const TRACKER_NOTE = "Maple is a tracker, not medical advice.";
 
-export const EMERGENCY_SIGNS =
-  "Call 911 if she has blue or gray lips or face, stops breathing for 20 seconds or more, is struggling to breathe (grunting, flaring nostrils, skin pulling in around the ribs), can't be woken, or is limp.";
+export const emergencySigns = (v: Voice) =>
+  `Call 911 if ${v.they} ${v.verb("has")} blue or gray lips or face, ${v.verb("stops")} breathing for 20 seconds or more, ${v.verb("is")} struggling to breathe (grunting, flaring nostrils, skin pulling in around the ribs), can't be woken, or ${v.verb("is")} limp.`;
+export const EMERGENCY_SIGNS = emergencySigns(FAMILY_ONE_VOICE);
 
 // ── Feeding ──────────────────────────────────────────────────────────────
 
@@ -68,8 +73,9 @@ export function typicalBottle(ageDays: number): string {
   return "about 4–5 oz (120–150 ml) per feed";
 }
 
-export const BOTTLE_CUES =
-  "Typical, not a target. Follow her hunger cues (rooting, hands to mouth) and fullness cues (turning away, relaxed hands).";
+export const bottleCues = (v: Voice) =>
+  `Typical, not a target. Follow ${v.their} hunger cues (rooting, hands to mouth) and fullness cues (turning away, relaxed hands).`;
+export const BOTTLE_CUES = bottleCues(FAMILY_ONE_VOICE);
 
 // ── Cluster feeding and going back and forth ─────────────────────────────
 // Shown in one place, the "Cluster feeding" sheet (sheets/ClusterInfoSheet),
@@ -103,8 +109,9 @@ export const CLUSTER_FEEDING_NORMAL =
  * ABA (feeding-patterns, above): "There's no need to time feeds." Says back and forth is fine; never prescribes it
  * (no trial backs switch nursing for supply).
  */
-export const BACK_AND_FORTH =
-  "Going back and forth between sides is fine. Offer the other side when her sucking slows or she comes off, not by the clock. There's no need to time each side.";
+export const backAndForth = (v: Voice) =>
+  `Going back and forth between sides is fine. Offer the other side when ${v.their} sucking slows or ${v.they} ${v.verb("comes")} off, not by the clock. There's no need to time each side.`;
+export const BACK_AND_FORTH = backAndForth(FAMILY_ONE_VOICE);
 
 /**
  * Newman/Kernerman (above): "unless you have sore nipples". LLL GB,
@@ -118,10 +125,11 @@ export const BACK_AND_FORTH_SORE = "If your nipples are sore, check with a lacta
  * and the comfort of the mother to ensure that the infant is latched deeply and effectively. Some fussy infants are in
  * pain that should be addressed."
  */
-export const CLUSTER_PAIN = {
+export const clusterPain = (v: Voice) => ({
   label: "Ask a lactation consultant",
-  body: "If nursing hurts, or she seems to be in pain while she feeds, ask a lactation consultant to watch a feed.",
-} as const;
+  body: `If nursing hurts, or ${v.they} ${v.verb("seems")} to be in pain while ${v.they} ${v.verb("feeds")}, ask a lactation consultant to watch a feed.`,
+});
+export const CLUSTER_PAIN = clusterPain(FAMILY_ONE_VOICE);
 
 /**
  * KellyMom (IBCLC), https://kellymom.com/bf/got-milk/supply-worries/enough-milk/: "As long as baby is gaining well on
@@ -131,7 +139,8 @@ export const CLUSTER_PAIN = {
  * CDC Newborn Basics, https://www.cdc.gov/infant-toddler-nutrition/breastfeeding/newborn-basics.html: back to birth
  * weight "by day 10 to 14 of life".
  */
-export const CLUSTER_ENOUGH = "Her diapers and her weight show whether she's getting enough, not the minutes on each side.";
+export const clusterEnough = (v: Voice) => `${v.Their} diapers and ${v.their} weight show whether ${v.they}${v.verb("'s")} getting enough, not the minutes on each side.`;
+export const CLUSTER_ENOUGH = clusterEnough(FAMILY_ONE_VOICE);
 
 /**
  * AAP KidsDoc, https://www.healthychildren.org/English/tips-tools/symptom-checker/Pages/symptomviewer.aspx?symptom=Breast-Feeding+Questions:
@@ -139,10 +148,12 @@ export const CLUSTER_ENOUGH = "Her diapers and her weight show whether she's get
  * be getting enough, including "seems fussy after breastfeeding" and fewer than 3 poops and 6 pees a day by 5 days
  * old. Always shown with EMERGENCY_SIGNS after it ("can't be woken" stays a 911 sign).
  */
-export const CLUSTER_CALL = {
+const clusterLead = (v: Voice) => `Call your pediatrician if ${v.they} ${v.verb("seems")} hungry after most feeds or ${v.verb("has")}`;
+export const clusterCallOnToday = (v: Voice) => ({
   label: "Call your pediatrician",
-  body: "Call your pediatrician if she seems hungry after most feeds or has fewer wet or dirty diapers than her targets on Today.",
-} as const;
+  body: `${clusterLead(v)} fewer wet or dirty diapers than ${v.their} targets on Today.`,
+});
+export const CLUSTER_CALL = clusterCallOnToday(FAMILY_ONE_VOICE);
 
 /**
  * CLUSTER_CALL as the Cluster feeding sheet shows it. Today shows her diaper targets only while warnings and
@@ -150,9 +161,9 @@ export const CLUSTER_CALL = {
  * minimums Today would show), or, with no day of life (no birth time), CDC's by-five-days line (above: fewer than 3
  * poops and 6 pees a day). Always shown with EMERGENCY_SIGNS after it.
  */
-export function clusterCall(opts: { onToday: boolean; dayOfLife?: number | null }): { label: string; body: string } {
-  if (opts.onToday) return CLUSTER_CALL;
-  const lead = "Call your pediatrician if she seems hungry after most feeds or has";
+export function clusterCall(opts: { onToday: boolean; dayOfLife?: number | null }, v: Voice): { label: string; body: string } {
+  if (opts.onToday) return clusterCallOnToday(v);
+  const lead = clusterLead(v);
   const day = opts.dayOfLife;
   if (day == null || day < 1) {
     return { label: CLUSTER_CALL.label, body: `${lead} fewer wet or dirty diapers than usual (by 5 days old, at least 6 wet and 3 dirty a day).` };
@@ -228,11 +239,12 @@ export const RED_STOOL: Assessment = {
   body: "Often it's something small, like a tiny tear or swallowed blood from a cracked nipple, but blood in poop should always be checked. Call now instead if there's a lot of blood or mucus, or blood with fever, vomiting, a swollen belly or poor feeding.",
 };
 
-export const LATE_BLACK_STOOL: Assessment = {
+export const lateBlackStool = (v: Voice): Assessment => ({
   tier: "today",
   title: "Still black poop after Day 4",
-  body: "Her poop should have turned yellow by now, which is a sign milk is flowing. Very dark green can look black: smear a little on a white wipe in bright light. If it's truly black or tarry, please check in with your pediatrician today.",
-};
+  body: `${v.Their} poop should have turned yellow by now, which is a sign milk is flowing. Very dark green can look black: smear a little on a white wipe in bright light. If it's truly black or tarry, please check in with your pediatrician today.`,
+});
+export const LATE_BLACK_STOOL = lateBlackStool(FAMILY_ONE_VOICE);
 
 // ── Weight ───────────────────────────────────────────────────────────────
 
@@ -257,7 +269,8 @@ export function assessTemperature(
   tempC: number,
   method: TempMethod | undefined,
   ageMonths: number,
-  previous?: { tempC: number; minutesBefore: number } | null
+  previous: { tempC: number; minutesBefore: number } | null | undefined,
+  v: Voice
 ): Assessment | null {
   const f = round1(cToF(tempC));
   const shown = `${f.toFixed(1)}°F`;
@@ -269,7 +282,7 @@ export function assessTemperature(
     return {
       tier: "now",
       title: `${shown}: call your pediatrician now`,
-      body: "A temperature of 104°F (40°C) or higher needs a call right away at any age. If she's hard to wake, limp, or struggling to breathe, call 911.",
+      body: `A temperature of 104°F (40°C) or higher needs a call right away at any age. If ${v.they}${v.verb("'s")} hard to wake, limp, or struggling to breathe, call 911.`,
     };
   }
 
@@ -295,7 +308,7 @@ export function assessTemperature(
       return {
         tier: "now",
         title: "Fever: call your pediatrician now",
-        body: "100.4°F (38.0°C) or higher counts as a fever at Maple's age. Call your pediatrician now, even if she seems fine; doctors want to check every fever in babies this young. Don't give fever medicine unless they tell you to. If you can't reach them, go to the ER.",
+        body: `100.4°F (38.0°C) or higher counts as a fever at ${v.name}'s age. Call your pediatrician now, even if ${v.they} ${v.verb("seems")} fine; doctors want to check every fever in babies this young. Don't give fever medicine unless they tell you to. If you can't reach them, go to the ER.`,
       };
     }
     if (atLeast(99, 37.2) && (method === "armpit" || method === undefined)) {
@@ -313,14 +326,14 @@ export function assessTemperature(
       return {
         tier: "today",
         title: "Fever: call your pediatrician",
-        body: "For a baby 3–6 months old, call your pediatrician for advice at 101°F (38.3°C) or higher, and sooner if she's hard to wake, won't feed, or is breathing hard.",
+        body: `For a baby 3–6 months old, call your pediatrician for advice at 101°F (38.3°C) or higher, and sooner if ${v.they}${v.verb("'s")} hard to wake, won't feed, or ${v.verb("is")} breathing hard.`,
       };
     }
   } else if (atLeast(102, 38.9)) {
     return {
       tier: "mention",
       title: "Fever",
-      body: "Call your pediatrician if a fever lasts more than 24 hours, or right away if she seems very sick, won't drink, or is hard to wake.",
+      body: `Call your pediatrician if a fever lasts more than 24 hours, or right away if ${v.they} ${v.verb("seems")} very sick, won't drink, or ${v.verb("is")} hard to wake.`,
     };
   }
 
@@ -331,7 +344,7 @@ export function assessTemperature(
       return {
         tier: "now",
         title: `Still low (${shown}): call your pediatrician now`,
-        body: "Her temperature is still low after warming. Newborns sometimes run cold instead of hot when they're unwell. Please call your pediatrician now, sooner still if she's feeding poorly, unusually sleepy or floppy.",
+        body: `${v.Their} temperature is still low after warming. Newborns sometimes run cold instead of hot when they're unwell. Please call your pediatrician now, sooner still if ${v.they}${v.verb("'s")} feeding poorly, unusually sleepy or floppy.`,
       };
     }
     return {
@@ -340,7 +353,7 @@ export function assessTemperature(
       body:
         method === "armpit"
           ? "Armpit readings run low. Snuggle skin-to-skin or add a layer, then recheck rectally in 15–30 minutes. If it's under 96.8°F (36.0°C), call your pediatrician now."
-          : "Snuggle skin-to-skin or add a layer, then recheck in 15–30 minutes. If it's still under 96.8°F (36.0°C), or she's feeding poorly or very sleepy, call your pediatrician now.",
+          : `Snuggle skin-to-skin or add a layer, then recheck in 15–30 minutes. If it's still under 96.8°F (36.0°C), or ${v.they}${v.verb("'s")} feeding poorly or very sleepy, call your pediatrician now.`,
     };
   }
   return null;
@@ -360,42 +373,43 @@ export function heartRange(ageMonths: number): [number, number] {
  * or counting breaths). First odd reading → recount; confirmed → call.
  */
 export function assessVitals(
-  v: { heart_bpm?: number; resp_rate?: number; spo2?: number },
+  vit: { heart_bpm?: number; resp_rate?: number; spo2?: number },
   ageMonths: number,
-  previous?: { heart_bpm?: number; resp_rate?: number; spo2?: number; minutesBefore: number } | null
+  previous: { heart_bpm?: number; resp_rate?: number; spo2?: number; minutesBefore: number } | null | undefined,
+  v: Voice
 ): Assessment[] {
   const out: Assessment[] = [];
   const recent = previous && previous.minutesBefore <= 60 ? previous : null;
 
-  if (v.spo2 != null) {
-    if (v.spo2 < 92) {
+  if (vit.spo2 != null) {
+    if (vit.spo2 < 92) {
       out.push({
         tier: "emergency",
-        title: `Oxygen ${v.spo2}%`,
-        body: "If her lips or face look blue or gray, or she's working hard to breathe, call 911 now. Home oximeters often misread wiggly babies with cold feet: if she looks pink and comfortable, warm her foot and recheck with a steady signal, and call 911 if a calm reading stays under 92%.",
+        title: `Oxygen ${vit.spo2}%`,
+        body: `If ${v.their} lips or face look blue or gray, or ${v.they}${v.verb("'s")} working hard to breathe, call 911 now. Home oximeters often misread wiggly babies with cold feet: if ${v.they} ${v.verb("looks")} pink and comfortable, warm ${v.their} foot and recheck with a steady signal, and call 911 if a calm reading stays under 92%.`,
       });
-    } else if (v.spo2 < 95) {
+    } else if (vit.spo2 < 95) {
       out.push(
         recent?.spo2 != null && recent.spo2 < 95
-          ? { tier: "now", title: `Oxygen ${v.spo2}% on recheck`, body: "A calm, warm baby with a good signal reading 92–94% should be checked: call your pediatrician now." }
-          : { tier: "nudge", title: `Oxygen ${v.spo2}%: recheck`, body: "Healthy newborns usually read 95% or higher. Warm her foot, wait for a steady signal while she's calm, and recheck. If it stays at 92–94%, call your pediatrician now." }
+          ? { tier: "now", title: `Oxygen ${vit.spo2}% on recheck`, body: "A calm, warm baby with a good signal reading 92–94% should be checked: call your pediatrician now." }
+          : { tier: "nudge", title: `Oxygen ${vit.spo2}%: recheck`, body: `Healthy newborns usually read 95% or higher. Warm ${v.their} foot, wait for a steady signal while ${v.they}${v.verb("'s")} calm, and recheck. If it stays at 92–94%, call your pediatrician now.` }
       );
     }
   }
-  if (v.resp_rate != null && v.resp_rate > 60) {
+  if (vit.resp_rate != null && vit.resp_rate > 60) {
     out.push(
       recent?.resp_rate != null && recent.resp_rate > 60
-        ? { tier: "now", title: `Breathing ${v.resp_rate}/min on recount`, body: `Fast breathing at rest (over 60 a minute) should be checked: call your pediatrician now. ${EMERGENCY_SIGNS}` }
-        : { tier: "nudge", title: `Breathing ${v.resp_rate}/min: recount`, body: "Count breaths for a full 60 seconds while she's calm or asleep (not crying). Newborns breathe about 30–60 times a minute, with short pauses under 10 seconds that are normal. If it's still over 60 at rest, call your pediatrician now." }
+        ? { tier: "now", title: `Breathing ${vit.resp_rate}/min on recount`, body: `Fast breathing at rest (over 60 a minute) should be checked: call your pediatrician now. ${emergencySigns(v)}` }
+        : { tier: "nudge", title: `Breathing ${vit.resp_rate}/min: recount`, body: `Count breaths for a full 60 seconds while ${v.they}${v.verb("'s")} calm or asleep (not crying). Newborns breathe about 30–60 times a minute, with short pauses under 10 seconds that are normal. If it's still over 60 at rest, call your pediatrician now.` }
     );
   }
-  if (v.heart_bpm != null) {
+  if (vit.heart_bpm != null) {
     const [lo, hi] = heartRange(ageMonths);
-    if (v.heart_bpm < lo || v.heart_bpm > hi) {
+    if (vit.heart_bpm < lo || vit.heart_bpm > hi) {
       out.push(
         recent?.heart_bpm != null && (recent.heart_bpm < lo || recent.heart_bpm > hi)
-          ? { tier: "today", title: `Heart rate ${v.heart_bpm} on recheck`, body: `A resting heart rate outside about ${lo}–${hi} at her age is worth a call to your pediatrician. Call 911 if she looks pale, gray or limp.` }
-          : { tier: "nudge", title: `Heart rate ${v.heart_bpm}: recheck when calm`, body: `At her age a resting heart rate is usually about ${lo}–${hi} (lower asleep, higher crying). Recheck while she's calm; if it's still outside that range, call your pediatrician.` }
+          ? { tier: "today", title: `Heart rate ${vit.heart_bpm} on recheck`, body: `A resting heart rate outside about ${lo}–${hi} at ${v.their} age is worth a call to your pediatrician. Call 911 if ${v.they} ${v.verb("looks")} pale, gray or limp.` }
+          : { tier: "nudge", title: `Heart rate ${vit.heart_bpm}: recheck when calm`, body: `At ${v.their} age a resting heart rate is usually about ${lo}–${hi} (lower asleep, higher crying). Recheck while ${v.they}${v.verb("'s")} calm; if it's still outside that range, call your pediatrician.` }
       );
     }
   }
@@ -415,13 +429,15 @@ export const JAUNDICE_LABEL: Record<JaundiceLevel, string> = {
 
 const JAUNDICE_RANK: Record<JaundiceLevel, number> = { none: 0, face: 1, eyes: 2, chest: 2, legs: 3, deep: 4 };
 
-export const JAUNDICE_HOWTO =
-  "Check her skin and eyes in daylight. Gently press her forehead or nose: does the skin look yellow as it blanches? On darker skin, look at the whites of her eyes and her gums.";
+export const jaundiceHowto = (v: Voice) =>
+  `Check ${v.their} skin and eyes in daylight. Gently press ${v.their} forehead or nose: does the skin look yellow as it blanches? On darker skin, look at the whites of ${v.their} eyes and ${v.their} gums.`;
+export const JAUNDICE_HOWTO = jaundiceHowto(FAMILY_ONE_VOICE);
 
 export function assessJaundice(
   level: JaundiceLevel,
   ageHours: number,
-  previous?: { level: JaundiceLevel; minutesBefore: number } | null
+  previous: { level: JaundiceLevel; minutesBefore: number } | null | undefined,
+  v: Voice
 ): Assessment | null {
   if (level === "none") return null;
   if (ageHours < 24) {
@@ -435,21 +451,21 @@ export function assessJaundice(
     return {
       tier: "now",
       title: "Jaundice spreading: call your pediatrician now",
-      body: "Yellow that has reached her legs, or skin that looks deep yellow-orange, should be checked now. Call 911 if she can't be woken, is limp, has a high-pitched cry, or arches her back or neck. Sunlight isn't a safe treatment for jaundice.",
+      body: `Yellow that has reached ${v.their} legs, or skin that looks deep yellow-orange, should be checked now. Call 911 if ${v.they} can't be woken, ${v.verb("is")} limp, ${v.verb("has")} a high-pitched cry, or ${v.verb("arches")} ${v.their} back or neck. Sunlight isn't a safe treatment for jaundice.`,
     };
   }
   if (previous && previous.minutesBefore <= 48 * 60 && JAUNDICE_RANK[level] > JAUNDICE_RANK[previous.level]) {
     return {
       tier: "now",
       title: "Jaundice getting worse: call your pediatrician now",
-      body: "The yellow has spread since the last check. Please call your pediatrician now, especially if she's sleepy, not feeding well, or has fewer wet or dirty diapers than expected.",
+      body: `The yellow has spread since the last check. Please call your pediatrician now, especially if ${v.they}${v.verb("'s")} sleepy, not feeding well, or ${v.verb("has")} fewer wet or dirty diapers than expected.`,
     };
   }
   if (level === "eyes" || level === "chest") {
     return {
       tier: "today",
       title: "Yellow eyes or belly: call within 24 hours",
-      body: "Yellow in the whites of the eyes or spreading to the belly should be checked within a day. Call sooner if she's hard to wake or not feeding well, and today if her poop is pale or her pee is dark.",
+      body: `Yellow in the whites of the eyes or spreading to the belly should be checked within a day. Call sooner if ${v.they}${v.verb("'s")} hard to wake or not feeding well, and today if ${v.their} poop is pale or ${v.their} pee is dark.`,
     };
   }
   if (ageHours >= 14 * 24) {
@@ -465,8 +481,9 @@ export function assessJaundice(
 // ── Vitamin D, tummy time, sleep ─────────────────────────────────────────
 
 export const VITAMIN_D_DEFAULT = { name: "Vitamin D", dose: "400 IU" };
-export const VITAMIN_D_NOTE =
-  "Sunshine drops: 400 IU of vitamin D once a day. Breast milk is naturally low in vitamin D, so pediatricians recommend a daily dose starting in her first few days. Drop strengths differ by brand, so follow the label.";
+export const vitaminDNote = (v: Voice) =>
+  `Sunshine drops: 400 IU of vitamin D once a day. Breast milk is naturally low in vitamin D, so pediatricians recommend a daily dose starting in ${v.their} first few days. Drop strengths differ by brand, so follow the label.`;
+export const VITAMIN_D_NOTE = vitaminDNote(FAMILY_ONE_VOICE);
 
 /** Daily tummy-time goal in minutes (WHO / NIH Safe to Sleep, ramped for newborns). */
 export function tummyGoalMinutes(ageDays: number): number {
@@ -474,22 +491,29 @@ export function tummyGoalMinutes(ageDays: number): number {
   if (ageDays < 56) return 20;
   return 30;
 }
-export const TUMMY_NOTE =
-  "A few minutes, a few times a day, while she's awake and you're right there, on the floor on a blanket. It builds neck and shoulder strength and helps avoid flat spots. Stop when she's fussy.";
+export const tummyNote = (v: Voice) =>
+  `A few minutes, a few times a day, while ${v.they}${v.verb("'s")} awake and you're right there, on the floor on a blanket. It builds neck and shoulder strength and helps avoid flat spots. Stop when ${v.they}${v.verb("'s")} fussy.`;
+export const TUMMY_NOTE = tummyNote(FAMILY_ONE_VOICE);
 
 export const SLEEP_TOTAL_NOTE =
   "Newborns sleep about 14–17 hours a day in little bursts. Day and night get sorted out over the next couple of months.";
 
-export const SAFE_SLEEP_TIPS: Partial<Record<string, string>> = {
-  bed: "Pediatricians recommend her own firm, flat space (a bassinet or crib in your room) for at least the first 6 months. If she drifts off in your bed after a feed, move her back to her bassinet, on her back, when you can.",
-  car: "If she falls asleep in the car seat, move her flat on her back in her bassinet when you can.",
-  stroller: "If she falls asleep in the stroller, move her flat on her back in her bassinet when you can.",
-  carrier: "If she falls asleep in the carrier, move her flat on her back in her bassinet when you can.",
-  arms: "Contact naps are lovely. If you're getting sleepy too, move her to her bassinet, on her back.",
+export const safeSleepTips = (v: Voice): Partial<Record<string, string>> => {
+  const flat = (where: string) =>
+    `If ${v.they} ${v.verb("falls")} asleep in the ${where}, move ${v.them} flat on ${v.their} back in ${v.their} bassinet when you can.`;
+  return {
+    bed: `Pediatricians recommend ${v.their} own firm, flat space (a bassinet or crib in your room) for at least the first 6 months. If ${v.they} ${v.verb("drifts")} off in your bed after a feed, move ${v.them} back to ${v.their} bassinet, on ${v.their} back, when you can.`,
+    car: flat("car seat"),
+    stroller: flat("stroller"),
+    carrier: flat("carrier"),
+    arms: `Contact naps are lovely. If you're getting sleepy too, move ${v.them} to ${v.their} bassinet, on ${v.their} back.`,
+  };
 };
+export const SAFE_SLEEP_TIPS = safeSleepTips(FAMILY_ONE_VOICE);
 
-export const FIRST_CHECKUP_NOTE =
-  "Her first checkup is usually at 3–5 days old (within 48 hours of leaving the hospital), with a weight check around 2 weeks.";
+export const firstCheckupNote = (v: Voice) =>
+  `${v.Their} first checkup is usually at 3–5 days old (within 48 hours of leaving the hospital), with a weight check around 2 weeks.`;
+export const FIRST_CHECKUP_NOTE = firstCheckupNote(FAMILY_ONE_VOICE);
 
 /** Healthy full-term defaults; preterm or small babies follow their pediatrician's plan. */
 export function needsOwnPlan(gestationalWeeks: number | null | undefined, birthWeightG: number | null | undefined): boolean {
@@ -547,19 +571,30 @@ export const momWhatToSayOther = (birthDate: string) => `Tell them: "She gave bi
 
 export const CRISIS_LEAD = "Thank you for being honest about this.";
 /** For her. */
-export const CRISIS: Assessment = {
+export const crisis = (v: Voice): Assessment => ({
   tier: "emergency",
   label: "Call 911 or 988 now",
   title: "Please talk to someone now",
-  body: "Thoughts like these can come with depression after a baby, and they get better with help. If you might act on them, they're about hurting Maple or someone else, or you don't feel safe, call 911 now. Otherwise, call or text 988 now: it's free, open 24/7, and you don't have to be in crisis to call. Then let your OB know today, and if you can, tell someone you trust so you're not alone with this.",
-};
+  body: `Thoughts like these can come with depression after a baby, and they get better with help. If you might act on them, they're about hurting ${v.name} or someone else, or you don't feel safe, call 911 now. Otherwise, call or text 988 now: it's free, open 24/7, and you don't have to be in crisis to call. Then let your OB know today, and if you can, tell someone you trust so you're not alone with this.`,
+});
+export const CRISIS = crisis(FAMILY_ONE_VOICE);
+const PARTNER_CARDS = new WeakSet<Assessment>();
+
 /** For any reader who isn't her (partner, family). Never prefixed by forMom. */
-export const CRISIS_PARTNER: Assessment = {
-  tier: "emergency",
-  label: "Call 911 now",
-  title: "If she talks about hurting herself or the baby",
-  body: "Call 911 now if she talks about hurting herself or the baby, sees or hears things that aren't there, or you're worried about her or Maple's safety. Stay with her, and don't leave her alone with Maple. If you're not sure, call or text 988 for advice: it's for people worried about someone they care about too.",
+export const crisisPartner = (v: Voice): Assessment => {
+  const a: Assessment = {
+    tier: "emergency",
+    label: "Call 911 now",
+    title: "If she talks about hurting herself or the baby",
+    body: `Call 911 now if she talks about hurting herself or the baby, sees or hears things that aren't there, or you're worried about her or ${v.name}'s safety. Stay with her, and don't leave her alone with ${v.name}. If you're not sure, call or text 988 for advice: it's for people worried about someone they care about too.`,
+  };
+  PARTNER_CARDS.add(a);
+  return a;
 };
+
+/** The partner's crisis card, in any family's words (forMom leaves it unprefixed). */
+export const isCrisisPartner = (a: Assessment): boolean => PARTNER_CARDS.has(a);
+export const CRISIS_PARTNER = crisisPartner(FAMILY_ONE_VOICE);
 export const NO_AUTO_NOTIFY = "No one is notified automatically. Maple's Log can't call anyone for you.";
 /** Prefilled body for "Text someone you trust" (she only picks the person). */
 export const TRUSTED_TEXT = "I'm having a really hard time. Can you call me or come be with me?";
@@ -571,12 +606,14 @@ export const HELP_NOW_LINE =
 /** HELP_NOW_LINE as said to the person: the in-app chat opens its reply with it. */
 export const CRISIS_REPLY = "Please call 911 if anyone is in immediate danger. Otherwise, call or text 988, any time.";
 /** The in-app chat's card when the model declines to answer (a safety filter), always with the help lines under it. */
-export const CHAT_REFUSAL = {
-  tier: "mention",
-  label: "Help is a call away",
-  title: "Couldn't answer that here",
-  body: "If anyone may be in danger, call 911. For thoughts of harming yourself or someone else, call or text 988. For anything about Maple's health, call her pediatrician.",
-} satisfies Assessment;
+export const chatRefusal = (v: Voice) =>
+  ({
+    tier: "mention",
+    label: "Help is a call away",
+    title: "Couldn't answer that here",
+    body: `If anyone may be in danger, call 911. For thoughts of harming yourself or someone else, call or text 988. For anything about ${v.name}'s health, call ${v.their} pediatrician.`,
+  }) satisfies Assessment;
+export const CHAT_REFUSAL = chatRefusal(FAMILY_ONE_VOICE);
 /** On the chat's terms card, before a first message; the maternal hotline isn't a crisis line (HRSA, above). */
 export const CHAT_TERMS_HELP =
   "In an emergency, call 911. For thoughts of harming yourself or someone else, call or text 988. For support after the birth, call or text the National Maternal Mental Health Hotline at 1-833-852-6262.";
@@ -595,7 +632,7 @@ export const MOM_SIGNS = [
 ] as const;
 export type MomSign = (typeof MOM_SIGNS)[number];
 
-export const MOM_SIGN_INFO: Record<MomSign, { label: string; labelOther?: string; tier: AlertTier; body: string }> = {
+export const momSignInfo = (v: Voice): Record<MomSign, { label: string; labelOther?: string; tier: AlertTier; body: string }> => ({
   chest_pain: { label: "Chest pain", tier: "emergency",
     body: "Chest pain after birth can mean a blood clot in the lung or a heart problem. Call 911 now." },
   breathing: { label: "Trouble breathing or short of breath", tier: "emergency",
@@ -603,9 +640,9 @@ export const MOM_SIGN_INFO: Record<MomSign, { label: string; labelOther?: string
   seizure: { label: "Seizure", tier: "emergency",
     body: "A seizure after birth can be eclampsia, a blood pressure emergency. Call 911 now." },
   harm_thoughts: { label: "Thoughts of hurting myself or someone else", labelOther: "Talking about hurting herself or the baby", tier: "emergency",
-    body: CRISIS.body }, // UI opens CRISIS for her, CRISIS_PARTNER for anyone else
+    body: crisis(v).body }, // UI opens CRISIS for her, CRISIS_PARTNER for anyone else
   psychosis: { label: "Seeing or hearing things, very confused, or barely sleeping with racing energy", tier: "emergency",
-    body: "These can be signs of postpartum psychosis, an emergency that's treatable. Call 911 or go to the nearest emergency room now, and don't stay alone with Maple." }, // NIMH; ACOG CPG 4 Box 1
+    body: `These can be signs of postpartum psychosis, an emergency that's treatable. Call 911 or go to the nearest emergency room now, and don't stay alone with ${v.name}.` }, // NIMH; ACOG CPG 4 Box 1
   heavy_bleeding: { label: "Soaking a pad in an hour, or clots egg-sized or bigger", tier: "now",
     body: "That much bleeding can be a postpartum hemorrhage. Call your OB now. If you can't reach them right away, call 911 or go to the emergency room. Call 911 if you also feel faint or dizzy or your heart is pounding." }, // AWHONN; NHS
   racing_heart: { label: "Heart racing or pounding", tier: "now",
@@ -636,7 +673,8 @@ export const MOM_SIGN_INFO: Record<MomSign, { label: string; labelOther?: string
     body: "That can be the start of mastitis. Call your OB today, and now if you also have a temperature of 100.4°F or higher." },
   peeing: { label: "Trouble peeing, or pain when peeing", tier: "today",
     body: "Call your OB or midwife today, and now if you also have a fever." },
-};
+});
+export const MOM_SIGN_INFO = momSignInfo(FAMILY_ONE_VOICE);
 
 // ── Temperature ──────────────────────────────────────────────────────────
 /** AWHONN 2023: 100.4°F or higher, or 96.8°F or lower; CDC Hear Her. */
@@ -664,12 +702,14 @@ export const MOM_MED_NOTE =
 
 /** AAP https://www.healthychildren.org/English/ages-stages/baby/breastfeeding/Pages/Medications-and-Breastfeeding.aspx;
  *  ACOG FAQ029; NHS. Numbers: mothertobaby.org, infantrisk.com (verified 2026-10-24). */
-export const MED_NURSING_NOTE =
-  "Before starting any medicine while nursing, including over-the-counter ones, check with your OB, Maple's pediatrician or your pharmacist. Many medicines can be used while breastfeeding, but not all. LactMed, from the National Library of Medicine, is a free reference. MotherToBaby (call 866-626-6847 or text 855-999-3525) and the InfantRisk Center (806-352-2519, weekdays 8–3 Central) answer questions by phone.";
+export const medNursingNote = (v: Voice) =>
+  `Before starting any medicine while nursing, including over-the-counter ones, check with your OB, ${v.name}'s pediatrician or your pharmacist. Many medicines can be used while breastfeeding, but not all. LactMed, from the National Library of Medicine, is a free reference. MotherToBaby (call 866-626-6847 or text 855-999-3525) and the InfantRisk Center (806-352-2519, weekdays 8–3 Central) answer questions by phone.`;
+export const MED_NURSING_NOTE = medNursingNote(FAMILY_ONE_VOICE);
 
 /** AAP (as above). Shown unless settings.feeding === "no". */
-export const MED_BABY_WATCH =
-  "If you're nursing or pumping and taking any medicine, watch Maple for poor feeding, diarrhea, more sleepiness than usual, a lot of crying, vomiting or a rash, and call her pediatrician right away if you see them.";
+export const medBabyWatch = (v: Voice) =>
+  `If you're nursing or pumping and taking any medicine, watch ${v.name} for poor feeding, diarrhea, more sleepiness than usual, a lot of crying, vomiting or a rash, and call ${v.their} pediatrician right away if you see them.`;
+export const MED_BABY_WATCH = medBabyWatch(FAMILY_ONE_VOICE);
 
 export const OPIOID_NAMES =
   /\b(oxycodone|hydrocodone|percocet|endocet|roxicodone|oxycontin|norco|vicodin|lortab|morphine|hydromorphone|dilaudid|tapentadol|nucynta|codeine|tramadol|ultram|ultracet)\b/i;
@@ -684,21 +724,23 @@ export const ZURANOLONE_NAMES = /\b(zuranolone|zurzuvae)\b/i;
 
 /** Percocet label https://www.accessdata.fda.gov/drugsatfda_docs/label/2018/040330s052lbl.pdf ("until they know how they will react");
  *  AAP safe sleep; MedlinePlus; FDA disposal. */
-export const OPIOID_NOTE: Assessment = {
+export const opioidNote = (v: Voice): Assessment => ({
   tier: "nudge",
   title: "Opioid pain medicine",
-  body: "This can make you drowsy. Don't drive until you know how it affects you, and don't doze off with Maple in your bed or on the couch: put her in her bassinet, on her back, before you rest. If you're nursing, watch her for more sleepiness than usual, trouble feeding, trouble breathing or limpness. Call 911 if she's limp, can't be woken or is struggling to breathe, and her pediatrician now for the others. When you no longer need it, take leftovers to a pharmacy take-back site.",
-};
+  body: `This can make you drowsy. Don't drive until you know how it affects you, and don't doze off with ${v.name} in your bed or on the couch: put ${v.them} in ${v.their} bassinet, on ${v.their} back, before you rest. If you're nursing, watch ${v.them} for more sleepiness than usual, trouble feeding, trouble breathing or limpness. Call 911 if ${v.they}${v.verb("'s")} limp, can't be woken or ${v.verb("is")} struggling to breathe, and ${v.their} pediatrician now for the others. When you no longer need it, take leftovers to a pharmacy take-back site.`,
+});
+export const OPIOID_NOTE = opioidNote(FAMILY_ONE_VOICE);
 
 /** ULTRAM label https://www.accessdata.fda.gov/drugsatfda_docs/label/2017/020281s039lbl.pdf and acetaminophen-codeine label
  *  https://dailymed.nlm.nih.gov/dailymed/lookup.cfm?setid=1fe39679-fd58-4d2c-ba61-49d492a2b087: "breastfeeding is not
  *  recommended during treatment". Shown unless settings.feeding === "no". */
-export const LABEL_NOT_WHILE_NURSING: Assessment = {
+export const labelNotWhileNursing = (v: Voice): Assessment => ({
   tier: "today",
   label: "Check before your next dose",
   title: "Its label says not while nursing",
-  body: "The FDA labels for codeine and tramadol say breastfeeding isn't recommended while taking them. If you're nursing or pumping for Maple, call your OB or pharmacist before your next dose.",
-};
+  body: `The FDA labels for codeine and tramadol say breastfeeding isn't recommended while taking them. If you're nursing or pumping for ${v.name}, call your OB or pharmacist before your next dose.`,
+});
+export const LABEL_NOT_WHILE_NURSING = labelNotWhileNursing(FAMILY_ONE_VOICE);
 
 /** "For: Mood". ACOG FAQ091 https://www.acog.org/womens-health/faqs/postpartum-depression ("call your ob-gyn, another health
  *  care professional, or emergency medical services right away"); NIMH. Never a dose; never "stop". */
@@ -786,7 +828,7 @@ export const MOOD_OPTIONS = [
   { value: 2, label: "Low" },
   { value: 1, label: "Really struggling" },
 ] as const;
-export const MOOD_TAGS = {
+export const moodTags = (v: Voice) => ({
   tearful: "Tearful",
   anxious: "Anxious or on edge",
   irritable: "Irritable or angry",
@@ -797,9 +839,10 @@ export const MOOD_TAGS = {
   harm_self: "Thoughts of hurting myself",        // → CRISIS
   calm: "Calm",
   hopeful: "Hopeful",
-  close: "Felt close to Maple",
+  close: `Felt close to ${v.name}`,
   supported: "Felt supported",
-} as const;
+});
+export const MOOD_TAGS = moodTags(FAMILY_ONE_VOICE);
 export type MoodTag = keyof typeof MOOD_TAGS;
 export const CHECKIN_NOTE_PLACEHOLDER = "Anything on your mind?";
 export const CHECKIN_SAVED = "Saved. Thanks for checking in.";
@@ -809,11 +852,12 @@ export const BLUES_NOTE =
   "In the first two weeks after birth, lots of people feel weepy, anxious or overwhelmed. These baby blues usually ease on their own within a few days to 2 weeks. If they last longer, feel severe, or make it hard to get through the day, call your OB. You don't have to wait for your postpartum visit.";
 
 /** "Scary thoughts I don't want". Lifeline for Moms; PSI; CDC Hear Her. */
-export const INTRUSIVE: Assessment = {
+export const intrusive = (v: Voice): Assessment => ({
   tier: "now",
   title: "Unwanted scary thoughts: call your OB now",
-  body: "Sudden, upsetting thoughts or pictures of something bad happening to the baby are common after birth, even thoughts of causing it. They usually come from anxiety or OCD, most people who have them never act on them, and they're very treatable. Please don't keep them to yourself: call your OB now, or call or text the National Maternal Mental Health Hotline at 1-833-852-6262, any time. If the thoughts start to feel comforting or right, or you're seeing or hearing things others don't, call 911 and ask someone to stay with you and Maple.",
-};
+  body: `Sudden, upsetting thoughts or pictures of something bad happening to the baby are common after birth, even thoughts of causing it. They usually come from anxiety or OCD, most people who have them never act on them, and they're very treatable. Please don't keep them to yourself: call your OB now, or call or text the National Maternal Mental Health Hotline at 1-833-852-6262, any time. If the thoughts start to feel comforting or right, or you're seeing or hearing things others don't, call 911 and ask someone to stay with you and ${v.name}.`,
+});
+export const INTRUSIVE = intrusive(FAMILY_ONE_VOICE);
 
 /** "Really struggling". ACOG FAQ091. The tier label says who to call. */
 export const STRUGGLING: Assessment = {
@@ -822,10 +866,11 @@ export const STRUGGLING: Assessment = {
   body: "You don't have to wait for this to pass or for your next checkup. Call your OB today. Any time, day or night, you can also call or text the National Maternal Mental Health Hotline at 1-833-852-6262 to talk it through. If you're having thoughts of hurting yourself, call or text 988 now.",
 };
 
-export const CHECKIN_SUGGEST = {
-  day14: "It's been about two weeks since Maple was born, when baby blues usually ease. A 3-minute check-in can show how you're really doing.",
+export const checkinSuggest = (v: Voice) => ({
+  day14: `It's been about two weeks since ${v.name} was born, when baby blues usually ease. A 3-minute check-in can show how you're really doing.`,
   visit: "Your OB visit is coming up. A 3-minute check-in now gives you something to bring.",
-} as const;
+});
+export const CHECKIN_SUGGEST = checkinSuggest(FAMILY_ONE_VOICE);
 
 // ── Mood: fuller check-in. The developers' own forms, word for word; do not edit. ──
 // PHQ-9 https://www.phqscreeners.com/images/sites/g/files/g10060481/f/201412/PHQ-9_English.pdf
@@ -919,7 +964,7 @@ export type HelpLine = {
   name: string; action: string; detail: string; sources: readonly string[];
   tel?: string; sms?: string; url?: string; extra?: { action: string; tel?: string; sms?: string }[];
 };
-export const MOM_HELP: Record<"now" | "talk" | "medicine", HelpLine[]> = {
+export const momHelp = (v: Voice): Record<"now" | "talk" | "medicine", HelpLine[]> => ({
   now: [
     { name: "Emergency", action: "Call 911", tel: "911",
       sources: ["https://pbws.s3.amazonaws.com/PBWSSaveYourLifeHandout_English.pdf", "https://www.nimh.nih.gov/health/publications/perinatal-depression"],
@@ -951,14 +996,15 @@ export const MOM_HELP: Record<"now" | "talk" | "medicine", HelpLine[]> = {
     { name: "InfantRisk Center", action: "Call 806-352-2519", tel: "+18063522519", sources: ["https://www.infantrisk.com/"],
       detail: "Questions about medicines while nursing, weekdays 8am to 3pm Central." },
     { name: "LactMed", action: "Open LactMed", url: "https://www.ncbi.nlm.nih.gov/books/NBK501922/", sources: ["https://www.ncbi.nlm.nih.gov/books/NBK501922/"],
-      detail: "A free reference from the National Library of Medicine on medicines and breast milk. It's a reference, not a yes or no: ask your OB, Maple's pediatrician or a pharmacist." },
+      detail: `A free reference from the National Library of Medicine on medicines and breast milk. It's a reference, not a yes or no: ask your OB, ${v.name}'s pediatrician or a pharmacist.` },
   ],
-};
+});
+export const MOM_HELP = momHelp(FAMILY_ONE_VOICE);
 
 // ── Support page text ────────────────────────────────────────────────────
-export const SUPPORT = {
+export const support = (v: Voice) => ({
   intro: "You don't need a diagnosis, or a crisis, to reach out.", // PSI; 988
-  wellVisit: "Maple's pediatrician may ask about your mood at her 1-, 2-, 4- and 6-month checkups. The AAP recommends pediatricians ask at these visits.", // AAFP summary of the AAP report
+  wellVisit: `${v.Name}'s pediatrician may ask about your mood at ${v.their} 1-, 2-, 4- and 6-month checkups. The AAP recommends pediatricians ask at these visits.`, // AAFP summary of the AAP report
   learn: {
     blues: "Baby blues: weepy, anxious or overwhelmed in the first two weeks, easing on its own. If it lasts longer than 2 weeks or feels severe, call your OB.",
     depression: "Postpartum depression: sadness, emptiness, guilt, or losing interest most days for 2 weeks or more, any time in the first year. It's common, it isn't your fault, and it's treatable. Call your OB.",
@@ -968,10 +1014,11 @@ export const SUPPORT = {
     psychosis: "Seeing or hearing things, believing things that aren't true, or barely sleeping with racing energy, usually in the first two weeks. This is an emergency: call 911.",
   }, // ACOG FAQ091; NIMH; PSI; ACOG CPG 4
   privacy: "Everyone who signs in to Maple's Log can see this page, check-ins included. Connected AI tools see her medicines, temperature and questions, but not check-ins.",
-} as const;
+});
+export const SUPPORT = support(FAMILY_ONE_VOICE);
 
 /** Partner section. NIMH; ACOG CPG 4; PSI (psychosis, family, fathers); ACOG FAQ091; HRSA; Paulson 2010; AAP. */
-export const PARTNER = {
+export const partner = (v: Voice) => ({
   intro: "You may notice changes before she does. Here's what to look for, how to help, and when to call.",
   watch: {
     heading: "Signs to watch for",
@@ -981,7 +1028,7 @@ export const PARTNER = {
       "Seeming hopeless or guilty, or calling herself a bad mom",
       "Constant worry or panic",
       "Not sleeping even when she could, or not eating",
-      "Pulling away from Maple or from you",
+      `Pulling away from ${v.name} or from you`,
       "Saying things like \"you'd be better off without me\"",
     ],
     action: "If you're worried, tell her what you've noticed, kindly and specifically, and offer to call her OB together. You don't need to wait for her checkup.",
@@ -993,7 +1040,7 @@ export const PARTNER = {
       "Has a burst of energy with little or no sleep, or seems confused or very unlike herself",
       "Talks about hurting herself or the baby",
     ],
-    note: "Stay with her and Maple, and don't leave them alone. This is rare, usually starts in the first two weeks, and is treatable.",
+    note: `Stay with her and ${v.name}, and don't leave them alone. This is rare, usually starts in the first two weeks, and is treatable.`,
   },
   help: {
     heading: "How to help",
@@ -1010,7 +1057,8 @@ export const PARTNER = {
     heading: "How are you doing?",
     body: "Around 1 in 10 new dads get depressed, most often 3 to 6 months after the birth, and it's more likely when mom is struggling too. In dads it often looks like irritability, anger, low energy or pulling away. Postpartum Support International has a Dads support group and a weekly \"Chat with an Expert\" call at postpartum.net, and its HelpLine is 1-800-944-4773.",
   },
-} as const;
+});
+export const PARTNER = partner(FAMILY_ONE_VOICE);
 
 // ── Visits ───────────────────────────────────────────────────────────────
 /** ACOG Committee Opinion 736. Shown in Care team. */
@@ -1021,15 +1069,19 @@ export const POSTPARTUM_VISIT_NOTE =
 export const BABY_FEVER_MED_NAMES = /acetaminophen|paracetamol|tylenol|ibuprofen|motrin|advil/i;
 export const BABY_IBUPROFEN_NAMES = /ibuprofen|motrin|advil/i;
 export const BABY_ACETAMINOPHEN_NAMES = /acetaminophen|tylenol|paracetamol/i;
-export const BABY_IBUPROFEN_UNDER_6M: Assessment = {
+export const babyIbuprofenUnder6m = (v: Voice): Assessment => ({
   tier: "mention",
   title: "Ibuprofen under 6 months",
-  body: "Ibuprofen isn't recommended for babies under 6 months unless her pediatrician said to give it.",
-};
-export const BABY_FEVER_MED_UNDER_3M: Assessment = {
+  body: `Ibuprofen isn't recommended for babies under 6 months unless ${v.their} pediatrician said to give it.`,
+});
+export const BABY_IBUPROFEN_UNDER_6M = babyIbuprofenUnder6m(FAMILY_ONE_VOICE);
+export const babyFeverMedUnder3m = (v: Voice): Assessment => ({
   tier: "mention",
   title: "Fever medicine under 3 months",
-  body: "For babies under 3 months, give fever medicine only when her pediatrician has said to, and call them about any fever first.",
-};
-export const BABY_FEVER_MED_UNDER_3M_HINT = "At her age, fever medicine only if her pediatrician says so. If she has a fever, call them first.";
+  body: `For babies under 3 months, give fever medicine only when ${v.their} pediatrician has said to, and call them about any fever first.`,
+});
+export const BABY_FEVER_MED_UNDER_3M = babyFeverMedUnder3m(FAMILY_ONE_VOICE);
+export const babyFeverMedUnder3mHint = (v: Voice) =>
+  `At ${v.their} age, fever medicine only if ${v.their} pediatrician says so. If ${v.they} ${v.verb("has")} a fever, call them first.`;
+export const BABY_FEVER_MED_UNDER_3M_HINT = babyFeverMedUnder3mHint(FAMILY_ONE_VOICE);
 export const BABY_IBUPROFEN_UNDER_6M_HINT = "Ibuprofen isn't recommended under 6 months without your pediatrician's OK.";

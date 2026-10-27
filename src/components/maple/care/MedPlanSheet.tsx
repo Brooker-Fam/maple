@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { forMom, parseUnits, planTitle } from "@/lib/maple/care";
-import { ACETAMINOPHEN_NAMES, ALL_OPIOID_NAMES, OPIOID_NOTE } from "@/lib/maple/guidelines";
+import { ACETAMINOPHEN_NAMES, ALL_OPIOID_NAMES, opioidNote } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, addDays, dayKey } from "@/lib/maple/time";
 import type { CarePlan, LimitUnit, MedReason, MedSchedule, PlanInput } from "@/lib/maple/types";
+import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Label, MoreDetails, SheetFooter, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
@@ -132,6 +133,7 @@ export default function MedPlanSheet(props: MedPlanSheetProps) {
 
 function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   const { state, now, memberName, refresh, toast } = useMaple();
+  const voice = useVoice();
   const nameRef = useRef<HTMLInputElement>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const today = dayKey(now(), tz);
@@ -438,7 +440,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
           )}
         </div>
 
-        {opioid && <NoteCard note={forMom(OPIOID_NOTE, care.name, care.self)} care={care} />}
+        {opioid && <NoteCard note={forMom(opioidNote(voice), care.name, care.self)} care={care} />}
 
         <MoreDetails summary={f.reason ? (REASONS.find((r) => r.value === f.reason)?.label ?? "") : ""}>
           <FieldBlock label="The label's words" optional hint="Copy how the label says it, so it's here to check.">

@@ -18,6 +18,7 @@ import { DETAIL_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE, timerNumbers, useTimerActions } from "./TimerCard";
 import { cx } from "./ui";
+import { useBabyWords } from "./familyWords";
 import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMaple";
 
 /**
@@ -122,6 +123,7 @@ function useCooldowns(): [Record<string, boolean>, (key: string, ms: number) => 
 
 export default function Dock() {
   const { state, summary, log, remove, update, now, readOnly, memberLabel, units, toast } = useMaple();
+  const w = useBabyWords();
   const { open } = useSheets();
   const actions = useTimerActions();
   const clock = useNow(1000);
@@ -389,7 +391,7 @@ export default function Dock() {
                     id="back-and-forth"
                     label="Back & forth"
                     sub="Track sides"
-                    aria="Going back and forth. Track sides again: which side is she on now?"
+                    aria={`Going back and forth. Track sides again: which side is ${w.he} on now?`}
                     letter="B"
                     stack
                     disabled={feedPending || cooling.col1}
@@ -443,7 +445,7 @@ export default function Dock() {
                   id="track"
                   label="Track sides"
                   sub="Left or Right"
-                  aria="Back on a side: which side is she on now?"
+                  aria={`Back on a side: which side is ${w.he} on now?`}
                   letter="B"
                   stack
                   disabled={feedPending || cooling.col1}

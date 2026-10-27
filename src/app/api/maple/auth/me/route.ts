@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isGoogleConfigured, isPasswordConfigured, sessionMember } from "@/lib/maple/auth";
+import { isGoogleConfigured, isPasswordConfigured, sessionContext } from "@/lib/maple/auth";
 import { captureServerException } from "@/lib/posthog-server";
 
 export const dynamic = "force-dynamic";
@@ -8,9 +8,9 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   const base = { google: isGoogleConfigured(), password: isPasswordConfigured() };
   try {
-    const member = await sessionMember(request);
+    const signedIn = await sessionContext(request);
     return NextResponse.json(
-      member ? { ...base, signedIn: true, member } : { ...base, signedIn: false },
+      signedIn ? { ...base, signedIn: true, member: signedIn.member } : { ...base, signedIn: false },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {

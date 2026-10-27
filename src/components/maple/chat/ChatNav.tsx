@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatConsent } from "@/lib/maple/chat/types";
+import { useBabyWords } from "../familyWords";
 import { Icon } from "../icons";
 import { cx } from "../ui";
 import { useMaple } from "../useMaple";
@@ -99,13 +100,14 @@ export function ChatNavProvider({ children }: { children: ReactNode }) {
 /** Today's round Ask button, beside her name. */
 export function AskButton({ className }: { className?: string }) {
   const { online } = useMaple();
+  const w = useBabyWords();
   const { openChat } = useChatNav();
   return (
     <button
       type="button"
       onClick={openChat}
       disabled={!online}
-      aria-label={online ? "Ask about Maple" : "Ask about Maple: needs a connection"}
+      aria-label={online ? `Ask about ${w.name}` : `Ask about ${w.name}: needs a connection`}
       title={online ? undefined : "Needs a connection"}
       className={cx(
         "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2 transition active:scale-95 disabled:opacity-40",

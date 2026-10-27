@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mintAuthCode, publicOrigin, trustedRedirect, verifyAdminCreds } from "@/lib/mcp/auth";
-import {
-  ADMIN_ID,
-  isGoogleConfigured,
-  isRemoved,
-  memberFor,
-  openSession,
-  SESSION_COOKIE,
-} from "@/lib/maple/auth";
+import { ADMIN_ID, isGoogleConfigured, isRemoved, openSession, SESSION_COOKIE, signedInAs, type SignedIn } from "@/lib/maple/auth";
+import { adminFamilyId, familiesOf, parseFamilyId } from "@/lib/maple/family";
 import type { Member } from "@/lib/maple/types";
 import { checkUploadRateLimit } from "@/lib/rate-limit";
 
@@ -17,8 +11,9 @@ import { checkUploadRateLimit } from "@/lib/rate-limit";
  *
  * Family members sign in with Google (the maple_session cookie from
  * /api/maple/auth/*), see a consent card naming the app and their account, and
- * get a code for sub "maple:<email>", scope "maple", bound to the resource.
- * The admin login stays as a fallback.
+ * get a code for sub "maple:<email>" and `fam` (the family it opens: the
+ * session's, or the one they pick when they belong to several), scope "maple",
+ * bound to the resource. The admin login stays as a fallback, in its own family only.
  */
 
 export async function GET(request: NextRequest) {
@@ -82,14 +77,23 @@ function redirectWithError(p: MapleParams, error: string, description: string) {
   return NextResponse.redirect(to.toString(), 302);
 }
 
-async function signedInMember(request: NextRequest): Promise<{ member: Member | null; offline: boolean }> {
-  const id = openSession(request.cookies.get(SESSION_COOKIE)?.value);
-  if (!id) return { member: null, offline: false };
+type Families = { familyId: number; name: string | null }[];
+
+/**
+ * Who's signed in, in the family the session names or, on Approve, the one
+ * they picked (`pick`): membership there is read fresh, so a family they
+ * aren't in opens nothing. `families`: every family they're in, for the picker.
+ */
+async function signedInMember(request: NextRequest, pick?: number | null): Promise<{ who: SignedIn | null; families: Families; offline: boolean }> {
+  const body = openSession(request.cookies.get(SESSION_COOKIE)?.value);
+  if (!body) return { who: null, families: [], offline: false };
   try {
-    return { member: await memberFor(id), offline: false };
+    const who = await signedInAs(pick ? { id: body.id, fam: pick } : body);
+    const families = who && who.member.email !== ADMIN_ID ? await familiesOf(who.member.email) : [];
+    return { who, families, offline: false };
   } catch (error) {
     console.error("Maple authorize: membership lookup failed:", error);
-    return { member: null, offline: true };
+    return { who: null, families: [], offline: true };
   }
 }
 
@@ -123,7 +127,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
   }
 
   const client = mapleClient(p.redirect_uri);
-  const mint = (sub: string) => {
+  const mint = (sub: string, fam: number) => {
     const code = mintAuthCode({
       client_id: p.client_id,
       redirect_uri: p.redirect_uri,
@@ -131,6 +135,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
       code_challenge_method: "S256",
       scope: "maple",
       sub,
+      fam,
       resource,
     });
     const to = new URL(p.redirect_uri);
@@ -147,10 +152,10 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
       if (from && from !== origin && from !== url.origin) {
         return maplePage(403, "That didn't come from here", `<p>For safety, approve the connection from this page.</p>`);
       }
-      const { member, offline } = await signedInMember(request);
+      const { who, offline } = await signedInMember(request, parseFamilyId(form.get("maple_family")?.toString()));
       if (offline) return offlinePage();
-      if (!member) return signInPage(p, client, "Please sign in again to approve.");
-      return mint(member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`);
+      if (!who) return signInPage(p, client, "Please sign in again to approve.");
+      return mint(who.member.email === ADMIN_ID ? ADMIN_ID : `maple:${who.member.email}`, who.ctx.familyId);
     }
 
     // Admin login fallback (before Google is set up, or for the site admin).
@@ -160,17 +165,17 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
       const user = form.get("username")?.toString() ?? "";
       const pass = form.get("password")?.toString() ?? "";
       if (!verifyAdminCreds(user, pass)) return signInPage(p, client, "That username and password didn't match.", 401);
-      if (await isRemoved(ADMIN_ID).catch(() => false)) {
+      if (await isRemoved({ familyId: adminFamilyId() }, ADMIN_ID).catch(() => false)) {
         return signInPage(p, client, "The admin login was turned off for Maple's Log. Continue with Google instead.", 403);
       }
-      return mint(ADMIN_ID);
+      return mint(ADMIN_ID, adminFamilyId());
     }
   }
 
-  const { member, offline } = await signedInMember(request);
+  const { who, families, offline } = await signedInMember(request);
   if (offline) return offlinePage();
-  if (!member) return signInPage(p, client);
-  return consentPage(p, client, member, cancelUrl(p));
+  if (!who) return signInPage(p, client);
+  return consentPage(p, client, who.member, cancelUrl(p), { current: who.ctx.familyId, families });
 }
 
 /** Same resource whatever the host's case or a trailing slash. */
@@ -245,7 +250,22 @@ function signInPage(p: MapleParams, client: { name: string; host: string }, erro
   return maplePage(status, "Connect to Maple's Log", body);
 }
 
-function consentPage(p: MapleParams, client: { name: string; host: string }, member: Member, cancel: string) {
+/** Only for someone in two or more families: which one the connection opens, the session's picked to start. */
+function familyPicker(choice: { current: number; families: Families }): string {
+  if (choice.families.length < 2) return "";
+  const rows = choice.families
+    .map((f, i) => {
+      const label = f.name?.trim() || `Family ${i + 1}`;
+      const checked = f.familyId === choice.current ? " checked" : "";
+      return `<label class="pick"><input type="radio" name="maple_family" value="${f.familyId}"${checked}> ${esc(label)}</label>`;
+    })
+    .join("\n    ");
+  return `<fieldset class="families"><legend>Which family?</legend>
+    ${rows}
+  </fieldset>`;
+}
+
+function consentPage(p: MapleParams, client: { name: string; host: string }, member: Member, cancel: string, choice: { current: number; families: Families }) {
   const name = member.display_name || (member.email === ADMIN_ID ? "Admin" : member.email.split("@")[0]);
   const who = member.email === ADMIN_ID ? esc(name) : `${esc(name)} <span class="host">(${esc(member.email)})</span>`;
   const readOnly = member.role === "viewer";
@@ -257,6 +277,7 @@ function consentPage(p: MapleParams, client: { name: string; host: string }, mem
     <li>Disconnect anytime by removing the connector${member.role === "owner" ? "" : ", or ask an owner to remove you in Family"}.</li>
   </ul>
   <form method="post">
+    ${familyPicker(choice)}
     ${hiddenInputs(p)}
     <input type="hidden" name="maple_consent" value="1">
     <button type="submit" class="btn primary">Approve</button>
@@ -297,6 +318,9 @@ function maplePage(status: number, title: string, body: string) {
   .quiet{background:transparent;color:#1D4420;border:1px solid #5C7A4A55;}
   .quiet:hover{background:#5C7A4A14;}
   form{margin:0;}
+  .families{border:1px solid #5C7A4A33;border-radius:12px;margin:0 0 6px;padding:8px 14px 10px;}
+  .families legend{font-size:13px;font-weight:600;padding:0 4px;}
+  .pick{display:flex;align-items:center;gap:8px;font-size:15px;margin:6px 0;font-weight:400;}
   .or{display:flex;align-items:center;gap:10px;color:#5C7A4A;font-size:12px;margin:18px 0 2px;}
   .or::before,.or::after{content:"";flex:1;border-top:1px solid #5C7A4A33;}
   .error{color:#B5452B;margin:14px 0 0;font-size:14px;}

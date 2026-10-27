@@ -48,6 +48,36 @@ export function budgets(env: Record<string, string | undefined> = process.env): 
   };
 }
 
+/** A new family's beta budget (docs/multi-family-plan.md 5.1) until its own columns say otherwise. */
+export const FAMILY_DAILY_BUDGET_DEFAULT = BigInt(250_000);
+export const FAMILY_MONTHLY_BUDGET_DEFAULT = BigInt(4_000_000);
+
+/**
+ * One family's budget: its own maple_families columns where set; otherwise
+ * family 1 (`familyOne`) keeps the environment's (the MAPLE_CHAT_*_BUDGET_MICRO
+ * it has always used) and every other family gets the beta default.
+ */
+export function familyBudgets(
+  own: { day: bigint | null; month: bigint | null },
+  opts: { familyOne: boolean },
+  env: Record<string, string | undefined> = process.env
+): { day: bigint; month: bigint } {
+  const fallback = opts.familyOne ? budgets(env) : { day: FAMILY_DAILY_BUDGET_DEFAULT, month: FAMILY_MONTHLY_BUDGET_DEFAULT };
+  return { day: own.day ?? fallback.day, month: own.month ?? fallback.month };
+}
+
+/**
+ * Every family's chats but the Brookers', together, in a calendar month (UTC):
+ * past it they all stop until the next month, so new families can't run up
+ * the shared Gateway balance. Unset is the default; anything that isn't a
+ * whole number is 0, which stops them.
+ */
+export const GLOBAL_MONTHLY_DEFAULT = BigInt(25_000_000);
+
+export function globalMonthlyCeiling(env: Record<string, string | undefined> = process.env): bigint {
+  return budgetFrom(env.MAPLE_CHAT_GLOBAL_MONTHLY_MICRO, GLOBAL_MONTHLY_DEFAULT);
+}
+
 export const LIMIT_MESSAGE = "That's the chat's limit for today. Logging works as usual.";
 export const MONTH_MESSAGE = "That's the chat's limit for this month. Logging works as usual.";
 

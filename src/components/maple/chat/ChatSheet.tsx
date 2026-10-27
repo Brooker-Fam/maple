@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CHAT_MAX_CHARS } from "@/lib/maple/chat/types";
 import { useCareNav } from "../care/CareNav";
+import { useBabyWords } from "../familyWords";
 import { Icon } from "../icons";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -20,6 +21,7 @@ import { useChatThread } from "./useChatThread";
  */
 export default function ChatSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { readOnly, online } = useMaple();
+  const w = useBabyWords();
   const nav = useCareNav();
   const { consent } = useChatNav();
   const t = useChatThread(open);
@@ -35,7 +37,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
   }, [open, count, tailLength, t.problem, t.help, needsTerms]);
 
   const waiting = t.status === "submitted" || (t.status === "streaming" && tail?.role === "user");
-  const suggestions = readOnly ? ["How did the night go?", "When did she last eat?"] : ["How did the night go?", "Which side next?", "Log a wet diaper"];
+  const suggestions = readOnly ? ["How did the night go?", `When did ${w.he} last eat?`] : ["How did the night go?", "Which side next?", "Log a wet diaper"];
 
   return (
     <Sheet
@@ -59,7 +61,7 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
         !needsTerms && (
           <div className="space-y-4 pt-2">
             <p className={cx(tone.body, "text-[16px] leading-relaxed")}>
-              {readOnly ? "Ask how Maple's doing, in your own words." : "Tell it what happened, or ask how Maple's doing, in your own words."}
+              {readOnly ? `Ask how ${w.name}'s doing, in your own words.` : `Tell it what happened, or ask how ${w.name}'s doing, in your own words.`}
             </p>
             <div className="flex flex-wrap gap-2">
               {suggestions.map((s) => (

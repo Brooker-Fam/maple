@@ -4,6 +4,7 @@ import { useState } from "react";
 import { dayKey, daysBetween } from "@/lib/maple/time";
 import BirthSheet from "./BirthSheet";
 import { MapleLeaf, Sapling } from "./art";
+import { useBabyWords } from "./familyWords";
 import { Button, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
@@ -25,12 +26,13 @@ function countdown(todayKey: string, due: string | null): string {
 
 export default function Waiting() {
   const { state, readOnly } = useMaple();
+  const w = useBabyWords();
   const now = useNow(60_000);
   const [open, setOpen] = useState(false);
   if (!state) return null;
 
   const baby = state.baby;
-  const name = baby.nickname || baby.name.split(" ")[0] || "Maple";
+  const name = baby.nickname || baby.name.split(" ")[0] || "Baby";
   const logging = state.entries.length > 0;
   const before = baby.due_date ? daysBetween(dayKey(now, baby.timezone), baby.due_date) > 0 : false;
 
@@ -44,9 +46,9 @@ export default function Waiting() {
         <p className="mt-2 text-[17px] font-semibold text-mp-maple">{countdown(dayKey(now, baby.timezone), baby.due_date)}</p>
         <p className="mx-auto mt-1.5 max-w-xs text-[15px] leading-relaxed text-mp-ink-2">
           {readOnly
-            ? "We'll share the news here the moment she arrives."
+            ? `We'll share the news here the moment ${w.he} arrives.`
             : logging
-              ? "Add her birth time so Day 1 and her age are right."
+              ? `Add ${w.his} birth time so Day 1 and ${w.his} age are right.`
               : before
                 ? "Growing strong. The forest is getting ready."
                 : "The forest is holding its breath."}
@@ -54,7 +56,7 @@ export default function Waiting() {
         {!readOnly && (
           <>
             <Button size="lg" className="mt-5 w-full" onClick={() => setOpen(true)}>
-              She&apos;s here!
+              {w.Hes} here!
             </Button>
             <p className="mt-2 text-xs text-mp-ink-3">Just the time for now. Weight and length can wait.</p>
           </>
@@ -72,13 +74,14 @@ export default function Waiting() {
  */
 export function BirthBanner({ className }: { className?: string }) {
   const { state, readOnly } = useMaple();
+  const w = useBabyWords();
   const [open, setOpen] = useState(false);
   if (!state || state.baby.born_at || readOnly || !state.entries.length) return null;
   return (
     <>
       <div role="status" className={cx(tone.card, "flex items-center gap-3 px-4 py-3", className)}>
         <MapleLeaf size={24} veins={false} className="shrink-0" />
-        <p className="flex-1 text-sm leading-snug text-mp-ink">Add her birth time so Day 1 and her age are right</p>
+        <p className="flex-1 text-sm leading-snug text-mp-ink">Add {w.his} birth time so Day 1 and {w.his} age are right</p>
         <Button size="sm" onClick={() => setOpen(true)}>
           Add now
         </Button>

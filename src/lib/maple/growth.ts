@@ -1,16 +1,26 @@
 /**
- * Growth percentiles against the WHO Child Growth Standards (girls, 0–24
- * months). The tables are ~60 KB, so client code should load this module
- * lazily (the growth chart does) rather than from the main /maple bundle.
+ * Growth percentiles against the WHO Child Growth Standards (0–24 months),
+ * which are published separately for girls and boys. The tables are ~120 KB,
+ * so client code should load this module lazily (the growth chart does)
+ * rather than from the main /maple bundle.
  *
  * Math per WHO "Methods and development" (2006): LMS z-scores, with the
  * restricted tail adjustment beyond ±3 SD for weight only.
  */
-import { WHO_GIRLS, type WhoLmsTable } from "./who-girls";
+import type { Baby } from "./types";
+import { WHO_BOYS } from "./who-boys";
+import { WHO_GIRLS, type WhoTables } from "./who-girls";
 
 export type Measure = "weight" | "length" | "head";
+export type WhoChart = "girls" | "boys";
 
-const TABLES: Record<Measure, WhoLmsTable> = WHO_GIRLS;
+const TABLES: Record<WhoChart, WhoTables> = { girls: WHO_GIRLS, boys: WHO_BOYS };
+
+/** No sex, no chart: the standards differ enough that a guess would misplace every percentile. */
+export function whoChartFor(sex: Baby["sex"] | undefined): WhoChart | null {
+  return sex === "female" ? "girls" : sex === "male" ? "boys" : null;
+}
+
 const MAX_DAY = 730;
 const DAY_MS = 86_400_000;
 
@@ -21,9 +31,9 @@ const FLAG_LIMITS: Record<Measure, [number, number]> = {
   head: [-5, 5],
 };
 
-function lms(measure: Measure, ageDays: number): [number, number, number] | null {
+function lms(chart: WhoChart, measure: Measure, ageDays: number): [number, number, number] | null {
   if (!Number.isFinite(ageDays) || ageDays < 0 || ageDays > MAX_DAY) return null;
-  const rows = TABLES[measure].rows;
+  const rows = TABLES[chart][measure].rows;
   const lo = Math.floor(ageDays);
   const hi = Math.min(lo + 1, MAX_DAY);
   const f = ageDays - lo;
@@ -50,10 +60,10 @@ export function normalCdf(z: number): number {
 
 /**
  * z-score for a measurement in WHO units (kg for weight, cm otherwise).
- * Returns null outside 0–730 days.
+ * Returns null outside 0–730 days, or with no chart.
  */
-export function zScore(measure: Measure, value: number, ageDays: number): number | null {
-  const p = lms(measure, ageDays);
+export function zScore(measure: Measure, value: number, ageDays: number, chart: WhoChart | null): number | null {
+  const p = chart ? lms(chart, measure, ageDays) : null;
   if (!p || !(value > 0)) return null;
   const [L, M, S] = p;
   const z = L === 0 ? Math.log(value / M) / S : (Math.pow(value / M, L) - 1) / (L * S);
@@ -86,14 +96,31 @@ function ordinal(n: number): string {
 }
 
 /** Measurement in storage units (grams for weight, cm otherwise). */
-export function percentileFor(measure: Measure, stored: number, ageDays: number): Percentile | null {
+export function percentileFor(measure: Measure, stored: number, ageDays: number, chart: WhoChart | null): Percentile | null {
   const value = measure === "weight" ? stored / 1000 : stored;
-  const z = zScore(measure, value, ageDays);
+  const z = zScore(measure, value, ageDays, chart);
   if (z === null) return null;
   const pct = Math.round(normalCdf(z) * 1000) / 10;
   const [lo, hi] = FLAG_LIMITS[measure];
   const label = pct < 1 ? "<1st" : pct > 99 ? ">99th" : ordinal(pct);
   return { z, percentile: pct, label, implausible: z < lo || z > hi };
+}
+
+/** For a baby with no chart: implausible on both standards is a likely typo whichever one applies. */
+export function implausibleOnBoth(measure: Measure, stored: number, ageDays: number): boolean {
+  return (["girls", "boys"] as const).every((c) => percentileFor(measure, stored, ageDays, c)?.implausible === true);
+}
+
+/** A measurement read against the baby's own standard; with no sex set, no percentile and only the both-standards check. */
+export function readingFor(
+  measure: Measure,
+  stored: number,
+  ageDays: number,
+  sex: Baby["sex"] | undefined
+): { pct: Percentile | null; implausible: boolean } {
+  const chart = whoChartFor(sex);
+  const pct = percentileFor(measure, stored, ageDays, chart);
+  return { pct, implausible: chart ? !!pct?.implausible : implausibleOnBoth(measure, stored, ageDays) };
 }
 
 /** Fractional days between birth and a measurement (clamped at 0). */
@@ -113,25 +140,27 @@ const CURVE_Z: Record<(typeof CURVE_PERCENTILES)[number], number> = {
 
 /**
  * Percentile curves between two ages, in storage units (grams / cm), as
- * { p, points: [ageDays, value][] }. Sampled every `step` days.
+ * { p, points: [ageDays, value][] }. Sampled every `step` days. None with no chart.
  */
 export function curves(
   measure: Measure,
   fromDay: number,
   toDay: number,
-  step = 1
+  step: number,
+  chart: WhoChart | null
 ): { p: (typeof CURVE_PERCENTILES)[number]; points: [number, number][] }[] {
+  if (!chart) return [];
   const start = Math.max(0, Math.floor(fromDay));
   const end = Math.min(MAX_DAY, Math.ceil(toDay));
   return CURVE_PERCENTILES.map((p) => {
     const points: [number, number][] = [];
     for (let d = start; d <= end; d += step) {
-      const [L, M, S] = lms(measure, d)!;
+      const [L, M, S] = lms(chart, measure, d)!;
       const v = valueAt(L, M, S, CURVE_Z[p]);
       points.push([d, measure === "weight" ? v * 1000 : v]);
     }
     if (points.length && points[points.length - 1][0] !== end) {
-      const [L, M, S] = lms(measure, end)!;
+      const [L, M, S] = lms(chart, measure, end)!;
       const v = valueAt(L, M, S, CURVE_Z[p]);
       points.push([end, measure === "weight" ? v * 1000 : v]);
     }

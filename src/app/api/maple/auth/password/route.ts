@@ -5,6 +5,7 @@ import {
   isPasswordConfigured,
   setSessionCookies,
 } from "@/lib/maple/auth";
+import { adminFamilyId } from "@/lib/maple/family";
 import { checkUploadRateLimit } from "@/lib/rate-limit";
 import { captureServerException } from "@/lib/posthog-server";
 
@@ -12,7 +13,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * Fallback sign-in with the site admin login, so the log works before
- * Google sign-in is set up. Signs in as the "admin" owner pseudo-member.
+ * Google sign-in is set up. Signs in as the "admin" owner pseudo-member of
+ * its one family (MAPLE_ADMIN_FAMILY_ID, default 1).
  */
 export async function POST(request: NextRequest) {
   try {
@@ -36,7 +38,7 @@ export async function POST(request: NextRequest) {
     if (!member) return NextResponse.json({ error: "Maple's log is offline right now" }, { status: 503 });
 
     const res = NextResponse.json({ ok: true, member });
-    setSessionCookies(res, member.email);
+    setSessionCookies(res, member.email, adminFamilyId());
     return res;
   } catch (error) {
     await captureServerException(error, { route: "POST /api/maple/auth/password" });

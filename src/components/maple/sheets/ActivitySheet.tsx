@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { TUMMY_NOTE, tummyGoalMinutes } from "@/lib/maple/guidelines";
+import { tummyGoalMinutes, tummyNote } from "@/lib/maple/guidelines";
 import { formatDuration } from "@/lib/maple/time";
 import { KIND_COLOR } from "../palette";
+import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Sheet, TimeRange, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import { ContextNote, Label, LoggedBy, NoteField, RunningNote, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase } from "./parts";
@@ -23,6 +24,7 @@ export default function ActivitySheet(props: SheetProps) {
 
 function TummyForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, summary, log, update, remove, now, ageDays, age } = useSheetBase();
+  const voice = useVoice();
   const e = entry?.kind === "tummy" ? entry : undefined;
   const running = !!e?.active;
   const [range, setRange] = useState<[Date, Date]>(() => {
@@ -94,7 +96,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
       )}
       <NoteField value={note} onChange={setNote} />
       {age && <TummyProgress soFar={soFar} goal={goal} />}
-      <ContextNote>{TUMMY_NOTE}</ContextNote>
+      <ContextNote>{tummyNote(voice)}</ContextNote>
     </Sheet>
   );
 }
@@ -186,6 +188,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
 
 /** Today's tummy time against her daily goal: a plain sentence over a thin bar in the kind's color. */
 function TummyProgress({ soFar, goal }: { soFar: number; goal: number }) {
+  const w = useBabyWords();
   const pct = goal > 0 ? Math.min(100, (soFar / goal) * 100) : 0;
   return (
     <div>
@@ -195,7 +198,7 @@ function TummyProgress({ soFar, goal }: { soFar: number; goal: number }) {
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-mp-sunken" aria-hidden>
         <div className="mp-kind-fill h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: KIND_COLOR.tummy }} />
       </div>
-      <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>Goal about {goal} min a day at her age</p>
+      <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>Goal about {goal} min a day at {w.his} age</p>
     </div>
   );
 }

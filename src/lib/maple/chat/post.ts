@@ -6,6 +6,7 @@ import type { Baby, Member } from "../types";
 import { capsVerdict, threadFull, type Usage } from "./caps";
 import { mentionsCrisis } from "./crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, titleFrom, userMessage, withCrisisHelp, type Incoming } from "./messages";
+import type { ToolCopy } from "../mcp-tools";
 import type { ModelPrice } from "./prices";
 import { contextLine } from "./prompt";
 import type { LockedThread, UsageRow } from "./store";
@@ -32,14 +33,17 @@ export type ChatStore = {
 
 export type PostDeps = {
   store: ChatStore;
-  /** The family's baby and members, read only once the request is worth answering. */
-  household: () => Promise<{ baby: Baby; members: Member[] }>;
+  /** The family's baby, members and words (its ToolCopy), read only once the request is worth answering. */
+  household: () => Promise<{ familyId: number; baby: Baby; members: Member[]; copy: ToolCopy }>;
+  /** The baby's name and nickname for the crisis check; a failed read leaves it the generic words. */
+  crisisNames?: () => Promise<(string | null | undefined)[]>;
   model: LanguageModel;
   modelKey: string;
   price: ModelPrice | null;
   /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). */
-  tools: (opts: { born: boolean; care: boolean }) => ToolSet;
-  budget: { day: bigint; month: bigint };
+  tools: (opts: { born: boolean; care: boolean; copy: ToolCopy }) => ToolSet;
+  /** The family's chat budget, read only once the request is worth answering. */
+  budget: () => Promise<{ day: bigint; month: bigint }>;
   now: Date;
   /** Gets every error already scrubbed (`scrub`), so whatever it logs carries no message text. */
   report: (error: Error) => void;
@@ -79,7 +83,8 @@ function failure(error: unknown, report: (e: unknown) => void): Response {
 export async function answerPost(body: PostBody, member: Member, raw: PostDeps): Promise<Response> {
   const report = (e: unknown) => raw.report(scrub(e));
   const deps = { ...raw, report };
-  const crisis = mentionsCrisis(roughText(body.message));
+  const names = raw.crisisNames ? await raw.crisisNames().catch(() => []) : [];
+  const crisis = mentionsCrisis(roughText(body.message), names);
   const res = await postTurn(body, member, crisis, deps).catch((e: unknown) => failure(e, report));
   return crisis ? withCrisisHelp(res) : res;
 }
@@ -105,11 +110,11 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   if (!consent.terms) return refuse({ error: CHAT_TERMS_NEEDED, code: "terms" }, 403);
   const care = consent.care && member.role !== "viewer";
 
-  const { baby, members } = await deps.household();
+  const { familyId, baby, members, copy } = await deps.household();
   const tz = baby.timezone || DEFAULT_TZ;
   const today = dayKey(deps.now, tz);
   const usage = await store.usageSince(member.email, today, dayBounds(today, tz)[0], startOfDay(`${today.slice(0, 8)}01`, tz));
-  const limit = capsVerdict(usage, { role: member.role, newMessage: incoming.kind === "user", budget: deps.budget });
+  const limit = capsVerdict(usage, { role: member.role, newMessage: incoming.kind === "user", budget: await deps.budget() });
   if (limit) return refuse({ error: limit, code: "limit" }, 429);
 
   const viewer = member.role === "viewer";
@@ -134,7 +139,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     let stepsDone = 0;
     if (incoming.kind === "user") {
       if (threadFull(thread)) return refuse({ error: FULL, code: "new_chat" }, 409);
-      const line = contextLine({ now: deps.now, baby, name: memberName(member.email, members), role: member.role });
+      const line = contextLine({ now: deps.now, baby, name: memberName(member.email, members), role: member.role, familyId });
       const stored = userMessage(newMessageId(), incoming.text, line);
       const prior = denyPending(history);
       await store.countMessage(member.email, today);
@@ -155,9 +160,10 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       model: deps.model,
       modelKey: deps.modelKey,
       price,
-      tools: deps.tools({ born: !!baby.born_at, care }),
+      tools: deps.tools({ born: !!baby.born_at, care, copy }),
       viewer,
       care,
+      copy,
       messages,
       responseId,
       crisis,

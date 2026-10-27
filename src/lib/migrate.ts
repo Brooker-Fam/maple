@@ -1,13 +1,19 @@
-import { neon } from "@neondatabase/serverless";
+import { pathToFileURL } from "node:url";
+import { query, transaction } from "./db";
+import { FAMILY_OPTIONAL_TABLES, FAMILY_TABLES } from "./maple/family-tables";
+import { migrateSignup } from "./maple/family/schema";
 
-async function migrate() {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
+async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
+  const text = strings.reduce((out, part, i) => `${out}$${i}${part}`);
+  return (await query(text, values)) ?? [];
+}
+
+export async function migrate() {
+  if (!process.env.DATABASE_URL) {
     console.log("No DATABASE_URL set, skipping migration.");
     return;
   }
 
-  const sql = neon(databaseUrl);
   console.log("Running database migrations...");
 
   // Fixed-hourly-window counter keyed by hashed IP — caps how many upload tokens
@@ -45,11 +51,6 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
-  `;
-  await sql`
-    INSERT INTO maple_babies (name, nickname, sex, due_date)
-    SELECT 'Maple Jane', 'Maple', 'female', DATE '2026-10-20'
-    WHERE NOT EXISTS (SELECT 1 FROM maple_babies)
   `;
 
   await sql`
@@ -396,10 +397,177 @@ async function migrate() {
   // A due month can say someone is pregnant, so the waitlist keeps none.
   await sql`UPDATE maple_waitlist SET baby_month = NULL WHERE baby_month IS NOT NULL`;
 
+  await migrateFamilies();
+  await migrateSignup();
+
   console.log("Migrations complete.");
 }
 
-migrate().catch((err) => {
-  console.error("Migration failed:", err);
-  process.exit(1);
-});
+// ========================================
+// FAMILIES (docs/multi-family-plan.md, Phase 1: expand only)
+// Every family-owned maple_* row gets a family_id. The Brooker family is
+// family 1, and DEFAULT 1 files a row from code that doesn't pass one yet
+// (brooker-wedding's copy of Maple writes these tables too) under them. New
+// unique keys sit beside the old ones, which brooker-wedding's ON CONFLICT
+// targets still name. Nothing here drops, renames, retypes or tightens: that
+// is the separate contract step, never run from a build.
+// ========================================
+
+export async function migrateFamilies() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_families (
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT,
+      timezone TEXT NOT NULL,
+      country TEXT NOT NULL DEFAULT 'US',
+      units TEXT NOT NULL DEFAULT 'us' CHECK (units IN ('us', 'metric')),
+      status TEXT NOT NULL DEFAULT 'onboarding' CHECK (status IN ('onboarding', 'active', 'deleting')),
+      plan TEXT NOT NULL DEFAULT 'beta' CHECK (plan IN ('beta', 'free', 'plus')),
+      settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      onboarding JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ai_daily_micro BIGINT,
+      ai_monthly_micro BIGINT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      delete_requested_at TIMESTAMPTZ
+    )
+  `;
+  await sql`
+    INSERT INTO maple_families (id, timezone, status)
+    SELECT 1, COALESCE((SELECT timezone FROM maple_babies ORDER BY id LIMIT 1), 'America/New_York'), 'active'
+    ON CONFLICT (id) DO NOTHING
+  `;
+  // Only while the sequence is unused: setting it from MAX(id) later would hand a deleted family's id to a new one.
+  await sql`SELECT setval('maple_families_id_seq', GREATEST(1, (SELECT MAX(id) FROM maple_families)), true) FROM maple_families_id_seq WHERE NOT is_called`;
+
+  for (const table of FAMILY_TABLES) {
+    await addColumn(table, "family_id", "BIGINT DEFAULT 1");
+    await familyKey(table, "");
+  }
+  for (const table of FAMILY_OPTIONAL_TABLES) {
+    await addColumn(table, "family_id", "BIGINT");
+  }
+  await familyKey("maple_push_sent", "ON DELETE CASCADE");
+  await familyKey("maple_ai_usage", "ON DELETE SET NULL");
+
+  for (const table of FAMILY_TABLES) {
+    await query(`UPDATE ${table} SET family_id = 1 WHERE family_id IS NULL`);
+  }
+  // While the Brookers are the only family, every cost row and missed-reminder record is theirs.
+  await sql`UPDATE maple_ai_usage SET family_id = 1 WHERE family_id IS NULL AND NOT EXISTS (SELECT 1 FROM maple_families WHERE id <> 1)`;
+  await sql`
+    UPDATE maple_push_sent SET family_id = 1
+    WHERE family_id IS NULL AND (key LIKE 'miss:%' OR key LIKE 'gap:%') AND NOT EXISTS (SELECT 1 FROM maple_families WHERE id <> 1)
+  `;
+
+  // Upload tokens signed per family per day, for the per-family photo quota (not family 1's: it has none).
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_upload_counts (
+      family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
+      day DATE NOT NULL,
+      tokens INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (family_id, day)
+    )
+  `;
+
+  await addColumn("maple_babies", "archived_at", "TIMESTAMPTZ");
+  await addColumn("maple_members", "role_word", "TEXT");
+  await addColumn("maple_members", "accepted_at", "TIMESTAMPTZ");
+  await addColumn("maple_invites", "email", "TEXT");
+
+  // With every row in family 1 these hold exactly when the old keys do, so they build cleanly beside them.
+  await index("uniq_maple_babies_family_id", "maple_babies (family_id, id)", true);
+  await index("uniq_maple_members_family_email", "maple_members (family_id, email)", true);
+  await index("uniq_maple_removed_family_email", "maple_removed (family_id, email)", true);
+  await index("uniq_maple_entries_family_client", "maple_entries (family_id, client_id) WHERE client_id IS NOT NULL", true);
+  await index("uniq_maple_care_people_family", "maple_care_people (family_id)", true);
+  await index("uniq_maple_care_meds_family_client", "maple_care_meds (family_id, client_id) WHERE client_id IS NOT NULL", true);
+  await index("uniq_maple_care_entries_family_client", "maple_care_entries (family_id, client_id) WHERE client_id IS NOT NULL", true);
+  await index("uniq_maple_care_mood_family_client", "maple_care_mood (family_id, client_id) WHERE client_id IS NOT NULL", true);
+  await index("uniq_maple_push_subs_family_endpoint", "maple_push_subs (family_id, endpoint)", true);
+  await index("uniq_maple_chat_daily_family", "maple_chat_daily (family_id, member, day)", true);
+  await index("uniq_maple_consents_family", "maple_consents (family_id, member, kind)", true);
+
+  await index("idx_maple_entries_family_time", "maple_entries (family_id, baby_id, started_at DESC) WHERE deleted_at IS NULL");
+  await index("idx_maple_entries_family_kind", "maple_entries (family_id, baby_id, kind, started_at DESC) WHERE deleted_at IS NULL");
+  await index("idx_maple_entries_family_updated", "maple_entries (family_id, baby_id, updated_at DESC)");
+  await index("idx_maple_invites_family", "maple_invites (family_id, created_at DESC)");
+  await index("idx_maple_tokens_family", "maple_tokens (family_id, member)");
+  await index("idx_maple_care_meds_family", "maple_care_meds (family_id, sort, id) WHERE deleted_at IS NULL");
+  await index("idx_maple_care_entries_family_time", "maple_care_entries (family_id, at DESC) WHERE deleted_at IS NULL");
+  await index("idx_maple_care_entries_family_updated", "maple_care_entries (family_id, updated_at DESC)");
+  await index("idx_maple_care_mood_family_time", "maple_care_mood (family_id, at DESC)");
+  await index("idx_maple_push_subs_family", "maple_push_subs (family_id, member)");
+  await index("idx_maple_push_sent_family", "maple_push_sent (family_id, sent_at DESC) WHERE family_id IS NOT NULL");
+  await index("idx_maple_chat_threads_family", "maple_chat_threads (family_id, member, updated_at DESC)");
+  await index("idx_maple_chat_messages_family_daily", "maple_chat_messages (family_id, member, created_at DESC) WHERE role = 'user'");
+  await index("idx_maple_ai_usage_family_time", "maple_ai_usage (family_id, created_at DESC)");
+}
+
+/** ALTER TABLE only when the column is missing: even a no-op ADD COLUMN IF NOT EXISTS takes the table's lock. */
+async function addColumn(table: string, column: string, type: string) {
+  const rows = await sql`SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ${table} AND column_name = ${column}`;
+  if (!rows.length) await alter(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${type}`);
+}
+
+const codeOf = (err: unknown) => String((err as { code?: unknown })?.code ?? "");
+
+/** The family foreign key, added NOT VALID and then validated, so no write waits on the check of existing rows. */
+async function familyKey(table: string, onDelete: string) {
+  const name = `fk_${table}_family`;
+  const rows = await sql`SELECT convalidated FROM pg_constraint WHERE conname = ${name} AND conrelid = to_regclass(${table})`;
+  if (!rows.length) {
+    try {
+      await alter(`ALTER TABLE ${table} ADD CONSTRAINT ${name} FOREIGN KEY (family_id) REFERENCES maple_families(id) ${onDelete} NOT VALID`);
+    } catch (err) {
+      // 42710: another build migrating the same database (a Preview beside Production) added it first.
+      if (codeOf(err) !== "42710") throw err;
+    }
+  }
+  if (!rows[0]?.convalidated) await alter(`ALTER TABLE ${table} VALIDATE CONSTRAINT ${name}`);
+}
+
+/**
+ * CONCURRENTLY never blocks the family's writes; a build that failed half-way
+ * leaves an invalid index, rebuilt here. Another build creating the same
+ * index at the same time is left to finish it (a later build rebuilds it if
+ * that one stopped). A driver that runs every statement in a transaction
+ * block gets the plain build: a short write lock on a small table.
+ */
+async function index(name: string, on: string, unique = false) {
+  const rows = await sql`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(${name})`;
+  if (rows[0]?.indisvalid) return;
+  const make = `CREATE ${unique ? "UNIQUE " : ""}INDEX`;
+  try {
+    if (rows.length) await query(`DROP INDEX CONCURRENTLY IF EXISTS ${name}`);
+    await query(`${make} CONCURRENTLY IF NOT EXISTS ${name} ON ${on}`);
+  } catch (err) {
+    const code = codeOf(err);
+    const constraint = (err as { constraint?: unknown })?.constraint;
+    if (code === "42P07" || (code === "23505" && constraint === "pg_class_relname_nsp_index")) return;
+    if (code !== "25001") throw err;
+    if (rows.length) await alter(`DROP INDEX IF EXISTS ${name}`);
+    await alter(`${make} IF NOT EXISTS ${name} ON ${on}`);
+  }
+}
+
+/** Each ALTER waits at most 3 s for its lock (a queued ALTER would stall every request behind it), then retries. */
+async function alter(statement: string) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await transaction([{ sql: "SET LOCAL lock_timeout = '3s'" }, { sql: statement }]);
+      return;
+    } catch (err) {
+      if ((err as { code?: string }).code !== "55P03" || attempt >= 5) throw err;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  migrate().catch((err) => {
+    console.error("Migration failed:", err);
+    process.exit(1);
+  });
+}

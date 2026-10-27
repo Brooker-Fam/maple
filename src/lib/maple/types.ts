@@ -240,7 +240,15 @@ export type MapleState = {
   seen_at: string | null;
   /** Mom's area, filtered by careAccess for this reader; absent when they can't read anything there. */
   care?: CareState;
+  /**
+   * The family this session acts in: its id (family 1 keeps the Brookers'
+   * own words and presets) and who a view-only guest asks to change
+   * something ("Matt or Brittany" for family 1, else its owners' names).
+   */
+  family?: FamilyInfo;
 };
+
+export type FamilyInfo = { id: number; ask: string };
 
 export type MapleStateUnchanged = { unchanged: true; now: string; rev: string };
 

@@ -2,10 +2,11 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mentionsCrisis } from "@/lib/maple/chat/crisis";
 import { CHAT_MAX_CHARS, type ChatMessage, type ChatThread } from "@/lib/maple/chat/types";
 import { deviceHeaders } from "@/lib/maple/device";
+import { shownFamilyHeaders } from "../shownFamily";
 import { useMaple } from "../useMaple";
 import { useChatNav } from "./ChatNav";
 import { DROPPED, needsHelpCard, problemFor, refusalOf, textOf, unanswered } from "./stopped";
@@ -21,15 +22,18 @@ const newThreadId = () => crypto.randomUUID();
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/maple/chat",
-  // This install's id, so her "Logged" notice skips the phone the chat ran on.
-  headers: () => deviceHeaders(),
+  // This install's id, so her "Logged" notice skips the phone the chat ran on; and the family this tab shows.
+  headers: () => ({ ...deviceHeaders(), ...shownFamilyHeaders() }),
   // Only the newest message goes up: the server keeps the thread and never takes history from the phone.
   prepareSendMessagesRequest: ({ id, messages }) => ({ body: { threadId: id, message: messages[messages.length - 1] } }),
 });
 
 export function useChatThread(open: boolean) {
-  const { api, refresh, online } = useMaple();
+  const { api, refresh, online, state } = useMaple();
   const { termsNeeded } = useChatNav();
+  const babyName = state?.baby.name;
+  const babyNickname = state?.baby.nickname;
+  const names = useMemo(() => [babyName, babyNickname], [babyName, babyNickname]);
   const [thread, setThread] = useState<{ id: string; initial: ChatMessage[] } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
@@ -63,7 +67,7 @@ export function useChatThread(open: boolean) {
       if (refusal?.code === "terms") termsNeeded();
       setProblem(problemFor(err.message));
       // No answer, or one cut off before its card: the help card shows here instead.
-      if (!helpArrived.current && (refusal?.help === "crisis" || (lastSent.current != null && mentionsCrisis(lastSent.current)))) setHelp(true);
+      if (!helpArrived.current && (refusal?.help === "crisis" || (lastSent.current != null && mentionsCrisis(lastSent.current, names)))) setHelp(true);
       if (thread) void resync(thread.id);
       if (!refusal) return;
       chat.setMessages((ms) => {
@@ -100,12 +104,12 @@ export function useChatThread(open: boolean) {
         if (moved()) return;
         chat.setMessages(saved.messages);
         setProblem((p) => (p === DROPPED ? null : p));
-        setHelp(needsHelpCard(saved.messages, lastSent.current));
+        setHelp(needsHelpCard(saved.messages, lastSent.current, names));
         void refresh();
         return;
       }
     },
-    [api, chat, refresh]
+    [api, chat, refresh, names]
   );
 
   // Opening: the thread from the last six hours, else a new one.
@@ -140,7 +144,7 @@ export function useChatThread(open: boolean) {
     (raw: string) => {
       const text = raw.trim();
       if (!text || busy || !thread) return;
-      const crisis = mentionsCrisis(text);
+      const crisis = mentionsCrisis(text, names);
       if (!online) {
         setProblem("Needs a connection. Logging still works from the buttons.");
         setHelp(crisis);
@@ -159,7 +163,7 @@ export function useChatThread(open: boolean) {
       lastSent.current = text;
       void chat.sendMessage({ text });
     },
-    [busy, chat, online, thread]
+    [busy, chat, online, thread, names]
   );
 
   // A thread that filled up hands the message that didn't fit to the new one.

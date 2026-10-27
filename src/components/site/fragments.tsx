@@ -92,7 +92,7 @@ export function GrowthFragment() {
   const W = 300;
   const H = 190;
   const days = 21;
-  const lines = curves("weight", 0, days, 1);
+  const lines = curves("weight", 0, days, 1, "girls");
   const all = lines.flatMap((l) => l.points.map(([, g]) => g));
   const lo = Math.min(...all) - 150;
   const hi = Math.max(...all) + 250;
@@ -100,7 +100,7 @@ export function GrowthFragment() {
   const y = (g: number) => H - 14 - ((g - lo) / (hi - lo)) * (H - 28);
   const path = (pts: [number, number][]) => pts.map(([d, g], i) => `${i ? "L" : "M"}${x(d).toFixed(1)} ${y(g).toFixed(1)}`).join(" ");
   const [lastDay, lastG] = JUNE_WEIGHTS[JUNE_WEIGHTS.length - 1];
-  const p = percentileFor("weight", lastG, lastDay);
+  const p = percentileFor("weight", lastG, lastDay, "girls");
   const pct = p?.label ?? null;
   return (
     <Fragment label={`Sample chart: June's weight over her first two weeks on the WHO girls' percentile curves${pct ? `, now near the ${pct} percentile` : ""}.`}>

@@ -6,16 +6,17 @@ import {
   BLUES_NOTE,
   CHECKIN_NOTE_PLACEHOLDER,
   CHECKIN_SUB,
-  CHECKIN_SUGGEST,
   CHECKIN_TITLE,
   FULL_INTRO,
   MOOD_OPTIONS,
-  MOOD_TAGS,
+  checkinSuggest,
+  moodTags,
   type Assessment,
   type MoodTag,
 } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { MoodEntry } from "@/lib/maple/types";
+import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { AssessmentCard } from "../sheets/parts";
 import { Button, SectionTitle, Sheet, TextArea, cx, tone } from "../ui";
@@ -48,7 +49,7 @@ type Mood = NonNullable<UseCare["mood"]>;
 const CORRECT_MS = 30 * 60_000;
 
 const levelLabel = (level: number) => MOOD_OPTIONS.find((o) => o.value === level)?.label ?? "";
-const tagText = (tags: MoodTag[] | undefined) => (tags ?? []).map((t) => MOOD_TAGS[t]).join(", ");
+const tagText = (tags: MoodTag[] | undefined, labels: Record<MoodTag, string>) => (tags ?? []).map((t) => labels[t]).join(", ");
 
 export function CheckInSection() {
   const care = useCare();
@@ -60,6 +61,7 @@ export default CheckInSection;
 
 function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   const { state, now } = useMaple();
+  const voice = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const t = now();
   const todayKey = dayKey(t, tz);
@@ -102,7 +104,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   const cards: Assessment[] = [];
   let blues = false;
   for (const c of todays) {
-    const r = checkinResponse(c.data, { daysSinceBirth: day });
+    const r = checkinResponse(c.data, { daysSinceBirth: day, voice });
     for (const a of r.cards) if (!cards.some((x) => x.title === a.title)) cards.push(a);
     blues ||= r.blues;
   }
@@ -158,7 +160,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
                     onClick={() => setExtras(true)}
                     className="-ml-1 flex min-h-[44px] w-full items-center gap-1.5 rounded-lg px-1 text-left text-[15px] text-mp-ink-2"
                   >
-                    <span className="min-w-0 flex-1 truncate">{tagText(today.data.tags) || today.note || "Anything else? (optional)"}</span>
+                    <span className="min-w-0 flex-1 truncate">{tagText(today.data.tags, moodTags(voice)) || today.note || "Anything else? (optional)"}</span>
                     <Icon name="pencil" size={15} className="shrink-0 text-mp-ink-3" />
                   </button>
                 )}
@@ -180,7 +182,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
 
         {mood.suggestion && (
           <div className={cx(tone.card, "p-4")}>
-            <p className={cx(tone.body, "text-[15px] leading-relaxed")}>{CHECKIN_SUGGEST[mood.suggestion]}</p>
+            <p className={cx(tone.body, "text-[15px] leading-relaxed")}>{checkinSuggest(voice)[mood.suggestion]}</p>
             <div className="mt-3 flex gap-2">
               <Button size="sm" onClick={() => setFull(true)}>
                 Start
@@ -274,6 +276,7 @@ function Extras({
 }) {
   const [note, setNote] = useState(entry.note ?? "");
   const [problem, setProblem] = useState<string | null>(null);
+  const labels = moodTags(useVoice());
   const tags = entry.data.tags ?? [];
 
   const toggle = (tag: MoodTag) => {
@@ -294,7 +297,7 @@ function Extras({
         Anything else? <span className="font-normal text-mp-ink-3">(optional)</span>
       </p>
       <div className="flex flex-wrap gap-1.5">
-        {(Object.keys(MOOD_TAGS) as MoodTag[]).map((tag) => {
+        {(Object.keys(labels) as MoodTag[]).map((tag) => {
           const on = tags.includes(tag);
           return (
             <button
@@ -308,7 +311,7 @@ function Extras({
               )}
             >
               {on && <Icon name="check" size={14} strokeWidth={2.25} className="shrink-0" />}
-              {MOOD_TAGS[tag]}
+              {labels[tag]}
             </button>
           );
         })}
@@ -338,10 +341,11 @@ function Extras({
 
 /** One row of "Your check-ins": "Thu, Oct 29 · Low · Tearful, Overwhelmed", her note under it, the time on the right. */
 function PastRow({ m, todayKey, tz, onOpen }: { m: MoodEntry; todayKey: string; tz: string; onOpen: () => void }) {
+  const labels = moodTags(useVoice());
   const day = formatDayLabel(dayKey(new Date(m.at), tz), todayKey);
   const line =
     m.kind === "checkin"
-      ? [day, levelLabel(m.data.level), tagText(m.data.tags)].filter(Boolean).join(" · ")
+      ? [day, levelLabel(m.data.level), tagText(m.data.tags, labels)].filter(Boolean).join(" · ")
       : `${day} · ${FULL_INTRO.title}${m.data.complete ? "" : " · unfinished"}`;
   return (
     <button type="button" onClick={onOpen} className={cx(tone.row, "min-h-[52px] py-2.5")}>
@@ -373,6 +377,7 @@ function CheckInSheet({
   onCrisis: () => void;
 }) {
   const { state, now } = useMaple();
+  const voice = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -384,7 +389,7 @@ function CheckInSheet({
   const live = base ? (care.mood?.checkins.find((c) => c.id === base.id) ?? base) : null;
   if (!live) return null;
   const when = `${formatDayLabel(dayKey(new Date(live.at), tz), dayKey(now(), tz))} · ${formatTime(live.at, tz)}`;
-  const cards = checkinResponse(live.data, { daysSinceBirth: null }).cards;
+  const cards = checkinResponse(live.data, { daysSinceBirth: null, voice }).cards;
 
   const remove = async () => {
     setBusy(true);

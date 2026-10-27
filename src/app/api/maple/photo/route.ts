@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { get } from "@vercel/blob";
 import { BadRequest, idParam, withMember } from "@/lib/maple/api";
-import { blobToken } from "@/lib/maple/blob";
+import { blobBelongsTo, blobToken } from "@/lib/maple/blob";
 import { getEntry, NotFound } from "@/lib/maple/store";
 import { MAPLE_BLOB_RE } from "@/lib/maple/validate";
 
@@ -13,8 +13,10 @@ const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
  * GET /api/maple/photo?entry=<id>&i=<index>&size=thumb|full
  *
  * The only way a moment's photo reaches a browser. Checks the family session
- * here (not in middleware), looks the blob up by position on the entry, and
- * streams it back. Never redirects to the blob URL, which stays server-side.
+ * here (not in middleware), looks the entry up in the session's family only
+ * (another family's moment is "not found"), takes the blob by position on it,
+ * and serves it only from that family's own paths. Streams it back; never
+ * redirects to the blob URL, which stays server-side.
  *
  * Caching: `private, max-age=1y, immutable` + ETag. What a URL points at can't
  * change: blob paths are random and never overwritten, entry ids are never
@@ -26,7 +28,7 @@ const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
  * photos ever become removable from a moment, switch this to `private,
  * no-cache` (the ETag/304 path below already handles revalidation).
  */
-export const GET = withMember("GET /api/maple/photo", async (request: NextRequest) => {
+export const GET = withMember("GET /api/maple/photo", async (request: NextRequest, _me, ctx) => {
   const sp = new URL(request.url).searchParams;
   const entryId = idParam(request, "entry");
   const index = Number(sp.get("i") ?? "0");
@@ -34,12 +36,12 @@ export const GET = withMember("GET /api/maple/photo", async (request: NextReques
   const size = sp.get("size") ?? "thumb";
   if (size !== "thumb" && size !== "full") throw new BadRequest("size must be thumb or full");
 
-  const entry = await getEntry(entryId);
+  const entry = await getEntry(ctx, entryId);
   if (!entry || entry.kind !== "moment") return notFound();
   const ref = entry.data.photos?.[index];
   // Thumbs are best-effort at upload time; fall back to the full image.
   const key = size === "thumb" ? ref?.thumb_key || ref?.key : ref?.key;
-  if (!ref || !key || !MAPLE_BLOB_RE.test(key)) return notFound();
+  if (!ref || !key || !MAPLE_BLOB_RE.test(key) || !blobBelongsTo(key, ctx.familyId)) return notFound();
 
   const access = ref.access ?? (key.includes(".private.blob.") ? "private" : "public");
   const token = blobToken(access);

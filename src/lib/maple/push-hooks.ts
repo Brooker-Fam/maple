@@ -11,6 +11,9 @@ import { captureServerException } from "@/lib/posthog-server";
  * This file stays tiny on purpose: the stores import it, and the heavy
  * modules (push.ts, notify.ts) are loaded inside the task, so there's no
  * import cycle between the stores and the notification code.
+ *
+ * Each hook names the writer's family, and only that family's phones hear
+ * of it.
  */
 
 type Task = () => Promise<void>;
@@ -44,22 +47,24 @@ export function later(task: Task, route = "maple notify"): void {
 }
 
 /**
- * Her medicines changed (a dose, a skip, a plan, an edit or delete): re-arm
- * the exact-time wake-ups, send "Logged" for a new dose or skip (`doseId`,
- * from the phone `device`, when there is one), and run a tick so anything
- * that's now due goes out.
+ * Her medicines changed in `familyId` (a dose, a skip, a plan, an edit or
+ * delete): re-arm that family's exact-time wake-ups, send "Logged" for a new
+ * dose or skip (`doseId`, from the phone `device`, when there is one), and
+ * run its tick so anything that's now due goes out.
  */
-export function careChanged(opts: { doseId?: number; device?: string | null } = {}): void {
+export function careChanged(opts: { familyId: number; doseId?: number; device?: string | null }): void {
   later(async () => {
     const { afterCareWrite } = await import("./notify");
-    await afterCareWrite(opts);
+    const { familyId, ...rest } = opts;
+    await afterCareWrite(familyId, rest);
   }, "maple notify care");
 }
 
-/** A nursing timer changed (start, switch, break, back on, done, discard, a fix): update its lock-screen notice. */
-export function nursingChanged(entryId: number): void {
+/** A nursing timer changed in `familyId` (start, switch, break, back on, done, discard, a fix): update its lock-screen notice. */
+export function nursingChanged(entryId: number, familyId: number): void {
   later(async () => {
-    const { notifyNursing } = await import("./notify");
-    await notifyNursing(entryId);
+    const [{ notifyNursing }, { familyScope }] = await Promise.all([import("./notify"), import("./family")]);
+    const scope = await familyScope(familyId);
+    if (scope) await notifyNursing(scope, entryId);
   }, "maple notify nursing");
 }

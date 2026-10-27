@@ -2,9 +2,10 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState, type ReactNode } from "react";
-import { DISCLAIMER, EMERGENCY_SIGNS, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT, type AlertTier } from "@/lib/maple/guidelines";
+import { DISCLAIMER, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT, emergencySigns, type AlertTier } from "@/lib/maple/guidelines";
 import type { Alert } from "@/lib/maple/insights";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
+import { useVoice } from "./familyWords";
 import { Icon, type IconName } from "./icons";
 import type { TabId } from "./MapleApp";
 import { useSheets } from "./sheets";
@@ -402,6 +403,7 @@ export function AlertNote({ alert, mom }: { alert: { tier: AlertTier; label: str
 
 /** The always-there footer: "When to call 911" and the disclaimer. */
 export function EmergencyHelp() {
+  const voice = useVoice();
   const [open, setOpen] = useState(false);
   const phones = usePhones();
   const numbers = [
@@ -425,7 +427,7 @@ export function EmergencyHelp() {
         <p className={cx(tone.faint, "mx-auto max-w-xs text-[12px] leading-snug")}>{DISCLAIMER}</p>
       </div>
       <Sheet open={open} onClose={() => setOpen(false)} title="When to call 911">
-        <p className={cx(tone.body, "text-[17px] leading-relaxed")}>{EMERGENCY_SIGNS}</p>
+        <p className={cx(tone.body, "text-[17px] leading-relaxed")}>{emergencySigns(voice)}</p>
         <a
           href="tel:911"
           className={cx("flex min-h-[56px] items-center justify-center gap-2 rounded-[14px] text-[17px] font-semibold active:scale-[0.98]", EMERGENCY_FILL)}

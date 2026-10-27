@@ -6,6 +6,7 @@ import { NOTE_TAGS, type NoteData, type NoteTag } from "@/lib/maple/types";
 import { useCareNav } from "../care/CareNav";
 import { useCare } from "../care/useCare";
 import { Icon } from "../icons";
+import { useBabyWords } from "../familyWords";
 import { Chip, Segmented, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import { Label, LoggedBy, SheetFooter, pbool, presetStart, pstr, useOpenCount, useSheetBase, withNulls } from "./parts";
@@ -28,6 +29,7 @@ export default function NoteSheet(props: SheetProps) {
 
 function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, now, clock } = useSheetBase();
+  const w = useBabyWords();
   const e = entry?.kind === "note" ? entry : undefined;
   const care = useCare();
   const careNav = useCareNav();
@@ -71,7 +73,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
     void log(
       { kind: "note", started_at: doctor ? undefined : when?.toISOString(), data: clean, note: words || null },
       doctor
-        ? { toast: "Saved for her next visit" }
+        ? { toast: `Saved for ${w.his} next visit` }
         : { toast: `${label} · ${clock(when ?? now())}` }
     );
   };
@@ -105,8 +107,8 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
         <>
           <div>
             <Label>Question</Label>
-            <TextArea value={text} onChange={setText} rows={3} placeholder="Ask about the rash on her cheek…" />
-            {!e && <p className={cx(tone.muted, "mt-1.5 text-xs")}>It goes on the list for her next checkup. Anyone can add to it.</p>}
+            <TextArea value={text} onChange={setText} rows={3} placeholder={`Ask about the rash on ${w.his} cheek…`} />
+            {!e && <p className={cx(tone.muted, "mt-1.5 text-xs")}>It goes on the list for {w.his} next checkup. Anyone can add to it.</p>}
           </div>
           {!e && care?.access.write && (
             <button

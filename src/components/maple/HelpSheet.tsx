@@ -1,8 +1,9 @@
 "use client";
 
-import { DISCLAIMER, EMERGENCY_SIGNS, MOM_HELP } from "@/lib/maple/guidelines";
+import { DISCLAIMER, emergencySigns, momHelp } from "@/lib/maple/guidelines";
 import { EMERGENCY_FILL, usePhones } from "./AlertCard";
 import { useAppNav } from "./AppNav";
+import { useBabyWords, useVoice } from "./familyWords";
 import { useCareNav } from "./care/CareNav";
 import { telHref } from "./care/CareTeam";
 import { GROUP, NavRow } from "./care/parts";
@@ -26,12 +27,14 @@ import { useMaple } from "./useMaple";
  * same signs for "mom", so it never shows that a page exists.
  */
 export default function HelpSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { state, readOnly } = useMaple();
+  const { readOnly } = useMaple();
+  const w = useBabyWords();
+  const voice = useVoice();
   const care = useCare();
   const nav = useCareNav();
   const app = useAppNav();
   const phones = usePhones();
-  const baby = state ? (state.baby.nickname || state.baby.name).split(" ")[0] : "Maple";
+  const baby = w.name;
 
   // A launcher: it closes before what it opens, so that sheet isn't under it.
   const then = (fn: () => void) => {
@@ -61,7 +64,7 @@ export default function HelpSheet({ open, onClose }: { open: boolean; onClose: (
             <Icon name="siren" size={16} strokeWidth={2} className="shrink-0" />
             When to call 911
           </p>
-          <p className={cx(tone.body, "mt-1.5 text-[15px] leading-relaxed")}>{EMERGENCY_SIGNS}</p>
+          <p className={cx(tone.body, "mt-1.5 text-[15px] leading-relaxed")}>{emergencySigns(voice)}</p>
           <a
             href="tel:911"
             className={cx("mt-3.5 flex min-h-[52px] items-center justify-center gap-2 rounded-[14px] text-[17px] font-semibold active:scale-[0.98]", EMERGENCY_FILL)}
@@ -75,7 +78,7 @@ export default function HelpSheet({ open, onClose }: { open: boolean; onClose: (
         ) : (
           !readOnly && (
             <div className={GROUP}>
-              <NavRow icon="phone" label="Add her doctor's numbers" note="In Family → Her doctor, for one-tap calling" onClick={() => then(() => app.go("family"))} />
+              <NavRow icon="phone" label={`Add ${w.his} doctor's numbers`} note={`In Family → ${w.His} doctor, for one-tap calling`} onClick={() => then(() => app.go("family"))} />
             </div>
           )
         )}
@@ -90,7 +93,7 @@ export default function HelpSheet({ open, onClose }: { open: boolean; onClose: (
         {her.length > 0 && <CallRows rows={her} />}
         <div>
           <p className={cx(tone.label, "mb-1.5 px-1")}>If you need help now</p>
-          <HelpLines lines={MOM_HELP.now} />
+          <HelpLines lines={momHelp(voice).now} />
         </div>
         <TalkSection />
         <div className={GROUP}>

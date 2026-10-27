@@ -62,7 +62,10 @@ import {
 import { timerNumbers } from "../src/components/maple/FeedParts";
 import { sidesLabel } from "../src/components/maple/StatusCard";
 import { describeEntry } from "../src/lib/maple/describe";
-import { dailyStats, memberLabel, statsFor, summarize as summarizeDay } from "../src/lib/maple/insights";
+import { dailyStats, memberLabel, statsFor, summarize as summarizeWith } from "../src/lib/maple/insights";
+import { FAMILY_ONE_VOICE } from "../src/lib/maple/voice";
+
+const summarizeDay = (o: Omit<Parameters<typeof summarizeWith>[0], "vo">) => summarizeWith({ ...o, vo: FAMILY_ONE_VOICE });
 import { CLUSTER_CALL, clusterCall } from "../src/lib/maple/guidelines";
 import { cleanData } from "../src/lib/maple/validate";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
@@ -187,14 +190,14 @@ check("formatTimeNear drops a shared AM/PM only", () => {
   eq(formatTimeNear(T("11:58"), T("12:03"), TZ), "11:58 AM");
 });
 check("momentQuestion titles (§1.2)", () => {
-  eq(momentQuestion("feed_start", "L"), "When did the feed start?");
-  eq(momentQuestion("switch", "R"), "When did she switch to Right?");
-  eq(momentQuestion("pause", "L"), "When did she come off the Left?");
-  eq(momentQuestion("resume", "R"), "When did she go back on the Right?");
+  eq(momentQuestion("feed_start", "L", undefined, FAMILY_ONE_VOICE), "When did the feed start?");
+  eq(momentQuestion("switch", "R", undefined, FAMILY_ONE_VOICE), "When did she switch to Right?");
+  eq(momentQuestion("pause", "L", undefined, FAMILY_ONE_VOICE), "When did she come off the Left?");
+  eq(momentQuestion("resume", "R", undefined, FAMILY_ONE_VOICE), "When did she go back on the Right?");
   // fix-everything NEW[2]: "back on" only when she came off that side before the break.
-  eq(momentQuestion("resume", "R", "R"), "When did she go back on the Right?");
-  eq(momentQuestion("resume", "R", "L"), "When did she go on the Right?");
-  eq(momentQuestion("feed_end", "R"), "When did the feed end?");
+  eq(momentQuestion("resume", "R", "R", FAMILY_ONE_VOICE), "When did she go back on the Right?");
+  eq(momentQuestion("resume", "R", "L", FAMILY_ONE_VOICE), "When did she go on the Right?");
+  eq(momentQuestion("feed_end", "R", undefined, FAMILY_ONE_VOICE), "When did the feed end?");
 });
 
 // ── normalizeSegments (§9.1) ─────────────────────────────────────────────
@@ -219,7 +222,7 @@ check("normalize: a snap that leaves a sub-second stretch drops it too", () =>
   eqSegs(normalizeSegments(segs("L 16:00-16:10, R 16:09:59.5-16:10:00.6, L 16:10:01-"), { active: true }), "L 16:00-"));
 check("normalize: overlap over 1 s throws overlap", () => {
   const e = throwsCode(() => normalizeSegments(segs("L 16:00-16:10, R 16:05-16:20"), { active: false }), "overlap");
-  eq(feedEditCopy(e, "ui", TZ), "That overlaps Left 4:00–4:10.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "That overlaps Left 4:00–4:10.");
 });
 check("normalize: open stretch not last throws", () => throwsPlain(() => normalizeSegments(segs("L 16:00-, R 16:10-16:20"), { active: true }), "open"));
 check("normalize: open stretch on a finished feed throws", () => throwsPlain(() => normalizeSegments(segs("L 16:00-"), { active: false }), "finished"));
@@ -409,8 +412,8 @@ check("S1c: No break turns the resume into a switch", () => {
 check("S1c: restore segments validate", () => eqSegs(normalizeSegments(s1.segments!, { active: true }), "L 16:00-16:10, R 16:25-"));
 check("S1d: before the break is refused with the no-break hint", () => {
   const e = throwsCode(() => moveEdge(s1, { edge: "start", ref: ref("R", "16:25"), to: D("16:05") }, live("16:27")), "before_break");
-  eq(feedEditCopy(e, "ui", TZ), "Can't be before she came off (4:10 PM). For no break, pick 4:10.");
-  eq(feedEditCopy(e, "mcp", TZ), 'The break began at 4:10 PM. For no break, use at: "4:10 PM".');
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Can't be before she came off (4:10 PM). For no break, pick 4:10.");
+  eq(feedEditCopy(e, "mcp", TZ, FAMILY_ONE_VOICE), 'The break began at 4:10 PM. For no break, use at: "4:10 PM".');
 });
 check("S1d: preview at 4:20", () =>
   eq(preview(s1, { edge: "start", ref: ref("R", "16:25"), to: D("16:20") }, live("16:27")), "Break 15 → 10 min · Right 5 min longer · Left unchanged"));
@@ -437,12 +440,12 @@ check("feed start: ref omitted means the first stretch", () =>
   eqSegs(moveEdge(s1, { edge: "start", to: D("15:55") }, live("16:27")).data.segments, "L 15:55-16:10, R 16:25-"));
 check("feed start: more than 6 h before is too_early", () => {
   const e = throwsCode(() => moveEdge(feed("L 16:05-"), { edge: "start", to: D("10:04") }, live("16:06")), "too_early");
-  eq(feedEditCopy(e, "ui", TZ), "That's more than 6 hours before the feed started.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "That's more than 6 hours before the feed started.");
   eqTime(edgeBounds(feed("L 16:05-"), { edge: "start" }, live("16:06")).min, "10:05", "min");
 });
 check("feed start: after a closed first side ends is after_own_end", () => {
   const e = throwsCode(() => moveEdge(feed("L 16:00-16:15, R 16:15-16:30"), { edge: "start", to: D("16:15") }, done("17:00", "16:30")), "after_own_end");
-  eq(feedEditCopy(e, "ui", TZ), "Can't be after Left ended (4:15 PM).");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Can't be after Left ended (4:15 PM).");
 });
 check("feed start: an open side can't start in the future", () =>
   throwsCode(() => moveEdge(feed("L 16:05-"), { edge: "start", to: D("16:06:30") }, live("16:06")), "future"));
@@ -475,8 +478,8 @@ check("S3: switch 4 min earlier", () => {
 });
 check("S3: switch before Left began is before_prev_start", () => {
   const e = throwsCode(() => moveEdge(s3, { edge: "start", ref: ref("R", "16:16"), to: D("16:00") }, live("16:17")), "before_prev_start");
-  eq(feedEditCopy(e, "ui", TZ), "Can't be before Left started (4:00 PM).");
-  eq(feedEditCopy(e, "mcp", TZ), "Left started at 4:00 PM; the switch has to be after that.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Can't be before Left started (4:00 PM).");
+  eq(feedEditCopy(e, "mcp", TZ, FAMILY_ONE_VOICE), "Left started at 4:00 PM; the switch has to be after that.");
 });
 check("switch: a side under a minute falls back to the 1 s floor in the UI", () => {
   const b = edgeBounds(feed("L 16:00-16:00:30, R 16:00:30-"), { edge: "start", ref: ref("R", "16:00:30") }, live("16:05"));
@@ -514,7 +517,7 @@ check("feed end: to the future is refused", () =>
   throwsCode(() => moveEdge(feed("L 16:00-16:30"), { edge: "end", to: D("16:52") }, done("16:51", "16:30")), "future"));
 check("end: an open side can't end here (use_stop)", () => {
   const e = throwsCode(() => moveEdge(s3, { edge: "end", to: D("16:30") }, live("16:40")), "use_stop");
-  eq(feedEditCopy(e, "ui", TZ), "Use She already finished to end the feed.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Use She already finished to end the feed.");
   throwsCode(() => edgeBounds(s3, { edge: "end" }, live("16:40")), "use_stop");
 });
 
@@ -563,7 +566,7 @@ check("undo a resume goes back to paused", () => {
 });
 check("undo: a lone stretch is nothing_to_undo", () => {
   const e = throwsCode(() => undoLastTap(feed("L 16:00-"), { side: "L", start: T("16:00"), end: null }), "nothing_to_undo");
-  eq(feedEditCopy(e, "ui", TZ), "Nothing to undo; use Discard.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Nothing to undo; use Discard.");
 });
 check("undo: a stale expect is not_newest", () => {
   throwsCode(() => undoLastTap(feed("L 16:00-16:05, R 16:05-16:06, L 16:06-"), { side: "R", start: T("16:05"), end: null }), "not_newest");
@@ -600,7 +603,7 @@ check("S8c: a second switch to the same side 2 s later is a noop", () => {
 });
 check("switchTo explicit before the open side began is before_own_start", () => {
   const e = throwsCode(() => switchTo(feed("L 16:00-"), "R", D("15:59"), { explicit: true }), "before_own_start");
-  eq(feedEditCopy(e, "ui", TZ), "Can't be before Left started (4:00 PM).");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Can't be before Left started (4:00 PM).");
   throwsCode(() => switchTo(feed("L 16:00-"), "R", D("16:00:00.5"), { explicit: true }), "before_own_start");
 });
 check("paused: same side within 60 s merges (16:10:40)", () => {
@@ -660,9 +663,9 @@ check("end before a gap is the pause", () => {
 });
 check("pause: can't pass the resume or the side's start", () => {
   const late = throwsCode(() => moveEdge(s1, { edge: "end", ref: ref("L", "16:00"), to: D("16:26") }, live("16:27")), "after_next");
-  eq(feedEditCopy(late, "ui", TZ), "Can't be after Right started (4:25 PM).");
+  eq(feedEditCopy(late, "ui", TZ, FAMILY_ONE_VOICE), "Can't be after Right started (4:25 PM).");
   const early = throwsCode(() => moveEdge(s1, { edge: "end", ref: ref("L", "16:00"), to: D("16:00:00.5") }, live("16:27")), "before_own_start");
-  eq(feedEditCopy(early, "ui", TZ), "Can't be before Left started (4:00 PM).");
+  eq(feedEditCopy(early, "ui", TZ, FAMILY_ONE_VOICE), "Can't be before Left started (4:00 PM).");
   const b = edgeBounds(s1, { edge: "end", ref: ref("L", "16:00") }, live("16:27"));
   eqTime(b.min, "16:00:01", "min");
   eqTime(b.uiMin, "16:01", "uiMin");
@@ -693,7 +696,7 @@ check("legacy: the last end is a pause bounded by ended_at", () => {
   eq(r.moment, "pause");
   eqTime(edgeBounds(legacy, { edge: "end" }, done("17:00", "16:30")).max, "16:30", "max");
   const e = throwsCode(() => moveEdge(legacy, { edge: "end", to: D("16:31") }, done("17:00", "16:30")), "after_next");
-  eq(feedEditCopy(e, "ui", TZ), "Can't be after the feed ended (4:30 PM).");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Can't be after the feed ended (4:30 PM).");
 });
 check("S7e: legacy Ended edits ended_at only", () => {
   const legacy = feed("L 16:00-16:10", { left_sec: 600, right_sec: 0 });
@@ -703,7 +706,7 @@ check("S7e: legacy Ended edits ended_at only", () => {
   eq(r.moment, "feed_end");
   eqTime(moveEdge(legacy, { edge: "ended", to: D("16:10:01") }, done("17:00", "16:30")).endedAt, "16:10", "snaps to the last end");
   const e = throwsCode(() => moveEdge(legacy, { edge: "ended", to: D("16:05") }, done("17:00", "16:30")), "before_break");
-  eq(feedEditCopy(e, "ui", TZ), "Can't be before she came off (4:10 PM). For no break, pick 4:10.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Can't be before she came off (4:10 PM). For no break, pick 4:10.");
   throwsCode(() => moveEdge(s3, { edge: "ended", to: D("16:30") }, live("16:40")), "use_stop");
 });
 check("S7e: moving only the first start keeps a legacy ended_at", () => {
@@ -746,8 +749,8 @@ check("S6: a stop time before Left began is refused", () => {
 });
 check("S6/S10d: running, a stop before the Right began is refused", () => {
   const e = throwsCode(() => stopBreast(s1, D("16:10"), D("16:30")), "before_own_start");
-  eq(feedEditCopy(e, "ui", TZ), "Can't be before Right started (4:25 PM).");
-  eq(feedEditCopy(e, "mcp", TZ), "The Right side started at 4:25 PM, after 4:10. If Right was a mistaken tap, call fix_nursing_time {undo_last_tap:true} first, then stop_timer.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "Can't be before Right started (4:25 PM).");
+  eq(feedEditCopy(e, "mcp", TZ, FAMILY_ONE_VOICE), "The Right side started at 4:25 PM, after 4:10. If Right was a mistaken tap, call fix_nursing_time {undo_last_tap:true} first, then stop_timer.");
 });
 check("running stop: default now, never later", () => {
   eqTime(stopBreast(s1, undefined, D("16:30")).endedAt, "16:30", "now");
@@ -802,7 +805,7 @@ check("S7d: add a missed Right after a paused stop", () => {
 });
 check("S7d: an added side that overlaps is refused", () => {
   const e = throwsCode(() => addPart(feed("L 16:00-16:10"), { side: "R", start: T("16:05"), end: T("16:20") }, done("17:00", "16:10", true)), "overlap");
-  eq(feedEditCopy(e, "ui", TZ), "That overlaps Left 4:00–4:10.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "That overlaps Left 4:00–4:10.");
 });
 check("addPart: before the first side moves the start, not the end", () => {
   const r = addPart(feed("L 16:00-16:10"), { side: "R", start: D("15:50"), end: D("16:00") }, done("17:00", "16:10"));
@@ -929,9 +932,10 @@ const copyCases: [FeedEditCode, Record<string, string>, string, string][] = [
 for (const [code, params, ui, mcp] of copyCases) {
   check(`feedEditCopy ${code}`, () => {
     const e = new FeedEditError(code, params);
-    eq(feedEditCopy(e, "ui", TZ), ui, "ui");
-    eq(feedEditCopy(e, "mcp", TZ), mcp, "mcp");
-    eq(e.message, ui, "message");
+    eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), ui, "ui");
+    eq(feedEditCopy(e, "mcp", TZ, FAMILY_ONE_VOICE), mcp, "mcp");
+    // The button reads "{name} already finished" for a baby with no sex set.
+    eq(e.message, ui.replace(/\bShe already finished\b/g, "The baby already finished").replace(/\bshe\b/g, "they").replace(/\bher\b/g, "them"), "message: no family's words");
   });
 }
 check("feedEditCopy covers every code", () => {
@@ -940,7 +944,7 @@ check("feedEditCopy covers every code", () => {
 });
 check("feedEditCopy across noon keeps AM/PM on asked", () =>
   eq(
-    feedEditCopy(new FeedEditError("before_own_start", { side: "L", t: T("12:05"), asked: T("11:58") }), "mcp", TZ),
+    feedEditCopy(new FeedEditError("before_own_start", { side: "L", t: T("12:05"), asked: T("11:58") }), "mcp", TZ, FAMILY_ONE_VOICE),
     "The Left side started at 12:05 PM, after 11:58 AM. If Left was a mistaken tap, call fix_nursing_time {undo_last_tap:true} first, then try again."
   ));
 
@@ -972,7 +976,7 @@ check("the reviewer's case: a merged same-side resume undoes back to paused, nev
   eq([r.what, tapOf(r.data)?.undone], ["resume", true]);
   // And once undone there's nothing left, rather than the switch before it.
   const e = throwsCode(() => undoLastTap(r.data, newest(r.data)), "nothing_to_undo");
-  eq(feedEditCopy(e, "ui", TZ), "That tap was already undone.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "That tap was already undone.");
   eq(undoableTap(r.data, live("16:30")), null);
 });
 check("a merged resume on the feed's only side still goes back to paused", () => {
@@ -984,7 +988,7 @@ check("a switch back within 15 s (reverted) has no tap left to undo", () => {
   const back = switchTo(switchTo(feed("R 16:00-16:10, L 16:10-"), "R", D("16:20")).data, "L", D("16:20:05")).data;
   eqSegs(back.segments, "R 16:00-16:10, L 16:10-");
   const e = throwsCode(() => undoLastTap(back, newest(back)), "nothing_to_undo");
-  eq(feedEditCopy(e, "mcp", TZ), "The latest tap on this feed was already taken back, so there's no tap left to undo. To fix a time, use fix_nursing_time with part and at.");
+  eq(feedEditCopy(e, "mcp", TZ, FAMILY_ONE_VOICE), "The latest tap on this feed was already taken back, so there's no tap left to undo. To fix a time, use fix_nursing_time with part and at.");
 });
 check("a clamped resume (other side, at the pause) undoes back to paused, not into the side before", () => {
   const r = switchTo(feed("L 16:00-16:10"), "R", D("16:05"), { explicit: true });
@@ -1017,7 +1021,7 @@ check("a tap the stretches no longer show is refused (changed)", () => {
   const merged = setSide(sw, ref("R", "16:16"), "L", live("16:20")).data;
   eqSegs(merged.segments, "L 16:00-");
   const e = throwsCode(() => undoLastTap(merged, newest(merged)), "nothing_to_undo");
-  eq(feedEditCopy(e, "ui", TZ), "The times were fixed after that tap, so there's nothing to undo.");
+  eq(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE), "The times were fixed after that tap, so there's nothing to undo.");
 });
 check("undoableTap: what undo would take back, and when it was tapped", () => {
   eq(undoableTap(switchTo(feed("L 16:00-"), "R", D("16:10"), { now: D("16:10:01") }).data, live("16:11")), { what: "switch", at: T("16:10:01") });
@@ -1071,10 +1075,10 @@ check("switchTo resume with no time (a stale dock's Resume): the other side is n
 check("before_own_start on the feed's only side names feed_start (stop_timer, switch, pause)", () => {
   const stop = throwsCode(() => stopBreast(feed("L 16:17-"), D("16:15"), D("16:27")), "before_own_start");
   eq(
-    feedEditCopy(stop, "mcp", TZ),
+    feedEditCopy(stop, "mcp", TZ, FAMILY_ONE_VOICE),
     'The feed started at 4:17 PM, after 4:15. If it really started earlier, fix that first with fix_nursing_time {part:"feed_start", at:"…"}, then stop_timer; otherwise give a time after 4:17 PM.'
   );
-  eq(feedEditCopy(stop, "ui", TZ), "Can't be before Left started (4:17 PM).");
+  eq(feedEditCopy(stop, "ui", TZ, FAMILY_ONE_VOICE), "Can't be before Left started (4:17 PM).");
   eq(throwsCode(() => stopBreast(feed("L 16:00-16:10"), D("15:55"), D("16:27")), "before_own_start").params.first, "1");
   eq(throwsCode(() => pause(feed("L 16:00-"), D("15:58"), { explicit: true }), "before_own_start").params.first, "1");
   eq(throwsCode(() => switchTo(feed("L 16:00-"), "R", D("15:58"), { explicit: true }), "before_own_start").params.first, "1");
@@ -1449,7 +1453,7 @@ check("paused at 60 parts nothing goes back on, Back and forth too, and the copy
   for (const side of ["L", "R", "B"] as const) {
     const e = throwsCode(() => switchTo(paused, side, D("13:05")), "too_many");
     eq(e.params.paused, "1", side);
-    ok(e.message.includes("Tap Done and start her again"), `${side}: ${e.message}`);
+    ok(feedEditCopy(e, "ui", TZ, FAMILY_ONE_VOICE).includes("Tap Done and start her again"), `${side}: ${e.message}`);
   }
   const m = switchTo(paused, "R", D("13:00:30"));
   eq([m.merged, m.data.segments!.length, m.data.segments![59].end], [true, 60, null]);
@@ -1489,11 +1493,11 @@ check("a side within 15 s of that splits it off again too: the Left takes it bac
   eqSegs(undoLastTap(r.data, newest(r.data)).data.segments, "L 18:00-18:05, B 18:05-");
 });
 check("momentQuestion words back and forth", () => {
-  eq(momentQuestion("switch", "B"), "When did she start going back and forth?");
-  eq(momentQuestion("switch", "L", "B"), "When did she go on the Left?");
-  eq(momentQuestion("switch", "R", "L"), "When did she switch to Right?");
-  eq(momentQuestion("pause", "B"), "When did she come off?");
-  eq(momentQuestion("resume", "B", "B"), "When did she go back on?");
+  eq(momentQuestion("switch", "B", undefined, FAMILY_ONE_VOICE), "When did she start going back and forth?");
+  eq(momentQuestion("switch", "L", "B", FAMILY_ONE_VOICE), "When did she go on the Left?");
+  eq(momentQuestion("switch", "R", "L", FAMILY_ONE_VOICE), "When did she switch to Right?");
+  eq(momentQuestion("pause", "B", undefined, FAMILY_ONE_VOICE), "When did she come off?");
+  eq(momentQuestion("resume", "B", "B", FAMILY_ONE_VOICE), "When did she go back on?");
 });
 check("setSide: That was both sides (and back); the side she started on stays", () => {
   const d = feed("L 16:00-16:10, R 16:10-16:30", { first_side: "L", last_side: "R", left_sec: 600, right_sec: 1200 });
@@ -1516,8 +1520,8 @@ check("describeChange names both sides", () => {
   );
 });
 check("feedEditCopy words a both-sides part", () => {
-  eq(feedEditCopy(new FeedEditError("before_own_start", { side: "B", t: T("16:05") }), "ui", TZ), "Can't be before back and forth started (4:05 PM).");
-  ok(feedEditCopy(new FeedEditError("before_own_start", { side: "B", t: T("16:05"), asked: T("16:02") }), "mcp", TZ).startsWith("Back and forth started at 4:05 PM"), "mcp");
+  eq(feedEditCopy(new FeedEditError("before_own_start", { side: "B", t: T("16:05") }), "ui", TZ, FAMILY_ONE_VOICE), "Can't be before back and forth started (4:05 PM).");
+  ok(feedEditCopy(new FeedEditError("before_own_start", { side: "B", t: T("16:05"), asked: T("16:02") }), "mcp", TZ, FAMILY_ONE_VOICE).startsWith("Back and forth started at 4:05 PM"), "mcp");
 });
 check("staleFeed: back and forth isn't stale for two hours (it gets no taps by design)", () => {
   const both = { started_at: T("13:00"), data: { ...feed("L 13:00-13:05, B 13:05-"), last_tap: { kind: "switch", side: "B", at: T("13:05") } } as TapFeedData };
@@ -1768,16 +1772,16 @@ check("describeEntry: back and forth reads as such", () => {
     eq(two.map((d) => [d.feeds, d.nursingSec / 60]), [[1, 10], [1, 10]]);
   });
   check("clusterCall: the Today targets line while warnings are on; her day's numbers otherwise (never pointing at Today)", () => {
-    eq(clusterCall({ onToday: true, dayOfLife: 4 }), CLUSTER_CALL);
-    const off = clusterCall({ onToday: false, dayOfLife: 4 });
+    eq(clusterCall({ onToday: true, dayOfLife: 4 }, FAMILY_ONE_VOICE), CLUSTER_CALL);
+    const off = clusterCall({ onToday: false, dayOfLife: 4 }, FAMILY_ONE_VOICE);
     eq(off.label, CLUSTER_CALL.label);
     eq(off.body, "Call your pediatrician if she seems hungry after most feeds or has fewer wet or dirty diapers than usual (on Day 4, at least 4 wet and 2 dirty a day).");
     eq(
-      clusterCall({ onToday: false, dayOfLife: null }).body,
+      clusterCall({ onToday: false, dayOfLife: null }, FAMILY_ONE_VOICE).body,
       "Call your pediatrician if she seems hungry after most feeds or has fewer wet or dirty diapers than usual (by 5 days old, at least 6 wet and 3 dirty a day)."
     );
-    eq(clusterCall({ onToday: false, dayOfLife: 50 }).body, "Call your pediatrician if she seems hungry after most feeds or has fewer wet diapers than usual (on Day 50, at least 6 a day).");
-    for (const d of [null, 1, 3, 5, 20, 43, 90]) ok(!/Today/.test(clusterCall({ onToday: false, dayOfLife: d }).body), `day ${d}`);
+    eq(clusterCall({ onToday: false, dayOfLife: 50 }, FAMILY_ONE_VOICE).body, "Call your pediatrician if she seems hungry after most feeds or has fewer wet diapers than usual (on Day 50, at least 6 a day).");
+    for (const d of [null, 1, 3, 5, 20, 43, 90]) ok(!/Today/.test(clusterCall({ onToday: false, dayOfLife: d }, FAMILY_ONE_VOICE).body), `day ${d}`);
   });
   check("typicalFeedGapMin skips the gaps inside a cluster", () => {
     const entries = [

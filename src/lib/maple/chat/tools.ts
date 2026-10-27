@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ADMIN_ID } from "../auth";
 import { registerCareTools } from "../care-mcp";
-import { registerMapleTools, type Annotations, type Extra } from "../mcp-tools";
+import { FAMILY_ONE_COPY, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
 import type { Member } from "../types";
 import type { ChatAlert, ChatReceipt, ChatToolOutput, HelpAbout } from "./types";
 
@@ -31,11 +31,21 @@ function record(register: (server: McpServer) => void): Registration[] {
   return out;
 }
 
-let cache: { all: Registration[]; mom: Set<string> } | null = null;
+/** One recording per family's words (its ToolCopy), so one family's names never reach another's chat. */
+const cache = new Map<string, { all: Registration[]; mom: Set<string> }>();
+const KEPT = 64;
 
-export function registrations(): { all: Registration[]; mom: Set<string> } {
-  cache ??= { all: record(registerMapleTools), mom: new Set(record(registerCareTools).map((r) => r.name)) };
-  return cache;
+const copyKey = (c: ToolCopy) => JSON.stringify([c.opening, c.tz, c.exampleBy, c.v.name, c.v.pronoun, c.v.mom, c.v.hasMom]);
+
+export function registrations(copy: ToolCopy = FAMILY_ONE_COPY): { all: Registration[]; mom: Set<string> } {
+  const key = copyKey(copy);
+  let got = cache.get(key);
+  if (!got) {
+    got = { all: record((server) => registerMapleTools(server, copy)), mom: new Set(record((server) => registerCareTools(server, copy)).map((r) => r.name)) };
+    if (cache.size >= KEPT) cache.delete(cache.keys().next().value!);
+    cache.set(key, got);
+  }
+  return got;
 }
 
 /** Her medicine list changes only in the app, where adding one is a real tap, not the model's word. */
@@ -89,17 +99,20 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
 const HELP_TEXT = "The help card is showing under your reply.";
 
 /**
- * `device`: the phone's X-Maple-Device id, so a dose logged here sends "Logged"
- * to the other phones only. `care` also rides on every call, so Maple's tools
- * leave her out of their results until she has turned it on (context() in mcp-tools.ts).
+ * `fam`: the signed-in member's family, which every call resolves again
+ * (context() in mcp-tools.ts), as an MCP token's `fam` does. `device`: the
+ * phone's X-Maple-Device id, so a dose logged here sends "Logged" to the
+ * other phones only. `care` also rides on every call, so Maple's tools leave
+ * her out of their results until she has turned it on.
  */
-export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: boolean; care: boolean; device?: string | null }): ToolSet {
-  const { all, mom } = registrations();
+export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null }): ToolSet {
+  const { all, mom } = registrations(opts.copy);
+  const vo = opts.copy.v;
   const sub = member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`;
   const extra = {
     signal: new AbortController().signal,
     requestId: "maple-chat",
-    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, via: "chat", device: opts.device ?? null, care: opts.care } },
+    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care } },
     sendNotification: async () => {},
     sendRequest: async () => {
       throw new Error("unsupported");
@@ -130,8 +143,7 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { born: 
     });
   }
   set.show_help = tool({
-    description:
-      "Shows the app's help card under your reply: 911, 988 and the maternal mental health line for anyone (about: anyone or mom), or Maple's 911 signs and her pediatrician (about: maple). Call it every time you give the crisis line or the 911 emergency signs.",
+    description: `Shows the app's help card under your reply: 911, 988 and the maternal mental health line for anyone (about: anyone or mom), or ${vo.name}'s 911 signs and ${vo.their} pediatrician (about: maple). Call it every time you give the crisis line or the 911 emergency signs.`,
     inputSchema: zodSchema(z.object({ about: z.enum(["maple", "mom", "anyone"]) })),
     execute: async ({ about }: { about: HelpAbout }): Promise<ChatToolOutput> => ({ ok: true, write: false, text: HELP_TEXT, about }),
     toModelOutput: () => ({ type: "text", value: HELP_TEXT }),

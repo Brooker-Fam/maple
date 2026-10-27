@@ -11,6 +11,7 @@ import {
   type ToolSet,
 } from "ai";
 import { chatProviderOptions, CHAT_MAX_OUTPUT_TOKENS, CHAT_MAX_STEPS, CHAT_TIMEOUT, LIMIT_MESSAGE, STEP_PROMPT_LIMIT } from "./caps";
+import type { ToolCopy } from "../mcp-tools";
 import { costMicro, stepTokens, type ModelPrice, type StepTokens } from "./prices";
 import { markTailForCache, systemBlocks, usesCacheBreakpoints } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
@@ -72,6 +73,8 @@ export async function chatTurn(opts: {
   viewer: boolean;
   /** She has let the chat see her page (chat_care); `tools` must match. */
   care: boolean;
+  /** The family's words: the instructions must match the tools' (both from one ToolCopy). */
+  copy: ToolCopy;
   messages: ChatMessage[];
   responseId: string;
   crisis: boolean;
@@ -81,7 +84,7 @@ export async function chatTurn(opts: {
 }): Promise<Response> {
   const { tools, messages, responseId, deps } = opts;
   const stepsDone = opts.stepsDone ?? 0;
-  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey });
+  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey, copy: opts.copy });
   const breakpoints = usesCacheBreakpoints(opts.modelKey);
   const prefixChars = JSON.stringify([instructions, Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
 

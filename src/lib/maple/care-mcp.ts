@@ -28,9 +28,9 @@ import {
 import {
   CareConflict,
   CareForbidden,
-  DEFAULT_CARE_PERSON,
   addCareQuestion,
   careSession,
+  noteCtx,
   deleteCarePlan,
   deleteCareEntry,
   listCareEntries,
@@ -47,9 +47,25 @@ import {
   type CareSession,
   type CareEntryPatch,
 } from "./care-store";
-import { ALERT_TIERS, HELP_NOW_LINE, MOM_DISCLAIMER, MOM_HELP, MOM_TIER_LABEL, assessMomTemp, type AlertTier, type Assessment } from "./guidelines";
+import { ALERT_TIERS, HELP_NOW_LINE, MOM_DISCLAIMER, MOM_HELP, MOM_TIER_LABEL, assessMomTemp, momHelp, type AlertTier, type Assessment } from "./guidelines";
 import { isVitaminD, memberName } from "./insights";
-import { READ_ANN, ToolError, WRITE_ANN, context, fail, isoLocal, ok, startFrom, whenText, type Annotations, type Ctx, type Extra } from "./mcp-tools";
+import {
+  FAMILY_ONE_COPY,
+  READ_ANN,
+  ToolError,
+  WRITE_ANN,
+  context,
+  fail,
+  isoLocal,
+  ok,
+  startFrom,
+  voiceOf,
+  whenText,
+  type Annotations,
+  type Ctx,
+  type Extra,
+  type ToolCopy,
+} from "./mcp-tools";
 import { NotFound, StoreUnavailable } from "./store";
 import { addDays, dayKey } from "./time";
 import type { CareEntry, CarePlan, DoseEntry, MedReason, PlanInput, Source } from "./types";
@@ -64,8 +80,8 @@ import { cToF, fToC } from "./units";
  *   access (careAccess, through careSession) on the MCP channel. An
  *   assistant gets everything on her page except check-ins: there are no
  *   mood tools.
- * - She's named: titles and descriptions say "Brittany's" (MOM, the name her
- *   page is made with, since registration can't read the database), and
+ * - She's named: titles and descriptions use the ToolCopy's voice (the
+ *   caller resolves it, since registration can't read the database), and
  *   results use her page's own name (s.name).
  * - Ids print as c12345678 (entries) and p12345678 (plans): Maple's tools
  *   take plain numbers, so neither set reaches the other's rows.
@@ -85,13 +101,6 @@ import { cToF, fToC } from "./units";
 
 const ROUTE = "/api/maple/mcp";
 const DAY = 86400_000;
-
-/**
- * Her name where it's fixed when the server starts (tool titles and
- * descriptions; MAPLE_INSTRUCTIONS uses the same constant): the name her page
- * is made with. Results use the page's own name.
- */
-const MOM = DEFAULT_CARE_PERSON;
 
 // ── one medicine, two names ─────────────────────────────────────────────
 
@@ -163,13 +172,13 @@ class CareAccessError extends Error {}
 /** No page at all where she hasn't opened it to this caller (ctx.care): every read and write here then finds nothing. */
 async function careFor(ctx: Ctx): Promise<CareSession> {
   const viewer: CareViewer = { id: ctx.who.id, role: ctx.who.role, viaAdmin: ctx.who.viaAdmin, channel: "mcp" };
-  return careSession(viewer, { members: ctx.members, baby: ctx.baby, ...(ctx.care ? {} : { person: null }) });
+  return careSession(viewer, { familyId: ctx.fam.familyId, members: ctx.members, baby: ctx.baby, ...(ctx.care ? {} : { person: null }) });
 }
 
 /** The one access error: a view-only guest. Everyone else can do everything here. */
 function needAccess(ctx: Ctx, s: CareSession, write: boolean) {
   if (ctx.who.role === "viewer" || !s.access.read || (write && !s.access.write)) {
-    throw new CareAccessError("You're a viewer on Maple's Log, so her mom's page isn't open to you. An owner can make you a member in Maple's Log → Family.");
+    throw new CareAccessError(`You're a viewer on Maple's Log, so ${voiceOf(ctx).their} mom's page isn't open to you. An owner can make you a member in Maple's Log → Family.`);
   }
 }
 
@@ -278,10 +287,8 @@ function alertLines(alerts: MomAlert[]): string[] {
 const textCtx = (s: CareSession) => ({
   now: s.now,
   tz: s.tz,
-  self: s.access.self,
   members: s.members,
-  name: s.name,
-  settings: s.person?.settings ?? {},
+  ...noteCtx(s),
 });
 
 type Viewed = { view: PlanView; doses: DoseEntry[] };
@@ -294,7 +301,7 @@ async function viewsFor(s: CareSession, days = 0): Promise<{ active: Viewed[]; f
   const tctx = textCtx(s);
   const all = await Promise.all(
     plans.map(async (plan) => {
-      const doses = await planDoses(plan.id, since);
+      const doses = await planDoses(s, plan.id, since);
       return { view: planView(plan, doses, tctx, s.viewer.id), doses };
     })
   );
@@ -454,11 +461,11 @@ const assumedLines = (assumed: string[]) => (assumed.length ? [`Note: ${[...new 
 
 // ── inputs ──────────────────────────────────────────────────────────────
 
-const TIME_HINT =
-  "a local clock time in America/New_York as the user said it, \"yesterday\" plus a time, \"just now\", or an ISO timestamp. Never invent a date. Leave it out (with minutes_ago) for right now.";
+const timeHint = (tz: string) =>
+  `a local clock time in ${tz} as the user said it, "yesterday" plus a time, "just now", or an ISO timestamp. Never invent a date. Leave it out (with minutes_ago) for right now.`;
 
-const inputs = {
-  at: (what: string) => z.string().max(60).nullish().describe(`${what}: ${TIME_HINT}`),
+const inputsFor = (tz: string) => ({
+  at: (what: string) => z.string().max(60).nullish().describe(`${what}: ${timeHint(tz)}`),
   minutesAgo: () => z.number().min(0).max(4320).nullish().describe("How many minutes ago, as the user said it. Use instead of at."),
   clientRef: () =>
     z.string().max(100).nullish().describe("Optional idempotency key: repeat the same client_ref on a retry and the first save comes back instead of a second entry."),
@@ -467,7 +474,7 @@ const inputs = {
       .boolean()
       .nullish()
       .describe("Only after the user confirms a possible_duplicate is really another dose: true saves it anyway."),
-};
+});
 
 const HOW = ["as_needed", "every", "daily", "times"] as const;
 const REASONS = ["pain", "constipation", "bp", "iron", "infection", "mood", "vitamin", "other"] as const;
@@ -567,7 +574,7 @@ export async function momSummary(ctx: Ctx, from: Date): Promise<{ line: string; 
     };
     const parts = [
       list.length
-        ? `${s.access.self ? "Your" : `${s.name}'s`} own medicines over these days (not Maple's): ${list.map(medText).join("; ")}.`
+        ? `${s.access.self ? "Your" : `${s.name}'s`} own medicines over these days (not ${voiceOf(ctx).name}'s): ${list.map(medText).join("; ")}.`
         : `${s.access.self ? "Your" : `${s.name}'s`} own medicines: none logged over these days.`,
     ];
     let tempJson: Record<string, unknown> | null = null;
@@ -834,7 +841,7 @@ async function savePlan(a: PlanArgs, id: number | null, s: CareSession, source: 
   const missing = cur ? null : notOnFile(plan);
   // Two medicines with acetaminophen: the app's list note, said when this save makes (or keeps) the pair.
   const overlap = plan.contains_apap && planActive(plan, s.now, s.tz)
-    ? listNotes((await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz)), { name: s.name, self: s.access.self, settings: s.person?.settings ?? {} })
+    ? listNotes((await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz)), noteCtx(s))
     : [];
   return { plan, lines: [`Saved p${plan.id}: ${plan.name} · ${summary}.${missing ? ` ${missing}` : ""}`, ...kept], notes: [...overlap, ...saved.notes], missing };
 }
@@ -854,13 +861,16 @@ const planOut = (plan: CarePlan) => ({
 const FROM_PAPER =
   "Use only what the user read from her label, discharge papers or clinician, or what's printed on a photo of her label or discharge papers that the user shared. From a photo: copy each value exactly as printed, leave out anything that isn't printed, read every medicine and number back to the user, and save only after they say yes. Never invent, guess, fill in or suggest a dose, interval, limit or count that isn't on the paper or in what the user said, and never use a typical one.";
 
-export function registerCareTools(server: McpServer) {
+export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE_COPY) {
+  const vo = copy.v;
+  const MOM = vo.mom;
+  const inputs = inputsFor(copy.tz);
   addCareTool(
     server,
     "mom_status",
     {
       title: `${MOM}'s medicines right now`,
-      description: `${MOM}'s own medicines (she's Maple's mom), from the plan the family typed in or copied from her label or clinician: for each, when it was last taken and by whom, when her schedule next allows it, how many in the last 24 hours against her own limit (in the label's unit), and the course day. Also her latest temperature, open questions for her OB, her care-team numbers and help lines. Answer "can she take X yet?" about ${MOM} only from this, using the line given; a brand or generic name of one on her list (acetaminophen for Tylenol) answers for that one. Never say whether a medicine is safe while nursing and never suggest a dose, interval or limit: suggest her OB, Maple's pediatrician or a pharmacist.`,
+      description: `${MOM}'s own medicines (she's ${vo.name}'s mom), from the plan the family typed in or copied from her label or clinician: for each, when it was last taken and by whom, when her schedule next allows it, how many in the last 24 hours against her own limit (in the label's unit), and the course day. Also her latest temperature, open questions for her OB, her care-team numbers and help lines. Answer "can she take X yet?" about ${MOM} only from this, using the line given; a brand or generic name of one on her list (acetaminophen for Tylenol) answers for that one. Never say whether a medicine is safe while nursing and never suggest a dose, interval or limit: suggest her OB, ${vo.name}'s pediatrician or a pharmacist.`,
       inputSchema: {
         medicine: z.string().max(80).nullish().describe("Optional: one medicine, by its name, an also-called name, its brand or generic name, or its p id (finished ones too)."),
         days: z.number().int().min(0).max(7).nullish().describe("Optional: how many days of dose history to include for each medicine, up to a week. Leave out for none."),
@@ -921,7 +931,7 @@ export function registerCareTools(server: McpServer) {
       // The app's list note (two medicines with acetaminophen) too, over the whole active list as it reads there.
       const overlap = listNotes(
         active.map((x) => x.view.plan),
-        { name: s.name, self: s.access.self, settings: s.person?.settings ?? {} }
+        noteCtx(s)
       );
       const alerts = alertsOf([...overlap, ...shown.flatMap((x) => x.view.notes), ...(tempAlert ? [forMom(tempAlert, s.name, s.access.self)] : [])]);
       lines.push(...alertLines(alerts));
@@ -938,7 +948,7 @@ export function registerCareTools(server: McpServer) {
         questions_open: open.map((q) => ({ id: `c${q.id}`, text: q.note, added: whenText(q.at, ctx), by: memberName(q.created_by, ctx.members) })),
         care_team,
         alerts,
-        help: MOM_HELP,
+        help: momHelp(voiceOf(ctx)),
         disclaimer: MOM_DISCLAIMER,
         speak,
       });
@@ -950,7 +960,7 @@ export function registerCareTools(server: McpServer) {
     "log_mom_medicine",
     {
       title: `Log a dose of ${MOM}'s medicine`,
-      description: `Log a dose of ${MOM}'s own medicine (she's Maple's mom; Maple's medicines use log_medicine). Use it whenever the dose was ${MOM}'s: "${MOM}", "mom", "my wife", or "I" when she's the one talking. "She" and "her" mean Maple: when the medicine named is on ${MOM}'s list (by its name, an Also called name, or its brand or generic name) and the user didn't say whose dose it was, ask "Maple's or ${MOM}'s?" before logging, and use this tool only once they say ${MOM}'s. It saves, like Maple's log: a name on her list counts toward that medicine, so does its brand or generic name (acetaminophen for Tylenol on her list), and any other name is saved as a one-time medicine. Pass \`units\` (how many tablets, caplets, capsules or mL) only if the user said it, and \`dose\` only if they said something different from her plan; never fill either in. created:false with possible_duplicate means someone logged the same medicine within 30 minutes: ask whether it's another dose, and only then call again with allow_duplicate: true. If it was early or over her limit it still saves; repeat the result's alerts word for word with their labels.`,
+      description: `Log a dose of ${MOM}'s own medicine (she's ${vo.name}'s mom; ${vo.name}'s medicines use log_medicine). Use it whenever the dose was ${MOM}'s: "${MOM}", "mom", "my wife", or "I" when she's the one talking. "${vo.They}" and "${vo.them}" mean ${vo.name}: when the medicine named is on ${MOM}'s list (by its name, an Also called name, or its brand or generic name) and the user didn't say whose dose it was, ask "${vo.Name}'s or ${MOM}'s?" before logging, and use this tool only once they say ${MOM}'s. It saves, like ${vo.name}'s log: a name on her list counts toward that medicine, so does its brand or generic name (acetaminophen for Tylenol on her list), and any other name is saved as a one-time medicine. Pass \`units\` (how many tablets, caplets, capsules or mL) only if the user said it, and \`dose\` only if they said something different from her plan; never fill either in. created:false with possible_duplicate means someone logged the same medicine within 30 minutes: ask whether it's another dose, and only then call again with allow_duplicate: true. If it was early or over her limit it still saves; repeat the result's alerts word for word with their labels.`,
       inputSchema: {
         medicine: z.string().min(1).max(80).describe("The medicine as the user said it: a name or also-called name on her list, its brand or generic name, or its p id."),
         at: inputs.at("When she took it"),
@@ -984,7 +994,7 @@ export function registerCareTools(server: McpServer) {
     "set_mom_medicine",
     {
       title: `Add or change ${MOM}'s medicine`,
-      description: `Add, change, stop or delete one medicine on ${MOM}'s list (she's Maple's mom). ${FROM_PAPER} Leave any field empty that the user didn't say and the paper doesn't print. A 24-hour limit needs limit_unit exactly as the label counts it (tablets, caplets, capsules, doses or mL); with no unit printed, leave the limit out and say so. Several at once (a discharge list): add_mom_medicines.`,
+      description: `Add, change, stop or delete one medicine on ${MOM}'s list (she's ${vo.name}'s mom). ${FROM_PAPER} Leave any field empty that the user didn't say and the paper doesn't print. A 24-hour limit needs limit_unit exactly as the label counts it (tablets, caplets, capsules, doses or mL); with no unit printed, leave the limit out and say so. Several at once (a discharge list): add_mom_medicines.`,
       inputSchema: {
         id: z.string().max(20).nullish().describe("To change, stop or delete one: its p id from mom_status. Leave out to add a new one."),
         name: z.string().max(80).nullish().describe("The medicine's name as on the label (needed to add one)."),
@@ -1055,7 +1065,7 @@ export function registerCareTools(server: McpServer) {
     "add_mom_medicines",
     {
       title: `Add ${MOM}'s medicines from her papers`,
-      description: `Add several medicines to ${MOM}'s list at once (she's Maple's mom), like the lines of her discharge papers: one call for the whole list, after the user says yes to your read-back. ${FROM_PAPER} Leave any field empty that the user didn't say and the paper doesn't print; a 24-hour limit needs limit_unit exactly as the label counts it. A name already on her list is left as it is (change it with set_mom_medicine). Each saved line says what isn't on file.`,
+      description: `Add several medicines to ${MOM}'s list at once (she's ${vo.name}'s mom), like the lines of her discharge papers: one call for the whole list, after the user says yes to your read-back. ${FROM_PAPER} Leave any field empty that the user didn't say and the paper doesn't print; a 24-hour limit needs limit_unit exactly as the label counts it. A name already on her list is left as it is (change it with set_mom_medicine). Each saved line says what isn't on file.`,
       inputSchema: {
         medicines: z
           .array(
@@ -1139,7 +1149,7 @@ export function registerCareTools(server: McpServer) {
     "log_mom_temperature",
     {
       title: `Log ${MOM}'s temperature`,
-      description: `Log ${MOM}'s temperature (she's Maple's mom; Maple's temperature uses log_temperature). Repeat the result's alert word for word with its label.`,
+      description: `Log ${MOM}'s temperature (she's ${vo.name}'s mom; ${vo.name}'s temperature uses log_temperature). Repeat the result's alert word for word with its label.`,
       inputSchema: {
         temp_f: z.number().min(80).max(115).nullish().describe("The reading in °F, as the user said it."),
         temp_c: z.number().min(25).max(46).nullish().describe("Or the reading in °C, as the user said it."),
@@ -1179,7 +1189,7 @@ export function registerCareTools(server: McpServer) {
     "add_mom_question",
     {
       title: `Add a question for ${MOM}'s OB`,
-      description: `Add a question for ${MOM}'s OB (she's Maple's mom; Maple's pediatrician questions use add_doctor_question).`,
+      description: `Add a question for ${MOM}'s OB (she's ${vo.name}'s mom; ${vo.name}'s pediatrician questions use add_doctor_question).`,
       inputSchema: {
         text: z.string().min(2).max(1000).describe("The question, in the family's own words."),
         client_ref: inputs.clientRef(),

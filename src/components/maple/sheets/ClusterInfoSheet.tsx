@@ -1,20 +1,21 @@
 "use client";
 
 import { useCallback, useState, type ReactNode } from "react";
-import { FEED_COUNT_RULE, LAST_FED_RULE, sideMinutesText, spanText, minutesShort, type FeedCluster } from "@/lib/maple/feed";
+import { FEED_COUNT_RULE, lastFedRule, sideMinutesText, spanText, minutesShort, type FeedCluster } from "@/lib/maple/feed";
 import {
-  BACK_AND_FORTH,
   BACK_AND_FORTH_SORE,
-  clusterCall,
-  CLUSTER_ENOUGH,
   CLUSTER_FEEDING_NORMAL,
-  CLUSTER_PAIN,
   DISCLAIMER,
-  EMERGENCY_SIGNS,
   NEXT_SIDE_NOTE,
+  backAndForth,
+  clusterCall,
+  clusterEnough,
+  clusterPain,
+  emergencySigns,
 } from "@/lib/maple/guidelines";
 import { DEFAULT_TZ } from "@/lib/maple/time";
 import { EMERGENCY_FILL, usePhones } from "../AlertCard";
+import { useBabyWords, useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -35,10 +36,13 @@ import { useMaple } from "../useMaple";
  */
 export default function ClusterInfoSheet({ open, onClose, cluster }: { open: boolean; onClose: () => void; cluster?: FeedCluster | null }) {
   const { state, summary } = useMaple();
+  const w = useBabyWords();
+  const voice = useVoice();
+  const pain = clusterPain(voice);
   const phones = usePhones();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   // Today shows her diaper targets only while warnings are on; otherwise the call line says the numbers itself.
-  const call = clusterCall({ onToday: !!summary?.targets, dayOfLife: summary?.age?.dayOfLife ?? null });
+  const call = clusterCall({ onToday: !!summary?.targets, dayOfLife: summary?.age?.dayOfLife ?? null }, voice);
   const calls = [
     phones.pediatrician && { label: "Pediatrician", phone: phones.pediatrician },
     phones.afterHours && { label: "After-hours line", phone: phones.afterHours },
@@ -61,19 +65,19 @@ export default function ClusterInfoSheet({ open, onClose, cluster }: { open: boo
       <p className={cx(tone.body, "text-[17px] leading-relaxed")}>{CLUSTER_FEEDING_NORMAL}</p>
 
       <Group title="Going back and forth">
-        <p>{BACK_AND_FORTH}</p>
+        <p>{backAndForth(voice)}</p>
         <p>{BACK_AND_FORTH_SORE}</p>
         <p>{NEXT_SIDE_NOTE}</p>
       </Group>
 
-      <Group title="Is she getting enough?">
-        <p>{CLUSTER_ENOUGH}</p>
+      <Group title={`Is ${w.he} getting enough?`}>
+        <p>{clusterEnough(voice)}</p>
       </Group>
 
       <Group title="Who to ask">
         <p>
-          <span className="block text-[13px] font-semibold text-mp-ink-2">{CLUSTER_PAIN.label}</span>
-          {CLUSTER_PAIN.body}
+          <span className="block text-[13px] font-semibold text-mp-ink-2">{pain.label}</span>
+          {pain.body}
         </p>
         <p>
           <span className="block text-[13px] font-semibold text-mp-ink-2">{call.label}</span>
@@ -98,7 +102,7 @@ export default function ClusterInfoSheet({ open, onClose, cluster }: { open: boo
             <Icon name="siren" size={16} strokeWidth={2} className="shrink-0" />
             When to call 911
           </p>
-          <p className="mt-1">{EMERGENCY_SIGNS}</p>
+          <p className="mt-1">{emergencySigns(voice)}</p>
           <a
             href="tel:911"
             className={cx("mt-3 flex min-h-[48px] items-center justify-center gap-2 rounded-[14px] text-[16px] font-semibold active:scale-[0.98]", EMERGENCY_FILL)}
@@ -111,7 +115,7 @@ export default function ClusterInfoSheet({ open, onClose, cluster }: { open: boo
 
       <Group title="How the log counts it">
         <p>{FEED_COUNT_RULE}</p>
-        <p>{LAST_FED_RULE}</p>
+        <p>{lastFedRule(voice)}</p>
       </Group>
 
       <p className={cx(tone.faint, "px-1 pb-1 text-center text-[12px] leading-snug")}>{DISCLAIMER}</p>

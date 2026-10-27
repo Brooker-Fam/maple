@@ -270,7 +270,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     [api, run]
   );
 
-  const forgetThisPhone = useCallback(async (): Promise<boolean> => {
+  const forgetThisPhone = useCallback(async (opts: { everywhere?: boolean } = {}): Promise<boolean> => {
     if (!phone.supported()) return false;
     try {
       const sub = await phone.existing();
@@ -279,7 +279,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       if (!ep && !sub) return false;
       if (ep) {
         // Never hold sign-out up for long: the unsubscribe below stops it either way.
-        const del = api(`/api/maple/push?endpoint=${enc(ep)}`, { method: "DELETE" }).catch(() => null);
+        const del = api(`/api/maple/push?endpoint=${enc(ep)}${opts.everywhere ? "&everywhere=1" : ""}`, { method: "DELETE" }).catch(() => null);
         await Promise.race([del, new Promise((r) => window.setTimeout(r, 4000))]);
       }
       await sub?.unsubscribe().catch(() => false);

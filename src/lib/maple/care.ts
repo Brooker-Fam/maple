@@ -12,8 +12,6 @@
 import {
   ACETAMINOPHEN_NAMES,
   ALL_OPIOID_NAMES,
-  CRISIS,
-  CRISIS_PARTNER,
   DIFFICULTY_HARD,
   EARLY_GRACE_CHOICES,
   EARLY_GRACE_DEFAULT_MIN,
@@ -21,16 +19,18 @@ import {
   EARLY_GRACE_MAX_FRACTION,
   EARLY_GRACE_RUN_MS,
   GAD7_RESULT,
-  INTRUSIVE,
-  LABEL_NOT_WHILE_NURSING,
   LABEL_NOT_WHILE_NURSING_NAMES,
   MOOD_MED_NOTE,
-  OPIOID_NOTE,
   PHQ9_ITEM9,
   PHQ9_RESULT,
   STRUGGLING,
   acetaminophenOverlap,
+  crisis,
   earlyDose,
+  intrusive,
+  isCrisisPartner,
+  labelNotWhileNursing,
+  opioidNote,
   overDailyMax,
   type AlertTier,
   type Assessment,
@@ -53,6 +53,7 @@ import type {
   Role,
   Source,
 } from "./types";
+import type { Voice } from "./voice";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -104,7 +105,7 @@ export function careAccess(viewer: CareViewer, person: CarePerson | null, member
  * applied to CRISIS_PARTNER. With no care access, `name` is "mom".
  */
 export function forMom(a: Assessment, name: string, self: boolean): Assessment {
-  if (self || a === CRISIS_PARTNER) return a;
+  if (self || isCrisisPartner(a)) return a;
   return { ...a, title: `For ${name}: ${a.title}` };
 }
 
@@ -632,8 +633,8 @@ function clockText(hhmm: string): string {
  */
 export type CareNote = Assessment & { key: string; dismiss?: string };
 
-/** Who the copy is for, and the settings the nursing notes depend on (shown unless feeding === "no"). */
-export type CareNoteCtx = { name: string; self: boolean; settings: CareSettings };
+/** Who the copy is for, the family's words for the baby (`voice`), and the settings the nursing notes depend on (shown unless feeding === "no"). */
+export type CareNoteCtx = { name: string; self: boolean; settings: CareSettings; voice: Voice };
 
 /** A plan's name and its Also called names, for the name-based notes. */
 const namesOf = (plan: CarePlan) => [plan.name, ...(plan.also_called ?? "").split(",")].map((s) => s.trim()).filter(Boolean);
@@ -742,9 +743,9 @@ export function planNotes(plan: CarePlan, status: PlanStatus, ctx: CareNoteCtx):
     if (early) add(early, `early:c${status.last.id}`);
   }
   if (nursingNotesOn(ctx.settings) && anyName(plan, LABEL_NOT_WHILE_NURSING_NAMES)) {
-    add(LABEL_NOT_WHILE_NURSING, `nursing:${pid}`, "I've checked with my OB or pharmacist");
+    add(labelNotWhileNursing(ctx.voice), `nursing:${pid}`, "I've checked with my OB or pharmacist");
   }
-  if (ALL_OPIOID_NAMES.some((re) => anyName(plan, re))) add(OPIOID_NOTE, `opioid:${pid}`, "Got it");
+  if (ALL_OPIOID_NAMES.some((re) => anyName(plan, re))) add(opioidNote(ctx.voice), `opioid:${pid}`, "Got it");
   if (plan.reason === "mood") add(MOOD_MED_NOTE, `mood:${pid}`, "Got it");
   return out;
 }
@@ -774,7 +775,7 @@ export function doseNotes(
   if (next.skipped) return [];
   const { early, over } = doseFlags(plan, doses, next, ctx.settings);
   const out = [early, over].filter((a): a is Assessment => a !== null);
-  if (nursingNotesOn(ctx.settings) && anyName(plan, LABEL_NOT_WHILE_NURSING_NAMES)) out.push(LABEL_NOT_WHILE_NURSING);
+  if (nursingNotesOn(ctx.settings) && anyName(plan, LABEL_NOT_WHILE_NURSING_NAMES)) out.push(labelNotWhileNursing(ctx.voice));
   return out.map((a) => forMom(a, ctx.name, ctx.self));
 }
 
@@ -809,7 +810,7 @@ export function oneOffNotes(name: string, plans: CarePlan[], ctx: CareNoteCtx): 
   if (!n) return out;
   const apap = plans.find((p) => p.contains_apap && !p.stopped_at);
   if (apap && ACETAMINOPHEN_NAMES.test(n) && normName(apap.name) !== normName(n)) out.push(acetaminophenOverlap(n, apap.name));
-  if (nursingNotesOn(ctx.settings) && LABEL_NOT_WHILE_NURSING_NAMES.test(n)) out.push(LABEL_NOT_WHILE_NURSING);
+  if (nursingNotesOn(ctx.settings) && LABEL_NOT_WHILE_NURSING_NAMES.test(n)) out.push(labelNotWhileNursing(ctx.voice));
   return out.map((a) => forMom(a, ctx.name, ctx.self));
 }
 
@@ -1050,11 +1051,11 @@ export function matchPlan(query: string, plans: CarePlan[], opts: { includePriva
 /** A daily check-in's response: the crisis sheet (harm chip), INTRUSIVE, STRUGGLING; `blues` shows BLUES_NOTE (Days 0–14). */
 export function checkinResponse(
   d: MoodDataByKind["checkin"],
-  ctx: { daysSinceBirth: number | null }
+  ctx: { daysSinceBirth: number | null; voice: Voice }
 ): { crisis: boolean; cards: Assessment[]; blues: boolean } {
   const tags = d.tags ?? [];
   const cards: Assessment[] = [];
-  if (tags.includes("scary_thoughts")) cards.push(INTRUSIVE);
+  if (tags.includes("scary_thoughts")) cards.push(intrusive(ctx.voice));
   if (d.level === 1) cards.push(STRUGGLING);
   const dsb = ctx.daysSinceBirth;
   return { crisis: tags.includes("harm_self"), cards, blues: dsb !== null && dsb >= 0 && dsb <= 14 };
@@ -1104,9 +1105,12 @@ const band = (score: number, r: { low: Band; some: Band; positive: Band }): Band
  * DIFFICULTY_HARD. A scale she stopped partway through ("Stop here") gets no
  * score band: a partial total would reassure on questions she never answered.
  */
-export function screenResults(d: MoodDataByKind["screen"]): ScreenCard[] {
+export function screenResults(d: MoodDataByKind["screen"], voice: Voice): ScreenCard[] {
   const cards: ScreenCard[] = [];
-  if (d.item9_ever) cards.push({ key: "crisis", tier: CRISIS.tier, label: CRISIS.label, title: CRISIS.title, body: CRISIS.body });
+  if (d.item9_ever) {
+    const c = crisis(voice);
+    cards.push({ key: "crisis", tier: c.tier, label: c.label, title: c.title, body: c.body });
+  }
   const phqDone = d.phq9.length === 9;
   const phqHeading = phqDone ? { heading: `PHQ-9: ${d.phq9_score} of 27` } : {};
   // After any self-harm answer the results never reassure (S6): no "few signs" or "some signs".

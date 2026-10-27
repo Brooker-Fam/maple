@@ -2,18 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WEIGHT_GAIN_NOTE } from "@/lib/maple/guidelines";
-import { ageInDays, curves, percentileFor, type Measure, type Percentile } from "@/lib/maple/growth";
+import { ageInDays, curves, readingFor, whoChartFor, type Measure, type Percentile, type WhoChart } from "@/lib/maple/growth";
 import { dayKey, formatDayLabel } from "@/lib/maple/time";
 import { CM_PER_IN, G_PER_LB, formatLength, formatWeight } from "@/lib/maple/units";
 import type { Baby, Entry, EntryOf, UnitSystem } from "@/lib/maple/types";
+import { babyWords } from "./familyWords";
 import { Icon } from "./icons";
 import { Button, EmptyState, HowToRead, Segmented, cx, tone } from "./ui";
 
 /**
- * Her measurements on the WHO girls' growth standards (3rd–97th percentile
- * bands). Loaded lazily by Patterns because growth.ts carries the WHO tables.
- * Percentiles describe; they aren't targets, so nothing here is colored as
- * good or bad, and an implausible value only asks for a double-check.
+ * The baby's measurements on the WHO growth standard for their sex (3rd–97th
+ * percentile bands), or on their own when no sex is set. Loaded lazily by
+ * Patterns because growth.ts carries the WHO tables. Percentiles describe;
+ * they aren't targets, so nothing here is colored as good or bad, and an
+ * implausible value only asks for a double-check.
  */
 
 type Props = {
@@ -35,12 +37,15 @@ type Point = {
   where: "birth" | "doctor" | "home" | null;
   entry?: Entry;
   pct: Percentile | null;
+  implausible: boolean;
 };
 
 const FIELD = { weight: "weight_g", length: "length_cm", head: "head_cm" } as const;
 const BIRTH_FIELD = { weight: "birth_weight_g", length: "birth_length_cm", head: "birth_head_cm" } as const;
 const NOUN: Record<Measure, string> = { weight: "weight", length: "length", head: "head size" };
 const ORD: Record<number, string> = { 3: "3rd", 15: "15th", 50: "50th", 85: "85th", 97: "97th" };
+/** Room around the points when there are no bands to set the scale (grams / cm). */
+const BARE_PAD: Record<Measure, number> = { weight: 250, length: 2, head: 1 };
 
 /**
  * Validated against the card surfaces (≥ 3:1, chroma ≥ 0.10): gold for her,
@@ -112,20 +117,20 @@ function useWidth<T extends HTMLElement>(): [(el: T | null) => (() => void) | un
 export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEdit }: Props) {
   const [measure, setMeasure] = useState<Measure>("weight");
   const bornAt = baby.born_at;
+  const w = babyWords(baby);
+  const chart = whoChartFor(baby.sex);
 
   const points = useMemo<Point[]>(() => {
     if (!bornAt) return [];
     const out: Point[] = [];
+    const point = (p: Omit<Point, "pct" | "implausible">): Point => ({ ...p, ...readingFor(measure, p.value, p.ageDays, baby.sex) });
     const birth = baby[BIRTH_FIELD[measure]];
-    if (birth != null) {
-      out.push({ key: "birth", ageDays: 0, value: birth, at: bornAt, where: "birth", pct: percentileFor(measure, birth, 0) });
-    }
+    if (birth != null) out.push(point({ key: "birth", ageDays: 0, value: birth, at: bornAt, where: "birth" }));
     for (const e of growth) {
       if (e.kind !== "growth") continue;
       const v = (e as EntryOf<"growth">).data[FIELD[measure]];
       if (v == null) continue;
-      const age = ageInDays(bornAt, e.started_at);
-      out.push({ key: String(e.id), ageDays: age, value: v, at: e.started_at, where: e.data.at ?? null, entry: e, pct: percentileFor(measure, v, age) });
+      out.push(point({ key: String(e.id), ageDays: ageInDays(bornAt, e.started_at), value: v, at: e.started_at, where: e.data.at ?? null, entry: e }));
     }
     return out.sort((a, b) => a.ageDays - b.ageDays);
   }, [baby, bornAt, growth, measure]);
@@ -140,7 +145,9 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
         <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-3">
           <Icon name="sprout" size={24} />
         </span>
-        <p className={cx(tone.muted, "mx-auto max-w-[20rem] text-[15px]")}>Once she&apos;s here, her measurements will sit on the WHO growth curves.</p>
+        <p className={cx(tone.muted, "mx-auto max-w-[20rem] text-[15px]")}>
+          Once {w.hes} here, {w.his} measurements will {chart ? "sit on the WHO growth curves" : "be charted here"}.
+        </p>
       </div>
     );
   }
@@ -149,7 +156,7 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
     return (
       <div className={VARS}>
         <EmptyState icon="ruler" title="No weigh-ins yet">
-          Add her birth stats or numbers from the next checkup.
+          Add {w.his} birth stats or numbers from the next checkup.
           {onAdd && (
             <span className="mt-4 block">
               <Button variant="soft" onClick={onAdd}>
@@ -175,10 +182,19 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
           { value: "head", label: "Head" },
         ]}
       />
+      {!chart && (
+        <p className={cx(tone.muted, "mb-3 flex gap-2 px-1 text-[13px] leading-relaxed")}>
+          <Icon name="info" size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
+          <span>
+            WHO&apos;s growth standards are separate for girls and boys. {w.Name}&apos;s sex isn&apos;t set, so this shows the measurements without
+            percentiles.
+          </span>
+        </p>
+      )}
       {points.length ? (
         <>
-          <Plot measure={measure} points={points} units={units} birthValue={baby[BIRTH_FIELD[measure]]} />
-          <PointsTable measure={measure} points={points} units={units} birthWeight={baby.birth_weight_g} tz={baby.timezone} todayKey={todayKey} onEdit={onEdit} />
+          <Plot measure={measure} points={points} units={units} birthValue={baby[BIRTH_FIELD[measure]]} chart={chart} whose={w.His} />
+          <PointsTable measure={measure} points={points} units={units} birthWeight={baby.birth_weight_g} tz={baby.timezone} todayKey={todayKey} whose={w.His} onEdit={onEdit} />
         </>
       ) : (
         <div className="py-8 text-center">
@@ -192,18 +208,36 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
         </div>
       )}
       <HowToRead className="mt-2">
-        <p>
-          Shaded bands are the WHO growth standards for girls: the wide band spans the 3rd to 97th percentile, the deeper, narrower one
-          the 15th to 85th, and the dashed line is the 50th. Percentiles describe where she sits among healthy girls her age; they aren&apos;t
-          targets. Her pediatrician watches the curve over time.
-        </p>
+        {chart ? (
+          <p>
+            Shaded bands are the WHO growth standards for {chart}: the wide band spans the 3rd to 97th percentile, the deeper, narrower one
+            the 15th to 85th, and the dashed line is the 50th. Percentiles describe where {w.he} sits among healthy {chart} {w.his} age; they
+            aren&apos;t targets. {w.His} pediatrician watches the curve over time.
+          </p>
+        ) : (
+          <p>Each dot is one measurement. {w.His} pediatrician watches the curve over time.</p>
+        )}
         {measure === "weight" && <p>{WEIGHT_GAIN_NOTE}</p>}
       </HowToRead>
     </div>
   );
 }
 
-function Plot({ measure, points, units, birthValue }: { measure: Measure; points: Point[]; units: UnitSystem; birthValue: number | null }) {
+function Plot({
+  measure,
+  points,
+  units,
+  birthValue,
+  chart,
+  whose,
+}: {
+  measure: Measure;
+  points: Point[];
+  units: UnitSystem;
+  birthValue: number | null;
+  chart: WhoChart | null;
+  whose: string;
+}) {
   const [ref, W] = useWidth<HTMLDivElement>();
   const [active, setActive] = useState<number | null>(null);
   const box = useRef<HTMLDivElement | null>(null);
@@ -226,14 +260,20 @@ function Plot({ measure, points, units, birthValue }: { measure: Measure; points
 
   const maxAge = points[points.length - 1]?.ageDays ?? 0;
   const xMax = Math.min(730, Math.max(14, Math.ceil(maxAge * 1.3) + 1));
-  const bands = useMemo(() => curves(measure, 0, xMax, xMax <= 60 ? 1 : xMax <= 240 ? 3 : 7), [measure, xMax]);
+  const bands = useMemo(() => curves(measure, 0, xMax, xMax <= 60 ? 1 : xMax <= 240 ? 3 : 7, chart), [chart, measure, xMax]);
   const u = axisUnit(measure, units);
 
   // A value far off the charts (usually a typo or lb/kg mix-up) shouldn't squash the
   // whole chart: it's pinned to the edge, ringed, and flagged in the table.
-  const plausible = points.filter((p) => !p.pct?.implausible);
-  const lo = Math.min(...bands[0].points.map((p) => p[1]), ...plausible.map((p) => p.value));
-  const hi = Math.max(...bands[bands.length - 1].points.map((p) => p[1]), ...plausible.map((p) => p.value));
+  const plausible = points.filter((p) => !p.implausible);
+  const scaled = bands.length || plausible.length ? plausible : points;
+  let lo = Math.min(...(bands.length ? bands[0].points.map((p) => p[1]) : []), ...scaled.map((p) => p.value));
+  let hi = Math.max(...(bands.length ? bands[bands.length - 1].points.map((p) => p[1]) : []), ...scaled.map((p) => p.value));
+  if (!bands.length) {
+    const pad = Math.max(BARE_PAD[measure], (hi - lo) * 0.08);
+    lo -= pad;
+    hi += pad;
+  }
   const dLo = u.to(lo);
   const dHi = u.to(hi);
   const step = niceStep(dHi - dLo, 4);
@@ -270,7 +310,7 @@ function Plot({ measure, points, units, birthValue }: { measure: Measure; points
   const her = plausible.map((p) => [p.ageDays, p.value] as [number, number]);
   const tip = active != null ? points[active] : null;
   const tipX = tip ? x(tip.ageDays) : 0;
-  const ariaLabel = `${NOUN[measure]} on the WHO girls' growth curves: ${points
+  const ariaLabel = `${chart ? `${NOUN[measure]} on the WHO ${chart}' growth curves` : `${whose} ${NOUN[measure]}`}: ${points
     .map((p) => `${formatValue(measure, p.value, units)} ${ageLabel(p.ageDays, p.where === "birth")}${p.pct ? `, about the ${p.pct.label} percentile` : ""}`)
     .join("; ")}`;
 
@@ -330,9 +370,13 @@ function Plot({ measure, points, units, birthValue }: { measure: Measure; points
             ))}
             <line x1={LEFT} x2={W - RIGHT} y1={H_ - BOTTOM} y2={H_ - BOTTOM} stroke="var(--g-axis)" />
 
-            <path d={area(bands[4].points, bands[0].points)} fill="var(--g-outer)" />
-            <path d={area(bands[3].points, bands[1].points)} fill="var(--g-inner)" />
-            <path d={line(bands[2].points)} fill="none" stroke="var(--g-mid)" strokeWidth={1.25} strokeDasharray="4 4" opacity={0.75} />
+            {bands.length > 0 && (
+              <>
+                <path d={area(bands[4].points, bands[0].points)} fill="var(--g-outer)" />
+                <path d={area(bands[3].points, bands[1].points)} fill="var(--g-inner)" />
+                <path d={line(bands[2].points)} fill="none" stroke="var(--g-mid)" strokeWidth={1.25} strokeDasharray="4 4" opacity={0.75} />
+              </>
+            )}
             {edge.map((e) => (
               <text key={e.p} x={W - RIGHT + 4} y={e.y} dy="0.32em" className={AXIS_TEXT}>
                 {ORD[e.p]}
@@ -353,7 +397,7 @@ function Plot({ measure, points, units, birthValue }: { measure: Measure; points
               const cx = x(p.ageDays);
               const cy = y(p.value);
               const hollow = p.where === "home";
-              if (p.pct?.implausible) {
+              if (p.implausible) {
                 return (
                   <g key={p.key}>
                     <circle cx={cx} cy={cy} r={6} fill="var(--g-surface)" stroke="var(--g-birth)" strokeWidth={1.5} strokeDasharray="2 2" />
@@ -414,8 +458,8 @@ function Plot({ measure, points, units, birthValue }: { measure: Measure; points
               {tip.where === "doctor" ? (measure === "weight" ? " · doctor's scale" : " · at the doctor's") : ""}
               {tip.where === "home" ? (measure === "weight" ? " · home scale" : " · measured at home") : ""}
             </span>
-            {tip.pct && !tip.pct.implausible && <span className="block opacity-90">about the {tip.pct.label} percentile</span>}
-            {tip.pct?.implausible && <span className="block opacity-90">far outside the usual range: worth a double-check</span>}
+            {tip.pct && !tip.implausible && <span className="block opacity-90">about the {tip.pct.label} percentile</span>}
+            {tip.implausible && <span className="block opacity-90">far outside the usual range: worth a double-check</span>}
           </div>
         )}
       </div>
@@ -430,6 +474,7 @@ function PointsTable({
   birthWeight,
   tz,
   todayKey,
+  whose,
   onEdit,
 }: {
   measure: Measure;
@@ -438,13 +483,14 @@ function PointsTable({
   birthWeight: number | null;
   tz: string;
   todayKey: string;
+  whose: string;
   onEdit?: (e: Entry) => void;
 }) {
   const rows = [...points].reverse();
   const th = cx(tone.faint, "px-1.5 pt-1 pb-2 text-left text-xs font-medium");
   return (
     <table className="mt-4 w-full text-sm">
-      <caption className="sr-only">Her {NOUN[measure]} measurements</caption>
+      <caption className="sr-only">{whose} {NOUN[measure]} measurements</caption>
       <thead>
         <tr className="border-b border-mp-line">
           <th scope="col" className={th}>
@@ -499,7 +545,7 @@ function PointsTable({
               </th>
               <td className={cx(tone.body, "px-1.5 py-2.5 whitespace-nowrap tabular-nums")}>{formatValue(measure, p.value, units)}</td>
               <td className={cx(tone.body, "px-1.5 py-2.5 tabular-nums")}>
-                {p.pct?.implausible ? (
+                {p.implausible ? (
                   <span
                     className="inline-flex items-start gap-1 rounded-md bg-mp-danger/10 px-1.5 py-0.5 text-xs leading-snug font-semibold text-mp-danger"
                     title="Far outside the usual range, which often means a typo or a lb/kg mix-up."

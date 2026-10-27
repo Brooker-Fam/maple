@@ -1,10 +1,11 @@
 "use client";
 
+import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { tick } from "@/components/atlas/haptics";
 import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
-import { LAST_FED_RULE, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
+import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
@@ -121,6 +122,7 @@ function NextSide({ next }: { next: NextSideInfo }) {
  */
 export default function StatusCard() {
   const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
+  const vo = useVoice();
   const { open } = useSheets();
   const now = useNow(20_000);
   const [info, setInfo] = useState(false);
@@ -259,7 +261,7 @@ export default function StatusCard() {
                 exit={{ height: 0, opacity: 0 }}
                 className="overflow-hidden text-[13px] text-mp-ink-3"
               >
-                {LAST_FED_RULE}
+                {lastFedRule(vo)}
                 {gap != null && <> Lately: about every {formatDuration(gap * 60)} (start to start).</>}
               </motion.p>
             )}

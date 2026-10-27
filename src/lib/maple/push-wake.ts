@@ -2,9 +2,10 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { query } from "@/lib/db";
 import { captureServerException } from "@/lib/posthog-server";
 import { planStatus } from "./care";
-import { getCarePerson, listCarePlans, rowToCareEntry } from "./care-store";
+import { rowToCareEntry, rowToPlan } from "./care-store";
+import { FAMILY_ONE, type FamilyScope } from "./family";
 import { addDays, dayKey, parseDayKey, zonedTimeToUtc } from "./time";
-import type { CarePerson, CarePlan, DoseEntry } from "./types";
+import type { CarePerson, CarePlan, CareSettings, DoseEntry, Member, Role } from "./types";
 import { MAPLE_ORIGIN } from "./origin";
 
 /**
@@ -28,6 +29,13 @@ import { MAPLE_ORIGIN } from "./origin";
  *
  * Without QStash env vars nothing here does anything: the GitHub workflow
  * and an open app's polls drive the tick, as before.
+ *
+ * Families: everything a tick reads (phones, members, her page, plans,
+ * doses) is one family's, and each family's wakes are its own
+ * (`wake:<fam>:<second>`, published with the family in the signed body), so
+ * two families' moments in the same second both get one. Family 1 keeps the
+ * keys, ids and body it had before families, which brooker-wedding's copy
+ * still shares. Only the safety net is global: it walks every family.
  */
 
 type Row = Record<string, unknown>;
@@ -47,6 +55,70 @@ async function q(sql: string, params: unknown[] = []): Promise<Row[]> {
   const rows = await query(sql, params);
   if (rows === null) throw new Error("No database");
   return rows as Row[];
+}
+
+/**
+ * A maple_push_sent row of this family's. Rows written before families (and
+ * by brooker-wedding's copy) have no family_id and are family 1's; the
+ * global rows (ticks, the net, the floor, gaps) are never read through this.
+ */
+export const familySent = (n: number) => `(family_id = $${n} OR (family_id IS NULL AND $${n}::bigint = ${FAMILY_ONE}))`;
+
+// ── who's in the family ──────────────────────────────────────────────
+
+export async function familyMembers(familyId: number): Promise<Member[]> {
+  const rows = await q(`SELECT email, role, display_name, emoji, color FROM maple_members WHERE family_id = $1 ORDER BY added_at, email`, [familyId]);
+  return rows.map((r) => ({
+    email: String(r.email),
+    role: (r.role === "owner" || r.role === "viewer" ? r.role : "member") as Role,
+    display_name: r.display_name == null ? null : String(r.display_name),
+    emoji: r.emoji == null ? null : String(r.emoji),
+    color: r.color == null ? null : String(r.color),
+  }));
+}
+
+/** The family's care page, if it has one (read only: a notification never makes one). */
+export async function familyCarePerson(familyId: number): Promise<CarePerson | null> {
+  const rows = await q(`SELECT * FROM maple_care_people WHERE family_id = $1 ORDER BY created_at LIMIT 1`, [familyId]);
+  if (!rows.length) return null;
+  const r = rows[0];
+  return {
+    member: String(r.member),
+    shared_with: Array.isArray(r.shared_with) ? (r.shared_with as unknown[]).map(String) : [],
+    settings: (r.settings ?? {}) as CareSettings,
+    created_by: r.created_by == null ? null : String(r.created_by),
+    created_at: new Date(r.created_at as string).toISOString(),
+    updated_at: new Date(r.updated_at as string).toISOString(),
+  };
+}
+
+/** The member the admin login acts as (the active baby's settings.admin_as), for her page's access. */
+export async function familyAdminAs(scope: FamilyScope): Promise<string | null> {
+  if (scope.babyId == null) return null;
+  const rows = await q(`SELECT settings->>'admin_as' AS admin_as FROM maple_babies WHERE id = $1 AND family_id = $2`, [scope.babyId, scope.familyId]);
+  return rows[0]?.admin_as == null ? null : String(rows[0].admin_as);
+}
+
+const PLAN_COLS = `m.*, to_char(m.course_start, 'YYYY-MM-DD') AS course_start_text, to_char(m.course_end, 'YYYY-MM-DD') AS course_end_text`;
+
+export async function familyPlans(familyId: number, person: string): Promise<CarePlan[]> {
+  const rows = await q(`SELECT ${PLAN_COLS} FROM maple_care_meds m WHERE m.family_id = $1 AND m.person = $2 AND m.deleted_at IS NULL ORDER BY m.sort, m.id`, [familyId, person]);
+  return rows.map(rowToPlan);
+}
+
+/** One of the family's plans by id, deleted ones included ("Logged" names it either way). */
+export async function familyPlan(familyId: number, id: number): Promise<CarePlan | null> {
+  const rows = await q(`SELECT ${PLAN_COLS} FROM maple_care_meds m WHERE m.id = $1 AND m.family_id = $2`, [id, familyId]);
+  return rows.length ? rowToPlan(rows[0]) : null;
+}
+
+/** The family's doses of these plans since `since`. */
+export async function familyDoses(familyId: number, planIds: number[], since: Date): Promise<DoseEntry[]> {
+  const rows = await q(
+    `SELECT * FROM maple_care_entries WHERE family_id = $1 AND med_id = ANY($2::bigint[]) AND kind = 'dose' AND deleted_at IS NULL AND at >= $3::timestamptz ORDER BY at`,
+    [familyId, planIds, since.toISOString()]
+  );
+  return rows.map(rowToCareEntry) as DoseEntry[];
 }
 
 // ── when ──────────────────────────────────────────────────────────────
@@ -114,24 +186,26 @@ export function remindKind(plan: CarePlan): { kind: "ok" | "at" | null; why?: "d
 export type PlanMoments = { plan: CarePlan; doses: DoseEntry[]; moments: DueMoment[] };
 
 /**
- * Her active plans (private ones included: a wake only starts a tick, and the
- * tick still applies what each phone may see), their doses of the last three
- * days in one query, and each plan's moments.
+ * One family's active plans (private ones included: a wake only starts a
+ * tick, and the tick still applies what each phone may see), their doses of
+ * the last three days in one query, and each plan's moments, in the
+ * family's timezone. No care page: nothing.
  */
-export async function collectMoments(now: Date, tz: string): Promise<{ person: CarePerson; plans: PlanMoments[] }> {
-  const person = await getCarePerson();
-  const plans = (await listCarePlans(person.member)).filter((p) => !p.stopped_at);
+export async function collectMoments(scope: FamilyScope, now: Date): Promise<{ person: CarePerson | null; plans: PlanMoments[] }> {
+  const person = await familyCarePerson(scope.familyId);
+  if (!person) return { person, plans: [] };
+  const plans = (await familyPlans(scope.familyId, person.member)).filter((p) => !p.stopped_at);
   if (!plans.length) return { person, plans: [] };
-  const rows = await q(
-    `SELECT * FROM maple_care_entries WHERE med_id = ANY($1::bigint[]) AND kind = 'dose' AND deleted_at IS NULL AND at >= $2::timestamptz ORDER BY at`,
-    [plans.map((p) => p.id), new Date(now.getTime() - DOSE_LOOKBACK_MS).toISOString()]
+  const doses = await familyDoses(
+    scope.familyId,
+    plans.map((p) => p.id),
+    new Date(now.getTime() - DOSE_LOOKBACK_MS)
   );
-  const doses = rows.map(rowToCareEntry) as DoseEntry[];
   return {
     person,
     plans: plans.map((plan) => {
       const mine = doses.filter((d) => d.med_id === plan.id);
-      return { plan, doses: mine, moments: dueMoments(plan, mine, now, tz) };
+      return { plan, doses: mine, moments: dueMoments(plan, mine, now, scope.tz) };
     }),
   };
 }
@@ -171,19 +245,25 @@ async function qstash(path: string, init: { method: string; headers?: Record<str
   });
 }
 
+/** A wake's claim key, QStash deduplication id and signed body: family 1's are the ones from before families. */
+export function wakeIds(familyId: number, sec: number, via: Via): { key: string; dedup: string; body: string } {
+  if (familyId === FAMILY_ONE) return { key: `wake:${sec}`, dedup: `maple-wake-${sec}`, body: JSON.stringify({ via, at: sec }) };
+  return { key: `wake:${familyId}:${sec}`, dedup: `maple-wake-${familyId}-${sec}`, body: JSON.stringify({ via, at: sec, family: familyId }) };
+}
+
 /**
- * Publish one wake for `atMs` (plus a few seconds), once: the `wake:<second>`
- * row is claimed first and given back if the publish fails, so a later
- * write or tick tries again. False when there's no QStash, it was already
- * published, or the publish failed.
+ * Publish one wake for `atMs` (plus a few seconds) for one family, once: its
+ * `wake:` row is claimed first and given back if the publish fails, so a
+ * later write or tick tries again. False when there's no QStash, it was
+ * already published, or the publish failed.
  */
-export async function scheduleWake(atMs: number, via: Via, slackS = WAKE_SLACK_S): Promise<boolean> {
+export async function scheduleWake(familyId: number, atMs: number, via: Via, slackS = WAKE_SLACK_S): Promise<boolean> {
   if (schedulerMode() !== "qstash") return false;
   const sec = Math.ceil(atMs / SEC) + slackS;
-  const key = `wake:${sec}`;
+  const { key, dedup, body } = wakeIds(familyId, sec, via);
   const claimed = await q(
-    `INSERT INTO maple_push_sent (key, sent_at, state) VALUES ($1, to_timestamp($2::double precision), 'sent') ON CONFLICT (key) DO NOTHING RETURNING key`,
-    [key, sec]
+    `INSERT INTO maple_push_sent (key, sent_at, state, family_id) VALUES ($1, to_timestamp($2::double precision), 'sent', $3) ON CONFLICT (key) DO NOTHING RETURNING key`,
+    [key, sec, familyId]
   );
   if (!claimed.length) return false;
   let ok = false;
@@ -194,10 +274,10 @@ export async function scheduleWake(atMs: number, via: Via, slackS = WAKE_SLACK_S
         "Content-Type": "application/json",
         "Upstash-Not-Before": String(sec),
         "Upstash-Retries": "3",
-        "Upstash-Deduplication-Id": `maple-wake-${sec}`,
+        "Upstash-Deduplication-Id": dedup,
         "Upstash-Forward-X-Maple-Via": via,
       },
-      body: JSON.stringify({ via, at: sec }),
+      body,
     });
     ok = res.ok;
     if (!ok) void captureServerException(new Error(`qstash publish ${res.status}`), { route: "maple push wake" });
@@ -251,45 +331,62 @@ export async function ensureSafetyNet(wanted: boolean, now = new Date()): Promis
 }
 
 /**
- * Publish wakes for the next few moments not already published: her
- * medicines' moments (only while some phone wants medicine notices) and
- * pending tests ("Send a test in 1 minute"), within QStash's 7 days. Also
- * keeps the safety net in step. Called from writes and from scheduled ticks,
- * never from an open app's polls. `pre`: moments the caller already worked
- * out (the tick shares its own).
+ * Whether any phone in any family has notifications on: the safety net is
+ * shared, so it runs while anyone's does. Reads no family's data.
  */
-export async function scheduleWakeups(now = new Date(), pre?: { plans: PlanMoments[] } | null, tz?: string): Promise<{ mode: SchedulerMode; published: number }> {
+export async function anyPhoneOn(): Promise<boolean> {
+  return (await q(`SELECT 1 FROM maple_push_subs WHERE NOT needs_resubscribe LIMIT 1`)).length > 0;
+}
+
+/**
+ * Publish one family's wakes for its next few moments not already
+ * published: her medicines' moments (only while one of its phones wants
+ * medicine notices) and its pending tests ("Send a test in 1 minute"),
+ * within QStash's 7 days. Also keeps the shared safety net in step. Called
+ * from writes and from scheduled ticks, never from an open app's polls.
+ * `pre`: moments the caller already worked out for this family (the tick
+ * shares its own).
+ */
+export async function scheduleWakeups(scope: FamilyScope, now = new Date(), pre?: { plans: PlanMoments[] } | null): Promise<{ mode: SchedulerMode; published: number }> {
   if (schedulerMode() !== "qstash") return { mode: "fallback", published: 0 };
-  const subs = await q(`SELECT prefs, test_due_at FROM maple_push_subs WHERE NOT needs_resubscribe`);
-  await ensureSafetyNet(subs.length > 0, now);
+  const subs = await q(`SELECT prefs, test_due_at FROM maple_push_subs WHERE family_id = $1 AND NOT needs_resubscribe`, [scope.familyId]);
+  await ensureSafetyNet(subs.length > 0 || (await anyPhoneOn()), now);
   if (!subs.length) return { mode: "qstash", published: 0 };
   const t = now.getTime();
   const times: number[] = [];
   const wantMeds = subs.some((s) => (s.prefs as { meds?: boolean } | null)?.meds !== false);
   if (wantMeds) {
-    let plans = pre?.plans;
-    if (!plans) {
-      const zone = tz ?? (await babyTz());
-      plans = (await collectMoments(now, zone)).plans;
-    }
+    const plans = pre?.plans ?? (await collectMoments(scope, now)).plans;
     for (const p of plans) for (const m of p.moments) if (m.at > t) times.push(m.at);
   }
   for (const s of subs) if (s.test_due_at) times.push(Math.max(t, new Date(s.test_due_at as string).getTime()));
   const next = [...new Set(times.filter((x) => x - t <= MAX_AHEAD_MS))].sort((a, b) => a - b).slice(0, WAKES_PER_CALL);
   let published = 0;
-  for (const at of next) if (await scheduleWake(at, "wake")) published++;
+  for (const at of next) if (await scheduleWake(scope.familyId, at, "wake")) published++;
   return { mode: "qstash", published };
 }
 
-async function babyTz(): Promise<string> {
-  const rows = await q(`SELECT timezone FROM maple_babies ORDER BY id LIMIT 1`);
-  return String(rows[0]?.timezone || "America/New_York");
+/** The family's next wake already published (for the health line), if any. */
+export async function nextWake(familyId: number, now = new Date()): Promise<string | null> {
+  const rows = await q(`SELECT MIN(sent_at) AS at FROM maple_push_sent WHERE key LIKE 'wake:%' AND sent_at > $1 AND ${familySent(2)}`, [now.toISOString(), familyId]);
+  return rows[0]?.at ? new Date(rows[0].at as string).toISOString() : null;
 }
 
-/** The next wake already published (for the health line), if any. */
-export async function nextWake(now = new Date()): Promise<string | null> {
-  const rows = await q(`SELECT MIN(sent_at) AS at FROM maple_push_sent WHERE key LIKE 'wake:%' AND sent_at > $1`, [now.toISOString()]);
-  return rows[0]?.at ? new Date(rows[0].at as string).toISOString() : null;
+/**
+ * The family a signed wake names in its body (`family`), or family 1 for a
+ * wake published before families (or by brooker-wedding's copy). Null when
+ * the body names something that isn't a family id.
+ */
+export function wakeFamily(body: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body || "{}");
+  } catch {
+    return FAMILY_ONE;
+  }
+  const fam = parsed && typeof parsed === "object" ? (parsed as { family?: unknown }).family : undefined;
+  if (fam === undefined || fam === null) return FAMILY_ONE;
+  return typeof fam === "number" && Number.isSafeInteger(fam) && fam > 0 ? fam : null;
 }
 
 // ── the signature on QStash's requests ────────────────────────────────

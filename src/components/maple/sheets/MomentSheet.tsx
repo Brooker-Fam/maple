@@ -9,11 +9,12 @@ import {
   uploadPhoto,
   type EncodedPhoto,
 } from "@/lib/maple/image";
-import { MILESTONES, milestoneLabel, milestonePreset } from "@/lib/maple/milestones";
+import { milestoneLabel, milestonePreset, milestonesFor } from "@/lib/maple/milestones";
 import { dayKey, formatDayLabel, formatTime, zonedTimeToUtc } from "@/lib/maple/time";
 import type { MomentData, PhotoRef } from "@/lib/maple/types";
 import { photoUrl } from "../EntryRow";
 import { Icon } from "../icons";
+import { useBabyWords, useMilestoneWords } from "../familyWords";
 import { Button, Chip, Field, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { useSheets, type SheetProps } from "./index";
@@ -65,10 +66,13 @@ export default function MomentSheet(props: SheetProps) {
 
 function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const { state, log, update, remove, toast, now, readOnly } = useMaple();
+  const w = useBabyWords();
   const { open: openSheet } = useSheets();
   const tz = state?.baby.timezone ?? "America/New_York";
   const moment = entry?.kind === "moment" ? entry : undefined;
   const isEdit = !!moment;
+  const mw = useMilestoneWords();
+  const presets = milestonesFor(mw);
 
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   const [title, setTitle] = useState(() => moment?.data.title ?? str(preset?.title));
@@ -78,7 +82,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const [whenFromPhoto, setWhenFromPhoto] = useState(false);
   const whenTouched = useRef(isEdit);
   const [showAllChips, setShowAllChips] = useState(() => {
-    const i = MILESTONES.findIndex((m) => m.id === (moment?.data.milestone ?? preset?.milestone));
+    const i = presets.findIndex((m) => m.id === (moment?.data.milestone ?? preset?.milestone));
     return i >= COLLAPSED_CHIPS;
   });
   const [items, setItems] = useState<Item[]>([]);
@@ -331,12 +335,12 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   );
 
   // Chips: a non-preset tag (a monthly photo, a kept celebration) leads the row.
-  const custom = milestone && !milestonePreset(milestone) ? milestone : null;
-  const chips = showAllChips ? MILESTONES : MILESTONES.slice(0, COLLAPSED_CHIPS);
+  const custom = milestone && !milestonePreset(milestone, mw) ? milestone : null;
+  const chips = showAllChips ? presets : presets.slice(0, COLLAPSED_CHIPS);
 
   // Viewers (read-only role) see the moment, not a form.
   if (readOnly) {
-    const label = milestoneLabel(moment?.data.milestone);
+    const label = milestoneLabel(moment?.data.milestone, mw);
     const heading = moment?.data.title || label || "A little moment";
     return (
       <Sheet open={open} onClose={onClose} title="Moment" footer={footer}>
@@ -354,7 +358,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
             </div>
           </>
         ) : (
-          <p className={cx(tone.muted, "text-sm")}>Moments are added by Maple&apos;s grown-ups.</p>
+          <p className={cx(tone.muted, "text-sm")}>Moments are added by {w.name}&apos;s grown-ups.</p>
         )}
       </Sheet>
     );
@@ -424,7 +428,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
           value={title}
           maxLength={120}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder={milestone ? milestoneLabel(milestone) : "What happened?"}
+          placeholder={milestone ? milestoneLabel(milestone, mw) : "What happened?"}
           className={tone.input}
         />
       </Field>
@@ -435,7 +439,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
           {custom && (
             // Not on the shelf, so it can't be picked again: the x says tapping removes it.
             <Chip selected onClick={() => setMilestone("")}>
-              {milestoneLabel(custom)}
+              {milestoneLabel(custom, mw)}
               <Icon name="x" size={14} strokeWidth={2.25} label="Remove" />
             </Chip>
           )}
@@ -458,7 +462,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
       </div>
 
       <Field label="Note">
-        <TextArea value={note} onChange={setNote} rows={3} placeholder="A few words for Maple to read someday…" />
+        <TextArea value={note} onChange={setNote} rows={3} placeholder={`A few words for ${w.name} to read someday…`} />
       </Field>
 
       <div>

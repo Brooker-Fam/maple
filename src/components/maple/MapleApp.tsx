@@ -13,6 +13,7 @@ import FamilyTab from "./FamilyTab";
 import HistoryTab from "./HistoryTab";
 import MomentsTab from "./MomentsTab";
 import { NotificationsProvider } from "./notify";
+import { OnboardingGate } from "./onboarding/OnboardingGate";
 import SignIn from "./SignIn";
 import TodayTab from "./TodayTab";
 import { MAPLE_LEAF_PATH } from "./Hero";
@@ -78,7 +79,9 @@ function Shell() {
   return (
     <>
       <NightLook />
-      <Screens />
+      <OnboardingGate>
+        <Screens />
+      </OnboardingGate>
     </>
   );
 }

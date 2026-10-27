@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { formatClock } from "@/lib/maple/time";
 import AlertStack from "./AlertCard";
 import type { NavTarget } from "./AppNav";
+import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import Celebrations from "./Celebrations";
 import { AskButton } from "./chat/ChatNav";
 import DayDial from "./DayDial";
@@ -140,7 +141,7 @@ function TitleTicker() {
   const now = useNow(1000);
   const original = useRef<string | null>(null);
   const e = summary?.active[0];
-  const name = (state?.baby.nickname || state?.baby.name || "Maple").split(" ")[0];
+  const name = babyFirstName(state?.baby);
   let title: string | null = null;
   if (e) {
     const n = timerNumbers(e, now);
@@ -180,14 +181,16 @@ function Bruce({ className }: { className?: string }) {
 }
 
 function FreshPage({ readOnly }: { readOnly: boolean }) {
+  const w = useBabyWords();
+  const one = useFamilyOne();
   return (
     <section className={cx(tone.card, "px-6 py-8 text-center")}>
       <Bruce className="mx-auto h-10 w-[72px]" />
       <p className={cx(tone.heading, "mt-3 text-[20px]")}>A fresh page</p>
       <p className={cx(tone.muted, "mx-auto mt-1 max-w-[18rem] text-[15px]")}>
-        {readOnly ? "Nothing logged yet today. Check back soon." : "Tap a button below when Maple eats, sleeps, or needs a change."}
+        {readOnly ? "Nothing logged yet today. Check back soon." : `Tap a button below when ${w.name} eats, sleeps, or needs a change.`}
       </p>
-      <p className={cx(tone.faint, "mt-3 text-xs")}>Bruce is guarding an empty page.</p>
+      {one && <p className={cx(tone.faint, "mt-3 text-xs")}>Bruce is guarding an empty page.</p>}
     </section>
   );
 }
@@ -200,7 +203,7 @@ function LatestMoment() {
   return (
     <figure className={cx(tone.card, "overflow-hidden p-2", m.data.title ? "pb-3" : "")}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={photoUrl(m.id, 0, "full")} alt={m.data.title ?? "Maple"} className="aspect-[4/3] w-full rounded-[14px] object-cover" />
+      <img src={photoUrl(m.id, 0, "full")} alt={m.data.title ?? babyFirstName(state?.baby)} className="aspect-[4/3] w-full rounded-[14px] object-cover" />
       {m.data.title && <figcaption className="mt-2.5 px-2 text-center text-[15px] font-medium text-mp-ink">{m.data.title}</figcaption>}
     </figure>
   );

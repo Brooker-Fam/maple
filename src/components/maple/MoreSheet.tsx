@@ -17,6 +17,7 @@ import { CARE_COLOR, KIND_COLOR, SKIN_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { useTimerActions } from "./TimerCard";
 import { Sheet, cx, tone } from "./ui";
+import { babyFirstName } from "./familyWords";
 import { useMaple } from "./useMaple";
 
 /**
@@ -260,7 +261,7 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
     onClose();
     window.setTimeout(fn, 120);
   };
-  const baby = (state?.baby.nickname || state?.baby.name || "Maple").split(" ")[0];
+  const baby = babyFirstName(state?.baby);
   const line = care?.todayLine;
   const lastHerTemp = care?.state.entries
     .filter((e) => e.kind === "temp")

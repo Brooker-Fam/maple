@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { HELP_VERIFIED_ON, MOM_HELP, PARTNER, SUPPORT, type HelpLine } from "@/lib/maple/guidelines";
+import { HELP_VERIFIED_ON, MOM_HELP, momHelp, partner as partnerGuide, support, type HelpLine } from "@/lib/maple/guidelines";
 import { parseDayKey } from "@/lib/maple/time";
 import { EMERGENCY_FILL, NOW_WASH } from "../AlertCard";
+import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Button, SectionTitle, Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -36,6 +37,9 @@ const longDate = (key: string) => {
 export default function SupportScreen({ open, onClose }: SupportScreenProps) {
   const care = useCare();
   const { memberName } = useMaple();
+  const voice = useVoice();
+  const help = momHelp(voice);
+  const supportCopy = support(voice);
   const her = !!care?.self;
   // Her "For Matt and family" row shows her the partner page; closing Support goes back to her own next time.
   const [partner, setPartner] = useState(false);
@@ -69,28 +73,28 @@ export default function SupportScreen({ open, onClose }: SupportScreenProps) {
             <>
               <section>
                 <SectionTitle>If you need help now</SectionTitle>
-                <HelpLines lines={MOM_HELP.now} />
+                <HelpLines lines={help.now} />
               </section>
               <TalkSection />
               <WarningSignsCard />
               {care && (
                 <div>
                   <CareTeam care={care} onEdit={() => setSettings(true)} />
-                  <p className={cx(tone.faint, "mt-2 px-1 text-[13px] leading-snug")}>{SUPPORT.wellVisit}</p>
+                  <p className={cx(tone.faint, "mt-2 px-1 text-[13px] leading-snug")}>{supportCopy.wellVisit}</p>
                 </div>
               )}
               <Common />
               <div className={GROUP}>
                 <NavRow icon="users" label={family} note="What to watch for, how to help, and when to call" onClick={() => setPartner(true)} />
               </div>
-              <p className={cx(tone.faint, "px-1 text-[13px] leading-snug")}>{SUPPORT.privacy}</p>
+              <p className={cx(tone.faint, "px-1 text-[13px] leading-snug")}>{supportCopy.privacy}</p>
             </>
           ) : (
             <>
               <PartnerGuide />
               <section>
                 <SectionTitle>If you need help now</SectionTitle>
-                <HelpLines lines={MOM_HELP.now} />
+                <HelpLines lines={help.now} />
               </section>
               <TalkSection />
               <WarningSignsCard />
@@ -112,11 +116,12 @@ export default function SupportScreen({ open, onClose }: SupportScreenProps) {
 
 /** "Talk to someone who knows postpartum": the maternal hotline, PSI and New York's helpline (here and in Help). */
 export function TalkSection() {
+  const voice = useVoice();
   return (
     <section>
       <SectionTitle>Talk to someone who knows postpartum</SectionTitle>
-      <p className={cx(tone.body, "mb-3 px-1 text-[15px] leading-snug")}>{SUPPORT.intro}</p>
-      <HelpLines lines={MOM_HELP.talk} />
+      <p className={cx(tone.body, "mb-3 px-1 text-[15px] leading-snug")}>{support(voice).intro}</p>
+      <HelpLines lines={momHelp(voice).talk} />
     </section>
   );
 }
@@ -164,11 +169,12 @@ export function HelpLines({ lines }: { lines: readonly HelpLine[] }) {
 
 /** "What's common, and what needs a call": each one's name, then its words as written. */
 function Common() {
+  const supportCopy = support(useVoice());
   return (
     <section>
       <SectionTitle>What&apos;s common, and what needs a call</SectionTitle>
       <div className={GROUP}>
-        {Object.entries(SUPPORT.learn).map(([k, text]) => {
+        {Object.entries(supportCopy.learn).map(([k, text]) => {
           // "Baby blues:" is a name to bold; a colon after a full sentence (the psychosis line) isn't.
           const colon = text.indexOf(": ");
           const at = colon > 0 && colon <= 40 && !text.slice(0, colon).includes(".") ? colon : -1;
@@ -209,29 +215,30 @@ const PSI_GROUPS = MOM_HELP.talk.find((l) => l.url);
 
 /** PARTNER, word for word: what to watch for, when it's 911, and how to help. */
 function PartnerGuide() {
+  const partnerCopy = partnerGuide(useVoice());
   return (
     <section className="space-y-3">
-      <p className={cx(tone.body, "px-1 text-[17px] leading-relaxed")}>{PARTNER.intro}</p>
-      <GuideCard heading={PARTNER.watch.heading}>
-        <Bullets items={PARTNER.watch.items} />
-        <p className={cx(tone.muted, "mt-3 text-[15px] leading-snug")}>{PARTNER.watch.action}</p>
+      <p className={cx(tone.body, "px-1 text-[17px] leading-relaxed")}>{partnerCopy.intro}</p>
+      <GuideCard heading={partnerCopy.watch.heading}>
+        <Bullets items={partnerCopy.watch.items} />
+        <p className={cx(tone.muted, "mt-3 text-[15px] leading-snug")}>{partnerCopy.watch.action}</p>
       </GuideCard>
       <div className={cx("rounded-[20px] border p-4", NOW_WASH)}>
         <h3 className="flex items-center gap-1.5 text-[16px] font-semibold text-mp-danger">
           <Icon name="siren" size={18} strokeWidth={2} className="shrink-0" />
-          {PARTNER.emergency.heading}
+          {partnerCopy.emergency.heading}
         </h3>
         <div className={tone.body}>
-          <Bullets items={PARTNER.emergency.items} />
-          <p className="mt-3 text-[15px] leading-snug font-medium">{PARTNER.emergency.note}</p>
+          <Bullets items={partnerCopy.emergency.items} />
+          <p className="mt-3 text-[15px] leading-snug font-medium">{partnerCopy.emergency.note}</p>
         </div>
         <CallButton href="tel:911" look="emergency" className="mt-3.5">
           Call 911
         </CallButton>
       </div>
-      <GuideCard heading={PARTNER.help.heading}>
-        <Bullets items={PARTNER.help.items} />
-        <p className="mt-3 text-[15px] leading-snug">{PARTNER.help.hotline}</p>
+      <GuideCard heading={partnerCopy.help.heading}>
+        <Bullets items={partnerCopy.help.items} />
+        <p className="mt-3 text-[15px] leading-snug">{partnerCopy.help.hotline}</p>
         {HOTLINE && (
           <div className="mt-3 flex flex-wrap gap-2">
             {lineActions(HOTLINE).map((a, i) => (
@@ -249,9 +256,10 @@ function PartnerGuide() {
 
 /** PARTNER.you: dads and partners struggle too, with PSI's numbers. */
 function PartnerYou() {
+  const partnerCopy = partnerGuide(useVoice());
   return (
-    <GuideCard heading={PARTNER.you.heading}>
-      <p className="mt-1.5 text-[15px] leading-relaxed">{PARTNER.you.body}</p>
+    <GuideCard heading={partnerCopy.you.heading}>
+      <p className="mt-1.5 text-[15px] leading-relaxed">{partnerCopy.you.body}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         {PSI?.tel && (
           <a href={telHref(PSI.tel)} className={cx(PILL, "bg-mp-accent text-mp-on-accent")}>

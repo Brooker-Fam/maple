@@ -4,16 +4,23 @@ import crypto from "node:crypto";
  * Self-contained HMAC-signed tokens for the MCP OAuth shim. No storage —
  * the token IS the payload, signed so we can trust it on the way back in.
  *
- * Secret derivation: MCP_SECRET env var, or falls back to a value derived
- * from ADMIN_PASS. Rotating ADMIN_PASS therefore invalidates all tokens,
- * which is a feature, not a bug.
+ * Signed with MCP_SECRET, else a key derived from ADMIN_PASS (rotating it
+ * invalidates all tokens, which is a feature). With neither there is no key
+ * and no token mints or verifies. MCP_SECRET_PREV (whatever signed before
+ * MCP_SECRET was set) still verifies, for family 1 only: sign-up stays off
+ * until MCP_SECRET is set, so everything it signed predates other families.
  */
-function getSecret(): string {
+function signingSecret(): string | null {
   const explicit = process.env.MCP_SECRET;
   if (explicit && explicit.length > 0) return explicit;
   const pass = process.env.ADMIN_PASS;
-  if (!pass) return "brooker-mcp-dev-secret-change-me";
-  return `brooker-mcp:${pass}`;
+  return pass ? `brooker-mcp:${pass}` : null;
+}
+
+function verifyingSecrets(): { secret: string; prev: boolean }[] {
+  const current = signingSecret();
+  const prev = process.env.MCP_SECRET?.length ? process.env.MCP_SECRET_PREV : undefined;
+  return [...(current ? [{ secret: current, prev: false }] : []), ...(prev ? [{ secret: prev, prev: true }] : [])];
 }
 
 function base64urlEncode(buf: Buffer | Uint8Array): string {
@@ -30,10 +37,8 @@ function base64urlDecode(str: string): Buffer {
   return Buffer.from(padded + pad, "base64");
 }
 
-function sign(payload: string): string {
-  return base64urlEncode(
-    crypto.createHmac("sha256", getSecret()).update(payload).digest()
-  );
+function sign(payload: string, secret: string): string {
+  return base64urlEncode(crypto.createHmac("sha256", secret).update(payload).digest());
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -53,8 +58,10 @@ function pack<T>(payload: T, ttlSeconds: number, prefix: string): string {
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + ttlSeconds,
   };
+  const secret = signingSecret();
+  if (!secret) throw new Error("mcp_secret_missing");
   const body = base64urlEncode(Buffer.from(JSON.stringify(env)));
-  const sig = sign(`${prefix}.${body}`);
+  const sig = sign(`${prefix}.${body}`, secret);
   return `${prefix}.${body}.${sig}`;
 }
 
@@ -63,8 +70,8 @@ function unpack<T>(token: string, prefix: string): T | null {
   if (parts.length !== 3) return null;
   const [gotPrefix, body, sig] = parts;
   if (gotPrefix !== prefix) return null;
-  const expected = sign(`${prefix}.${body}`);
-  if (!timingSafeEqual(sig, expected)) return null;
+  const signer = verifyingSecrets().find(({ secret }) => timingSafeEqual(sig, sign(`${prefix}.${body}`, secret)));
+  if (!signer) return null;
   let env: SignedEnvelope<T>;
   try {
     env = JSON.parse(base64urlDecode(body).toString("utf8")) as SignedEnvelope<T>;
@@ -73,6 +80,10 @@ function unpack<T>(token: string, prefix: string): T | null {
   }
   if (typeof env.exp !== "number" || env.exp < Math.floor(Date.now() / 1000)) {
     return null;
+  }
+  if (signer.prev) {
+    const fam = (env.p as { fam?: unknown } | null)?.fam;
+    if (fam !== undefined && fam !== null && fam !== 1) return null;
   }
   return env.p;
 }
@@ -86,6 +97,8 @@ export interface AuthCodePayload {
   code_challenge_method: "S256" | "plain";
   scope: string;
   sub: string;
+  /** The family the member approved the connection in; a code or token without one means family 1. */
+  fam?: number;
   /** RFC 8707 resource the code was issued for (Maple binds it; others omit it). */
   resource?: string;
   /** Which assistant is connecting ("claude" | "chatgpt" | "mcp"), for attribution. */
@@ -104,6 +117,8 @@ export function verifyAuthCode(code: string): AuthCodePayload | null {
 
 export interface AccessTokenPayload {
   sub: string;
+  /** The family it opens (AuthCodePayload.fam). */
+  fam?: number;
   scope: string;
   client_id: string;
   /** Audience: the MCP URL this token was minted for, when the client sent one. */
@@ -140,6 +155,7 @@ export function verifyAccessToken(token: string): AccessTokenPayload | null {
  */
 export interface RefreshTokenPayload {
   sub: string;
+  fam?: number;
   scope: string;
   client_id: string;
   resource?: string;

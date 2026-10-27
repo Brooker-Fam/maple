@@ -8,6 +8,7 @@ import {
   MOM_SIGNS,
   MOM_SIGN_INFO,
   MOM_TIER_LABEL,
+  momSignInfo,
   assessMomTemp,
   momWhatToSay,
   momWhatToSayOther,
@@ -19,6 +20,7 @@ import { DEFAULT_TZ, dayKey, parseDayKey } from "@/lib/maple/time";
 import { cToF } from "@/lib/maple/units";
 import { tierMark } from "../AlertCard";
 import { Icon } from "../icons";
+import { useVoice } from "../familyWords";
 import { AssessmentCard } from "../sheets/parts";
 import { Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -90,6 +92,7 @@ export default function WarningSignsSheet({ open, onClose }: WarningSignsSheetPr
 /** The three groups of chips, and the sign (or crisis) sheet a chip opens. */
 function SignGroups({ className }: { className?: string }) {
   const { self } = useReader();
+  const signInfo = momSignInfo(useVoice());
   const [all, setAll] = useState(false);
   const [sign, setSign] = useState<MomSign | null>(null);
   const [crisis, setCrisis] = useState(false);
@@ -108,7 +111,7 @@ function SignGroups({ className }: { className?: string }) {
             </p>
             <div className="flex flex-wrap gap-2">
               {shown.map((s) => {
-                const info = MOM_SIGN_INFO[s];
+                const info = signInfo[s];
                 return (
                   <button
                     key={s}
@@ -152,6 +155,7 @@ function SignGroups({ className }: { className?: string }) {
 function SignSheet({ sign, onClose }: { sign: MomSign | null; onClose: () => void }) {
   const { state, now } = useMaple();
   const { care, self, name } = useReader();
+  const signInfo = momSignInfo(useVoice());
   const [settings, setSettings] = useState(false);
   // Keep the last sign while the sheet slides away; a new sign starts without the settings sheet over it.
   const [shown, setShown] = useState<MomSign | null>(sign);
@@ -166,7 +170,7 @@ function SignSheet({ sign, onClose }: { sign: MomSign | null; onClose: () => voi
   const s = sign ?? shown;
   if (!s) return null;
 
-  const info = MOM_SIGN_INFO[s];
+  const info = signInfo[s];
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const bornAt = state?.baby.born_at ?? null;
 

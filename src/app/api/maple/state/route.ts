@@ -2,6 +2,7 @@ import { listMembers } from "@/lib/maple/auth";
 import { json, withMember } from "@/lib/maple/api";
 import { careRev, careSession, careStateFor, viewerFor } from "@/lib/maple/care-store";
 import { getBaby, lifetimeCounts, listEntries, rev, toClientEntry, touchLastSeen } from "@/lib/maple/store";
+import { familyInfo } from "@/lib/maple/family-info";
 import { pushTickQuietly } from "@/lib/maple/push";
 import type { MapleState, MapleStateUnchanged } from "@/lib/maple/types";
 import { after } from "next/server";
@@ -21,31 +22,31 @@ const WINDOW_HOURS = 72;
  * base rev alone, so nothing about her (an Only me dose, a check-in, any
  * write at all for someone she doesn't share with) ever changes their token.
  */
-export const GET = withMember("GET /api/maple/state", async (request, me) => {
+export const GET = withMember("GET /api/maple/state", async (request, me, ctx) => {
   const now = new Date();
   // An open app keeps pill reminders on time between the scheduled ticks (push.ts), after answering.
   try {
-    after(pushTickQuietly);
+    after(() => pushTickQuietly(ctx.familyId));
   } catch {
     // outside a request (scripts calling the handler directly)
   }
-  const [baby, seenAt, members] = await Promise.all([getBaby(), touchLastSeen(me.email), listMembers()]);
-  const care = await careSession(viewerFor(me, baby, members), { members, baby });
-  const [base, cRev] = await Promise.all([rev(baby.id), careRev(care)]);
+  const [baby, seenAt, members] = await Promise.all([getBaby(ctx), touchLastSeen(ctx, me.email), listMembers(ctx)]);
+  const care = await careSession(viewerFor(me, baby, members), { familyId: ctx.familyId, members, baby });
+  const [base, cRev] = await Promise.all([rev(ctx, baby.id), careRev(care)]);
   const current = cRev === null ? base : `${base}|c:${cRev}`;
   if (new URL(request.url).searchParams.get("rev") === current) {
     return json({ unchanged: true, now: now.toISOString(), rev: current } satisfies MapleStateUnchanged);
   }
 
   const [entries, growth, lifetime, careState] = await Promise.all([
-    listEntries({
+    listEntries(ctx, {
       babyId: baby.id,
       from: new Date(now.getTime() - WINDOW_HOURS * 3600_000),
       includeActive: true,
       limit: 2000,
     }),
-    listEntries({ babyId: baby.id, kinds: ["growth"], ascending: true, limit: 2000 }),
-    lifetimeCounts(baby.id),
+    listEntries(ctx, { babyId: baby.id, kinds: ["growth"], ascending: true, limit: 2000 }),
+    lifetimeCounts(ctx, baby.id),
     careStateFor(care),
   ]);
 
@@ -60,6 +61,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me) => {
     rev: current,
     seen_at: seenAt,
     ...(careState ? { care: careState } : {}),
+    family: familyInfo(ctx, members),
   };
   return json(body);
 });

@@ -10,6 +10,7 @@ import {
   STATE_COOKIE_PATH,
 } from "@/lib/maple/auth";
 import { captureServerException } from "@/lib/posthog-server";
+import { handleSignupCallback, isSignupCallback, type SignupCallbackDeps } from "./family/signup";
 import { mintNativeTicket, nativeFromState, nativeReturnUrl, parseNativeChallenge, parseNativeFlag } from "./native-auth";
 import type { NativePlatform } from "./native";
 
@@ -20,7 +21,10 @@ function withAuthParam(base: string, path: string, value: string): string {
   return url.toString();
 }
 
-export async function handleMapleGoogleCallback(request: NextRequest): Promise<NextResponse> {
+/** `deps` stands in for Google in the checks; the route passes none. */
+export async function handleMapleGoogleCallback(request: NextRequest, deps: SignupCallbackDeps = { identify: identityFromCode }): Promise<NextResponse> {
+  // /signup's sign-ins come back to this one registered callback; only its handler may make or join a family.
+  if (isSignupCallback(request)) return handleSignupCallback(request, deps);
   let base = getAppBaseUrl();
   const { searchParams } = new URL(request.url);
 
@@ -59,17 +63,18 @@ export async function handleMapleGoogleCallback(request: NextRequest): Promise<N
     const code = searchParams.get("code");
     if (!code) return fail("no_code");
 
-    const who = await identityFromCode(code, base);
+    const who = await deps.identify(code, base);
     if (!who) return fail("no_email");
 
     // Resolve membership before minting a session, so an uninvited account
     // never holds a cookie for a log it can't reach.
-    const { member, reason } = await joinWithGoogle(who);
-    if (!member) return fail(reason ?? "not_invited");
+    const joined = await joinWithGoogle(who);
+    if (!joined.member) return fail(joined.reason);
+    const { member, familyId } = joined;
 
     if (native) {
       if (!challenge) return fail("bad_state");
-      const res = NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(member.email, back, challenge) }));
+      const res = NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(member.email, familyId, back, challenge) }));
       res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
       return res;
     }
@@ -78,7 +83,7 @@ export async function handleMapleGoogleCallback(request: NextRequest): Promise<N
     // res.cookies.* rewrites every Set-Cookie header, so it must run before
     // setSessionCookies appends the session's raw headers.
     res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
-    setSessionCookies(res, member.email);
+    setSessionCookies(res, member.email, familyId);
     return res;
   } catch (error) {
     console.error("Maple auth callback error:", error);
