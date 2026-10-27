@@ -13,7 +13,8 @@
     "check:maple-care": "tsx scripts/maple-care-check.ts",
     "check:maple-native": "tsx scripts/maple-native-check.ts",
     "check:maple-chat": "tsx scripts/maple-chat-check.ts",
-    "check:site": "tsx scripts/site-check.ts"
+    "check:site": "tsx scripts/site-check.ts",
+    "check:email": "tsx scripts/email-check.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",
@@ -29,6 +30,7 @@
     "posthog-node": "^5.29.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "resend": "6.34.1",
     "web-push": "3.6.7",
     "zod": "^3.25.76"
   },
