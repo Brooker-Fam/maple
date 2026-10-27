@@ -1,5 +1,5 @@
 import { Icon, type IconName } from "@/components/maple/icons";
-import { CARE_COLOR, DETAIL_COLOR, KIND_COLOR, MAPLE } from "@/components/maple/palette";
+import { DETAIL_COLOR, KIND_COLOR, MAPLE } from "@/components/maple/palette";
 import { curves, percentileFor } from "@/lib/maple/growth";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import type { StoolColor } from "@/lib/maple/types";
@@ -173,46 +173,6 @@ export function MomentFragment() {
           <p className="text-[15px] font-semibold text-mp-ink">First bath</p>
           <p className="text-[13px] text-mp-ink-3">Day 15 · 4:30 PM</p>
           <p className="mt-1.5 text-[14px] leading-snug text-mp-ink-2">Cried at first, then settled.</p>
-        </div>
-      </div>
-    </Fragment>
-  );
-}
-
-export function MomFragment() {
-  const meds: { name: string; glance: string; ready?: boolean }[] = [
-    { name: "Ibuprofen", glance: "OK after 7:10 PM" },
-    { name: "Acetaminophen", glance: "OK now · last 1:40 PM", ready: true },
-  ];
-  return (
-    <Fragment label="Sample screen: Mom's own page, with two medicines showing when each is OK again, a Took it button, a question for her OB, and a row for warning signs and help lines.">
-      <div className="flex items-baseline justify-between">
-        <p className="font-display text-[26px] leading-none font-semibold text-mp-ink">Mom</p>
-        <p className="text-[13px] text-mp-ink-3">Day 15</p>
-      </div>
-      <div className="mt-3 divide-y divide-[var(--mp-line)]">
-        {meds.map((m) => (
-          <div key={m.name} className="flex items-center gap-3 py-2.5">
-            <Badge icon="pill" color={CARE_COLOR} size={32} />
-            <div className="min-w-0 flex-1">
-              <p className="text-[15px] font-medium text-mp-ink">{m.name}</p>
-              <p className="text-[13px] text-mp-ink-3 tabular-nums">{m.glance}</p>
-            </div>
-            <span
-              className={`rounded-full px-3.5 py-1.5 text-[13px] font-semibold ${m.ready ? "bg-mp-accent text-mp-on-accent" : "bg-mp-sunken text-mp-ink-3"}`}
-            >
-              Took it
-            </span>
-          </div>
-        ))}
-        <div className="flex items-center gap-3 py-2.5">
-          <Badge icon="message-square" color={CARE_COLOR} size={32} />
-          <p className="flex-1 text-[14px] text-mp-ink">Ask about the stitches at the 6-week visit</p>
-        </div>
-        <div className="flex items-center gap-3 py-2.5">
-          <Badge icon="life-buoy" color={MAPLE.rust} size={32} />
-          <p className="flex-1 text-[14px] text-mp-ink">Warning signs and help lines</p>
-          <Icon name="chevron-right" size={18} className="text-mp-ink-3" />
         </div>
       </div>
     </Fragment>
