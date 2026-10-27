@@ -12,14 +12,16 @@ const cormorantItalic = Cormorant_Garamond({
   display: "swap",
 });
 
-const DESCRIPTION = "A newborn tracker two parents share, with a nursing timer, diapers, sleep, growth and a page for mom's medicines.";
+const TITLE = "Maple | Who fed her last?";
+const DESCRIPTION =
+  "Who fed her last? Maple is one newborn log on both parents' phones, with the last feed and the next side ready at 3am. Free while in early access, with a waitlist for now.";
 
 export const metadata: Metadata = {
-  title: { default: "Maple | A newborn log for two parents", template: "%s | Maple" },
+  title: { default: TITLE, template: "%s | Maple" },
   description: DESCRIPTION,
   applicationName: "Maple",
   robots: { index: true, follow: true },
-  openGraph: siteOpenGraph("Maple | A newborn log for two parents", DESCRIPTION, "/"),
+  openGraph: siteOpenGraph(TITLE, DESCRIPTION, "/"),
   twitter: { card: "summary_large_image" },
 };
 
