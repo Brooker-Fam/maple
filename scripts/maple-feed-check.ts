@@ -60,6 +60,7 @@ import {
   type TapFeedData,
 } from "../src/lib/maple/feed";
 import { timerNumbers } from "../src/components/maple/FeedParts";
+import { backOnPresets, earlierPresets, finishPresets, fitPresets, PRESET_LIMIT, usualBreakMin, usualSideMin } from "../src/lib/maple/presets";
 import { sidesLabel } from "../src/components/maple/StatusCard";
 import { describeEntry } from "../src/lib/maple/describe";
 import { dailyStats, memberLabel, statsFor, summarize as summarizeDay } from "../src/lib/maple/insights";
@@ -1792,6 +1793,154 @@ check("describeEntry: back and forth reads as such", () => {
       fe("R 19:00-19:10"),
     ];
     eq(typicalFeedGapMin(entries, D("21:00")), 240);
+  });
+}
+
+// ── one-tap times: usual lengths and the presets each question shows ─────
+
+{
+  let pid = 9000;
+  const pe = (spec: string, o: { day?: number; active?: boolean } = {}): EntryOf<"feed"> => {
+    const list = segs(spec).map((x) => (o.day === undefined ? x : { ...x, start: new Date(Date.parse(x.start) + o.day * 864e5).toISOString(), end: x.end && new Date(Date.parse(x.end) + o.day * 864e5).toISOString() }));
+    const start = list[0].start;
+    const end = list[list.length - 1].end;
+    return {
+      id: pid++, kind: "feed", started_at: start, ended_at: o.active ? null : end, active: !!o.active, data: { method: "breast", segments: list }, note: null,
+      created_by: null, updated_by: null, source: "web", created_at: start, updated_at: start,
+    };
+  };
+  const at = (hms: string) => D(hms).getTime();
+  const MINUTE = 60_000;
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id);
+
+  check("usualSideMin is the median of her recent single sides", () => {
+    const entries = [pe("L 10:00-10:10"), pe("L 12:00-12:12"), pe("R 14:00-14:11, L 14:15-14:26"), pe("R 18:00-18:08")];
+    eq(usualSideMin(entries, D("22:00")), 11);
+  });
+  check("usualSideMin needs four sides, ignores forgotten timers, strays, old feeds and live ones", () => {
+    const three = [pe("L 10:00-10:10"), pe("L 12:00-12:12"), pe("R 14:00-14:11")];
+    eq(usualSideMin(three, D("22:00")), null);
+    const noise = [...three, pe("L 03:00-05:30"), pe("R 16:00-16:01"), pe("L 09:00-09:30", { day: -8 }), pe("R 20:00-", { active: true })];
+    eq(usualSideMin(noise, D("22:00")), null);
+    eq(usualSideMin([...noise, pe("R 18:00-18:08")], D("22:00")), 10);
+  });
+  check("usualBreakMin is the median of the pauses inside her feeds", () => {
+    const entries = [pe("L 10:00-10:10, R 10:12-10:20"), pe("L 12:00-12:10, R 12:13-12:20"), pe("L 14:00-14:10, R 14:12-14:20"), pe("L 16:00-16:10, R 16:15-16:20")];
+    eq(usualBreakMin(entries, D("22:00")), 2);
+    eq(usualBreakMin(entries.slice(0, 3), D("22:00")), null);
+  });
+
+  check("fitPresets keeps bounds, one per clock minute, and counts a wide one twice", () => {
+    const r = fitPresets([{ at: 100 * MINUTE, n: "a" }, { at: 100 * MINUTE + 5, n: "b" }, { at: 50 * MINUTE, n: "c" }, { at: 200 * MINUTE, n: "d", wide: true }, { at: 90 * MINUTE, n: "e" }], { min: 60 * MINUTE, max: 150 * MINUTE });
+    eq(r.map((x) => x.n), ["a", "e"]);
+    const cells = Array.from({ length: 8 }, (_, i) => ({ at: (60 + i) * MINUTE, wide: i === 0 }));
+    eq(fitPresets(cells, { min: 0, max: 1e9 }).length, PRESET_LIMIT - 1);
+  });
+
+  check("finishPresets: Now, then likely, then the plain minutes", () => {
+    const start = at("10:00");
+    const p = finishPresets({ start, now: at("10:30"), fromDone: true, usualMin: null, both: false });
+    eq(ids(p), ["stop-now", "stop-likely", "stop-5", "stop-10", "stop-20"]);
+    eq(p.map((x) => x.kind), ["now", "likely", "ago", "ago", "ago"]);
+    eq(new Date(p[1].at).toISOString(), D("10:15").toISOString());
+  });
+  check("finishPresets: nothing before a minute on the side or after now, ever six at most", () => {
+    for (const run of [3, 4, 6, 9, 16, 31, 59, 61, 125, 400, 900]) {
+      for (const fromDone of [false, true]) {
+        for (const usualMin of [null, 8, 11, 22]) {
+          const start = at("01:00");
+          const now = start + run * MINUTE;
+          const p = finishPresets({ start, now, fromDone, usualMin, both: false });
+          ok(p.length <= PRESET_LIMIT, `${run} min: ${p.length} chips`);
+          ok(new Set(p.map((x) => Math.floor(x.at / MINUTE))).size === p.length, `${run} min: two chips on one minute`);
+          for (const x of p) {
+            ok(x.at >= start + MINUTE && x.at <= now, `${run} min: ${x.id} out of bounds`);
+            stopBreast(feed("L 01:00-"), new Date(x.at), new Date(now));
+          }
+        }
+      }
+    }
+  });
+  check("finishPresets: a side left on for hours offers minutes after she went on", () => {
+    const start = at("01:00");
+    const p = finishPresets({ start, now: at("04:00"), fromDone: true, usualMin: null, both: false });
+    eq(ids(p), ["stop-now", "stop-likely", "stop-on-10", "stop-on-20", "stop-10", "stop-30"]);
+    eq(p.filter((x) => x.kind === "on").map((x) => new Date(x.at).toISOString()), [D("01:10").toISOString(), D("01:20").toISOString()]);
+  });
+  check("finishPresets: her usual side length is its own chip when it is not the likely time", () => {
+    const start = at("01:00");
+    const base = { start, now: at("04:00"), fromDone: false, both: false };
+    const withUsual = finishPresets({ ...base, usualMin: 10 });
+    eq(ids(withUsual).slice(0, 2), ["stop-likely", "stop-usual"]);
+    eq(new Date(withUsual[1].at).toISOString(), D("01:10").toISOString());
+    eq(ids(finishPresets({ ...base, usualMin: 13 })).includes("stop-usual"), false);
+    eq(ids(finishPresets({ ...base, usualMin: null })).includes("stop-usual"), false);
+  });
+  check("finishPresets: going back and forth has no likely or usual end", () => {
+    const p = finishPresets({ start: at("01:00"), now: at("04:00"), fromDone: true, usualMin: 10, both: true });
+    ok(!p.some((x) => x.kind === "likely" || x.kind === "usual"), "guess on back and forth");
+  });
+  check("earlierPresets: plain minutes in time order, 2 / 5 / 10 / 15 / 20 / 30", () => {
+    const p = earlierPresets({ recorded: at("10:00"), min: at("08:00") });
+    eq(p.map((x) => x.minutes), [2, 5, 10, 15, 20, 30]);
+    eq(new Date(p[0].at).toISOString(), D("09:58").toISOString());
+  });
+  check("earlierPresets: a short stretch gets the small minutes that fit", () => {
+    const p = earlierPresets({ recorded: at("10:00"), min: at("09:56") });
+    eq(p.map((x) => x.minutes), [1, 2, 3]);
+  });
+  check("earlierPresets: her usual switch leads, and only when it is an earlier time", () => {
+    const usual = { kind: "usual" as const, at: at("10:11") };
+    const p = earlierPresets({ recorded: at("10:30"), min: at("10:01"), smart: [usual] });
+    eq(p[0].id, "a-usual");
+    eq(p[0].minutes, 19);
+    eq(earlierPresets({ recorded: at("10:11"), min: at("10:01"), smart: [usual] }).some((x) => x.kind === "usual"), false);
+    eq(earlierPresets({ recorded: at("10:30"), min: at("10:12"), smart: [usual] }).some((x) => x.kind === "usual"), false);
+  });
+  check("earlierPresets: No break leads the plain ones and nothing lands at or before the pause", () => {
+    const p = earlierPresets({ recorded: at("10:20"), min: at("10:10"), floor: at("10:10") });
+    eq(ids(p), ["a-floor", "a-2", "a-5"]);
+    eq(p.every((x) => x.at >= at("10:10")), true);
+  });
+  check("earlierPresets: Since the last feed takes the place of what it clipped, two cells wide", () => {
+    const p = earlierPresets({ recorded: at("10:00"), min: at("08:00"), feedFloor: at("09:52") });
+    eq(ids(p), ["a-feed", "a-2", "a-5"]);
+    eq(p.every((x) => x.at >= at("09:52")), true);
+    eq(ids(earlierPresets({ recorded: at("10:00"), min: at("08:00"), feedFloor: at("09:20") })).includes("a-feed"), false);
+  });
+  check("earlierPresets: every chip is a start the engine takes", () => {
+    const data = feed("L 10:00-10:10, R 10:10-");
+    const ctx = live("10:25");
+    const r = ref("R", "10:10");
+    const b = edgeBounds(data, { edge: "start", ref: r }, ctx);
+    const p = earlierPresets({ recorded: b.recorded.getTime(), min: b.uiMin.getTime(), smart: [{ kind: "usual", at: at("10:07") }, { kind: "likely", at: at("10:15") }] });
+    ok(p.length >= 2, "chips");
+    for (const x of p) moveEdge(data, { edge: "start", ref: r, to: new Date(x.at) }, ctx);
+  });
+
+  check("backOnPresets: Now, No break, then 2 / 5 / 10 min ago (20 is the pause itself)", () => {
+    const p = backOnPresets({ pauseAt: at("10:10"), now: at("10:30"), latest: at("10:30"), withNow: true, usualMin: null });
+    eq(ids(p), ["back-now", "back-floor", "back-2", "back-5", "back-10"]);
+    eq(p[0].at, null);
+  });
+  check("backOnPresets: her usual break is the second chip", () => {
+    const p = backOnPresets({ pauseAt: at("10:10"), now: at("10:30"), latest: at("10:30"), withNow: true, usualMin: 3 });
+    eq(ids(p).slice(0, 3), ["back-now", "back-usual", "back-floor"]);
+    eq(new Date(p[1].at!).toISOString(), D("10:13").toISOString());
+    eq(ids(backOnPresets({ pauseAt: at("10:10"), now: at("10:12"), latest: at("10:12"), withNow: true, usualMin: 3 })).includes("back-usual"), false);
+  });
+  check("backOnPresets: after a Done there is no Now and nothing past the Done", () => {
+    const latest = at("10:28");
+    const p = backOnPresets({ pauseAt: at("10:10"), now: at("10:40"), latest, withNow: false, usualMin: 3 });
+    ok(!p.some((x) => x.kind === "now"), "Now after Done");
+    ok(p.every((x) => (x.at ?? 0) <= latest && (x.at ?? Infinity) >= at("10:10")), "out of bounds");
+  });
+  check("backOnPresets: a break left for hours is asked in hours, and every chip is a resume the engine takes", () => {
+    const data = feed("L 01:00-01:10");
+    const ctx = live("04:00");
+    const p = backOnPresets({ pauseAt: at("01:10"), now: at("04:00"), latest: at("04:00"), withNow: true, usualMin: null });
+    eq(ids(p).slice(0, 4), ["back-now", "back-floor", "back-10", "back-30"]);
+    for (const x of p) ok(!switchTo(data, "L", new Date(x.at ?? at("04:00")), { resume: true, now: ctx.now }).clamped, `${x.id} clamped`);
   });
 }
 

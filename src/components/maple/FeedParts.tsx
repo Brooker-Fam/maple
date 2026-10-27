@@ -12,10 +12,13 @@ import {
   minutesText,
   momentQuestion,
   moveEdge,
+  type Moment,
   partTotals,
+  previousFeedEnd,
   spanMinutes,
   type Part,
 } from "@/lib/maple/feed";
+import { earlierPresets, LIKELY_SIDE_MIN, usualBreakMin, usualSideMin } from "@/lib/maple/presets";
 import { DEFAULT_TZ, formatClock, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, Side, StretchRef, StretchSide, TimerKind } from "@/lib/maple/types";
 import { Icon } from "./icons";
@@ -763,6 +766,11 @@ type MomentInfo = {
   max: Date;
   edge?: MomentEdge;
   notes?: { low?: string; high?: string };
+  /** "No break": when she came off, for a Resume. */
+  floor?: number;
+  /** What the guesses count from: when the side that this moment ends began (a break: when it began), and which. */
+  anchor?: { at: number; of: "side" | "break" };
+  moment?: Moment;
 };
 
 function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEditorProps["free"], now: Date): MomentInfo | null {
@@ -786,7 +794,14 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
       low: b.uiMin.getTime() > b.min.getTime() + 1000 ? shortest(edge.edge === "start" ? sides[i - 1] : sides[i]) : undefined,
       high: soft ? shortest(shrinks) : undefined,
     };
+    // The guesses ("likely", "usual") count from the side this moment ends (a switch's, a pause's, the feed's end),
+    // or from the pause for a Resume.
+    const ends = b.moment === "switch" && edge.edge === "start" ? sides[i - 1] : b.moment === "switch" || b.moment === "pause" || b.moment === "feed_end" ? sides[i] : undefined;
+    const anchor: MomentInfo["anchor"] = ends && isTracked(ends.side) ? { at: Date.parse(ends.start), of: "side" } : b.floor ? { at: b.floor.getTime(), of: "break" } : undefined;
     return {
+      floor: b.floor?.getTime(),
+      anchor,
+      moment: b.moment,
       keyBase: `${edge.ref?.side ?? ""}|${edge.ref?.start ?? ""}|${edge.edge}|${b.moment}`,
       // "go back on the Right" only if she was on the Right before the break.
       title: momentQuestion(b.moment, side ?? "L", b.moment === "resume" && i > 0 ? sides[i - 1]?.side : undefined),
@@ -804,6 +819,28 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
 const sameMinute = (a: Date, b: Date) => Math.floor(a.getTime() / 60_000) === Math.floor(b.getTime() / 60_000);
 /** The engine's "same moment" slack. */
 const NEAR_MS = 1500;
+
+const MINUTE = 60_000;
+
+/** The one-tap earlier times a staged moment offers (FeedSheet's rows): guesses, "No break", "Since the last feed", then plain minutes. */
+function momentPresets(info: MomentInfo, entry: Entry, entries: readonly Entry[], now: Date) {
+  const smart: { kind: "likely" | "usual"; at: number }[] = [];
+  if (info.anchor?.of === "side") {
+    smart.push({ kind: "likely", at: info.anchor.at + LIKELY_SIDE_MIN * MINUTE });
+    const usual = usualSideMin(entries, now);
+    if (usual !== null && Math.abs(usual - LIKELY_SIDE_MIN) >= 3) smart.push({ kind: "usual", at: info.anchor.at + usual * MINUTE });
+  } else if (info.anchor?.of === "break") {
+    const usual = usualBreakMin(entries, now);
+    if (usual !== null) smart.push({ kind: "usual", at: info.anchor.at + usual * MINUTE });
+  }
+  return earlierPresets({
+    recorded: info.recorded.getTime(),
+    min: info.min.getTime(),
+    floor: info.moment === "resume" ? (info.floor ?? null) : null,
+    feedFloor: info.moment === "feed_start" ? previousFeedEnd(entries, entry) : null,
+    smart,
+  });
+}
 
 function MomentEditorInner({
   entry,
@@ -825,6 +862,8 @@ function MomentEditorInner({
   const [touched, setTouched] = useState(false);
   const draft = mode === "staged" ? controlled ?? info.recorded : local;
   const draftMs = draft.getTime();
+  // Staged (FeedSheet's rows) offers the one-tap times here; Fix times already showed them before "Other time…".
+  const presets = mode === "staged" && info.edge && entry.kind === "feed" ? momentPresets(info, entry, state?.entries ?? [], now()) : [];
   const set = (d: Date) => {
     setTouched(true);
     if (mode === "staged") onDraft?.(d);
@@ -888,6 +927,36 @@ function MomentEditorInner({
           </p>
         )}
       </div>
+      {presets.length > 0 && (
+        <fieldset disabled={locked} className="min-w-0 space-y-2">
+          <div role="group" aria-label="Earlier times" className="grid grid-cols-3 gap-2">
+            {presets.map((p) => {
+              const tag = p.kind === "likely" ? " \u00b7 likely" : p.kind === "usual" ? " \u00b7 usual" : "";
+              return (
+                <TimeChip
+                  key={p.id}
+                  tall
+                  line1={p.kind === "floor" ? "No break" : p.kind === "feed" ? "Since the last feed" : `${p.minutes} min earlier`}
+                  line2={`${formatTimeNear(p.at, info.recorded.getTime(), tz)}${tag}`}
+                  ariaLabel={`${p.kind === "floor" ? "No break" : p.kind === "feed" ? "Since the last feed" : `${p.minutes} minutes earlier`}, ${formatTime(p.at, tz)}${tag ? `, ${tag.slice(3)}` : ""}`}
+                  onClick={() => set(new Date(p.at))}
+                  className={p.wide ? "col-span-2" : undefined}
+                />
+              );
+            })}
+          </div>
+          {presets.some((p) => p.kind === "likely" || p.kind === "usual") && (
+            <p className="text-[13px] leading-snug text-mp-ink-2">
+              {[
+                presets.some((p) => p.kind === "likely") ? `\u201cLikely\u201d is ${LIKELY_SIDE_MIN} min on the side.` : "",
+                presets.some((p) => p.kind === "usual") ? `\u201cUsual\u201d is her usual ${info.anchor?.of === "break" ? "break" : "time on a side"}.` : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            </p>
+          )}
+        </fieldset>
+      )}
       <fieldset disabled={locked} className="min-w-0">
         <TimeScrubber value={draft} onChange={set} tz={tz} quick={false} nudgeStyle="words" min={info.min} max={info.max} label={info.title} hideLabel />
       </fieldset>
