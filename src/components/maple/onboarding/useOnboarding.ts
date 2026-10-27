@@ -12,6 +12,7 @@ export function useOnboarding(initial: OnboardingView) {
   const [view, setView] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [versions, setVersions] = useState<Partial<Record<StepId, number>>>({});
   const [links, setLinks] = useState<InviteLink[]>([]);
 
   const post = useCallback(
@@ -21,6 +22,8 @@ export function useOnboarding(initial: OnboardingView) {
       try {
         const res = await api<{ view: OnboardingView; invites?: InviteLink[] }>("/api/maple/onboarding", { method: "POST", body: JSON.stringify(body) });
         setView(res.view);
+        const step = (body.step ?? body.skip) as StepId | undefined;
+        if (step) setVersions((v) => ({ ...v, [step]: (v[step] ?? 0) + 1 }));
         if (res.invites?.length) setLinks((l) => [...l, ...res.invites!]);
         void refresh();
         return true;
@@ -46,6 +49,7 @@ export function useOnboarding(initial: OnboardingView) {
 
   return {
     view,
+    versions,
     busy,
     problem,
     clearProblem: () => setProblem(null),

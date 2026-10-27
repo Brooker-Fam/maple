@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { ROLE_WORDS, type Answer, type OnboardingView } from "@/lib/maple/onboarding/steps";
 import { LegalLinks } from "../Legal";
 import { Chip, cx, tone } from "../ui";
+import { birthFields } from "./describe";
 import { StepShell, TextInput } from "./StepShell";
 import type { Onboarding } from "./useOnboarding";
 
@@ -137,9 +138,10 @@ const todayKey = () => new Date().toLocaleDateString("en-CA");
 export function BirthStep({ ob, view }: Props) {
   const b = view.values.baby;
   const [born, setBorn] = useState<boolean | null>(view.done.birth ? !!b?.born_at : null);
-  const [date, setDate] = useState(b?.born_at ? new Date(b.born_at).toLocaleDateString("en-CA", { timeZone: view.values.timezone.timezone }) : "");
-  const [time, setTime] = useState("");
-  const [noTime, setNoTime] = useState(false);
+  const fields = birthFields(view);
+  const [date, setDate] = useState(fields.date);
+  const [time, setTime] = useState(fields.time);
+  const [noTime, setNoTime] = useState(fields.unknownTime);
   const [due, setDue] = useState(b?.due_date ?? "");
   const value: Answer["birth"] | null = born === true ? (date ? { born: true, date, time: noTime || !time ? null : time } : null) : born === false ? (due ? { born: false, due } : null) : null;
   return (

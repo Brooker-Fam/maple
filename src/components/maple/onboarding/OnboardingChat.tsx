@@ -16,6 +16,7 @@ import { Icon } from "../icons";
 import { LegalLinks } from "../Legal";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { latestProposals, proposalState } from "./proposals";
 import { answerLine } from "./describe";
 import { useSetupFrame } from "./SetupPage";
 import type { Onboarding } from "./useOnboarding";
@@ -50,6 +51,7 @@ const UNAVAILABLE = "The chat isn't available right now, so the questions carry 
 export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { ob: Onboarding; onCare: () => void; onReview: () => void; onFallback: (why: string) => void }) {
   const { api, online } = useMaple();
   const [consent, setConsent] = useState<ChatConsent | null>(null);
+  const [requestVersions, setRequestVersions] = useState(ob.versions);
   const [draft, setDraft] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
@@ -87,8 +89,11 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
     setHelp(false);
     setDraft("");
     lastSent.current = text;
+    setRequestVersions(ob.versions);
     void chat.sendMessage({ text });
   };
+
+  const latest = latestProposals(chat.messages);
 
   if (!consent) return null;
   if (!consent.terms) return <ChatTerms onAccepted={setConsent} onDecline={() => onFallback("")} />;
@@ -104,7 +109,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
             m.parts.map((p, i) => {
               if (p.type === "text") return p.text.trim() ? <p key={i} className={cx(tone.body, "text-[15px] leading-relaxed whitespace-pre-wrap wrap-anywhere")}>{p.text}</p> : null;
               if (p.type === "data-help") return <HelpCard key={i} reason={p.data.reason} />;
-              if (isToolUIPart(p) && p.state === "output-available") return <ProposalChip key={i} p={p.output as Proposal} ob={ob} onCare={onCare} onReview={onReview} />;
+              if (isToolUIPart(p) && p.state === "output-available") return <ProposalChip key={i} p={p.output as Proposal} id={p.toolCallId} latest={latest} requestVersions={requestVersions} ob={ob} onCare={onCare} onReview={onReview} />;
               return null;
             })
           )}
@@ -191,8 +196,9 @@ function Composer({
   );
 }
 
-function ProposalChip({ p, ob, onCare, onReview }: { p: Proposal; ob: Onboarding; onCare: () => void; onReview: () => void }) {
+function ProposalChip({ p, id, latest, requestVersions, ob, onCare, onReview }: { p: Proposal; id: string; latest: Partial<Record<StepId, string>>; requestVersions: Partial<Record<StepId, number>>; ob: Onboarding; onCare: () => void; onReview: () => void }) {
   const [saved, setSaved] = useState(false);
+  const [issuedVersion] = useState(() => p.ok && "step" in p ? (requestVersions[p.step] ?? 0) : 0);
   if (!p.ok) return null;
   if (p.kind === "help") return <HelpCard reason="crisis" />;
   if (p.kind === "finish") {
@@ -203,7 +209,9 @@ function ProposalChip({ p, ob, onCare, onReview }: { p: Proposal; ob: Onboarding
     );
   }
   const step: StepId = p.step;
+  const status = proposalState(id, latest[step], issuedVersion, ob.versions[step] ?? 0, saved);
   const tap = async () => {
+    if (status !== "pending") return;
     if (p.kind === "answer" && step === "care" && (p.value as { choice?: string }).choice === "me") return onCare();
     const done = p.kind === "skip" ? await ob.skip(step) : await ob.answer(step, p.value);
     if (done) setSaved(true);
@@ -215,7 +223,9 @@ function ProposalChip({ p, ob, onCare, onReview }: { p: Proposal; ob: Onboarding
         <p className={tone.label}>{STEP_TITLES[step]}</p>
         <p className={cx(tone.body, "text-[15px] font-medium leading-snug wrap-anywhere")}>{line}</p>
       </div>
-      {saved ? (
+      {status === "replaced" ? (
+        <span className={cx(tone.muted, "text-[13px]")}>Earlier answer</span>
+      ) : status === "saved" ? (
         <span className="flex items-center gap-1 text-[14px] font-semibold text-mp-accent-fg">
           <Icon name="check" size={16} />
           Saved

@@ -4,9 +4,11 @@ import { lazy, Suspense, useState } from "react";
 import { STEPS, type OnboardingView, type StepId } from "@/lib/maple/onboarding/steps";
 import { Button, Segmented, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { finishSetup } from "./actions";
+import { answerLine, savedLine } from "./describe";
 import { InviteLinks } from "./MoreSteps";
 import { SetupPage } from "./SetupPage";
-import { StepCard, Summary } from "./StepCard";
+import { SavedAnswers, StepCard, Summary } from "./StepCard";
 import { useOnboarding } from "./useOnboarding";
 
 const OnboardingChat = lazy(() => import("./OnboardingChat"));
@@ -20,9 +22,10 @@ const OnboardingChat = lazy(() => import("./OnboardingChat"));
  * who left comes back at the server's next question. Anyone but the owner
  * who started it waits for them.
  */
-export default function Onboarding({ initial, onDone }: { initial: OnboardingView; onDone: () => void }) {
+export default function Onboarding({ initial, onDone }: { initial: OnboardingView; onDone: (notifications: boolean) => void }) {
   const ob = useOnboarding(initial);
   const { online } = useMaple();
+  const [acknowledgment, setAcknowledgment] = useState<string | null>(null);
   const [mode, setMode] = useState<"chat" | "form">("chat");
   const [note, setNote] = useState<string | null>(null);
   const [editing, setEditing] = useState<StepId | null>(null);
@@ -30,7 +33,7 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
   const [careConsent, setCareConsent] = useState(false);
   const view = ob.view;
 
-  if (!view.owner) return <Waiting ob={ob} onDone={onDone} />;
+  if (!view.owner) return <Waiting ob={ob} onDone={() => onDone(false)} />;
 
   const answered = STEPS.filter((s) => view.done[s]).length;
   const step = editing ?? (reviewing ? null : view.next);
@@ -43,19 +46,19 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
     ...ob,
     answer: async (s: StepId, value: unknown) => {
       const saved = await ob.answer(s, value);
+      if (saved) setAcknowledgment(`Saved: ${answerLine(s, value)}.`);
       if (saved && editing === s) setEditing(null);
       if (saved && s === "care") setCareConsent(false);
       return saved;
     },
     skip: async (s: StepId) => {
       const saved = await ob.skip(s);
+      if (saved) setAcknowledgment("Skipped for now. You can come back to it.");
       if (saved && editing === s) setEditing(null);
       return saved;
     },
   };
-  const start = async () => {
-    if (await ob.finish()) onDone();
-  };
+  const start = () => finishSetup(ob.finish, onDone, view.values.notifications === true);
   const chatOn = mode === "chat" && online && view.done.welcome === "answered";
 
   const header = (
@@ -108,6 +111,9 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
       )}
 
       <InviteLinks links={ob.links} />
+
+      {step && STEPS.some((s) => s !== "welcome" && savedLine(view, s)) && <SavedAnswers view={view} onEdit={edit} />}
+      {step && (acknowledgment || answered > 1) && <p role="status" className={cx(tone.muted, "px-1 text-[14px] leading-snug")}>{acknowledgment ?? "Your confirmed answers are saved. Pick up here."}</p>}
 
       {step ? (
         <>

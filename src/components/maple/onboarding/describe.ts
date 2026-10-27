@@ -7,6 +7,16 @@ import type { Answer, OnboardingView, StepId } from "@/lib/maple/onboarding/step
 
 const DAY = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
 
+export function birthFields(view: OnboardingView): { date: string; time: string; unknownTime: boolean } {
+  const baby = view.values.baby;
+  if (!baby?.born_at) return { date: "", time: "", unknownTime: false };
+  const at = new Date(baby.born_at);
+  const zone = { timeZone: view.values.timezone.timezone };
+  const date = new Intl.DateTimeFormat("en-CA", { ...zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+  const time = baby.birth_time_known ? new Intl.DateTimeFormat("en-GB", { ...zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at) : "";
+  return { date, time, unknownTime: !baby.birth_time_known };
+}
+
 export function dayLabel(key: string): string {
   return DAY.format(new Date(`${key}T12:00:00Z`));
 }
@@ -61,7 +71,7 @@ export function answerLine(step: StepId, value: unknown): string {
       return [v.name, v.phone, v.after_hours && `after hours ${v.after_hours}`].filter(Boolean).join(" · ");
     }
     case "notifications":
-      return (value as Answer["notifications"]).on ? "Turn on" : "Not now";
+      return (value as Answer["notifications"]).on ? "Set up after starting" : "Not now";
   }
 }
 
@@ -97,7 +107,7 @@ export function savedLine(view: OnboardingView, step: StepId): string | null {
     case "pediatrician":
       return v.pediatrician ? answerLine("pediatrician", v.pediatrician) : null;
     case "notifications":
-      return v.notifications ? "On" : "Not now";
+      return v.notifications ? "Set up after starting" : "Not now";
     default:
       return "Done";
   }

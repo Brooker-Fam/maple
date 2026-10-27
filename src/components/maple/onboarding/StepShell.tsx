@@ -1,9 +1,23 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { skippable, STEP_TITLES, type StepId } from "@/lib/maple/onboarding/steps";
+import { skippable, type StepId } from "@/lib/maple/onboarding/steps";
 import { Button, cx, tone } from "../ui";
 import type { Onboarding } from "./useOnboarding";
+
+const QUESTIONS: Record<StepId, string> = {
+  welcome: "Before getting started",
+  you: "What should the log call you?",
+  timezone: "Which clock and units should the log use?",
+  baby_name: "What is your baby's name?",
+  birth: "Is your baby here or still on the way?",
+  sex: "Which growth chart should the log use?",
+  feeding: "How are you feeding your baby?",
+  invites: "Who else will use the log?",
+  care: "Would a recovery page help?",
+  pediatrician: "Who is your baby's pediatrician?",
+  notifications: "Would you like notifications on this phone?",
+};
 
 export const WHY: Record<StepId, string> = {
   welcome: "Maple is a tracker, not medical advice.",
@@ -42,7 +56,7 @@ export function StepShell({
     <section aria-labelledby={`onb-${step}`} className={cx(tone.card, "space-y-4 p-4")}>
       <div className="space-y-1">
         <h2 id={`onb-${step}`} className={cx(tone.heading, "text-[18px]")}>
-          {STEP_TITLES[step]}
+          {QUESTIONS[step]}
         </h2>
         <p className={cx(tone.muted, "text-[14px] leading-snug")}>{WHY[step]}</p>
       </div>

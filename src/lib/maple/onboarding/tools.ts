@@ -83,7 +83,7 @@ export function onboardingTools(opts: { tz: string; now: Date }): ToolSet {
       (i) => propose("pediatrician", { name: i.name ?? null, phone: i.phone ?? null, after_hours: i.after_hours ?? null })
     ),
     propose_notifications: def(
-      "Whether to turn on notifications on this phone now (on true opens the phone's own steps after the tap).",
+      "Whether to open this phone's notification setup after starting the log. This only records a request, not permission or an active subscription.",
       { on: z.boolean() },
       (i) => propose("notifications", i)
     ),

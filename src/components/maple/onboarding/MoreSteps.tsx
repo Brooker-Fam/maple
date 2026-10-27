@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { MAX_INVITES_AT_ONCE, type OnboardingView } from "@/lib/maple/onboarding/steps";
 import { Icon } from "../icons";
-import { useNotifications } from "../notify";
 import { Button, Chip, cx, tone } from "../ui";
 import { StepShell, TextInput } from "./StepShell";
 import type { InviteLink, Onboarding } from "./useOnboarding";
@@ -115,19 +114,16 @@ export function CareStep({ ob, consent: startAtConsent }: Props & { consent?: bo
 }
 
 export function NotificationsStep({ ob }: Props) {
-  const notify = useNotifications();
   return (
     <StepShell step="notifications" ob={ob} hideSave noSkip onSave={() => {}}>
       <div className="flex flex-col gap-2">
         <Button
-          onClick={() => {
-            notify.open();
-            void ob.answer("notifications", { on: true });
-          }}
+          onClick={() => void ob.answer("notifications", { on: true })}
           disabled={ob.busy}
         >
-          Set up notifications
+          Set up after starting
         </Button>
+        <p className={cx(tone.muted, "text-[14px] leading-snug")}>The phone&apos;s setup opens after you start logging. This choice does not turn notifications on.</p>
         <Button variant="ghost" onClick={() => void ob.answer("notifications", { on: false })} disabled={ob.busy}>
           Not now
         </Button>

@@ -72,3 +72,20 @@ export function Summary({ view, ob, onEdit, onStart }: { view: OnboardingView; o
     </section>
   );
 }
+
+export function SavedAnswers({ view, onEdit }: { view: OnboardingView; onEdit: (step: StepId) => void }) {
+  const rows = STEPS.filter((s) => s !== "welcome" && savedLine(view, s));
+  return (
+    <details className={cx(tone.inset, "px-3.5 py-2.5")}>
+      <summary className={cx(tone.body, "cursor-pointer text-[14px] font-medium")}>Your saved answers</summary>
+      <div className="mt-2 space-y-1">
+        {rows.map((s) => (
+          <div key={s} className="flex items-center gap-3">
+            <p className={cx(tone.muted, "min-w-0 flex-1 text-[14px] leading-snug")}><span className="font-medium">{STEP_TITLES[s]}:</span> {savedLine(view, s)}</p>
+            <button type="button" onClick={() => onEdit(s)} aria-label={`Edit ${STEP_TITLES[s].toLowerCase()}`} className="min-h-[44px] px-2 text-[14px] font-semibold text-mp-accent-fg">Edit</button>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}

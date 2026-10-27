@@ -3,6 +3,8 @@
 import dynamic from "next/dynamic";
 import { useEffect, useState, type ReactNode } from "react";
 import type { OnboardingView } from "@/lib/maple/onboarding/steps";
+import { useNotifications } from "../notify";
+import { openSetupWhenReady } from "./actions";
 import { useMaple } from "../useMaple";
 
 const Onboarding = dynamic(() => import("./Onboarding"), { ssr: false });
@@ -17,6 +19,8 @@ type Check = { needed: boolean; view?: OnboardingView; failed?: true };
  */
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const { status, api, refresh, state } = useMaple();
+  const notifications = useNotifications();
+  const [notificationSetup, setNotificationSetup] = useState(false);
   const [check, setCheck] = useState<Check | null>(null);
   const [asked, setAsked] = useState(false);
   const signedIn = status === "ready" || status === "error";
@@ -43,14 +47,22 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   }, [check]);
 
   useEffect(() => {
-    if (status === "signedOut") setCheck(null);
+    if (status === "signedOut") {
+      setCheck(null);
+      setNotificationSetup(false);
+    }
   }, [status]);
+
+  useEffect(() => {
+    if (openSetupWhenReady(notificationSetup, loaded, notifications.open)) setNotificationSetup(false);
+  }, [notificationSetup, loaded, notifications.open]);
 
   if (check?.needed && check.view) {
     return (
       <Onboarding
         initial={check.view}
-        onDone={() => {
+        onDone={(requested) => {
+          setNotificationSetup(requested);
           setCheck({ needed: false });
           void refresh();
         }}
