@@ -3,14 +3,12 @@
 import dynamic from "next/dynamic";
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatConsent } from "@/lib/maple/chat/types";
-import { Icon } from "../icons";
-import { cx } from "../ui";
 import { useMaple } from "../useMaple";
 
 /**
- * Opens the chat (Ask) from Today's button and More's first row. Mounted once
- * in MapleApp inside CareNav and the log sheets, so Help and Maple's own
- * sheets open on top of it. The sheet and the AI SDK load on first open, so
+ * Opens the chat (Ask) from the tab bar's Ask. Mounted once in MapleApp
+ * inside CareNav and the log sheets, so Help and Maple's own sheets open on
+ * top of it. The sheet and the AI SDK load on first open, so
  * Today and the dock don't carry them. It also holds this member's chat
  * consents, so the sheet's terms card and her switch in Family and on her
  * page agree.
@@ -93,26 +91,5 @@ export function ChatNavProvider({ children }: { children: ReactNode }) {
       {children}
       {state && loaded && <ChatSheet open={open} onClose={close} />}
     </ChatNavContext.Provider>
-  );
-}
-
-/** Today's round Ask button, beside her name. */
-export function AskButton({ className }: { className?: string }) {
-  const { online } = useMaple();
-  const { openChat } = useChatNav();
-  return (
-    <button
-      type="button"
-      onClick={openChat}
-      disabled={!online}
-      aria-label={online ? "Ask about Maple" : "Ask about Maple: needs a connection"}
-      title={online ? undefined : "Needs a connection"}
-      className={cx(
-        "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink-2 transition active:scale-95 disabled:opacity-40",
-        className
-      )}
-    >
-      <Icon name="message-square" size={20} />
-    </button>
   );
 }

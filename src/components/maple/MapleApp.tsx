@@ -7,7 +7,7 @@ import { AppNavProvider, useAppNav, type NavTarget, type TabId } from "./AppNav"
 import { WelcomeHost } from "./BirthSheet";
 import CareScreen from "./care/CareScreen";
 import { CareNavProvider } from "./care/CareNav";
-import { ChatNavProvider } from "./chat/ChatNav";
+import { ChatNavProvider, useChatNav } from "./chat/ChatNav";
 import { useCare } from "./care/useCare";
 import FamilyTab from "./FamilyTab";
 import HistoryTab from "./HistoryTab";
@@ -28,8 +28,9 @@ import { MapleProvider, useMaple } from "./useMaple";
  * waiting hero ("She's here!") above the same logging dock.
  *
  * Tabs: Today, hers (Brittany's page, for anyone who can read it), History
- * (Timeline | Patterns), Moments and Family. Which one shows lives in
- * AppNav, so her strip, a reminder's link or More can switch it.
+ * (Timeline | Patterns), Moments, Ask and Family. Which one shows lives in
+ * AppNav, so her strip, a reminder's link or More can switch it. Ask isn't a
+ * screen: it opens the chat sheet over whichever tab is showing.
  *
  * The shell also owns the night look (html.maple-night, styled in
  * src/app/maple/maple.css), the browser theme-color, the sync chip, and the
@@ -38,12 +39,15 @@ import { MapleProvider, useMaple } from "./useMaple";
 
 export type { NavTarget, TabId } from "./AppNav";
 
+type TabItem = { id: TabId | "ask"; label: string; icon: IconName };
+
 /** The bar, left to right. Her tab is labelled with her first name and only shows for readers of her page. */
-const TABS: { id: TabId; label: string; icon: IconName }[] = [
+const TABS: TabItem[] = [
   { id: "today", label: "Today", icon: "house" },
   { id: "care", label: "", icon: "heart" },
   { id: "history", label: "History", icon: "history" },
   { id: "moments", label: "Moments", icon: "image" },
+  { id: "ask", label: "Ask", icon: "message-square" },
   { id: "family", label: "Family", icon: "users" },
 ];
 
@@ -256,7 +260,10 @@ function SyncChip() {
   );
 }
 
-function TabBar({ tabs, tab, onChange }: { tabs: typeof TABS; tab: TabId; onChange: (t: NavTarget) => void }) {
+function TabBar({ tabs, tab, onChange }: { tabs: TabItem[]; tab: TabId; onChange: (t: NavTarget) => void }) {
+  const { online, toast } = useMaple();
+  const { openChat } = useChatNav();
+  const ask = () => (online ? openChat() : toast("Ask needs a connection.", { tone: "info" }));
   return (
     <nav
       aria-label="Maple's Log"
@@ -266,19 +273,24 @@ function TabBar({ tabs, tab, onChange }: { tabs: typeof TABS; tab: TabId; onChan
       <div className="mx-auto flex max-w-lg">
         {tabs.map((t) => {
           const active = t.id === tab;
+          const isAsk = t.id === "ask";
+          const offline = isAsk && !online;
           return (
             <button
               key={t.id}
               type="button"
-              onClick={() => onChange(t.id)}
+              onClick={() => (t.id === "ask" ? ask() : onChange(t.id))}
               aria-current={active ? "page" : undefined}
+              aria-haspopup={isAsk ? "dialog" : undefined}
+              aria-label={offline ? "Ask: needs a connection" : undefined}
               className={cx(
                 "flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 text-[11px] font-medium transition",
-                active ? "text-mp-accent-fg" : "text-mp-ink-3"
+                active ? "text-mp-accent-fg" : "text-mp-ink-3",
+                offline && "opacity-40"
               )}
             >
               <Icon name={t.icon} size={24} strokeWidth={active ? 2.1 : 1.75} />
-              <span className="max-w-full truncate px-0.5">{t.label}</span>
+              <span className="max-w-full truncate">{t.label}</span>
             </button>
           );
         })}

@@ -12,9 +12,10 @@ import { CareNote, TermsCard } from "./ChatTerms";
 import { useChatThread } from "./useChatThread";
 
 /**
- * Ask: the in-app chat, a tall sheet over Today. The newest thread from the
- * last six hours reopens with it; New chat starts over. What the assistant
- * logs shows under its reply with Undo, and Today updates once it's done.
+ * Ask: the in-app chat, a tall sheet from the tab bar over whichever tab is
+ * showing. The newest thread from the last six hours reopens with it; New
+ * chat starts over. What the assistant logs shows under its reply with Undo,
+ * and Today updates once it's done.
  * Until this member accepts the chat's terms, the terms card shows and the
  * composer waits.
  */
