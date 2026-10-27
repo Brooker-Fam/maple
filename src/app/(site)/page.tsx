@@ -57,7 +57,7 @@ const HOURS: Hour[] = [
     time: "8:20",
     half: "pm",
     title: "Your hands are full, and one of them is wet.",
-    body: "Tell Siri, or type “wet one at 8” into the chat.",
+    body: "Tell Maple to log a wet diaper.",
     visual: (
       <div className="grid gap-3">
         <SiriFragment />
