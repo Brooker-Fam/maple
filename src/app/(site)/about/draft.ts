@@ -1,1 +1,1 @@
-export const ABOUT_DRAFT = true;
+export const ABOUT_DRAFT = false;
