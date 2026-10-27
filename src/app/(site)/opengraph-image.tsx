@@ -1,11 +1,11 @@
 import { ImageResponse } from "next/og";
 import { OgLeaf, ogFonts } from "@/components/site/og";
 
-export const alt = "Maple. Who fed her last? Beside it, a night clock reads 3:12 am.";
+export const alt = "Maple. Left boob or right boob? Beside it, a night clock reads 3:12 am.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-const HEADLINE = "Who fed her last?";
+const HEADLINE = "Left boob or right boob?";
 
 export default async function OpenGraphImage() {
   const fonts = await ogFonts(`Maple${HEADLINE}`, "3:12 am");

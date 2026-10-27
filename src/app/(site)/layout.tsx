@@ -12,9 +12,9 @@ const cormorantItalic = Cormorant_Garamond({
   display: "swap",
 });
 
-const TITLE = "Maple | Who fed her last?";
+const TITLE = "Maple | Left boob or right boob?";
 const DESCRIPTION =
-  "Who fed her last? Maple is one newborn log on both parents' phones, with the last feed and the next side ready at 3am. Free while in early access, with a waitlist for now.";
+  "Left boob or right boob? Maple is one newborn log on both parents' phones, with the last feed and the next side ready at 3am. Free while in early access, with a waitlist for now.";
 
 export const metadata: Metadata = {
   title: { default: TITLE, template: "%s | Maple" },

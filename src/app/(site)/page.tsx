@@ -174,11 +174,12 @@ export default function Home() {
         <section className="mx-auto grid w-full max-w-[76rem] items-center gap-12 px-4 pt-12 pb-20 sm:px-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-20 lg:pt-20 lg:pb-28">
           <div>
             <h1 className="site-display max-w-[13ch] text-[clamp(2.85rem,1.4rem+6vw,5.75rem)] leading-[0.98] text-mp-ink">
-              Who fed her last?
+              Left boob or right boob?
             </h1>
             <p className="site-prose mt-6 text-[19px] leading-[1.55]">
-              Your newborn&rsquo;s day is milk in and poop out, and the one who knows when is asleep. Maple puts one log on both
-              your phones, so at 3am nobody has to wake anyone to ask.
+              You knew an hour ago. Now it&rsquo;s 3am and the answer is gone, along with when she last ate and whether that diaper
+              had poop in it. Maple keeps one log on both your phones, so the next side is on the screen before you&rsquo;re fully
+              awake.
             </p>
             <div className="mt-9">
               <WaitlistForm />
