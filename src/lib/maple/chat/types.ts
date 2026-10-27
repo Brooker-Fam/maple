@@ -42,8 +42,8 @@ export type ChatToolOutput = {
 export type HelpAbout = "maple" | "mom" | "anyone";
 
 export type ChatData = {
-  /** The app's own line on each user message (time, her age, who's signed in), for the model only. */
-  context: { line: string };
+  /** The app's own lines on each user message, for the model only: `line` (time, her age, who's signed in), then `state` (the log as it stood). */
+  context: { line: string; state?: string[] };
   /** The help card, added by the server: after a crisis mention, or when the model declined to answer. */
   help: { reason: "crisis" | "refusal" };
 };

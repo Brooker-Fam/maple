@@ -69,9 +69,9 @@ export function userText(parts: unknown[]): string {
   return text;
 }
 
-/** The user message as stored: the app's context line for the model, then their words. */
-export function userMessage(id: string, text: string, line: string): ChatMessage {
-  return { id, role: "user", parts: [{ type: "data-context", data: { line } }, { type: "text", text }] };
+/** The user message as stored: the app's context lines for the model, then their words. */
+export function userMessage(id: string, text: string, line: string, state: string[] = []): ChatMessage {
+  return { id, role: "user", parts: [{ type: "data-context", data: { line, ...(state.length ? { state } : {}) } }, { type: "text", text }] };
 }
 
 /** How many model steps a stored reply has run, so an approval's continuation shares the turn's step cap. */

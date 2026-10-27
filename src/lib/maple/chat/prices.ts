@@ -28,6 +28,21 @@ export const PRICES: Record<string, ModelPrice> = {
     long: { above: 100_000, price: { input: BigInt(500_000), cacheRead: BigInt(50_000), cacheWrite: BigInt(625_000), output: BigInt(2_500_000) } },
     providers: ["anthropic", "bedrock", "vertexAnthropic"],
   },
+  // These three: the Gateway's listing, checked 2026-10-27.
+  "anthropic/claude-sonnet-5.5": {
+    base: { input: BigInt(2_000_000), cacheRead: BigInt(100_000), cacheWrite: BigInt(2_500_000), output: BigInt(10_000_000) },
+    providers: ["anthropic", "bedrock", "claudeaws", "vertexAnthropic"],
+  },
+  "openai/gpt-6-luna": {
+    base: { input: BigInt(100_000), cacheRead: BigInt(10_000), cacheWrite: BigInt(125_000), output: BigInt(500_000) },
+    long: { above: 272_000, price: { input: BigInt(200_000), cacheRead: BigInt(20_000), cacheWrite: BigInt(250_000), output: BigInt(750_000) } },
+    // Not bedrock: no ZDR there.
+    providers: ["azure", "openai"],
+  },
+  "alibaba/qwen3.8-flash": {
+    base: { input: BigInt(150_000), cacheRead: BigInt(16_000), cacheWrite: BigInt(200_000), output: BigInt(470_000) },
+    providers: ["alibaba"],
+  },
 };
 
 const MILLION = BigInt(1_000_000);

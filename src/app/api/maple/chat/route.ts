@@ -8,7 +8,7 @@ import { budgets, chatModel } from "@/lib/maple/chat/caps";
 import { answerPost, type PostBody } from "@/lib/maple/chat/post";
 import { priceFor } from "@/lib/maple/chat/prices";
 import { countMessage, deleteThread, getThread, listThreads, loadMessages, lockThread, recordUsage, releaseThread, saveMessage, setTitle, usageSince } from "@/lib/maple/chat/store";
-import { chatTools } from "@/lib/maple/chat/tools";
+import { chatLogState, chatTools } from "@/lib/maple/chat/tools";
 import { THREAD_ID_RE } from "@/lib/maple/chat/types";
 import { chatConsent } from "@/lib/maple/consent";
 import { captureServerException } from "@/lib/posthog-server";
@@ -55,6 +55,7 @@ export const DELETE = withMember("DELETE /api/maple/chat", async (request, membe
 export const POST = withMember("POST /api/maple/chat", async (request: NextRequest, member: Member) => {
   const body = await readJson<PostBody>(request);
   const model = chatModel();
+  const now = new Date();
   return answerPost(body, member, {
     store: { consent: chatConsent, usageSince, lockThread, releaseThread, loadMessages, saveMessage, setTitle, countMessage, recordUsage },
     household: async () => {
@@ -65,8 +66,9 @@ export const POST = withMember("POST /api/maple/chat", async (request: NextReque
     modelKey: model,
     price: priceFor(model),
     tools: (opts) => chatTools(member, { ...opts, device: deviceOf(request) }),
+    state: ({ care }) => chatLogState(member, { care, now }),
     budget: budgets(),
-    now: new Date(),
+    now,
     report,
     waitUntil: (p) => after(() => p),
   });
