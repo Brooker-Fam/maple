@@ -284,7 +284,7 @@ export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "di
  * which moves its end there, only if nobody changed it since.
  */
 export type FeedEdit =
-  | { op: "move"; edge: "start" | "end" | "ended"; ref?: StretchRef; to: string }
+  | { op: "move"; edge: "start" | "end" | "side_end" | "ended"; ref?: StretchRef; to: string }
   | { op: "set_side"; ref: StretchRef; side: StretchSide }
   | { op: "undo_tap"; expect: { side: StretchSide; start: string; end: string | null } }
   | { op: "add_part"; side: StretchSide; start: string; end: string; expect_updated_at: string }

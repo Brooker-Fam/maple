@@ -1315,7 +1315,6 @@ function ClosedSidePanel({ e, tz, now, disabled, busy, run, openEditor, pin, act
   const k = found ? sides.findIndex((x) => x.side === found.side && x.start === found.start) : -1;
   const s = sides[k];
   if (!s || s.end === null) return <Caption>This part changed, so there&apos;s nothing to fix here.</Caption>;
-  const next = sides[k + 1];
   const name = SIDE_NAME[s.side];
   const before = sides[k - 1]?.side;
   // After a break: "Back on the Left" only when she came off the Left, else "On the Right after the break" (as the feed sheet says it).
@@ -1324,8 +1323,8 @@ function ClosedSidePanel({ e, tz, now, disabled, busy, run, openEditor, pin, act
   // A switch to back and forth "went back and forth"; a side after it is "on the Left" (tracking sides again).
   const switchedTo = (to: StretchSide, from?: StretchSide) => (to === "B" ? "Went back and forth" : from === "B" ? `On the ${SIDE_NAME[to]}` : `Switched to ${SIDE_NAME[to]}`);
   const startLabel = s.startMoment === "feed_start" ? "Feed started" : s.startMoment === "switch" ? switchedTo(s.side, before) : resumed;
-  const endLabel = s.endMoment === "switch" && next ? switchedTo(next.side, s.side) : s.endMoment === "feed_end" ? "Feed ended" : "Came off";
-  const edit = (edge: "start" | "end") => openEditor({ id: "editor", edge: { edge, ref: s.ref } });
+  const endLabel = s.side === "B" ? "Finished both sides" : `Finished ${name}`;
+  const edit = (edge: "start" | "side_end") => openEditor({ id: "editor", edge: { edge, ref: s.ref } });
   return (
     <div className="space-y-3">
       <p className="text-[17px] leading-snug font-semibold text-mp-ink tabular-nums">
@@ -1335,7 +1334,7 @@ function ClosedSidePanel({ e, tz, now, disabled, busy, run, openEditor, pin, act
         <LinkRow disabled={disabled} onClick={() => edit("start")}>
           {startLabel} {formatTime(s.start, tz)}
         </LinkRow>
-        <LinkRow disabled={disabled} onClick={() => edit("end")}>
+        <LinkRow disabled={disabled} onClick={() => edit("side_end")}>
           {endLabel} {formatTime(s.end, tz)}
         </LinkRow>
         <SideFixRow

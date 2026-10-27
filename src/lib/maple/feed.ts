@@ -535,7 +535,7 @@ export function momentQuestion(moment: Moment, side: StretchSide, prev?: Stretch
 
 // ── moving one moment ────────────────────────────────────────────────────
 
-type Edge = "start" | "end" | "ended";
+type Edge = "start" | "end" | "side_end" | "ended";
 
 type Plan = {
   S: Stretch[];
@@ -616,8 +616,7 @@ function plan(data: FeedData, edge: Edge, ref: StretchRef | undefined, ctx: Feed
   if (s.end === null) throw new FeedEditError("use_stop");
   const sEnd = s.end;
   const n = S[k + 1];
-  // The end of a side she switched from is that switch.
-  if (n && n.start === sEnd) return startOf(k + 1);
+  if (edge === "end" && n && n.start === sEnd) return startOf(k + 1);
   const min = s.start + SEC;
   const base = { S, recorded: sEnd, min, uiMin: soft(s.start + MIN, min, sEnd), low: () => editError("before_own_start", { side: s.side, t: s.start }) };
   const endAt = (to: number, ended: number | null) => {

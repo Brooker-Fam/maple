@@ -20,7 +20,7 @@ import {
 } from "@/lib/maple/feed";
 import { earlierPresets, LIKELY_SIDE_MIN, usualBreakMin, usualSideMin } from "@/lib/maple/presets";
 import { DEFAULT_TZ, formatClock, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
-import type { Entry, FeedData, Side, StretchRef, StretchSide, TimerKind } from "@/lib/maple/types";
+import type { Entry, FeedData, FeedEdit, Side, StretchRef, StretchSide, TimerKind } from "@/lib/maple/types";
 import { Icon } from "./icons";
 import { SIDE_COLOR, SIDE_INK } from "./palette";
 import { cx, TimeScrubber } from "./ui";
@@ -702,7 +702,7 @@ export function LinkRow({
 }
 
 /** A moment of a feed: one edge of one stretch ("ended" is a finished feed's ended_at alone). */
-export type MomentEdge = { edge: "start" | "end" | "ended"; ref?: StretchRef };
+export type MomentEdge = Pick<Extract<FeedEdit, { op: "move" }>, "edge" | "ref">;
 
 type MomentEditorProps = {
   /**

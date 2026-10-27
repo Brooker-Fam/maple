@@ -58,7 +58,7 @@ function feedEdit(v: unknown): FeedEdit {
   if (!isObject(v)) throw new BadRequest("edit is required");
   switch (v.op) {
     case "move": {
-      if (v.edge !== "start" && v.edge !== "end" && v.edge !== "ended") throw new BadRequest("edit.edge must be start, end or ended");
+      if (v.edge !== "start" && v.edge !== "end" && v.edge !== "side_end" && v.edge !== "ended") throw new BadRequest("edit.edge must be start, end, side_end or ended");
       const to = instant(v.to, "edit.to").toISOString();
       return { op: "move", edge: v.edge, to, ...(v.ref != null ? { ref: stretchRef(v.ref, "edit.ref") } : {}) };
     }

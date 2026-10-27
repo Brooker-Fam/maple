@@ -772,15 +772,15 @@ function sideFields(l: number, r: number, chosen: Side, b = 0): { first_side: Si
 
 // ── Times: a finished timed feed, part by part ──────────────────────────
 
-/** Which row is open: a part (by its place, and side), the Ended row, or Add a side (its form, and the feed it adds to). */
-type Row = { kind: "side"; index: number; side: StretchSide } | { kind: "break"; index: number } | { kind: "ended" } | { kind: "add"; base: FeedEntry; form: AddForm };
+type Row = { kind: "side"; key: string; index: number; side: StretchSide } | { kind: "break"; key: string; index: number } | { kind: "ended" } | { kind: "add"; base: FeedEntry; form: AddForm };
 /** The open moment editor: its line, the moment, and the feed as it was when it opened (`to`: the staged time). */
 type StagedEditor = { id: string; edge: MomentEdge; base: FeedEntry; to?: Date };
 
-/** The open part row in `parts`: where it was, or (after a merge or a new part) the nearest of the same kind and side. */
-function rowIndex(row: Row | null, parts: Part[]): number | null {
+export function rowIndex(row: Row | null, parts: Part[]): number | null {
   if (!row || (row.kind !== "side" && row.kind !== "break")) return null;
   const fits = (p: Part | undefined) => !!p && p.kind === row.kind && (row.kind !== "side" || (p.kind === "side" && p.side === row.side));
+  const exact = parts.findIndex((p) => fits(p) && rowKey(p) === row.key);
+  if (exact !== -1) return exact;
   if (fits(parts[row.index])) return row.index;
   let best: number | null = null;
   for (let i = 0; i < parts.length; i++) {
@@ -821,9 +821,10 @@ const rowKey = (p: Part) => (p.kind === "side" ? `s-${p.ref.start}` : `b-${p.bef
  * rows instead, so no row vanishes from under the editor and the closed
  * break can say "No break".
  */
-function previewParts(rows: Part[], staged: Part[], from: number | null, to: Date | undefined): Part[] {
+export function previewParts(rows: Part[], staged: Part[], from: number | null, to: Date | undefined): Part[] {
   const same = rows.length === staged.length && rows.every((p, i) => p.kind === staged[i].kind && (p.kind !== "side" || (staged[i] as SidePart).side === p.side));
   if (same) return staged;
+  if (staged.length > rows.length) return rows.map((p) => staged.find((next) => rowKey(next) === rowKey(p)) ?? p);
   if (from === null || !to) return rows;
   const at = (t: string) => (Date.parse(t) === from ? to.toISOString() : t);
   return rows.map((p): Part => {
@@ -925,9 +926,9 @@ function TimesSection({
     const i = rowIndex(row, staged);
     return i === null ? null : { p: staged[i], i };
   };
-  const rowOf = (p: Part, i: number): Row => (p.kind === "side" ? { kind: "side", index: i, side: p.side } : { kind: "break", index: i });
+  const rowOf = (p: Part, i: number): Row => (p.kind === "side" ? { kind: "side", key: rowKey(p), index: i, side: p.side } : { kind: "break", key: rowKey(p), index: i });
   const edgeOf = (id: string, p: Part): MomentEdge | null => {
-    if (p.kind === "side") return id === "start" ? { edge: "start", ref: p.ref } : id === "end" && p.end ? { edge: "end", ref: p.ref } : null;
+    if (p.kind === "side") return id === "start" ? { edge: "start", ref: p.ref } : id === "end" && p.end ? { edge: "side_end", ref: p.ref } : null;
     if (id === "off") return { edge: "end", ref: p.before };
     if (id === "on") return p.after ? { edge: "start", ref: p.after } : null;
     return id === "legacy-end" ? { edge: "ended" } : null;
@@ -960,7 +961,7 @@ function TimesSection({
     try {
       const r = setSide(working.data, found.p.ref, side, feedCtx(working, nowFn()));
       onStage({ data: r.data, startedAt: r.startedAt, endedAt: working.ended_at }, working);
-      openRow({ kind: "side", index: found.i, side });
+      openRow({ kind: "side", key: rowKey(found.p), index: found.i, side });
     } catch (err) {
       setError(err instanceof FeedEditError ? feedEditCopy(err, "ui", tz) : "That part changed; have another look.");
     }
@@ -1032,7 +1033,6 @@ function TimesSection({
   const renderOpen = (p: Part, v: Part, i: number) => {
     if (p.kind === "side") {
       const name = SIDE_NAME[p.side];
-      const next = parts.slice(i + 1).find(isSide);
       // After a break, "Back on the Left" only if she was on the Left before it; another side is just "On the Right".
       const before = parts.slice(0, i).filter(isSide).at(-1);
       const resumed =
@@ -1040,7 +1040,7 @@ function TimesSection({
       // A switch to back and forth "went back and forth"; a side after it is "On the Left" (tracking sides again).
       const switchedTo = (to: StretchSide, from?: StretchSide) => (to === "B" ? "Went back and forth" : from === "B" ? `On the ${SIDE_NAME[to]}` : `Switched to ${SIDE_NAME[to]}`);
       const startLabel = p.startMoment === "feed_start" ? "Feed started" : p.startMoment === "switch" ? switchedTo(p.side, before?.side) : resumed;
-      const endLabel = p.endMoment === "switch" && next ? switchedTo(next.side, p.side) : p.endMoment === "feed_end" ? "Feed ended" : "Came off";
+      const endLabel = p.side === "B" ? "Finished both sides" : `Finished ${name}`;
       const end = v.end ?? p.end;
       return (
         <Detail>
