@@ -681,6 +681,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   end={range[1]}
                   tz={tz}
                   durations={[]}
+                  startQuick={[10, 20, 30, 60, 120]}
                   onChange={(s, en) => {
                     setAnchor(null);
                     setRange([s, en]);

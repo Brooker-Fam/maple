@@ -81,6 +81,26 @@ async function seed() {
   );
   await sql(`INSERT INTO maple_tokens (member, token_hash, label, created_at) VALUES ($1, $2, 'Made-up iPhone', $3)`, [OWNER, sha(SIRI), ago(60 * 24 * 3)]);
   await sql(`INSERT INTO maple_consents (member, kind, version, accepted_at) VALUES ($1, 'chat', 1, $2)`, [OWNER, ago(60 * 24)]);
+  const thread = (id: string, member: string, at: number, viewerOnly = false) =>
+    sql(`INSERT INTO maple_chat_threads (id, member, title, model, viewer_only, created_at, updated_at) VALUES ($1, $2, 'Made-up chat', 'zai/glm-5.3-flash', $3, $4, $4)`, [id, member, viewerOnly, ago(at)]);
+  const message = (id: string, threadId: string, member: string, seq: number, role: "user" | "assistant", text: string, at: number) =>
+    sql(`INSERT INTO maple_chat_messages (id, thread_id, member, seq, role, parts, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $7)`, [
+      id,
+      threadId,
+      member,
+      seq,
+      role,
+      JSON.stringify([{ type: "text", text }]),
+      ago(at),
+    ]);
+  await thread("parity-thread-old", OWNER, 60 * 30);
+  await message("parity-m1", "parity-thread-old", OWNER, 1, "user", "How many made-up diapers today?", 60 * 30);
+  await message("parity-m2", "parity-thread-old", OWNER, 2, "assistant", "Three so far.", 60 * 30 - 1);
+  await thread("parity-thread-new", OWNER, 20);
+  await message("parity-m3", "parity-thread-new", OWNER, 1, "user", "Which side next?", 20);
+  await message("parity-m4", "parity-thread-new", OWNER, 2, "assistant", "The left.", 19);
+  await thread("parity-thread-viewer", VIEWER, 40, true);
+  await message("parity-m5", "parity-thread-viewer", VIEWER, 1, "user", "When did she last eat?", 40);
 }
 
 const cookieFor = (id: string) => encryptSecret(JSON.stringify({ id, iat: Date.now() }));
@@ -200,6 +220,20 @@ async function main() {
   await call("tokens.get", tokens.GET as H, "GET", "/api/maple/tokens", { as: OWNER });
   await call("consent.get", consent.GET as H, "GET", "/api/maple/chat/consent", { as: OWNER });
   await call("consent.get.member", consent.GET as H, "GET", "/api/maple/chat/consent", { as: MEMBER });
+  const chat = await import("../../../src/app/api/maple/chat/route");
+  await call("chat.get.owner", chat.GET as H, "GET", "/api/maple/chat", { as: OWNER });
+  await call("chat.get.owner.before", chat.GET as H, "GET", "/api/maple/chat?before=parity-m3", { as: OWNER });
+  await call("chat.get.viewer", chat.GET as H, "GET", "/api/maple/chat", { as: VIEWER });
+  await call("chat.get.owner2", chat.GET as H, "GET", "/api/maple/chat", { as: OWNER2 });
+  await call("chat.post.noterms", chat.POST as H, "POST", "/api/maple/chat", {
+    as: MEMBER,
+    body: { threadId: "parity-thread-member", message: { id: "parity-u1", role: "user", parts: [{ type: "text", text: "Log a wet diaper" }] } },
+  });
+  await call("chat.delete.member", chat.DELETE as H, "DELETE", "/api/maple/chat", { as: MEMBER });
+  await call("chat.get.owner.kept", chat.GET as H, "GET", "/api/maple/chat", { as: OWNER });
+  await call("chat.delete.owner", chat.DELETE as H, "DELETE", "/api/maple/chat", { as: OWNER });
+  await call("chat.get.owner.deleted", chat.GET as H, "GET", "/api/maple/chat", { as: OWNER });
+  await call("chat.get.viewer.kept", chat.GET as H, "GET", "/api/maple/chat", { as: VIEWER });
   await call("export", exportCsv, "GET", "/api/maple/export", { as: OWNER });
   await call("push.get", push.GET as H, "GET", "/api/maple/push", { as: OWNER });
   const phone = (n: string) => ({ endpoint: `https://push.example.test/parity-${n}-0123456789`, keys: { p256dh: `made-up-p256dh-${n}`, auth: `made-up-auth-${n}` } });

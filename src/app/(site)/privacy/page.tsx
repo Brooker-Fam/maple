@@ -65,9 +65,9 @@ export default function Privacy() {
       </p>
       <h3>The chat</h3>
       <p>
-        Your chats with Maple are saved in your family&rsquo;s log so you can scroll back. Each chat belongs to the person who
-        started it, and &ldquo;Delete this chat&rdquo; removes it for good. Maple also counts each chat&rsquo;s length and cost,
-        without its words, to keep within its limits.
+        Your chat with Maple is saved in your family&rsquo;s log so you can scroll back. It belongs to you alone: nobody else in
+        your family can read it, and &ldquo;Delete chat history&rdquo; removes it for good. Maple also counts each answer&rsquo;s
+        length and cost, without its words, to keep within its limits.
       </p>
       <h3>The waitlist</h3>
       <p>

@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ADMIN_ID } from "../auth";
 import { registerCareTools } from "../care-mcp";
-import { FAMILY_ONE_COPY, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
+import { context, FAMILY_ONE_COPY, logState, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
 import type { Member } from "../types";
 import type { ChatAlert, ChatReceipt, ChatToolOutput, HelpAbout } from "./types";
 
@@ -105,11 +105,9 @@ const HELP_TEXT = "The help card is showing under your reply.";
  * other phones only. `care` also rides on every call, so Maple's tools leave
  * her out of their results until she has turned it on.
  */
-export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null }): ToolSet {
-  const { all, mom } = registrations(opts.copy);
-  const vo = opts.copy.v;
+function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boolean; device?: string | null }): Extra {
   const sub = member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`;
-  const extra = {
+  return {
     signal: new AbortController().signal,
     requestId: "maple-chat",
     authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care } },
@@ -118,6 +116,18 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: n
       throw new Error("unsupported");
     },
   } as unknown as Extra;
+}
+
+/** The log as the chat's tools would read it for this member at `now` (logState): the user message's [App] state lines. */
+export async function chatLogState(member: Pick<Member, "email">, opts: { fam: number; care: boolean; now: Date }): Promise<string[]> {
+  const ctx = await context(chatExtra(member, { fam: opts.fam, care: opts.care }));
+  return logState({ ...ctx, now: opts.now });
+}
+
+export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null }): ToolSet {
+  const { all, mom } = registrations(opts.copy);
+  const vo = opts.copy.v;
+  const extra = chatExtra(member, opts);
 
   const viewer = member.role === "viewer";
   const set: ToolSet = {};

@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { LEGAL_VERSION } from "../../src/components/site/legal";
 import { done, eq, freshDb, ok, quietly, seedFamilies, sha256, sql, test } from "./harness";
 
 /**
@@ -200,7 +201,7 @@ async function finalShape(k: Kit) {
     const to = new URL(began.res.headers.get("location") ?? "");
     eq([began.res.status, to.hostname, to.searchParams.get("redirect_uri")], [303, "accounts.google.com", `${BASE}/api/maple/auth/callback`]);
     ok(began.state?.state.startsWith(signup.SIGNUP_STATE_PREFIX), "state prefix");
-    eq(signup.openIntent(began.state?.signup), { kind: "create", code: null, tz: "America/Denver", terms: "1.2" }, "intent");
+    eq(signup.openIntent(began.state?.signup), { kind: "create", code: null, tz: "America/Denver", terms: LEGAL_VERSION }, "intent");
   });
 
   let firstFamily = 0;

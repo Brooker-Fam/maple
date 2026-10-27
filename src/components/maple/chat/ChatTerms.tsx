@@ -83,7 +83,7 @@ export function ChatCareRow() {
   return (
     <SwitchRow
       label={CARE_SWITCH}
-      note="Ask, the chat in this app. Off, it leaves your page out."
+      note="The Chat tab in this app. Off, it leaves your page out."
       checked={!!consent?.care}
       disabled={!consent?.self || busy}
       onChange={(on) => void set(on)}

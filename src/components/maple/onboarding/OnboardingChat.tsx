@@ -3,26 +3,30 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart } from "ai";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { mentionsCrisis } from "@/lib/maple/chat/crisis";
 import { LIMIT_MESSAGE } from "@/lib/maple/chat/caps";
 import { CHAT_MAX_CHARS, CHAT_OFF, type ChatConsent } from "@/lib/maple/chat/types";
 import { CHAT_TERMS_HELP, TRACKER_NOTE } from "@/lib/maple/guidelines";
 import { ONBOARDING_HISTORY, STEP_TITLES, type OnboardingMessage, type OnboardingRefusal, type Proposal, type StepId } from "@/lib/maple/onboarding/steps";
 import { HelpCard } from "../chat/ChatParts";
+import { usePageHold } from "../chat/page";
 import { refusalOf } from "../chat/stopped";
 import { Icon } from "../icons";
 import { LegalLinks } from "../Legal";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { answerLine } from "./describe";
+import { useSetupFrame } from "./SetupPage";
 import type { Onboarding } from "./useOnboarding";
 
 /**
- * Onboarding's chat voice, under the question's card: the person can answer
- * in their own words, and each value the model understood comes back as a
- * chip they tap to save (the same POST the card makes). The phone sends only
- * its last few text messages; what's saved comes from the server each turn.
- * Loaded only when the chat is used, so the form never carries the AI SDK.
+ * Onboarding's chat voice on the setup Chat page: the conversation above the
+ * question's card, and the composer in the page's bottom slot. The person can
+ * answer in their own words, and each value the model understood comes back
+ * as a chip they tap to save (the same POST the card makes). The phone sends
+ * only its last few text messages; what's saved comes from the server each
+ * turn. Loaded only when the chat is used, so the form never carries the AI SDK.
  */
 
 const textOf = (m: OnboardingMessage) => m.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n").trim();
@@ -40,7 +44,7 @@ const transport = new DefaultChatTransport<OnboardingMessage>({
 });
 
 const FALLBACK: readonly string[] = ["form", "off", "limit"];
-const STOPPED = "The chat stopped there. Your answers so far are kept; carry on with the card above.";
+const STOPPED = "The chat stopped there. Your answers so far are kept; carry on with the card below.";
 const UNAVAILABLE = "The chat isn't available right now, so the questions carry on here with buttons.";
 
 export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { ob: Onboarding; onCare: () => void; onReview: () => void; onFallback: (why: string) => void }) {
@@ -50,7 +54,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
   const [problem, setProblem] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
   const lastSent = useRef<string | null>(null);
-  const end = useRef<HTMLDivElement>(null);
+  const frame = useSetupFrame();
 
   useEffect(() => {
     let live = true;
@@ -74,34 +78,24 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
     },
   });
   const busy = chat.status === "submitted" || chat.status === "streaming";
-  const count = chat.messages.length;
-  const tailLength = count ? JSON.stringify(chat.messages[count - 1].parts).length : 0;
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
-  }, [count, tailLength, problem, help]);
 
   const send = () => {
     const text = draft.trim();
     if (!text || busy) return;
-    if (!online) return setProblem("Needs a connection. The card above works offline once it's loaded.");
+    if (!online) return setProblem("Needs a connection. The card below works offline once it's loaded.");
     setProblem(null);
     setHelp(false);
     setDraft("");
     lastSent.current = text;
     void chat.sendMessage({ text });
   };
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || !window.matchMedia("(pointer: fine)").matches) return;
-    e.preventDefault();
-    send();
-  };
 
   if (!consent) return null;
   if (!consent.terms) return <ChatTerms onAccepted={setConsent} onDecline={() => onFallback("")} />;
 
   return (
-    <section aria-label="Chat" className="space-y-3">
-      <p className={cx(tone.muted, "text-[15px] leading-relaxed")}>Rather type? Tell me in your own words, like &quot;she came Tuesday around 3am&quot;. You&apos;ll tap to confirm each answer.</p>
+    <>
+      <p className={cx(tone.muted, "px-1 text-[15px] leading-relaxed")}>Rather type? Tell me in your own words, like &quot;she came Tuesday around 3am&quot;. You&apos;ll tap to confirm each answer.</p>
       {chat.messages.map((m) => (
         <div key={m.id} className={cx("space-y-2", m.role === "user" && "flex justify-end")}>
           {m.role === "user" ? (
@@ -128,8 +122,51 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
         </p>
       )}
       {help && <HelpCard reason="crisis" />}
-      <div className="flex items-end gap-2">
+      <p className={cx(tone.faint, "px-1 text-[13px] leading-snug")}>Answers come from an AI and can be wrong; nothing is saved until you tap it.</p>
+      {frame.composer &&
+        createPortal(<Composer draft={draft} setDraft={setDraft} send={send} busy={busy} online={online} keyboard={frame.keyboard} />, frame.composer)}
+    </>
+  );
+}
+
+function Composer({
+  draft,
+  setDraft,
+  send,
+  busy,
+  online,
+  keyboard,
+}: {
+  draft: string;
+  setDraft: (text: string) => void;
+  send: () => void;
+  busy: boolean;
+  online: boolean;
+  keyboard: boolean;
+}) {
+  const bar = useRef<HTMLDivElement>(null);
+  const area = useRef<HTMLTextAreaElement>(null);
+  usePageHold(true, bar);
+
+  // Grows with what's typed, up to about five lines.
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, [draft]);
+
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || !window.matchMedia("(pointer: fine)").matches) return;
+    e.preventDefault();
+    send();
+  };
+
+  return (
+    <div className="border-t border-mp-line bg-mp-bg" style={{ paddingBottom: keyboard ? 0 : "env(safe-area-inset-bottom)" }}>
+      <div ref={bar} className="flex items-end gap-2 px-4 py-2">
         <textarea
+          ref={area}
           value={draft}
           rows={1}
           maxLength={CHAT_MAX_CHARS}
@@ -138,7 +175,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
           placeholder={online ? "Type an answer" : "Needs a connection"}
           aria-label="Message"
           disabled={!online}
-          className={cx(tone.input, "min-h-[44px] resize-none py-2.5 leading-snug")}
+          className={cx(tone.input, "min-h-[44px] resize-none rounded-[22px] py-2.5 leading-snug disabled:opacity-60")}
         />
         <button
           type="button"
@@ -150,9 +187,7 @@ export default function OnboardingChat({ ob, onCare, onReview, onFallback }: { o
           <Icon name="arrow-up" size={22} strokeWidth={2.25} />
         </button>
       </div>
-      <p className={cx(tone.faint, "text-[13px] leading-snug")}>Answers come from an AI and can be wrong; nothing is saved until you tap it.</p>
-      <div ref={end} />
-    </section>
+    </div>
   );
 }
 
@@ -217,7 +252,7 @@ function ChatTerms({ onAccepted, onDecline }: { onAccepted: (c: ChatConsent) => 
         <li>{CHAT_TERMS_HELP}</li>
         <li>What you type, and the answers you&apos;ve saved here, are sent to an AI model through Vercel AI Gateway, with zero data retention and no training on it requested.</li>
       </ul>
-      <p className={cx(tone.faint, "text-[13px] leading-snug")}>These are the same terms as Ask, the chat in the app.</p>
+      <p className={cx(tone.faint, "text-[13px] leading-snug")}>These are the same terms as the app&apos;s Chat tab.</p>
       <LegalLinks className="-ml-2 justify-start" />
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => void accept()} disabled={busy}>

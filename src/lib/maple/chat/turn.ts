@@ -13,9 +13,11 @@ import {
 import { chatProviderOptions, CHAT_MAX_OUTPUT_TOKENS, CHAT_MAX_STEPS, CHAT_TIMEOUT, LIMIT_MESSAGE, STEP_PROMPT_LIMIT } from "./caps";
 import type { ToolCopy } from "../mcp-tools";
 import { costMicro, stepTokens, type ModelPrice, type StepTokens } from "./prices";
-import { markTailForCache, systemBlocks, usesCacheBreakpoints } from "./prompt";
+import { dashFilter } from "./dashes";
+import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
-import { CHAT_FAILED, CHAT_OFF, type ChatMessage } from "./types";
+import { CHAT_FAILED, CHAT_OFF, type ChatData, type ChatMessage } from "./types";
+import { modelWindow } from "./window";
 
 /**
  * One chat turn as a streamed response: the model with the member's tools,
@@ -26,7 +28,7 @@ import { CHAT_FAILED, CHAT_OFF, type ChatMessage } from "./types";
  */
 
 export { CHAT_FAILED, CHAT_OFF };
-export const CHAT_CUT = "This chat got too long to finish that answer. Ask again and it carries on in a new chat.";
+export const CHAT_CUT = "That answer got too long to finish. Try asking again.";
 
 /** An error's HTTP status, or the last attempt's once the SDK's retries ran out. */
 export function errorStatus(error: unknown): number | null {
@@ -101,10 +103,10 @@ export async function chatTurn(opts: {
   const result = streamText({
     model: opts.model,
     instructions,
-    messages: await convertToModelMessages(messages, {
+    messages: await convertToModelMessages(modelWindow(messages), {
       tools,
       ignoreIncompleteToolCalls: true,
-      convertDataPart: (p) => (p.type === "data-context" ? { type: "text", text: `[App] ${(p.data as { line: string }).line}` } : undefined),
+      convertDataPart: (p) => (p.type === "data-context" ? { type: "text", text: contextText(p.data as ChatData["context"]) } : undefined),
     }),
     tools,
     toolApproval: TOOL_APPROVAL,
@@ -144,9 +146,21 @@ export async function chatTurn(opts: {
         sendReasoning: true,
         onError: friendlyError,
       }).getReader();
+      const dashes = new Map<string, ReturnType<typeof dashFilter>>();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (value.type === "text-start") dashes.set(value.id, dashFilter());
+        if (value.type === "text-delta") {
+          const delta = dashes.get(value.id)?.push(value.delta) ?? value.delta;
+          if (delta) writer.write({ ...value, delta });
+          continue;
+        }
+        if (value.type === "text-end") {
+          const rest = dashes.get(value.id)?.end();
+          if (rest) writer.write({ type: "text-delta", id: value.id, delta: rest });
+          dashes.delete(value.id);
+        }
         writer.write(value);
       }
       const unfinished = inFlight;

@@ -606,6 +606,7 @@ export function TimeScrubber({
             <Chip
               key={m}
               raised
+              className="min-h-[44px]!"
               selected={chip?.m === m && chip.at === t}
               onClick={() => setChip({ m, at: set(nowFn().getTime() - m * MIN_MS) })}
             >
@@ -660,6 +661,7 @@ export function TimeRange({
   tz,
   labels = ["Started", "Ended"],
   durations = [15, 30, 45, 60, 90, 120, 180],
+  startQuick,
 }: {
   start: Date;
   end: Date;
@@ -668,12 +670,16 @@ export function TimeRange({
   labels?: [string, string];
   /** Minutes; [] hides the chips. */
   durations?: number[];
+  /** "{N}m ago" chips under the start (only the ones that leave the start before the end). */
+  startQuick?: number[];
 }) {
+  const { now } = useMaple();
   const ms = Math.max(0, end.getTime() - start.getTime());
+  const startChips = startQuick?.filter((m) => now().getTime() - m * MIN_MS <= end.getTime() - MIN_MS);
   const fmt = (m: number) => (m < 60 ? `${m}m` : `${Math.round((m / 60) * 10) / 10}h`);
   return (
     <div className="space-y-2">
-      <TimeScrubber label={labels[0]} value={start} max={end} quick={false} tz={tz} onChange={(s) => onChange(s, end)} />
+      <TimeScrubber label={labels[0]} value={start} max={end} quick={startChips?.length ? startChips : false} tz={tz} onChange={(s) => onChange(s, end)} />
       <div className="px-1" role="group" aria-label="Duration">
         <p className={cx(tone.body, "flex items-baseline gap-2 text-sm")}>
           <Icon name="arrow-right" size={14} className="rotate-90 self-center text-mp-ink-3" />
@@ -1240,7 +1246,7 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
               className={cx(
                 "inline-flex min-h-[44px] items-center gap-1.5 bg-current/15 font-semibold",
                 // A chip with a second line (the time it produces) is a two-line tile.
-                a.sub ? "min-w-[96px] flex-col items-start justify-center rounded-xl px-3 py-1 text-left" : "rounded-full px-3 text-xs"
+                a.sub ? "min-w-[72px] flex-col items-start justify-center rounded-xl px-3 py-1 text-left" : "rounded-full px-3 text-xs"
               )}
             >
               {/* mp-swatch: the real colour, dimmed at night, never folded into amber (matching the diaper is the point). */}

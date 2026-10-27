@@ -3,7 +3,8 @@
  * (every registered tool captured, gated for members and viewers, excluded
  * tools, approvals), consent (no terms is refused; her tools and her lines
  * stay out without chat_care), cost arithmetic in BigInt micro-dollars, the
- * crisis matcher, the context line, message validation, whole turns against
+ * crisis matcher, the context line and the log's lines, the dash rewrite,
+ * message validation, whole turns against
  * a stand-in model, and the POST against an in-memory store.
  *
  *   npx tsx scripts/maple-chat-check.ts      (or pnpm check:maple-chat)
@@ -18,33 +19,37 @@ import {
   CHAT_MODEL_DEFAULT,
   chatModel,
   chatProviderOptions,
+  DAILY_BUDGET_DEFAULT,
   FAMILY_DAILY_BUDGET_DEFAULT,
   FAMILY_MONTHLY_BUDGET_DEFAULT,
   familyBudgets,
   GATEWAY_PRIVACY,
   LIMIT_MESSAGE,
   MONTH_MESSAGE,
-  threadFull,
+  STEP_PROMPT_LIMIT,
 } from "../src/lib/maple/chat/caps";
 import { mentionsCrisis } from "../src/lib/maple/chat/crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, storable, titleFrom, userMessage, userText, withCrisisHelp } from "../src/lib/maple/chat/messages";
 import { costMicro, dollars, priceFor, PRICES, stepTokens } from "../src/lib/maple/chat/prices";
-import { answerPost, BUSY, CARE_CLOSED, FULL, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
-import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, markTailForCache, systemBlocks } from "../src/lib/maple/chat/prompt";
+import { answerPost, BUSY, CARE_CLOSED, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
+import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, contextText, markTailForCache, stateLines, systemBlocks } from "../src/lib/maple/chat/prompt";
+import { dashFilter, withoutDashes } from "../src/lib/maple/chat/dashes";
 import type { LockedThread, UsageRow } from "../src/lib/maple/chat/store";
 import { chatTools, EXCLUDED_TOOLS, forModel, MODEL_TEXT_MAX, registrations, TOOL_APPROVAL, toOutput } from "../src/lib/maple/chat/tools";
-import { CHAT_TERMS_NEEDED, type ChatConsent, type ChatMessage, type ChatToolOutput } from "../src/lib/maple/chat/types";
+import { CHAT_MAX_CHARS, CHAT_TERMS_NEEDED, type ChatConsent, type ChatMessage, type ChatToolOutput } from "../src/lib/maple/chat/types";
 import { momSameMedicine } from "../src/lib/maple/care-mcp";
 import { consentCurrent, CONSENT_VERSION, isCarePerson } from "../src/lib/maple/consent";
-import { careOpen, FAMILY_ONE_COPY, type Ctx } from "../src/lib/maple/mcp-tools";
+import { careOpen, FAMILY_ONE_COPY, logStateLines, voiceOf, type Ctx } from "../src/lib/maple/mcp-tools";
+import { summarize } from "../src/lib/maple/insights";
 import { CRISIS_REPLY } from "../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
 import { CHAT_CUT, CHAT_FAILED, CHAT_OFF, chatTurn, friendlyError } from "../src/lib/maple/chat/turn";
 import { StoreUnavailable } from "../src/lib/maple/store";
-import type { Baby, Member } from "../src/lib/maple/types";
+import type { Baby, Entry, Member } from "../src/lib/maple/types";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { DROPPED, needsHelpCard, problemFor, unanswered } from "../src/components/maple/chat/stopped";
+import { messageTokens, modelWindow, streamPage, WINDOW_MESSAGES, WINDOW_TOKENS, type StreamItem } from "../src/lib/maple/chat/window";
 
 let passed = 0;
 let failed = 0;
@@ -232,7 +237,7 @@ check("stepTokens fills in a missing no-cache count and never goes negative", ()
 });
 
 check("an unpriced model has no price (the chat refuses it)", () => {
-  eq(priceFor("anthropic/claude-sonnet-5.5"), null, "Sonnet");
+  eq(priceFor("openai/made-up-model"), null, "a made-up model");
   eq(priceFor("constructor"), null, "no prototype keys");
   eq([chatModel({}), CHAT_MODEL_DEFAULT], [GLM, GLM], "default model");
   eq(chatModel({ MAPLE_CHAT_MODEL: `  ${HAIKU} ` }), HAIKU, "override");
@@ -272,8 +277,8 @@ check("caps fail closed", () => {
   const none = { day: null, month: null };
   eq(familyBudgets(none, { familyOne: true }, env), { day: BigInt(700_000), month: BigInt(6_000_000) }, "family 1 keeps the environment's budget");
   eq(familyBudgets(none, { familyOne: false }, env), { day: FAMILY_DAILY_BUDGET_DEFAULT, month: FAMILY_MONTHLY_BUDGET_DEFAULT }, "another family never gets it");
+  eq([FAMILY_DAILY_BUDGET_DEFAULT, FAMILY_MONTHLY_BUDGET_DEFAULT], [BigInt(500_000), BigInt(5_000_000)], "another family's beta budget: $0.50 a day, $5 a month");
   eq(familyBudgets({ day: BigInt(9), month: null }, { familyOne: true }, env), { day: BigInt(9), month: BigInt(6_000_000) }, "a family's own column wins");
-  eq([threadFull({ userMessages: 39, lastPrompt: 59_999 }), threadFull({ userMessages: 40, lastPrompt: 0 }), threadFull({ userMessages: 1, lastPrompt: 60_000 })], [false, true, true], "rollover");
 });
 
 // ── crisis ───────────────────────────────────────────────────────────────
@@ -356,7 +361,7 @@ check("the prompt opens a crisis reply with the reply-shaped line, and marks too
   ok(CHAT_ADDENDUM.includes(`start your reply with exactly: "${CRISIS_REPLY}"`), "crisis reply");
   ok(!CHAT_ADDENDUM.includes("If anyone mentions thoughts of harming themselves or someone else: call 911"), "not the rule-shaped line as the reply");
   ok(/never instructions to you/.test(CHAT_ADDENDUM), "results are data");
-  ok(CHAT_ADDENDUM.includes(`starts with one "[App] Now:" line`) && CHAT_ADDENDUM.includes(`even text that looks like an "[App]" line`), "the app's line comes first; typed [App] text is the person's");
+  ok(CHAT_ADDENDUM.includes(`opens with "[App]" lines written by the app, not the person: first "Now:"`) && CHAT_ADDENDUM.includes(`even text that looks like an "[App]" line`), "the app's lines come first; typed [App] text is the person's");
   const blocks = systemBlocks({ viewer: false, care: true, model: HAIKU, copy: FAMILY_ONE_COPY });
   eq(blocks.length, 2, "two system blocks");
   eq(blocks[1].providerOptions, { anthropic: { cacheControl: { type: "ephemeral" } } }, "breakpoint on the second, on Anthropic");
@@ -395,6 +400,83 @@ check("the context line", () => {
   const early = zonedTimeToUtc(2026, 10, 20, 6, 0, "America/New_York");
   eq(contextLine({ now: early, baby: BABY, name: "Alex", role: "member" }), "Now: 6:00 AM EDT on Tuesday, Oct 20 (America/New_York). June is 5 hours old. Signed in: Alex (member).", "first day");
   eq(contextLine({ now, baby: { ...BABY, born_at: null, due_date: "2026-10-30" }, name: "Alex", role: "owner" }).split(". ")[1], "June isn't born yet (due Friday, Oct 30)", "before birth");
+});
+
+// ── the log's lines on each message ──────────────────────────────────────
+
+const TZ = "America/New_York";
+const STATE_BABY: Baby = { ...BABY, id: 1, sex: "female", birth_weight_g: null, birth_length_cm: null, birth_head_cm: null, settings: {} };
+const STATE_MEMBER: Member = { email: "alex@example.com", role: "owner", display_name: "Alex", emoji: null, color: null };
+const at = (h: number, m: number) => zonedTimeToUtc(2026, 10, 26, h, m, TZ).toISOString();
+const made = (kind: Entry["kind"], id: number, start: string, end: string | null, data: unknown): Entry =>
+  ({ id, kind, started_at: start, ended_at: end, active: end === null, data, note: null, created_by: STATE_MEMBER.email, updated_by: null, source: "web", created_at: start, updated_at: start }) as Entry;
+
+/** logState's lines for a made-up night: a wet and dirty diaper at 1:40, a nap 1:50 to 2:45, and the entries given. */
+function rawLogLines(now: string, entries: Entry[], baby: Baby = STATE_BABY): string[] {
+  const all = [made("diaper", 801, at(1, 40), at(1, 40), { pee: true, poop: true }), made("sleep", 802, at(1, 50), at(2, 45), {}), ...entries];
+  const ctx: Ctx = {
+    fam: { familyId: 1, babyId: 1, tz: TZ, member: STATE_MEMBER.email, role: "owner", status: "active" },
+    now: new Date(now),
+    baby,
+    tz: TZ,
+    members: [STATE_MEMBER],
+    who: { id: STATE_MEMBER.email, via: "chat", role: "owner", name: "Alex", viaAdmin: false },
+    device: null,
+    care: false,
+  };
+  return logStateLines(summarize({ entries: all, baby, members: [STATE_MEMBER], now: new Date(now), vo: voiceOf(ctx) }), ctx);
+}
+const logLines = (now: string, entries: Entry[], baby?: Baby) => stateLines(rawLogLines(now, entries, baby));
+
+const RUNNING = made("feed", 812, at(3, 1), null, { method: "breast", first_side: "L", segments: [{ side: "L", start: at(3, 1), end: at(3, 13) }, { side: "R", start: at(3, 13), end: null }] });
+
+check("the log's lines: a running feed's side now, since when, its total so far and who started it", () => {
+  eq(logLines(at(3, 22), [RUNNING]), [
+    "Nursing on the right since 3:13 AM (9 min); Left 3:01 to 3:13; total nursing 21 min, started by Alex [timer #812].",
+    "She's nursing right now (see the timer above).",
+    "Next feed after this one: start on the right.",
+    "Diapers: last wet 1h 42m ago (1:40 AM today); last dirty 1h 42m ago (1:40 AM today).",
+    "Last sleep: 55m, ended 37m ago (2:45 AM today).",
+    "Today so far: 1 feed, 1 wet, 1 dirty, 55m of sleep logged.",
+  ], "lines");
+});
+
+check("the log's lines: a paused feed and one going back and forth say so", () => {
+  const paused = made("feed", 813, at(3, 1), null, { method: "breast", first_side: "L", segments: [{ side: "L", start: at(3, 1), end: at(3, 15) }] });
+  eq(logLines(at(3, 20), [paused])[0], "Nursing paused since 3:15 AM (5 min); Left 3:01 to 3:15; total nursing 14 min, started by Alex [timer #813].", "paused");
+  const both = made("feed", 814, at(3, 1), null, { method: "breast", first_side: "L", segments: [{ side: "L", start: at(3, 1), end: at(3, 5) }, { side: "B", start: at(3, 5), end: null }] });
+  eq(logLines(at(3, 20), [both])[0], "Nursing going back and forth (both sides) since 3:05 AM (15 min); Left 3:01 to 3:05; total nursing 19 min, started by Alex [timer #814].", "back and forth");
+  const finished = made("feed", 815, at(2, 50), at(3, 10), { method: "breast", first_side: "R", left_sec: 0, right_sec: 1200, segments: [{ side: "R", start: at(2, 50), end: at(3, 10) }] });
+  const later = logLines(at(4, 0), [finished]);
+  ok(!later.some((l) => l.startsWith("Nursing")), "no timer line once it's stopped");
+  ok(later.includes("Last feed: nursed at 2:50 AM today (1h 10m ago): R 20m, started on the right."), `the last feed: ${later[0]}`);
+  eq(logLines(at(3, 22), [RUNNING], { ...STATE_BABY, born_at: null }), [], "nothing before she's born");
+});
+
+check("the [App] lines: a message stored before the log's lines reads byte for byte as it did; a new one adds them", () => {
+  const line = "Now: 3:22 AM EDT on Monday, Oct 26 (America/New_York). June is 6 days old (Day 7). Signed in: Alex (owner).";
+  eq(contextText({ line }), `[App] ${line}`, "an older message");
+  eq(contextText({ line, state: ["Nursing on the right since 3:13 AM (9 min).", "Today so far: 1 feed."] }), `[App] ${line}\n[App] Nursing on the right since 3:13 AM (9 min).\n[App] Today so far: 1 feed.`, "a new one");
+  eq(userMessage("msg_1", "Hi", line).parts[0], { type: "data-context", data: { line } }, "no state stores no field");
+});
+
+check("no em or en dashes: commas, \"to\" between numbers, \"- \" at a line's start, nothing at either end", () => {
+  eq(withoutDashes("Got it — about how many minutes total?"), "Got it, about how many minutes total?", "em dash");
+  eq(withoutDashes("Stopped—she nursed 3:01–3:19 AM."), "Stopped, she nursed 3:01 to 3:19 AM.", "unspaced, and a range");
+  eq(withoutDashes("Feeds:\n– Left 12 min\n— Right 6 min"), "Feeds:\n- Left 12 min\n- Right 6 min", "list items");
+  eq(withoutDashes("Done. — Next is the right. —"), "Done. Next is the right.", "after punctuation, and a trailing one");
+  eq(withoutDashes("— Saved it"), "Saved it", "a leading one");
+  eq(withoutDashes("a well-fed 8-12 feeds"), "a well-fed 8-12 feeds", "hyphens stay");
+  const f = dashFilter();
+  const out = ["Got it ", "—", " ", "stopped at 3:21", "–", "3:22", " —"].map((d) => f.push(d)).join("") + f.end();
+  eq(out, "Got it, stopped at 3:21 to 3:22", "split across deltas");
+});
+
+check("the prompt: the log's lines and the tools before any question; a running timer that ended is stopped at the time said", () => {
+  for (const want of ["never ask a question the log or a tool can answer", "stop that timer right away at the time they said", "never ask how long or which side", "log it right away with the time they said", "one short sentence that says what was saved", "Never write an em dash or an en dash", "no markdown"]) {
+    ok(CHAT_ADDENDUM.includes(want), `says "${want}"`);
+  }
+  ok(!/[\u2013\u2014]/.test(CHAT_ADDENDUM), "and has no dashes itself");
 });
 
 // ── messages ─────────────────────────────────────────────────────────────
@@ -462,6 +544,67 @@ check("a new message turns an unanswered approval into a no", () => {
   eq([part.state, part.approval.approved], ["approval-responded", false], "denied");
   eq(messages[0], user, "the user message untouched");
   eq(denyPending([user]).changed.length, 0, "nothing pending");
+});
+
+// ── the window: one endless chat, a bounded prompt ───────────────────────
+
+const LINE = "Now: 3:10 AM EDT on Monday, Oct 26 (America/New_York). June is 6 days old (Day 7). Signed in: Alex (owner).";
+
+/** A made-up exchange: a question, then a reply that read the log and said something. */
+function exchange(n: number): ChatMessage[] {
+  return [
+    userMessage(`msg_u${n}`, `made-up question #${n}.`, LINE, ["Today so far: 4 feeds, 3 wet diapers."]),
+    {
+      id: `msg_a${n}`,
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        { type: "tool-maple_status", toolCallId: `call_${n}`, state: "output-available", input: {}, output: { ok: true, write: false, text: "made-up status ".repeat(40) } },
+        { type: "text", text: `made-up reply #${n}.` },
+      ] as ChatMessage["parts"],
+    },
+  ];
+}
+const longThread = (exchanges: number) => Array.from({ length: exchanges }, (_, i) => exchange(i + 1)).flat();
+const sizeOf = (ms: ChatMessage[]) => ms.reduce((n, m) => n + messageTokens(m), 0);
+
+check("the window: a long chat sends only its recent end, in whole exchanges, the newest always", () => {
+  for (const n of [1, 5, 50, 500]) {
+    const all = longThread(n);
+    const w = modelWindow(all);
+    ok(w.length <= WINDOW_MESSAGES, `${n}: at most ${WINDOW_MESSAGES} messages, got ${w.length}`);
+    ok(sizeOf(w) <= WINDOW_TOKENS, `${n}: at most ${WINDOW_TOKENS} tokens, got ${sizeOf(w)}`);
+    eq([w[0].role, w.at(-1)!.id], ["user", all.at(-1)!.id], `${n}: opens with a question, ends with the newest`);
+    eq(all.slice(-w.length).map((m) => m.id), w.map((m) => m.id), `${n}: one run from the end`);
+  }
+  eq(modelWindow(longThread(5)).length, 10, "a short chat goes whole");
+  eq(modelWindow(longThread(500)).length, modelWindow(longThread(50)).length, "a longer one doesn't grow it");
+  const huge: ChatMessage = { id: "msg_huge", role: "assistant", parts: [{ type: "text", text: "y".repeat(6 * WINDOW_TOKENS) }] };
+  eq(modelWindow([...longThread(3), userMessage("msg_last", "made-up", LINE), huge]).map((m) => m.id), ["msg_last", "msg_huge"], "an exchange past the limit goes alone");
+  eq(modelWindow([]), [], "nothing");
+});
+
+check("the window leaves room under the step cap for the cached prefix, a full message and a whole tool result", () => {
+  const tools = chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true, device: null });
+  const prefixChars = JSON.stringify([systemBlocks({ viewer: false, care: true, model: GLM, copy: FAMILY_ONE_COPY }), Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
+  const prefix = Math.ceil(prefixChars / 3);
+  const newest = messageTokens(userMessage("msg_u", "x".repeat(CHAT_MAX_CHARS), LINE, Array.from({ length: 12 }, () => "A made-up line of the log as it stands now, as long as most.")));
+  const first = prefix + WINDOW_TOKENS + newest;
+  ok(first + Math.ceil(MODEL_TEXT_MAX / 3) <= STEP_PROMPT_LIMIT, `prefix ${prefix} + window ${WINDOW_TOKENS} + message ${newest} + a cut result is over ${STEP_PROMPT_LIMIT}`);
+  const cost = costMicro(GLM, priceFor(GLM)!, { prompt: first, fresh: first, cacheRead: 0, cacheWrite: 0, output: 1500, reasoning: 0 }).micro;
+  ok(cost * BigInt(50) <= DAILY_BUDGET_DEFAULT, `a first step with nothing cached costs ${dollars(cost)}, over a fiftieth of the day's budget`);
+});
+
+check("a page of the chat opens with a question; replies cut off from theirs come with the next page", () => {
+  const newestFirst: StreamItem[] = longThread(30)
+    .map((message) => ({ thread: "thread_made_up_1", message }))
+    .reverse();
+  const page = streamPage(newestFirst.slice(0, 41), 40);
+  eq([page.more, page.items.length, page.items[0].message.id, page.items.at(-1)!.message.id], [true, 40, "msg_u11", "msg_a30"], "a full page");
+  const cut = streamPage(newestFirst.slice(0, 40), 39);
+  eq([cut.more, cut.items.length, cut.items[0].message.id], [true, 38, "msg_u12"], "a reply without its question waits for the next page");
+  const start = streamPage(newestFirst.slice(0, 10), 40);
+  eq([start.more, start.items.length, start.items[0].message.id], [false, 10, "msg_u26"], "the start of the chat comes whole");
 });
 
 // ── one turn, with a stand-in model ──────────────────────────────────────
@@ -571,6 +714,15 @@ async function turnChecks() {
     const text = h.saved[0].parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("");
     eq(text, "Saved it. Next side is the right.", "all of it");
     eq(h.released(), 1, "released");
+  });
+
+  await checkAsync("the reply streams and is saved without em or en dashes, even one split across chunks", async () => {
+    const h = harness([[{ type: "text-start", id: "t1" }, ...["Got it ", "—", " stopped the feed at 3:19", "–", "3:20 AM. —"].map((delta) => ({ type: "text-delta", id: "t1", delta })), { type: "text-end", id: "t1" }, finishPart("stop")]]);
+    const body = await (await h.run([ask("finished nursing like 3 minutes ago")], "msg_d1")).text();
+    await h.settle();
+    const text = h.saved[0].parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("");
+    eq(text, "Got it, stopped the feed at 3:19 to 3:20 AM.", "saved");
+    ok(!/[\u2013\u2014]/.test(body), "none streamed");
   });
 
   await checkAsync("delete waits for a tap: nothing runs until approved, then it runs once in the same message", async () => {
@@ -803,6 +955,7 @@ function post(f: ReturnType<typeof fakeStore>, h: ReturnType<typeof harness>, ov
     modelKey: GLM,
     price: priceFor(GLM),
     tools: () => h.tools,
+    state: async () => [],
     budget: async () => ({ day: BigInt(500_000), month: BigInt(5_000_000) }),
     now: zonedTimeToUtc(2026, 10, 26, 3, 10, "America/New_York"),
     report: () => {},
@@ -838,12 +991,70 @@ async function postChecks() {
     eq([call.reasoning, call.maxOutputTokens], ["low", 1500], "low reasoning, 1,500 output tokens");
   });
 
-  await checkAsync("every early return after the lock releases the thread", async () => {
-    const full = fakeStore();
-    full.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 60_000, messages: [] });
-    const r1 = await post(full, harness([]))(say("one more"));
-    eq([r1.status, r1.json().error, r1.json().code, full.threads.get(THREAD)!.busy, full.daily.size], [409, FULL, "new_chat", false, 0], "thread full: released, not counted");
+  await checkAsync("a new message stores the log's lines with it, and the model reads them as [App] lines after the Now line", async () => {
+    const f = fakeStore(undefined, { terms: true, care: false, self: false });
+    const h = harness([[...textChunks("Stopped the feed at 3:19 AM."), finishPart("stop")]]);
+    const asked: boolean[] = [];
+    const raw = rawLogLines(at(3, 22), [RUNNING]);
+    const r = await post(f, h, { now: new Date(at(3, 22)), state: async ({ care }) => (asked.push(care), raw) })(say("finished nursing like 3 minutes ago"));
+    eq(r.status, 200, "streamed");
+    eq(asked, [false], "read once, with her page as the consent has it");
+    const stored = f.threads.get(THREAD)!.messages[0].parts[0] as { data: { line: string; state?: string[] } };
+    eq(stored.data.state, stateLines(raw), "stored with the message, in the chat's punctuation");
+    ok(!/[\u2013\u2014\u202f]/.test(stored.data.state!.join("")), "no dashes or narrow spaces stored");
+    const user = h.model.doStreamCalls[0].prompt.find((m) => m.role === "user") as { content: { type: string; text?: string }[] };
+    const app = user.content[0].text!.split("\n");
+    ok(app[0].startsWith("[App] Now: 3:22 AM EDT"), "the Now line first");
+    eq(app[1], "[App] Nursing on the right since 3:13 AM (9 min); Left 3:01 to 3:13; total nursing 21 min, started by Alex [timer #812].", "the running feed next");
+    eq(user.content[1].text, "finished nursing like 3 minutes ago", "then their words");
+  });
 
+  await checkAsync("the log's lines failing leaves them out and still answers; the log being down turns the message away uncounted", async () => {
+    const f = fakeStore();
+    const reported: Error[] = [];
+    const r = await post(f, harness([[...textChunks("made-up reply"), finishPart("stop")]]), { state: async () => Promise.reject(new TypeError("made-up words")), report: (e) => void reported.push(e) })(say("hi"));
+    eq([r.status, (f.threads.get(THREAD)!.messages[0].parts[0] as { data: unknown }).data], [200, { line: "Now: 3:10 AM EDT on Monday, Oct 26 (America/New_York). June is 6 days old (Day 7). Signed in: Alex (owner)." }], "answered without them");
+    eq(reported.map((e) => e.message), ["TypeError"], "reported by class");
+    const down = fakeStore();
+    const r2 = await post(down, harness([]), { state: async () => Promise.reject(new StoreUnavailable()) })(say("hi"));
+    eq([r2.status, down.daily.size, down.threads.get(THREAD)!.busy, down.threads.get(THREAD)!.messages.length], [503, 0, false, 0], "503, not counted, released, nothing saved");
+  });
+
+  await checkAsync("one endless chat: the model reads the same recent window however long the chat grows", async () => {
+    const sent: string[] = [];
+    for (const n of [30, 300]) {
+      const f = fakeStore();
+      f.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 0, messages: longThread(n) });
+      const h = harness([[...textChunks("made-up reply"), finishPart("stop")]]);
+      const r = await post(f, h)(say("made-up newest question"));
+      eq(r.status, 200, `${n}: answered`);
+      const prompt = JSON.stringify(h.model.doStreamCalls[0].prompt.filter((m) => m.role !== "system"));
+      ok(prompt.includes(`question #${n}.`) && prompt.includes("made-up newest question"), `${n}: the newest exchanges go`);
+      ok(!prompt.includes("question #1."), `${n}: the oldest don't`);
+      eq(f.threads.get(THREAD)!.messages.length, 2 * n + 2, `${n}: and the whole chat is still stored`);
+      sent.push(prompt);
+    }
+    ok(sent[1].length <= sent[0].length * 1.05, `300 exchanges sent ${sent[1].length} characters, 30 sent ${sent[0].length}`);
+  });
+
+  await checkAsync("one chat across her page closing: a long thread that ran open never reaches the model, and the next starts clean", async () => {
+    const consent = { terms: true, care: true, self: false };
+    const f = fakeStore(undefined, consent);
+    const before = longThread(40);
+    before.at(-1)!.parts.push({ type: "text", text: "made-up-secret: Robin's Examplex is OK after 9:10 AM." });
+    f.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, careOpen: true, busy: false, title: "t", lastPrompt: 0, messages: before });
+    consent.care = false;
+    const h = harness([[...textChunks("made-up reply"), finishPart("stop")]]);
+    const send = post(f, h);
+    const r = await send(say("log a wet diaper"));
+    eq([r.status, r.json().code, h.model.doStreamCalls.length, f.daily.size], [409, "new_chat", 0, 0], "the old thread is turned away, uncounted");
+    const next = await send({ ...say("log a wet diaper"), threadId: "thread_made_up_2" });
+    eq(next.status, 200, "the new thread answers");
+    const prompt = JSON.stringify(h.model.doStreamCalls.map((c) => c.prompt));
+    ok(!prompt.includes("made-up-secret") && !prompt.includes("question #40."), "nothing from the old thread");
+  });
+
+  await checkAsync("every early return after the lock releases the thread", async () => {
     const stale = fakeStore();
     stale.threads.set(THREAD, { member: ALEX.email, viewerOnly: false, busy: false, title: "t", lastPrompt: 0, messages: [stored()] });
     const r2 = await post(stale, harness([]))({ threadId: THREAD, message: { id: "msg_a", role: "assistant", parts: [] } });

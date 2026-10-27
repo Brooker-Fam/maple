@@ -19,6 +19,7 @@ import {
   type TapFeedData,
   type TapWhat,
 } from "@/lib/maple/feed";
+import { backOnPresets, earlierPresets, finishPresets, EARLIER_MINS, LIKELY_SIDE_MIN, usualBreakMin, usualSideMin, type FinishPreset } from "@/lib/maple/presets";
 import { DEFAULT_TZ, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, FeedEdit, StretchRef, StretchSide, TimerKind, TimerResponse } from "@/lib/maple/types";
 import {
@@ -143,8 +144,6 @@ const sideText = (x: StretchSide) => (x === "B" ? "both sides" : SIDE_NAME[x]);
 /** A part as a row names it: "Left side", "Right side", "Back and forth". */
 const partName = (x: StretchSide) => (x === "B" ? "Back and forth" : `${SIDE_NAME[x]} side`);
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-/** The clock minute a time shows ("6:03"): two chips in one minute read as the same time. */
-const clockMinute = (t: number) => Math.floor(t / MIN);
 /**
  * Ended at its pause (Done during a break), in the server's word for it. Not
  * "the last side ends at the end": a Done while she's on closes her side at
@@ -961,36 +960,28 @@ function FinishQuestion({
 const agoText = (m: number) => (m < 60 ? `${m} min ago` : m % 60 === 0 ? `${m / 60}h ago` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m ago`);
 
 /**
- * Stop chips for "When did she finish?" / "When did she wake up?": "{N} min
- * ago" over the time, in time order. The likely end (15 min on the side) is a
- * tag on the chip nearest it, or its own "{N} min ago" chip in its place when
- * none is within 2 min, never a chip out of order. `nowChip` puts "Now" first
- * (Done now, as the dock's Done would).
+ * Stop chips for "When did she finish?" / "When did she wake up?", most likely
+ * first (see `finishPresets`): Now, "likely" (15 min on the side), her usual,
+ * "After 10 min" for a side left on for hours, then "{N} min ago". Each time
+ * is one the engine takes.
  */
 function StopChips({
-  sinceStart,
-  mins,
-  likely,
-  likelyWhy,
+  presets,
+  captions,
   verb,
   tooSoon,
-  nowChip,
   now,
   tz,
   disabled,
   busy,
   onStop,
 }: {
-  /** The earliest end allowed (the current part's start + 1 min). */
-  sinceStart: number;
-  mins: number[];
-  likely?: number | null;
-  /** "15 min after she went on the Right": what the likely tag means. */
-  likelyWhy?: string;
+  presets: FinishPreset[];
+  /** What a tag or an "After…" chip means ("Likely" is 15 min after she went on the Right). */
+  captions: string[];
   /** "Ended" / "Woke up", for the chips' accessible names. */
   verb: string;
   tooSoon: string;
-  nowChip?: boolean;
   now: Date;
   tz: string;
   disabled: boolean;
@@ -998,54 +989,34 @@ function StopChips({
   /** `at` undefined: now. */
   onStop: (id: string, at?: Date) => void;
 }) {
+  const words = useBabyWords();
   const n = now.getTime();
-  const fits = (m: number) => n - m * MIN >= sinceStart;
-  // A side left on for hours (the forgotten overnight feed): hours to pick from, not "185 min ago".
-  let set = fits(60) ? [10, 30, 60, 120, 180].filter(fits) : mins.filter(fits);
-  // A short part: the usual minutes don't fit, so smaller ones do.
-  if (set.length < 2) set = [...new Set([1, 2, 3, ...mins])].filter(fits).sort((a, b) => a - b);
-  // "Likely" is exactly what it says (15 min on the side): its own chip, unless one already shows that minute.
-  let tagged: number | null = null;
-  if (likely != null && likely >= sinceStart) {
-    const lm = Math.max(1, Math.round((n - likely) / MIN));
-    if (!set.includes(lm) && fits(lm)) set = [...set, lm].sort((a, b) => a - b);
-    if (set.includes(lm)) tagged = lm;
-  }
-  if (!set.length && !nowChip) return <Caption>{tooSoon}</Caption>;
+  if (!presets.length) return <Caption>{tooSoon}</Caption>;
   return (
     <>
       <Grid>
-        {nowChip && (
-          <TimeChip
-            variant="stop"
-            tall
-            line1="Now"
-            line2={formatTimeNear(n, n, tz)}
-            ariaLabel={`${verb} now, at ${formatTime(n, tz)}`}
-            disabled={disabled}
-            busy={busy === "stop-now"}
-            onClick={() => onStop("stop-now")}
-          />
-        )}
-        {set.map((m) => {
-          const at = n - m * MIN;
-          const isLikely = m === tagged;
+        {presets.map((p) => {
+          const at = p.at;
+          const clock = formatTime(at, tz);
+          const tag = p.kind === "likely" ? " · likely" : p.kind === "usual" ? " · usual" : "";
+          const line1 = p.kind === "now" ? "Now" : p.kind === "on" ? `After ${p.minutes} min` : agoText(p.minutes);
+          const said = p.kind === "now" ? "now" : p.kind === "on" ? `${minutesWord(p.minutes)} after ${words.he} went on` : `${minutesWord(p.minutes)} ago`;
           return (
             <TimeChip
-              key={m}
+              key={p.id}
               variant="stop"
               tall
-              line1={agoText(m)}
-              line2={`${formatTimeNear(at, at, tz)}${isLikely ? " · likely" : ""}`}
-              ariaLabel={`${verb} ${minutesWord(m)} ago, at ${formatTime(at, tz)}${isLikely && likelyWhy ? `, likely (${likelyWhy})` : ""}`}
+              line1={line1}
+              line2={`${formatTimeNear(at, p.kind === "now" ? n : at, tz)}${tag}`}
+              ariaLabel={`${verb} ${said}, at ${clock}${tag ? `, ${tag.slice(3)}` : ""}`}
               disabled={disabled}
-              busy={busy === `stop-${m}`}
-              onClick={() => onStop(`stop-${m}`, new Date(at))}
+              busy={busy === p.id}
+              onClick={() => onStop(p.id, p.kind === "now" ? undefined : new Date(at))}
             />
           );
         })}
       </Grid>
-      {tagged !== null && likelyWhy && <Caption>&ldquo;Likely&rdquo; is {likelyWhy}.</Caption>}
+      {captions.length > 0 && <Caption>{captions.join(" ")}</Caption>}
     </>
   );
 }
@@ -1100,7 +1071,21 @@ function OpenSidePanel({
     const fBoth = fin.side === "B";
     const fName = fBoth ? "back and forth" : SIDE_NAME[fin.side];
     const fFrom = Date.parse(fin.start);
-    const likely = !fBoth && fFrom + 15 * MIN < now.getTime() - 2 * MIN ? fFrom + 15 * MIN : null;
+    const usualMin = usualSideMin(state?.entries ?? [], now);
+    const presets = finishPresets({
+      start: fFrom,
+      now: now.getTime(),
+      // Opened by Done (the dock's or the Lantern's, past "Still nursing?"): she may have just finished. Not from
+      // "She finished earlier…", which says it wasn't now.
+      fromDone: !!fromDone && !tapped,
+      usualMin,
+      both: fBoth,
+    });
+    const captions = [
+      presets.some((p) => p.kind === "likely") ? `\u201cLikely\u201d is ${LIKELY_SIDE_MIN} min after ${words.he} went on the ${fName}.` : "",
+      presets.some((p) => p.kind === "usual") ? `\u201cUsual\u201d is ${words.his} usual ${usualMin} min on a side.` : "",
+      presets.some((p) => p.kind === "on") ? `\u201cAfter\u201d counts from when ${words.he} went on (${formatTime(fin.start, tz)}).` : "",
+    ].filter(Boolean);
     return (
       <FinishQuestion
         title={`When did ${words.he} finish?`}
@@ -1119,15 +1104,10 @@ function OpenSidePanel({
         }
       >
         <StopChips
-          sinceStart={fFrom + MIN}
-          mins={[5, 10, 20, 30]}
-          likely={likely}
-          likelyWhy={`15 min after ${words.he} went on the ${fName}`}
+          presets={presets}
+          captions={captions}
           verb="Ended"
-          tooSoon={`${fBoth ? "Back and forth" : fName} only started ${formatTime(fin.start, tz)}, so use Other time…`}
-          // Opened by Done (the dock's or the Lantern's, past "Still nursing?"): she may have just finished. Not from
-          // "She finished earlier…", which says it wasn't now.
-          nowChip={fromDone && !tapped}
+          tooSoon={`${fBoth ? "Back and forth" : fName} only started ${formatTime(fin.start, tz)}, so use Other time\u2026`}
           now={now}
           tz={tz}
           disabled={disabled}
@@ -1167,27 +1147,36 @@ function OpenSidePanel({
   const floor = brk && prev?.end ? Date.parse(prev.end) : null;
   // The feed before this one: a feed start can't be laid over it by a chip (Other time… still can, with a word in its preview).
   const feedFloor = k === 0 ? previousFeedEnd(state?.entries, e) : null;
-  const chips: { id: string; to: number; line1: string; aria: string; wide?: boolean }[] = [];
-  let clipped = false;
-  for (const n of [1, 2, 3, 4, 5, 10, 15]) {
-    const to = recorded - n * MIN;
-    if (floor !== null ? to <= floor : to < uiMin) continue;
-    if (feedFloor !== null && to < feedFloor) {
-      clipped = true;
-      continue;
-    }
-    chips.push({ id: `a-${n}`, to, line1: `${n} min earlier`, aria: `${name} started ${minutesWord(n)} earlier, at ${formatTime(to, tz)}` });
-  }
-  // Any break, even one under a minute, can be no break at all.
-  if (floor !== null && brk) chips.push({ id: "a-floor", to: floor, line1: "No break", aria: `No break: ${name} from ${formatTime(floor, tz)}, when ${words.he} came off` });
-  // (Not when the last chip kept already lands within a minute of it.)
-  const lastTo = chips.at(-1)?.to ?? recorded;
-  if (clipped && feedFloor !== null && lastTo - feedFloor >= MIN && feedFloor >= uiMin) {
-    chips.push({ id: "a-feed", to: feedFloor, line1: "Since the last feed", aria: `${name} started when the last feed ended, at ${formatTime(feedFloor, tz)}`, wide: true });
-  }
-  // Two chips showing one clock time ("1 min earlier / 6:03" beside "No break / 6:03") would read as one: the named one stays.
-  const named = new Set(chips.filter((c) => c.id === "a-floor" || c.id === "a-feed").map((c) => clockMinute(c.to)));
-  const shown = chips.filter((c) => c.id === "a-floor" || c.id === "a-feed" || !named.has(clockMinute(c.to))).slice(0, 8);
+  // Guesses first: she likely switched after 15 min on the side before (or her usual), and a break was likely her usual.
+  const usualSide = usualSideMin(state?.entries ?? [], now);
+  const usualBreak = usualBreakMin(state?.entries ?? [], now);
+  const smart: { kind: "likely" | "usual"; at: number }[] = [];
+  if (prev && !brk && isTracked(prev.side)) {
+    smart.push({ kind: "likely", at: Date.parse(prev.start) + LIKELY_SIDE_MIN * MIN });
+    if (usualSide !== null && Math.abs(usualSide - LIKELY_SIDE_MIN) >= 3) smart.push({ kind: "usual", at: Date.parse(prev.start) + usualSide * MIN });
+  } else if (floor !== null && usualBreak !== null) smart.push({ kind: "usual", at: floor + usualBreak * MIN });
+  const presets = earlierPresets({ recorded, min: uiMin, floor, feedFloor, smart });
+  const clipped = feedFloor !== null && EARLIER_MINS.some((n) => recorded - n * MIN < feedFloor && recorded - n * MIN >= uiMin);
+  const tagOf = (k: string) => (k === "likely" ? " · likely" : k === "usual" ? " · usual" : "");
+  const shown = presets.map((p) => ({
+    id: p.id,
+    to: p.at,
+    wide: p.wide,
+    tag: tagOf(p.kind),
+    line1: p.kind === "floor" ? "No break" : p.kind === "feed" ? "Since the last feed" : `${p.minutes} min earlier`,
+    aria:
+      p.kind === "floor"
+        ? `No break: ${name} from ${formatTime(p.at, tz)}, when ${words.he} came off`
+        : p.kind === "feed"
+          ? `${name} started when the last feed ended, at ${formatTime(p.at, tz)}`
+          : `${name} started ${minutesWord(p.minutes)} earlier, at ${formatTime(p.at, tz)}${tagOf(p.kind) ? `, ${tagOf(p.kind).slice(3)}` : ""}`,
+  }));
+  const why = [
+    prev && presets.some((p) => p.kind === "likely") ? `\u201cLikely\u201d is ${LIKELY_SIDE_MIN} min on the ${prev.side === "B" ? "back and forth" : SIDE_NAME[prev.side]}.` : "",
+    presets.some((p) => p.kind === "usual") ? `\u201cUsual\u201d is ${words.his} usual ${brk ? `${usualBreak} min break` : `${usualSide} min on a side`}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const move = (id: string, to: number) => void run(id, (o) => actions.retime(e, { op: "move", edge: "start", ref: s.ref, to: new Date(to).toISOString() }, o));
 
   let caption: string;
@@ -1242,7 +1231,7 @@ function OpenSidePanel({
                 key={c.id}
                 tall
                 line1={c.line1}
-                line2={formatTimeNear(c.to, recorded, tz)}
+                line2={`${formatTimeNear(c.to, recorded, tz)}${c.tag}`}
                 ariaLabel={c.aria}
                 disabled={disabled}
                 busy={busy === c.id}
@@ -1258,6 +1247,7 @@ function OpenSidePanel({
               {k === 0 && <NapNote e={e} tz={tz} />}
             </Caption>
           )}
+          {why && <Caption>{why}</Caption>}
         </div>
       ) : prev ? (
         <Caption>{brk ? "The break was under a minute" : `${prev.side === "B" ? "Back and forth" : SIDE_NAME[prev.side]} was under a minute`}, so use Other time…</Caption>
@@ -1434,7 +1424,7 @@ function BreakPanel({
   backOnly: boolean;
   actions: Actions;
 }) {
-  const { now: nowFn } = useMaple();
+  const { state, now: nowFn } = useMaple();
   const words = useBabyWords();
   const vo = useVoice();
   const [cameOff, setCameOff] = useState(false);
@@ -1452,22 +1442,16 @@ function BreakPanel({
   // Off a back-and-forth part: going back on that way is the third choice.
   const offBoth = last.side === "B";
 
-  const since: { id: string; at: number | null; line1: string; line2: string }[] = [{ id: "back-now", at: null, line1: "Now", line2: formatTimeNear(n, pauseAt, tz) }];
-  for (const m of [2, 5, 10, 20]) {
-    const at = n - m * MIN;
-    // (One in the pause's own minute would show the same time as No break.)
-    if (at <= pauseAt || clockMinute(at) === clockMinute(pauseAt)) continue;
-    since.push({ id: `back-${m}`, at, line1: `${m} min ago`, line2: formatTimeNear(at, pauseAt, tz) });
-  }
-  // Back on since the break began: no break at all (the same words as panel A's floor chip).
-  since.push({ id: "back-floor", at: pauseAt, line1: "No break", line2: formatTimeNear(pauseAt, pauseAt, tz) });
+  const usualBreak = usualBreakMin(state?.entries ?? [], now);
+  const since = backOnPresets({ pauseAt, now: n, latest: n, withNow: true, usualMin: usualBreak }).map((p) => ({
+    id: p.id,
+    at: p.at,
+    kind: p.kind,
+    line1: p.kind === "now" ? "Now" : p.kind === "floor" ? "No break" : p.kind === "usual" ? `After ${p.minutes} min` : agoText(p.minutes),
+    line2: `${formatTimeNear(p.at ?? n, pauseAt, tz)}${p.kind === "usual" ? " · usual" : ""}`,
+  }));
 
-  const earlier: { id: string; to: number; n: number }[] = [];
-  for (const m of [1, 2, 3, 5]) {
-    const to = pauseAt - m * MIN;
-    if (to < Date.parse(last.start) + MIN) continue;
-    earlier.push({ id: `off-${m}`, to, n: m });
-  }
+  const earlier = earlierPresets({ recorded: pauseAt, min: Date.parse(last.start) + MIN });
   const showCameOff = !backOnly || cameOff;
   // Off the Left: "Back on the Left", but "On the Right" (the feed sheet's words).
   const on = backSide ? putOn(backSide, last.side) : "";
@@ -1489,7 +1473,7 @@ function BreakPanel({
                   tall
                   line1={c.line1}
                   line2={c.line2}
-                  ariaLabel={`${cap(on)} ${c.at === null ? "now" : c.id === "back-floor" ? "since the break began (no break)" : c.line1}, at ${formatTime(c.at ?? n, tz)}`}
+                  ariaLabel={`${cap(on)} ${c.at === null ? "now" : c.kind === "floor" ? "since the break began (no break)" : c.kind === "usual" ? `${c.line1.toLowerCase()} on the break, usual` : c.line1}, at ${formatTime(c.at ?? n, tz)}`}
                   disabled={disabled}
                   busy={busy === c.id}
                   onClick={() =>
@@ -1500,6 +1484,7 @@ function BreakPanel({
                 />
               ))}
             </Grid>
+            {since.some((c) => c.kind === "usual") && <Caption>&ldquo;Usual&rdquo; is {words.his} usual {usualBreak} min break.</Caption>}
             <LinkRow
               disabled={disabled}
               onClick={() =>
@@ -1530,12 +1515,12 @@ function BreakPanel({
               {earlier.map((c) => (
                 <TimeChip
                   key={c.id}
-                  line1={`${c.n} min earlier`}
-                  line2={formatTimeNear(c.to, pauseAt, tz)}
-                  ariaLabel={`Came off ${minutesWord(c.n)} earlier, at ${formatTime(c.to, tz)}`}
+                  line1={`${c.minutes} min earlier`}
+                  line2={formatTimeNear(c.at, pauseAt, tz)}
+                  ariaLabel={`Came off ${minutesWord(c.minutes)} earlier, at ${formatTime(c.at, tz)}`}
                   disabled={disabled}
                   busy={busy === c.id}
-                  onClick={() => void run(c.id, (o) => actions.retime(e, { op: "move", edge: "end", ref: last.ref, to: new Date(c.to).toISOString() }, o))}
+                  onClick={() => void run(c.id, (o) => actions.retime(e, { op: "move", edge: "end", ref: last.ref, to: new Date(c.at).toISOString() }, o))}
                 />
               ))}
             </Grid>
@@ -1596,6 +1581,7 @@ function AfterDonePanel({
   setBackSide: (s: StretchSide) => void;
   actions: Actions;
 }) {
+  const { state } = useMaple();
   const words = useBabyWords();
   const vo = useVoice();
   const [stillOn, setStillOn] = useState(false);
@@ -1611,16 +1597,14 @@ function AfterDonePanel({
   // Finished: the side runs to the Done tap (a minute at least); still on: it runs on from the time picked.
   const until = stillOn ? null : doneAt;
   const latest = until !== null ? until - MIN : n;
-  const chips: { id: string; at: number; line1: string; line2: string }[] = [];
-  if (stillOn) chips.push({ id: "after-now", at: n, line1: "Now", line2: formatTimeNear(n, pauseAt, tz) });
-  for (const m of [2, 5, 10, 15, 20, 30]) {
-    const at = n - m * MIN;
-    // (One in the pause's own minute would show the same time as No break.)
-    if (at <= pauseAt || at > latest || clockMinute(at) === clockMinute(pauseAt)) continue;
-    chips.push({ id: `after-${m}`, at, line1: `${m} min ago`, line2: formatTimeNear(at, pauseAt, tz) });
-  }
-  chips.splice(5);
-  chips.push({ id: "after-floor", at: pauseAt, line1: "No break", line2: formatTimeNear(pauseAt, pauseAt, tz) });
+  const usualBreak = usualBreakMin(state?.entries ?? [], now);
+  const chips = backOnPresets({ pauseAt, now: n, latest, withNow: stillOn, usualMin: usualBreak, agoMins: [2, 5, 10, 15, 20, 30] }).map((p) => ({
+    id: p.id.replace("back-", "after-"),
+    at: p.at ?? n,
+    kind: p.kind,
+    line1: p.kind === "now" ? "Now" : p.kind === "floor" ? "No break" : p.kind === "usual" ? `After ${p.minutes} min` : agoText(p.minutes),
+    line2: `${formatTimeNear(p.at ?? n, pauseAt, tz)}${p.kind === "usual" ? " \u00b7 usual" : ""}`,
+  }));
   const commit = (from: Date, o: TimerCallOptions) => actions.backOnAfterDone(e, side, from, until !== null ? new Date(until) : null, o);
   const meta = (at: number): RunMeta => ({ backOn: { side, at, ...(until !== null ? { until } : {}) } });
   const tail = until !== null ? `until ${done}` : "and still on";
@@ -1644,13 +1628,14 @@ function AfterDonePanel({
               tall
               line1={c.line1}
               line2={c.line2}
-              ariaLabel={`${cap(on)} ${c.id === "after-floor" ? `when ${words.he} came off (no break)` : c.id === "after-now" ? "now" : c.line1}, ${formatTime(c.at, tz)}, ${tail}`}
+              ariaLabel={`${cap(on)} ${c.kind === "floor" ? `when ${words.he} came off (no break)` : c.kind === "now" ? "now" : c.kind === "usual" ? `${c.line1.toLowerCase()} on the break, usual` : c.line1}, ${formatTime(c.at, tz)}, ${tail}`}
               disabled={disabled}
               busy={busy === c.id}
               onClick={() => void run(c.id, (o) => commit(new Date(c.at), o), meta(c.at))}
             />
           ))}
         </Grid>
+        {chips.some((c) => c.kind === "usual") && <Caption>&ldquo;Usual&rdquo; is {words.his} usual {usualBreak} min break.</Caption>}
         <LinkRow
           disabled={disabled}
           onClick={() =>
@@ -1685,6 +1670,8 @@ function AfterDonePanel({
 
 /** Panel D: a finished feed's end ("Ended earlier…" on the Done toast). */
 function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: PanelProps & { actions: Actions }) {
+  const { state } = useMaple();
+  const words = useBabyWords();
   if (!timed(e) || e.active || !e.ended_at) return <Caption>This feed is still going.</Caption>;
   const parts = partsOf(e, now);
   const last = sidesOf(parts).at(-1);
@@ -1699,10 +1686,21 @@ function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: P
     // keep a minute on the last side
   }
   const total = partTotals(parts).min.nursing;
-  const chipsFor = (mins: number[]) => mins.map((m) => ({ id: `end-${m}`, m, to: recorded - m * MIN })).filter((c) => c.to >= uiMin);
-  // A short last part: the usual chips would all land before it started, so offer the minutes that fit.
-  let chips = chipsFor([5, 10, 15, 20, 30]);
-  if (chips.length < 2) chips = chipsFor([1, 2, 3, 5, 10, 15, 20, 30]).slice(0, 5);
+  const usualMin = usualSideMin(state?.entries ?? [], now);
+  const lastStart = Date.parse(last.start);
+  const smart: { kind: "likely" | "usual"; at: number }[] = [];
+  if (isTracked(last.side)) {
+    smart.push({ kind: "likely", at: lastStart + LIKELY_SIDE_MIN * MIN });
+    if (usualMin !== null && Math.abs(usualMin - LIKELY_SIDE_MIN) >= 3) smart.push({ kind: "usual", at: lastStart + usualMin * MIN });
+  }
+  const chips = earlierPresets({ recorded, min: uiMin, smart });
+  const tagOf = (k: string) => (k === "likely" ? " \u00b7 likely" : k === "usual" ? " \u00b7 usual" : "");
+  const why = [
+    chips.some((c) => c.kind === "likely") ? `\u201cLikely\u201d is ${LIKELY_SIDE_MIN} min on the ${SIDE_NAME[last.side]}.` : "",
+    chips.some((c) => c.kind === "usual") ? `\u201cUsual\u201d is ${words.his} usual ${usualMin} min on a side.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const commit = (to: Date, o: TimerCallOptions) => actions.retime(e, { op: "move", ...edge, to: to.toISOString() } as FeedEdit, o);
   return (
     <div className="space-y-4">
@@ -1718,15 +1716,16 @@ function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: P
                 <TimeChip
                   key={c.id}
                   tall
-                  line1={`${c.m} min earlier`}
-                  line2={formatTimeNear(c.to, recorded, tz)}
-                  ariaLabel={`Ended ${minutesWord(c.m)} earlier, at ${formatTime(c.to, tz)}`}
+                  line1={`${c.minutes} min earlier`}
+                  line2={`${formatTimeNear(c.at, recorded, tz)}${tagOf(c.kind)}`}
+                  ariaLabel={`Ended ${minutesWord(c.minutes)} earlier, at ${formatTime(c.at, tz)}${tagOf(c.kind) ? `, ${tagOf(c.kind).slice(3)}` : ""}`}
                   disabled={disabled}
                   busy={busy === c.id}
-                  onClick={() => void run(c.id, (o) => commit(new Date(c.to), o))}
+                  onClick={() => void run(c.id, (o) => commit(new Date(c.at), o))}
                 />
               ))}
             </Grid>
+            {why && <Caption>{why}</Caption>}
           </>
         ) : (
           <Caption>
@@ -1783,8 +1782,8 @@ function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, set
         }
       >
         <StopChips
-          sinceStart={start + MIN}
-          mins={endMins}
+          presets={finishPresets({ start, now: now.getTime(), fromDone: false, usualMin: null, both: true, agoMins: endMins, onMins: [] })}
+          captions={[]}
           verb={sleep ? "Woke up" : "Ended"}
           tooSoon="It only just started, so use Other time…"
           now={now}

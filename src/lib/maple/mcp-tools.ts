@@ -2038,6 +2038,42 @@ function diaperLine(s: Summary, ctx: Ctx): string | null {
   return `Diapers: ${text.charAt(0).toLowerCase()}${text.slice(1)}.`;
 }
 
+/** "Last sleep: 1h 30m, ended 40m ago (2:10 AM today)." Null before any, and while one runs (its timer line says so). */
+function lastSleepLine(s: Summary, ctx: Ctx): string | null {
+  const e = s.lastSleep;
+  if (!e || e.active || !e.ended_at) return null;
+  const end = Date.parse(e.ended_at);
+  return `Last sleep: ${formatDuration((end - ts(e)) / 1000)}, ended ${formatDuration((ctx.now.getTime() - end) / 1000)} ago (${whenText(e.ended_at, ctx)}).`;
+}
+
+/** "Today so far: 6 feeds (4 in a cluster), 3 wet, 2 dirty, 4h 10m of sleep logged." Bottles and pumping only when there are some. */
+function todayLine(s: Summary): string {
+  const tb = s.today;
+  const extra = [
+    tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
+    tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${tb.bottleMl ? `, ${formatVolumeBoth(tb.bottleMl)}` : ""}` : "",
+  ].filter(Boolean);
+  return `Today so far: ${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged${tb.pumpMl ? `, pumped ${formatVolumeBoth(tb.pumpMl)}` : ""}.`;
+}
+
+/**
+ * The log in maple_status's own lines, cut to what the in-app chat needs on every message: running timers, her last
+ * feed, the next side, diapers, the last sleep and today's counts. Nothing before she's born.
+ */
+export function logStateLines(s: Summary, ctx: Ctx): string[] {
+  if (!s.born) return [];
+  const lines = [...s.active.map((e) => timerLine(e, ctx)), lastFeedLine(s, ctx), nextLine(s, voiceOf(ctx)), diaperLine(s, ctx), lastSleepLine(s, ctx), todayLine(s)];
+  return lines.filter((l): l is string => !!l);
+}
+
+/** logStateLines for the log now, then her next medicine for someone who can read her page (momStatus, so ctx.care holds). */
+export async function logState(ctx: Ctx): Promise<string[]> {
+  const [s, mom] = await Promise.all([snapshot(ctx), momStatus(ctx)]);
+  const lines = logStateLines(s, ctx);
+  if (mom) lines.push(`${mom.name}'s next medicine: ${mom.top}.`);
+  return lines;
+}
+
 function speakLine(s: Summary, ctx: Ctx): string {
   const vo = voiceOf(ctx);
   const name = ctx.baby.nickname || vo.Name;
@@ -2234,15 +2270,7 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   }
 
   const t = s.targets;
-  // Bottles and pumping only when there are some today.
-  const tb = s.today;
-  const extra = [
-    tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
-    tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${tb.bottleMl ? `, ${formatVolumeBoth(tb.bottleMl)}` : ""}` : "",
-  ].filter(Boolean);
-  lines.push(
-    `Today so far: ${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged${tb.pumpMl ? `, pumped ${formatVolumeBoth(tb.pumpMl)}` : ""}.`
-  );
+  lines.push(todayLine(s));
   if (s.age) {
     // The aim only with warnings on (targets is null otherwise).
     const aim = t ? ` (Day ${s.age.dayOfLife} aim: ${t.feeds[0]}–${t.feeds[1]} feeds, ${t.wet}+ wet${t.dirty != null ? `, ${t.dirty}+ dirty` : ""})` : "";
@@ -3235,7 +3263,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     first_side: sideEnum().nullish().describe(`Breast: which side ${vo.they} started on (drives the next-side suggestion; give it with both_minutes too).`),
     amount: z.number().min(0).max(1000).nullish().describe(`Bottle: how much ${vo.they} drank, in \`unit\`.`),
     unit: z.enum(["oz", "ml"]).nullish().describe("Bottle: fl oz (default) or ml."),
-    milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe("Bottle: what was in it."),
+    milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe('Bottle: what was in it, from the user\'s words ("of formula" → formula, "pumped" or "breast milk" → breastmilk). When they didn\'t say, leave it out: never guess it or copy it from an earlier bottle.'),
     at: fields.at("When the feed STARTED"),
     minutes_ago: fields.minutesAgo("How many minutes ago the feed STARTED"),
     ended_minutes_ago: fields.endedMinutesAgo(),
@@ -4226,7 +4254,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     first_side: z.enum(["left", "right"]).nullish().describe(`breastfeed: side ${vo.they} started on.`),
     amount: z.number().min(0).max(2000).nullish().describe("bottle / pump: amount in `unit`."),
     unit: z.enum(["oz", "ml", "F", "C"]).nullish().describe("oz or ml for bottle/pump (default oz); F or C for temperature."),
-    milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe("bottle: what was in it."),
+    milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe("bottle: what was in it, from the user's words; when they didn't say, leave it out."),
     diaper: z.enum(["wet", "dirty", "both", "dry"]).nullish().describe("diaper: wet, dirty, both or dry (required for diapers)."),
     color: z.enum(STOOL_COLORS).nullish().describe("diaper: poop color (see log_diaper)."),
     texture: z.enum(STOOL_TEXTURES).nullish().describe("diaper: poop texture."),

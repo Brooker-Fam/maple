@@ -18,11 +18,11 @@ import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 
 /**
- * One message in the chat. The person's words sit in a bubble; the reply is
- * plain text, then what the tools did as compact receipts (Undo for an entry
- * this reply added), each health alert as its card word for word, a Delete /
- * Keep card before delete_entry or a delete of hers, and the help card when
- * it's called for. Reasoning and the app's context line are never shown.
+ * One message in the chat. The person's words sit in a bubble on the right,
+ * the reply's text in one on the left, then what the tools did as compact
+ * receipts (Undo for an entry this reply added), each health alert as its
+ * card word for word, a Delete / Keep card before delete_entry or a delete of
+ * hers, and the help card when it's called for. Reasoning and the app's context line are never shown.
  */
 
 type Part = ChatMessage["parts"][number];
@@ -40,10 +40,16 @@ export function MessageView({ message, last, busy, onApprove }: { message: ChatM
   }
   const alerts = uniqueAlerts(message.parts);
   return (
-    <div className="space-y-2.5 pr-4">
+    <div className="space-y-2.5">
       {message.parts.map((p, i) => {
         if (p.type === "data-help") return <HelpCard key={i} reason={p.data.reason} />;
-        if (p.type === "text") return p.text.trim() ? <p key={i} className={cx(tone.body, "text-[16px] leading-relaxed whitespace-pre-wrap wrap-anywhere")}>{p.text.trim()}</p> : null;
+        if (p.type === "text") {
+          return p.text.trim() ? (
+            <div key={i} className="pr-10">
+              <p className={cx(tone.body, "w-fit rounded-[18px] rounded-bl-[6px] border border-(--mp-edge) bg-mp-surface px-3.5 py-2.5 text-[16px] leading-snug whitespace-pre-wrap wrap-anywhere")}>{p.text.trim()}</p>
+            </div>
+          ) : null;
+        }
         if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} last={last} busy={busy} onApprove={onApprove} />;
         return null;
       })}

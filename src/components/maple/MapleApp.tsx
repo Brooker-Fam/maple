@@ -1,6 +1,7 @@
 "use client";
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { postToNative } from "@/lib/maple/native";
 import { AppNavProvider, useAppNav, type NavTarget, type TabId } from "./AppNav";
@@ -29,8 +30,10 @@ import { MapleProvider, useMaple } from "./useMaple";
  * waiting hero ("She's here!") above the same logging dock.
  *
  * Tabs: Today, hers (Brittany's page, for anyone who can read it), History
- * (Timeline | Patterns), Moments and Family. Which one shows lives in
- * AppNav, so her strip, a reminder's link or More can switch it.
+ * (Timeline | Patterns), Moments, Chat and Family. Which one shows lives in
+ * AppNav, so her strip, a reminder's link or More can switch it. Chat loads
+ * on first visit (Today's bundle doesn't carry the AI SDK) and then stays
+ * mounted behind the others, so its draft and a reply still coming survive.
  *
  * The shell also owns the night look (html.maple-night, styled in
  * src/app/maple/maple.css), the browser theme-color, the sync chip, and the
@@ -39,12 +42,17 @@ import { MapleProvider, useMaple } from "./useMaple";
 
 export type { NavTarget, TabId } from "./AppNav";
 
+const ChatTab = dynamic(() => import("./chat/ChatTab"), { ssr: false });
+
+type TabItem = { id: TabId; label: string; icon: IconName };
+
 /** The bar, left to right. Her tab is labelled with her first name and only shows for readers of her page. */
-const TABS: { id: TabId; label: string; icon: IconName }[] = [
+const TABS: TabItem[] = [
   { id: "today", label: "Today", icon: "house" },
   { id: "care", label: "", icon: "heart" },
   { id: "history", label: "History", icon: "history" },
   { id: "moments", label: "Moments", icon: "image" },
+  { id: "chat", label: "Chat", icon: "message-square" },
   { id: "family", label: "Family", icon: "users" },
 ];
 
@@ -56,8 +64,7 @@ export default function MapleApp() {
           everything that switches it. Mom's sheets (Support, warning signs, the picker, the Dose sheet, her
           temperature, Help, For the doctor) wrap SheetProvider: Maple's sheets (MedSheet's "Log it for {Name}
           instead") render beside the shell, so they only reach useCareNav from inside it, and hers come after
-          them, on top. The notifications sheet wraps both. The chat (Ask) sits inside them all, so Help and Maple's
-          sheets open over it. */}
+          them, on top. The notifications sheet wraps both. The chat's consents sit inside them all. */}
       <MotionConfig reducedMotion="user">
         <AppNavProvider>
           <NotificationsProvider>
@@ -91,6 +98,8 @@ function Screens() {
   const care = useCare();
   const { tab, go } = useAppNav();
   const hasCare = !!care;
+  const [chatSeen, setChatSeen] = useState(false);
+  if (tab === "chat" && !chatSeen) setChatSeen(true);
 
   // Her tab without access (demoted to a viewer, the page deleted elsewhere, or a saved tab from before): back to
   // Today, saying so only when her page was showing here.
@@ -145,6 +154,7 @@ function Screens() {
           {showing === "family" && <FamilyTab />}
         </motion.div>
       </AnimatePresence>
+      {chatSeen && <ChatTab key={state.family?.id ?? 1} active={showing === "chat"} />}
       <TabBar tabs={tabs} tab={showing} onChange={go} />
       <ToastHost />
       <WelcomeHost />
@@ -259,7 +269,7 @@ function SyncChip() {
   );
 }
 
-function TabBar({ tabs, tab, onChange }: { tabs: typeof TABS; tab: TabId; onChange: (t: NavTarget) => void }) {
+function TabBar({ tabs, tab, onChange }: { tabs: TabItem[]; tab: TabId; onChange: (t: NavTarget) => void }) {
   return (
     <nav
       aria-label="Maple's Log"
@@ -281,7 +291,7 @@ function TabBar({ tabs, tab, onChange }: { tabs: typeof TABS; tab: TabId; onChan
               )}
             >
               <Icon name={t.icon} size={24} strokeWidth={active ? 2.1 : 1.75} />
-              <span className="max-w-full truncate px-0.5">{t.label}</span>
+              <span className="max-w-full truncate">{t.label}</span>
             </button>
           );
         })}

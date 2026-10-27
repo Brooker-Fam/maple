@@ -295,6 +295,8 @@ Files read: `knowledge/features/onboarding.md`, `lib/ai/coach/onboarding-state.t
 
 **Entry.** maplebaby.app → "Start your family's log" → Google sign-in (the native apps use the existing system-sheet flow), which for someone with no family yields the short-lived pending session or pending native ticket (2.5), not a member session → a short terms screen (tracker, not medical advice; 18+; US only; what the chat sends to an AI provider with zero retention) → the onboarding chat. A family row is created in `status: 'onboarding'` at the first saved answer.
 
+**Where it shows (built).** Until "Start logging", the family's app is one page: the Chat page, in the Chat tab's frame (`chat/page.ts`: it fills what the phone can see, the composer sits at the bottom or on the keyboard, and the page stays pinned to the newest). The conversation comes first and the question's card (or the summary) last, as the newest thing on the page; the chat's composer goes into the page's bottom slot (`onboarding/SetupPage.tsx`). "Just the questions", or the chat being unavailable, leaves the same page with the card alone. Anyone but the owner who started it sees "Almost ready" instead.
+
 Questions, in order:
 
 | # | Question | Widget | Stored as | Required? |
@@ -344,7 +346,7 @@ Not legal advice. This is a solo developer's action list; have a lawyer read `/p
 
 ### 5.1 Per-family AI caps; are paid plans needed?
 
-- Move today's env budgets into per-family columns (`maple_families.ai_daily_micro`, `ai_monthly_micro`, BigInt micro-dollars) with plan defaults. Beta suggestion: $0.25 a day and $4 a month per family (above the engaged-family estimate below, so a family using the chat every day doesn't hit the cap mid-month); members 40 messages a day, viewers 10. The Brookers keep today's $0.50 / $5. Twenty-five beta families at the cap is $100 a month, which the global ceiling bounds.
+- Move today's env budgets into per-family columns (`maple_families.ai_daily_micro`, `ai_monthly_micro`, BigInt micro-dollars) with plan defaults. Decided 2026-10-27: $0.50 a day and $5 a month per family (`FAMILY_DAILY_BUDGET_DEFAULT` / `FAMILY_MONTHLY_BUDGET_DEFAULT`), the same as the Brookers' $0.50 / $5, and above the engaged-family estimate below, so a family using the chat every day doesn't hit the cap mid-month. Twenty-five beta families at the cap would be $125 a month; the $25 global ceiling below bounds it.
 - Keep a **global** ceiling too (`MAPLE_CHAT_GLOBAL_MONTHLY_MICRO`) plus the Gateway's own project budget in the dashboard, so a bug can't spend past it.
 - Expected spend on `zai/glm-5.3-flash`, now partly measured: a synthetic smoke test (scratchpad `smoke-glm.log`, made-up data, ZDR options on) sent a 20.6K-token prefix; a cold step cost $0.0031, a step reading the cache about $0.0008, so a 2-step message is about $0.0039 cold and $0.0015 warm. Chat messages minutes apart will often miss the provider's short-lived cache. An engaged family at 10 messages a day is about $0.45 (all warm) to $1.20 (all cold) a month at 2 steps a message, and up to about $3.30 with 3 steps and long threads (moderate: two turns measured, no real usage yet). Infrastructure per family is cents (2.6).
 - **Paid plans aren't needed for the beta.** Logging, Siri, notifications and MCP cost almost nothing per family; the chat is the only real variable cost and the caps bound it. Decide on a paid "Plus" (the chat beyond the free cap, more members, photo storage) after measuring real cost per family for a while. If charging, Vercel Pro is already required, the payment provider needs a business, and App Store rules apply to in-app purchases of digital features (Apple takes a cut; pricing the web plan separately is allowed in the US after the 2025 court rulings, moderate).
@@ -453,7 +455,7 @@ Shippable order: A → B1 → (B2 and C side by side) → B3 → D + E + F → i
 
 ### 6.3 Open questions
 
-- Decided 2026-10-27 (Matt): anyone can sign up (MAPLE_SIGNUP=open on the web once the Phase 0 gates are done; iPhone sign-up waits for Sign in with Apple). Free beta to gather feedback, no billing yet. Chat cap $5 a month per family.
+- Decided 2026-10-27 (Matt): anyone can sign up (MAPLE_SIGNUP=open on the web once the Phase 0 gates are done; iPhone sign-up waits for Sign in with Apple). Free beta to gather feedback, no billing yet. Chat cap $5 a month and $0.50 a day per family, $25 a month across every family but the Brookers.
 - Decided 2026-10-27: "Maple" is the public brand. Copy says each family's own baby's name; the app name stays.
 - Whether `guava-tri` is on Vercel Pro today (needed for ZDR), and who is on that team. (unknown)
 - This month's compute hours for the shared database. Per the checklist, it is the Neon store named brooker-wedding in Matt's personal Vercel account, on Neon Free (not re-checked here). (unknown)

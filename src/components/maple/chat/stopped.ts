@@ -4,7 +4,7 @@ import { mentionsCrisis } from "@/lib/maple/chat/crisis";
 import { CHAT_FAILED, CHAT_OFF, type ChatMessage, type ChatRefusal } from "@/lib/maple/chat/types";
 
 /**
- * What the sheet makes of an answer that stopped early: a refused POST, the
+ * What the Chat tab makes of an answer that stopped early: a refused POST, the
  * server's own line mid-answer, or a dropped connection. No React here, so
  * the chat's checks can run it.
  */
@@ -17,7 +17,7 @@ const SERVER_LINES = new Set([CHAT_FAILED, CHAT_OFF, LIMIT_MESSAGE]);
 export const textOf = (m: ChatMessage) => m.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
 
 /**
- * Once the thread reloads: whether the sheet still shows its own help card,
+ * Once the thread reloads: whether the tab still shows its own help card,
  * because the last message sent mentioned a crisis and the saved thread has
  * no card answering it (turned away, or its reply was never saved). An older
  * reply's card doesn't count.

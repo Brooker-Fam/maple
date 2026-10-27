@@ -1,11 +1,11 @@
 import { ImageResponse } from "next/og";
 import { OgLeaf, ogFonts } from "@/components/site/og";
 
-export const alt = "A newborn log you and your partner share.";
+export const alt = "Maple. Left boob or right boob? Beside it, a night clock reads 3:12 am.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-const HEADLINE = "A newborn log you and your partner share.";
+const HEADLINE = "Left boob or right boob?";
 
 export default async function OpenGraphImage() {
   const fonts = await ogFonts(`Maple${HEADLINE}`, "3:12 am");
@@ -17,7 +17,7 @@ export default async function OpenGraphImage() {
             <OgLeaf />
             <span style={{ fontSize: 52, fontWeight: 600, color: "#1C2619" }}>Maple</span>
           </div>
-          <div style={{ display: "flex", fontSize: 76, fontWeight: 600, lineHeight: 1.02, color: "#1C2619", letterSpacing: "-0.01em" }}>
+          <div style={{ display: "flex", fontSize: 112, fontWeight: 600, lineHeight: 1, color: "#1C2619", letterSpacing: "-0.01em" }}>
             {HEADLINE}
           </div>
         </div>

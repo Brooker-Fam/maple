@@ -35,7 +35,7 @@ export default function Pricing() {
 
           <h2>The chat costs real money</h2>
           <p>
-            Ask, the chat inside the app, sends each message to an AI model through Vercel AI Gateway. The Gateway charges for each
+            Chat, the tab inside the app, sends each message to an AI model through Vercel AI Gateway. The Gateway charges for each
             one by how much text the model reads and writes. In Maple&rsquo;s tests a message cost under a cent, so a day of
             ordinary use should come to a few cents. No family&rsquo;s real use has been measured yet, so that is an estimate.
           </p>

@@ -8,7 +8,7 @@ import type { Member } from "../types";
 import type { PostDeps } from "./post";
 import { priceFor } from "./prices";
 import { chatBudget, chatStore } from "./store";
-import { chatTools } from "./tools";
+import { chatLogState, chatTools } from "./tools";
 
 /**
  * Everything one chat POST reads, bound to the signed-in member's family:
@@ -35,6 +35,7 @@ export function familyPostDeps(
     modelKey: opts.modelKey,
     price: priceFor(opts.modelKey),
     tools: (t) => chatTools(member, { ...t, fam: fam.familyId, device: opts.device }),
+    state: ({ care }) => chatLogState(member, { fam: fam.familyId, care, now: opts.now }),
     budget: () => chatBudget(fam, opts.now),
     now: opts.now,
     report: opts.report,

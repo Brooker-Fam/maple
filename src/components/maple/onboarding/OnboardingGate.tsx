@@ -10,10 +10,10 @@ const Onboarding = dynamic(() => import("./Onboarding"), { ssr: false });
 type Check = { needed: boolean; view?: OnboardingView; failed?: true };
 
 /**
- * Opens onboarding in place of the app for a family whose setup isn't
- * finished; everyone else gets `children` unchanged, at once. The server
- * decides (GET /api/maple/onboarding answers `needed: false` for a finished
- * family, family 1 among them).
+ * A family whose setup isn't finished gets its setup as the Chat page
+ * (Onboarding) in place of the app; everyone else gets `children` unchanged,
+ * at once. The server decides (GET /api/maple/onboarding answers
+ * `needed: false` for a finished family, family 1 among them).
  */
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const { status, api, refresh, state } = useMaple();

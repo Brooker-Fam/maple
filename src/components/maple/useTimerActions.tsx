@@ -8,6 +8,7 @@ import {
   feedCtx,
   feedMinutes,
   feedParts,
+  isTracked,
   minutesShort,
   minutesText,
   nextSideFor,
@@ -25,6 +26,7 @@ import {
   type Part,
   type TapFeedData,
 } from "@/lib/maple/feed";
+import { earlierPresets, LIKELY_SIDE_MIN, usualBreakMin, usualSideMin } from "@/lib/maple/presets";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, FeedEdit, Side, StretchSide, TimerKind, TimerResponse } from "@/lib/maple/types";
 import { useBabyWords, type BabyWords } from "./familyWords";
@@ -175,49 +177,53 @@ export function useTimerActions() {
   );
 
   /**
-   * "{N} min earlier" chips over the time each produces. `to` is always the
-   * recorded value minus N, so tapping two chips never adds up. A chip at or
-   * before `floor` (a resume's pause) becomes one "No break" chip. One before
-   * `after` (when the feed before this one ended) is dropped, and the last
-   * chip becomes "Since the last feed", so a chip never lays a new feed over
-   * the last one (as in Fix times).
+   * "{N} min" chips over the time each produces, for a toast that asks
+   * "Earlier?" (`terse`: three fit a 375px toast beside Undo), or "{N} min
+   * earlier" chips, two at most. `to` is always the recorded value minus N, so
+   * tapping two never adds up. The guesses come first ("likely", "usual"),
+   * then "No break" (a chip at or before `floor`, a resume's pause) and "Since
+   * the last feed" (one before `after`, when the feed before this one ended),
+   * so a chip never lays a new feed over the last one (as in Fix times).
    */
   const earlierChips = useCallback(
-    (recorded: number, mins: number[], aria: (n: number, at: string) => string, commit: (to: Date) => void, limits: { min?: number; floor?: number; after?: number | null } = {}) => {
+    (
+      recorded: number,
+      mins: number[],
+      aria: (n: number, at: string) => string,
+      commit: (to: Date) => void,
+      limits: { min?: number; floor?: number; after?: number | null; smart?: { kind: "likely" | "usual"; at: number }[]; terse?: boolean } = {}
+    ) => {
+      // A "No break" under a minute from the tap would show the same time as the tap itself.
+      const floorChip = limits.floor !== undefined && recorded - limits.floor >= 60_000;
+      const presets = earlierPresets({
+        recorded,
+        min: limits.min ?? -Infinity,
+        floor: limits.floor ?? null,
+        feedFloor: limits.after ?? null,
+        smart: limits.smart,
+        mins,
+      }).filter((p) => p.kind !== "floor" || floorChip);
+      // A tag ("6:02 · likely") widens its chip: with one, two chips and Undo are what a 375px toast holds.
+      const room = limits.terse && !presets.some((p) => p.kind === "likely" || p.kind === "usual") ? 3 : 2;
       const chips: ToastAction[] = [];
-      let floored = false;
-      let clipped = false;
-      let lastTo = recorded;
-      for (const n of mins) {
-        const to = recorded - n * 60_000;
-        if (limits.min !== undefined && to < limits.min) continue;
-        if (limits.floor !== undefined && to <= limits.floor) {
-          if (!floored && recorded - limits.floor >= 60_000) {
-            floored = true;
-            const f = limits.floor;
-            chips.push({ label: "No break", sub: formatTimeNear(f, recorded, tz), ariaLabel: `No break, from ${clock(f)}`, onClick: () => commit(new Date(f)) });
-            lastTo = f;
-          }
-          continue;
-        }
-        if (limits.after != null && to < limits.after) {
-          clipped = true;
-          continue;
-        }
-        chips.push({ label: `${n} min earlier`, sub: formatTimeNear(to, recorded, tz), ariaLabel: aria(n, clock(to)), onClick: () => commit(new Date(to)) });
-        lastTo = to;
+      let used = 0;
+      for (const p of presets) {
+        if (chips.length >= room || used + (p.wide ? 2 : 1) > 3) continue;
+        used += p.wide ? 2 : 1;
+        const tag = p.kind === "likely" ? " \u00b7 likely" : p.kind === "usual" ? " \u00b7 usual" : "";
+        const sub = `${formatTimeNear(p.at, recorded, tz)}${tag}`;
+        const go = () => commit(new Date(p.at));
+        if (p.kind === "floor") chips.push({ label: "No break", sub, ariaLabel: `No break, from ${clock(p.at)}`, onClick: go });
+        else if (p.kind === "feed") chips.push({ label: "Since the last feed", sub, ariaLabel: `Since the last feed ended, at ${clock(p.at)}`, onClick: go });
+        else chips.push({ label: limits.terse ? `${p.minutes} min` : `${p.minutes} min earlier`, sub, ariaLabel: `${aria(p.minutes, clock(p.at))}${tag ? `, ${tag.slice(3)}` : ""}`, onClick: go });
       }
-      const f = limits.after;
-      // (Not when the last chip kept already lands within a minute of it: two chips would show one clock time.)
-      if (clipped && f != null && lastTo - f >= 60_000 && (limits.min === undefined || f >= limits.min)) {
-        // It takes the last of the two places.
-        chips.length = Math.min(chips.length, 1);
-        chips.push({ label: "Since the last feed", sub: formatTimeNear(f, recorded, tz), ariaLabel: `Since the last feed ended, at ${clock(f)}`, onClick: () => commit(new Date(f)) });
-      }
-      return chips.slice(0, 2);
+      return chips;
     },
     [clock, tz]
   );
+
+  /** A terse "2 min" chip, in a toast that doesn't ask "Earlier?" (it follows [Back and forth]): "2 min earlier". */
+  const askless = useCallback((chips: ToastAction[]) => chips.map((c) => (c.label.endsWith(" min") ? { ...c, label: `${c.label} earlier` } : c)), []);
 
   /** Put back what a change replaced (`before`), only if nobody changed the feed since. `said` words the toast after it. */
   const restoreFrom = useCallback(
@@ -651,11 +657,11 @@ export function useTimerActions() {
       const ref = first?.ref ?? { side, start: e.started_at };
       const chips = earlierChips(
         Date.parse(ref.start),
-        [2, 5],
+        [2, 5, 10],
         (n, at) => `${name} started ${minutesWord(n)} earlier, at ${at}`,
         (to) => void retime(e, { op: "move", edge: "start", ref, to: to.toISOString() }),
         // Never over the feed before this one (two-phones #53): Fix times stops its chips there too.
-        { after: previousFeedEnd(entriesRef.current, e) }
+        { after: previousFeedEnd(entriesRef.current, e), terse: true }
       );
       // The last feed ended minutes ago (fresh-eyes: a Done by mistake split one feed in two): one tap joins them.
       const prev = previousFeed(entriesRef.current, e);
@@ -676,10 +682,10 @@ export function useTimerActions() {
       const ask = chips.length && !cluster ? ". Started earlier?" : "";
       // One toast for both: the nap it ended, then the feed.
       const text = napEnded ? `${napText} · ${name} started ${short(e.started_at)}${ask}` : `${name} started ${clock(e.started_at)}${ask}`;
-      timerToast(text, e, { actions: cluster ? [bothChip(e), ...chips.slice(0, 1)] : chips, undo: () => void unstart(e, napEnded) });
+      timerToast(text, e, { actions: cluster ? [bothChip(e), ...askless(chips.slice(0, 1))] : chips, undo: () => void unstart(e, napEnded) });
       return e;
     },
-    [bothChip, clock, earlierChips, now, reopen, retime, running, sameFeed, short, timerCall, timerToast, unstart]
+    [askless, bothChip, clock, earlierChips, now, reopen, retime, running, sameFeed, short, timerCall, timerToast, unstart]
   );
 
   /**
@@ -841,12 +847,20 @@ export function useTimerActions() {
       } catch {
         min = undefined;
       }
+      // A forgotten Switch was likely after 15 minutes on the side before (or after her usual).
+      const before = sides.at(-2);
+      const smart: { kind: "likely" | "usual"; at: number }[] = [];
+      if (before && isTracked(before.side)) {
+        smart.push({ kind: "likely", at: Date.parse(before.start) + LIKELY_SIDE_MIN * 60_000 });
+        const usual = usualSideMin(entriesRef.current ?? [], now());
+        if (usual !== null && Math.abs(usual - LIKELY_SIDE_MIN) >= 3) smart.push({ kind: "usual", at: Date.parse(before.start) + usual * 60_000 });
+      }
       const chips = earlierChips(
         Date.parse(cur.start),
-        [2, 5],
+        [2, 5, 10],
         (n, at) => `${SIDE_NAME[cur.side]} started ${minutesWord(n)} earlier, at ${at}`,
         (to) => void retime(after, { op: "move", edge: "start", ref: cur.ref, to: to.toISOString() }),
-        { min }
+        { min, smart: fromBoth ? undefined : smart, terse: true }
       );
       if (fromBoth) {
         timerToast(`On the ${SIDE_NAME[cur.side]} from ${short(cur.start)} · tracking sides${chips.length ? ". Earlier?" : ""}`, after, {
@@ -858,12 +872,12 @@ export function useTimerActions() {
       // From the feed's second Switch: going back and forth, so she can stop tapping (then one "earlier" chip).
       const offer = sides.filter((p) => p.startMoment === "switch").length >= OFFER_AFTER_SWITCHES;
       timerToast(`Switched to ${SIDE_NAME[cur.side]} · ${short(cur.start)}${chips.length && !offer ? ". Earlier?" : ""}`, after, {
-        actions: offer ? [bothChip(after), ...chips.slice(0, 1)] : chips,
+        actions: offer ? [bothChip(after), ...askless(chips.slice(0, 1))] : chips,
         undo: () => void undoTap(after),
       });
       return after;
     },
-    [backAndForth, bothChip, continueAction, earlierChips, live, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
+    [askless, backAndForth, bothChip, continueAction, earlierChips, live, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
   );
 
   const pause = useCallback(
@@ -949,13 +963,14 @@ export function useTimerActions() {
           undoLabel: back,
         });
       } else if (cur) {
+        const usualBreak = usualBreakMin(entriesRef.current ?? [], now());
         const chips = brk
           ? earlierChips(
               Date.parse(cur.start),
-              [2, 5],
+              [2, 5, 10],
               (n, t) => `${both ? "Back on" : `${name} started`} ${minutesWord(n)} earlier, at ${t}`,
               (to) => void retime(after, { op: "move", edge: "start", ref: cur.ref, to: to.toISOString() }),
-              { floor: Date.parse(brk.start) }
+              { floor: Date.parse(brk.start), smart: usualBreak === null ? undefined : [{ kind: "usual", at: Date.parse(brk.start) + usualBreak * 60_000 }], terse: true }
             )
           : [];
         const prev = parts.filter((p): p is SidePart => p.kind === "side").at(-2)?.side;

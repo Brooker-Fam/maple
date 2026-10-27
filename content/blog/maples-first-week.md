@@ -3,7 +3,7 @@ title: Maple's first week
 description: Maple started as a private page on my family's website, for logging my daughter's feeds and diapers. Its commit history shows what came next.
 date: 2026-10-26
 author: Matt Brooker
-draft: true
+draft: false
 ---
 
 Maple's Log is a log for my daughter, Maple, that my wife and I can both write to from our phones.

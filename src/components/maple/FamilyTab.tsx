@@ -1078,7 +1078,7 @@ function ChatPrivacy() {
   const care = useCare();
   if (!care?.self) return null;
   return (
-    <Section title="Ask">
+    <Section title="Chat">
       <div className={GROUP}>
         <ChatCareRow />
       </div>

@@ -10,7 +10,6 @@ import type { Baby, Entry, EntryKind, EntryOf } from "@/lib/maple/types";
 import { formatTemp, formatVolume, formatWeight } from "@/lib/maple/units";
 import { careTime } from "@/lib/maple/care";
 import { useCareNav } from "./care/CareNav";
-import { useChatNav } from "./chat/ChatNav";
 import { useCare } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
 import { CARE_COLOR, KIND_COLOR, SKIN_COLOR } from "./palette";
@@ -29,9 +28,8 @@ import { useMaple } from "./useMaple";
  * name (vitamin D has its own row), and "For the doctor" opens that sheet
  * at its add field. Then Brittany (for anyone who can log hers): her
  * medicines (the picker), her temperature, and a question for her OB, so
- * nobody logs one of hers in Maple's log by mistake. Ask (the chat) leads,
- * so it's in reach while a timer runs and Today's Ask button is folded away.
- * The sheet scrolls when it doesn't fit.
+ * nobody logs one of hers in Maple's log by mistake. The sheet scrolls when
+ * it doesn't fit.
  */
 
 export const LONG_PRESS_MS = 450;
@@ -124,7 +122,6 @@ type Item = {
   color: string;
   onTap: () => void;
   onHold?: () => void;
-  disabled?: boolean;
 };
 
 /** Set once someone has held a row, so the "hold" hint stops repeating itself. */
@@ -172,11 +169,10 @@ function useOpenQuestions(active: boolean): number {
 }
 
 export default function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { state, summary, log, memberName, now, units, online } = useMaple();
+  const { state, summary, log, memberName, now, units } = useMaple();
   const sheets = useSheets();
   const care = useCare();
   const careNav = useCareNav();
-  const chatNav = useChatNav();
   const actions = useTimerActions();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
@@ -301,15 +297,6 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
       ]
     : [];
 
-  const ask: Item = {
-    id: "ask",
-    label: `Ask about ${baby}`,
-    sub: online ? "Log or ask in your own words" : "Needs a connection",
-    icon: "message-square",
-    color: "var(--mp-accent-fg)",
-    onTap: () => openCare(chatNav.openChat),
-    disabled: !online,
-  };
   const vitaminD: Item = {
     id: "vitd",
     label: "Vitamin D",
@@ -432,7 +419,6 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
 
   return (
     <Sheet open={open} onClose={onClose} title="More to log">
-      <Cells items={[ask]} />
       <section aria-label={baby} className="space-y-3 pb-1">
         {mom.length > 0 && <GroupHeading>{baby}</GroupHeading>}
         {groups.map((g) => (
@@ -477,9 +463,8 @@ function MoreRow({ item, className }: { item: Item; className?: string }) {
     <button
       type="button"
       {...press}
-      disabled={item.disabled}
       className={cx(
-        "flex min-h-[52px] items-start gap-2.5 border-mp-line px-3 py-3 text-left transition select-none active:bg-mp-ink/[0.04] disabled:opacity-50",
+        "flex min-h-[52px] items-start gap-2.5 border-mp-line px-3 py-3 text-left transition select-none active:bg-mp-ink/[0.04]",
         className
       )}
       style={{ WebkitTouchCallout: "none" }}

@@ -7,7 +7,6 @@ import AlertStack from "./AlertCard";
 import type { NavTarget } from "./AppNav";
 import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import Celebrations from "./Celebrations";
-import { AskButton } from "./chat/ChatNav";
 import DayDial from "./DayDial";
 import Dock from "./Dock";
 import EntryRow, { photoUrl } from "./EntryRow";
@@ -55,17 +54,10 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {timing && <TitleTicker />}
       {born ? (
         timing ? (
-          <>
-            {/* The hero folds away while a timer runs; her name stays the page's heading. Viewers have no More, so Ask stays here for them. */}
-            <h1 className="sr-only">{state.baby.name}</h1>
-            {readOnly && (
-              <div className="-mb-3 flex justify-end">
-                <AskButton />
-              </div>
-            )}
-          </>
+          // The hero folds away while a timer runs; her name stays the page's heading.
+          <h1 className="sr-only">{state.baby.name}</h1>
         ) : (
-          <Hero action={<AskButton />} />
+          <Hero />
         )
       ) : (
         <Waiting />

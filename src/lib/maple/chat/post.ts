@@ -3,12 +3,12 @@ import { memberName } from "../insights";
 import { dayBounds, dayKey, DEFAULT_TZ, startOfDay } from "../time";
 import { StoreUnavailable } from "../store";
 import type { Baby, Member } from "../types";
-import { capsVerdict, threadFull, type Usage } from "./caps";
+import { capsVerdict, type Usage } from "./caps";
 import { mentionsCrisis } from "./crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, titleFrom, userMessage, withCrisisHelp, type Incoming } from "./messages";
 import type { ToolCopy } from "../mcp-tools";
 import type { ModelPrice } from "./prices";
-import { contextLine } from "./prompt";
+import { contextLine, stateLines } from "./prompt";
 import type { LockedThread, UsageRow } from "./store";
 import { CHAT_OFF, chatTurn } from "./turn";
 import { CHAT_TERMS_NEEDED, THREAD_ID_RE, type ChatConsent, type ChatMessage, type ChatRefusal } from "./types";
@@ -42,6 +42,8 @@ export type PostDeps = {
   price: ModelPrice | null;
   /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). */
   tools: (opts: { born: boolean; care: boolean; copy: ToolCopy }) => ToolSet;
+  /** The log as it stands (logState in mcp-tools.ts), for the new user message's [App] lines; `care` as for `tools`. */
+  state: (opts: { care: boolean }) => Promise<string[]>;
   /** The family's chat budget, read only once the request is worth answering. */
   budget: () => Promise<{ day: bigint; month: bigint }>;
   now: Date;
@@ -53,7 +55,6 @@ export type PostDeps = {
 export type PostBody = { threadId?: unknown; message?: unknown };
 
 export const BUSY = "One message at a time: the last answer is still coming.";
-export const FULL = "This chat is long, so a new one starts here.";
 export const CARE_CLOSED = "Her page is closed to the chat now, so a new chat starts here.";
 export const STALE = "That question has moved on. Ask again if you still want it.";
 
@@ -77,6 +78,17 @@ function failure(error: unknown, report: (e: unknown) => void): Response {
   if (error instanceof StoreUnavailable) return reply({ error: "Maple's log is offline right now" }, 503);
   report(error);
   return reply({ error: "Something went wrong" }, 500);
+}
+
+/** No lines when reading them fails, since the tools can still read the log; the log being down still turns the message away. */
+async function logStateOrNone(deps: Pick<PostDeps, "state"> & { report: (e: unknown) => void }, care: boolean): Promise<string[]> {
+  try {
+    return await deps.state({ care });
+  } catch (e) {
+    if (e instanceof StoreUnavailable) throw e;
+    deps.report(e);
+    return [];
+  }
 }
 
 /** The crisis check reads the raw message first, so a cap, a busy thread or a store error still answers with the help card. */
@@ -138,9 +150,8 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     let responseId: string;
     let stepsDone = 0;
     if (incoming.kind === "user") {
-      if (threadFull(thread)) return refuse({ error: FULL, code: "new_chat" }, 409);
       const line = contextLine({ now: deps.now, baby, name: memberName(member.email, members), role: member.role, familyId });
-      const stored = userMessage(newMessageId(), incoming.text, line);
+      const stored = userMessage(newMessageId(), incoming.text, line, stateLines(await logStateOrNone(deps, care)));
       const prior = denyPending(history);
       await store.countMessage(member.email, today);
       for (const m of prior.changed) await store.saveMessage(thread.id, member.email, m);

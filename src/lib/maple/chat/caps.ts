@@ -23,9 +23,6 @@ export const CHAT_MAX_STEPS = 6;
 export const CHAT_MAX_OUTPUT_TOKENS = 1500;
 export const CHAT_TIMEOUT = { totalMs: 55_000, stepMs: 25_000, toolMs: 15_000 };
 
-/** A thread this long starts over in a new one, which keeps every request's prompt, and so its cost, bounded. */
-export const THREAD_MAX_USER_MESSAGES = 40;
-export const THREAD_MAX_PROMPT_TOKENS = 60_000;
 /** A step whose prompt passed this ends the turn, even with its tool results unread. */
 export const STEP_PROMPT_LIMIT = 60_000;
 
@@ -49,8 +46,8 @@ export function budgets(env: Record<string, string | undefined> = process.env): 
 }
 
 /** A new family's beta budget (docs/multi-family-plan.md 5.1) until its own columns say otherwise. */
-export const FAMILY_DAILY_BUDGET_DEFAULT = BigInt(250_000);
-export const FAMILY_MONTHLY_BUDGET_DEFAULT = BigInt(4_000_000);
+export const FAMILY_DAILY_BUDGET_DEFAULT = BigInt(500_000);
+export const FAMILY_MONTHLY_BUDGET_DEFAULT = BigInt(5_000_000);
 
 /**
  * One family's budget: its own maple_families columns where set; otherwise
@@ -89,9 +86,4 @@ export function capsVerdict(u: Usage, opts: { role: Role; newMessage: boolean; b
   if (u.day >= opts.budget.day) return LIMIT_MESSAGE;
   if (opts.newMessage && u.mine >= DAILY_MESSAGES[opts.role]) return LIMIT_MESSAGE;
   return null;
-}
-
-/** Whether a thread has to roll over to a new one before taking another message. */
-export function threadFull(t: { userMessages: number; lastPrompt: number }): boolean {
-  return t.userMessages >= THREAD_MAX_USER_MESSAGES || t.lastPrompt >= THREAD_MAX_PROMPT_TOKENS;
 }

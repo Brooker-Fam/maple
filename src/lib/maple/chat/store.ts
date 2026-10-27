@@ -2,8 +2,9 @@ import { query } from "@/lib/db";
 import { FAMILY_ONE, type FamilyScope } from "../family";
 import { StoreUnavailable } from "../store";
 import { familyBudgets, globalMonthlyCeiling, type Usage } from "./caps";
+import { loadRecentMessages } from "./history";
 import type { StepTokens } from "./prices";
-import type { ChatMessage, ChatThread } from "./types";
+import type { ChatMessage } from "./types";
 
 /**
  * The chat's tables (src/lib/migrate.ts). A thread belongs to one member of
@@ -25,40 +26,9 @@ async function rows(sql: string, params: unknown[]): Promise<Record<string, unkn
   return r as Record<string, unknown>[];
 }
 
-const iso = (v: unknown) => new Date(v as string).toISOString();
-
-const threadOf = (r: Record<string, unknown>): ChatThread => ({ id: String(r.id), title: (r.title as string | null) ?? null, updated_at: iso(r.updated_at) });
-
-export async function listThreads(fam: Fam, member: string, viewer: boolean): Promise<ChatThread[]> {
-  const r = await rows(
-    `SELECT id, title, updated_at FROM maple_chat_threads WHERE family_id = $1 AND member = $2 AND (viewer_only OR NOT $3) ORDER BY updated_at DESC LIMIT 20`,
-    [fam.familyId, member, viewer]
-  );
-  return r.map(threadOf);
-}
-
-export async function getThread(fam: Fam, id: string, member: string, viewer: boolean): Promise<ChatThread | null> {
-  const r = await rows(
-    `SELECT id, title, updated_at, COALESCE(busy_until > NOW(), FALSE) AS busy FROM maple_chat_threads
-     WHERE id = $1 AND family_id = $2 AND member = $3 AND (viewer_only OR NOT $4)`,
-    [id, fam.familyId, member, viewer]
-  );
-  return r.length ? { ...threadOf(r[0]), busy: r[0].busy === true } : null;
-}
-
-export async function deleteThread(fam: Fam, id: string, member: string): Promise<boolean> {
-  return (await rows(`DELETE FROM maple_chat_threads WHERE id = $1 AND family_id = $2 AND member = $3 RETURNING id`, [id, fam.familyId, member])).length > 0;
-}
-
 /** `careOpen`: some turn in it, this one included, ran with her page open to the chat (`care_open`). */
 export type LockedThread = { id: string; title: string | null; userMessages: number; lastPrompt: number; careOpen: boolean };
 
-/**
- * One turn at a time per thread: claims it (making it on first use) for 70
- * seconds, longer than a turn can run. "busy" while another turn has it;
- * "missing" for another member's or another family's thread, said the same
- * as one that isn't there. `care`: this turn runs with her page open to the chat.
- */
 /**
  * Cost rows that count for family `fam`. One without a family (written by
  * the code from before families, during a build or after a rollback) is
@@ -67,6 +37,12 @@ export type LockedThread = { id: string; title: string | null; userMessages: num
 const costOf = (fam: string, col = "family_id") =>
   `(${col} = ${fam} OR (${col} IS NULL AND ${fam} = ${FAMILY_ONE} AND NOT EXISTS (SELECT 1 FROM maple_families WHERE id <> ${FAMILY_ONE})))`;
 
+/**
+ * One turn at a time per thread: claims it (making it on first use) for 70
+ * seconds, longer than a turn can run. "busy" while another turn has it;
+ * "missing" for another member's or another family's thread, said the same
+ * as one that isn't there. `care`: this turn runs with her page open to the chat.
+ */
 export async function lockThread(fam: Fam, id: string, member: string, model: string, viewer: boolean, care: boolean): Promise<LockedThread | "busy" | "missing"> {
   await rows(
     `INSERT INTO maple_chat_threads (family_id, id, member, model, viewer_only, care_open) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
@@ -100,11 +76,6 @@ export async function releaseThread(fam: Fam, id: string): Promise<void> {
 
 export async function setTitle(fam: Fam, id: string, title: string): Promise<void> {
   await rows(`UPDATE maple_chat_threads SET title = COALESCE(title, $3) WHERE id = $1 AND family_id = $2`, [id, fam.familyId, title]);
-}
-
-export async function loadMessages(fam: Fam, threadId: string): Promise<ChatMessage[]> {
-  const r = await rows(`SELECT id, role, parts FROM maple_chat_messages WHERE thread_id = $1 AND family_id = $2 ORDER BY seq`, [threadId, fam.familyId]);
-  return r.map((m) => ({ id: String(m.id), role: m.role as "user" | "assistant", parts: Array.isArray(m.parts) ? (m.parts as ChatMessage["parts"]) : [] }));
 }
 
 /** Adds a message at the end of the thread, or replaces the parts of the one with its id (an assistant reply carried on). */
@@ -218,7 +189,7 @@ export function chatStore(fam: Fam) {
     usageSince: (member: string, day: string, dayStart: Date, monthStart: Date) => usageSince(fam, member, day, dayStart, monthStart),
     lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean) => lockThread(fam, id, member, model, viewer, care),
     releaseThread: (id: string) => releaseThread(fam, id),
-    loadMessages: (threadId: string) => loadMessages(fam, threadId),
+    loadMessages: (threadId: string) => loadRecentMessages(fam, threadId),
     saveMessage: (threadId: string, member: string, m: ChatMessage) => saveMessage(fam, threadId, member, m),
     setTitle: (id: string, title: string) => setTitle(fam, id, title),
     countMessage: (member: string, day: string) => countMessage(fam, member, day),

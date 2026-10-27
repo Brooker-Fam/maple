@@ -110,7 +110,7 @@ const FAQS: Faq[] = [
     q: "What does the AI see?",
     a: [
       [
-        "Ask, the chat inside the app, sends your message, the recent conversation and whatever it looks up in your log to an AI model through Vercel AI Gateway. Every request asks for zero data retention and no training on your data. Each person accepts short terms before their first message. Chats are saved in your family’s log so you can scroll back, and nothing you type goes into Maple’s server logs or error reports. ",
+        "Chat, the tab inside the app, sends your message, the recent conversation and whatever it looks up in your log to an AI model through Vercel AI Gateway. Every request asks for zero data retention and no training on your data. Each person accepts short terms before their first message. Each person’s chat is saved in your family’s log for them alone to scroll back through, and nothing you type goes into Maple’s server logs or error reports. ",
         { text: "What Maple’s chat sends to an AI model", href: "/blog/what-maple-sends-to-an-ai-model" },
         " lists each part of a request.",
       ],

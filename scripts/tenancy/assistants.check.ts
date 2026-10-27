@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { NextRequest } from "next/server";
 import { sealSession } from "../../src/lib/maple/auth";
+import * as history from "../../src/lib/maple/chat/history";
 import * as chat from "../../src/lib/maple/chat/store";
 import { registrations } from "../../src/lib/maple/chat/tools";
+import type { StreamItem } from "../../src/lib/maple/chat/window";
 import { NOT_MEMBER_MESSAGE, type Extra } from "../../src/lib/maple/mcp-tools";
 import { mintAccessToken, mintAuthCode, mintRefreshToken, verifyAccessToken, verifyAuthCode } from "../../src/lib/mcp/auth";
 import { encryptSecret } from "../../src/lib/secret-box";
@@ -82,12 +84,13 @@ async function chatStoreChecks(shape: Shape, seed: Seed) {
   const { alpha, beta } = seed;
 
   await test(`${shape}: chat threads and messages are listed, read, locked and deleted in the caller's family only`, async () => {
-    eq((await chat.listThreads(B, beta.owner, false)).map((t) => t.id), [beta.threadId]);
-    eq(await chat.getThread(B, alpha.threadId, beta.owner, false), null);
-    eq(await chat.loadMessages(B, alpha.threadId), []);
-    eq((await chat.loadMessages(A, alpha.threadId)).map((m) => m.id), [alpha.messageId]);
+    const mine = await history.chatStream(B, beta.owner, false, null);
+    eq([mine.current?.id, mine.items.map((i) => i.thread)], [beta.threadId, [beta.threadId]]);
+    eq((await history.chatStream(B, beta.owner, false, alpha.messageId)).items, [], "another family's message as the cursor reads as none");
+    eq(await history.loadRecentMessages(B, alpha.threadId), []);
+    eq((await history.loadRecentMessages(A, alpha.threadId)).map((m) => m.id), [alpha.messageId]);
     eq(await chat.lockThread(B, alpha.threadId, beta.owner, "zai/glm-5.3-flash", false, true), "missing");
-    eq(await chat.deleteThread(B, alpha.threadId, beta.owner), false);
+    eq(await history.deleteChats(B, alpha.owner, false), 0);
     const [row] = await sql(`SELECT family_id, member, busy_until FROM maple_chat_threads WHERE id = $1`, [alpha.threadId]);
     eq([row.family_id, row.member, row.busy_until], ["1", alpha.owner, null]);
   });
@@ -153,11 +156,11 @@ async function chatStoreBothFamilies(seed: Seed) {
   const { alpha } = seed;
   await test("final: someone in both families never sees, locks or counts their other family's chats", async () => {
     await sql(`UPDATE maple_chat_threads SET busy_until = NOW() + INTERVAL '1 minute' WHERE id = $1`, [alpha.threadId]);
-    eq(await chat.listThreads(B, alpha.owner, false), []);
-    eq(await chat.getThread(B, alpha.threadId, alpha.owner, false), null);
-    eq(await chat.loadMessages(B, alpha.threadId), []);
+    eq(await history.chatStream(B, alpha.owner, false, null), { current: null, items: [], more: false });
+    eq(await history.loadRecentMessages(B, alpha.threadId), []);
     eq(await chat.lockThread(B, alpha.threadId, alpha.owner, "zai/glm-5.3-flash", false, true), "missing");
-    eq(await chat.deleteThread(B, alpha.threadId, alpha.owner), false);
+    eq(await history.deleteChats(B, alpha.owner, false), 0);
+    eq((await history.chatStream(A, alpha.owner, false, null)).items.map((i) => i.message.id), [alpha.messageId], "their chat in family 1 is still there");
     const since = new Date("2026-01-01T00:00:00Z");
     eq((await chat.usageSince(B, alpha.owner, "2026-10-20", since, since)).mine, 0);
     await chat.countMessage(B, alpha.owner, "2026-10-20");
@@ -419,9 +422,8 @@ async function chatRouteChecks(shape: Shape, seed: Seed) {
 
   await test(`${shape}: the chat route answers another family's thread like a missing one`, async () => {
     const list = await jsonOf(await chatRoute.GET(req("/api/maple/chat", { headers: asBeta })));
-    eq((list.threads as { id: string }[]).map((t) => t.id), [beta.threadId]);
-    eq((await chatRoute.GET(req(`/api/maple/chat?thread=${alpha.threadId}`, { headers: asBeta }))).status, 404);
-    eq((await chatRoute.DELETE(req(`/api/maple/chat?thread=${alpha.threadId}`, { method: "DELETE", headers: asBeta }))).status, 404);
+    eq([(list.current as { id: string } | null)?.id, (list.items as StreamItem[]).map((i) => i.thread)], [beta.threadId, [beta.threadId]]);
+    eq((await jsonOf(await chatRoute.GET(req(`/api/maple/chat?before=${alpha.messageId}`, { headers: asBeta })))).items, []);
     const posted = await chatRoute.POST(req("/api/maple/chat", { method: "POST", headers: { ...asBeta, "content-type": "application/json" }, body: userMessage(alpha.threadId) }));
     eq(posted.status, 404);
     eq((await sql(`SELECT COUNT(*)::int AS n, bool_and(busy_until IS NULL) AS free FROM maple_chat_threads WHERE id = $1`, [alpha.threadId]))[0], { n: 1, free: true });
@@ -436,15 +438,23 @@ async function chatRouteChecks(shape: Shape, seed: Seed) {
     eq(a.status, 404);
     await sql(`UPDATE maple_families SET ai_daily_micro = NULL WHERE id = 2`);
   });
+
+  await test(`${shape}: Delete chat history removes this member's chat in the session's family only`, async () => {
+    eq((await chatRoute.DELETE(req("/api/maple/chat", { method: "DELETE", headers: asBeta }))).status, 200);
+    eq((await sql(`SELECT id FROM maple_chat_threads WHERE id IN ($1, $2)`, [alpha.threadId, beta.threadId])).map((r) => r.id), [alpha.threadId]);
+    eq((await sql(`SELECT id FROM maple_chat_messages WHERE id = $1`, [alpha.messageId])).length, 1);
+  });
 }
 
 async function bothFamiliesRouteChecks(seed: Seed) {
   const { alpha } = seed;
   await test("final: someone in both families sees each family's chats only under its own session", async () => {
     const away = { cookie: cookie(alpha.owner, 2) };
-    eq((await jsonOf(await chatRoute.GET(req("/api/maple/chat", { headers: away })))).threads, []);
-    eq((await chatRoute.GET(req(`/api/maple/chat?thread=${alpha.threadId}`, { headers: away }))).status, 404);
-    eq(((await jsonOf(await chatRoute.GET(req("/api/maple/chat", { headers: { cookie: cookie(alpha.owner, 1) } })))).threads as { id: string }[]).map((t) => t.id), [alpha.threadId]);
+    eq(await jsonOf(await chatRoute.GET(req("/api/maple/chat", { headers: away }))), { current: null, items: [], more: false });
+    const home = await jsonOf(await chatRoute.GET(req("/api/maple/chat", { headers: { cookie: cookie(alpha.owner, 1) } })));
+    eq([(home.current as { id: string } | null)?.id, (home.items as StreamItem[]).map((i) => i.thread)], [alpha.threadId, [alpha.threadId]]);
+    eq((await chatRoute.DELETE(req("/api/maple/chat", { method: "DELETE", headers: away }))).status, 200);
+    eq((await sql(`SELECT id FROM maple_chat_messages WHERE id = $1`, [alpha.messageId])).length, 1, "a delete in their other family leaves this one's chat");
     await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES (2, $1, 'chat', 1)`, [alpha.owner]);
     await sql(`UPDATE maple_chat_threads SET busy_until = NOW() + INTERVAL '1 minute' WHERE id = $1`, [alpha.threadId]);
     const posted = await chatRoute.POST(req("/api/maple/chat", { method: "POST", headers: { ...away, "content-type": "application/json" }, body: userMessage(alpha.threadId) }));
