@@ -153,12 +153,14 @@ Ids:
 
 ### 2.6 Its own Neon project: yes, now
 
-**Recommendation: move Maple's tables to a Maple-only Neon project before the first other family, and before the multi-family schema work.** (high on the need, moderate on the cost estimate)
+**Completed 2026-10-27:** production uses the Maple-only Neon database. The 22 Maple tables and nine sequences were transferred from PostgreSQL 17 to PostgreSQL 18 with PostgreSQL 18 tools. Schema, every row, and sequence state matched before and after two migration runs. The original tables remain intact and reject INSERT, UPDATE, DELETE, and TRUNCATE. `upload_rate_limit` stayed behind; migrations created Maple's separate table. Authentication and notification secrets were unchanged, and sign-up remains off.
 
-Why now:
-- The current database is a wedding site's (finding 1). A leaked brooker-wedding credential or a bug in its code would expose other families' health data.
-- It's cheapest while there is one family and the data is small.
-- Each Neon project gets its own Free allowance, so splitting doubles the free compute for both apps.
+Production activation was verified by a successful usage job writing its completion record only in the new database, a healthy response, and the [independent health workflow](https://github.com/Brooker-Fam/maple/actions/runs/40525533725). Laptop access was confirmed. Phone recovery, Siri, external assistant connections, and push delivery are separate device checks; the transfer verification does not establish those results. A private dump and transfer metadata are retained for recovery. Production has accepted new writes, so rolling back requires reconciliation before restoring old-table writes.
+
+Reasons for separating the database:
+- Wedding-site credentials must not grant access to future families' health data.
+- Moving before other families join keeps the transfer smaller.
+- Each Neon project has its own compute allowance.
 
 Cost (Neon pricing page, fetched 2026-10-26):
 - Free: 100 CU-hours per project per month, 1 GB storage per project (20 GB across projects), 100 projects, 10 branches per project, scale to zero after 5 minutes (can't be turned off), 6 hours of restore history, autoscaling to 2 CU.
@@ -166,15 +168,15 @@ Cost (Neon pricing page, fetched 2026-10-26):
 - Maple's load: the app polls every 10 seconds while open (`POLL_MS`), and QStash ticks the safety net at :04 and :34. One family fits Free easily. With families awake at different hours the compute rarely sleeps: always-on at the 0.25 CU minimum is about 182 CU-hours a month, which is over Free and about $19 a month on Launch ($39 at 0.5 CU). Storage is cents.
 - So: Free for the move and the beta; **switch to Launch before opening sign-up**, mainly for the 7-day restore window. Set a Neon spend alert.
 
-Zero-downtime move (the owner runs it; agents never connect to production):
+Maintenance move (production access requires the owner's authorization):
 1. **Preconditions:** the family is fully on maplebaby.app; brooker-wedding's Maple code is gone (no migrations touching `maple_*`, no Maple tools on its calendar connector, `brooker.family/maple` only forwards). Otherwise its writes would keep landing in the old database. The `migrate.ts` seed is deleted (Phase 0), so an empty database never gets a "Maple Jane" row, and `getBaby()` then answers `NotFound` instead of a made-up baby. `MAPLE_ALLOWED_EMAILS` is set to the family's addresses for the whole move, because `joinWithGoogle` lets the first Google sign-in on an empty database claim owner (auth.ts:216-226), and maplebaby.app is public.
-2. **Build the read-only switch first** (Chunk A work; `MAPLE_READ_ONLY` doesn't exist yet). It must cover every write path: the app's API routes and uploads, MCP tools, Siri (`/api/maple/quick`), the chat (no model call either), sign-in (no member inserts), invites, and the push tick (its `maple_push_sent` claims are writes: the tick answers 503 so QStash retries). Writes answer 503 "offline", which the outbox treats as transient (useMaple.tsx:304) and replays with its `client_id`, so nothing duplicates. Test it on the synthetic branch: every channel gets 503 and nothing changes.
-3. Create the Neon project in the same region as the Vercel functions, same Postgres major version.
+2. **Verify the maintenance guard and transfer utility before pausing production.** `MAPLE_READ_ONLY=1` in `src/proxy.ts` blocks every Maple API, OAuth and waitlist request, including reads with side effects. Responses are 503 "offline", which the outbox treats as transient and retries with its `client_id`. `pnpm check:read-only` verifies that handlers never execute while paused.
+3. Create the Neon project in the same region as the Vercel functions. Validate source, target and client Postgres versions explicitly; never restore into an older server or use a dump client older than the source.
 4. **Rehearse with no real data:** `pg_dump --schema-only` of the `maple_*` tables (not `upload_rate_limit`) into an empty branch of the new project, run Maple's migrations against it twice (idempotency), seed synthetic data (the seed creates its own care person, so `getCarePerson()` never auto-creates "Brittany" there), run the app locally against it. Then rehearse step 5's restore into a second empty branch.
-5. **Cut over at a quiet hour with no timer running** (the offline outbox queues new entries, doses and check-ins, but not timer taps or edits): deploy with `MAPLE_READ_ONLY` on; `pg_dump` the Maple tables (schema, data and sequences; `upload_rate_limit` stays behind) and `pg_restore` into the new project while it is still **empty**: no build or deployment may point at it before the restore finishes, because a build runs `migrate.ts`, which would create the tables and the one-row care index first and make the data restore collide (duplicate `maple_babies` id 1, `uniq_maple_care_people_one`). Compare row counts and `MAX(updated_at)` per table (numbers only); point `DATABASE_URL`/`DATABASE_URL_UNPOOLED` at the new project; redeploy with the switch off. Siri and Claude writes during that short window fail with "offline" and can be repeated. QStash retries a tick that fails.
-6. **Freeze the old tables for real.** Right after the cutover, revoke writes on the old `maple_*` tables (`REVOKE INSERT, UPDATE, DELETE` from the app's role, or rename them). Vercel deployments keep the environment variables they were built with, so an instant rollback to any deployment from before the move would otherwise write to the old database without any error, splitting the family's log in two.
+5. **Pause during a quiet period with no timer running.** The offline outbox queues new entries, doses and check-ins, but not timer taps or edits. Deploy with `MAPLE_READ_ONLY=1` and verify API responses are 503. The destination must contain no Maple tables: no build or deployment may point at it before restore because builds run migrations. Siri and external assistant writes fail with "offline" during this window and can be repeated; QStash retries failed ticks.
+6. **Copy with the source frozen.** Hold SHARE locks on every source Maple table while dumping schema, data and sequences, excluding `upload_rate_limit`. Before releasing those locks, install and commit ALWAYS statement triggers rejecting INSERT, UPDATE, DELETE and TRUNCATE. Install them after the dump so the target stays writable. Restore in one transaction; verify schema/data hashes, row counts, sequence state, and every source blocker. Run migrations twice and repeat the comparison. Only then switch both database URLs, set `MAPLE_READ_ONLY=0`, and deploy. Vercel deployments retain their original environment, so the old-table freeze must survive app redeployments.
 7. **Verify:** log one diaper from each phone and see it on the other; one Siri status; one Claude `maple_status`; one push test; QStash log shows a 2xx tick; one write attempt from a pre-move deployment URL fails.
-8. **Rollback:** deliberately restore the old tables' grants, point the env vars back and redeploy; any writes made on the new database in between are copied back by `client_id`. Drop the old `maple_*` tables only after 14 quiet days; never drop `upload_rate_limit`, which brooker-wedding's guest gallery still uses.
+8. **Rollback:** keep maintenance enabled. The private transfer utility can remove only its own blockers, and refuses if the target differs from the copied baseline. After target writes begin, reconcile them, including edits and deletes, before restoring source writes and switching URLs back. An instant Vercel rollback alone is insufficient. Retain the old `maple_*` tables for at least 14 quiet days; never drop brooker-wedding's `upload_rate_limit`.
 
 Logical replication (Neon supports it both ways) would avoid even the short write freeze, but needs sequence fixes and a publication on the shared database. With this little data the dump-and-restore window is simpler and safer.
 
@@ -211,7 +213,7 @@ Ships:
 
 Verify: the cutover checklist in 2.6 step 7; after step 2, each phone opens the app without signing in again (the session fallback works); after step 3, an existing Claude connector still answers and refreshes (the MCP fallback works); Siri still answers; a test notification arrives after every step.
 
-Rollback: env vars back to the old database and old secrets; the `_PREV` values keep every cookie and token opening either way.
+Rollback: follow the database reconciliation requirements in 2.6 before changing database URLs. Secret rollback also needs the matching `_PREV` values so existing cookies and tokens remain readable.
 
 ### Phase 1: additive columns and backfill to the Brooker family
 
