@@ -83,7 +83,7 @@ export default function Home() {
             <h1 className="site-display max-w-[13ch] text-[clamp(2.85rem,1.4rem+6vw,5.75rem)] leading-[0.98] text-mp-ink">
               Left boob or right boob?
             </h1>
-            <p className="site-prose mt-6 text-[19px] leading-[1.55]">You knew an hour ago. Maple remembers, on both your phones.</p>
+            <p className="site-prose mt-6 text-[19px] leading-[1.55]">You knew an hour ago. Maple remembers.</p>
             <div className="mt-9">
               <WaitlistForm />
             </div>
