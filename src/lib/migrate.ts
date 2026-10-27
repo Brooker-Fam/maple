@@ -15,6 +15,7 @@ export async function migrate() {
   }
 
   console.log("Running database migrations...");
+  const contracted = !!(await familyPrimaryKey("maple_care_people", ["family_id"]));
 
   // Fixed-hourly-window counter keyed by hashed IP — caps how many upload tokens
   // one source can mint, so a stranger who finds the URL can't burn Blob storage.
@@ -100,7 +101,7 @@ export async function migrate() {
 
   // One running timer per kind, even when both phones tap Start at once.
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_entries_running ON maple_entries(baby_id, kind) WHERE active AND deleted_at IS NULL`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_entries_client ON maple_entries(client_id) WHERE client_id IS NOT NULL`;
+  if (!contracted) await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_entries_client ON maple_entries(client_id) WHERE client_id IS NOT NULL`;
 
   // People an owner removed. Keeps an allowlisted address (MAPLE_ALLOWED_EMAILS)
   // from rejoining by just signing in again; inviting them again clears it.
@@ -156,7 +157,7 @@ export async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_people_one ON maple_care_people ((TRUE))`;
+  if (!contracted) await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_people_one ON maple_care_people ((TRUE))`;
 
   // Ids are random 8-digit numbers made by care-store.ts, not a sequence:
   // a gap in a sequence would show other readers that a private row exists.
@@ -194,7 +195,7 @@ export async function migrate() {
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_meds_person ON maple_care_meds(person, sort, id) WHERE deleted_at IS NULL`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_meds_client ON maple_care_meds(client_id) WHERE client_id IS NOT NULL`;
+  if (!contracted) await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_meds_client ON maple_care_meds(client_id) WHERE client_id IS NOT NULL`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS maple_care_entries (
@@ -221,7 +222,7 @@ export async function migrate() {
   await sql`UPDATE maple_care_meds SET private = FALSE WHERE private`;
   await sql`UPDATE maple_care_entries SET private = FALSE WHERE private`;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_updated ON maple_care_entries(person, updated_at DESC)`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_entries_client ON maple_care_entries(client_id) WHERE client_id IS NOT NULL`;
+  if (!contracted) await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_entries_client ON maple_care_entries(client_id) WHERE client_id IS NOT NULL`;
 
   // Check-ins and fuller check-ins: hers only, never shared, hard-deleted, never in MCP or Siri.
   // Their own table and sequence, so no other reader ever sees their ids.
@@ -240,7 +241,7 @@ export async function migrate() {
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_mood_time ON maple_care_mood(person, at DESC)`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_mood_client ON maple_care_mood(client_id) WHERE client_id IS NOT NULL`;
+  if (!contracted) await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_care_mood_client ON maple_care_mood(client_id) WHERE client_id IS NOT NULL`;
 
   // Push notifications (pill reminders): one row per phone that turned them on, and a log of what was sent so a
   // reminder goes out once however many ticks see it.
@@ -461,7 +462,6 @@ export async function migrateFamilies() {
     WHERE family_id IS NULL AND (key LIKE 'miss:%' OR key LIKE 'gap:%') AND NOT EXISTS (SELECT 1 FROM maple_families WHERE id <> 1)
   `;
 
-  // Upload tokens signed per family per day, for the per-family photo quota (not family 1's: it has none).
   await sql`
     CREATE TABLE IF NOT EXISTS maple_upload_counts (
       family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
@@ -478,16 +478,16 @@ export async function migrateFamilies() {
 
   // With every row in family 1 these hold exactly when the old keys do, so they build cleanly beside them.
   await index("uniq_maple_babies_family_id", "maple_babies (family_id, id)", true);
-  await index("uniq_maple_members_family_email", "maple_members (family_id, email)", true);
-  await index("uniq_maple_removed_family_email", "maple_removed (family_id, email)", true);
+  await familyUniqueIndex("maple_members", ["family_id", "email"], "uniq_maple_members_family_email");
+  await familyUniqueIndex("maple_removed", ["family_id", "email"], "uniq_maple_removed_family_email");
   await index("uniq_maple_entries_family_client", "maple_entries (family_id, client_id) WHERE client_id IS NOT NULL", true);
-  await index("uniq_maple_care_people_family", "maple_care_people (family_id)", true);
+  await familyUniqueIndex("maple_care_people", ["family_id"], "uniq_maple_care_people_family");
   await index("uniq_maple_care_meds_family_client", "maple_care_meds (family_id, client_id) WHERE client_id IS NOT NULL", true);
   await index("uniq_maple_care_entries_family_client", "maple_care_entries (family_id, client_id) WHERE client_id IS NOT NULL", true);
   await index("uniq_maple_care_mood_family_client", "maple_care_mood (family_id, client_id) WHERE client_id IS NOT NULL", true);
   await index("uniq_maple_push_subs_family_endpoint", "maple_push_subs (family_id, endpoint)", true);
-  await index("uniq_maple_chat_daily_family", "maple_chat_daily (family_id, member, day)", true);
-  await index("uniq_maple_consents_family", "maple_consents (family_id, member, kind)", true);
+  await familyUniqueIndex("maple_chat_daily", ["family_id", "member", "day"], "uniq_maple_chat_daily_family");
+  await familyUniqueIndex("maple_consents", ["family_id", "member", "kind"], "uniq_maple_consents_family");
 
   await index("idx_maple_entries_family_time", "maple_entries (family_id, baby_id, started_at DESC) WHERE deleted_at IS NULL");
   await index("idx_maple_entries_family_kind", "maple_entries (family_id, baby_id, kind, started_at DESC) WHERE deleted_at IS NULL");
@@ -503,6 +503,19 @@ export async function migrateFamilies() {
   await index("idx_maple_chat_threads_family", "maple_chat_threads (family_id, member, updated_at DESC)");
   await index("idx_maple_chat_messages_family_daily", "maple_chat_messages (family_id, member, created_at DESC) WHERE role = 'user'");
   await index("idx_maple_ai_usage_family_time", "maple_ai_usage (family_id, created_at DESC)");
+}
+
+async function familyPrimaryKey(table: string, columns: string[]): Promise<string | null> {
+  const rows = await sql`SELECT c.conname FROM pg_constraint c
+    WHERE c.conrelid = to_regclass(${table}) AND c.contype = 'p'
+      AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, ord)
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.ord) = ${columns}::text[]`;
+  return rows.length ? String(rows[0].conname) : null;
+}
+
+async function familyUniqueIndex(table: string, columns: string[], name: string) {
+  const primary = await familyPrimaryKey(table, columns);
+  await index(primary ?? name, `${table} (${columns.join(", ")})`, true);
 }
 
 /** ALTER TABLE only when the column is missing: even a no-op ADD COLUMN IF NOT EXISTS takes the table's lock. */
