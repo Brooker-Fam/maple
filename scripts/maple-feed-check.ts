@@ -60,6 +60,7 @@ import {
   type TapFeedData,
 } from "../src/lib/maple/feed";
 import { timerNumbers } from "../src/components/maple/FeedParts";
+import { previewParts, rowIndex } from "../src/components/maple/sheets/FeedSheet";
 import { backOnPresets, earlierPresets, finishPresets, fitPresets, PRESET_LIMIT, usualBreakMin, usualSideMin } from "../src/lib/maple/presets";
 import { sidesLabel } from "../src/components/maple/StatusCard";
 import { describeEntry } from "../src/lib/maple/describe";
@@ -492,6 +493,64 @@ check("S10a: switch_side minutes_ago on a single side", () =>
   eqSegs(switchTo(feed("L 16:00-"), "R", D("16:15"), { explicit: true }).data.segments, "L 16:00-16:15, R 16:15-"));
 check("S10b: switch_side {at:4:12} moves the switch", () =>
   eqSegs(moveEdge(s3, { edge: "start", ref: ref("R", "16:16"), to: D("16:12") }, live("16:20")).data.segments, "L 16:00-16:12, R 16:12-"));
+
+check("side_end: shortening a completed side leaves the active side where it started", () => {
+  const ctx = live("14:25");
+  const r = moveEdge(feed("L 14:00-14:20, R 14:20-"), { edge: "side_end", ref: ref("L", "14:00"), to: D("14:10") }, ctx);
+  eqSegs(r.data.segments, "L 14:00-14:10, R 14:20-");
+  eq(rows(feedParts(r.data, ctx)), ["L 14:00-14:10 10 min", "Break 14:10-14:20 10 min", "R 14:20- 5 min"]);
+  eq(r.endedAt, null, "active feed stays active");
+  eq(r.moment, "pause");
+});
+check("side_end: a finished feed loses only the corrected side's nursing time", () => {
+  const ctx = done("15:00", "14:35");
+  const r = moveEdge(feed("L 14:00-14:20, R 14:20-14:35"), { edge: "side_end", ref: ref("L", "14:00"), to: D("14:10") }, ctx);
+  eqSegs(r.data.segments, "L 14:00-14:10, R 14:20-14:35");
+  eq([r.data.left_sec, r.data.right_sec], [600, 900], "finished nursing totals");
+  eqTime(r.endedAt, "14:35", "feed end");
+  eqTime(r.startedAt, "14:00", "feed start");
+});
+check("side_end: bounds keep the next side's start fixed and reject overlap", () => {
+  const data = feed("L 14:00-14:20, R 14:20-");
+  const ctx = live("14:25");
+  const edit = { edge: "side_end" as const, ref: ref("L", "14:00") };
+  const b = edgeBounds(data, edit, ctx);
+  eqTime(b.max, "14:20", "maximum is next start");
+  eqTime(b.min, "14:00:01", "minimum leaves a second");
+  eqTime(b.uiMin, "14:01", "picker leaves a minute");
+  eq(b.moment, "pause");
+  throwsCode(() => moveEdge(data, { ...edit, to: D("14:21") }, ctx), "after_next");
+  throwsCode(() => moveEdge(data, { ...edit, to: D("14:00") }, ctx), "before_own_start");
+});
+check("side_end: a corrected break can close again without moving the next side", () => {
+  const ctx = live("14:25");
+  const edit = { edge: "side_end" as const, ref: ref("L", "14:00") };
+  const shortened = moveEdge(feed("L 14:00-14:20, R 14:20-"), { ...edit, to: D("14:10") }, ctx);
+  const closed = moveEdge(shortened.data, { ...edit, to: D("14:20") }, ctx);
+  eqSegs(closed.data.segments, "L 14:00-14:20, R 14:20-");
+  eq(closed.moment, "pause");
+  eq(feedParts(closed.data, ctx).filter((p) => p.kind === "break").length, 0, "no break remains");
+  const snapped = moveEdge(shortened.data, { ...edit, to: D("14:19:59.5") }, ctx);
+  eqSegs(snapped.data.segments, "L 14:00-14:20, R 14:20-");
+});
+check("side_end preview: inserting a break shows the next side's unchanged start", () => {
+  const ctx = done("17:00", "16:30");
+  const original = feedParts(feed("L 16:00-16:20, R 16:20-16:30"), ctx);
+  const staged = feedParts(feed("L 16:00-16:10, R 16:20-16:30"), ctx);
+  const shown = previewParts(original, staged, D("16:20").getTime(), D("16:10"));
+  eqTime(shown.find((p) => p.kind === "side" && p.side === "L")?.end, "16:10", "shown Left end");
+  eqTime(shown.find((p) => p.kind === "side" && p.side === "R")?.start, "16:20", "shown Right start");
+});
+check("side_end selection: a new break keeps a later repeated side selected", () => {
+  const ctx = done("17:00", "16:40");
+  const original = feedParts(feed("L 16:00-16:10, R 16:10-16:20, L 16:20-16:30, R 16:30-16:40"), ctx);
+  const selected = original[3];
+  if (selected.kind !== "side") throw new Error("Expected the final Right side");
+  const staged = feedParts(feed("L 16:00-16:05, R 16:10-16:20, L 16:20-16:30, R 16:30-16:40"), ctx);
+  const index = rowIndex({ kind: "side", key: `s-${selected.ref.start}`, index: 3, side: "R" }, staged);
+  eqTime(index === null ? null : staged[index]?.start, "16:30", "selected Right start");
+  eq(index, 4, "selected row index");
+});
 
 // ── S4: forgot to stop ───────────────────────────────────────────────────
 
