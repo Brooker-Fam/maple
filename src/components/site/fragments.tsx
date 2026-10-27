@@ -40,16 +40,16 @@ function Row({ icon, color, title, meta, time }: { icon: IconName; color: string
 
 export function HandoffFragment() {
   return (
-    <Fragment label="Sample screen: a 'While you slept' line saying Theo gave a bottle, changed two wet diapers and put June down for a nap, with each entry below it.">
+    <Fragment label="Sample screen: a 'While you slept' line saying Dad gave a bottle, changed two wet diapers and put June down for a nap, with each entry below it.">
       <div className="rounded-[16px] bg-mp-sunken px-4 py-3 text-[14px] text-mp-ink">
         <span className="font-semibold">While you slept</span>
-        <span className="text-mp-ink-2"> · 1 feed · 2 wet · a nap · by Theo</span>
+        <span className="text-mp-ink-2"> · 1 feed · 2 wet · a nap · by Dad</span>
       </div>
       <div className="mt-2 divide-y divide-[var(--mp-line)]">
-        <Row icon="moon" color={KIND_COLOR.sleep} title="Slept 2h 25m" meta="by Theo" time="2:15 AM" />
-        <Row icon="droplet" color={DETAIL_COLOR.pee} title="Wet diaper" meta="by Theo" time="2:10 AM" />
-        <Row icon="bottle" color={DETAIL_COLOR.bottle} title="Bottle · 2 fl oz pumped milk" meta="by Theo" time="1:50 AM" />
-        <Row icon="droplet" color={DETAIL_COLOR.pee} title="Wet diaper" meta="by Theo" time="12:40 AM" />
+        <Row icon="moon" color={KIND_COLOR.sleep} title="Slept 2h 25m" meta="by Dad" time="2:15 AM" />
+        <Row icon="droplet" color={DETAIL_COLOR.pee} title="Wet diaper" meta="by Dad" time="2:10 AM" />
+        <Row icon="bottle" color={DETAIL_COLOR.bottle} title="Bottle · 2 fl oz pumped milk" meta="by Dad" time="1:50 AM" />
+        <Row icon="droplet" color={DETAIL_COLOR.pee} title="Wet diaper" meta="by Dad" time="12:40 AM" />
       </div>
     </Fragment>
   );
@@ -185,9 +185,9 @@ export function MomFragment() {
     { name: "Acetaminophen", glance: "OK now · last 1:40 PM", ready: true },
   ];
   return (
-    <Fragment label="Sample screen: Ana's own page, with two medicines showing when each is OK again, a Took it button, a question for her OB, and a row for warning signs and help lines.">
+    <Fragment label="Sample screen: Mom's own page, with two medicines showing when each is OK again, a Took it button, a question for her OB, and a row for warning signs and help lines.">
       <div className="flex items-baseline justify-between">
-        <p className="font-display text-[26px] leading-none font-semibold text-mp-ink">Ana</p>
+        <p className="font-display text-[26px] leading-none font-semibold text-mp-ink">Mom</p>
         <p className="text-[13px] text-mp-ink-3">Day 15</p>
       </div>
       <div className="mt-3 divide-y divide-[var(--mp-line)]">

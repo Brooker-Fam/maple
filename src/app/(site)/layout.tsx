@@ -13,8 +13,7 @@ const cormorantItalic = Cormorant_Garamond({
 });
 
 const TITLE = "Maple | Left boob or right boob?";
-const DESCRIPTION =
-  "Left boob or right boob? Maple is one newborn log on both parents' phones, with the last feed and the next side ready at 3am. Free while in early access, with a waitlist for now.";
+const DESCRIPTION = "A newborn log for both parents' phones. Free in early access.";
 
 export const metadata: Metadata = {
   title: { default: TITLE, template: "%s | Maple" },
