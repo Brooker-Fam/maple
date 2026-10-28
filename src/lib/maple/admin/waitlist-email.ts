@@ -64,7 +64,7 @@ export function waitlistLaunchEmail(): Rendered {
     "Start a private family log for feeds, diapers, sleep and little moments, and invite the people helping you care for your baby.",
     "Start your family’s log:",
     url,
-    "Reply to this email if you have a question or need a hand getting started. It reaches the person who makes Maple.",
+    "Reply to this email if you have a question or need a hand getting started.",
     `You received this one-time invitation because this address joined Maple’s waitlist. To have your waitlist address removed, reply to this email or write to ${REPLY_TO}.`,
     "Maple is a tracker, not medical advice.",
   ];

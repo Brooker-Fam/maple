@@ -177,10 +177,9 @@ export function parseAnswer<S extends StepId>(step: S, raw: unknown): Answer[S] 
   throw new AnswerError("That isn't one of the questions.");
 }
 
-/** The instant a birth answer names, in the family's timezone; a missing time counts as noon. */
 export function birthInstant(a: { date: string; time: string | null }, tz: string): Date {
   const [y, m, d] = a.date.split("-").map(Number);
-  const [hh, mm] = (a.time ?? "12:00").split(":").map(Number);
+  const [hh, mm] = (a.time ?? "00:00").split(":").map(Number);
   return zonedTimeToUtc(y, m, d, hh, mm, tz);
 }
 

@@ -106,7 +106,7 @@ export async function homeFamily(email: string): Promise<number | null> {
 }
 
 export type JoinRefusal = "invite" | "elsewhere" | "unavailable";
-export type Joined = { familyId: number; reason?: undefined } | { familyId?: undefined; reason: JoinRefusal };
+export type Joined = { familyId: number; added?: boolean; reason?: undefined } | { familyId?: undefined; reason: JoinRefusal };
 
 const inviteHash = (token: string) => createHash("sha256").update(token).digest("hex");
 
@@ -149,7 +149,7 @@ export async function joinByInvite(who: GoogleIdentity, token: string, verifiedE
     const rows = redeemed?.[1];
     if (!rows) return { reason: "unavailable" };
     const familyId = parseFamilyId(rows[0]?.family_id);
-    if (familyId !== null) return { familyId };
+    if (familyId !== null) return { familyId, added: true };
     const already = await query(
       `SELECT i.family_id FROM maple_invites i JOIN maple_members m ON m.family_id = i.family_id AND m.email = $2
        JOIN maple_families f ON f.id = i.family_id AND f.status <> 'deleting'

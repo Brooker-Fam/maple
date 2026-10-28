@@ -1,5 +1,6 @@
 import Link from "next/link";
-import GetStarted, { SIGN_IN_PATH } from "./GetStarted";
+import GetStarted from "./GetStarted";
+import { SIGN_IN_PATH } from "./paths";
 import Leaf from "./Leaf";
 
 const LINKS = [
@@ -29,7 +30,7 @@ export default function SiteHeader() {
         <a href={SIGN_IN_PATH} rel="nofollow" className="site-focus rounded-xl px-3 py-2.5 text-[15px] font-medium whitespace-nowrap text-mp-ink hover:underline hover:underline-offset-4">
           Sign in
         </a>
-        <GetStarted size="small" />
+        <GetStarted size="small" placement="header" />
       </div>
     </header>
   );

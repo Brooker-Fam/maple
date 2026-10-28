@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { checkinResponse, daysSinceBirth } from "@/lib/maple/care";
 import {
   BLUES_NOTE,
@@ -75,6 +75,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   const [results, setResults] = useState<ScreenEntry | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const saveExtras = useRef<(() => Promise<boolean>) | null>(null);
 
   const pick = async (level: Level) => {
     if (busy) return;
@@ -143,7 +144,9 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
                     variant="ghost"
                     size="sm"
                     className="-mr-3 shrink-0"
-                    onClick={() => {
+                    data-checkin-save
+                    onClick={async () => {
+                      if (saveExtras.current && !(await saveExtras.current())) return;
                       setExtras(false);
                       setChanging(true);
                     }}
@@ -153,7 +156,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
                 </div>
                 {extras ? (
                   // Keyed by its time, which stays put when its temporary id becomes the saved one (a note being typed survives).
-                  <Extras key={Date.parse(today.at)} entry={today} care={care} onCrisis={() => setCrisis(true)} onDone={() => setExtras(false)} />
+                  <Extras key={Date.parse(today.at)} entry={today} care={care} onCrisis={() => setCrisis(true)} onDone={() => setExtras(false)} saveRef={saveExtras} />
                 ) : (
                   <button
                     type="button"
@@ -258,6 +261,85 @@ function Levels({ value, onPick, disabled }: { value?: number; onPick: (l: Level
   );
 }
 
+type ExtrasDraft = { note: string; tags: MoodTag[] };
+
+function useExtrasDraft(entry: Checkin, care: UseCare) {
+  const [note, setNote] = useState(entry.note ?? "");
+  const [tags, setTags] = useState<MoodTag[]>(entry.data.tags ?? []);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const initial = { note: entry.note ?? "", tags: entry.data.tags ?? [] };
+  const saved = useRef(initial);
+  const [savedKey, setSavedKey] = useState(() => extrasKey(initial));
+  const pending = useRef<{ key: string; id: number; promise: Promise<boolean> } | null>(null);
+  const sequence = useRef(0);
+  const latest = useRef({ note, tags });
+  latest.current = { note, tags };
+  const dirty = extrasKey({ note, tags }) !== savedKey;
+
+  useEffect(() => {
+    const current = latest.current.tags;
+    const acknowledged = saved.current.tags;
+    const changed = new Set([...current, ...acknowledged].filter((tag) => current.includes(tag) !== acknowledged.includes(tag)));
+    const remote = entry.data.tags ?? [];
+    const merged = [...remote.filter((tag) => !changed.has(tag)), ...current.filter((tag) => changed.has(tag))];
+    saved.current = { ...saved.current, tags: [...remote.filter((tag) => !changed.has(tag)), ...acknowledged.filter((tag) => changed.has(tag))] };
+    setSavedKey(extrasKey(saved.current));
+    setTags(merged);
+  }, [entry.data.tags]);
+
+  const save = (draft: ExtrasDraft): Promise<boolean> => {
+    const key = extrasKey(draft);
+    if (pending.current?.key === key) return pending.current.promise;
+    if (!pending.current && key === extrasKey(saved.current)) return Promise.resolve(true);
+    const previous = pending.current?.promise;
+    const request = ++sequence.current;
+    setSaving(true);
+    setProblem(null);
+    const promise = Promise.resolve(previous).then(async () => {
+      try {
+        const patch = {
+          ...(draft.note.trim() !== saved.current.note.trim() ? { note: draft.note } : {}),
+          ...(tagKey(draft.tags) !== tagKey(saved.current.tags) ? { tags: draft.tags } : {}),
+        };
+        if (Object.keys(patch).length) await care.act.updateCheckin(entry.id, patch);
+        saved.current = draft;
+        setSavedKey(key);
+        if (pending.current?.id === request) setProblem(null);
+        return true;
+      } catch (e) {
+        if (pending.current?.id === request) setProblem(errorText(e));
+        return false;
+      } finally {
+        if (pending.current?.id === request) { pending.current = null; setSaving(false); }
+      }
+    });
+    pending.current = { key, id: request, promise };
+    return promise;
+  };
+  const saveCurrent = async () => {
+    const draft = latest.current;
+    return await save(draft) && extrasKey(latest.current) === extrasKey(draft);
+  };
+  return { note, setNote, tags, setTags, problem, saving, dirty, save, saveCurrent };
+}
+
+function useCheckinNavigationGuard(active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const beforeNavigate = (event: Event) => {
+      if (!event.defaultPrevented && !window.confirm("Leave and discard your unsaved check-in changes?")) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("maple-before-navigate", beforeNavigate);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("maple-before-navigate", beforeNavigate);
+    };
+  }, [active]);
+}
+
 /**
  * "Anything else? (optional)": the chips and a note on one check-in, saved
  * as she goes (useCare shows them at once). The harm chip opens the crisis
@@ -268,27 +350,34 @@ function Extras({
   care,
   onCrisis,
   onDone,
+  saveRef,
+  onDirtyChange,
 }: {
   entry: Checkin;
   care: UseCare;
   onCrisis: () => void;
   onDone?: () => void;
+  saveRef: RefObject<(() => Promise<boolean>) | null>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const [note, setNote] = useState(entry.note ?? "");
-  const [problem, setProblem] = useState<string | null>(null);
+  const { note, setNote, tags, setTags, problem, saving, dirty, save, saveCurrent } = useExtrasDraft(entry, care);
   const labels = moodTags(useVoice());
-  const tags = entry.data.tags ?? [];
+  useCheckinNavigationGuard(!!onDone && (dirty || saving));
+  useEffect(() => {
+    saveRef.current = saveCurrent;
+    return () => { saveRef.current = null; };
+  });
+  useEffect(() => {
+    onDirtyChange?.(dirty || saving);
+    return () => onDirtyChange?.(false);
+  }, [dirty, saving, onDirtyChange]);
 
   const toggle = (tag: MoodTag) => {
     const on = !tags.includes(tag);
     if (tag === "harm_self" && on) onCrisis();
-    setProblem(null);
-    void care.act.updateCheckin(entry.id, { tags: on ? [...tags, tag] : tags.filter((x) => x !== tag) }).catch((e) => setProblem(errorText(e)));
-  };
-  const saveNote = () => {
-    if (note.trim() === (entry.note ?? "").trim()) return;
-    setProblem(null);
-    void care.act.updateCheckin(entry.id, { note }).catch((e) => setProblem(errorText(e)));
+    const next = on ? [...tags, tag] : tags.filter((x) => x !== tag);
+    setTags(next);
+    void save({ note, tags: next });
   };
 
   return (
@@ -316,19 +405,22 @@ function Extras({
           );
         })}
       </div>
-      <div onBlur={saveNote}>
+      <div onBlur={(event) => {
+        if (!(event.relatedTarget instanceof HTMLElement && event.relatedTarget.closest("[data-checkin-save]"))) void saveCurrent();
+      }}>
         <TextArea value={note} onChange={setNote} placeholder={CHECKIN_NOTE_PLACEHOLDER} rows={2} />
       </div>
       <Problem>{problem}</Problem>
+      {problem && <Button variant="soft" size="sm" data-checkin-save disabled={saving} onClick={() => void saveCurrent()}>Try again</Button>}
       {onDone && (
         <div className="flex justify-end">
           <Button
             variant="ghost"
             size="sm"
             className="-mr-3"
-            onClick={() => {
-              saveNote();
-              onDone();
+            data-checkin-save
+            onClick={async () => {
+              if (await saveCurrent()) onDone();
             }}
           >
             Done
@@ -338,6 +430,9 @@ function Extras({
     </div>
   );
 }
+
+const tagKey = (tags: MoodTag[]) => [...tags].sort().join(",");
+const extrasKey = (draft: ExtrasDraft) => JSON.stringify({ note: draft.note.trim(), tags: tagKey(draft.tags) });
 
 /** One row of "Your check-ins": "Thu, Oct 29 · Low · Tearful, Overwhelmed", her note under it, the time on the right. */
 function PastRow({ m, todayKey, tz, onOpen }: { m: MoodEntry; todayKey: string; tz: string; onOpen: () => void }) {
@@ -382,6 +477,8 @@ function CheckInSheet({
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [extrasDirty, setExtrasDirty] = useState(false);
+  const saveExtras = useRef<(() => Promise<boolean>) | null>(null);
   // Keep the last one while the sheet slides away; read the live copy so chips show as they're tapped.
   const [shown, setShown] = useState<Checkin | null>(entry);
   if (entry && entry !== shown && entry.id !== shown?.id) setShown(entry);
@@ -408,11 +505,12 @@ function CheckInSheet({
     <>
       <Sheet
         open={open}
+        dirty={extrasDirty}
         onClose={onClose}
         title="Your check-in"
         subtitle={when}
         footer={
-          <Button size="lg" className="w-full" onClick={onClose}>
+          <Button size="lg" className="w-full" data-checkin-save onClick={async () => { if (!saveExtras.current || await saveExtras.current()) onClose(); }}>
             Done
           </Button>
         }
@@ -431,7 +529,7 @@ function CheckInSheet({
           />
           <Problem>{problem}</Problem>
         </div>
-        <Extras key={Date.parse(live.at)} entry={live} care={care} onCrisis={onCrisis} />
+        <Extras key={Date.parse(live.at)} entry={live} care={care} onCrisis={onCrisis} saveRef={saveExtras} onDirtyChange={setExtrasDirty} />
         {cards.map((a) => (
           <AssessmentCard key={a.title} a={a} audience="mom" more={hotlineLinks(a)} />
         ))}

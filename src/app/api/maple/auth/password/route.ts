@@ -1,3 +1,5 @@
+import { clearAnalyticsContext, readAnalyticsContext } from "@/lib/analytics/context";
+import { identifyAnalyticsSoon } from "@/lib/analytics/server";
 import { NextRequest, NextResponse } from "next/server";
 import {
   checkAdminPassword,
@@ -38,7 +40,9 @@ export async function POST(request: NextRequest) {
     if (!member) return NextResponse.json({ error: "Maple's log is offline right now" }, { status: 503 });
 
     const res = NextResponse.json({ ok: true, member });
+    identifyAnalyticsSoon({ familyId: adminFamilyId(), member: member.email, role: member.role }, readAnalyticsContext(request));
     setSessionCookies(res, member.email, adminFamilyId());
+    clearAnalyticsContext(res);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "POST /api/maple/auth/password" });

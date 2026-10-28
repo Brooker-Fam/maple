@@ -31,6 +31,8 @@ import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/m
 import type { NavTarget } from "./AppNav";
 import { useCareNav } from "./care/CareNav";
 import { NavRow } from "./care/parts";
+import DayDial from "./DayDial";
+import { DiaperBrigade } from "./StatusCard";
 import { Icon, KindBadge } from "./icons";
 import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
 import { useNightActive } from "./nightLook";
@@ -139,12 +141,13 @@ export default function PatternsTab({
 
   const [range, setRange] = useState<Range>("7");
   const [mode, setMode] = useState<RibbonMode>("days");
+  const [dayDetails, setDayDetails] = useState(false);
 
   const span = range === "all" ? Math.min(daysBetween(bornKey ?? addDays(todayKey, -29), todayKey) + 1, 399) : Number(range);
   let fromKey = addDays(todayKey, -(span - 1));
   if (bornKey && bornKey > fromKey) fromKey = bornKey > todayKey ? todayKey : bornKey;
   // One extra day back so the first night (noon → noon) and sleeps across midnight are complete.
-  const { entries, ready, loaded, loadedFrom, partialDays } = useEntryRange(addDays(fromKey, -1), todayKey);
+  const { entries, ready, loaded, loadedFrom, partialDays, error, reload } = useEntryRange(addDays(fromKey, -1), todayKey);
   // While older weeks load (newest first), show only what has arrived instead of empty days.
   const viewFrom = ready || !loadedFrom || loadedFrom <= fromKey ? fromKey : loadedFrom;
 
@@ -215,6 +218,15 @@ export default function PatternsTab({
         />
       </div>
 
+      <div className="mb-5">
+        <button type="button" onClick={() => setDayDetails((shown) => !shown)} aria-expanded={dayDetails} className={cx(tone.card, "flex min-h-[56px] w-full items-center gap-3 px-4 text-left")}>
+          <Icon name="clock-3" size={20} className="text-mp-ink-2" />
+          <span className="flex-1 text-[15px] font-semibold text-mp-ink">Day details <span className="block text-[13px] font-normal text-mp-ink-2">24-hour clock and logged totals</span></span>
+          <Icon name={dayDetails ? "chevron-up" : "chevron-down"} size={18} className="text-mp-ink-2" />
+        </button>
+        {dayDetails && <div className="mt-4"><DayDial /></div>}
+      </div>
+
       <Segmented
         className="mb-6"
         value={range}
@@ -227,10 +239,17 @@ export default function PatternsTab({
         ]}
       />
 
-      <div className={cx("space-y-6 transition-opacity", !ready && loaded && "opacity-60")} aria-busy={!ready}>
-        {!loaded ? (
+      {error && (
+        <div className={cx(tone.card, "mb-5 flex items-center gap-3 py-2.5 pr-2.5 pl-4")} role="status">
+          <Icon name="cloud-off" size={20} className="shrink-0 text-mp-ink-3" />
+          <p className={cx(tone.body, "flex-1 text-sm")}>{loaded ? "Couldn't load every day. The days already loaded are below." : "Couldn't load the history for these patterns."}</p>
+          <Button size="sm" variant="soft" onClick={reload}>Try again</Button>
+        </div>
+      )}
+      <div className={cx("space-y-6 transition-opacity", !ready && loaded && !error && "opacity-60")} aria-busy={!ready && !error}>
+        {!loaded && !error ? (
           <EmptyState title="Loading…" />
-        ) : (
+        ) : loaded ? (
           <>
             {loggedDays < 2 && ready && (
               <Card>
@@ -241,7 +260,7 @@ export default function PatternsTab({
             )}
             {loggedDays >= 2 && <Insights days={chartDays} entries={entries} todayKey={todayKey} tz={tz} now={now} />}
 
-            {!ready && <p className={cx(tone.faint, "px-1 text-xs")}>Gathering earlier days…</p>}
+            {!ready && !error && <p className={cx(tone.faint, "px-1 text-xs")}>Gathering earlier days…</p>}
             {partialDays.length > 0 && (
               <p className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-[13px] leading-snug")} role="status">
                 <Icon name="info" size={16} className="mt-px shrink-0 text-mp-ink-3" />
@@ -270,7 +289,9 @@ export default function PatternsTab({
               <DailyCharts days={chartDays} entries={entries} todayKey={todayKey} tz={tz} bornAt={bornAt} units={units} now={now} />
             )}
           </>
-        )}
+        ) : null}
+
+        <DiaperBrigade />
 
         <section aria-labelledby="maple-growth" id="maple-growth-chart" className="scroll-mt-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px)+12px)]">
           <SectionTitle>
@@ -1731,8 +1752,12 @@ export async function buildVisitSummary(opts: {
 
   out.push(`${baby.name}: visit summary (${from === todayKey ? dayRuns([from]) : `${dayRuns([from])} to ${dayRuns([todayKey])}`})`);
   if (born != null) {
-    const age = babyAge(baby.born_at!, now, tz);
-    out.push(`Born ${shortDay(bornKey!)} at ${formatTime(born, tz)} · today ${words.hes} ${age.label.replace(/ old$/, "")} old (Day ${age.dayOfLife})`);
+    if (baby.settings.birth_time_approx === true) {
+      out.push(`Born ${shortDay(bornKey!)}, time not recorded`);
+    } else {
+      const age = babyAge(baby.born_at!, now, tz);
+      out.push(`Born ${shortDay(bornKey!)} at ${formatTime(born, tz)} · today ${words.hes} ${age.label.replace(/ old$/, "")} old (Day ${age.dayOfLife})`);
+    }
   }
   const birthBits = [
     baby.birth_weight_g ? `weight ${formatWeightBoth(baby.birth_weight_g)}` : null,

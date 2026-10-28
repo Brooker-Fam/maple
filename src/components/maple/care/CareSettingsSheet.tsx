@@ -6,6 +6,7 @@ import type { CareSettings } from "@/lib/maple/types";
 import { SheetFooter, useOpenCount } from "../sheets/parts";
 import { Segmented, Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
 import { ConfirmSheet, Footnote, GROUP, Problem, SwitchRow, errorText } from "./parts";
 import type { UseCare } from "./useCare";
 
@@ -44,6 +45,7 @@ function SettingsForm({ open, onClose, care, onDeleted }: { open: boolean; onClo
   const [suggest, setSuggest] = useState(s.checkin_suggestions !== false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const dirty = useDraftChanged({ ob, after, pharmacy, therapist, visit, feeding, grace, suggest });
 
   const save = async () => {
     setBusy(true);
@@ -88,6 +90,7 @@ function SettingsForm({ open, onClose, care, onDeleted }: { open: boolean; onClo
     <>
       <Sheet
         open={open && !confirm}
+        dirty={dirty}
         onClose={onClose}
         title="Settings for this page"
         footer={

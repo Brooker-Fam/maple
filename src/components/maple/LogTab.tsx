@@ -15,6 +15,9 @@ import {
   formatDuration,
   formatRelative,
   formatTime,
+  localParts,
+  parseDayKey,
+  zonedTimeToUtc,
 } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, EntryKind, EntryOf, MapleState, UnitSystem } from "@/lib/maple/types";
@@ -758,7 +761,7 @@ function DaySection({
                 ? "Nothing written down for today yet."
                 : `Nothing written down for ${label}.`}
           </p>
-          {!total && !readOnly && <QuickLog compact />}
+          {!total && !readOnly && <QuickLog compact day={key} />}
         </div>
       )}
     </section>
@@ -772,8 +775,19 @@ const QUICK: { kind: EntryKind; label: string }[] = [
 ];
 
 /** "Log an earlier one": open a sheet (each has its own time picker). */
-function QuickLog({ compact }: { compact?: boolean }) {
+function QuickLog({ compact, day }: { compact?: boolean; day?: string }) {
   const { open } = useSheets();
+  const { state, now } = useMaple();
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const add = (kind: EntryKind) => {
+    const current = now();
+    if (!day || day === dayKey(current, tz)) return open({ kind });
+    const { year, month, day: date } = parseDayKey(day);
+    const { hour, minute } = localParts(current, tz);
+    const end = zonedTimeToUtc(year, month, date, hour, minute, tz);
+    const start = kind === "sleep" ? new Date(Math.max(dayBounds(day, tz)[0].getTime(), end.getTime() - H)) : end;
+    open({ kind, preset: { started_at: start.toISOString(), ended_at: end.toISOString() } });
+  };
   return (
     <div role="group" aria-label="Log an earlier one" className={cx("flex flex-wrap justify-center gap-2", compact ? "mt-3" : "mt-1")}>
       {!compact && (
@@ -782,7 +796,7 @@ function QuickLog({ compact }: { compact?: boolean }) {
         </p>
       )}
       {QUICK.map((q) => (
-        <Chip key={q.kind} onClick={() => open({ kind: q.kind })}>
+        <Chip key={q.kind} onClick={() => add(q.kind)}>
           <Icon name={KIND_ICON[q.kind]} size={16} className="mp-kind-ink" style={{ color: KIND_COLOR[q.kind] }} />
           {q.label}
         </Chip>

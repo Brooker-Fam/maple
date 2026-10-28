@@ -73,9 +73,9 @@ function roughGap(min: number): string {
 /** One of the three "how long since" numbers: the value, with its label underneath. */
 function Since({ label, value, mark }: { label: string; value: string | null; mark: React.ReactNode }) {
   return (
-    <div className="min-w-0 px-3 py-3 first:pl-4">
-      <p className="truncate text-[16px] leading-tight font-semibold tracking-[-0.01em] text-mp-ink tabular-nums">{value ?? "—"}</p>
-      <p className="mt-1 flex items-center gap-1.5 text-[12px] font-medium text-mp-ink-2">
+    <div className="min-w-0 px-2 py-3 first:pl-3 last:pr-3">
+      <p className={cx("truncate leading-tight font-semibold tracking-[-0.01em] text-mp-ink tabular-nums", value ? "text-[16px]" : "text-[13px]")}>{value ?? "Not logged"}</p>
+      <p className="mt-1 flex items-center gap-1 text-[12px] font-medium text-mp-ink-2">
         {mark}
         <span className="truncate">{label}</span>
       </p>
@@ -267,7 +267,7 @@ export default function StatusCard() {
                 className="overflow-hidden text-[13px] text-mp-ink-3"
               >
                 {lastFedRule(vo)}
-                {gap != null && <> Lately: about every {formatDuration(gap * 60)} (start to start).</>}
+                {gap != null && <> Feeds lately: about every {formatDuration(gap * 60)} (start to start).</>}
               </motion.p>
             )}
           </AnimatePresence>
@@ -279,12 +279,12 @@ export default function StatusCard() {
         <div className="grid grid-cols-3">
           {/* All three are "how long since", so they share one form (and fit a third of a phone). The marks are the dock's. */}
           <Since
-            label="Since pee"
+            label="Last wet"
             mark={<Icon name="droplet" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.pee }} />}
             value={summary.lastPee ? since((now.getTime() - ts(summary.lastPee)) / 1000) : null}
           />
           <Since
-            label="Since poop"
+            label="Last dirty"
             mark={<Icon name="poop" size={14} strokeWidth={2} className="mp-kind-ink shrink-0" style={{ color: DETAIL_COLOR.poop }} />}
             value={summary.lastPoop ? since((now.getTime() - ts(summary.lastPoop)) / 1000) : null}
           />
@@ -307,7 +307,7 @@ export default function StatusCard() {
           <p className="-mt-1.5 flex items-center gap-1.5 px-4 pb-2.5 text-[12px] leading-4 text-mp-ink-2">
             <Icon name="history" size={13} className="shrink-0 text-mp-ink-3" />
             <span className="min-w-0">
-              Lately: about every {formatDuration(gap * 60)} <span className="whitespace-nowrap">(start to start)</span>
+              Feeds lately: about every {formatDuration(gap * 60)} <span className="whitespace-nowrap">(start to start)</span>
             </span>
           </p>
         )}

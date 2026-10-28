@@ -8,9 +8,11 @@ import type { CareEntry } from "@/lib/maple/types";
 import { cToF, fToC, formatTemp } from "@/lib/maple/units";
 import { Icon } from "../icons";
 import { AssessmentCard, CHECK_NUMBER_HINT, Label, SheetFooter, useNumberChecks, useOpenCount } from "../sheets/parts";
-import { Segmented, Sheet, Stepper, WhenField, cx, tone } from "../ui";
+import { Button, Segmented, Sheet, Stepper, WhenField, cx, tone } from "../ui";
+import { useDraftChanged } from "../useDraftChanged";
 import { useMaple } from "../useMaple";
 import { useCareNav } from "./CareNav";
+import CareHistorySheet from "./CareHistorySheet";
 import { GROUP, Problem, errorText } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
@@ -75,7 +77,9 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
   const [when, setWhen] = useState<Date | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [history, setHistory] = useState(false);
   const checks = useNumberChecks();
+  const dirty = useDraftChanged({ value, unit, when, invalid: checks.invalid });
   const write = care.access.write;
 
   const switchUnit = (u: "F" | "C") => {
@@ -109,8 +113,9 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
   };
 
   return (
-    <Sheet
+    <><Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={care.self ? "Your temperature" : `${care.name}'s temperature`}
       footer={
@@ -199,7 +204,9 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
           </div>
         </section>
       )}
+      <Button variant="soft" onClick={() => setHistory(true)}>View all readings</Button>
     </Sheet>
+    <CareHistorySheet open={open && history} onClose={() => setHistory(false)} care={care} kind="temp" /></>
   );
 }
 

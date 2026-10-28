@@ -115,7 +115,7 @@ export function welcomeEmail(d: WelcomeEmail): Rendered {
     { kind: "link", href: app },
     { kind: "p", text: "On an iPhone, open it in Safari, tap Share, then Add to Home Screen. Notifications work only from the Home Screen app." },
     { kind: "p", text: "To add the rest of the family, open Family and go to Invite someone." },
-    { kind: "p", text: "Reply to this email with a question or a problem. It reaches the person who makes Maple." },
+    { kind: "p", text: "Reply to this email with a question or a problem." },
   ];
   return { subject, text: text(blocks), html: page(subject, blocks) };
 }

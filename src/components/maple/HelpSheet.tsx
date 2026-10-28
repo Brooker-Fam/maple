@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { DISCLAIMER, emergencySigns, momHelp } from "@/lib/maple/guidelines";
 import { EMERGENCY_FILL, usePhones } from "./AlertCard";
 import { useAppNav } from "./AppNav";
@@ -11,21 +12,9 @@ import { HelpLines, TalkSection } from "./care/SupportScreen";
 import { useCare } from "./care/useCare";
 import { WarningSignsCard } from "./care/WarningSigns";
 import { Icon } from "./icons";
-import { SectionTitle, Sheet, cx, tone } from "./ui";
+import { SectionTitle, Segmented, Sheet, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
-/**
- * Help: the one sheet for "when do we call, and who", opened from Today's
- * footer, her tab's header and Family (view-only guests too). Two headed
- * parts: Maple (when to call 911, Call 911, her pediatrician and the
- * after-hours line) and Brittany (her warning signs grouped by who to call,
- * her OB's numbers, 911 and 988, the postpartum lines, and Supporting
- * Brittany). Every line of guidance is guidelines.ts's, word for word; the
- * crisis sheet and strip aren't part of it.
- *
- * Readers without her page (view-only guests) see "After the birth" and the
- * same signs for "mom", so it never shows that a page exists.
- */
 export default function HelpSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { readOnly } = useMaple();
   const w = useBabyWords();
@@ -33,6 +22,12 @@ export default function HelpSheet({ open, onClose }: { open: boolean; onClose: (
   const care = useCare();
   const nav = useCareNav();
   const app = useAppNav();
+  const [person, setPerson] = useState<"baby" | "care">("baby");
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) setPerson(app.tab === "care" ? "care" : "baby");
+  }
   const phones = usePhones();
   const baby = w.name;
 
@@ -55,7 +50,8 @@ export default function HelpSheet({ open, onClose }: { open: boolean; onClose: (
 
   return (
     <Sheet open={open} onClose={onClose} title="Help">
-      <section aria-labelledby="help-baby" className="space-y-3">
+      <Segmented aria-label="Help for" value={person} onChange={setPerson} options={[{ value: "baby", label: baby }, { value: "care", label: care?.name ?? "After the birth" }]} />
+      {person === "baby" && <section aria-labelledby="help-baby" className="space-y-3">
         <SectionTitle>
           <span id="help-baby">{baby}</span>
         </SectionTitle>
@@ -78,14 +74,14 @@ export default function HelpSheet({ open, onClose }: { open: boolean; onClose: (
         ) : (
           !readOnly && (
             <div className={GROUP}>
-              <NavRow icon="phone" label={`Add ${w.his} doctor's numbers`} note={`In Family → ${w.His} doctor, for one-tap calling`} onClick={() => then(() => app.go("family"))} />
+              <NavRow icon="phone" label={`Add ${w.his} doctor's numbers`} note="In Settings → Doctor & care plan, for one-tap calling" onClick={() => then(() => window.location.assign("#family/doctor"))} />
             </div>
           )
         )}
         <p className={cx(tone.faint, "px-1 text-[13px] leading-snug")}>For anything else that worries you, call your pediatrician.</p>
-      </section>
+      </section>}
 
-      <section aria-labelledby="help-mom" className="space-y-3">
+      {person === "care" && <section aria-labelledby="help-mom" className="space-y-3">
         <SectionTitle>
           <span id="help-mom">{care ? care.name : "After the birth"}</span>
         </SectionTitle>
@@ -104,7 +100,7 @@ export default function HelpSheet({ open, onClose }: { open: boolean; onClose: (
             onClick={() => then(nav.openSupport)}
           />
         </div>
-      </section>
+      </section>}
 
       <p className={cx(tone.faint, "px-1 pb-1 text-center text-[12px] leading-snug")}>{DISCLAIMER}</p>
     </Sheet>

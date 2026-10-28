@@ -1,3 +1,5 @@
+import { clearAnalyticsContext } from "@/lib/analytics/context";
+import { identifyAnalyticsSoon } from "@/lib/analytics/server";
 import { NextRequest, NextResponse } from "next/server";
 import { getAppBaseUrl } from "@/lib/secret-box";
 import { setSessionCookies, signedInAs } from "@/lib/maple/auth";
@@ -27,7 +29,9 @@ export async function GET(request: NextRequest) {
     const signedIn = await signedInAs(ticket);
     if (!signedIn) return redirect("/maple?auth=failed");
     const res = redirect(ticket.back);
+    identifyAnalyticsSoon({ familyId: signedIn.ctx.familyId, member: signedIn.member.email, role: signedIn.member.role }, ticket.analytics);
     setSessionCookies(res, signedIn.member.email, signedIn.ctx.familyId);
+    clearAnalyticsContext(res);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "GET /api/maple/auth/native" });

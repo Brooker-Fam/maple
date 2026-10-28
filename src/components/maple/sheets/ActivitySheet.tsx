@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useState } from "react";
 import { tummyGoalMinutes, tummyNote } from "@/lib/maple/guidelines";
 import { formatDuration } from "@/lib/maple/time";
@@ -38,6 +40,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
   });
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const dirty = useDraftChanged({ range, note });
   const [start, end] = range;
   const goal = summary?.targets?.tummyMin ?? tummyGoalMinutes(ageDays);
   const soFar = Math.round((summary?.today.tummySec ?? 0) / 60);
@@ -76,6 +79,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title="Tummy time"
+      dirty={dirty}
       footer={
         <SheetFooter
           onClose={onClose}
@@ -110,6 +114,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   );
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const dirty = useDraftChanged({ when, minutes, note });
 
   /** A bath that "just" happened with a length ends now, so it started that long ago. */
   const times = () => {
@@ -152,6 +157,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={onClose}
       title="Bath"
+      dirty={dirty}
       footer={
         <SheetFooter
           onClose={onClose}

@@ -2,8 +2,8 @@
 
 import { useRef, useState } from "react";
 import { deviceId } from "@/lib/maple/device";
-import { currentSetting, isPhoneSetting, settingProposalSchema, settingValueLabel, type SettingAction, type SettingActionResult, type SettingProposal, type SettingsSnapshot, type SettingValue } from "@/lib/maple/chat/settings";
-import { useAppNav } from "../AppNav";
+import { currentSetting, isPhoneSetting, settingProposalSchema, settingValueLabel, type SettingAction, type SettingActionResult, type SettingKey, type SettingProposal, type SettingsSnapshot, type SettingValue } from "@/lib/maple/chat/settings";
+import { useAppNav, type SettingsTarget } from "../AppNav";
 import { Icon } from "../icons";
 import { useNotifications } from "../notify";
 import { Button, cx, tone } from "../ui";
@@ -13,9 +13,16 @@ import { usePhoneSettings } from "./phoneSettings";
 type Ref = { threadId: string; messageId: string; toolCallId: string };
 type PendingPhone = { action: SettingAction["action"]; previous: SettingValue; value: SettingValue };
 
+function settingsPage(key: SettingKey): SettingsTarget {
+  if (isPhoneSetting(key)) return "family/appearance";
+  if (key === "baby_name" || key === "nickname") return "family/baby";
+  if (key === "pediatrician_name" || key === "pediatrician_phone" || key === "after_hours_phone") return "family/doctor";
+  return "family/today";
+}
+
 export default function ChatSetting({ setting: raw, ...props }: Ref & { setting: SettingProposal | unknown; busy?: boolean }) {
   const parsed = settingProposalSchema.safeParse(raw);
-  if (!parsed.success) return <p className={cx(tone.muted, "text-[14px]")}>This setting card is no longer available. Open Family to change it.</p>;
+  if (!parsed.success) return <p className={cx(tone.muted, "text-[14px]")}>This setting card is no longer available. Open Settings to change it.</p>;
   return <SettingCard key={`${props.threadId}/${props.messageId}/${props.toolCallId}`} initial={parsed.data} {...props} />;
 }
 
@@ -82,7 +89,7 @@ function SettingCard({ initial, threadId, messageId, toolCallId, busy = false }:
         setPhonePending(localChange);
         setProblem("Changed on this phone, but the chat couldn't record it. Try checking again.");
       } else if (error instanceof ApiError && error.status === 409) {
-        setProblem("This setting or conversation changed. Open Family to check its current value.");
+        setProblem("This setting or conversation changed. Open Settings to check its current value.");
         void refresh();
       } else {
         setProblem("Couldn't confirm this setting. Check again before changing it elsewhere.");
@@ -110,7 +117,7 @@ function SettingCard({ initial, threadId, messageId, toolCallId, busy = false }:
       </div>
       {local && !samePhone && <p className={cx(tone.muted, "text-[13px] leading-snug")}>This card is for the phone where it was requested. Ask again to change this phone.</p>}
       {undoChanged && !phonePending && <p className={cx(tone.muted, "text-[13px] leading-snug")}>Changed again since this card. Your current choice is {settingValueLabel(key, current)}.</p>}
-      {familyChanged && <p className={cx(tone.muted, "text-[13px] leading-snug")}>This setting changed since the card was made. Check its current value in Family.</p>}
+      {familyChanged && <p className={cx(tone.muted, "text-[13px] leading-snug")}>This setting changed since the card was made. Check its current value in Settings.</p>}
       {problem && <p role="alert" className="text-[14px] leading-snug text-mp-danger">{problem}</p>}
       {canChange && setting.status !== "undone" && (
         <div className="flex flex-wrap gap-2">
@@ -119,7 +126,7 @@ function SettingCard({ initial, threadId, messageId, toolCallId, busy = false }:
             : setting.status === "applied"
               ? <Button size="sm" variant="ghost" disabled={disabled || undoChanged} onClick={() => void act("undo")}>Undo</Button>
               : familyChanged
-                ? <Button size="sm" variant="soft" onClick={() => app.go("family")}>Open Family</Button>
+                ? <Button size="sm" variant="soft" onClick={() => app.go(settingsPage(key))}>Open Settings</Button>
                 : <Button size="sm" disabled={disabled} onClick={() => void act("apply")}>Apply</Button>}
         </div>
       )}

@@ -25,7 +25,7 @@ export type MilestonePreset = {
 };
 
 export const MILESTONES: readonly MilestonePreset[] = [
-  { id: "hello-world", label: "Hello, world", emoji: "🍁", hint: "The very first photo" },
+  { id: "hello-world", label: "First photo", emoji: "🍁", hint: "The very first photo" },
   { id: "held-finger", label: "Held a finger", emoji: "🤲", hint: "That tiny grip" },
   { id: "met-zoe", label: "Met Zoe", emoji: "🐾", hint: "The couch commander approves" },
   { id: "met-bruce", label: "Bruce acknowledged Maple (eventually)", emoji: "🐈", hint: "From a dignified distance" },

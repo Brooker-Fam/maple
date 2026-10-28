@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ROLE_WORDS, type Answer, type OnboardingView } from "@/lib/maple/onboarding/steps";
+import { dayKey } from "@/lib/maple/time";
 import { LegalLinks } from "../Legal";
 import { Chip, cx, tone } from "../ui";
 import { birthFields } from "./describe";
@@ -13,7 +14,7 @@ type Props = { ob: Onboarding; view: OnboardingView };
 export function WelcomeStep({ ob }: Props) {
   const [adult, setAdult] = useState(false);
   return (
-    <StepShell step="welcome" ob={ob} canSave={adult} saveLabel="Continue" onSave={() => void ob.answer("welcome", { adult: true, terms: true })}>
+    <StepShell step="welcome" ob={ob} draft={{ adult }} canSave={adult} saveLabel="Continue" onSave={() => void ob.answer("welcome", { adult: true, terms: true })}>
       <label className="flex items-start gap-3">
         <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-[var(--mp-accent)]" />
         <span className={cx(tone.body, "text-[15px] leading-snug")}>I&apos;m 18 or older, I live in the US, and I agree to the terms and privacy policy.</span>
@@ -29,7 +30,7 @@ export function YouStep({ ob, view }: Props) {
   const [word, setWord] = useState<string | null>(view.values.you.role_word ?? null);
   const [other, setOther] = useState(!known && !!view.values.you.role_word);
   return (
-    <StepShell step="you" ob={ob} canSave={!!name.trim()} onSave={() => void ob.answer("you", { name, role_word: word })}>
+    <StepShell step="you" ob={ob} draft={{ name, word, other }} canSave={!!name.trim()} onSave={() => void ob.answer("you", { name, role_word: word })}>
       <TextInput label="Your first name" value={name} onChange={setName} autoComplete="given-name" />
       <div className="space-y-1.5">
         <span className={tone.label}>What the baby will call you</span>
@@ -84,7 +85,7 @@ export function TimezoneStep({ ob, view }: Props) {
   const rest = zones.filter((z) => !US_ZONES.includes(z));
   const label = (z: string) => z.replace(/_/g, " ");
   return (
-    <StepShell step="timezone" ob={ob} onSave={() => void ob.answer("timezone", { timezone: tz, units })}>
+    <StepShell step="timezone" ob={ob} draft={{ tz, units }} onSave={() => void ob.answer("timezone", { timezone: tz, units })}>
       <label className="block space-y-1.5">
         <span className={tone.label}>Timezone</span>
         <select value={tz} onChange={(e) => setTz(e.target.value)} className={tone.input}>
@@ -125,15 +126,13 @@ export function BabyNameStep({ ob, view }: Props) {
   const [name, setName] = useState(saved ? (view.values.baby?.name ?? "") : "");
   const [nickname, setNickname] = useState(view.values.baby?.nickname ?? "");
   return (
-    <StepShell step="baby_name" ob={ob} canSave={!!name.trim()} onSave={() => void ob.answer("baby_name", { name, nickname: nickname || null })}>
+    <StepShell step="baby_name" ob={ob} draft={{ name, nickname }} canSave={!!name.trim()} onSave={() => void ob.answer("baby_name", { name, nickname: nickname || null })}>
       <TextInput label="Baby's name" value={name} onChange={setName} />
       <TextInput label="Nickname (optional)" value={nickname} onChange={setNickname} />
       <p className={cx(tone.faint, "text-[13px]")}>Haven&apos;t picked yet? Skip it, and the log says &quot;Baby&quot; until you do.</p>
     </StepShell>
   );
 }
-
-const todayKey = () => new Date().toLocaleDateString("en-CA");
 
 export function BirthStep({ ob, view }: Props) {
   const b = view.values.baby;
@@ -145,7 +144,7 @@ export function BirthStep({ ob, view }: Props) {
   const [due, setDue] = useState(b?.due_date ?? "");
   const value: Answer["birth"] | null = born === true ? (date ? { born: true, date, time: noTime || !time ? null : time } : null) : born === false ? (due ? { born: false, due } : null) : null;
   return (
-    <StepShell step="birth" ob={ob} canSave={!!value && (born === false || noTime || !!time)} onSave={() => value && void ob.answer("birth", value)}>
+    <StepShell step="birth" ob={ob} draft={{ born, date, time, noTime, due }} canSave={!!value && (born === false || noTime || !!time)} onSave={() => value && void ob.answer("birth", value)}>
       <div className="flex flex-wrap gap-2">
         <Chip selected={born === true} onClick={() => setBorn(true)}>
           The baby is here
@@ -156,7 +155,7 @@ export function BirthStep({ ob, view }: Props) {
       </div>
       {born === true && (
         <div className="grid grid-cols-2 gap-3">
-          <TextInput label="Birth date" type="date" value={date} onChange={setDate} max={todayKey()} />
+          <TextInput label="Birth date" type="date" value={date} onChange={setDate} max={dayKey(new Date(), view.values.timezone.timezone)} />
           {!noTime && <TextInput label="Time" type="time" value={time} onChange={setTime} />}
           <label className="col-span-2 flex items-center gap-2.5">
             <input type="checkbox" checked={noTime} onChange={(e) => setNoTime(e.target.checked)} className="h-5 w-5 accent-[var(--mp-accent)]" />
@@ -186,7 +185,7 @@ export function FeedingStep({ ob, view }: Props) {
   const [f, setF] = useState(view.values.feeding ?? { nursing: false, pumping: false, formula: false });
   const toggle = (k: keyof typeof f) => setF({ ...f, [k]: !f[k] });
   return (
-    <StepShell step="feeding" ob={ob} canSave={f.nursing || f.pumping || f.formula} onSave={() => void ob.answer("feeding", f)}>
+    <StepShell step="feeding" ob={ob} draft={f} canSave={f.nursing || f.pumping || f.formula} onSave={() => void ob.answer("feeding", f)}>
       <p className={cx(tone.body, "text-[15px]")}>Pick any that fit.</p>
       <div className="flex flex-wrap gap-2">
         <Chip selected={f.nursing} onClick={() => toggle("nursing")}>
@@ -212,6 +211,7 @@ export function PediatricianStep({ ob, view }: Props) {
     <StepShell
       step="pediatrician"
       ob={ob}
+      draft={{ name, phone, afterHours }}
       canSave={!!(name.trim() || phone.trim() || afterHours.trim())}
       onSave={() => void ob.answer("pediatrician", { name: name || null, phone: phone || null, after_hours: afterHours || null })}
     >

@@ -42,7 +42,7 @@ export function TermsCard({ consent, onAccepted }: { consent: ChatConsent; onAcc
       </ul>
       {consent.self ? (
         <div className={cx(tone.inset, "overflow-hidden")}>
-          <SwitchRow label={CARE_SWITCH} note="Off, the chat leaves your page out. You can change this later in Family." checked={care} onChange={setCare} />
+          <SwitchRow label={CARE_SWITCH} note="Off, the chat leaves your page out. You can change this later in Settings → Chat privacy." checked={care} onChange={setCare} />
         </div>
       ) : (
         <CareNote consent={consent} />
@@ -60,7 +60,7 @@ export function CareNote({ consent }: { consent: ChatConsent | null }) {
   if (!care || !consent || consent.care) return null;
   return (
     <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-      {consent.self ? "The chat can't see your food, drinks, medicines, temperatures or OB questions. You can turn that on in Family." : `${care.name}'s food, drinks, medicines, temperatures and OB questions aren't available to the chat.`}
+      {consent.self ? "The chat can't see your food, drinks, medicines, temperatures or OB questions. You can turn that on in Settings → Chat privacy." : `${care.name}'s food, drinks, medicines, temperatures and OB questions aren't available to the chat.`}
     </p>
   );
 }

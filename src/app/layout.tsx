@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Cormorant_Garamond } from "next/font/google";
 import ThemeProvider from "@/components/ThemeProvider";
+import ClientErrors from "@/components/analytics/ClientErrors";
 import { MAPLE_ORIGIN } from "@/lib/maple/origin";
 import "./globals.css";
 
@@ -35,6 +36,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
       </head>
       <body className="min-h-screen antialiased">
+        <ClientErrors />
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>

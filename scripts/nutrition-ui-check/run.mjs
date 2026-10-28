@@ -56,6 +56,38 @@ const saveFood = async (description) => {
 
 try {
   await reset();
+  await page.evaluate(() => window.__nutritionFixture.seedHistory());
+  await page.getByLabel("Food and drink day", { exact: true }).selectOption("2026-10-24");
+  await page.getByRole("button", { name: "Edit Lentil toast", exact: true }).click();
+  await page.getByLabel("Food 1 protein (g)", { exact: true }).fill("10");
+  const foodDraft = page.getByRole("dialog", { name: "Edit food or drink", exact: true });
+  await foodDraft.getByRole("button", { name: "Close", exact: true }).click();
+  const discardDraft = page.getByRole("dialog", { name: "Discard unsaved changes?", exact: true });
+  await discardDraft.waitFor();
+  await discardDraft.getByRole("button", { name: "Keep editing", exact: true }).click();
+  assert.equal(await page.getByLabel("Food 1 protein (g)", { exact: true }).inputValue(), "10");
+  await page.keyboard.press("Escape");
+  await discardDraft.waitFor();
+  await page.screenshot({ path: path.join(screenshots, "nutrition-discard.png"), fullPage: true });
+  await discardDraft.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await closeSaved();
+  assert.equal((await snapshot()).server[0].data.items[0].nutrients.protein_g, 9);
+  assert.equal((await snapshot()).requests.filter((request) => request.method !== "GET").length, 0);
+  console.log("PASS item-only draft: Close and Escape protect protein edits; explicit discard saves nothing");
+
+  await reset();
+  await page.getByRole("button", { name: "Other drink", exact: true }).click();
+  await page.getByLabel("Amount in oz", { exact: true }).fill("7..2");
+  await page.getByRole("dialog", { name: "Had a drink", exact: true }).getByRole("button", { name: "Close", exact: true }).click();
+  await discardDraft.waitFor();
+  await discardDraft.getByRole("button", { name: "Keep editing", exact: true }).click();
+  assert.equal(await page.getByLabel("Amount in oz", { exact: true }).inputValue(), "7..2");
+  assert.equal((await snapshot()).requests.length, 0);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await closeSaved();
+  console.log("PASS invalid drink draft: closing keeps typed text behind discard confirmation");
+
+  await reset();
   await page.getByRole("button", { name: "Ate something", exact: true }).click();
   await page.getByLabel("What was it?", { exact: true }).fill("Synthetic egg toast");
   await page.getByRole("button", { name: "Add food item", exact: true }).click();

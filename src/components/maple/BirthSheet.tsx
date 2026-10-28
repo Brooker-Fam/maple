@@ -2,24 +2,18 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { formatTime } from "@/lib/maple/time";
+import { birthInstant, birthProblem } from "@/lib/maple/onboarding/steps";
+import { dayKey, formatTime } from "@/lib/maple/time";
 import { cmToIn, formatLength, formatWeight, gramsToLbOz, inToCm, lbOzToGrams } from "@/lib/maple/units";
 import type { UnitSystem } from "@/lib/maple/types";
 import { MapleLeaf, useStill } from "./art";
 import { useBabyWords } from "./familyWords";
 import { Icon } from "./icons";
 import { useSheets } from "./sheets";
-import { MiniStepper } from "./sheets/parts";
-import { Button, Sheet, WhenField, cx, tone } from "./ui";
+import { MiniStepper, useOpenCount } from "./sheets/parts";
+import { useDraftChanged } from "./useDraftChanged";
+import { Button, Field, Sheet, WhenField, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
-
-/**
- * "She's here!" — the birth form. Only the time is required (defaulting to
- * now); weight, length and head can wait. Saving sets born_at, keeps a
- * "Hello, world" moment with her birth stats, and opens the welcome
- * celebration. mode="edit" reuses the form from Family to fix the details
- * later, without the celebration.
- */
 
 type Mode = "birth" | "edit";
 
@@ -39,50 +33,49 @@ export function birthLine(
   born: Date,
   tz: string,
   units: UnitSystem,
-  stats: { weightG: number | null; lengthCm: number | null; headCm: number | null }
+  stats: { weightG: number | null; lengthCm: number | null; headCm: number | null },
+  timeKnown = true
 ): string {
-  const bits = [`Born ${formatTime(born, tz)}`];
+  const bits = [timeKnown ? `Born ${formatTime(born, tz)}` : "Birth time not recorded"];
   if (stats.weightG) bits.push(formatWeight(stats.weightG, units));
   if (stats.lengthCm) bits.push(`${formatLength(stats.lengthCm, units)} long`);
   if (stats.headCm) bits.push(`head ${formatLength(stats.headCm, units)}`);
   return bits.join(" · ");
 }
 
-export default function BirthSheet({ open, onClose, mode = "birth" }: { open: boolean; onClose: () => void; mode?: Mode }) {
+type Props = { open: boolean; onClose: () => void; mode?: Mode };
+
+export default function BirthSheet(props: Props) {
+  const count = useOpenCount(props.open);
+  return <BirthForm key={count} {...props} />;
+}
+
+function BirthForm({ open, onClose, mode = "birth" }: Props) {
   const { state, units, now, api, log, refresh, toast } = useMaple();
   const words = useBabyWords();
   const baby = state?.baby;
   const tz = baby?.timezone ?? "America/New_York";
 
-  const [when, setWhen] = useState<Date | null>(null);
+  const initialBorn = mode === "edit" && baby?.born_at ? new Date(baby.born_at) : null;
+  const initialUnknown = mode === "edit" && baby?.settings.birth_time_approx === true;
+  const lbOz = baby?.birth_weight_g ? gramsToLbOz(baby.birth_weight_g) : null;
+  const [when, setWhen] = useState<Date | null>(initialBorn);
+  const [timeUnknown, setTimeUnknown] = useState(initialUnknown);
+  const [exactChosen, setExactChosen] = useState(!initialUnknown);
+  const [birthDate, setBirthDate] = useState(() => dayKey(initialBorn ?? now(), tz));
   const [showStats, setShowStats] = useState(true);
-  const [lb, setLb] = useState<number | null>(null);
-  const [oz, setOz] = useState<number | null>(null);
-  const [grams, setGrams] = useState<number | null>(null);
-  const [length, setLength] = useState<number | null>(null);
-  const [head, setHead] = useState<number | null>(null);
+  const [lb, setLb] = useState<number | null>(lbOz?.lb ?? null);
+  const [oz, setOz] = useState<number | null>(lbOz?.oz ?? null);
+  const [grams, setGrams] = useState<number | null>(baby?.birth_weight_g ? Math.round(baby.birth_weight_g) : null);
+  const [length, setLength] = useState<number | null>(toShown(baby?.birth_length_cm ?? null, units));
+  const [head, setHead] = useState<number | null>(toShown(baby?.birth_head_cm ?? null, units));
   const [saving, setSaving] = useState(false);
   // A typo in a measurement ("7..2") holds Save rather than dropping the number.
   const [invalid, setInvalid] = useState<Record<string, boolean>>({});
   const hasInvalid = Object.values(invalid).some(Boolean);
   const [problem, setProblem] = useState<string | null>(null);
 
-  // Fill in from what's saved each time the sheet opens.
-  useEffect(() => {
-    if (!open || !baby) return;
-    const w = baby.birth_weight_g;
-    const lbOz = w ? gramsToLbOz(w) : null;
-    setWhen(mode === "edit" && baby.born_at ? new Date(baby.born_at) : null);
-    setShowStats(true);
-    setLb(lbOz ? lbOz.lb : null);
-    setOz(lbOz ? lbOz.oz : null);
-    setGrams(w ? Math.round(w) : null);
-    setLength(toShown(baby.birth_length_cm, units));
-    setHead(toShown(baby.birth_head_cm, units));
-    setProblem(null);
-    // Only on open: later baby/units changes shouldn't wipe what's being typed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  const dirty = useDraftChanged({ when, timeUnknown, birthDate, showStats, lb, oz, grams, length, head, hasInvalid });
 
   if (!baby) return null;
 
@@ -91,7 +84,23 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
   const headCm = showStats ? fromShown(head, units) : null;
   const firstName = baby.nickname || baby.name.split(" ")[0] || "Baby";
 
+  const changeTimeCertainty = (unknown: boolean) => {
+    if (unknown && exactChosen) setBirthDate(dayKey(when ?? now(), tz));
+    if (!unknown) {
+      setWhen(null);
+      setExactChosen(false);
+    }
+    setTimeUnknown(unknown);
+  };
+
   const check = (): string | null => {
+    if (!timeUnknown && !exactChosen) return "Choose the birth time, or keep it marked as unknown.";
+    if (!timeUnknown && when && when.getTime() > now().getTime() + 10 * 60_000) return "That birth time is in the future.";
+    if (timeUnknown) {
+      if (!birthDate) return "Choose the birth date.";
+      const issue = birthProblem({ born: true, date: birthDate, time: null }, tz, now());
+      if (issue) return issue;
+    }
     if (weightG != null && (weightG < WEIGHT_G[0] || weightG > WEIGHT_G[1])) return "That weight looks off. Check the numbers?";
     if (lengthCm != null && (lengthCm < LENGTH_CM[0] || lengthCm > LENGTH_CM[1])) return "That length looks off. Check the numbers?";
     if (headCm != null && (headCm < HEAD_CM[0] || headCm > HEAD_CM[1])) return "That head size looks off. Check the numbers?";
@@ -103,13 +112,13 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
     setProblem(issue);
     if (issue || saving) return;
     setSaving(true);
-    const born = when ?? now();
+    const born = timeUnknown ? birthInstant({ date: birthDate, time: null }, tz) : when ?? now();
     const stats = {
       weightG: weightG == null ? null : Math.round(weightG),
       lengthCm: lengthCm == null ? null : round(lengthCm, 1),
       headCm: headCm == null ? null : round(headCm, 1),
     };
-    const body: Record<string, unknown> = { born_at: born.toISOString() };
+    const body: Record<string, unknown> = { born_at: born.toISOString(), settings: { birth_time_approx: timeUnknown ? true : null } };
     // Birth mode only sends what was filled in ("Add later" keeps any saved values);
     // edit mode saves exactly what's on screen, so clearing a field clears it.
     if (mode === "edit" || stats.weightG != null) body.birth_weight_g = stats.weightG;
@@ -131,7 +140,7 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
       return;
     }
 
-    const line = birthLine(born, tz, units, stats);
+    const line = birthLine(born, tz, units, stats, !timeUnknown);
     // One "Hello, world" moment, even if both parents tap "She's here!" at once:
     // the fixed client_id makes the server keep the first.
     const already = state?.entries.some((e) => e.kind === "moment" && e.data.milestone === "born");
@@ -152,7 +161,7 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
     const day = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "long", month: "long", day: "numeric" }).format(born);
     celebrateBirth({
       name: baby.name,
-      when: `${day} · ${formatTime(born, tz)}`,
+      when: timeUnknown ? `${day} · time not recorded` : `${day} · ${formatTime(born, tz)}`,
       stats: line.split(" · ").slice(1).join(" · "),
     });
     void refresh();
@@ -190,21 +199,35 @@ export default function BirthSheet({ open, onClose, mode = "birth" }: { open: bo
     <div className="contents">
       <Sheet
         open={open}
+        dirty={dirty}
         onClose={onClose}
         title={mode === "birth" ? `${words.Hes} here!` : "Birth details"}
         footer={
-          <Button size="lg" className="w-full" onClick={() => void submit()} disabled={saving || hasInvalid}>
+          <Button size="lg" className="w-full" onClick={() => void submit()} disabled={saving || hasInvalid || (timeUnknown && !birthDate) || (!timeUnknown && !exactChosen)}>
             {saving ? "Saving…" : mode === "birth" ? `Welcome ${firstName}` : "Save"}
           </Button>
         }
       >
         {mode === "birth" && (
           <p className={cx(tone.muted, "text-[15px] leading-relaxed")}>
-            Congratulations! Just {words.his} birth time for now. Everything else can wait.
+            Add {words.his} birth date and time, if you know it. Measurements can wait.
           </p>
         )}
 
-        <WhenField label="Born" value={when} onChange={setWhen} tz={tz} offsets={[15, 60, 180, 360]} />
+        <label className="flex min-h-[44px] items-center gap-3">
+          <input type="checkbox" className="h-5 w-5 accent-[var(--mp-accent)]" checked={timeUnknown} onChange={(e) => changeTimeCertainty(e.target.checked)} />
+          <span className={cx(tone.body, "text-[15px]")}>Birth time not known</span>
+        </label>
+        {timeUnknown ? (
+          <Field label="Birth date" hint="The log will show the date without a birth time.">
+            <input type="date" aria-label="Birth date" className={tone.input} value={birthDate} max={dayKey(now(), tz)} onChange={(e) => setBirthDate(e.target.value)} />
+          </Field>
+        ) : (
+          <div className="space-y-2">
+            <WhenField label="Born" value={when} onChange={(value) => { setWhen(value); setExactChosen(true); }} tz={tz} offsets={[15, 60, 180, 360]} />
+            {!exactChosen && <p className={cx(tone.muted, "text-[13px]")}>Choose a time to replace the unknown birth time.</p>}
+          </div>
+        )}
 
         {showStats ? (
           <section aria-labelledby="birth-stats" className="space-y-4">

@@ -60,6 +60,7 @@ export type PostDeps = {
   /** Gets every error already scrubbed (`scrub`), so whatever it logs carries no message text. */
   report: (error: Error) => void;
   waitUntil: (p: Promise<unknown>) => void;
+  lifecycle?: (event: "chat_started" | "chat_completed" | "chat_failed") => void;
 };
 
 export type PostBody = { threadId?: unknown; message?: unknown; requestId?: unknown; submittedAt?: unknown };
@@ -252,7 +253,11 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
         release,
         report: deps.report,
         waitUntil: deps.waitUntil,
+        lifecycle: deps.lifecycle,
       },
+    }).catch((error: unknown) => {
+      deps.lifecycle?.("chat_failed");
+      throw error;
     });
     streaming = true;
     return res;

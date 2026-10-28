@@ -9,6 +9,8 @@ import { RecordedTimeField } from "../TimeField";
 import { Label, MoreDetails, NoteField, SheetFooter, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Segmented, Sheet, cx, tone } from "../ui";
 import { ApiError, useMaple, useNow } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
+import CareHistorySheet from "./CareHistorySheet";
 import { useCareNav } from "./CareNav";
 import MedPlanSheet from "./MedPlanSheet";
 import { GROUP, Problem, errorText, useDoseText } from "./parts";
@@ -28,7 +30,7 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
   const id = planId ?? last;
   const open = planId != null;
   const view = id == null ? undefined : [...care.plans, ...care.finished].find((v) => v.plan.id === id);
-  const [sub, setSub] = useState<"edit" | { dose: DoseEntry } | null>(null);
+  const [sub, setSub] = useState<"edit" | "history" | { dose: DoseEntry } | null>(null);
   const { state, now } = useMaple();
   const nav = useCareNav();
   const text = useDoseText();
@@ -96,6 +98,7 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
             <p className={cx(tone.muted, "px-1 text-[15px]")}>Nothing logged in the last 7 days.</p>
           )}
         </section>
+        <Button variant="soft" onClick={() => setSub("history")}>View older doses</Button>
 
         {write && (
           <div className="flex flex-wrap gap-2 pb-1">
@@ -133,6 +136,7 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
       </Sheet>
 
       <MedPlanSheet open={open && sub === "edit"} onClose={() => setSub(null)} care={care} plan={plan} onDeleted={onClose} />
+      <CareHistorySheet open={open && sub === "history"} onClose={() => setSub(null)} care={care} plan={plan} />
       <DoseEdit
         open={open && typeof sub === "object" && sub !== null}
         dose={typeof sub === "object" && sub !== null ? sub.dose : null}
@@ -170,6 +174,7 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
   const [skipped, setSkipped] = useState(!!dose.data.skipped);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const dirty = useDraftChanged({ when, timeInvalid, units, doseText, note, skipped });
   const close = () => { if (!busy) onClose(); };
   const counted = !!plan.limit_unit && plan.limit_unit !== "doses";
   const options = parseUnits(plan.units_per_dose).options;
@@ -216,6 +221,7 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={close}
       title={plan.name}
       subtitle="Edit dose details"

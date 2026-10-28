@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useState } from "react";
 import { NOTE_TAG_LABELS, describeEntry } from "@/lib/maple/describe";
 import { NOTE_TAGS, type NoteData, type NoteTag } from "@/lib/maple/types";
@@ -43,6 +45,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const [answer, setAnswer] = useState(d.answer ?? "");
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [busy, setBusy] = useState(false);
+  const dirty = useDraftChanged({ doctor, tag, amount, text, done, answer, when });
 
   const words = text.trim();
   const canSave = doctor ? !!words : !!(tag || words);
@@ -87,6 +90,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? describeEntry(e).title : doctor ? "Question for the doctor" : "Note"}
       footer={

@@ -4,8 +4,9 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import ts from "typescript";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { query } from "../src/lib/db";
+import { scrubError } from "../src/lib/posthog-server";
 import { StoreUnavailable } from "../src/lib/maple/store";
 import * as diagnostics from "../src/lib/maple/diagnostics";
 
@@ -142,14 +143,18 @@ async function main() {
   let signedIn = true;
   let sessionFailure: Error | undefined;
   const logger = load<typeof diagnostics>("src/lib/maple/diagnostics.ts", {}, { console: { info: (...args: unknown[]) => logged.push(args) } });
-  const captureServerException = async (error: unknown, props: Record<string, unknown> = {}) => { captured.push({ error, props }); };
+  const captureServerException = async (error: unknown, props: Record<string, unknown> = {}) => { captured.push({ error: scrubError(error), props }); };
   const api = load<typeof import("../src/lib/maple/api")>("src/lib/maple/api.ts", {
+    "next/server": { NextResponse, after: () => {} },
+    "@/lib/analytics/config": { analyticsTags: () => ({ environment: "development", is_test: true }) },
+    "@/lib/email/send": {},
+    "./usage-alerts/delivery": {},
     "./auth": { sessionContext: async () => {
       if (sessionFailure) throw sessionFailure;
       return signedIn ? { member: { email: "synthetic-parent@example.test", role: "owner" }, ctx: { familyId: 701, status: "active" } } : null;
     } },
     "./diagnostics": logger,
-    "@/lib/posthog-server": { captureServerException, scrubError: () => new Error("scrubbed") },
+    "@/lib/posthog-server": { captureServerException, scrubError },
   }, { console: { error: () => {} } });
   const req = (path = "state", id: string | null = ID) => new NextRequest(`https://synthetic.example.test/api/maple/${path}?private=${PRIVATE}`, { headers: id ? { "x-maple-request-id": id } : {} });
 
@@ -173,19 +178,25 @@ async function main() {
   await check("API captures safe expected errors and unavailable writes without duplicating unexpected errors", async () => {
     captured.length = 0;
     const run = (handler: () => Promise<Response>) => api.withMember("POST /api/maple/timer", handler)(req("timer"));
-    await run(async () => api.json({ error: PRIVATE }, 409));
-    await run(async () => { throw new StoreUnavailable(); });
-    await run(async () => { throw Object.assign(new Error(PRIVATE), { code: "ECONNRESET" }); });
+    assert.equal((await run(async () => api.json({ error: PRIVATE }, 409))).status, 409);
+    assert.equal((await run(async () => { throw new StoreUnavailable(); })).status, 503);
+    assert.equal((await run(async () => { throw Object.assign(new Error(PRIVATE), { code: "ECONNRESET" }); })).status, 500);
     signedIn = false;
     assert.equal((await run(async () => api.json({}))).status, 401);
     signedIn = true;
     assert.equal(captured.length, 4);
-    for (const entry of [captured[0], captured[1], captured[3]]) {
+    for (const entry of [captured[0], captured[3]]) {
       assert.equal((entry.error as Error).message, "sync_request_failed");
       assert.deepEqual(Object.keys(entry.props).sort(), ["requestId", "status"]);
       assert(!JSON.stringify(entry).includes(PRIVATE));
     }
-    assert.deepEqual([captured[0].props.status, captured[1].props.status, captured[3].props.status], [409, 503, 401]);
+    assert.deepEqual([captured[0].props.status, captured[3].props.status], [409, 401]);
+    assert.equal((captured[1].error as Error).name, "StoreUnavailable");
+    assert.deepEqual(captured[1].props, { route: "POST /api/maple/timer", where: "api", kind: "database_unavailable" });
+    assert.deepEqual(captured[2].props, { route: "POST /api/maple/timer", where: "api", kind: "server_error" });
+    for (const { error, props } of captured) {
+      assert(!JSON.stringify({ message: (error as Error).message, stack: (error as Error).stack, props }).includes(PRIVATE));
+    }
   });
 
   await query(`CREATE TABLE upload_rate_limit (ip_hash VARCHAR(64) NOT NULL, window_start TIMESTAMP NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (ip_hash, window_start))`);

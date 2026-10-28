@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useMemo, useState } from "react";
 import { normName, planNames } from "@/lib/maple/care";
 import { describeEntry } from "@/lib/maple/describe";
@@ -61,6 +63,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const dirty = useDraftChanged({ name, dose, when, note });
 
   // Other medicines they've logged lately, as one-tap names (never their doses).
   const recent = useMemo(() => {
@@ -140,6 +143,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? describeEntry(e).title : vitD ? "Vitamin D" : `${w.Name}'s medicine`}
       footer={

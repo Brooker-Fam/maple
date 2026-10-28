@@ -66,8 +66,7 @@ html.maple-night {
   --mp-raised: #2b2515;
   --mp-ink: rgb(224 169 59 / 0.85);
   --mp-ink-2: rgb(224 169 59 / 0.7);
-  /* ink-3 carries 11–13px meta text: about 4:1 on the night page. */
-  --mp-ink-3: rgb(224 169 59 / 0.62);
+  --mp-ink-3: rgb(224 169 59 / 0.75);
   --mp-line: rgb(224 169 59 / 0.1);
   --mp-edge: rgb(224 169 59 / 0.1);
   --mp-accent: #3a2711;

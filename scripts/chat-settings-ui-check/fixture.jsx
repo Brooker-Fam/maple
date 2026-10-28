@@ -10,8 +10,9 @@ import { FixtureContext, ApiError } from "./mocks";
 const initial = { v: 1, scope: "family", babyId: 99, key: "track_pump", label: "Pumping", previous: true, value: false, status: "proposed" };
 const refs = { threadId: "synthetic-thread", messageId: "synthetic-message", toolCallId: "synthetic-tool" };
 function Destination({ page }) {
-  useSectionFocus(page === "care" ? "care" : "family");
-  return <div><div style={{ height: 1400 }}>Synthetic {page}</div>{["baby-details", "doctor-contacts", "phone-preferences", "mom-medicines"].map(id => <section key={id} id={id} tabIndex={-1}>{id}</section>)}</div>;
+  useSectionFocus(page === "care" ? "care" : "family", page);
+  const id = { "family/baby": "baby-details", "family/doctor": "doctor-contacts", "family/appearance": "phone-preferences", care: "mom-medicines" }[page];
+  return <div><div style={{ height: 1400 }}>Synthetic {page}</div>{id && <section id={id} tabIndex={-1}>{id}</section>}</div>;
 }
 function Fixture() {
   const [config, setConfig] = useState({ kind: "setting", setting: initial });
@@ -34,7 +35,7 @@ function Fixture() {
     });
   };
   const maple = { state: config.baby ? { baby: config.baby } : null, units, setUnits: value => { calls.current.push({ kind: "units", value }); setUnits(value); }, online: config.online !== false, readOnly: !!config.viewer, api, refresh: async () => {} };
-  const app = { tab: page, go: target => { calls.current.push({ kind: "go", target }); setPage(target); } };
+  const app = { tab: page.split("/")[0], go: target => { calls.current.push({ kind: "go", target }); setPage(target); return true; } };
   const notifications = { value: "Off", open: () => calls.current.push({ kind: "notifications" }) };
   const careNav = { openDoctor: () => calls.current.push({ kind: "doctor" }), openHelp: () => calls.current.push({ kind: "help" }) };
   const sheets = { open: value => calls.current.push({ kind: "sheet", value }) };

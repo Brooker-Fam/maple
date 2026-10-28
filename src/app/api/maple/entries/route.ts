@@ -1,9 +1,10 @@
 import { BadRequest, idParam, json, readJson, withMember } from "@/lib/maple/api";
-import { createEntryOnce, discardedBy, getBaby, listDeleted, listEntries, NotFound, softDeleteEntry, toClientEntry, updateEntry } from "@/lib/maple/store";
+import { createEntryOnce, discardedBy, getBaby, listDeleted, listEntries, listMomentHighlights, NotFound, softDeleteEntry, toClientEntry, updateEntry } from "@/lib/maple/store";
 import { dayBounds, dayKey, daysBetween, isDayKey } from "@/lib/maple/time";
 import { isEntryKind } from "@/lib/maple/validate";
 import type { FamilyCtx } from "@/lib/maple/family";
 import type { CreateEntryInput, EntryKind, UpdateEntryInput } from "@/lib/maple/types";
+import { milestonesFor, milestoneWordsOf, monthlyId } from "@/lib/maple/milestones";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,20 @@ export const GET = withMember("GET /api/maple/entries", async (request, _me, ctx
   const limit = Math.min(Math.max(Number(sp.get("limit")) || 2000, 1), 5000);
   const fromKey = sp.get("from");
   const toKey = sp.get("to") ?? dayKey(new Date(), baby.timezone);
+  const beforeAt = sp.get("before");
+  const beforeId = sp.get("before_id");
+  let before: { startedAt: string; id: number } | undefined;
+  if (beforeAt !== null || beforeId !== null) {
+    if (!beforeAt || !beforeId || !Number.isSafeInteger(Number(beforeId)) || Number(beforeId) <= 0) throw new BadRequest("before and a positive integer before_id are required together");
+    before = { startedAt: instant(beforeAt, "Before").toISOString(), id: Number(beforeId) };
+  }
+
+  if (sp.get("highlights") === "1") {
+    if (kinds?.length !== 1 || kinds[0] !== "moment" || before || fromKey || sp.has("to")) throw new BadRequest("Highlights requires kind=moment without a date range or cursor");
+    const milestones = [...milestonesFor(milestoneWordsOf(ctx.familyId, baby)).map((preset) => preset.id), ...Array.from({ length: 12 }, (_, index) => monthlyId(index + 1))];
+    const entries = await listMomentHighlights(ctx, baby.id, milestones);
+    return json({ entries: entries.map(toClientEntry), tz: baby.timezone });
+  }
 
   let from: Date | undefined;
   let to: Date | undefined;
@@ -72,9 +87,10 @@ export const GET = withMember("GET /api/maple/entries", async (request, _me, ctx
     to = dayBounds(toKey, baby.timezone)[1];
   }
 
-  const entries = await listEntries(ctx, { babyId: baby.id, kinds, from, to, limit });
-  // Hitting the limit means there's more (newest first): page with a narrower range.
-  return json({ entries: entries.map(toClientEntry), tz: baby.timezone, truncated: entries.length >= limit });
+  const entries = await listEntries(ctx, { babyId: baby.id, kinds, from, to, limit, before });
+  const last = entries.at(-1);
+  const truncated = entries.length >= limit;
+  return json({ entries: entries.map(toClientEntry), tz: baby.timezone, truncated, next_cursor: truncated && last ? { started_at: last.started_at, id: last.id } : null });
 });
 
 /**

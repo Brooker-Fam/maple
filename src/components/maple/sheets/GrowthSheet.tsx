@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useEffect, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { WEIGHT_GAIN_NOTE } from "@/lib/maple/guidelines";
@@ -81,6 +83,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
   const checks = useNumberChecks();
+  const dirty = useDraftChanged({ sys, lb, oz, grams, length, head, at, when, note, invalid: checks.invalid });
   // Switching lb ↔ kg converts what's shown; only typing or stepping counts as a change.
   const { touched, touch } = useTouched();
   const edit = (key: "weight" | "length" | "head", set: (v: number | null) => void) => (v: number | null) => {
@@ -186,6 +189,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Growth"}
       footer={

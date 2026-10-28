@@ -79,7 +79,7 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
           ))}
           {/* Viewers can't fill them in (Family → Her doctor is read-only for them). */}
           {!numbers.length && !readOnly && (
-            <NavRow icon="phone" label={`Add ${w.his} doctor's numbers`} note={`In Family → ${w.His} doctor, for one-tap calling`} onClick={() => then(() => app.go("family"))} />
+            <NavRow icon="phone" label={`Add ${w.his} doctor's numbers`} note="In Settings → Doctor & care plan, for one-tap calling" onClick={() => then(() => window.location.assign("#family/doctor"))} />
           )}
           <NavRow
             icon="ruler"

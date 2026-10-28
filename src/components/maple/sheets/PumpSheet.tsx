@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { formatDuration } from "@/lib/maple/time";
@@ -61,6 +63,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
   const checks = useNumberChecks();
+  const dirty = useDraftChanged({ mode, left, right, total, range, note, invalid: checks.invalid });
   const { touched, touch } = useTouched();
   const [start, end] = range;
 
@@ -116,6 +119,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Pump"}
       footer={

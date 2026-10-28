@@ -29,8 +29,8 @@ const AUTH_MESSAGES: Record<string, string> = {
   not_configured: "That sign-in option isn't available yet. Please choose another way to sign in.",
   conflict: "That sign-in method belongs to another account. Use your original sign-in method to open your log.",
   link_conflict: "That sign-in method belongs to another account. Sign in the way you used before.",
-  link_expired: "That connection attempt expired. Sign in again, then connect it from Family → Sign-in methods.",
-  link_failed: "Couldn't connect that sign-in method. Sign in again, then try from Family → Sign-in methods.",
+  link_expired: "That connection attempt expired. Sign in again, then connect it from Settings → Sign-in & account.",
+  link_failed: "Couldn't connect that sign-in method. Sign in again, then try from Settings → Sign-in & account.",
 };
 
 /** With sign-up open the page serves every family, so nothing names this one. */
@@ -182,7 +182,7 @@ export default function SignIn() {
           )}
         </div>
 
-        {(apple || email) && <p className={cx(tone.faint, "mt-4 text-[13px] leading-relaxed")}>Already using Maple? Sign in the way you used before, then connect other options in Family → Sign-in methods.</p>}
+        {(apple || email) && <p className={cx(tone.faint, "mt-4 text-[13px] leading-relaxed")}>Already using Maple? Sign in the way you used before, then connect other options in Settings → Sign-in & account.</p>}
 
         {passwordOk && (
           <div className="mt-4">

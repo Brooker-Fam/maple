@@ -228,6 +228,7 @@ export type ListOptions = {
   ascending?: boolean;
   /** Keyset paging (ascending only): rows strictly after this (started_at, id). */
   after?: { startedAt: string; id: number };
+  before?: { startedAt: string; id: number };
 };
 
 export async function listEntries(fam: FamilyRef, opts: ListOptions): Promise<Entry[]> {
@@ -241,6 +242,7 @@ export async function listEntries(fam: FamilyRef, opts: ListOptions): Promise<En
          OR ($5::boolean AND active)
        )
        AND ($7::timestamptz IS NULL OR (started_at, id) > ($7::timestamptz, $8::bigint))
+       AND ($10::timestamptz IS NULL OR (started_at, id) < ($10::timestamptz, $11::bigint))
      ORDER BY started_at ${opts.ascending ? "ASC" : "DESC"}, id ${opts.ascending ? "ASC" : "DESC"}
      LIMIT $6`,
     [
@@ -253,9 +255,26 @@ export async function listEntries(fam: FamilyRef, opts: ListOptions): Promise<En
       opts.after?.startedAt ?? null,
       opts.after?.id ?? 0,
       famId(fam),
+      opts.before?.startedAt ?? null,
+      opts.before?.id ?? 0,
     ]
   );
   return rows.map(rowToEntry);
+}
+
+export async function listMomentHighlights(fam: FamilyRef, babyId: number, milestones: string[]): Promise<Entry[]> {
+  const rows = await q(
+    `SELECT DISTINCT ON (data->>'milestone') * FROM maple_entries
+     WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL AND kind = 'moment'
+       AND data->>'milestone' = ANY($3::text[])
+     ORDER BY data->>'milestone',
+       CASE WHEN data->>'milestone' LIKE 'monthly-%' THEN started_at END DESC,
+       started_at ASC,
+       CASE WHEN data->>'milestone' LIKE 'monthly-%' THEN id END DESC,
+       id ASC`,
+    [famId(fam), babyId, milestones]
+  );
+  return rows.map(rowToEntry).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at) || b.id - a.id);
 }
 
 /** An entry by id, or null when it doesn't exist, is deleted (unless asked), or is another family's. */
@@ -351,7 +370,7 @@ export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ en
     ]
   );
   if (rows.length) {
-    captureAppEventSoon(familyId, "entry_logged");
+    captureAppEventSoon({ familyId, member: String(rows[0].created_by) }, "entry_logged");
     return { entry: rowToEntry(rows[0]), deduped: false };
   }
   const existing = clientId ? await q(`SELECT * FROM maple_entries WHERE client_id = $1 AND family_id = $2`, [clientId, familyId]) : [];

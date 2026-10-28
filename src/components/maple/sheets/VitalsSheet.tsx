@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useMemo, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { JAUNDICE_LABEL, assessJaundice, assessVitals, emergencySigns, jaundiceHowto } from "@/lib/maple/guidelines";
@@ -64,6 +66,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
   const checks = useNumberChecks();
+  const dirty = useDraftChanged({ heart, resp, spo2, level, when, note, invalid: checks.invalid });
 
   const t = when ?? now();
   const ago = (x: EntryOf<"vitals">) => (t.getTime() - Date.parse(x.started_at)) / 60_000;
@@ -173,6 +176,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? (skinMode ? "Skin check" : describeEntry(e).title) : skinMode ? "Skin check" : "Vitals"}
       footer={

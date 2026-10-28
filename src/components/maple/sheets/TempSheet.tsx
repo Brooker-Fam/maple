@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useMemo, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { assessTemperature, assessVitals, earThermometerOk, emergencySigns } from "@/lib/maple/guidelines";
@@ -85,6 +87,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const [heart, setHeart] = useState<number | null>(null);
   const [resp, setResp] = useState<number | null>(null);
   const [spo2, setSpo2] = useState<number | null>(null);
+  const dirty = useDraftChanged({ unit, value, method, when, note, heart, resp, spo2, invalid: checks.invalid });
 
   const switchUnit = (u: "F" | "C") => {
     if (u === unit) return;
@@ -156,6 +159,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Temperature"}
       footer={

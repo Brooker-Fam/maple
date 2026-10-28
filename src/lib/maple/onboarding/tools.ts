@@ -88,7 +88,7 @@ export function onboardingTools(opts: { tz: string; now: Date }): ToolSet {
       (i) => propose("notifications", i)
     ),
     propose_skip: def(
-      "Skip one question for now; it can be answered later in Family.",
+      "Skip one question for now; it can be answered later in Settings.",
       { step: z.enum(SKIPPABLE) },
       (i): Proposal => (skippable(i.step) ? { ok: true, kind: "skip", step: i.step, text: CONFIRM } : { ok: false, text: `${STEP_TITLES[i.step]} is needed before logging.` })
     ),

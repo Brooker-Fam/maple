@@ -78,6 +78,7 @@ export type TurnDeps = {
   report: (error: unknown) => void;
   /** Keeps the function alive until the promise settles (next/server's after). */
   waitUntil: (p: Promise<unknown>) => void;
+  lifecycle?: (event: "chat_started" | "chat_completed" | "chat_failed") => void;
 };
 
 const lastPrompt = (steps: StepResult<ToolSet>[]) => (steps.length ? stepTokens(steps[steps.length - 1].usage).prompt : 0);
@@ -135,6 +136,9 @@ export async function chatTurn(opts: {
   // Ends the turn: a step sent without its tools would miss the cached prefix, which starts with them.
   const promptTooLong: StopCondition<ToolSet> = ({ steps }) => (cut = lastPrompt(steps) > STEP_PROMPT_LIMIT);
 
+  let failed = false;
+  let completed = false;
+  deps.lifecycle?.("chat_started");
   const result = streamText({
     model: opts.model,
     instructions,
@@ -164,6 +168,7 @@ export async function chatTurn(opts: {
     },
     // Set, so the SDK's own handler never prints the failed request (it carries the prompt) to the logs.
     onError: ({ error }) => {
+      failed = true;
       failedStatus = errorStatus(error);
       deps.waitUntil(alertGatewayCredit(error));
       deps.report(error);
@@ -173,7 +178,7 @@ export async function chatTurn(opts: {
   const stream = createUIMessageStream<ChatMessage>({
     originalMessages: messages,
     generateId: () => responseId,
-    onError: friendlyError,
+    onError: (error) => { failed = true; return friendlyError(error); },
     execute: async ({ writer }) => {
       writer.write({ type: "start", messageId: responseId });
       if (opts.crisis) writer.write({ type: "data-help", data: { reason: "crisis" } });
@@ -198,6 +203,7 @@ export async function chatTurn(opts: {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (value.type === "error" || value.type === "abort") failed = true;
         if (value.type === "text-start") dashes.set(value.id, dashFilter());
         if (value.type === "text-delta") {
           const delta = dashes.get(value.id)?.push(value.delta) ?? value.delta;
@@ -215,6 +221,7 @@ export async function chatTurn(opts: {
       // A 4xx was turned away before the model ran, so there's nothing to count.
       if (unfinished && !(failedStatus !== null && failedStatus >= 400 && failedStatus < 500)) await record(unfinished.step, unfinishedTokens(unfinished.prompt), "unfinished", null);
       const finish = await Promise.resolve(result.finishReason).catch(() => null);
+      completed = !failed && (finish === "stop" || finish === "tool-calls" || finish === "content-filter" || finish === "length");
       if (cut && finish === "tool-calls") {
         writer.write({ type: "text-start", id: "cut" });
         writer.write({ type: "text-delta", id: "cut", delta: CHAT_CUT });
@@ -223,12 +230,14 @@ export async function chatTurn(opts: {
       if (finish === "content-filter" && !opts.crisis) writer.write({ type: "data-help", data: { reason: "refusal" } });
       writer.write({ type: "finish", ...(finish ? { finishReason: finish } : {}) });
     },
-    onEnd: async ({ responseMessage }) => {
+    onEnd: async ({ responseMessage, isAborted }) => {
       try {
         if (responseMessage.parts.length) await deps.save(responseMessage);
       } catch (e) {
+        failed = true;
         deps.report(e);
       } finally {
+        deps.lifecycle?.(completed && !failed && !isAborted ? "chat_completed" : "chat_failed");
         await deps.release();
       }
     },

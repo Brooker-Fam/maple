@@ -109,14 +109,20 @@ async function idempotency() {
     }
   });
 
-  await test("every family table has family_id: DEFAULT 1 on 15, nullable without a default on push_sent and ai_usage", async () => {
+  await test("family columns retain tenant defaults and separate analytics references", async () => {
     await freshDb();
     const cols = await sql(`SELECT table_name, column_default, is_nullable FROM information_schema.columns WHERE column_name = 'family_id' ORDER BY 1`);
     const byTable = Object.fromEntries(cols.map((c) => [String(c.table_name), [c.column_default, c.is_nullable]]));
     for (const t of FAMILY_TABLES) eq(byTable[t], ["1", "YES"], t);
     for (const t of FAMILY_OPTIONAL_TABLES) eq(byTable[t], [null, "YES"], t);
     for (const t of FAMILY_KEYED_TABLES) eq(byTable[t], [null, "NO"], t);
-    eq(Object.keys(byTable).sort(), [...FAMILY_TABLES, ...FAMILY_OPTIONAL_TABLES, ...FAMILY_KEYED_TABLES].sort());
+    eq(byTable.maple_analytics_families, [null, "NO"]);
+    eq(byTable.maple_analytics_deliveries, [null, "YES"]);
+    eq(await sql(`SELECT table_name, data_type FROM information_schema.columns WHERE column_name = 'family_id' AND table_name IN ('maple_analytics_families', 'maple_analytics_deliveries') ORDER BY 1`), [
+      { table_name: "maple_analytics_deliveries", data_type: "uuid" },
+      { table_name: "maple_analytics_families", data_type: "bigint" },
+    ]);
+    eq(Object.keys(byTable).sort(), [...FAMILY_TABLES, ...FAMILY_OPTIONAL_TABLES, ...FAMILY_KEYED_TABLES, "maple_analytics_families", "maple_analytics_deliveries"].sort());
   });
 
   await test("every family foreign key is validated and every new index is valid", async () => {

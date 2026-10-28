@@ -1,9 +1,12 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { skippable, type StepId } from "@/lib/maple/onboarding/steps";
 import { Button, cx, tone } from "../ui";
 import type { Onboarding } from "./useOnboarding";
+import { useDraftChanged } from "../useDraftChanged";
+
+export const AnswerDraftContext = createContext<(dirty: boolean) => void>(() => {});
 
 const QUESTIONS: Record<StepId, string> = {
   welcome: "Before getting started",
@@ -23,7 +26,7 @@ export const WHY: Record<StepId, string> = {
   welcome: "Maple is a tracker, not medical advice.",
   you: "So the log can say who logged what.",
   timezone: "So \"today\" and every time in the log match your home's clock.",
-  baby_name: "You can change it any time in Family.",
+  baby_name: "You can change it any time in Settings → Baby details.",
   birth: "The baby's age decides which guidance applies. The time can be rough.",
   sex: "Only to pick the WHO growth chart. Skip it and the chart shows no percentiles.",
   feeding: "This only decides which buttons show. Nothing you log is ever hidden.",
@@ -42,6 +45,7 @@ export function StepShell({
   saveLabel = "Save",
   hideSave,
   noSkip,
+  draft,
 }: {
   step: StepId;
   ob: Onboarding;
@@ -51,7 +55,14 @@ export function StepShell({
   saveLabel?: string;
   hideSave?: boolean;
   noSkip?: boolean;
+  draft?: unknown;
 }) {
+  const changed = useDraftChanged(draft);
+  const register = useContext(AnswerDraftContext);
+  useEffect(() => {
+    register(changed);
+    return () => register(false);
+  }, [changed, register]);
   return (
     <section aria-labelledby={`onb-${step}`} className={cx(tone.card, "space-y-4 p-4")}>
       <div className="space-y-1">
