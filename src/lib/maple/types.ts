@@ -392,7 +392,7 @@ export type UnitSystem = "us" | "metric";
 // through careAccess() in care.ts. Every number on a plan is typed by the
 // family from her label, discharge papers or clinician, in the label's unit.
 
-export type CareKind = "dose" | "temp" | "question"; // "bp" is reserved for Appendix A
+export type CareKind = "dose" | "temp" | "question" | "food" | "drink";
 export type MoodKind = "checkin" | "screen";
 export type LimitUnit = "tablets" | "caplets" | "capsules" | "doses" | "mL";
 
@@ -417,6 +417,8 @@ export type CareDataByKind = {
   dose: { name: string; dose?: string | null; units?: number | null; unit?: LimitUnit | null; skipped?: boolean };
   temp: { temp_c: number };
   question: { done?: boolean; answer?: string | null }; // the question text is in note
+  food: { description: string; meal: "meal" | "snack" };
+  drink: { name: string; amount_ml?: number | null };
 };
 export type MoodDataByKind = {
   // harm_ever: "Thoughts of hurting myself" was ticked at some point, so the day's crisis strip holds even if it's unticked.
@@ -430,6 +432,10 @@ export type CareEntry = { [K in CareKind]: {
   private: boolean; created_by: string | null; updated_by: string | null; source: Source;
   created_at: string; updated_at: string; pending?: boolean;
 } }[CareKind];
+export type CareNutritionEntry = Extract<CareEntry, { kind: "food" | "drink" }>;
+export type CareNutritionInput = { [K in "food" | "drink"]: {
+  kind: K; data: CareDataByKind[K]; at: string; note?: string | null;
+} }["food" | "drink"];
 export type MoodEntry = { [K in MoodKind]: {
   id: number; kind: K; at: string; data: MoodDataByKind[K]; note: string | null; created_at: string; updated_at: string; pending?: boolean;
 } }[MoodKind];

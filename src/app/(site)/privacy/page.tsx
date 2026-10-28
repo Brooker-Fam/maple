@@ -82,11 +82,11 @@ export default function Privacy() {
         skip the phone that did it.
       </p>
       <p>
-        Mom&rsquo;s page keeps her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
+        Mom&rsquo;s page keeps her food and drinks, any amounts she records, her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
         her daily check-ins, including the optional PHQ-9 and GAD-7 questionnaires.
       </p>
       <p>
-        Deleting an entry from the baby&rsquo;s log, or one of mom&rsquo;s medicines, doses, temperatures or questions, hides it so
+        Deleting an entry from the baby&rsquo;s log, or one of mom&rsquo;s food, drink, medicine, dose, temperature or question entries, hides it so
         you can restore it; it stays in the database until your family&rsquo;s log is deleted. Deleting one of her check-ins
         removes it for good at once, and so does deleting everything on her page.
       </p>
@@ -217,7 +217,7 @@ export default function Privacy() {
       <p>
         When you use the chat, your message, answers to question cards, the recent conversation, and whatever it looks up in your log to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
-        see her page can use the chat with her medicines and doses, temperatures and questions for her OB. Her check-ins never
+        see her page can use the chat with her food, drinks and recorded amounts, medicines and doses, temperatures and questions for her OB. Her check-ins never
         reach the chat. Every request asks the
         Gateway for zero data retention and no training on your data, and names the only providers it may be sent to, each one
         the Gateway lists as keeping no data. Nothing about your messages goes into Maple&rsquo;s logs or error reports.

@@ -4569,11 +4569,9 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
            ORDER BY created_at DESC, id DESC LIMIT 1`,
           [ctx.fam.familyId, ctx.baby.id, ctx.who.id, MCP_SOURCES]
         ),
-        // Your newest write to her medicines, temperature or questions:
-        // if it's newer, "undo that" means it, and removing Maple's entry would undo the wrong thing.
         hers(
           ctx,
-          `SELECT e.id, e.kind, e.created_at, e.data->>'name' AS name FROM maple_care_entries e
+          `SELECT e.id, e.kind, e.created_at, COALESCE(e.data->>'name', e.data->>'description') AS name FROM maple_care_entries e
            WHERE e.family_id = $1 AND e.created_by = $2 AND e.source = ANY($3::text[]) AND e.deleted_at IS NULL
              AND e.created_at >= NOW() - INTERVAL '30 minutes'
            ORDER BY e.created_at DESC, e.id DESC LIMIT 1`,
@@ -4592,7 +4590,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         // Your latest edit to one of her entries (fix_mom_entry): creating one leaves updated_by empty.
         hers(
           ctx,
-          `SELECT id, kind, updated_at, data->>'name' AS name FROM maple_care_entries
+          `SELECT id, kind, updated_at, COALESCE(data->>'name', data->>'description') AS name FROM maple_care_entries
            WHERE family_id = $1 AND updated_by = $2 AND deleted_at IS NULL AND updated_at >= NOW() - INTERVAL '30 minutes'
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
           [ctx.fam.familyId, ctx.who.id]
@@ -4629,12 +4627,12 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         throw new ToolError(`Nothing was removed. Your last action was to her medicine ${plan.name} (p${plan.id}), not a new entry. ${how}`);
       }
       if (fixAt > latestOther && fix) {
-        const what = fix.kind === "dose" ? `her ${fix.name ?? "medicine"} dose` : fix.kind === "temp" ? "her temperature reading" : "one of her questions";
+        const what = fix.kind === "dose" ? `her ${fix.name ?? "medicine"} dose` : fix.kind === "temp" ? "her temperature reading" : fix.kind === "food" || fix.kind === "drink" ? `her ${fix.name ?? fix.kind}` : "one of her questions";
         throw new ToolError(`Nothing was removed. Your last action was a change to ${what} (c${fix.id}), not a new entry. To change it back use fix_mom_entry with id c${fix.id}; to remove it, action delete.`);
       }
       if (momRow && momAt > Math.max(created ? Date.parse(created.created_at) : 0, edited ? Date.parse(edited.updated_at) : 0)) {
         // Her entry is the newest: "undo that" takes it back, the same as one of Maple's.
-        const what = momRow.kind === "dose" ? (momRow.name ?? "a medicine") : momRow.kind === "temp" ? "a temperature" : "a question";
+        const what = momRow.kind === "dose" ? (momRow.name ?? "a medicine") : momRow.kind === "temp" ? "a temperature" : momRow.kind === "food" || momRow.kind === "drink" ? (momRow.name ?? momRow.kind) : "a question";
         const s = await careSession({ id: ctx.who.id, role: ctx.who.role, viaAdmin: ctx.who.viaAdmin, channel: "mcp" }, { familyId: ctx.fam.familyId, members: ctx.members, baby: ctx.baby });
         await deleteCareEntry(s, Number(momRow.id));
         return ok(`Removed c${momRow.id}: ${s.name}'s ${what}. To bring it back, use fix_mom_entry with id c${momRow.id} and action restore.`, {
