@@ -24,6 +24,7 @@ import { Button, Sheet, cx, tone } from "../ui";
 import { useVoice } from "../familyWords";
 import { ApiError, useMaple } from "../useMaple";
 import type { CareHeld, UseCare } from "./useCare";
+import { requestDoseTime } from "./doseTimeNav";
 
 /**
  * Small pieces shared by mom's medicine screens (B): list rows in the Family
@@ -182,15 +183,27 @@ export function TookItButton({
   );
 }
 
-/** "Logged 6:56 AM" with a check, in Took it's place while the dose just logged here holds its slot (not a button). */
-export function LoggedSlot({ held, className }: { held: CareHeld; className?: string }) {
+/** The held dose keeps its place and offers its exact time editor without logging another dose. */
+export function LoggedSlot({ held, care, className }: { held: CareHeld; care: UseCare; className?: string }) {
   const { state, now } = useMaple();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const entry = care.state.entries.find((item): item is DoseEntry => item.kind === "dose" && item.id === held.entryId);
+  const pending = held.entryId <= 0 || !!entry?.pending;
+  const editable = care.access.write && !!entry && !pending;
+  const recordedAt = entry?.at ?? held.at;
+  const at = careTime(recordedAt, now(), tz);
+  // Keep the day on the second line so an overnight correction leaves room
+  // for the medicine's name in Today's strip. careTime preserves DST zones.
+  const clock = careTime(recordedAt, new Date(recordedAt), tz);
+  const day = at.slice(clock.length).trim();
+  const dayLabel = day ? day[0].toUpperCase() + day.slice(1) : "";
+  const status = <span className="inline-flex items-center gap-1"><Icon name="check" size={14} strokeWidth={2.2} className="shrink-0" />{held.skipped ? "Skipped" : "Logged"} {care.access.write ? clock : at}</span>;
+  if (!care.access.write) return <span role="status" className={cx("flex min-h-[44px] shrink-0 items-center text-[13px] font-medium whitespace-nowrap text-mp-ink-2 tabular-nums", className)}>{status}</span>;
   return (
-    <span role="status" className={cx("flex min-h-[44px] shrink-0 items-center gap-1 text-[13px] font-medium whitespace-nowrap text-mp-ink-2 tabular-nums", className)}>
-      <Icon name="check" size={16} strokeWidth={2.2} className="shrink-0" />
-      {held.skipped ? "Skipped" : "Logged"} {careTime(held.at, now(), tz)}
-    </span>
+    <button type="button" disabled={!editable} onClick={() => { if (entry) requestDoseTime(entry.id); }} aria-label={editable ? `Edit time for ${entry.data.name}, logged ${at}` : pending ? "Dose still syncing" : "Dose no longer available"} className={cx("flex min-h-[44px] shrink-0 flex-col items-end justify-center rounded-xl px-1 text-[13px] leading-[17px] font-medium whitespace-nowrap text-mp-ink-2 tabular-nums active:bg-mp-sunken disabled:opacity-60", className)}>
+      {status}
+      <span className={cx("text-[12px] font-semibold", editable ? "text-mp-accent-fg" : "text-mp-ink-3")}>{dayLabel && `${dayLabel} · `}{pending ? "Still syncing" : entry ? "Edit time" : "Not available"}</span>
+    </button>
   );
 }
 
@@ -229,7 +242,7 @@ export function TookIt({
   const [busy, setBusy] = useState(false);
   if (!care.access.write) return null;
   const held = care.held(view.plan.id);
-  if (held) return <LoggedSlot held={held} className={className} />;
+  if (held) return <LoggedSlot held={held} care={care} className={className} />;
   const took = async () => {
     if (busy) return;
     setBusy(true);

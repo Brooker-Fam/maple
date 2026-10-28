@@ -10,6 +10,7 @@ import { useMaple } from "../useMaple";
 import { OnTop } from "./CrisisSheet";
 import DoseSheet from "./DoseSheet";
 import DoseTimeSheet from "./DoseTimeSheet";
+import { DOSE_TIME_EVENT } from "./doseTimeNav";
 import { MomTempSheet } from "./MomTempSheet";
 import PlanPicker from "./PlanPicker";
 import { requestQuestion } from "./Questions";
@@ -115,10 +116,31 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
     setDose((d) => ({ planId, ask, name, start, seq: (d?.seq ?? 0) + 1 }));
     setDoseOpen(true);
   }, []);
-  const openDoseTime = useCallback((entry: DoseEntry) => {
+  const showDoseTime = useCallback((entryId: number) => {
+    if (!care?.access.write) return;
+    const entry = care.state.entries.find((item): item is DoseEntry => item.kind === "dose" && item.id === entryId);
+    if (!entry) {
+      toast("That dose is no longer in the log.", { tone: "info" });
+      return;
+    }
+    if (entry.id <= 0 || entry.pending) {
+      toast("This dose is still syncing. Try again once it's saved.", { tone: "info" });
+      return;
+    }
+    setOpen((current) => current.picker ? { ...current, picker: false } : current);
     setDoseTime((current) => ({ dose: entry, seq: (current?.seq ?? 0) + 1 }));
     setDoseTimeOpen(true);
-  }, []);
+  }, [care, toast]);
+  // Every opener resolves the current version of this exact dose, never the newest dose of its medicine.
+  const openDoseTime = useCallback((entry: DoseEntry) => showDoseTime(entry.id), [showDoseTime]);
+  useEffect(() => {
+    const onEditTime = (event: Event) => {
+      const entryId = (event as CustomEvent<{ entryId?: unknown }>).detail?.entryId;
+      if (typeof entryId === "number" && Number.isInteger(entryId) && entryId > 0) showDoseTime(entryId);
+    };
+    window.addEventListener(DOSE_TIME_EVENT, onEditTime);
+    return () => window.removeEventListener(DOSE_TIME_EVENT, onEditTime);
+  }, [showDoseTime]);
   const go = app.go;
 
   const nav = useMemo<CareNav>(

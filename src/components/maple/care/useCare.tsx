@@ -45,6 +45,7 @@ import type {
 import { useVoice } from "../familyWords";
 import { ApiError, useMaple, useNow, type ToastAction } from "../useMaple";
 import { useRemindChip } from "../notify/context";
+import { requestDoseTime } from "./doseTimeNav";
 
 /**
  * Mom's area for the signed-in reader, from the care part of Maple's state:
@@ -271,11 +272,14 @@ export function useCare(): UseCare | null {
     const finished = views
       .filter((v) => !planActive(v.plan, now, tz))
       .sort((a, b) => (b.plan.stopped_at ?? b.plan.course_end ?? "").localeCompare(a.plan.stopped_at ?? a.plan.course_end ?? ""));
-    // A hold lasts while its dose is still there (an Undo ends it); matched by plan and time too, since a dose saved
-    // offline changes id when it syncs.
+    // Always keep the exact held dose. Only an offline temporary id may resolve by time after syncing,
+    // and only when that match is unique: two doses at the same minute must never edit one another.
     const heldBy = new Map<number, CareHeld & { seq: number }>();
     for (const h of holdMap.values()) {
-      const e = (dosesBy.get(h.planId) ?? []).find((d) => d.id === h.entryId || d.at === h.at);
+      const planDoses = dosesBy.get(h.planId) ?? [];
+      const exact = planDoses.find((dose) => dose.id === h.entryId);
+      const synced = !exact && h.entryId < 0 ? planDoses.filter((dose) => dose.id > 0 && !dose.pending && dose.at === h.at) : [];
+      const e = exact ?? (synced.length === 1 ? synced[0] : undefined);
       if (e && plans.some((v) => v.plan.id === h.planId)) heldBy.set(h.planId, { entryId: e.id, at: e.at, skipped: !!e.data.skipped, seq: h.seq });
     }
     const lastHeld = [...heldBy.entries()].sort((a, b) => b[1].seq - a[1].seq)[0];
@@ -476,7 +480,7 @@ export function useCare(): UseCare | null {
     [call, clock, editEntry, fail, goneLine, patchEntries, toast, tz]
   );
 
-  /** The toast after a dose saves: when the next is OK, any note, "2/5/15 min earlier" and Undo. */
+  /** The toast after a dose saves: when the next is OK, any note, its exact time editor and Undo. */
   const doseToast = useCallback(
     (plan: CarePlan | null, entry: DoseEntry, notes: Assessment[]) => {
       // A count left out on a plan that counts units: say what it counted as, so a wrong one gets fixed.
@@ -485,28 +489,18 @@ export function useCare(): UseCare | null {
       const slot = plan && !entry.data.skipped ? aheadOfSlot(plan, dosesOf(plan.id).filter((d) => d.id !== entry.id && d.at !== entry.at), new Date(entry.at), tz) : null;
       const text = `${doseText(plan, entry)}${counted ? ` · counted as ${counted}` : ""}${slot ? ` · for the ${formatTimeNear(Date.parse(slot), Date.parse(entry.at), tz)} time` : ""}`;
       const urgent = notes.find((n) => n.tier === "now" || n.tier === "emergency") ?? notes.find((n) => n.tier === "nudge");
-      const recorded = Date.parse(entry.at);
-      const chips: ToastAction[] = entry.data.skipped
-        ? []
-        : [2, 5, 15].map((n) => {
-            const to = recorded - n * 60_000;
-            return {
-              label: `${n} min earlier`,
-              sub: formatTimeNear(to, recorded, tz),
-              ariaLabel: `${plan ? planTitle(plan) : entry.data.name} ${n} minutes earlier, at ${formatTime(to, tz)}`,
-              onClick: () => void editEntry(entry.id, { at: new Date(to).toISOString() }, entry.updated_at).catch((e) => toast(e.message, { tone: "error" })),
-            };
-          });
       // A call-now note carries its whole text (who to call, the number): there's no sheet to read it in after a one-tap.
       const urgentText = urgent ? `${noteLine(urgent)}${urgent.tier === "now" || urgent.tier === "emergency" ? `. ${urgent.body}` : ""}` : "";
-      // The time-fix chips first; any other chip for this dose goes after them: "Remind me at 12:56 PM" when this
+      // The direct time editor first; any other chip for this dose follows: "Remind me at 12:56 PM" when this
       // medicine has a next time by her schedule (never beside a call-now note).
       let remind: ToastAction | null = null;
       if (plan && !entry.data.skipped && entry.id > 0 && (!urgent || urgent.tier === "nudge")) {
         const after = statusOf(plan, [...dosesOf(plan.id).filter((d) => (d.id > 0 || d.pending) && d.id !== entry.id), entry]);
         remind = remindChip(plan, after.state === "wait" || after.state === "at_limit" ? after.nextOkAt : after.state === "slot_next" ? after.nextSlotAt : null);
       }
-      const actions: ToastAction[] = entry.id > 0 ? [...chips, ...(remind ? [remind] : [])] : [];
+      const actions: ToastAction[] = entry.id > 0 && !entry.pending
+        ? [{ label: "Edit time", ariaLabel: `Edit time for ${plan ? planTitle(plan) : entry.data.name}`, onClick: () => requestDoseTime(entry.id) }, ...(remind ? [remind] : [])]
+        : [];
       toast(urgent ? `${text}. ${urgentText}` : text, {
         tone: urgent ? "info" : "ok",
         icon: "pill",
@@ -514,7 +508,7 @@ export function useCare(): UseCare | null {
         undo: () => void deleteEntry(entry.id).catch(() => {}),
       });
     },
-    [deleteEntry, doseText, dosesOf, editEntry, remindChip, statusOf, toast, tz]
+    [deleteEntry, doseText, dosesOf, remindChip, statusOf, toast, tz]
   );
 
   const logDose = useCallback<CareActions["logDose"]>(

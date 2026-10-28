@@ -7,6 +7,7 @@ import { CARE_COLOR } from "../palette";
 import { EmptyState, Sheet, cx, tone } from "../ui";
 import { useCareNav } from "./CareNav";
 import MedPlanSheet from "./MedPlanSheet";
+import RecentDoses from "./RecentDoses";
 import { Footnote, GROUP, GlanceMark, NavRow, PlanName, TookIt } from "./parts";
 import { useCare } from "./useCare";
 
@@ -68,6 +69,7 @@ export default function PlanPicker({ open, onClose }: PlanPickerProps) {
             Add each one from the label or discharge papers. Maple&apos;s Log keeps time against that schedule; it never suggests a dose.
           </EmptyState>
         )}
+        <RecentDoses care={care} onEdit={(dose) => then(() => nav.openDoseTime(dose))} />
         {care.access.write && (
           <div>
             <div className={GROUP}>

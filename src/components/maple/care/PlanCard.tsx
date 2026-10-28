@@ -84,7 +84,7 @@ export default function PlanCard({ view, care, onOpen, finished }: { view: PlanV
       {write &&
         (held ? (
           <div className="flex items-center justify-end px-4 pb-3.5">
-            <LoggedSlot held={held} />
+            <LoggedSlot held={held} care={care} />
           </div>
         ) : (
           <div className="flex items-center justify-end gap-2 px-4 pb-3.5">

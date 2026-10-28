@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkProductionCare } from "./production-care-checks.mjs";
 
 const require = createRequire(import.meta.url);
 const { build } = require("esbuild");
@@ -16,6 +16,7 @@ const root = path.resolve(here, "../..");
 const output = await mkdtemp(path.join(tmpdir(), "maple-ui-"));
 const screenshots = path.join(root, "test-results/maple-ui");
 await mkdir(screenshots, { recursive: true });
+await rm(path.join(screenshots, "failure.png"), { force: true });
 await build({
   entryPoints: [path.join(here, "fixture.jsx")], outfile: path.join(output, "app.js"), bundle: true,
   format: "esm", jsx: "automatic", sourcemap: "inline", absWorkingDir: root,
@@ -25,23 +26,34 @@ await build({
     plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? { path: path.join(here, "mocks.jsx") } : undefined);
   } }],
 });
+await build({
+  entryPoints: [path.join(here, "production-care.jsx")], outfile: path.join(output, "care-app.js"), bundle: true,
+  format: "esm", jsx: "automatic", sourcemap: "inline", absWorkingDir: root,
+  define: { "process.env.NODE_ENV": '"test"' },
+  plugins: [{ name: "synthetic-care-boundaries", setup(plugin) {
+    const mocks = { path: path.join(here, "care-mocks.jsx") };
+    plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useTimerActions|AppNav|sheets)$/ }, () => mocks);
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? mocks : undefined);
+    plugin.onResolve({ filter: /(?:^|\/)(?:DoctorSheet|HelpSheet|CrisisSheet|DoseSheet|MomTempSheet|Questions|SupportScreen|WarningSigns|MedPlanSheet)$/ }, (args) => /\/(?:CareNav|PlanPicker)\.tsx$/.test(args.importer) ? mocks : undefined);
+    plugin.onResolve({ filter: /^\.\.\/notify$/ }, (args) => args.importer.endsWith("/care/CareNav.tsx") ? { path: path.join(root, "src/components/maple/notify/context.ts") } : undefined);
+  } }],
+});
 const sourceCss = await readFile(path.join(root, "src/app/globals.css"), "utf8");
 const compiled = await postcss([tailwind({ base: root })]).process(sourceCss, { from: path.join(root, "src/app/globals.css") });
 await writeFile(path.join(output, "app.css"), compiled.css + "\n" + await readFile(path.join(root, "src/app/maple/maple.css"), "utf8"));
 await writeFile(path.join(output, "index.html"), '<!doctype html><html class="maple-ui"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Maple synthetic UI checks</title><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/app.js"></script></body></html>');
-const server = createServer(async (req, res) => {
-  const file = req.url === "/app.js" ? "app.js" : req.url === "/app.css" ? "app.css" : "index.html";
-  res.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html");
-  res.end(await readFile(path.join(output, file)));
-});
-await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-const address = server.address();
+await writeFile(path.join(output, "care.html"), (await readFile(path.join(output, "index.html"), "utf8")).replace('/app.js', '/care-app.js'));
 const browser = await chromium.launch({ headless: true, ...(process.env.MAPLE_UI_CHROMIUM ? { executablePath: process.env.MAPLE_UI_CHROMIUM } : {}) });
 const errors = [];
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce", locale: "en-US", timezoneId: "UTC" });
 const page = await context.newPage();
 page.on("pageerror", (error) => errors.push(error.message));
-const url = `http://127.0.0.1:${address.port}`;
+const url = "https://maple-ui.example.test";
+await page.route("**/*", async (route) => {
+  const pathname = new URL(route.request().url()).pathname;
+  const file = ["/app.js", "/care-app.js", "/app.css", "/care.html"].includes(pathname) ? pathname.slice(1) : "index.html";
+  await route.fulfill({ status: 200, contentType: file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html", body: await readFile(path.join(output, file)) });
+});
 const snapshot = () => page.evaluate(() => window.__mapleUiFixture.snapshot());
 const openDose = async () => {
   await page.getByRole("button", { name: /^Edit time for Example medicine,/ }).click();
@@ -66,6 +78,7 @@ const settleView = async () => {
 };
 
 try {
+  await checkProductionCare({ page, url, screenshots, settleView, noOverflow });
   await page.goto(url);
   await openDose();
   assert.equal(await page.getByLabel("Taken at: time", { exact: true }).inputValue(), "08:00");
@@ -185,6 +198,5 @@ try {
   throw error;
 } finally {
   await browser.close();
-  await new Promise((resolve) => server.close(resolve));
   await rm(output, { recursive: true, force: true });
 }
