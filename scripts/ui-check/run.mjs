@@ -57,6 +57,13 @@ const noOverflow = async () => {
     assert(box.height >= 44, "Time field is smaller than a 44px tap target");
   }
 };
+const settleView = async () => {
+  // Reduced motion still fades sheets in. Presence alone captures a translucent
+  // intermediate frame and makes the underlying page look like an overlap bug.
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] > div')].every((el) => Number(getComputedStyle(el).opacity) >= 0.999));
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+};
 
 try {
   await page.goto(url);
@@ -156,6 +163,7 @@ try {
     await page.goto(url);
     await page.setViewportSize({ width, height: 844 });
     await openDose();
+    await settleView();
     await noOverflow();
     const saveBox = await page.getByRole("button", { name: "Save time", exact: true }).boundingBox();
     assert(saveBox && saveBox.y + saveBox.height <= 844, "Save time stays reachable without scrolling the sheet footer");
@@ -163,6 +171,8 @@ try {
   }
   await page.setViewportSize({ width: 320, height: 844 });
   await page.evaluate(() => { document.documentElement.classList.add("dark", "maple-night"); document.documentElement.style.fontSize = "20px"; });
+  await settleView();
+  assert.equal(await page.locator('input[type="time"]').evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(19, 23, 15)", "Native time input uses the night surface after transitions settle");
   await noOverflow();
   await page.screenshot({ path: path.join(screenshots, "dose-320-night-large-text.png") });
   await page.keyboard.press("Escape");
