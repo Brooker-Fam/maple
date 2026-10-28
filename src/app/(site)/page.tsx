@@ -84,7 +84,7 @@ export default function Home() {
               Left boob or right boob?
             </h1>
             <p className="site-prose mt-6 text-[19px] leading-[1.55]">You knew an hour ago. Maple remembers.</p>
-            <GetStarted className="mt-9" />
+            <GetStarted className="mt-9" placement="hero" />
           </div>
           <Phone
             className="mx-auto lg:mr-4"
@@ -151,7 +151,7 @@ export default function Home() {
               Want in?
             </h2>
             <p className="site-prose mt-4">Maple is free while it&rsquo;s in early access.</p>
-            <GetStarted className="mt-8" />
+            <GetStarted className="mt-8" placement="footer" />
           </div>
         </section>
       </main>

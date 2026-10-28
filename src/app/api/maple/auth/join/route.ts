@@ -1,3 +1,5 @@
+import { clearAnalyticsContext, readAnalyticsContext } from "@/lib/analytics/context";
+import { identifyAnalyticsSoon, captureAppEventSoon } from "@/lib/analytics/server";
 import { NextRequest, NextResponse } from "next/server";
 import { inviteFamily, memberFor, redeemInvite, setSessionCookies } from "@/lib/maple/auth";
 import { FAMILY_ONE, signupMode } from "@/lib/maple/family";
@@ -25,7 +27,12 @@ export async function POST(request: NextRequest) {
     if (!joined) return NextResponse.json({ error: usedCopy(await inviteFamily(body.token)) }, { status: 400 });
     const member = await memberFor({ familyId: joined.familyId }, joined.id);
     const res = NextResponse.json({ ok: true, member });
+    const actor = { familyId: joined.familyId, member: joined.id, role: member?.role };
+    const analytics = readAnalyticsContext(request);
+    captureAppEventSoon(actor, "invite_accepted", undefined, analytics);
+    identifyAnalyticsSoon(actor, analytics);
     setSessionCookies(res, joined.id, joined.familyId);
+    clearAnalyticsContext(res);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "POST /api/maple/auth/join" });

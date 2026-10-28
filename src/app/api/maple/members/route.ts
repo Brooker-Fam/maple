@@ -1,3 +1,4 @@
+import { clearAnalyticsContext } from "@/lib/analytics/context";
 import { captureAppEventSoon } from "@/lib/analytics/server";
 import { BadRequest, familyName, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
 import {
@@ -36,7 +37,8 @@ export const POST = withMember("POST /api/maple/members", async (request, me, ct
     const open = (await listInvites(ctx)).filter((i) => i.email !== email);
     if (current.length + open.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
     const { invite, token } = await createInvite(ctx, { role, displayName: null, emoji: null, createdBy: me.email, email });
-    captureAppEventSoon(ctx.familyId, "invite_sent");
+    const actor = { familyId: ctx.familyId, member: me.email, role: me.role };
+    captureAppEventSoon(actor, "invite_created");
     const origin = publicOrigin(request);
     // The token rides in the #fragment, which browsers never send to servers or logs.
     const url = `${origin}/signup#join=${token}`;
@@ -51,6 +53,7 @@ export const POST = withMember("POST /api/maple/members", async (request, me, ct
       timeZone: ctx.tz,
       origin,
     });
+    if (emailed) captureAppEventSoon(actor, "invite_sent");
     return json({ members: current, invite, url, emailed }, 201);
   }
   if (current.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
@@ -103,6 +106,7 @@ export const DELETE = withMember("DELETE /api/maple/members", async (request, me
     if (refused === "last_owner") throw new BadRequest("You're the only owner, so you can't leave this log.");
     if (refused) throw new BadRequest("You can't leave this log.");
     const res = json({ left: true });
+    clearAnalyticsContext(res);
     clearSessionCookies(res);
     return res;
   }

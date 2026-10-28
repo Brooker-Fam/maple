@@ -36,7 +36,7 @@ export const POST = withMember("POST /api/maple/invites", async (request, me, ct
     emoji: emoji || null,
     createdBy: me.email,
   });
-  captureAppEventSoon(ctx.familyId, "invite_sent");
+  captureAppEventSoon({ familyId: ctx.familyId, member: me.email, role: me.role }, "invite_created");
   // The token rides in the #fragment, which browsers never send to servers or logs.
   return json({ invite, url: `${publicOrigin(request)}/maple/join#${token}` }, 201);
 });

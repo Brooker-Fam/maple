@@ -350,7 +350,7 @@ Waitlist rows offer **Preview invitation**, then **Send invitation** for that on
 
 Checks: `pnpm check:maple-tenancy admin admin-details admin-email`. The tests use synthetic database records and email transports; never point them at production or send a real waitlist email as a test.
 
-PostHog remains the separate source for public-site visits and allowed usage events. `signed_up` and `signup_completed` each represent one newly created family; use either event, not their sum. The database dashboard works independently of PostHog configuration and delivery.
+PostHog measures public visits, signup conversion, onboarding and allowed usage events through opaque person ids and separate family groups. Use `signup_completed` for new families; `signed_up` is retired. Production reporting filters `schema_version = 2`, `environment = production`, and `is_test = false`. Earlier events cannot reconstruct a visit-to-signup funnel because their identities were separate. See [analytics](analytics.md) for event definitions, privacy boundaries and health checks. The database dashboard works independently of PostHog configuration and delivery.
 
 ## Usage alerts
 

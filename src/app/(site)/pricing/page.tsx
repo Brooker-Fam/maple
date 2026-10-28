@@ -3,6 +3,7 @@ import Link from "next/link";
 import SiteFooter from "@/components/site/SiteFooter";
 import SiteHeader from "@/components/site/SiteHeader";
 import { siteOpenGraph } from "@/components/site/meta";
+import GetStarted from "@/components/site/GetStarted";
 
 const DESCRIPTION =
   "Maple is free while it’s in early access. There is no paid plan, and any price will be posted on this page before it applies to anyone.";
@@ -23,7 +24,7 @@ export default function Pricing() {
           Maple is free while it&rsquo;s in early access.
         </h1>
         <p className="site-prose mt-5 text-[19px] leading-[1.55]">
-          There is no paid plan. One family uses Maple today, and other families can&rsquo;t sign up yet.
+          Anyone can sign up. There is no paid plan during the beta.
         </p>
 
         <div className="site-legal mt-6">
@@ -52,10 +53,7 @@ export default function Pricing() {
         </div>
 
         <div className="mt-14 border-t border-mp-line pt-8">
-          <p className="site-prose">Leave your email to hear when families can sign up.</p>
-          <Link href="/waitlist" className="site-button mt-5 inline-flex items-center">
-            Join the waitlist
-          </Link>
+          <GetStarted className="mt-5" placement="pricing" />
         </div>
       </main>
       <SiteFooter />

@@ -193,7 +193,7 @@ export default function Privacy() {
         </li>
       </ul>
       <p>
-        If error reporting is turned on, a server error is sent to PostHog as the kind of error and where in Maple&rsquo;s code it
+        If error reporting is turned on, an error is sent to PostHog as the kind of error and where in Maple&rsquo;s code it
         happened. A failed save or refresh may also include its response status and random operation id, so a failure can be
         connected to its diagnostic record. The contents of your log and your messages aren&rsquo;t sent.
       </p>
@@ -207,24 +207,28 @@ export default function Privacy() {
         The admin page does not send its metrics or revealed addresses to PostHog.
       </p>
       <p>
-        Maple uses PostHog to see whether people can get started and which features are used. The public site sends pageviews
-        (<code>$pageview</code>). Maple&rsquo;s server sends <code>signup_started</code> when it accepts a new-family sign-up form,
-        and <code>signup_completed</code> when a new family is created. Pageviews contain only a public page path; blog articles are grouped together. Query
-        strings, invite tokens, page titles and referring pages are left out.
+        Maple uses PostHog to understand how people find the app, whether they finish setup, and whether they come back.
+        The public site records page visits and clicks on Get started. Page visits can include the published article,
+        the referring website&rsquo;s domain, and limited campaign labels from a link. Full query strings, invite tokens,
+        page titles and the referring page&rsquo;s path are left out.
       </p>
       <p>
-        The app sends only <code>signed_up</code>, <code>onboarding_completed</code>, <code>invite_sent</code>,
-        {" "}<code>chat_used</code>, <code>entry_logged</code> and <code>app_opened</code>. These say that an action happened,
-        without names, email addresses, the type of entry, health details, chat text or anything else from the log.
-        App pageviews are off.
+        We record signup attempts and their outcomes, setup progress, invite creation and acceptance, app opens,
+        saved entries, and whether a chat reply succeeds or fails. These events say that an action happened.
+        They exclude names, email addresses, the type of entry, health details, chat text and the contents of your log.
+        We do not record app pageviews.
       </p>
       <p>
-        Site visits use a random id kept only in the page&rsquo;s memory, with no analytics cookies or
-        persistent analytics storage. It changes when the page reloads. Each sign-up start gets a fresh random id on the server.
-        Completed sign-ups and app events use a keyed hash of the family id,
-        so usage can be counted for one family without sending its name or anyone&rsquo;s email address. Maple does not create
-        PostHog person profiles or send IP addresses in these events, and asks PostHog not to look up a location. A direct
-        browser request still exposes its connection information to the receiving service.
+        Maple keeps a random visitor identifier in a first-party cookie for up to 30 days, with a separate session
+        identifier that expires after 30 minutes of inactivity. When you sign in, Maple connects those earlier visits
+        to a PostHog profile with a random account identifier. Each adult has their own identifier, and a separate random
+        family identifier lets us count household activity. PostHog does not receive the account&rsquo;s email address or
+        the family&rsquo;s name. Signing out clears the browser&rsquo;s analytics identity.
+      </p>
+      <p>
+        Events pass through Maple&rsquo;s server. We do not include your IP address in the analytics payload and ask
+        PostHog not to look up a location. Error reports contain limited technical details; they do not include what
+        you typed or the contents of your log.
       </p>
       <p>
         Automatic click and form tracking, session replay, surveys and heatmaps are off. PostHog does not receive what you

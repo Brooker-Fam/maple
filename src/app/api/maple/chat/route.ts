@@ -10,7 +10,6 @@ import { chatStream, deleteChats } from "@/lib/maple/chat/history";
 import { CHAT_REQUEST_ID_RE } from "@/lib/maple/chat/delivery";
 import { deliveryStatus } from "@/lib/maple/chat/delivery-store";
 import { captureServerException } from "@/lib/posthog-server";
-import { captureAppEventSoon } from "@/lib/analytics/server";
 
 /**
  * The in-app chat: Maple's MCP tools, run by the model as the signed-in
@@ -61,6 +60,5 @@ export const POST = withMember("POST /api/maple/chat", async (request: NextReque
     member,
     familyPostDeps(fam, member, { model, modelKey: model, device: deviceOf(request), now: new Date(), report, waitUntil: (p) => after(() => p) })
   );
-  if (response.ok) captureAppEventSoon(fam.familyId, "chat_used");
   return response;
 });

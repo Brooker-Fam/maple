@@ -1,3 +1,4 @@
+import { parseAnalyticsContext, type AnalyticsContext } from "@/lib/analytics/context";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { encryptSecret, openSecret } from "@/lib/secret-box";
 import { MAPLE_STATE_PREFIX, safeReturnPath } from "./auth";
@@ -59,27 +60,28 @@ export function nativeVerifierMatches(verifier: string | null | undefined, chall
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
-export type NativeTicket = { id: string; fam?: unknown; back: string; challenge: string };
+export type NativeTicket = { id: string; fam?: unknown; back: string; challenge: string; analytics?: AnalyticsContext };
 
-export function mintNativeTicket(id: string, familyId: number, back: string, challenge: string, now = Date.now()): string {
-  const sealed = encryptSecret(JSON.stringify({ k: KIND, id, fam: familyId, back, c: challenge, exp: now + NATIVE_TICKET_TTL_MS }));
+export function mintNativeTicket(id: string, familyId: number, back: string, challenge: string, now = Date.now(), analytics?: AnalyticsContext): string {
+  const sealed = encryptSecret(JSON.stringify({ k: KIND, id, fam: familyId, back, c: challenge, analytics, exp: now + NATIVE_TICKET_TTL_MS }));
   const parts = sealed.split(":").map((p) => Buffer.from(p, "base64").toString("base64url"));
   return [NATIVE_TICKET_PREFIX, ...parts].join(".");
 }
 
 export function openNativeTicket(raw: string | null | undefined, now = Date.now()): NativeTicket | null {
-  if (!raw || raw.length > 2048) return null;
+  if (!raw || raw.length > 4096) return null;
   const [prefix, ...parts] = raw.split(".");
   if (prefix !== NATIVE_TICKET_PREFIX || parts.length !== 3 || parts.some((p) => !/^[A-Za-z0-9_-]+$/.test(p))) return null;
   try {
     const sealed = parts.map((p) => Buffer.from(p, "base64url").toString("base64")).join(":");
     const opened = openSecret(sealed);
-    const { k, id, fam, back, c, exp } = JSON.parse(opened.text);
+    const { k, id, fam, back, c, exp, analytics: rawAnalytics } = JSON.parse(opened.text);
     if (k !== KIND || typeof id !== "string" || !id || typeof exp !== "number" || now > exp) return null;
     if (opened.prev && carrierFamily(fam) !== FAMILY_ONE) return null;
     const challenge = parseNativeChallenge(typeof c === "string" ? c : null);
     if (!challenge) return null;
-    return { id, ...(fam === undefined ? {} : { fam }), back: safeReturnPath(typeof back === "string" ? back : null), challenge };
+    const analytics = parseAnalyticsContext(rawAnalytics);
+    return { id, ...(analytics ? { analytics } : {}), ...(fam === undefined ? {} : { fam }), back: safeReturnPath(typeof back === "string" ? back : null), challenge };
   } catch {
     return null;
   }

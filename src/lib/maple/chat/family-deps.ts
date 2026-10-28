@@ -1,3 +1,4 @@
+import { captureAppEvent } from "@/lib/analytics/server";
 import type { LanguageModel } from "ai";
 import { listMembers } from "../auth";
 import { chatConsent } from "../consent";
@@ -40,5 +41,6 @@ export function familyPostDeps(
     now: opts.now,
     report: opts.report,
     waitUntil: opts.waitUntil,
+    lifecycle: (event) => opts.waitUntil(captureAppEvent({ familyId: fam.familyId, member: member.email, role: member.role }, event)),
   };
 }

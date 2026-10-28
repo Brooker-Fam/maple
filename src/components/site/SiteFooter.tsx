@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { SIGN_IN_PATH, SIGNUP_PATH } from "./GetStarted";
+import GetStarted from "./GetStarted";
+import { SIGN_IN_PATH } from "./paths";
 import Leaf from "./Leaf";
 import { CONTACT_EMAIL } from "./legal";
 
@@ -45,9 +46,7 @@ export default function SiteFooter() {
           <a className="site-link-quiet" href={SIGN_IN_PATH} rel="nofollow">
             Sign in
           </a>
-          <Link className="site-link-quiet" href={SIGNUP_PATH} prefetch={false}>
-            Get started
-          </Link>
+          <GetStarted size="text" className="site-link-quiet" placement="footer" />
         </nav>
       </div>
     </footer>

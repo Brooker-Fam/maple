@@ -370,7 +370,7 @@ export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ en
     ]
   );
   if (rows.length) {
-    captureAppEventSoon(familyId, "entry_logged");
+    captureAppEventSoon({ familyId, member: String(rows[0].created_by) }, "entry_logged");
     return { entry: rowToEntry(rows[0]), deduped: false };
   }
   const existing = clientId ? await q(`SELECT * FROM maple_entries WHERE client_id = $1 AND family_id = $2`, [clientId, familyId]) : [];

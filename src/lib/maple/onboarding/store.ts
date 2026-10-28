@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { query, transaction } from "@/lib/db";
-import { captureAppEventSoon } from "@/lib/analytics/server";
+import { later } from "../push-hooks";
+import { captureAppEvent, captureAppEventSoon } from "@/lib/analytics/server";
 import { createInvite, familyOf, listInvites, listMembers, type Fam } from "../auth";
 import { CareConflict, createCarePerson, patchCarePerson } from "../care-store";
 import { ADMIN_MEMBER_ID, type FamilyCtx } from "../family";
@@ -17,6 +19,7 @@ import {
   ONBOARDING_MODEL_STEPS,
   parseAnswer,
   skippable,
+  STEPS,
   type Answer,
   type OnboardingView,
   type Progress,
@@ -56,6 +59,7 @@ type State = {
   care?: "me" | "later" | "no";
   notifications?: boolean;
   model_steps?: number;
+  analytics_events?: Record<string, { sent?: boolean }>;
 };
 
 function progress(raw: unknown): State {
@@ -88,6 +92,8 @@ export async function readView(ctx: FamilyCtx): Promise<OnboardingView> {
   const feeding = settings.feeding_methods as { nursing?: unknown; pumping?: unknown; formula?: unknown } | undefined;
   const status = row.status === "active" || row.status === "deleting" ? row.status : "onboarding";
   const missing = missingSteps(done);
+  const pendingAnalytics = Object.values(s.analytics_events ?? {}).some((event) => event.sent !== true);
+  if (ctx.role === "owner" && (status === "onboarding" || pendingAnalytics)) trackOnboarding(ctx);
   return {
     familyId: familyOf(ctx),
     status,
@@ -128,7 +134,7 @@ function writer(ctx: FamilyCtx, member: Member) {
   if (member.role !== "owner" || member.email !== ctx.member) throw new AnswerError("Only the person setting up this log can answer these.");
 }
 
-async function mark(ctx: Fam, step: StepId, how: Progress, extra: Partial<State> = {}): Promise<void> {
+async function mark(ctx: FamilyCtx, step: StepId, how: Progress, extra: Partial<State> = {}): Promise<void> {
   const r = await rows(
     `UPDATE maple_families
      SET onboarding = onboarding || $3::jsonb || jsonb_build_object('done', COALESCE(onboarding->'done', '{}'::jsonb) || jsonb_build_object($2::text, $4::text)),
@@ -137,6 +143,51 @@ async function mark(ctx: Fam, step: StepId, how: Progress, extra: Partial<State>
     [familyOf(ctx), step, JSON.stringify(extra), how]
   );
   if (!r.length) throw new OnboardingClosed();
+  trackOnboarding(ctx, step);
+}
+
+async function deliverOnboarding(ctx: FamilyCtx, step?: string): Promise<void> {
+  const key = step ?? "started";
+  const claim = randomUUID();
+  const claimed = await query(
+    `UPDATE maple_families SET onboarding = onboarding || jsonb_build_object('analytics_events',
+       COALESCE(onboarding->'analytics_events', '{}'::jsonb) || jsonb_build_object($2::text,
+         COALESCE(onboarding #> ARRAY['analytics_events', $2], '{}'::jsonb) || jsonb_build_object(
+           'event_id', COALESCE(onboarding #>> ARRAY['analytics_events', $2, 'event_id'], $3),
+           'member', COALESCE(onboarding #>> ARRAY['analytics_events', $2, 'member'], $4),
+           'claim', $5::text, 'lease_until', NOW() + INTERVAL '30 seconds')))
+     WHERE id = $1 AND COALESCE(onboarding #>> ARRAY['analytics_events', $2, 'sent'], 'false') <> 'true'
+       AND COALESCE((onboarding #>> ARRAY['analytics_events', $2, 'lease_until'])::timestamptz, '-infinity') < NOW()
+     RETURNING onboarding #>> ARRAY['analytics_events', $2, 'event_id'] AS event_id,
+       onboarding #>> ARRAY['analytics_events', $2, 'member'] AS member`,
+    [ctx.familyId, key, randomUUID(), ctx.member, claim]
+  );
+  if (!claimed?.length) return;
+  let sent = false;
+  try {
+    sent = await captureAppEvent({ ...ctx, member: String(claimed[0].member) },
+      step ? "onboarding_step_completed" : "onboarding_started",
+      { event_id: claimed[0].event_id, ...(step ? { step } : {}) });
+  } finally {
+    await query(
+      `UPDATE maple_families SET onboarding = jsonb_set(onboarding, ARRAY['analytics_events', $2],
+         (onboarding #> ARRAY['analytics_events', $2]) - 'claim' - 'lease_until' || jsonb_build_object('sent', $4::boolean))
+       WHERE id = $1 AND onboarding #>> ARRAY['analytics_events', $2, 'claim'] = $3`,
+      [ctx.familyId, key, claim, sent]
+    );
+  }
+}
+
+export function trackOnboarding(ctx: FamilyCtx, step?: StepId): void {
+  if (ctx.role !== "owner" || !process.env.NEXT_PUBLIC_POSTHOG_KEY) return;
+  later(async () => {
+    const saved = await query("SELECT onboarding FROM maple_families WHERE id = $1", [ctx.familyId]);
+    const events = progress(saved?.[0]?.onboarding).analytics_events;
+    if (ctx.status === "onboarding" || events?.started) await deliverOnboarding(ctx);
+    const pending = new Set(STEPS.map((_, i) => `step_${i + 1}`).filter((key) => events?.[key] && events[key].sent !== true));
+    if (step) pending.add(`step_${STEPS.indexOf(step) + 1}`);
+    for (const key of pending) await deliverOnboarding(ctx, key);
+  }, "onboarding analytics");
 }
 
 /** The lock keeps two phones answering at once from making two babies. */
@@ -192,7 +243,7 @@ export async function answerStep(ctx: FamilyCtx, member: Member, step: StepId, r
   switch (step) {
     case "welcome": {
       parseAnswer("welcome", raw);
-      await mark(fam, step, "answered", { terms_at: now.toISOString() });
+      await mark(ctx, step, "answered", { terms_at: now.toISOString() });
       break;
     }
     case "you": {
@@ -203,7 +254,7 @@ export async function answerStep(ctx: FamilyCtx, member: Member, step: StepId, r
         a.name,
         a.role_word,
       ]);
-      await mark(fam, step, "answered");
+      await mark(ctx, step, "answered");
       break;
     }
     case "timezone": {
@@ -213,13 +264,13 @@ export async function answerStep(ctx: FamilyCtx, member: Member, step: StepId, r
       const s = progress((await rows(`SELECT onboarding FROM maple_families WHERE id = $1`, [familyOf(fam)]))[0]?.onboarding);
       // A birth time was given on the family's clock: a new clock moves the instant, not the wall time.
       if (s.birth && s.done?.birth === "answered") await writeBirth(fam, { born: true, ...s.birth }, a.timezone);
-      await mark(fam, step, "answered");
+      await mark(ctx, step, "answered");
       break;
     }
     case "baby_name": {
       const a = parseAnswer("baby_name", raw);
       await setBaby(fam, `name = $3, nickname = $4`, [a.name ?? BABY_DEFAULT_NAME, a.nickname]);
-      await mark(fam, step, "answered");
+      await mark(ctx, step, "answered");
       break;
     }
     case "birth": {
@@ -228,20 +279,20 @@ export async function answerStep(ctx: FamilyCtx, member: Member, step: StepId, r
       const problem = birthProblem(a, tz, now);
       if (problem) throw new AnswerError(problem);
       await writeBirth(fam, a, tz);
-      await mark(fam, step, "answered", { birth: a.born ? { date: a.date, time: a.time } : null });
+      await mark(ctx, step, "answered", { birth: a.born ? { date: a.date, time: a.time } : null });
       break;
     }
     case "sex": {
       const a = parseAnswer("sex", raw);
       await setBaby(fam, `sex = $3`, [a.sex]);
-      await mark(fam, step, "answered");
+      await mark(ctx, step, "answered");
       break;
     }
     case "feeding": {
       const a = parseAnswer("feeding", raw);
       // Pumped milk and formula both go in bottles; nothing logged is hidden either way.
       await setBabySettings(fam, { feeding_methods: a, feeds_bottle: a.formula || a.pumping, track_pump: a.pumping });
-      await mark(fam, step, "answered");
+      await mark(ctx, step, "answered");
       break;
     }
     case "invites": {
@@ -254,27 +305,27 @@ export async function answerStep(ctx: FamilyCtx, member: Member, step: StepId, r
       out.invites = [];
       for (const p of a.people) {
         const { token } = await createInvite(fam, { role: p.role, displayName: p.name, emoji: null, createdBy: member.email });
-        captureAppEventSoon(ctx.familyId, "invite_sent");
+        captureAppEventSoon(ctx, "invite_created");
         out.invites.push({ name: p.name, role: p.role, token });
       }
-      await mark(fam, step, "answered");
+      await mark(ctx, step, "answered");
       break;
     }
     case "care": {
       const a = parseAnswer("care", raw);
       if (a.choice === "me") await openCarePage(fam, member, now);
-      await mark(fam, step, "answered", { care: a.choice });
+      await mark(ctx, step, "answered", { care: a.choice });
       break;
     }
     case "pediatrician": {
       const a = parseAnswer("pediatrician", raw);
       await setBabySettings(fam, { pediatrician_name: a.name, pediatrician_phone: a.phone, after_hours_phone: a.after_hours });
-      await mark(fam, step, "answered");
+      await mark(ctx, step, "answered");
       break;
     }
     case "notifications": {
       const a = parseAnswer("notifications", raw);
-      await mark(fam, step, "answered", { notifications: a.on });
+      await mark(ctx, step, "answered", { notifications: a.on });
       break;
     }
   }
@@ -313,7 +364,7 @@ export async function skipStep(ctx: FamilyCtx, member: Member, step: StepId): Pr
   if (!skippable(step)) throw new AnswerError("This one is needed before you can start logging.");
   const fam = { familyId: ctx.familyId };
   if (step === "baby_name") await ensureBaby(fam);
-  await mark(fam, step, "skipped", step === "care" ? { care: "no" } : step === "notifications" ? { notifications: false } : {});
+  await mark(ctx, step, "skipped", step === "care" ? { care: "no" } : step === "notifications" ? { notifications: false } : {});
   return readView(ctx);
 }
 
@@ -329,7 +380,7 @@ export async function finishOnboarding(ctx: FamilyCtx, member: Member, now = new
     [familyOf(fam), now.toISOString()]
   );
   if (!r.length) throw new OnboardingClosed();
-  captureAppEventSoon(ctx.familyId, "onboarding_completed");
+  captureAppEventSoon(ctx, "onboarding_completed");
   return readView({ ...ctx, status: "active" });
 }
 

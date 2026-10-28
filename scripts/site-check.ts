@@ -309,16 +309,29 @@ async function main() {
   });
 
   // ── error reports ─────────────────────────────────────────────────────
-  await check("scrubError keeps the class, code and frames, never the message", async () => {
+  await check("scrubError keeps approved classes and codes, never raw messages or frames", async () => {
     const { scrubError } = await import("../src/lib/posthog-server");
-    const pg = Object.assign(new Error('new row violates check constraint\nFailing row contains (12, june@example.com, "3350 g")'), { name: "NeonDbError", code: "23514" });
+    const pg = Object.assign(new Error("Failing row contains synthetic-parent@example.test synthetic-health-value"), {
+      name: "NeonDbError", code: "23514",
+      stack: "NeonDbError: synthetic-health-value\n    at write (https://synthetic.example.test/?token=synthetic-private-token:1:2)",
+    });
     const out = scrubError(pg);
+    eq(out.name, "NeonDbError");
     eq(out.message, "NeonDbError 23514");
-    ok(!/june|3350|Failing/.test(out.stack ?? ""), `stack leaks: ${out.stack}`);
-    ok(/\n\s+at /.test(out.stack ?? ""), "no frames kept");
-    eq(scrubError(new SyntaxError('Unexpected token \'j\', "june@example.com" is not valid JSON')).message, "SyntaxError");
+    eq(out.stack, "NeonDbError: NeonDbError 23514");
+    eq(scrubError(out).message, "NeonDbError 23514");
+    eq(scrubError(new SyntaxError("Unexpected token in synthetic-parent@example.test")).message, "SyntaxError");
     eq(scrubError(new Error("care_error")).message, "care_error");
-    eq(scrubError("june@example.com").message, "Error");
+    eq(scrubError(scrubError(new Error("care_error"))).message, "care_error");
+    for (const input of [
+      "synthetic-parent@example.test", new Error("synthetic-private-token"), new Error("care_error_synthetic-private-token"),
+      Object.assign(new Error("synthetic-private-token"), { name: "synthetic-private-token", code: "synthetic-private-token" }),
+    ]) {
+      const clean = scrubError(input);
+      eq(clean.name, "Error");
+      eq(clean.message, "Error");
+      eq(clean.stack, "Error: Error");
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

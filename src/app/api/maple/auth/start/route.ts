@@ -1,3 +1,4 @@
+import { readAnalyticsContext, ensureAnalyticsContext } from "@/lib/analytics/context";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getAppBaseUrl } from "@/lib/secret-box";
@@ -34,7 +35,8 @@ export async function GET(request: NextRequest) {
   const state = native ? nativeState(native, randomUUID()) : `${MAPLE_STATE_PREFIX}${randomUUID()}`;
   const site = native ? base : signInSite(searchParams.get("site"));
   const res = NextResponse.redirect(authorizeUrl(state, site));
-  res.cookies.set(STATE_COOKIE, JSON.stringify(native ? { state, back, native, challenge } : { state, back, site }), {
+  const analytics = readAnalyticsContext(request) ?? ensureAnalyticsContext(request, res);
+  res.cookies.set(STATE_COOKIE, JSON.stringify(native ? { state, back, native, challenge, analytics } : { state, back, site, analytics }), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

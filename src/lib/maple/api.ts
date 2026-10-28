@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
+import { after, NextRequest, NextResponse } from "next/server";
 import { captureServerException, scrubError } from "@/lib/posthog-server";
 import { listMembers, sessionContext } from "./auth";
 import { CareConflict, CareForbidden, careSession, viewerFor, type CareSession } from "./care-store";
@@ -11,6 +12,12 @@ import { voiceFor } from "./voice";
 import { AnswerError, parseName } from "./onboarding/steps";
 import { logSyncDiagnostic, syncRequestFor } from "./diagnostics";
 import type { Member } from "./types";
+import { CONTACT_EMAIL } from "@/components/site/legal";
+import { sendEmail } from "@/lib/email/send";
+import { analyticsTags } from "@/lib/analytics/config";
+import { deliver, deliveryDeps } from "./usage-alerts/delivery";
+import { MAPLE_ORIGIN } from "./origin";
+import type { AnalyticsActor } from "@/lib/analytics/identity";
 
 /**
  * Shared plumbing for /api/maple/* routes: resolve the signed-in member and
@@ -73,7 +80,7 @@ export function withMember(route: string, handler: Handler, opts: { write?: bool
       return finish(await handler(request, member, ctx));
     } catch (error) {
       const response = await errorResponse(route, error, fam);
-      return finish(response, response.status === 500);
+      return finish(response, response.status >= 500);
     }
   };
 }
@@ -113,7 +120,10 @@ export function viewOnlyCopy(ctx: Pick<FamilyCtx, "familyId">): string {
 
 /** `fam`: the caller's family, so a feed-time error reads in its clock and words. */
 export async function errorResponse(route: string, error: unknown, fam?: FamilyCtx): Promise<Response> {
-  if (error instanceof StoreUnavailable) return json({ error: "Maple's log is offline right now" }, 503);
+  if (error instanceof StoreUnavailable) {
+    await reportApiError(route, error, "database_unavailable", fam);
+    return json({ error: "Maple's log is offline right now" }, 503);
+  }
   if (error instanceof NotFound) return json({ error: error.message || "Not found" }, 404);
   if (error instanceof Conflict) {
     return json({ error: error.message, reason: error.reason, entry: toClientEntry(error.entry) }, 409);
@@ -130,8 +140,7 @@ export async function errorResponse(route: string, error: unknown, fam?: FamilyC
   if (error instanceof Error && !("code" in error) && isUserFacing(error)) {
     return json({ error: error.message }, 400);
   }
-  console.error(`${route} error:`, scrubError(error));
-  await captureServerException(error, { route });
+  await reportApiError(route, error, "server_error", fam);
   return json({ error: "Something went wrong" }, 500);
 }
 
@@ -170,17 +179,15 @@ export type CareHandler = (request: NextRequest, member: Member, s: CareSession,
  * 404 so the app never confirms there's anything there; `write` and
  * `manage` she can read but not change answer 403; `mood` (her session
  * only) answers 404 to everyone else.
- *
- * Errors are scrubbed: Postgres puts row data in its messages ("Failing row
- * contains (…)"), so an unexpected error is reported as `new Error(code)`
- * with `{ route }` only, and never forwarded.
  */
 export function withCare(route: string, handler: CareHandler, opts: { write?: boolean; manage?: boolean; mood?: boolean } = {}) {
   return async function (request: NextRequest): Promise<Response> {
+    let fam: FamilyCtx | undefined;
     try {
       const signedIn = await sessionContext(request);
       if (!signedIn) return json({ error: "Not signed in" }, 401);
       const { member, ctx } = signedIn;
+      fam = ctx;
       if (ctx.status === "onboarding") return json(STILL_SETTING_UP, 403);
       const mismatch = familyMismatch(request, ctx);
       if (mismatch) return mismatch;
@@ -190,7 +197,7 @@ export function withCare(route: string, handler: CareHandler, opts: { write?: bo
       if (opts.manage && !s.access.manage) return json({ error: `Only ${s.name} can change that.` }, 403);
       return await handler(request, member, s, ctx);
     } catch (error) {
-      return careErrorResponse(route, error);
+      return careErrorResponse(route, error, fam);
     }
   };
 }
@@ -201,8 +208,11 @@ export async function sessionCare(member: Member, ctx: Pick<FamilyCtx, "familyId
   return careSession(viewerFor(member, baby, members), { familyId: ctx.familyId, members, baby });
 }
 
-export async function careErrorResponse(route: string, error: unknown): Promise<Response> {
-  if (error instanceof StoreUnavailable) return json({ error: "Maple's log is offline right now" }, 503);
+export async function careErrorResponse(route: string, error: unknown, fam?: AnalyticsActor): Promise<Response> {
+  if (error instanceof StoreUnavailable) {
+    await reportApiError(route, error, "database_unavailable", fam);
+    return json({ error: "Maple's log is offline right now" }, 503);
+  }
   if (error instanceof NotFound) return json({ error: error.message || "Not found" }, 404);
   if (error instanceof CareConflict) {
     if (error.reason === "exists") return json({ error: error.message, reason: "exists" }, 409);
@@ -213,9 +223,50 @@ export async function careErrorResponse(route: string, error: unknown): Promise<
   if (error instanceof Error && !("code" in error) && isUserFacing(error) && error.message !== "id_exhausted") {
     return json({ error: error.message }, 400);
   }
-  const code = (error as { code?: unknown } | null)?.code;
-  const scrubbed = new Error(typeof code === "string" && /^[A-Za-z0-9_]{1,40}$/.test(code) ? code : error instanceof Error && error.message === "id_exhausted" ? "id_exhausted" : "care_error");
-  console.error(`${route} error: ${scrubbed.message}`);
-  await captureServerException(scrubbed, { route });
+  await reportApiError(route, error, "server_error", fam);
   return json({ error: "Something went wrong" }, 500);
+}
+
+type ApiErrorKind = "database_unavailable" | "server_error";
+
+async function alertApiError(kind: ApiErrorKind): Promise<void> {
+  const tags = analyticsTags();
+  if (tags.is_test) return;
+  const quietReport = () => { console.error("Maple API error alert delivery failed"); };
+  const deps = deliveryDeps({ report: quietReport, send: (email) => sendEmail(email, { report: quietReport }) });
+  const alert = {
+    key: `api-errors/${kind}/${tags.environment}/${deps.now.toISOString().slice(0, 10)}`,
+    subject: kind === "database_unavailable" ? "Maple database unavailable" : "Maple API error",
+    body: `Maple observed an API ${kind === "database_unavailable" ? "database outage" : "server error"}. The Maple operator should review server health and exception tracking.\n\n${MAPLE_ORIGIN}/maple/admin`,
+  };
+  try {
+    await deliver(alert, deps);
+  } catch {
+    const escape = (text: string) => text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+    const result = await deps.send({
+      to: deps.env.MAPLE_ALERT_EMAIL?.trim() || CONTACT_EMAIL,
+      subject: alert.subject,
+      text: alert.body,
+      html: `<p>${escape(alert.body).replace(/\n/g, "<br>")}</p>`,
+      kind: "usage_alert",
+      idempotencyKey: `usage/${createHash("sha256").update(alert.key).digest("hex")}`,
+    });
+    if (!result.sent) quietReport();
+  }
+}
+
+async function reportApiError(route: string, error: unknown, kind: ApiErrorKind, actor?: AnalyticsActor): Promise<void> {
+  try {
+    console.error("Maple API error:", scrubError(error));
+    await captureServerException(error, { route, where: "api", kind }, actor);
+  } catch {}
+  try {
+    after(async () => {
+      try {
+        await alertApiError(kind);
+      } catch {
+        console.error("Maple API error alert delivery failed");
+      }
+    });
+  } catch {}
 }

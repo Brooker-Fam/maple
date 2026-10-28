@@ -1,62 +1,129 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { analyticsHost, APP_EVENTS, type AppAnalyticsEvent } from "./policy";
+import { analyticsConfig } from "./config";
+import { parseAnalyticsContext, type AnalyticsContext } from "./context";
+import { reportAnalyticsFailure } from "./health";
+import { claimAnalyticsVisitor, resolveAnalyticsActor, type AnalyticsActor, type AnalyticsIdentity } from "./identity";
+import { APP_EVENTS, canonicalUrl, safeProperties, type AppAnalyticsEvent, type PublicAnalyticsEvent } from "./policy";
+import { sendAnalyticsEvent } from "./transport";
 
-export function familyAnalyticsId(familyId: number): string | null {
-  const secret = process.env.MAPLE_SESSION_SECRET?.trim() || process.env.GOOGLE_CLIENT_SECRET?.trim();
-  if (!secret || !Number.isSafeInteger(familyId) || familyId < 1) return null;
-  return `family:${createHmac("sha256", secret).update(`maple-analytics:family:${familyId}`).digest("hex")}`;
+export { readAnalyticsContext, ensureAnalyticsContext, clearAnalyticsContext, parseAnalyticsContext } from "./context";
+export type { AnalyticsContext } from "./context";
+export type { AnalyticsActor } from "./identity";
+
+export function contextProperties(context?: AnalyticsContext): Record<string, unknown> {
+  const ctx = parseAnalyticsContext(context);
+  if (!ctx) return {};
+  const { pathname, referrer_host, ...utm } = ctx.initial;
+  const session = ctx.session ?? ctx.initial;
+  return {
+    $session_id: ctx.sessionId,
+    ...(session.utm_source ? { utm_source: session.utm_source } : {}),
+    ...(session.utm_medium ? { utm_medium: session.utm_medium } : {}),
+    ...(session.utm_campaign ? { utm_campaign: session.utm_campaign } : {}),
+    ...(session.referrer_host ? { $referring_domain: session.referrer_host } : {}),
+    ...(pathname ? { $initial_current_url: canonicalUrl(pathname), $initial_pathname: pathname } : {}),
+    ...(referrer_host ? { $initial_referring_domain: referrer_host } : {}),
+    ...Object.fromEntries(Object.entries(utm).map(([key, value]) => [`$initial_${key}`, value])),
+  };
 }
 
-async function sendEvent(distinctId: string, event: AppAnalyticsEvent | "signup_started" | "signup_completed"): Promise<void> {
-  const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-  const host = analyticsHost(process.env.NEXT_PUBLIC_POSTHOG_HOST);
-  if (!key || !host) return;
+function identifiedProperties(identity: AnalyticsIdentity, properties: Record<string, unknown>, context?: AnalyticsContext) {
+  return { ...safeProperties(properties), ...contextProperties(context), $groups: { family: identity.familyGroupId }, family_id: identity.familyGroupId, $current_url: canonicalUrl("/maple"), $pathname: "/maple" };
+}
+
+async function captureIdentified(actor: AnalyticsActor, event: string, properties: Record<string, unknown> = {}, context?: AnalyticsContext): Promise<boolean> {
+  if (!analyticsConfig()) return false;
   try {
-    await fetch(`${host}/capture/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      signal: AbortSignal.timeout(1500),
-      body: JSON.stringify({
-        api_key: key,
-        event,
-        properties: { distinct_id: distinctId, $process_person_profile: false, $geoip_disable: true },
-      }),
-    });
-  } catch {}
+    const identity = await resolveAnalyticsActor(actor);
+    if (!identity) return false;
+    return await sendAnalyticsEvent(identity.distinctId, event, identifiedProperties(identity, properties, context), identity,
+      typeof properties.event_id === "string" ? properties.event_id : undefined);
+  } catch { await reportAnalyticsFailure(); return false; }
 }
 
-async function captureFamilyEvent(familyId: number, event: AppAnalyticsEvent | "signup_completed"): Promise<void> {
-  const distinctId = familyAnalyticsId(familyId);
-  if (distinctId) await sendEvent(distinctId, event);
+export async function captureAppEvent(actor: AnalyticsActor, event: AppAnalyticsEvent, properties: Record<string, unknown> = {}, context?: AnalyticsContext): Promise<boolean> {
+  if (!APP_EVENTS.includes(event)) return false;
+  return captureIdentified(actor, event, properties, context);
 }
 
-export async function captureAppEvent(familyId: number, event: AppAnalyticsEvent): Promise<void> {
-  if (!APP_EVENTS.includes(event)) return;
-  await captureFamilyEvent(familyId, event);
+function schedule(task: () => Promise<unknown>): void {
+  if (!analyticsConfig()) return;
+  const run = async () => { try { await task(); } catch { await reportAnalyticsFailure(); } };
+  try { after(run); } catch { void run(); }
 }
 
-function schedule(task: () => Promise<void>): void {
-  if (!process.env.NEXT_PUBLIC_POSTHOG_KEY) return;
+export function captureAppEventSoon(actor: AnalyticsActor, event: AppAnalyticsEvent, properties: Record<string, unknown> = {}, context?: AnalyticsContext): void {
+  schedule(() => captureAppEvent(actor, event, properties, context));
+}
+
+async function captureAnonymous(event: string, context?: AnalyticsContext, properties: Record<string, unknown> = {}): Promise<boolean> {
+  const ctx = parseAnalyticsContext(context);
+  return sendAnalyticsEvent(ctx?.visitorId ?? randomUUID(), event, { ...safeProperties(properties), ...contextProperties(ctx) });
+}
+
+export async function captureSignupStarted(context?: AnalyticsContext, properties: Record<string, unknown> = {}): Promise<boolean> {
+  return captureAnonymous("signup_started", context, properties);
+}
+
+export function captureSignupStartedSoon(context?: AnalyticsContext, properties: Record<string, unknown> = {}): void {
+  schedule(() => captureSignupStarted(context, properties));
+}
+
+export function captureSignupFailedSoon(context?: AnalyticsContext, properties: Record<string, unknown> = {}): void {
+  schedule(() => captureAnonymous("signup_failed", context, properties));
+}
+
+export function captureWaitlistJoinedSoon(context?: AnalyticsContext, properties: Record<string, unknown> = {}): void {
+  schedule(() => captureAnonymous("waitlist_joined", context, properties));
+}
+
+export async function identifyAnalytics(actor: AnalyticsActor, context?: AnalyticsContext): Promise<boolean> {
+  if (!analyticsConfig()) return false;
   try {
-    after(task);
-  } catch {}
+    const identity = await resolveAnalyticsActor(actor);
+    if (!identity) return false;
+    const ctx = parseAnalyticsContext(context);
+    const link = ctx && await claimAnalyticsVisitor(ctx.visitorId, identity.distinctId);
+    const properties = identifiedProperties(identity, {}, link ? ctx : undefined);
+    const identified = await sendAnalyticsEvent(identity.distinctId, "$identify", {
+      ...properties, ...(link ? { $anon_distinct_id: ctx.visitorId } : {}),
+      $set_once: contextProperties(link ? ctx : undefined),
+    }, identity, ctx?.visitorId);
+    const grouped = await sendAnalyticsEvent(identity.distinctId, "$groupidentify", {
+      ...properties, $group_type: "family", $group_key: identity.familyGroupId, $group_set: {},
+    }, identity, identity.familyGroupId);
+    return identified && grouped;
+  } catch { await reportAnalyticsFailure(); return false; }
 }
 
-export function captureAppEventSoon(familyId: number, event: AppAnalyticsEvent): void {
-  schedule(() => captureAppEvent(familyId, event));
+export function identifyAnalyticsSoon(actor: AnalyticsActor, context?: AnalyticsContext): void {
+  schedule(() => identifyAnalytics(actor, context));
 }
 
-export async function captureSignupStarted(): Promise<void> {
-  await sendEvent(`site:${randomUUID()}`, "signup_started");
+export async function captureSignupCompleted(actor: AnalyticsActor, context?: AnalyticsContext, properties: Record<string, unknown> = {}): Promise<boolean> {
+  await identifyAnalytics(actor, context);
+  return captureIdentified(actor, "signup_completed", properties, context);
 }
 
-export function captureSignupStartedSoon(): void {
-  schedule(captureSignupStarted);
-}
-
-export async function captureSignupCompleted(familyId: number): Promise<void> {
-  await captureFamilyEvent(familyId, "signup_completed");
+export async function capturePublicEvent(event: PublicAnalyticsEvent, context: AnalyticsContext, actor?: AnalyticsActor): Promise<boolean> {
+  const pathname = event.event === "client_error" ? undefined : event.properties.pathname;
+  const properties: Record<string, unknown> = {
+    ...contextProperties(context), ...(pathname ? { $current_url: canonicalUrl(pathname), $pathname: pathname } : {}),
+    ...(pathname?.startsWith("/blog/") ? { blog_slug: pathname.slice(6) } : {}),
+    ...(event.event === "signup_clicked" ? { placement: event.properties.placement } : {}),
+  };
+  if (event.event === "client_error") {
+    properties.area = event.properties.area;
+    properties.$exception_list = [{ type: event.properties.error_class, value: event.properties.error_class, mechanism: { type: "generic", handled: false } }];
+  }
+  try {
+    const identity = actor ? await resolveAnalyticsActor(actor) : null;
+    if (identity) {
+      await claimAnalyticsVisitor(context.visitorId, identity.distinctId);
+      properties.$groups = { family: identity.familyGroupId };
+      properties.family_id = identity.familyGroupId;
+    }
+    return await sendAnalyticsEvent(identity?.distinctId ?? context.visitorId, event.event === "client_error" ? "$exception" : event.event, properties, identity ?? undefined, event.event_id);
+  } catch { await reportAnalyticsFailure(); return false; }
 }

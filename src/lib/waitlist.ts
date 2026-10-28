@@ -109,12 +109,13 @@ export async function handleWaitlist(req: Request, deps: WaitlistDeps): Promise<
 }
 
 export const WAITLIST_INSERT = `WITH today AS (SELECT count(*)::int AS n FROM maple_waitlist WHERE created_at > NOW() - INTERVAL '1 day'),
-  added AS (INSERT INTO maple_waitlist (email) SELECT $1::text FROM today WHERE n < $2 ON CONFLICT (email) DO NOTHING)
-SELECT n FROM today`;
+  added AS (INSERT INTO maple_waitlist (email) SELECT $1::text FROM today WHERE n < $2 ON CONFLICT (email) DO NOTHING RETURNING 1)
+SELECT n, EXISTS(SELECT 1 FROM added) AS added FROM today`;
 
-export async function addToWaitlist(entry: WaitlistEntry, run: Run): Promise<WaitlistSave> {
+export async function addToWaitlist(entry: WaitlistEntry, run: Run, onAdded?: () => void): Promise<WaitlistSave> {
   const rows = await run(WAITLIST_INSERT, [entry.email, WAITLIST_DAILY_MAX]);
   if (!rows) return "offline";
+  if ((rows[0] as { added?: unknown } | undefined)?.added === true) onAdded?.();
   const before = Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0);
   return before < WAITLIST_DAILY_MAX ? "saved" : "full";
 }
