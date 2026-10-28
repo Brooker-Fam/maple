@@ -3,6 +3,7 @@ import { normalizeEmail } from "@/lib/waitlist";
 import { captureSignupStartedSoon } from "@/lib/analytics/server";
 import { captureServerException } from "@/lib/posthog-server";
 import { setSessionCookies } from "./auth";
+import { grantMetricsAccess } from "./admin/auth";
 import { startEmailChallenge, verifyEmailChallenge } from "./email-auth";
 import { allowAttempt } from "./family/limits";
 import { completeSignIn, sameOriginRequest, signInContext, signInErrorCode, SIGNIN_ERRORS, type SignInContext } from "./signin-flow";
@@ -50,6 +51,7 @@ export async function finishEmail(req: NextRequest): Promise<NextResponse> {
     const completed = await completeSignIn(req, ctx, { provider: "email", email: result.email });
     const res = NextResponse.json({ ok: true, redirect: completed.redirect }, { headers });
     res.cookies.set(EMAIL_STATE_COOKIE, "", { path: PATH, maxAge: 0 });
+    grantMetricsAccess(res, result.email, completed.id);
     setSessionCookies(res, completed.id, completed.familyId);
     return res;
   } catch (error) {

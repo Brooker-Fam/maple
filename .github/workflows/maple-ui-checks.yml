@@ -40,6 +40,9 @@ jobs:
       - name: Time editing checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-time-edit
+      - name: Admin metrics access and counts
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-tenancy admin
       - name: Install browser check tools
         id: browser_tools
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

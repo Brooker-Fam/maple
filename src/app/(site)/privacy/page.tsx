@@ -166,6 +166,11 @@ export default function Privacy() {
 
       <h2>Usage counts</h2>
       <p>
+        Maple&rsquo;s operator has a private metrics page showing totals for signups, member accounts, completed setup,
+        recent activity, saved entries and the waitlist. These totals come from existing database records. The page does
+        not show names, email addresses, individual logs or chat messages, and does not send its metrics to PostHog.
+      </p>
+      <p>
         Maple uses PostHog to see whether people can get started and which features are used. The public site sends pageviews
         (<code>$pageview</code>). Maple&rsquo;s server sends <code>signup_started</code> when it accepts a new-family sign-up form,
         and <code>signup_completed</code> when a new family is created. Pageviews contain only a public page path; blog articles are grouped together. Query

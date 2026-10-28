@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { grantMetricsAccess } from "../admin/auth";
 import { resolveEmailIdentity } from "../auth-identities";
 import { sameOriginRequest } from "../auth-request";
 import { NextResponse, type NextRequest } from "next/server";
@@ -228,6 +229,7 @@ export async function handleSignupCallback(req: NextRequest, deps: SignupCallbac
     const url = new URL("/maple", site);
     url.searchParams.set("auth", "ok");
     const res = finish(NextResponse.redirect(url.toString()));
+    grantMetricsAccess(res, verifiedEmail, who.email);
     // After every res.cookies call: setSessionCookies appends raw Set-Cookie headers that a later one would drop.
     setSessionCookies(res, who.email, familyId);
     return res;

@@ -358,7 +358,7 @@ const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, "")}`;
 // ── The tab ──────────────────────────────────────────────────────────────
 
 export default function FamilyTab() {
-  const { state, readOnly } = useMaple();
+  const { state, readOnly, auth } = useMaple();
   if (!state) return null;
   return (
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
@@ -373,6 +373,17 @@ export default function FamilyTab() {
       <HelpSection />
       <SignInMethods memberId={state.me.email} />
       <DataAndAccount />
+      {auth?.metricsAdmin && (
+        <Section title="Administration">
+          <Link href="/maple/admin" className={cx(GROUP, "flex min-h-[60px] items-center justify-between gap-3 px-4 py-3 text-mp-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mp-accent")}>
+            <span>
+              <span className="block text-[15px] font-medium">Site metrics</span>
+              <span className={cx(tone.muted, "block text-[13px]")}>Signups, setup and recent activity</span>
+            </span>
+            <Icon name="chevron-right" size={18} />
+          </Link>
+        </Section>
+      )}
       <About />
       <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
     </div>

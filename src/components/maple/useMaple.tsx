@@ -68,6 +68,8 @@ export type AuthInfo = {
   apple: boolean;
   email: boolean;
   password: boolean;
+  /** Server-verified access to the separate site metrics page. */
+  metricsAdmin?: boolean;
   reason?: string | null;
   /** MAPLE_SIGNUP, when the server says; absent reads as "off". */
   signup?: "off" | "invite" | "open";

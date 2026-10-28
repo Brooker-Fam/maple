@@ -4,6 +4,7 @@ import { signupMode } from "@/lib/maple/family";
 import { captureServerException } from "@/lib/posthog-server";
 import { isAppleConfigured } from "@/lib/maple/apple";
 import { isEmailConfigured } from "@/lib/maple/email-auth";
+import { isMetricsAdmin } from "@/lib/maple/admin/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export async function GET(request: NextRequest) {
   try {
     const signedIn = await sessionContext(request);
     return NextResponse.json(
-      signedIn ? { ...base, signedIn: true, member: signedIn.member } : { ...base, signedIn: false },
+      signedIn ? { ...base, signedIn: true, member: signedIn.member, metricsAdmin: isMetricsAdmin(signedIn.member.email) } : { ...base, signedIn: false },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {

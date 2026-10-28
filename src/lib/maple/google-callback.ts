@@ -14,6 +14,7 @@ import { captureServerException } from "@/lib/posthog-server";
 import { handleSignupCallback, isSignupCallback, type SignupCallbackDeps } from "./family/signup";
 import { mintNativeTicket, nativeFromState, nativeReturnUrl, parseNativeChallenge, parseNativeFlag } from "./native-auth";
 import type { NativePlatform } from "./native";
+import { grantMetricsAccess } from "./admin/auth";
 
 function withAuthParam(base: string, path: string, value: string): string {
   const url = new URL(path, base);
@@ -67,6 +68,7 @@ export async function handleMapleGoogleCallback(request: NextRequest, deps: Sign
     const who = await deps.identify(code, base);
     if (!who) return fail("no_email");
 
+    const verifiedEmail = who.email;
     who.email = await resolveEmailIdentity(who.email);
 
     // Resolve membership before minting a session, so an uninvited account
@@ -86,6 +88,7 @@ export async function handleMapleGoogleCallback(request: NextRequest, deps: Sign
     // res.cookies.* rewrites every Set-Cookie header, so it must run before
     // setSessionCookies appends the session's raw headers.
     res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
+    grantMetricsAccess(res, verifiedEmail, member.email);
     setSessionCookies(res, member.email, familyId);
     return res;
   } catch (error) {

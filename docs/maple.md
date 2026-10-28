@@ -301,6 +301,16 @@ Nothing else notifies: no "timer left running", no morning summary, no readings,
 9. **Leave the GitHub backup on:** GitHub → Brooker-Fam/maple → Settings → Secrets and variables → Actions → Variables: `MAPLE_TICK_URL` = `https://maplebaby.app/api/maple/push/tick`, and Actions → Maple reminders not disabled.
 10. Whenever a phone shows Stopped (the row, or the "Notifications stopped on this phone" toast), is reset, or has its Home Screen icon removed: open Maple from the icon, tap Turn on, and run the 1-minute test with the phone locked.
 
+## Site metrics
+
+The designated operator can open `/maple/admin`, or Family → Administration → Site metrics after signing in with their own account. The shared Admin password and other family owners do not grant access. `src/lib/maple/admin/auth.ts` pins a SHA-256 digest of the authorized canonical member identity, keeping the address out of this public repository. Every metrics request checks the existing signed session and current family membership before the separate operator check; the page itself is only an empty client shell until that request succeeds.
+
+Metrics also requires a 12-hour HttpOnly proof issued only after Google, email or Apple directly verifies the operator's original email, before linked-identity resolution. The proof uses the independent current Maple session key, never its previous key. Family switching and native-ticket exchange cannot issue it, so legacy shared credentials cannot be promoted to global metrics access. An existing login can use the page's Google or email verification to obtain it. Signing out clears it. The normal family session remains unchanged.
+
+`GET /api/maple/admin/metrics` returns aggregate counts only, with `Cache-Control: no-store`. Family totals, signup trends, accepted account totals and recent activity exclude the original family (id 1). Accounts are deduplicated across families; pending invitations, the Admin pseudo-account and anonymous invite-link identities are excluded from the account count. Setup complete means family status `active`; recent activity instead uses members' `last_seen_at` from app state requests. The 7/30-day cards use rolling windows, while the daily signup chart covers today and the preceding 29 UTC dates. Counts describe records still present, not an immutable historical ledger. No migrations, extra tracking, names, addresses, entry contents or chat content are needed.
+
+PostHog remains the separate source for public-site visits and allowed usage events. `signed_up` and `signup_completed` each represent one newly created family; use either event, not their sum. The database dashboard works independently of PostHog configuration and delivery.
+
 ## Usage alerts
 
 `vercel.json` schedules `GET /api/maple/usage-alerts` daily at 12:04 UTC. It requires `Authorization: Bearer $CRON_SECRET`, compared in constant time. Resend sends usage notices only to `MAPLE_ALERT_EMAIL`, defaulting to `hello@maplebaby.app`; its normal key and domain configuration are required. Notices contain counts, amounts and internal family ids, never chat content or member addresses. Check with `pnpm check:usage-alerts` and `pnpm check:maple-tenancy usage-alerts`.

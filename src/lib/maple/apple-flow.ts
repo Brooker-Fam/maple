@@ -5,6 +5,7 @@ import { encryptSecret, getAppBaseUrl, openSecret } from "@/lib/secret-box";
 import { captureServerException } from "@/lib/posthog-server";
 import { APPLE_CALLBACK_PATH, appleAuthorizeUrl, appleIdentityFromCode, isAppleConfigured, type AppleIdentity } from "./apple";
 import { setSessionCookies } from "./auth";
+import { grantMetricsAccess } from "./admin/auth";
 import { mintNativeTicket, nativeFromState, nativeReturnUrl, nativeState } from "./native-auth";
 import { completeSignIn, signInErrorCode, type SignInContext } from "./signin-flow";
 
@@ -84,6 +85,7 @@ export async function finishApple(req: NextRequest, identify: (code: string, non
       return clear(NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(completed.id, completed.familyId, ctx.back, ctx.challenge) }), 303));
     }
     const res = clear(NextResponse.redirect(completed.redirect, 303));
+    grantMetricsAccess(res, identity.email ?? "", completed.id);
     setSessionCookies(res, completed.id, completed.familyId);
     return res;
   } catch (error) {
