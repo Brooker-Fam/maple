@@ -803,6 +803,16 @@ export async function createCareEntry(
     const { entry, deduped } = await addCareQuestion(s, { text: typeof body.note === "string" ? body.note : "", private: body.private === true, clientId, source });
     return { created: !deduped, deduped: deduped || undefined, entry, notes: [] };
   }
+  if (body.kind === "food" || body.kind === "drink") {
+    const person = needWrite(s);
+    const at = cleanAt(typeof body.at === "string" ? body.at : s.now.toISOString(), s.now);
+    const data = cleanCareData(body.kind, body.data);
+    const { entry, deduped } = await insertEntry(s, person.member, {
+      kind: body.kind, medId: null, at, data, note: cleanCareNote(body.note), priv: false,
+      by: s.viewer.id, source, clientId: cleanClientId(clientId),
+    });
+    return { created: !deduped, deduped: deduped || undefined, entry, notes: [] };
+  }
   throw new Error("Unknown kind");
 }
 

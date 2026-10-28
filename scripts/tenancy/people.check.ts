@@ -31,6 +31,7 @@ async function main() {
   const { NextRequest } = await import("next/server");
   const { encryptSecret } = await import("../../src/lib/secret-box");
   const auth = await import("../../src/lib/maple/auth");
+  const { CONSENT_VERSION } = await import("../../src/lib/maple/consent");
   const { blobFamily } = await import("../../src/lib/maple/blob");
   const { MAPLE_BLOB_RE } = await import("../../src/lib/maple/validate");
   const routes = {
@@ -478,7 +479,7 @@ async function main() {
     const { alpha, beta } = s;
     await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES (2, $1, 'chat', 1)`, [alpha.member]);
     await sql(`INSERT INTO maple_care_people (family_id, member, created_by) VALUES (2, $1, $2)`, [beta.member, beta.owner]);
-    await sql(`INSERT INTO maple_consents (family_id, member, kind, version, accepted_at) VALUES (2, $1, 'chat_care', 1, NOW() + INTERVAL '1 second')`, [beta.member]);
+    await sql(`INSERT INTO maple_consents (family_id, member, kind, version, accepted_at) VALUES (2, $1, 'chat_care', $2, NOW() + INTERVAL '1 second')`, [beta.member, CONSENT_VERSION.chat_care]);
     eq((await call(routes.consent.GET, "/api/maple/chat/consent", { id: alpha.member })).body, { terms: false, care: false, self: false }, "Alpha's member in family 1");
     eq((await call(routes.consent.GET, "/api/maple/chat/consent", as(s, "member", "beta"))).body, { terms: false, care: true, self: true }, "Beta's care person in family 2");
     eq((await call(routes.consent.GET, "/api/maple/chat/consent", { id: alpha.owner })).body, { terms: true, care: false, self: false }, "Alpha's owner in family 1");

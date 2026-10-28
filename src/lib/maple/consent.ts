@@ -7,7 +7,7 @@ import type { Member } from "./types";
 /**
  * What members have agreed to (maple_consents, one row per family, member and kind):
  * the chat's terms (`chat`), and the care person letting the chat see her
- * page: her medicines and doses, temperatures and questions for her OB
+ * page: her food, drinks, medicines and doses, temperatures and questions for her OB
  * (`chat_care`). A row counts only at its kind's current version, so raising
  * a version here asks everyone again. Turning chat_care off deletes her row,
  * and one from before her page was made (deleted and made again) doesn't count.
@@ -17,7 +17,7 @@ import type { Member } from "./types";
 
 export type ConsentKind = "chat" | "chat_care";
 
-export const CONSENT_VERSION: Record<ConsentKind, number> = { chat: 1, chat_care: 1 };
+export const CONSENT_VERSION: Record<ConsentKind, number> = { chat: 1, chat_care: 2 };
 
 export const consentCurrent = (kind: ConsentKind, version: unknown): boolean => version != null && Number(version) >= CONSENT_VERSION[kind];
 

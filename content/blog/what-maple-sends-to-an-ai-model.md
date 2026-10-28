@@ -30,9 +30,9 @@ Those tool results are the parts of the log it looks up. A question about last n
 
 ## Mom's page stays out until she turns it on
 
-Mom's page holds her medicines and doses, her temperatures and her questions for her OB. None of it reaches the chat until she turns on "Let the chat see my medicines, temperatures and questions for my OB" herself. The switch is on her own terms card, in Family under Ask, and in her page's settings. It starts off, and nobody else can turn it on.
+Mom's page holds her food and drinks, including recorded amounts, medicines and doses, temperatures and questions for her OB. None of it reaches the chat until she turns on access herself. The switch is on her own terms card, in Family under Ask, and in her page's settings. It starts off, and nobody else can turn it on. The expanded access to food and drinks needs her permission again.
 
-While it's off, her tools aren't offered to the model, and the baby's tools leave her out of their answers. Other members see a line saying her medicines, temperatures and OB questions aren't available to the chat. If she turns it off after using it, a chat that ran while it was on never goes back to the model, since its history can quote her page. The next message starts a new chat.
+While it's off, her tools aren't offered to the model, and the baby's tools leave her out of their answers. Other members see a line saying her food, drinks, medicines, temperatures and OB questions aren't available to the chat. If she turns it off after using it, a chat that ran while it was on never goes back to the model, since its history can quote her page. The next message starts a new chat.
 
 ## What stays out
 

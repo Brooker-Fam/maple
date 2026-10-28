@@ -234,7 +234,10 @@ function ApprovalCard({ name, input, onAnswer }: { name: string; input: unknown;
     const id = typeof raw.id === "string" ? Number(raw.id.replace(/^c/i, "")) : NaN;
     const e = care?.entries.find((x) => x.id === id);
     const her = care?.person.name ?? "Her";
-    const label = !e ? `${her}'s selected entry` : e.kind === "dose" ? `${her}'s ${e.data.name}` : e.kind === "temp" ? `${her}'s temperature` : `${her}'s question for her OB`;
+    const label = !e ? `${her}'s selected entry`
+      : e.kind === "dose" || e.kind === "drink" ? `${her}'s ${e.data.name}`
+      : e.kind === "food" ? `${her}'s ${e.data.description}`
+      : e.kind === "temp" ? `${her}'s temperature` : `${her}'s question for her OB`;
     what = (
       <p className={cx(tone.body, "text-[15px] leading-snug font-medium")}>
         {label}
