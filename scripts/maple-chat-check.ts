@@ -89,6 +89,7 @@ function throws(fn: () => unknown, what: string) {
 const ALEX = { email: "alex@example.com", role: "owner" as const };
 const VI = { email: "vi@example.com", role: "viewer" as const };
 const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions"];
+const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting"];
 
 // ── the adapter ──────────────────────────────────────────────────────────
 
@@ -100,20 +101,21 @@ check("captures every registered tool (29 Maple + 10 of hers)", () => {
   for (const r of all) ok(r.description && typeof r.handler === "function" && r.shape && typeof r.ann.readOnlyHint === "boolean", `${r.name} is complete`);
 });
 
-check("a member gets the allowed log tools plus help, questions and charts", () => {
+check("a member gets the allowed log tools and interactive app cards", () => {
   const names = registrations().all.map((r) => r.name);
   const born = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true }));
-  eq(born.length, 39 - EXCLUDED_TOOLS.size - 1 + 3, "count once born");
+  eq(born.length, 39 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
   ok(born.includes("ask_user") && born.includes("show_chart"), "interactive questions and charts");
+  for (const name of CHAT_CARDS) ok(born.includes(name), `${name} card tool`);
   ok(Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).includes("record_birth"), "record_birth before she's born");
   eq([...EXCLUDED_TOOLS].sort(), ["add_mom_medicines", "set_mom_medicine"], "excluded");
 });
 
-check("a viewer gets Maple's reads, help, questions and charts without write tools", () => {
-  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true })).sort(), [...READS, "show_help", "ask_user", "show_chart"].sort(), "viewer set");
-  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).sort(), [...READS, "show_help", "ask_user", "show_chart"].sort(), "viewer set before birth");
+check("a viewer gets reads and app cards; family writes remain server-gated", () => {
+  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true })).sort(), [...READS, ...CHAT_CARDS].sort(), "viewer set");
+  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).sort(), [...READS, ...CHAT_CARDS].sort(), "viewer set before birth");
 });
 
 check("her tools stay out of the chat until she lets it see her medicines (chat_care)", () => {
@@ -605,6 +607,13 @@ function exchange(n: number): ChatMessage[] {
 }
 const longThread = (exchanges: number) => Array.from({ length: exchanges }, (_, i) => exchange(i + 1)).flat();
 const sizeOf = (ms: ChatMessage[]) => ms.reduce((n, m) => n + messageTokens(m), 0);
+
+check("UI snapshots do not crowd the model's conversation window", () => {
+  const part = { type: "tool-show_chart" as const, toolCallId: "chart_window", state: "output-available" as const, input: { kind: "growth" }, output: { ok: true, write: false, text: "Three recorded measurements." } };
+  const plain: ChatMessage = { id: "msg_window", role: "assistant", parts: [part] };
+  const rich: ChatMessage = { ...plain, parts: [{ ...part, output: { ...part.output, chart: { points: Array.from({ length: 60 }, () => ({ label: "Synthetic historical point".repeat(50) })) } } }] };
+  eq(messageTokens(rich), messageTokens(plain), "the numeric tool summary is the model input");
+});
 
 check("the window: a long chat sends only its recent end, in whole exchanges, the newest always", () => {
   for (const n of [1, 5, 50, 500]) {

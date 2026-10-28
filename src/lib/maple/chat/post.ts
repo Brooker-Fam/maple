@@ -13,6 +13,9 @@ import type { LockedThread, UsageRow } from "./store";
 import { CHAT_CUT, CHAT_OFF, chatTurn, questionReply } from "./turn";
 import { hasPendingQuestion, mergeQuestionAnswers } from "./questions";
 import { CHAT_TERMS_NEEDED, THREAD_ID_RE, type ChatConsent, type ChatMessage, type ChatRefusal } from "./types";
+import { deliveryTimeProblem, parseDelivery, type ChatDelivery } from "./delivery";
+import { matchesDeliveryFingerprint, type DeliveryReceipt } from "./delivery-store";
+import { CHAT_FAILED } from "./types";
 
 /**
  * One POST to the chat, from the raw body to a streamed answer or a refusal.
@@ -24,12 +27,18 @@ export type ChatStore = {
   consent: (member: Member) => Promise<ChatConsent>;
   usageSince: (member: string, day: string, dayStart: Date, monthStart: Date) => Promise<Usage>;
   lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean) => Promise<LockedThread | "busy" | "missing">;
-  releaseThread: (id: string) => Promise<void>;
+  releaseThread: (id: string, leaseId?: string) => Promise<void>;
   loadMessages: (threadId: string) => Promise<ChatMessage[]>;
   saveMessage: (threadId: string, member: string, m: ChatMessage) => Promise<void>;
   setTitle: (id: string, title: string) => Promise<void>;
   countMessage: (member: string, day: string) => Promise<void>;
   recordUsage: (u: UsageRow) => Promise<void>;
+  /** Older callers can omit this, but a request using delivery ids fails closed without it. */
+  deliveries?: {
+    find: (member: string, requestId: string) => Promise<DeliveryReceipt | null>;
+    accept: (member: string, threadId: string, delivery: ChatDelivery, text: string, message: ChatMessage, day: string) => Promise<boolean>;
+    complete: (member: string, requestId: string) => Promise<void>;
+  };
 };
 
 export type PostDeps = {
@@ -42,7 +51,7 @@ export type PostDeps = {
   modelKey: string;
   price: ModelPrice | null;
   /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). */
-  tools: (opts: { born: boolean; care: boolean; copy: ToolCopy }) => ToolSet;
+  tools: (opts: { born: boolean; care: boolean; copy: ToolCopy; submittedAt?: Date }) => ToolSet;
   /** The log as it stands (logState in mcp-tools.ts), for the new user message's [App] lines; `care` as for `tools`. */
   state: (opts: { care: boolean }) => Promise<string[]>;
   /** The family's chat budget, read only once the request is worth answering. */
@@ -53,7 +62,7 @@ export type PostDeps = {
   waitUntil: (p: Promise<unknown>) => void;
 };
 
-export type PostBody = { threadId?: unknown; message?: unknown };
+export type PostBody = { threadId?: unknown; message?: unknown; requestId?: unknown; submittedAt?: unknown };
 
 export const BUSY = "One message at a time: the last answer is still coming.";
 export const CARE_CLOSED = "Her page is closed to the chat now, so a new chat starts here.";
@@ -122,6 +131,25 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   const consent = await store.consent(member);
   if (!consent.terms) return refuse({ error: CHAT_TERMS_NEEDED, code: "terms" }, 403);
   const care = consent.care && member.role !== "viewer";
+  let delivery: ChatDelivery | null = null;
+  if (incoming.kind === "user") {
+    try { delivery = parseDelivery(body); } catch (error) { return reply({ error: (error as Error).message }, 400); }
+  }
+  const alreadyReceived = async (): Promise<Response | null> => {
+    if (!delivery || incoming.kind !== "user") return null;
+    if (!store.deliveries) return refuse({ error: "Couldn't check this message's delivery. Please try checking again.", code: "off" }, 503);
+    const previous = await store.deliveries.find(member.email, delivery.requestId);
+    if (!previous) return null;
+    if (previous.cancelled) return refuse({ error: "This message was cancelled before it was received. Nothing was changed.", code: "cancelled", requestId: delivery.requestId }, 409);
+    if (!matchesDeliveryFingerprint(previous.fingerprint, delivery, incoming.text)) return refuse({ error: "This delivery reference belongs to a different message. Review the message before sending it again.", code: "stale" }, 409);
+    return refuse({ error: "This message was already received. Checking its saved reply.", code: "received", requestId: delivery.requestId, threadId: previous.threadId ?? undefined }, 409);
+  };
+  const received = await alreadyReceived();
+  if (received) return received;
+  if (delivery) {
+    const problem = deliveryTimeProblem(delivery, deps.now);
+    if (problem) return reply({ error: problem }, 400);
+  }
 
   const { familyId, baby, members, copy } = await deps.household();
   const tz = baby.timezone || DEFAULT_TZ;
@@ -139,29 +167,50 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   const release = async () => {
     if (released) return;
     released = true;
-    await store.releaseThread(thread.id).catch(deps.report);
+    await store.releaseThread(thread.id, thread.leaseId).catch(deps.report);
   };
   // Every way out of here releases the thread, except a started answer: its stream releases it once the reply is saved.
   let streaming = false;
+  let accepted = false;
+  let failedResponseId: string | null = null;
   try {
     // Its history can quote her page (results and the replies that repeat them), which she has since closed to the chat.
     if (thread.careOpen && !care) return refuse({ error: CARE_CLOSED, code: "new_chat" }, 409);
+    const duplicate = await alreadyReceived();
+    if (duplicate) return duplicate;
     const history = await store.loadMessages(thread.id);
     let messages: ChatMessage[];
     let responseId: string;
     let stepsDone = 0;
     let questionContinuation = false;
+    let submittedAt: Date | undefined;
     if (incoming.kind === "user") {
       const line = contextLine({ now: deps.now, baby, name: memberName(member.email, members), role: member.role, familyId });
-      const stored = userMessage(newMessageId(), incoming.text, line, stateLines(await logStateOrNone(deps, care)));
+      const state = stateLines(await logStateOrNone(deps, care));
+      if (delivery) {
+        submittedAt = new Date(Math.min(Date.parse(delivery.submittedAt), deps.now.getTime()));
+        state.unshift(`Submitted at ${delivery.submittedAt}. The log and Now line are current; times relative to this message (now or minutes ago) refer to its submitted time.`);
+      }
+      const stored = userMessage(newMessageId(), incoming.text, line, state, delivery ?? undefined);
       const prior = denyPending(history);
-      await store.countMessage(member.email, today);
+      responseId = newMessageId();
+      failedResponseId = responseId;
+      if (delivery) {
+        accepted = await store.deliveries!.accept(member.email, thread.id, delivery, incoming.text, stored, today);
+        if (!accepted) return (await alreadyReceived()) ?? refuse({ error: BUSY, code: "busy" }, 409);
+      } else {
+        await store.countMessage(member.email, today);
+        await store.saveMessage(thread.id, member.email, stored);
+      }
       for (const m of prior.changed) await store.saveMessage(thread.id, member.email, m);
-      await store.saveMessage(thread.id, member.email, stored);
       if (!thread.title) await store.setTitle(thread.id, titleFrom(incoming.text));
       messages = [...prior.messages, stored];
-      responseId = newMessageId();
     } else {
+      const original = history.findLast((message) => message.role === "user")?.parts.find((p) => p.type === "data-delivery");
+      if (original?.type === "data-delivery") {
+        if (deliveryTimeProblem(original.data, deps.now)) return refuse({ error: "That request has been waiting for more than a week. Send a new message with the details you want to log.", code: "stale" }, 409);
+        submittedAt = new Date(Math.min(Date.parse(original.data.submittedAt), deps.now.getTime()));
+      }
       const last = history[history.length - 1];
       const answered = last ? mergeQuestionAnswers(last, incoming.message) : null;
       questionContinuation = !!answered;
@@ -185,7 +234,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       model: deps.model,
       modelKey: deps.modelKey,
       price,
-      tools: deps.tools({ born: !!baby.born_at, care, copy }),
+      tools: deps.tools({ born: !!baby.born_at, care, copy, ...(submittedAt ? { submittedAt } : {}) }),
       viewer,
       care,
       copy,
@@ -195,7 +244,10 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       stepsDone,
       questionContinuation,
       deps: {
-        save: (m) => store.saveMessage(thread.id, member.email, m),
+        save: async (m) => {
+          await store.saveMessage(thread.id, member.email, m);
+          if (accepted && delivery) await store.deliveries!.complete(member.email, delivery.requestId);
+        },
         record: (u) => store.recordUsage({ ...u, member: member.email, threadId: thread.id, messageId: responseId, model: deps.modelKey }),
         release,
         report: deps.report,
@@ -204,6 +256,13 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     });
     streaming = true;
     return res;
+  } catch (error) {
+    if (accepted && delivery && failedResponseId) {
+      // Acceptance is durable even if conversion/setup fails before a stream exists. Keep a visible outcome; never replay it.
+      const failed: ChatMessage = { id: failedResponseId, role: "assistant", parts: [{ type: "text", text: CHAT_FAILED }, ...(crisis ? [{ type: "data-help" as const, data: { reason: "crisis" as const } }] : [])] };
+      await store.saveMessage(thread.id, member.email, failed).then(() => store.deliveries!.complete(member.email, delivery.requestId)).catch(deps.report);
+    }
+    throw error;
   } finally {
     if (!streaming) await release();
   }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { query } from "@/lib/db";
 import { FAMILY_ONE, type FamilyScope } from "../family";
 import { StoreUnavailable } from "../store";
@@ -5,6 +6,8 @@ import { familyBudgets, globalMonthlyCeiling, type Usage } from "./caps";
 import { loadRecentMessages } from "./history";
 import type { StepTokens } from "./prices";
 import type { ChatMessage } from "./types";
+import { acceptDelivery, completeDelivery, findDelivery } from "./delivery-store";
+import type { ChatDelivery } from "./delivery";
 
 /**
  * The chat's tables (src/lib/migrate.ts). A thread belongs to one member of
@@ -27,7 +30,7 @@ async function rows(sql: string, params: unknown[]): Promise<Record<string, unkn
 }
 
 /** `careOpen`: some turn in it, this one included, ran with her page open to the chat (`care_open`). */
-export type LockedThread = { id: string; title: string | null; userMessages: number; lastPrompt: number; careOpen: boolean };
+export type LockedThread = { id: string; title: string | null; userMessages: number; lastPrompt: number; careOpen: boolean; leaseId?: string };
 
 /**
  * Cost rows that count for family `fam`. One without a family (written by
@@ -44,6 +47,25 @@ const costOf = (fam: string, col = "family_id") =>
  * as one that isn't there. `care`: this turn runs with her page open to the chat.
  */
 export async function lockThread(fam: Fam, id: string, member: string, model: string, viewer: boolean, care: boolean): Promise<LockedThread | "busy" | "missing"> {
+  // Serialize this member even when two freshly opened phones proposed different first-thread ids.
+  const leaseId = randomUUID();
+  const lease = await rows(`INSERT INTO maple_chat_member_locks (family_id, member, thread_id, lease_id, busy_until)
+    VALUES ($1, $2, $3, $4, NOW() + INTERVAL '70 seconds')
+    ON CONFLICT (family_id, member) DO UPDATE SET thread_id = EXCLUDED.thread_id, lease_id = EXCLUDED.lease_id, busy_until = EXCLUDED.busy_until
+      WHERE maple_chat_member_locks.busy_until < NOW() RETURNING lease_id`, [fam.familyId, member, id, leaseId]);
+  if (!lease.length) return "busy";
+  try {
+    const result = await lockOneThread(fam, id, member, model, viewer, care);
+    if (typeof result === "object") return { ...result, leaseId };
+    await rows(`DELETE FROM maple_chat_member_locks WHERE family_id = $1 AND member = $2 AND lease_id = $3`, [fam.familyId, member, leaseId]);
+    return result;
+  } catch (error) {
+    await rows(`DELETE FROM maple_chat_member_locks WHERE family_id = $1 AND member = $2 AND lease_id = $3`, [fam.familyId, member, leaseId]).catch(() => {});
+    throw error;
+  }
+}
+
+async function lockOneThread(fam: Fam, id: string, member: string, model: string, viewer: boolean, care: boolean): Promise<LockedThread | "busy" | "missing"> {
   await rows(
     `INSERT INTO maple_chat_threads (family_id, id, member, model, viewer_only, care_open) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
     [fam.familyId, id, member, model, viewer, care]
@@ -70,8 +92,11 @@ export async function lockThread(fam: Fam, id: string, member: string, model: st
   return owner.length && owner[0].member === member && (owner[0].viewer_only === true || !viewer) ? "busy" : "missing";
 }
 
-export async function releaseThread(fam: Fam, id: string): Promise<void> {
-  await rows(`UPDATE maple_chat_threads SET busy_until = NULL, updated_at = NOW() WHERE id = $1 AND family_id = $2`, [id, fam.familyId]);
+export async function releaseThread(fam: Fam, id: string, leaseId?: string): Promise<void> {
+  await rows(`WITH released AS (
+    DELETE FROM maple_chat_member_locks WHERE thread_id = $1 AND family_id = $2 AND ($3::text IS NULL OR lease_id = $3) RETURNING lease_id
+  ) UPDATE maple_chat_threads SET busy_until = NULL, updated_at = NOW()
+    WHERE id = $1 AND family_id = $2 AND ($3::text IS NULL OR EXISTS (SELECT 1 FROM released))`, [id, fam.familyId, leaseId ?? null]);
 }
 
 export async function setTitle(fam: Fam, id: string, title: string): Promise<void> {
@@ -188,11 +213,16 @@ export function chatStore(fam: Fam) {
   return {
     usageSince: (member: string, day: string, dayStart: Date, monthStart: Date) => usageSince(fam, member, day, dayStart, monthStart),
     lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean) => lockThread(fam, id, member, model, viewer, care),
-    releaseThread: (id: string) => releaseThread(fam, id),
+    releaseThread: (id: string, leaseId?: string) => releaseThread(fam, id, leaseId),
     loadMessages: (threadId: string) => loadRecentMessages(fam, threadId),
     saveMessage: (threadId: string, member: string, m: ChatMessage) => saveMessage(fam, threadId, member, m),
     setTitle: (id: string, title: string) => setTitle(fam, id, title),
     countMessage: (member: string, day: string) => countMessage(fam, member, day),
     recordUsage: (u: UsageRow) => recordUsage(fam, u),
+    deliveries: {
+      find: (member: string, requestId: string) => findDelivery(fam, member, requestId),
+      accept: (member: string, threadId: string, delivery: ChatDelivery, text: string, message: ChatMessage, day: string) => acceptDelivery(fam, member, threadId, delivery, text, message, day),
+      complete: (member: string, requestId: string) => completeDelivery(fam, member, requestId),
+    },
   };
 }

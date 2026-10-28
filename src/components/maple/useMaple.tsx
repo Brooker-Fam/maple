@@ -1,6 +1,7 @@
 "use client";
 
 import { voiceFor } from "@/lib/maple/voice";
+import { clearStoredChatQueues } from "./chat/queue";
 import {
   createContext,
   useCallback,
@@ -693,6 +694,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         setShownFamily(null);
         setState(null);
         setStatus("signedOut");
+        clearStoredChatQueues();
         // Signed out: her doses and check-ins waiting on this phone go, so nothing about her stays behind.
         if (outboxRef.current.some((i) => i.target === "care" || i.target === "mood")) {
           const kept = outboxRef.current.filter((i) => i.target !== "care" && i.target !== "mood");

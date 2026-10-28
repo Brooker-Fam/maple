@@ -20,6 +20,7 @@ import { Icon, type IconName } from "./icons";
 import { LegalLinks } from "./Legal";
 import { logSwitches } from "./MoreSheet";
 import SignInMethods from "./SignInMethods";
+import { useSectionFocus, type AppSection } from "./sectionFocus";
 import { useNightPref, type NightPref } from "./nightLook";
 import { NotificationsRow, useNotifications } from "./notify";
 import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, cx, memberColor, tone } from "./ui";
@@ -91,9 +92,9 @@ const DATE_PICKER_ICON =
 const DANGER_TEXT =
   "-mr-2 min-h-[44px] shrink-0 rounded-[10px] px-2 text-[15px] font-medium text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97] disabled:opacity-40";
 
-function Section({ title, footnote, children, action }: { title: string; footnote?: ReactNode; children: ReactNode; action?: ReactNode }) {
+function Section({ title, footnote, children, action, id }: { title: string; footnote?: ReactNode; children: ReactNode; action?: ReactNode; id?: AppSection }) {
   return (
-    <section>
+    <section id={id} tabIndex={id ? -1 : undefined} aria-label={id ? title : undefined} className={id ? "scroll-mt-5 outline-none" : undefined}>
       <SectionTitle action={action}>{title}</SectionTitle>
       {children}
       {footnote && <Footnote>{footnote}</Footnote>}
@@ -359,6 +360,7 @@ const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, "")}`;
 
 export default function FamilyTab() {
   const { state, readOnly, auth } = useMaple();
+  useSectionFocus("family");
   if (!state) return null;
   return (
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
@@ -971,7 +973,7 @@ function BabyDetails() {
     const phone = doctorSrc.pedPhone;
     return (
       <>
-        <Section title={w.name}>
+        <Section title={w.name} id="baby-details">
           <div className={GROUP}>
             <p className="flex flex-wrap items-baseline gap-x-2 px-4 py-3.5">
               <span className={cx(tone.display, "text-[24px] leading-tight")}>{baby.name}</span>
@@ -993,7 +995,7 @@ function BabyDetails() {
 
   return (
     <>
-      <Section title={w.name}>
+      <Section title={w.name} id="baby-details">
         <div className={GROUP}>
           <InputRow label="Name" value={p.name} maxLength={80} onChange={(e) => setPEdits((x) => ({ ...x, name: e.target.value }))} />
           <InputRow
@@ -1026,7 +1028,7 @@ function BabyDetails() {
         {pDirty && <SaveBar busy={busy === "profile"} onSave={() => void save("profile")} onCancel={() => setPEdits({})} />}
       </Section>
 
-      <Section title={`${w.His} doctor`} footnote={`${w.His} doctor's numbers, for the middle of the night.`}>
+      <Section title={`${w.His} doctor`} id="doctor-contacts" footnote={`${w.His} doctor's numbers, for the middle of the night.`}>
         <div className={GROUP}>
           <PhoneRow label="Pediatrician" value={d.pedPhone} saved={doctorSrc.pedPhone} onChange={(v) => setDEdits((x) => ({ ...x, pedPhone: v }))} />
           <PhoneRow label="After-hours line" value={d.afterHours} saved={doctorSrc.afterHours} onChange={(v) => setDEdits((x) => ({ ...x, afterHours: v }))} />
@@ -1182,7 +1184,7 @@ function Preferences() {
   }, []);
 
   return (
-    <Section title="On this phone">
+    <Section title="On this phone" id="phone-preferences">
       <div className={GROUP}>
         <SegmentRow label="Units">
           <Segmented

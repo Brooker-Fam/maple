@@ -16,12 +16,19 @@ recovery is checked after a simulated connection failure, including draft
 preservation and preventing accidental write retries. Authorization and database
 persistence are covered by the separate chat unit/integration checks.
 
+Queue cases also cover a POST lost before server receipt, sequential delivery,
+pausing at questions, reload, the ten-message limit, original request IDs and
+times, and cancellation racing acceptance. Entry cards read an exact synthetic
+record to check edits, deletions and restores after reload, including care entries.
+Separate settings and search fixtures cover Apply/Undo, phone preferences,
+navigation, pagination and doctor-question actions without clearing a draft.
+
 Install temporary tools outside application dependencies, then run:
 
 ```sh
 npm install --prefix /tmp/maple-ui-tools --no-save esbuild@0.25.10 playwright@1.56.1 postcss@8.5.6
 NODE_PATH=/tmp/maple-ui-tools/node_modules node /tmp/maple-ui-tools/node_modules/playwright/cli.js install --with-deps chromium
-NODE_PATH=/tmp/maple-ui-tools/node_modules node scripts/chat-ui-check/run.mjs
+NODE_PATH=/tmp/maple-ui-tools/node_modules pnpm check:maple-chat-ui
 ```
 
 Screenshots in `test-results/maple-chat-ui` contain example records only.

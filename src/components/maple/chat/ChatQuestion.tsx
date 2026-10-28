@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { chatDisplayText } from "@/lib/maple/chat/display";
 import { questionInput } from "@/lib/maple/chat/questions";
 import { CHAT_MAX_CHARS, type ChatQuestionAnswer, type ChatQuestionOutput } from "@/lib/maple/chat/types";
@@ -24,8 +24,15 @@ export default function ChatQuestion({ input, output, toolState, active, busy, o
   const [sending, setSending] = useState(false);
   const [failed, setFailed] = useState(false);
   const inflight = useRef(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (custom) field.current?.focus(); }, [custom]);
   const question = questionInput(input);
-  if (!question) return null;
+  if (!question || toolState === "output-error") return (
+    <section className={cx(tone.card, "space-y-2 p-3.5")} aria-label="Question unavailable">
+      {question && <p className={cx(tone.body, "text-[16px]")}>{chatDisplayText(question.question)}</p>}
+      <p role="status" className={cx(tone.muted, "text-[14px] leading-snug")}>This question couldn&apos;t be shown. You can type your reply in the message box.</p>
+    </section>
+  );
 
   const result = output && typeof output === "object" ? output as Partial<ChatQuestionOutput> : null;
   const submittedAnswer = output && typeof output === "object" ? output as Partial<ChatQuestionAnswer> : null;
@@ -80,7 +87,7 @@ export default function ChatQuestion({ input, output, toolState, active, busy, o
           {custom ? (
             <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); if (draft.trim()) void send({ text: draft.trim() }); }}>
               <label htmlFor={answerLabel} className={cx(tone.muted, "block text-[13px] font-medium")}>Your answer</label>
-              <textarea id={answerLabel} value={draft} rows={2} maxLength={CHAT_MAX_CHARS} disabled={!canAnswer} onChange={(event) => setDraft(event.target.value)} className={cx(tone.input, "min-h-[80px] resize-y text-[16px] disabled:opacity-60")} />
+              <textarea ref={field} id={answerLabel} value={draft} rows={2} maxLength={CHAT_MAX_CHARS} disabled={!canAnswer} onChange={(event) => setDraft(event.target.value)} className={cx(tone.input, "min-h-[80px] resize-y text-[16px] disabled:opacity-60")} />
               <Button type="submit" size="sm" disabled={!canAnswer || !draft.trim()}>Send answer</Button>
             </form>
           ) : (

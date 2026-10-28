@@ -8,7 +8,7 @@ export const useNow = () => fixture().maple.now();
 export const useChatThread = () => fixture().thread;
 export const useChatNav = () => fixture().chatNav;
 export const useCareNav = () => fixture().nav;
-export const useCare = () => null;
+export const useCare = () => fixture().care ?? null;
 export const useSheets = () => fixture().sheets;
 export const useAppNav = () => fixture().appNav;
 export const useTimerActions = () => ({});

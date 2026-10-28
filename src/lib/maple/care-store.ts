@@ -579,6 +579,11 @@ async function oneOffsNear(s: CareSession, at: Date): Promise<DoseEntry[]> {
 
 /** An entry this session can read (private ones and doses of private plans only for her), else NotFound. */
 export async function readableEntry(s: CareSession, id: number, opts: { includeDeleted?: boolean } = {}): Promise<CareEntry> {
+  return (await readableEntryStatus(s, id, opts)).entry;
+}
+
+/** An authorized entry and its deletion state from the same read, for historical chat cards. */
+export async function readableEntryStatus(s: CareSession, id: number, opts: { includeDeleted?: boolean } = {}): Promise<{ entry: CareEntry; deleted: boolean }> {
   const p = personOf(s);
   const rows = await q(
     `SELECT e.* FROM maple_care_entries e ${PLAN_JOIN}
@@ -586,7 +591,7 @@ export async function readableEntry(s: CareSession, id: number, opts: { includeD
     [id, p.member, s.access.private, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
-  return rowToCareEntry(rows[0]);
+  return { entry: rowToCareEntry(rows[0]), deleted: rows[0].deleted_at != null };
 }
 
 /**

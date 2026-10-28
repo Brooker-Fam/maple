@@ -157,7 +157,7 @@ function Screens() {
           {showing === "family" && <FamilyTab />}
         </motion.div>
       </AnimatePresence>
-      {chatSeen && <ChatTab key={state.family?.id ?? 1} active={showing === "chat"} />}
+      {chatSeen && <ChatTab key={`${state.family?.id ?? 1}:${state.me.email}`} active={showing === "chat"} />}
       <TabBar tabs={tabs} tab={showing} onChange={go} />
       <ToastHost />
       <WelcomeHost />

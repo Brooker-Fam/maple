@@ -54,7 +54,7 @@ jobs:
         run: pnpm check:maple-chat
       - name: Chat family boundaries and copy
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm check:maple-tenancy chat-charts copy
+        run: pnpm check:maple-tenancy chat-charts chat-delivery chat-entry-status chat-search chat-settings copy
       - name: Install browser check tools
         id: browser_tools
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -98,6 +98,7 @@ jobs:
             test-results/maple-chat-ui
             test-results/maple-nutrition-ui
             test-results/maple-admin-ui
+            test-results/maple-search-ui
           if-no-files-found: ignore
       - name: Build without database migrations
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

@@ -10,6 +10,7 @@ import { NotificationsRow, useNotifications } from "../notify";
 import { CARE_COLOR } from "../palette";
 import { Button, EmptyState, SectionTitle, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { useSectionFocus } from "../sectionFocus";
 import CareSettingsSheet from "./CareSettingsSheet";
 import CareTeam from "./CareTeam";
 import { useCareNav } from "./CareNav";
@@ -37,6 +38,7 @@ type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "setti
 
 function Page({ care }: { care: UseCare }) {
   const { state, summary } = useMaple();
+  useSectionFocus("care");
   const nav = useCareNav();
   const notify = useNotifications();
   const ctx = useCareCtx(care);
@@ -107,7 +109,7 @@ function Page({ care }: { care: UseCare }) {
 
       <RecentDoses care={care} />
 
-      <section aria-labelledby="her-meds">
+      <section id="mom-medicines" tabIndex={-1} className="scroll-mt-5 outline-none" aria-labelledby="her-meds">
         <SectionTitle
           action={
             write && care.rows.length > 0 ? (

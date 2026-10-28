@@ -7,6 +7,8 @@ import { chatModel } from "@/lib/maple/chat/caps";
 import { answerPost, type PostBody } from "@/lib/maple/chat/post";
 import { familyPostDeps } from "@/lib/maple/chat/family-deps";
 import { chatStream, deleteChats } from "@/lib/maple/chat/history";
+import { CHAT_REQUEST_ID_RE } from "@/lib/maple/chat/delivery";
+import { deliveryStatus } from "@/lib/maple/chat/delivery-store";
 import { captureServerException } from "@/lib/posthog-server";
 import { captureAppEventSoon } from "@/lib/analytics/server";
 
@@ -34,9 +36,16 @@ function report(scrubbed: Error) {
 }
 
 export const GET = withMember("GET /api/maple/chat", async (request, member, fam) => {
-  const before = new URL(request.url).searchParams.get("before");
+  const params = new URL(request.url).searchParams;
+  const before = params.get("before");
+  const requestId = params.get("requestId");
   if (before != null && !MESSAGE_ID_RE.test(before)) throw new BadRequest("before is not a message");
-  return json(await chatStream(fam, member.email, member.role === "viewer", before));
+  if (requestId != null && !CHAT_REQUEST_ID_RE.test(requestId)) throw new BadRequest("requestId is not a delivery reference");
+  const [stream, delivery] = await Promise.all([
+    chatStream(fam, member.email, member.role === "viewer", before),
+    requestId ? deliveryStatus(fam, member.email, member.role === "viewer", requestId) : null,
+  ]);
+  return json({ ...stream, ...(delivery ? { delivery } : {}) });
 });
 
 export const DELETE = withMember("DELETE /api/maple/chat", async (_request, member, fam) => {

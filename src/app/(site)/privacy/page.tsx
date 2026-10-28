@@ -78,8 +78,8 @@ export default function Privacy() {
       <p>
         Your baby&rsquo;s name, due date and birth details, and everything you add: feeds, pumping, diapers and stool colors,
         sleep, temperatures and other readings, growth, medicines, notes, questions for the doctor, milestones and photos. Each
-        entry records who added it and, when it came from the app, a random id for that phone, used only so a notification can
-        skip the phone that did it.
+        entry records who added it and, when it came from the app, a random id for that phone, so a notification can skip the
+        phone that did it. Chat also uses that id to keep a phone-preference card attached to the phone where it was requested.
       </p>
       <p>
         Mom&rsquo;s page keeps her food and drinks, any amounts she records, her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
@@ -98,8 +98,18 @@ export default function Privacy() {
       </p>
       <p>
         Answers you choose or type into a question card are part of that conversation. Charts in the chat keep a dated snapshot
-        of the log values they showed, so an earlier answer stays understandable when the log changes. These answers and chart
-        snapshots are removed with your chat history.
+        of the log values they showed, so an earlier answer stays understandable when the log changes. Search results and settings
+        cards keep the values they showed, proposed changes and the outcome of your taps. These are removed with your chat history.
+      </p>
+      <p>
+        Your draft and up to ten queued messages stay in this browser, separately for each signed-in account and family, so a
+        reload does not lose them. They are cleared when you sign out or delete chat history. Queued messages are sent only
+        when the chat can continue; after a reload you choose whether to resume. Their original submission time stays with them.
+      </p>
+      <p>
+        To prevent duplicate logging after a lost connection, Maple keeps delivery receipts with random request references,
+        times and a keyed fingerprint, without the message text. These receipts can remain after chat history is deleted.
+        Receipts more than eight days old are cleared as chat is used.
       </p>
       <h3>The waitlist</h3>
       <p>
@@ -236,7 +246,7 @@ export default function Privacy() {
       <h2>The AI features</h2>
       <h3>Maple&rsquo;s chat</h3>
       <p>
-        When you use the chat, your message, answers to question cards, the recent conversation, and whatever it looks up in your log to answer are sent to
+        When you use the chat, your message, answers to question cards, the recent conversation, and the log or supported family settings it reads to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
         see her page can use the chat with her food, drinks and recorded amounts, medicines and doses, temperatures and questions for her OB. Her check-ins never
         reach the chat. Every request asks the

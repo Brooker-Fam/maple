@@ -1,0 +1,28 @@
+import assert from "node:assert/strict";
+import { CHAT_QUEUE_LIMIT, emptyQueue, queueScope, readChatQueue, waitingForAnswer, writeChatQueue, type ChatQueue } from "../src/components/maple/chat/queue";
+import type { ChatMessage } from "../src/lib/maple/chat/types";
+
+const values = new Map<string, string>();
+const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+const now = Date.parse("2026-10-28T16:00:00Z");
+const scope = queueScope(99, "alex@example.test");
+const item = { requestId: "synthetic-request-1", text: "A synthetic queued note", submittedAt: new Date(now).toISOString(), state: "queued" as const };
+const saved: ChatQueue = { draft: "An unfinished draft", items: [item], paused: false };
+assert(writeChatQueue(scope, saved, storage));
+assert.deepEqual(readChatQueue(scope, storage, now), { ...saved, paused: true }, "Reload preserves text and requires deliberate queue resume");
+assert.deepEqual(readChatQueue(queueScope(100, "alex@example.test"), storage, now), emptyQueue(), "Another family's draft never appears");
+assert.deepEqual(readChatQueue(queueScope(99, "other@example.test"), storage, now), emptyQueue(), "Another account's draft never appears");
+writeChatQueue(scope, { ...saved, items: [{ ...item, state: "sending", threadId: "synthetic-thread" }] }, storage);
+assert.equal(readChatQueue(scope, storage, now).items[0].state, "uncertain", "Reload never resends an in-flight write");
+writeChatQueue(scope, saved, storage);
+assert.equal(readChatQueue(scope, storage, now + 8 * 24 * 60 * 60 * 1000).items[0].state, "failed", "Old commands require editing before retry");
+storage.setItem(scope, JSON.stringify({ ...saved, items: Array(CHAT_QUEUE_LIMIT + 1).fill(item) }));
+assert.deepEqual(readChatQueue(scope, storage, now), emptyQueue(), "Unbounded stored queues are rejected");
+writeChatQueue(scope, emptyQueue(), storage);
+assert.equal(storage.getItem(scope), null, "Empty queues leave no private text behind");
+assert(!writeChatQueue(scope, saved, { ...storage, setItem: () => { throw new Error("Unavailable"); } }), "Unavailable storage is reported");
+const message = (part: unknown) => [{ id: "synthetic-message", role: "assistant", parts: [part] }] as ChatMessage[];
+assert(waitingForAnswer(message({ type: "tool-ask_user", state: "input-available" })));
+assert(waitingForAnswer(message({ type: "tool-delete_entry", state: "approval-requested" })));
+assert(!waitingForAnswer(message({ type: "tool-ask_user", state: "output-available" })));
+console.log("PASS chat queue: scoped drafts, bounded storage, interrupted sends, age limits and question pauses");

@@ -393,7 +393,7 @@ export const careOpen = (auth: { via?: unknown; care?: unknown }): boolean => au
 export const NOT_MEMBER_MESSAGE = "You're not a member of this family's log anymore, so nothing was read or saved. Reconnect the connector and sign in again.";
 
 export async function context(extra: Extra): Promise<Ctx> {
-  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; fam?: unknown; via?: unknown; device?: unknown; care?: unknown };
+  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; fam?: unknown; via?: unknown; device?: unknown; care?: unknown; requestAt?: unknown };
   const sub = typeof auth.sub === "string" ? auth.sub : "";
   if (!sub) throw new ToolError("You're not signed in to Maple's Log. Reconnect the connector and sign in again.");
   const signedIn = memberIdFromSub(sub);
@@ -420,9 +420,14 @@ export async function context(extra: Extra): Promise<Ctx> {
   const id = viaAdmin ? (adminActsAs(baby, members)?.email ?? signedIn) : signedIn;
   const me = members.find((m) => m.email === id);
   const role: Role = me?.role ?? (id === ADMIN_ID ? "owner" : "viewer");
+  const current = new Date();
+  // Only the chat's write adapter supplies this server-validated submission time.
+  // Read tools and external connectors continue to use the current clock.
+  const requestAt = via === "chat" && typeof auth.requestAt === "string" ? Date.parse(auth.requestAt) : NaN;
+  const eventTime = Number.isFinite(requestAt) && requestAt <= current.getTime() + 120_000 && requestAt >= current.getTime() - 7 * 86_400_000 ? new Date(requestAt) : current;
   return {
     fam,
-    now: new Date(),
+    now: eventTime,
     baby,
     tz: baby.timezone || DEFAULT_TZ,
     members,

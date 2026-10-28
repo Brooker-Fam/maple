@@ -173,7 +173,8 @@ class CareAccessError extends Error {}
 /** No page at all where she hasn't opened it to this caller (ctx.care): every read and write here then finds nothing. */
 async function careFor(ctx: Ctx): Promise<CareSession> {
   const viewer: CareViewer = { id: ctx.who.id, role: ctx.who.role, viaAdmin: ctx.who.viaAdmin, channel: "mcp" };
-  return careSession(viewer, { familyId: ctx.fam.familyId, members: ctx.members, baby: ctx.baby, ...(ctx.care ? {} : { person: null }) });
+  const session = await careSession(viewer, { familyId: ctx.fam.familyId, members: ctx.members, baby: ctx.baby, ...(ctx.care ? {} : { person: null }) });
+  return { ...session, now: ctx.now };
 }
 
 /** The one access error: a view-only guest. Everyone else can do everything here. */
