@@ -82,9 +82,9 @@ test("the rendered dial omits unused nursing labels but retains the key for hist
 
 test("the Family nursing toggle saves the override used by Today", async () => {
   const requests: { path: string; body: string }[] = [];
-  const setter = find("FamilyTab", (node) => ts.isVariableDeclaration(node) && node.name.getText() === "setSetting");
+  const setter = find("settings/BabySettings", (node) => ts.isVariableDeclaration(node) && node.name.getText() === "setSetting");
   const setSetting = evaluate<(key: string, value: boolean) => Promise<void>>(setter.slice(setter.indexOf("=") + 1), { setToggles: noop, api: async (path: string, init: { body: string }) => { requests.push({ path, body: init.body }); }, refresh: async () => {}, toast: noop });
-  const toggle = find("FamilyTab", (node) => ts.isJsxSelfClosingElement(node) && node.tagName.getText() === "Toggle" && node.attributes.properties.some((prop) => ts.isJsxAttribute(prop) && prop.name.getText() === "label" && prop.initializer && ts.isStringLiteral(prop.initializer) && prop.initializer.text === "Nursing"));
+  const toggle = find("settings/BabySettings", (node) => ts.isJsxSelfClosingElement(node) && node.tagName.getText() === "Toggle" && node.attributes.properties.some((prop) => ts.isJsxAttribute(prop) && prop.name.getText() === "label" && prop.initializer && ts.isStringLiteral(prop.initializer) && prop.initializer.text === "Nursing"));
   const rendered = evaluate<Element>(toggle, { Toggle: "Toggle", toggles: {}, baby: { settings: formula }, logSwitches: switches, setSetting });
   assert.equal(rendered.props.checked, false);
   (rendered.props.onChange as (value: boolean) => void)(true);

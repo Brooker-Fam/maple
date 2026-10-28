@@ -38,11 +38,13 @@ export function useOnboarding(initial: OnboardingView) {
   );
 
   const reload = useCallback(async () => {
+    setProblem(null);
     try {
       const res = await api<{ needed: boolean; view?: OnboardingView }>("/api/maple/onboarding");
       if (res.view) setView(res.view);
       return res.needed;
     } catch {
+      setProblem("Couldn't check whether setup is finished. Try again.");
       return true;
     }
   }, [api]);

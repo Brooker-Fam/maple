@@ -24,13 +24,14 @@ import { bottleCues, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
 import type { Entry, EntryOf, FeedData, Side, StretchSide, UpdateEntryInput } from "@/lib/maple/types";
-import { BreakMark, LinkRow, MomentEditor, partAria, ROW_NAME, SIDE_NAME, SideFixRow, SideMark, type MomentEdge } from "../FeedParts";
+import { BreakMark, MomentEditor, partAria, ROW_NAME, SIDE_NAME, SideFixRow, SideMark, type MomentEdge } from "../FeedParts";
 import { logSwitches } from "../MoreSheet";
 import { Icon } from "../icons";
 import { Button, Chip, Segmented, Sheet, TimeRange, TimeScrubber, WhenField, cx, tone } from "../ui";
 import { useBabyWords, useVoice } from "../familyWords";
 import type { Voice } from "@/lib/maple/voice";
 import { ApiError, useMaple } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
 import { doneText, nextSideWords } from "../useTimerActions";
 import type { SheetProps } from "./index";
 import {
@@ -318,6 +319,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     e?.data.method === "bottle" ? e.data.milk : ((pstr(preset, "milk") as Milk | undefined) ?? lastBottle?.data.milk)
   );
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
+  const fieldsDirty = useDraftChanged({ method, when, note: notePatch.note, amount, milk, left, right, both, first, range, invalid: checks.invalid });
   const amountMl = amount == null ? undefined : Math.round((units === "metric" ? amount : ozToMl(amount)) * 10) / 10;
   const amountLabel = amountMl != null ? formatVolume(amountMl, units) : null;
   const chips = units === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
@@ -562,6 +564,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       onClose={close}
+      dirty={fieldsDirty && !dirty && !addBlocked && !timeInvalid && !readOnly}
       title={title}
       calm={preset?.editTime === true}
       footer={

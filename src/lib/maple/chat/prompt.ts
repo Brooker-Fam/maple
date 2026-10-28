@@ -34,13 +34,13 @@ Don't name tools to the user; say what you did.`;
 
 export function chatAddendumViewer(vo: Voice): string {
   return `${chatAddendum(vo)}
-This person can look but not log or change anything, and ${vo.mom}'s page isn't open to them. If they ask to log something, say an owner can make them a member in Family.`;
+This person can look but not log or change anything, and ${vo.mom}'s page isn't open to them. If they ask to log something, say an owner can make them a member in Settings → People & permissions.`;
 }
 
 export function chatAddendumCareClosed(vo: Voice): string {
   const MOM = vo.mom;
   return `${chatAddendum(vo)}
-${MOM} hasn't let this chat see her food, drinks, medicines, temperatures or questions for her OB, so none of the mom tools are here and results leave her out. If asked about them, say the chat can't see them until ${MOM} turns that on in the app (Family, or Settings on her page). Never log anything of hers with ${vo.name}'s tools, and don't answer about her from earlier messages.
+${MOM} hasn't let this chat see her food, drinks, medicines, temperatures or questions for her OB, so none of the mom tools are here and results leave her out. If asked about them, say the chat can't see them until ${MOM} turns that on in the app (Settings → Chat privacy, or Settings on her page). Never log anything of hers with ${vo.name}'s tools, and don't answer about her from earlier messages.
 You can't see her medicine list here, so before logging any medicine other than vitamin D, ask "${vo.Name}'s or ${MOM}'s?" unless the person already named whose it was ("she" or "her" alone doesn't). If it's ${MOM}'s, say to log it on her page in the app.`;
 }
 
@@ -101,7 +101,7 @@ export function contextText(data: { line: string; state?: string[] }): string {
  */
 export function contextLine(opts: {
   now: Date;
-  baby: Pick<Baby, "name" | "nickname" | "born_at" | "due_date" | "timezone"> & Partial<Pick<Baby, "sex">>;
+  baby: Pick<Baby, "name" | "nickname" | "born_at" | "due_date" | "timezone"> & Partial<Pick<Baby, "sex" | "settings">>;
   name: string;
   role: Role;
   familyId?: number;
@@ -115,7 +115,9 @@ export function contextLine(opts: {
   let age: string;
   if (baby.born_at) {
     const a = babyAge(baby.born_at, now, tz);
-    age = a.ms < 86_400_000 ? `${first} is ${a.label}.` : a.days < 14 ? `${first} is ${a.days} day${a.days === 1 ? "" : "s"} old (Day ${a.dayOfLife}).` : `${first} is ${a.label} old.`;
+    age = baby.settings?.birth_time_approx
+      ? `${first} is on Estimated Day ${a.dayOfLife} (birth time not recorded).`
+      : a.ms < 86_400_000 ? `${first} is ${a.label}.` : a.days < 14 ? `${first} is ${a.days} day${a.days === 1 ? "" : "s"} old (Day ${a.dayOfLife}).` : `${first} is ${a.label} old.`;
   } else if (baby.due_date) {
     const due = formatDayLabel(baby.due_date, dayKey(now, tz), { long: true });
     age = `${first} isn't born yet (due ${due === "Today" ? "today" : due}).`;

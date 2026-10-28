@@ -17,8 +17,9 @@ import { Icon } from "../icons";
 import { useBabyWords, useMilestoneWords } from "../familyWords";
 import { Button, Chip, Field, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
 import { useSheets, type SheetProps } from "./index";
-import { Label, LoggedBy, SheetFooter, useOpenCount } from "./parts";
+import { Label, LoggedBy, SheetFooter, presetStart, useOpenCount } from "./parts";
 
 /**
  * Log or edit a moment: photos, a title, an optional "first" (milestone),
@@ -78,9 +79,9 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const [title, setTitle] = useState(() => moment?.data.title ?? str(preset?.title));
   const [milestone, setMilestone] = useState(() => moment?.data.milestone ?? str(preset?.milestone));
   const [note, setNote] = useState(() => moment?.note ?? str(preset?.note));
-  const [when, setWhen] = useState<Date | null>(() => (moment ? new Date(moment.started_at) : null));
+  const [when, setWhen] = useState<Date | null>(() => (moment ? new Date(moment.started_at) : presetStart(preset)));
   const [whenFromPhoto, setWhenFromPhoto] = useState(false);
-  const whenTouched = useRef(isEdit);
+  const whenTouched = useRef(isEdit || !!presetStart(preset));
   const [showAllChips, setShowAllChips] = useState(() => {
     const i = presets.findIndex((m) => m.id === (moment?.data.milestone ?? preset?.milestone));
     return i >= COLLAPSED_CHIPS;
@@ -88,6 +89,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [storage, setStorage] = useState<Storage>("checking");
   const [saving, setSaving] = useState(false);
+  const dirty = useDraftChanged({ title, milestone, note, when, photos: items.map((item) => item.id) });
 
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
@@ -365,7 +367,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title={isEdit ? "Edit moment" : "New moment"} footer={footer}>
+    <Sheet open={open} onClose={onClose} dirty={dirty} title={isEdit ? "Edit moment" : "New moment"} footer={footer}>
       {moment && <LoggedBy entry={moment} />}
       {/* Photos */}
       {moment ? (

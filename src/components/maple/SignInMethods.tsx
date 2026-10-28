@@ -33,6 +33,16 @@ export default function SignInMethods({ memberId }: { memberId: string }) {
     void load();
   }, [load]);
 
+  if (memberId.startsWith("invite:")) return (
+    <section>
+      <SectionTitle>Your access</SectionTitle>
+      <div className={cx(tone.card, "space-y-2 p-4")}>
+        <p className={cx(tone.body, "text-[15px] font-medium")}>Signed in with a one-time invite link</p>
+        <p className={cx(tone.muted, "text-sm leading-relaxed")}>Keep using this browser to stay signed in. After signing out or clearing browser data, ask a family owner for a new invite link. You also need a new link if another device or the Home Screen app asks you to sign in.</p>
+        <p className={cx(tone.muted, "text-sm leading-relaxed")}>To use email sign-in, ask an owner to invite your email address from Settings → People &amp; permissions.</p>
+      </div>
+    </section>
+  );
   if (!eligible || (!error && methods && !methods.apple && !methods.email && !methods.methods.length)) return null;
   const appleLinked = methods?.methods.some((method) => method.provider === "apple");
 
@@ -53,7 +63,7 @@ export default function SignInMethods({ memberId }: { memberId: string }) {
             </ul>}
             {methods.email && <EmailSignIn mode="link" label="Connect another email address" />}
             {methods.apple && !appleLinked && (native ? (
-              <p className={cx(tone.muted, "text-sm leading-relaxed")}>To connect Apple, open Maple in your browser, sign in, then go to Family → Sign-in methods. Once connected, you can use Apple to sign in here too.</p>
+              <p className={cx(tone.muted, "text-sm leading-relaxed")}>To connect Apple, open Maple in your browser, sign in, then go to Settings → Sign-in &amp; account. Once connected, you can use Apple to sign in here too.</p>
             ) : (
               <form action="/api/maple/auth/apple/start" method="post">
                 <input type="hidden" name="mode" value="link" />

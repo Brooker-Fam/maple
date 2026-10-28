@@ -39,7 +39,7 @@ function setLine(view: OnboardingView, step: StepId, tz: string): string | null 
     case "baby_name":
       return v.baby?.name ? `${quote(v.baby.name)}${v.baby.nickname ? ` (${quote(v.baby.nickname)})` : ""}` : null;
     case "birth":
-      if (v.baby?.born_at) return `born ${formatTime(v.baby.born_at, tz)} on ${new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric", year: "numeric" }).format(new Date(v.baby.born_at))}${v.baby.birth_time_known ? "" : " (time not known)"}`;
+      if (v.baby?.born_at) return `born ${v.baby.birth_time_known ? `${formatTime(v.baby.born_at, tz)} ` : ""}on ${new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric", year: "numeric" }).format(new Date(v.baby.born_at))}${v.baby.birth_time_known ? "" : " (time not recorded)"}`;
       return v.baby?.due_date ? `due ${v.baby.due_date}` : null;
     case "sex":
       return v.baby?.sex === "female" ? "girl" : v.baby?.sex === "male" ? "boy" : "prefer not to say";

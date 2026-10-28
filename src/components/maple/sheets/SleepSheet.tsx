@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { SLEEP_TOTAL_NOTE, safeSleepTips } from "@/lib/maple/guidelines";
@@ -58,13 +60,15 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
       const s = new Date(e.started_at);
       return [s, e.ended_at ? new Date(e.ended_at) : running ? now() : s];
     }
-    const end = now();
+    const presetEnd = pstr(preset, "ended_at");
+    const end = presetEnd && Number.isFinite(Date.parse(presetEnd)) ? new Date(presetEnd) : now();
     const s = presetStart(preset);
     return s && s.getTime() < end.getTime() ? [s, end] : [new Date(end.getTime() - H), end];
   });
   const [place, setPlace] = useState<SleepPlace | undefined>(() => e?.data.place ?? (pstr(preset, "place") as SleepPlace | undefined));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const dirty = useDraftChanged({ range, place, note });
 
   const [start, end] = range;
   const tip = place ? safeSleepTips(voice)[place] : undefined;
@@ -102,6 +106,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Sleep"}
       footer={

@@ -66,10 +66,10 @@ try {
   await scenario({ kind: "setting", setting: family, busy: true }); assert(await page.getByRole("button", { name: "Apply", exact: true }).isDisabled());
   await scenario({ kind: "setting", setting: family, online: false }); assert(await page.getByRole("button", { name: "Apply", exact: true }).isDisabled());
   await scenario({ kind: "setting", setting: family, baby: { id: 99, name: "River", nickname: null, settings: { track_pump: false } } });
-  await page.getByRole("button", { name: "Open Family", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Open Settings", exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Apply", exact: true }).count(), 0);
   await scenario({ kind: "setting", setting: family, baby: { id: 100, name: "River", nickname: null, settings: { track_pump: true } } });
-  await page.getByRole("button", { name: "Open Family", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Open Settings", exact: true }).waitFor();
   await scenario({ kind: "setting", setting: { ...phone, status: "applied", previous: "us" } });
   await page.getByText("Changed again since this card. Your current choice is lb · oz · °F.", { exact: true }).waitFor();
   assert(await page.getByRole("button", { name: "Undo", exact: true }).isDisabled());
@@ -78,10 +78,11 @@ try {
   for (const [destination, expected] of [["notifications", "notifications"], ["doctor_questions", "doctor"], ["add_photo", "sheet"]]) {
     await scenario({ kind: "navigation", destination }); await page.getByRole("button").click(); assert.equal((await snapshot()).calls.at(-1).kind, expected);
   }
-  for (const [destination, target] of [["baby_profile", "baby-details"], ["pediatrician", "doctor-contacts"], ["phone_preferences", "phone-preferences"], ["mom_medicines", "mom-medicines"]]) {
+  for (const [destination, target, route] of [["baby_profile", "baby-details", "family/baby"], ["pediatrician", "doctor-contacts", "family/doctor"], ["phone_preferences", "phone-preferences", "family/appearance"], ["mom_medicines", "mom-medicines", "care"]]) {
     await scenario({ kind: "navigation", destination }); await page.getByRole("button").click();
     await page.waitForFunction(id => document.activeElement?.id === id, target);
     assert.equal((await snapshot()).focused, target, "Navigation focuses its exact destination section");
+    assert.equal((await snapshot()).page, route, "Navigation opens the matching settings page or care tab");
   }
   await scenario({ kind: "navigation", destination: "add_photo", viewer: true }); assert(await page.getByRole("button").isDisabled());
   await scenario({ kind: "navigation", destination: "mom_medicines", care: false }); assert(await page.getByRole("button").isDisabled());

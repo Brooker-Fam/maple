@@ -29,10 +29,10 @@ export default function ChatNavigation({ navigation: raw }: { navigation: ChatNa
       case "doctor_questions": careNav.openDoctor(); break;
       case "help": careNav.openHelp(); break;
       case "add_photo": sheets.open({ kind: "moment" }); break;
-      case "baby_profile": requestSection("baby-details"); app.go("family"); break;
-      case "pediatrician": requestSection(readOnly ? "baby-details" : "doctor-contacts"); app.go("family"); break;
-      case "phone_preferences": requestSection("phone-preferences"); app.go("family"); break;
-      case "mom_medicines": requestSection("mom-medicines"); app.go("care"); break;
+      case "baby_profile": if (app.go("family/baby")) requestSection("baby-details"); break;
+      case "pediatrician": if (app.go(readOnly ? "family/baby" : "family/doctor")) requestSection(readOnly ? "baby-details" : "doctor-contacts"); break;
+      case "phone_preferences": if (app.go("family/appearance")) requestSection("phone-preferences"); break;
+      case "mom_medicines": if (app.go("care")) requestSection("mom-medicines"); break;
       case "family_settings": app.go("family"); break;
       case "history": app.go("log"); break;
       default: app.go(destination);

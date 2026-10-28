@@ -561,8 +561,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     const messages: Record<string, string> = {
       linked: "Sign-in method connected. It opens this same account.",
       link_conflict: "That sign-in method belongs to another account. It wasn't connected.",
-      link_expired: "That connection attempt expired. Try again from Family → Sign-in methods.",
-      link_failed: "Couldn't connect that sign-in method. Try again from Family → Sign-in methods.",
+      link_expired: "That connection attempt expired. Try again from Settings → Sign-in & account.",
+      link_failed: "Couldn't connect that sign-in method. Try again from Settings → Sign-in & account.",
     };
     if (!result || !messages[result]) return;
     toast(messages[result], { tone: result === "linked" ? "ok" : "error", duration: 8_000 });

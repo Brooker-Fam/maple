@@ -438,7 +438,7 @@ export async function context(extra: Extra): Promise<Ctx> {
 }
 
 export const VIEWER_MESSAGE =
-  "You're a viewer on Maple's Log, so you can look but not log or change anything. An owner can make you a member in Maple's Log → Family.";
+  "You're a viewer on Maple's Log, so you can look but not log or change anything. An owner can make you a member in Maple's Log → Settings → People & permissions.";
 
 function requireWriter(ctx: Ctx) {
   if (ctx.who.role === "viewer") throw new ToolError(VIEWER_MESSAGE);
@@ -1130,10 +1130,10 @@ function clusterJson(c: FeedCluster, ctx: Ctx) {
   };
 }
 
-function tallyLines(s: Summary, kinds: Set<EntryKind>, vo: Voice): string[] {
+function tallyLines(s: Summary, kinds: Set<EntryKind>, vo: Voice, unknownBirthTime: boolean): string[] {
   const out: string[] = [];
   const t = s.targets;
-  const day = s.age ? `Day ${s.age.dayOfLife}` : null;
+  const day = s.age ? `${unknownBirthTime ? "Estimated " : ""}Day ${s.age.dayOfLife}` : null;
   if (kinds.has("diaper")) {
     let line = `Today: ${s.today.wet} wet / ${s.today.dirty} dirty.`;
     if (t && day) {
@@ -1143,7 +1143,7 @@ function tallyLines(s: Summary, kinds: Set<EntryKind>, vo: Voice): string[] {
   }
   if (kinds.has("feed")) {
     let line = `Feeds today: ${s.today.feeds}${s.today.clusterFeeds ? ` (${s.today.clusterFeeds} in a cluster)` : ""}`;
-    line += t ? `; last 24h: ${s.last24h.feeds} (aim ${t.feeds[0]}–${t.feeds[1]}).` : ".";
+    line += t ? `; last 24h: ${s.last24h.feeds} (${unknownBirthTime ? "estimated " : ""}aim ${t.feeds[0]}–${t.feeds[1]}).` : ".";
     out.push(line);
     const next = nextLine(s, vo);
     if (next) out.push(next);
@@ -1421,7 +1421,7 @@ async function writeResult(ctx: Ctx, sv: Saved): Promise<CallToolResult> {
   const lines = [
     savedLine(sv, ctx),
     ...(sv.status === "duplicate" ? [] : sv.lines),
-    ...(s ? tallyLines(s, kinds, voiceOf(ctx)) : []),
+    ...(s ? tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true) : []),
     ...assumedLine(sv.assumed),
     ...alertLines(alerts, { emergencySigns: sv.emergencySigns }, voiceOf(ctx)),
   ];
@@ -2218,10 +2218,18 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   };
 
   if (s.born && s.age) {
-    const age = s.age.label.endsWith("old") ? s.age.label : `${s.age.label} old`;
-    lines.push(`${nowLine(ctx)} ${name} is ${age} (Day ${s.age.dayOfLife}).`);
-    json.age = { label: s.age.label, day_of_life: s.age.dayOfLife, days: s.age.days, weeks: s.age.weeks, months: s.age.months };
-    json.born_local = localWhen(ctx.baby.born_at!, ctx);
+    if (ctx.baby.settings.birth_time_approx) {
+      const day = s.age.dayOfLife;
+      const label = `Estimated Day ${day} (birth time not recorded)`;
+      lines.push(`${nowLine(ctx)} ${name} is on ${label}.`);
+      json.age = { label, day_of_life: day, days: day - 1, birth_time_known: false };
+      json.born_local = dayKey(new Date(ctx.baby.born_at!), ctx.tz);
+    } else {
+      const age = s.age.label.endsWith("old") ? s.age.label : `${s.age.label} old`;
+      lines.push(`${nowLine(ctx)} ${name} is ${age} (Day ${s.age.dayOfLife}).`);
+      json.age = { label: s.age.label, day_of_life: s.age.dayOfLife, days: s.age.days, weeks: s.age.weeks, months: s.age.months };
+      json.born_local = localWhen(ctx.baby.born_at!, ctx);
+    }
   } else {
     const due = dueWords(ctx.baby, ctx);
     lines.push(
@@ -2278,7 +2286,7 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   lines.push(todayLine(s));
   if (s.age) {
     // The aim only with warnings on (targets is null otherwise).
-    const aim = t ? ` (Day ${s.age.dayOfLife} aim: ${t.feeds[0]}–${t.feeds[1]} feeds, ${t.wet}+ wet${t.dirty != null ? `, ${t.dirty}+ dirty` : ""})` : "";
+    const aim = t ? ` (${ctx.baby.settings.birth_time_approx ? "Estimated " : ""}Day ${s.age.dayOfLife} aim: ${t.feeds[0]}–${t.feeds[1]} feeds, ${t.wet}+ wet${t.dirty != null ? `, ${t.dirty}+ dirty` : ""})` : "";
     lines.push(`Last 24 hours: ${plural(s.last24h.feeds, "feed")}, ${s.last24h.wet} wet, ${s.last24h.dirty} dirty${aim}.`);
   }
   Object.assign(json, talliesJson(s));
@@ -2535,9 +2543,10 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
   const p: string[] = [];
   if (ctx.baby.born_at) {
     const age = babyAge(ctx.baby.born_at, ctx.now, ctx.tz);
-    const born = `born at ${whenText(ctx.baby.born_at, ctx)}`;
+    const unknownTime = ctx.baby.settings.birth_time_approx;
+    const born = unknownTime ? `born ${dayWord(new Date(ctx.baby.born_at), ctx)}, time not recorded` : `born at ${whenText(ctx.baby.born_at, ctx)}`;
     const bw = ctx.baby.birth_weight_g ? `, birth weight ${formatWeightBoth(ctx.baby.birth_weight_g)}` : "";
-    p.push(`${name} is ${age.label.endsWith("old") ? age.label : `${age.label} old`} (${born}${bw}).`);
+    p.push(`${name} is ${unknownTime ? `on Estimated Day ${age.dayOfLife}` : age.label.endsWith("old") ? age.label : `${age.label} old`} (${born}${bw}).`);
   } else {
     p.push(`${name} isn't born yet.`);
   }
@@ -3209,13 +3218,15 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       if (len != null && (len < 25 || len > 65)) throw new ToolError("That birth length looks off; check inches vs cm.");
       if (head != null && (head < 20 || head > 45)) throw new ToolError("That head size looks off; check inches vs cm.");
       if (cur.born_at && !a.replace_existing) {
-        const parts = [`${whenText(cur.born_at, ctx)} (${isoLocal(cur.born_at, ctx.tz)})`, cur.birth_weight_g ? formatWeightBoth(cur.birth_weight_g) : null].filter(Boolean);
+        const recorded = cur.settings.birth_time_approx ? `${dayKey(new Date(cur.born_at), ctx.tz)}, time not recorded` : `${whenText(cur.born_at, ctx)} (${isoLocal(cur.born_at, ctx.tz)})`;
+        const parts = [recorded, cur.birth_weight_g ? formatWeightBoth(cur.birth_weight_g) : null].filter(Boolean);
         throw new ToolError(
-          `${vo.Name}'s birth is already recorded (${parts.join(", ")}). To correct it, call record_birth again with replace_existing: true and only the values that change; leave at/minutes_ago out to keep the birth time.`
+          `${vo.Name}'s birth is already recorded (${parts.join(", ")}). To correct it, call record_birth again with replace_existing: true and only the values that change; leave at/minutes_ago out to keep the birth ${cur.settings.birth_time_approx ? "date and its unknown time" : "time"}.`
         );
       }
       const baby = await updateBaby(ctx.fam, cur.id, {
         ...(given || !cur.born_at ? { born_at: born.toISOString() } : {}),
+        ...((given || !cur.born_at) && cur.settings.birth_time_approx ? { settings: { birth_time_approx: null } } : {}),
         ...(g != null ? { birth_weight_g: g } : {}),
         ...(len != null ? { birth_length_cm: round1(len) } : {}),
         ...(head != null ? { birth_head_cm: round1(head) } : {}),
@@ -3228,8 +3239,9 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       ].filter(Boolean);
       const fresh = !cur.born_at && ctx.now.getTime() - born.getTime() < 48 * HOUR;
       const verb = cur.born_at ? `Updated ${vo.their} birth record` : `Recorded ${vo.their} birth`;
+      const birth = baby.settings.birth_time_approx ? `born ${dayWord(born, ctx)}, time not recorded` : `born at ${whenText(born, ctx)}`;
       const lines = [
-        `${fresh ? `Welcome to the world, ${vo.name}! 🍁 ` : ""}${verb}: born at ${whenText(born, ctx)}${measures.length ? `, ${measures.join(", ")}` : ""} (by ${ctx.who.name} via ${viaLabel(ctx.who.via)}).`,
+        `${fresh ? `Welcome to the world, ${vo.name}! 🍁 ` : ""}${verb}: ${birth}${measures.length ? `, ${measures.join(", ")}` : ""} (by ${ctx.who.name} via ${viaLabel(ctx.who.via)}).`,
         ...(pct.json
           ? [
               `WHO percentiles at birth: ${Object.entries(pct.json)
@@ -3241,8 +3253,9 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         ...assumedLine(assumed),
       ];
       return ok(lines.join("\n"), {
-        born_local: localWhen(born, ctx),
-        born_iso: isoLocal(born, ctx.tz),
+        born_local: baby.settings.birth_time_approx ? dayKey(born, ctx.tz) : localWhen(born, ctx),
+        born_iso: baby.settings.birth_time_approx ? null : isoLocal(born, ctx.tz),
+        ...(baby.settings.birth_time_approx ? { birth_time_known: false } : {}),
         birth_weight: baby.birth_weight_g ? formatWeightBoth(baby.birth_weight_g) : null,
         birth_length: baby.birth_length_cm ? formatLengthBoth(baby.birth_length_cm) : null,
         birth_head: baby.birth_head_cm ? formatLengthBoth(baby.birth_head_cm) : null,
@@ -3591,7 +3604,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         `Saved #${stopped.id}: ${phrase(stopped, ctx)}, ${formatTime(stopped.started_at, ctx.tz)}–${formatTime(stopped.ended_at!, ctx.tz)} ${dayWord(new Date(stopped.started_at), ctx)} (stopped by ${ctx.who.name} via ${viaLabel(ctx.who.via)}).${ending}`,
         // Breaks and switches are worth spelling out; a one-side feed is already in the line above.
         ...(timed && timed.length > 1 ? [timelineText(stopped as FeedEntry, ctx)] : []),
-        ...tallyLines(s, kinds, voiceOf(ctx)),
+        ...tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true),
         ...assumedLine(assumed),
       ];
       return ok(lines.join("\n"), {
@@ -4352,7 +4365,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         if (r.saved) lines.push(savedLine(r.saved, ctx), ...(r.saved.status === "duplicate" ? [] : r.saved.lines));
         else lines.push(`Not saved (item ${r.index + 1}, ${a.entries[r.index].kind}): ${r.error}`);
       }
-      if (s) lines.push(...tallyLines(s, kinds, voiceOf(ctx)));
+      if (s) lines.push(...tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true));
       lines.push(...assumedLine(saved.flatMap((x) => x.assumed)));
       lines.push(...alertLines(alerts, { emergencySigns: saved.some((x) => x.emergencySigns) }, voiceOf(ctx)));
       const created = saved.filter((x) => x.status === "created").length;

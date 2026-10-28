@@ -245,11 +245,11 @@ export async function answerStep(ctx: FamilyCtx, member: Member, step: StepId, r
       break;
     }
     case "invites": {
-      if (member.email === ADMIN_MEMBER_ID) throw new AnswerError("Invite people from Family once you're signed in with Google.");
+      if (member.email === ADMIN_MEMBER_ID) throw new AnswerError("Invite people from Settings → People & permissions once you're signed in with Google.");
       const a = parseAnswer("invites", raw);
       const [members, open] = await Promise.all([listMembers(fam), listInvites(fam)]);
       if (open.length + a.people.length > MAX_OPEN_INVITES || members.length + open.length + a.people.length > MAX_PEOPLE) {
-        throw new AnswerError("That's more invites than one log can have open. Add the rest later in Family.");
+        throw new AnswerError("That's more invites than one log can have open. Add the rest later in Settings → People & permissions.");
       }
       out.invites = [];
       for (const p of a.people) {

@@ -15,7 +15,7 @@ export function InvitesStep({ ob }: Props) {
   const set = (i: number, p: Partial<Person>) => setPeople(people.map((x, j) => (j === i ? { ...x, ...p } : x)));
   const filled = people.filter((p) => p.name.trim());
   return (
-    <StepShell step="invites" ob={ob} canSave={filled.length > 0} saveLabel="Make links" onSave={() => void ob.answer("invites", { people: filled })}>
+    <StepShell step="invites" ob={ob} draft={people} canSave={filled.length > 0} saveLabel="Make links" onSave={() => void ob.answer("invites", { people: filled })}>
       {people.map((p, i) => (
         <div key={i} className={cx(tone.inset, "space-y-2.5 p-3")}>
           <TextInput label="Their first name" value={p.name} onChange={(name) => set(i, { name })} />
@@ -27,6 +27,9 @@ export function InvitesStep({ ob }: Props) {
               View only
             </Chip>
           </div>
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+            {p.role === "member" ? "Can log also gives access to the recovery page, including medicines, temperatures, food and drinks, questions and check-ins, when it is set up." : "View-only guests can see the baby’s log and moments. They cannot see the recovery page or change the log."}
+          </p>
         </div>
       ))}
       {people.length < MAX_INVITES_AT_ONCE && (

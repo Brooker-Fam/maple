@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { scoreScreen } from "@/lib/maple/care";
 import {
   DIFFICULTY,
@@ -45,6 +45,7 @@ type Answer = 0 | 1 | 2 | 3;
 type Screen = MoodDataByKind["screen"];
 type Step = { kind: "intro" } | { kind: "q"; i: number } | { kind: "difficulty" } | { kind: "results"; data: Screen; at: string };
 type Answers = { phq9: Answer[]; gad7: Answer[]; difficulty: Answer | null };
+const answersKey = (a: Answers, item9: boolean) => JSON.stringify({ phq9: a.phq9, gad7: a.gad7, difficulty: a.difficulty, item9 });
 
 const PHQ = PHQ9_ITEMS.length;
 const TOTAL = PHQ + GAD7_ITEMS.length;
@@ -77,12 +78,34 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
   const holdUntil = useRef(0);
   // This check-in's row once question 9 (or the end) has saved it: later saves update it rather than add another.
   const row = useRef<Promise<MoodEntry | null> | null>(null);
+  const savedRow = useRef<MoodEntry | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const currentKey = answersKey({ phq9, gad7, difficulty }, item9Ever);
+  const unsaved = phq9.length > 0 && currentKey !== saved;
+  const partial = step.kind !== "results" && row.current !== null;
+
+  useEffect(() => {
+    if (!open || !partial || !unsaved) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const beforeNavigate = (event: Event) => {
+      if (!event.defaultPrevented && !window.confirm("Leave and discard your unsaved check-in answers?")) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("maple-before-navigate", beforeNavigate);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("maple-before-navigate", beforeNavigate);
+    };
+  }, [open, partial, unsaved]);
 
   const persist = (a: Answers, item9: boolean): Promise<MoodEntry | null> => {
     const prev = row.current;
     const run = (async () => {
-      const first = prev ? await prev.catch(() => null) : null;
-      return care.act.saveScreen({ ...a, item9_ever: item9 }, first ? { id: first.id } : undefined);
+      if (prev) await prev.catch(() => null);
+      const entry = await care.act.saveScreen({ ...a, item9_ever: item9 }, savedRow.current ? { id: savedRow.current.id } : undefined);
+      savedRow.current = entry;
+      setSaved(answersKey(a, item9));
+      return entry;
     })();
     row.current = run;
     return run;
@@ -93,8 +116,11 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
     setProblem(null);
     try {
       await persist(a, item9Ever);
+      setProblem(null);
+      return true;
     } catch (e) {
       setProblem(errorText(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -105,15 +131,15 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
     void save(a);
   };
 
-  const close = () => {
-    // Question 9 is already saved: keep what she's answered since, as "Stop here" would.
-    if (step.kind !== "results" && row.current) void persist({ phq9, gad7, difficulty }, true).catch(() => {});
+  const close = async () => {
+    if (busy) return;
+    if (partial && unsaved && !(await save({ phq9, gad7, difficulty }))) return;
     setCrisis(false);
     onClose();
   };
 
   const answer = (v: Answer) => {
-    if (Date.now() < holdUntil.current) return;
+    if (busy || Date.now() < holdUntil.current) return;
     if (step.kind === "difficulty") {
       setDifficulty(v);
       finish({ phq9, gad7, difficulty: v });
@@ -130,7 +156,7 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
         // At once, over the question; set for good, even if she goes Back and changes it. Saved now, so today's strip holds.
         setItem9Ever(true);
         setCrisis(true);
-        void persist({ phq9: next, gad7: [], difficulty: null }, true).catch(() => {});
+        void persist({ phq9: next, gad7: [], difficulty: null }, true).catch((e) => setProblem(errorText(e)));
         return;
       }
       setStep({ kind: "q", i: i + 1 });
@@ -161,7 +187,7 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
   if (step.kind === "intro") {
     footer = (
       <div className="flex gap-3">
-        <Button variant="soft" size="lg" className="flex-1" onClick={close}>
+        <Button variant="soft" size="lg" className="flex-1" onClick={() => { if (!unsaved || partial || window.confirm("Discard this check-in's unsaved answers?")) void close(); }}>
           Not now
         </Button>
         <Button size="lg" className="flex-1" onClick={() => setStep({ kind: "q", i: 0 })}>
@@ -177,8 +203,8 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
         <Button variant="soft" size="lg" className="flex-[1.4]" onClick={() => void copyForOb(screenCopyText(data, at, tz))}>
           Copy for my OB
         </Button>
-        <Button size="lg" className="flex-1" onClick={close}>
-          Done
+        <Button size="lg" className="flex-1" disabled={busy || unsaved} onClick={() => void close()}>
+          {busy ? "Saving…" : "Done"}
         </Button>
       </div>
     );
@@ -188,18 +214,25 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
     <>
       <Sheet
         open={open}
+        dirty={unsaved && !partial}
         onClose={close}
         title={title}
         subtitle={subtitle}
         footer={footer}
         actions={
           asking ? (
-            <Button variant="ghost" size="sm" onClick={back}>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={back}>
               Back
             </Button>
           ) : undefined
         }
       >
+        {problem && (
+          <div className={cx(tone.inset, "flex items-center gap-3 px-4 py-3")}>
+            <Problem className="mt-0 flex-1">{problem}</Problem>
+            <Button variant="soft" size="sm" disabled={busy} onClick={() => void save({ phq9, gad7, difficulty })}>Try again</Button>
+          </div>
+        )}
         {step.kind === "intro" && (
           <div className="space-y-4 pb-2">
             <p className={cx(tone.body, "text-[17px] leading-relaxed")}>{FULL_INTRO.body}</p>
@@ -219,14 +252,6 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
         {step.kind === "difficulty" && <Question key="difficulty" item={DIFFICULTY_Q} options={DIFFICULTY} value={difficulty ?? undefined} onAnswer={answer} />}
         {step.kind === "results" && (
           <>
-            {problem && (
-              <div className={cx(tone.inset, "flex items-center gap-3 px-4 py-3")}>
-                <Problem className="mt-0 flex-1">{problem}</Problem>
-                <Button variant="soft" size="sm" disabled={busy} onClick={() => void save({ phq9, gad7, difficulty })}>
-                  Try again
-                </Button>
-              </div>
-            )}
             <ScreenResults data={step.data} />
           </>
         )}

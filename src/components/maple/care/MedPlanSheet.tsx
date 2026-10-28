@@ -10,6 +10,8 @@ import { Icon } from "../icons";
 import { Label, MoreDetails, SheetFooter, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
+import MedicinePhotoHelp from "./MedicinePhotoHelp";
 import { LIMIT_UNITS, NoteCard, Problem, Switch, UNIT_LABEL, errorText } from "./parts";
 import type { UseCare } from "./useCare";
 
@@ -139,6 +141,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
   const today = dayKey(now(), tz);
   const [base, setBase] = useState<CarePlan | undefined>(plan);
   const [f, setF] = useState<Form>(() => fromPlan(plan, today));
+  const dirty = useDraftChanged(f);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((x) => ({ ...x, [k]: v }));
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -269,6 +272,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
     <>
       <Sheet
         open={open}
+        dirty={dirty}
         onClose={onClose}
         title={base ? `Edit ${base.name}` : "Add a medicine"}
         footer={
@@ -308,7 +312,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
         )}
         <div>
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>Copy each one from the label or discharge papers.</p>
-          {!base && <p className={cx(tone.faint, "mt-0.5 text-[13px] leading-snug")}>Or photograph the discharge sheet and ask Claude to add them.</p>}
+          {!base && <MedicinePhotoHelp className="mt-0.5" />}
         </div>
 
         <FieldBlock label="Name" hint="As on the label." problem={shown("name")}>

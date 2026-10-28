@@ -169,7 +169,11 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
   // Pumping off (Family → On Today): no Pump row; anything already pumped still shows in the log.
-  const { pumping } = logSwitches(state?.baby);
+  const { nursing, bottles, pumping } = logSwitches(state?.baby);
+  const [loggingEarlier, setLoggingEarlier] = useState(false);
+  useEffect(() => {
+    if (!open) setLoggingEarlier(false);
+  }, [open]);
   const [held, setHeld] = useState(true);
   useEffect(() => {
     try {
@@ -291,7 +295,7 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
 
   const vitaminD: Item = {
     id: "vitd",
-    label: "Vitamin D",
+    label: vitD ? "Vitamin D logged" : "Log Vitamin D",
     sub: vitD ? `${formatTimeNear(vitD.givenAt, n, tz)} · ${memberName(vitD.by)}` : lastVitD ? when(lastVitD.started_at) : undefined,
     icon: "sun",
     color: KIND_COLOR.med,
@@ -310,13 +314,14 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
       vitaminD,
       {
         id: "tummy",
-        label: "Tummy time",
+        label: tummy ? "View tummy timer" : "Start tummy timer",
         sub: tummy ? "Running now" : tummyMin > 0 ? `${tummyMin} min today` : lastTummy ? when(lastTummy.started_at) : undefined,
         icon: "tummy",
         color: KIND_COLOR.tummy,
         onTap: () => {
           onClose();
           if (!tummy) void actions.startTimer("tummy");
+          else window.scrollTo({ top: 0 });
         },
         onHold: earlier("tummy"),
       },
@@ -405,24 +410,52 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
         onTap: () => go("note"),
         onHold: earlier("note"),
       },
-      { id: "moment", label: "Moment", sub: lastMoment ? when(lastMoment.started_at) : "Photo or words", icon: "camera", color: KIND_COLOR.moment, onTap: () => go("moment") },
+      { id: "moment", label: "Moment", sub: lastMoment ? when(lastMoment.started_at) : "Photo or words", icon: "camera", color: KIND_COLOR.moment, onTap: () => go("moment"), onHold: earlier("moment") },
     ],
   ];
 
+  const everyday: Item[] = [
+    ...(nursing ? [{ id: "earlier-feed", label: "Nursing", icon: "baby" as const, color: KIND_COLOR.feed, onTap: earlier("feed", { method: "breast" }) }] : []),
+    ...(bottles ? [{ id: "earlier-bottle", label: "Bottle", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: earlier("feed", { method: "bottle" }) }] : []),
+    { id: "earlier-diaper", label: "Diaper", icon: "droplet", color: KIND_COLOR.diaper, onTap: earlier("diaper") },
+    { id: "earlier-sleep", label: "Sleep", icon: "moon", color: KIND_COLOR.sleep, onTap: earlier("sleep") },
+  ];
+  const earlierGroups = groups.map((items) => items.flatMap((it) => it.onHold ? [{
+    ...it,
+    label: it.id === "vitd" ? "Vitamin D" : it.id === "tummy" ? "Tummy time" : it.label,
+    onTap: it.onHold,
+    onHold: undefined,
+  }] : []));
+
   return (
-    <Sheet open={open} onClose={onClose} title="More to log">
-      <section aria-label={baby} className="space-y-3 pb-1">
-        {mom.length > 0 && <GroupHeading>{baby}</GroupHeading>}
-        {groups.map((g) => (
-          <Cells key={g[0].id} items={g} />
-        ))}
-        {!held && <p className={cx(tone.faint, "pt-1 text-center text-xs")}>Hold one to log an earlier one.</p>}
-      </section>
-      {mom.length > 0 && care && (
-        <section aria-label={care.name} className="space-y-3 pb-1">
-          <GroupHeading>{care.name}</GroupHeading>
-          <Cells items={mom} />
-        </section>
+    <Sheet open={open} onClose={onClose} title={loggingEarlier ? "Log earlier" : "More to log"}>
+      {loggingEarlier ? (
+        <>
+          <button type="button" onClick={() => setLoggingEarlier(false)} className="inline-flex min-h-[44px] items-center gap-1 text-[15px] font-semibold text-mp-accent-fg">
+            <Icon name="chevron-left" size={18} /> More to log
+          </button>
+          <p className={cx(tone.muted, "text-[15px]")}>Choose what happened. Check the date and time before saving.</p>
+          <Cells items={everyday} />
+          {earlierGroups.map((items) => <Cells key={items[0].id} items={items} />)}
+        </>
+      ) : (
+        <>
+          <Cells items={[
+            { id: "earlier", label: "Log earlier", sub: "A feed, diaper, nap or other entry", icon: "clock-3", color: KIND_COLOR.note, onTap: () => setLoggingEarlier(true) },
+            ...(bottles ? [{ id: "bottle", label: "Bottle", sub: "Log an amount", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => go("feed", { method: "bottle" }) }] : []),
+          ]} />
+          <section aria-label={baby} className="space-y-3 pb-1">
+            {mom.length > 0 && <GroupHeading>{baby}</GroupHeading>}
+            {groups.map((g) => <Cells key={g[0].id} items={g} />)}
+            {!held && <p className={cx(tone.faint, "pt-1 text-center text-xs")}>Hold one to log an earlier one.</p>}
+          </section>
+          {mom.length > 0 && care && (
+            <section aria-label={care.name} className="space-y-3 pb-1">
+              <GroupHeading>{care.name}</GroupHeading>
+              <Cells items={mom} />
+            </section>
+          )}
+        </>
       )}
     </Sheet>
   );

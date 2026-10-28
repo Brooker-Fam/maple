@@ -26,3 +26,17 @@ NODE_PATH=/tmp/maple-ui-tools/node_modules node scripts/ui-check/run.mjs
 ```
 
 Screenshots go to `test-results/maple-ui` and contain example records only.
+
+## App flow regressions
+
+With the same temporary browser tools, run `pnpm check:maple-ui-review`.
+It runs the shared navigation, draft, keyboard and contrast checks; daily logging
+and historical dates; settings, birth and guest access; onboarding recovery;
+chat navigation into settings; care history; check-in and food/drink draft recovery; and Moments
+pagination, refresh and photo recovery. The API checks use in-memory Postgres
+with synthetic families. UI fixtures replace only their documented boundaries
+and cannot contact a production family log.
+
+The regression cases were run against the affected code before each fix. The
+optional baseline modes in individual runners load Git source through esbuild,
+without swapping files in a shared worktree. CI runs the fixed tree.

@@ -18,6 +18,7 @@ type Node = [string, Record<string, string>][];
 export const DROPLET_PATH = "M12 21.5a6.5 6.5 0 0 0 6.5-6.5c0-1.9-.95-3.65-2.8-5.15S12.45 6.2 12 3.9c-.45 2.3-1.85 4.45-3.7 5.95S5.5 13.1 5.5 15a6.5 6.5 0 0 0 6.5 6.5z";
 
 const ICONS = {
+  "settings": [["path", {"d":"M4 6h16M4 12h16M4 18h16"}], ["circle", {"cx":"8","cy":"6","r":"2","fill":"var(--mp-bg)"}], ["circle", {"cx":"16","cy":"12","r":"2","fill":"var(--mp-bg)"}], ["circle", {"cx":"10","cy":"18","r":"2","fill":"var(--mp-bg)"}]],
   "arrow-left-right": [["path",{"d":"M8 3 4 7l4 4"}],["path",{"d":"M4 7h16"}],["path",{"d":"m16 21 4-4-4-4"}],["path",{"d":"M20 17H4"}]],
   "arrow-right": [["path",{"d":"M5 12h14"}],["path",{"d":"m12 5 7 7-7 7"}]],
   "arrow-up": [["path",{"d":"m5 12 7-7 7 7"}],["path",{"d":"M12 19V5"}]],

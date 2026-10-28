@@ -7,6 +7,7 @@ import { RecordedTimeField } from "../TimeField";
 import { ContextNote, Label, MoreDetails, NoteField, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
 import { useCareNav } from "./CareNav";
 import OverLimitList from "./OverLimitList";
 import { NoteCard, Problem, errorText, isOverLimit, useCareCtx } from "./parts";
@@ -108,6 +109,7 @@ function PlanDose({
   const [unitsTyped, setUnitsTyped] = useState("");
   const [note, setNote] = useState("");
   const [doseText, setDoseText] = useState(startDose);
+  const dirty = useDraftChanged({ when, timeInvalid, units, unitsTyped, note, doseText });
   // The duplicate ask: from "Took it" (recent), or the server's answer (the other phone's dose, not synced here yet).
   const [dup, setDup] = useState<{ by: string | null; at: string } | null>(ask?.reason === "recent" && ask.at ? { by: ask.by ?? null, at: ask.at } : null);
   const [confirmed, setConfirmed] = useState(false);
@@ -186,6 +188,7 @@ function PlanDose({
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={close}
       title={planTitle(plan)}
       subtitle={plan.dose_text ? `As prescribed: ${plan.dose_text}` : undefined}
@@ -336,6 +339,7 @@ function OneOffDose({
   const [timeInvalid, setTimeInvalid] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [serverDup, setServerDup] = useState<{ key: string; by: string | null; at: string } | null>(null);
+  const dirty = useDraftChanged({ name, dose, when, timeInvalid });
   const [notMatch, setNotMatch] = useState<string | null>(null);
   // A name that fits more than one plan: which one she picked.
   const [picked, setPicked] = useState<{ key: string; id: number } | null>(null);
@@ -426,6 +430,7 @@ function OneOffDose({
       open={open}
       onClose={close}
       title="Another medicine"
+      dirty={dirty}
       footer={
         dup || asking ? undefined : (
           <div>

@@ -2,17 +2,16 @@
 
 import { AnimatePresence } from "framer-motion";
 import { useEffect, useRef } from "react";
-import { formatClock } from "@/lib/maple/time";
+import { formatClock, formatDuration } from "@/lib/maple/time";
 import AlertStack from "./AlertCard";
 import type { NavTarget } from "./AppNav";
 import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import Celebrations from "./Celebrations";
-import DayDial from "./DayDial";
 import Dock from "./Dock";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
-import StatusCard, { DiaperBrigade } from "./StatusCard";
+import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
 import Waiting from "./Waiting";
@@ -21,20 +20,6 @@ import { useSheets } from "./sheets";
 import { Icon } from "./icons";
 import { cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
-
-/**
- * Today: the screen parents use one-handed at 3am. One order in every state,
- * so nothing jumps between them: who she is (the sapling hero, or the waiting
- * hero), anything urgent, "Right now" (running timers, then the 3am answers;
- * its heading is for screen readers only), the one-line "While you slept"
- * hand-off, gentler alerts, the last few entries, the day dial with its
- * tallies, celebrations, the diaper brigade, and the
- * Help footer. While a timer runs the sapling hero folds away (rather than
- * moving down the page), so the timer card and the Since tiles sit above the
- * dock without a scroll. Logging lives in the dock pinned above the tab bar
- * (with her medicine strip on top of it), so nothing here needs a scroll to
- * reach.
- */
 
 const KIND_TITLE: Record<string, string> = { feed: "Nursing", sleep: "Asleep", tummy: "Tummy time", pump: "Pumping" };
 
@@ -46,7 +31,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
 
   const born = !!state.baby.born_at;
   const nothingYet = state.entries.length === 0;
-  const recent = state.entries.filter((e) => !e.active).slice(0, 5);
+  const recent = state.entries.filter((e) => !e.active).slice(0, 3);
   const timing = summary.active.length > 0;
 
   return (
@@ -109,10 +94,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
         </section>
       )}
 
-      {/* Recent entries stay close to the timer and logging controls, so corrections are easy to find. */}
-      {!nothingYet && <DayDial />}
+      {!nothingYet && <LoggedToday onDetails={() => onNavigate("patterns")} />}
       <Celebrations />
-      {!nothingYet && <DiaperBrigade />}
 
       <HelpFooter />
 
@@ -120,6 +103,28 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {!readOnly && <div aria-hidden className="h-[calc(var(--maple-dock-h,150px)-16px)]" />}
       <Dock />
     </div>
+  );
+}
+
+function LoggedToday({ onDetails }: { onDetails: () => void }) {
+  const { summary } = useMaple();
+  if (!summary) return null;
+  const s = summary.today;
+  return (
+    <section aria-labelledby="logged-today" className={cx(tone.card, "px-4 py-3")}>
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="logged-today" className={cx(tone.heading, "text-[17px]")}>Logged today</h2>
+        <button type="button" onClick={onDetails} className="-my-2 -mr-2 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-semibold text-mp-accent-fg">
+          Patterns <Icon name="chevron-right" size={16} />
+        </button>
+      </div>
+      <p className="mt-2 text-[15px] leading-relaxed text-mp-ink">
+        <span className="whitespace-nowrap">{s.feeds} {s.feeds === 1 ? "feed" : "feeds"}</span>{" · "}
+        <span className="whitespace-nowrap">{s.wet} wet</span>{" · "}
+        <span className="whitespace-nowrap">{s.dirty} dirty</span>
+      </p>
+      <p className={cx(tone.muted, "mt-0.5 text-[13px]")}>{s.sleeps ? `${formatDuration(s.sleepSec)} sleep logged` : "No sleep logged today"}. Missing entries are not counted.</p>
+    </section>
   );
 }
 

@@ -12,11 +12,13 @@ import { Button, EmptyState, SectionTitle, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { useSectionFocus } from "../sectionFocus";
 import CareSettingsSheet from "./CareSettingsSheet";
+import CareHistorySheet from "./CareHistorySheet";
 import CareTeam from "./CareTeam";
 import { useCareNav } from "./CareNav";
 import { CheckInSection } from "./CheckIn";
 import { CrisisStrip } from "./CrisisSheet";
 import MedPlanSheet from "./MedPlanSheet";
+import MedicinePhotoHelp from "./MedicinePhotoHelp";
 import MedQuestionsSheet from "./MedQuestionsSheet";
 import NutritionSection from "./NutritionSection";
 import { TemperatureTile } from "./MomTempSheet";
@@ -34,7 +36,7 @@ export default function CareScreen() {
   return <Page care={care} />;
 }
 
-type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "settings" } | { kind: "questions" } | null;
+type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "settings" } | { kind: "questions" } | { kind: "history" } | null;
 
 function Page({ care }: { care: UseCare }) {
   const { state, summary } = useMaple();
@@ -108,6 +110,7 @@ function Page({ care }: { care: UseCare }) {
       </div>
 
       <RecentDoses care={care} />
+      <div className={GROUP}><NavRow icon="history" label="Care history" note="Older doses and temperatures by date" onClick={() => setSub({ kind: "history" })} /></div>
 
       <section id="mom-medicines" tabIndex={-1} className="scroll-mt-5 outline-none" aria-labelledby="her-meds">
         <SectionTitle
@@ -140,7 +143,7 @@ function Page({ care }: { care: UseCare }) {
               {write && (
                 <div className="-mt-4 flex flex-col items-center gap-2 px-6">
                   <Button onClick={() => setSub({ kind: "add" })}>Add a medicine</Button>
-                  <p className={cx(tone.faint, "text-center text-[13px]")}>Or photograph the discharge sheet and ask Claude to add them.</p>
+                  <MedicinePhotoHelp className="text-center" />
                 </div>
               )}
             </div>
@@ -175,7 +178,7 @@ function Page({ care }: { care: UseCare }) {
             )}
             <NavRow icon="message-square" label="Medicine questions" note="Nursing, and who to call about a medicine" onClick={() => setSub({ kind: "questions" })} />
           </div>
-          {write && care.rows.length > 0 && <Footnote className="mt-0">Got the discharge sheet? Photograph it and ask Claude to add them.</Footnote>}
+          {write && care.rows.length > 0 && <MedicinePhotoHelp className="px-1" />}
         </div>
       </section>
 
@@ -213,7 +216,7 @@ function Page({ care }: { care: UseCare }) {
           {write && <NavRow icon="pencil" label="Settings for this page" note="Care team, nursing, early doses, next OB visit" onClick={() => setSub({ kind: "settings" })} />}
         </div>
         <Footnote>
-          A notification can&apos;t ring through Silent. For an alarm, the Mom meds shortcut can start a timer (Family → Shortcuts &amp; assistants).
+          A notification can&apos;t ring through Silent. For an alarm, the Mom meds shortcut can start a timer (Settings → Shortcuts &amp; assistants).
         </Footnote>
       </section>
 
@@ -223,6 +226,7 @@ function Page({ care }: { care: UseCare }) {
       <MedPlanSheet open={sub?.kind === "add"} onClose={() => setSub(null)} care={care} />
       <MedQuestionsSheet open={sub?.kind === "questions"} onClose={() => setSub(null)} care={care} />
       <CareSettingsSheet open={sub?.kind === "settings"} onClose={() => setSub(null)} care={care} onDeleted={() => setSub(null)} />
+      <CareHistorySheet open={sub?.kind === "history"} onClose={() => setSub(null)} care={care} />
     </div>
   );
 }

@@ -59,7 +59,7 @@ function DoseTimeForm({ open, onClose, dose, care }: { open: boolean; onClose: (
   };
 
   return (
-    <Sheet open={open} onClose={close} title="Edit dose time" subtitle={dose.data.name} calm footer={
+    <Sheet open={open} dirty={dirty || invalid} onClose={close} title="Edit dose time" subtitle={dose.data.name} calm footer={
       <div className="space-y-3">
         <Problem className="mt-0">{problem}</Problem>
         <div className="flex flex-wrap gap-3">

@@ -7,6 +7,7 @@ import { mlToOz, ozToMl } from "@/lib/maple/units";
 import { RecordedTimeField } from "../TimeField";
 import { Button, Segmented, Sheet, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
 import { Problem, errorText } from "./parts";
 import type { UseCare } from "./useCare";
 
@@ -35,6 +36,7 @@ export default function NutritionEntrySheet({ kind, entry, care, onClose, onSave
   const [problem, setProblem] = useState<string | null>(null);
   const [refused, setRefused] = useState(false);
   const [showTime, setShowTime] = useState(!!entry);
+  const dirty = useDraftChanged({ description, meal, name, amount, when, timeInvalid });
   const current = base ? care.state.entries.find((item): item is CareNutritionEntry => item.id === base.id && (item.kind === "food" || item.kind === "drink")) : null;
   const changed = !!base && !!current && current.updated_at !== base.updated_at;
   const gone = !!base && !current;
@@ -71,7 +73,7 @@ export default function NutritionEntrySheet({ kind, entry, care, onClose, onSave
     }
   };
 
-  return <Sheet open onClose={close} title={base ? "Edit food or drink" : kind === "food" ? "Ate something" : "Had a drink"} subtitle={care.self ? "For you" : `For ${care.name}`} calm footer={
+  return <Sheet open dirty={dirty} onClose={close} title={base ? "Edit food or drink" : kind === "food" ? "Ate something" : "Had a drink"} subtitle={care.self ? "For you" : `For ${care.name}`} calm footer={
     <div className="space-y-3">
       <Problem className="mt-0">{problem}</Problem>
       <div className="flex gap-3">

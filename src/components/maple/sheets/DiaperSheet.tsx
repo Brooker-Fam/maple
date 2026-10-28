@@ -1,5 +1,7 @@
 "use client";
 
+import { useDraftChanged } from "../useDraftChanged";
+
 import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { PALE_STOOL, RED_STOOL, STOOL_COLOR_INFO, STOOL_TIMELINE, lateBlackStool } from "@/lib/maple/guidelines";
@@ -100,6 +102,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const dirty = useDraftChanged({ type, color, texture, size, rash, when, note });
 
   const poop = type === "poop" || type === "both";
   const pee = type === "pee" || type === "both";
@@ -149,6 +152,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      dirty={dirty}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Diaper"}
       footer={

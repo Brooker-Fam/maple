@@ -55,7 +55,7 @@ const TABS: TabItem[] = [
   { id: "history", label: "History", icon: "history" },
   { id: "moments", label: "Moments", icon: "image" },
   { id: "chat", label: "Chat", icon: "message-square" },
-  { id: "family", label: "Family", icon: "users" },
+  { id: "family", label: "Settings", icon: "settings" },
 ];
 
 export default function MapleApp() {
@@ -262,12 +262,12 @@ function TabBar({ tabs, tab, onChange }: { tabs: TabItem[]; tab: TabId; onChange
               onClick={() => onChange(t.id)}
               aria-current={active ? "page" : undefined}
               className={cx(
-                "flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 text-[11px] font-medium transition",
+                "flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 text-[12px] font-medium transition",
                 active ? "text-mp-accent-fg" : "text-mp-ink-3"
               )}
             >
               <Icon name={t.icon} size={24} strokeWidth={active ? 2.1 : 1.75} />
-              <span className="max-w-full truncate">{t.label}</span>
+              <span className="max-w-full truncate tracking-[-0.02em]">{t.label}</span>
             </button>
           );
         })}

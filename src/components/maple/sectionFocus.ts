@@ -13,7 +13,7 @@ export function requestSection(section: AppSection): void {
   window.dispatchEvent(new Event(EVENT));
 }
 
-export function useSectionFocus(page: "family" | "care"): void {
+export function useSectionFocus(page: "family" | "care", view?: string | null): void {
   const { tab } = useAppNav();
   useEffect(() => {
     let frame = 0;
@@ -21,9 +21,11 @@ export function useSectionFocus(page: "family" | "care"): void {
       const section = pending;
       if (tab !== page || !section || (section === "mom-medicines") !== (page === "care")) return;
       const target = document.getElementById(section);
-      if (!target) return;
-      pending = null;
+      if (!target || target.closest("[hidden]")) return;
+      cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
+        if (pending !== section || !target.isConnected || target.closest("[hidden]")) return;
+        pending = null;
         target.focus({ preventScroll: true });
         target.scrollIntoView({ block: "start", behavior: "instant" });
       });
@@ -31,5 +33,5 @@ export function useSectionFocus(page: "family" | "care"): void {
     focus();
     window.addEventListener(EVENT, focus);
     return () => { cancelAnimationFrame(frame); window.removeEventListener(EVENT, focus); };
-  }, [page, tab]);
+  }, [page, tab, view]);
 }

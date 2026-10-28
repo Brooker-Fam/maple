@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { STEPS, type OnboardingView, type StepId } from "@/lib/maple/onboarding/steps";
 import { Button, Segmented, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -11,6 +11,7 @@ import { SetupPage } from "./SetupPage";
 import { SavedAnswers, StepCard, Summary } from "./StepCard";
 import { useOnboarding } from "./useOnboarding";
 import { useAnswerMode } from "./useAnswerMode";
+import { AnswerDraftContext } from "./StepShell";
 
 const OnboardingChat = lazy(() => import("./OnboardingChat"));
 
@@ -33,12 +34,22 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
   const [reviewing, setReviewing] = useState(false);
   const [careConsent, setCareConsent] = useState(false);
   const view = ob.view;
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (!dirty) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [dirty]);
 
   if (!view.owner) return <Waiting ob={ob} onDone={() => onDone(false)} />;
 
   const answered = STEPS.filter((s) => view.done[s]).length;
   const step = editing ?? (reviewing ? null : view.next);
+  const discard = () => !dirty || window.confirm("Discard your unsaved answer? Your saved answers will stay.");
   const edit = (s: StepId) => {
+    if (s === step || !discard()) return;
+    setDirty(false);
     ob.clearProblem();
     setCareConsent(false);
     setEditing(s);
@@ -47,17 +58,35 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
     ...ob,
     answer: async (s: StepId, value: unknown) => {
       const saved = await ob.answer(s, value);
-      if (saved) setAcknowledgment(`Saved: ${answerLine(s, value)}.`);
+      if (saved) {
+        if (s === step) setDirty(false);
+        setAcknowledgment(`Saved: ${answerLine(s, value)}.`);
+      }
       if (saved && editing === s) setEditing(null);
       if (saved && s === "care") setCareConsent(false);
       return saved;
     },
     skip: async (s: StepId) => {
+      if (s === step && !discard()) return false;
       const saved = await ob.skip(s);
-      if (saved) setAcknowledgment("Skipped for now. You can come back to it.");
+      if (saved) {
+        if (s === step) setDirty(false);
+        setAcknowledgment("Skipped for now. You can come back to it.");
+      }
       if (saved && editing === s) setEditing(null);
       return saved;
     },
+  };
+  const review = () => {
+    if (!discard()) return;
+    setDirty(false);
+    setEditing(null);
+    setReviewing(true);
+  };
+  const back = () => {
+    if (!discard()) return;
+    setDirty(false);
+    setEditing(null);
   };
   const start = () => finishSetup(ob.finish, onDone, view.values.notifications === true);
   const chatOn = mode === "chat" && online && view.done.welcome === "answered";
@@ -90,51 +119,52 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
   );
 
   return (
-    <SetupPage header={header}>
-      {chatOn && (
-        <Suspense fallback={null}>
-          <OnboardingChat
-            ob={wrapped}
-            onCare={() => {
-              setCareConsent(true);
-              setEditing("care");
-            }}
-            onReview={() => {
-              setEditing(null);
-              setReviewing(true);
-            }}
-            onDecline={() => chooseMode("form")}
-            onFallback={(why) => {
-              fallbackToForm();
-              setNote(why || null);
-            }}
-          />
-        </Suspense>
-      )}
+    <AnswerDraftContext.Provider value={setDirty}>
+      <SetupPage header={header}>
+        {chatOn && (
+          <Suspense fallback={null}>
+            <OnboardingChat
+              ob={wrapped}
+              onCare={() => {
+                if (!discard()) return;
+                setDirty(false);
+                setCareConsent(true);
+                setEditing("care");
+              }}
+              onReview={review}
+              onDecline={() => chooseMode("form")}
+              onFallback={(why) => {
+                fallbackToForm();
+                setNote(why || null);
+              }}
+            />
+          </Suspense>
+        )}
 
-      <InviteLinks links={ob.links} />
+        <InviteLinks links={ob.links} />
 
-      {step && STEPS.some((s) => s !== "welcome" && savedLine(view, s)) && <SavedAnswers view={view} onEdit={edit} />}
-      {step && (acknowledgment || answered > 1) && <p role="status" className={cx(tone.muted, "px-1 text-[14px] leading-snug")}>{acknowledgment ?? "Your confirmed answers are saved. Pick up here."}</p>}
+        {step && STEPS.some((s) => s !== "welcome" && savedLine(view, s)) && <SavedAnswers view={view} onEdit={edit} />}
+        {step && (acknowledgment || answered > 1) && <p role="status" className={cx(tone.muted, "px-1 text-[14px] leading-snug")}>{acknowledgment ?? "Your confirmed answers are saved. Pick up here."}</p>}
 
-      {step ? (
-        <>
-          <StepCard key={`${step}-${careConsent}`} step={step} ob={wrapped} careConsent={step === "care" && careConsent} />
-          {editing && (
-            <Button variant="ghost" size="sm" className="self-start" onClick={() => setEditing(null)}>
-              Back
-            </Button>
-          )}
-          {!editing && view.canFinish && (
-            <Button variant="ghost" size="sm" className="self-start" onClick={() => setReviewing(true)}>
-              Review and start logging
-            </Button>
-          )}
-        </>
-      ) : (
-        <Summary view={view} ob={ob} onEdit={edit} onStart={() => void start()} />
-      )}
-    </SetupPage>
+        {step ? (
+          <>
+            <StepCard key={`${step}-${careConsent}`} step={step} ob={wrapped} careConsent={step === "care" && careConsent} />
+            {editing && (
+              <Button variant="ghost" size="sm" className="self-start" onClick={back}>
+                Back
+              </Button>
+            )}
+            {!editing && view.canFinish && (
+              <Button variant="ghost" size="sm" className="self-start" onClick={review}>
+                Review and start logging
+              </Button>
+            )}
+          </>
+        ) : (
+          <Summary view={view} ob={ob} onEdit={edit} onStart={() => void start()} />
+        )}
+      </SetupPage>
+    </AnswerDraftContext.Provider>
   );
 }
 
@@ -143,7 +173,8 @@ function Waiting({ ob, onDone }: { ob: ReturnType<typeof useOnboarding>; onDone:
   return (
     <div className="mx-auto flex min-h-[100dvh] w-full max-w-lg flex-col items-center justify-center gap-4 px-6 text-center">
       <h1 className={cx(tone.display, "text-[26px]")}>Almost ready</h1>
-      <p className={cx(tone.muted, "text-[16px] leading-relaxed")}>The person who started this log is still setting it up. It opens here as soon as they&apos;re done.</p>
+      <p className={cx(tone.muted, "text-[16px] leading-relaxed")}>The person who started this log is still setting it up. Check again when they&apos;re done.</p>
+      {ob.problem && <p role="alert" className={cx(tone.body, "text-[15px] leading-relaxed text-mp-danger")}>{ob.problem}</p>}
       <Button
         variant="soft"
         disabled={checking}
