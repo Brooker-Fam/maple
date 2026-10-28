@@ -1,6 +1,7 @@
 import { isToolUIPart } from "ai";
 import { CHAT_MAX_CHARS, type ChatMessage } from "./types";
 import { questionAnswerText, supersedeQuestions } from "./questions";
+import type { ChatDelivery } from "./delivery";
 
 /**
  * What the chat route takes from the phone, and how it changes stored
@@ -73,8 +74,8 @@ export function userText(parts: unknown[]): string {
 }
 
 /** The user message as stored: the app's context lines for the model, then their words. */
-export function userMessage(id: string, text: string, line: string, state: string[] = []): ChatMessage {
-  return { id, role: "user", parts: [{ type: "data-context", data: { line, ...(state.length ? { state } : {}) } }, { type: "text", text }] };
+export function userMessage(id: string, text: string, line: string, state: string[] = [], delivery?: ChatDelivery): ChatMessage {
+  return { id, role: "user", parts: [{ type: "data-context", data: { line, ...(state.length ? { state } : {}) } }, ...(delivery ? [{ type: "data-delivery" as const, data: delivery }] : []), { type: "text", text }] };
 }
 
 /** How many model steps a stored reply has run, so an approval's continuation shares the turn's step cap. */

@@ -118,7 +118,7 @@ export async function checkLiveThread({ page, server, url }) {
   const draft = page.getByRole("textbox", { name: "Message", exact: true });
   await draft.fill("A draft that must survive recovery.");
   await page.getByText("Waiting to reconnect…", { exact: true }).waitFor();
-  assert(await page.getByRole("button", { name: "Waiting for the current reply", exact: true }).isDisabled(), "An unresolved previous turn blocks another send");
+  assert(await page.getByRole("button", { name: "Queue message", exact: true }).isEnabled(), "An unresolved reply allows queueing but cannot start another request");
   await page.getByRole("button", { name: "Check again", exact: true }).click();
   await page.getByText("Your earlier reply is ready.", { exact: true }).waitFor();
   assert.equal(await draft.inputValue(), "A draft that must survive recovery.");

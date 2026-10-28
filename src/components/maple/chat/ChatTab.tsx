@@ -13,6 +13,7 @@ import { CareNote, TermsCard } from "./ChatTerms";
 import { NEAR_BOTTOM, TAB_BAR, usePageHold, useVisibleArea } from "./page";
 import { useChatThread } from "./useChatThread";
 import { chatActivity, visibleRevision } from "./progress";
+import type { QueuedMessage } from "./queue";
 
 /**
  * Chat: this member's one conversation with Maple, a tab like the others.
@@ -39,6 +40,8 @@ export default function ChatTab({ active }: { active: boolean }) {
   const prepend = useRef<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showLatest, setShowLatest] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const completingReply = useRef(false);
   usePageHold(active, composer);
   const needsTerms = consent?.terms === false;
 
@@ -50,6 +53,16 @@ export default function ChatTab({ active }: { active: boolean }) {
   const tail = t.messages[count - 1];
   const revision = visibleRevision(tail);
   const empty = count === 0 && t.earlier.length === 0;
+  useEffect(() => {
+    if (!t.ready || t.loadingHistory) return;
+    if (t.busy) {
+      completingReply.current = true;
+      setAnnouncement("");
+    } else if (completingReply.current) {
+      completingReply.current = false;
+      if (tail?.role === "assistant") setAnnouncement(t.awaitingAnswer ? "Maple is waiting for your answer." : "Maple's reply is ready.");
+    }
+  }, [t.ready, t.loadingHistory, t.busy, t.awaitingAnswer, tail]);
 
   const toBottom = () => {
     const el = scroller.current;
@@ -93,10 +106,10 @@ export default function ChatTab({ active }: { active: boolean }) {
     return () => watch.disconnect();
   }, [active]);
 
-  const send = (text: string) => {
+  const send = (text: string, clearDraft = false) => {
     pinned.current = true;
     setShowLatest(false);
-    t.send(text);
+    t.send(text, { clearDraft });
   };
   const showEarlier = () => {
     prepend.current = scroller.current?.scrollHeight ?? null;
@@ -142,14 +155,14 @@ export default function ChatTab({ active }: { active: boolean }) {
               </div>
             </div>
           )}
-          {(t.more || (!empty && !t.busy && !needsTerms)) && (
+          {(t.more || (!empty && !t.busy && !t.queue.length && !needsTerms)) && (
             <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
               {t.more && (
                 <button type="button" onClick={showEarlier} disabled={t.loadingEarlier} className="min-h-[44px] px-2 text-[14px] font-semibold text-mp-accent-fg disabled:opacity-50">
                   {t.loadingEarlier ? "Loading…" : "Show earlier"}
                 </button>
               )}
-              {!empty && !t.busy && !needsTerms && (confirmDelete ? (
+              {!empty && !t.busy && !t.queue.length && !needsTerms && (confirmDelete ? (
                 <span className="flex items-center gap-2">
                   <span className={cx(tone.muted, "text-[14px]")}>Delete your whole chat for good?</span>
                   <Button size="sm" variant="soft" onClick={() => setConfirmDelete(false)}>
@@ -194,12 +207,13 @@ export default function ChatTab({ active }: { active: boolean }) {
           {items.map(({ thread, message }, i) => (
             <Fragment key={message.id}>
               {i > 0 && items[i - 1].thread !== thread && <hr aria-hidden className="mx-8 border-mp-line" />}
-              <MessageView message={message} last={i === items.length - 1 && i >= t.earlier.length} busy={t.busy} onApprove={t.approve} onAnswerQuestion={t.answerQuestion} onAsk={send} />
+              <MessageView threadId={thread} message={message} last={i === items.length - 1 && i >= t.earlier.length} busy={t.busy} onApprove={t.approve} onAnswerQuestion={t.answerQuestion} onAsk={send} />
             </Fragment>
           ))}
           <div role="status" aria-live="polite" aria-atomic="true" className={!activity ? "sr-only" : undefined}>
             {activity && <ChatActivity label={activity} paused={t.recoveryPaused} />}
           </div>
+          <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
           {t.historyProblem && (
             <div className={cx(tone.inset, "flex items-center gap-3 px-3.5 py-3 text-[14px] leading-snug")}>
               <p role="status" className={cx(tone.body, "min-w-0 flex-1")}>{t.historyProblem}</p>
@@ -234,6 +248,7 @@ export default function ChatTab({ active }: { active: boolean }) {
         style={{ paddingBottom: area?.keyboard ? 0 : `calc(${TAB_BAR}px + env(safe-area-inset-bottom))` }}
       >
         <div ref={composer} className="px-4 py-2">
+          <QueuePanel t={t} offline={!online} />
           {!needsTerms && t.ready && !t.busy && !t.draft.trim() && (
             <div className="mb-1 flex items-center gap-1 overflow-x-auto whitespace-nowrap" aria-label="Explore your log">
               <span className={cx(tone.faint, "shrink-0 pr-1 text-[12px]")}>Explore</span>
@@ -246,7 +261,7 @@ export default function ChatTab({ active }: { active: boolean }) {
               ))}
             </div>
           )}
-          <Composer t={t} onSend={send} disabled={needsTerms} offline={!online} />
+          <Composer t={t} onSend={(text) => send(text, true)} disabled={needsTerms} offline={!online} />
         </div>
       </div>
     </section>
@@ -256,7 +271,8 @@ export default function ChatTab({ active }: { active: boolean }) {
 function Composer({ t, onSend, disabled, offline }: { t: ReturnType<typeof useChatThread>; onSend: (text: string) => void; disabled: boolean; offline: boolean }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const near = t.draft.length > CHAT_MAX_CHARS - 200;
-  const canSend = !disabled && t.ready && !t.busy && !offline && t.draft.trim().length > 0 && t.draft.length <= CHAT_MAX_CHARS;
+  const queueing = t.busy || offline || t.queuePaused || t.awaitingAnswer || t.queue.length > 0;
+  const canSend = !disabled && t.queue.length < t.queueLimit && t.draft.trim().length > 0 && t.draft.length <= CHAT_MAX_CHARS;
 
   // Grows with what's typed, up to about five lines.
   useEffect(() => {
@@ -286,7 +302,7 @@ function Composer({ t, onSend, disabled, offline }: { t: ReturnType<typeof useCh
             if (t.problem) t.clearProblem();
           }}
           onKeyDown={onKey}
-          placeholder={offline ? "Needs a connection" : "Message"}
+          placeholder={offline ? "Message · saved until you're online" : "Message"}
           aria-label="Message"
           disabled={disabled}
           className={cx(tone.input, "min-h-[44px] resize-none rounded-[22px] py-2.5 leading-snug disabled:opacity-60")}
@@ -295,17 +311,67 @@ function Composer({ t, onSend, disabled, offline }: { t: ReturnType<typeof useCh
           type="button"
           onClick={() => onSend(t.draft)}
           disabled={!canSend}
-          aria-label={t.busy ? "Waiting for the current reply" : "Send"}
+          aria-label={queueing ? "Queue message" : "Send"}
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-accent text-mp-on-accent transition active:scale-95 disabled:opacity-40"
         >
           <Icon name="arrow-up" size={22} strokeWidth={2.25} />
         </button>
       </div>
+      {t.storageProblem && <p role="status" className={cx(tone.faint, "mt-1 text-[12px] leading-snug")}>This browser couldn&apos;t save your draft. Keep this page open until your messages send.</p>}
+      {t.draft.trim() && queueing && <p className={cx(tone.faint, "mt-1 text-[12px] leading-snug")}>{offline ? "Queue it here, then resume when you're connected." : "Add this to the queue while Maple finishes."}</p>}
       {near && (
         <p className={cx(tone.faint, "mt-1 text-right text-[12px] tabular-nums")}>
           {t.draft.length.toLocaleString("en-US")} / {CHAT_MAX_CHARS.toLocaleString("en-US")}
         </p>
       )}
+    </div>
+  );
+}
+
+function QueuePanel({ t, offline }: { t: ReturnType<typeof useChatThread>; offline: boolean }) {
+  const waiting = t.queue.filter((item) => item.state !== "sending");
+  if (!waiting.length) return null;
+  const blocked = waiting.some((item) => item.state !== "queued");
+  const canResume = !t.busy && !offline && !blocked;
+  return (
+    <section className="mb-2 rounded-xl border border-mp-line bg-mp-surface px-3 py-2" aria-label="Message queue">
+      <div className="flex min-h-[36px] items-center justify-between gap-2">
+        <p className={cx(tone.body, "text-[13px] font-semibold")} role="status">{waiting.length} {waiting.length === 1 ? "message" : "messages"} waiting</p>
+        {t.queuePaused && canResume ? <Button size="sm" variant="ghost" onClick={() => t.resumeQueue()}>Resume</Button>
+          : !t.queuePaused && !t.awaitingAnswer && !blocked ? <Button size="sm" variant="ghost" onClick={t.pauseQueue}>Pause queue</Button> : null}
+      </div>
+      {offline ? <p className={cx(tone.faint, "text-[12px]")}>Saved on this device. Reconnect, then resume.</p>
+        : t.awaitingAnswer && !blocked ? <div className="flex items-center gap-2"><p className={cx(tone.faint, "min-w-0 flex-1 text-[12px] leading-snug")}>Answer the card above before these messages send.</p><Button size="sm" variant="ghost" disabled={!canResume} onClick={() => t.resumeQueue(true)}>Send next instead</Button></div>
+          : t.queuePaused && !blocked ? <p className={cx(tone.faint, "text-[12px]")}>Paused. Review these messages before resuming.</p> : null}
+      <div className="max-h-[164px] space-y-2 overflow-y-auto overscroll-contain">
+        {waiting.map((item) => <QueuedRow key={item.requestId} item={item} t={t} offline={offline} />)}
+      </div>
+    </section>
+  );
+}
+
+function QueuedRow({ item, t, offline }: { item: QueuedMessage; t: ReturnType<typeof useChatThread>; offline: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(item.text);
+  const [reviewedAt] = useState(Date.now);
+  const editable = (item.state === "queued" && !item.threadId) || item.state === "failed" || item.state === "cancelled";
+  const expired = reviewedAt - Date.parse(item.submittedAt) > 7 * 24 * 60 * 60 * 1000;
+  return (
+    <div className="border-t border-mp-line pt-2">
+      {editing && editable ? <>
+        <textarea aria-label="Edit queued message" value={text} onChange={(e) => setText(e.target.value)} maxLength={CHAT_MAX_CHARS} rows={2} className={cx(tone.input, "w-full text-[14px]")} />
+        <div className="flex gap-2"><Button size="sm" variant="soft" disabled={!text.trim() || (!!item.threadId && item.state !== "cancelled" && offline)} onClick={async () => { if (await t.editQueued(item.requestId, text)) setEditing(false); }}>Save changes</Button><Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Keep original</Button></div>
+        {item.problem && <p role="status" className={cx(tone.muted, "text-[12px] leading-snug")}>{item.problem}</p>}
+      </> : <>
+        <p className={cx(tone.body, "line-clamp-2 text-[13px] leading-snug whitespace-pre-wrap wrap-anywhere")}>{item.text}</p>
+        {item.problem && <p role="status" className={cx(tone.muted, "mt-1 text-[12px] leading-snug")}>{item.problem}</p>}
+        <div className="flex flex-wrap gap-1">
+          {item.state === "uncertain" ? <Button size="sm" variant="ghost" disabled={offline || t.loadingHistory} onClick={t.retryHistory}>Check delivery</Button> : null}
+          {item.state === "failed" && !expired ? <Button size="sm" variant="soft" disabled={offline || t.busy} onClick={() => t.retryQueued(item.requestId)}>Retry</Button> : null}
+          {editable && <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>}
+          {(editable || item.state === "received") && <Button size="sm" variant="ghost" disabled={!!item.threadId && item.state !== "cancelled" && item.state !== "received" && offline} onClick={() => void t.discardQueued(item.requestId)}>{item.state === "received" ? "Dismiss" : "Discard"}</Button>}
+        </div>
+      </>}
     </div>
   );
 }

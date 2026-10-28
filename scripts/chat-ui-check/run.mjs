@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkLiveThread, liveServer } from "./live-thread-checks.mjs";
+import { checkQueue } from "./queue-checks.mjs";
 
 const require = createRequire(import.meta.url);
 const { build } = require("esbuild");
@@ -74,10 +75,11 @@ const tapTarget = async (locator) => {
 
 try {
   await checkLiveThread({ page, server, url: origin });
+  await checkQueue({ page, url: origin });
   await page.goto(origin);
   await page.waitForFunction(() => !!window.__chatFixture);
   await page.getByText("Loading your conversation…", { exact: true }).waitFor();
-  assert(await page.getByRole("button", { name: "Waiting for the current reply", exact: true }).isDisabled());
+  assert(await page.getByRole("button", { name: "Queue message", exact: true }).isDisabled());
   await fixture("history-error");
   await page.getByRole("button", { name: "Check again", exact: true }).click();
   assert((await snapshot()).calls.some((c) => c.kind === "retry-history"));
@@ -86,7 +88,7 @@ try {
   await page.getByText("Thinking…", { exact: true }).waitFor();
   assert.equal(await page.getByText("Hidden synthetic model work", { exact: true }).count(), 0, "Reasoning stays hidden while progress stays visible");
   await page.getByRole("textbox", { name: "Message", exact: true }).fill("A draft for later");
-  assert(await page.getByRole("button", { name: "Waiting for the current reply", exact: true }).isDisabled(), "Generation blocks another send while keeping the draft editable");
+  assert(await page.getByRole("button", { name: "Queue message", exact: true }).isEnabled(), "Generation keeps the draft editable and allows queueing the next message");
   await fixture("read-work");
   await page.getByText("Checking the log…", { exact: true }).waitFor();
   assert.equal(await page.getByText("Working on it…", { exact: true }).count(), 0, "A tool does not add a competing activity row");
@@ -108,6 +110,7 @@ try {
   await fixture("question");
   await page.getByRole("button", { name: "Type an answer", exact: true }).click();
   const answer = page.getByRole("textbox", { name: "Your answer", exact: true });
+  assert(await answer.evaluate((el) => document.activeElement === el), "Opening a custom answer focuses its field");
   await answer.fill("It was a separate feeding on the right.");
   await page.getByRole("button", { name: "Send answer", exact: true }).click();
   assert.deepEqual((await snapshot()).calls.at(-1), { kind: "answer", toolCallId: "call_question", answer: { text: "It was a separate feeding on the right." } });
@@ -122,31 +125,164 @@ try {
   await page.screenshot({ path: path.join(screenshots, "question-375-day.png") });
   console.log("PASS questions: choices, pending state, custom reply, retry, answered history");
 
+  for (const name of ["question-error", "question-malformed"]) {
+    await fixture(name);
+    await page.getByRole("region", { name: "Question unavailable", exact: true }).waitFor();
+    await page.getByText("This question couldn't be shown. You can type your reply in the message box.", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Same feeding", exact: true }).count(), 0);
+  }
+  await fixture("tool-error");
+  await page.getByText("Some details need checking before this can continue.", { exact: true }).waitFor();
+  assert(!/log_feed|maple_status|Synthetic validation/.test(await page.locator("body").innerText()), "Tool/schema diagnostics never leak into cards");
+  console.log("PASS errors: failed questions offer a typed fallback and tool diagnostics stay readable");
+
   await fixture("receipt");
   const undo = page.getByRole("button", { name: "Undo", exact: true });
-  await undo.waitFor();
+  await page.getByText("Feeding in the log", { exact: true }).waitFor();
+  await page.getByRole("region", { name: "Saved entry", exact: true }).getByText(/L 8m/).waitFor();
+  await noOverflow(); await settle();
+  await page.screenshot({ path: path.join(screenshots, "receipt-375-day.png") });
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  assert((await snapshot()).calls.some((c) => c.kind === "edit" && c.value.entry.id === 901), "Edit opens the correct synthetic entry");
+  assert((await snapshot()).calls.some((c) => c.kind === "edit" && c.value.entry.id === 901), "Edit opens the exact scoped entry");
   await undo.click();
   await page.getByRole("button", { name: "Undoing…", exact: true }).waitFor();
-  assert.equal(await page.getByText("Undone", { exact: true }).count(), 0, "Undo does not claim success before the mutation");
+  assert.equal(await page.getByText("Feeding removed", { exact: true }).count(), 0, "Undo does not claim success before the mutation");
   await resolveAction(false);
-  await page.getByText("Couldn't undo this entry. Try again.", { exact: true }).waitFor();
+  await page.getByText("Couldn't undo this entry. Check its status before trying again.", { exact: true }).waitFor();
+  assert(await undo.isDisabled(), "An uncertain failed action must be checked before retry");
+  await page.getByRole("button", { name: "Check status", exact: true }).click();
   await undo.click();
   await resolveAction(true);
-  await page.getByText("Undone", { exact: true }).waitFor();
-  await fixture("restore");
+  await page.getByText("Feeding removed", { exact: true }).waitFor();
+  await page.evaluate(() => window.__chatFixture.remount());
+  await page.getByText("Feeding removed", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Undo", exact: true }).count(), 0, "A removed entry never returns as saved after remount");
   const restore = page.getByRole("button", { name: "Restore", exact: true });
   await restore.click();
   await page.getByRole("button", { name: "Restoring…", exact: true }).waitFor();
-  assert.equal(await page.getByText("Restored", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Feeding in the log", { exact: true }).count(), 0);
   await resolveAction(false);
-  await page.getByText("Couldn't restore this entry. Try again.", { exact: true }).waitFor();
+  await page.getByText("Couldn't restore this entry. Check its status before trying again.", { exact: true }).waitFor();
+  assert(await restore.isDisabled());
+  await page.getByRole("button", { name: "Check status", exact: true }).click();
   await restore.click();
   await resolveAction(true);
-  await page.getByText("Restored", { exact: true }).waitFor();
+  await page.getByText("Feeding in the log", { exact: true }).waitFor();
+  await page.evaluate(() => window.__chatFixture.remount());
+  await page.getByText("Feeding in the log", { exact: true }).waitFor();
   assert(!/#901/.test(await page.locator("body").innerText()), "Raw receipt IDs remain hidden");
-  console.log("PASS actions: entry Edit, pending Undo/Restore, failed actions stay retryable, confirmed success");
+  console.log("PASS actions: exact entry Edit, pending and failed Undo/Restore, server status survives remount");
+
+  await page.evaluate(() => {
+    const old = window.__chatFixture.snapshot().records.baby.entry;
+    window.__chatFixture.updateRecord("baby", { entry: { ...old, ended_at: null, data: { method: "bottle", amount_ml: 60, milk: "formula" }, updated_at: "2026-10-28T16:01:00.000Z" } });
+  });
+  const receiptCard = page.getByRole("region", { name: "Saved entry", exact: true });
+  await receiptCard.getByText(/Bottle.*formula/).waitFor();
+  assert(!(await receiptCard.innerText()).includes("left 8 minutes"), "Current details replace stale receipt prose after an edit");
+  await page.evaluate(() => window.__chatFixture.updateRecord("baby", { available: false }));
+  await page.getByText("Earlier confirmation. Current status is unavailable.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Undo", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Edit", exact: true }).count(), 0, "Missing exact records are not inferred deleted or editable");
+  await page.evaluate(() => window.__chatFixture.remount());
+  await page.getByText("Saved earlier", { exact: true }).waitFor();
+  console.log("PASS receipts: edited details stay current; unavailable records are historical without destructive actions");
+
+  await fixture("restore");
+  await page.getByText("Feeding removed", { exact: true }).waitFor();
+  assert(await page.getByRole("button", { name: "Restore", exact: true }).isEnabled());
+  await page.evaluate(() => {
+    const old = window.__chatFixture.snapshot().records.baby.entry;
+    window.__chatFixture.updateRecord("baby", { entry: { ...old, kind: "med", data: { name: "Example medicine", moved_to: 902 } } });
+  });
+  await page.getByText("Moved to the care log", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Restore", exact: true }).count(), 0, "A moved medicine cannot be restored into both logs");
+  assert(!/902/.test(await receiptCard.innerText()), "Move destination IDs are never shown");
+  await fixture("care-receipt");
+  await page.getByText("Example medicine · in the log", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Edit time", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit dose time", exact: true });
+  await editor.waitFor();
+  await editor.getByLabel("Taken at: time", { exact: true }).fill("10:15");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await editor.waitFor({ state: "hidden" });
+  assert((await snapshot()).calls.some((c) => c.kind === "care-edit" && c.id === 901 && c.at === "2026-10-28T14:15:00.000Z" && c.expected === "2026-10-28T16:00:00.000Z"), "Care edit uses the exact entry version and local time");
+  await page.getByRole("region", { name: "Saved entry", exact: true }).getByText(/10:15/).waitFor();
+  await noOverflow(); await settle();
+  await page.screenshot({ path: path.join(screenshots, "care-receipt-375-day.png") });
+  await undo.click();
+  await resolveAction(true);
+  await page.getByText("Example medicine · removed", { exact: true }).waitFor();
+  assert((await snapshot()).calls.some((c) => c.kind === "care-remove" && c.id === 901));
+  assert(!(await snapshot()).calls.some((c) => c.kind === "remove"), "Matching care/baby IDs cannot cross mutation domains");
+  await page.evaluate(() => window.__chatFixture.remount());
+  await page.getByText("Example medicine · removed", { exact: true }).waitFor();
+  await restore.click();
+  await resolveAction(true);
+  await page.getByText("Example medicine · in the log", { exact: true }).waitFor();
+  await page.evaluate(() => window.__chatFixture.setCareEnabled(false));
+  await page.getByText("This care entry isn't available in chat.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Undo", exact: true }).count(), 0);
+  assert(!/c901/.test(await page.locator("body").innerText()));
+  console.log("PASS care receipts: scoped dose editing, Undo/Restore, reload and revoked access");
+
+  await fixture("care-food");
+  await page.getByText("Meal · in the log", { exact: true }).waitFor();
+  await receiptCard.getByText(/Toast and eggs/).waitFor();
+  assert(!(await receiptCard.innerText()).includes("OB"), "Food is never rendered as an OB question");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const foodEditor = page.getByRole("dialog", { name: "Edit food", exact: true });
+  await foodEditor.getByRole("radio", { name: "Snack", exact: true }).click();
+  await foodEditor.getByRole("textbox", { name: "What was it?", exact: true }).fill("Yogurt and fruit");
+  await foodEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await foodEditor.waitFor({ state: "hidden" });
+  await page.getByText("Snack · in the log", { exact: true }).waitFor();
+  await receiptCard.getByText(/Yogurt and fruit/).waitFor();
+  const foodEdit = (await snapshot()).calls.find((c) => c.kind === "care-edit-entry");
+  assert.deepEqual(foodEdit.patch.data, { description: "Yogurt and fruit", meal: "snack" });
+  assert.equal(foodEdit.expected, "2026-10-28T16:00:00.000Z");
+  assert.equal((await snapshot()).records.care.entry.note, "Synthetic note retained", "Nutrition edits retain the entry's existing note");
+  assert(!("note" in foodEdit.patch), "Food data is never saved into the question note field");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await foodEditor.getByRole("textbox", { name: "What was it?", exact: true }).fill("An older unsaved edit");
+  await page.evaluate(() => {
+    const old = window.__chatFixture.snapshot().records.care.entry;
+    window.__chatFixture.updateRecord("care", { entry: { ...old, data: { ...old.data, description: "A newer saved snack" }, updated_at: "2026-10-28T16:05:00.000Z" } });
+  });
+  await foodEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await foodEditor.getByText("Couldn't confirm this change. Close this editor and check the latest entry before trying again.", { exact: true }).waitFor();
+  assert.equal((await snapshot()).records.care.entry.data.description, "A newer saved snack", "Version guards preserve a newer change from another device");
+  await foodEditor.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await fixture("care-drink");
+  await page.getByText("Water · in the log", { exact: true }).waitFor();
+  await receiptCard.getByText(/8 oz/).waitFor();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const drinkEditor = page.getByRole("dialog", { name: "Edit drink", exact: true });
+  await drinkEditor.getByRole("textbox", { name: "Drink", exact: true }).fill("Tea");
+  await drinkEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await drinkEditor.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).records.care.entry.data.amount_ml, 237, "Renaming a drink does not round its original volume");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await drinkEditor.getByRole("textbox", { name: "Amount in oz", exact: true }).fill("-1");
+  assert(await drinkEditor.getByRole("button", { name: "Save", exact: true }).isDisabled());
+  await drinkEditor.getByRole("textbox", { name: "Amount in oz", exact: true }).fill("");
+  await drinkEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await drinkEditor.waitFor({ state: "hidden" });
+  await receiptCard.getByText(/Amount not recorded/).waitFor();
+  assert.equal((await snapshot()).records.care.entry.data.amount_ml, null, "Unknown volume is not zero");
+  await page.evaluate(() => window.__chatFixture.setUnits("metric"));
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await drinkEditor.getByRole("textbox", { name: "Amount in ml", exact: true }).fill("250");
+  await drinkEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await drinkEditor.waitFor({ state: "hidden" });
+  await receiptCard.getByText(/250 ml/).waitFor();
+  assert.equal((await snapshot()).records.care.entry.data.amount_ml, 250);
+  assert.equal((await snapshot()).records.care.entry.note, "Synthetic note retained");
+  assert(!(await snapshot()).calls.some((c) => c.kind === "edit" || c.kind === "remove"), "Nutrition stays in the maternal care domain");
+  await noOverflow(); await settle();
+  await page.screenshot({ path: path.join(screenshots, "nutrition-receipt-375-day.png") });
+  console.log("PASS nutrition receipts: old food/drink records edit in care, preserve versions/notes and respect units and unknown amounts");
 
   await fixture("activity");
   const activityCard = page.getByRole("region", { name: "Activity over time", exact: true });
@@ -201,8 +337,23 @@ try {
   assert(await scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 100), "Latest reply returns to the newest content");
   console.log("PASS scroll: new reply indicator, stable reading position, tab return, latest navigation");
 
-  for (const name of ["question", "activity", "growth"]) {
+  await fixture("queue-panel");
+  await page.getByText("3 messages waiting", { exact: true }).waitFor();
+  const queueList = page.getByRole("region", { name: "Message queue", exact: true }).locator(".overflow-y-auto");
+  assert(await queueList.evaluate((el) => el.clientHeight <= 164 && el.scrollHeight > el.clientHeight), "Three long queued messages stay in a bounded scrolling panel");
+  const composerBox = await page.getByRole("textbox", { name: "Message", exact: true }).boundingBox();
+  assert(composerBox && composerBox.height <= 132 && composerBox.y + composerBox.height < 812, "Long drafts stay visible without pushing the composer offscreen");
+  assert(await page.getByRole("button", { name: "Queue message", exact: true }).isVisible());
+  await noOverflow(); await settle();
+  await page.screenshot({ path: path.join(screenshots, "queue-panel-375-day.png") });
+  console.log("PASS queue layout: three long messages scroll above the capped draft composer");
+
+  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel"]) {
     await fixture(name);
+    if (name === "receipt") await page.getByText("Feeding in the log", { exact: true }).waitFor();
+    if (name === "care-receipt") await page.getByText("Example medicine · in the log", { exact: true }).waitFor();
+    if (name === "care-food") await page.getByText("Meal · in the log", { exact: true }).waitFor();
+    if (name === "care-drink") await page.getByText("Water · in the log", { exact: true }).waitFor();
     await page.evaluate(() => document.documentElement.classList.add("dark", "maple-night"));
     await settle();
     await noOverflow();

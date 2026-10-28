@@ -579,6 +579,11 @@ async function oneOffsNear(s: CareSession, at: Date): Promise<DoseEntry[]> {
 
 /** An entry this session can read (private ones and doses of private plans only for her), else NotFound. */
 export async function readableEntry(s: CareSession, id: number, opts: { includeDeleted?: boolean } = {}): Promise<CareEntry> {
+  return (await readableEntryStatus(s, id, opts)).entry;
+}
+
+/** An authorized entry and its deletion state from the same read, for historical chat cards. */
+export async function readableEntryStatus(s: CareSession, id: number, opts: { includeDeleted?: boolean } = {}): Promise<{ entry: CareEntry; deleted: boolean }> {
   const p = personOf(s);
   const rows = await q(
     `SELECT e.* FROM maple_care_entries e ${PLAN_JOIN}
@@ -586,7 +591,7 @@ export async function readableEntry(s: CareSession, id: number, opts: { includeD
     [id, p.member, s.access.private, s.familyId]
   );
   if (!rows.length) throw new NotFound("Not found");
-  return rowToCareEntry(rows[0]);
+  return { entry: rowToCareEntry(rows[0]), deleted: rows[0].deleted_at != null };
 }
 
 /**
@@ -801,6 +806,16 @@ export async function createCareEntry(
   }
   if (body.kind === "question") {
     const { entry, deduped } = await addCareQuestion(s, { text: typeof body.note === "string" ? body.note : "", private: body.private === true, clientId, source });
+    return { created: !deduped, deduped: deduped || undefined, entry, notes: [] };
+  }
+  if (body.kind === "food" || body.kind === "drink") {
+    const person = needWrite(s);
+    const at = cleanAt(typeof body.at === "string" ? body.at : s.now.toISOString(), s.now);
+    const data = cleanCareData(body.kind, body.data);
+    const { entry, deduped } = await insertEntry(s, person.member, {
+      kind: body.kind, medId: null, at, data, note: cleanCareNote(body.note), priv: false,
+      by: s.viewer.id, source, clientId: cleanClientId(clientId),
+    });
     return { created: !deduped, deduped: deduped || undefined, entry, notes: [] };
   }
   throw new Error("Unknown kind");

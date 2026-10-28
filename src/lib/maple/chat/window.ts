@@ -16,8 +16,11 @@ export const HISTORY_LOAD = 60;
 /** Messages per page of the chat's history on the phone. */
 export const STREAM_PAGE = 40;
 
-/** The same rough count as the turn's own (chars / 3), over everything stored on the message. */
-export const messageTokens = (m: ChatMessage) => Math.ceil(JSON.stringify(m.parts).length / 3);
+/** Count the tool text sent to the model, not UI-only chart/search/settings snapshots. */
+export const messageTokens = (m: ChatMessage) => Math.ceil(JSON.stringify(m.parts.map((p) => {
+  if (!("output" in p) || !p.output || typeof p.output !== "object" || !("text" in p.output) || typeof p.output.text !== "string") return p;
+  return { ...p, output: { text: p.output.text } };
+})).length / 3);
 
 export function modelWindow(messages: ChatMessage[]): ChatMessage[] {
   if (!messages.length) return messages;

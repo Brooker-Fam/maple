@@ -1,8 +1,9 @@
 /**
  * A per-install id for this copy of the app (localStorage 'maple-device'),
- * sent with every app request as X-Maple-Device. It exists only so a
- * notification can go to "the other phone" and skip the phone that did the
- * action. It is never shown to anyone, never names a person and never
+ * sent with every app request as X-Maple-Device. It lets a notification go
+ * to "the other phone" and skip the phone that did the action, and keeps a
+ * chat card for a phone preference attached to that phone. It is never
+ * shown to anyone, never names a person and never
  * decides access. Siri and Claude's writes carry none; the in-app chat
  * passes on the phone's.
  *

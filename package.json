@@ -11,9 +11,11 @@
     "typecheck": "tsc --noEmit",
     "check:maple-feed": "tsx scripts/maple-feed-check.ts",
     "check:maple-care": "tsx scripts/maple-care-check.ts",
+    "check:maple-nutrition": "tsx scripts/maple-nutrition-check.ts",
+    "check:maple-nutrition-ui": "node scripts/nutrition-ui-check/run.mjs",
     "check:maple-native": "tsx scripts/maple-native-check.ts",
-    "check:maple-chat": "tsx scripts/maple-chat-check.ts && tsx scripts/maple-chat-questions-check.ts && tsx scripts/maple-chat-charts-check.ts && tsx scripts/maple-chat-progress-check.ts",
-    "check:maple-chat-ui": "node scripts/chat-ui-check/run.mjs",
+    "check:maple-chat": "tsx scripts/maple-chat-check.ts && tsx scripts/maple-chat-questions-check.ts && tsx scripts/maple-chat-charts-check.ts && tsx scripts/maple-chat-progress-check.ts && tsx scripts/maple-chat-queue-check.ts && tsx scripts/maple-chat-receipts-check.ts && tsx scripts/maple-chat-navigation-check.ts",
+    "check:maple-chat-ui": "node scripts/chat-ui-check/run.mjs && node scripts/chat-settings-ui-check/run.mjs && node scripts/chat-search-ui/run.mjs",
     "check:site": "tsx scripts/site-check.ts",
     "check:email": "tsx scripts/email-check.ts",
     "check:analytics": "tsx scripts/analytics-check.ts && tsx scripts/analytics-client-check.ts && tsx scripts/analytics-flow-check.ts && tsx scripts/analytics-errors-check.ts && tsx scripts/analytics-lifecycle-check.ts && tsx scripts/analytics-monitor-check.ts",
@@ -27,7 +29,10 @@
     "check:maple-time-edit": "tsx scripts/maple-time-edit-check.ts",
     "check:apple-auth": "tsx scripts/apple-auth-check.ts",
     "check:email-auth": "tsx scripts/email-auth-check.ts",
-    "check:signin": "tsx scripts/signin-flow-check.ts"
+    "check:signin": "tsx scripts/signin-flow-check.ts",
+    "check:maple-sync": "node scripts/maple-sync-check/run.mjs",
+    "check:maple-feed-status": "tsx scripts/maple-feed-status-check.ts",
+    "check:maple-diagnostics": "tsx scripts/maple-diagnostics-check.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",
@@ -54,8 +59,10 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/web-push": "3.6.4",
+    "esbuild": "0.25.10",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "playwright": "1.56.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

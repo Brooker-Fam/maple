@@ -20,6 +20,9 @@ pnpm build             # runs migrations, then next build
 pnpm typecheck
 pnpm lint
 pnpm check:maple-feed  # the nursing engine's checks
+pnpm check:maple-feed-status
+pnpm check:maple-sync
+pnpm check:maple-diagnostics
 pnpm check:maple-care  # Brittany's medicines' checks
 pnpm check:maple-chat  # the in-app chat's checks
 pnpm check:site        # the waitlist's checks

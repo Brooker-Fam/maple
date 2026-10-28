@@ -89,37 +89,39 @@ function throws(fn: () => unknown, what: string) {
 const ALEX = { email: "alex@example.com", role: "owner" as const };
 const VI = { email: "vi@example.com", role: "viewer" as const };
 const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions"];
+const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting"];
 
 // ── the adapter ──────────────────────────────────────────────────────────
 
-check("captures every registered tool (29 Maple + 7 of hers)", () => {
+check("captures every registered tool (29 Maple + 10 of hers)", () => {
   const { all, mom } = registrations();
-  eq(all.length, 36, "registrations");
-  eq(new Set(all.map((r) => r.name)).size, 36, "distinct names");
-  eq([...mom].sort(), ["add_mom_medicines", "add_mom_question", "fix_mom_entry", "log_mom_medicine", "log_mom_temperature", "mom_status", "set_mom_medicine"], "her tools");
+  eq(all.length, 39, "registrations");
+  eq(new Set(all.map((r) => r.name)).size, 39, "distinct names");
+  eq([...mom].sort(), ["add_mom_medicines", "add_mom_question", "fix_mom_entry", "log_mom_drink", "log_mom_food", "log_mom_medicine", "log_mom_temperature", "mom_nutrition", "mom_status", "set_mom_medicine"], "her tools");
   for (const r of all) ok(r.description && typeof r.handler === "function" && r.shape && typeof r.ann.readOnlyHint === "boolean", `${r.name} is complete`);
 });
 
-check("a member gets the allowed log tools plus help, questions and charts", () => {
+check("a member gets the allowed log tools and interactive app cards", () => {
   const names = registrations().all.map((r) => r.name);
   const born = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true }));
-  eq(born.length, 36 - EXCLUDED_TOOLS.size - 1 + 3, "count once born");
+  eq(born.length, 39 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
   ok(born.includes("ask_user") && born.includes("show_chart"), "interactive questions and charts");
+  for (const name of CHAT_CARDS) ok(born.includes(name), `${name} card tool`);
   ok(Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).includes("record_birth"), "record_birth before she's born");
   eq([...EXCLUDED_TOOLS].sort(), ["add_mom_medicines", "set_mom_medicine"], "excluded");
 });
 
-check("a viewer gets Maple's reads, help, questions and charts without write tools", () => {
-  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true })).sort(), [...READS, "show_help", "ask_user", "show_chart"].sort(), "viewer set");
-  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).sort(), [...READS, "show_help", "ask_user", "show_chart"].sort(), "viewer set before birth");
+check("a viewer gets reads and app cards; family writes remain server-gated", () => {
+  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true })).sort(), [...READS, ...CHAT_CARDS].sort(), "viewer set");
+  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).sort(), [...READS, ...CHAT_CARDS].sort(), "viewer set before birth");
 });
 
 check("her tools stay out of the chat until she lets it see her medicines (chat_care)", () => {
   const { mom } = registrations();
   const hers = [...mom].filter((n) => !EXCLUDED_TOOLS.has(n)).sort();
-  eq(hers, ["add_mom_question", "fix_mom_entry", "log_mom_medicine", "log_mom_temperature", "mom_status"], "her tools the chat can have");
+  eq(hers, ["add_mom_question", "fix_mom_entry", "log_mom_drink", "log_mom_food", "log_mom_medicine", "log_mom_temperature", "mom_nutrition", "mom_status"], "her tools the chat can have");
   const closed = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: false }));
   eq(closed.filter((n) => mom.has(n)), [], "closed: none of hers");
   ok(closed.includes("maple_status") && closed.includes("log_medicine"), "closed: Maple's tools stay");
@@ -403,7 +405,7 @@ check("GLM gets no Anthropic cache markers; a chat closed to her says so in its 
   ok(glm.every((b) => b.providerOptions === undefined), "no providerOptions on GLM's blocks");
   eq(glm[1].content, CHAT_ADDENDUM, "her page open: the usual addendum");
   eq(systemBlocks({ viewer: false, care: false, model: GLM, copy: FAMILY_ONE_COPY })[1].content, CHAT_ADDENDUM_CARE_CLOSED, "closed: says so");
-  ok(CHAT_ADDENDUM_CARE_CLOSED.startsWith(CHAT_ADDENDUM) && /hasn't let this chat see her medicines/.test(CHAT_ADDENDUM_CARE_CLOSED), "the closed addendum adds to the usual one");
+  ok(CHAT_ADDENDUM_CARE_CLOSED.startsWith(CHAT_ADDENDUM) && /hasn't let this chat see her food, drinks, medicines/.test(CHAT_ADDENDUM_CARE_CLOSED), "the closed addendum adds to the usual one");
   ok(/before logging any medicine other than vitamin D, ask "Maple's or \w+'s\?"/.test(CHAT_ADDENDUM_CARE_CLOSED), "closed: asks whose before any medicine but vitamin D, since her list is out of sight");
   eq(systemBlocks({ viewer: true, care: false, model: GLM, copy: FAMILY_ONE_COPY })[1].content, CHAT_ADDENDUM_VIEWER, "a viewer's stays the viewer's");
 });
@@ -605,6 +607,13 @@ function exchange(n: number): ChatMessage[] {
 }
 const longThread = (exchanges: number) => Array.from({ length: exchanges }, (_, i) => exchange(i + 1)).flat();
 const sizeOf = (ms: ChatMessage[]) => ms.reduce((n, m) => n + messageTokens(m), 0);
+
+check("UI snapshots do not crowd the model's conversation window", () => {
+  const part = { type: "tool-show_chart" as const, toolCallId: "chart_window", state: "output-available" as const, input: { kind: "growth" }, output: { ok: true, write: false, text: "Three recorded measurements." } };
+  const plain: ChatMessage = { id: "msg_window", role: "assistant", parts: [part] };
+  const rich: ChatMessage = { ...plain, parts: [{ ...part, output: { ...part.output, chart: { points: Array.from({ length: 60 }, () => ({ label: "Synthetic historical point".repeat(50) })) } } }] };
+  eq(messageTokens(rich), messageTokens(plain), "the numeric tool summary is the model input");
+});
 
 check("the window: a long chat sends only its recent end, in whole exchanges, the newest always", () => {
   for (const n of [1, 5, 50, 500]) {
@@ -1158,7 +1167,7 @@ async function postChecks() {
     const closed = await sent({ terms: true, care: false, self: false });
     eq([closed.asked, closed.hers, closed.closed], [[false], [], true], "without chat_care: none of hers, and the prompt says so");
     const open = await sent({ terms: true, care: true, self: false });
-    eq([open.asked, open.hers.length, open.closed], [[true], 5, false], "with chat_care: hers are in");
+    eq([open.asked, open.hers.length, open.closed], [[true], 8, false], "with chat_care: hers are in");
     const viewer = await sent({ terms: true, care: true, self: false }, { ...ALEX_MEMBER, email: VI.email, role: "viewer" });
     eq([viewer.asked, viewer.hers], [[false], []], "a viewer: never");
   });

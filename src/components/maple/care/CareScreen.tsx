@@ -10,6 +10,7 @@ import { NotificationsRow, useNotifications } from "../notify";
 import { CARE_COLOR } from "../palette";
 import { Button, EmptyState, SectionTitle, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { useSectionFocus } from "../sectionFocus";
 import CareSettingsSheet from "./CareSettingsSheet";
 import CareTeam from "./CareTeam";
 import { useCareNav } from "./CareNav";
@@ -17,6 +18,7 @@ import { CheckInSection } from "./CheckIn";
 import { CrisisStrip } from "./CrisisSheet";
 import MedPlanSheet from "./MedPlanSheet";
 import MedQuestionsSheet from "./MedQuestionsSheet";
+import NutritionSection from "./NutritionSection";
 import { TemperatureTile } from "./MomTempSheet";
 import OverLimitList from "./OverLimitList";
 import PlanDetail from "./PlanDetail";
@@ -26,21 +28,6 @@ import { VisitSummaryRow } from "./VisitSummary";
 import { Footnote, GROUP, GlanceMark, NavRow, NoteCard, PlanName, TookIt, isOverLimit, useCareCtx, useDoseText } from "./parts";
 import { type UseCare, useCare } from "./useCare";
 
-/**
- * Her tab (§11.2): her page as a place you go back to, not a pop-up. Short
- * and ordered by use: the header (her name, the same day count as Today's
- * hero, and Help), a row of actions (Took a medicine, Temperature, Question
- * for her OB, Notifications), three recent doses with direct time edits,
- * her medicines in a fixed order (the glance, Took it now and Log earlier;
- * the name opens that medicine's detail),
- * then Something else, Add and Finished, one-time medicines, the check-in,
- * temperature, OB questions, one Help group, her care team and settings.
- * Sheets open from here at most one deep.
- *
- * Everyone signed in sees all of it; view-only guests never get the tab
- * (MapleApp hides it when useCare() is null, and sends anyone on it back to
- * Today with a word if access goes).
- */
 export default function CareScreen() {
   const care = useCare();
   if (!care) return null;
@@ -51,6 +38,7 @@ type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "setti
 
 function Page({ care }: { care: UseCare }) {
   const { state, summary } = useMaple();
+  useSectionFocus("care");
   const nav = useCareNav();
   const notify = useNotifications();
   const ctx = useCareCtx(care);
@@ -98,6 +86,8 @@ function Page({ care }: { care: UseCare }) {
         <CrisisStrip />
       </div>
 
+      <NutritionSection key={`${state?.family?.id}:${state?.me.email}:${care.state.person.member}`} care={care} />
+
       <div className={cx("grid gap-2", actions.length === 4 ? "grid-cols-4" : "grid-cols-1")} role="group" aria-label="Quick actions">
         {actions.map((a) => (
           <button
@@ -119,7 +109,7 @@ function Page({ care }: { care: UseCare }) {
 
       <RecentDoses care={care} />
 
-      <section aria-labelledby="her-meds">
+      <section id="mom-medicines" tabIndex={-1} className="scroll-mt-5 outline-none" aria-labelledby="her-meds">
         <SectionTitle
           action={
             write && care.rows.length > 0 ? (

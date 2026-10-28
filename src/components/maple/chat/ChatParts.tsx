@@ -1,13 +1,13 @@
 "use client";
 
 import { getToolName, isToolUIPart } from "ai";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { chatRefusal, emergencySigns, momHelp } from "@/lib/maple/guidelines";
 import { careTime } from "@/lib/maple/care";
 import { formatTime } from "@/lib/maple/time";
 import { chatDisplayText, receiptText } from "@/lib/maple/chat/display";
-import type { ChatAlert, ChatMessage, ChatReceipt, ChatToolOutput, HelpAbout } from "@/lib/maple/chat/types";
+import type { ChatAlert, ChatMessage, ChatToolOutput, HelpAbout } from "@/lib/maple/chat/types";
 import { AlertNote, EMERGENCY_FILL, usePhones } from "../AlertCard";
 import { useCareNav } from "../care/CareNav";
 import { telHref } from "../care/CareTeam";
@@ -15,10 +15,14 @@ import { GROUP, NavRow } from "../care/parts";
 import { HelpLines } from "../care/SupportScreen";
 import { useVoice } from "../familyWords";
 import { Icon, KindBadge } from "../icons";
-import { useSheets } from "../sheets";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { chatToolErrorText } from "@/lib/maple/chat/receipts";
 import ChatChart from "./ChatChart";
+import ChatReceipt, { CareReceipt } from "./ChatReceipt";
+import ChatEntries from "./ChatEntries";
+import ChatSetting, { SettingsSummary } from "./ChatSetting";
+import ChatNavigation from "./ChatNavigation";
 import ChatQuestion, { type AnswerQuestion } from "./ChatQuestion";
 
 /**
@@ -33,7 +37,7 @@ type Part = ChatMessage["parts"][number];
 type ToolPart = Extract<Part, { toolCallId: string }>;
 
 /** `last`: the newest message, the only one whose approval card can still be answered; `busy`: an answer is coming. */
-export function MessageView({ message, last, busy, onApprove, onAnswerQuestion, onAsk }: { message: ChatMessage; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
+export function MessageView({ message, threadId, last, busy, onApprove, onAnswerQuestion, onAsk }: { message: ChatMessage; threadId?: string; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
   if (message.role === "user") {
     const text = message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
     return (
@@ -55,7 +59,7 @@ export function MessageView({ message, last, busy, onApprove, onAnswerQuestion, 
             </div>
           ) : null;
         }
-        if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} last={last} busy={busy} onApprove={onApprove} onAnswerQuestion={onAnswerQuestion} onAsk={onAsk} />;
+        if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} threadId={threadId ?? ""} messageId={message.id} last={last} busy={busy} onApprove={onApprove} onAnswerQuestion={onAnswerQuestion} onAsk={onAsk} />;
         return null;
       })}
       {alerts.map((a) => (
@@ -84,7 +88,7 @@ const Muted = ({ icon, children }: { icon?: "clock-3" | "circle-alert" | "info" 
   </p>
 );
 
-function ToolView({ part, last, busy, onApprove, onAnswerQuestion, onAsk }: { part: ToolPart; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
+function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQuestion, onAsk }: { part: ToolPart; threadId: string; messageId: string; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
   const name = getToolName(part as Parameters<typeof getToolName>[0]);
   if (name === "ask_user") {
     if (part.state === "input-streaming") return null;
@@ -104,108 +108,37 @@ function ToolView({ part, last, busy, onApprove, onAnswerQuestion, onAsk }: { pa
     case "output-denied":
       return <Muted icon="info">Kept. Nothing was deleted.</Muted>;
     case "output-error":
-      return <Muted icon="circle-alert">That step didn&apos;t work, so it changed nothing.</Muted>;
+      return <Muted icon="circle-alert">That step didn&apos;t finish. Check the log before trying again.</Muted>;
     case "output-available":
-      return <OutputView output={part.output as ChatToolOutput} busy={busy} onAsk={onAsk} />;
+      return <OutputView output={part.output as ChatToolOutput} busy={busy} onAsk={onAsk} threadId={threadId} messageId={messageId} toolCallId={part.toolCallId} />;
   }
   return null;
 }
 
-function OutputView({ output, busy, onAsk }: { output: ChatToolOutput | undefined; busy: boolean; onAsk?: (text: string) => void }) {
+function OutputView({ output, busy, onAsk, threadId, messageId, toolCallId }: { output: ChatToolOutput | undefined; busy: boolean; onAsk?: (text: string) => void; threadId: string; messageId: string; toolCallId: string }) {
   if (!output) return null;
   const first = receiptText(output.text.split("\n")[0] ?? "");
-  if (!output.ok) return <Muted icon="circle-alert">{first || "That step didn't finish. Please try again."}</Muted>;
+  if (!output.ok) return <Muted icon="circle-alert">{chatToolErrorText(output.error, output.write)}</Muted>;
+  if (output.setting) return <ChatSetting setting={output.setting} threadId={threadId} messageId={messageId} toolCallId={toolCallId} busy={busy} />;
+  if (output.settings) return <SettingsSummary settings={output.settings} />;
+  if (output.navigation) return <ChatNavigation navigation={output.navigation} />;
+  if (output.entries) return <ChatEntries results={output.entries} disabled={busy} />;
   if (output.chart) return <ChatChart chart={output.chart} onAsk={onAsk} disabled={busy} />;
   if (output.about) return <HelpCard about={output.about} />;
   if (!output.write) return null;
+  if (output.careReceipts?.length) return <div className={GROUP}>{output.careReceipts.map((receipt) => <CareReceipt key={receipt.id} receipt={receipt} />)}</div>;
   if (output.saved?.length) {
     return (
       <div className={cx(GROUP)}>
         {output.saved.map((r) => (
-          <Receipt key={r.id} receipt={r} />
+          <ChatReceipt key={r.id} receipt={r} />
         ))}
       </div>
     );
   }
   if (output.duplicateOf != null) return <Muted icon="info">Not saved yet: it looks like an entry already in the log.</Muted>;
-  if (output.deleted != null) return <Restorable id={output.deleted} line={first} />;
+  if (output.deleted != null) return <div className={GROUP}><ChatReceipt receipt={{ id: output.deleted, line: first, action: "deleted" }} /></div>;
   return <Muted icon="check">{first}</Muted>;
-}
-
-const SAVED_TITLES = {
-  feed: "Feeding saved", pump: "Pumping saved", diaper: "Diaper saved", sleep: "Sleep saved",
-  growth: "Measurements saved", temp: "Temperature saved", vitals: "Reading saved", med: "Medicine saved",
-  tummy: "Tummy time saved", bath: "Bath saved", moment: "Moment saved", note: "Note saved",
-};
-
-function Receipt({ receipt }: { receipt: ChatReceipt }) {
-  const { remove, state, readOnly, online } = useMaple();
-  const { open } = useSheets();
-  const [action, setAction] = useState<"idle" | "pending" | "done" | "failed">("idle");
-  const inflight = useRef(false);
-  const entry = state?.entries.find((e) => e.id === receipt.id);
-  const title = entry ? SAVED_TITLES[entry.kind] : "Saved to the log";
-  const detail = receiptText(receipt.line).replace(/^Saved:\s*/i, "");
-  const undone = action === "done";
-  const pending = action === "pending";
-  const undo = async () => {
-    if (inflight.current || readOnly || !online) return;
-    inflight.current = true;
-    setAction("pending");
-    try {
-      setAction(await remove(receipt.id, { toast: "Undone" }) ? "done" : "failed");
-    } catch {
-      setAction("failed");
-    } finally {
-      inflight.current = false;
-    }
-  };
-  return (
-    <section className="space-y-2 px-3.5 py-3" aria-label="Saved entry" aria-busy={pending}>
-      <div className="flex items-center gap-2">
-        <Icon name={undone ? "x" : "check"} size={17} strokeWidth={2.25} className={cx("shrink-0", undone ? "text-mp-ink-3" : "text-mp-accent-fg")} />
-        <p className={cx(undone ? tone.faint : tone.body, "text-[14px] font-semibold")} role="status">{undone ? "Undone" : pending ? "Undoing…" : title}</p>
-      </div>
-      <p className={cx(undone ? tone.faint : tone.body, "text-[15px] leading-snug wrap-anywhere", undone && "line-through")}>{detail}</p>
-      {action === "failed" && <p role="alert" className="text-[14px] leading-snug text-mp-danger">Couldn&apos;t undo this entry. Try again.</p>}
-      {!undone && !readOnly && (
-        <div className="flex flex-wrap gap-2">
-          {entry && <Button size="sm" variant="soft" disabled={pending || !online} onClick={() => open({ kind: entry.kind, entry })}>Edit</Button>}
-          <Button size="sm" variant="ghost" disabled={pending || !online} onClick={() => void undo()}>{pending ? "Undoing…" : "Undo"}</Button>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function Restorable({ id, line }: { id: number; line: string }) {
-  const { restore, readOnly, online } = useMaple();
-  const [action, setAction] = useState<"idle" | "pending" | "done" | "failed">("idle");
-  const inflight = useRef(false);
-  const back = action === "done";
-  const pending = action === "pending";
-  const bringBack = async () => {
-    if (inflight.current || readOnly || !online) return;
-    inflight.current = true;
-    setAction("pending");
-    try {
-      setAction(await restore(id) ? "done" : "failed");
-    } catch {
-      setAction("failed");
-    } finally {
-      inflight.current = false;
-    }
-  };
-  return (
-    <section className={cx(GROUP, "space-y-2 px-3.5 py-3")} aria-label="Removed entry" aria-busy={pending}>
-      <div className="flex min-h-[44px] items-center gap-2.5">
-        <Icon name={back ? "check" : "trash-2"} size={18} className="shrink-0 text-mp-ink-2" />
-        <p role="status" className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere")}>{back ? "Restored" : pending ? "Restoring…" : line}</p>
-        {!back && !readOnly && <Button size="sm" variant="soft" disabled={pending || !online} onClick={() => void bringBack()}>{pending ? "Restoring…" : "Restore"}</Button>}
-      </div>
-      {action === "failed" && <p role="alert" className="text-[14px] leading-snug text-mp-danger">Couldn&apos;t restore this entry. Try again.</p>}
-    </section>
-  );
 }
 
 /** Delete / Keep before delete_entry or one of her entries is deleted. */
@@ -234,7 +167,10 @@ function ApprovalCard({ name, input, onAnswer }: { name: string; input: unknown;
     const id = typeof raw.id === "string" ? Number(raw.id.replace(/^c/i, "")) : NaN;
     const e = care?.entries.find((x) => x.id === id);
     const her = care?.person.name ?? "Her";
-    const label = !e ? `${her}'s selected entry` : e.kind === "dose" ? `${her}'s ${e.data.name}` : e.kind === "temp" ? `${her}'s temperature` : `${her}'s question for her OB`;
+    const label = !e ? `${her}'s selected entry`
+      : e.kind === "dose" || e.kind === "drink" ? `${her}'s ${e.data.name}`
+      : e.kind === "food" ? `${her}'s ${e.data.description}`
+      : e.kind === "temp" ? `${her}'s temperature` : `${her}'s question for her OB`;
     what = (
       <p className={cx(tone.body, "text-[15px] leading-snug font-medium")}>
         {label}

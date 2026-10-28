@@ -1,6 +1,7 @@
 "use client";
 
 import { voiceFor } from "@/lib/maple/voice";
+import { clearStoredChatQueues } from "./chat/queue";
 import {
   createContext,
   useCallback,
@@ -28,9 +29,9 @@ import {
 } from "@/lib/maple/feed";
 import { memberLabel as labelOf, summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
-import { deviceHeaders } from "@/lib/maple/device";
+import { ApiError, createMapleRequests } from "@/lib/maple/client-request";
 import { keepConfirmed, stampOutbox } from "@/lib/maple/client-state";
-import { FAMILY_MOVED_EVENT, setShownFamily, shownFamilyHeaders } from "./shownFamily";
+import { FAMILY_MOVED_EVENT, setShownFamily } from "./shownFamily";
 import type {
   CareEntry,
   CareEntryInput,
@@ -285,11 +286,7 @@ const POLL_MS = 10_000;
 /** Back after this long → refresh "While you slept" from the server. */
 const AWAY_MS = 3 * 3600_000;
 
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly body: unknown) {
-    super(message);
-  }
-}
+export { ApiError } from "@/lib/maple/client-request";
 
 /**
  * An edit or delete of an entry someone discarded meanwhile (PATCH / DELETE
@@ -316,29 +313,6 @@ const isFamilyMismatch = (e: unknown) => e instanceof ApiError && e.status === 4
 
 /** Network down or server hiccup (or a write waiting for its own family): worth keeping and retrying, unlike a 4xx. */
 const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status >= 500 || e.status === 408 || e.status === 429 || isFamilyMismatch(e);
-
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const write = (init?.method ?? "GET").toUpperCase() !== "GET";
-  const res = await fetch(path.startsWith("/") ? path : `/api/maple/${path}`, {
-    ...init,
-    // This install's id (src/lib/maple/device.ts): lets a notification skip the phone that did the action.
-    headers: { "Content-Type": "application/json", ...deviceHeaders(), ...(write ? shownFamilyHeaders() : {}), ...(init?.headers ?? {}) },
-    cache: "no-store",
-  });
-  let body: unknown = null;
-  try {
-    body = await res.json();
-  } catch {
-    // non-JSON (e.g. 502 page)
-  }
-  if (!res.ok) {
-    const msg = (body as { error?: string } | null)?.error ?? `Request failed (${res.status})`;
-    const error = new ApiError(msg, res.status, body);
-    if (isFamilyMismatch(error)) window.dispatchEvent(new Event(FAMILY_MOVED_EVENT));
-    throw error;
-  }
-  return body as T;
-}
 
 /**
  * One write waiting for a connection. `target` says where it goes: Maple's
@@ -497,6 +471,8 @@ function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date, by?: 
 }
 
 export function MapleProvider({ children }: { children: ReactNode }) {
+  const [requests] = useState(createMapleRequests);
+  const fetchJson = requests.request;
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState<string | null>(null);
   const [auth, setAuth] = useState<AuthInfo | null>(null);
@@ -639,7 +615,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     } catch {
       setAuth({ signedIn: false, google: false, apple: false, email: false, password: false });
     }
-  }, []);
+  }, [fetchJson]);
 
   /** Server entries plus anything still waiting in the outbox (care items as pending care entries). */
   const withPending = useCallback((s: MapleState, all: OutboxItem[]): MapleState => {
@@ -672,41 +648,53 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   outboxRef.current = outbox;
 
   const refresh = useCallback(async () => {
-    // Skip polls while a mutation is in flight so we don't flash stale data.
     if (inflight.current > 0) return;
-    const sentAt = Date.now();
+    const read = requests.beginRefresh();
+    if (!read) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const qs = revRef.current ? `?rev=${encodeURIComponent(revRef.current)}` : "";
-      const res = await fetchJson<MapleState | MapleStateUnchanged>(`/api/maple/state${qs}`);
+      const res = await fetchJson<MapleState | MapleStateUnchanged>(`/api/maple/state${qs}`, {
+        signal: controller.signal,
+        headers: read.requestId ? { "x-maple-request-id": read.requestId } : undefined,
+      });
+      const accepted = requests.acceptRefresh(read) && inflight.current === 0;
+      if (!("unchanged" in res)) {
+        const previous = stateRef.current;
+        const sameOwner = previous && previous.me.email === res.me.email && (previous.family?.id ?? 1) === (res.family?.id ?? 1);
+        const away = Date.now() - lastPollRef.current >= AWAY_MS;
+        if ((accepted || sameOwner) && (!seenRef.current || away)) {
+          seenRef.current = true;
+          setSeenAt(res.seen_at);
+          lastPollRef.current = Date.now();
+        }
+      }
+      if (!accepted) return;
       syncClock(res.now);
       setOnline(true);
+      setError(null);
+      setStatus("ready");
       if ("unchanged" in res) {
         lastPollRef.current = Date.now();
+        requests.refreshed(read);
         return;
       }
-      // "While you slept": the previous visit as of the first poll, and again
-      // whenever the app comes back after a long time in the background. Read
-      // it before the in-flight check below: the server has already marked
-      // this visit, so a dropped response would lose the old value for good.
-      const away = Date.now() - lastPollRef.current >= AWAY_MS;
-      if (!seenRef.current || away) {
-        seenRef.current = true;
-        setSeenAt(res.seen_at);
-      }
       lastPollRef.current = Date.now();
-      if (inflight.current > 0) return;
       revRef.current = res.rev;
       tzRef.current = res.baby.timezone;
       setShownFamily(res.family?.id ?? null);
-      setState((prev) => keepConfirmed(withPending(res, outboxRef.current), prev, confirmedRef.current, sentAt));
-      setStatus("ready");
-      setError(null);
+      setState((prev) => keepConfirmed(withPending(res, outboxRef.current), prev, confirmedRef.current, read.sentAt));
+      requests.refreshed(read);
     } catch (e) {
+      if (!requests.acceptRefresh(read) || inflight.current > 0) return;
+      requests.refreshFailed(read, e);
       if (e instanceof ApiError && e.status === 401) {
         revRef.current = null;
         setShownFamily(null);
         setState(null);
         setStatus("signedOut");
+        clearStoredChatQueues();
         // Signed out: her doses and check-ins waiting on this phone go, so nothing about her stays behind.
         if (outboxRef.current.some((i) => i.target === "care" || i.target === "mood")) {
           const kept = outboxRef.current.filter((i) => i.target !== "care" && i.target !== "mood");
@@ -717,11 +705,13 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void loadAuth();
         return;
       }
-      if (!(e instanceof ApiError)) setOnline(false);
-      setError(e instanceof Error ? e.message : "Couldn't reach Maple's log");
+      if (!(e instanceof ApiError) && !controller.signal.aborted) setOnline(false);
+      setError(controller.signal.aborted ? "Refresh took too long. Try again." : e instanceof Error ? e.message : "Couldn't reach Maple's log");
       setStatus((s) => (s === "loading" ? "error" : s));
+    } finally {
+      clearTimeout(timeout);
     }
-  }, [loadAuth, syncClock, withPending]);
+  }, [fetchJson, loadAuth, requests, syncClock, withPending]);
 
   const forceRefresh = useCallback(async () => {
     revRef.current = null;
@@ -775,7 +765,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         ],
       });
     },
-    [toast]
+    [fetchJson, toast]
   );
 
   /**
@@ -850,7 +840,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     } finally {
       flushing.current = false;
     }
-  }, [careDuplicateToast, forceRefresh, setQueue, toast]);
+  }, [careDuplicateToast, fetchJson, forceRefresh, setQueue, toast]);
 
   useEffect(() => {
     void refresh();
@@ -983,7 +973,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void forceRefresh();
       }
     },
-    [forceRefresh, toast, upsert, withInflight]
+    [fetchJson, forceRefresh, toast, upsert, withInflight]
   );
 
   const remove = useCallback<MapleContextValue["remove"]>(
@@ -1021,7 +1011,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void forceRefresh();
       }
     },
-    [dropEntry, forceRefresh, labelFor, optimistic, restore, setQueue, toast, withInflight]
+    [dropEntry, fetchJson, forceRefresh, labelFor, optimistic, restore, setQueue, toast, withInflight]
   );
 
   const log = useCallback<MapleContextValue["log"]>(
@@ -1074,7 +1064,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void forceRefresh();
       }
     },
-    [dropEntry, forceRefresh, now, remove, setQueue, state, toast, upsert, withInflight]
+    [dropEntry, fetchJson, forceRefresh, now, remove, setQueue, state, toast, upsert, withInflight]
   );
 
   const update = useCallback<MapleContextValue["update"]>(
@@ -1127,7 +1117,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void forceRefresh();
       }
     },
-    [dropEntry, forceRefresh, labelFor, setQueue, toast, upsert, withInflight]
+    [dropEntry, fetchJson, forceRefresh, labelFor, setQueue, toast, upsert, withInflight]
   );
 
   const memberName = useCallback((id: string | null | undefined) => nameOf(id, state?.members ?? []), [state]);
@@ -1309,7 +1299,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void forceRefresh();
       }
     },
-    [confirm, dropEntry, forceRefresh, memberLabel, now, optimistic, state, toast, upsert]
+    [confirm, dropEntry, fetchJson, forceRefresh, memberLabel, now, optimistic, state, toast, upsert]
   );
 
   const timerBusy = useCallback((id: number) => busy.has(id), [busy]);
@@ -1327,7 +1317,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     if (stale.length) setToasts((ts) => ts.filter((t) => !stale.includes(t)));
   }, [state, toasts]);
 
-  const api = useCallback(<T,>(path: string, init?: RequestInit) => fetchJson<T>(path, init), []);
+  const api = useCallback(<T,>(path: string, init?: RequestInit) => fetchJson<T>(path, init), [fetchJson]);
 
   const member = useCallback(
     (id: string | null | undefined) => (id && state ? state.members.find((m) => m.email === id) ?? null : null),
@@ -1349,7 +1339,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     } catch {
       return undefined;
     }
-  }, []);
+  }, [fetchJson]);
 
   const care = useMemo<MapleContextValue["care"]>(
     () => ({

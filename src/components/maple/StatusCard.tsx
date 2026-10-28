@@ -137,6 +137,9 @@ export default function StatusCard() {
   const last = fed?.entry ?? summary.lastFeed;
   // "Last fed … ago" counts from fed.at: the feed's start, or 40 minutes before a long back-and-forth one ended.
   const fedAt = fed?.at ?? last?.started_at ?? null;
+  const feedLabel = fed?.rule === "start" ? "Last feed started" : "Last fed";
+  const finished = fed?.end ? `Finished ${formatRelative(fed.end, now)}` : null;
+  const grouped = (fed?.run?.entries.length ?? 0) > 1;
   // Gaps inside a cluster are skipped, so an evening of clustering doesn't read "usually every ~45m".
   const gap = typicalFeedGapMin(state.entries, now);
   const cluster = fed?.kind === "breast" && fed.run?.cluster != null ? summary.cluster : null;
@@ -195,21 +198,21 @@ export default function StatusCard() {
     <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
       {/* Feeding: the most-asked question at 3am, and which side is next. */}
       {!nursing && (
-        <div className={cx("relative p-4", fold && "[@media(max-height:719px)]:py-2.5")}>
+        <div className={cx("relative p-4", fold && "[@media(max-height:719px)]:py-1")}>
           {last && (
             // The whole block opens that feed, so a wrong Done is fixed right where its wrong number shows. It lies
             // over the text; the next side and the info button sit above it.
             <button
               type="button"
               onClick={() => open({ kind: "feed", entry: last })}
-              aria-label={`Last fed ${formatRelative(fedAt ?? last.started_at, now)}, started ${formatTime(fed?.start ?? last.started_at, tz)}. ${readOnly ? "Open that feed." : "Open that feed to fix it."}`}
+              aria-label={`${feedLabel} ${formatRelative(fedAt ?? last.started_at, now)}, started ${formatTime(fed?.start ?? last.started_at, tz)}.${finished ? ` ${finished}.` : ""} ${readOnly ? "Open that feed." : "Open that feed to fix it."}`}
               className="absolute inset-0 transition active:bg-mp-ink/[0.04]"
             />
           )}
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
               <p className={cx(tone.label, "flex items-center gap-0.5")}>
-                Last fed
+                {feedLabel}
                 {last && <Icon name="chevron-right" size={14} className="text-mp-ink-3" />}
               </p>
               {last ? (
@@ -219,6 +222,7 @@ export default function StatusCard() {
               ) : (
                 <p className="mt-0.5 text-[17px] text-mp-ink-2">No feeds logged yet</p>
               )}
+              {finished && <p className="mt-0.5 text-[13px] leading-snug text-mp-ink-2">{finished}</p>}
             </div>
             {next && <NextSide next={next} />}
           </div>
@@ -253,6 +257,7 @@ export default function StatusCard() {
               </span>
             </p>
           )}
+          {grouped && <p className={cx("mt-1 text-[12px] leading-4 text-mp-ink-2", fold && "[@media(max-height:719px)]:mt-0")}>Short breaks under 10m count as one feed.</p>}
           <AnimatePresence>
             {info && (
               <motion.p

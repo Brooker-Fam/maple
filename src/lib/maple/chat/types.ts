@@ -1,6 +1,10 @@
 import type { UIMessage } from "ai";
 import type { AlertTier } from "../guidelines";
 import type { ChatChartSnapshot } from "./charts";
+import type { ChatNavigationCard } from "./navigation";
+import type { ChatCareReceipt, ChatToolError } from "./receipts";
+import type { ChatEntryResults } from "./search";
+import type { SettingProposal, SettingsSnapshot } from "./settings";
 
 /**
  * What the in-app chat's server and the Chat tab share. No server imports: the
@@ -38,6 +42,8 @@ export type ChatToolOutput = {
   /** Her alerts are about her OB, not the pediatrician. */
   mom?: boolean;
   saved?: ChatReceipt[];
+  careReceipts?: ChatCareReceipt[];
+  error?: ChatToolError;
   duplicateOf?: number;
   /** delete_entry's entry, which Restore brings back. */
   deleted?: number;
@@ -45,11 +51,17 @@ export type ChatToolOutput = {
   about?: HelpAbout;
   /** A dated snapshot from the log, rendered by the app's chart components. */
   chart?: ChatChartSnapshot;
+  entries?: ChatEntryResults;
+  navigation?: ChatNavigationCard;
+  setting?: SettingProposal;
+  settings?: SettingsSnapshot;
 };
 
 export type HelpAbout = "maple" | "mom" | "anyone";
 
 export type ChatData = {
+  /** Stable receipt for a message submitted on this phone; never displayed as an entry number. */
+  delivery: { requestId: string; submittedAt: string };
   /** The app's own lines on each user message, for the model only: `line` (time, her age, who's signed in), then `state` (the log as it stood). */
   context: { line: string; state?: string[] };
   /** The help card, added by the server: after a crisis mention, or when the model declined to answer. */
@@ -62,7 +74,7 @@ export type ChatMessage = UIMessage<unknown, ChatData>;
 export type ChatThread = { id: string; title: string | null; updated_at: string; busy?: boolean };
 
 /** A refused POST: `code` says what the Chat tab should do about it; `help` that the message mentioned a crisis, so the help card shows anyway. */
-export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off" | "terms"; help?: "crisis" };
+export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off" | "terms" | "received" | "cancelled"; help?: "crisis"; requestId?: string; threadId?: string };
 
 export const CHAT_TERMS_NEEDED = "Accept the chat's terms first. Logging works as usual.";
 

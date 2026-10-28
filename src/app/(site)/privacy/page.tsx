@@ -78,15 +78,15 @@ export default function Privacy() {
       <p>
         Your baby&rsquo;s name, due date and birth details, and everything you add: feeds, pumping, diapers and stool colors,
         sleep, temperatures and other readings, growth, medicines, notes, questions for the doctor, milestones and photos. Each
-        entry records who added it and, when it came from the app, a random id for that phone, used only so a notification can
-        skip the phone that did it.
+        entry records who added it and, when it came from the app, a random id for that phone, so a notification can skip the
+        phone that did it. Chat also uses that id to keep a phone-preference card attached to the phone where it was requested.
       </p>
       <p>
-        Mom&rsquo;s page keeps her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
+        Mom&rsquo;s page keeps her food and drinks, any amounts she records, her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
         her daily check-ins, including the optional PHQ-9 and GAD-7 questionnaires.
       </p>
       <p>
-        Deleting an entry from the baby&rsquo;s log, or one of mom&rsquo;s medicines, doses, temperatures or questions, hides it so
+        Deleting an entry from the baby&rsquo;s log, or one of mom&rsquo;s food, drink, medicine, dose, temperature or question entries, hides it so
         you can restore it; it stays in the database until your family&rsquo;s log is deleted. Deleting one of her check-ins
         removes it for good at once, and so does deleting everything on her page.
       </p>
@@ -98,13 +98,29 @@ export default function Privacy() {
       </p>
       <p>
         Answers you choose or type into a question card are part of that conversation. Charts in the chat keep a dated snapshot
-        of the log values they showed, so an earlier answer stays understandable when the log changes. These answers and chart
-        snapshots are removed with your chat history.
+        of the log values they showed, so an earlier answer stays understandable when the log changes. Search results and settings
+        cards keep the values they showed, proposed changes and the outcome of your taps. These are removed with your chat history.
+      </p>
+      <p>
+        Your draft and up to ten queued messages stay in this browser, separately for each signed-in account and family, so a
+        reload does not lose them. They are cleared when you sign out or delete chat history. Queued messages are sent only
+        when the chat can continue; after a reload you choose whether to resume. Their original submission time stays with them.
+      </p>
+      <p>
+        To prevent duplicate logging after a lost connection, Maple keeps delivery receipts with random request references,
+        times and a keyed fingerprint, without the message text. These receipts can remain after chat history is deleted.
+        Receipts more than eight days old are cleared as chat is used.
       </p>
       <h3>The waitlist</h3>
       <p>
         If you join the waitlist, Maple keeps your email address and the date you joined. It is used only to tell you when Maple
         opens to more families.
+      </p>
+      <p>
+        Maple&rsquo;s operator can preview and send an invitation to get started. Resend receives your address and the invitation,
+        just as it does for other Maple emails. Maple keeps a sending status, timestamps and the provider&rsquo;s message identifier
+        to avoid sending the same invitation twice. These records are removed when your waitlist entry is removed.
+        Reply to the invitation or email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> to leave the waitlist.
       </p>
       <h3>Feedback and support</h3>
       <p>
@@ -123,6 +139,18 @@ export default function Privacy() {
           the IP address nor the sender&rsquo;s email address, and counts more than a day old are cleared out.
         </li>
         <li>For each phone that turns on notifications, the address its browser gave Maple for sending them.</li>
+        <li>
+          Limited diagnostics show whether a save reached the server and the screen refreshed, or whether a request failed
+          or an old response was discarded. They contain only a fixed event name, random ids connecting a save with its
+          refresh, a request status and a bounded request duration. They contain no names, email addresses, family ids,
+          entry types, log contents, log times, error messages or page addresses. The ids change for each operation and
+          are not saved on your phone or used as persistent device identifiers. These diagnostics go to Vercel&rsquo;s
+          operational logs, not analytics.
+        </li>
+        <li>
+          Diagnostic submissions are limited with a keyed hash of the signed-in member&rsquo;s id. These counters contain
+          no names or email addresses and are cleared after a day, like the other rate limits.
+        </li>
         <li>
           A hashed copy of each personal key behind a Siri shortcut, so each entry from a shortcut records who logged it. Claude and ChatGPT
           connections use signed keys that Maple doesn&rsquo;t store.
@@ -152,7 +180,7 @@ export default function Privacy() {
           you use Hide My Email. Your family&rsquo;s log is not sent to either provider to sign you in.
         </li>
         <li>
-          <strong>Resend</strong> sends sign-in codes, invites and welcome emails. It receives the recipient&rsquo;s address and the message,
+          <strong>Resend</strong> sends sign-in codes, invites, waitlist invitations and welcome emails. It receives the recipient&rsquo;s address and the message,
           and keeps email and delivery records under its <a href="https://resend.com/security">retention policy</a>.
           Email open and click tracking are off.
         </li>
@@ -166,14 +194,17 @@ export default function Privacy() {
       </ul>
       <p>
         If error reporting is turned on, an error is sent to PostHog as the kind of error and where in Maple&rsquo;s code it
-        happened. The contents of your log and your messages aren&rsquo;t sent.
+        happened. A failed save or refresh may also include its response status and random operation id, so a failure can be
+        connected to its diagnostic record. The contents of your log and your messages aren&rsquo;t sent.
       </p>
 
       <h2>Usage counts</h2>
       <p>
         Maple&rsquo;s operator has a private metrics page showing totals for signups, member accounts, completed setup,
-        recent activity, saved entries and the waitlist. These totals come from existing database records. The page does
-        not show names, email addresses, individual logs or chat messages, and does not send its metrics to PostHog.
+        recent activity, saved entries and the waitlist. These totals come from existing database records. The operator can
+        open account and waitlist lists, where email addresses are masked until they choose to reveal one. These views show
+        account dates, family membership and setup status, but do not show names, individual logs or chat messages.
+        The admin page does not send its metrics or revealed addresses to PostHog.
       </p>
       <p>
         Maple uses PostHog to understand how people find the app, whether they finish setup, and whether they come back.
@@ -219,9 +250,9 @@ export default function Privacy() {
       <h2>The AI features</h2>
       <h3>Maple&rsquo;s chat</h3>
       <p>
-        When you use the chat, your message, answers to question cards, the recent conversation, and whatever it looks up in your log to answer are sent to
+        When you use the chat, your message, answers to question cards, the recent conversation, and the log or supported family settings it reads to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
-        see her page can use the chat with her medicines and doses, temperatures and questions for her OB. Her check-ins never
+        see her page can use the chat with her food, drinks and recorded amounts, medicines and doses, temperatures and questions for her OB. Her check-ins never
         reach the chat. Every request asks the
         Gateway for zero data retention and no training on your data, and names the only providers it may be sent to, each one
         the Gateway lists as keeping no data. Nothing about your messages goes into Maple&rsquo;s logs or error reports.

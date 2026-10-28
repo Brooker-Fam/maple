@@ -10,6 +10,10 @@ import type { ChatAlert, ChatReceipt, ChatToolOutput, HelpAbout } from "./types"
 import type { ChatQuestionInput, ChatQuestionOutput } from "./types";
 import { questionOutputSchema, questionSchema } from "./questions";
 import { showChartTool } from "./chart-tools";
+import { openScreenTool } from "./navigation-tools";
+import { careReceiptOutput } from "./receipts";
+import { searchEntriesTool } from "./search-tools";
+import { settingsTools } from "./settings-tools";
 
 /**
  * The MCP tools as an AI SDK ToolSet for the in-app chat. The registrations
@@ -92,6 +96,8 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
     ok: !res.isError,
     text,
     write: opts.write,
+    ...(res.isError ? { error: { kind: "unknown" as const } } : {}),
+    ...(opts.mom ? careReceiptOutput(res) : {}),
     ...(alerts.length ? { alerts, ...(opts.mom ? { mom: true } : {}) } : {}),
     ...(saved.length ? { saved } : {}),
     ...(typeof dup === "number" ? { duplicateOf: dup } : {}),
@@ -108,12 +114,12 @@ const HELP_TEXT = "The help card is showing under your reply.";
  * other phones only. `care` also rides on every call, so Maple's tools leave
  * her out of their results until she has turned it on.
  */
-function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boolean; device?: string | null }): Extra {
+function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boolean; device?: string | null; submittedAt?: Date }): Extra {
   const sub = member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`;
   return {
     signal: new AbortController().signal,
     requestId: "maple-chat",
-    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care } },
+    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care, ...(opts.submittedAt ? { requestAt: opts.submittedAt.toISOString() } : {}) } },
     sendNotification: async () => {},
     sendRequest: async () => {
       throw new Error("unsupported");
@@ -127,10 +133,11 @@ export async function chatLogState(member: Pick<Member, "email">, opts: { fam: n
   return logState({ ...ctx, now: opts.now });
 }
 
-export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null }): ToolSet {
+export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date }): ToolSet {
   const { all, mom } = registrations(opts.copy);
   const vo = opts.copy.v;
-  const extra = chatExtra(member, opts);
+  const extra = chatExtra(member, { ...opts, submittedAt: undefined });
+  const writeExtra = chatExtra(member, opts);
 
   const viewer = member.role === "viewer";
   const set: ToolSet = {};
@@ -147,9 +154,9 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: n
         const parsed = parser.safeParse(raw ?? {});
         if (!parsed.success) {
           const why = parsed.error.issues.map((i) => `${i.path.join(".") || "input"}: ${i.message}`).join("; ");
-          return { ok: false, write, text: `Those arguments don't fit ${r.name} (${why}). Nothing was saved; fix that and try again.` };
+          return { ok: false, write, error: { kind: "validation" }, text: `Those arguments don't fit ${r.name} (${why}). Nothing was saved; fix that and try again.` };
         }
-        return toOutput(await r.handler(parsed.data, extra), { write, mom: isMom });
+        return toOutput(await r.handler(parsed.data, write ? writeExtra : extra), { write, mom: isMom });
       },
       toModelOutput: ({ output }: { output: ChatToolOutput }) =>
         output.ok ? { type: "text", value: forModel(output.text) } : { type: "error-text", value: forModel(output.text) },
@@ -175,6 +182,9 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: n
   });
   const summary = all.find((r) => r.name === "daily_summary");
   if (summary) set.show_chart = showChartTool(extra, () => summary.handler({ days: 14 }, extra));
+  set.search_entries = searchEntriesTool(extra);
+  set.open_screen = openScreenTool({ viewer });
+  Object.assign(set, settingsTools(extra));
   return set;
 }
 

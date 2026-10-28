@@ -97,7 +97,7 @@ async function authorization(shape: Shape) {
   const { alpha, beta } = await seedFamilies();
   await sql(`INSERT INTO maple_members (family_id, email, role, accepted_at) VALUES (1, 'admin', 'owner', NOW())`);
   // If an unauthorized request reaches the aggregate read it would now fail.
-  await sql(`DROP TABLE maple_waitlist`);
+  await sql(`DROP TABLE maple_waitlist CASCADE`);
   await test(`${shape}: no session, a tampered cookie and a foreign family do not authorize`, async () => {
     eq((await GET(request())).status, 401);
     eq((await GET(request(undefined, 1, { cookie: `${SESSION_COOKIE}=tampered` }))).status, 401);

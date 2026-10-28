@@ -312,7 +312,6 @@ async function finalShape() {
   });
 }
 
-/** Statements migrate.ts may never run (docs/multi-family-plan.md, finding 7). */
 const FORBIDDEN = [
   /\bDROP\s+(TABLE|COLUMN|CONSTRAINT|DEFAULT|SCHEMA)\b/i,
   /\bRENAME\b/i,
@@ -325,11 +324,12 @@ const FORBIDDEN = [
 const ALLOWED_DROPS = [/DROP INDEX IF EXISTS idx_maple_entries_active/, /DROP INDEX (?:CONCURRENTLY )?IF EXISTS \$\{name\}/];
 
 async function staticGuard() {
-  await test("migrate.ts stays additive: no drop, rename, retype, tightening, delete or key swap", () => {
+  await test("migrate.ts forbids destructive changes and allows the care-kind expansion", () => {
     const src = readFileSync(join(ROOT, "src", "lib", "migrate.ts"), "utf8");
     const code = src.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+    const guarded = code.replace("ALTER TABLE maple_care_entries DROP CONSTRAINT IF EXISTS maple_care_entries_kind_check", "");
     for (const re of FORBIDDEN) {
-      const hit = re.exec(code);
+      const hit = re.exec(guarded);
       ok(!hit, `migrate.ts has ${hit?.[0]}`);
     }
     const drops = code.match(/DROP INDEX[^`;]*/g) ?? [];

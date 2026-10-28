@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ChatTab from "../../src/components/maple/chat/ChatTab";
 import { ApiError, FixtureContext } from "./mocks";
@@ -13,6 +13,7 @@ const api = async (url, init) => {
   return body;
 };
 function App() {
+  const [online, setOnline] = useState(true);
   const value = useRef({
     maple: {
       state: { baby: { id: 99, name: "River Example", nickname: "River", sex: "female", timezone: "America/New_York", settings: {} }, family: { id: 99, care_name: "Sam", ask: "an owner" }, entries: [], me: { email: "alex@example.test", role: "owner" }, members: [], care: null },
@@ -24,7 +25,8 @@ function App() {
     sheets: { open: () => {}, close: () => {}, current: null },
     appNav: { go: () => {} },
   }).current;
-  useEffect(() => { window.__chatLiveFixture = true; }, []);
+  value.maple.online = online;
+  useEffect(() => { window.__chatLiveFixture = { setOnline }; }, []);
   return <FixtureContext.Provider value={value}><ChatTab active /></FixtureContext.Provider>;
 }
 

@@ -15,7 +15,7 @@ import { useChatNav } from "./ChatNav";
  * letting the chat see her page, and the line everyone else reads while it's off.
  */
 
-const CARE_SWITCH = "Let the chat see my medicines, temperatures and questions for my OB";
+const CARE_SWITCH = "Let the chat see my food, drinks, medicines, temperatures and OB questions";
 
 export function TermsCard({ consent, onAccepted }: { consent: ChatConsent; onAccepted: () => void }) {
   const { saveConsent } = useChatNav();
@@ -60,7 +60,7 @@ export function CareNote({ consent }: { consent: ChatConsent | null }) {
   if (!care || !consent || consent.care) return null;
   return (
     <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-      {consent.self ? "The chat can't see your medicines, temperatures or questions for your OB. You can turn that on in Family." : `${care.name}'s medicines, temperatures and OB questions aren't available to the chat.`}
+      {consent.self ? "The chat can't see your food, drinks, medicines, temperatures or OB questions. You can turn that on in Family." : `${care.name}'s food, drinks, medicines, temperatures and OB questions aren't available to the chat.`}
     </p>
   );
 }

@@ -4,6 +4,7 @@
  * newborn, a 140°F fever) out of the log.
  */
 import { z } from "zod";
+import { cleanCareNutritionData } from "./care-nutrition-validation";
 import { ACETAMINOPHEN_NAMES, EARLY_GRACE_CHOICES, MOOD_TAGS, type MoodTag } from "./guidelines";
 import {
   DIAPER_SIZES,
@@ -362,6 +363,7 @@ export function cleanUnits(v: unknown, unit: LimitUnit | null): number | null {
 
 /** Validate a care entry's data (kind by kind). Unknown keys are dropped. */
 export function cleanCareData<K extends CareKind>(kind: K, data: unknown, opts: { unit?: LimitUnit | null } = {}): CareDataByKind[K] {
+  if (kind === "food" || kind === "drink") return cleanCareNutritionData(kind, data) as CareDataByKind[K];
   const d = (data ?? {}) as Record<string, unknown>;
   if (kind === "dose") {
     const name = text(d.name, 80, "Name");
@@ -388,7 +390,7 @@ export function cleanCareData<K extends CareKind>(kind: K, data: unknown, opts: 
 }
 
 export function isCareKind(k: unknown): k is CareKind {
-  return k === "dose" || k === "temp" || k === "question";
+  return k === "dose" || k === "temp" || k === "question" || k === "food" || k === "drink";
 }
 
 /** Trimmed text cut to 2000 characters, like a note in Maple's log. */

@@ -70,6 +70,7 @@ import { NotFound, StoreUnavailable } from "./store";
 import { addDays, dayKey } from "./time";
 import type { CareEntry, CarePlan, DoseEntry, MedReason, PlanInput, Source } from "./types";
 import { cToF, fToC } from "./units";
+import { nutritionEntryText, registerNutritionTools } from "./care-nutrition-mcp";
 
 /**
  * Her mom's own medicines, temperature and questions as MCP tools (§10 of
@@ -172,7 +173,8 @@ class CareAccessError extends Error {}
 /** No page at all where she hasn't opened it to this caller (ctx.care): every read and write here then finds nothing. */
 async function careFor(ctx: Ctx): Promise<CareSession> {
   const viewer: CareViewer = { id: ctx.who.id, role: ctx.who.role, viaAdmin: ctx.who.viaAdmin, channel: "mcp" };
-  return careSession(viewer, { familyId: ctx.fam.familyId, members: ctx.members, baby: ctx.baby, ...(ctx.care ? {} : { person: null }) });
+  const session = await careSession(viewer, { familyId: ctx.fam.familyId, members: ctx.members, baby: ctx.baby, ...(ctx.care ? {} : { person: null }) });
+  return { ...session, now: ctx.now };
 }
 
 /** The one access error: a view-only guest. Everyone else can do everything here. */
@@ -248,6 +250,8 @@ function addCareTool<S extends ZodRawShapeCompat>(
     handler as unknown as ToolCallback<S>
   );
 }
+
+export type CareToolRegistrar = typeof addCareTool;
 
 // ── how her things read ─────────────────────────────────────────────────
 
@@ -862,6 +866,7 @@ const FROM_PAPER =
   "Use only what the user read from her label, discharge papers or clinician, or what's printed on a photo of her label or discharge papers that the user shared. From a photo: copy each value exactly as printed, leave out anything that isn't printed, read every medicine and number back to the user, and save only after they say yes. Never invent, guess, fill in or suggest a dose, interval, limit or count that isn't on the paper or in what the user said, and never use a typical one.";
 
 export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE_COPY) {
+  registerNutritionTools(server, copy, addCareTool, clientIdFor);
   const vo = copy.v;
   const MOM = vo.mom;
   const inputs = inputsFor(copy.tz);
@@ -1217,7 +1222,7 @@ export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE
     {
       title: `Fix one of ${MOM}'s entries`,
       description:
-        `Change, delete or restore one of ${MOM}'s entries by its c… id: a dose, temperature or question. Plans are changed with set_mom_medicine.`,
+        `Change, delete or restore one of ${MOM}'s entries by its c… id: a dose, temperature, question, food or drink. Read mom_nutrition for food/drink ids. Plans are changed with set_mom_medicine.`,
       inputSchema: {
         id: z.string().max(20).describe("The entry's c id, from mom_status or the result that saved it."),
         action: z.enum(["update", "delete", "restore"]).describe("update, delete, or restore (brings a deleted one back)."),
@@ -1229,6 +1234,10 @@ export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE
         note: z.string().max(1000).nullish().describe("update: the note (for a question, the question itself)."),
         done: z.boolean().nullish().describe("update, a question: true once it's been asked."),
         answer: z.string().max(1000).nullish().describe("update, a question: what her OB said, in the family's words."),
+        food_description: z.string().trim().min(1).max(500).optional().describe("update, food: what she ate, in her words."),
+        meal: z.enum(["meal", "snack"]).optional().describe("update, food: meal or snack."),
+        drink_name: z.string().trim().min(1).max(100).optional().describe("update, a drink: what she drank."),
+        amount_ml: z.number().positive().max(5000).nullable().optional().describe("update, a drink: stated volume in mL; null clears an unknown amount."),
       },
       annotations: { ...WRITE_ANN, destructiveHint: true },
       invoking: `Fixing ${MOM}'s entry…`,
@@ -1242,7 +1251,9 @@ export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE
           ? `${e.data.name}${e.data.skipped ? " skipped" : ""} at ${whenText(e.at, ctx)}`
           : e.kind === "temp"
             ? `${tempText(e.data.temp_c)} at ${whenText(e.at, ctx)}`
-            : `question for ${s.access.self ? "your" : "her"} OB${e.data.done ? " (asked)" : ""}`;
+            : e.kind === "question"
+              ? `question for ${s.access.self ? "your" : "her"} OB${e.data.done ? " (asked)" : ""}`
+              : `${nutritionEntryText(e)} at ${whenText(e.at, ctx)}`;
       if (a.action === "delete") {
         const e = await deleteCareEntry(s, id);
         return ok(`Deleted c${id}: ${what(e)}. To bring it back, use fix_mom_entry with action restore.`, { deleted: true, id: `c${id}` });
@@ -1264,12 +1275,20 @@ export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE
       } else if (cur.kind === "question") {
         if (a.done != null) data.done = a.done;
         if (a.answer != null) data.answer = a.answer;
+      } else if (cur.kind === "food") {
+        if (a.food_description !== undefined) data.description = a.food_description;
+        if (a.meal !== undefined) data.meal = a.meal;
+      } else if (cur.kind === "drink") {
+        if (a.drink_name !== undefined) data.name = a.drink_name;
+        if (a.amount_ml !== undefined) data.amount_ml = a.amount_ml;
       }
+      if (cur.kind !== "food" && (a.food_description !== undefined || a.meal !== undefined)) throw new ToolError("Food fields can only change a food entry.");
+      if (cur.kind !== "drink" && (a.drink_name !== undefined || a.amount_ml !== undefined)) throw new ToolError("Drink fields can only change a drink entry.");
       const wrong = cur.kind !== "dose" && (a.units != null || a.dose != null || a.skipped != null) ? "units, dose and skipped are for doses" : cur.kind !== "question" && (a.done != null || a.answer != null) ? "done and answer are for questions" : null;
       if (wrong) throw new ToolError(`c${id} is a ${cur.kind === "temp" ? "temperature" : cur.kind}: ${wrong}.`);
       if (Object.keys(data).length) patch.data = data;
       if (a.note != null) patch.note = a.note;
-      if (!patch.at && !patch.data && patch.note === undefined) throw new ToolError("Nothing to change: pass at or minutes_ago, units, dose, skipped, note, done or answer.");
+      if (!patch.at && !patch.data && patch.note === undefined) throw new ToolError("Nothing to change: pass a corrected time, note or a field for this entry's kind.");
       const r = await updateCareEntry(s, id, patch);
       const alerts = alertsOf(r.notes);
       return ok([`Updated c${id}: ${what(r.entry)}.`, ...assumedLines(assumed), ...alertLines(alerts)].join("\n"), {

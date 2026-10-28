@@ -5,7 +5,9 @@ import { gunzipSync } from "node:zlib";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { PostHog } from "posthog-node";
+import type { NextRequest } from "next/server";
 import type { AnalyticsActor } from "../src/lib/analytics/identity";
+import { syncRequestFor } from "../src/lib/maple/diagnostics";
 
 const PRIVATE = "synthetic_private_token";
 const ACTOR = { member: "synthetic-parent@example.test", familyId: 701, role: "owner" };
@@ -19,7 +21,7 @@ function load<T>(path: string, mocks: Record<string, unknown>, globals: Record<s
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const exports = {};
   runInNewContext(js, {
-    exports, Error, TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError, AggregateError,
+    exports, performance, Error, TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError, AggregateError,
     console: { error() {} }, process: { env: { NEXT_PUBLIC_POSTHOG_KEY: "phc_synthetic_check" } },
     require: (name: string) => {
       assert(name in mocks, `Unexpected dependency: ${name}`);
@@ -74,6 +76,7 @@ class AnswerError extends Error {}
 
 function api(failure?: "capture" | "delivery" | "auth") {
   const reports: unknown[][] = [];
+  const diagnostics: { event: string; requestId: string; status: number }[] = [];
   const alerts: { key: string; subject: string; body: string }[] = [];
   const emails: { idempotencyKey?: string; text: string }[] = [];
   const tasks: (() => Promise<void>)[] = [];
@@ -87,6 +90,7 @@ function api(failure?: "capture" | "delivery" | "auth") {
       scrubError: () => new Error("Error"),
       captureServerException: async (...args: unknown[]) => { reports.push(args); if (failure === "capture") throw new Error(PRIVATE); },
     },
+    "./diagnostics": { syncRequestFor, logSyncDiagnostic: (event: { event: string; requestId: string; status: number }) => diagnostics.push(event) },
     "./auth": { listMembers: async () => [], sessionContext: async () => {
       if (failure === "auth") throw new StoreUnavailable(PRIVATE);
       return { member: { id: ACTOR.member, role: "owner" }, ctx: { ...ACTOR, status: "active", tz: "UTC", babyId: 801 } };
@@ -105,7 +109,7 @@ function api(failure?: "capture" | "delivery" | "auth") {
     },
     "./origin": { MAPLE_ORIGIN: "https://synthetic.example.test" },
   });
-  return { ...loaded, reports, alerts, emails, drain: async () => { for (const task of tasks.splice(0)) await task(); } };
+  return { ...loaded, reports, diagnostics, alerts, emails, drain: async () => { for (const task of tasks.splice(0)) await task(); } };
 }
 
 async function checkServer() {
@@ -240,6 +244,40 @@ async function checkDiagnostics() {
   });
 }
 
+async function checkSyncIntegration() {
+  await check("sync finish avoids duplicate 500/503 reports and preserves direct failure diagnostics", async () => {
+    const requestId = "abcdef12-3456-4789-8abc-def012345678";
+    const request = { headers: new Headers({ "x-maple-request-id": requestId.toUpperCase() }) } as NextRequest;
+    for (const [error, status] of [[new StoreUnavailable(PRIVATE), 503], [new TypeError(PRIVATE), 500]] as const) {
+      const a = api();
+      const response = await a.withMember("GET /api/maple/state", async () => { throw error; })(request);
+      assert.equal(response.status, status);
+      assert.equal(a.reports.length, 1, `HTTP ${status} must be reported once`);
+      assert.equal((a.reports[0][2] as AnalyticsActor).member, ACTOR.member);
+      assert.equal(a.diagnostics.length, 1);
+      assert.equal(a.diagnostics[0].requestId, requestId);
+      assert.equal(a.diagnostics[0].status, status);
+      await a.drain();
+      assert.equal(a.alerts.length, 1);
+    }
+    for (const status of [400, 503]) {
+      const a = api();
+      const response = await a.withMember("GET /api/maple/state", async () => {
+        if (status === 400) throw new a.BadRequest(PRIVATE);
+        return Response.json({ error: PRIVATE }, { status });
+      })(request);
+      assert.equal(response.status, status);
+      assert.equal(a.reports.length, 1);
+      const s = server();
+      await s.captureServerException(a.reports[0][0], a.reports[0][1] as Record<string, unknown>);
+      assert.equal(s.captures[0].error.message, "sync_request_failed");
+      assert.equal(s.captures[0].properties.status, status);
+      assert.equal(s.captures[0].properties.requestId, requestId);
+      assert(!JSON.stringify(s.captures).includes(PRIVATE));
+    }
+  });
+}
+
 async function checkApi() {
   await check("both API database 503 paths report and queue static daily category alerts", async () => {
     const a = api();
@@ -337,6 +375,7 @@ async function checkClient() {
 async function main() {
   await checkServer();
   await checkDiagnostics();
+  await checkSyncIntegration();
   await checkApi();
   await checkClient();
   console.log(`Analytics errors: ${passed} passed, ${failed} failed`);

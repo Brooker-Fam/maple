@@ -546,6 +546,45 @@ export const MOM_TIER_LABEL: Record<AlertTier, string> = {
 export const MOM_DISCLAIMER =
   "Maple's Log isn't medical advice. It keeps your medicines on the schedule your own doctor gave you. When in doubt, call your OB or midwife.";
 
+const NURSING_NUTRITION_SOURCE = {
+  sourceUrl: "https://www.nhs.uk/baby/breastfeeding-and-bottle-feeding/breastfeeding-and-lifestyle/diet/",
+  sourceLabel: "NHS: breastfeeding and diet",
+};
+
+export const MOM_NUTRITION_SUGGESTIONS = {
+  general: {
+    title: "Food and drink, at your pace",
+    body: "Choose a variety of foods you enjoy and keep a drink handy. Log whatever is useful to you; the log may not include everything you've had.",
+    sourceUrl: "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eating-a-balanced-diet/",
+    sourceLabel: "NHS: eating a balanced diet",
+  },
+  drink: {
+    title: "Keep a drink within reach",
+    body: "Set a drink beside you while feeding. Water or milk are simple choices; someone nearby could bring one over.",
+    ...NURSING_NUTRITION_SOURCE,
+  },
+  snack: {
+    title: "Something easy to eat",
+    body: "If you're hungry, fruit and nuts, yogurt, or hummus with bread can be easy snacks to have nearby. Choose what suits you.",
+    ...NURSING_NUTRITION_SOURCE,
+  },
+  prepared: {
+    title: "Make the next feed comfortable",
+    body: "Keep a drink ready for the next feed and choose an easy meal or snack when you're hungry. You don't need a special diet for breastfeeding.",
+    ...NURSING_NUTRITION_SOURCE,
+  },
+  pause: {
+    title: "A moment for you",
+    body: "If you're hungry or thirsty, this pause can be a chance for food or a drink. Yogurt, fruit or hummus with bread can be easy to have nearby.",
+    ...NURSING_NUTRITION_SOURCE,
+  },
+  cluster: {
+    title: "Keep food and drink nearby",
+    body: "With feeds close together, ask someone to bring a drink and a snack if you'd like one. Fruit with nuts, yogurt or hummus with bread are simple options.",
+    ...NURSING_NUTRITION_SOURCE,
+  },
+} as const;
+
 /** AWHONN https://pbws.s3.amazonaws.com/PBWSSaveYourLifeHandout_English.pdf */
 export const MOM_CANT_REACH = "If you can't reach them right away, call 911 or go to the emergency room.";
 
@@ -1013,7 +1052,7 @@ export const support = (v: Voice) => ({
     trauma: "After a hard birth: flashbacks, nightmares, or avoiding reminders of it. Treatable. Call your OB or a therapist.",
     psychosis: "Seeing or hearing things, believing things that aren't true, or barely sleeping with racing energy, usually in the first two weeks. This is an emergency: call 911.",
   }, // ACOG FAQ091; NIMH; PSI; ACOG CPG 4
-  privacy: "Everyone who signs in to Maple's Log can see this page, check-ins included. Connected AI tools see her medicines, temperature and questions, but not check-ins.",
+  privacy: "Family members who can see mom's page can see her check-ins. Connected AI tools can see her food, drinks, medicines, temperature and questions, but not check-ins. The in-app chat needs her permission first.",
 });
 export const SUPPORT = support(FAMILY_ONE_VOICE);
 

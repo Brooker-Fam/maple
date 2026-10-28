@@ -4,6 +4,7 @@ import { FAMILY_OPTIONAL_TABLES, FAMILY_TABLES } from "./maple/family-tables";
 import { migrateSignup } from "./maple/family/schema";
 import { migrateAuth } from "./maple/auth-schema";
 import { migrateAnalytics } from "./analytics/schema";
+import { migrateChatDelivery } from "./maple/chat/delivery-schema";
 
 async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   const text = strings.reduce((out, part, i) => `${out}$${i}${part}`);
@@ -219,6 +220,7 @@ export async function migrate() {
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_time ON maple_care_entries(person, at DESC) WHERE deleted_at IS NULL`;
+  await expandCareKinds();
   await sql`CREATE INDEX IF NOT EXISTS idx_maple_care_entries_med ON maple_care_entries(med_id, at DESC) WHERE deleted_at IS NULL AND kind = 'dose'`;
   // "Only me" is gone (one rule: everyone signed in sees her whole page), so no row stays hidden.
   await sql`UPDATE maple_care_meds SET private = FALSE WHERE private`;
@@ -400,10 +402,25 @@ export async function migrate() {
   // A due month can say someone is pregnant, so the waitlist keeps none.
   await sql`UPDATE maple_waitlist SET baby_month = NULL WHERE baby_month IS NOT NULL`;
 
+  // Operator-triggered waitlist invitations. A durable claim prevents a later
+  // retry from duplicating a send after a timeout or uncertain provider result.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_waitlist_outreach (
+      waitlist_id BIGINT NOT NULL REFERENCES maple_waitlist(id) ON DELETE CASCADE,
+      campaign TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'sending' CHECK (status IN ('sending', 'sent', 'uncertain')),
+      attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at TIMESTAMPTZ,
+      provider_id TEXT,
+      PRIMARY KEY (waitlist_id, campaign)
+    )
+  `;
+
   await migrateFamilies();
   await migrateSignup();
   await migrateAuth();
   await migrateAnalytics();
+  await migrateChatDelivery();
 
   console.log("Migrations complete.");
 }
@@ -515,6 +532,21 @@ async function familyPrimaryKey(table: string, columns: string[]): Promise<strin
       AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, ord)
         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.ord) = ${columns}::text[]`;
   return rows.length ? String(rows[0].conname) : null;
+}
+
+async function expandCareKinds() {
+  const name = "maple_care_entries_kind_v2_check";
+  const rows = await sql`SELECT convalidated FROM pg_constraint WHERE conname = ${name} AND conrelid = 'maple_care_entries'::regclass`;
+  if (!rows.length) {
+    try {
+      await alter(`ALTER TABLE maple_care_entries ADD CONSTRAINT ${name} CHECK (kind IN ('dose', 'temp', 'question', 'bp', 'food', 'drink')) NOT VALID`);
+    } catch (err) {
+      if (codeOf(err) !== "42710") throw err;
+    }
+  }
+  if (!rows[0]?.convalidated) await alter(`ALTER TABLE maple_care_entries VALIDATE CONSTRAINT ${name}`);
+  const old = await sql`SELECT 1 FROM pg_constraint WHERE conname = 'maple_care_entries_kind_check' AND conrelid = 'maple_care_entries'::regclass`;
+  if (old.length) await alter("ALTER TABLE maple_care_entries DROP CONSTRAINT IF EXISTS maple_care_entries_kind_check");
 }
 
 async function familyUniqueIndex(table: string, columns: string[], name: string) {

@@ -46,7 +46,7 @@ export type ChatStream = {
 export async function chatStream(fam: Fam, member: string, viewer: boolean, before: string | null, size = STREAM_PAGE): Promise<ChatStream> {
   const visible = `t.family_id = $1 AND t.member = $2 AND (t.viewer_only OR NOT $3)`;
   const [head, page] = await Promise.all([
-    rows(`SELECT t.id, COALESCE(t.busy_until > NOW(), FALSE) AS busy FROM maple_chat_threads t WHERE ${visible} ORDER BY t.updated_at DESC LIMIT 1`, [fam.familyId, member, viewer]),
+    rows(`SELECT t.id, COALESCE(t.busy_until > NOW(), FALSE) AS busy FROM maple_chat_threads t WHERE ${visible} ORDER BY busy DESC, t.updated_at DESC LIMIT 1`, [fam.familyId, member, viewer]),
     rows(
       `SELECT m.id, m.role, m.parts, m.thread_id FROM maple_chat_messages m JOIN maple_chat_threads t ON t.id = m.thread_id AND t.family_id = m.family_id
        WHERE ${visible} AND ($4::text IS NULL OR (m.created_at, m.seq) < (SELECT c.created_at, c.seq FROM maple_chat_messages c WHERE c.id = $4 AND c.family_id = $1 AND c.member = $2))
@@ -63,7 +63,11 @@ export async function chatStream(fam: Fam, member: string, viewer: boolean, befo
 
 /** Deletes every thread this member can open in this family, for good. Usage rows and the day's count stay. */
 export async function deleteChats(fam: Fam, member: string, viewer: boolean): Promise<number> {
-  return (
-    await rows(`DELETE FROM maple_chat_threads t WHERE t.family_id = $1 AND t.member = $2 AND (t.viewer_only OR NOT $3) RETURNING t.id`, [fam.familyId, member, viewer])
-  ).length;
+  // Keep only non-content delivery receipts so a lost acknowledgement cannot replay a write after deletion.
+  // A running turn keeps its member lease until it finishes, even if its conversation is deleted.
+  return (await rows(`WITH removed AS (
+    DELETE FROM maple_chat_threads t WHERE t.family_id = $1 AND t.member = $2 AND (t.viewer_only OR NOT $3) RETURNING t.id
+  ), detached AS (
+    UPDATE maple_chat_deliveries SET thread_id = NULL WHERE family_id = $1 AND member = $2 AND thread_id IN (SELECT id FROM removed)
+  ) SELECT id FROM removed`, [fam.familyId, member, viewer])).length;
 }
