@@ -23,24 +23,35 @@ jobs:
         with:
           version: 11
       - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile
       - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm typecheck
       - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint
       - name: Nursing checks
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-feed
       - name: Medicine checks
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-care
       - name: Time editing checks
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-time-edit
       - name: Install browser check tools
+        id: browser_tools
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm install --prefix /tmp/maple-ui-tools --no-save esbuild@0.25.10 playwright@1.56.1 postcss@8.5.6
       - name: Install Chromium
+        id: browser
+        if: ${{ !cancelled() && steps.browser_tools.outcome == 'success' }}
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: node /tmp/maple-ui-tools/node_modules/playwright/cli.js install --with-deps chromium
       - name: Check time editing in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: node scripts/ui-check/run.mjs
@@ -52,4 +63,5 @@ jobs:
           path: test-results/maple-ui
           if-no-files-found: ignore
       - name: Build without database migrations
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm exec next build

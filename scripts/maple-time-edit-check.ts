@@ -5,7 +5,6 @@ const tz = "America/New_York";
 const now = new Date("2026-10-28T13:30:00Z");
 const parse = (day: string, clock: string, reference = now, bounds: { min?: Date; max?: Date } = {}) => parseRecordedTime(day, clock, tz, reference, bounds);
 const iso = (result: ReturnType<typeof parse>) => {
-  assert.equal(result.valid, true, result.valid ? undefined : result.message);
   if (!result.valid) throw new Error(result.message);
   return result.date.toISOString();
 };
