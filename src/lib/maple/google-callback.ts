@@ -1,3 +1,5 @@
+import { parseAnalyticsContext, clearAnalyticsContext, type AnalyticsContext } from "@/lib/analytics/context";
+import { identifyAnalyticsSoon } from "@/lib/analytics/server";
 import { NextRequest, NextResponse } from "next/server";
 import { resolveEmailIdentity } from "./auth-identities";
 import { getAppBaseUrl } from "@/lib/secret-box";
@@ -34,10 +36,12 @@ export async function handleMapleGoogleCallback(request: NextRequest, deps: Sign
   let expected: string | null = null;
   let native: NativePlatform | null = null;
   let challenge: string | null = null;
+  let analytics: AnalyticsContext | undefined;
   try {
     const raw = request.cookies.get(STATE_COOKIE)?.value;
     if (raw) {
-      const parsed = JSON.parse(raw) as { state?: string; back?: string; native?: string; challenge?: string; site?: string };
+      const parsed = JSON.parse(raw) as { state?: string; back?: string; native?: string; challenge?: string; site?: string; analytics?: unknown };
+      analytics = parseAnalyticsContext(parsed.analytics);
       expected = parsed.state ?? null;
       back = safeReturnPath(parsed.back);
       native = parseNativeFlag(parsed.native);
@@ -79,8 +83,9 @@ export async function handleMapleGoogleCallback(request: NextRequest, deps: Sign
 
     if (native) {
       if (!challenge) return fail("bad_state");
-      const res = NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(member.email, familyId, back, challenge) }));
+      const res = NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(member.email, familyId, back, challenge, Date.now(), analytics) }));
       res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
+      clearAnalyticsContext(res);
       return res;
     }
 
@@ -88,8 +93,10 @@ export async function handleMapleGoogleCallback(request: NextRequest, deps: Sign
     // res.cookies.* rewrites every Set-Cookie header, so it must run before
     // setSessionCookies appends the session's raw headers.
     res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
+    identifyAnalyticsSoon({ familyId, member: member.email, role: member.role }, analytics);
     grantMetricsAccess(res, verifiedEmail, member.email);
     setSessionCookies(res, member.email, familyId);
+    clearAnalyticsContext(res);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "GET /api/maple/auth/callback" });

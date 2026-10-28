@@ -1,3 +1,6 @@
+import { clearAnalyticsContext, parseAnalyticsContext, readAnalyticsContext, ensureAnalyticsContext } from "@/lib/analytics/context";
+import { captureSignupStartedSoon } from "@/lib/analytics/server";
+import { signupFailed } from "./family/signup";
 import { createHash, randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
@@ -13,6 +16,7 @@ export const APPLE_STATE_COOKIE = "maple_apple_state";
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 export function appleFailure(ctx: SignInContext | null, code: string): NextResponse {
+  if (ctx?.signup?.kind === "create") signupFailed(parseAnalyticsContext(ctx.analytics), "apple", code);
   if (ctx?.native) return NextResponse.redirect(nativeReturnUrl({ error: code }), 303);
   const site = ctx?.site ?? getAppBaseUrl();
   const url = new URL(ctx?.mode === "signup" ? "/signup" : "/maple", site);
@@ -23,6 +27,7 @@ export function appleFailure(ctx: SignInContext | null, code: string): NextRespo
 }
 
 export async function beginApple(req: NextRequest, ctx: SignInContext): Promise<NextResponse> {
+  ctx = { ...ctx, analytics: parseAnalyticsContext(ctx.analytics) ?? readAnalyticsContext(req) };
   if (!isAppleConfigured()) return appleFailure(ctx, "not_configured");
   try {
     const random = randomBytes(32).toString("base64url");
@@ -30,6 +35,9 @@ export async function beginApple(req: NextRequest, ctx: SignInContext): Promise<
     const browser = randomBytes(32).toString("base64url");
     const nonce = randomBytes(32).toString("base64url");
     const authorize = appleAuthorizeUrl(state, nonce, ctx.site);
+    const res = NextResponse.redirect(authorize, 303);
+    ctx.analytics ??= ensureAnalyticsContext(req, res);
+    if (ctx.signup) ctx.signup = { ...ctx.signup, analytics: ctx.analytics };
     const rows = await query(
       `WITH expired AS (DELETE FROM maple_oauth_attempts WHERE expires_at <= NOW())
        INSERT INTO maple_oauth_attempts (state_hash, browser_hash, sealed_payload, expires_at)
@@ -37,10 +45,10 @@ export async function beginApple(req: NextRequest, ctx: SignInContext): Promise<
       [hash(state), hash(browser), encryptSecret(JSON.stringify({ ctx, nonce }))]
     );
     if (!rows?.length) return appleFailure(ctx, "unavailable");
-    const res = NextResponse.redirect(authorize, 303);
     // Apple's callback is a cross-site POST. Secure + None lets only this
     // narrow, random browser proof accompany it; the session stays SameSite=Lax.
     res.cookies.set(APPLE_STATE_COOKIE, browser, { httpOnly: true, secure: true, sameSite: "none", path: APPLE_CALLBACK_PATH, maxAge: 600 });
+    if (ctx.signup?.kind === "create") captureSignupStartedSoon(ctx.analytics, { provider: "apple" });
     return res;
   } catch (error) {
     await captureServerException(error, { route: "apple start" });
@@ -82,11 +90,14 @@ export async function finishApple(req: NextRequest, identify: (code: string, non
     const completed = await completeSignIn(req, ctx, { provider: "apple", ...identity });
     if (ctx.native) {
       if (!ctx.challenge) return clear(appleFailure(ctx, "bad_state"));
-      return clear(NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(completed.id, completed.familyId, ctx.back, ctx.challenge) }), 303));
+      const res = clear(NextResponse.redirect(nativeReturnUrl({ ticket: mintNativeTicket(completed.id, completed.familyId, ctx.back, ctx.challenge, Date.now(), parseAnalyticsContext(ctx.analytics)) }), 303));
+      clearAnalyticsContext(res);
+      return res;
     }
     const res = clear(NextResponse.redirect(completed.redirect, 303));
     grantMetricsAccess(res, identity.email ?? "", completed.id);
     setSessionCookies(res, completed.id, completed.familyId);
+    clearAnalyticsContext(res);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "apple callback" });

@@ -2,7 +2,9 @@ import "next/dist/server/node-environment-baseline";
 import { workAsyncStorage, type WorkStore } from "next/dist/server/app-render/work-async-storage.external";
 import { NextRequest } from "next/server";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type Seed } from "./harness";
-import { familyAnalyticsId } from "../../src/lib/analytics/server";
+import { resolveAnalyticsActor } from "../../src/lib/analytics/identity";
+import { UUID } from "../../src/lib/analytics/policy";
+import { randomUUID } from "node:crypto";
 import { SESSION_COOKIE, sealSession } from "../../src/lib/maple/auth";
 import { POST as logEntry } from "../../src/app/api/maple/entries/route";
 import { POST as invite } from "../../src/app/api/maple/invites/route";
@@ -10,6 +12,7 @@ import { POST as appOpened } from "../../src/app/api/maple/analytics/open/route"
 import { POST as onboarding } from "../../src/app/api/maple/onboarding/route";
 import { startSignup } from "../../src/lib/maple/family/signup";
 
+process.env.MAPLE_ANALYTICS_TEST = "1";
 process.env.MAPLE_SESSION_SECRET = "synthetic-analytics-session-secret";
 process.env.MCP_SECRET = "synthetic-analytics-mcp-secret";
 process.env.GOOGLE_CLIENT_SECRET = "synthetic-analytics-google-secret";
@@ -23,7 +26,7 @@ delete process.env.MAPLE_SIGNUP;
 type Event = { event: string; properties: Record<string, unknown> };
 const events: Event[] = [];
 globalThis.fetch = async (url, init) => {
-  eq(String(url), "https://us.i.posthog.com/capture/", "only stubbed analytics transport");
+  eq(String(url), "https://us.i.posthog.com/i/v0/e/", "only stubbed analytics transport");
   events.push(JSON.parse(String(init?.body)));
   return new Response(null, { status: 200 });
 };
@@ -34,6 +37,7 @@ function request(path: string, family: Seed["beta"], body?: unknown, headerFamil
     headers: {
       cookie: `${SESSION_COOKIE}=${encodeURIComponent(sealSession(family.owner, family.familyId))}`,
       "content-type": "application/json",
+      origin: "http://localhost:3000",
       "X-Maple-Family": String(headerFamily),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -50,9 +54,21 @@ async function responseThenEvents(run: () => Promise<Response>) {
   return response;
 }
 
-function expectEvents(names: string[], familyId: number) {
+async function expectEvents(names: string[], family: Seed["beta"]) {
   eq(events.map((event) => event.event), names);
-  for (const event of events) eq(event.properties, { distinct_id: familyAnalyticsId(familyId), $process_person_profile: false, $geoip_disable: true });
+  const identity = await resolveAnalyticsActor({ familyId: family.familyId, member: family.owner });
+  ok(identity, "existing adult identity");
+  ok(identity!.distinctId !== identity!.familyGroupId, "family is never a person");
+  for (const event of events) {
+    eq(event.properties.distinct_id, identity!.distinctId);
+    eq(event.properties.$groups, { family: identity!.familyGroupId });
+    eq(event.properties.family_id, identity!.familyGroupId);
+    eq(event.properties.$process_person_profile, true);
+    eq(event.properties.$geoip_disable, true);
+    eq(event.properties.is_test, true);
+    ok(!JSON.stringify(event).includes(family.owner), "no member email");
+    ok(!JSON.stringify(event).includes("Synthetic private"), "no event contents");
+  }
 }
 
 async function checkEntries(s: Seed, shape: string) {
@@ -61,7 +77,7 @@ async function checkEntries(s: Seed, shape: string) {
     const body = { kind: "note", data: { text: "Synthetic private health detail" }, note: "Synthetic Parent private@example.test", client_id: "b2437840-62ef-4a79-9c54-d2c6a377c350" };
     eq((await responseThenEvents(() => logEntry(request("/api/maple/entries", s.beta, body)))).status, 201);
     eq((await responseThenEvents(() => logEntry(request("/api/maple/entries", s.beta, body)))).status, 200);
-    expectEvents(["entry_logged"], s.beta.familyId);
+    await expectEvents(["entry_logged"], s.beta);
   });
 }
 
@@ -70,15 +86,24 @@ async function checkInvitesAndOpen(s: Seed, shape: string) {
     events.length = 0;
     const response = await responseThenEvents(() => invite(request("/api/maple/invites", s.beta, { display_name: "Synthetic Invitee", role: "viewer" })));
     eq(response.status, 201);
-    expectEvents(["invite_sent"], s.beta.familyId);
+    await expectEvents(["invite_created"], s.beta);
     ok(!JSON.stringify(events).includes(String((await response.json()).url)), "no invite link");
   });
   await test(`${shape}: app open uses authenticated family and rejects a stale family or missing session`, async () => {
     events.length = 0;
-    eq((await responseThenEvents(() => appOpened(request("/api/maple/analytics/open?token=synthetic-private", s.beta)))).status, 204);
-    eq((await responseThenEvents(() => appOpened(request("/api/maple/analytics/open", s.beta, undefined, s.alpha.familyId)))).status, 409);
+    const eventId = randomUUID();
+    eq((await appOpened(request("/api/maple/analytics/open?token=synthetic-private", s.beta, { event_id: eventId }))).status, 200);
+    eq((await appOpened(request("/api/maple/analytics/open", s.beta, { event_id: eventId }))).status, 200);
+    eq((await appOpened(request("/api/maple/analytics/open", s.beta, { event_id: eventId }, s.alpha.familyId))).status, 409);
     eq((await responseThenEvents(() => appOpened(new NextRequest("http://localhost:3000/api/maple/analytics/open", { method: "POST" })))).status, 401);
-    expectEvents(["app_opened"], s.beta.familyId);
+    await expectEvents(["app_opened"], s.beta);
+    const ownerId = events[0].properties.distinct_id;
+    const group = events[0].properties.$groups;
+    eq((await appOpened(request("/api/maple/analytics/open", { ...s.beta, owner: s.beta.member }, { event_id: randomUUID() }))).status, 200);
+    ok(events[1].properties.distinct_id !== ownerId, "adults in one family have separate identities");
+    eq(events[1].properties.$groups, group, "adults share only a family group");
+    const otherFamily = await resolveAnalyticsActor({ familyId: s.alpha.familyId, member: s.alpha.owner });
+    ok(otherFamily?.familyGroupId !== events[1].properties.family_id, "family groups remain isolated");
   });
 }
 
@@ -89,12 +114,12 @@ async function checkOnboarding(s: Seed, shape: string) {
     const finish = () => onboarding(request("/api/maple/onboarding", s.beta, { finish: true }));
     eq((await responseThenEvents(finish)).status, 200);
     eq((await responseThenEvents(finish)).status, 409);
-    expectEvents(["onboarding_completed"], s.beta.familyId);
+    await expectEvents(["onboarding_started", "onboarding_completed"], s.beta);
   });
 }
 
 async function checkSignupStart() {
-  await test("accepted signup start records an anonymous event; invite joins and missing terms do not", async () => {
+  await test("signup start records an anonymous event; invalid signup records failure and invite joins do not start signup", async () => {
     process.env.MAPLE_SIGNUP = "open";
     events.length = 0;
     const start = (fields: Record<string, string>) => startSignup(new NextRequest("http://localhost:3000/api/maple/signup/start", {
@@ -106,10 +131,13 @@ async function checkSignupStart() {
     ok(new URL(accepted.headers.get("location")!).hostname === "accounts.google.com", "accepted signup redirects to Google");
     await responseThenEvents(() => start({}));
     await responseThenEvents(() => start({ invite: "synthetic_invite_token_1234567890" }));
-    eq(events.map((event) => event.event), ["signup_started"]);
+    eq(events.map((event) => event.event), ["signup_started", "signup_failed"]);
     const id = String(events[0].properties.distinct_id);
-    ok(/^site:[a-f0-9-]{36}$/.test(id), "anonymous random ID");
-    eq(events[0].properties, { distinct_id: id, $process_person_profile: false, $geoip_disable: true });
+    ok(UUID.test(id), "anonymous random ID");
+    eq(events[0].properties.$process_person_profile, false);
+    eq(events[0].properties.$geoip_disable, true);
+    eq(events[0].properties.is_test, true);
+    ok(!JSON.stringify(events).includes("synthetic_invite_token"), "no invite token");
     delete process.env.MAPLE_SIGNUP;
   });
 }

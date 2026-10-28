@@ -1,3 +1,5 @@
+import { readAnalyticsContext, parseAnalyticsContext, type AnalyticsContext } from "@/lib/analytics/context";
+import { identifyAnalyticsSoon } from "@/lib/analytics/server";
 import type { NextRequest } from "next/server";
 import { LEGAL_VERSION } from "@/components/site/legal";
 import { normalizeEmail } from "@/lib/waitlist";
@@ -20,6 +22,7 @@ export type SignInContext = {
   link?: { id: string; fam: number };
   native?: NativePlatform;
   challenge?: string;
+  analytics?: AnalyticsContext;
 };
 
 export class SignInError extends Error {
@@ -30,7 +33,7 @@ export async function signInContext(req: NextRequest, data: Record<string, unkno
   if (!sameOriginRequest(req)) throw new SignInError("cross");
   const mode = data.mode ?? "signin";
   if (mode !== "signin" && mode !== "signup" && mode !== "link") throw new SignInError("failed");
-  const ctx: SignInContext = { mode, site: signInSite(typeof data.site === "string" ? data.site : null), back: safeReturnPath(typeof data.return === "string" ? data.return : null) };
+  const ctx: SignInContext = { analytics: readAnalyticsContext(req), mode, site: signInSite(typeof data.site === "string" ? data.site : null), back: safeReturnPath(typeof data.return === "string" ? data.return : null) };
   if (mode === "link") {
     const current = await sessionContext(req);
     if (!current || !normalizeEmail(current.member.email)) throw new SignInError("link_expired");
@@ -54,6 +57,7 @@ export async function signInContext(req: NextRequest, data: Record<string, unkno
       ctx.signup = { kind: "create", code, tz: validTimeZone(data.tz) ?? DEFAULT_TZ, terms: LEGAL_VERSION };
     }
   }
+  if (ctx.signup) ctx.signup.analytics = ctx.analytics;
   return ctx;
 }
 
@@ -72,13 +76,14 @@ export async function completeSignIn(req: NextRequest, ctx: SignInContext, who: 
     } else {
       await bindAppleIdentity(who.subject, who.email, current.member.email);
     }
+    identifyAnalyticsSoon({ familyId: current.ctx.familyId, member: current.member.email, role: current.member.role }, parseAnalyticsContext(ctx.analytics));
     return { id: current.member.email, familyId: current.ctx.familyId, redirect: new URL("/maple?auth=linked", ctx.site).toString() };
   }
   const id = who.provider === "email" ? await resolveEmailIdentity(who.email) : await resolveAppleIdentity(who.subject, who.email);
   const identity = { email: id, name: null };
   let familyId: number;
   if (ctx.mode === "signup" && ctx.signup) {
-    const result = await completeSignup(req, identity, ctx.signup, who.email ?? id);
+    const result = await completeSignup(req, identity, { ...ctx.signup, analytics: parseAnalyticsContext(ctx.analytics ?? ctx.signup.analytics), provider: who.provider }, who.email ?? id);
     if ("error" in result) throw new SignInError(result.error);
     familyId = result.familyId;
   } else {
@@ -93,6 +98,7 @@ export async function completeSignIn(req: NextRequest, ctx: SignInContext, who: 
     familyId = joined.familyId;
   }
   if (who.provider === "apple") await bindAppleIdentity(who.subject, who.email, id);
+  if (!ctx.native) identifyAnalyticsSoon({ familyId, member: id }, parseAnalyticsContext(ctx.analytics));
   const to = new URL(safeReturnPath(ctx.back), ctx.site);
   if (to.pathname.startsWith("/maple")) to.searchParams.set("auth", "ok");
   return { id, familyId, redirect: to.toString() };

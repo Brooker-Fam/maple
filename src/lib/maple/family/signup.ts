@@ -3,7 +3,8 @@ import { grantMetricsAccess } from "../admin/auth";
 import { resolveEmailIdentity } from "../auth-identities";
 import { sameOriginRequest } from "../auth-request";
 import { NextResponse, type NextRequest } from "next/server";
-import { captureAppEvent, captureSignupCompleted, captureSignupStartedSoon } from "@/lib/analytics/server";
+import { captureAppEventSoon, captureSignupCompleted, captureSignupStartedSoon, captureSignupFailedSoon, identifyAnalyticsSoon } from "@/lib/analytics/server";
+import { readAnalyticsContext, ensureAnalyticsContext, parseAnalyticsContext, clearAnalyticsContext, type AnalyticsContext } from "@/lib/analytics/context";
 import { LEGAL_VERSION } from "@/components/site/legal";
 import { emailWelcome } from "@/lib/email/notices";
 import { captureServerException } from "@/lib/posthog-server";
@@ -41,24 +42,26 @@ export const SIGNUP_STATE_PREFIX = `${MAPLE_STATE_PREFIX}signup.`;
 const INTENT_KIND = "maple-signup";
 const INTENT_TTL_MS = 10 * 60_000;
 
-export type SignupIntent = { kind: "create"; code: string | null; tz: string; terms: string } | { kind: "join"; invite: string };
+export type SignupIntent = ({ kind: "create"; code: string | null; tz: string; terms: string } | { kind: "join"; invite: string }) & { analytics?: AnalyticsContext; provider?: "google" | "email" | "apple" };
 
 export function sealIntent(intent: SignupIntent, now = Date.now()): string {
   return encryptSecret(JSON.stringify({ k: INTENT_KIND, exp: now + INTENT_TTL_MS, ...intent }));
 }
 
 export function openIntent(raw: unknown, now = Date.now()): SignupIntent | null {
-  if (typeof raw !== "string" || !raw || raw.length > 2048) return null;
+  if (typeof raw !== "string" || !raw || raw.length > 4096) return null;
   try {
     const opened = openSecret(raw);
     if (opened.prev) return null;
     const v = JSON.parse(opened.text);
     if (v?.k !== INTENT_KIND || typeof v.exp !== "number" || now > v.exp) return null;
-    if (v.kind === "join") return typeof v.invite === "string" && v.invite ? { kind: "join", invite: v.invite } : null;
+    const analytics = parseAnalyticsContext(v.analytics);
+    const telemetry = { ...(analytics ? { analytics } : {}), ...(v.provider === "google" || v.provider === "email" || v.provider === "apple" ? { provider: v.provider } : {}) };
+    if (v.kind === "join") return typeof v.invite === "string" && v.invite ? { kind: "join", invite: v.invite, ...telemetry } : null;
     if (v.kind !== "create" || typeof v.terms !== "string") return null;
     const tz = validTimeZone(v.tz);
     if (!tz) return null;
-    return { kind: "create", code: v.code == null ? null : normalizeCode(v.code), tz, terms: v.terms };
+    return { kind: "create", code: v.code == null ? null : normalizeCode(v.code), tz, terms: v.terms, ...telemetry };
   } catch {
     return null;
   }
@@ -120,12 +123,17 @@ export async function startSignup(req: NextRequest): Promise<NextResponse> {
   const form = await readForm(req);
   const site = signInSite(form?.get("site"));
   const invite = form?.get("invite")?.trim() || null;
-  const fail = (error: SignupError) => toSignup(site, error, !!invite);
+  let analytics = readAnalyticsContext(req);
+  const provider = form?.get("provider") === "apple" ? "apple" : "google";
+  const fail = (error: SignupError) => {
+    if (!invite) signupFailed(analytics, provider, error);
+    return toSignup(site, error, !!invite);
+  };
   if (!form) return fail("failed");
   const mode = await effectiveSignupMode();
   if (mode === "off") return fail("off");
-  const provider = form.get("provider") ?? "google";
-  if (provider !== "google" && provider !== "apple") return fail("not_configured");
+  const requestedProvider = form.get("provider") ?? "google";
+  if (requestedProvider !== "google" && requestedProvider !== "apple") return fail("not_configured");
   if (provider === "google" && !isGoogleConfigured()) return fail("not_configured");
   if (!(await allowAttempt(req))) return fail("busy");
 
@@ -146,15 +154,17 @@ export async function startSignup(req: NextRequest): Promise<NextResponse> {
     intent = { kind: "create", code, tz: validTimeZone(form.get("tz")) ?? DEFAULT_TZ, terms: LEGAL_VERSION };
   }
 
+  intent = { ...intent, analytics, ...(provider === "apple" ? { provider } : {}) };
   if (provider === "apple") {
     const { beginApple } = await import("../apple-flow");
-    const response = await beginApple(req, { mode: "signup", signup: intent, site, back: "/maple" });
-    if (intent.kind === "create" && response.headers.get("location")?.startsWith("https://appleid.apple.com/")) captureSignupStartedSoon();
+    const response = await beginApple(req, { mode: "signup", signup: intent, site, back: "/maple", analytics });
     return response;
   }
 
   const state = `${SIGNUP_STATE_PREFIX}${randomUUID()}`;
   const res = NextResponse.redirect(authorizeUrl(state, site), 303);
+  analytics ??= ensureAnalyticsContext(req, res);
+  intent = { ...intent, analytics };
   res.cookies.set(STATE_COOKIE, JSON.stringify({ state, back: "/maple", site, signup: sealIntent(intent) }), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -162,7 +172,7 @@ export async function startSignup(req: NextRequest): Promise<NextResponse> {
     maxAge: 600,
     path: STATE_COOKIE_PATH,
   });
-  if (intent.kind === "create") captureSignupStartedSoon();
+  if (intent.kind === "create") captureSignupStartedSoon(analytics, { provider });
   return res;
 }
 
@@ -206,7 +216,10 @@ export async function handleSignupCallback(req: NextRequest, deps: SignupCallbac
     res.cookies.set(STATE_COOKIE, "", { path: STATE_COOKIE_PATH, maxAge: 0 });
     return res;
   };
-  const fail = (error: SignupError) => finish(toSignup(site, error, join));
+  const fail = (error: SignupError) => {
+    if (!join) signupFailed(intent?.analytics ?? readAnalyticsContext(req), "google", error);
+    return finish(toSignup(site, error, join));
+  };
 
   try {
     if (params.get("error")) return fail("denied");
@@ -229,9 +242,11 @@ export async function handleSignupCallback(req: NextRequest, deps: SignupCallbac
     const url = new URL("/maple", site);
     url.searchParams.set("auth", "ok");
     const res = finish(NextResponse.redirect(url.toString()));
+    identifyAnalyticsSoon({ familyId, member: who.email }, intent.analytics);
     grantMetricsAccess(res, verifiedEmail, who.email);
     // After every res.cookies call: setSessionCookies appends raw Set-Cookie headers that a later one would drop.
     setSessionCookies(res, who.email, familyId);
+    clearAnalyticsContext(res);
     return res;
   } catch (error) {
     await captureServerException(error, { route: "GET /api/maple/auth/callback (signup)" });
@@ -245,7 +260,9 @@ export async function completeSignup(req: NextRequest, who: GoogleIdentity, inte
   if (mode === "off") return { error: "off" };
   if (intent.kind === "join") {
     const joined = await joinByInvite(who, intent.invite, verifiedEmail);
-    return joined.reason ? { error: joined.reason } : { familyId: joined.familyId };
+    if (joined.reason) return { error: joined.reason };
+    if (joined.added) captureAppEventSoon({ familyId: joined.familyId, member: who.email }, "invite_accepted", undefined, intent.analytics);
+    return { familyId: joined.familyId };
   }
   if (onFamilyOneAllowlist(who.email)) {
     const joined = await joinWithGoogle(who);
@@ -260,7 +277,16 @@ export async function completeSignup(req: NextRequest, who: GoogleIdentity, inte
   const familyId = created.familyId;
   const made = { familyId, to: who.email, name: who.name, origin: getAppBaseUrl() };
   later(async () => {
-    await Promise.all([emailWelcome(made), captureAppEvent(familyId, "signed_up"), captureSignupCompleted(familyId)]);
+    await Promise.all([emailWelcome(made), captureSignupCompleted({ familyId, member: who.email, role: "owner" }, intent.analytics, { provider: intent.provider ?? "google" })]);
   }, "maple signup notices");
   return { familyId };
+}
+
+export function signupFailed(context: AnalyticsContext | undefined, provider: "google" | "email" | "apple", error: string): void {
+  const reason = error === "denied" ? "denied"
+    : error === "bad_state" ? "expired"
+    : ["busy", "full", "ip_limit", "account_limit"].includes(error) ? "rate_limited"
+    : ["off", "not_configured", "unavailable"].includes(error) ? "unavailable"
+    : ["terms", "code", "invite", "cross", "no_email"].includes(error) ? "invalid" : "failed";
+  captureSignupFailedSoon(context, { provider, reason });
 }

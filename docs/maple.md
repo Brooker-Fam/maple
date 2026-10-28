@@ -314,7 +314,7 @@ Metrics also requires a 12-hour HttpOnly proof issued only after Google, email o
 
 `GET /api/maple/admin/metrics` returns aggregate counts only, with `Cache-Control: no-store`. Family totals, signup trends, accepted account totals and recent activity exclude the original family (id 1). Accounts are deduplicated across families; pending invitations, the Admin pseudo-account and anonymous invite-link identities are excluded from the account count. Setup complete means family status `active`; recent activity instead uses members' `last_seen_at` from app state requests. The 7/30-day cards use rolling windows, while the daily signup chart covers today and the preceding 29 UTC dates. Counts describe records still present, not an immutable historical ledger. No migrations, extra tracking, names, addresses, entry contents or chat content are needed.
 
-PostHog remains the separate source for public-site visits and allowed usage events. `signed_up` and `signup_completed` each represent one newly created family; use either event, not their sum. The database dashboard works independently of PostHog configuration and delivery.
+PostHog measures public visits, signup conversion, onboarding and allowed usage events through opaque person ids and separate family groups. Use `signup_completed` for new families; `signed_up` is retired. Production reporting filters `schema_version = 2`, `environment = production`, and `is_test = false`. Earlier events cannot reconstruct a visit-to-signup funnel because their identities were separate. See [analytics](analytics.md) for event definitions, privacy boundaries and health checks. The database dashboard works independently of PostHog configuration and delivery.
 
 ## Usage alerts
 
