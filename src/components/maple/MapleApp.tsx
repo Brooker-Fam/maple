@@ -16,6 +16,7 @@ import MomentsTab from "./MomentsTab";
 import { NotificationsProvider } from "./notify";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
 import SignIn from "./SignIn";
+import SyncStatus from "./SyncStatus";
 import TodayTab from "./TodayTab";
 import { MAPLE_LEAF_PATH } from "./Hero";
 import { Icon, type IconName } from "./icons";
@@ -140,7 +141,7 @@ function Screens() {
 
   return (
     <div className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
-      <SyncChip />
+      <SyncStatus />
       <AnimatePresence mode="wait">
         <motion.div
           key={showing}
@@ -242,33 +243,6 @@ function NightLook() {
   }, []);
 
   return null;
-}
-
-/** Shown only when something is waiting in the outbox or we're offline. */
-function SyncChip() {
-  const { pending, online, refresh } = useMaple();
-  if (pending === 0 && online) return null;
-  const text = online
-    ? `${pending} waiting to sync`
-    : pending
-      ? `Offline · ${pending} saved on this phone`
-      : "Offline";
-  return (
-    <div className="pointer-events-none sticky top-0 z-[65] flex justify-center px-4 pt-[env(safe-area-inset-top)]">
-      <button
-        type="button"
-        onClick={() => void refresh()}
-        aria-live="polite"
-        aria-label={`${text}. Tap to try syncing now.`}
-        className="pointer-events-auto flex min-h-[44px] items-center"
-      >
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-mp-surface/95 px-3 py-1.5 text-xs font-semibold text-mp-ink-2 shadow-sm ring-1 ring-mp-line backdrop-blur-md">
-          <Icon name={online ? "refresh-cw" : "cloud-off"} size={14} />
-          {text}
-        </span>
-      </button>
-    </div>
-  );
 }
 
 function TabBar({ tabs, tab, onChange }: { tabs: TabItem[]; tab: TabId; onChange: (t: NavTarget) => void }) {

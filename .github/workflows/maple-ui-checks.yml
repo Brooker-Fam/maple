@@ -34,6 +34,9 @@ jobs:
       - name: Nursing checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-feed
+      - name: Feed status and sync diagnostics
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-feed-status && pnpm check:maple-diagnostics
       - name: Medicine checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-care
@@ -69,6 +72,9 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: pnpm check:maple-chat-ui
+      - name: Check save and refresh ordering in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm check:maple-sync
       - name: Save synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@v4

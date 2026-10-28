@@ -124,6 +124,18 @@ export default function Privacy() {
         </li>
         <li>For each phone that turns on notifications, the address its browser gave Maple for sending them.</li>
         <li>
+          Limited diagnostics show whether a save reached the server and the screen refreshed, or whether a request failed
+          or an old response was discarded. They contain only a fixed event name, random ids connecting a save with its
+          refresh, a request status and a bounded request duration. They contain no names, email addresses, family ids,
+          entry types, log contents, log times, error messages or page addresses. The ids change for each operation and
+          are not saved on your phone or used as persistent device identifiers. These diagnostics go to Vercel&rsquo;s
+          operational logs, not analytics.
+        </li>
+        <li>
+          Diagnostic submissions are limited with a keyed hash of the signed-in member&rsquo;s id. These counters contain
+          no names or email addresses and are cleared after a day, like the other rate limits.
+        </li>
+        <li>
           A hashed copy of each personal key behind a Siri shortcut, so each entry from a shortcut records who logged it. Claude and ChatGPT
           connections use signed keys that Maple doesn&rsquo;t store.
         </li>
@@ -166,7 +178,8 @@ export default function Privacy() {
       </ul>
       <p>
         If error reporting is turned on, a server error is sent to PostHog as the kind of error and where in Maple&rsquo;s code it
-        happened. The contents of your log and your messages aren&rsquo;t sent.
+        happened. A failed save or refresh may also include its response status and random operation id, so a failure can be
+        connected to its diagnostic record. The contents of your log and your messages aren&rsquo;t sent.
       </p>
 
       <h2>Usage counts</h2>

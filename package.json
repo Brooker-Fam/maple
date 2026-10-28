@@ -26,7 +26,10 @@
     "check:maple-time-edit": "tsx scripts/maple-time-edit-check.ts",
     "check:apple-auth": "tsx scripts/apple-auth-check.ts",
     "check:email-auth": "tsx scripts/email-auth-check.ts",
-    "check:signin": "tsx scripts/signin-flow-check.ts"
+    "check:signin": "tsx scripts/signin-flow-check.ts",
+    "check:maple-sync": "node scripts/maple-sync-check/run.mjs",
+    "check:maple-feed-status": "tsx scripts/maple-feed-status-check.ts",
+    "check:maple-diagnostics": "tsx scripts/maple-diagnostics-check.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",
@@ -54,8 +57,10 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/web-push": "3.6.4",
+    "esbuild": "0.25.10",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "playwright": "1.56.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

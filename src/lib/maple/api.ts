@@ -9,6 +9,7 @@ import { DEFAULT_TZ } from "./time";
 import { OnlyHers } from "./validate";
 import { voiceFor } from "./voice";
 import { AnswerError, parseName } from "./onboarding/steps";
+import { logSyncDiagnostic, syncRequestFor } from "./diagnostics";
 import type { Member } from "./types";
 
 /**
@@ -49,18 +50,30 @@ export function familyMismatch(request: NextRequest, ctx: Pick<FamilyCtx, "famil
 export function withMember(route: string, handler: Handler, opts: { write?: boolean; setup?: boolean } = {}) {
   return async function (request: NextRequest): Promise<Response> {
     let fam: FamilyCtx | undefined;
+    const requestId = syncRequestFor(route, request);
+    const started = performance.now();
+    const finish = async (response: Response, reported = false) => {
+      if (requestId) {
+        logSyncDiagnostic({ event: "api_response", requestId, status: response.status, elapsedMs: performance.now() - started });
+        if (response.status >= 400 && !reported) {
+          await captureServerException(new Error("sync_request_failed"), { status: response.status, requestId }).catch(() => {});
+        }
+      }
+      return response;
+    };
     try {
       const signedIn = await sessionContext(request);
-      if (!signedIn) return json({ error: "Not signed in" }, 401);
+      if (!signedIn) return finish(json({ error: "Not signed in" }, 401));
       const { member, ctx } = signedIn;
       fam = ctx;
-      if (ctx.status === "onboarding" && !opts.setup) return json(STILL_SETTING_UP, 403);
+      if (ctx.status === "onboarding" && !opts.setup) return finish(json(STILL_SETTING_UP, 403));
       const mismatch = familyMismatch(request, ctx);
-      if (mismatch) return mismatch;
-      if (opts.write && member.role === "viewer") return json({ error: viewOnlyCopy(ctx) }, 403);
-      return await handler(request, member, ctx);
+      if (mismatch) return finish(mismatch);
+      if (opts.write && member.role === "viewer") return finish(json({ error: viewOnlyCopy(ctx) }, 403));
+      return finish(await handler(request, member, ctx));
     } catch (error) {
-      return errorResponse(route, error, fam);
+      const response = await errorResponse(route, error, fam);
+      return finish(response, response.status === 500);
     }
   };
 }
