@@ -43,9 +43,9 @@ jobs:
       - name: Time editing checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-time-edit
-      - name: Admin metrics access and counts
+      - name: Admin access, drilldowns and waitlist email
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm check:maple-tenancy admin
+        run: pnpm check:maple-tenancy admin admin-details admin-email
       - name: Chat checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-chat
@@ -77,6 +77,11 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: pnpm check:maple-nutrition-ui
+      - name: Check admin in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: node scripts/admin-ui-check/run.mjs
       - name: Save synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -86,6 +91,7 @@ jobs:
             test-results/maple-ui
             test-results/maple-chat-ui
             test-results/maple-nutrition-ui
+            test-results/maple-admin-ui
           if-no-files-found: ignore
       - name: Build without database migrations
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

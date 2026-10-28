@@ -6,6 +6,8 @@ import type { AdminMetrics } from "@/lib/maple/admin/types";
 import EmailSignIn from "../EmailSignIn";
 import { Icon, type IconName } from "../icons";
 import { Button, cx, tone } from "../ui";
+import AdminDetails, { type DetailsSelection } from "./AdminDetails";
+import type { AdminAuthProblem } from "./admin-request";
 
 type Problem = "signin" | "reauth" | "forbidden" | "unavailable";
 const number = new Intl.NumberFormat("en-US");
@@ -28,6 +30,7 @@ export default function AdminMetricsPage() {
     controller.current = current;
     setLoading(true);
     setProblem(null);
+    setMetrics(null);
     try {
       const response = await fetch("/api/maple/admin/metrics", {
         cache: "no-store", credentials: "same-origin", signal: current.signal,
@@ -52,6 +55,13 @@ export default function AdminMetricsPage() {
     }
   }, []);
 
+  const failAuth = useCallback((next: AdminAuthProblem) => {
+    controller.current?.abort();
+    setMetrics(null);
+    setLoading(false);
+    setProblem(next);
+  }, []);
+
   useEffect(() => {
     void load();
     return () => controller.current?.abort();
@@ -74,7 +84,7 @@ export default function AdminMetricsPage() {
       </header>
 
       <div role="status" className="sr-only">{loading ? "Loading metrics" : metrics ? "Metrics updated" : ""}</div>
-      {problem ? <ProblemCard problem={problem} retry={() => void load()} /> : metrics ? <Overview metrics={metrics} /> : <LoadingCards />}
+      {problem ? <ProblemCard problem={problem} retry={() => void load()} /> : metrics ? <Overview metrics={metrics} onAuthProblem={failAuth} /> : <LoadingCards />}
     </main>
   );
 }
@@ -124,58 +134,66 @@ function LoadingCards() {
   );
 }
 
-function MetricCard({ label, value, note, icon, emphasis }: { label: string; value: number; note: string; icon: IconName; emphasis?: boolean }) {
+function MetricCard({ label, value, note, icon, emphasis, onClick, actionLabel }: { label: string; value: number; note: string; icon: IconName; emphasis?: boolean; onClick: () => void; actionLabel: string }) {
   return (
-    <div className={cx(emphasis ? "rounded-[20px] border border-mp-accent bg-mp-accent text-mp-on-accent" : tone.card, "flex flex-col p-4 sm:p-5")}>
-      <dt className={cx("flex items-center justify-between gap-2 text-sm font-medium", !emphasis && "text-mp-ink-2")}>
+    <button type="button" onClick={onClick} aria-label={actionLabel} className={cx(emphasis ? "rounded-[20px] border border-mp-accent bg-mp-accent text-mp-on-accent" : tone.card, "group flex flex-col p-4 text-left transition hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-mp-focus sm:p-5")}>
+      <span className={cx("flex w-full items-center justify-between gap-2 text-sm font-medium", !emphasis && "text-mp-ink-2")}>
         {label}
         <Icon name={icon} size={18} className={emphasis ? "opacity-75" : "text-mp-accent-fg"} />
-      </dt>
-      <dd>
+      </span>
+      <span>
         <span className="mt-4 block text-4xl font-semibold tracking-tight tabular-nums sm:text-[44px]">{number.format(value)}</span>
         <span className={cx("mt-3 block text-xs leading-relaxed", emphasis ? "opacity-85" : "text-mp-ink-3")}>{note}</span>
-      </dd>
-    </div>
+      </span>
+      <span className={cx("mt-3 flex items-center gap-1 text-xs font-semibold", !emphasis && "text-mp-accent-fg")}>View details <Icon name="arrow-right" size={13} /></span>
+    </button>
   );
 }
 
-function Overview({ metrics: m }: { metrics: AdminMetrics }) {
+function Overview({ metrics: m, onAuthProblem }: { metrics: AdminMetrics; onAuthProblem: (problem: AdminAuthProblem) => void }) {
+  const [selection, setSelection] = useState<DetailsSelection | null>(null);
+  const showDetails = (next: DetailsSelection) => {
+    setSelection(next);
+    document.getElementById("admin-details-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const completion = m.families.total ? Math.round(m.families.setupComplete / m.families.total * 100) : 0;
   return (
     <div className="space-y-5">
-      <dl className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <MetricCard label="Families" value={m.families.total} note="Current family accounts" icon="house" emphasis />
-        <MetricCard label="People" value={m.people.total} note="People with accepted accounts" icon="users" />
-        <MetricCard label="New this week" value={m.families.signedUp7d} note="Family signups in the last 7 days" icon="sprout" />
-        <MetricCard label="Waitlist" value={m.waitlist.total} note="Email signups to the waitlist" icon="list" />
-      </dl>
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4" aria-label="Browse accounts and waitlist">
+        <MetricCard label="Families" value={m.families.total} note="Current family accounts" icon="house" emphasis actionLabel="View families" onClick={() => showDetails({ view: "families", filter: "all" })} />
+        <MetricCard label="People" value={m.people.total} note="People with accepted accounts" icon="users" actionLabel="View people" onClick={() => showDetails({ view: "people", filter: "all" })} />
+        <MetricCard label="New this week" value={m.families.signedUp7d} note="Family signups in the last 7 days" icon="sprout" actionLabel="View new families in 7 days" onClick={() => showDetails({ view: "families", filter: "7d" })} />
+        <MetricCard label="Waitlist" value={m.waitlist.total} note="Email signups to the waitlist" icon="list" actionLabel="View waitlist" onClick={() => showDetails({ view: "waitlist", filter: "all" })} />
+      </div>
 
       <p className="px-1 text-xs leading-relaxed text-mp-ink-3">Family and people counts exclude the original family. Updated {updatedFormat.format(new Date(m.generatedAt))}.</p>
 
+      {selection && <AdminDetails key={`${selection.view}/${selection.filter}`} selection={selection} onSelect={showDetails} onClose={() => setSelection(null)} onAuthProblem={onAuthProblem} />}
+
       <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr]">
-        <SignupChart days={m.dailySignups} rollingTotal={m.families.signedUp30d} />
+        <SignupChart days={m.dailySignups} rollingTotal={m.families.signedUp30d} onViewSignups={() => showDetails({ view: "families", filter: "30d" })} />
         <section className={cx(tone.card, "p-5 sm:p-6")} aria-labelledby="setup-title">
           <h2 id="setup-title" className={cx(tone.heading, "text-lg")}>Getting settled</h2>
           <p className="mt-1 text-sm text-mp-ink-2">How many families finished setup.</p>
           <p className="mt-6 text-4xl font-semibold tracking-tight tabular-nums">{m.families.total ? `${completion}%` : "—"}</p>
           <p className="mt-2 text-sm text-mp-ink-2">{number.format(m.families.setupComplete)} of {number.format(m.families.total)} families set up</p>
           <div className="mt-4 h-2 overflow-hidden rounded-full bg-mp-sunken" aria-hidden="true"><div className="h-full rounded-full bg-mp-accent" style={{ width: `${completion}%` }} /></div>
-          <dl className="mt-6 divide-y divide-mp-line">
-            <CountRow label="Setup complete" value={m.families.setupComplete} />
-            <CountRow label="Still setting up" value={m.families.onboarding} />
-            <CountRow label="Deletion requested" value={m.families.deleting} />
-          </dl>
+          <div className="mt-6 divide-y divide-mp-line">
+            <CountRow label="Setup complete" value={m.families.setupComplete} onClick={() => showDetails({ view: "families", filter: "setup_complete" })} />
+            <CountRow label="Still setting up" value={m.families.onboarding} onClick={() => showDetails({ view: "families", filter: "onboarding" })} />
+            <CountRow label="Deletion requested" value={m.families.deleting} onClick={() => showDetails({ view: "families", filter: "deleting" })} />
+          </div>
         </section>
       </div>
 
       <section className={cx(tone.card, "p-5 sm:p-6")} aria-labelledby="activity-title">
         <h2 id="activity-title" className={cx(tone.heading, "text-lg")}>Coming back to Maple</h2>
         <p className="mt-1 text-sm text-mp-ink-2">A family counts once when someone opens its log.</p>
-        <dl className="mt-5 grid gap-6 sm:grid-cols-3 sm:gap-4">
-          <ActivityStat label="Families active in 7 days" value={m.activity.families7d} />
-          <ActivityStat label="Families active in 30 days" value={m.activity.families30d} />
+        <div className="mt-5 grid gap-6 sm:grid-cols-3 sm:gap-4">
+          <ActivityStat label="Families active in 7 days" value={m.activity.families7d} onClick={() => showDetails({ view: "families", filter: "active7d" })} />
+          <ActivityStat label="Families active in 30 days" value={m.activity.families30d} onClick={() => showDetails({ view: "families", filter: "active30d" })} />
           <ActivityStat label="Entries added in 30 days" value={m.activity.entries30d} />
-        </dl>
+        </div>
       </section>
 
       <section className={cx(tone.card, "p-5 sm:p-6")} aria-labelledby="numbers-title">
@@ -195,22 +213,23 @@ function Overview({ metrics: m }: { metrics: AdminMetrics }) {
   );
 }
 
-function CountRow({ label, value }: { label: string; value: number }) {
-  return <div className="flex items-center justify-between gap-4 py-3 text-sm"><dt className="text-mp-ink-2">{label}</dt><dd className="font-semibold tabular-nums">{number.format(value)}</dd></div>;
+function CountRow({ label, value, onClick }: { label: string; value: number; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-lg py-3 text-left text-sm focus-visible:outline-2 focus-visible:outline-mp-focus"><span className="text-mp-ink-2">{label}</span><span className="flex items-center gap-2 font-semibold tabular-nums">{number.format(value)}<Icon name="chevron-right" size={14} className="text-mp-ink-3" /></span></button>;
 }
 
-function ActivityStat({ label, value }: { label: string; value: number }) {
-  return <div className="flex flex-col"><dt className="order-2 mt-2 text-sm text-mp-ink-2">{label}</dt><dd className="order-1 text-3xl font-semibold tracking-tight tabular-nums">{number.format(value)}</dd></div>;
+function ActivityStat({ label, value, onClick }: { label: string; value: number; onClick?: () => void }) {
+  const content = <><span className="block text-3xl font-semibold tracking-tight tabular-nums">{number.format(value)}</span><span className="mt-2 flex items-center gap-1 text-sm text-mp-ink-2">{label}{onClick && <Icon name="chevron-right" size={14} />}</span></>;
+  return onClick ? <button type="button" onClick={onClick} aria-label={`View ${label.toLowerCase()}`} className="rounded-lg text-left focus-visible:outline-2 focus-visible:outline-mp-focus">{content}</button> : <div>{content}</div>;
 }
 
-function SignupChart({ days, rollingTotal }: { days: AdminMetrics["dailySignups"]; rollingTotal: number }) {
+function SignupChart({ days, rollingTotal, onViewSignups }: { days: AdminMetrics["dailySignups"]; rollingTotal: number; onViewSignups: () => void }) {
   const max = Math.max(1, ...days.map((day) => day.count));
   const total = days.reduce((n, day) => n + day.count, 0);
   return (
     <section className={cx(tone.card, "min-w-0 p-5 sm:p-6")} aria-labelledby="signups-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h2 id="signups-title" className={cx(tone.heading, "text-lg")}>New families</h2><p className="mt-1 text-sm text-mp-ink-2">Daily signups · last 30 calendar days</p></div>
-        <p className="rounded-full bg-mp-sunken px-3 py-1.5 text-xs font-medium text-mp-ink-2">{number.format(rollingTotal)} in the last 30 days</p>
+        <button type="button" onClick={onViewSignups} aria-label="View new families in 30 days" className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-mp-sunken px-3 py-1.5 text-xs font-medium text-mp-accent-fg focus-visible:outline-2 focus-visible:outline-mp-focus">{number.format(rollingTotal)} in the last 30 days<Icon name="chevron-right" size={13} /></button>
       </div>
       <div className="mt-6" role="img" aria-label={`${number.format(total)} new families across the displayed dates. Daily counts are available in the table below.`}>
         <div aria-hidden="true" className="mb-2 text-right text-xs tabular-nums text-mp-ink-3">{number.format(max)}</div>

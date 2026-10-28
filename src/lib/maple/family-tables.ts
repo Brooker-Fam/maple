@@ -24,7 +24,7 @@ export const FAMILY_OPTIONAL_TABLES = ["maple_push_sent", "maple_ai_usage"] as c
 /** Made with family_id NOT NULL from the start (a cascade from maple_families), so nothing old writes them. */
 export const FAMILY_KEYED_TABLES = ["maple_upload_counts"] as const;
 
-/** Not family data: abuse counters and the site's waitlist. */
-export const GLOBAL_TABLES = ["upload_rate_limit", "maple_waitlist"] as const;
+/** Not family data: abuse counters, the site's waitlist and its invitation status. */
+export const GLOBAL_TABLES = ["upload_rate_limit", "maple_waitlist", "maple_waitlist_outreach"] as const;
 
 export type FamilyTable = (typeof FAMILY_TABLES)[number] | (typeof FAMILY_OPTIONAL_TABLES)[number];
