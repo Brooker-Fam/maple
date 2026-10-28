@@ -551,12 +551,16 @@ const NURSING_NUTRITION_SOURCE = {
   sourceLabel: "NHS: breastfeeding and diet",
 };
 
+const VARIED_FOOD_SOURCE = {
+  sourceUrl: "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eating-a-balanced-diet/",
+  sourceLabel: "NHS: eating a balanced diet",
+};
+
 export const MOM_NUTRITION_SUGGESTIONS = {
   general: {
     title: "Food and drink, at your pace",
     body: "Choose a variety of foods you enjoy and keep a drink handy. Log whatever is useful to you; the log may not include everything you've had.",
-    sourceUrl: "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eating-a-balanced-diet/",
-    sourceLabel: "NHS: eating a balanced diet",
+    ...VARIED_FOOD_SOURCE,
   },
   drink: {
     title: "Keep a drink within reach",
@@ -582,6 +586,22 @@ export const MOM_NUTRITION_SUGGESTIONS = {
     title: "Keep food and drink nearby",
     body: "With feeds close together, ask someone to bring a drink and a snack if you'd like one. Fruit with nuts, yogurt or hummus with bread are simple options.",
     ...NURSING_NUTRITION_SOURCE,
+  },
+  protein: {
+    title: "An easy protein pairing",
+    body: "For your next meal or snack, you could pair fruit or wholegrain toast with beans, eggs, yogurt or tofu. Choose something that suits you.",
+    sourceUrl: "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/the-vegetarian-diet/",
+    sourceLabel: "NHS: the vegetarian diet",
+  },
+  fiber: {
+    title: "A fiber-rich option",
+    body: "For your next meal or snack, fruit, vegetables, beans or whole grains are ways to add fiber. Pick one you enjoy.",
+    ...VARIED_FOOD_SOURCE,
+  },
+  variety: {
+    title: "A little variety",
+    body: "A fruit or vegetable you enjoy could go alongside your next meal or snack. Fresh, frozen or canned options can all fit.",
+    ...VARIED_FOOD_SOURCE,
   },
 } as const;
 

@@ -8,6 +8,7 @@
  * °F and fl oz by default.
  */
 import type { Assessment, MoodTag } from "./guidelines";
+import type { CareFoodItem } from "./care-nutrition-types";
 
 export type Side = "L" | "R";
 
@@ -417,7 +418,7 @@ export type CareDataByKind = {
   dose: { name: string; dose?: string | null; units?: number | null; unit?: LimitUnit | null; skipped?: boolean };
   temp: { temp_c: number };
   question: { done?: boolean; answer?: string | null }; // the question text is in note
-  food: { description: string; meal: "meal" | "snack" };
+  food: { description: string; meal: "meal" | "snack"; items?: CareFoodItem[] };
   drink: { name: string; amount_ml?: number | null };
 };
 export type MoodDataByKind = {

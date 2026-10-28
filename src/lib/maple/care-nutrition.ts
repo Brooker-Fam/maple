@@ -1,10 +1,23 @@
 import { CLUSTER_GAP_MS, clusterOf, nursingRuns, openSegment, staleFeed, typicalFeedGapMin, type TapFeedData } from "./feed";
+import { foodNutritionSummary } from "./care-nutrition-summary";
+import type { FoodNutritionSummary } from "./care-nutrition-types";
 import { MOM_NUTRITION_SUGGESTIONS } from "./guidelines";
 import { dayBounds, dayKey, formatMinutes, formatTime } from "./time";
 import type { CareEntry, CareNutritionEntry, Entry, EntryOf } from "./types";
 
 type NutritionOptions = { now: Date; tz: string; feeding?: "yes" | "no" | null };
 type SuggestionKey = keyof typeof MOM_NUTRITION_SUGGESTIONS;
+
+function foodSuggestion(nutrition: FoodNutritionSummary): SuggestionKey | null {
+  if (!nutrition.assessedGroupItems || nutrition.unassessedEntries || nutrition.unknownGroupItems) return null;
+  const groups = nutrition.groups;
+  const hasProteinFood = groups.some((group) => ["protein", "legumes", "nuts_seeds", "dairy_or_fortified"].includes(group));
+  const hasFiberFood = groups.some((group) => ["fruit", "vegetables", "whole_grains", "legumes", "nuts_seeds"].includes(group));
+  if (!hasProteinFood) return "protein";
+  if (!hasFiberFood) return "fiber";
+  if (!groups.includes("fruit") && !groups.includes("vegetables")) return "variety";
+  return null;
+}
 
 function recordedNursing(entries: readonly Entry[], now: Date): EntryOf<"feed">[] {
   const happened = (at: string) => Number.isFinite(Date.parse(at)) && Date.parse(at) <= now.getTime();
@@ -75,6 +88,9 @@ export function careNutritionSummary(
   const suggestionKey: SuggestionKey = situation === "running"
     ? drinkCount === 0 ? "drink" : foodCount === 0 ? "snack" : "prepared"
     : situation;
+  const nutrition = foodNutritionSummary(dayEntries);
+  const foodKey = foodSuggestion(nutrition);
+  const suggestion = MOM_NUTRITION_SUGGESTIONS[suggestionKey];
   return {
     dayEntries,
     foodCount,
@@ -82,6 +98,8 @@ export function careNutritionSummary(
     fluidMl,
     unmeasuredDrinks,
     nursingLine,
-    suggestion: MOM_NUTRITION_SUGGESTIONS[suggestionKey],
+    nutrition,
+    suggestion,
+    suggestions: [suggestion, ...(foodKey ? [MOM_NUTRITION_SUGGESTIONS[foodKey]] : [])],
   };
 }

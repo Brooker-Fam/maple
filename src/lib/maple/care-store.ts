@@ -862,16 +862,10 @@ export type CareEntryPatch = {
   expect_updated_at?: string;
 };
 
-/**
- * Edit a dose, temperature or question. The last save wins, like an entry
- * in Maple's log (expect_updated_at is ignored, so two quick "5 min
- * earlier" taps both land); someone else's delete meanwhile answers
- * NotFound (the route says who). A dose edit comes back with its plan's
- * notes and status.
- */
 export async function updateCareEntry(s: CareSession, id: number, patch: CareEntryPatch): Promise<{ entry: CareEntry; notes: Assessment[]; status?: PlanStatus }> {
   const p = needWrite(s);
   const cur = await readableEntry(s, id);
+  const expected = cur.kind === "food" || cur.kind === "drink" ? patch.expect_updated_at ?? cur.updated_at : null;
   const at = patch.at !== undefined ? cleanAt(patch.at, s.now) : new Date(cur.at);
   let plan: CarePlan | null = null;
   if (cur.kind === "dose" && cur.med_id != null) plan = await readablePlan(s, cur.med_id, { includeDeleted: true }).catch(() => null);
@@ -882,12 +876,19 @@ export async function updateCareEntry(s: CareSession, id: number, patch: CareEnt
   // Nothing is hidden anymore ("Only me" is gone): an edit clears any old flag.
   const priv = false;
   const rows = await q(
-    `UPDATE maple_care_entries SET at = $3, data = $4::jsonb, note = $5, private = $6, updated_by = $7, updated_at = NOW()
-     WHERE id = $1 AND family_id = $8 AND person = $2 AND deleted_at IS NULL RETURNING *`,
-    [id, p.member, at.toISOString(), JSON.stringify(data), note, priv, s.viewer.id, s.familyId]
+    `UPDATE maple_care_entries SET at = $3, data = $4::jsonb, note = $5, private = $6, updated_by = $7,
+       updated_at = CASE WHEN $9::timestamptz IS NULL THEN NOW() ELSE GREATEST(NOW(), date_trunc('milliseconds', updated_at) + INTERVAL '1 millisecond') END
+     WHERE id = $1 AND family_id = $8 AND person = $2 AND deleted_at IS NULL
+       AND ($9::timestamptz IS NULL OR date_trunc('milliseconds', updated_at) = date_trunc('milliseconds', $9::timestamptz)) RETURNING *`,
+    [id, p.member, at.toISOString(), JSON.stringify(data), note, priv, s.viewer.id, s.familyId, expected]
   );
-  // Deleted on the other phone between the read and the write.
-  if (!rows.length) throw new NotFound("Not found");
+  if (!rows.length) {
+    if (expected !== null) {
+      const latest = await readableEntry(s, id);
+      throw new CareConflict("This entry changed on another device. Here's the latest.", { entry: latest });
+    }
+    throw new NotFound("Not found");
+  }
   const entry = rowToCareEntry(rows[0]);
   // A dose moved or turned into a skip: what's due moves with it.
   if (entry.kind === "dose") careChanged({ familyId: s.familyId });
@@ -909,7 +910,8 @@ export async function deleteCareEntry(s: CareSession, id: number): Promise<CareE
   const p = needWrite(s);
   await readableEntry(s, id);
   const rows = await q(
-    `UPDATE maple_care_entries SET deleted_at = NOW(), updated_by = $3, updated_at = NOW()
+    `UPDATE maple_care_entries SET deleted_at = NOW(), updated_by = $3,
+       updated_at = CASE WHEN kind IN ('food', 'drink') THEN GREATEST(NOW(), date_trunc('milliseconds', updated_at) + INTERVAL '1 millisecond') ELSE NOW() END
      WHERE id = $1 AND family_id = $4 AND person = $2 AND deleted_at IS NULL RETURNING *`,
     [id, p.member, s.viewer.id, s.familyId]
   );
@@ -923,7 +925,8 @@ export async function restoreCareEntry(s: CareSession, id: number): Promise<Care
   const p = needWrite(s);
   await readableEntry(s, id, { includeDeleted: true });
   const rows = await q(
-    `UPDATE maple_care_entries SET deleted_at = NULL, updated_by = $3, updated_at = NOW()
+    `UPDATE maple_care_entries SET deleted_at = NULL, updated_by = $3,
+       updated_at = CASE WHEN kind IN ('food', 'drink') THEN GREATEST(NOW(), date_trunc('milliseconds', updated_at) + INTERVAL '1 millisecond') ELSE NOW() END
      WHERE id = $1 AND family_id = $4 AND person = $2 AND deleted_at IS NOT NULL RETURNING *`,
     [id, p.member, s.viewer.id, s.familyId]
   );

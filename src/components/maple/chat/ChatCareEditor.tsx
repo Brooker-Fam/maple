@@ -6,6 +6,8 @@ import { forMom } from "@/lib/maple/care";
 import { assessMomTemp } from "@/lib/maple/guidelines";
 import { cToF, fToC } from "@/lib/maple/units";
 import { nutritionAmountText, nutritionEditData } from "@/lib/maple/chat/nutrition-edit";
+import type { CareFoodItem } from "@/lib/maple/care-nutrition-types";
+import { FoodItemsFields } from "../care/FoodItemsFields";
 import { useCare } from "../care/useCare";
 import { RecordedTimeField } from "../TimeField";
 import { AssessmentCard } from "../sheets/parts";
@@ -24,6 +26,7 @@ export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; o
   const [temperature, setTemperature] = useState(entry.kind === "temp" ? String(Math.round((units === "us" ? cToF(entry.data.temp_c) : entry.data.temp_c) * 10) / 10) : "");
   const [description, setDescription] = useState(entry.kind === "food" ? entry.data.description : "");
   const [meal, setMeal] = useState<"meal" | "snack">(entry.kind === "food" ? entry.data.meal : "meal");
+  const [items, setItems] = useState<CareFoodItem[] | undefined>(entry.kind === "food" ? entry.data.items : undefined);
   const [drinkName, setDrinkName] = useState(entry.kind === "drink" ? entry.data.name : "");
   const [amount, setAmount] = useState(entry.kind === "drink" ? nutritionAmountText(entry, units) : "");
   const [busy, setBusy] = useState(false);
@@ -34,7 +37,7 @@ export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; o
   let nutritionData: ReturnType<typeof nutritionEditData> | null = null;
   let nutritionProblem: string | null = null;
   if (entry.kind === "food" || entry.kind === "drink") {
-    try { nutritionData = nutritionEditData(entry, { description, meal, name: drinkName, amount }, editUnits); }
+    try { nutritionData = nutritionEditData(entry, { description, meal, name: drinkName, amount, items }, editUnits); }
     catch (error) {
       const message = error instanceof Error ? error.message : "Check the food or drink details.";
       nutritionProblem = message.startsWith("Drink amount") ? `Enter a positive amount up to ${editUnits === "metric" ? "5,000 ml" : "169 oz"}, or leave it blank.` : message;
@@ -72,6 +75,7 @@ export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; o
       {entry.kind === "food" && <>
         <Segmented aria-label="Food type" value={meal} onChange={setMeal} options={[{ value: "meal", label: "Meal" }, { value: "snack", label: "Snack" }]} />
         <label className={cx(tone.body, "block space-y-2 text-[15px]")}><span>What was it? (optional)</span><textarea aria-label="What was it?" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} rows={3} className={tone.input} /></label>
+        <FoodItemsFields items={items ?? []} onChange={setItems} />
       </>}
       {entry.kind === "drink" && <>
         <label className={cx(tone.body, "block space-y-2 text-[15px]")}><span>Drink</span><input aria-label="Drink" value={drinkName} onChange={(event) => setDrinkName(event.target.value)} maxLength={100} className={tone.input} /></label>

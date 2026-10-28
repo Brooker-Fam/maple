@@ -39,6 +39,9 @@ assert.equal(careReceiptDetails({ ...drink, data: { name: "Water", amount_ml: 25
 assert.equal(careReceiptDetails({ ...drink, data: { name: "Water", amount_ml: null } }, "us").description, "Amount not recorded");
 const draft = { description: "Yogurt", meal: "snack" as const, name: "Tea", amount: nutritionAmountText(drink, "us") };
 assert.deepEqual(nutritionEditData(food, draft, "us"), { description: "Yogurt", meal: "snack" });
+const detailedFood: CareNutritionEntry = { ...food, data: { ...food.data, items: [{ name: "Oats", portion: "1 bowl", nutrients: { protein_g: 6, fiber_g: 0, energy_kcal: null }, groups: ["whole_grains"], source: "estimate", note: "Typical bowl" }] } };
+assert.deepEqual(nutritionEditData(detailedFood, draft, "us"), { ...detailedFood.data, description: "Yogurt", meal: "snack" }, "Editing a chat receipt preserves optional nutrients, provenance and unknown values");
+assert.deepEqual(nutritionEditData(detailedFood, { ...draft, items: [] }, "us"), { description: "Yogurt", meal: "snack", items: [] }, "Clearing optional food details is explicit");
 assert.deepEqual(nutritionEditData(drink, draft, "us"), { name: "Tea", amount_ml: 237 }, "An unchanged rounded amount retains exact source volume");
 assert.deepEqual(nutritionEditData(drink, { ...draft, amount: "6" }, "us"), { name: "Tea", amount_ml: ozToMl(6) });
 assert.deepEqual(nutritionEditData(drink, { ...draft, amount: "250" }, "metric"), { name: "Tea", amount_ml: 250 });

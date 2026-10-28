@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { careNutritionSummary } from "../src/lib/maple/care-nutrition";
+import { foodNutritionSummary } from "../src/lib/maple/care-nutrition-summary";
+import { NUTRIENT_KEYS, type CareFoodItem } from "../src/lib/maple/care-nutrition-types";
 import type { CareEntry, CareNutritionEntry, Entry, EntryOf, Segment } from "../src/lib/maple/types";
 
 let passed = 0;
@@ -30,6 +32,16 @@ function drink(at: string, amount_ml?: number | null): CareNutritionEntry {
   return {
     ...food(at), kind: "drink", data: { name: "Example water", ...(amount_ml === undefined ? {} : { amount_ml }) },
   };
+}
+
+function assessedFood(items: CareFoodItem[], at = "2026-10-20T15:00:00Z"): CareNutritionEntry {
+  const entry = food(at);
+  assert.equal(entry.kind, "food");
+  return { ...entry, data: { ...entry.data, items } };
+}
+
+function item(patch: Partial<CareFoodItem> = {}): CareFoodItem {
+  return { name: "Example food", portion: "One portion", nutrients: {}, groups: null, source: "manual", ...patch };
 }
 
 function feed(start: string, end: string | null, options: { active?: boolean; bottle?: boolean; segments?: Segment[] } = {}): EntryOf<"feed"> {
@@ -217,6 +229,124 @@ check("a running timer without recorded nursing parts does not claim a pause", (
   const s = summary([], [feed("2026-10-20T15:50:00Z", null, { segments: [] })]);
   assert.equal(s.nursingLine, "Nursing timer needs checking");
   general(s);
+});
+
+check("an empty nutrition summary keeps every nutrient unknown rather than zero", () => {
+  const s = foodNutritionSummary([]);
+  for (const key of NUTRIENT_KEYS) assert.deepEqual(s.nutrients[key], { total: null, knownItems: 0, estimatedItems: 0 });
+});
+
+check("nutrient totals preserve known zeros and count estimates separately for each nutrient", () => {
+  const s = foodNutritionSummary([assessedFood([
+    item({ nutrients: { protein_g: 10, fiber_g: 0, carbs_g: null }, groups: ["protein"], source: "label" }),
+    item({ nutrients: { protein_g: 5, fiber_g: 3, energy_kcal: 100 }, groups: ["fruit", "whole_grains"], source: "estimate" }),
+    item({ nutrients: { protein_g: 0, fat_g: 2 }, groups: [] }),
+    item({ source: "estimate" }),
+  ])]);
+  assert.deepEqual(s.nutrients.protein_g, { total: 15, knownItems: 3, estimatedItems: 1 });
+  assert.deepEqual(s.nutrients.fiber_g, { total: 3, knownItems: 2, estimatedItems: 1 });
+  assert.deepEqual(s.nutrients.fat_g, { total: 2, knownItems: 1, estimatedItems: 0 });
+  assert.deepEqual(s.nutrients.energy_kcal, { total: 100, knownItems: 1, estimatedItems: 1 });
+  assert.deepEqual(s.nutrients.carbs_g, { total: null, knownItems: 0, estimatedItems: 0 });
+});
+
+check("food groups are unique and explicit empty groups differ from unassessed groups", () => {
+  const s = foodNutritionSummary([assessedFood([
+    item({ groups: ["whole_grains", "protein"] }),
+    item({ groups: ["fruit", "protein", "fruit"] }),
+    item({ groups: [] }),
+    item(),
+  ])]);
+  assert.deepEqual(s.groups, ["protein", "fruit", "whole_grains"]);
+  assert.equal(s.itemCount, 4);
+  assert.equal(s.assessedGroupItems, 3);
+  assert.equal(s.unknownGroupItems, 1);
+});
+
+check("legacy food and empty item lists stay unassessed without reading description keywords", () => {
+  const legacy = food("2026-10-20T15:00:00Z");
+  assert.equal(legacy.kind, "food");
+  legacy.data.description = "Tofu, wholegrain toast, spinach and berries";
+  const s = foodNutritionSummary([legacy, assessedFood([]), drink("2026-10-20T15:00:00Z", 250)]);
+  assert.equal(s.unassessedEntries, 2);
+  assert.equal(s.itemCount, 0);
+  assert.deepEqual(s.groups, []);
+  assert.equal(s.nutrients.protein_g.total, null);
+});
+
+check("invalid nutrient numbers cannot contaminate the recorded totals", () => {
+  const s = foodNutritionSummary([assessedFood([
+    item({ nutrients: { protein_g: -2, fiber_g: NaN, fat_g: Infinity, energy_kcal: -Infinity } }),
+    item({ nutrients: { protein_g: 0, fiber_g: 1, fat_g: 2 } }),
+  ])]);
+  assert.deepEqual(s.nutrients.protein_g, { total: 0, knownItems: 1, estimatedItems: 0 });
+  assert.deepEqual(s.nutrients.fiber_g, { total: 1, knownItems: 1, estimatedItems: 0 });
+  assert.equal(s.nutrients.energy_kcal.total, null);
+});
+
+check("standalone food aggregation includes all supplied dates for a selected history day", () => {
+  const s = foodNutritionSummary([
+    assessedFood([item({ nutrients: { protein_g: 3 } })], "2026-10-01T12:00:00Z"),
+    assessedFood([item({ nutrients: { protein_g: 9 } })], "2026-10-22T12:00:00Z"),
+  ]);
+  assert.equal(s.nutrients.protein_g.total, 12);
+  assert.equal(s.itemCount, 2);
+});
+
+check("the live care summary aggregates nutrition only from the family's today through now", () => {
+  const s = summary([
+    assessedFood([item({ nutrients: { protein_g: 99 } })], "2026-10-20T03:59:00Z"),
+    assessedFood([item({ nutrients: { protein_g: 12 } })], "2026-10-20T04:00:00Z"),
+    assessedFood([item({ nutrients: { protein_g: 88 } })], "2026-10-20T17:00:00Z"),
+  ]);
+  assert.equal(s.nutrition.nutrients.protein_g.total, 12);
+  assert.equal(s.nutrition.itemCount, 1);
+});
+
+check("fruit-only assessed groups offer an optional protein pairing without a deficit claim", () => {
+  const s = summary([assessedFood([item({ groups: ["fruit"] })])]);
+  assert.equal(s.suggestions.length, 2);
+  assert.equal(s.suggestions[0], s.suggestion);
+  assert.equal(s.suggestions[1].title, "An easy protein pairing");
+  assert.doesNotMatch(s.suggestions[1].body, /not enough|missing|low in|deficien|need|remaining|calori/i);
+});
+
+check("protein-only assessed groups offer a fiber-rich option", () => {
+  const s = summary([assessedFood([item({ groups: ["protein"] })])]);
+  assert.equal(s.suggestions[1].title, "A fiber-rich option");
+  assert.match(s.suggestions[1].sourceUrl, /^https:\/\/www\.nhs\.uk\//);
+});
+
+check("whole grains and dairy can prompt a fruit or vegetable idea without scoring the meal", () => {
+  const s = summary([assessedFood([item({ groups: ["whole_grains", "dairy_or_fortified"] })])]);
+  assert.equal(s.suggestions[1].title, "A little variety");
+  assert.doesNotMatch(s.suggestions[1].body, /score|goal|target|calori|remaining/i);
+});
+
+check("unassessed foods or unknown groups keep targeted food suggestions off", () => {
+  for (const entries of [
+    [assessedFood([item({ groups: ["fruit"] }), item()])],
+    [assessedFood([item({ groups: ["fruit"] })]), food("2026-10-20T15:30:00Z")],
+  ]) {
+    const s = summary(entries);
+    assert.deepEqual(s.suggestions, [s.suggestion]);
+  }
+});
+
+check("food variety guidance stays available without nursing-specific copy when nursing is off", () => {
+  const s = summary([assessedFood([item({ groups: ["protein"] })])], [feed("2026-10-20T15:50:00Z", null)], { feeding: "no" });
+  assert.equal(s.suggestions.length, 2);
+  assert.doesNotMatch(s.suggestions.map((suggestion) => suggestion.body).join(" "), /nurs|breast|feed/i);
+});
+
+check("cluster guidance remains first and food guidance never expands beyond two suggestions", () => {
+  const s = summary([assessedFood([item({ groups: [] })])], [
+    feed("2026-10-20T14:50:00Z", "2026-10-20T15:00:00Z"),
+    feed("2026-10-20T15:15:00Z", "2026-10-20T15:25:00Z"),
+    feed("2026-10-20T15:40:00Z", "2026-10-20T15:50:00Z"),
+  ]);
+  assert.equal(s.suggestions.length, 2);
+  assert.equal(s.suggestions[0].title, "Keep food and drink nearby");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

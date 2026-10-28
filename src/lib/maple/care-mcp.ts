@@ -70,7 +70,7 @@ import { NotFound, StoreUnavailable } from "./store";
 import { addDays, dayKey } from "./time";
 import type { CareEntry, CarePlan, DoseEntry, MedReason, PlanInput, Source } from "./types";
 import { cToF, fToC } from "./units";
-import { nutritionEntryText, registerNutritionTools } from "./care-nutrition-mcp";
+import { careFoodItemsSchema, nutritionEntryText, registerNutritionTools } from "./care-nutrition-mcp";
 
 /**
  * Her mom's own medicines, temperature and questions as MCP tools (§10 of
@@ -1236,6 +1236,7 @@ export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE
         answer: z.string().max(1000).nullish().describe("update, a question: what her OB said, in the family's words."),
         food_description: z.string().trim().min(1).max(500).optional().describe("update, food: what she ate, in her words."),
         meal: z.enum(["meal", "snack"]).optional().describe("update, food: meal or snack."),
+        items: careFoodItemsSchema.optional().describe("update, food: explicitly replace the entire food list. Include every food to retain; [] clears the details. Omit to preserve existing details during other corrections. Re-estimate only if requested, preserving whether values are estimated, from a label or entered manually."),
         drink_name: z.string().trim().min(1).max(100).optional().describe("update, a drink: what she drank."),
         amount_ml: z.number().positive().max(5000).nullable().optional().describe("update, a drink: stated volume in mL; null clears an unknown amount."),
       },
@@ -1278,11 +1279,12 @@ export function registerCareTools(server: McpServer, copy: ToolCopy = FAMILY_ONE
       } else if (cur.kind === "food") {
         if (a.food_description !== undefined) data.description = a.food_description;
         if (a.meal !== undefined) data.meal = a.meal;
+        if (a.items !== undefined) data.items = a.items;
       } else if (cur.kind === "drink") {
         if (a.drink_name !== undefined) data.name = a.drink_name;
         if (a.amount_ml !== undefined) data.amount_ml = a.amount_ml;
       }
-      if (cur.kind !== "food" && (a.food_description !== undefined || a.meal !== undefined)) throw new ToolError("Food fields can only change a food entry.");
+      if (cur.kind !== "food" && (a.food_description !== undefined || a.meal !== undefined || a.items !== undefined)) throw new ToolError("Food fields can only change a food entry.");
       if (cur.kind !== "drink" && (a.drink_name !== undefined || a.amount_ml !== undefined)) throw new ToolError("Drink fields can only change a drink entry.");
       const wrong = cur.kind !== "dose" && (a.units != null || a.dose != null || a.skipped != null) ? "units, dose and skipped are for doses" : cur.kind !== "question" && (a.done != null || a.answer != null) ? "done and answer are for questions" : null;
       if (wrong) throw new ToolError(`c${id} is a ${cur.kind === "temp" ? "temperature" : cur.kind}: ${wrong}.`);

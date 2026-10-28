@@ -82,7 +82,8 @@ export default function Privacy() {
         phone that did it. Chat also uses that id to keep a phone-preference card attached to the phone where it was requested.
       </p>
       <p>
-        Mom&rsquo;s page keeps her food and drinks, any amounts she records, her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
+        Mom&rsquo;s page keeps her food and drinks, any amounts she records, optional food items and portions, nutrient values and food groups,
+        whether values were estimated or entered from a label, and any notes about those estimates. It also keeps her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
         her daily check-ins, including the optional PHQ-9 and GAD-7 questionnaires.
       </p>
       <p>
@@ -248,7 +249,8 @@ export default function Privacy() {
       <p>
         When you use the chat, your message, answers to question cards, the recent conversation, and the log or supported family settings it reads to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
-        see her page can use the chat with her food, drinks and recorded amounts, medicines and doses, temperatures and questions for her OB. Her check-ins never
+        see her page can use the chat with her food, drinks, portions and nutrient details, medicines and doses, temperatures and questions for her OB. If you ask for food estimates,
+        the chat can save approximate nutrient values with the entry, marked as estimates that you can edit. Her check-ins never
         reach the chat. Every request asks the
         Gateway for zero data retention and no training on your data, and names the only providers it may be sent to, each one
         the Gateway lists as keeping no data. Nothing about your messages goes into Maple&rsquo;s logs or error reports.

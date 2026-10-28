@@ -40,7 +40,7 @@ function App() {
     const method = init.method ?? "GET";
     const body = init.body ? JSON.parse(init.body) : null;
     const id = Number(url.searchParams.get("id"));
-    requests.current.push({ path: url.pathname, method, id: id || null, body });
+    requests.current.push({ path: url.pathname, method, id: id || null, body, query: url.search, family: init.headers?.["X-Maple-Family"] });
     if (delayed.current) await new Promise((resolve) => { delayed.current = resolve; });
     if (fail.current) { const error = fail.current; fail.current = null; throw error; }
     if (url.pathname === "/api/maple/care/entries/restore") {
@@ -57,6 +57,10 @@ function App() {
       };
       server.current.push(entry);
       return { created: true, entry, notes: [] };
+    }
+    if (method === "GET") {
+      const from = url.searchParams.get("from");
+      return { entries: server.current.filter((entry) => entry.at.startsWith(from)), tz: "America/New_York" };
     }
     const existing = server.current.find((entry) => entry.id === id);
     if (!existing) throw new ApiError(404, "This entry was removed", { reason: "discarded", deleted_by: "alex@example.test" });
@@ -106,6 +110,10 @@ function App() {
       snapshot: () => ({ state: latest.current.state, server: server.current, requests: requests.current, queued: queued.current }),
       clearToasts: () => setToasts([]),
       setUnits,
+      poll: () => setState((current) => ({ ...current, care: { ...current.care, entries: [...current.care.entries] } })),
+      seedHistory: () => {
+        server.current = [{ id: 8001, kind: "food", at: "2026-10-24T13:00:00.000Z", data: { description: "Lentil toast", meal: "meal", items: [{ name: "Lentils", portion: "Half a cup", nutrients: { protein_g: 9, fiber_g: 8, energy_kcal: 115 }, groups: ["legumes", "protein"], source: "estimate", note: "Synthetic estimate" }] }, note: "Synthetic meal note", updated_at: NOW.toISOString() }];
+      },
       offline: () => { fail.current = new TypeError("Offline"); },
       reject: () => { fail.current = new ApiError(400, "That entry could not be saved"); },
       pauseRequest: () => { delayed.current = true; },
