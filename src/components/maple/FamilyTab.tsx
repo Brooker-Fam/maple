@@ -19,6 +19,7 @@ import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import { Icon, type IconName } from "./icons";
 import { LegalLinks } from "./Legal";
 import { logSwitches } from "./MoreSheet";
+import SignInMethods from "./SignInMethods";
 import { useNightPref, type NightPref } from "./nightLook";
 import { NotificationsRow, useNotifications } from "./notify";
 import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, SectionTitle, Sheet, cx, memberColor, tone } from "./ui";
@@ -44,7 +45,7 @@ import { MAPLE_HOST, MAPLE_ORIGIN, MCP_URL } from "@/lib/maple/origin";
 type Invite = {
   id: number;
   role: Role;
-  /** A pending invite for one Google address (outside family 1). */
+  /** A pending invite for one email address (outside family 1). */
   email?: string | null;
   display_name: string | null;
   emoji: string | null;
@@ -370,6 +371,7 @@ export default function FamilyTab() {
       {!readOnly && <Assistants />}
       <ChatPrivacy />
       <HelpSection />
+      <SignInMethods memberId={state.me.email} />
       <DataAndAccount />
       <About />
       <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
@@ -455,7 +457,7 @@ function People() {
             <InviteByEmail onInvited={() => void loadInvites()} />
             <ActionRow
               icon="link"
-              label="Invite someone without Google"
+              label="Invite with a one-time link"
               note="A one-time link for grandparents or a helper. No account needed."
               chevron
               onClick={() => setLinkOpen(true)}
@@ -583,7 +585,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
         <div className="mt-3 space-y-3 pb-1.5">
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>
             This is the site&apos;s admin password. Turning it off here means it no longer opens Maple&apos;s Log (or connects
-            Claude/ChatGPT to it). Google sign-in keeps working for everyone else.
+            Claude/ChatGPT to it). Other sign-in methods keep working for everyone else.
           </p>
           {!confirmRemove ? (
             <Button variant="danger" size="sm" className="w-full" onClick={() => setConfirmRemove(true)}>
@@ -637,7 +639,7 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
       if (r.url) {
         setPending({ email: email.trim(), url: r.url, emailed: r.emailed === true });
         onInvited();
-      } else toast(`Added ${email.trim()}. They can sign in with Google at ${MAPLE_HOST}/maple`, { duration: 6000 });
+      } else toast(`Added ${email.trim()}. They can sign in with that email address at ${MAPLE_HOST}/maple`, { duration: 6000 });
       setEmail("");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't add them", { tone: "error" });
@@ -654,7 +656,7 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
       }}
       className="space-y-2.5 px-4 pt-3 pb-3.5"
     >
-      <span className={cx(tone.label, "block")}>Invite with a Google account</span>
+      <span className={cx(tone.label, "block")}>Invite by email</span>
       <input
         className={tone.input}
         type="email"
@@ -663,7 +665,7 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
         autoComplete="off"
         spellCheck={false}
         placeholder={one ? "brittany@gmail.com" : "name@gmail.com"}
-        aria-label="Their Google email"
+        aria-label="Their email address"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
@@ -684,7 +686,7 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
       {pending?.emailed && (
         <div className="space-y-2 pt-1" aria-live="polite">
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-            Invite emailed to {pending.email}. They join once they open its link and sign in with that Google account. It works once, for 7 days.
+            Invite emailed to {pending.email}. They join once they open its link and sign in with that email address. It works once, for 7 days.
           </p>
           <CopyButton text={pending.url} label="Copy link" className="min-h-[44px] w-full text-[15px]" />
         </div>
@@ -692,7 +694,7 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
       {pending && !pending.emailed && (
         <div className="space-y-2 pt-1" aria-live="polite">
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-            Send {pending.email} this link. They join once they open it and sign in with that Google account. It works once, for 7 days.
+            Send {pending.email} this link. They join once they open it and sign in with that email address. It works once, for 7 days.
           </p>
           <div className={cx(tone.inset, "p-3")}>
             <p className="font-mono text-[13px] leading-relaxed break-all text-mp-ink select-all">{pending.url}</p>
@@ -762,7 +764,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
     <Sheet
       open={open}
       onClose={onClose}
-      title={url ? "Link ready" : "Invite without Google"}
+      title={url ? "Link ready" : "Invite with a link"}
       footer={
         url ? (
           <Button size="lg" className="w-full" onClick={onClose}>
@@ -1297,7 +1299,7 @@ function ConnectAI() {
           <dl className="space-y-3 text-sm">
             <div>
               <dt className={cx(tone.body, "font-semibold")}>Claude (web, desktop, phone)</dt>
-              <dd className={tone.muted}>Settings → Connectors → Add custom connector, then sign in with Google.</dd>
+              <dd className={tone.muted}>Settings → Connectors → Add custom connector, then sign in to Maple.</dd>
             </div>
             <div>
               <dt className={cx(tone.body, "font-semibold")}>ChatGPT</dt>

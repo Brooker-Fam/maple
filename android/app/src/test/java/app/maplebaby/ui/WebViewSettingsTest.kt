@@ -19,7 +19,7 @@ class WebViewSettingsTest {
 
         webView.configure()
 
-        assertEquals("Mozilla/5.0 (Linux; Android 15) Chrome/140.0 Maple-Native-App/1.0 (android)", webView.settings.userAgentString)
+        assertEquals("Mozilla/5.0 (Linux; Android 15) Chrome/140.0 Maple-Native-App/1.1 (android)", webView.settings.userAgentString)
         assertTrue(webView.settings.javaScriptEnabled)
         assertTrue(webView.settings.domStorageEnabled)
     }

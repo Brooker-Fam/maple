@@ -1,4 +1,6 @@
 import { randomUUID } from "crypto";
+import { resolveEmailIdentity } from "../auth-identities";
+import { sameOriginRequest } from "../auth-request";
 import { NextResponse, type NextRequest } from "next/server";
 import { captureAppEvent, captureSignupCompleted, captureSignupStartedSoon } from "@/lib/analytics/server";
 import { LEGAL_VERSION } from "@/components/site/legal";
@@ -78,14 +80,14 @@ export const SIGNUP_ERRORS = {
   busy: "Too many tries from this connection. Try again in an hour.",
   full: "Maple has taken all the new families it can for today. Try again tomorrow.",
   ip_limit: "Several families were started from this connection today. Try again tomorrow.",
-  account_limit: "That Google account started a family in the last day. Sign in to it instead.",
+  account_limit: "That account started a family in the last day. Sign in to it instead.",
   invite: "That invite link has been used or has expired. Ask the family for a new one.",
-  elsewhere: "That Google account is already in another family’s log, and can join a second one later. Use the invite link without Google for now.",
+  elsewhere: "That account is already in another family’s log, and can join a second one later. Use the invite link without Google for now.",
   cross: "Start from Maple’s own sign-up page.",
-  not_configured: "Google sign-in isn’t set up here yet.",
-  denied: "Google sign-in was cancelled. Try again whenever you’re ready.",
+  not_configured: "That sign-in method isn’t set up here yet.",
+  denied: "Sign-in was cancelled. Try again whenever you’re ready.",
   bad_state: "That sign-in took a wrong turn (it may have sat open too long). Please try once more.",
-  no_email: "Google didn’t share a verified email for that account. Try a different account.",
+  no_email: "Your sign-in provider didn’t share a verified email for that account. Try a different account.",
   unavailable: "Maple is offline for a moment. Please try again shortly.",
   failed: "Something went wrong. Please try again.",
 } as const;
@@ -113,7 +115,7 @@ async function readForm(req: Request): Promise<URLSearchParams | null> {
 /** POST /api/maple/signup/start: a plain form post, so it works before the page's script loads. */
 export async function startSignup(req: NextRequest): Promise<NextResponse> {
   const base = getAppBaseUrl();
-  if (req.headers.get("sec-fetch-site") === "cross-site") return toSignup(base, "cross");
+  if (!sameOriginRequest(req)) return toSignup(base, "cross");
   const form = await readForm(req);
   const site = signInSite(form?.get("site"));
   const invite = form?.get("invite")?.trim() || null;
@@ -121,7 +123,9 @@ export async function startSignup(req: NextRequest): Promise<NextResponse> {
   if (!form) return fail("failed");
   const mode = await effectiveSignupMode();
   if (mode === "off") return fail("off");
-  if (!isGoogleConfigured()) return fail("not_configured");
+  const provider = form.get("provider") ?? "google";
+  if (provider !== "google" && provider !== "apple") return fail("not_configured");
+  if (provider === "google" && !isGoogleConfigured()) return fail("not_configured");
   if (!(await allowAttempt(req))) return fail("busy");
 
   let intent: SignupIntent;
@@ -139,6 +143,13 @@ export async function startSignup(req: NextRequest): Promise<NextResponse> {
       if (!usable) return fail("code");
     }
     intent = { kind: "create", code, tz: validTimeZone(form.get("tz")) ?? DEFAULT_TZ, terms: LEGAL_VERSION };
+  }
+
+  if (provider === "apple") {
+    const { beginApple } = await import("../apple-flow");
+    const response = await beginApple(req, { mode: "signup", signup: intent, site, back: "/maple" });
+    if (intent.kind === "create" && response.headers.get("location")?.startsWith("https://appleid.apple.com/")) captureSignupStartedSoon();
+    return response;
   }
 
   const state = `${SIGNUP_STATE_PREFIX}${randomUUID()}`;
@@ -208,31 +219,11 @@ export async function handleSignupCallback(req: NextRequest, deps: SignupCallbac
     const who = await deps.identify(code, site);
     if (!who) return fail("no_email");
 
-    let familyId: number;
-    if (intent.kind === "join") {
-      const joined = await joinByInvite(who, intent.invite);
-      if (joined.reason) return fail(joined.reason);
-      familyId = joined.familyId;
-    } else if (onFamilyOneAllowlist(who.email)) {
-      const joined = await joinWithGoogle(who);
-      if (!joined.member) return fail(joined.reason === "unavailable" ? "unavailable" : "failed");
-      familyId = joined.familyId;
-    } else {
-      const created = await createFamily(who, { code: intent.code, tz: intent.tz, via: mode, terms: intent.terms }, req);
-      if (created.reason === "exists") {
-        const home = await homeFamily(who.email);
-        if (home === null) return fail("unavailable");
-        familyId = home;
-      } else if (created.reason) {
-        return fail(created.reason);
-      } else {
-        familyId = created.familyId;
-        const made = { familyId, to: who.email, name: who.name, origin: getAppBaseUrl() };
-        later(async () => {
-          await Promise.all([emailWelcome(made), captureAppEvent(familyId, "signed_up"), captureSignupCompleted(familyId)]);
-        }, "maple signup notices");
-      }
-    }
+    const verifiedEmail = who.email;
+    who.email = await resolveEmailIdentity(who.email);
+    const completed = await completeSignup(req, who, intent, verifiedEmail);
+    if ("error" in completed) return fail(completed.error);
+    const { familyId } = completed;
 
     const url = new URL("/maple", site);
     url.searchParams.set("auth", "ok");
@@ -244,4 +235,30 @@ export async function handleSignupCallback(req: NextRequest, deps: SignupCallbac
     await captureServerException(error, { route: "GET /api/maple/auth/callback (signup)" });
     return fail("failed");
   }
+}
+
+/** The same family admission rules for each verified sign-in provider. */
+export async function completeSignup(req: NextRequest, who: GoogleIdentity, intent: SignupIntent, verifiedEmail = who.email): Promise<{ familyId: number } | { error: SignupError }> {
+  const mode = await effectiveSignupMode();
+  if (mode === "off") return { error: "off" };
+  if (intent.kind === "join") {
+    const joined = await joinByInvite(who, intent.invite, verifiedEmail);
+    return joined.reason ? { error: joined.reason } : { familyId: joined.familyId };
+  }
+  if (onFamilyOneAllowlist(who.email)) {
+    const joined = await joinWithGoogle(who);
+    return joined.member ? { familyId: joined.familyId } : { error: joined.reason === "unavailable" ? "unavailable" : "failed" };
+  }
+  const created = await createFamily(who, { code: intent.code, tz: intent.tz, via: mode, terms: intent.terms }, req);
+  if (created.reason === "exists") {
+    const familyId = await homeFamily(who.email);
+    return familyId === null ? { error: "unavailable" } : { familyId };
+  }
+  if (created.reason) return { error: created.reason };
+  const familyId = created.familyId;
+  const made = { familyId, to: who.email, name: who.name, origin: getAppBaseUrl() };
+  later(async () => {
+    await Promise.all([emailWelcome(made), captureAppEvent(familyId, "signed_up"), captureSignupCompleted(familyId)]);
+  }, "maple signup notices");
+  return { familyId };
 }

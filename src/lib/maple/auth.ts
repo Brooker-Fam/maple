@@ -1,7 +1,8 @@
 import { OAuth2Client } from "google-auth-library";
 import { createHash, randomBytes } from "crypto";
 import type { NextRequest, NextResponse } from "next/server";
-import { query } from "@/lib/db";
+import { query, transaction } from "@/lib/db";
+import { IDENTITY_LOCK } from "./auth-identities";
 import { getAppBaseUrl, encryptSecret, openSecret } from "@/lib/secret-box";
 import { verifyAdminCreds } from "@/lib/mcp/auth";
 import type { Member, Role } from "./types";
@@ -148,11 +149,20 @@ export function setSessionCookies(res: NextResponse, id: string, familyId: numbe
   // An old cookie at "/" (early builds) would be sent alongside and could
   // shadow the new one, so expire it.
   res.headers.append("Set-Cookie", sessionCookieHeader("", "/", 0));
+  clearPendingAppleLink(res);
 }
 
 export function clearSessionCookies(res: NextResponse): void {
   // "/" too: early builds set it there.
   for (const path of [...SESSION_PATHS, "/"]) res.headers.append("Set-Cookie", sessionCookieHeader("", path, 0));
+  clearPendingAppleLink(res);
+}
+
+// Apple's cross-site form_post cannot read the Lax login cookie. Invalidate
+// its browser proof whenever this browser signs out, changes account, or
+// switches families, so a pending link never attaches after an account change.
+function clearPendingAppleLink(res: NextResponse): void {
+  res.headers.append("Set-Cookie", "maple_apple_state=; Path=/api/maple/auth/apple/callback; Max-Age=0; HttpOnly; Secure; SameSite=None");
 }
 
 /**
@@ -260,12 +270,13 @@ export async function joinWithGoogle(who: GoogleIdentity): Promise<GoogleJoin> {
 
   const role: Role = noOneYet ? "owner" : "member";
   // No emoji: avatars show the initial in the member's color until they pick one in Family.
-  const inserted = await query(
-    `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at)
-     VALUES ($1, $2, $3, $4, NULL, 'self', NOW())
-     ON CONFLICT (family_id, email) DO NOTHING`,
-    [FAMILY_ONE, who.email, role, who.name]
-  );
+  const inserted = await transaction([
+    { sql: `SELECT pg_advisory_xact_lock(${IDENTITY_LOCK})` },
+    { sql: `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at)
+      SELECT $1, $2, $3, $4, NULL, 'self', NOW()
+      WHERE NOT EXISTS (SELECT 1 FROM maple_auth_identities WHERE provider = 'email' AND subject = $2 AND member_id <> $2)
+      ON CONFLICT (family_id, email) DO NOTHING`, params: [FAMILY_ONE, who.email, role, who.name] },
+  ]);
   if (inserted === null) return { member: null, reason: "unavailable" };
   const member = await memberFor({ familyId: FAMILY_ONE }, who.email);
   return member ? { member, familyId: FAMILY_ONE } : { member: null, reason: "unavailable" };
@@ -326,12 +337,14 @@ export function sessionContext(request: NextRequest): Promise<SignedIn | null> {
 export async function addMember(fam: Fam, email: string, addedBy: string, emoji: string | null, role: "member" | "viewer" = "member"): Promise<void> {
   const familyId = familyOf(fam);
   if (familyId !== FAMILY_ONE) throw Object.assign(new Error("invite_by_email"), { code: "invite_by_email" });
-  await q(`DELETE FROM maple_removed WHERE family_id = $1 AND email = $2`, [familyId, email]);
-  await q(
-    `INSERT INTO maple_members (family_id, email, role, emoji, added_by) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (family_id, email) DO NOTHING`,
-    [familyId, email, role, emoji, addedBy]
-  );
+  const identity = `COALESCE((SELECT member_id FROM maple_auth_identities WHERE provider = 'email' AND subject = $2), $2)`;
+  const out = await transaction([
+    { sql: `SELECT pg_advisory_xact_lock(${IDENTITY_LOCK})` },
+    { sql: `DELETE FROM maple_removed WHERE family_id = $1 AND email = ${identity}`, params: [familyId, email] },
+    { sql: `INSERT INTO maple_members (family_id, email, role, emoji, added_by) VALUES ($1, ${identity}, $3, $4, $5)
+      ON CONFLICT (family_id, email) DO NOTHING`, params: [familyId, email, role, emoji, addedBy] },
+  ]);
+  if (!out) throw new StoreUnavailable();
 }
 
 /**

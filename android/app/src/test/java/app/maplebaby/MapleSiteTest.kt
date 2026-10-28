@@ -41,6 +41,10 @@ class MapleSiteTest {
             "https://maplebaby.app/api/maple/auth/start?native=android&challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
             site.googleSignIn("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"),
         )
+        assertEquals(
+            "https://maplebaby.app/api/maple/auth/apple/start?native=android&challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            site.appleSignIn("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"),
+        )
     }
 
     @Test
@@ -48,6 +52,14 @@ class MapleSiteTest {
         assertTrue(site.isWebGoogleSignIn(Uri.parse("https://maplebaby.app/api/maple/auth/start?return=/maple")))
         assertFalse(site.isWebGoogleSignIn(Uri.parse(site.googleSignIn("x"))))
         assertFalse(site.isWebGoogleSignIn(Uri.parse("https://evil.example/api/maple/auth/start")))
+    }
+
+    @Test
+    fun spotsOnlyTheAppsWebAppleSignIn() {
+        assertTrue(site.isWebAppleSignIn(Uri.parse("https://maplebaby.app/api/maple/auth/apple/start?return=/maple")))
+        assertFalse(site.isWebAppleSignIn(Uri.parse(site.appleSignIn("x"))))
+        assertFalse(site.isWebAppleSignIn(Uri.parse("https://evil.example/api/maple/auth/apple/start")))
+        assertFalse(site.isWebAppleSignIn(Uri.parse("https://maplebaby.app/api/maple/auth/start")))
     }
 
     private fun returnUrl(link: String) = site.signInReturn(Uri.parse(link), "the-verifier")?.url

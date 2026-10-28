@@ -42,12 +42,18 @@ final class MapleRoutesTests: XCTestCase {
     func testTheWebSignInLinkStartsNativeSignIn() {
         let link = URL(string: "https://maple.example.test/api/maple/auth/start?return=%2Fmaple")!
         XCTAssertEqual(routes.route(for: link), .googleSignIn)
+        XCTAssertEqual(routes.route(for: URL(string: "https://maple.example.test/api/maple/auth/apple/start?return=%2Fmaple")!), .appleSignIn)
+        XCTAssertEqual(routes.route(for: URL(string: "https://evil.test/api/maple/auth/apple/start")!), .system)
     }
 
     func testSignInStartsWithTheNativeFlagAndChallenge() {
         XCTAssertEqual(
             routes.googleSignInStart(challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM").absoluteString,
             "https://maple.example.test/api/maple/auth/start?native=ios&challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        )
+        XCTAssertEqual(
+            routes.appleSignInStart(challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM").absoluteString,
+            "https://maple.example.test/api/maple/auth/apple/start?native=ios&challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         )
     }
 
@@ -91,6 +97,8 @@ final class MapleRoutesTests: XCTestCase {
     func testBridgeAcceptsObjectsAndJSONStrings() {
         XCTAssertEqual(BridgeMessage.parse(["type": "google-sign-in"]), .googleSignIn)
         XCTAssertEqual(BridgeMessage.parse(#"{"type":"google-sign-in"}"#), .googleSignIn)
+        XCTAssertEqual(BridgeMessage.parse(["type": "apple-sign-in"]), .appleSignIn)
+        XCTAssertEqual(BridgeMessage.parse(#"{"type":"apple-sign-in"}"#), .appleSignIn)
         XCTAssertNil(BridgeMessage.parse(["type": "something-else"]))
         XCTAssertNil(BridgeMessage.parse("not json"))
     }

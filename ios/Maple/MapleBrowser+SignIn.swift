@@ -1,9 +1,16 @@
 import AuthenticationServices
 
-// Google refuses sign-in inside an embedded web view, so it runs in the system's auth session and
-// comes back as maple://auth?ticket=… for the web view to redeem.
+// Both providers run in the system's auth session and return a verifier-bound ticket for the web view.
 extension MapleBrowser: ASWebAuthenticationPresentationContextProviding {
     func startGoogleSignIn() {
+        startSignIn(apple: false)
+    }
+
+    func startAppleSignIn() {
+        startSignIn(apple: true)
+    }
+
+    private func startSignIn(apple: Bool) {
         guard signInSession == nil else { return }
         guard let verifier = SignInVerifier.make() else {
             load(routes.signInFailed(reason: "failed"))
@@ -11,11 +18,11 @@ extension MapleBrowser: ASWebAuthenticationPresentationContextProviding {
         }
         signInVerifier = verifier
         let session = ASWebAuthenticationSession(
-            url: routes.googleSignInStart(challenge: verifier.challenge),
+            url: apple ? routes.appleSignInStart(challenge: verifier.challenge) : routes.googleSignInStart(challenge: verifier.challenge),
             callbackURLScheme: Config.callbackScheme
         ) { [weak self] callbackURL, error in
             Task { @MainActor in
-                self?.finishGoogleSignIn(callbackURL: callbackURL, error: error)
+                self?.finishSignIn(callbackURL: callbackURL, error: error)
             }
         }
         session.presentationContextProvider = self
@@ -32,7 +39,7 @@ extension MapleBrowser: ASWebAuthenticationPresentationContextProviding {
         webView.window ?? ASPresentationAnchor()
     }
 
-    private func finishGoogleSignIn(callbackURL: URL?, error: Error?) {
+    private func finishSignIn(callbackURL: URL?, error: Error?) {
         signInSession = nil
         let verifier = signInVerifier
         signInVerifier = nil

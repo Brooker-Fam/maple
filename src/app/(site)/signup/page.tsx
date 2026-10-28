@@ -6,6 +6,9 @@ import WaitlistForm from "@/components/site/WaitlistForm";
 import { siteOpenGraph } from "@/components/site/meta";
 import { effectiveSignupMode } from "@/lib/maple/family";
 import { isSignupError, SIGNUP_ERRORS } from "@/lib/maple/family/signup";
+import { isGoogleConfigured } from "@/lib/maple/auth";
+import { isAppleConfigured } from "@/lib/maple/apple";
+import { isEmailConfigured } from "@/lib/maple/email-auth";
 import SignupForm from "./SignupForm";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +22,7 @@ export const metadata: Metadata = {
   openGraph: siteOpenGraph("Get started | Maple", DESCRIPTION, "/signup"),
 };
 
-/** MAPLE_SIGNUP off: the waitlist. On: Google sign-in, with an invite code first when it's "invite". */
+/** MAPLE_SIGNUP off: the waitlist. On: configured sign-in methods, with an invite code when needed. */
 export default async function Signup({ searchParams }: { searchParams: Promise<{ error?: string | string[]; join?: string | string[] }> }) {
   const { error: raw, join } = await searchParams;
   const mode = await effectiveSignupMode();
@@ -38,7 +41,7 @@ export default async function Signup({ searchParams }: { searchParams: Promise<{
             </div>
           </>
         ) : (
-          <SignupForm mode={mode} error={error} joining={join === "1"} />
+          <SignupForm mode={mode} error={error} joining={join === "1"} providers={{ google: isGoogleConfigured(), apple: isAppleConfigured(), email: isEmailConfigured() }} />
         )}
         <p className="mt-12 text-[15px]">
           Already in a family’s log?{" "}

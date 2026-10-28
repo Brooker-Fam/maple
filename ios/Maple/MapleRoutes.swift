@@ -4,6 +4,7 @@ enum LinkRoute: Equatable {
     case stay
     case system
     case googleSignIn
+    case appleSignIn
 }
 
 enum SignInOutcome: Equatable {
@@ -17,7 +18,15 @@ struct MapleRoutes {
     var app: URL { base.appending(path: "maple") }
 
     func googleSignInStart(challenge: String) -> URL {
-        var components = URLComponents(url: base.appending(path: "api/maple/auth/start"), resolvingAgainstBaseURL: false)!
+        signInStart(path: "api/maple/auth/start", challenge: challenge)
+    }
+
+    func appleSignInStart(challenge: String) -> URL {
+        signInStart(path: "api/maple/auth/apple/start", challenge: challenge)
+    }
+
+    private func signInStart(path: String, challenge: String) -> URL {
+        var components = URLComponents(url: base.appending(path: path), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "native", value: "ios"), URLQueryItem(name: "challenge", value: challenge)]
         return components.url!
     }
@@ -40,7 +49,11 @@ struct MapleRoutes {
         switch url.scheme?.lowercased() {
         case "http", "https":
             guard isOwnHost(url) else { return .system }
-            return url.path == "/api/maple/auth/start" ? .googleSignIn : .stay
+            switch url.path {
+            case "/api/maple/auth/start": return .googleSignIn
+            case "/api/maple/auth/apple/start": return .appleSignIn
+            default: return .stay
+            }
         case nil, "about", "blob", "data":
             return .stay
         default:

@@ -13,7 +13,7 @@ export const NATIVE_UA_TOKEN = "Maple-Native-App/";
 export type NativePlatform = "ios" | "android";
 
 /** "theme": the page's theme-color, so Android's system bars match the night look. */
-export type NativeMessage = { type: "google-sign-in" } | { type: "theme"; color: string };
+export type NativeMessage = { type: "google-sign-in" | "apple-sign-in" } | { type: "theme"; color: string };
 
 interface NativeMessageTarget {
   postMessage: (message: unknown) => void;
@@ -38,9 +38,17 @@ export function nativePlatform(): NativePlatform | null {
   return null;
 }
 
+/** Apple needs bridge 1.1; a 1.0 shell would silently ignore its message. Web browsers need no bridge. */
+export function supportsNativeAppleSignIn(userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent): boolean {
+  if (!userAgent.includes(NATIVE_UA_TOKEN)) return true;
+  const version = /Maple-Native-App\/(\d+)\.(\d+)(?:\s|\.)/.exec(userAgent);
+  return !!version && (Number(version[1]) > 1 || (Number(version[1]) === 1 && Number(version[2]) >= 1));
+}
+
 /** True when the app took the message (false outside the apps, or with no bridge). */
 export function postToNative(message: NativeMessage): boolean {
   if (!isNativeApp()) return false;
+  if (message.type === "apple-sign-in" && !supportsNativeAppleSignIn()) return false;
   // Exactly one target: Android's webkit shim forwards to window.nativeApp, so posting to both would deliver twice there.
   const target = window.webkit?.messageHandlers?.nativeApp ?? window.nativeApp;
   if (!target) return false;

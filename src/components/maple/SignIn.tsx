@@ -3,36 +3,41 @@
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { useEffect, useState, type FormEvent, type MouseEvent } from "react";
-import { isNativeApp, postToNative } from "@/lib/maple/native";
+import { isNativeApp, postToNative, supportsNativeAppleSignIn } from "@/lib/maple/native";
 import { MapleLeaf, useStill } from "./art";
+import EmailSignIn from "./EmailSignIn";
+import AppleMark from "./AppleMark";
 import { Icon } from "./icons";
 import { TrackerNote } from "./Legal";
 import { Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
- * The door to Maple's Log. Google sign-in for the family; the site admin
- * password as a quieter fallback. Google's callback lands back on /maple with
+ * The door to Maple's Log. Google, Apple or an emailed code for the family;
+ * the site admin password as a quieter fallback. Callbacks land on /maple with
  * ?auth=<reason> when something went wrong, which we turn into plain words.
  */
 
 const AUTH_MESSAGES: Record<string, string> = {
-  not_invited: "That Google account isn't on Maple's list yet. Ask the person who invited you to add it, then try again.",
+  not_invited: "That account isn't on Maple's list yet. Ask the person who invited you to add it, then try again.",
   bad_state: "That sign-in took a wrong turn (it may have sat open too long). Please try once more.",
-  denied: "Google sign-in was cancelled. No harm done; try again whenever you're ready.",
-  failed: "Something went wrong signing in with Google. Please try again.",
-  no_code: "Something went wrong signing in with Google. Please try again.",
-  no_email: "Google didn't share a verified email for that account. Try a different account.",
+  denied: "Sign-in was cancelled. Try again whenever you're ready.",
+  failed: "Something went wrong signing in. Please try again.",
+  no_code: "Something went wrong signing in. Please try again.",
+  no_email: "That sign-in didn't share a verified email. Try email sign-in or another account.",
   unavailable: "Maple's log is offline for a moment. Please try again shortly.",
-  not_configured: "Google sign-in isn't set up yet. Use the site admin password below, or ask Matt.",
+  not_configured: "That sign-in option isn't available yet. Please choose another way to sign in.",
+  conflict: "That sign-in method belongs to another account. Use your original sign-in method to open your log.",
+  link_conflict: "That sign-in method belongs to another account. Sign in the way you used before.",
+  link_expired: "That connection attempt expired. Sign in again, then connect it from Family → Sign-in methods.",
+  link_failed: "Couldn't connect that sign-in method. Sign in again, then try from Family → Sign-in methods.",
 };
 
 /** With sign-up open the page serves every family, so nothing names this one. */
 const OPEN_MESSAGES: Record<string, string> = {
   ...AUTH_MESSAGES,
-  not_invited: "That Google account isn't in a family's log yet. Ask the person who invited you to add it, then try again.",
+  not_invited: "That account isn't in a family's log yet. Use your original sign-in method, or ask the person who invited you for a link.",
   unavailable: "Maple is offline for a moment. Please try again shortly.",
-  not_configured: "Google sign-in isn't set up yet. Use the site admin password below.",
 };
 
 export default function SignIn() {
@@ -45,8 +50,10 @@ export default function SignIn() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inApp, setInApp] = useState(false);
+  const [appleSupported, setAppleSupported] = useState(true);
   useEffect(() => {
     setInApp(isNativeApp());
+    setAppleSupported(supportsNativeAppleSignIn());
   }, []);
 
   // Read (then tidy away) the callback's ?auth= so a reload doesn't repeat it.
@@ -55,8 +62,7 @@ export default function SignIn() {
       const url = new URL(window.location.href);
       const code = url.searchParams.get("auth");
       if (!code) return;
-      if (code !== "ok") setReason(code);
-      if (code === "not_configured") setShowPassword(true);
+      if (code !== "ok" && code !== "linked") setReason(code);
       url.searchParams.delete("auth");
       window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
     } catch {
@@ -92,12 +98,29 @@ export default function SignIn() {
   const startGoogle = (e: MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     if (postToNative({ type: "google-sign-in" })) return;
-    window.location.assign(`/api/maple/auth/start?return=%2Fmaple&site=${encodeURIComponent(window.location.origin)}`);
+    const requested = new URL(window.location.href).searchParams.get("return");
+    const back = requested && requested.length <= 4096 ? requested : "/maple";
+    window.location.assign(`/api/maple/auth/start?return=${encodeURIComponent(back)}&site=${encodeURIComponent(window.location.origin)}`);
+  };
+
+  const startApple = (e: MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    if (isNativeApp()) {
+      if (!supportsNativeAppleSignIn() || !postToNative({ type: "apple-sign-in" })) {
+        setError("Update the Maple app to use Apple sign-in, or continue with email.");
+      }
+      return;
+    }
+    const requested = new URL(window.location.href).searchParams.get("return");
+    const back = requested && requested.length <= 4096 ? requested : "/maple";
+    window.location.assign(`/api/maple/auth/apple/start?return=${encodeURIComponent(back)}&site=${encodeURIComponent(window.location.origin)}`);
   };
 
   const google = auth?.google ?? false;
+  const apple = auth?.apple ?? false;
+  const email = auth?.email ?? false;
   const passwordOk = auth?.password ?? false;
-  const nothing = auth && !google && !passwordOk;
+  const nothing = auth && !google && !apple && !email && !passwordOk;
   const open = !!auth?.signup && auth.signup !== "off";
   const messages = open ? OPEN_MESSAGES : AUTH_MESSAGES;
   const notice = reason ? (messages[reason] ?? messages.failed) : null;
@@ -142,12 +165,24 @@ export default function SignIn() {
               Continue with Google
             </a>
           )}
+          {apple && appleSupported && (
+            // eslint-disable-next-line @next/next/no-html-link-for-pages
+            <a href="/api/maple/auth/apple/start?return=%2Fmaple" onClick={startApple} className="flex min-h-[52px] w-full items-center justify-center gap-3 rounded-[14px] bg-mp-ink px-5 text-base font-semibold text-mp-bg transition hover:opacity-90 active:scale-[0.98]">
+              <AppleMark />
+              Continue with Apple
+            </a>
+          )}
+          {apple && !appleSupported && <p className={cx(tone.muted, "text-sm")}>Update the Maple app to use Apple sign-in.</p>}
+          {email && <EmailSignIn />}
+          {error && !showPassword && <p role="alert" className="text-sm text-mp-danger">{error}</p>}
           {nothing && (
             <p className={cx(tone.muted, "text-sm")}>
               {open ? "Sign-in isn't set up yet." : <>Sign-in isn&apos;t set up yet. Ask Matt to finish setting up Maple&apos;s Log.</>}
             </p>
           )}
         </div>
+
+        {(apple || email) && <p className={cx(tone.faint, "mt-4 text-[13px] leading-relaxed")}>Already using Maple? Sign in the way you used before, then connect other options in Family → Sign-in methods.</p>}
 
         {passwordOk && (
           <div className="mt-4">

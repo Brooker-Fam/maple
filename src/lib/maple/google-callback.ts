@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { resolveEmailIdentity } from "./auth-identities";
 import { getAppBaseUrl } from "@/lib/secret-box";
 import {
   identityFromCode,
@@ -66,6 +67,8 @@ export async function handleMapleGoogleCallback(request: NextRequest, deps: Sign
     const who = await deps.identify(code, base);
     if (!who) return fail("no_email");
 
+    who.email = await resolveEmailIdentity(who.email);
+
     // Resolve membership before minting a session, so an uninvited account
     // never holds a cookie for a log it can't reach.
     const joined = await joinWithGoogle(who);
@@ -86,7 +89,6 @@ export async function handleMapleGoogleCallback(request: NextRequest, deps: Sign
     setSessionCookies(res, member.email, familyId);
     return res;
   } catch (error) {
-    console.error("Maple auth callback error:", error);
     await captureServerException(error, { route: "GET /api/maple/auth/callback" });
     return fail("failed");
   }

@@ -10,6 +10,6 @@ final class UserAgentTests: XCTestCase {
 
         XCTAssertTrue(userAgent?.hasPrefix("Mozilla/5.0 (iPhone") == true, userAgent ?? "nil")
         XCTAssertTrue(userAgent?.contains(" Mobile/") == true, userAgent ?? "nil")
-        XCTAssertTrue(userAgent?.hasSuffix(" Maple-Native-App/1.0 (ios)") == true, userAgent ?? "nil")
+        XCTAssertTrue(userAgent?.hasSuffix(" Maple-Native-App/1.1 (ios)") == true, userAgent ?? "nil")
     }
 }

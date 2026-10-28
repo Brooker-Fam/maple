@@ -59,6 +59,7 @@ const OTHER_VERIFIER = "another-made-up-verifier-0123456789abcdefghij";
 async function main() {
   const { NextRequest } = await import("next/server");
   const nativeAuth = await import("../src/lib/maple/native-auth");
+  const { supportsNativeAppleSignIn, postToNative } = await import("../src/lib/maple/native");
   const { mintNativeTicket, openNativeTicket, nativeReturnUrl, parseNativeFlag, nativeFromState, NATIVE_TICKET_TTL_MS } = nativeAuth;
   const { nativeChallengeFor, nativeVerifierMatches, parseNativeChallenge } = nativeAuth;
   const { openSession, sealSession, STATE_COOKIE } = await import("../src/lib/maple/auth");
@@ -73,6 +74,16 @@ async function main() {
     return r;
   };
   const location = (res: Response) => res.headers.get("location") ?? "";
+
+  await check("Apple sign-in is available on the web and bridge 1.1, never silently sent to older shells", () => {
+    for (const ua of ["Mozilla/5.0", "Mozilla/5.0 Maple-Native-App/1.1 (ios)", "Mozilla/5.0 Maple-Native-App/1.10 (android)", "Mozilla/5.0 Maple-Native-App/2.0 (ios)"]) {
+      ok(supportsNativeAppleSignIn(ua), ua);
+    }
+    for (const ua of ["Mozilla/5.0 Maple-Native-App/1.0 (ios)", "Mozilla/5.0 Maple-Native-App/0.9 (android)", "Mozilla/5.0 Maple-Native-App/unknown (ios)"]) {
+      ok(!supportsNativeAppleSignIn(ua), ua);
+    }
+    eq(postToNative({ type: "apple-sign-in" }), false, "no native bridge in a browser");
+  });
 
   // ── the ?native= flag ──────────────────────────────────────────────────
 

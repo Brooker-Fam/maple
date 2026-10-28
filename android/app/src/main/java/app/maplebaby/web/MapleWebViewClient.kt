@@ -15,6 +15,7 @@ class MapleWebViewClient(
     private val onUrlChanged: (url: String?) -> Unit,
     private val onMainFrameError: (url: String) -> Unit,
     private val onGoogleSignIn: () -> Unit,
+    private val onAppleSignIn: () -> Unit,
     private val onRendererGone: () -> Unit,
 ) : WebViewClient() {
 
@@ -22,6 +23,10 @@ class MapleWebViewClient(
         val url = request.url
         if (site.isWebGoogleSignIn(url)) {
             onGoogleSignIn()
+            return true
+        }
+        if (site.isWebAppleSignIn(url)) {
+            onAppleSignIn()
             return true
         }
         if (site.isApp(url)) return false

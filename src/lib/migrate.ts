@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import { query, transaction } from "./db";
 import { FAMILY_OPTIONAL_TABLES, FAMILY_TABLES } from "./maple/family-tables";
 import { migrateSignup } from "./maple/family/schema";
+import { migrateAuth } from "./maple/auth-schema";
 
 async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   const text = strings.reduce((out, part, i) => `${out}$${i}${part}`);
@@ -400,6 +401,7 @@ export async function migrate() {
 
   await migrateFamilies();
   await migrateSignup();
+  await migrateAuth();
 
   console.log("Migrations complete.");
 }

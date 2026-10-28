@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import { transaction, query } from "@/lib/db";
 import { ACCEPTED_MEMBERSHIP, FAMILY_ONE, homeFamilyOf, parseFamilyId } from "../family";
 import type { GoogleIdentity } from "../auth";
+import { IDENTITY_LOCK } from "../auth-identities";
 import { codeHash } from "./codes";
 import { FAMILY_BUCKET, SIGNUP_LIMITS, connectionKey, familiesPerDay } from "./limits";
 
@@ -27,7 +28,8 @@ WITH checks AS (
       SELECT 1 FROM maple_signup_codes
       WHERE code_hash = $4 AND uses < max_uses AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
     )) AS code_ok,
-    NOT EXISTS (SELECT 1 FROM maple_members m WHERE m.email = $1 AND ${ACCEPTED_MEMBERSHIP("m")}) AS new_ok,
+    (NOT EXISTS (SELECT 1 FROM maple_members m WHERE m.email = $1 AND ${ACCEPTED_MEMBERSHIP("m")})
+      AND NOT EXISTS (SELECT 1 FROM maple_auth_identities WHERE provider = 'email' AND subject = $1 AND member_id <> $1)) AS new_ok,
     (SELECT count(*) FROM maple_families WHERE created_by = $1 AND created_at > NOW() - INTERVAL '1 day') < $9 AS account_ok,
     (SELECT COALESCE(SUM(count), 0) FROM upload_rate_limit WHERE ip_hash = $7 AND window_start > NOW() - INTERVAL '1 day') < $8 AS ip_ok,
     (SELECT count(*) FROM maple_families WHERE id <> ${FAMILY_ONE} AND created_at > NOW() - INTERVAL '1 day') < $6 AS day_ok
@@ -66,7 +68,7 @@ export async function createFamily(
   let out;
   try {
     out = await transaction([
-      { sql: `SELECT pg_advisory_xact_lock(${SIGNUP_LOCK})` },
+      { sql: `SELECT pg_advisory_xact_lock(${IDENTITY_LOCK}), pg_advisory_xact_lock(${SIGNUP_LOCK})` },
       {
         sql: CREATE,
         params: [
@@ -112,7 +114,8 @@ const REDEEM = `
 WITH inv AS (
   UPDATE maple_invites i SET used_at = NOW(), used_by = $2
   WHERE i.token_hash = $1 AND i.used_at IS NULL AND i.expires_at > NOW()
-    AND (i.email = $2 OR (i.email IS NULL AND NOT EXISTS (SELECT 1 FROM maple_removed r WHERE r.family_id = i.family_id AND r.email = $2)))
+    AND NOT EXISTS (SELECT 1 FROM maple_auth_identities WHERE provider = 'email' AND subject = $2 AND member_id <> $2)
+    AND (i.email = $2 OR i.email = $4 OR (i.email IS NULL AND NOT EXISTS (SELECT 1 FROM maple_removed r WHERE r.family_id = i.family_id AND r.email = $2)))
     AND EXISTS (SELECT 1 FROM maple_families f WHERE f.id = i.family_id AND f.status <> 'deleting')
     AND NOT EXISTS (SELECT 1 FROM maple_members m WHERE m.family_id = i.family_id AND m.email = $2)
   RETURNING i.family_id, i.role, i.display_name, i.emoji, i.created_by
@@ -135,18 +138,22 @@ SELECT family_id FROM added`;
  * someone again always has; a link made for no one in particular never lets
  * in an address the family removed.
  */
-export async function joinByInvite(who: GoogleIdentity, token: string): Promise<Joined> {
+export async function joinByInvite(who: GoogleIdentity, token: string, verifiedEmail = who.email): Promise<Joined> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return { reason: "invite" };
   const hash = inviteHash(token);
   try {
-    const rows = await query(REDEEM, [hash, who.email, who.name]);
+    const redeemed = await transaction([
+      { sql: `SELECT pg_advisory_xact_lock(${IDENTITY_LOCK})` },
+      { sql: REDEEM, params: [hash, who.email, who.name, verifiedEmail] },
+    ]);
+    const rows = redeemed?.[1];
     if (!rows) return { reason: "unavailable" };
     const familyId = parseFamilyId(rows[0]?.family_id);
     if (familyId !== null) return { familyId };
     const already = await query(
       `SELECT i.family_id FROM maple_invites i JOIN maple_members m ON m.family_id = i.family_id AND m.email = $2
        JOIN maple_families f ON f.id = i.family_id AND f.status <> 'deleting'
-       WHERE i.token_hash = $1 AND i.used_at IS NULL AND i.expires_at > NOW()`,
+       WHERE i.token_hash = $1 AND i.used_at IS NULL AND i.expires_at > NOW() AND ${ACCEPTED_MEMBERSHIP("m")}`,
       [hash, who.email]
     );
     const member = parseFamilyId(already?.[0]?.family_id);

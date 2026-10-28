@@ -13,6 +13,8 @@ class MapleSite(baseUrl: String) {
 
     fun googleSignIn(challenge: String): String = "$origin/api/maple/auth/start?native=android&challenge=$challenge"
 
+    fun appleSignIn(challenge: String): String = "$origin/api/maple/auth/apple/start?native=android&challenge=$challenge"
+
     fun isApp(url: String?): Boolean = url != null && isApp(url.toUri())
 
     fun isApp(url: Uri): Boolean =
@@ -22,6 +24,9 @@ class MapleSite(baseUrl: String) {
 
     fun isWebGoogleSignIn(url: Uri): Boolean =
         isApp(url) && url.path == "/api/maple/auth/start" && url.getQueryParameter("native") == null
+
+    fun isWebAppleSignIn(url: Uri): Boolean =
+        isApp(url) && url.path == "/api/maple/auth/apple/start" && url.getQueryParameter("native") == null
 
     fun isSignInReturn(url: Uri): Boolean = url.scheme == "maple" && url.host == "auth"
 

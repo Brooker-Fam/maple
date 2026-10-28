@@ -49,12 +49,14 @@ export default function Terms() {
         Maple is for adults 18 and older. The <Link href="/signup">sign-up page</Link> says whether new families can join or
         leave an email address on the waitlist. The owner of a family&rsquo;s log decides who is in it and can remove anyone.
         Invite only people who expect an invitation from you, and check their email address before sending it. You&rsquo;re
-        responsible for who you invite and for keeping your sign-in to yourself.
+        responsible for who you invite and for keeping your sign-in and email codes to yourself. Google, Apple and email
+        sign-in are available when shown on the sign-in page. Connecting a sign-in method to your existing account does not
+        combine separate family logs.
       </p>
 
       <h2>Email and feedback</h2>
       <p>
-        Maple sends invite links and a new owner&rsquo;s welcome email through Resend. Feedback and replies go to{" "}
+        Maple sends requested sign-in codes, invite links and a new owner&rsquo;s welcome email through Resend. Feedback and replies go to{" "}
         <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. The <Link href="/privacy">privacy page</Link> explains what
         these emails contain, how invite addresses are kept, and the limited usage events sent to PostHog.
       </p>

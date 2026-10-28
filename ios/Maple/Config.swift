@@ -5,7 +5,8 @@ enum Config {
 
     static let baseURL: URL = baseURL(from: Bundle.main.object(forInfoDictionaryKey: "MapleBaseURL") as? String)
 
-    static let userAgentToken = "Maple-Native-App/1.0 (ios)"
+    // Bridge 1.1 adds Apple sign-in; web pages gate its button for older shells.
+    static let userAgentToken = "Maple-Native-App/1.1 (ios)"
 
     static let bridgeName = "nativeApp"
 

@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
                 pendingLoad = pendingLoad,
                 onPendingLoadConsumed = { pendingLoad = null },
                 onGoogleSignIn = ::openGoogleSignIn,
+                onAppleSignIn = ::openAppleSignIn,
             )
         }
     }
@@ -53,11 +54,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openGoogleSignIn() {
+        openSignIn(apple = false)
+    }
+
+    private fun openAppleSignIn() {
+        openSignIn(apple = true)
+    }
+
+    private fun openSignIn(apple: Boolean) {
         try {
+            val challenge = SignInVerifier.challenge(signIn.begin())
+            val url = if (apple) site.appleSignIn(challenge) else site.googleSignIn(challenge)
             CustomTabsIntent.Builder()
                 .setShowTitle(true)
                 .build()
-                .launchUrl(this, site.googleSignIn(SignInVerifier.challenge(signIn.begin())).toUri())
+                .launchUrl(this, url.toUri())
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, R.string.no_app_for_link, Toast.LENGTH_SHORT).show()
         }

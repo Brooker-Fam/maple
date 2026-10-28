@@ -22,6 +22,7 @@ class MapleWebViewClientTest {
     private val app = RuntimeEnvironment.getApplication()
     private val webView = WebView(app)
     private var signIns = 0
+    private var appleSignIns = 0
     private val client = MapleWebViewClient(
         site = MapleSite("https://maplebaby.app"),
         onDocumentStarted = {},
@@ -29,6 +30,7 @@ class MapleWebViewClientTest {
         onUrlChanged = {},
         onMainFrameError = {},
         onGoogleSignIn = { signIns++ },
+        onAppleSignIn = { appleSignIns++ },
         onRendererGone = {},
     )
 
@@ -61,6 +63,14 @@ class MapleWebViewClientTest {
     fun routesGoogleSignInThroughTheSystemBrowser() {
         assertTrue(client.shouldOverrideUrlLoading(webView, request("https://maplebaby.app/api/maple/auth/start?return=/maple")))
         assertEquals(1, signIns)
+        assertNull(nextStarted())
+    }
+
+    @Test
+    fun routesAppleSignInThroughTheSystemBrowser() {
+        assertTrue(client.shouldOverrideUrlLoading(webView, request("https://maplebaby.app/api/maple/auth/apple/start?return=/maple")))
+        assertEquals(1, appleSignIns)
+        assertEquals(0, signIns)
         assertNull(nextStarted())
     }
 

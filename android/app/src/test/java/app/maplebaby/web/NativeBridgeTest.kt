@@ -12,8 +12,9 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class NativeBridgeTest {
     private var signIns = 0
+    private var appleSignIns = 0
     private val themes = mutableListOf<Int>()
-    private val bridge = NativeBridge(MapleSite("https://maplebaby.app"), { signIns++ }, { themes += it })
+    private val bridge = NativeBridge(MapleSite("https://maplebaby.app"), { signIns++ }, { appleSignIns++ }, { themes += it })
     private val maple = Uri.parse("https://maplebaby.app")
 
     @Test
@@ -23,10 +24,19 @@ class NativeBridgeTest {
     }
 
     @Test
+    fun startsAppleSignInFromTheAppsMainFrame() {
+        bridge.receive("""{"type":"apple-sign-in"}""", maple, isMainFrame = true)
+        assertEquals(1, appleSignIns)
+        assertEquals(0, signIns)
+    }
+
+    @Test
     fun ignoresSubframesEvenOnTheAppsOrigin() {
         bridge.receive("""{"type":"google-sign-in"}""", maple, isMainFrame = false)
+        bridge.receive("""{"type":"apple-sign-in"}""", maple, isMainFrame = false)
         bridge.receive("""{"type":"theme","color":"#0B0F0A"}""", maple, isMainFrame = false)
         assertEquals(0, signIns)
+        assertEquals(0, appleSignIns)
         assertEquals(emptyList<Int>(), themes)
     }
 
@@ -34,8 +44,10 @@ class NativeBridgeTest {
     fun ignoresOtherOrigins() {
         for (origin in listOf("https://maplebaby.app.evil.example", "http://maplebaby.app", "https://maplebaby.app:8443", "null")) {
             bridge.receive("""{"type":"google-sign-in"}""", Uri.parse(origin), isMainFrame = true)
+            bridge.receive("""{"type":"apple-sign-in"}""", Uri.parse(origin), isMainFrame = true)
         }
         assertEquals(0, signIns)
+        assertEquals(0, appleSignIns)
     }
 
     @Test

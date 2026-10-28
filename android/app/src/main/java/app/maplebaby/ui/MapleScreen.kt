@@ -61,6 +61,7 @@ fun MapleScreen(
     pendingLoad: PageLoad?,
     onPendingLoadConsumed: () -> Unit,
     onGoogleSignIn: () -> Unit,
+    onAppleSignIn: () -> Unit,
 ) {
     val context = LocalContext.current
     val colors = mapleColors()
@@ -154,7 +155,7 @@ fun MapleScreen(
                         configure()
 
                         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-                            val bridge = NativeBridge(site, onGoogleSignIn) { argb -> pageColor = Color(argb) }
+                            val bridge = NativeBridge(site, onGoogleSignIn, onAppleSignIn) { argb -> pageColor = Color(argb) }
                             WebViewCompat.addWebMessageListener(this, NativeBridge.NAME, setOf(site.origin), bridge)
                         }
                         var shimAtDocumentStart = false
@@ -191,6 +192,7 @@ fun MapleScreen(
                                 retrying = false
                             },
                             onGoogleSignIn = onGoogleSignIn,
+                            onAppleSignIn = onAppleSignIn,
                             onRendererGone = { generation++ },
                         )
                         webChromeClient = MapleWebChromeClient(::chooseFiles)
@@ -235,4 +237,5 @@ internal fun WebView.configure() {
     }
 }
 
-internal const val USER_AGENT_SUFFIX = "Maple-Native-App/1.0 (android)"
+// Bridge 1.1 adds Apple sign-in; web pages gate its button for older shells.
+internal const val USER_AGENT_SUFFIX = "Maple-Native-App/1.1 (android)"

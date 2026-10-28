@@ -12,6 +12,7 @@ import org.json.JSONObject
 class NativeBridge(
     private val site: MapleSite,
     private val onGoogleSignIn: () -> Unit,
+    private val onAppleSignIn: () -> Unit,
     private val onTheme: (argb: Int) -> Unit,
 ) : WebViewCompat.WebMessageListener {
 
@@ -34,6 +35,7 @@ class NativeBridge(
         }
         when (body.optString("type")) {
             "google-sign-in" -> onGoogleSignIn()
+            "apple-sign-in" -> onAppleSignIn()
             "theme" -> themeColor(body.optString("color"))?.let(onTheme)
         }
     }

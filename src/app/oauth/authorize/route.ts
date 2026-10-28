@@ -237,6 +237,7 @@ function signInPage(p: MapleParams, client: { name: string; host: string }, erro
   const body = `
   <p class="lead">Sign in to connect <strong>${esc(client.name)}</strong> <span class="host">(${esc(client.host)})</span> to Maple's Log.</p>
   ${google}
+  <p><a href="${esc(`/maple?return=${encodeURIComponent(returnPath(p))}`)}">More sign-in options</a></p>
   <form method="post" class="admin">
     <label for="u">Username</label>
     <input id="u" type="text" name="username" autocomplete="username" required>
@@ -246,7 +247,7 @@ function signInPage(p: MapleParams, client: { name: string; host: string }, erro
     <button type="submit" class="btn ${google ? "quiet" : "primary"}">Sign in</button>
   </form>
   ${error ? `<p class="error" role="alert">${esc(error)}</p>` : ""}
-  <p class="fine">Only family members invited to Maple's Log can connect. Use the Google account you use for the app.</p>`;
+  <p class="fine">Only family members invited to Maple's Log can connect. Use the same account you use for the app.</p>`;
   return maplePage(status, "Connect to Maple's Log", body);
 }
 

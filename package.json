@@ -22,7 +22,10 @@
     "check:maple-growth": "tsx scripts/maple-growth-check.ts",
     "check:maple-tenancy": "tsx scripts/tenancy/run.ts",
     "check:maple-parity": "tsx scripts/tenancy/parity/run.ts",
-    "check:maple-time-edit": "tsx scripts/maple-time-edit-check.ts"
+    "check:maple-time-edit": "tsx scripts/maple-time-edit-check.ts",
+    "check:apple-auth": "tsx scripts/apple-auth-check.ts",
+    "check:email-auth": "tsx scripts/email-auth-check.ts",
+    "check:signin": "tsx scripts/signin-flow-check.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",

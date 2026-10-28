@@ -40,14 +40,30 @@ export default function Privacy() {
       <p>
         When you sign in with Google, Google shares your name, email address and profile photo with Maple. Maple keeps your
         email address and your first name (or your full name, if Google has no first name for you). It doesn&rsquo;t keep your
-        photo or anything else from your Google account. Someone invited with a one-time link instead of Google is known by the
-        name on their invite.
+        photo or anything else from your Google account.
+      </p>
+      <p>
+        Email sign-in keeps your verified email address. Sign in with Apple keeps Apple&rsquo;s account identifier for Maple
+        and the verified email address Apple shares, which can be a private relay address if you choose Hide My Email.
+        Maple does not keep Apple&rsquo;s access or refresh tokens. Someone invited with a one-time link instead of an account
+        is known by the name on their invite.
+      </p>
+      <p>
+        Maple keeps records connecting verified sign-in methods to your member account, so those methods open the same family
+        memberships. You can connect another email address or Apple account from Family settings while signed in. This does
+        not combine separate family logs or give you access to someone else&rsquo;s membership.
       </p>
       <p>
         When someone is removed from a family&rsquo;s log, Maple keeps their email address so they can&rsquo;t sign back
         in. Inviting them again clears it.
       </p>
-      <h3>Invites and welcome emails</h3>
+      <h3>Sign-in codes, invites and welcome emails</h3>
+      <p>
+        When you request email sign-in, Maple sends a six-digit code through Resend. The code expires after ten minutes,
+        works once and can be tried only a limited number of times. Maple stores a keyed hash of the code, plus encrypted
+        information needed to finish the sign-in, including your email address. Expired challenge records are cleared during
+        later code requests. The code email contains no information from your family&rsquo;s log.
+      </p>
       <p>
         When an owner invites you by email, Maple keeps your address with the invite and sends its link through Resend.
         The email includes the inviter&rsquo;s name, the baby&rsquo;s name if set, and when the link expires. A new family&rsquo;s
@@ -97,7 +113,8 @@ export default function Privacy() {
         <li>A sign-in cookie, so you stay signed in. Your theme and a few app settings are saved on your own phone.</li>
         <li>
           A keyed hash of your IP address, counted per hour to limit how often one connection can try to sign in, upload or
-          join the waitlist. Invite email limits use a keyed hash of the sender&rsquo;s member id. These counters keep neither
+          join the waitlist. Invite email limits use a keyed hash of the sender&rsquo;s member id; sign-in code limits also
+          use a keyed hash of the recipient&rsquo;s email address. These counters keep neither
           the IP address nor the sender&rsquo;s email address, and counts more than a day old are cleared out.
         </li>
         <li>For each phone that turns on notifications, the address its browser gave Maple for sending them.</li>
@@ -111,7 +128,7 @@ export default function Privacy() {
       <ul>
         <li>
           <strong>Neon</strong> runs Maple&rsquo;s Postgres database, which holds your family&rsquo;s log, chats, membership,
-          invites, waitlist addresses and the records that keep Maple working.
+          invites, sign-in identities and code challenges, waitlist addresses and the records that keep Maple working.
         </li>
         <li>
           <strong>Vercel Blob</strong> stores photos. They are only ever shown through Maple to someone signed in to your log.
@@ -125,7 +142,12 @@ export default function Privacy() {
           logged isn&rsquo;t sent to it.
         </li>
         <li>
-          <strong>Resend</strong> sends invites and welcome emails. It receives the recipient&rsquo;s address and the message,
+          <strong>Google and Apple</strong> verify your identity when you choose their sign-in option. They receive the
+          sign-in request and handle it under their own policies. Apple&rsquo;s private email relay forwards messages if
+          you use Hide My Email. Your family&rsquo;s log is not sent to either provider to sign you in.
+        </li>
+        <li>
+          <strong>Resend</strong> sends sign-in codes, invites and welcome emails. It receives the recipient&rsquo;s address and the message,
           and keeps email and delivery records under its <a href="https://resend.com/security">retention policy</a>.
           Email open and click tracking are off.
         </li>
@@ -229,7 +251,9 @@ export default function Privacy() {
         <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> from an address in your family&rsquo;s log, and the log, its
         photos, chats and members are deleted within 30 days. Copies in the database host&rsquo;s short-term backups expire on
         their own after that. First, you can download every entry in the baby&rsquo;s log as a CSV from Family &rarr; Data &amp;
-        account; mom&rsquo;s page and photos aren&rsquo;t in that file. To leave the waitlist, email the same address.
+        account; mom&rsquo;s page and photos aren&rsquo;t in that file. Sign-in records needed for another family you still
+        belong to are kept for that access. To delete your account&rsquo;s sign-in records or leave the waitlist, email the
+        same address.
       </p>
 
       <h2>Open source</h2>

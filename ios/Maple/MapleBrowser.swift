@@ -123,6 +123,8 @@ final class MapleBrowser: NSObject, ObservableObject {
             openExternally(url)
         case .googleSignIn:
             startGoogleSignIn()
+        case .appleSignIn:
+            startAppleSignIn()
         }
     }
 }
@@ -217,6 +219,8 @@ extension MapleBrowser: WKScriptMessageHandler {
         switch bridgeMessage {
         case .googleSignIn:
             startGoogleSignIn()
+        case .appleSignIn:
+            startAppleSignIn()
         }
     }
 }

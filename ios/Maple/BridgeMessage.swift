@@ -2,10 +2,12 @@ import Foundation
 
 enum BridgeMessage: Equatable {
     case googleSignIn
+    case appleSignIn
 
     static func parse(_ body: Any) -> BridgeMessage? {
         switch type(of: body) {
         case "google-sign-in": return .googleSignIn
+        case "apple-sign-in": return .appleSignIn
         default: return nil
         }
     }

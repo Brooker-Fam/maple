@@ -65,6 +65,8 @@ import type { IconName } from "./icons";
 export type AuthInfo = {
   signedIn: boolean;
   google: boolean;
+  apple: boolean;
+  email: boolean;
   password: boolean;
   reason?: string | null;
   /** MAPLE_SIGNUP, when the server says; absent reads as "off". */
@@ -572,6 +574,22 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     },
     [show]
   );
+  // A linked provider returns to Today, so its result must be visible before Family is opened again.
+  useEffect(() => {
+    if (!state) return;
+    const url = new URL(window.location.href);
+    const result = url.searchParams.get("auth");
+    const messages: Record<string, string> = {
+      linked: "Sign-in method connected. It opens this same account.",
+      link_conflict: "That sign-in method belongs to another account. It wasn't connected.",
+      link_expired: "That connection attempt expired. Try again from Family → Sign-in methods.",
+      link_failed: "Couldn't connect that sign-in method. Try again from Family → Sign-in methods.",
+    };
+    if (!result || !messages[result]) return;
+    toast(messages[result], { tone: result === "linked" ? "ok" : "error", duration: 8_000 });
+    url.searchParams.delete("auth");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+  }, [state, toast]);
   const dismissTimerToast = useCallback(() => setToasts((t) => (t.some((x) => x.group === "timer") ? t.filter((x) => x.group !== "timer") : t)), []);
   const holdTimerToasts = useCallback(
     (on: boolean) => {
@@ -616,7 +634,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     try {
       setAuth(await fetchJson<AuthInfo>("/api/maple/auth/me"));
     } catch {
-      setAuth({ signedIn: false, google: false, password: false });
+      setAuth({ signedIn: false, google: false, apple: false, email: false, password: false });
     }
   }, []);
 

@@ -23,6 +23,7 @@ const ref = process.argv[2] ?? git("merge-base", "HEAD", "origin/main");
 /** What the new code may add for family 1 (`added`: only it has the path) or answer differently, each with why. Everything else must match exactly. */
 const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
   { path: /^out\.me\.(owner|none|stranger)\.body\.signup$/, added: true, why: "sign-in receives the signup switch" },
+  { path: /^out\.me\.(owner|none|stranger)\.body\.(apple|email)$/, added: true, why: "sign-in receives the configured Apple and email options" },
   { path: /^out\..+\.body\.family$/, added: true, why: "the state names its family (id, and who a viewer asks)" },
   { path: /^out\.invites\..+\.invite\.email$/, added: true, why: "an invite says whose address it's for (none for a link)" },
   { path: /^db\.[^.]+$/, added: true, why: "a table new code made" },
@@ -35,7 +36,7 @@ const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
   },
 ];
 
-const OVERLAY = ["src/lib/db.ts", "src/lib/migrate.ts", "src/lib/maple/family-tables.ts", "src/lib/maple/family/schema.ts"];
+const OVERLAY = ["src/lib/db.ts", "src/lib/migrate.ts", "src/lib/maple/family-tables.ts", "src/lib/maple/family/schema.ts", "src/lib/maple/auth-schema.ts"];
 
 const FIXED_DAY = "2026-10-27";
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/;

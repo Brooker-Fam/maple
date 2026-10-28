@@ -5,7 +5,7 @@ A small SwiftUI app that shows Maple's Log (`{BASE}/maple`) full screen in a `WK
 ## What the app adds to the web app
 
 - **Edge to edge.** The page draws under the status bar and home indicator and keeps its controls clear with `env(safe-area-inset-*)` (the web layout uses `viewport-fit=cover`).
-- **User agent.** WebKit's own user agent with ` Maple-Native-App/1.0 (ios)` appended, so the web app can tell it is in the app.
+- **User agent.** WebKit's own user agent with ` Maple-Native-App/1.1 (ios)` appended, so the web app can tell it is in the app.
 - **Google sign-in.** Google blocks sign-in inside embedded web views, so the app does it in the system sign-in sheet:
   1. The page posts `{type: "google-sign-in"}` to `window.webkit.messageHandlers.nativeApp` (an object or a JSON string both work). A tap on a plain link to `/api/maple/auth/start` does the same.
   2. The app makes a random verifier and opens `ASWebAuthenticationSession` at `{BASE}/api/maple/auth/start?native=ios&challenge=<SHA-256 of the verifier>`, then waits for a `maple://` callback.
@@ -13,6 +13,7 @@ A small SwiftUI app that shows Maple's Log (`{BASE}/maple`) full screen in a `WK
   4. `maple://auth?error=<reason>` loads `{BASE}/maple?auth=<reason>`, so the sign-in screen shows its usual message. A cancelled sheet does nothing.
   
   Only the app's own origin (same scheme, host and port), in the main frame, can start sign-in. The admin password works inside the web view as it does on the web. Invite links don't reach the app yet: they open in Safari and sign in there (universal links are Phase 4).
+- **Apple and email sign-in.** Bridge 1.1 adds `apple-sign-in`, which uses the same system sheet and verifier-bound ticket flow at `/api/maple/auth/apple/start`. Email codes work in the web view. Linking Apple to an existing account happens from Family in a browser, where its session cookie is available; after linking, Apple sign-in opens that account in the app. Older installed 1.0 shells keep Google and email until updated.
 - **Links.** `tel:`, `sms:`, `mailto:` and links to anything but `BASE`'s scheme, host and port open in the system (Phone, Messages, Mail, Safari). `target="_blank"` links to Maple's own origin stay in the app.
 - **Photos.** `<input type="file">` offers the photo library and the camera. The usage strings are in `Maple/Info.plist`.
 - **Downloads.** The CSV export, and any other download, goes to the share sheet (Save to Files, AirDrop and so on). The temporary copy is deleted when the sheet closes, and any leftovers are deleted on the next launch.
