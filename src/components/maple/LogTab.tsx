@@ -18,7 +18,7 @@ import {
 } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, EntryKind, EntryOf, MapleState, UnitSystem } from "@/lib/maple/types";
-import EntryRow, { ClusterRow } from "./EntryRow";
+import EntryRow, { ClusterRow, entryEditPreset } from "./EntryRow";
 import { useClockMinute } from "./FeedParts";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
@@ -714,7 +714,7 @@ function DaySection({
                     }
                     onOpenEntry={(e) => {
                       onOpen(e);
-                      open({ kind: e.kind, entry: e });
+                      open({ kind: e.kind, entry: e, preset: entryEditPreset(e) });
                     }}
                     onInfo={() => onClusterInfo(null)}
                   />
@@ -742,7 +742,7 @@ function DaySection({
                 now={now}
                 onClick={() => {
                   onOpen(e);
-                  open({ kind: e.kind, entry: e });
+                  open({ kind: e.kind, entry: e, preset: entryEditPreset(e) });
                 }}
               />
             </li>
@@ -800,7 +800,7 @@ function RunningNow({ entries }: { entries: Entry[] }) {
       <SectionTitle>Happening now</SectionTitle>
       <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
         {entries.map((e) => (
-          <EntryRow key={e.id} entry={e} now={now} onClick={() => open({ kind: e.kind, entry: e })} />
+          <EntryRow key={e.id} entry={e} now={now} onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e) })} />
         ))}
       </div>
     </section>

@@ -14,18 +14,17 @@ import {
   moveEdge,
   type Moment,
   partTotals,
-  previousFeedEnd,
   spanMinutes,
   type Part,
 } from "@/lib/maple/feed";
-import { earlierPresets, LIKELY_SIDE_MIN, usualBreakMin, usualSideMin } from "@/lib/maple/presets";
 import { DEFAULT_TZ, formatClock, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, FeedEdit, Side, StretchRef, StretchSide, TimerKind } from "@/lib/maple/types";
 import { Icon } from "./icons";
 import { useBabyWords, useVoice } from "./familyWords";
 import type { Voice } from "@/lib/maple/voice";
 import { SIDE_COLOR, SIDE_INK } from "./palette";
-import { cx, TimeScrubber } from "./ui";
+import { cx } from "./ui";
+import { RecordedTimeField } from "./TimeField";
 import { useMaple } from "./useMaple";
 
 /**
@@ -723,13 +722,17 @@ type MomentEditorProps = {
    */
   free?: { title: string; recorded: Date; min: Date; max: Date; notes?: { low?: string; high?: string } };
   /**
-   * "commit" (Fix times): [Cancel] [Save · 4:20 PM]; Save waits for a change.
+   * "commit" (Edit times): [Cancel] [Save time]; Save waits for a valid change.
    * "staged" (FeedSheet): no buttons; every nudge or exact time calls onDraft
    * at once, and the sheet's own Save sends it.
    */
   mode: "commit" | "staged";
   /** Staged: the current draft (defaults to the recorded value). */
   draft?: Date;
+  /** Commit: a selected preset is a draft until Save time. */
+  initial?: Date;
+  onInvalidChange?: (invalid: boolean) => void;
+  onDirtyChange?: (dirty: boolean) => void;
   onDraft?: (to: Date) => void;
   onSave?: (to: Date) => void;
   onCancel?: () => void;
@@ -744,7 +747,7 @@ type MomentEditorProps = {
 
 /**
  * The editor for one moment: its question ("When did she go back on the
- * Right?"), "Logged as 4:25 PM" (a recorded moment), a TimeScrubber spelled in words and
+ * Right?"), "Logged as 4:25 PM" (a recorded moment), visible date and clock fields
  * bounded by the engine (the neighbouring moments), a preview of what the
  * change does ("Break 15 → 10 min · Right 5 min longer · Left unchanged"),
  * and the limit it stops at. Keyed by the moment and its recorded value, so
@@ -759,7 +762,7 @@ export function MomentEditor(props: MomentEditorProps) {
   const [first] = useState(key);
   const changed = key !== first;
   if (!info) return <p className="text-[13px] text-mp-ink-2">This part changed, so it can&apos;t be edited here.</p>;
-  return <MomentEditorInner key={key} {...props} info={info} changed={changed} />;
+  return <MomentEditorInner key={`${key}|${props.initial?.getTime() ?? ""}`} {...props} info={info} changed={changed} />;
 }
 
 type MomentInfo = {
@@ -824,33 +827,14 @@ const sameMinute = (a: Date, b: Date) => Math.floor(a.getTime() / 60_000) === Ma
 /** The engine's "same moment" slack. */
 const NEAR_MS = 1500;
 
-const MINUTE = 60_000;
-
-/** The one-tap earlier times a staged moment offers (FeedSheet's rows): guesses, "No break", "Since the last feed", then plain minutes. */
-function momentPresets(info: MomentInfo, entry: Entry, entries: readonly Entry[], now: Date) {
-  const smart: { kind: "likely" | "usual"; at: number }[] = [];
-  if (info.anchor?.of === "side") {
-    smart.push({ kind: "likely", at: info.anchor.at + LIKELY_SIDE_MIN * MINUTE });
-    const usual = usualSideMin(entries, now);
-    if (usual !== null && Math.abs(usual - LIKELY_SIDE_MIN) >= 3) smart.push({ kind: "usual", at: info.anchor.at + usual * MINUTE });
-  } else if (info.anchor?.of === "break") {
-    const usual = usualBreakMin(entries, now);
-    if (usual !== null) smart.push({ kind: "usual", at: info.anchor.at + usual * MINUTE });
-  }
-  return earlierPresets({
-    recorded: info.recorded.getTime(),
-    min: info.min.getTime(),
-    floor: info.moment === "resume" ? (info.floor ?? null) : null,
-    feedFloor: info.moment === "feed_start" ? previousFeedEnd(entries, entry) : null,
-    smart,
-  });
-}
-
 function MomentEditorInner({
   entry,
   tz,
   mode,
   draft: controlled,
+  initial,
+  onInvalidChange,
+  onDirtyChange,
   onDraft,
   onSave,
   onCancel,
@@ -864,12 +848,13 @@ function MomentEditorInner({
   const { state, now } = useMaple();
   const w = useBabyWords();
   const vo = useVoice();
-  const [local, setLocal] = useState(info.recorded);
+  const [local, setLocal] = useState(initial ?? info.recorded);
+  const [invalid, setInvalid] = useState(false);
   const [touched, setTouched] = useState(false);
   const draft = mode === "staged" ? controlled ?? info.recorded : local;
   const draftMs = draft.getTime();
-  // Staged (FeedSheet's rows) offers the one-tap times here; Fix times already showed them before "Other time…".
-  const presets = mode === "staged" && info.edge && entry.kind === "feed" ? momentPresets(info, entry, state?.entries ?? [], now()) : [];
+  const dirty = invalid || !sameMinute(draft, info.recorded);
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   const set = (d: Date) => {
     setTouched(true);
     if (mode === "staged") onDraft?.(d);
@@ -933,38 +918,19 @@ function MomentEditorInner({
           </p>
         )}
       </div>
-      {presets.length > 0 && (
-        <fieldset disabled={locked} className="min-w-0 space-y-2">
-          <div role="group" aria-label="Earlier times" className="grid grid-cols-3 gap-2">
-            {presets.map((p) => {
-              const tag = p.kind === "likely" ? " \u00b7 likely" : p.kind === "usual" ? " \u00b7 usual" : "";
-              return (
-                <TimeChip
-                  key={p.id}
-                  tall
-                  line1={p.kind === "floor" ? "No break" : p.kind === "feed" ? "Since the last feed" : `${p.minutes} min earlier`}
-                  line2={`${formatTimeNear(p.at, info.recorded.getTime(), tz)}${tag}`}
-                  ariaLabel={`${p.kind === "floor" ? "No break" : p.kind === "feed" ? "Since the last feed" : `${p.minutes} minutes earlier`}, ${formatTime(p.at, tz)}${tag ? `, ${tag.slice(3)}` : ""}`}
-                  onClick={() => set(new Date(p.at))}
-                  className={p.wide ? "col-span-2" : undefined}
-                />
-              );
-            })}
-          </div>
-          {presets.some((p) => p.kind === "likely" || p.kind === "usual") && (
-            <p className="text-[13px] leading-snug text-mp-ink-2">
-              {[
-                presets.some((p) => p.kind === "likely") ? `\u201cLikely\u201d is ${LIKELY_SIDE_MIN} min on the side.` : "",
-                presets.some((p) => p.kind === "usual") ? `\u201cUsual\u201d is ${w.his} usual ${info.anchor?.of === "break" ? "break" : "time on a side"}.` : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-            </p>
-          )}
-        </fieldset>
-      )}
       <fieldset disabled={locked} className="min-w-0">
-        <TimeScrubber value={draft} onChange={set} tz={tz} quick={false} nudgeStyle="words" min={info.min} max={info.max} label={info.title} hideLabel />
+        <RecordedTimeField
+          value={draft}
+          onChange={set}
+          tz={tz}
+          min={info.min}
+          max={info.max}
+          label={info.title}
+          onInvalidChange={(bad) => {
+            setInvalid(bad);
+            onInvalidChange?.(bad);
+          }}
+        />
       </fieldset>
       {preview && (
         <p aria-live="polite" className="text-[13px] leading-snug text-mp-ink-2">
@@ -990,7 +956,7 @@ function MomentEditorInner({
           <button
             type="button"
             onClick={() => onSave?.(draft)}
-            disabled={locked || sameMinute(draft, info.recorded)}
+            disabled={locked || invalid || sameMinute(draft, info.recorded)}
             className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-[14px] bg-mp-accent px-5 text-[15px] font-semibold text-mp-on-accent disabled:opacity-45"
           >
             {busy ? (
@@ -999,7 +965,7 @@ function MomentEditorInner({
                 Saving…
               </>
             ) : (
-              `Save · ${formatTime(draft, tz)}`
+              "Save time"
             )}
           </button>
         </div>

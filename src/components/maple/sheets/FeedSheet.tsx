@@ -232,6 +232,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [timesNotice, setTimesNotice] = useState<string | null>(null);
   // An open "Add a side" whose times don't fit: Save waits, so what was typed is never dropped.
   const [addBlocked, setAddBlocked] = useState(false);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   // "Add a side" open with no side picked: Save with nothing else to save would close as if it added one.
   const [addPending, setAddPending] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -247,6 +248,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const discardTimes = () => {
     setDraft(null);
     setAddBlocked(false);
+    setTimeInvalid(false);
     setEpoch((x) => x + 1);
   };
   const startOver = () => {
@@ -302,7 +304,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // Closing with a staged change asks first. Stable, because Sheet re-runs its open effect (and refocuses) when onClose changes.
   const guarded = useRef(false);
   useEffect(() => {
-    guarded.current = (dirty || addBlocked) && !readOnly;
+    guarded.current = (dirty || addBlocked || timeInvalid) && !readOnly;
   });
   const close = useCallback(() => (guarded.current ? setConfirming(true) : onClose()), [onClose]);
 
@@ -519,8 +521,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const empty = method === "breast" && !running && !gone && (timed ? minutesTyped && noMinutes : noMinutes && spanMinutes(range[0], range[1]) === 0);
 
   const addOnly = addPending && !dirty && !("note" in notePatch);
-  const title = e ? (running ? "Nursing now" : describeEntry(e).title) : "Feed";
-  const primary = e ? "Save" : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
+  const title = e ? (running ? "Nursing now" : timed && preset?.editTime ? "Edit nursing times" : describeEntry(e).title) : "Feed";
+  const primary = e ? (timed && (dirty || preset?.editTime) ? "Save time" : "Save") : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
 
   // Left and Right abreast; back and forth (both sides, not split into made-up sides) under them, with what it means.
@@ -561,6 +563,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       open={open}
       onClose={close}
       title={title}
+      calm={preset?.editTime === true}
       footer={
         confirming ? (
           <DiscardConfirm
@@ -587,7 +590,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && addBlocked) || empty || addOnly}
+              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
@@ -599,6 +602,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     ? "Pick Left or Right to add a side."
                     : conflict
                     ? undefined
+                    : timeInvalid
+                      ? "Check the date and time above."
                     : addBlocked
                       ? ADD_BLOCKED
                       : e && e.id < 0
@@ -662,6 +667,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     onStage={stage}
                     onAddBlocked={setAddBlocked}
                     onAddPending={setAddPending}
+                    openTime={preset?.editTime === true}
+                    onTimeInvalid={setTimeInvalid}
                   />
                   {!readOnly && (
                     <MoreDetails label="Type minutes instead" summary={minutesTyped ? `L ${left ?? 0} · R ${right ?? 0}${(both ?? 0) > 0 ? ` · both ${both}` : ""} min` : undefined}>
@@ -866,6 +873,8 @@ function TimesSection({
   onStage,
   onAddBlocked,
   onAddPending,
+  openTime,
+  onTimeInvalid,
 }: {
   /** The feed as the server has it now. */
   live: FeedEntry;
@@ -883,12 +892,16 @@ function TimesSection({
   onAddBlocked: (blocked: boolean) => void;
   /** The add form is open and nothing is picked in it yet. */
   onAddPending: (pending: boolean) => void;
+  openTime: boolean;
+  onTimeInvalid: (invalid: boolean) => void;
 }) {
   const { now: nowFn } = useMaple();
   const w = useBabyWords();
   const vo = useVoice();
-  const [row, setRow] = useState<Row | null>(null);
-  const [editor, setEditor] = useState<StagedEditor | null>(null);
+  const initialParts = partsOf(working, nowFn());
+  const initialSide = initialParts.find(isSide);
+  const [row, setRow] = useState<Row | null>(() => openTime && initialSide ? { kind: "side", key: rowKey(initialSide), index: initialParts.indexOf(initialSide), side: initialSide.side } : null);
+  const [editor, setEditor] = useState<StagedEditor | null>(() => openTime && initialSide ? { id: `${rowKey(initialSide)}:start`, edge: { edge: "start", ref: initialSide.ref }, base: working } : null);
   const [error, setError] = useState<string | null>(null);
 
   // With nothing staged, a change from the other phone replaces the editor's feed (and the editor says who moved it),
@@ -910,10 +923,10 @@ function TimesSection({
     shown = previewParts(parts, staged, from, editor.to);
   }
   const saved = new Set(partsOf(live, now).map(partKey));
-  const openIndex = rowIndex(row, parts);
   const clock = (t: string) => formatTime(t, tz);
 
   const collapse = () => {
+    onTimeInvalid(false);
     setEditor(null);
     setError(null);
   };
@@ -928,8 +941,9 @@ function TimesSection({
   };
   // Taps act on the staged feed, which the rows draw on the editor's feed while one is open:
   // find the open row there (a moved switch has a new start, so the shown part's ref won't do).
-  const openInStaged = (): { p: Part; i: number } | null => {
-    const i = rowIndex(row, staged);
+  const openInStaged = (p: Part, at: number): { p: Part; i: number } | null => {
+    const target: Row = p.kind === "side" ? { kind: "side", key: rowKey(p), index: at, side: p.side } : { kind: "break", key: rowKey(p), index: at };
+    const i = rowIndex(target, staged);
     return i === null ? null : { p: staged[i], i };
   };
   const rowOf = (p: Part, i: number): Row => (p.kind === "side" ? { kind: "side", key: rowKey(p), index: i, side: p.side } : { kind: "break", key: rowKey(p), index: i });
@@ -939,11 +953,13 @@ function TimesSection({
     if (id === "on") return p.after ? { edge: "start", ref: p.after } : null;
     return id === "legacy-end" ? { edge: "ended" } : null;
   };
-  const toggleEditor = (id: string) => {
+  const toggleEditor = (moment: string, p: Part, i: number) => {
+    onTimeInvalid(false);
     setError(null);
+    const id = `${rowKey(p)}:${moment}`;
     if (editor?.id === id) return setEditor(null);
-    const found = openInStaged();
-    const edge = found && edgeOf(id, found.p);
+    const found = openInStaged(p, i);
+    const edge = found && edgeOf(moment, found.p);
     // The part went in the last change (a break closed): the rows show that once the editor's gone.
     if (!found || !edge) return setEditor(null);
     openRow(rowOf(found.p, found.i));
@@ -955,13 +971,15 @@ function TimesSection({
       const moved = moveEdge(base.data, { ...editor.edge, to }, feedCtx(base, nowFn()));
       onStage({ data: moved.data, startedAt: moved.startedAt, endedAt: moved.endedAt }, base);
       setEditor({ ...editor, base, to });
-    } catch {
-      // Past a limit: the scrubber stops at the engine's bounds, and the editor's preview says why.
+      setError(null);
+    } catch (err) {
+      setError(err instanceof FeedEditError ? feedEditCopy(err, "ui", tz, vo) : "That time couldn't be changed. Have another look.");
+      onTimeInvalid(true);
     }
   };
   /** "Wrong side?": the part is the other side, or both sides; one going back and forth is one side after all. */
-  const flip = (side: StretchSide) => {
-    const found = openInStaged();
+  const flip = (side: StretchSide, part: Part, index: number) => {
+    const found = openInStaged(part, index);
     collapse();
     if (!found || found.p.kind !== "side") return;
     try {
@@ -972,11 +990,8 @@ function TimesSection({
       setError(err instanceof FeedEditError ? feedEditCopy(err, "ui", tz, vo) : "That part changed; have another look.");
     }
   };
-  const pickRow = (p: Part, i: number) => {
-    collapse();
-    openRow(openIndex === i ? null : rowOf(p, i));
-  };
   const pickEnded = () => {
+    onTimeInvalid(false);
     if (row?.kind === "ended") {
       collapse();
       openRow(null);
@@ -1022,18 +1037,24 @@ function TimesSection({
     editor?.id === id && (
       <InView again={dirty}>
         <div className="pt-1 pb-3">
-          <MomentEditor entry={base} tz={tz} edge={editor.edge} mode="staged" draft={fresh ? undefined : editor.to} onDraft={nudge} disabled={disabled} who={who} />
+          <MomentEditor entry={base} tz={tz} edge={editor.edge} mode="staged" draft={fresh ? undefined : editor.to} onDraft={nudge} onInvalidChange={onTimeInvalid} disabled={disabled} who={who} />
         </div>
       </InView>
     );
-  const line = (id: string, label: string) => (
-    <div key={id}>
-      <LinkRow expanded={editor?.id === id} disabled={disabled} onClick={() => toggleEditor(id)}>
-        {label}
-      </LinkRow>
-      {editorFor(id)}
-    </div>
-  );
+  const line = (moment: string, label: string, part: Part, index: number) => {
+    const id = `${rowKey(part)}:${moment}`;
+    return (
+      <div key={id}>
+        {readOnly ? <p className="py-2 text-[14px] text-mp-ink-2">{label}</p> : (
+          <button type="button" aria-expanded={editor?.id === id} disabled={disabled} onClick={() => toggleEditor(moment, part, index)} className="flex min-h-[48px] w-full items-center justify-between gap-3 rounded-lg py-2 text-left disabled:opacity-45">
+            <span className="min-w-0 text-[14px] text-mp-ink tabular-nums">{label}</span>
+            <span className="shrink-0 text-[14px] font-medium text-mp-accent-fg">Edit time</span>
+          </button>
+        )}
+        {editorFor(id)}
+      </div>
+    );
+  };
 
   /** Under an open row: its moments, worded from the part (p) and timed as shown (v, the staged times). */
   const renderOpen = (p: Part, v: Part, i: number) => {
@@ -1045,14 +1066,17 @@ function TimesSection({
         p.side === "B" ? (before?.side === "B" ? "Back on, back and forth" : "Back and forth after the break") : before?.side === p.side ? `Back on the ${name}` : `On the ${name} after the break`;
       // A switch to back and forth "went back and forth"; a side after it is "On the Left" (tracking sides again).
       const switchedTo = (to: StretchSide, from?: StretchSide) => (to === "B" ? "Went back and forth" : from === "B" ? `On the ${SIDE_NAME[to]}` : `Switched to ${SIDE_NAME[to]}`);
-      const startLabel = p.startMoment === "feed_start" ? "Feed started" : p.startMoment === "switch" ? switchedTo(p.side, before?.side) : resumed;
-      const endLabel = p.side === "B" ? "Finished both sides" : `Finished ${name}`;
+      const startLabel = p.startMoment === "feed_start" ? `Started ${name}` : p.startMoment === "switch" ? switchedTo(p.side, before?.side) : resumed;
+      const endLabel = p.side === "B" ? "Ended both sides" : `Ended ${name}`;
       const end = v.end ?? p.end;
       return (
         <Detail>
-          {line("start", `${startLabel} ${clock(v.start)}`)}
-          {end && line("end", `${endLabel} ${clock(end)}`)}
-          <SideFixRow side={p.side} disabled={disabled} onPick={flip} />
+          {line("start", `${startLabel} · ${clock(v.start)}`, p, i)}
+          {end && i < parts.length - 1 && line("end", `${endLabel} · ${clock(end)}`, p, i)}
+          {!readOnly && <details className="text-[14px] text-mp-ink-2">
+            <summary className="min-h-[44px] cursor-pointer py-3">Change side</summary>
+            <SideFixRow side={p.side} disabled={disabled} onPick={(side) => flip(side, p, i)} />
+          </details>}
         </Detail>
       );
     }
@@ -1060,8 +1084,8 @@ function TimesSection({
     const back = !p.after ? "" : p.after.side === "B" ? (p.before.side === "B" ? "Back on, back and forth" : "Back and forth") : `${p.after.side === p.before.side ? "Back on the" : "On the"} ${SIDE_NAME[p.after.side]}`;
     return (
       <Detail>
-        {line("off", p.before.side === "B" ? `Came off ${clock(v.start)}` : `Came off ${SIDE_NAME[p.before.side]} ${clock(v.start)}`)}
-        {p.after && end ? line("on", `${back} ${clock(end)}`) : end && line("legacy-end", `Feed ended ${clock(end)}`)}
+        {line("off", p.before.side === "B" ? `Came off · ${clock(v.start)}` : `Came off ${SIDE_NAME[p.before.side]} · ${clock(v.start)}`, p, i)}
+        {p.after && end ? line("on", `${back} · ${clock(end)}`, p, i) : end && line("legacy-end", `Feed ended · ${clock(end)}`, p, i)}
       </Detail>
     );
   };
@@ -1084,8 +1108,8 @@ function TimesSection({
         const v = shown[i] ?? p;
         return (
           <div key={rowKey(p)}>
-            <TimesRow part={v} changed={!saved.has(partKey(v))} open={openIndex === i} tz={tz} readOnly={readOnly} disabled={disabled} onClick={() => pickRow(p, i)} />
-            {openIndex === i && renderOpen(p, v, i)}
+            <TimesRow part={v} changed={!saved.has(partKey(v))} open={false} tz={tz} readOnly disabled={disabled} onClick={() => {}} />
+            {p.kind === "side" && renderOpen(p, v, i)}
           </div>
         );
       })}
@@ -1097,13 +1121,14 @@ function TimesSection({
             </span>
           }
           name="Ended"
+          editTime
           value={clock(endedAt)}
           changed={endChanged}
           open={row?.kind === "ended"}
           onClick={pickEnded}
           disabled={disabled}
           readOnly={readOnly}
-          ariaLabel={`Ended at ${clock(endedAt)}${endChanged ? ", not saved yet" : ""}. Fix when the feed ended.`}
+          ariaLabel={`Ended at ${clock(endedAt)}${endChanged ? ", not saved yet" : ""}. Edit time when the feed ended.`}
         />
       )}
       {row?.kind === "ended" && editor?.id === "ended-row" && <Detail>{editorFor("ended-row")}</Detail>}
@@ -1241,6 +1266,7 @@ function ExtraRow({
   readOnly,
   accent,
   ariaLabel,
+  editTime,
 }: {
   mark: ReactNode;
   name: string;
@@ -1253,6 +1279,7 @@ function ExtraRow({
   readOnly?: boolean;
   accent?: boolean;
   ariaLabel?: string;
+  editTime?: boolean;
 }) {
   const body = (
     <>
@@ -1264,7 +1291,7 @@ function ExtraRow({
         {value && <span className={cx("min-w-0 text-[14px] tabular-nums", changed ? "text-mp-accent-fg" : "text-mp-ink-2")}>{value}</span>}
       </span>
       {changed && <ChangedDot />}
-      {!readOnly && <Icon name={open ? "chevron-down" : "chevron-right"} size={16} className="shrink-0 text-mp-ink-3" />}
+      {!readOnly && (editTime ? <span className="shrink-0 text-[14px] font-medium text-mp-accent-fg">Edit time</span> : <Icon name={open ? "chevron-down" : "chevron-right"} size={16} className="shrink-0 text-mp-ink-3" />)}
     </>
   );
   if (readOnly) return <div className="flex min-h-[44px] items-center gap-2">{body}</div>;

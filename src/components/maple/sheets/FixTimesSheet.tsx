@@ -98,8 +98,12 @@ type RunMeta = { backOn?: BackOnMeta; stop?: { ref: StretchRef } };
  * the other phone moves it and commit `retime move` on it; `free` ones (a new
  * moment: back on at, ended at) commit through `commit`.
  */
+type EditorNavigation = { kind: "pin"; pin: Pin } | { kind: "editor"; editor: Editor } | { kind: "more" };
+
 type Editor = {
   id: string;
+  /** A picked correction is a draft until Save time. */
+  initial?: Date;
   edge?: MomentEdge;
   free?: { title: string; recorded: Date; min: Date; max: Date; notes?: { low?: string; high?: string } };
   commit?: (to: Date, o: TimerCallOptions) => Promise<unknown>;
@@ -277,7 +281,7 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   // A tap from this phone (the dock, a toast) still on its way: the sheet waits for its answer, as for a timer that's still starting.
   const saving = e.id > 0 && timerBusy(e.id) && !committing;
   return (
-    <Sheet open={open} onClose={onClose} title={saving ? `${fix.expand === "done" ? "Done" : "Fix times"} · saving…` : fix.expand === "done" ? "Done" : "Fix times"} subtitle={subtitle} calm>
+    <Sheet open={open} onClose={onClose} title={saving ? `${fix.expand === "done" ? "Done" : "Edit times"} · saving…` : fix.expand === "done" ? "Done" : timed(e) ? "Edit nursing times" : "Edit times"} subtitle={subtitle} calm>
       {/* A fresh pin each time it opens (the router keeps one instance per entry mounted). */}
       <FixBody
         key={count}
@@ -330,7 +334,41 @@ function FixBody({
   const [already, setAlready] = useState<Already | null>(null);
   const [holding, setHolding] = useState(false);
   const holdTimer = useRef(0);
-  const [editor, setEditor] = useState<Editor | null>(null);
+  const editorForPin = (p: Pin, on: Entry, at: Date): Editor | null => {
+    if (!timed(on)) {
+      return {
+        id: "editor",
+        free: {
+          title: on.kind === "sleep" ? "Fell asleep" : `${KIND_TITLE[on.kind as TimerKind] ?? "Timer"} started`,
+          recorded: new Date(on.started_at),
+          min: new Date(Date.parse(on.started_at) - 6 * 3600_000),
+          max: at,
+        },
+        commit: (to, o) => actions.adjust(on, to, o),
+      };
+    }
+    if (p.kind === "side") return { id: "editor", edge: { edge: "start", ref: p.ref } };
+    if (p.kind === "break") return { id: "editor", edge: { edge: "end", ref: p.ref } };
+    if (p.kind === "finish") {
+      const ps = partsOf(on, at);
+      const last = sidesOf(ps).at(-1);
+      if (last) return { id: "editor", edge: ps.at(-1)?.kind === "break" ? { edge: "ended" } : { edge: "end", ref: last.ref } };
+    }
+    return null;
+  };
+  // Edit times opens at the clock, with the neighbouring moments still available above it.
+  const [editor, setEditor] = useState<Editor | null>(() => expand || !timed(start) ? null : editorForPin(pin, start, nowFn()));
+  const [editorDirty, setEditorDirty] = useState(false);
+  const [editorRevision, setEditorRevision] = useState(0);
+  const [leavingEditor, setLeavingEditor] = useState<EditorNavigation | null>(null);
+  const keepEditingButton = useRef<HTMLButtonElement>(null);
+  const editorHost = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!leavingEditor) return;
+    keepEditingButton.current?.scrollIntoView({ block: "nearest" });
+    keepEditingButton.current?.focus({ preventScroll: true });
+  }, [leavingEditor]);
+  const focusEditor = () => window.requestAnimationFrame(() => editorHost.current?.querySelector<HTMLElement>('input[type="time"], button')?.focus({ preventScroll: true }));
   const [finished, setFinished] = useState(expand === "finished" || expand === "done");
   // "She's back on…" / "She went back on…": the other side is the likely one (the dock's next side), one tap from the chips.
   // After going back and forth, the likely one is going back on that way ("B").
@@ -344,16 +382,23 @@ function FixBody({
   // A tap from this phone still on its way (not this sheet's own commit).
   const flight = e.id > 0 && timerBusy(e.id) && !busy;
 
-  const repin = (p: Pin) => {
+  const applyPin = (p: Pin) => {
+    setEditorDirty(false);
+    setEditorRevision((n) => n + 1);
     const n = nowFn();
     setPin(p);
     setSnap({ recorded: recordedOf(p, e, n), current: currentOf(e, n) });
-    setEditor(null);
+    setEditor(editorForPin(p, e, n));
     setNotice(null);
     setAlready(null);
     setFinished(false);
     setBackSide(null);
     setBackOnly(false);
+  };
+
+  const repin = (p: Pin) => {
+    if (editorDirty) setLeavingEditor({ kind: "pin", pin: p });
+    else applyPin(p);
   };
 
   // This phone's own tap landed while the sheet was open: its answer is the new baseline, not someone else's change.
@@ -699,9 +744,24 @@ function FixBody({
     setEditor(null);
   }, [already, live, pin, nowFn]);
 
-  const openEditor = (ed: Editor) => {
+  const applyEditor = (ed: Editor) => {
+    setEditorDirty(false);
+    setEditorRevision((n) => n + 1);
     setNotice(null);
     setEditor(ed);
+  };
+  const openEditor = (ed: Editor) => {
+    if (editorDirty) setLeavingEditor({ kind: "editor", editor: ed });
+    else applyEditor(ed);
+  };
+  const discardAndNavigate = () => {
+    const target = leavingEditor;
+    setLeavingEditor(null);
+    setEditorDirty(false);
+    if (target?.kind === "pin") applyPin(target.pin);
+    else if (target?.kind === "editor") applyEditor(target.editor);
+    else if (target?.kind === "more") setEditor(null);
+    focusEditor();
   };
 
   const panelProps: PanelProps = { e, tz, now, disabled, busy, run, openEditor };
@@ -712,16 +772,19 @@ function FixBody({
     const ed = editor;
     panel = (
       <MomentEditor
+        key={editorRevision}
         entry={e}
         tz={tz}
         edge={ed.edge}
         free={ed.free}
+        initial={ed.initial}
         mode="commit"
+        onDirtyChange={setEditorDirty}
         busy={busy === ed.id}
-        disabled={disabled}
+        disabled={disabled || !!leavingEditor}
         who={who}
         mine={mine}
-        onCancel={() => setEditor(null)}
+        onCancel={onClose}
         onSave={(to) =>
           void run(
             ed.id,
@@ -737,7 +800,7 @@ function FixBody({
   } else if (pin.kind === "timer") {
     panel = <TimerPanel {...panelProps} finished={finished} setFinished={setFinished} actions={actions} />;
   } else if (pin.kind === "finish") {
-    panel = <FinishPanel {...panelProps} actions={actions} />;
+    panel = <FinishPanel {...panelProps} />;
   } else if (pin.kind === "after") {
     panel = <AfterDonePanel {...panelProps} doneAt={doneAt ? Date.parse(doneAt) : Date.parse(e.ended_at ?? "")} backSide={backSide} setBackSide={setBackSide} actions={actions} />;
   } else if (pin.kind === "break") {
@@ -774,14 +837,42 @@ function FixBody({
       )}
       {/* "When did she go back on?" after a Done is one question about a feed that's over: no parts to pick from. */}
       {timed(e) && pin.kind !== "after" && (
-        <PartPicker e={e} parts={parts} pin={pin} editing={editor?.edge?.ref} tz={tz} onPick={repin} disabled={!!busy} />
+        <PartPicker e={e} parts={parts} pin={pin} editing={editor?.edge?.ref} tz={tz} onPick={repin} disabled={!!busy || !!leavingEditor} />
+      )}
+      {editor && timed(e) && pin.kind === "side" && (() => {
+        const part = locate(pin, e, now).part;
+        if (!part?.end) return null;
+        const choices = [
+          { edge: "start" as const, label: `Started ${SIDE_NAME[part.side]}`, at: part.start },
+          { edge: "side_end" as const, label: `Ended ${SIDE_NAME[part.side]}`, at: part.end },
+        ];
+        return (
+          <div role="group" aria-label="Which time to edit" className="flex flex-wrap gap-2">
+            {choices.map((choice) => (
+              <button key={choice.edge} type="button" disabled={disabled || !!leavingEditor} aria-pressed={editor.edge?.edge === choice.edge} onClick={() => openEditor({ id: "editor", edge: { edge: choice.edge, ref: part.ref } })} className="min-h-[44px] rounded-xl border border-mp-line bg-mp-surface px-3 py-2 text-[14px] font-medium text-mp-ink aria-pressed:border-mp-accent-fg aria-pressed:text-mp-accent-fg disabled:opacity-45">
+                {choice.label} · {formatTime(choice.at, tz)}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+      {leavingEditor && (
+        <div role="alertdialog" aria-label="Discard this time change?" className="space-y-3 rounded-xl border border-mp-line bg-mp-sunken p-3">
+          <p className="text-[15px] font-medium text-mp-ink">Discard your unsaved time change?</p>
+          <p className="text-[13px] text-mp-ink-2">The saved time will stay as it was.</p>
+          <div className="flex flex-wrap gap-2">
+            <button ref={keepEditingButton} type="button" onClick={() => { setLeavingEditor(null); focusEditor(); }} className="min-h-[44px] rounded-xl bg-mp-surface px-4 text-[14px] font-semibold text-mp-ink">Keep editing</button>
+            <button type="button" onClick={discardAndNavigate} className="min-h-[44px] rounded-xl bg-mp-accent px-4 text-[14px] font-semibold text-mp-on-accent">Discard change</button>
+          </div>
+        </div>
       )}
       {notice && !(notice.gone && !live) && (
         <p role="alert" className="rounded-xl border border-mp-danger/30 px-3 py-2.5 text-[13px] leading-snug text-mp-ink">
           {notice.text}
         </p>
       )}
-      {readOnly ? <p className="text-[15px] text-mp-ink-2">View only. Ask {ask} to fix the times.</p> : panel}
+      <div ref={editorHost}>{readOnly ? <p className="text-[15px] text-mp-ink-2">View only. Ask {ask} to fix the times.</p> : panel}</div>
+      {editor && !expand && !readOnly && <LinkRow disabled={!!busy || !!leavingEditor} onClick={() => editorDirty ? setLeavingEditor({ kind: "more" }) : setEditor(null)}>More timer options</LinkRow>}
     </>
   );
 }
@@ -1177,7 +1268,7 @@ function OpenSidePanel({
   ]
     .filter(Boolean)
     .join(" ");
-  const move = (id: string, to: number) => void run(id, (o) => actions.retime(e, { op: "move", edge: "start", ref: s.ref, to: new Date(to).toISOString() }, o));
+  const move = (id: string, to: number) => openEditor({ id: `editor-${id}`, edge: { edge: "start", ref: s.ref }, initial: new Date(to) });
 
   let caption: string;
   if (k === 0) caption = `The whole feed starts earlier.${clipped && feedFloor !== null ? ` The last feed ended at ${formatTime(feedFloor, tz)}.` : ""}`;
@@ -1519,7 +1610,7 @@ function BreakPanel({
                   ariaLabel={`Came off ${minutesWord(c.minutes)} earlier, at ${formatTime(c.at, tz)}`}
                   disabled={disabled}
                   busy={busy === c.id}
-                  onClick={() => void run(c.id, (o) => actions.retime(e, { op: "move", edge: "end", ref: last.ref, to: new Date(c.at).toISOString() }, o))}
+                  onClick={() => openEditor({ id: `editor-${c.id}`, edge: { edge: "end", ref: last.ref }, initial: new Date(c.at) })}
                 />
               ))}
             </Grid>
@@ -1668,7 +1759,7 @@ function AfterDonePanel({
 }
 
 /** Panel D: a finished feed's end ("Ended earlier…" on the Done toast). */
-function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: PanelProps & { actions: Actions }) {
+function FinishPanel({ e, tz, now, disabled, busy, openEditor }: PanelProps) {
   const { state } = useMaple();
   const words = useBabyWords();
   if (!timed(e) || e.active || !e.ended_at) return <Caption>This feed is still going.</Caption>;
@@ -1700,7 +1791,6 @@ function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: P
   ]
     .filter(Boolean)
     .join(" ");
-  const commit = (to: Date, o: TimerCallOptions) => actions.retime(e, { op: "move", ...edge, to: to.toISOString() } as FeedEdit, o);
   return (
     <div className="space-y-4">
       <Title>
@@ -1720,7 +1810,7 @@ function FinishPanel({ e, tz, now, disabled, busy, run, openEditor, actions }: P
                   ariaLabel={`Ended ${minutesWord(c.minutes)} earlier, at ${formatTime(c.at, tz)}${tagOf(c.kind) ? `, ${tagOf(c.kind).slice(3)}` : ""}`}
                   disabled={disabled}
                   busy={busy === c.id}
-                  onClick={() => void run(c.id, (o) => commit(new Date(c.at), o))}
+                  onClick={() => openEditor({ id: `editor-${c.id}`, edge, initial: new Date(c.at) })}
                 />
               ))}
             </Grid>
@@ -1810,7 +1900,12 @@ function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, set
               ariaLabel={`${sleep ? "Fell asleep" : "Started"} ${minutesWord(m)} earlier, at ${formatTime(to, tz)}`}
               disabled={disabled}
               busy={busy === `s-${m}`}
-              onClick={() => void run(`s-${m}`, (o) => actions.adjust(e, new Date(to), o))}
+              onClick={() => openEditor({
+                id: `editor-${m}`,
+                initial: new Date(to),
+                free: { title: sleep ? "Fell asleep" : `${what} started`, recorded: new Date(start), min: new Date(start - 6 * 3600_000), max: now },
+                commit: (at, o) => actions.adjust(e, at, o),
+              })}
             />
           );
         })}

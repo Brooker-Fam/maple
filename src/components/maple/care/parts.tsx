@@ -195,8 +195,8 @@ export function LoggedSlot({ held, className }: { held: CareHeld; className?: st
 }
 
 /** "Took it: Brittany's Ibuprofen (Advil)", or "your" on her own phone. */
-export function tookItLabel(care: UseCare, plan: CarePlan): string {
-  return `Took it: ${care.self ? "your" : `${care.name}'s`} ${planTitle(plan)}`;
+export function tookItLabel(care: UseCare, plan: CarePlan, label = "Took it"): string {
+  return `${label}: ${care.self ? "your" : `${care.name}'s`} ${planTitle(plan)}`;
 }
 
 /**
@@ -215,6 +215,7 @@ export function TookIt({
   onSaved,
   fixed,
   className,
+  label = "Took it",
 }: {
   view: PlanView;
   care: UseCare;
@@ -222,6 +223,7 @@ export function TookIt({
   onSaved?: () => void;
   fixed?: boolean;
   className?: string;
+  label?: string;
 }) {
   const { toast } = useMaple();
   const [busy, setBusy] = useState(false);
@@ -241,7 +243,7 @@ export function TookIt({
       setBusy(false);
     }
   };
-  return <TookItButton busy={busy} quiet={notYet(view.status)} onClick={() => void took()} aria-label={tookItLabel(care, view.plan)} className={className} />;
+  return <TookItButton busy={busy} quiet={notYet(view.status)} onClick={() => void took()} label={label} aria-label={tookItLabel(care, view.plan, label)} className={className} />;
 }
 
 /**

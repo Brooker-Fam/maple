@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { RECENT_MS, type PlanView, careTime, countedAs, doseNotes, loggedBy, matchPlan, normName, oneOffNotes, parseUnits, planTitle, planView, recentDose } from "@/lib/maple/care";
 import type { DoseEntry, DoseResult, OneTapAsk } from "@/lib/maple/types";
+import { RecordedTimeField } from "../TimeField";
 import { ContextNote, Label, MoreDetails, NoteField, useOpenCount } from "../sheets/parts";
-import { Button, Chip, Sheet, WhenField, cx, tone } from "../ui";
+import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { useCareNav } from "./CareNav";
 import OverLimitList from "./OverLimitList";
@@ -94,13 +95,15 @@ function PlanDose({
   startWhen: Date | null;
   startDose: string;
 }) {
-  const { now: nowFn, toast } = useMaple();
+  const { now: nowFn } = useMaple();
   const nav = useCareNav();
   const tick = useNow(30_000);
   const ctx = useCareCtx(care);
   const plan = shown.plan;
 
   const [when, setWhen] = useState<Date | null>(startWhen);
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const [units, setUnits] = useState<number | null>(null);
   const [unitsTyped, setUnitsTyped] = useState("");
   const [note, setNote] = useState("");
@@ -109,6 +112,12 @@ function PlanDose({
   const [dup, setDup] = useState<{ by: string | null; at: string } | null>(ask?.reason === "recent" && ask.at ? { by: ask.by ?? null, at: ask.at } : null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const close = () => { if (!busy) onClose(); };
+  const changeWhen = (value: Date | null) => {
+    setWhen(value);
+    setConfirmed(false);
+    setDup(null);
+  };
 
   const doses = care.doses(plan.id, 2).filter(isDose);
   const at = when ?? tick;
@@ -133,17 +142,11 @@ function PlanDose({
   // Once "Yes, another dose" answered the ask, Save is that answer.
   const sawEarlier = confirmed;
 
-  /**
-   * The sheet closes first, so the dose's toast (when the next one is OK, the
-   * earlier chips, Undo) lands where she's going back to: a toast raised in a
-   * sheet that then closes would wait behind the sheet under it. If the server
-   * finds a dose this phone hadn't seen (the other phone's), it comes back as
-   * the ask.
-   */
+  /** Keep the selected time and details on screen until the log succeeds. */
   const save = async (opts: { skipped?: boolean; allow?: boolean } = {}) => {
-    if (busy) return;
+    if (busy || future || timeInvalid || unitsBad) return;
     setBusy(true);
-    onClose();
+    setProblem(null);
     try {
       const r: DoseResult = await care.act.logDose({
         planId: plan.id,
@@ -155,11 +158,15 @@ function PlanDose({
         // Anything the sheet already showed about an earlier dose was the ask; a skip never repeats a dose.
         allowDuplicate: opts.skipped || opts.allow || sawEarlier,
       });
-      if (r.created || r.deduped) return;
+      if (r.created || r.deduped) {
+        onClose();
+        return;
+      }
       const d = r.possible_duplicate;
-      nav.openDose(plan.id, d ? { reason: "recent", by: d.created_by, at: d.at } : { reason: r.reason ?? "recent" });
+      if (d) setDup({ by: d.created_by, at: d.at });
+      else nav.openDose(plan.id, { reason: r.reason ?? "recent" }, undefined, { at: (when ?? nowFn()).toISOString(), dose: doseText });
     } catch (e) {
-      toast(errorText(e), { tone: "error" });
+      setProblem(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -174,12 +181,12 @@ function PlanDose({
   const whoText = (by: string | null) => loggedBy(by, ctx);
   const label = when ? `Took it at ${careTime(when.toISOString(), tick, ctx.tz)}` : "Took it";
   const skippable = plan.schedule.type !== "as_needed";
-  const ready = !future && !unitsBad;
+  const ready = !future && !unitsBad && !timeInvalid;
 
   return (
     <Sheet
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={planTitle(plan)}
       subtitle={plan.dose_text ? `As prescribed: ${plan.dose_text}` : undefined}
       footer={
@@ -187,7 +194,7 @@ function PlanDose({
           <div>
             <div className="flex items-center gap-3">
               {skippable && (
-                <Button variant="soft" size="lg" onClick={() => void save({ skipped: true })} disabled={busy || future}>
+                <Button variant="soft" size="lg" onClick={() => void save({ skipped: true })} disabled={busy || !ready}>
                   Skipped
                 </Button>
               )}
@@ -199,95 +206,99 @@ function PlanDose({
         )
       }
     >
-      <div className="space-y-1">
-        <p className="text-[16px] leading-snug text-mp-ink-2 tabular-nums">{view.sentence}</p>
-        {view.meta.map((m) => (
-          <p key={m} className="text-[13px] leading-snug text-mp-ink-2 tabular-nums">
-            {m}
-          </p>
-        ))}
-      </div>
-
-      {showDup && (
-        <div className={cx(tone.card, "p-4")} role="group" aria-label="Is this another dose?">
-          <p className={cx(tone.heading, "text-[17px] leading-snug")}>
-            {whoText(showDup.by)} logged {planTitle(plan)} at {careTime(showDup.at, tick, ctx.tz)}
-          </p>
-          <p className={cx(tone.muted, "mt-1 text-[15px]")}>Is this another dose?</p>
-          <div className="mt-3 flex flex-col gap-2">
-            <Button size="md" onClick={yesAnother} disabled={busy}>
-              Yes, another dose
-            </Button>
-            <Button size="md" variant="soft" onClick={onClose}>
-              No, same one
-            </Button>
-          </div>
+      <fieldset disabled={busy} className="min-w-0 space-y-5">
+        <div className="space-y-1">
+          <p className="text-[16px] leading-snug text-mp-ink-2 tabular-nums">{view.sentence}</p>
+          {view.meta.map((m) => (
+            <p key={m} className="text-[13px] leading-snug text-mp-ink-2 tabular-nums">
+              {m}
+            </p>
+          ))}
         </div>
-      )}
 
-      {ask?.reason === "logged_today" && !showDup && (
-        <p className={cx(tone.inset, tone.body, "px-4 py-3 text-[15px] leading-snug")}>Already logged today. You can still log another.</p>
-      )}
+        <Problem className="mt-0">{problem}</Problem>
 
-      {/* While it asks "another dose?", the early nudge (and its Poison Help line) would read as if she'd already doubled up:
-          it comes with the toast after "Yes, another dose". Over the limit always shows, before Save. */}
-      {notes.filter((a) => !showDup || isOverLimit(a)).map((a) => (
-        <div key={a.title}>
-          <NoteCard note={a} care={care} />
-          {isOverLimit(a) && <OverLimitList doses={windowDoses} plan={plan} care={care} className="mt-2" />}
-        </div>
-      ))}
-
-      {needUnits && plan.limit_unit && (
-        <div>
-          <Label optional>How many {plan.limit_unit} this time?</Label>
-          {parsed.options?.length ? (
-            <div className="flex flex-wrap gap-2">
-              {parsed.options.map((o) => (
-                <Chip
-                  key={o}
-                  selected={units === o}
-                  onClick={() => {
-                    setUnits(o);
-                    setUnitsTyped(String(o));
-                  }}
-                  className="min-w-[56px] justify-center text-base"
-                >
-                  {o}
-                </Chip>
-              ))}
+        {showDup && (
+          <div className={cx(tone.card, "p-4")} role="group" aria-label="Is this another dose?">
+            <p className={cx(tone.heading, "text-[17px] leading-snug")}>
+              {whoText(showDup.by)} logged {planTitle(plan)} at {careTime(showDup.at, tick, ctx.tz)}
+            </p>
+            <p className={cx(tone.muted, "mt-1 text-[15px]")}>Is this another dose?</p>
+            <div className="mt-3 flex flex-col gap-2">
+              <Button size="md" onClick={yesAnother} disabled={busy || !ready}>
+                Yes, another dose
+              </Button>
+              <Button size="md" variant="soft" onClick={close}>
+                No, same one
+              </Button>
             </div>
-          ) : (
-            <input
-              inputMode="decimal"
-              aria-label={`How many ${plan.limit_unit} this time`}
-              value={unitsTyped}
-              onChange={(e) => {
-                const t = e.target.value.replace(",", ".").replace(/[^\d.]/g, "");
-                setUnitsTyped(t);
-                const v = t === "" ? null : Number(t);
-                setUnits(v != null && Number.isFinite(v) ? v : null);
-              }}
-              className={cx(tone.input, "w-32! text-center text-xl font-semibold tabular-nums", unitsBad && "border-mp-danger! ring-2! ring-mp-danger/25!")}
-            />
-          )}
-          {unitsBad && <Problem>Check this number.</Problem>}
-          {units == null && !unitsBad && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Left blank, it counts as {countedAs(plan, null)} toward the limit.</p>}
-        </div>
-      )}
+          </div>
+        )}
 
-      <div>
-        <WhenField value={when} onChange={setWhen} tz={ctx.tz} />
-        {future && <Problem>That time is in the future.</Problem>}
-      </div>
+        {ask?.reason === "logged_today" && !showDup && (
+          <p className={cx(tone.inset, tone.body, "px-4 py-3 text-[15px] leading-snug")}>Already logged today. You can still log another.</p>
+        )}
 
-      <MoreDetails label="Add a note">
-        <NoteField value={note} onChange={setNote} />
+        {/* While it asks "another dose?", the early nudge (and its Poison Help line) would read as if she'd already doubled up:
+            it comes with the toast after "Yes, another dose". Over the limit always shows, before Save. */}
+        {notes.filter((a) => !showDup || isOverLimit(a)).map((a) => (
+          <div key={a.title}>
+            <NoteCard note={a} care={care} />
+            {isOverLimit(a) && <OverLimitList doses={windowDoses} plan={plan} care={care} className="mt-2" />}
+          </div>
+        ))}
+
+        {needUnits && plan.limit_unit && (
+          <div>
+            <Label optional>How many {plan.limit_unit} this time?</Label>
+            {parsed.options?.length ? (
+              <div className="flex flex-wrap gap-2">
+                {parsed.options.map((o) => (
+                  <Chip
+                    key={o}
+                    selected={units === o}
+                    onClick={() => {
+                      setUnits(o);
+                      setUnitsTyped(String(o));
+                    }}
+                    className="min-w-[56px] justify-center text-base"
+                  >
+                    {o}
+                  </Chip>
+                ))}
+              </div>
+            ) : (
+              <input
+                inputMode="decimal"
+                aria-label={`How many ${plan.limit_unit} this time`}
+                value={unitsTyped}
+                onChange={(e) => {
+                  const t = e.target.value.replace(",", ".").replace(/[^\d.]/g, "");
+                  setUnitsTyped(t);
+                  const v = t === "" ? null : Number(t);
+                  setUnits(v != null && Number.isFinite(v) ? v : null);
+                }}
+                className={cx(tone.input, "w-32! text-center text-xl font-semibold tabular-nums", unitsBad && "border-mp-danger! ring-2! ring-mp-danger/25!")}
+              />
+            )}
+            {unitsBad && <Problem>Check this number.</Problem>}
+            {units == null && !unitsBad && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Left blank, it counts as {countedAs(plan, null)} toward the limit.</p>}
+          </div>
+        )}
+
         <div>
-          <Label optional>Dose, if different</Label>
-          <input value={doseText} maxLength={80} onChange={(e) => setDoseText(e.target.value)} aria-label="Dose, if different" className={tone.input} />
+          <DoseWhen value={when} onChange={changeWhen} onInvalidChange={setTimeInvalid} now={tick} tz={ctx.tz} />
+          {future && <Problem>That time is in the future.</Problem>}
         </div>
-      </MoreDetails>
+
+        <MoreDetails label="Add a note">
+          <NoteField value={note} onChange={setNote} />
+          <div>
+            <Label optional>Dose, if different</Label>
+            <input value={doseText} maxLength={80} onChange={(e) => setDoseText(e.target.value)} aria-label="Dose, if different" className={tone.input} />
+          </div>
+        </MoreDetails>
+      </fieldset>
     </Sheet>
   );
 }
@@ -315,18 +326,30 @@ function OneOffDose({
   startWhen: Date | null;
   startDose: string;
 }) {
-  const { now: nowFn, toast } = useMaple();
+  const { now: nowFn } = useMaple();
   const nav = useCareNav();
   const tick = useNow(30_000);
   const ctx = useCareCtx(care);
   const [name, setName] = useState(startName ?? "");
   const [dose, setDose] = useState(startDose);
   const [when, setWhen] = useState<Date | null>(startWhen);
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [serverDup, setServerDup] = useState<{ key: string; by: string | null; at: string } | null>(null);
   const [notMatch, setNotMatch] = useState<string | null>(null);
   // A name that fits more than one plan: which one she picked.
   const [picked, setPicked] = useState<{ key: string; id: number } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const close = () => { if (!busy) onClose(); };
+  const clearConfirmation = () => {
+    setConfirmed(false);
+    setServerDup(null);
+  };
+  const changeWhen = (value: Date | null) => {
+    setWhen(value);
+    clearConfirmation();
+  };
 
   const typed = name.trim();
   const active = care.plans.map((v) => v.plan);
@@ -353,26 +376,27 @@ function OneOffDose({
           (e): e is DoseEntry =>
             e.kind === "dose" && e.med_id == null && !e.data.skipped && normName(e.data.name) === key && Math.abs(Date.parse(e.at) - at.getTime()) < RECENT_MS
         );
-  const dup = !confirmed && near ? { by: near.created_by, at: near.at } : null;
+  const dup = !confirmed ? (serverDup?.key === key ? serverDup : near ? { by: near.created_by, at: near.at } : null) : null;
 
-  // Closes first, like a plan's dose, so its toast lands on the screen underneath. A dose the server knew of and this
-  // phone didn't (the other phone's) can't come back as this sheet, so its toast asks instead.
+  // A refused save leaves the chosen time and medicine in place.
   const save = async (allowDuplicate: boolean) => {
-    if (busy || !typed) return;
+    if (busy || !typed || future || timeInvalid) return;
     setBusy(true);
-    onClose();
+    setProblem(null);
     if (onPlan) {
       // On her list: a dose of that plan, so it counts toward her schedule. One the server knew of and this phone didn't
       // comes back as that plan's sheet, with the time and dose text she picked.
       const pickedAt = (when ?? nowFn()).toISOString();
       try {
         const r = await care.act.logDose({ planId: onPlan.id, at: pickedAt, dose: dose.trim() || undefined, allowDuplicate });
-        if (!r.created && !r.deduped) {
+        if (r.created || r.deduped) onClose();
+        else {
           const d = r.possible_duplicate;
-          nav.openDose(onPlan.id, d ? { reason: "recent", by: d.created_by, at: d.at } : { reason: r.reason ?? "recent" }, undefined, { at: pickedAt, dose: dose.trim() });
+          if (d) setServerDup({ key, by: d.created_by, at: d.at });
+          else nav.openDose(onPlan.id, { reason: r.reason ?? "recent" }, undefined, { at: pickedAt, dose: dose.trim() });
         }
       } catch (e) {
-        toast(errorText(e), { tone: "error" });
+        setProblem(errorText(e));
       } finally {
         setBusy(false);
       }
@@ -385,14 +409,11 @@ function OneOffDose({
     try {
       const r = await care.act.logDose({ ...input, allowDuplicate });
       const d = r.possible_duplicate;
-      if (!r.created && !r.deduped) {
-        toast(d ? `${loggedBy(d.created_by, ctx)} logged ${typed} at ${careTime(d.at, nowFn(), ctx.tz)}. Is this another dose?` : "That didn't save. Try again.", {
-          tone: "info",
-          actions: d ? [{ label: "Yes, another dose", onClick: () => void care.act.logDose({ ...input, allowDuplicate: true }).catch((e) => toast(errorText(e), { tone: "error" })) }] : undefined,
-        });
-      }
+      if (r.created || r.deduped) onClose();
+      else if (d) setServerDup({ key, by: d.created_by, at: d.at });
+      else setProblem("That didn't save. Your details are still here; try again.");
     } catch (e) {
-      toast(errorText(e), { tone: "error" });
+      setProblem(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -403,102 +424,122 @@ function OneOffDose({
   return (
     <Sheet
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Another medicine"
       footer={
         dup || asking ? undefined : (
           <div>
             {!typed && <p className={cx(tone.muted, "mb-2 text-center text-xs")}>What was it?</p>}
-            <Button size="lg" className="w-full" onClick={() => void save(confirmed || !!near)} disabled={busy || !typed || future}>
+            <Button size="lg" className="w-full" onClick={() => void save(confirmed || !!near)} disabled={busy || !typed || future || timeInvalid}>
               {busy ? "Saving…" : when ? `Took it at ${careTime(when.toISOString(), tick, ctx.tz)}` : "Took it"}
             </Button>
           </div>
         )
       }
     >
-      <ContextNote>For a one-time medicine. To keep time against a schedule, add it to the list instead.</ContextNote>
+      <fieldset disabled={busy} className="min-w-0 space-y-5">
+        <ContextNote>For a one-time medicine. To keep time against a schedule, add it to the list instead.</ContextNote>
 
-      <div>
-        <Label>Name</Label>
-        <input value={name} maxLength={80} onChange={(e) => setName(e.target.value)} aria-label="Name" autoComplete="off" className={tone.input} />
-      </div>
+        <Problem className="mt-0">{problem}</Problem>
 
-      {onPlan && (
-        <div className={cx(tone.inset, "px-4 py-3")} role="status">
-          <p className={cx(tone.body, "text-[15px] leading-snug")}>
-            It&apos;s on {care.self ? "your" : "her"} list as {planTitle(onPlan)}, so it&apos;s logged there.
-          </p>
-          <div className="mt-1 flex flex-wrap gap-x-4">
-            <button type="button" onClick={() => onUsePlan(onPlan.id, when, dose)} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
-              Open {planTitle(onPlan)}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPicked(null);
-                setNotMatch(key);
-              }}
-              className="min-h-[44px] text-sm font-semibold text-mp-accent-fg"
-            >
-              It&apos;s something else
-            </button>
-          </div>
+        <div>
+          <Label>Name</Label>
+          <input value={name} maxLength={80} onChange={(e) => { setName(e.target.value); clearConfirmation(); }} aria-label="Name" autoComplete="off" className={tone.input} />
         </div>
-      )}
 
-      {asking && (
-        <div className={cx(tone.card, "p-4")} role="group" aria-label="Which one?">
-          <p className={cx(tone.heading, "text-[17px] leading-snug")}>Which one?</p>
-          <div className="mt-3 flex flex-col gap-2">
-            {choices.map((p) => (
-              <Button key={p.id} size="md" onClick={() => setPicked({ key, id: p.id })}>
-                {planTitle(p)}
+        {onPlan && (
+          <div className={cx(tone.inset, "px-4 py-3")} role="status">
+            <p className={cx(tone.body, "text-[15px] leading-snug")}>
+              It&apos;s on {care.self ? "your" : "her"} list as {planTitle(onPlan)}, so it&apos;s logged there.
+            </p>
+            <div className="mt-1 flex flex-wrap gap-x-4">
+              <button type="button" onClick={() => onUsePlan(onPlan.id, when, dose)} className="min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+                Open {planTitle(onPlan)}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPicked(null);
+                  setNotMatch(key);
+                    clearConfirmation();
+                }}
+                className="min-h-[44px] text-sm font-semibold text-mp-accent-fg"
+              >
+                It&apos;s something else
+              </button>
+            </div>
+          </div>
+        )}
+
+        {asking && (
+          <div className={cx(tone.card, "p-4")} role="group" aria-label="Which one?">
+            <p className={cx(tone.heading, "text-[17px] leading-snug")}>Which one?</p>
+            <div className="mt-3 flex flex-col gap-2">
+              {choices.map((p) => (
+                <Button key={p.id} size="md" onClick={() => { setPicked({ key, id: p.id }); clearConfirmation(); }}>
+                  {planTitle(p)}
+                </Button>
+              ))}
+              <Button size="md" variant="soft" onClick={() => { setNotMatch(key); clearConfirmation(); }}>
+                Something else
               </Button>
-            ))}
-            <Button size="md" variant="soft" onClick={() => setNotMatch(key)}>
-              Something else
-            </Button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {dup && (
-        <div className={cx(tone.card, "p-4")} role="group" aria-label="Is this another dose?">
-          <p className={cx(tone.heading, "text-[17px] leading-snug")}>
-            {whoText(dup.by)} logged {typed} at {careTime(dup.at, tick, ctx.tz)}
-          </p>
-          <p className={cx(tone.muted, "mt-1 text-[15px]")}>Is this another dose?</p>
-          <div className="mt-3 flex flex-col gap-2">
-            <Button
-              size="md"
-              disabled={busy}
-              onClick={() => {
-                setConfirmed(true);
-                void save(true);
-              }}
-            >
-              Yes, another dose
-            </Button>
-            <Button size="md" variant="soft" onClick={onClose}>
-              No, same one
-            </Button>
+        {dup && (
+          <div className={cx(tone.card, "p-4")} role="group" aria-label="Is this another dose?">
+            <p className={cx(tone.heading, "text-[17px] leading-snug")}>
+              {whoText(dup.by)} logged {typed} at {careTime(dup.at, tick, ctx.tz)}
+            </p>
+            <p className={cx(tone.muted, "mt-1 text-[15px]")}>Is this another dose?</p>
+            <div className="mt-3 flex flex-col gap-2">
+              <Button
+                size="md"
+                disabled={busy || future || timeInvalid}
+                onClick={() => {
+                  setConfirmed(true);
+                  void save(true);
+                }}
+              >
+                Yes, another dose
+              </Button>
+              <Button size="md" variant="soft" onClick={close}>
+                No, same one
+              </Button>
+            </div>
           </div>
+        )}
+
+        {notes.map((a) => (
+          <NoteCard key={a.title} note={a} care={care} />
+        ))}
+
+        <div>
+          <Label optional>Dose</Label>
+          <input value={dose} maxLength={80} onChange={(e) => setDose(e.target.value)} aria-label="Dose" className={tone.input} />
         </div>
-      )}
 
-      {notes.map((a) => (
-        <NoteCard key={a.title} note={a} care={care} />
-      ))}
-
-      <div>
-        <Label optional>Dose</Label>
-        <input value={dose} maxLength={80} onChange={(e) => setDose(e.target.value)} aria-label="Dose" className={tone.input} />
-      </div>
-
-      <div>
-        <WhenField value={when} onChange={setWhen} tz={ctx.tz} />
-        {future && <Problem>That time is in the future.</Problem>}
-      </div>
+        <div>
+          <DoseWhen value={when} onChange={changeWhen} onInvalidChange={setTimeInvalid} now={tick} tz={ctx.tz} />
+          {future && <Problem>That time is in the future.</Problem>}
+        </div>
+      </fieldset>
     </Sheet>
+  );
+}
+
+/** "Now" stays one choice; choosing an earlier log reveals its actual date and clock at once. */
+function DoseWhen({ value, onChange, onInvalidChange, now, tz }: { value: Date | null; onChange: (value: Date | null) => void; onInvalidChange: (invalid: boolean) => void; now: Date; tz: string }) {
+  return value ? (
+    <div>
+      <RecordedTimeField label="Taken at" value={value} onChange={onChange} onInvalidChange={onInvalidChange} tz={tz} max={new Date(now.getTime() + 60_000)} />
+      <button type="button" onClick={() => { onInvalidChange(false); onChange(null); }} className="mt-1 min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">Use current time</button>
+    </div>
+  ) : (
+    <div className={cx(tone.inset, "flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2")}>
+      <span className="min-w-0 flex-1 text-[15px] font-medium text-mp-ink tabular-nums">Now · {careTime(now.toISOString(), now, tz)}</span>
+      <button type="button" onClick={() => onChange(new Date(now.getTime() - 15 * 60_000))} className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">Log earlier</button>
+    </div>
   );
 }

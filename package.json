@@ -21,7 +21,8 @@
     "check:usage-health": "node --test scripts/usage-health-monitor.check.mjs",
     "check:maple-growth": "tsx scripts/maple-growth-check.ts",
     "check:maple-tenancy": "tsx scripts/tenancy/run.ts",
-    "check:maple-parity": "tsx scripts/tenancy/parity/run.ts"
+    "check:maple-parity": "tsx scripts/tenancy/parity/run.ts",
+    "check:maple-time-edit": "tsx scripts/maple-time-edit-check.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",

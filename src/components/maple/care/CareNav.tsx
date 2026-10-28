@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { OneTapAsk } from "@/lib/maple/types";
+import type { DoseEntry, OneTapAsk } from "@/lib/maple/types";
 import { useAppNav } from "../AppNav";
 import DoctorSheet from "../DoctorSheet";
 import HelpSheet from "../HelpSheet";
@@ -9,6 +9,7 @@ import { MAPLE_OPEN_EVENT, type MapleOpenEvent } from "../notify";
 import { useMaple } from "../useMaple";
 import { OnTop } from "./CrisisSheet";
 import DoseSheet from "./DoseSheet";
+import DoseTimeSheet from "./DoseTimeSheet";
 import { MomTempSheet } from "./MomTempSheet";
 import PlanPicker from "./PlanPicker";
 import { requestQuestion } from "./Questions";
@@ -33,6 +34,8 @@ export type CareNav = {
   openPicker(): void;
   /** No planId: the one-off "Another medicine". `ask`: why "Took it" stopped to ask. */
   openDose(planId?: number, ask?: OneTapAsk, name?: string, start?: { at?: string; dose?: string }): void;
+  /** Correct an existing dose, including a one-time medicine. */
+  openDoseTime(dose: DoseEntry): void;
   /** "Another medicine", with what's already known filled in (Maple's medicine sheet: the name, time and dose). */
   openOneOff(name?: string, start?: { at?: string; dose?: string }): void;
   /** Her temperature sheet, straight away. */
@@ -52,6 +55,7 @@ const NONE: CareNav = {
   openSigns: () => {},
   openPicker: () => {},
   openDose: () => {},
+  openDoseTime: () => {},
   openOneOff: () => {},
   openTemp: () => {},
   openQuestion: () => {},
@@ -102,12 +106,18 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
   // The last Dose target stays mounted while its sheet slides away.
   const [dose, setDose] = useState<{ planId?: number; ask?: OneTapAsk; name?: string; start?: { at?: string; dose?: string }; seq: number } | null>(null);
   const [doseOpen, setDoseOpen] = useState(false);
+  const [doseTime, setDoseTime] = useState<{ dose: DoseEntry; seq: number } | null>(null);
+  const [doseTimeOpen, setDoseTimeOpen] = useState(false);
 
   const show = useCallback((k: Simple) => setOpen((o) => ({ ...o, [k]: true })), []);
   const hide = useCallback((k: Simple) => setOpen((o) => ({ ...o, [k]: false })), []);
   const openDose = useCallback((planId?: number, ask?: OneTapAsk, name?: string, start?: { at?: string; dose?: string }) => {
     setDose((d) => ({ planId, ask, name, start, seq: (d?.seq ?? 0) + 1 }));
     setDoseOpen(true);
+  }, []);
+  const openDoseTime = useCallback((entry: DoseEntry) => {
+    setDoseTime((current) => ({ dose: entry, seq: (current?.seq ?? 0) + 1 }));
+    setDoseTimeOpen(true);
   }, []);
   const go = app.go;
 
@@ -118,6 +128,7 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
       openSigns: () => show("signs"),
       openPicker: () => show("picker"),
       openDose,
+      openDoseTime,
       openOneOff: (name?: string, start?: { at?: string; dose?: string }) => openDose(undefined, undefined, name, start),
       openTemp: () => show("temp"),
       openQuestion: (text?: string) => {
@@ -130,7 +141,7 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
         show("doctor");
       },
     }),
-    [go, openDose, show]
+    [go, openDose, openDoseTime, show]
   );
 
   // A reminder's tap opens /maple?care=1&plan=<id> (push.ts): her tab, and that medicine's Dose sheet while it's still
@@ -183,6 +194,7 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
   const closeHelp = useCallback(() => hide("help"), [hide]);
   const closeDoctor = useCallback(() => hide("doctor"), [hide]);
   const closeDose = useCallback(() => setDoseOpen(false), []);
+  const closeDoseTime = useCallback(() => setDoseTimeOpen(false), []);
 
   return (
     <CareNavContext.Provider value={nav}>
@@ -200,6 +212,11 @@ export function CareNavProvider({ children }: { children: ReactNode }) {
           {dose && (
             <OnTop>
               <DoseSheet key={dose.seq} open={doseOpen} onClose={closeDose} planId={dose.planId} ask={dose.ask} name={dose.name} start={dose.start} />
+            </OnTop>
+          )}
+          {doseTime && (
+            <OnTop>
+              <DoseTimeSheet key={doseTime.seq} open={doseTimeOpen} onClose={closeDoseTime} dose={doseTime.dose} />
             </OnTop>
           )}
         </>

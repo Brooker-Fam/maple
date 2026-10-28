@@ -5,9 +5,11 @@ import { parseUnits } from "@/lib/maple/care";
 import { DEFAULT_TZ, dayKey, formatDayLabel } from "@/lib/maple/time";
 import type { CarePlan, DoseEntry } from "@/lib/maple/types";
 import { Icon } from "../icons";
+import { RecordedTimeField } from "../TimeField";
 import { Label, MoreDetails, NoteField, SheetFooter, useOpenCount } from "../sheets/parts";
-import { Button, Chip, Segmented, Sheet, WhenField, cx, tone } from "../ui";
-import { ApiError, useMaple } from "../useMaple";
+import { Button, Chip, Segmented, Sheet, cx, tone } from "../ui";
+import { ApiError, useMaple, useNow } from "../useMaple";
+import { useCareNav } from "./CareNav";
 import MedPlanSheet from "./MedPlanSheet";
 import { GROUP, Problem, errorText, useDoseText } from "./parts";
 import type { UseCare } from "./useCare";
@@ -28,6 +30,7 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
   const view = id == null ? undefined : [...care.plans, ...care.finished].find((v) => v.plan.id === id);
   const [sub, setSub] = useState<"edit" | { dose: DoseEntry } | null>(null);
   const { state, now } = useMaple();
+  const nav = useCareNav();
   const text = useDoseText();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   if (!view) return null;
@@ -72,20 +75,19 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
                 </p>
                 <div className={GROUP}>
                   {g.doses.map((d) => (
-                    <button
-                      key={d.id}
-                      type="button"
-                      disabled={!write || d.id < 0}
-                      onClick={() => setSub({ dose: d })}
-                      className={cx(tone.row, "min-h-[48px] py-2 disabled:active:bg-transparent")}
-                    >
-                      <span className={cx(d.data.skipped ? tone.muted : tone.body, "min-w-0 flex-1 text-[15px] tabular-nums")}>
+                    <div key={d.id} className="px-4 py-3">
+                      <p className={cx(d.data.skipped ? tone.muted : tone.body, "text-[15px] tabular-nums")}>
                         {text(d, plan, { noDay: true })}
                         {d.data.name && d.data.name !== plan.name ? ` · ${d.data.name}` : ""}
                         {d.pending && <span className={tone.faint}> · on this phone, not synced</span>}
-                      </span>
-                      {write && d.id > 0 && <Icon name="chevron-right" size={16} className="shrink-0 text-mp-ink-3" />}
-                    </button>
+                      </p>
+                      {write && (
+                        <div className="flex flex-wrap gap-x-5 gap-y-1">
+                          <button type="button" disabled={d.id < 0 || d.pending} onClick={() => nav.openDoseTime(d)} aria-label={`Edit time for ${plan.name}, ${text(d, plan)}`} className="min-h-[44px] text-[14px] font-medium text-mp-accent-fg disabled:opacity-40">Edit time</button>
+                          <button type="button" disabled={d.id < 0 || d.pending} onClick={() => setSub({ dose: d })} className="min-h-[44px] text-[14px] text-mp-ink-2 disabled:opacity-40">Dose details</button>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -99,7 +101,7 @@ export default function PlanDetail({ planId, onClose, care }: { planId: number |
           <div className="flex flex-wrap gap-2 pb-1">
             <Button variant="soft" className="flex-1" onClick={() => setSub("edit")}>
               <Icon name="pencil" size={16} />
-              Edit
+              Edit medicine schedule
             </Button>
             {active && status.state !== "stopped" && (
               <Button
@@ -157,15 +159,18 @@ function DoseEdit(props: { open: boolean; dose: DoseEntry | null; plan: CarePlan
 }
 
 function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose: DoseEntry; plan: CarePlan; care: UseCare; onClose: () => void }) {
-  const { state, memberLabel, toast } = useMaple();
+  const { state, memberLabel } = useMaple();
+  const now = useNow(30_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const [when, setWhen] = useState<Date | null>(new Date(dose.at));
+  const [when, setWhen] = useState(new Date(dose.at));
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const [units, setUnits] = useState<string>(dose.data.units != null ? String(dose.data.units) : "");
   const [doseText, setDoseText] = useState(dose.data.dose ?? "");
   const [note, setNote] = useState(dose.note ?? "");
   const [skipped, setSkipped] = useState(!!dose.data.skipped);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const close = () => { if (!busy) onClose(); };
   const counted = !!plan.limit_unit && plan.limit_unit !== "doses";
   const options = parseUnits(plan.units_per_dose).options;
   const u = units.trim() === "" ? null : Number(units);
@@ -180,29 +185,30 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
     return errorText(e);
   };
 
-  // Both close first, so useCare's "Saved" / "Deleted" (with Undo) lands on the plan underneath.
+  // Keep the draft on screen until its save succeeds.
   const save = async () => {
-    if (busy || unitsBad) return;
+    if (busy || unitsBad || timeInvalid) return;
     setBusy(true);
     setProblem(null);
-    onClose();
     try {
       await care.act.editEntry(
         dose.id,
         {
-          at: (when ?? new Date()).toISOString(),
+          at: when.toISOString(),
           data: { ...dose.data, units: counted && !skipped ? u : null, unit: counted ? plan.limit_unit : null, dose: doseText.trim() || null, skipped },
           note: note.trim() || null,
         },
         dose.updated_at
       );
+      onClose();
     } catch (e) {
-      toast(failText(e), { tone: "error" });
+      setProblem(failText(e));
     } finally {
       setBusy(false);
     }
   };
   const del = () => {
+    if (busy) return;
     onClose();
     void care.act.deleteEntry(dose.id).catch(() => {});
   };
@@ -210,56 +216,58 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
   return (
     <Sheet
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={plan.name}
-      subtitle="Fix this dose"
+      subtitle="Edit dose details"
       footer={
         <div>
           <Problem className="mt-0 mb-2 text-center">{problem}</Problem>
-          <SheetFooter onClose={onClose} onDelete={del} onPrimary={() => void save()} label="Save" busy={busy} disabled={unitsBad} />
+          <SheetFooter onClose={close} onDelete={del} onPrimary={() => void save()} label="Save dose" busy={busy} disabled={unitsBad || timeInvalid} />
         </div>
       }
     >
-      <Segmented
-        aria-label="Taken or skipped"
-        value={skipped ? "skipped" : "taken"}
-        onChange={(v) => setSkipped(v === "skipped")}
-        options={[
-          { value: "taken", label: "Taken" },
-          { value: "skipped", label: "Skipped" },
-        ]}
-      />
-      <WhenField value={when} onChange={setWhen} tz={tz} />
-      {counted && !skipped && plan.limit_unit && (
-        <div>
-          <Label>How many {plan.limit_unit}</Label>
-          {options?.length ? (
-            <div className="flex flex-wrap gap-2">
-              {options.map((o) => (
-                <Chip key={o} selected={u === o} onClick={() => setUnits(String(o))} className="min-w-[56px] justify-center text-base">
-                  {o}
-                </Chip>
-              ))}
-            </div>
-          ) : (
-            <input
-              inputMode="decimal"
-              aria-label={`How many ${plan.limit_unit}`}
-              value={units}
-              onChange={(e) => setUnits(e.target.value.replace(",", ".").replace(/[^\d.]/g, ""))}
-              className={cx(tone.input, "w-32! text-center text-xl font-semibold tabular-nums")}
-            />
-          )}
-          {unitsBad && <Problem>Check this number.</Problem>}
-        </div>
-      )}
-      <MoreDetails label="Note and dose" summary={[note.trim() && "Note", doseText.trim() && doseText.trim()].filter(Boolean).join(" · ")}>
-        <NoteField value={note} onChange={setNote} />
-        <div>
-          <Label optional>Dose, if different</Label>
-          <input value={doseText} maxLength={80} onChange={(e) => setDoseText(e.target.value)} aria-label="Dose, if different" className={tone.input} />
-        </div>
-      </MoreDetails>
+      <fieldset disabled={busy} className="min-w-0 space-y-5">
+        <Segmented
+          aria-label="Taken or skipped"
+          value={skipped ? "skipped" : "taken"}
+          onChange={(v) => setSkipped(v === "skipped")}
+          options={[
+            { value: "taken", label: "Taken" },
+            { value: "skipped", label: "Skipped" },
+          ]}
+        />
+        <RecordedTimeField label={skipped ? "Skipped at" : "Taken at"} value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} max={new Date(now.getTime() + 60_000)} />
+        {counted && !skipped && plan.limit_unit && (
+          <div>
+            <Label>How many {plan.limit_unit}</Label>
+            {options?.length ? (
+              <div className="flex flex-wrap gap-2">
+                {options.map((o) => (
+                  <Chip key={o} selected={u === o} onClick={() => setUnits(String(o))} className="min-w-[56px] justify-center text-base">
+                    {o}
+                  </Chip>
+                ))}
+              </div>
+            ) : (
+              <input
+                inputMode="decimal"
+                aria-label={`How many ${plan.limit_unit}`}
+                value={units}
+                onChange={(e) => setUnits(e.target.value.replace(",", ".").replace(/[^\d.]/g, ""))}
+                className={cx(tone.input, "w-32! text-center text-xl font-semibold tabular-nums")}
+              />
+            )}
+            {unitsBad && <Problem>Check this number.</Problem>}
+          </div>
+        )}
+        <MoreDetails label="Note and dose" summary={[note.trim() && "Note", doseText.trim() && doseText.trim()].filter(Boolean).join(" · ")}>
+          <NoteField value={note} onChange={setNote} />
+          <div>
+            <Label optional>Dose, if different</Label>
+            <input value={doseText} maxLength={80} onChange={(e) => setDoseText(e.target.value)} aria-label="Dose, if different" className={tone.input} />
+          </div>
+        </MoreDetails>
+      </fieldset>
     </Sheet>
   );
 }

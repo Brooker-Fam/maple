@@ -2,7 +2,7 @@
 
 import { describeEntry } from "@/lib/maple/describe";
 import { minutesShort, nursingRuns, sideMinutesText, spanText, type NursingRun } from "@/lib/maple/feed";
-import { formatRelative, formatTime } from "@/lib/maple/time";
+import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
 import { useMilestoneWords } from "./familyWords";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
@@ -40,56 +40,60 @@ export default function EntryRow({
   showRelative?: boolean;
   now: Date;
 }) {
-  const { units, state, member } = useMaple();
+  const { units, state, member, readOnly } = useMaple();
   const words = useMilestoneWords();
   const tz = state?.baby.timezone ?? "America/New_York";
   const d = describeEntry(entry, { units, now, words });
   const who = member(entry.created_by);
   const firstPhoto = entry.kind === "moment" && entry.data.photos?.length && entry.id > 0;
 
+  const canEdit = !!onClick && !readOnly && entry.id > 0;
+  const editLabel = entryEditPreset(entry) ? "Edit time" : "Edit";
+  const entryDay = dayKey(new Date(entry.started_at), tz);
+  const today = dayKey(now, tz);
+
   return (
     <button
       type="button"
       onClick={onClick}
-      className={cx(tone.row, "min-h-[56px] py-2.5")}
+      aria-label={canEdit ? `${editLabel}: ${d.title}, ${formatDayLabel(entryDay, today)} at ${formatTime(entry.started_at, tz)}` : undefined}
+      className={cx(tone.row, "min-h-[64px] py-3")}
     >
       {firstPhoto ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={photoUrl(entry.id, 0)} alt="" className="h-9 w-9 shrink-0 rounded-[10px] object-cover" loading="lazy" />
       ) : (
-        // No pulse on a live one: "Nursing now" and its minutes already say so, and a pulse reads as a loading skeleton.
         <KindBadge entry={entry} />
       )}
-      {/* Two lines that share baselines: what + when, then detail + how long ago. A one-line entry stays one line. */}
       <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-3">
-          <span className={cx(tone.body, "min-w-0 flex-1 truncate text-[15px] font-medium")}>{d.title}</span>
-          <span className={cx(tone.body, "inline-flex shrink-0 items-center gap-1.5 self-center text-sm tabular-nums")}>
-            {entry.id < 0 && (
-              <span title="Saving…" className="inline-flex text-mp-ink-3">
-                <Icon name="refresh-cw" size={12} label="Not synced yet" />
-              </span>
-            )}
-            {/* Your own rows go unmarked: the initial only says when someone else logged it. */}
-            {entry.created_by && entry.created_by !== state?.me.email && <Avatar member={who} size={16} />}
-            {formatTime(entry.started_at, tz)}
+        <span className={cx(tone.body, "block text-[15px] leading-snug font-medium")}>{d.title}</span>
+        {(d.detail || entry.note) && (
+          <span className={cx(tone.muted, "mt-0.5 block truncate text-[13px]")}>
+            {[d.detail, entry.note ? `“${entry.note}”` : ""].filter(Boolean).join(" · ")}
           </span>
-        </span>
-        {(d.detail || entry.note || VIA[entry.source] || showRelative) && (
-          <span className="flex items-baseline gap-3">
-            <span className={cx(tone.muted, "min-w-0 flex-1 truncate text-[13px]")}>
-              {[d.detail, entry.note ? `“${entry.note}”` : ""].filter(Boolean).join(" · ")}
-            </span>
-            {(VIA[entry.source] || showRelative) && (
-              <span className={cx(tone.faint, "shrink-0 text-[12px]")}>
-                {[VIA[entry.source] && `via ${VIA[entry.source]}`, showRelative && formatRelative(entry.started_at, now)].filter(Boolean).join(" · ")}
-              </span>
-            )}
+        )}
+        {(VIA[entry.source] || showRelative) && (
+          <span className={cx(tone.faint, "mt-0.5 block text-[12px]")}>
+            {[VIA[entry.source] && `via ${VIA[entry.source]}`, showRelative && formatRelative(entry.started_at, now)].filter(Boolean).join(" · ")}
           </span>
         )}
       </span>
+      <span className="flex shrink-0 flex-col items-end gap-0.5 text-right">
+        {entryDay !== today && <span className={cx(tone.muted, "text-[12px]")}>{formatDayLabel(entryDay, today)}</span>}
+        <span className={cx(tone.body, "inline-flex items-center gap-1.5 text-sm tabular-nums")}>
+          {entry.id < 0 && <Icon name="refresh-cw" size={12} label="Not synced yet" className="text-mp-ink-3" />}
+          {entry.created_by && entry.created_by !== state?.me.email && <Avatar member={who} size={16} />}
+          {formatTime(entry.started_at, tz)}
+        </span>
+        {canEdit && <span className="text-[13px] font-medium text-mp-accent-fg">{editLabel}</span>}
+      </span>
     </button>
   );
+}
+
+/** A nursing correction opens the first recorded moment directly. */
+export function entryEditPreset(entry: Entry): Record<string, unknown> | undefined {
+  return entry.kind === "feed" && entry.data.method === "breast" && !entry.active && entry.data.segments?.length ? { editTime: true } : undefined;
 }
 
 /**

@@ -20,6 +20,7 @@ import MedQuestionsSheet from "./MedQuestionsSheet";
 import { TemperatureTile } from "./MomTempSheet";
 import OverLimitList from "./OverLimitList";
 import PlanDetail from "./PlanDetail";
+import RecentDoses from "./RecentDoses";
 import { QuestionsSection } from "./Questions";
 import { VisitSummaryRow } from "./VisitSummary";
 import { Footnote, GROUP, GlanceMark, NavRow, NoteCard, PlanName, TookIt, isOverLimit, useCareCtx, useDoseText } from "./parts";
@@ -29,8 +30,9 @@ import { type UseCare, useCare } from "./useCare";
  * Her tab (§11.2): her page as a place you go back to, not a pop-up. Short
  * and ordered by use: the header (her name, the same day count as Today's
  * hero, and Help), a row of actions (Took a medicine, Temperature, Question
- * for her OB, Notifications), her medicines as one row each (the glance and
- * Took it, in her list's fixed order; a row opens that medicine's detail),
+ * for her OB, Notifications), three recent doses with direct time edits,
+ * her medicines in a fixed order (the glance, Took it now and Log earlier;
+ * the name opens that medicine's detail),
  * then Something else, Add and Finished, one-time medicines, the check-in,
  * temperature, OB questions, one Help group, her care team and settings.
  * Sheets open from here at most one deep.
@@ -114,6 +116,8 @@ function Page({ care }: { care: UseCare }) {
           </button>
         ))}
       </div>
+
+      <RecentDoses care={care} />
 
       <section aria-labelledby="her-meds">
         <SectionTitle
@@ -237,19 +241,20 @@ function Page({ care }: { care: UseCare }) {
  * One medicine as a row: the pill badge, its name (with the Also called name
  * muted), the glance ("OK now · last 2:24 AM", or the timer mark and "OK
  * after 10:55 AM · last 4:55 AM", two lines when it needs them so the time is
- * never cut) and Took it. The row opens its detail (schedule, the last 7
- * days, Edit, Stop). A finished one has no Took it.
+ * never cut). Logging actions have their own row so names and times keep
+ * their room. The name opens its detail (schedule and the last 7 days).
  */
 function MedRow({ view, care, onOpen, finished }: { view: PlanView; care: UseCare; onOpen: (planId: number) => void; finished?: boolean }) {
   const nav = useCareNav();
+  const { now } = useMaple();
   const g = view.glance;
   return (
-    <div className="flex items-center gap-1 pr-3">
+    <div>
       <button
         type="button"
         onClick={() => onOpen(view.plan.id)}
         aria-label={`${planTitle(view.plan)}: ${finished ? view.summary : g.text}. Open it.`}
-        className={cx(tone.row, "min-h-[60px] min-w-0 flex-1 py-2.5 pr-1")}
+        className={cx(tone.row, "min-h-[60px] min-w-0 py-2.5")}
       >
         <KindBadge icon="pill" color={CARE_COLOR} size={28} />
         <span className="min-w-0 flex-1 leading-snug tabular-nums">
@@ -259,19 +264,27 @@ function MedRow({ view, care, onOpen, finished }: { view: PlanView; care: UseCar
             <span className="line-clamp-2">{finished ? view.summary : g.text}</span>
           </span>
         </span>
-        {finished && <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />}
+        <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
       </button>
-      {!finished && <TookIt view={view} care={care} fixed onAsk={(ask) => nav.openDose(view.plan.id, ask)} />}
+      {!finished && care.access.write && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-3">
+          <TookIt view={view} care={care} fixed label="Took it now" onAsk={(ask) => nav.openDose(view.plan.id, ask)} />
+          <button type="button" onClick={() => nav.openDose(view.plan.id, undefined, undefined, { at: new Date(now().getTime() - 15 * 60_000).toISOString() })} aria-label={`Log an earlier dose of ${planTitle(view.plan)}`} className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">
+            Log earlier
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 /**
  * One-time medicines from the last few days (the state's window): they
- * belong to no plan, so no row shows them. Each can be removed (with Undo).
+ * belong to no plan. Each has the same time editor and can be removed with Undo.
  */
 function OneOffs({ care, write }: { care: UseCare; write: boolean }) {
   const text = useDoseText();
+  const nav = useCareNav();
   const doses = care.state.entries
     .filter((e): e is DoseEntry => e.kind === "dose" && e.med_id == null && !e.data.skipped)
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
@@ -282,13 +295,14 @@ function OneOffs({ care, write }: { care: UseCare; write: boolean }) {
       <p className={cx(tone.label, "mb-1.5 px-1")}>One-time medicines</p>
       <div className={GROUP}>
         {doses.map((d) => (
-          <div key={d.id} className={cx(tone.row, "min-h-[48px] py-2")}>
-            <span className={cx(tone.body, "min-w-0 flex-1 text-[15px] tabular-nums")}>
+          <div key={d.id} className={cx(tone.row, "min-h-[48px] flex-wrap py-2")}>
+            <span className={cx(tone.body, "min-w-0 flex-1 basis-[150px] text-[15px] tabular-nums")}>
               {d.data.name}
               {d.data.dose ? ` ${d.data.dose}` : ""}
               <span className="text-mp-ink-2"> · {text(d, null)}</span>
               {d.pending && <span className={tone.faint}> · on this phone, not synced</span>}
             </span>
+            {write && <button type="button" disabled={d.id < 0 || d.pending} onClick={() => nav.openDoseTime(d)} className="min-h-[44px] shrink-0 text-[14px] font-medium text-mp-accent-fg disabled:opacity-40">Edit time</button>}
             {write && d.id > 0 && (
               <button
                 type="button"

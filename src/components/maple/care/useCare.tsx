@@ -89,6 +89,8 @@ export type CareActions = {
   }): Promise<DoseResult>;
   /** `quiet`: no "Saved" toast (a question's Asked tick and its answer save as you go). */
   editEntry(id: number, patch: object, expectUpdatedAt: string, opts?: { quiet?: boolean }): Promise<void>;
+  /** Correct only when an existing dose happened; Undo uses the returned version, never a stale overwrite. */
+  editDoseTime(dose: DoseEntry, at: string): Promise<DoseEntry | null>;
   deleteEntry(id: number): Promise<void>;
   restoreEntry(id: number): Promise<void>;
   logTemp(tempC: number, at: string): Promise<DoseResult>;
@@ -444,6 +446,34 @@ export function useCare(): UseCare | null {
       }
     },
     [call, fail, goneLine, patchEntries, toast]
+  );
+
+  const editDoseTime = useCallback<CareActions["editDoseTime"]>(
+    async (dose, at) => {
+      if (dose.id < 0 || dose.pending) throw new Error("This dose is still syncing. Try again once it's saved.");
+      try {
+        const res = await call<{ entry: DoseEntry; notes: Assessment[] }>(`/api/maple/care/entries?id=${dose.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ at, expect_updated_at: dose.updated_at }),
+        });
+        patchEntries((es) => es.map((e) => (e.id === dose.id ? res.entry : e)));
+        const urgent = res.notes.find((n) => n.tier === "emergency" || n.tier === "now") ?? res.notes.find((n) => n.tier !== "today");
+        const note = urgent ? ` ${noteLine(urgent)}${urgent.tier === "emergency" || urgent.tier === "now" ? `. ${urgent.body}` : ""}` : "";
+        toast(`${dose.data.name}: time changed to ${careTime(res.entry.at, clock(), tz)}.${note}`, {
+          tone: urgent ? "info" : "ok",
+          undo: () => void editEntry(dose.id, { at: dose.at }, res.entry.updated_at).catch((e) => toast(e instanceof Error ? e.message : "Couldn't undo this time change", { tone: "error" })),
+        });
+        return res.entry;
+      } catch (e) {
+        const gone = goneLine(e, true, true);
+        if (gone) {
+          patchEntries((es) => es.filter((entry) => entry.id !== dose.id));
+          throw new Error(gone);
+        }
+        throw fail(e, "Couldn't save the time. Your change is still here.");
+      }
+    },
+    [call, clock, editEntry, fail, goneLine, patchEntries, toast, tz]
   );
 
   /** The toast after a dose saves: when the next is OK, any note, "2/5/15 min earlier" and Undo. */
@@ -925,6 +955,7 @@ export function useCare(): UseCare | null {
       tookIt,
       logDose,
       editEntry,
+      editDoseTime,
       deleteEntry,
       restoreEntry,
       logTemp,
@@ -936,7 +967,7 @@ export function useCare(): UseCare | null {
       dismissSuggestion,
       moveFromMaple,
     }),
-    [patchPerson, savePlan, deletePlan, stopPlan, resumePlan, tookIt, logDose, editEntry, deleteEntry, restoreEntry, logTemp, addQuestion, checkin, updateCheckin, deleteMood, saveScreen, dismissSuggestion, moveFromMaple]
+    [patchPerson, savePlan, deletePlan, stopPlan, resumePlan, tookIt, logDose, editEntry, editDoseTime, deleteEntry, restoreEntry, logTemp, addQuestion, checkin, updateCheckin, deleteMood, saveScreen, dismissSuggestion, moveFromMaple]
   );
 
   const doses = useCallback(

@@ -172,7 +172,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
       )}
     >
       <Icon name="pencil" size={16} />
-      {pending ? "Fix times · starting…" : savingSlow ? "Fix times · saving…" : "Fix times"}
+      {pending ? "Edit times · starting…" : savingSlow ? "Edit times · saving…" : "Edit times"}
     </button>
   );
 

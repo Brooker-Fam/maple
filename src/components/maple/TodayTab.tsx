@@ -9,7 +9,7 @@ import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import Celebrations from "./Celebrations";
 import DayDial from "./DayDial";
 import Dock from "./Dock";
-import EntryRow, { photoUrl } from "./EntryRow";
+import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
 import StatusCard, { DiaperBrigade } from "./StatusCard";
@@ -27,8 +27,8 @@ import { useMaple, useNow } from "./useMaple";
  * so nothing jumps between them: who she is (the sapling hero, or the waiting
  * hero), anything urgent, "Right now" (running timers, then the 3am answers;
  * its heading is for screen readers only), the one-line "While you slept"
- * hand-off, gentler alerts, the day dial (the screen's hero) with its
- * tallies, celebrations, the diaper brigade, the last few entries, and the
+ * hand-off, gentler alerts, the last few entries, the day dial with its
+ * tallies, celebrations, the diaper brigade, and the
  * Help footer. While a timer runs the sapling hero folds away (rather than
  * moving down the page), so the timer card and the Since tiles sit above the
  * dock without a scroll. Logging lives in the dock pinned above the tab bar
@@ -86,16 +86,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
 
-      {/* The dial is the day at a glance, so it leads, with its tallies right under it; one-off celebrations follow. */}
-      {!nothingYet && <DayDial />}
-      <Celebrations />
-      {!nothingYet && <DiaperBrigade />}
-
       {recent.length > 0 && (
         <section aria-labelledby="recent">
           <div className="mb-1 flex items-center justify-between px-1">
             <h2 id="recent" className={cx(tone.heading, "text-[17px]")}>
-              Recent
+              Recently logged
             </h2>
             <button
               type="button"
@@ -108,11 +103,16 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
           </div>
           <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
             {recent.map((e) => (
-              <EntryRow key={e.id} entry={e} now={now} showRelative onClick={readOnly ? undefined : () => open({ kind: e.kind, entry: e })} />
+              <EntryRow key={e.id} entry={e} now={now} showRelative onClick={readOnly ? undefined : () => open({ kind: e.kind, entry: e, preset: entryEditPreset(e) })} />
             ))}
           </div>
         </section>
       )}
+
+      {/* Recent entries stay close to the timer and logging controls, so corrections are easy to find. */}
+      {!nothingYet && <DayDial />}
+      <Celebrations />
+      {!nothingYet && <DiaperBrigade />}
 
       <HelpFooter />
 
