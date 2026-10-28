@@ -12,6 +12,7 @@ import { HelpCard, MessageView } from "./ChatParts";
 import { CareNote, TermsCard } from "./ChatTerms";
 import { NEAR_BOTTOM, TAB_BAR, usePageHold, useVisibleArea } from "./page";
 import { useChatThread } from "./useChatThread";
+import { chatActivity, visibleRevision } from "./progress";
 
 /**
  * Chat: this member's one conversation with Maple, a tab like the others.
@@ -32,9 +33,12 @@ export default function ChatTab({ active }: { active: boolean }) {
   const area = useVisibleArea(active);
   const scroller = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const savedScroll = useRef(0);
   const prepend = useRef<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showLatest, setShowLatest] = useState(false);
   usePageHold(active, composer);
   const needsTerms = consent?.terms === false;
 
@@ -44,41 +48,62 @@ export default function ChatTab({ active }: { active: boolean }) {
 
   const count = t.messages.length;
   const tail = t.messages[count - 1];
-  const tailLength = tail ? JSON.stringify(tail.parts).length : 0;
+  const revision = visibleRevision(tail);
   const empty = count === 0 && t.earlier.length === 0;
 
   const toBottom = () => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      savedScroll.current = el.scrollTop;
+    }
   };
-  // Opening the tab shows the newest message.
+  // Returning to the tab keeps the place the person was reading.
   useLayoutEffect(() => {
     if (!active) return;
-    pinned.current = true;
-    toBottom();
+    if (pinned.current) toBottom();
+    else if (scroller.current) scroller.current.scrollTop = savedScroll.current;
   }, [active]);
   // Earlier messages go on top without moving what's on screen; anything new keeps a pinned page at the bottom.
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || !active) return;
     if (prepend.current != null) {
       el.scrollTop += el.scrollHeight - prepend.current;
       prepend.current = null;
       return;
     }
     if (pinned.current) toBottom();
-  }, [t.earlier, count, tailLength, t.problem, t.help, needsTerms, area?.height]);
+  }, [active, t.earlier, count, revision, t.problem, t.historyProblem, t.help, needsTerms, area?.height]);
+
+  // Charts, expanding cards and the growing composer can resize without a new message.
+  useEffect(() => {
+    const el = scroller.current;
+    const body = content.current;
+    if (!active || !el || !body) return;
+    const watch = new ResizeObserver(() => {
+      if (prepend.current != null) return;
+      if (pinned.current) {
+        el.scrollTop = el.scrollHeight;
+        savedScroll.current = el.scrollTop;
+      }
+    });
+    watch.observe(body);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [active]);
 
   const send = (text: string) => {
     pinned.current = true;
+    setShowLatest(false);
     t.send(text);
   };
   const showEarlier = () => {
     prepend.current = scroller.current?.scrollHeight ?? null;
-    void t.loadEarlier();
+    void t.loadEarlier().then((loaded) => { if (!loaded) prepend.current = null; });
   };
 
-  const waiting = t.status === "submitted" || (t.status === "streaming" && tail?.role === "user");
+  const activity = t.loadingHistory ? (t.ready ? "Updating your conversation…" : null) : chatActivity(t.messages, t);
   const suggestions = readOnly ? ["How did the night go?", `When did ${w.he} last eat?`] : ["How did the night go?", "Which side next?", "Log a wet diaper"];
   const items = [...t.earlier, ...t.messages.map((message) => ({ thread: t.threadId ?? "", message }))];
 
@@ -99,12 +124,24 @@ export default function ChatTab({ active }: { active: boolean }) {
       <div
         ref={scroller}
         onScroll={(e) => {
+          if (!active) return;
           const el = e.currentTarget;
+          savedScroll.current = el.scrollTop;
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
+          setShowLatest(!pinned.current);
         }}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4"
       >
-        <div className="flex min-h-full flex-col justify-end gap-4 pt-2 pb-4">
+        <div ref={content} className="flex min-h-full flex-col justify-end gap-4 pt-2 pb-4">
+          {!t.ready && t.loadingHistory && !needsTerms && (
+            <div role="status" className="space-y-3 px-1 py-4">
+              <p className={cx(tone.muted, "text-[14px]")}>Loading your conversation…</p>
+              <div aria-hidden="true" className="space-y-3 motion-safe:animate-pulse">
+                <div className="ml-auto h-12 w-3/5 rounded-[18px] bg-mp-surface" />
+                <div className="h-20 w-4/5 rounded-[18px] bg-mp-surface" />
+              </div>
+            </div>
+          )}
           {(t.more || (!empty && !t.busy && !needsTerms)) && (
             <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
               {t.more && (
@@ -157,14 +194,17 @@ export default function ChatTab({ active }: { active: boolean }) {
           {items.map(({ thread, message }, i) => (
             <Fragment key={message.id}>
               {i > 0 && items[i - 1].thread !== thread && <hr aria-hidden className="mx-8 border-mp-line" />}
-              <MessageView message={message} last={i === items.length - 1 && i >= t.earlier.length} busy={t.busy} onApprove={t.approve} />
+              <MessageView message={message} last={i === items.length - 1 && i >= t.earlier.length} busy={t.busy} onApprove={t.approve} onAnswerQuestion={t.answerQuestion} onAsk={send} />
             </Fragment>
           ))}
-          {waiting && (
-            <p className={cx(tone.muted, "flex items-center gap-2 px-1 text-[14px]")} aria-live="polite">
-              <Icon name="clock-3" size={16} />
-              Thinking…
-            </p>
+          <div role="status" aria-live="polite" aria-atomic="true" className={!activity ? "sr-only" : undefined}>
+            {activity && <ChatActivity label={activity} paused={t.recoveryPaused} />}
+          </div>
+          {t.historyProblem && (
+            <div className={cx(tone.inset, "flex items-center gap-3 px-3.5 py-3 text-[14px] leading-snug")}>
+              <p role="status" className={cx(tone.body, "min-w-0 flex-1")}>{t.historyProblem}</p>
+              <Button size="sm" variant="soft" onClick={t.retryHistory} disabled={t.loadingHistory || !online}>Check again</Button>
+            </div>
           )}
           {needsTerms && consent && <TermsCard key={`${consent.self}-${consent.care}`} consent={consent} onAccepted={t.clearProblem} />}
           {t.problem && (
@@ -177,12 +217,36 @@ export default function ChatTab({ active }: { active: boolean }) {
         </div>
       </div>
 
+      {showLatest && !empty && (
+        <div className="relative z-10 h-0 shrink-0">
+          <button
+            type="button"
+            onClick={() => { pinned.current = true; setShowLatest(false); toBottom(); }}
+            className={cx(tone.card, "absolute right-5 bottom-3 flex min-h-[44px] items-center gap-1.5 rounded-full px-4 text-[14px] font-semibold text-mp-accent-fg shadow-md")}
+          >
+            Latest reply <span aria-hidden="true">↓</span>
+          </button>
+        </div>
+      )}
+
       <div
         className="shrink-0 border-t border-mp-line bg-mp-bg"
         style={{ paddingBottom: area?.keyboard ? 0 : `calc(${TAB_BAR}px + env(safe-area-inset-bottom))` }}
       >
         <div ref={composer} className="px-4 py-2">
-          <Composer t={t} onSend={send} disabled={!t.ready || needsTerms} offline={!online} />
+          {!needsTerms && t.ready && !t.busy && !t.draft.trim() && (
+            <div className="mb-1 flex items-center gap-1 overflow-x-auto whitespace-nowrap" aria-label="Explore your log">
+              <span className={cx(tone.faint, "shrink-0 pr-1 text-[12px]")}>Explore</span>
+              {[
+                ["Feeding", "Show feeding over the last 7 days"],
+                ["Sleep", "Show sleep over the last 7 days"],
+                ["Weight", "Show the weight trend"],
+              ].map(([label, question]) => (
+                <button key={label} type="button" onClick={() => send(question)} disabled={!online} className="min-h-[44px] shrink-0 rounded-full px-3 text-[13px] font-medium text-mp-accent-fg disabled:opacity-40">{label}</button>
+              ))}
+            </div>
+          )}
+          <Composer t={t} onSend={send} disabled={needsTerms} offline={!online} />
         </div>
       </div>
     </section>
@@ -192,7 +256,7 @@ export default function ChatTab({ active }: { active: boolean }) {
 function Composer({ t, onSend, disabled, offline }: { t: ReturnType<typeof useChatThread>; onSend: (text: string) => void; disabled: boolean; offline: boolean }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const near = t.draft.length > CHAT_MAX_CHARS - 200;
-  const canSend = !disabled && !t.busy && t.draft.trim().length > 0 && t.draft.length <= CHAT_MAX_CHARS;
+  const canSend = !disabled && t.ready && !t.busy && !offline && t.draft.trim().length > 0 && t.draft.length <= CHAT_MAX_CHARS;
 
   // Grows with what's typed, up to about five lines.
   useEffect(() => {
@@ -231,7 +295,7 @@ function Composer({ t, onSend, disabled, offline }: { t: ReturnType<typeof useCh
           type="button"
           onClick={() => onSend(t.draft)}
           disabled={!canSend}
-          aria-label="Send"
+          aria-label={t.busy ? "Waiting for the current reply" : "Send"}
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-accent text-mp-on-accent transition active:scale-95 disabled:opacity-40"
         >
           <Icon name="arrow-up" size={22} strokeWidth={2.25} />
@@ -243,5 +307,18 @@ function Composer({ t, onSend, disabled, offline }: { t: ReturnType<typeof useCh
         </p>
       )}
     </div>
+  );
+}
+
+function ChatActivity({ label, paused }: { label: string; paused: boolean }) {
+  return (
+    <p className={cx(tone.muted, "flex min-h-[28px] items-center gap-2.5 px-1 text-[14px]")}>
+      <span aria-hidden="true" className={cx("flex gap-1 text-mp-accent-fg", !paused && "motion-safe:animate-pulse")}>
+        <span className="h-1 w-1 rounded-full bg-current" />
+        <span className="h-1 w-1 rounded-full bg-current" />
+        <span className="h-1 w-1 rounded-full bg-current" />
+      </span>
+      {label}
+    </p>
   );
 }

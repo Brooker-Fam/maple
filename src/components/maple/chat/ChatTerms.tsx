@@ -36,7 +36,7 @@ export function TermsCard({ consent, onAccepted }: { consent: ChatConsent; onAcc
         <li>{TRACKER_NOTE} The chat&apos;s answers come from an AI and can be wrong.</li>
         <li>{CHAT_TERMS_HELP}</li>
         <li>
-          What you type, and the parts of the log the chat reads to answer, are sent to an AI model through Vercel AI Gateway, with zero data retention
+          What you type or choose in the chat, and the parts of the log the chat reads to answer, are sent to an AI model through Vercel AI Gateway, with zero data retention
           and no training on it requested.
         </li>
       </ul>

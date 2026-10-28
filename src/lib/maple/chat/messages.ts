@@ -1,17 +1,18 @@
 import { isToolUIPart } from "ai";
 import { CHAT_MAX_CHARS, type ChatMessage } from "./types";
+import { questionAnswerText, supersedeQuestions } from "./questions";
 
 /**
  * What the chat route takes from the phone, and how it changes stored
  * history. The phone sends only its newest message; history comes from the
  * database. A user message is plain text. An assistant message is only ever
- * a carrier for approval taps: the server copies `approved` and `reason`
- * onto its own stored parts and ignores everything else in it.
+ * a carrier for approval taps or question answers: separate mergers copy
+ * only validated answers onto the server's own stored parts.
  */
 
 export class ChatInputError extends Error {}
 
-export type Incoming = { kind: "user"; text: string } | { kind: "approvals"; message: { id: string; parts: unknown[] } };
+export type Incoming = { kind: "user"; text: string } | { kind: "continuation"; message: { id: string; parts: unknown[] } };
 
 const MSG_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
@@ -19,7 +20,7 @@ export function readIncoming(raw: unknown): Incoming {
   const m = raw as { id?: unknown; role?: unknown; parts?: unknown } | null;
   if (!m || typeof m !== "object" || !Array.isArray(m.parts)) throw new ChatInputError("Expected a message");
   if (m.role === "user") return { kind: "user", text: userText(m.parts) };
-  if (m.role === "assistant" && typeof m.id === "string" && MSG_ID_RE.test(m.id)) return { kind: "approvals", message: { id: m.id, parts: m.parts } };
+  if (m.role === "assistant" && typeof m.id === "string" && MSG_ID_RE.test(m.id) && m.parts.length <= 200) return { kind: "continuation", message: { id: m.id, parts: m.parts } };
   throw new ChatInputError("Expected a message");
 }
 
@@ -29,7 +30,9 @@ export function readIncoming(raw: unknown): Incoming {
  */
 export function roughText(raw: unknown): string {
   const m = raw as { role?: unknown; parts?: unknown } | null;
-  if (!m || typeof m !== "object" || m.role !== "user" || !Array.isArray(m.parts)) return "";
+  if (!m || typeof m !== "object" || !Array.isArray(m.parts)) return "";
+  if (m.role === "assistant") return questionAnswerText(m.parts);
+  if (m.role !== "user") return "";
   const texts = m.parts.slice(0, 20).flatMap((p) => {
     const t = (p as { text?: unknown } | null)?.text;
     return typeof t === "string" ? [t] : [];
@@ -127,8 +130,9 @@ export function mergeApprovals(stored: ChatMessage, incoming: { id: string; part
 export function denyPending(history: ChatMessage[]): { messages: ChatMessage[]; changed: ChatMessage[] } {
   const changed: ChatMessage[] = [];
   const messages = history.map((m) => {
-    if (m.role !== "assistant" || !m.parts.some((p) => asTool(p)?.state === "approval-requested")) return m;
-    const parts = m.parts.map((p) => {
+    const superseded = supersedeQuestions(m);
+    if (m.role !== "assistant" || (superseded === m && !m.parts.some((p) => asTool(p)?.state === "approval-requested"))) return m;
+    const parts = superseded.parts.map((p) => {
       const t = asTool(p);
       if (!t || t.state !== "approval-requested" || !t.approval) return p;
       return { ...p, state: "approval-responded", approval: { ...t.approval, approved: false, reason: "They sent a new message instead of answering." } } as typeof p;

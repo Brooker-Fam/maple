@@ -3,14 +3,15 @@ import { memberName } from "../insights";
 import { dayBounds, dayKey, DEFAULT_TZ, startOfDay } from "../time";
 import { StoreUnavailable } from "../store";
 import type { Baby, Member } from "../types";
-import { capsVerdict, type Usage } from "./caps";
+import { capsVerdict, CHAT_MAX_STEPS, type Usage } from "./caps";
 import { mentionsCrisis } from "./crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, titleFrom, userMessage, withCrisisHelp, type Incoming } from "./messages";
 import type { ToolCopy } from "../mcp-tools";
 import type { ModelPrice } from "./prices";
 import { contextLine, stateLines } from "./prompt";
 import type { LockedThread, UsageRow } from "./store";
-import { CHAT_OFF, chatTurn } from "./turn";
+import { CHAT_CUT, CHAT_OFF, chatTurn, questionReply } from "./turn";
+import { hasPendingQuestion, mergeQuestionAnswers } from "./questions";
 import { CHAT_TERMS_NEEDED, THREAD_ID_RE, type ChatConsent, type ChatMessage, type ChatRefusal } from "./types";
 
 /**
@@ -149,6 +150,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     let messages: ChatMessage[];
     let responseId: string;
     let stepsDone = 0;
+    let questionContinuation = false;
     if (incoming.kind === "user") {
       const line = contextLine({ now: deps.now, baby, name: memberName(member.email, members), role: member.role, familyId });
       const stored = userMessage(newMessageId(), incoming.text, line, stateLines(await logStateOrNone(deps, care)));
@@ -161,11 +163,23 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       responseId = newMessageId();
     } else {
       const last = history[history.length - 1];
-      const merged = last ? mergeApprovals(last, incoming.message) : null;
+      const answered = last ? mergeQuestionAnswers(last, incoming.message) : null;
+      questionContinuation = !!answered;
+      let merged = last ? mergeApprovals(answered ?? last, incoming.message) ?? answered : null;
       if (!merged) return refuse({ error: STALE, code: "stale" }, 409);
-      messages = [...history.slice(0, -1), merged];
       responseId = merged.id;
       stepsDone = stepsTaken(merged);
+      const waiting = hasPendingQuestion(merged) || merged.parts.some((p) => "state" in p && p.state === "approval-requested");
+      const exhausted = !!answered && stepsDone >= CHAT_MAX_STEPS;
+      if (exhausted) {
+        merged = denyPending([merged]).messages[0];
+        merged = { ...merged, parts: [...merged.parts, { type: "text", text: CHAT_CUT }] };
+      }
+      if (crisis && answered && (waiting || exhausted)) merged = { ...merged, parts: [...merged.parts, { type: "data-help", data: { reason: "crisis" } }] };
+      // Once an answer is accepted it cannot be replayed, even if the model or connection fails next.
+      if (answered || waiting || exhausted) await store.saveMessage(thread.id, member.email, merged);
+      if (waiting || exhausted) return questionReply(merged, { ...(exhausted ? { notice: CHAT_CUT } : {}), crisis });
+      messages = [...history.slice(0, -1), merged];
     }
     const res = await chatTurn({
       model: deps.model,
@@ -179,6 +193,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       responseId,
       crisis,
       stepsDone,
+      questionContinuation,
       deps: {
         save: (m) => store.saveMessage(thread.id, member.email, m),
         record: (u) => store.recordUsage({ ...u, member: member.email, threadId: thread.id, messageId: responseId, model: deps.modelKey }),

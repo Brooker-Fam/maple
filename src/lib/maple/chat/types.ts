@@ -1,5 +1,6 @@
 import type { UIMessage } from "ai";
 import type { AlertTier } from "../guidelines";
+import type { ChatChartSnapshot } from "./charts";
 
 /**
  * What the in-app chat's server and the Chat tab share. No server imports: the
@@ -19,6 +20,11 @@ export type ChatAlert = { tier: AlertTier; label: string; title: string; body: s
 /** One "Saved #1234: …" line from a write, with the entry it made (Undo removes it). */
 export type ChatReceipt = { id: number; line: string };
 
+/** A small question in the conversation. The stored options, never the phone, supply each choice's meaning. */
+export type ChatQuestionInput = { question: string; options: { id: string; label: string }[] };
+export type ChatQuestionAnswer = { choiceId: string; text?: never } | { text: string; choiceId?: never };
+export type ChatQuestionOutput = { status: "answered"; answer: string; choiceId?: string } | { status: "superseded" };
+
 /**
  * A tool's result as the Chat tab reads it. `text` is what the model gets;
  * the rest is for the cards under the reply.
@@ -37,6 +43,8 @@ export type ChatToolOutput = {
   deleted?: number;
   /** show_help's card. */
   about?: HelpAbout;
+  /** A dated snapshot from the log, rendered by the app's chart components. */
+  chart?: ChatChartSnapshot;
 };
 
 export type HelpAbout = "maple" | "mom" | "anyone";

@@ -31,6 +31,31 @@ import { modelWindow } from "./window";
 export { CHAT_FAILED, CHAT_OFF };
 export const CHAT_CUT = "That answer got too long to finish. Try asking again.";
 
+/** A question's answers are canonical server data, including on a turn that is still waiting for another answer. */
+export function questionReply(message: ChatMessage, opts: { notice?: string; crisis?: boolean } = {}): Response {
+  return createUIMessageStreamResponse({
+    stream: createUIMessageStream<ChatMessage>({
+      originalMessages: [message],
+      execute: ({ writer }) => {
+        writer.write({ type: "start", messageId: message.id });
+        if (opts.crisis) writer.write({ type: "data-help", data: { reason: "crisis" } });
+        for (const p of message.parts) {
+          if (p.type === "tool-ask_user" && "state" in p && p.state === "output-available" && "toolCallId" in p && "output" in p) {
+            writer.write({ type: "tool-output-available", toolCallId: p.toolCallId as string, output: p.output });
+          }
+        }
+        if (opts.notice) {
+          writer.write({ type: "text-start", id: "question-limit" });
+          writer.write({ type: "text-delta", id: "question-limit", delta: opts.notice });
+          writer.write({ type: "text-end", id: "question-limit" });
+        }
+        writer.write({ type: "finish", finishReason: "stop" });
+      },
+    }),
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
 /** An error's HTTP status, or the last attempt's once the SDK's retries ran out. */
 export function errorStatus(error: unknown): number | null {
   const e = error as { statusCode?: unknown; lastError?: { statusCode?: unknown } | null } | null;
@@ -83,10 +108,19 @@ export async function chatTurn(opts: {
   crisis: boolean;
   /** Steps the reply already ran before an approval: the cap is per message, not per request. */
   stepsDone?: number;
+  /** Question answers cannot extend the message's model-step budget. Approval-only completion keeps its existing final reporting step. */
+  questionContinuation?: boolean;
   deps: TurnDeps;
 }): Promise<Response> {
   const { tools, messages, responseId, deps } = opts;
   const stepsDone = opts.stepsDone ?? 0;
+  // Continuations share one budget. A pending question must never buy another model step at the boundary.
+  if (opts.questionContinuation && stepsDone >= CHAT_MAX_STEPS) {
+    const last = messages[messages.length - 1];
+    const completed: ChatMessage = { ...last, id: responseId, role: "assistant", parts: [...last.parts, { type: "text", text: CHAT_CUT }] };
+    try { await deps.save(completed); } finally { await deps.release(); }
+    return questionReply(completed, { notice: CHAT_CUT, crisis: opts.crisis });
+  }
   const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey, copy: opts.copy });
   const breakpoints = usesCacheBreakpoints(opts.modelKey);
   const prefixChars = JSON.stringify([instructions, Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
@@ -118,7 +152,10 @@ export async function chatTurn(opts: {
     providerOptions: chatProviderOptions(opts.price.providers),
     prepareStep: ({ steps, stepNumber, messages: stepMessages }) => {
       inFlight = { step: stepNumber, prompt: Math.max(lastPrompt(steps), roughTokens(prefixChars + JSON.stringify(stepMessages).length)) };
-      return breakpoints ? { messages: markTailForCache(stepMessages) } : {};
+      return {
+        ...(breakpoints ? { messages: markTailForCache(stepMessages) } : {}),
+        ...(stepsDone + stepNumber >= CHAT_MAX_STEPS - 1 ? { activeTools: Object.keys(tools).filter((name) => name !== "ask_user") } : {}),
+      };
     },
     onStepEnd: async (step) => {
       inFlight = null;
@@ -140,6 +177,15 @@ export async function chatTurn(opts: {
     execute: async ({ writer }) => {
       writer.write({ type: "start", messageId: responseId });
       if (opts.crisis) writer.write({ type: "data-help", data: { reason: "crisis" } });
+      // Replace the phone's raw choice/text with the validated result before streaming the continuation.
+      const previous = messages[messages.length - 1];
+      if (previous?.id === responseId && previous.role === "assistant") {
+        for (const p of previous.parts) {
+          if (p.type === "tool-ask_user" && "state" in p && p.state === "output-available" && "toolCallId" in p && "output" in p) {
+            writer.write({ type: "tool-output-available", toolCallId: p.toolCallId as string, output: p.output });
+          }
+        }
+      }
       const reader = toUIMessageStream<ToolSet, ChatMessage>({
         stream: result.stream,
         tools,

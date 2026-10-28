@@ -172,7 +172,8 @@ export type MapleContextValue = {
     }
   ) => Promise<Entry | null>;
   update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string }) => Promise<Entry | null>;
-  remove: (id: number, opts?: { toast?: string }) => Promise<void>;
+  /** True when the entry is removed (including one already removed elsewhere); false when the change failed. */
+  remove: (id: number, opts?: { toast?: string }) => Promise<boolean>;
   /** `quiet`: no "Restored" toast (an Undo that says its own "Undone"). */
   restore: (id: number, opts?: { quiet?: boolean }) => Promise<Entry | null>;
   /**
@@ -992,27 +993,30 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       // Still being saved (temporary id, not queued): nothing to delete yet.
       if (id < 0 && !queued) {
         toast("One sec, that's still saving", { tone: "info" });
-        return;
+        return false;
       }
       if (queued) {
         setQueue(outboxRef.current.filter((i) => i.client_id !== queued.client_id));
         dropEntry(id);
         toast(opts.toast ?? "Removed");
-        return;
+        return true;
       }
       const kind = stateRef.current?.entries.find((x) => x.id === id)?.kind;
       const rollback = optimistic(id, () => null);
       try {
         await withInflight(() => fetchJson(`/api/maple/entries?id=${id}`, { method: "DELETE" }));
         toast(opts.toast ?? "Deleted", { undo: () => void restore(id) });
+        return true;
       } catch (e) {
         // Someone else deleted it first: it stays gone here too, and the toast says who.
         const gone = discardedLine(e, kind, labelFor);
-        if (gone) toast(gone, { tone: "info" });
-        else {
-          rollback();
-          toast(e instanceof Error ? e.message : "Couldn't delete", { tone: "error" });
+        if (gone) {
+          toast(gone, { tone: "info" });
+          return true;
         }
+        rollback();
+        toast(e instanceof Error ? e.message : "Couldn't delete", { tone: "error" });
+        return false;
       } finally {
         void forceRefresh();
       }

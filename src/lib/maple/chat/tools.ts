@@ -7,6 +7,9 @@ import { registerCareTools } from "../care-mcp";
 import { context, FAMILY_ONE_COPY, logState, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
 import type { Member } from "../types";
 import type { ChatAlert, ChatReceipt, ChatToolOutput, HelpAbout } from "./types";
+import type { ChatQuestionInput, ChatQuestionOutput } from "./types";
+import { questionOutputSchema, questionSchema } from "./questions";
+import { showChartTool } from "./chart-tools";
 
 /**
  * The MCP tools as an AI SDK ToolSet for the in-app chat. The registrations
@@ -158,6 +161,20 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: n
     execute: async ({ about }: { about: HelpAbout }): Promise<ChatToolOutput> => ({ ok: true, write: false, text: HELP_TEXT, about }),
     toModelOutput: () => ({ type: "text", value: HELP_TEXT }),
   });
+  set.ask_user = tool<ChatQuestionInput, ChatQuestionOutput, Record<string, unknown>>({
+    description: "Ask one necessary clarification with two to four short choices and a custom answer. Use only when the log and tools cannot supply a detail needed to fulfill the person's request. This pauses the reply until they answer; call it alone and do not perform the dependent write yet. It is not a delete approval. Choose a sensible chart or date range yourself unless the person needs to decide.",
+    inputSchema: zodSchema(questionSchema),
+    outputSchema: zodSchema(questionOutputSchema),
+    // No execute: the UI renders the pending call and the request ends. The server validates the person's later answer.
+    toModelOutput: ({ output }) => ({
+      type: "text",
+      value: output.status === "answered"
+        ? JSON.stringify({ user_answer: output.answer, ...(output.choiceId ? { choice: output.choiceId } : {}) })
+        : "The person sent a new message instead of choosing here. Read their newest message and do not repeat this question unless a necessary detail is still missing.",
+    }),
+  });
+  const summary = all.find((r) => r.name === "daily_summary");
+  if (summary) set.show_chart = showChartTool(extra, () => summary.handler({ days: 14 }, extra));
   return set;
 }
 

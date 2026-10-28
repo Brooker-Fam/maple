@@ -274,7 +274,7 @@ export function mapleInstructions(c: ToolCopy, { entryNumbers = true }: { entryN
   const by = c.exampleBy ? ` · ${c.exampleBy}` : "";
   return `${c.opening} (timezone ${c.tz}; reply in US units). Call maple_status first for the local time, running timers, "when did ${v.they} last eat", "which side next" or "how many diapers". Log what the user describes with the log_* tools. Not medical advice. If anyone may harm themselves or someone else: 911 if in immediate danger, otherwise call or text 988. ${momRule}
 
-For times pass minutes_ago or a local clock time like "3:10am" or "15:10"; never invent a date. ${entryNumbers ? 'After a write, repeat its summary sentence with the entry number ("Saved #123: …").' : "After a write, confirm what was saved without showing internal entry numbers."}
+For times pass minutes_ago or a local clock time like "3:10am" or "15:10"; never invent a date. ${entryNumbers ? 'After a write, repeat its summary sentence with the entry number ("Saved #123: …").' : "After a write, rely on the app's saved-entry confirmation when present; add useful context without showing internal entry numbers."}
 
 Health alerts: when a result includes alerts, tell the user each one word for word with its label (for example "Call your pediatrician now: …"). Don't soften, shorten or add to them, never give medical advice of your own, and never suggest medicine doses. Suggest calling the pediatrician (or 911 for the emergency signs).
 

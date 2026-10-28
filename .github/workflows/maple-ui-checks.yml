@@ -43,6 +43,12 @@ jobs:
       - name: Admin metrics access and counts
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-tenancy admin
+      - name: Chat checks
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-chat
+      - name: Chat family boundaries and copy
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-tenancy chat-charts copy
       - name: Install browser check tools
         id: browser_tools
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -58,12 +64,19 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: node scripts/ui-check/run.mjs
+      - name: Check chat in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-chat-ui
       - name: Save synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: maple-ui-screenshots
-          path: test-results/maple-ui
+          path: |
+            test-results/maple-ui
+            test-results/maple-chat-ui
           if-no-files-found: ignore
       - name: Build without database migrations
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

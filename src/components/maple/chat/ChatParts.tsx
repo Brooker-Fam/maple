@@ -1,7 +1,7 @@
 "use client";
 
 import { getToolName, isToolUIPart } from "ai";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { chatRefusal, emergencySigns, momHelp } from "@/lib/maple/guidelines";
 import { careTime } from "@/lib/maple/care";
@@ -15,8 +15,11 @@ import { GROUP, NavRow } from "../care/parts";
 import { HelpLines } from "../care/SupportScreen";
 import { useVoice } from "../familyWords";
 import { Icon, KindBadge } from "../icons";
+import { useSheets } from "../sheets";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import ChatChart from "./ChatChart";
+import ChatQuestion, { type AnswerQuestion } from "./ChatQuestion";
 
 /**
  * One message in the chat. The person's words sit in a bubble on the right,
@@ -30,7 +33,7 @@ type Part = ChatMessage["parts"][number];
 type ToolPart = Extract<Part, { toolCallId: string }>;
 
 /** `last`: the newest message, the only one whose approval card can still be answered; `busy`: an answer is coming. */
-export function MessageView({ message, last, busy, onApprove }: { message: ChatMessage; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void }) {
+export function MessageView({ message, last, busy, onApprove, onAnswerQuestion, onAsk }: { message: ChatMessage; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
   if (message.role === "user") {
     const text = message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
     return (
@@ -52,7 +55,7 @@ export function MessageView({ message, last, busy, onApprove }: { message: ChatM
             </div>
           ) : null;
         }
-        if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} last={last} busy={busy} onApprove={onApprove} />;
+        if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} last={last} busy={busy} onApprove={onApprove} onAnswerQuestion={onAnswerQuestion} onAsk={onAsk} />;
         return null;
       })}
       {alerts.map((a) => (
@@ -81,35 +84,40 @@ const Muted = ({ icon, children }: { icon?: "clock-3" | "circle-alert" | "info" 
   </p>
 );
 
-function ToolView({ part, last, busy, onApprove }: { part: ToolPart; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void }) {
+function ToolView({ part, last, busy, onApprove, onAnswerQuestion, onAsk }: { part: ToolPart; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
   const name = getToolName(part as Parameters<typeof getToolName>[0]);
+  if (name === "ask_user") {
+    if (part.state === "input-streaming") return null;
+    return <ChatQuestion key={part.state} input={part.input} output={"output" in part ? part.output : undefined} toolState={part.state} active={last} busy={busy} onAnswer={(answer) => onAnswerQuestion(part.toolCallId, answer)} />;
+  }
   switch (part.state) {
     case "input-streaming":
     case "input-available":
-      return last && busy ? <Muted icon="clock-3">Working on it…</Muted> : null;
+      return null;
     case "approval-requested":
       if (!last || part.approval.isAutomatic) return <Muted icon="info">Nothing was deleted.</Muted>;
       if (busy) return null;
       return <ApprovalCard name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
     case "approval-responded":
       if (!part.approval.approved) return <Muted icon="info">Kept. Nothing was deleted.</Muted>;
-      return last && busy ? <Muted icon="clock-3">Deleting…</Muted> : <Muted icon="circle-alert">That didn&apos;t finish. Check the log to see whether it was deleted.</Muted>;
+      return last && busy ? null : <Muted icon="circle-alert">That didn&apos;t finish. Check the log to see whether it was deleted.</Muted>;
     case "output-denied":
       return <Muted icon="info">Kept. Nothing was deleted.</Muted>;
     case "output-error":
       return <Muted icon="circle-alert">That step didn&apos;t work, so it changed nothing.</Muted>;
     case "output-available":
-      return <OutputView output={part.output as ChatToolOutput} />;
+      return <OutputView output={part.output as ChatToolOutput} busy={busy} onAsk={onAsk} />;
   }
   return null;
 }
 
-function OutputView({ output }: { output: ChatToolOutput | undefined }) {
+function OutputView({ output, busy, onAsk }: { output: ChatToolOutput | undefined; busy: boolean; onAsk?: (text: string) => void }) {
   if (!output) return null;
+  const first = receiptText(output.text.split("\n")[0] ?? "");
+  if (!output.ok) return <Muted icon="circle-alert">{first || "That step didn't finish. Please try again."}</Muted>;
+  if (output.chart) return <ChatChart chart={output.chart} onAsk={onAsk} disabled={busy} />;
   if (output.about) return <HelpCard about={output.about} />;
   if (!output.write) return null;
-  const first = receiptText(output.text.split("\n")[0] ?? "");
-  if (!output.ok) return <Muted icon="circle-alert">{first}</Muted>;
   if (output.saved?.length) {
     return (
       <div className={cx(GROUP)}>
@@ -124,49 +132,79 @@ function OutputView({ output }: { output: ChatToolOutput | undefined }) {
   return <Muted icon="check">{first}</Muted>;
 }
 
+const SAVED_TITLES = {
+  feed: "Feeding saved", pump: "Pumping saved", diaper: "Diaper saved", sleep: "Sleep saved",
+  growth: "Measurements saved", temp: "Temperature saved", vitals: "Reading saved", med: "Medicine saved",
+  tummy: "Tummy time saved", bath: "Bath saved", moment: "Moment saved", note: "Note saved",
+};
+
 function Receipt({ receipt }: { receipt: ChatReceipt }) {
-  const { remove } = useMaple();
-  const [undone, setUndone] = useState(false);
+  const { remove, state, readOnly, online } = useMaple();
+  const { open } = useSheets();
+  const [action, setAction] = useState<"idle" | "pending" | "done" | "failed">("idle");
+  const inflight = useRef(false);
+  const entry = state?.entries.find((e) => e.id === receipt.id);
+  const title = entry ? SAVED_TITLES[entry.kind] : "Saved to the log";
+  const detail = receiptText(receipt.line).replace(/^Saved:\s*/i, "");
+  const undone = action === "done";
+  const pending = action === "pending";
+  const undo = async () => {
+    if (inflight.current || readOnly || !online) return;
+    inflight.current = true;
+    setAction("pending");
+    try {
+      setAction(await remove(receipt.id, { toast: "Undone" }) ? "done" : "failed");
+    } catch {
+      setAction("failed");
+    } finally {
+      inflight.current = false;
+    }
+  };
   return (
-    <div className="flex min-h-[52px] items-center gap-2.5 px-3.5 py-2">
-      <Icon name={undone ? "x" : "check"} size={18} strokeWidth={2.25} className={cx("shrink-0", undone ? "text-mp-ink-3" : "text-mp-accent-fg")} />
-      <p className={cx(undone ? tone.faint : tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere", undone && "line-through")}>{receiptText(receipt.line)}</p>
-      {!undone && (
-        <Button
-          size="sm"
-          variant="soft"
-          onClick={() => {
-            setUndone(true);
-            void remove(receipt.id, { toast: "Undone" });
-          }}
-        >
-          Undo
-        </Button>
+    <section className="space-y-2 px-3.5 py-3" aria-label="Saved entry" aria-busy={pending}>
+      <div className="flex items-center gap-2">
+        <Icon name={undone ? "x" : "check"} size={17} strokeWidth={2.25} className={cx("shrink-0", undone ? "text-mp-ink-3" : "text-mp-accent-fg")} />
+        <p className={cx(undone ? tone.faint : tone.body, "text-[14px] font-semibold")} role="status">{undone ? "Undone" : pending ? "Undoing…" : title}</p>
+      </div>
+      <p className={cx(undone ? tone.faint : tone.body, "text-[15px] leading-snug wrap-anywhere", undone && "line-through")}>{detail}</p>
+      {action === "failed" && <p role="alert" className="text-[14px] leading-snug text-mp-danger">Couldn&apos;t undo this entry. Try again.</p>}
+      {!undone && !readOnly && (
+        <div className="flex flex-wrap gap-2">
+          {entry && <Button size="sm" variant="soft" disabled={pending || !online} onClick={() => open({ kind: entry.kind, entry })}>Edit</Button>}
+          <Button size="sm" variant="ghost" disabled={pending || !online} onClick={() => void undo()}>{pending ? "Undoing…" : "Undo"}</Button>
+        </div>
       )}
-    </div>
+    </section>
   );
 }
 
 function Restorable({ id, line }: { id: number; line: string }) {
-  const { restore } = useMaple();
-  const [back, setBack] = useState(false);
+  const { restore, readOnly, online } = useMaple();
+  const [action, setAction] = useState<"idle" | "pending" | "done" | "failed">("idle");
+  const inflight = useRef(false);
+  const back = action === "done";
+  const pending = action === "pending";
+  const bringBack = async () => {
+    if (inflight.current || readOnly || !online) return;
+    inflight.current = true;
+    setAction("pending");
+    try {
+      setAction(await restore(id) ? "done" : "failed");
+    } catch {
+      setAction("failed");
+    } finally {
+      inflight.current = false;
+    }
+  };
   return (
-    <div className={cx(GROUP, "flex min-h-[52px] items-center gap-2.5 px-3.5 py-2")}>
-      <Icon name={back ? "check" : "trash-2"} size={18} className="shrink-0 text-mp-ink-2" />
-      <p className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere")}>{back ? "Brought back" : line}</p>
-      {!back && (
-        <Button
-          size="sm"
-          variant="soft"
-          onClick={() => {
-            setBack(true);
-            void restore(id);
-          }}
-        >
-          Restore
-        </Button>
-      )}
-    </div>
+    <section className={cx(GROUP, "space-y-2 px-3.5 py-3")} aria-label="Removed entry" aria-busy={pending}>
+      <div className="flex min-h-[44px] items-center gap-2.5">
+        <Icon name={back ? "check" : "trash-2"} size={18} className="shrink-0 text-mp-ink-2" />
+        <p role="status" className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere")}>{back ? "Restored" : pending ? "Restoring…" : line}</p>
+        {!back && !readOnly && <Button size="sm" variant="soft" disabled={pending || !online} onClick={() => void bringBack()}>{pending ? "Restoring…" : "Restore"}</Button>}
+      </div>
+      {action === "failed" && <p role="alert" className="text-[14px] leading-snug text-mp-danger">Couldn&apos;t restore this entry. Try again.</p>}
+    </section>
   );
 }
 

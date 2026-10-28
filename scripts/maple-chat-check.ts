@@ -100,19 +100,20 @@ check("captures every registered tool (29 Maple + 7 of hers)", () => {
   for (const r of all) ok(r.description && typeof r.handler === "function" && r.shape && typeof r.ann.readOnlyHint === "boolean", `${r.name} is complete`);
 });
 
-check("a member gets every tool but the excluded ones (and record_birth once she's born), plus show_help", () => {
+check("a member gets the allowed log tools plus help, questions and charts", () => {
   const names = registrations().all.map((r) => r.name);
   const born = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true }));
-  eq(born.length, 36 - EXCLUDED_TOOLS.size - 1 + 1, "count once born");
+  eq(born.length, 36 - EXCLUDED_TOOLS.size - 1 + 3, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
+  ok(born.includes("ask_user") && born.includes("show_chart"), "interactive questions and charts");
   ok(Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).includes("record_birth"), "record_birth before she's born");
   eq([...EXCLUDED_TOOLS].sort(), ["add_mom_medicines", "set_mom_medicine"], "excluded");
 });
 
-check("a viewer gets Maple's five reads and show_help, nothing else", () => {
-  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true })).sort(), [...READS, "show_help"].sort(), "viewer set");
-  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).sort(), [...READS, "show_help"].sort(), "viewer set before birth");
+check("a viewer gets Maple's reads, help, questions and charts without write tools", () => {
+  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true })).sort(), [...READS, "show_help", "ask_user", "show_chart"].sort(), "viewer set");
+  eq(Object.keys(chatTools(VI, { fam: 1, copy: FAMILY_ONE_COPY, born: false, care: true })).sort(), [...READS, "show_help", "ask_user", "show_chart"].sort(), "viewer set before birth");
 });
 
 check("her tools stay out of the chat until she lets it see her medicines (chat_care)", () => {
@@ -510,7 +511,7 @@ check("no em or en dashes: commas, \"to\" between numbers, \"- \" at a line's st
 });
 
 check("the prompt: the log's lines and the tools before any question; a running timer that ended is stopped at the time said", () => {
-  for (const want of ["never ask a question the log or a tool can answer", "stop that timer right away at the time they said", "never ask how long or which side", "log it right away with the time they said", "one short sentence that says what was saved", "Never write an em dash or an en dash", "no markdown"]) {
+  for (const want of ["never ask a question the log or a tool can answer", "stop that timer right away at the time they said", "never ask how long or which side", "log it right away with the time they said", "do not repeat their details in another reply", "Never write an em dash or an en dash", "no markdown"]) {
     ok(CHAT_ADDENDUM.includes(want), `says "${want}"`);
   }
   ok(!/[\u2013\u2014]/.test(CHAT_ADDENDUM), "and has no dashes itself");
