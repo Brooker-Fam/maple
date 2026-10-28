@@ -34,12 +34,13 @@ import { costMicro, dollars, priceFor, PRICES, stepTokens } from "../src/lib/map
 import { answerPost, BUSY, CARE_CLOSED, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
 import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, contextText, markTailForCache, stateLines, systemBlocks } from "../src/lib/maple/chat/prompt";
 import { dashFilter, withoutDashes } from "../src/lib/maple/chat/dashes";
+import { chatDisplayText, receiptText } from "../src/lib/maple/chat/display";
 import type { LockedThread, UsageRow } from "../src/lib/maple/chat/store";
 import { chatTools, EXCLUDED_TOOLS, forModel, MODEL_TEXT_MAX, registrations, TOOL_APPROVAL, toOutput } from "../src/lib/maple/chat/tools";
 import { CHAT_MAX_CHARS, CHAT_TERMS_NEEDED, type ChatConsent, type ChatMessage, type ChatToolOutput } from "../src/lib/maple/chat/types";
 import { momSameMedicine } from "../src/lib/maple/care-mcp";
 import { consentCurrent, CONSENT_VERSION, isCarePerson } from "../src/lib/maple/consent";
-import { careOpen, FAMILY_ONE_COPY, logStateLines, voiceOf, type Ctx } from "../src/lib/maple/mcp-tools";
+import { careOpen, FAMILY_ONE_COPY, logStateLines, mapleInstructions, MAPLE_INSTRUCTIONS, voiceOf, type Ctx } from "../src/lib/maple/mcp-tools";
 import { summarize } from "../src/lib/maple/insights";
 import { CRISIS_REPLY } from "../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
@@ -186,6 +187,34 @@ check("a long result is cut before the model reads it", () => {
   eq(forModel("short"), "short", "short stays");
   const cut = forModel("x".repeat(MODEL_TEXT_MAX + 500));
   ok(cut.length < MODEL_TEXT_MAX + 120 && cut.includes("Cut off here"), "cut with a note");
+});
+
+check("chat display hides old receipt, timer and care references while keeping their useful details", () => {
+  eq(receiptText("Saved #241: wet diaper at 2:10 AM today (logged by Alex via Maple chat)."), "Saved: wet diaper at 2:10 AM today", "saved receipt");
+  eq(chatDisplayText("Saved #242: breastfeed, 8 minutes on the left. The current timer (#240, right since 2:30) is still running."), "Saved: breastfeed, 8 minutes on the left. The current timer (right since 2:30) is still running.", "older reply with a timer aside");
+  eq(chatDisplayText("The timer is running (#243). Paused the feed (timer #243). Nursing [timer #243]."), "The timer is running. Paused the feed. Nursing.", "ID-only asides");
+  eq(chatDisplayText("Updated #244: bath. Deleted c245: Robin's question. Restored c245: question. Already saved c246: Examplex at 9:15 AM."), "Updated: bath. Deleted: Robin's question. Restored: question. Already saved: Examplex at 9:15 AM.", "other write results");
+  eq(chatDisplayText("#247 was already deleted. Entry #248 is a feed. Nothing changed on #249. That #250 was stopped."), "This entry was already deleted. Entry is a feed. Nothing changed on this entry. That entry was stopped.", "standalone references");
+  eq(chatDisplayText("The feed (started at 4:20 AM; timer #251) goes on. Use delete_entry id 252 or fix_mom_entry id c253."), "The feed (started at 4:20 AM) goes on. Use delete_entry this entry or fix_mom_entry this entry.", "trailing asides and explicit tool IDs");
+});
+
+check("chat display preserves health values, times, counts, names and paragraph breaks", () => {
+  const details = "Saved: 8 lb 2 oz at 10:45 AM, 41st percentile and 3.2% below birth weight.\n\nToday: 6 feeds, 4 wet diapers. Left 12 minutes, right 7. Temperature 98.6 F. Vitamin B12. C3 and C4. HbA1c. Call 911 or 1-833-852-6262.";
+  eq(chatDisplayText(details), details, "ordinary numbers and text");
+  eq(receiptText("Saved #254: measurements (8 lb 2 oz) at 10:45 AM today (logged by Alex via Maple chat)."), "Saved: measurements (8 lb 2 oz) at 10:45 AM today", "measurement parentheses stay");
+});
+
+check("each growing streamed reply hides partial record numbers without changing the stored tool output", () => {
+  for (const reply of ["Saved #987654: wet diaper at 4:10 AM.", "A timer (#987654, started at 4:10 AM) is running.", "Saved c987654: Robin's question."]) {
+    for (let n = 1; n <= reply.length; n++) {
+      const shown = chatDisplayText(reply.slice(0, n));
+      ok(!/#\d|\bc\d/i.test(shown), `no partial identifier at character ${n}: ${shown}`);
+    }
+  }
+  const output = toOutput({ content: text("Saved #255: wet diaper at 4:10 AM."), structuredContent: { created: true, id: 255 } }, { write: true, mom: false });
+  eq(receiptText(output.saved![0].line), "Saved: wet diaper at 4:10 AM", "displayed receipt");
+  eq(output.saved, [{ id: 255, line: "Saved #255: wet diaper at 4:10 AM." }], "Undo ID and raw receipt stay");
+  eq(output.text, "Saved #255: wet diaper at 4:10 AM.", "model's raw result stays");
 });
 
 // ── cost (BigInt micro-dollars) ──────────────────────────────────────────
@@ -376,6 +405,14 @@ check("GLM gets no Anthropic cache markers; a chat closed to her says so in its 
   ok(CHAT_ADDENDUM_CARE_CLOSED.startsWith(CHAT_ADDENDUM) && /hasn't let this chat see her medicines/.test(CHAT_ADDENDUM_CARE_CLOSED), "the closed addendum adds to the usual one");
   ok(/before logging any medicine other than vitamin D, ask "Maple's or \w+'s\?"/.test(CHAT_ADDENDUM_CARE_CLOSED), "closed: asks whose before any medicine but vitamin D, since her list is out of sight");
   eq(systemBlocks({ viewer: true, care: false, model: GLM, copy: FAMILY_ONE_COPY })[1].content, CHAT_ADDENDUM_VIEWER, "a viewer's stays the viewer's");
+});
+
+check("in-app prompts keep record numbers internal without changing external MCP instructions", () => {
+  for (const mode of [{ viewer: false, care: true }, { viewer: false, care: false }, { viewer: true, care: false }]) {
+    const prompt = systemBlocks({ ...mode, model: GLM, copy: FAMILY_ONE_COPY }).map((block) => block.content).join("\n");
+    ok(!prompt.includes("repeat its summary sentence with the entry number"), "no conflicting entry-number instruction");
+  }
+  eq(mapleInstructions(FAMILY_ONE_COPY), MAPLE_INSTRUCTIONS, "external MCP copy stays the same");
 });
 
 check("markTailForCache leaves exactly one message breakpoint, on the newest", () => {

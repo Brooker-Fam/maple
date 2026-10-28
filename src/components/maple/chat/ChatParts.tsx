@@ -6,6 +6,7 @@ import { describeEntry } from "@/lib/maple/describe";
 import { chatRefusal, emergencySigns, momHelp } from "@/lib/maple/guidelines";
 import { careTime } from "@/lib/maple/care";
 import { formatTime } from "@/lib/maple/time";
+import { chatDisplayText, receiptText } from "@/lib/maple/chat/display";
 import type { ChatAlert, ChatMessage, ChatReceipt, ChatToolOutput, HelpAbout } from "@/lib/maple/chat/types";
 import { AlertNote, EMERGENCY_FILL, usePhones } from "../AlertCard";
 import { useCareNav } from "../care/CareNav";
@@ -44,9 +45,10 @@ export function MessageView({ message, last, busy, onApprove }: { message: ChatM
       {message.parts.map((p, i) => {
         if (p.type === "data-help") return <HelpCard key={i} reason={p.data.reason} />;
         if (p.type === "text") {
-          return p.text.trim() ? (
+          const text = chatDisplayText(p.text).trim();
+          return text ? (
             <div key={i} className="pr-10">
-              <p className={cx(tone.body, "w-fit rounded-[18px] rounded-bl-[6px] border border-(--mp-edge) bg-mp-surface px-3.5 py-2.5 text-[16px] leading-snug whitespace-pre-wrap wrap-anywhere")}>{p.text.trim()}</p>
+              <p className={cx(tone.body, "w-fit rounded-[18px] rounded-bl-[6px] border border-(--mp-edge) bg-mp-surface px-3.5 py-2.5 text-[16px] leading-snug whitespace-pre-wrap wrap-anywhere")}>{text}</p>
             </div>
           ) : null;
         }
@@ -78,9 +80,6 @@ const Muted = ({ icon, children }: { icon?: "clock-3" | "circle-alert" | "info" 
     <span className="min-w-0 wrap-anywhere">{children}</span>
   </p>
 );
-
-/** "Saved #1234: wet diaper at 3:10 AM today" (the who-and-how tail is the app's own, so it's left off). */
-const receiptText = (line: string) => line.replace(/ \((logged|stopped|started) by [^)]*\)\.?$/, "").replace(/\.$/, "");
 
 function ToolView({ part, last, busy, onApprove }: { part: ToolPart; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void }) {
   const name = getToolName(part as Parameters<typeof getToolName>[0]);
@@ -120,7 +119,7 @@ function OutputView({ output }: { output: ChatToolOutput | undefined }) {
       </div>
     );
   }
-  if (output.duplicateOf != null) return <Muted icon="info">Not saved yet: it looks like #{output.duplicateOf}.</Muted>;
+  if (output.duplicateOf != null) return <Muted icon="info">Not saved yet: it looks like an entry already in the log.</Muted>;
   if (output.deleted != null) return <Restorable id={output.deleted} line={first} />;
   return <Muted icon="check">{first}</Muted>;
 }
@@ -154,7 +153,7 @@ function Restorable({ id, line }: { id: number; line: string }) {
   return (
     <div className={cx(GROUP, "flex min-h-[52px] items-center gap-2.5 px-3.5 py-2")}>
       <Icon name={back ? "check" : "trash-2"} size={18} className="shrink-0 text-mp-ink-2" />
-      <p className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere")}>{back ? `Brought back #${id}` : line}</p>
+      <p className={cx(tone.body, "min-w-0 flex-1 text-[14px] leading-snug wrap-anywhere")}>{back ? "Brought back" : line}</p>
       {!back && (
         <Button
           size="sm"
@@ -190,14 +189,14 @@ function ApprovalCard({ name, input, onAnswer }: { name: string; input: unknown;
         </span>
       </div>
     ) : (
-      <p className={cx(tone.body, "text-[15px]")}>Entry #{String(raw.id ?? "")}</p>
+      <p className={cx(tone.body, "text-[15px]")}>The selected entry</p>
     );
   } else {
     const care = state?.care;
     const id = typeof raw.id === "string" ? Number(raw.id.replace(/^c/i, "")) : NaN;
     const e = care?.entries.find((x) => x.id === id);
     const her = care?.person.name ?? "Her";
-    const label = !e ? `${her}'s entry ${String(raw.id ?? "")}` : e.kind === "dose" ? `${her}'s ${e.data.name}` : e.kind === "temp" ? `${her}'s temperature` : `${her}'s question for her OB`;
+    const label = !e ? `${her}'s selected entry` : e.kind === "dose" ? `${her}'s ${e.data.name}` : e.kind === "temp" ? `${her}'s temperature` : `${her}'s question for her OB`;
     what = (
       <p className={cx(tone.body, "text-[15px] leading-snug font-medium")}>
         {label}

@@ -262,7 +262,7 @@ ${MOM}'s label or discharge papers in a photo: when the user shares one, you may
  * text above (the tenancy copy check holds them equal); that literal stays
  * because maple-care-check reads its paragraph from this file's source.
  */
-export function mapleInstructions(c: ToolCopy): string {
+export function mapleInstructions(c: ToolCopy, { entryNumbers = true }: { entryNumbers?: boolean } = {}): string {
   const { v } = c;
   const m = v.mom;
   const momRule = v.hasMom
@@ -274,7 +274,7 @@ export function mapleInstructions(c: ToolCopy): string {
   const by = c.exampleBy ? ` · ${c.exampleBy}` : "";
   return `${c.opening} (timezone ${c.tz}; reply in US units). Call maple_status first for the local time, running timers, "when did ${v.they} last eat", "which side next" or "how many diapers". Log what the user describes with the log_* tools. Not medical advice. If anyone may harm themselves or someone else: 911 if in immediate danger, otherwise call or text 988. ${momRule}
 
-For times pass minutes_ago or a local clock time like "3:10am" or "15:10"; never invent a date. After a write, repeat its summary sentence with the entry number ("Saved #123: …").
+For times pass minutes_ago or a local clock time like "3:10am" or "15:10"; never invent a date. ${entryNumbers ? 'After a write, repeat its summary sentence with the entry number ("Saved #123: …").' : "After a write, confirm what was saved without showing internal entry numbers."}
 
 Health alerts: when a result includes alerts, tell the user each one word for word with its label (for example "Call your pediatrician now: …"). Don't soften, shorten or add to them, never give medical advice of your own, and never suggest medicine doses. Suggest calling the pediatrician (or 911 for the emergency signs).
 
