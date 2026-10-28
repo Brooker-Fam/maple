@@ -106,6 +106,12 @@ export default function Privacy() {
         If you join the waitlist, Maple keeps your email address and the date you joined. It is used only to tell you when Maple
         opens to more families.
       </p>
+      <p>
+        Maple&rsquo;s operator can preview and send an invitation to get started. Resend receives your address and the invitation,
+        just as it does for other Maple emails. Maple keeps a sending status, timestamps and the provider&rsquo;s message identifier
+        to avoid sending the same invitation twice. These records are removed when your waitlist entry is removed.
+        Reply to the invitation or email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> to leave the waitlist.
+      </p>
       <h3>Feedback and support</h3>
       <p>
         &ldquo;Send feedback&rdquo; opens your email app. It sends nothing until you send the email yourself. What you choose to
@@ -152,7 +158,7 @@ export default function Privacy() {
           you use Hide My Email. Your family&rsquo;s log is not sent to either provider to sign you in.
         </li>
         <li>
-          <strong>Resend</strong> sends sign-in codes, invites and welcome emails. It receives the recipient&rsquo;s address and the message,
+          <strong>Resend</strong> sends sign-in codes, invites, waitlist invitations and welcome emails. It receives the recipient&rsquo;s address and the message,
           and keeps email and delivery records under its <a href="https://resend.com/security">retention policy</a>.
           Email open and click tracking are off.
         </li>
@@ -172,8 +178,10 @@ export default function Privacy() {
       <h2>Usage counts</h2>
       <p>
         Maple&rsquo;s operator has a private metrics page showing totals for signups, member accounts, completed setup,
-        recent activity, saved entries and the waitlist. These totals come from existing database records. The page does
-        not show names, email addresses, individual logs or chat messages, and does not send its metrics to PostHog.
+        recent activity, saved entries and the waitlist. These totals come from existing database records. The operator can
+        open account and waitlist lists, where email addresses are masked until they choose to reveal one. These views show
+        account dates, family membership and setup status, but do not show names, individual logs or chat messages.
+        The admin page does not send its metrics or revealed addresses to PostHog.
       </p>
       <p>
         Maple uses PostHog to see whether people can get started and which features are used. The public site sends pageviews

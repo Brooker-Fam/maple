@@ -399,6 +399,20 @@ export async function migrate() {
   // A due month can say someone is pregnant, so the waitlist keeps none.
   await sql`UPDATE maple_waitlist SET baby_month = NULL WHERE baby_month IS NOT NULL`;
 
+  // Operator-triggered waitlist invitations. A durable claim prevents a later
+  // retry from duplicating a send after a timeout or uncertain provider result.
+  await sql`
+    CREATE TABLE IF NOT EXISTS maple_waitlist_outreach (
+      waitlist_id BIGINT NOT NULL REFERENCES maple_waitlist(id) ON DELETE CASCADE,
+      campaign TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'sending' CHECK (status IN ('sending', 'sent', 'uncertain')),
+      attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at TIMESTAMPTZ,
+      provider_id TEXT,
+      PRIMARY KEY (waitlist_id, campaign)
+    )
+  `;
+
   await migrateFamilies();
   await migrateSignup();
   await migrateAuth();
