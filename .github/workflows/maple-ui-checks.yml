@@ -101,6 +101,7 @@ jobs:
           path: |
             test-results/maple-ui
             test-results/maple-chat-ui
+            test-results/maple-entrypoints-ui
             test-results/maple-nutrition-ui
             test-results/maple-admin-ui
             test-results/maple-search-ui

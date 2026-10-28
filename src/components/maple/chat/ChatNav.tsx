@@ -1,7 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
-import type { ChatConsent } from "@/lib/maple/chat/types";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CHAT_MAX_CHARS, type ChatConsent } from "@/lib/maple/chat/types";
+import { useAppNav } from "../AppNav";
 import { useMaple } from "../useMaple";
 
 /**
@@ -10,8 +11,13 @@ import { useMaple } from "../useMaple";
  */
 
 export type ConsentChange = { terms?: true; care?: boolean };
+export type ChatPrompt = { label: string; prompt: string };
+export type PendingChatPrompt = ChatPrompt & { id: number };
 
 export type ChatNav = {
+  pendingPrompt: PendingChatPrompt | null;
+  ask(prompt: ChatPrompt): boolean;
+  dismissPrompt(id: number): void;
   /** Null until read (or when the read failed: the server still turns a message away without terms). */
   consent: ChatConsent | null;
   loadConsent(): void;
@@ -21,6 +27,9 @@ export type ChatNav = {
 };
 
 const ChatNavContext = createContext<ChatNav>({
+  pendingPrompt: null,
+  ask: () => false,
+  dismissPrompt: () => {},
   consent: null,
   loadConsent: () => {},
   saveConsent: async () => false,
@@ -33,11 +42,33 @@ export function useChatNav(): ChatNav {
 
 export function ChatNavProvider({ children }: { children: ReactNode }) {
   const { state, api, toast } = useMaple();
+  const { tab, go } = useAppNav();
   // Consents are per family, so a tab that moved to another family reads them again.
   const me = state ? `${state.family?.id ?? 1}:${state.me.email}` : null;
   const [consent, setConsent] = useState<{ me: string | null; value: ChatConsent } | null>(null);
   const reading = useRef(false);
   const mine = consent?.me === me ? consent.value : null;
+  const scope = `${me}:${state?.baby.id ?? ""}`;
+  const nextPrompt = useRef(0);
+  const [pending, setPending] = useState<{ scope: string; value: PendingChatPrompt } | null>(null);
+  const pendingPrompt = pending?.scope === scope ? pending.value : null;
+
+  useEffect(() => {
+    setPending((current) => current?.scope === scope ? current : null);
+  }, [scope]);
+
+  const ask = useCallback((question: ChatPrompt) => {
+    const prompt = question.prompt.trim();
+    if (!me || !prompt || prompt.length > CHAT_MAX_CHARS) return false;
+    if (tab === "chat" && !window.dispatchEvent(new CustomEvent("maple-before-navigate", { cancelable: true, detail: { tab: "chat" } }))) return false;
+    if (!go("chat")) return false;
+    setPending({ scope, value: { ...question, prompt, id: ++nextPrompt.current } });
+    return true;
+  }, [go, me, scope, tab]);
+
+  const dismissPrompt = useCallback((id: number) => {
+    setPending((current) => current?.value.id === id ? null : current);
+  }, []);
 
   const loadConsent = useCallback(() => {
     if (reading.current || !me) return;
@@ -69,7 +100,7 @@ export function ChatNavProvider({ children }: { children: ReactNode }) {
     loadConsent();
   }, [loadConsent, me]);
 
-  const nav = useMemo(() => ({ consent: mine, loadConsent, saveConsent, termsNeeded }), [mine, loadConsent, saveConsent, termsNeeded]);
+  const nav = useMemo(() => ({ consent: mine, loadConsent, saveConsent, termsNeeded, pendingPrompt, ask, dismissPrompt }), [mine, loadConsent, saveConsent, termsNeeded, pendingPrompt, ask, dismissPrompt]);
   return (
     <ChatNavContext.Provider value={nav}>
       {children}

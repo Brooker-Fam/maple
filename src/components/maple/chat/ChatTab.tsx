@@ -8,6 +8,7 @@ import { Icon } from "../icons";
 import { Button, Chip, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { useChatNav } from "./ChatNav";
+import ChatDraftPrompt from "./ChatDraftPrompt";
 import { HelpCard, MessageView } from "./ChatParts";
 import { CareNote, TermsCard } from "./ChatTerms";
 import { NEAR_BOTTOM, TAB_BAR, usePageHold, useVisibleArea } from "./page";
@@ -249,6 +250,7 @@ export default function ChatTab({ active }: { active: boolean }) {
       >
         <div ref={composer} className="px-4 py-2">
           <QueuePanel t={t} offline={!online} />
+          <ChatDraftPrompt active={active} draft={t.draft} setDraft={t.setDraft} composer={composer} />
           {!needsTerms && t.ready && !t.busy && !t.draft.trim() && (
             <div className="mb-1 flex items-center gap-1 overflow-x-auto whitespace-nowrap" aria-label="Explore your log">
               <span className={cx(tone.faint, "shrink-0 pr-1 text-[12px]")}>Explore</span>

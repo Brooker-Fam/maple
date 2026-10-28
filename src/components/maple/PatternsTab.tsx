@@ -31,6 +31,7 @@ import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/m
 import type { NavTarget } from "./AppNav";
 import { useCareNav } from "./care/CareNav";
 import { NavRow } from "./care/parts";
+import { AskChatCard } from "./chat/AskChat";
 import DayDial from "./DayDial";
 import { DiaperBrigade } from "./StatusCard";
 import { Icon, KindBadge } from "./icons";
@@ -282,6 +283,7 @@ export default function PatternsTab({
                 onMode={setMode}
                 onPickDay={onNavigate ? goToDay : undefined}
                 units={units}
+                showChatSuggestions={ready}
               />
             )}
 
@@ -404,8 +406,7 @@ function Insights({ days, entries, todayKey, tz, now }: { days: DayStats[]; entr
 type Span = { x1: number; x2: number; title: string };
 type FeedMark = Span & { bottle: boolean };
 type DiaperMark = { x: number; pee: boolean; poop: boolean; title: string };
-type RibbonRow = {
-  key: string;
+type RibbonRow = TimeWindow & {
   label: string;
   /** The day to open in the Timeline when tapped. */
   jumpKey: string;
@@ -502,6 +503,8 @@ function buildRibbon(
     const inRow = buckets[w];
     const row: RibbonRow = {
       key: k,
+      start,
+      end,
       label: mode === "nights" ? nightLabel(k, todayKey) : formatDayLabel(k, todayKey),
       jumpKey: mode === "nights" && addDays(k, 1) <= todayKey ? addDays(k, 1) : k,
       dst: null,
@@ -582,6 +585,7 @@ function Ribbons({
   onMode,
   onPickDay,
   units,
+  showChatSuggestions,
 }: {
   entries: Entry[];
   fromKey: string;
@@ -593,7 +597,9 @@ function Ribbons({
   onMode: (m: RibbonMode) => void;
   onPickDay?: (key: string) => void;
   units: UnitSystem;
+  showChatSuggestions: boolean;
 }) {
+  const w = useBabyWords();
   const rows = useMemo(
     () => buildRibbon(entries, fromKey, todayKey, mode, tz, now, bornAt, units),
     [entries, fromKey, todayKey, mode, tz, now, bornAt, units]
@@ -603,6 +609,12 @@ function Ribbons({
   const night = useNightActive();
   const shown = showAll ? rows : rows.slice(0, RIBBON_PAGE);
   const ticks = mode === "days" ? ["12a", "6a", "12p", "6p", "12a"] : ["12p", "6p", "12a", "6a", "12p"];
+  const first = shown.at(-1);
+  const last = shown[0];
+  const through = last ? Math.min(last.end, now.getTime()) : now.getTime();
+  const chatWindow = first
+    ? `${mode === "nights" ? "noon-to-noon nights" : "local days"} shown from ${dayKey(first.start, tz)} at ${formatTime(first.start, tz)} through ${dayKey(through, tz)} at ${formatTime(through, tz)} (${tz})`
+    : null;
 
   return (
     <section aria-labelledby="maple-ribbons">
@@ -660,6 +672,24 @@ function Ribbons({
           {onPickDay && " Tap a row to open that day in the Timeline."}
         </p>
       </div>
+      {showChatSuggestions && chatWindow && (
+        <div className="mt-4">
+          <AskChatCard
+            title="Questions about these patterns?"
+            description="Start with the dates and view you selected."
+            suggestions={[
+              {
+                label: "How have feeds changed?",
+                prompt: `How have ${w.name}'s logged feeds changed across the ${chatWindow}? Describe recorded patterns without treating missing logs as missed feeds.`,
+              },
+              {
+                label: "Summarize logged sleep",
+                prompt: `Can you summarize ${w.name}'s logged sleep across the ${chatWindow}? Point out recorded patterns and gaps in the log.`,
+              },
+            ]}
+          />
+        </div>
+      )}
     </section>
   );
 }

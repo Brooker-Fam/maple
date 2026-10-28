@@ -15,6 +15,7 @@ import {
 } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
 import { photoUrl } from "./EntryRow";
+import { AskChatButton } from "./chat/AskChat";
 import { Icon, KindBadge } from "./icons";
 import { LeafMark, ageShort, keptDate } from "./keepsake";
 import { captionOf, extraNote, Lightbox, SafeImg, type Slide } from "./MomentPhotos";
@@ -136,6 +137,17 @@ export default function MomentsTab() {
           )}
         </div>
       </header>
+
+      {moments && moments.length > 0 && (
+        <div className="mb-5">
+          <AskChatButton
+            label="Moments"
+            prompt={`Can you write a short keepsake recap of ${babyName}'s saved moments and milestones from ${dayKey(new Date(moments[moments.length - 1].started_at), tz)} through ${todayKey} (${tz})? Use the saved titles and notes without inventing details or describing photos you cannot see.`}
+          >
+            Recap these moments in chat
+          </AskChatButton>
+        </div>
+      )}
 
       <div className="space-y-6">
         {!viewer && bornAt && (

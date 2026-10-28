@@ -2,10 +2,12 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { KIND_LABELS } from "@/lib/maple/describe";
 import type { TapFeedData } from "@/lib/maple/feed";
 import { MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, overDailyMax, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
 import { babyAge, DEFAULT_TZ, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryKind, Source, StretchSide } from "@/lib/maple/types";
+import { AskChatButton } from "../chat/AskChat";
 import { fixPreset } from "../FeedParts";
 import { useAskWho, useBabyWords } from "../familyWords";
 import { Icon, type IconName } from "../icons";
@@ -121,6 +123,7 @@ function editedText(entry: Entry, name: (id: string) => string): string | null {
  */
 export function LoggedBy({ entry, noTime }: { entry: Entry; noTime?: boolean }) {
   const { member, memberName, now, tz } = useSheetBase();
+  const { close } = useSheets();
   const who = member(entry.created_by);
   const name = who?.display_name ?? memberName(entry.created_by);
   const via = VIA[entry.source];
@@ -128,18 +131,32 @@ export function LoggedBy({ entry, noTime }: { entry: Entry; noTime?: boolean }) 
   const day = formatDayLabel(dayKey(created, tz), dayKey(now(), tz));
   const when = `${day === "Today" ? "" : `${day} `}${formatTime(created, tz)}`;
   const editor = editedText(entry, memberName);
+  const entryWhen = `${dayKey(new Date(entry.started_at), tz)} at ${formatTime(entry.started_at, tz)}`;
+  const kind = KIND_LABELS[entry.kind];
   return (
-    <p className={cx(tone.muted, "flex items-start gap-2 text-[13px] leading-snug")}>
-      {/* Their own emoji (or initial), the same mark the lists use. */}
-      {who && <Avatar member={who} size={18} />}
-      <span>
-        Logged by {name}
-        {via ? ` via ${via}` : ""}
-        {noTime ? (day === "Today" ? "" : ` · ${day}`) : ` · ${when}`}
-        {editor ? ` · ${editor}` : ""}
-        {entry.id < 0 && " · waiting to sync"}
-      </span>
-    </p>
+    <div>
+      <p className={cx(tone.muted, "flex items-start gap-2 text-[13px] leading-snug")}>
+        {/* Their own emoji (or initial), the same mark the lists use. */}
+        {who && <Avatar member={who} size={18} />}
+        <span>
+          Logged by {name}
+          {via ? ` via ${via}` : ""}
+          {noTime ? (day === "Today" ? "" : ` · ${day}`) : ` · ${when}`}
+          {editor ? ` · ${editor}` : ""}
+          {entry.id < 0 && " · waiting to sync"}
+        </span>
+      </p>
+      {entry.id > 0 && (
+        <AskChatButton
+          prompt={`Can you help me understand this saved ${kind.toLowerCase()} entry (#${entry.id}) from ${entryWhen} (${tz}), and how it fits with the nearby log?`}
+          label={`${kind} · ${entryWhen}`}
+          onOpened={close}
+          className="mt-1"
+        >
+          Ask about this entry
+        </AskChatButton>
+      )}
+    </div>
   );
 }
 

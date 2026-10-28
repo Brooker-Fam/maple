@@ -303,10 +303,19 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   // Closing with a staged change asks first. Stable, because Sheet re-runs its open effect (and refocuses) when onClose changes.
+  const hasStagedChanges = (dirty || addBlocked || timeInvalid) && !readOnly;
   const guarded = useRef(false);
   useEffect(() => {
-    guarded.current = (dirty || addBlocked || timeInvalid) && !readOnly;
+    guarded.current = hasStagedChanges;
   });
+  useEffect(() => {
+    if (!open || !hasStagedChanges) return;
+    const beforeNavigate = (event: Event) => {
+      if (!event.defaultPrevented && !window.confirm("Leave and discard your unsaved changes?")) event.preventDefault();
+    };
+    window.addEventListener("maple-before-navigate", beforeNavigate);
+    return () => window.removeEventListener("maple-before-navigate", beforeNavigate);
+  }, [open, hasStagedChanges]);
   const close = useCallback(() => (guarded.current ? setConfirming(true) : onClose()), [onClose]);
 
   // ── Bottle ──

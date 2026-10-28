@@ -22,6 +22,7 @@ import {
 import { formatVolume } from "@/lib/maple/units";
 import type { Entry, EntryKind, EntryOf, MapleState, UnitSystem } from "@/lib/maple/types";
 import EntryRow, { ClusterRow, entryEditPreset } from "./EntryRow";
+import { AskChatButton } from "./chat/AskChat";
 import { useClockMinute } from "./FeedParts";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
@@ -52,13 +53,13 @@ const LIVE_WINDOW_MS = 72 * H;
 
 export type KindGroup = "all" | "feeds" | "diapers" | "sleep" | "health" | "other";
 
-export const KIND_GROUPS: { id: KindGroup; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "feeds", label: "Feeds" },
-  { id: "diapers", label: "Diapers" },
-  { id: "sleep", label: "Sleep" },
-  { id: "health", label: "Health" },
-  { id: "other", label: "Other" },
+export const KIND_GROUPS: { id: KindGroup; label: string; description: string }[] = [
+  { id: "all", label: "All", description: "all entries" },
+  { id: "feeds", label: "Feeds", description: "nursing, bottle and pumping entries" },
+  { id: "diapers", label: "Diapers", description: "diaper entries" },
+  { id: "sleep", label: "Sleep", description: "sleep entries" },
+  { id: "health", label: "Health", description: "growth, temperature, vital signs and medicine entries" },
+  { id: "other", label: "Other", description: "tummy time, bath, note and moment entries" },
 ];
 
 const GROUP_OF: Partial<Record<EntryKind, KindGroup>> = {
@@ -473,6 +474,7 @@ export default function LogTab({
   if (!state) return null;
   const running = state.entries.filter((e) => e.active);
   const nothingAtAll = ready && entries.length === 0;
+  const selectedGroup = KIND_GROUPS.find((g) => g.id === group) ?? KIND_GROUPS[0];
 
   return (
     <div className="px-4">
@@ -507,6 +509,17 @@ export default function LogTab({
           </Chip>
         ))}
       </div>
+
+      {ready && !nothingAtAll && (
+        <div className="mb-4">
+          <AskChatButton
+            label={group === "all" ? "History" : `History: ${selectedGroup.label}`}
+            prompt={`Can you summarize ${babyFirstName(state.baby)}'s ${selectedGroup.description} in the history from ${shownFrom} through ${todayKey} (${tz})? Describe what was logged and distinguish missing logs from recorded activity.`}
+          >
+            {group === "all" ? "Ask about these logs" : `Ask about ${selectedGroup.label.toLowerCase()}`}
+          </AskChatButton>
+        </div>
+      )}
 
       <RunningNow entries={running} />
 

@@ -2,11 +2,12 @@
 
 import { AnimatePresence } from "framer-motion";
 import { useEffect, useRef } from "react";
-import { formatClock, formatDuration } from "@/lib/maple/time";
+import { dayKey, formatClock, formatDuration } from "@/lib/maple/time";
 import AlertStack from "./AlertCard";
 import type { NavTarget } from "./AppNav";
 import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
 import Celebrations from "./Celebrations";
+import { AskChatButton } from "./chat/AskChat";
 import Dock from "./Dock";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
@@ -107,9 +108,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
 }
 
 function LoggedToday({ onDetails }: { onDetails: () => void }) {
-  const { summary } = useMaple();
-  if (!summary) return null;
+  const { summary, state } = useMaple();
+  const now = useNow(60_000);
+  if (!summary || !state) return null;
   const s = summary.today;
+  const today = dayKey(now, state.baby.timezone);
   return (
     <section aria-labelledby="logged-today" className={cx(tone.card, "px-4 py-3")}>
       <div className="flex items-center justify-between gap-3">
@@ -124,6 +127,13 @@ function LoggedToday({ onDetails }: { onDetails: () => void }) {
         <span className="whitespace-nowrap">{s.dirty} dirty</span>
       </p>
       <p className={cx(tone.muted, "mt-0.5 text-[13px]")}>{s.sleeps ? `${formatDuration(s.sleepSec)} sleep logged` : "No sleep logged today"}. Missing entries are not counted.</p>
+      <AskChatButton
+        className="mt-2"
+        label="Today's log"
+        prompt={`Can you summarize ${babyFirstName(state.baby)}'s feeds, diapers and sleep logged on ${today} (${state.baby.timezone}) so far? Keep it brief and distinguish missing logs from recorded activity.`}
+      >
+        Ask about today
+      </AskChatButton>
     </section>
   );
 }

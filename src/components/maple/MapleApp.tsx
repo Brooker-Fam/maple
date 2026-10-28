@@ -66,18 +66,18 @@ export default function MapleApp() {
           everything that switches it. Mom's sheets (Support, warning signs, the picker, the Dose sheet, her
           temperature, Help, For the doctor) wrap SheetProvider: Maple's sheets (MedSheet's "Log it for {Name}
           instead") render beside the shell, so they only reach useCareNav from inside it, and hers come after
-          them, on top. The notifications sheet wraps both. The chat's consents sit inside them all. */}
+          them, on top. The notifications sheet wraps both. */}
       <MotionConfig reducedMotion="user">
         <AppNavProvider>
-          <NotificationsProvider>
-            <CareNavProvider>
-              <SheetProvider>
-                <ChatNavProvider>
+          <ChatNavProvider>
+            <NotificationsProvider>
+              <CareNavProvider>
+                <SheetProvider>
                   <Shell />
-                </ChatNavProvider>
-              </SheetProvider>
-            </CareNavProvider>
-          </NotificationsProvider>
+                </SheetProvider>
+              </CareNavProvider>
+            </NotificationsProvider>
+          </ChatNavProvider>
         </AppNavProvider>
       </MotionConfig>
     </MapleProvider>
