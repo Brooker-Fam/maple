@@ -32,6 +32,7 @@ const ERROR_CODES = new Set(["400", "401", "403", "404", "409", "422", "429", "5
   "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "23502", "23503", "23505", "23514", "40001", "53300", "57P01"]);
 const ERROR_LABELS = new Set(["care_error", "sync_request_failed", "sync_diagnostics_failed", "chat_image_request_failed"]);
 const API_PATHS = new Set([
+  "/oauth/authorize", "/oauth/token",
   "/api/waitlist", "/api/maple/analytics/event", "/api/maple/analytics/open", "/api/maple/state",
   "/api/maple/entries", "/api/maple/entries/restore", "/api/maple/timer", "/api/maple/baby",
   "/api/maple/members", "/api/maple/invites", "/api/maple/tokens", "/api/maple/photo", "/api/maple/diagnostics",

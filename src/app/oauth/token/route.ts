@@ -12,6 +12,7 @@ import {
 } from "@/lib/mcp/auth";
 import { isRemoved } from "@/lib/maple/auth";
 import { ADMIN_MEMBER_ID, adminFamilyId, carrierFamily, familyForAuth } from "@/lib/maple/family";
+import { captureServerException } from "@/lib/posthog-server";
 
 /**
  * OAuth 2.1 token endpoint: authorization_code + PKCE, and refresh_token.
@@ -99,6 +100,16 @@ export async function POST(request: NextRequest) {
     } catch {
       params = new URL(request.url).searchParams;
     }
+  }
+
+  if (
+    request.headers.get("authorization")?.trim() ||
+    params.has("client_assertion") ||
+    params.has("client_assertion_type") ||
+    params.getAll("client_secret").some(secret => secret !== "")
+  ) {
+    await captureServerException(Object.assign(new Error("Unsupported OAuth client authentication"), { code: "400" }), { route: "/oauth/token", status: 400 });
+    return err("invalid_request", "Only public-client authentication is supported");
   }
 
   const grantType = params.get("grant_type");

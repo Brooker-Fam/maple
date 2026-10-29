@@ -1,14 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
-/**
- * RFC 7591 — Dynamic Client Registration.
- *
- * We don't actually track clients (there's only one admin), but MCP spec
- * requires this endpoint for ChatGPT-style clients to register themselves.
- * We accept any registration and hand back a fresh client_id. Clients are
- * public (no secret) — they authenticate their code redemption via PKCE.
- */
 export async function POST(request: NextRequest) {
   let body: Record<string, unknown> = {};
   try {

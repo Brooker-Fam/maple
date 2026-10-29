@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mintAuthCode, publicOrigin, trustedRedirect, verifyAdminCreds } from "@/lib/mcp/auth";
+import { mintAuthCode, publicOrigin, verifyAdminCreds } from "@/lib/mcp/auth";
+import { OAuthClientError, resolveOAuthClient, type OAuthClientInfo } from "@/lib/mcp/clients";
 import { ADMIN_ID, isGoogleConfigured, isRemoved, openSession, SESSION_COOKIE, signedInAs, type SignedIn } from "@/lib/maple/auth";
 import { adminFamilyId, familiesOf, parseFamilyId } from "@/lib/maple/family";
 import type { Member } from "@/lib/maple/types";
 import { checkUploadRateLimit } from "@/lib/rate-limit";
+import { captureServerException } from "@/lib/posthog-server";
 
 /**
  * OAuth 2.1 Authorization endpoint with PKCE, for connecting Claude, ChatGPT or
@@ -57,24 +59,32 @@ function readMapleParams(url: URL, form?: FormData): MapleParams {
   };
 }
 
-
-/** "Claude" / "ChatGPT" / "this app", plus the host shown on the consent card. */
-function mapleClient(uri: string): { name: string; host: string } {
-  const u = new URL(uri);
-  const host = u.hostname.toLowerCase();
-  if (host === "claude.ai" || host === "claude.com") return { name: "Claude", host: u.host };
-  if (host === "chatgpt.com" || host === "chat.openai.com") return { name: "ChatGPT", host: u.host };
-  return { name: "this app", host: u.host };
-}
-
 const PKCE_CHALLENGE_RE = /^[A-Za-z0-9\-._~]{43,128}$/;
 
-function redirectWithError(p: MapleParams, error: string, description: string) {
+function callbackUrl(p: MapleParams, issuer: string, values: Record<string, string>) {
   const to = new URL(p.redirect_uri);
-  to.searchParams.set("error", error);
-  to.searchParams.set("error_description", description);
   if (p.state) to.searchParams.set("state", p.state);
-  return NextResponse.redirect(to.toString(), 302);
+  for (const [key, value] of Object.entries(values)) to.searchParams.set(key, value);
+  to.searchParams.set("iss", issuer);
+  return to.toString();
+}
+
+function redirectWithError(p: MapleParams, issuer: string, error: string, description: string) {
+  return NextResponse.redirect(callbackUrl(p, issuer, { error, error_description: description }), { status: 302, headers: { "Referrer-Policy": "no-referrer" } });
+}
+
+function approveConnection(p: MapleParams, issuer: string, sub: string, fam: number) {
+  const code = mintAuthCode({
+    client_id: p.client_id,
+    redirect_uri: p.redirect_uri,
+    code_challenge: p.code_challenge,
+    code_challenge_method: "S256",
+    scope: "maple",
+    sub,
+    fam,
+    resource: `${issuer}${MAPLE_PATH}`,
+  });
+  return NextResponse.redirect(callbackUrl(p, issuer, { code }), { status: 302, headers: { "Referrer-Policy": "no-referrer" } });
 }
 
 type Families = { familyId: number; name: string | null }[];
@@ -91,58 +101,45 @@ async function signedInMember(request: NextRequest, pick?: number | null): Promi
     const who = await signedInAs(pick ? { id: body.id, fam: pick } : body);
     const families = who && who.member.email !== ADMIN_ID ? await familiesOf(who.member.email) : [];
     return { who, families, offline: false };
-  } catch (error) {
-    console.error("Maple authorize: membership lookup failed:", error);
+  } catch {
     return { who: null, families: [], offline: true };
   }
 }
 
 async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
   const p = readMapleParams(url, form);
+  const origin = publicOrigin(request);
 
   // Without a trustworthy redirect_uri, errors can only be shown here.
   if (!p.client_id || !p.redirect_uri) {
     return maplePage(400, "Something's missing", `<p>This sign-in link is missing its app details. Start again from Claude or ChatGPT.</p>`);
   }
-  if (!trustedRedirect(p.redirect_uri)) {
+  let client: OAuthClientInfo;
+  try {
+    client = await resolveOAuthClient(p.client_id, p.redirect_uri);
+  } catch (error) {
+    if (!(error instanceof OAuthClientError) || error.code === "unavailable") {
+      return maplePage(503, "Couldn't verify the app", `<p>The app's connection details couldn't be loaded. Try connecting again in a minute.</p>`);
+    }
     return maplePage(
       400,
-      "Unknown app",
-      `<p>Maple's Log only connects to Claude, ChatGPT, or an app on this computer. This request wanted to send you to <strong>${esc(safeHost(p.redirect_uri))}</strong>, so it was stopped.</p>`
+      "Couldn't verify the connection",
+      `<p>The app's identity or return address doesn't match. Start a new connection from Claude or ChatGPT.</p>`
     );
   }
   if (p.response_type !== "code") {
-    return redirectWithError(p, "unsupported_response_type", "Only response_type=code is supported");
+    return redirectWithError(p, origin, "unsupported_response_type", "Only response_type=code is supported");
   }
   if (p.code_challenge_method !== "S256" || !PKCE_CHALLENGE_RE.test(p.code_challenge)) {
-    return redirectWithError(p, "invalid_request", "PKCE with code_challenge_method=S256 is required");
+    return redirectWithError(p, origin, "invalid_request", "PKCE with code_challenge_method=S256 is required");
   }
-  const origin = publicOrigin(request);
   // The token is only good for this server's Maple endpoint: a resource on
   // any other host (or path) is refused, so no other MCP server can obtain a
   // parent's token through this consent screen.
   const resource = `${origin}${MAPLE_PATH}`;
   if (p.resource && canonResource(p.resource) !== canonResource(resource)) {
-    return redirectWithError(p, "invalid_target", `resource must be ${resource}`);
+    return redirectWithError(p, origin, "invalid_target", `resource must be ${resource}`);
   }
-
-  const client = mapleClient(p.redirect_uri);
-  const mint = (sub: string, fam: number) => {
-    const code = mintAuthCode({
-      client_id: p.client_id,
-      redirect_uri: p.redirect_uri,
-      code_challenge: p.code_challenge,
-      code_challenge_method: "S256",
-      scope: "maple",
-      sub,
-      fam,
-      resource,
-    });
-    const to = new URL(p.redirect_uri);
-    to.searchParams.set("code", code);
-    if (p.state) to.searchParams.set("state", p.state);
-    return NextResponse.redirect(to.toString(), 302);
-  };
 
   if (request.method === "POST" && form) {
     // Approve: same-origin form only (the SameSite=Lax session cookie already
@@ -155,7 +152,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
       const { who, offline } = await signedInMember(request, parseFamilyId(form.get("maple_family")?.toString()));
       if (offline) return offlinePage();
       if (!who) return signInPage(p, client, "Please sign in again to approve.");
-      return mint(who.member.email === ADMIN_ID ? ADMIN_ID : `maple:${who.member.email}`, who.ctx.familyId);
+      return approveConnection(p, origin, who.member.email === ADMIN_ID ? ADMIN_ID : `maple:${who.member.email}`, who.ctx.familyId);
     }
 
     // Admin login fallback (before Google is set up, or for the site admin).
@@ -168,14 +165,14 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
       if (await isRemoved({ familyId: adminFamilyId() }, ADMIN_ID).catch(() => false)) {
         return signInPage(p, client, "The admin login was turned off for Maple's Log. Continue with Google instead.", 403);
       }
-      return mint(ADMIN_ID, adminFamilyId());
+      return approveConnection(p, origin, ADMIN_ID, adminFamilyId());
     }
   }
 
   const { who, families, offline } = await signedInMember(request);
   if (offline) return offlinePage();
   if (!who) return signInPage(p, client);
-  return consentPage(p, client, who.member, cancelUrl(p), { current: who.ctx.familyId, families });
+  return consentPage(p, client, who.member, callbackUrl(p, origin, { error: "access_denied" }), { current: who.ctx.familyId, families });
 }
 
 /** Same resource whatever the host's case or a trailing slash. */
@@ -186,13 +183,6 @@ function canonResource(r: string): string {
   } catch {
     return r.replace(/\/+$/, "");
   }
-}
-
-function cancelUrl(p: MapleParams): string {
-  const to = new URL(p.redirect_uri);
-  to.searchParams.set("error", "access_denied");
-  if (p.state) to.searchParams.set("state", p.state);
-  return to.toString();
 }
 
 function safeHost(uri: string): string {
@@ -266,15 +256,16 @@ function familyPicker(choice: { current: number; families: Families }): string {
   </fieldset>`;
 }
 
-function consentPage(p: MapleParams, client: { name: string; host: string }, member: Member, cancel: string, choice: { current: number; families: Families }) {
+function consentPage(p: MapleParams, client: OAuthClientInfo, member: Member, cancel: string, choice: { current: number; families: Families }) {
   const name = member.display_name || (member.email === ADMIN_ID ? "Admin" : member.email.split("@")[0]);
   const who = member.email === ADMIN_ID ? esc(name) : `${esc(name)} <span class="host">(${esc(member.email)})</span>`;
   const readOnly = member.role === "viewer";
   const body = `
   <p class="lead">Connect <strong>${esc(client.name)}</strong> <span class="host">(${esc(client.host)})</span> to Maple's Log as ${who}?</p>
+  ${client.metadataUrl ? `<p class="fine">App identity: ${esc(client.host)}. After approval, return to ${esc(safeHost(p.redirect_uri))}.</p>` : ""}
   <ul class="perks">
     <li>${readOnly ? "Read Maple's log: feeds, diapers, sleep, growth and moments (you're a viewer, so it can't add anything)." : "Read and add to Maple's log: feeds, diapers, sleep, growth, temperatures and moments."}</li>
-    <li>Anything it logs shows your name and &ldquo;via ${esc(client.name === "this app" ? "AI" : client.name)}&rdquo;.</li>
+    <li>Anything it logs is credited to your Maple account.</li>
     <li>Disconnect anytime by removing the connector${member.role === "owner" ? "" : ", or ask an owner to remove you in Family"}.</li>
   </ul>
   <form method="post">
@@ -283,7 +274,7 @@ function consentPage(p: MapleParams, client: { name: string; host: string }, mem
     <input type="hidden" name="maple_consent" value="1">
     <button type="submit" class="btn primary">Approve</button>
   </form>
-  <a class="btn quiet" href="${esc(cancel)}">Cancel</a>
+  <a class="btn quiet" href="${esc(cancel)}" referrerpolicy="no-referrer">Cancel</a>
   <p class="fine">Not ${esc(name)}? <a href="${esc(googleHref(p))}">Use a different Google account</a>.</p>`;
   return maplePage(200, "Connect to Maple's Log", body);
 }
@@ -292,7 +283,8 @@ function offlinePage() {
   return maplePage(503, "Maple's Log is napping", `<p>We couldn't reach Maple's Log just now. Try connecting again in a minute.</p>`);
 }
 
-function maplePage(status: number, title: string, body: string) {
+async function maplePage(status: number, title: string, body: string) {
+  if (status >= 400) await captureServerException(Object.assign(new Error("OAuth request failed"), { code: String(status) }), { route: "/oauth/authorize", status });
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>${esc(title)} · Maple's Log</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -353,7 +345,7 @@ function maplePage(status: number, title: string, body: string) {
       "Cache-Control": "no-store",
       "Content-Security-Policy": "frame-ancestors 'none'",
       "X-Frame-Options": "DENY",
-      "Referrer-Policy": "no-referrer",
+      "Referrer-Policy": "same-origin",
     },
   });
 }
