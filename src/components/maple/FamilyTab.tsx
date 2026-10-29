@@ -99,7 +99,9 @@ export default function FamilyTab() {
 
   if (!state) return null;
 
+  const photosOnly = state.me.role === "photos";
   const allowed = (target: Page) => {
+    if (photosOnly) return ["people", "appearance", "account", "about"].includes(target);
     if (target === "medical-records") return state.me.role === "owner";
     if (target === "chat") return !!care?.self;
     return !readOnly || !["doctor", "today", "assistants"].includes(target);
@@ -148,14 +150,14 @@ export default function FamilyTab() {
         <div hidden={!!active} className="space-y-6">
           <Section title="Your account">
             <div className={GROUP}>
-              {row("account", "key-round", undefined, "Sign-in methods and data export")}
+              {row("account", "key-round", undefined, photosOnly ? "Sign-in methods and family access" : "Sign-in methods and data export")}
               {row("assistants", "message-square", undefined, "Hands-free logging and connected apps")}
               {row("chat", "lock", undefined, "Access to your recovery page")}
             </div>
           </Section>
           <Section title="This device">
             <div className={GROUP}>
-              <NotificationsRow />
+              {!photosOnly && <NotificationsRow />}
               {row("appearance", "sun", units === "metric" ? "Metric" : "US units")}
               {row("discoveries", "leaf", undefined, "Topics you enjoy and whether to show them")}
             </div>
@@ -170,11 +172,11 @@ export default function FamilyTab() {
             </div>
           </Section>
           <div className={cx(tone.divide, "border-t border-mp-line")}>
-            <ActionRow icon="life-buoy" label="Help and doctor numbers" chevron onClick={nav.openHelp} />
+            {!photosOnly && <ActionRow icon="life-buoy" label="Help and doctor numbers" chevron onClick={nav.openHelp} />}
             {row("about", "info", undefined, "Feedback, terms and privacy")}
             {auth?.metricsAdmin && <Link href="/maple/admin" className={cx(tone.row, "min-h-[52px]")}><Icon name="chart-column" size={20} className="text-mp-ink-2" /><span className="flex-1 text-[15px] text-mp-ink">Site metrics</span><Icon name="chevron-right" size={18} className="text-mp-ink-3" /></Link>}
           </div>
-          <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
+          {!photosOnly && <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>}
         </div>
 
         {visited.filter(allowed).map((target) => <div key={target} hidden={active !== target} className="space-y-6">{screens[target]}</div>)}

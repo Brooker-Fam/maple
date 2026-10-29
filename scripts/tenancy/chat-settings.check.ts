@@ -15,16 +15,16 @@ delete process.env.NEXT_PUBLIC_POSTHOG_KEY;
 const DEVICE = "synthetic-phone-one";
 let counter = 0;
 
-function toolsFor(family: FamilySeed, role: Role = "member") {
+function toolsFor(family: FamilySeed, role: Exclude<Role, "photos"> = "member") {
   return settingsTools({ authInfo: { extra: { sub: `maple:${family[role]}`, fam: family.familyId, via: "chat", care: false, device: DEVICE } } } as unknown as Extra);
 }
 
-async function proposal(family: FamilySeed, input: SettingInput, role: Role = "member") {
+async function proposal(family: FamilySeed, input: SettingInput, role: Exclude<Role, "photos"> = "member") {
   const tool = toolsFor(family, role).propose_setting;
   return await tool.execute!(input, { toolCallId: "synthetic-proposal", messages: [], context: {} }) as SettingsToolOutput;
 }
 
-async function card(family: FamilySeed, input: SettingInput, role: Role = "member") {
+async function card(family: FamilySeed, input: SettingInput, role: Exclude<Role, "photos"> = "member") {
   const output = await proposal(family, input, role);
   ok(output.ok && output.setting, "proposal made");
   const id = ++counter;
@@ -35,7 +35,7 @@ async function card(family: FamilySeed, input: SettingInput, role: Role = "membe
   return target;
 }
 
-async function tap(family: FamilySeed, action: Omit<SettingAction, "phonePrevious"> & { phonePrevious?: unknown }, opts: { role?: Role; device?: string; extra?: Record<string, unknown>; signedIn?: boolean } = {}) {
+async function tap(family: FamilySeed, action: Omit<SettingAction, "phonePrevious"> & { phonePrevious?: unknown }, opts: { role?: Exclude<Role, "photos">; device?: string; extra?: Record<string, unknown>; signedIn?: boolean } = {}) {
   const member = family[opts.role ?? "member"];
   return POST(new NextRequest("http://localhost:3000/api/maple/chat/settings", {
     method: "POST", headers: { "content-type": "application/json", "X-Maple-Device": opts.device ?? DEVICE, ...(opts.signedIn === false ? {} : { cookie: `${SESSION_COOKIE}=${encodeURIComponent(sealSession(member, family.familyId))}` }) },

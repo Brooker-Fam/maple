@@ -87,7 +87,7 @@ function rowStatus(raw: unknown): FamilyStatus {
 }
 
 function rowRole(raw: unknown): Role {
-  return raw === "owner" || raw === "viewer" ? raw : "member";
+  return raw === "owner" || raw === "viewer" || raw === "photos" ? raw : "member";
 }
 
 /**
@@ -123,14 +123,16 @@ export function familyForSession(body: { id?: unknown; fam?: unknown } | null | 
 }
 
 /** MCP access token, refresh token or code, and the chat's tool calls: `{ sub, fam? }`. */
-export function familyForAuth(auth: { sub?: unknown; fam?: unknown } | null | undefined): Promise<FamilyCtx | null> {
-  return resolveFamily(memberIdFromSub(auth?.sub), auth?.fam);
+export async function familyForAuth(auth: { sub?: unknown; fam?: unknown } | null | undefined): Promise<FamilyCtx | null> {
+  const ctx = await resolveFamily(memberIdFromSub(auth?.sub), auth?.fam);
+  return ctx?.role === "photos" ? null : ctx;
 }
 
 /** A Siri personal token or a redeemed invite: the row's own member and family_id (DEFAULT 1 for rows from before). */
-export function familyForRow(row: { member?: unknown; family_id?: unknown } | null | undefined): Promise<FamilyCtx | null> {
+export async function familyForRow(row: { member?: unknown; family_id?: unknown } | null | undefined): Promise<FamilyCtx | null> {
   if (!row || row.family_id == null) return Promise.resolve(null);
-  return resolveFamily(typeof row.member === "string" ? row.member : null, row.family_id);
+  const ctx = await resolveFamily(typeof row.member === "string" ? row.member : null, row.family_id);
+  return ctx?.role === "photos" ? null : ctx;
 }
 
 /** One family's scope for a job, or null when it doesn't exist or is being deleted. */

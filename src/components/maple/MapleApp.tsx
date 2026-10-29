@@ -60,15 +60,18 @@ const TABS: TabItem[] = [
 export default function MapleApp() {
   return (
     <MapleProvider>
-      {/* Reduce Motion turns every slide and spring into a fade (framer drops transforms, keeps opacity). Outside
-          SheetProvider, so the sheets it renders beside the shell follow it too. AppNav (the tab) sits outside
-          everything that switches it. Mom's sheets (Support, warning signs, the picker, the Dose sheet, her
-          temperature, Help, For the doctor) wrap SheetProvider: Maple's sheets (MedSheet's "Log it for {Name}
-          instead") render beside the shell, so they only reach useCareNav from inside it, and hers come after
-          them, on top. The notifications sheet wraps both. */}
+      <MapleSession />
+    </MapleProvider>
+  );
+}
+
+function MapleSession() {
+  const { state } = useMaple();
+  const session = state ? `${state.family?.id ?? 1}:${state.me.email}:${state.me.role}` : "signed-out";
+  return (
       <MotionConfig reducedMotion="user">
         <AppNavProvider>
-          <ChatNavProvider>
+          <ChatNavProvider key={session}>
             <NotificationsProvider>
               <CareNavProvider>
                 <SheetProvider>
@@ -79,7 +82,6 @@ export default function MapleApp() {
           </ChatNavProvider>
         </AppNavProvider>
       </MotionConfig>
-    </MapleProvider>
   );
 }
 
@@ -99,9 +101,10 @@ function Screens() {
   const { status, state, error, refresh, toast } = useMaple();
   const care = useCare();
   const { tab, go } = useAppNav();
+  const photosOnly = state?.me.role === "photos";
   const hasCare = !!care;
   const [chatSeen, setChatSeen] = useState(false);
-  if (tab === "chat" && !chatSeen) setChatSeen(true);
+  if (tab === "chat" && !photosOnly && !chatSeen) setChatSeen(true);
 
   // Her tab without access (demoted to a viewer, the page deleted elsewhere, or a saved tab from before): back to
   // Today, saying so only when her page was showing here.
@@ -109,6 +112,10 @@ function Screens() {
   const loaded = !!state;
   useEffect(() => {
     if (!loaded) return;
+    if (photosOnly) {
+      if (tab !== "moments" && tab !== "family") go("moments");
+      return;
+    }
     if (tab !== "care") {
       shown.current = false;
       return;
@@ -120,7 +127,7 @@ function Screens() {
     if (shown.current) toast("That page isn't available anymore.", { tone: "info" });
     shown.current = false;
     go("today");
-  }, [loaded, tab, hasCare, go, toast]);
+  }, [loaded, tab, hasCare, go, toast, photosOnly]);
 
   if (status === "loading") return <Splash />;
   if (status === "signedOut") return <SignIn />;
@@ -135,12 +142,14 @@ function Screens() {
     );
   }
 
-  const showing: TabId = tab === "care" && !care ? "today" : tab;
-  const tabs = TABS.flatMap((t) => (t.id !== "care" ? [t] : care ? [{ ...t, label: care.name.split(" ")[0] || care.name }] : []));
+  const showing: TabId = photosOnly && tab !== "family" ? "moments" : tab === "care" && !care ? "today" : tab;
+  const tabs = photosOnly
+    ? TABS.filter((t) => t.id === "moments")
+    : TABS.flatMap((t) => (t.id !== "care" ? [t] : care ? [{ ...t, label: care.name.split(" ")[0] || care.name }] : []));
 
   return (
-    <div key={`${state.family?.id ?? 1}:${state.me.email}`} className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
-      <SyncStatus />
+    <div key={`${state.family?.id ?? 1}:${state.me.email}:${state.me.role}`} className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
+      {!photosOnly && <SyncStatus />}
       <AnimatePresence mode="wait">
         <motion.div
           key={showing}
@@ -156,10 +165,10 @@ function Screens() {
           {showing === "family" && <FamilyTab />}
         </motion.div>
       </AnimatePresence>
-      {chatSeen && <ChatTab key={`${state.family?.id ?? 1}:${state.me.email}`} active={showing === "chat"} />}
+      {!photosOnly && chatSeen && <ChatTab key={`${state.family?.id ?? 1}:${state.me.email}`} active={showing === "chat"} />}
       <TabBar tabs={tabs} tab={showing} onChange={go} />
       <ToastHost />
-      <WelcomeHost />
+      {!photosOnly && <WelcomeHost />}
     </div>
   );
 }

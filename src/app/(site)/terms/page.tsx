@@ -79,7 +79,7 @@ export default function Terms() {
 
       <h2>Who owns what you log</h2>
       <p>
-        You own what you add to Maple. You let Maple store it, show it to the members of your family&rsquo;s log, and process
+        You own what you add to Maple. You let Maple store it, show it to people your family has granted access, and process
         it to run the features you use, such as sending a chat message to an AI model. The{" "}
         <Link href="/privacy">privacy page</Link> says exactly how.
       </p>

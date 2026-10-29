@@ -15,7 +15,7 @@ const postcss = createRequire(require.resolve("@tailwindcss/postcss"))("postcss"
 const tailwind = require("@tailwindcss/postcss");
 export const origin = "https://maplebaby.app";
 const baseline = process.env.SETTINGS_BASELINE_REF;
-const baselineFiles = new Set(["MapleApp.tsx", "AppNav.tsx", "FamilyTab.tsx", "Hero.tsx", "TodayTab.tsx", "LogTab.tsx", "PatternsTab.tsx", "MomentsTab.tsx", "care/CareScreen.tsx", "chat/ChatTab.tsx", "settings/AccountSettings.tsx", "settings/AssistantSettings.tsx", "settings/parts.tsx", "settings/PhoneSettings.tsx"]);
+const baselineFiles = new Set(["MapleApp.tsx", "AppNav.tsx", "FamilyTab.tsx", "AccountMenu.tsx", "useMaple.tsx", "Hero.tsx", "TodayTab.tsx", "LogTab.tsx", "PatternsTab.tsx", "MomentsTab.tsx", "care/CareScreen.tsx", "chat/ChatTab.tsx", "settings/PeopleSettings.tsx", "settings/AccountSettings.tsx", "settings/AssistantSettings.tsx", "settings/parts.tsx", "settings/PhoneSettings.tsx"]);
 
 export async function environment() {
   const output = await mkdtemp(path.join(tmpdir(), "maple-settings-design-"));
@@ -36,19 +36,25 @@ export async function environment() {
   const css = await postcss([tailwind({ base: root })]).process(await readFile(cssPath, "utf8"), { from: cssPath });
   await writeFile(path.join(output, "app.css"), css.css + await readFile(path.join(root, "src/app/maple/maple.css"), "utf8"));
   const { chromium, webkit } = require("playwright");
-  const browser = await (process.env.REVIEW_BROWSER === "webkit" ? webkit : chromium).launch({ headless: true });
+  const browser = await (process.env.REVIEW_BROWSER === "webkit" ? webkit : chromium).launch({ headless: true, ...(process.env.REVIEW_BROWSER_PATH ? { executablePath: process.env.REVIEW_BROWSER_PATH } : {}) });
   return {
     visit: (options) => visit(browser, output, options),
     close: async () => { await browser.close(); await rm(output, { recursive: true, force: true }); },
   };
 }
 
-async function visit(browser, output, { hash = "today", guest = false, width = 390, theme = "light" } = {}) {
+async function visit(browser, output, { hash = "today", guest = false, role, width = 390, theme = "light" } = {}) {
   const controls = { ...world(), signedIn: true, signoutFailure: false, tokens: [] };
   if (guest) {
     controls.state.me = { ...controls.state.me, email: "invite:900", role: "viewer", display_name: "Helper" };
     controls.state.members = [controls.state.me];
     controls.state.care = null;
+  }
+  if (role) controls.state.me.role = role;
+  if (role === "photos") {
+    controls.state.care = null;
+    controls.state.entries = [];
+    controls.state.baby.settings = {};
   }
   const context = await browser.newContext({ viewport: { width, height: 844 }, reducedMotion: "reduce", colorScheme: theme === "dark" ? "dark" : "light" });
   const page = await context.newPage();
@@ -86,7 +92,20 @@ async function settingsRoute(route, controls) {
   }
   if (url.pathname === "/api/maple/diagnostics") return route.fulfill({ status: 204, body: "" });
   if (url.pathname === "/api/maple/auth/methods") return json({ methods: [], google: true, email: true, apple: false });
-  if (url.pathname === "/api/maple/invites") return json({ invites: [] });
+  if (url.pathname === "/api/maple/invites") {
+    controls.requests.push({ path: url.pathname, method: req.method(), body: req.postDataJSON() });
+    return req.method() === "POST" ? json({ url: `${origin}/maple/invite/synthetic-local-only`, invites: [] }) : json({ invites: [] });
+  }
+  if (url.pathname === "/api/maple/members") {
+    const body = req.postDataJSON();
+    controls.requests.push({ path: url.pathname, method: req.method(), body });
+    if (req.method() === "PATCH") {
+      controls.state.members = controls.state.members.map((member) => member.email === (body.email ?? controls.state.me.email) ? { ...member, ...body } : member);
+      controls.state.me = controls.state.members.find((member) => member.email === controls.state.me.email);
+      controls.changed();
+    }
+    return json(req.method() === "POST" ? { url: `${origin}/maple/invite/synthetic-local-only`, emailed: false } : { members: controls.state.members });
+  }
   if (url.pathname === "/api/maple/epic") return json({ available: false });
   if (url.pathname === "/api/maple/chat") return json({ messages: [], has_more: false, thread_id: "synthetic-settings-thread" });
   if (url.pathname === "/api/maple/baby" && req.method() === "PATCH") {

@@ -105,7 +105,9 @@ function flushing(item: Queued) {
   const reply = new Promise((done) => { resolve = done; });
   const flush = clientFunction<() => Promise<void>>("flush", {
     flushing: { current: false }, outboxRef, stateRef,
+    flushingEntry: { current: null }, syncedEntryIds: { current: { ids: new Map() } },
     ownedBy: clientFunction("ownedBy"),
+    isEntryItem: clientFunction("isEntryItem"),
     isMoodItem: clientFunction("isMoodItem"), isCareItem: clientFunction("isCareItem"),
     OUTBOX_URL: { entries: "/api/maple/entries", care: "/api/maple/care/entries", mood: "/api/maple/care/mood" },
     fetchJson: (path: string, init: RequestInit) => {
@@ -137,6 +139,22 @@ function duplicateNotice() {
 }
 
 async function main() {
+  await test("a role downgrade drops entries retained from an earlier read", () => {
+    const previous = { ...state(1, "owner@example.test", [entry]), me: { email: "owner@example.test", role: "member" } };
+    const next = { ...state(1), me: { email: "owner@example.test", role: "photos" } };
+    const saved = confirmed();
+    eq(keepConfirmed(next, previous, saved, 1000).entries, []);
+    eq(saved.size, 0);
+  });
+
+  await test("a photo guest does not render baby entries retained in an offline outbox", () => {
+    const next = { ...state(1), me: { email: "owner@example.test", role: "photos" } };
+    const merge = clientFunction<(value: typeof next, queued: unknown[]) => typeof next>("withPending", {
+      ownedBy: () => true, isEntryItem: () => true, isCareItem: () => false, isMoodItem: () => false,
+    });
+    eq(merge(next, [{ target: "entries", entry }]).entries, []);
+  });
+
   await test("every family's client wording uses its saved nickname, sex and care-person name", () => {
     for (const id of [1, 2]) {
       const male = renderedWords({ family: { id, ask: "a family owner" }, baby: { name: "Rory Example", nickname: "Ro", sex: "male" }, care: { person: { name: "Jamie Example" } } });

@@ -307,7 +307,8 @@ export async function subsOf(fam: Fam, member: string): Promise<PushSub[]> {
 
 /** The family's phones that can get something (a phone whose keys stopped matching waits until it turns notifications on again). */
 export async function liveSubs(fam: Fam): Promise<PushSub[]> {
-  return (await q(`SELECT * FROM maple_push_subs WHERE family_id = $1 AND NOT needs_resubscribe ORDER BY id`, [fam.familyId])).map(rowToSub);
+  return (await q(`SELECT s.* FROM maple_push_subs s JOIN maple_members m ON m.family_id = s.family_id AND m.email = s.member
+    WHERE s.family_id = $1 AND NOT s.needs_resubscribe AND m.role <> 'photos' AND ${ACCEPTED_MEMBERSHIP("m")} ORDER BY s.id`, [fam.familyId])).map(rowToSub);
 }
 
 /**
@@ -352,6 +353,8 @@ const topicFor = (subId: number, tag: string) => createHash("sha256").update(`${
  * claim is given back).
  */
 export async function deliver(sub: PushSub, n: Notice, opts: { key: string; ttlS: number; urgency?: "high" | "normal" }): Promise<Outcome> {
+  const member = await resolveFamily(sub.member, sub.family_id);
+  if (!member || member.role === "photos") return "stopped";
   const k = vapidKeys();
   if (!k) return "failed";
   const payload = {
@@ -463,7 +466,7 @@ export async function audienceOf(scope: FamilyScope, person?: CarePerson | null)
 /** The reader behind a member id, after the admin login's admin_as swap (viewerFor's rule). */
 function readerOf(member: Member, a: Audience): CareViewer {
   if (member.email !== "admin") return { id: member.email, role: member.role, viaAdmin: false, channel: "app" };
-  const as = a.members.find((m) => m.email === a.adminAs && m.email !== "admin" && m.role !== "viewer");
+  const as = a.members.find((m) => m.email === a.adminAs && m.email !== "admin" && m.role !== "viewer" && m.role !== "photos");
   return { id: as?.email ?? "admin", role: as?.role ?? "owner", viaAdmin: true, channel: "app" };
 }
 

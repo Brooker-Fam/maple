@@ -152,6 +152,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
       const { who, offline } = await signedInMember(request, parseFamilyId(form.get("maple_family")?.toString()));
       if (offline) return offlinePage();
       if (!who) return signInPage(p, client, "Please sign in again to approve.");
+      if (who.member.role === "photos") return photoGuestPage();
       return approveConnection(p, origin, who.member.email === ADMIN_ID ? ADMIN_ID : `maple:${who.member.email}`, who.ctx.familyId);
     }
 
@@ -172,6 +173,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
   const { who, families, offline } = await signedInMember(request);
   if (offline) return offlinePage();
   if (!who) return signInPage(p, client);
+  if (who.member.role === "photos") return photoGuestPage();
   return consentPage(p, client, who.member, callbackUrl(p, origin, { error: "access_denied" }), { current: who.ctx.familyId, families });
 }
 
@@ -277,6 +279,10 @@ function consentPage(p: MapleParams, client: OAuthClientInfo, member: Member, ca
   <a class="btn quiet" href="${esc(cancel)}" referrerpolicy="no-referrer">Cancel</a>
   <p class="fine">Not ${esc(name)}? <a href="${esc(googleHref(p))}">Use a different Google account</a>.</p>`;
   return maplePage(200, "Connect to Maple's Log", body);
+}
+
+function photoGuestPage() {
+  return maplePage(403, "Photos-only access", `<p>Your access is limited to shared moments. Assistants cannot connect to this family’s log from your account.</p><a class="btn quiet" href="/maple">Open shared moments</a>`);
 }
 
 function offlinePage() {

@@ -1,3 +1,4 @@
+import { membersForReader } from "@/lib/maple/photo-access";
 import { clearAnalyticsContext } from "@/lib/analytics/context";
 import { captureAppEventSoon } from "@/lib/analytics/server";
 import { BadRequest, familyName, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
@@ -23,14 +24,14 @@ export const dynamic = "force-dynamic";
 const MAX_MEMBERS = 12;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
-export const GET = withMember("GET /api/maple/members", async (_request, _me, ctx) => json({ members: await listMembers(ctx) }));
+export const GET = withMember("GET /api/maple/members", async (_request, _me, ctx) => json({ members: membersForReader(ctx, await listMembers(ctx)) }), { photos: true });
 
 export const POST = withMember("POST /api/maple/members", async (request, me, ctx) => {
   if (me.role !== "owner") throw new Forbidden("Only an owner can invite people");
   const body = await readJson(request);
   const email = normalizeEmail(body.email);
   if (!email) throw new BadRequest("Enter a valid email address");
-  const role = body.role === "viewer" ? "viewer" : "member";
+  const role = body.role === "viewer" || body.role === "photos" ? body.role : "member";
   const current = await listMembers(ctx);
   if (current.some((m) => m.email === email)) return json({ members: current });
   if (ctx.familyId !== FAMILY_ONE) {
@@ -59,7 +60,7 @@ export const POST = withMember("POST /api/maple/members", async (request, me, ct
   if (current.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
   // Their initial until they pick an emoji (Family tab), like every other way in.
   await addMember(ctx, email, me.email, null, role);
-  return json({ members: await listMembers(ctx) });
+  return json({ members: membersForReader(ctx, await listMembers(ctx)) });
 });
 
 /**
@@ -73,7 +74,7 @@ export const PATCH = withMember("PATCH /api/maple/members", async (request, me, 
   if (target !== me.email && me.role !== "owner") throw new Forbidden("You can only edit yourself");
   if (!(await memberFor(ctx, target))) throw new BadRequest("Not a member");
 
-  const patch: { display_name?: string | null; emoji?: string | null; color?: string | null; role?: "member" | "viewer" } = {};
+  const patch: { display_name?: string | null; emoji?: string | null; color?: string | null; role?: "member" | "viewer" | "photos" } = {};
   if ("display_name" in body) patch.display_name = familyName(ctx, body.display_name, 40, "The name");
   if ("emoji" in body) {
     const e = String(body.emoji ?? "").trim();
@@ -82,7 +83,7 @@ export const PATCH = withMember("PATCH /api/maple/members", async (request, me, 
   }
   if ("role" in body) {
     if (me.role !== "owner") throw new Forbidden("Only an owner can change roles");
-    if (body.role !== "member" && body.role !== "viewer") throw new BadRequest("role must be member or viewer");
+    if (body.role !== "member" && body.role !== "viewer" && body.role !== "photos") throw new BadRequest("role must be member, viewer, or photos");
     if (target === me.email) throw new BadRequest("You can't change your own role");
     patch.role = body.role;
   }
@@ -91,8 +92,8 @@ export const PATCH = withMember("PATCH /api/maple/members", async (request, me, 
     patch.color = (body.color as string | null) ?? null;
   }
   await updateMember(ctx, target, patch);
-  return json({ members: await listMembers(ctx) });
-});
+  return json({ members: membersForReader(ctx, await listMembers(ctx)) });
+}, { photos: true });
 
 /**
  * DELETE ?email= — owners remove someone (never an owner). Your own address
@@ -113,5 +114,5 @@ export const DELETE = withMember("DELETE /api/maple/members", async (request, me
   if (me.role !== "owner") throw new Forbidden("Only an owner can remove people");
   if (email === me.email) throw new BadRequest("You can't remove yourself");
   if (!(await removeMember(ctx, email, me.email))) throw new BadRequest("Owners can't be removed");
-  return json({ members: await listMembers(ctx) });
-});
+  return json({ members: membersForReader(ctx, await listMembers(ctx)) });
+}, { photos: true });

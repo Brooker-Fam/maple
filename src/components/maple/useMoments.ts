@@ -109,8 +109,9 @@ export function useMoments() {
   }, [api, cursor, loading]);
 
   const recent = useMemo(() => (state?.entries ?? []).filter(isMoment), [state?.entries]);
-  const moments = useMemo(() => merge(fetched, recent, state?.now), [fetched, recent, state?.now]);
-  const highlights = useMemo(() => merge(highlightEntries, recent, state?.now), [highlightEntries, recent, state?.now]);
+  const recentSnapshot = state?.me.role === "photos" ? undefined : state?.now;
+  const moments = useMemo(() => merge(fetched, recent, recentSnapshot), [fetched, recent, recentSnapshot]);
+  const highlights = useMemo(() => merge(highlightEntries, recent, recentSnapshot), [highlightEntries, recent, recentSnapshot]);
   const all = useMemo(() => sorted([...new Map([...(highlights ?? []), ...(moments ?? [])].map((entry) => [entry.id, entry])).values()]), [moments, highlights]);
   return { moments, highlights, all, error, moreError, loading, loadingMore, hasMore: !!cursor, load, loadMore };
 }

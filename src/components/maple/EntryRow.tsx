@@ -8,6 +8,7 @@ import { useMilestoneWords } from "./familyWords";
 import { fixPreset } from "./FeedParts";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
+import { photoUrl } from "./moments/photo";
 import { Avatar, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
@@ -20,10 +21,7 @@ const VIA: Record<string, string> = {
   epic: "MyChart import",
 };
 
-/** Photo thumbnail URL for a moment's photo by position (served through the auth proxy). */
-export function photoUrl(entryId: number, index: number, size: "thumb" | "full" = "thumb"): string {
-  return `/api/maple/photo?entry=${entryId}&i=${index}&size=${size}`;
-}
+export { photoUrl } from "./moments/photo";
 
 /**
  * One line in a list of entries: the kind's icon, what happened, when, and
@@ -65,7 +63,7 @@ export default function EntryRow({
     >
       {firstPhoto ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={photoUrl(entry.id, 0)} alt="" className="h-9 w-9 shrink-0 rounded-[10px] object-cover" loading="lazy" />
+        <img src={photoUrl(entry.id, entry.kind === "moment" ? entry.data.photos?.[0]?.id ?? 0 : 0)} alt="" className="h-9 w-9 shrink-0 rounded-[10px] object-cover" loading="lazy" />
       ) : (
         <KindBadge entry={entry} />
       )}

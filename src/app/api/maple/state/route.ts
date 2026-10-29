@@ -1,3 +1,4 @@
+import { photoState } from "@/lib/maple/photo-access";
 import { listMembers } from "@/lib/maple/auth";
 import { json, withMember } from "@/lib/maple/api";
 import { careRev, careSession, careStateFor, viewerFor } from "@/lib/maple/care-store";
@@ -24,6 +25,14 @@ const WINDOW_HOURS = 72;
  */
 export const GET = withMember("GET /api/maple/state", async (request, me, ctx) => {
   const now = new Date();
+  if (me.role === "photos") {
+    const [baby, members] = await Promise.all([getBaby(ctx), listMembers(ctx)]);
+    const body = await photoState(ctx, me, baby, members, now);
+    if (new URL(request.url).searchParams.get("rev") === body.rev) {
+      return json({ unchanged: true, now: body.now, rev: body.rev } satisfies MapleStateUnchanged);
+    }
+    return json(body);
+  }
   // An open app keeps pill reminders on time between the scheduled ticks (push.ts), after answering.
   try {
     after(() => pushTickQuietly(ctx.familyId));
@@ -64,4 +73,4 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     family: familyInfo(ctx, members),
   };
   return json(body);
-});
+}, { photos: true });

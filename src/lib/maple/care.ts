@@ -94,7 +94,7 @@ export const NO_CARE_ACCESS: CareAccess = {
 export function careAccess(viewer: CareViewer, person: CarePerson | null, members: Member[]): CareAccess {
   if (!person) return { ...NO_CARE_ACCESS };
   const m = viewer.id === "admin" ? { role: "owner" as const } : members.find((x) => x.email === viewer.id);
-  if (!m || m.role === "viewer") return { ...NO_CARE_ACCESS };
+  if (!m || m.role === "viewer" || m.role === "photos") return { ...NO_CARE_ACCESS };
   const self = viewer.id === person.member && !viewer.viaAdmin;
   return { self, read: true, write: true, private: true, mood: true, therapist: true, manage: true };
 }

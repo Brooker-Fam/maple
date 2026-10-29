@@ -26,7 +26,7 @@ export const CHAT_TIMEOUT = { totalMs: 55_000, stepMs: 25_000, toolMs: 15_000 };
 /** A step whose prompt passed this ends the turn, even with its tool results unread. */
 export const STEP_PROMPT_LIMIT = 60_000;
 
-export const DAILY_MESSAGES: Record<Role, number> = { owner: 60, member: 60, viewer: 20 };
+export const DAILY_MESSAGES: Record<Role, number> = { owner: 60, member: 60, viewer: 20, photos: 0 };
 
 export const DAILY_BUDGET_DEFAULT = BigInt(500_000);
 export const MONTHLY_BUDGET_DEFAULT = BigInt(5_000_000);
@@ -82,6 +82,7 @@ export type Usage = { mine: number; day: bigint; month: bigint };
 
 /** Why this turn can't run, or null. `newMessage`: a new user message (an approval's continuation isn't one). */
 export function capsVerdict(u: Usage, opts: { role: Role; newMessage: boolean; budget: { day: bigint; month: bigint } }): string | null {
+  if (opts.role === "photos") return "Your access is limited to shared moments.";
   if (u.month >= opts.budget.month) return MONTH_MESSAGE;
   if (u.day >= opts.budget.day) return LIMIT_MESSAGE;
   if (opts.newMessage && u.mine >= DAILY_MESSAGES[opts.role]) return LIMIT_MESSAGE;

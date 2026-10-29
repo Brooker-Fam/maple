@@ -101,4 +101,4 @@ export const DELETE = withMember("DELETE /api/maple/push", async (request, me, c
   const sp = new URL(request.url).searchParams;
   await deleteSub(fam, me.email, endpointOf(sp.get("endpoint")), { everywhere: sp.get("everywhere") === "1" });
   return json({ ok: true });
-}, { setup: true });
+}, { setup: true, photos: true });

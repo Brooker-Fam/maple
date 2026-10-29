@@ -1,4 +1,5 @@
-import { BadRequest, idParam, json, readJson, withMember } from "@/lib/maple/api";
+import { entryForReader } from "@/lib/maple/photo-access";
+import { BadRequest, Forbidden, idParam, json, readJson, withMember } from "@/lib/maple/api";
 import { createEntryOnce, discardedBy, getBaby, listDeleted, listEntries, listMomentHighlights, NotFound, softDeleteEntry, toClientEntry, updateEntry } from "@/lib/maple/store";
 import { dayBounds, dayKey, daysBetween, isDayKey } from "@/lib/maple/time";
 import { isEntryKind } from "@/lib/maple/validate";
@@ -52,11 +53,12 @@ function kindsParam(raw: string | null): EntryKind[] | undefined {
  * removed in the last 24 hours ("Recently removed", with updated_by = who).
  */
 export const GET = withMember("GET /api/maple/entries", async (request, _me, ctx) => {
-  const baby = await getBaby(ctx);
   const sp = new URL(request.url).searchParams;
+  if (ctx.role === "photos" && (sp.get("kind") !== "moment" || sp.get("deleted") === "1")) throw new Forbidden("Your access is limited to shared moments.");
+  const baby = await getBaby(ctx);
   if (sp.get("deleted") === "1") {
     const removed = await listDeleted(ctx, baby.id, new Date(Date.now() - 24 * 3600_000));
-    return json({ entries: removed.map(toClientEntry), tz: baby.timezone });
+    return json({ entries: removed.map((entry) => entryForReader(ctx, entry)), tz: baby.timezone });
   }
   const kinds = kindsParam(sp.get("kind"));
   const limit = Math.min(Math.max(Number(sp.get("limit")) || 2000, 1), 5000);
@@ -78,7 +80,7 @@ export const GET = withMember("GET /api/maple/entries", async (request, _me, ctx
       ...Array.from({ length: 12 }, (_, index) => monthlyId(index + 1)),
     ])];
     const entries = await listMomentHighlights(ctx, baby.id, milestones);
-    return json({ entries: entries.map(toClientEntry), tz: baby.timezone });
+    return json({ entries: entries.map((entry) => entryForReader(ctx, entry)), tz: baby.timezone });
   }
 
   let from: Date | undefined;
@@ -95,8 +97,8 @@ export const GET = withMember("GET /api/maple/entries", async (request, _me, ctx
   const entries = await listEntries(ctx, { babyId: baby.id, kinds, from, to, limit, before });
   const last = entries.at(-1);
   const truncated = entries.length >= limit;
-  return json({ entries: entries.map(toClientEntry), tz: baby.timezone, truncated, next_cursor: truncated && last ? { started_at: last.started_at, id: last.id } : null });
-});
+  return json({ entries: entries.map((entry) => entryForReader(ctx, entry)), tz: baby.timezone, truncated, next_cursor: truncated && last ? { started_at: last.started_at, id: last.id } : null });
+}, { photos: true });
 
 /**
  * POST /api/maple/entries — log something. Send a client_id (UUID) and a

@@ -14,6 +14,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = await mkdtemp(path.join(tmpdir(), "maple-moments-ui-"));
 await build({ entryPoints: [path.join(root, "scripts/ui-review-moments-fixture.jsx")], outfile: path.join(output, "app.js"), bundle: true, format: "esm", jsx: "automatic", absWorkingDir: root, define: { "process.env.NODE_ENV": '"test"' }, plugins: [{ name: "synthetic-moments-boundaries", setup(plugin) {
   plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|sheets|EntryRow)$/ }, () => ({ path: path.join(root, "scripts/ui-review-moments-mocks.jsx") }));
+  plugin.onResolve({ filter: /(?:^|\/)(?:AskChat|SignOutButton)$/ }, () => ({ path: path.join(root, "scripts/ui-review-moments-mocks.jsx") }));
 } }] });
 const cssFile = path.join(root, "src/app/globals.css");
 const css = await postcss([tailwind({ base: root })]).process(await readFile(cssFile, "utf8"), { from: cssFile });

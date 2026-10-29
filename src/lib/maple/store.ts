@@ -23,7 +23,8 @@ import {
   type TapFeedData,
 } from "./feed";
 import { cleanData } from "./validate";
-import { blobBelongsTo } from "./blob";
+import { clientMomentPhoto, prepareMomentPhotos, writeMomentPhotos } from "./moment-photos";
+import { QUOTA_MESSAGE } from "./upload-quota";
 import type {
   Baby,
   Entry,
@@ -127,7 +128,7 @@ export function toClientEntry(e: Entry): Entry {
   if (e.kind !== "moment" || !e.data.photos?.length) return e;
   const data: MomentData = {
     ...e.data,
-    photos: e.data.photos.map((p) => ({ w: p.w, h: p.h })),
+    photos: e.data.photos.map(clientMomentPhoto),
   };
   return { ...e, data };
 }
@@ -341,7 +342,10 @@ function isUniqueViolation(err: unknown, index: string): boolean {
 export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ entry: Entry; deduped: boolean }> {
   const familyId = famId(fam);
   const data = cleanData(e.kind, e.data);
-  if (e.kind === "moment") ownPhotosOnly(familyId, data as MomentData);
+  if (e.kind === "moment" && (data as MomentData).photos) {
+    (data as MomentData).photos = prepareMomentPhotos(familyId, (data as MomentData).photos);
+  }
+  const photoCount = e.kind === "moment" ? (data as MomentData).photos?.length ?? 0 : 0;
   if (e.endedAt === undefined && !e.active) e = { ...e, endedAt: manualFeedEnd(e.kind, data, e.startedAt) };
   if (e.endedAt && e.endedAt.getTime() < e.startedAt.getTime()) {
     throw new Error("End time is before the start time");
@@ -349,13 +353,14 @@ export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ en
   const clientId = cleanClientId(e.clientId);
   // The device column only when there's an id (a database a step behind on migrations still saves).
   const device = e.device ?? null;
-  const rows = await q(
-    `INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, active, data, note, created_by, source, client_id${device ? ", device" : ""})
+  const statement = {
+    sql: `INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, active, data, note, created_by, source, client_id${device ? ", device" : ""})
      SELECT $11::bigint, $1::integer, $2::text, $3::timestamptz, $4::timestamptz, $5::boolean, $6::jsonb, $7::text, $8::text, $9::text, $10::text${device ? ", $12::text" : ""}
      WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $1::integer AND family_id = $11::bigint)
+       ${photoCount ? "AND (SELECT allowed FROM photo_permission)" : ""}
      ON CONFLICT (family_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
      RETURNING *`,
-    [
+    params: [
       e.babyId,
       e.kind,
       e.startedAt.toISOString(),
@@ -368,24 +373,20 @@ export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ en
       clientId,
       familyId,
       ...(device ? [device] : []),
-    ]
-  );
+    ],
+  };
+  const write = photoCount ? await writeMomentPhotos(statement, familyId, photoCount) : { allowed: true, rows: await q(statement.sql, statement.params) };
+  if (!write) throw new StoreUnavailable();
+  const { rows } = write;
   if (rows.length) {
     captureAppEventSoon({ familyId, member: String(rows[0].created_by) }, "entry_logged");
     return { entry: rowToEntry(rows[0]), deduped: false };
   }
   const existing = clientId ? await q(`SELECT * FROM maple_entries WHERE client_id = $1 AND family_id = $2`, [clientId, familyId]) : [];
   if (existing.length) return { entry: rowToEntry(existing[0]), deduped: true };
+  if (!write.allowed) throw new Error(QUOTA_MESSAGE);
   if (!(await q(`SELECT 1 FROM maple_babies WHERE id = $1 AND family_id = $2`, [e.babyId, familyId])).length) throw new NotFound("Baby not found");
   throw new Error("Couldn't save that, please try again");
-}
-
-function ownPhotosOnly(familyId: number, data: MomentData): void {
-  for (const p of data.photos ?? []) {
-    if (!p.key || !blobBelongsTo(p.key, familyId) || (p.thumb_key !== undefined && !blobBelongsTo(p.thumb_key, familyId))) {
-      throw new Error("photo must be a Maple upload");
-    }
-  }
 }
 
 export async function createEntry(fam: FamilyRef, e: NewEntry): Promise<Entry> {
@@ -429,12 +430,12 @@ export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch,
     throw new Conflict("Someone else just changed this. Have another look and try again.", cur, "changed");
   }
 
+  const changesPhotos = cur.kind === "moment" && patch.data !== undefined && Object.hasOwn(patch.data, "photos");
+  if (changesPhotos && opts.expectUpdatedAt === undefined) throw new Error("Refresh this moment before changing its photos; the saved revision is required");
   let mergedData: Record<string, unknown> = { ...(cur.data as Record<string, unknown>) };
   if (patch.data) {
     const incoming = { ...patch.data };
-    // Photos are attached at upload time; clients never see their keys, so a
-    // round-tripped photos array must not overwrite the stored one.
-    if (cur.kind === "moment") delete incoming.photos;
+    if (changesPhotos && cur.kind === "moment") incoming.photos = prepareMomentPhotos(famId(fam), incoming.photos, cur.data.photos);
     // Running nursing sessions keep their segments; timer actions edit those.
     if (cur.active) delete incoming.segments;
     // The tap record is the taps' own (undo reads it), never a client's.
@@ -514,14 +515,15 @@ export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch,
 
   // Only write if the timer state is still what we read: if the other phone
   // just stopped (or switched) it, don't stomp on that with stale data.
-  const rows = await q(
-    `UPDATE maple_entries SET started_at = $2, ended_at = $3, data = $4::jsonb, note = $5,
+  const statement = {
+    sql: `UPDATE maple_entries SET started_at = $2, ended_at = $3, data = $4::jsonb, note = $5,
        updated_by = COALESCE($6, updated_by), updated_at = NOW()
      WHERE id = $1 AND family_id = $9 AND deleted_at IS NULL AND active = $7
        -- JS dates carry milliseconds; the column has microseconds.
        AND updated_at BETWEEN $8::timestamptz - INTERVAL '1 millisecond' AND $8::timestamptz + INTERVAL '1 millisecond'
+       ${changesPhotos ? "AND (SELECT allowed FROM photo_permission)" : ""}
      RETURNING *`,
-    [
+    params: [
       id,
       startedAt.toISOString(),
       endedAt ? endedAt.toISOString() : null,
@@ -531,8 +533,15 @@ export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch,
       cur.active,
       cur.updated_at,
       famId(fam),
-    ]
-  );
+    ],
+  };
+  const write = changesPhotos && cur.kind === "moment"
+    ? await writeMomentPhotos(statement, famId(fam), (data as MomentData).photos?.length ?? 0, id, cur.data.photos?.length ?? 0)
+    : { allowed: true, rows: await q(statement.sql, statement.params) };
+  if (!write) throw new StoreUnavailable();
+  if (!write.allowed) throw new Error(QUOTA_MESSAGE);
+  const { rows } = write;
+
   if (!rows.length) {
     const now = await getEntry(fam, id);
     if (!now) throw new NotFound(`Entry ${id} not found`);

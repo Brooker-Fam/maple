@@ -59,13 +59,13 @@ export function DataAndAccount() {
   return (
     <Section title="Data & account">
       <div className={GROUP}>
-        <a href="/api/maple/export" download className={cx(tone.row, "min-h-[52px] py-2.5")}>
+        {state?.me.role !== "photos" && <a href="/api/maple/export" download className={cx(tone.row, "min-h-[52px] py-2.5")}>
           <Icon name="download" size={20} className="shrink-0 text-mp-accent-fg" />
           <span className="min-w-0 flex-1">
             <span className="block text-[15px] font-medium text-mp-accent-fg">Download {w.name}&apos;s log (CSV)</span>
             <span className={cx(tone.muted, "block text-[13px] leading-snug")}>Baby-log entries for a spreadsheet or {w.his} pediatrician. Photo files, recovery records and chat are not included.</span>
           </span>
-        </a>
+        </a>}
         <Row label={<span className="block truncate">Signed in as {memberName(state!.me.email)}</span>}>
           <SignOutButton disabled={busy} className={DANGER_TEXT} />
         </Row>

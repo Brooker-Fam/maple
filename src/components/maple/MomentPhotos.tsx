@@ -6,7 +6,8 @@ import { createPortal } from "react-dom";
 import { milestoneLabel, type MilestoneWords } from "@/lib/maple/milestones";
 import { babyAge, dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import type { EntryOf, Member } from "@/lib/maple/types";
-import { photoUrl } from "./EntryRow";
+import { momentPhotoUrl } from "./moments/photo";
+import PhotoActions from "./moments/PhotoActions";
 import { useBabyWords, useMilestoneWords, type BabyWords } from "./familyWords";
 import { Icon } from "./icons";
 import { ageShort } from "./keepsake";
@@ -142,7 +143,7 @@ export function Lightbox({
     if (!openNow) return;
     for (const d of [1, -1]) {
       const s = slides[index + d];
-      if (s && s.photo != null) new Image().src = photoUrl(s.entry.id, s.photo, "full");
+      if (s && s.photo != null) new Image().src = momentPhotoUrl(s.entry.id, s.entry.data.photos![s.photo], s.photo, "full");
     }
   }, [index, openNow, slides]);
 
@@ -207,7 +208,7 @@ export function Lightbox({
                 }}
               >
                 {slide.photo != null ? (
-                  <FullPhoto entryId={slide.entry.id} index={slide.photo} dim={night} />
+                  <FullPhoto entry={slide.entry} index={slide.photo} dim={night} />
                 ) : (
                   // No photo: the words are the picture (the caption below skips what's shown here).
                   <div className="flex aspect-square max-h-full w-full max-w-xs flex-col items-center justify-center overflow-hidden rounded-[20px] border border-mp-line bg-mp-surface p-7 text-center">
@@ -223,6 +224,7 @@ export function Lightbox({
           </div>
 
           <Caption slide={slide} bornAt={bornAt} tz={tz} now={now()} who={memberName(slide.entry.created_by)} avatar={member(slide.entry.created_by)} />
+          {slide.photo != null && <PhotoActions key={`${slide.entry.id}-${slide.entry.data.photos![slide.photo].id ?? slide.photo}`} src={momentPhotoUrl(slide.entry.id, slide.entry.data.photos![slide.photo], slide.photo, "full")} filename={`maple-${slide.entry.id}-${slide.photo + 1}`} />}
         </motion.div>
       )}
     </AnimatePresence>,
@@ -247,12 +249,12 @@ function NavArrow({ side, onClick }: { side: "left" | "right"; onClick: () => vo
 }
 
 /** Thumb first (usually cached), then the full image fades in over it. */
-function FullPhoto({ entryId, index, dim }: { entryId: number; index: number; dim: boolean }) {
+function FullPhoto({ entry, index, dim }: { entry: Moment; index: number; dim: boolean }) {
   const [full, setFull] = useState<"loading" | "ok" | "broken">("loading");
   const [thumbBroken, setThumbBroken] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const cls = cx("max-h-full max-w-full rounded-[4px] object-contain select-none", dim && "brightness-[.55] saturate-[.8]");
-  const src = (size: "thumb" | "full") => `${photoUrl(entryId, index, size)}${attempt ? `&retry=${attempt}` : ""}`;
+  const src = (size: "thumb" | "full") => `${momentPhotoUrl(entry.id, entry.data.photos![index], index, size)}${attempt ? `&retry=${attempt}` : ""}`;
   const retry = () => {
     setAttempt((value) => value + 1);
     setThumbBroken(false);

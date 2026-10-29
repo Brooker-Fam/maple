@@ -1,33 +1,15 @@
 import { NextRequest } from "next/server";
 import { get } from "@vercel/blob";
-import { BadRequest, idParam, withMember } from "@/lib/maple/api";
+import { BadRequest, errorResponse, idParam, json, withMember } from "@/lib/maple/api";
 import { blobBelongsTo, blobToken } from "@/lib/maple/blob";
 import { getEntry, NotFound } from "@/lib/maple/store";
+import { momentPhotoId } from "@/lib/maple/moment-photos";
 import { MAPLE_BLOB_RE } from "@/lib/maple/validate";
 
 export const dynamic = "force-dynamic";
 
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-/**
- * GET /api/maple/photo?entry=<id>&i=<index>&size=thumb|full
- *
- * The only way a moment's photo reaches a browser. Checks the family session
- * here (not in middleware), looks the entry up in the session's family only
- * (another family's moment is "not found"), takes the blob by position on it,
- * and serves it only from that family's own paths. Streams it back; never
- * redirects to the blob URL, which stays server-side.
- *
- * Caching: `private, max-age=1y, immutable` + ETag. What a URL points at can't
- * change: blob paths are random and never overwritten, entry ids are never
- * reused, and a moment's photos are fixed once it's saved (updateEntry ignores
- * `photos`). `private` keeps it out of any shared/CDN cache, so the scrapbook
- * opens instantly on hospital wifi without an auth + Blob round trip per
- * thumbnail. Trade-off: a photo already viewed on a device stays in that
- * browser's cache after sign-out (see the signout note in the report). If
- * photos ever become removable from a moment, switch this to `private,
- * no-cache` (the ETag/304 path below already handles revalidation).
- */
 export const GET = withMember("GET /api/maple/photo", async (request: NextRequest, _me, ctx) => {
   const sp = new URL(request.url).searchParams;
   const entryId = idParam(request, "entry");
@@ -38,21 +20,25 @@ export const GET = withMember("GET /api/maple/photo", async (request: NextReques
 
   const entry = await getEntry(ctx, entryId);
   if (!entry || entry.kind !== "moment") return notFound();
-  const ref = entry.data.photos?.[index];
+  const photo = sp.get("photo");
+  const ref = photo ? entry.data.photos?.find(item => momentPhotoId(item) === photo) : entry.data.photos?.[index];
   // Thumbs are best-effort at upload time; fall back to the full image.
   const key = size === "thumb" ? ref?.thumb_key || ref?.key : ref?.key;
   if (!ref || !key || !MAPLE_BLOB_RE.test(key) || !blobBelongsTo(key, ctx.familyId)) return notFound();
 
   const access = ref.access ?? (key.includes(".private.blob.") ? "private" : "public");
   const token = blobToken(access);
-  if (!token) return notFound("Photo storage isn't set up");
+  if (!token) {
+    await errorResponse("GET /api/maple/photo", new PhotoStorageUnavailable("photo_storage_unavailable"), ctx);
+    return json({ error: "Photo storage isn't set up" }, 503);
+  }
 
   const ifNoneMatch = request.headers.get("if-none-match") ?? undefined;
   const result = await get(key, { access, token, ifNoneMatch });
   if (!result) return notFound();
 
   const headers: Record<string, string> = {
-    "Cache-Control": "private, max-age=31536000, immutable",
+    "Cache-Control": "private, no-cache",
     "X-Content-Type-Options": "nosniff",
     // Opened directly as a document, it can't run anything.
     "Content-Security-Policy": "default-src 'none'; sandbox",
@@ -71,7 +57,9 @@ export const GET = withMember("GET /api/maple/photo", async (request: NextReques
   if (result.blob.size != null) headers["Content-Length"] = String(result.blob.size);
   headers["Content-Disposition"] = `inline; filename="maple-${entryId}-${index + 1}${size === "thumb" ? "-thumb" : ""}.${type.split("/")[1].replace("jpeg", "jpg")}"`;
   return new Response(result.stream, { status: 200, headers });
-});
+}, { photos: true });
+
+class PhotoStorageUnavailable extends Error {}
 
 function notFound(message = "Photo not found"): never {
   throw new NotFound(message);

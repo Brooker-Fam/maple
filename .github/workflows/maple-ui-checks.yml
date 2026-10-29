@@ -128,6 +128,11 @@ jobs:
       - name: Check account menu, settings and Siri setup
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm check:maple-settings-ui
+      - name: Check private family photo sharing
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-photos
       - name: Check failed saves and family changes
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:
@@ -153,6 +158,7 @@ jobs:
             test-results/maple-settings-ui
             test-results/settings-ui
             test-results/maple-moments-ui
+            test-results/moments-sharing-ui
             test-results/maple-care-ui
             test-results/maple-notification-recovery
             test-results/maple-onboarding-recovery

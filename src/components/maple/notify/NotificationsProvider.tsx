@@ -48,7 +48,7 @@ function problemText(e: unknown): string {
  */
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const { state, status: appStatus, api, toast, now: clock } = useMaple();
-  const me = appStatus === "ready" ? (state?.me.email ?? null) : null;
+  const me = appStatus === "ready" && state?.me.role !== "photos" ? (state?.me.email ?? null) : null;
   const [status, setStatus] = useState<NotifyStatus>("loading");
   const [prefs, setPrefsState] = useState<PushPrefs>({});
   const [endpoint, setEndpoint] = useState<string | null>(null);
