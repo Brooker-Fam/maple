@@ -239,6 +239,10 @@ export const RED_STOOL: Assessment = {
   body: "Often it's something small, like a tiny tear or swallowed blood from a cracked nipple, but blood in poop should always be checked. Call now instead if there's a lot of blood or mucus, or blood with fever, vomiting, a swollen belly or poor feeding.",
 };
 
+export function chatImageGuidance(v: Voice): string {
+  return `For diaper photos, describe only apparent color and consistency. Lighting can change color, and a photo cannot establish health or rule out a problem. Do not diagnose an illness, allergy, infection, dehydration or bleeding from a photo, and never say a diaper is healthy or safe from the image alone. Ask about symptoms or the baby's age when needed, using the saved age when available. If the image or the person's words suggest a concerning color, share the matching guidance below without waiting for a log entry or claiming the photo proves a condition. Offer show_help for pediatrician contact details.\nPossible pale, chalky-white, gray or clay-colored stool: ${PALE_STOOL.body}\nPossible red or blood in stool: ${RED_STOOL.body}\nBlack or tarry stool beyond the early newborn period: ${lateBlackStool(v).body}\nDo not infer wetness, frequency, a fever or other symptoms from a photograph. When asked to log a diaper, confirm uncertain details before calling the tool.`;
+}
+
 export const lateBlackStool = (v: Voice): Assessment => ({
   tier: "today",
   title: "Still black poop after Day 4",

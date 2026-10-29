@@ -131,6 +131,12 @@ export default function Privacy() {
         cards keep the values they showed, proposed changes and the outcome of your taps. These are removed with your chat history.
       </p>
       <p>
+        Photos you attach to chat are resized, stripped of embedded metadata and stored privately in Maple&rsquo;s database,
+        separately from shared Moments. Only your account in that family can view them. Sent photos stay with your conversation
+        and are removed when you delete chat history. Unsent uploads expire after seven days and are cleaned up when you next upload.
+        Your browser keeps private photo references with drafts and queued messages, rather than the original image files.
+      </p>
+      <p>
         Your draft and up to ten queued messages stay in this browser, separately for each signed-in account and family, so a
         reload does not lose them. They are cleared when you sign out or delete chat history. Queued messages are sent only
         when the chat can continue; after a reload you choose whether to resume. Their original submission time stays with them.
@@ -284,7 +290,7 @@ export default function Privacy() {
       <h2>The AI features</h2>
       <h3>Maple&rsquo;s chat</h3>
       <p>
-        When you use the chat, your message, answers to question cards, the recent conversation, and the log or supported family settings it reads to answer are sent to
+        When you use the chat, your message and attached photos, answers to question cards, the recent conversation, and the log or supported family settings it reads to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
         see her page can use the chat with her food, drinks, portions and nutrient details, medicines and doses, temperatures and questions for her OB. If you ask for food estimates,
         the chat can save approximate nutrient values with the entry, marked as estimates that you can edit. Her check-ins never

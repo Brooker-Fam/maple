@@ -30,13 +30,13 @@ const ERROR_CLASSES = new Set([
 ]);
 const ERROR_CODES = new Set(["400", "401", "403", "404", "409", "422", "429", "500", "502", "503", "504",
   "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "23502", "23503", "23505", "23514", "40001", "53300", "57P01"]);
-const ERROR_LABELS = new Set(["care_error", "sync_request_failed", "sync_diagnostics_failed"]);
+const ERROR_LABELS = new Set(["care_error", "sync_request_failed", "sync_diagnostics_failed", "chat_image_request_failed"]);
 const API_PATHS = new Set([
   "/api/waitlist", "/api/maple/analytics/event", "/api/maple/analytics/open", "/api/maple/state",
   "/api/maple/entries", "/api/maple/entries/restore", "/api/maple/timer", "/api/maple/baby",
   "/api/maple/members", "/api/maple/invites", "/api/maple/tokens", "/api/maple/photo", "/api/maple/diagnostics",
   "/api/maple/upload", "/api/maple/export", "/api/maple/quick", "/api/maple/mcp",
-  "/api/maple/chat", "/api/maple/chat/consent", "/api/maple/onboarding", "/api/maple/onboarding/chat",
+  "/api/maple/chat", "/api/maple/chat/images", "/api/maple/chat/consent", "/api/maple/onboarding", "/api/maple/onboarding/chat",
   "/api/maple/admin/metrics", "/api/maple/usage-alerts", "/api/maple/push", "/api/maple/push/test",
   "/api/maple/push/tick", "/api/maple/push/receipt", "/api/maple/care/move", "/api/maple/care/mood",
   "/api/maple/care/meds", "/api/maple/care/person", "/api/maple/care/entries", "/api/maple/care/entries/restore",

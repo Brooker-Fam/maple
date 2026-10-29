@@ -3,6 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, getToolName, isToolUIPart, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CHAT_MAX_IMAGES, isChatImage, type ChatImage } from "@/lib/maple/chat/images";
 import { mentionsCrisis } from "@/lib/maple/chat/crisis";
 import { CHAT_MAX_CHARS, type ChatMessage } from "@/lib/maple/chat/types";
 import type { StreamItem } from "@/lib/maple/chat/window";
@@ -81,6 +82,11 @@ export function useChatThread(active: boolean) {
   const setDraft = useCallback((value: string | ((previous: string) => string)) => {
     updateQueue((q) => ({ ...q, draft: typeof value === "function" ? value(q.draft) : value }));
   }, [updateQueue]);
+  const addDraftImage = useCallback((image: ChatImage, expectedScope: string) => {
+    if (loadedScope.current !== expectedScope || scope !== expectedScope) return;
+    updateQueue((q) => ({ ...q, draftImages: [...(q.draftImages ?? []), image].slice(0, CHAT_MAX_IMAGES), imageProblem: undefined }));
+  }, [scope, updateQueue]);
+  const removeDraftImage = (url: string) => updateQueue((q) => ({ ...q, draftImages: q.draftImages?.filter((image) => image.url !== url) }));
   const lastSent = useRef<string | null>(null);
   const shown = useRef<{ id: string | null; busy: boolean }>({ id: null, busy: false });
   const recoveryRun = useRef(0);
@@ -155,7 +161,7 @@ export function useChatThread(active: boolean) {
         }
         if (last?.role !== "user") return ms;
         // Turned away before it was saved: the message comes back to the box to send again later.
-        setDraft((current) => current || textOf(last));
+        updateQueue((q) => ({ ...q, draft: q.draft || textOf(last), draftImages: q.draftImages?.length ? q.draftImages : last.parts.filter(isChatImage) }));
         return ms.slice(0, -1);
       });
     },
@@ -333,7 +339,8 @@ export function useChatThread(active: boolean) {
   const send = useCallback(
     (raw: string, options: { clearDraft?: boolean } = {}) => {
       const text = raw.trim();
-      if (!text) return;
+      const images = options.clearDraft ? outboxRef.current.draftImages ?? [] : [];
+      if ((!text && !images.length) || (options.clearDraft && outboxRef.current.imageProblem)) return;
       const crisis = mentionsCrisis(text, names);
       if (text.length > CHAT_MAX_CHARS) {
         setProblem(`That's over ${CHAT_MAX_CHARS.toLocaleString("en-US")} characters. Try a shorter message.`);
@@ -347,8 +354,8 @@ export function useChatThread(active: boolean) {
       }
       setProblem(null);
       setHelp(crisis);
-      const item: QueuedMessage = { requestId: crypto.randomUUID(), text, submittedAt: new Date().toISOString(), state: "queued" };
-      updateQueue((q) => ({ ...q, draft: options.clearDraft && q.draft.trim() === text ? "" : q.draft, items: [...q.items, item], paused: q.paused || !online }));
+      const item: QueuedMessage = { requestId: crypto.randomUUID(), text, ...(images.length ? { images } : {}), submittedAt: new Date().toISOString(), state: "queued" };
+      updateQueue((q) => ({ ...q, draft: options.clearDraft && q.draft.trim() === text ? "" : q.draft, draftImages: options.clearDraft ? undefined : q.draftImages, items: [...q.items, item], paused: q.paused || !online }));
     },
     [online, names, updateQueue]
   );
@@ -372,7 +379,7 @@ export function useChatThread(active: boolean) {
     helpArrived.current = false;
     lastSent.current = item.text;
     chat.clearError();
-    void chat.sendMessage({ id: item.requestId, role: "user", parts: [{ type: "text", text: item.text }] }, { body: { requestId: item.requestId, submittedAt: item.submittedAt } }).catch(() => {
+    void chat.sendMessage({ id: item.requestId, role: "user", parts: [...(item.text ? [{ type: "text" as const, text: item.text }] : []), ...(item.images ?? [])] }, { body: { requestId: item.requestId, submittedAt: item.submittedAt } }).catch(() => {
       updateQueue((q) => ({ ...q, paused: true, items: q.items.map((x) => x.requestId === item.requestId ? { ...x, state: "uncertain" } : x) }));
       void resync(thread.id);
     });
@@ -381,7 +388,7 @@ export function useChatThread(active: boolean) {
   const retryQueued = (requestId: string) => {
     if (busy || !online) return;
     const item = outboxRef.current.items.find((x) => x.requestId === requestId);
-    if (!item || item.state !== "failed" || Date.now() - Date.parse(item.submittedAt) > 7 * 24 * 60 * 60 * 1000) return;
+    if (!item || item.state !== "failed" || item.imagesMissing || Date.now() - Date.parse(item.submittedAt) > 7 * 24 * 60 * 60 * 1000) return;
     updateQueue((q) => ({ ...q, paused: false, items: q.items.map((x) => x.requestId === requestId ? { ...x, state: "queued", problem: undefined } : x) }));
   };
   // A missing receipt alone is not proof that a slow POST cannot arrive later.
@@ -414,11 +421,13 @@ export function useChatThread(active: boolean) {
     const item = outboxRef.current.items.find((x) => x.requestId === requestId);
     if (item?.state === "received" || await cancelBeforeChange(requestId)) updateQueue((q) => ({ ...q, items: q.items.filter((x) => x.requestId !== requestId) }));
   };
-  const editQueued = async (requestId: string, raw: string) => {
+  const editQueued = async (requestId: string, raw: string, images?: ChatImage[]) => {
     const text = raw.trim();
-    if (!text || text.length > CHAT_MAX_CHARS) return false;
+    const item = outboxRef.current.items.find((x) => x.requestId === requestId);
+    const attachments = images ?? item?.images ?? [];
+    if ((!text && !attachments.length) || text.length > CHAT_MAX_CHARS || attachments.length > CHAT_MAX_IMAGES || !attachments.every(isChatImage)) return false;
     if (!await cancelBeforeChange(requestId)) return false;
-    updateQueue((q) => ({ ...q, items: q.items.map((x) => x.requestId === requestId ? { requestId: crypto.randomUUID(), text, submittedAt: new Date().toISOString(), state: "queued" } : x) }));
+    updateQueue((q) => ({ ...q, items: q.items.map((x) => x.requestId === requestId ? { requestId: crypto.randomUUID(), text, ...(attachments.length ? { images: attachments } : {}), submittedAt: new Date().toISOString(), state: "queued" } : x) }));
     return true;
   };
   const resumeQueue = (moveOn = false) => {
@@ -462,6 +471,7 @@ export function useChatThread(active: boolean) {
     setEarlier([]);
     setMore(false);
     updateQueue(() => emptyQueue());
+    window.dispatchEvent(new Event("maple:chat-drafts-cleared"));
     setThread({ id: newThreadId(), initial: [] });
   }, [api, busy, updateQueue]);
 
@@ -514,7 +524,13 @@ export function useChatThread(active: boolean) {
     problem,
     help,
     clearProblem: () => setProblem(null),
+    scope,
     draft,
+    draftImages: outbox.draftImages ?? [],
+    imageProblem: outbox.imageProblem,
+    clearImageProblem: () => updateQueue((q) => ({ ...q, imageProblem: undefined })),
+    addDraftImage,
+    removeDraftImage,
     setDraft,
     send,
     queue: outbox.items,

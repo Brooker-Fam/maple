@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CHAT_MAX_CHARS } from "@/lib/maple/chat/types";
 import { useCareNav } from "../care/CareNav";
 import { useBabyWords } from "../familyWords";
@@ -9,6 +9,8 @@ import { Button, Chip, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { useChatNav } from "./ChatNav";
 import ChatDraftPrompt from "./ChatDraftPrompt";
+import Composer from "./ChatComposer";
+import ChatImages from "./ChatImages";
 import { HelpCard, MessageView } from "./ChatParts";
 import { CareNote, TermsCard } from "./ChatTerms";
 import { NEAR_BOTTOM, TAB_BAR, usePageHold, useVisibleArea } from "./page";
@@ -250,8 +252,8 @@ export default function ChatTab({ active }: { active: boolean }) {
       >
         <div ref={composer} className="px-4 py-2">
           <QueuePanel t={t} offline={!online} />
-          <ChatDraftPrompt active={active} draft={t.draft} setDraft={t.setDraft} composer={composer} />
-          {!needsTerms && t.ready && !t.busy && !t.draft.trim() && (
+          <ChatDraftPrompt active={active} draft={t.draft} hasAttachments={!!t.draftImages?.length} setDraft={t.setDraft} composer={composer} />
+          {!needsTerms && t.ready && !t.busy && !t.draft.trim() && !t.draftImages?.length && (
             <div className="mb-1 flex items-center gap-1 overflow-x-auto whitespace-nowrap" aria-label="Explore your log">
               <span className={cx(tone.faint, "shrink-0 pr-1 text-[12px]")}>Explore</span>
               {[
@@ -263,70 +265,10 @@ export default function ChatTab({ active }: { active: boolean }) {
               ))}
             </div>
           )}
-          <Composer t={t} onSend={(text) => send(text, true)} disabled={needsTerms} offline={!online} />
+          <Composer key={t.scope} t={t} onSend={(text) => send(text, true)} disabled={needsTerms} imagesAllowed={consent?.terms === true} offline={!online} />
         </div>
       </div>
     </section>
-  );
-}
-
-function Composer({ t, onSend, disabled, offline }: { t: ReturnType<typeof useChatThread>; onSend: (text: string) => void; disabled: boolean; offline: boolean }) {
-  const area = useRef<HTMLTextAreaElement>(null);
-  const near = t.draft.length > CHAT_MAX_CHARS - 200;
-  const queueing = t.busy || offline || t.queuePaused || t.awaitingAnswer || t.queue.length > 0;
-  const canSend = !disabled && t.queue.length < t.queueLimit && t.draft.trim().length > 0 && t.draft.length <= CHAT_MAX_CHARS;
-
-  // Grows with what's typed, up to about five lines.
-  useEffect(() => {
-    const el = area.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
-  }, [t.draft]);
-
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter sends with a keyboard and mouse; on a phone it's a new line, and the button sends.
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || !window.matchMedia("(pointer: fine)").matches) return;
-    e.preventDefault();
-    if (canSend) onSend(t.draft);
-  };
-
-  return (
-    <div>
-      <div className="flex items-end gap-2">
-        <textarea
-          ref={area}
-          value={t.draft}
-          rows={1}
-          maxLength={CHAT_MAX_CHARS}
-          onChange={(e) => {
-            t.setDraft(e.target.value);
-            if (t.problem) t.clearProblem();
-          }}
-          onKeyDown={onKey}
-          placeholder={offline ? "Message · saved until you're online" : "Message"}
-          aria-label="Message"
-          disabled={disabled}
-          className={cx(tone.input, "min-h-[44px] resize-none rounded-[22px] py-2.5 leading-snug disabled:opacity-60")}
-        />
-        <button
-          type="button"
-          onClick={() => onSend(t.draft)}
-          disabled={!canSend}
-          aria-label={queueing ? "Queue message" : "Send"}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-accent text-mp-on-accent transition active:scale-95 disabled:opacity-40"
-        >
-          <Icon name="arrow-up" size={22} strokeWidth={2.25} />
-        </button>
-      </div>
-      {t.storageProblem && <p role="status" className={cx(tone.faint, "mt-1 text-[12px] leading-snug")}>This browser couldn&apos;t save your draft. Keep this page open until your messages send.</p>}
-      {t.draft.trim() && queueing && <p className={cx(tone.faint, "mt-1 text-[12px] leading-snug")}>{offline ? "Queue it here, then resume when you're connected." : "Add this to the queue while Maple finishes."}</p>}
-      {near && (
-        <p className={cx(tone.faint, "mt-1 text-right text-[12px] tabular-nums")}>
-          {t.draft.length.toLocaleString("en-US")} / {CHAT_MAX_CHARS.toLocaleString("en-US")}
-        </p>
-      )}
-    </div>
   );
 }
 
@@ -355,21 +297,24 @@ function QueuePanel({ t, offline }: { t: ReturnType<typeof useChatThread>; offli
 function QueuedRow({ item, t, offline }: { item: QueuedMessage; t: ReturnType<typeof useChatThread>; offline: boolean }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(item.text);
+  const [images, setImages] = useState(item.images ?? []);
   const [reviewedAt] = useState(Date.now);
   const editable = (item.state === "queued" && !item.threadId) || item.state === "failed" || item.state === "cancelled";
   const expired = reviewedAt - Date.parse(item.submittedAt) > 7 * 24 * 60 * 60 * 1000;
   return (
     <div className="border-t border-mp-line pt-2">
+      {!!item.images?.length && <div className="mb-2"><ChatImages images={editing ? images : item.images} onRemove={editing ? (url) => setImages((current) => current.filter((image) => image.url !== url)) : undefined} compact /></div>}
       {editing && editable ? <>
         <textarea aria-label="Edit queued message" value={text} onChange={(e) => setText(e.target.value)} maxLength={CHAT_MAX_CHARS} rows={2} className={cx(tone.input, "w-full text-[14px]")} />
-        <div className="flex gap-2"><Button size="sm" variant="soft" disabled={!text.trim() || (!!item.threadId && item.state !== "cancelled" && offline)} onClick={async () => { if (await t.editQueued(item.requestId, text)) setEditing(false); }}>Save changes</Button><Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Keep original</Button></div>
+        <div className="flex gap-2"><Button size="sm" variant="soft" disabled={(!text.trim() && !images.length) || (!!item.threadId && item.state !== "cancelled" && offline)} onClick={async () => { if (await t.editQueued(item.requestId, text, images)) setEditing(false); }}>Save changes</Button><Button size="sm" variant="ghost" onClick={() => { setText(item.text); setImages(item.images ?? []); setEditing(false); }}>Keep original</Button></div>
+        {!!item.images?.length && <p className={cx(tone.faint, "text-[12px] leading-snug")}>To replace a photo, discard this message and attach it again.</p>}
         {item.problem && <p role="status" className={cx(tone.muted, "text-[12px] leading-snug")}>{item.problem}</p>}
       </> : <>
         <p className={cx(tone.body, "line-clamp-2 text-[13px] leading-snug whitespace-pre-wrap wrap-anywhere")}>{item.text}</p>
         {item.problem && <p role="status" className={cx(tone.muted, "mt-1 text-[12px] leading-snug")}>{item.problem}</p>}
         <div className="flex flex-wrap gap-1">
           {item.state === "uncertain" ? <Button size="sm" variant="ghost" disabled={offline || t.loadingHistory} onClick={t.retryHistory}>Check delivery</Button> : null}
-          {item.state === "failed" && !expired ? <Button size="sm" variant="soft" disabled={offline || t.busy} onClick={() => t.retryQueued(item.requestId)}>Retry</Button> : null}
+          {item.state === "failed" && !expired && !item.imagesMissing ? <Button size="sm" variant="soft" disabled={offline || t.busy} onClick={() => t.retryQueued(item.requestId)}>Retry</Button> : null}
           {editable && <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>}
           {(editable || item.state === "received") && <Button size="sm" variant="ghost" disabled={!!item.threadId && item.state !== "cancelled" && item.state !== "received" && offline} onClick={() => void t.discardQueued(item.requestId)}>{item.state === "received" ? "Dismiss" : "Discard"}</Button>}
         </div>

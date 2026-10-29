@@ -13,6 +13,7 @@
  * owner Alex, viewer Vi, and Robin as the care person. One PASS/FAIL line per case, exit 1 on any failure.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { deliveryFingerprint, matchesDeliveryFingerprint } from "../src/lib/maple/chat/delivery-store";
 import {
   budgetFrom,
   capsVerdict,
@@ -1019,6 +1020,40 @@ function post(f: ReturnType<typeof fakeStore>, h: ReturnType<typeof harness>, ov
 }
 
 async function postChecks() {
+  const image = { type: "file" as const, mediaType: "image/jpeg" as const, url: "/api/maple/chat/images?id=11111111-1111-4111-8111-111111111111" };
+  await checkAsync("a photo-only message reaches the model as image bytes and persists only its private reference", async () => {
+    const f = fakeStore();
+    const h = harness([[...textChunks("A synthetic picture."), finishPart("stop")]]);
+    const r = await post(f, h, {
+      images: {
+        validate: async (images) => eq(images, [image]),
+        resolve: async (messages) => messages.map((message) => ({ ...message, parts: message.parts.map((part) => part.type === "file" ? { ...part, url: "data:image/jpeg;base64,/9j/2Q==" } : part) })),
+      },
+    })({ threadId: THREAD, message: { role: "user", parts: [image] } });
+    eq(r.status, 200);
+    eq(f.threads.get(THREAD)!.messages[0].parts.filter((part) => part.type === "file"), [image]);
+    const content = h.model.doStreamCalls[0].prompt.find((message) => message.role === "user")!.content;
+    ok(Array.isArray(content) && content.some((part) => part.type === "file" && part.mediaType === "image/jpeg"), "image reaches the provider");
+    ok(!JSON.stringify(h.model.doStreamCalls[0].prompt).includes(image.url), "private route is never sent to the provider");
+  });
+  check("attachment substitutions cannot replay an accepted delivery", () => {
+    process.env.MAPLE_SESSION_SECRET = "synthetic-image-delivery-key";
+    const delivery = { requestId: "synthetic_images_1", submittedAt: "2026-10-29T12:00:00.000Z" };
+    const fingerprint = deliveryFingerprint(delivery, "Look", [image]);
+    ok(matchesDeliveryFingerprint(fingerprint, delivery, "Look", [image]), "same image retries match");
+    ok(!matchesDeliveryFingerprint(fingerprint, delivery, "Look", []), "removing an image changes the payload");
+    ok(!matchesDeliveryFingerprint(fingerprint, delivery, "Look", [{ ...image, url: image.url.replace(/1/g, "2") }]), "replacing an image changes the payload");
+  });
+  check("image tokens consume the model window independently of URL length", () => {
+    const photo: ChatMessage = { id: "image_window", role: "user", parts: [image] };
+    ok(messageTokens(photo) >= 8192, "reserve image input tokens");
+  });
+  check("a reply to a photo clarification retains both photos and the question", () => {
+    const photos: ChatMessage = { id: "photos", role: "user", parts: [image, { ...image, url: image.url.replace(/1/g, "2") }] };
+    const question: ChatMessage = { id: "question", role: "assistant", parts: [{ type: "text", text: "Whose food is this, and how much was eaten?" }] };
+    const followup = userMessage("followup", "Mine, and I ate all of it. Log it.", LINE);
+    eq(modelWindow([photos, question, followup]).map((message) => message.id), ["photos", "question", "followup"]);
+  });
   await checkAsync("a POST counts the message, saves both sides, records usage under the reply and releases the thread", async () => {
     const f = fakeStore();
     const h = harness([[...textChunks("Saved it."), finishPart("stop")]]);

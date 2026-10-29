@@ -4,6 +4,7 @@ import type { FamilyScope } from "../family";
 import { StoreUnavailable } from "../store";
 import type { ChatDelivery, ChatDeliveryStatus } from "./delivery";
 import type { ChatMessage } from "./types";
+import { isChatImage, type ChatImage } from "./images";
 
 type Fam = Pick<FamilyScope, "familyId">;
 async function rows(sql: string, params: unknown[]) {
@@ -18,9 +19,9 @@ function fingerprintKeys(): string[] {
   if (!current) throw new Error("Chat delivery key is unavailable");
   return [current, ...(own && process.env.MAPLE_SESSION_SECRET_PREV?.trim() ? [process.env.MAPLE_SESSION_SECRET_PREV.trim()] : [])];
 }
-const fingerprintWith = (key: string, delivery: ChatDelivery, text: string) => `h1:${createHmac("sha256", key).update(JSON.stringify(["maple-chat-delivery", delivery.requestId, delivery.submittedAt, text])).digest("hex")}`;
-export const deliveryFingerprint = (delivery: ChatDelivery, text: string) => fingerprintWith(fingerprintKeys()[0], delivery, text);
-export const matchesDeliveryFingerprint = (fingerprint: string, delivery: ChatDelivery, text: string) => fingerprintKeys().some((key) => fingerprintWith(key, delivery, text) === fingerprint);
+const fingerprintWith = (key: string, delivery: ChatDelivery, text: string, images: ChatImage[] = []) => `${images.length ? "h2" : "h1"}:${createHmac("sha256", key).update(JSON.stringify(["maple-chat-delivery", delivery.requestId, delivery.submittedAt, text, ...(images.length ? [images.map((image) => image.url)] : [])])).digest("hex")}`;
+export const deliveryFingerprint = (delivery: ChatDelivery, text: string, images?: ChatImage[]) => fingerprintWith(fingerprintKeys()[0], delivery, text, images);
+export const matchesDeliveryFingerprint = (fingerprint: string, delivery: ChatDelivery, text: string, images?: ChatImage[]) => fingerprintKeys().some((key) => fingerprintWith(key, delivery, text, images) === fingerprint);
 export type DeliveryReceipt = { fingerprint: string; threadId: string | null; completed: boolean; cancelled: boolean };
 
 /** Private receipt lookup; never exposes the fingerprint to a client or another member. */
@@ -74,7 +75,7 @@ export async function acceptDelivery(fam: Fam, member: string, threadId: string,
       INSERT INTO maple_chat_daily (family_id, member, day, messages)
       SELECT $1, $2, $9::date, 1 WHERE EXISTS (SELECT 1 FROM saved)
       ON CONFLICT (family_id, member, day) DO UPDATE SET messages = maple_chat_daily.messages + 1 RETURNING member
-    ) SELECT request_id FROM accepted`, [fam.familyId, member, delivery.requestId, deliveryFingerprint(delivery, text), delivery.submittedAt, threadId, message.id, JSON.stringify(message.parts), day]);
+    ) SELECT request_id FROM accepted`, [fam.familyId, member, delivery.requestId, deliveryFingerprint(delivery, text, message.parts.filter(isChatImage)), delivery.submittedAt, threadId, message.id, JSON.stringify(message.parts), day]);
   return r.length === 1;
 }
 

@@ -18,7 +18,7 @@ import { dashFilter } from "./dashes";
 import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
 import { CHAT_FAILED, CHAT_OFF, type ChatData, type ChatMessage } from "./types";
-import { modelWindow } from "./window";
+import { inputTokens, modelWindow } from "./window";
 
 /**
  * One chat turn as a streamed response: the model with the member's tools,
@@ -111,6 +111,7 @@ export async function chatTurn(opts: {
   stepsDone?: number;
   /** Question answers cannot extend the message's model-step budget. Approval-only completion keeps its existing final reporting step. */
   questionContinuation?: boolean;
+  resolveImages?: (messages: ChatMessage[]) => Promise<ChatMessage[]>;
   deps: TurnDeps;
 }): Promise<Response> {
   const { tools, messages, responseId, deps } = opts;
@@ -122,7 +123,9 @@ export async function chatTurn(opts: {
     try { await deps.save(completed); } finally { await deps.release(); }
     return questionReply(completed, { notice: CHAT_CUT, crisis: opts.crisis });
   }
-  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey, copy: opts.copy });
+  const window = modelWindow(messages);
+  const hasImages = window.some((message) => message.parts.some((part) => part.type === "file"));
+  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey, copy: opts.copy, images: hasImages });
   const breakpoints = usesCacheBreakpoints(opts.modelKey);
   const prefixChars = JSON.stringify([instructions, Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
 
@@ -138,11 +141,13 @@ export async function chatTurn(opts: {
 
   let failed = false;
   let completed = false;
+  if (!opts.resolveImages && hasImages) throw new Error("chat_images_unavailable");
+  const modelMessages = opts.resolveImages ? await opts.resolveImages(window) : window;
   deps.lifecycle?.("chat_started");
   const result = streamText({
     model: opts.model,
     instructions,
-    messages: await convertToModelMessages(modelWindow(messages), {
+    messages: await convertToModelMessages(modelMessages, {
       tools,
       ignoreIncompleteToolCalls: true,
       convertDataPart: (p) => (p.type === "data-context" ? { type: "text", text: contextText(p.data as ChatData["context"]) } : undefined),
@@ -155,7 +160,7 @@ export async function chatTurn(opts: {
     timeout: CHAT_TIMEOUT,
     providerOptions: chatProviderOptions(opts.price.providers),
     prepareStep: ({ steps, stepNumber, messages: stepMessages }) => {
-      inFlight = { step: stepNumber, prompt: Math.max(lastPrompt(steps), roughTokens(prefixChars + JSON.stringify(stepMessages).length)) };
+      inFlight = { step: stepNumber, prompt: Math.max(lastPrompt(steps), roughTokens(prefixChars) + inputTokens(stepMessages)) };
       return {
         ...(breakpoints ? { messages: markTailForCache(stepMessages) } : {}),
         ...(stepsDone + stepNumber >= CHAT_MAX_STEPS - 1 ? { activeTools: Object.keys(tools).filter((name) => name !== "ask_user") } : {}),

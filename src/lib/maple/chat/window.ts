@@ -15,22 +15,40 @@ export const WINDOW_TOKENS = 12_000;
 export const HISTORY_LOAD = 60;
 /** Messages per page of the chat's history on the phone. */
 export const STREAM_PAGE = 40;
+export const IMAGE_INPUT_TOKENS = 8192;
+
+export function inputTokens(value: unknown): number {
+  let images = 0;
+  const serialized = JSON.stringify(value, (_key, part) => {
+    if (part?.type === "file" && typeof part.mediaType === "string" && part.mediaType.startsWith("image/")) {
+      images++;
+      return { type: "file", mediaType: part.mediaType };
+    }
+    return part;
+  });
+  return Math.ceil(serialized.length / 3) + images * IMAGE_INPUT_TOKENS;
+}
 
 /** Count the tool text sent to the model, not UI-only chart/search/settings snapshots. */
-export const messageTokens = (m: ChatMessage) => Math.ceil(JSON.stringify(m.parts.map((p) => {
+export const messageTokens = (m: ChatMessage) => inputTokens(m.parts.map((p) => {
   if (!("output" in p) || !p.output || typeof p.output !== "object" || !("text" in p.output) || typeof p.output.text !== "string") return p;
   return { ...p, output: { text: p.output.text } };
-})).length / 3);
+}));
 
 export function modelWindow(messages: ChatMessage[]): ChatMessage[] {
   if (!messages.length) return messages;
   let start = messages.length - 1;
   while (start > 0 && messages[start].role !== "user") start--;
   let tokens = 0;
-  for (let i = messages.length - 1; i >= start; i--) tokens += messageTokens(messages[i]);
+  let images = 0;
+  const count = (message: ChatMessage) => {
+    tokens += messageTokens(message);
+    images += message.parts.filter((part) => part.type === "file").length;
+  };
+  for (let i = messages.length - 1; i >= start; i--) count(messages[i]);
   for (let i = start - 1; i >= 0; i--) {
-    tokens += messageTokens(messages[i]);
-    if (messages.length - i > WINDOW_MESSAGES || tokens > WINDOW_TOKENS) break;
+    count(messages[i]);
+    if (messages.length - i > WINDOW_MESSAGES || tokens > WINDOW_TOKENS + Math.min(images, 2) * IMAGE_INPUT_TOKENS) break;
     if (messages[i].role === "user") start = i;
   }
   return messages.slice(start);

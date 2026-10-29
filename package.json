@@ -14,8 +14,8 @@
     "check:maple-nutrition": "tsx scripts/maple-nutrition-check.ts",
     "check:maple-nutrition-ui": "node scripts/nutrition-ui-check/run.mjs",
     "check:maple-native": "tsx scripts/maple-native-check.ts",
-    "check:maple-chat": "tsx scripts/maple-chat-check.ts && tsx scripts/maple-chat-questions-check.ts && tsx scripts/maple-chat-charts-check.ts && tsx scripts/maple-chat-progress-check.ts && tsx scripts/maple-chat-queue-check.ts && tsx scripts/maple-chat-receipts-check.ts && tsx scripts/maple-chat-navigation-check.ts",
-    "check:maple-chat-ui": "node scripts/chat-ui-check/run.mjs && node scripts/chat-settings-ui-check/run.mjs && node scripts/chat-search-ui/run.mjs && node scripts/chat-entrypoints-ui/run.mjs",
+    "check:maple-chat": "tsx scripts/maple-chat-check.ts && tsx scripts/maple-chat-questions-check.ts && tsx scripts/maple-chat-charts-check.ts && tsx scripts/maple-chat-progress-check.ts && tsx scripts/maple-chat-queue-check.ts && tsx scripts/maple-chat-receipts-check.ts && tsx scripts/maple-chat-navigation-check.ts && tsx scripts/maple-chat-images-check.ts && tsx scripts/chat-images-ui/queue-check.ts",
+    "check:maple-chat-ui": "node scripts/chat-ui-check/run.mjs && node scripts/chat-settings-ui-check/run.mjs && node scripts/chat-search-ui/run.mjs && node scripts/chat-entrypoints-ui/run.mjs && node scripts/chat-images-ui/run.mjs",
     "check:site": "tsx scripts/site-check.ts",
     "check:email": "tsx scripts/email-check.ts",
     "check:analytics": "tsx scripts/analytics-check.ts && tsx scripts/analytics-client-check.ts && tsx scripts/analytics-flow-check.ts && tsx scripts/analytics-errors-check.ts && tsx scripts/analytics-lifecycle-check.ts && tsx scripts/analytics-monitor-check.ts",
@@ -38,7 +38,8 @@
     "check:maple-feed-status": "tsx scripts/maple-feed-status-check.ts",
     "check:maple-diagnostics": "tsx scripts/maple-diagnostics-check.ts",
     "check:maple-ui-review": "node scripts/ui-review-check.mjs",
-    "check:maple-ui-recovery": "node scripts/ui-recovery-check.mjs"
+    "check:maple-ui-recovery": "node scripts/ui-recovery-check.mjs",
+    "eval:maple-chat-images": "tsx scripts/chat-images-eval.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",
@@ -55,6 +56,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "resend": "6.34.1",
+    "sharp": "0.34.5",
     "web-push": "3.6.7",
     "zod": "^3.25.76"
   },

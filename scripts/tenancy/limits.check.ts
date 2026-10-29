@@ -197,7 +197,7 @@ async function main() {
       const [f] = await sql(`INSERT INTO maple_families (timezone, status, created_by, created_at) VALUES ('UTC', 'onboarding', $1, NOW() - make_interval(days => $2)) RETURNING id`, [email, daysAgo]);
       const id = Number(f.id);
       await sql(`INSERT INTO maple_members (family_id, email, role, added_by, accepted_at) VALUES ($1, $2, 'owner', 'signup', NOW())`, [id, email]);
-      await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES ($1, $2, 'chat', 1)`, [id, email]);
+      await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES ($1, $2, 'chat', 2)`, [id, email]);
       await sql(`INSERT INTO maple_invites (family_id, token_hash, role, created_by, expires_at) VALUES ($1, $2, 'member', $3, NOW() + INTERVAL '7 days')`, [id, `made-up-hash-${id}`, email]);
       await sql(`INSERT INTO maple_ai_usage (family_id, member, step, model, cost_micro_usd, price_key) VALUES ($1, $2, 1, 'm', 5, 'm')`, [id, email]);
       return id;
