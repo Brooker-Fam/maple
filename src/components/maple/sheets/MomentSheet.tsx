@@ -16,6 +16,7 @@ import { photoUrl } from "../EntryRow";
 import { Icon } from "../icons";
 import { useBabyWords, useMilestoneWords } from "../familyWords";
 import { Button, Chip, Field, Sheet, TextArea, WhenField, cx, tone } from "../ui";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import { useMaple } from "../useMaple";
 import { useDraftChanged } from "../useDraftChanged";
 import { useSheets, type SheetProps } from "./index";
@@ -62,7 +63,7 @@ let nextId = 0;
  */
 export default function MomentSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <MomentForm key={n} {...props} />;
+  return <MomentForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function MomentForm({ open, onClose, entry, preset }: SheetProps) {
@@ -71,6 +72,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const { open: openSheet } = useSheets();
   const tz = state?.baby.timezone ?? "America/New_York";
   const moment = entry?.kind === "moment" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(moment);
   const isEdit = !!moment;
   const mw = useMilestoneWords();
   const presets = milestonesFor(mw);
@@ -270,7 +272,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const failed = items.filter((it) => it.status === "error").length;
   const pending = items.length - done.length - failed;
   const hasWords = !!(title.trim() || milestone || note.trim());
-  const canSave = !timeInvalid && !readOnly && !saving && !uploading && (isEdit || hasWords || done.length > 0);
+  const canSave = !changed && !timeInvalid && !readOnly && !saving && !uploading && (isEdit || hasWords || done.length > 0);
 
   const save = async () => {
     // A closed sheet's photos are already gone from storage.
@@ -281,10 +283,11 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
     try {
       if (moment) {
         const res = await update(moment.id, {
-          started_at: when?.toISOString(),
+          expect_updated_at: moment.updated_at,
+          started_at: !when || when.getTime() !== Date.parse(moment.started_at) ? (when ?? now()).toISOString() : undefined,
           data: { title: t || null, milestone: milestone || null },
           note: n || null,
-        });
+        }, { onConflict });
         if (res) {
           saved.current = true;
           onClose();
@@ -375,6 +378,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet open={open} onClose={onClose} dirty={dirty} locked={saving} title={isEdit ? "Edit moment" : "New moment"} footer={footer}>
       <fieldset disabled={saving} aria-busy={saving} className="min-w-0 space-y-5">
         {moment && <LoggedBy entry={moment} />}
+        {notice}
         {/* Photos */}
         {moment ? (
           <ExistingPhotos

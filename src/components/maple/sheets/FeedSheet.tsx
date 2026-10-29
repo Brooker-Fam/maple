@@ -34,6 +34,7 @@ import { ApiError, useMaple } from "../useMaple";
 import { useDraftChanged } from "../useDraftChanged";
 import { doneText, nextSideWords } from "../useTimerActions";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
   CHECK_NUMBER_HINT,
   ContextNote,
@@ -129,7 +130,7 @@ function timesKey(data: FeedData, endedAt: string | null, now: Date): string {
 
 export default function FeedSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <FeedForm key={n} {...props} />;
+  return <FeedForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function FeedForm({ open, onClose, entry, preset }: SheetProps) {
@@ -233,6 +234,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   });
   // Typed minutes on a timed session replace its parts ("Type minutes instead").
   const [minutesTyped, setMinutesTyped] = useState(false);
+  const savedEntry = e && !running && (!timed || minutesTyped || first !== origFirst) ? e : undefined;
+  const { changed: savedChanged, onConflict, notice: savedNotice } = useSavedEntryConflict(savedEntry);
 
   // ── Times (a finished timed session) ──
   const liveFeed = timed && e ? (liveEntry?.kind === "feed" ? liveEntry : e) : null;
@@ -351,14 +354,14 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
 
   // ── Save ──
   const save = async () => {
-    if (busy || manualTimeInvalid || timeInvalid || addBlocked || zeroBottle || amountOverLimit || (!running && checks.invalid)) return;
+    if (busy || manualTimeInvalid || timeInvalid || addBlocked || savedChanged || zeroBottle || amountOverLimit || (!running && checks.invalid)) return;
     if (e) {
       const patch = editPatch();
       // Nothing changed: close without a write (a bare write would bump the version under the other phone's edit).
       if (Object.values(patch).every((v) => v === undefined)) return onClose();
       setBusy(true);
       const prev = liveEntry?.kind === "feed" ? liveEntry : e;
-      const res = await update(e.id, patch, { toast: "" });
+      const res = await update(e.id, { ...patch, ...(savedEntry ? { expect_updated_at: savedEntry.updated_at } : {}) }, { toast: "", onConflict });
       setBusy(false);
       if (res) {
         savedToast(`${method === "bottle" ? "Bottle" : "Feed"} updated`, prev, patch, res);
@@ -437,7 +440,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       if (touched.milk) data.milk = milk ?? null;
       return {
         data: Object.keys(data).length ? data : undefined,
-        started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+        started_at: !when || when.getTime() !== Date.parse(e.started_at) ? (when ?? now()).toISOString() : undefined,
         ...notePatch,
       };
     }
@@ -640,7 +643,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly || zeroBottle || amountOverLimit}
+              disabled={savedChanged || manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly || zeroBottle || amountOverLimit}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
@@ -670,6 +673,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
       {/* A timed feed's own times are its rows: the tap time up here would read as one more start. */}
       {e && <LoggedBy entry={e} noTime={e.data.method === "breast" && !!e.data.segments?.length} />}
+      {savedNotice}
 
       {gone && (
         <p role="status" className="flex items-center gap-2 rounded-xl bg-mp-sunken px-3 py-2 text-[13px] leading-snug font-medium text-mp-ink">

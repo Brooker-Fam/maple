@@ -10,6 +10,7 @@ import { Icon } from "../icons";
 import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
   AssessmentCard,
   CHECK_NUMBER_HINT,
@@ -40,7 +41,7 @@ const H = 3_600_000;
 
 export default function VitalsSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <VitalsForm key={n} {...props} />;
+  return <VitalsForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
@@ -48,6 +49,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const w = useBabyWords();
   const voice = useVoice();
   const e = entry?.kind === "vitals" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const d: Partial<VitalsData> = e?.data ?? {};
   const presetLevel = pstr(preset, "jaundice") as JaundiceLevel | undefined;
   // Skin-check mode: asked for one, or editing an entry that's only a skin check.
@@ -91,7 +93,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const data = { ...vitals, jaundice: level };
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || changed) return;
     setBusy(true);
     try {
       const noteVal = note.trim() || null;
@@ -106,11 +108,12 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
         const res = await update(
           e.id,
           {
+            expect_updated_at: e.updated_at,
             data: withNulls(data, ["heart_bpm", "resp_rate", "spo2", "jaundice"]),
-            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            started_at: !when || when.getTime() !== Date.parse(e.started_at) ? (when ?? now()).toISOString() : undefined,
             note: noteVal,
           },
-          { toast: `${what} updated` }
+          { toast: `${what} updated`, onConflict }
         );
         if (res) onClose();
         return;
@@ -193,7 +196,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || checks.invalid || !hasAny || (!!e && e.id < 0)}
+            disabled={changed || timeInvalid || checks.invalid || !hasAny || (!!e && e.id < 0)}
             hint={checks.invalid ? CHECK_NUMBER_HINT : !hasAny ? (skinMode ? "Pick what you see." : "Add a reading.") : undefined}
           />
         </fieldset>
@@ -201,6 +204,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
         {skinMode ? (
           <>
             {skin}

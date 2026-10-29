@@ -305,7 +305,7 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   // A tap from this phone (the dock, a toast) still on its way: the sheet waits for its answer, as for a timer that's still starting.
   const saving = e.id > 0 && timerBusy(e.id) && !committing;
   return (
-    <Sheet open={open} onClose={() => { if (!committing) onClose(); }} dirty={dirty} title={fix.expand === "switch" ? "Switch earlier" : saving ? `${fix.expand === "done" ? "Done" : "Edit times"} · saving…` : fix.expand === "done" ? "Done" : timed(e) ? "Edit nursing times" : "Edit times"} subtitle={subtitle} calm footer={hasEditorActions ? <div ref={setActionsContainer} /> : undefined}>
+    <Sheet open={open} onClose={() => { if (!committing) onClose(); }} dirty={dirty} locked={committing} title={fix.expand === "switch" ? "Switch earlier" : saving ? `${fix.expand === "done" ? "Done" : "Edit times"} · saving…` : fix.expand === "done" ? "Done" : timed(e) ? "Edit nursing times" : "Edit times"} subtitle={subtitle} calm footer={hasEditorActions ? <div ref={setActionsContainer} /> : undefined}>
       {/* A fresh pin each time it opens (the router keeps one instance per entry mounted). */}
       {timed(e) && fix.expand === "switch" ? <SwitchEarlier
         key={count}

@@ -11,6 +11,7 @@ import { Icon } from "../icons";
 import { useBabyWords } from "../familyWords";
 import { Chip, Segmented, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import { Label, LoggedBy, SheetFooter, pbool, presetStart, pstr, useOpenCount, useSheetBase, withNulls } from "./parts";
 
 /**
@@ -26,13 +27,14 @@ const AMOUNT_LABEL: Record<Amount, string> = { little: "A little", some: "Some",
 
 export default function NoteSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <NoteForm key={n} {...props} />;
+  return <NoteForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, now, clock } = useSheetBase();
   const w = useBabyWords();
   const e = entry?.kind === "note" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const care = useCare();
   const careNav = useCareNav();
   const d: Partial<NoteData> = e?.data ?? {};
@@ -52,7 +54,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const canSave = doctor ? !!words : !!(tag || words);
 
   const save = async () => {
-    if (timeInvalid) return;
+    if (timeInvalid || changed) return;
     if (!canSave || busy) return;
     const data = doctor
       ? { for_doctor: true, done: e ? done : undefined, answer: e ? answer.trim() || undefined : undefined, tag: undefined, amount: undefined }
@@ -63,11 +65,12 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
       const res = await update(
         e.id,
         {
+          expect_updated_at: e.updated_at,
           data: withNulls(data, ["tag", "amount", "for_doctor", "done", "answer"]),
-          started_at: !doctor && when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+          started_at: !doctor && (!when || when.getTime() !== Date.parse(e.started_at)) ? (when ?? now()).toISOString() : undefined,
           note: words || null,
         },
-        { toast: doctor ? (done ? "Marked as asked" : "Question updated") : `${label} updated` }
+        { toast: doctor ? (done ? "Marked as asked" : "Question updated") : `${label} updated`, onConflict }
       );
       setBusy(false);
       if (res) onClose();
@@ -109,7 +112,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : doctor ? "Add question" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || !canSave || (!!e && e.id < 0)}
+            disabled={changed || timeInvalid || !canSave || (!!e && e.id < 0)}
             hint={!canSave ? (doctor ? "Type the question." : "Pick one or type a note.") : undefined}
           />
         </fieldset>
@@ -117,6 +120,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
 
         {doctor ? (
           <>
