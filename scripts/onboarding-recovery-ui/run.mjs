@@ -151,20 +151,20 @@ try {
     await page.getByRole("button", { name: /^Invite with a one-time link/ }).click();
     const dialog = page.getByRole("dialog", { name: "Invite with a link" });
     await dialog.getByLabel("Their name", { exact: true }).fill("Helper One");
-    await dialog.getByRole("radio", { name: "Member · can log", exact: true }).click();
+    await dialog.getByRole("radio", { name: /^Can log\b/ }).click();
     await dialog.getByRole("button", { name: "Create invite link", exact: true }).click();
     await page.waitForFunction(() => window.__settingsFixture.snapshot().calls.some(x => x.method === "POST"));
     const name = dialog.getByLabel("Their name", { exact: true });
     if (await name.isEnabled()) {
       await name.fill("Helper Two");
-      await dialog.getByRole("radio", { name: "Viewer · can see", exact: true }).click();
+      await dialog.getByRole("radio", { name: /^View baby log\b/ }).click();
     }
     release();
     const ready = page.getByRole("dialog", { name: "Link ready" });
     await ready.waitFor();
     assert.deepEqual({ name: submitted.display_name, role: submitted.role }, { name: "Helper One", role: "member" });
     assert.match(await ready.innerText(), /Send this to Helper One/);
-    assert.match(await ready.innerText(), /Member · can log/);
+    await ready.getByText("Can log", { exact: true }).waitFor();
     assert.match(await ready.innerText(), /recovery page/);
     await capture(page, "invite-result");
   });
