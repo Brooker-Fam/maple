@@ -58,8 +58,8 @@ function matchesRedirect(registered: string, requested: string): boolean {
   return !!allowed && !!actual && allowed[1] === actual[1] && allowed[2] === actual[2];
 }
 
-function supportedValues(value: unknown, required: string, supported: string[]): boolean {
-  return value === undefined || (Array.isArray(value) && value.includes(required) && value.every(item => typeof item === "string" && supported.includes(item)));
+function includesCapability(value: unknown, required: string): boolean {
+  return value === undefined || (Array.isArray(value) && value.includes(required) && value.every(item => typeof item === "string" && item.trim().length > 0));
 }
 
 function supportsPublicAuthentication(data: Record<string, unknown>): boolean {
@@ -75,7 +75,7 @@ function validateMetadata(value: unknown, clientId: string): ClientMetadata {
     throw new OAuthClientError("invalid_client");
   }
   if (!supportsPublicAuthentication(data)) throw new OAuthClientError("invalid_client");
-  if (!supportedValues(data.grant_types, "authorization_code", ["authorization_code", "refresh_token"]) || !supportedValues(data.response_types, "code", ["code"])) {
+  if (!includesCapability(data.grant_types, "authorization_code") || !includesCapability(data.response_types, "code")) {
     throw new OAuthClientError("invalid_client");
   }
   const host = new URL(clientId).host;

@@ -38,6 +38,15 @@ async function rejected(promise: Promise<unknown>, code: OAuthClientError["code"
 }
 
 const checks: [string, () => Promise<void>][] = [
+  ["clients may advertise additional grants and responses alongside Maple's supported capabilities", async () => {
+    const body = {
+      ...metadata(),
+      grant_types: ["authorization_code", "refresh_token", "urn:example:synthetic-grant"],
+      response_types: ["code", "synthetic-response"],
+    };
+    const fixture = setup(() => documentResponse(body));
+    assert.deepEqual(await fixture.resolve(HOSTED, CALLBACK), { name: "Synthetic Connector", host: "claude.ai", metadataUrl: HOSTED });
+  }],
   ["ChatGPT metadata negotiates public authentication and keeps redirect and cache restrictions", async () => {
     const body = {
       ...metadata(CHATGPT, [CHATGPT_CALLBACK]),
@@ -85,7 +94,7 @@ const checks: [string, () => Promise<void>][] = [
     assert.equal(fixture.calls.length, 0);
   }],
   ["malformed and unsupported metadata cannot authorize a redirect", async () => {
-    const invalid = [null, [], {}, { ...metadata(), client_id: LOCAL }, { ...metadata(), redirect_uris: [] }, { ...metadata(), redirect_uris: CALLBACK }, { ...metadata(), redirect_uris: [CALLBACK, 3] }, { ...metadata(), redirect_uris: ["https://claude.ai/callback#fragment"] }, { ...metadata(), redirect_uris: ["http://attacker.example.test/callback"] }, { ...metadata(), token_endpoint_auth_method: "client_secret_basic" }, { ...metadata(), grant_types: ["refresh_token"] }, { ...metadata(), grant_types: ["authorization_code", "password"] }, { ...metadata(), response_types: ["token"] }, { ...metadata(), response_types: "code" }, { ...metadata(), client_name: 1 }];
+    const invalid = [null, [], {}, { ...metadata(), client_id: LOCAL }, { ...metadata(), redirect_uris: [] }, { ...metadata(), redirect_uris: CALLBACK }, { ...metadata(), redirect_uris: [CALLBACK, 3] }, { ...metadata(), redirect_uris: ["https://claude.ai/callback#fragment"] }, { ...metadata(), redirect_uris: ["http://attacker.example.test/callback"] }, { ...metadata(), token_endpoint_auth_method: "client_secret_basic" }, { ...metadata(), grant_types: ["refresh_token"] }, { ...metadata(), grant_types: ["authorization_code", 3] }, { ...metadata(), grant_types: ["authorization_code", " "] }, { ...metadata(), response_types: ["token"] }, { ...metadata(), response_types: ["code", ""] }, { ...metadata(), response_types: "code" }, { ...metadata(), client_name: 1 }];
     for (const body of invalid) await rejected(setup(() => documentResponse(body)).resolve(HOSTED, CALLBACK), "invalid_client");
   }],
   ["only registered redirect strings pass, without normalization bypasses", async () => {
