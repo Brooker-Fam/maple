@@ -26,7 +26,7 @@ await build({
     const mocks = { path: path.join(here, "mocks.jsx") };
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|sheets)$/ }, () => mocks);
     plugin.onResolve({ filter: /(?:^|\/)AccountMenu$/ }, () => mocks);
-    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:parts|useSavedEntryConflict)\.tsx$/.test(args.importer) ? mocks : undefined);
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => path.resolve(path.dirname(args.importer), args.path) === path.join(root, "src/components/maple/sheets/index") ? mocks : undefined);
     if (baseline) plugin.onLoad({ filter: /\.tsx?$/ }, async (args) => {
       const name = path.basename(args.path);
       if (baseline === "age-browser") {
@@ -128,7 +128,7 @@ async function scenario(name, query, check) {
     console.log(`PASS ${name}`);
   } catch (error) {
     await page.screenshot({ path: path.join(screenshots, baseline ? "baseline-failure.png" : "failure.png") }).catch(() => {});
-    if (!baseline) throw new Error(`${name}: ${error.message}`, { cause: error });
+    if (!baseline) throw new Error(`${name}: ${error.message}${errors.length ? `\nBrowser errors: ${errors.join("; ")}` : ""}`, { cause: error });
     failures.push(name);
     console.error(`FAIL baseline ${name}: ${error.message.split("\n")[0]}`);
   } finally {

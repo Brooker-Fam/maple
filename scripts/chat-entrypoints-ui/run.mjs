@@ -29,7 +29,7 @@ await build({
   plugins: [{ name: "synthetic-entrypoint-boundaries", setup(plugin) {
     const mocks = { path: path.join(here, "mocks.jsx") };
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|useChatThread|useTimerActions|sheets)$/ }, () => mocks);
-    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:parts|useSavedEntryConflict)\.tsx$/.test(args.importer) ? mocks : undefined);
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => path.dirname(args.importer) === path.join(root, "src/components/maple/sheets") ? mocks : undefined);
     if (baseline) plugin.onLoad({ filter: /\.[tj]sx?$/ }, (args) => {
       const relative = path.relative(root, args.path);
       if (!baselineFiles.has(relative)) return undefined;
@@ -93,7 +93,7 @@ async function scenario(name, query, check) {
     console.log(`PASS ${name}`);
   } catch (error) {
     await page.screenshot({ path: path.join(screenshots, baseline ? "baseline-failure.png" : "failure.png") }).catch(() => {});
-    if (!baseline) throw new Error(`${name}: ${error.message}`, { cause: error });
+    if (!baseline) throw new Error(`${name}: ${error.message}${errors.length ? `\nBrowser errors: ${errors.join("\n")}` : ""}`, { cause: error });
     failures.push(name);
     console.error(`FAIL baseline ${name}: ${error.message.split("\n")[0]}`);
   } finally {
