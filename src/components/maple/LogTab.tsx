@@ -146,6 +146,7 @@ export function useEntryRange(fromKey: string, toKey: string) {
   const failedWeeks = useRef(new Map<number, string>());
   /** Weeks holding an entry someone opened (and may have edited or deleted): refresh on the next change. */
   const dirty = useRef(new Set<number>());
+  const openedEntries = useRef(new Map<number, Entry>());
   const mounted = useRef(true);
   const rev = state?.rev;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
@@ -158,6 +159,17 @@ export function useEntryRange(fromKey: string, toKey: string) {
       mounted.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    for (const entry of state?.entries ?? []) {
+      const opened = openedEntries.current.get(entry.id);
+      if (!opened || entry.updated_at === opened.updated_at) continue;
+      for (const at of [opened.started_at, opened.ended_at, entry.started_at, entry.ended_at]) {
+        if (at) dirty.current.add(chunkOf(dayKey(Date.parse(at), tz)));
+      }
+      openedEntries.current.delete(entry.id);
+    }
+  }, [state?.entries, tz]);
 
   useEffect(() => {
     const now = Date.now();
@@ -225,6 +237,7 @@ export function useEntryRange(fromKey: string, toKey: string) {
   /** Call before opening or restoring an entry, so its week refreshes on the next change. */
   const touch = useCallback(
     (e: Entry) => {
+      openedEntries.current.set(e.id, e);
       dirty.current.add(chunkOf(dayKey(Date.parse(e.started_at), tz)));
       if (e.ended_at) dirty.current.add(chunkOf(dayKey(Date.parse(e.ended_at), tz)));
     },
@@ -304,9 +317,9 @@ export function statsByDay(entries: Entry[], fromKey: string, toKey: string, now
 /** Clock-change days in the baby's zone get a gentle label instead of a mystery gap. */
 export function dstNote(key: string, tz: string): string | null {
   const [a, b] = dayBounds(key, tz);
-  const hours = Math.round((b.getTime() - a.getTime()) / H);
-  if (hours === 25) return "25-hour day (clocks fell back)";
-  if (hours === 23) return "23-hour day (clocks sprang forward)";
+  const hours = (b.getTime() - a.getTime()) / H;
+  if (hours > 24) return `${hours}-hour day (clocks fell back)`;
+  if (hours < 24) return `${hours}-hour day (clocks sprang forward)`;
   return null;
 }
 

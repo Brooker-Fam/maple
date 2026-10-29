@@ -13,6 +13,7 @@ import { Icon } from "../icons";
 import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Segmented, Sheet, Stepper, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
   AssessmentCard,
   CHECK_NUMBER_HINT,
@@ -49,7 +50,7 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
 
 export default function TempSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <TempForm key={n} {...props} />;
+  return <TempForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function TempForm({ open, onClose, entry, preset }: SheetProps) {
@@ -57,6 +58,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const w = useBabyWords();
   const voice = useVoice();
   const e = entry?.kind === "temp" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const care = useCare();
   const careNav = useCareNav();
   const [unit, setUnit] = useState<"F" | "C">(units === "metric" ? "C" : "F");
@@ -124,7 +126,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const savable = tempC != null && tempC >= 30 && tempC <= 45;
 
   const save = async () => {
-    if (busy || timeInvalid || tempC == null) return;
+    if (busy || timeInvalid || changed || tempC == null) return;
     setBusy(true);
     try {
       const temp_c = Math.round(tempC * 1000) / 1000;
@@ -135,11 +137,12 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
         const res = await update(
           e.id,
           {
+            expect_updated_at: e.updated_at,
             data: { ...(touched.reading ? { temp_c } : {}), ...(touched.method ? { method: method ?? null } : {}) },
-            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            started_at: !when || when.getTime() !== Date.parse(e.started_at) ? (when ?? now()).toISOString() : undefined,
             note: noteVal,
           },
-          { toast: `Updated · ${shown}` }
+          { toast: `Updated · ${shown}`, onConflict }
         );
         if (res) onClose();
         return;
@@ -186,7 +189,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
+            disabled={changed || timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
             hint={
               checks.invalid ? CHECK_NUMBER_HINT : !savable ? "Enter the reading." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined
             }
@@ -196,6 +199,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
         {!busy && createdTemp && hasVitals && <ContextNote>Temperature saved. The other readings still need saving.</ContextNote>}
 
         <div>

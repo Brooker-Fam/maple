@@ -35,13 +35,15 @@ const original = () => ({
 });
 const browserName = process.env.REVIEW_BROWSER === "webkit" ? "webkit" : "chromium";
 const browser = await ({ chromium, webkit }[browserName]).launch({ headless: true });
-async function fixture(mode = "success", width = 390) {
-  const context = await browser.newContext({ viewport: { width, height: 844 }, reducedMotion: "reduce", timezoneId: "UTC" });
+async function fixture(mode = "success", width = 390, height = 844) {
+  const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce", timezoneId: "UTC" });
   const page = await context.newPage();
   await page.clock.setFixedTime(new Date(NOW));
   page.setDefaultTimeout(5000);
   const errors = [];
   const writes = [];
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
   let saved = original();
   if (mode === "early") saved = { ...saved, started_at: "2026-10-28T13:15:00.000Z", data: { ...saved.data, segments: [{ side: "L", start: "2026-10-28T13:15:00.000Z", end: null }] } };
   if (mode === "old") saved = { ...saved, started_at: "2026-10-28T06:30:00.000Z", data: { ...saved.data, segments: [{ side: "L", start: "2026-10-28T06:30:00.000Z", end: null }] } };
@@ -67,6 +69,7 @@ async function fixture(mode = "success", width = 390) {
     if (p === "/api/maple/timer") {
       const body = req.postDataJSON();
       writes.push(body);
+      if (mode === "pending") await pending;
       if (mode === "retry" && writes.length === 1) return route.fulfill({ status: 503, json: { error: "Synthetic save failure" } });
       if (mode === "conflict" && writes.length === 1) {
         saved = { ...saved, data: { ...saved.data, last_side: "R", segments: [{ ...saved.data.segments[0], end: "2026-10-28T13:10:00.000Z" }, { side: "R", start: "2026-10-28T13:10:00.000Z", end: null }] }, note: "Synthetic note from another device", updated_at: "2026-10-28T13:29:00.000Z", updated_by: me.email };
@@ -77,7 +80,7 @@ async function fixture(mode = "success", width = 390) {
       assert.equal(body.expect_updated_at ?? body.edit?.expect_updated_at, saved.updated_at, "Switch and Undo check the shown revision");
       const before = { segments: structuredClone(saved.data.segments), started_at: saved.started_at, ended_at: saved.ended_at, updated_at: saved.updated_at, first_side: saved.data.first_side ?? null, last_side: saved.data.last_side ?? null };
       if (body.action === "switch") {
-        assert(body.at < NOW, "Forgotten switch records an earlier timestamp");
+        assert(body.at < await page.evaluate(() => new Date().toISOString()), "Forgotten switch records an earlier timestamp");
         saved = { ...saved, data: { ...saved.data, last_side: body.side, segments: [...saved.data.segments.slice(0, -1), { ...saved.data.segments.at(-1), end: body.at }, { side: body.side, start: body.at, end: null }], last_tap: { kind: "switch", side: body.side, at: NOW, by: me.email } }, updated_at: new Date(Date.parse(NOW) + writes.length * 1000).toISOString(), updated_by: me.email };
       } else {
         assert.equal(body.action, "retime");
@@ -96,7 +99,11 @@ async function fixture(mode = "success", width = 390) {
   await page.goto("https://timing-switch.example.test/#today");
   await page.getByRole("region", { name: "Nursing timer", exact: true }).waitFor();
   if (mode !== "early") await page.getByText("Still nursing?", { exact: true }).waitFor();
-  return { page, writes, errors, state, close: () => context.close() };
+  return { page, writes, errors, state, release, close: async () => {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+    await context.close();
+  } };
 }
 const open = async (f) => {
   await f.page.getByRole("button", { name: "Switch earlier…", exact: true }).click();
@@ -221,6 +228,60 @@ const cases = [
       assert.equal(f.writes.length, 0);
       assert.deepEqual(f.errors, []);
     } finally { await f.close(); }
+  }],
+  ["Relative switch choices use the time of the tap and preserve the selected time", async () => {
+    const f = await fixture();
+    try {
+      const form = await open(f);
+      await f.page.clock.setFixedTime(new Date("2026-10-28T13:40:00.000Z"));
+      await form.getByRole("button", { name: /^1 min ago/ }).click();
+      assert.equal(await form.locator('input[type="time"]').inputValue(), "09:39", "The selected relative time starts from the tap");
+      await f.page.clock.setFixedTime(new Date("2026-10-28T13:45:00.000Z"));
+      await form.getByRole("button", { name: "Save switch", exact: true }).click();
+      await form.waitFor({ state: "hidden" });
+      assert.equal(f.writes.length, 1);
+      assert.equal(f.writes[0].at, "2026-10-28T13:39:00.000Z", "Waiting to save keeps the selected timestamp");
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
+  ["An open switch editor accepts a clock time after it was opened", async () => {
+    const f = await fixture();
+    try {
+      const form = await open(f);
+      await f.page.clock.setFixedTime(new Date("2026-10-28T13:40:00.000Z"));
+      await form.locator('input[type="time"]').fill("09:39");
+      const save = form.getByRole("button", { name: "Save switch", exact: true });
+      assert(await save.isEnabled(), "A time before the current clock remains valid after the editor opens");
+      await save.click();
+      await form.waitFor({ state: "hidden" });
+      assert.equal(f.writes.length, 1);
+      assert.equal(f.writes[0].at, "2026-10-28T13:39:00.000Z");
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
+  ["A pending switch locks keyboard dismissal and duplicate submission on a short phone", async () => {
+    const f = await fixture("pending", 320, 568);
+    try {
+      const form = await open(f);
+      await f.page.waitForTimeout(250);
+      assert(await f.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      const save = form.getByRole("button", { name: "Save switch", exact: true });
+      const bounds = await save.boundingBox();
+      assert(bounds && bounds.y >= 0 && bounds.y + bounds.height <= 568, "Save remains in the short phone viewport");
+      await form.getByRole("button", { name: /10 min ago/ }).focus();
+      await f.page.keyboard.press("Enter");
+      await save.focus();
+      await f.page.keyboard.press("Enter");
+      await form.getByRole("button", { name: "Saving…", exact: true }).waitFor();
+      assert(await form.locator('input[type="time"]').isDisabled());
+      await f.page.keyboard.press("Enter");
+      await f.page.keyboard.press("Escape");
+      assert.equal(await f.page.getByRole("dialog", { name: "Discard unsaved changes?", exact: true }).count(), 0, "A pending save cannot offer to discard a request already sent");
+      assert.equal(f.writes.length, 1, "Repeated activation sends one request");
+      f.release();
+      await form.waitFor({ state: "hidden" });
+      assert.deepEqual(f.errors, []);
+    } finally { f.release(); await f.close(); }
   }],
 ];
 let failures = 0;

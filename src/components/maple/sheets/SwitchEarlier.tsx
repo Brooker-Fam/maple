@@ -23,7 +23,8 @@ export default function SwitchEarlier({ start, live, onClose, tz, actionsContain
   onEditorActionsChange: (value: boolean) => void; onKnownEntry: (entry: Entry) => void;
 }) {
   const { now, readOnly, timerBusy } = useMaple();
-  const currentTime = useNow();
+  useNow();
+  const currentTime = now();
   const actions = useTimerActions();
   const [base, setBase] = useState(() => ({ entry: start, openedAt: now() }));
   const [chosen, setChosen] = useState<Date | null>(null);
@@ -90,24 +91,24 @@ export default function SwitchEarlier({ start, live, onClose, tz, actionsContain
         <p className="mt-1 text-[13px] text-mp-ink-2">The log still shows {SIDE_NAME[part.side]} since {formatTime(part.start, tz)}.</p>
         {earliest > sideStart && <p className="mt-1 text-[13px] text-mp-ink-2">Switches can only be recorded within the last 4 hours.</p>}
       </div>
-      <SwitchTimeChoices openedAt={base.openedAt} minimum={minimum} chosen={chosen} invalid={invalid} fieldVersion={fieldVersion} tz={tz} disabled={disabled} onChoose={choose} onChange={setChosen} onInvalidChange={setInvalid} />
+      <SwitchTimeChoices currentTime={currentTime} initialTime={base.openedAt} minimum={minimum} chosen={chosen} invalid={invalid} fieldVersion={fieldVersion} tz={tz} disabled={disabled} onChoose={(minutes) => choose(new Date(now().getTime() - minutes * MINUTE))} onChange={setChosen} onInvalidChange={setInvalid} />
     </> : <p className="text-[15px] text-mp-ink-2">This feed is not running on one side. Close this sheet and check the current timer.</p>}
     {!readOnly && (actionsContainer ? createPortal(footer, actionsContainer) : footer)}
   </div>;
 }
 
-function SwitchTimeChoices({ openedAt, minimum, chosen, invalid, fieldVersion, tz, disabled, onChoose, onChange, onInvalidChange }: {
-  openedAt: Date; minimum: Date; chosen: Date | null; invalid: boolean; fieldVersion: number; tz: string; disabled: boolean;
-  onChoose: (value: Date) => void; onChange: (value: Date) => void; onInvalidChange: (invalid: boolean) => void;
+function SwitchTimeChoices({ currentTime, initialTime, minimum, chosen, invalid, fieldVersion, tz, disabled, onChoose, onChange, onInvalidChange }: {
+  currentTime: Date; initialTime: Date; minimum: Date; chosen: Date | null; invalid: boolean; fieldVersion: number; tz: string; disabled: boolean;
+  onChoose: (minutes: number) => void; onChange: (value: Date) => void; onInvalidChange: (invalid: boolean) => void;
 }) {
   return <fieldset disabled={disabled} className="space-y-3">
     <div role="group" aria-label="Earlier switch times" className="grid grid-cols-3 gap-2">
-      {[1, 5, 10, 15, 20, 30].filter((minutes) => openedAt.getTime() - minutes * MINUTE >= minimum.getTime()).map((minutes) => {
-        const at = new Date(openedAt.getTime() - minutes * MINUTE);
-        return <TimeChip key={minutes} line1={`${minutes} min ago`} line2={formatTime(at, tz)} ariaLabel={`${minutes} min ago, ${formatTime(at, tz)}`} ring={!invalid && chosen?.getTime() === at.getTime()} onClick={() => onChoose(at)} />;
+      {[1, 5, 10, 15, 20, 30].filter((minutes) => currentTime.getTime() - minutes * MINUTE >= minimum.getTime()).map((minutes) => {
+        const at = new Date(currentTime.getTime() - minutes * MINUTE);
+        return <TimeChip key={minutes} line1={`${minutes} min ago`} line2={formatTime(at, tz)} ariaLabel={`${minutes} min ago, ${formatTime(at, tz)}`} ring={!invalid && !!chosen && Math.floor(chosen.getTime() / MINUTE) === Math.floor(at.getTime() / MINUTE)} onClick={() => onChoose(minutes)} />;
       })}
     </div>
-    <RecordedTimeField key={fieldVersion} label="Switched at" value={chosen ?? openedAt} onChange={onChange} tz={tz} min={minimum} max={openedAt} onInvalidChange={onInvalidChange} />
+    <RecordedTimeField key={fieldVersion} label="Switched at" value={chosen ?? initialTime} onChange={onChange} tz={tz} min={minimum} max={currentTime} onInvalidChange={onInvalidChange} />
   </fieldset>;
 }
 
