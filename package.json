@@ -32,7 +32,7 @@
     "check:maple-tenancy": "tsx scripts/tenancy/run.ts",
     "check:maple-parity": "tsx scripts/tenancy/parity/run.ts",
     "check:maple-timing": "tsx scripts/timing-engine-check.ts && pnpm check:maple-tenancy timing-switch timing-adjust",
-    "check:maple-timing-ui": "node scripts/timing-fields-ui/run.mjs && node scripts/timing-range-ui/run.mjs && node scripts/timing-switch-ui/run.mjs",
+    "check:maple-timing-ui": "node scripts/timing-fields-ui/run.mjs && node scripts/timing-range-ui/run.mjs && node scripts/timing-switch-ui/run.mjs && node scripts/timing-saved-ui/run.mjs && node scripts/timing-dose-ui/run.mjs",
     "check:maple-time-edit": "tsx scripts/maple-time-edit-check.ts",
     "check:maple-patterns-ui": "node scripts/patterns-ui-check/run.mjs",
     "check:maple-patterns": "tsx scripts/maple-clock-spans-check.ts && tsx scripts/maple-pattern-data-check.ts",
