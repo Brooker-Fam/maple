@@ -285,7 +285,7 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   const remember = useCallback((confirmed: Entry) => setHistory((h) =>
     !h.latest || Date.parse(confirmed.updated_at) >= Date.parse(h.latest.updated_at) ? { ...h, latest: confirmed } : h
   ), []);
-  const live = loaded ?? (history.outside ? history.latest : null);
+  const live = loaded ?? (history.outside && !history.latest?.active ? history.latest : null);
   const e = live ?? entry;
   const fix = (preset?.fix ?? { target: "current" }) as FixPreset["fix"];
   // The Done tap that ended this feed at its pause (the Done toast's "She went back on…", asked of the finished feed:
