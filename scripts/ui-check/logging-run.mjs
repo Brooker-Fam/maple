@@ -166,8 +166,10 @@ try {
     assert(await page.getByRole("region", { name: "Logged today", exact: true }).count(), "Today keeps compact logged totals");
     assert.equal(await page.getByRole("region", { name: "Day dial", exact: true }).count(), 0);
     await page.goto(`${url}?mode=patterns`);
-    await page.getByRole("button", { name: /^Day details/ }).click();
-    assert(await page.getByRole("region", { name: "Day dial", exact: true }).count(), "The full dial remains available in Patterns");
+    await page.getByRole("region", { name: "Day dial", exact: true }).waitFor();
+    assert.equal(await page.getByRole("radio", { name: "Day clock", exact: true }).getAttribute("aria-checked"), "true", "Patterns opens directly to the full day clock");
+    await page.getByRole("radio", { name: "Daily totals", exact: true }).click();
+    await page.getByRole("heading", { name: "Diaper changes this week", exact: true }).waitFor();
     assert(await page.getByRole("heading", { name: "Diaper changes this week", exact: true }).count(), "The weekly comparison remains available in Patterns");
   });
   await check("status labels fit narrow phones", async () => {
@@ -195,7 +197,8 @@ try {
   await check("patterns retry", async () => {
     await page.goto(`${url}?mode=patterns-error`);
     await page.getByRole("heading", { name: "Patterns", exact: true }).waitFor();
-    await page.waitForTimeout(150);
+    await page.getByRole("radio", { name: "Daily totals", exact: true }).click();
+    await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
     assert(await page.getByRole("button", { name: "Try again", exact: true }).count(), "Failed history load needs a retry");
     await page.evaluate(() => window.__loggingFixture.recover());
     await page.getByRole("button", { name: "Try again", exact: true }).click();
