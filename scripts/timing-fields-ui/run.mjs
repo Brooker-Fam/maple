@@ -25,6 +25,7 @@ try {
     if (url.pathname === "/app.js") return route.fulfill({ contentType: "text/javascript", body: await readFile(path.join(out, "app.js")) });
     if (url.pathname === "/api/maple/auth/me") return route.fulfill({ json: { signedIn: false, google: false, email: false, apple: false, password: false } });
     if (url.pathname === "/api/maple/state") return route.fulfill({ status: 401, json: { error: "Synthetic signed-out fixture" } });
+    if (url.pathname === "/api/maple/diagnostics") return route.fulfill({ status: 204 });
     if (url.pathname.startsWith("/api/")) throw new Error(`Unexpected request: ${url.pathname}`);
     return route.fulfill({ contentType: "text/html", body: '<!doctype html><div id="root"></div><script type="module" src="/app.js"></script>' });
   });

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { timingCases } from "./timing-cases.mjs";
 
 const require = createRequire(import.meta.url);
 const { build } = require("esbuild");
@@ -426,6 +427,8 @@ check("one-minute start correction: previous feed boundary", async (f) => {
   assert.equal(correction.body.edit.to, prior.ended_at, "The boundary retains the previous feed's exact seconds");
   await f.answer(correction, { entry: { ...entry, started_at: prior.ended_at, updated_at: "2026-01-01T10:17:01.000Z", data: { ...entry.data, segments: [{ side: "L", start: prior.ended_at, end: null }] } } });
 });
+
+timingCases({ check, snapshot, running, now });
 
 let failures = 0;
 try {

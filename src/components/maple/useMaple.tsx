@@ -173,7 +173,7 @@ export type MapleContextValue = {
       actions?: (entry: Entry) => ToastAction[];
     }
   ) => Promise<Entry | null>;
-  update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string }) => Promise<Entry | null>;
+  update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string; onConflict?: (entry: Entry) => void }) => Promise<Entry | null>;
   /** True when the entry is removed (including one already removed elsewhere); false when the change failed. */
   remove: (id: number, opts?: { toast?: string }) => Promise<boolean>;
   /** `quiet`: no "Restored" toast (an Undo that says its own "Undone"). */
@@ -1126,6 +1126,13 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         return entry;
       } catch (e) {
         // The other phone discarded it while this sheet was open: say who, and drop it here too.
+        if (e instanceof ApiError && e.status === 409) {
+          const body = e.body as { reason?: string; entry?: Entry } | null;
+          if (body?.reason === "changed" && body.entry?.id === id) {
+            upsert(body.entry);
+            opts.onConflict?.(body.entry);
+          }
+        }
         const onlyNote = Object.keys(patch).every((k) => k === "note" || k === "expect_updated_at");
         const gone = discardedLine(e, kind, labelFor, onlyNote ? "note" : "change");
         if (gone) {

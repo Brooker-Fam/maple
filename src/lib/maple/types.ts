@@ -375,6 +375,7 @@ export type Lifetime = {
 /** POST /api/maple/timer */
 export type TimerInput = {
   action: TimerAction;
+  expect_updated_at?: string;
   /** start: which timer. */
   kind?: TimerKind;
   /**

@@ -43,6 +43,7 @@ import type {
 import { captureServerException } from "@/lib/posthog-server";
 import { parseFamilyId, type FamilyScope } from "./family";
 import { nursingChanged } from "./push-hooks";
+import { TAP_LOOKBACK_MS } from "./timer-limits";
 
 /**
  * Database access for Maple's Log. Every function throws StoreUnavailable when
@@ -798,7 +799,7 @@ function tapTime(at: Date | undefined, now: Date): Date {
   const t = at.getTime();
   if (Number.isNaN(t)) throw new Error("That time isn't a valid time");
   if (t > now.getTime() + 5 * SEC) throw new FeedEditError("future", { now: now.toISOString() });
-  if (t < now.getTime() - 4 * HOUR) throw new Error("That's more than 4 hours ago.");
+  if (t < now.getTime() - TAP_LOOKBACK_MS) throw new Error("That's more than 4 hours ago.");
   return t > now.getTime() ? now : at;
 }
 
@@ -821,14 +822,14 @@ export type SwitchResponse = TimerResponse & { moved?: true };
  * side tap took going both back. Undo is retime undo_tap, as for any tap:
  * it gives a re-sided part its side back, or drops the part the tap added.
  */
-export async function switchSide(fam: FamilyRef, id: number, side: StretchSide, at: Date | undefined, by?: string, opts: { resume?: boolean } = {}): Promise<SwitchResponse> {
+export async function switchSide(fam: FamilyRef, id: number, side: StretchSide, at: Date | undefined, by?: string, opts: { resume?: boolean; expectUpdatedAt?: string } = {}): Promise<SwitchResponse> {
   const now = new Date();
   const t = tapTime(at, now);
   return mutateTimer(fam, id, (cur) => {
     if (cur.kind !== "feed") throw new Error("Only nursing timers have sides");
     const { data, noop, ...flags } = switchTo(cur.data, side, t, { explicit: at !== undefined, resume: opts.resume, now, by });
     return noop ? null : { data, flags };
-  }, { by });
+  }, { by, expectUpdatedAt: opts.expectUpdatedAt });
 }
 
 /** Pause the open side now or at `at` (when she came off). Already paused: noop. */
@@ -1026,15 +1027,15 @@ async function restoreNap(
  * REST "adjust" alias that cached PWA clients still send. Other timers: not
  * in the future, at most 12 hours back.
  */
-export async function adjustTimerStart(fam: FamilyRef, id: number, at: Date, by?: string): Promise<Entry> {
+export async function adjustTimerStart(fam: FamilyRef, id: number, at: Date, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
   if (Number.isNaN(at.getTime())) throw new Error("Start time must be a valid time");
   const e = await getEntry(fam, id);
   if (!e) throw new NotFound(`Timer ${id} not found`);
-  if (e.kind === "feed") return (await retime(fam, id, { op: "move", edge: "start", to: at.toISOString() }, by, false)).entry;
+  if (e.kind === "feed") return (await retime(fam, id, { op: "move", edge: "start", to: at.toISOString(), expect_updated_at: opts.expectUpdatedAt }, by, false)).entry;
   const now = Date.now();
   if (at.getTime() > now) throw new Error("Start time can't be in the future");
   if (at.getTime() < now - 12 * HOUR) throw new Error("That's more than 12 hours ago.");
-  return (await mutateTimer(fam, id, (cur) => ({ data: cur.data, startedAt: at.toISOString() }), { by })).entry;
+  return (await mutateTimer(fam, id, (cur) => ({ data: cur.data, startedAt: at.toISOString() }), { by, expectUpdatedAt: opts.expectUpdatedAt })).entry;
 }
 
 /**
