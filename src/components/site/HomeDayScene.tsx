@@ -6,7 +6,7 @@ const ticks = Array.from({ length: 48 }, (_, i) => i * 7.5);
 /** An original illustration of a fictional day, not a live family record. */
 export default function HomeDayScene() {
   return (
-    <figure className="home-day-scene" aria-label="Illustration of a baby's day: feeds, sleep, diapers and little firsts, held together in one log.">
+    <figure className="home-day-scene" aria-label="Illustration of a baby's day: feeds, sleep, diapers and firsts, held together in one log.">
       <div className="home-orbit home-orbit-one" aria-hidden />
       <div className="home-orbit home-orbit-two" aria-hidden />
       <span className="home-spark home-spark-one" aria-hidden>✧</span>
@@ -31,15 +31,15 @@ export default function HomeDayScene() {
         </svg>
         <div className="home-dial-center">
           <Leaf size={34} />
-          <span className="home-dial-label">a little day</span>
+          <span className="home-dial-label">a day together</span>
           <strong>It all<br />belongs.</strong>
           <span className="home-dial-date">Feeds · naps · firsts</span>
         </div>
       </div>
-      <div className="home-orbit-note home-note-sleep" aria-hidden><span className="home-note-icon"><Icon name="moon" size={23} /></span><span><small>A little rest</small><strong>Nap · 1h 12m</strong></span></div>
+      <div className="home-orbit-note home-note-sleep" aria-hidden><span className="home-note-icon"><Icon name="moon" size={23} /></span><span><small>Rest</small><strong>Nap · 1h 12m</strong></span></div>
       <div className="home-orbit-note home-note-feed" aria-hidden><span className="home-note-icon"><Icon name="bottle" size={24} /></span><span><small>All fed</small><strong>Logged by Dad</strong></span></div>
-      <div className="home-orbit-note home-note-moment" aria-hidden><span className="home-note-icon"><Icon name="heart" size={22} /></span><span><small>A little first</small><strong>That tiny smile.</strong></span></div>
-      <figcaption className="home-scene-caption">A little day with Maple</figcaption>
+      <div className="home-orbit-note home-note-moment" aria-hidden><span className="home-note-icon"><Icon name="heart" size={22} /></span><span><small>Firsts</small><strong>That first smile.</strong></span></div>
+      <figcaption className="home-scene-caption">A day with Maple</figcaption>
     </figure>
   );
 }

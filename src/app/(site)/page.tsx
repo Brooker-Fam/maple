@@ -19,24 +19,23 @@ export default function Home() {
           <div className="home-hero-inner">
             <div className="home-hero-copy">
               <p className="home-eyebrow"><span className="home-tiny-star" aria-hidden>✦</span> Your family’s newborn companion</p>
-              <h1 id="home-title">Tiny days.<br />A little more<br /><em>understanding.</em></h1>
-              <p className="home-hero-lead">Feeds, naps, little firsts.<br />A shared place to make sense of it all.</p>
+              <h1 id="home-title">Make sense<br />of the<br /><em>early days.</em></h1>
+              <p className="home-hero-lead">See patterns in feeds, sleep, and growth. Keep everyone caring for your baby on the same page.</p>
               <div className="home-actions">
                 <GetStarted placement="hero" />
-                <a href="#explore" className="home-explore-link">Take a little tour <Icon name="chevron-down" size={17} /></a>
+                <a href="#explore" className="home-explore-link">Explore Maple <Icon name="chevron-down" size={17} /></a>
               </div>
               <p className="home-access">Free in early access · Made by parents</p>
             </div>
             <HomeDayScene />
           </div>
-          <div className="home-hero-bottom" aria-hidden><span>A little less to remember.</span><span>A little more room to be here.</span></div>
         </section>
 
         <section id="explore" aria-labelledby="explore-title" className="home-explore home-section">
           <div className="home-section-heading">
             <p className="home-eyebrow">Meet Maple</p>
-            <h2 id="explore-title">Their little world.<br /><em>All in one place.</em></h2>
-            <p>Pick a little part of the day. Try it for yourself.</p>
+            <h2 id="explore-title">Their days.<br /><em>All in one place.</em></h2>
+            <p>Choose a part of the day. Try it for yourself.</p>
           </div>
           <FeatureExplorer />
         </section>
@@ -58,7 +57,7 @@ export default function Home() {
             <article className="home-care-card home-card-lilac">
               <div className="home-care-art home-chat-art" aria-hidden>
                 <span className="home-chat-bubble">What happened while I slept?</span>
-                <span className="home-chat-answer"><Leaf size={22} /><span>2 feeds. 3 diapers.<br />One busy little morning.</span></span>
+                <span className="home-chat-answer"><Leaf size={22} /><span>2 feeds. 3 diapers.<br />One busy morning.</span></span>
               </div>
               <h3>Ask it like<br />you’d say it.</h3>
               <p>Log a moment or explore your history with Maple’s chat.</p>
@@ -66,7 +65,7 @@ export default function Home() {
             <article className="home-care-card home-card-peach">
               <div className="home-care-art home-mom-art" aria-hidden>
                 <div className="home-mom-sun"><Icon name="heart" size={45} strokeWidth={1.2} /></div>
-                <span className="home-mom-note">A little space for you.</span>
+                <span className="home-mom-note">Space for you, too.</span>
                 <span className="home-mom-star">✧</span>
               </div>
               <h3>Because mom<br />matters, too.</h3>
@@ -80,7 +79,7 @@ export default function Home() {
             <div className="home-story-art" aria-hidden><span className="home-story-ring" /><Leaf size={100} /><span className="home-story-star">✧</span><span className="home-story-handwritten">for Maple,<br />with love.</span></div>
             <div className="home-story-copy">
               <p className="home-eyebrow">A real baby. A real beginning.</p>
-              <h2 id="story-title">Made for our little Maple.<br /><em>Here for your little world.</em></h2>
+              <h2 id="story-title">Made for Maple.<br /><em>Here for your family.</em></h2>
               <p>At her six-day checkup, Maple’s weight was down. Her log helped us see feeding gaps, talk with her doctor, and follow the changes that helped breastfeeding work for us. Today, she’s doing great.</p>
               <Link href="/about" className="home-text-link">Read our family’s story <Icon name="arrow-right" size={18} /></Link>
             </div>

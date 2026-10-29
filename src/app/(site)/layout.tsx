@@ -16,7 +16,7 @@ const cormorantItalic = Cormorant_Garamond({
 });
 
 const TITLE = "Maple Baby | Feeds, sleep, diapers & shared care";
-const DESCRIPTION = "Track feeds, sleep, diapers, growth, and little firsts with Maple Baby. One shared family log for everyday care, patterns, and appointments.";
+const DESCRIPTION = "Make sense of the early days. See patterns in feeds, sleep, and growth, share care with your family, and keep the moments you want to remember.";
 
 export const metadata: Metadata = {
   title: { default: TITLE, template: "%s | Maple Baby" },

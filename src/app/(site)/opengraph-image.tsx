@@ -1,19 +1,19 @@
 import { ImageResponse } from "next/og";
 import { OgLeaf, ogFonts } from "@/components/site/og";
 
-export const alt = "Maple Baby. Tiny days. A little more understanding. Feeds, sleep, diapers, growth and little firsts, together.";
+export const alt = "Maple Baby. Make sense of the early days. Feeds, sleep, diapers, growth and firsts, together.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
 export default async function OpenGraphImage() {
-  const fonts = await ogFonts("Maple BabyTiny days.A little moreFeeds · Sleep · Diapers · Growth · FirstsIt all belongs.", "understanding.");
+  const fonts = await ogFonts("Maple BabyMake senseof theFeeds · Sleep · Diapers · Growth · FirstsIt all belongs.", "early days.");
   return new ImageResponse(
     (
       <div style={{ display: "flex", width: "100%", height: "100%", background: "#153328", color: "#F5F1DF", fontFamily: "Cormorant", padding: "52px 64px" }}>
         <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", width: 620 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 13 }}><OgLeaf /><span style={{ fontSize: 42, fontWeight: 600 }}>Maple Baby</span></div>
           <div style={{ display: "flex", flexDirection: "column", fontSize: 88, lineHeight: .98, fontWeight: 600, letterSpacing: "-.02em" }}>
-            <span>Tiny days.</span><span>A little more</span><span style={{ fontStyle: "italic", fontWeight: 500, color: "#DCDEA7" }}>understanding.</span>
+            <span>Make sense</span><span>of the</span><span style={{ fontStyle: "italic", fontWeight: 500, color: "#DCDEA7" }}>early days.</span>
           </div>
           <div style={{ display: "flex", fontSize: 26, color: "#CAD6C0" }}>Feeds · Sleep · Diapers · Growth · Firsts</div>
         </div>

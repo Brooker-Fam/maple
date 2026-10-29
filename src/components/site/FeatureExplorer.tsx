@@ -5,11 +5,11 @@ import { Icon, type IconName } from "@/components/maple/icons";
 
 type Feature = "feeding" | "sleep" | "diapers" | "growth" | "moments";
 const FEATURES: { id: Feature; label: string; icon: IconName; title: string; description: string; hint: string }[] = [
-  { id: "feeding", label: "Feeding", icon: "bottle", title: "Find your own little rhythm.", description: "Nursing, bottles, and pumping. Bring the little feeds together and see the shape of your day.", hint: "Try adding a feed to this sample day." },
-  { id: "sleep", label: "Sleep", icon: "moon", title: "For all the little Zzzs.", description: "Keep track of naps and nights, so the next person on duty knows how the day has gone.", hint: "Start a sample nap. End it when you’re ready." },
-  { id: "diapers", label: "Diapers", icon: "droplet", title: "A little less to keep in your head.", description: "Wet, dirty, or both. Keep a shared count ready for your next handoff or checkup.", hint: "Tap a button and watch the count change." },
+  { id: "feeding", label: "Feeding", icon: "bottle", title: "Find your feeding rhythm.", description: "Nursing, bottles, and pumping. See when feeds happen and how your day takes shape.", hint: "Try adding a feed to this sample day." },
+  { id: "sleep", label: "Sleep", icon: "moon", title: "See how sleep unfolds.", description: "Keep track of naps and nights, so the next person on duty knows how the day has gone.", hint: "Start a sample nap. End it when you’re ready." },
+  { id: "diapers", label: "Diapers", icon: "droplet", title: "Less to keep in your head.", description: "Wet, dirty, or both. Keep a shared count ready for your next handoff or checkup.", hint: "Tap a button and watch the count change." },
   { id: "growth", label: "Growth", icon: "sprout", title: "Watch their story grow.", description: "Keep measurements together and return to them as your baby grows, from one checkup to the next.", hint: "Choose a moment on the sample growth chart." },
-  { id: "moments", label: "Moments", icon: "camera", title: "The firsts you’ll want to keep.", description: "A first bath. A tiny smile. Save photos and notes for the people sharing this little world with you.", hint: "Flip through a few illustrated firsts." },
+  { id: "moments", label: "Moments", icon: "camera", title: "The firsts you’ll want to keep.", description: "A first bath. A first smile. Save photos and notes for the people sharing these days with you.", hint: "Flip through a few illustrated firsts." },
 ];
 
 function DemoHeader({ title, icon }: { title: string; icon: IconName }) {
@@ -56,7 +56,7 @@ function SleepDemo() {
   };
   return (
     <div className="mx-demo-content">
-      <DemoHeader title="A little downtime" icon="moon" />
+      <DemoHeader title="Time to rest" icon="moon" />
       <div className={`mx-sleep-scene${running ? " mx-sleep-running" : ""}`} aria-hidden="true">
         <span className="mx-sleep-star mx-star-one">✦</span><span className="mx-sleep-star mx-star-two">✧</span><span className="mx-sleep-star mx-star-three">✦</span>
         <div className="mx-moon"><Icon name="moon" size={90} strokeWidth={1} /></div>
@@ -98,7 +98,7 @@ function GrowthDemo() {
   const point = MEASUREMENTS[selected];
   return (
     <div className="mx-demo-content">
-      <DemoHeader title="Little by little" icon="sprout" />
+      <DemoHeader title="Growing over time" icon="sprout" />
       <div className="mx-growth-value" aria-live="polite"><span>{point.label} · sample weight</span><strong>{point.weight}<small>kg</small></strong></div>
       <svg className="mx-growth-chart" viewBox="0 0 300 185" role="img" aria-label="Illustrative weight chart: 3.2 kilograms on day 3, 3.7 kilograms at week 2, and 4.2 kilograms at week 4.">
         {[45, 95, 147].map(y => <line key={y} x1="20" y1={y} x2="280" y2={y} stroke="var(--mx-track)" strokeDasharray="3 6" />)}
@@ -107,12 +107,12 @@ function GrowthDemo() {
         {MEASUREMENTS.map((p, index) => <g key={p.label}><circle cx={p.x} cy={p.y} r={index === selected ? 13 : 5} fill="var(--mx-sage)" opacity={index === selected ? .18 : 1} /><circle cx={p.x} cy={p.y} r={index === selected ? 5 : 3} fill="var(--mx-sage)" /></g>)}
       </svg>
       <div className="mx-date-choices" aria-label="Sample measurements">{MEASUREMENTS.map((p, i) => <button key={p.label} type="button" aria-pressed={selected === i} onClick={() => setSelected(i)}>{p.label}</button>)}</div>
-      <p className="mx-demo-status">A few points from an imaginary little life.</p>
+      <p className="mx-demo-status">Follow measurements from one checkup to the next.</p>
     </div>
   );
 }
 
-const MOMENTS = [{ title: "First bath", note: "A splash. A squeak. A very tiny towel.", date: "Day 12", icon: "bath" as const }, { title: "First smile", note: "The whole room smiled back.", date: "Week 6", icon: "heart" as const }, { title: "Hello, world", note: "The day everything got a little bigger.", date: "Day 1", icon: "sun" as const }];
+const MOMENTS = [{ title: "First bath", note: "A splash. A squeak. A warm towel.", date: "Day 12", icon: "bath" as const }, { title: "First smile", note: "The whole room smiled back.", date: "Week 6", icon: "heart" as const }, { title: "Hello, world", note: "The day we met you.", date: "Day 1", icon: "sun" as const }];
 function MomentArt({ index }: { index: number }) {
   return (
     <svg viewBox="0 0 280 150" aria-hidden="true" className="mx-moment-art">
@@ -141,7 +141,7 @@ function MomentsDemo() {
   const moment = MOMENTS[selected];
   return (
     <div className="mx-demo-content">
-      <DemoHeader title="The little firsts" icon="camera" />
+      <DemoHeader title="Their firsts" icon="camera" />
       <div className={`mx-memory-card mx-memory-${selected}`} aria-live="polite">
         <MomentArt index={selected} /><div className="mx-memory-caption"><small>{moment.date}</small><h4>{moment.title}</h4><p>{moment.note}</p></div>
       </div>

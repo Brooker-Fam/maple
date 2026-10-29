@@ -20,7 +20,6 @@
 .home-explore-link { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; min-height: 44px; text-underline-offset: 5px; }
 .home-explore-link:hover { text-decoration: underline; }
 .home-access { margin-top: 15px; font-size: 12px; color: var(--mp-ink-3); }
-.home-hero-bottom { position: relative; z-index: 1; display: flex; justify-content: space-between; max-width: 1152px; margin: auto; padding: 23px 0; border-top: 1px solid #f5f1df25; color: #c9d4be; font-size: 12px; letter-spacing: .035em; }
 .home-day-scene { position: relative; width: 100%; aspect-ratio: 1; max-width: 570px; justify-self: end; isolation: isolate; }
 .home-day-scene::before { content: ""; position: absolute; inset: 12% 5%; z-index: -1; border-radius: 50%; background: radial-gradient(circle at 55% 45%, #aeb5a32a, #c1a4bd10 45%, transparent 72%); filter: blur(20px); }
 .home-orbit { position: absolute; border: 1px solid #d7ddbd25; border-radius: 50%; inset: 10%; pointer-events: none; }
@@ -108,7 +107,6 @@
   .home-orbit-note { padding: 10px; gap: 7px; }
   .home-orbit-note strong { font-size: 11px; }
   .home-note-icon { width: 28px; height: 28px; }
-  .home-hero-bottom { margin-inline: 32px; }
   .home-care-card { padding: 22px; }
   .home-care-card h3 { font-size: 31px; }
   .home-handoff-note { flex-wrap: wrap; }
@@ -131,7 +129,6 @@
   .home-note-sleep { right: 0; top: 5%; }
   .home-note-moment { right: 0; }
   .home-scene-caption { bottom: -3%; font-size: 9px; }
-  .home-hero-bottom { margin-inline: 24px; padding: 20px 0; font-size: 9px; gap: 15px; }
   .home-section { padding: 65px 24px; }
   .home-section-heading { margin-bottom: 30px; }
   .home-section-heading h2 { font-size: 49px; }
