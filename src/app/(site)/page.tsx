@@ -19,7 +19,7 @@ export default function Home() {
           <div className="home-hero-inner">
             <div className="home-hero-copy">
               <p className="home-eyebrow"><span className="home-tiny-star" aria-hidden>✦</span> Your family’s newborn companion</p>
-              <h1 id="home-title">Tiny days.<br />A whole<br /><em>new world.</em></h1>
+              <h1 id="home-title">Tiny days.<br />A little more<br /><em>understanding.</em></h1>
               <p className="home-hero-lead">Feeds, naps, little firsts.<br />A shared place to make sense of it all.</p>
               <div className="home-actions">
                 <GetStarted placement="hero" />

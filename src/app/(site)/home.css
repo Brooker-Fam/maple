@@ -14,7 +14,7 @@
 .home-tiny-star { font-size: 18px; color: #edc698; }
 .home-hero h1 { font-family: var(--font-display); font-size: clamp(72px, 7.8vw, 112px); font-weight: 500; line-height: .89; letter-spacing: -.035em; margin-top: 27px; }
 .maple-home em { font-family: var(--font-site-italic), var(--font-display); font-weight: 500; }
-.home-hero h1 em { color: #dcdfa7; }
+.home-hero h1 em { color: #dcdfa7; font-size: .95em; line-height: 1.1; }
 .home-hero-lead { margin-top: 28px; font-size: 17px; line-height: 1.65; color: #d1d9c8; }
 .home-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 24px; margin-top: 28px; }
 .home-explore-link { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; min-height: 44px; text-underline-offset: 5px; }
@@ -104,7 +104,7 @@
 @keyframes home-arrive { from { opacity: 0; translate: 0 14px; } to { opacity: 1; translate: 0 0; } }
 @media (max-width: 1100px) {
   .home-hero-inner { gap: 0; }
-  .home-hero h1 { font-size: 85px; }
+  .home-hero h1 { font-size: clamp(72px, 7.8vw, 85px); }
   .home-note-feed { left: -1%; }
   .home-orbit-note { padding: 10px; gap: 7px; }
   .home-orbit-note strong { font-size: 11px; }
@@ -121,8 +121,6 @@
   .home-hero-copy { text-align: center; }
   .home-hero-copy .home-eyebrow { justify-content: center; font-size: 9px; letter-spacing: .1em; }
   .home-hero h1 { font-size: clamp(62px,12.5vw,94px); margin-top: 23px; }
-  .home-hero h1 br:nth-of-type(2) { display: none; }
-  .home-hero h1 em::before { content: " "; }
   .home-hero-lead { font-size: 15px; margin-top: 24px; }
   .home-actions { justify-content: center; margin-top: 23px; gap: 18px; }
   .home-access { font-size: 10px; }
