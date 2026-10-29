@@ -68,7 +68,7 @@ test("the rendered dock hides idle nursing for formula-only but keeps active con
 
 function legend(arcs: { lane: string }[], settings = formula) {
   const call = find("DayDial", (node) => ts.isJsxSelfClosingElement(node) && node.tagName.getText() === "Legend");
-  const props = evaluate<Element>(call, { Legend: "Legend", pal: {}, night: false, state: { baby: { settings } }, logSwitches: switches, arcs, brackets: [] }).props;
+  const props = evaluate<Element>(call, { Legend: "Legend", pal: {}, night: false, activity: "all", state: { baby: { settings } }, logSwitches: switches, arcs, brackets: [] }).props;
   const render = fn<(props: Record<string, unknown>) => Element>("DayDial", "Legend", { cx: (...x: unknown[]) => x.join(" "), DROPLET_PATH: "", Icon: "Icon", LEGEND_STOOLS: [], tone: {} });
   return JSON.stringify(render(props));
 }
