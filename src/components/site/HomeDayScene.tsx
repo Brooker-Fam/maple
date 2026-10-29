@@ -6,7 +6,7 @@ const ticks = Array.from({ length: 48 }, (_, i) => i * 7.5);
 /** An original illustration of a fictional day, not a live family record. */
 export default function HomeDayScene() {
   return (
-    <figure className="home-day-scene" aria-label="Illustration of a baby's day: feeds, sleep, diapers and little firsts, held together in one log. Fictional sample data.">
+    <figure className="home-day-scene" aria-label="Illustration of a baby's day: feeds, sleep, diapers and little firsts, held together in one log.">
       <div className="home-orbit home-orbit-one" aria-hidden />
       <div className="home-orbit home-orbit-two" aria-hidden />
       <span className="home-spark home-spark-one" aria-hidden>✧</span>
@@ -39,7 +39,7 @@ export default function HomeDayScene() {
       <div className="home-orbit-note home-note-sleep" aria-hidden><span className="home-note-icon"><Icon name="moon" size={23} /></span><span><small>A little rest</small><strong>Nap · 1h 12m</strong></span></div>
       <div className="home-orbit-note home-note-feed" aria-hidden><span className="home-note-icon"><Icon name="bottle" size={24} /></span><span><small>All fed</small><strong>Logged by Dad</strong></span></div>
       <div className="home-orbit-note home-note-moment" aria-hidden><span className="home-note-icon"><Icon name="heart" size={22} /></span><span><small>A little first</small><strong>That tiny smile.</strong></span></div>
-      <figcaption className="home-scene-caption">A little day with Maple · sample data</figcaption>
+      <figcaption className="home-scene-caption">A little day with Maple</figcaption>
     </figure>
   );
 }

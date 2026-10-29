@@ -73,7 +73,6 @@ export default function Home() {
               <p>A place for your recovery, medicines, and daily check-ins.</p>
             </article>
           </div>
-          <p className="home-sample-note">Illustrations use fictional sample data.</p>
         </section>
 
         <section id="maples-story" aria-labelledby="story-title" className="home-story">
@@ -89,7 +88,7 @@ export default function Home() {
         </section>
 
         <section className="home-finale home-section" aria-labelledby="join">
-          <div className="home-privacy"><Icon name="lock" size={17} /><span>Your family’s space. No ads. Never sold for advertising.</span><Link href="/privacy">Our privacy promise <span aria-hidden>↗</span></Link></div>
+          <div className="home-privacy"><Icon name="lock" size={17} /><span>Your family’s space. Never sold for advertising.</span><Link href="/privacy">Our privacy promise <span aria-hidden>↗</span></Link></div>
           <span className="home-finale-star" aria-hidden>✦</span>
           <h2 id="join">Find your<br /><em>family’s rhythm.</em></h2>
           <p>For the messy, sleepy, wonderful beginning.</p>

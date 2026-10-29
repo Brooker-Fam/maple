@@ -75,7 +75,6 @@
 .home-mom-sun { position: absolute; width: 115px; height: 115px; border-radius: 50%; background: #e9b68c; color: #805838; display: grid; place-items: center; top: 6px; left: calc(50% - 58px); box-shadow: 0 0 0 13px #e9b68c20, 0 0 0 27px #e9b68c10; }
 .home-mom-note { position: absolute; bottom: 31px; left: 50%; transform: translateX(-50%) rotate(-5deg); white-space: nowrap; background: #fff8ed; padding: 9px 16px; border-radius: 8px; font-family: var(--font-site-italic),var(--font-display); font-size: 24px; font-style: italic; box-shadow: 0 10px 25px #aa7e5220; }
 .home-mom-star { position: absolute; top: 7px; right: 10px; font-size: 34px; color: #805838; }
-.home-sample-note { margin-top: 15px; text-align: right; font-size: 10px; color: var(--mp-ink-3); }
 .home-story { background: #e9dfcf; border-block: 1px solid #554a3012; }
 .home-story-inner { display: grid; grid-template-columns: 1fr 1.6fr; align-items: center; gap: 70px; max-width: 1120px; padding: 65px 32px; margin: auto; }
 .home-story-copy .home-eyebrow { color: #6c7252; }

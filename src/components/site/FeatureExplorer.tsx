@@ -182,7 +182,7 @@ export default function FeatureExplorer() {
           <div className="mx-try-hint"><Icon name="arrow-right" size={20} /><span>{feature.hint}</span></div>
         </div>
         <div className={`mx-stage mx-stage-${active}${night ? " mx-night" : ""}`}>
-          <div className="mx-stage-bar"><span>Interactive demo · sample data</span><button type="button" className="mx-night-toggle" aria-label="Night preview" aria-pressed={night} onClick={() => setNight(!night)}><Icon name={night ? "moon" : "sun"} size={16} /><span>{night ? "Night" : "Day"}</span></button></div>
+          <div className="mx-stage-bar"><span>Interactive demo</span><button type="button" className="mx-night-toggle" aria-label="Night preview" aria-pressed={night} onClick={() => setNight(!night)}><Icon name={night ? "moon" : "sun"} size={16} /><span>{night ? "Night" : "Day"}</span></button></div>
           <div className="mx-demo-window"><Demo key={active} /></div>
         </div>
       </div>
