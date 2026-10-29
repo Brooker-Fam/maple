@@ -272,11 +272,12 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
 
-        {/* Where and which units, side by side: both set how the numbers below read. */}
-        <div className="flex gap-3">
+        {/* Each choice keeps enough room for enlarged text on a phone. */}
+        <div className="grid gap-3 sm:grid-cols-2">
           <div className="min-w-0 flex-1">
             <Label>Weighed at</Label>
             <Segmented<"home" | "doctor" | "">
+              className="[&>button]:px-2"
               value={at ?? ""}
               onChange={(next) => { if (next) { touch("at"); setAt(next); } }}
               options={[
@@ -289,6 +290,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
             <Label>Units</Label>
             <fieldset disabled={checks.invalid} className="min-w-0">
               <Segmented<UnitSystem>
+                className="[&>button]:px-2"
                 value={sys}
                 onChange={switchUnits}
                 options={[

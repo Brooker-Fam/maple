@@ -408,6 +408,25 @@ try {
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Measurement rows stay within the phone");
       }
     }
+    for (const font of [24, 32]) {
+      await page.setViewportSize({ width: 320, height: 568 });
+      await page.goto(`${url}?mode=form-growth`);
+      const form = page.getByRole("dialog").first();
+      await form.waitFor();
+      await page.evaluate((font) => { document.documentElement.style.fontSize = `${font}px`; }, font);
+      for (const name of ["Home", "g · cm"]) {
+        const choice = form.getByRole("radio", { name, exact: true });
+        await choice.scrollIntoViewIfNeeded();
+        assert(await choice.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const group = element.parentElement.getBoundingClientRect();
+          return box.width >= 44 && box.height >= 44 && box.left >= group.left && box.right <= group.right &&
+            document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest("button") === element;
+        }), `${name} must remain an unobstructed 44px choice at 320px / ${font}px text`);
+        await choice.click();
+        assert.equal(await choice.getAttribute("aria-checked"), "true");
+      }
+    }
     await page.setViewportSize({ width: 390, height: 844 });
     assert.deepEqual(cramped, [], "Measured decimals need at least 64px of readable input space");
   });

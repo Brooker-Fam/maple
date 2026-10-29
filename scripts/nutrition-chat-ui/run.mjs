@@ -182,14 +182,13 @@ try {
   });
 
   await scenario("manual logging remains explicit and Water keeps its direct measured save", "care=false&terms=false", async (page) => {
-    assert.equal(await page.getByRole("button", { name: "Ate something", exact: true }).isVisible(), false);
+    assert.equal(await page.getByRole("button", { name: "Ate something", exact: true }).isVisible(), true);
     await page.getByRole("button", { name: "Log water, 8 oz", exact: true }).click();
     await page.waitForFunction(() => window.__nutritionChat.snapshot().state.care.entries.length === 1);
     let value = await snapshot(page);
     assert.equal(writes(value)[0].body.data.name, "Water");
     assert(Math.abs(writes(value)[0].body.data.amount_ml - 236.5882365) < 0.001);
     assert.equal(writes(value)[0].body.at, "2026-10-28T02:30:00.000Z");
-    await page.getByText("Log manually", { exact: true }).click();
     await page.getByRole("button", { name: "Ate something", exact: true }).click();
     await page.getByLabel("What was it?", { exact: true }).fill("Synthetic toast");
     await page.getByRole("button", { name: "Log food", exact: true }).click();

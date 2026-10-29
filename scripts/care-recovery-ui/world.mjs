@@ -50,6 +50,24 @@ export async function apiRoute(route, controls) {
   if (url.pathname === "/api/maple/chat/consent") return json({ terms: true, care: false, self: true });
   if (url.pathname === "/api/maple/onboarding") return json({ needed: false });
   if (url.pathname === "/api/maple/push") return json({ publicKey: null, sub: null, health: { needs_resubscribe: false }, reminders: [] });
+  if (url.pathname === "/api/maple/diagnostics") return route.fulfill({ status: 204, body: "" });
+  if (url.pathname === "/api/maple/care/mood") {
+    if (method === "POST") {
+      if (controls.pauseMood) await new Promise((resolve) => { controls.releaseMood = resolve; });
+      if (controls.moodFailure) return json({ error: "Synthetic check-in creation rejected" }, 400);
+      const entry = { ...body, id: 9100 + state.care.mood.length, note: null, created_at: body.at, updated_at: controls.changed() };
+      state.care.mood.unshift(entry);
+      return json({ entry }, 201);
+    }
+    if (method === "PATCH") {
+      const entry = state.care.mood.find((row) => row.id === Number(url.searchParams.get("id")));
+      if (!entry) return json({ error: "No such check-in" }, 404);
+      entry.data = { ...entry.data, ...body.data, ...(entry.data.harm_ever || body.data?.tags?.includes("harm_self") ? { harm_ever: true } : {}) };
+      if (body.note !== undefined) entry.note = body.note;
+      entry.updated_at = controls.changed();
+      return json({ entry });
+    }
+  }
   if (url.pathname === "/api/maple/care/entries") {
     if (method === "GET") return controls.historyFailure ? json({ error: "Synthetic history failure" }, 503) : json({ entries: state.care.entries.filter((entry) => entry.at.startsWith(url.searchParams.get("from"))), tz: state.baby.timezone });
     if (method === "POST") {

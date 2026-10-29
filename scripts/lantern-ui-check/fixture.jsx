@@ -60,4 +60,3 @@ function Fixture() {
 }
 
 createRoot(document.getElementById("root")).render(<MotionConfig reducedMotion="user"><Fixture /></MotionConfig>);
-

@@ -341,4 +341,3 @@ try {
   }
 } finally { await browser.close(); await rm(out, { recursive: true, force: true }); }
 if (failures) process.exit(1);
-

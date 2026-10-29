@@ -25,7 +25,7 @@ await build({
         const source = await readFile(file, "utf8");
         const anchor = "  return <MapleContext.Provider value={value}>";
         assert(source.includes(anchor));
-        return { contents: source.replace(anchor, "  window.__loggingReview = { state, pending: outbox, online };\n" + anchor), loader: "tsx" };
+        return { contents: source.replace(anchor, "  window.__loggingReview = { state, pending: outbox, online, update, refresh: forceRefresh };\n" + anchor), loader: "tsx" };
       }
       const relative = path.relative(path.join(root, "src/components/maple"), file);
       if (process.env.LOGGING_BASELINE_REF && baselineFiles.has(relative)) {

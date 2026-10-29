@@ -42,7 +42,103 @@ export function saveCases({ assert, fixture, freshState, record, NOW }) {
     await f.page.waitForTimeout(80);
     assert(await form.isVisible(), "Back and Escape must keep the pending save open");
   };
+  const queuedTemperature = async ({ duringFlush = false, scopeChange = null, lateResponse = false } = {}) => {
+    let online = false;
+    let allowVitals = false;
+    let changedScope = false;
+    let release;
+    let started;
+    const flushing = new Promise((resolve) => { started = resolve; });
+    const f = await fixture({ entryResponse: async ({ route, req, state }) => {
+      const body = req.postDataJSON();
+      if (body.kind === "temp" && !online) return route.fulfill({ status: 503, json: { error: "Synthetic temporary temperature failure" } });
+      if (body.kind === "vitals" && !allowVitals) return route.fulfill({ status: 400, json: { error: "Synthetic rejected other readings" } });
+      if (body.kind === "temp") await new Promise((resolve) => { release = resolve; started(); });
+      const saved = req.method() === "PATCH"
+        ? { ...state.entries[0], ...body, data: { ...state.entries[0].data, ...body.data }, updated_at: NOW }
+        : record(state.entries.length + 900, body.kind, body.data, body.started_at, { note: body.note });
+      if (!changedScope) {
+        state.entries = [saved, ...state.entries.filter((entry) => entry.id !== saved.id)];
+        state.rev += "-saved";
+      }
+      return route.fulfill({ json: { entry: saved } });
+    } });
+    const waitForScope = () => f.page.waitForFunction(({ scopeChange }) => {
+      const state = window.__loggingReview.state;
+      return scopeChange === "family" ? state.family.id === 100 : scopeChange === "member" ? state.me.email === "other@example.test" : state.baby.id === 100;
+    }, { scopeChange });
+    const switchScope = async (wait = true) => {
+      changedScope = true;
+      if (scopeChange === "family") f.state.family = { ...f.state.family, id: 100 };
+      else if (scopeChange === "member") f.state.me = { ...f.state.me, email: "other@example.test" };
+      else f.state.baby = { ...f.state.baby, id: 100 };
+      f.state.entries = [];
+      f.state.rev += "-scope";
+      await f.page.evaluate(() => window.__loggingReview.refresh());
+      // Active requests intentionally defer refreshes. Once the old response
+      // settles, its automatic refresh must install the new scope safely.
+      if (wait) await waitForScope();
+    };
+    try {
+      await f.page.goto("https://logging-recovery.example.test/#today");
+      const form = await open(f.page, "Temperature");
+      const reading = form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true });
+      await reading.fill("98.6");
+      await form.getByRole("textbox", { name: "heart rate, beats per minute", exact: true }).fill("120");
+      await primary(form).click();
+      await f.page.getByText("Synthetic rejected other readings", { exact: true }).waitFor();
+      await f.page.waitForFunction(() => window.__loggingReview.pending.length === 1);
+      const pending = await f.page.evaluate(() => window.__loggingReview.pending[0]);
+      online = true;
+      await f.page.evaluate(() => window.dispatchEvent(new Event("online")));
+      await flushing;
+      if (scopeChange && lateResponse) await switchScope(false);
+      if (duringFlush) {
+        await reading.fill("98.8");
+        await primary(form).click();
+        await f.page.getByText("One sec, that's still saving", { exact: true }).waitFor();
+        assert.equal(await reading.inputValue(), "98.8", "A correction stays in the draft while its queued temperature is uploading");
+        assert(await form.isVisible());
+        assert.equal(writes(f).filter((req) => req.method === "PATCH").length, 0);
+      }
+      release();
+      await f.page.waitForFunction(() => window.__loggingReview.pending.length === 0);
+      if (scopeChange) {
+        if (!lateResponse) await switchScope();
+        else await waitForScope();
+        const count = writes(f).length;
+        const saved = await f.page.evaluate((id) => window.__loggingReview.update(id, { note: "Must not cross scope" }), pending.entry.id);
+        assert.equal(saved, null);
+        assert.equal(writes(f).length, count, "A previous scope's temporary id must never resolve to a write");
+      } else {
+        await f.page.waitForFunction(() => window.__loggingReview.state.entries.some((entry) => entry.id === 900));
+        if (!duringFlush) await reading.fill("98.8");
+        allowVitals = true;
+        await primary(form).click();
+        await form.waitFor({ state: "hidden" });
+        const temps = f.state.entries.filter((entry) => entry.kind === "temp");
+        assert.equal(temps.length, 1);
+        assert.equal(temps[0].id, 900);
+        assert.equal(temps[0].data.temp_c, 37.111);
+        assert(f.state.entries.every((entry) => entry.started_at === pending.input.started_at));
+        assert.equal(f.state.entries.find((entry) => entry.kind === "vitals").data.heart_bpm, 120);
+        const posts = writes(f).filter((req) => req.method === "POST" && req.body.kind === "temp");
+        assert.equal(posts.length, 2, "Only the original temperature attempt and its outbox retry are posted");
+        assert.equal(posts[0].body.client_id, posts[1].body.client_id);
+        const patches = writes(f).filter((req) => req.method === "PATCH");
+        assert.equal(patches.length, 1);
+        assert.equal(patches[0].query, "?id=900");
+      }
+      assert.deepEqual(f.errors, []);
+    } finally { release?.(); await f.close(); }
+  };
   return [
+    ["Temperature retry follows its queued reading after sync", () => queuedTemperature()],
+    ["Temperature correction waits for its in-flight queued reading and survives retry", () => queuedTemperature({ duringFlush: true })],
+    ...["family", "member", "baby"].flatMap((scopeChange) => [false, true].map((lateResponse) => [
+      `Temperature sync identity clears on ${scopeChange} change${lateResponse ? " before a late response" : " after syncing"}`,
+      () => queuedTemperature({ scopeChange, lateResponse }),
+    ])),
     ...kinds.map(([label, kind, field, value]) => [`${label} retains rejected logs and locks pending creation and edits`, async () => {
       let response = "reject";
       let release;
