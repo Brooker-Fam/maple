@@ -11,12 +11,14 @@ export async function GET(req: Request) {
   return NextResponse.json(
     {
       issuer: origin,
+      authorization_response_iss_parameter_supported: true,
       authorization_endpoint: `${origin}/oauth/authorize`,
       token_endpoint: `${origin}/oauth/token`,
       registration_endpoint: `${origin}/oauth/register`,
+      client_id_metadata_document_supported: true,
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256", "plain"],
+      code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
       // No offline_access: Claude only asks for it when it's advertised.
       // Refresh tokens go to Claude, ChatGPT and local apps (admin ones lapse after 90 idle days).

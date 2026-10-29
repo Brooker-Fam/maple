@@ -39,6 +39,8 @@
     "check:apple-auth": "tsx scripts/apple-auth-check.ts",
     "check:email-auth": "tsx scripts/email-auth-check.ts",
     "check:signin": "tsx scripts/signin-flow-check.ts",
+    "check:maple-oauth": "tsx scripts/oauth-clients-check.ts && tsx scripts/oauth-route-check.ts && tsx scripts/oauth-token-check.ts",
+    "check:maple-oauth-ui": "node scripts/oauth-ui/run.mjs",
     "check:maple-sync": "node scripts/maple-sync-check/run.mjs",
     "check:maple-feed-status": "tsx scripts/maple-feed-status-check.ts",
     "check:maple-diagnostics": "tsx scripts/maple-diagnostics-check.ts",

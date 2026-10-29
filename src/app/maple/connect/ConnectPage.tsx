@@ -224,7 +224,9 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
               <li>
                 Click <strong>Add custom connector</strong>. Name it{" "}
                 <strong>Maple&apos;s Log</strong> and paste the URL:{" "}
-                <Code>{MCP_URL}</Code>
+                <Code>{MCP_URL}</Code>. If Claude shows an OAuth client choice,
+                keep <strong>Use Claude&apos;s published identity (Recommended)</strong>.
+                Finish adding the connector.
               </li>
               <li>
                 Click <strong>Connect</strong> <Then /> <strong>Continue with Google</strong>{" "}
