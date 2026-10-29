@@ -42,6 +42,9 @@ type Growth = typeof import("@/lib/maple/growth");
 
 /** Rough newborn-to-toddler bounds before the WHO check loads (or before birth time is known). */
 const SANE = { weight: [1000, 20000], length: [35, 100], head: [25, 55] } as const;
+const MAX_WEIGHT_G = 30000;
+const MAX_LENGTH_CM = 130;
+const MAX_HEAD_CM = 60;
 
 export default function GrowthSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
@@ -183,9 +186,9 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   // The server's limits; anything outside can't be saved.
   const savable =
     hasAny &&
-    (data.weight_g == null || (data.weight_g >= 500 && data.weight_g <= 30000)) &&
-    (data.length_cm == null || (data.length_cm >= 25 && data.length_cm <= 130)) &&
-    (data.head_cm == null || (data.head_cm >= 20 && data.head_cm <= 60));
+    (data.weight_g == null || (data.weight_g >= 500 && data.weight_g <= MAX_WEIGHT_G)) &&
+    (data.length_cm == null || (data.length_cm >= 25 && data.length_cm <= MAX_LENGTH_CM)) &&
+    (data.head_cm == null || (data.head_cm >= 20 && data.head_cm <= MAX_HEAD_CM));
 
   /** Only the measurements that were changed: shown values are rounded through the display units. */
   const editData = () => {
@@ -198,7 +201,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || checks.invalid || !savable) return;
     setBusy(true);
     try {
       const noteVal = note.trim() || null;
@@ -277,6 +280,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
           <div className="min-w-0 flex-1">
             <Label>Weighed at</Label>
             <Segmented<"home" | "doctor" | "">
+              aria-label="Weighed at"
               className="[&>button]:px-2"
               value={at ?? ""}
               onChange={(next) => { if (next) { touch("at"); setAt(next); } }}
@@ -290,6 +294,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
             <Label>Units</Label>
             <fieldset disabled={checks.invalid} className="min-w-0">
               <Segmented<UnitSystem>
+                aria-label="Units"
                 className="[&>button]:px-2"
                 value={sys}
                 onChange={switchUnits}
@@ -310,22 +315,22 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
           </Label>
           {us ? (
             <div className="grid gap-3 sm:grid-cols-2">
-              <MiniStepper key="lb" label={null} unit="lb" ariaLabel="pounds" value={lb} onChange={(v) => editWeight("lb", v)} max={40} onInvalid={checks.watch("lb")} />
+              <MiniStepper key="lb" label={null} unit="lb" ariaLabel="pounds" value={lb} onChange={(v) => editWeight("lb", v)} max={Number((MAX_WEIGHT_G / lbOzToGrams(1)).toFixed(3))} onInvalid={checks.watch("lb")} />
               <MiniStepper key="oz" label={null} unit="oz" ariaLabel="ounces" value={oz} onChange={(v) => editWeight("oz", v)} step={0.1} decimals={1} max={15.9} onInvalid={checks.watch("oz")} />
             </div>
           ) : (
-            <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={(v) => editWeight("g", v)} step={10} max={30000} onInvalid={checks.watch("grams")} />
+            <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={(v) => editWeight("g", v)} step={10} max={MAX_WEIGHT_G} onInvalid={checks.watch("grams")} />
           )}
           <Reading p={pW} warn={off("weight", weightG, rW)} extra={!us && weightG ? `${(weightG / 1000).toFixed(2)} kg` : undefined} />
         </section>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <section aria-label="Length">
-            <MiniStepper label={`Length`} unit={lenUnit} ariaLabel={`length in ${us ? "inches" : "centimetres"}`} value={length} onChange={(v) => editLength("length", v)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 50 : 130} onInvalid={checks.watch("length")} />
+            <MiniStepper label={`Length`} unit={lenUnit} ariaLabel={`length in ${us ? "inches" : "centimetres"}`} value={length} onChange={(v) => editLength("length", v)} step={us ? 0.25 : 0.5} decimals={2} max={toLen(MAX_LENGTH_CM, sys)!} onInvalid={checks.watch("length")} />
             <Reading p={pL} warn={off("length", lenCm, rL)} compact />
           </section>
           <section aria-label="Head">
-            <MiniStepper label={`Head`} unit={lenUnit} ariaLabel={`head circumference in ${us ? "inches" : "centimetres"}`} value={head} onChange={(v) => editLength("head", v)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 25 : 60} onInvalid={checks.watch("head")} />
+            <MiniStepper label={`Head`} unit={lenUnit} ariaLabel={`head circumference in ${us ? "inches" : "centimetres"}`} value={head} onChange={(v) => editLength("head", v)} step={us ? 0.25 : 0.5} decimals={2} max={toLen(MAX_HEAD_CM, sys)!} onInvalid={checks.watch("head")} />
             <Reading p={pH} warn={off("head", headCm, rH)} compact />
           </section>
         </div>

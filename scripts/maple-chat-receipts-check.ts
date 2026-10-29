@@ -34,7 +34,7 @@ for (const entry of [food, drink]) {
 }
 assert.deepEqual(careReceiptDetails(food, "us"), { title: "Meal", description: "Toast and eggs" });
 assert.equal(careReceiptDetails({ ...food, data: { ...food.data, meal: "snack" } }, "us").title, "Snack");
-assert.equal(careReceiptDetails(drink, "us").description, "8 oz");
+assert.equal(careReceiptDetails(drink, "us").description, "8.01 oz");
 assert.equal(careReceiptDetails({ ...drink, data: { name: "Water", amount_ml: 250 } }, "metric").description, "250 ml");
 assert.equal(careReceiptDetails({ ...drink, data: { name: "Water", amount_ml: null } }, "us").description, "Amount not recorded");
 const draft = { description: "Yogurt", meal: "snack" as const, name: "Tea", amount: nutritionAmountText(drink, "us") };

@@ -104,9 +104,9 @@ function flushing(item: Queued) {
   let resolve!: (value: unknown) => void;
   const reply = new Promise((done) => { resolve = done; });
   const flush = clientFunction<() => Promise<void>>("flush", {
-    flushing: { current: false }, outboxRef, stateRef,
+    flushing: { current: false }, flushingEntry: { current: null }, syncedEntryIds: { current: { ids: new Map() } }, outboxRef, stateRef,
     ownedBy: clientFunction("ownedBy"),
-    isMoodItem: clientFunction("isMoodItem"), isCareItem: clientFunction("isCareItem"),
+    isEntryItem: clientFunction("isEntryItem"), isMoodItem: clientFunction("isMoodItem"), isCareItem: clientFunction("isCareItem"),
     OUTBOX_URL: { entries: "/api/maple/entries", care: "/api/maple/care/entries", mood: "/api/maple/care/mood" },
     fetchJson: (path: string, init: RequestInit) => {
       requests.push({ path, init });

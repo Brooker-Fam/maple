@@ -2,8 +2,9 @@
 
 import { lazy, Suspense, useEffect, useState } from "react";
 import { STEPS, type OnboardingView, type StepId } from "@/lib/maple/onboarding/steps";
-import { Button, Segmented, cx, tone } from "../ui";
+import { Button, Segmented, ToastHost, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import SignOutButton from "../SignOutButton";
 import { finishSetup } from "./actions";
 import { answerLine, savedLine } from "./describe";
 import { InviteLinks } from "./MoreSteps";
@@ -39,8 +40,15 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
   useEffect(() => {
     if (!dirty && !chatDraft.trim()) return;
     const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const beforeNavigate = (event: Event) => {
+      if (!window.confirm("Discard your unsaved answer? Your saved answers will stay.")) event.preventDefault();
+    };
     window.addEventListener("beforeunload", beforeUnload);
-    return () => window.removeEventListener("beforeunload", beforeUnload);
+    window.addEventListener("maple-before-navigate", beforeNavigate);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("maple-before-navigate", beforeNavigate);
+    };
   }, [dirty, chatDraft]);
 
   if (!view.owner) return <Waiting ob={ob} onDone={() => onDone(false)} />;
@@ -94,7 +102,10 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
 
   const header = (
     <>
-      <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Chat</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Chat</h1>
+        <SignOutButton disabled={ob.busy} className="min-h-11 rounded-xl px-3 text-sm font-medium text-mp-ink-2 focus-visible:ring-2 focus-visible:ring-mp-focus" />
+      </div>
       <div className="flex items-center gap-3">
         <p className={cx(tone.muted, "shrink-0 text-[14px]")}>Set up your log</p>
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-mp-sunken" role="progressbar" aria-valuemin={0} aria-valuemax={STEPS.length} aria-valuenow={answered} aria-label="Setup progress">
@@ -190,6 +201,8 @@ function Waiting({ ob, onDone }: { ob: ReturnType<typeof useOnboarding>; onDone:
       >
         {checking ? "Checking…" : "Check again"}
       </Button>
+      <SignOutButton disabled={checking} className="min-h-11 rounded-xl px-3 text-sm font-medium text-mp-ink-2 focus-visible:ring-2 focus-visible:ring-mp-focus" />
+      <ToastHost />
     </div>
   );
 }

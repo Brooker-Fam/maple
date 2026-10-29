@@ -71,12 +71,15 @@ jobs:
         id: browser_tools
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm install --prefix /tmp/maple-ui-tools --no-save esbuild@0.25.10 playwright@1.56.1 postcss@8.5.6
-      - name: Install Chromium
+      - name: Install Chromium and WebKit
         id: browser
         if: ${{ !cancelled() && steps.browser_tools.outcome == 'success' }}
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
-        run: node /tmp/maple-ui-tools/node_modules/playwright/cli.js install --with-deps chromium
+        run: node /tmp/maple-ui-tools/node_modules/playwright/cli.js install --with-deps chromium webkit
+      - name: Check diagnostics transport in both browsers
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm check:maple-diagnostics-ui
       - name: Check time editing in the browser
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:

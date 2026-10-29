@@ -4,11 +4,12 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { nutritionNumberCases } from "./number-review-cases.mjs";
 
 const require = createRequire(process.env.MAPLE_UI_TOOLS ? path.join(process.env.MAPLE_UI_TOOLS, "package.json") : import.meta.url);
 const { build } = require("esbuild");
-const { chromium } = require("playwright");
-const postcss = require("postcss");
+const { chromium, webkit } = require("playwright");
+const postcss = createRequire(require.resolve("@tailwindcss/postcss"))("postcss");
 const tailwind = require("@tailwindcss/postcss");
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -30,7 +31,8 @@ const cssPath = path.join(root, "src/app/globals.css");
 const compiled = await postcss([tailwind({ base: root })]).process(await readFile(cssPath, "utf8"), { from: cssPath });
 await writeFile(path.join(output, "app.css"), compiled.css + "\n" + await readFile(path.join(root, "src/app/maple/maple.css"), "utf8"));
 await writeFile(path.join(output, "index.html"), '<!doctype html><html class="maple-ui"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Synthetic nutrition checks</title><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/app.js"></script></body></html>');
-const browser = await chromium.launch({ headless: true, ...(process.env.MAPLE_UI_CHROMIUM ? { executablePath: process.env.MAPLE_UI_CHROMIUM } : {}) });
+const browserType = process.env.REVIEW_BROWSER === "webkit" ? webkit : chromium;
+const browser = await browserType.launch({ headless: true, ...(browserType === chromium && process.env.MAPLE_UI_CHROMIUM ? { executablePath: process.env.MAPLE_UI_CHROMIUM } : {}) });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce", locale: "en-US", timezoneId: "UTC" });
 page.setDefaultTimeout(7000);
 const errors = [];
@@ -60,6 +62,10 @@ const saveFood = async (description) => {
 };
 
 try {
+  for (const [name, run] of nutritionNumberCases({ assert, page, snapshot, reset, closeSaved, openManual })) {
+    await run();
+    console.log(`PASS ${name}`);
+  }
   await reset();
   await openManual("Ate something");
   await page.getByLabel("What was it?", { exact: true }).fill("Synthetic recent meal");

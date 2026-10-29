@@ -14,7 +14,7 @@ export default function SignOutButton({ children, className, onRequest, role, ta
   tabIndex?: number;
   disabled?: boolean;
 }) {
-  const { api, refresh, state, toast } = useMaple();
+  const { api, refresh, state, auth, toast } = useMaple();
   const notify = useNotifications();
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
@@ -25,7 +25,10 @@ export default function SignOutButton({ children, className, onRequest, role, ta
     pending.current = true;
     setBusy(true);
     try {
-      await notify.forgetThisPhone({ everywhere: true });
+      if (!await notify.forgetThisPhone({ everywhere: true })) {
+        toast("Couldn't turn notifications off on this phone. Try signing out again.", { tone: "error" });
+        return;
+      }
       try {
         await api("/api/maple/auth/signout", { method: "POST" });
       } catch {
@@ -41,7 +44,7 @@ export default function SignOutButton({ children, className, onRequest, role, ta
   const request = () => {
     if (pending.current || !window.dispatchEvent(new Event("maple-before-navigate", { cancelable: true }))) return;
     onRequest?.();
-    if (state?.me.email.startsWith("invite:")) setConfirm(true);
+    if ((state?.me ?? auth?.member)?.email.startsWith("invite:")) setConfirm(true);
     else void signOut();
   };
 

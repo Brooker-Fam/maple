@@ -6,6 +6,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { timeCases } from "./time-cases.mjs";
 import { handoffCases } from "./handoff-cases.mjs";
+import { amountCases } from "./amount-cases.mjs";
+import { bottleReviewCases } from "./bottle-review-cases.mjs";
+import { pumpReviewCases } from "./pump-review-cases.mjs";
+import { volumeBoundaryCases } from "./volume-boundary-cases.mjs";
+import { pumpSummaryCases } from "./pump-summary-cases.mjs";
+import { dailyReviewCases } from "./daily-review-cases.mjs";
+import { summaryConsistencyCases } from "./summary-consistency-cases.mjs";
+import { growthReviewCases } from "./growth-review-cases.mjs";
+import { signinReviewCases } from "./signin-review-cases.mjs";
+import { medicinePlanCases } from "./medicine-plan-cases.mjs";
+import { checkinPrivacyCases } from "./checkin-privacy-cases.mjs";
+import { doctorReviewCases } from "./doctor-review-cases.mjs";
+import { accessibilityReviewCases } from "./accessibility-review-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -80,6 +93,19 @@ const localDay = (at, timezone) => {
   return `${parts.year}-${parts.month}-${parts.day}`;
 };
 const cases = [
+  ...amountCases({ fixture, record, writes, assert }),
+  ...bottleReviewCases({ fixture, freshState, record, writes, assert }),
+  ...pumpReviewCases({ fixture, freshState, record, writes, assert }),
+  ...volumeBoundaryCases({ fixture, freshState, record, writes, assert }),
+  ...pumpSummaryCases({ fixture, freshState, record, writes, assert }),
+  ...dailyReviewCases({ fixture, freshState, record, writes, assert }),
+  ...summaryConsistencyCases({ fixture, freshState, record, assert }),
+  ...growthReviewCases({ fixture, freshState, record, writes, assert }),
+  ...signinReviewCases({ fixture, assert }),
+  ...medicinePlanCases({ fixture, freshState, assert }),
+  ...checkinPrivacyCases({ fixture, freshState, assert }),
+  ...doctorReviewCases({ fixture, freshState, record, writes, assert }),
+  ...accessibilityReviewCases({ fixture, freshState, assert }),
   ...timeCases({ fixture, freshState, record, writes, assert }),
   ...handoffCases({ fixture, freshState, record, writes, assert }),
   ["Every historical entry kind keeps an older family-local date", async () => {
@@ -207,7 +233,7 @@ const cases = [
         const saved = writes(f)[0]?.body;
         assert.equal(saved?.kind, kind);
         assert.equal(saved.started_at, "2026-10-27T04:00:00.000Z", `${kind} must remain on the chosen local day`);
-        assert.equal(saved.ended_at, saved.started_at, `${kind} must not replace a zero-span preset with invented duration`);
+        assert.equal(saved.ended_at, kind === "pump" ? null : saved.started_at, `${kind} must not replace a zero-span preset with invented duration`);
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }

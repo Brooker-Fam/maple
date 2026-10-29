@@ -241,7 +241,7 @@ try {
     assert.deepEqual(headers.slice(0, 5), ["Day", "Feeds", "Sleep", "Wet", "Dirty"], "The first columns expose everyday counts");
     const today = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: "Today", exact: true }) });
     const cells = await today.locator("th,td").allTextContents();
-    assert.equal(cells[headers.indexOf("Pumped")], "90 ml");
+    assert.equal(cells[headers.indexOf("Pumped")], "1 session · 15m90 ml logged");
     assert.equal(cells[headers.indexOf("Tummy time")], "10m");
     const scroll = page.getByRole("region", { name: "Daily totals table", exact: true });
     await scroll.focus();
@@ -250,7 +250,7 @@ try {
     await noOverflow(page);
     await page.getByRole("button", { name: "Charts", exact: true }).click();
     await page.getByRole("button", { name: /More charts/ }).click();
-    await page.getByRole("img", { name: /Pumped per day:.*10\/29 90 ml/ }).waitFor();
+    await page.getByRole("img", { name: /Recorded pump volume per day:.*10\/29 90 ml logged/ }).waitFor();
     await page.getByRole("img", { name: /Tummy time per day:.*10\/29 10m/ }).waitFor();
   });
 
@@ -387,11 +387,11 @@ try {
     await table.waitFor();
     const headers = await table.getByRole("columnheader").allTextContents();
     const today = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: "Today", exact: true }) });
-    assert.equal((await today.locator("th,td").allTextContents())[headers.indexOf("Pumped")], "90 ml");
+    assert.equal((await today.locator("th,td").allTextContents())[headers.indexOf("Pumped")], "1 session · 15m90 ml logged");
     assert.equal(await today.getByText("Nothing logged", { exact: true }).count(), 0);
     await page.getByRole("radio", { name: "Compare days", exact: true }).click();
     await page.getByText("No feeds, sleep, diapers or tummy time in this range", { exact: true }).waitFor();
-    await page.getByText("Pumping amounts are in Daily totals.", { exact: true }).waitFor();
+    await page.getByText("Pumping sessions and amounts are in Daily totals.", { exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: /Open in the Timeline$|Open this day in the Timeline/ }).count(), 0, "Pump-only logging explains the supported view instead of drawing empty clock days");
   });
 

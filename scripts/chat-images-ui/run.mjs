@@ -55,6 +55,8 @@ await page.route("**/*", async (route) => {
     uploads.push({ family: request.headers()["x-maple-family"], bytes: request.postDataBuffer() });
     if (uploadMode === "hold") { heldUpload = route; return; }
     if (uploadMode === "fail") return json(route, { error: "Photo upload unavailable. Try again." }, 503);
+    if (uploadMode === "html") return route.fulfill({ status: 503, contentType: "text/html", body: "<h1>Service temporarily unavailable</h1>" });
+    if (uploadMode === "malformed") return json(route, null);
     if (uploadMode === "invalid") return json(route, { image: { ...nextImage(), url: "https://unsafe.example.test/photo.jpg" } });
     return json(route, { image: nextImage() });
   }
@@ -185,6 +187,24 @@ const checks = [
     await page.getByText("Choose a JPEG, PNG or WebP photo.", { exact: true }).waitFor();
     assert.equal(uploads.length, 2, "Unsupported file is rejected before upload");
     assert.equal(await message().inputValue(), "Keep this synthetic caption");
+  }],
+  ["unreadable upload responses preserve the draft and offer retry guidance", async () => {
+    await message().fill("Keep this synthetic caption");
+    for (const mode of ["html", "malformed"]) {
+      uploadMode = mode;
+      await choose();
+      await page.getByRole("button", { name: "Dismiss", exact: true }).waitFor();
+      assert(await page.getByText("Couldn't upload the photo. Try again.", { exact: true }).count());
+      assert.equal(await message().inputValue(), "Keep this synthetic caption");
+      assert.equal(await attached().count(), 0);
+      assert(await page.getByRole("button", { name: "Send", exact: true }).isDisabled());
+      await page.getByRole("button", { name: "Dismiss", exact: true }).click();
+    }
+    uploadMode = "ok";
+    await choose();
+    await attached().waitFor();
+    assert.equal(await message().inputValue(), "Keep this synthetic caption");
+    assert(await page.getByRole("button", { name: "Send", exact: true }).isEnabled());
   }],
   ["terms and scope changes cannot attach a pending upload to another family", async () => {
     await fixture("setTerms", false); assert(await add().isDisabled());

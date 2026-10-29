@@ -53,7 +53,7 @@ async function flush() {
       body: JSON.stringify({ events }),
       credentials: "same-origin",
       mode: "same-origin",
-      referrerPolicy: "no-referrer",
+      referrerPolicy: "strict-origin",
       cache: "no-store",
       redirect: "error",
       keepalive: true,

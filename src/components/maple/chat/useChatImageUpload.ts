@@ -52,8 +52,9 @@ export function useChatImageUpload({ scope, enabled, count, onUploaded }: { scop
         const body = new FormData();
         body.set("file", photo, "chat-photo.jpg");
         const response = await fetch("/api/maple/chat/images", { method: "POST", headers, body, signal: controller.signal });
-        const result = await response.json();
+        const result = await response.json().catch(() => null);
         if (controller.signal.aborted) return;
+        if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Couldn't upload the photo. Try again.");
         if (!response.ok) {
           if (result.code === "terms") termsNeeded();
           if (result.code === "family_mismatch") window.dispatchEvent(new Event(FAMILY_MOVED_EVENT));

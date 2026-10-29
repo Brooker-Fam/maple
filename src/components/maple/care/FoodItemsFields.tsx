@@ -4,6 +4,7 @@ import { useState } from "react";
 import { FOOD_GROUPS, type CareFoodItem, type FoodGroup, type NutrientKey } from "@/lib/maple/care-nutrition-types";
 import { cleanCareFoodItems, FOOD_ITEM_LIMITS, NUTRIENT_LIMITS } from "@/lib/maple/care-nutrition-validation";
 import { Button, cx, tone } from "../ui";
+import { parseTypedNumber } from "../uiFields";
 
 export const FOOD_GROUP_LABELS: Record<FoodGroup, string> = {
   protein: "Protein foods", fruit: "Fruit", vegetables: "Vegetables", whole_grains: "Whole grains",
@@ -70,7 +71,8 @@ function NutrientField({ nutrient, label, value, onChange }: { nutrient: Nutrien
   if (!Object.is(draft.value, value)) setDraft({ value, text: value == null ? "" : String(value) });
   const invalid = value != null && (!Number.isFinite(value) || value < 0 || value > NUTRIENT_LIMITS[nutrient]);
   const change = (text: string) => {
-    const next = text.trim() === "" ? null : Number(text);
+    const parsed = parseTypedNumber(text.trim() === "" ? "" : text, NUTRIENT_LIMITS[nutrient]);
+    const next = parsed.invalid ? NaN : parsed.value;
     setDraft({ value: next, text });
     onChange(next);
   };

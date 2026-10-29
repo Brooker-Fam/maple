@@ -88,6 +88,53 @@ async function check(name, run) {
 }
 
 try {
+  await check("setup sign-out failure is visible while waiting", async () => {
+    const page = await fixture(async (route, url) => {
+      if (url.pathname !== "/api/maple/auth/signout") return false;
+      await route.fulfill({ status: 503, json: { error: "Synthetic sign-out failure" } });
+      return true;
+    }, "waiting");
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await page.getByText("Couldn't confirm sign-out. Try again.", { exact: true }).waitFor();
+    assert(await page.getByRole("button", { name: "Sign out", exact: true }).isEnabled());
+  });
+
+  await check("setup sign-out warns an invited member before losing access", async () => {
+    const page = await fixture(undefined, "invite-waiting");
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    const confirmation = page.getByRole("dialog", { name: "Sign out?", exact: true });
+    await confirmation.waitFor();
+    assert.equal((await snapshot(page)).calls.filter(call => call.url === "/api/maple/auth/signout").length, 0);
+    await confirmation.getByRole("button", { name: "Stay signed in", exact: true }).click();
+    await confirmation.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await confirmation.getByRole("button", { name: "Sign out anyway", exact: true }).click();
+    await page.waitForFunction(() => window.__settingsFixture.snapshot().calls.some(call => call.url === "/api/maple/auth/signout"));
+  });
+
+  for (const view of ["draft", "waiting"]) {
+    await check(`setup sign-out is available from ${view}`, async () => {
+      const page = await fixture(undefined, view);
+      await page.getByRole("button", { name: "Sign out", exact: true }).click();
+      await page.waitForFunction(() => window.__settingsFixture.snapshot().calls.some(call => call.url === "/api/maple/auth/signout"));
+      assert.equal((await snapshot(page)).calls.filter(call => call.url === "/api/maple/auth/signout").length, 1);
+    });
+  }
+
+  await check("setup sign-out protects an unsent chat draft", async () => {
+    const page = await fixture(undefined, "draft");
+    await page.getByRole("radio", { name: "Questions and chat", exact: true }).click();
+    const draft = "Synthetic unsent setup answer";
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill(draft);
+    page.once("dialog", dialog => dialog.dismiss());
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    assert.equal((await snapshot(page)).calls.filter(call => call.url === "/api/maple/auth/signout").length, 0);
+    assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).inputValue(), draft);
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await page.waitForFunction(() => window.__settingsFixture.snapshot().calls.some(call => call.url === "/api/maple/auth/signout"));
+  });
+
   await check("invite list failure has a working retry", async () => {
     let reads = 0;
     const page = await fixture(async (route, url) => {

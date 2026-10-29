@@ -7,18 +7,19 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const { build } = require("esbuild");
-const { chromium } = require("playwright");
-const postcss = require("postcss");
+const { chromium, webkit } = require("playwright");
+const postcss = createRequire(require.resolve("@tailwindcss/postcss"))("postcss");
 const tailwind = require("@tailwindcss/postcss");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = await mkdtemp(path.join(tmpdir(), "maple-moments-ui-"));
-await build({ entryPoints: [path.join(root, "scripts/ui-review-moments-fixture.jsx")], outfile: path.join(output, "app.js"), bundle: true, format: "esm", jsx: "automatic", absWorkingDir: root, define: { "process.env.NODE_ENV": '"test"' }, plugins: [{ name: "synthetic-moments-boundaries", setup(plugin) {
-  plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|sheets|EntryRow)$/ }, () => ({ path: path.join(root, "scripts/ui-review-moments-mocks.jsx") }));
+await build({ entryPoints: [path.join(root, "scripts/ui-review-moments-fixture.jsx")], outfile: path.join(output, "app.js"), bundle: true, format: "esm", jsx: "automatic", absWorkingDir: root, define: { "process.env": "{}" }, plugins: [{ name: "synthetic-moments-boundaries", setup(plugin) {
+  plugin.onLoad({ filter: /\/useMaple\.tsx$/ }, async ({ path: sourcePath }) => ({ contents: `${await readFile(sourcePath, "utf8")}\nexport const FixtureContext = MapleContext;`, loader: "tsx", resolveDir: path.dirname(sourcePath) }));
 } }] });
 const cssFile = path.join(root, "src/app/globals.css");
 const css = await postcss([tailwind({ base: root })]).process(await readFile(cssFile, "utf8"), { from: cssFile });
 await writeFile(path.join(output, "app.css"), css.css + await readFile(path.join(root, "src/app/maple/maple.css"), "utf8"));
-const browser = await chromium.launch({ headless: true, ...(process.env.MAPLE_UI_CHROMIUM ? { executablePath: process.env.MAPLE_UI_CHROMIUM } : {}) });
+const browserName = process.env.REVIEW_BROWSER === "webkit" ? "webkit" : "chromium";
+const browser = await ({ chromium, webkit }[browserName]).launch({ headless: true, ...(browserName === "chromium" && process.env.MAPLE_UI_CHROMIUM ? { executablePath: process.env.MAPLE_UI_CHROMIUM } : {}) });
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
 const page = await context.newPage();
 page.setDefaultTimeout(3000);
@@ -27,6 +28,7 @@ const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 await page.route("**/*", async (route) => {
   const url = new URL(route.request().url());
+  assert.equal(url.origin, "https://maple-moments.example.test", "Every request must remain inside the synthetic fixture");
   if (url.pathname === "/api/maple/photo") {
     if (photos === "all-fail" || photos === "full-fail" && url.searchParams.get("size") === "full") return route.fulfill({ status: 503, body: "Synthetic image failure" });
     return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><rect width="80" height="100" fill="#7b9277"/></svg>' });
@@ -102,14 +104,16 @@ const cases = [
   }],
   ["lightbox keeps keyboard focus away from background controls", async () => {
     await visit();
-    await page.getByRole("button", { name: /^Example photo,/ }).click();
+    const card = page.getByRole("button", { name: /^Example photo,/ });
+    await card.focus();
+    await page.keyboard.press("Enter");
     const dialog = page.getByRole("dialog", { name: "Moment", exact: true });
     await dialog.getByRole("button", { name: "Close", exact: true }).focus();
     await page.keyboard.press("Tab");
     assert(await page.evaluate(() => document.querySelector('[role="dialog"]').contains(document.activeElement)), "Tab from the final viewer control must stay in the viewer");
     await page.keyboard.press("Escape");
     await dialog.waitFor({ state: "hidden" });
-    assert(await page.getByRole("button", { name: /^Example photo,/ }).evaluate((button) => document.activeElement === button));
+    assert(await card.evaluate((button) => document.activeElement === button));
   }],
   ["first photo and birth have distinct labels and missing firsts stay factual", async () => {
     await visit("empty");

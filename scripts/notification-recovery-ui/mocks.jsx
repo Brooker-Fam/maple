@@ -2,10 +2,11 @@ const state = { baby: { name: "River", sex: "female", timezone: "UTC", settings:
 const fixture = window.notificationFixture = {
   deleted: false, unsubscribed: false, prefs: { nursing: true },
   mark: { member: "sam@example.test", endpoint: "https://push.example.test/synthetic" },
-  failDelete: true, unsubscribeResult: "reject", reads: [], saves: [],
+  failDelete: true, unsubscribeResult: "reject", reads: [], saves: [], toasts: [], signouts: 0,
 };
 const health = { clock: "ok", checked_at: "2026-10-28T12:00:00Z", clock_at: "2026-10-28T12:00:00Z", undelivered: 0, missed: [], gaps: [], test: null, needs_resubscribe: false };
 const api = async (url, options = {}) => {
+  if (url === "/api/maple/auth/signout") { fixture.signouts++; return {}; }
   if (options.method === "DELETE") {
     if (fixture.failDelete) throw new Error("Synthetic delete failure");
     fixture.deleted = true;
@@ -20,8 +21,9 @@ const api = async (url, options = {}) => {
   return fixture.holdRead ? new Promise(resolve => fixture.reads.push(() => resolve(result))) : result;
 };
 const now = () => new Date("2026-10-28T12:00:00Z");
-const toast = () => {};
-export const useMaple = () => ({ state, status: "ready", api, toast, now, units: "us", readOnly: false });
+const toast = message => { fixture.toasts.push(message); };
+const refresh = async () => {};
+export const useMaple = () => ({ state, status: "ready", api, toast, refresh, now, units: "us", readOnly: false });
 export const useNow = now;
 export const useHoldTimerToasts = () => {};
 export const useCare = () => null;

@@ -398,8 +398,15 @@ export function useCare(): UseCare | null {
 
   const deleteEntry = useCallback<CareActions["deleteEntry"]>(
     async (id) => {
+      let removed;
+      try {
+        removed = store.unqueue(id);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Couldn't delete", { tone: "error" });
+        throw fail(e, "Couldn't delete");
+      }
       // Still on this phone only: just drop it.
-      if (store.unqueue(id)) {
+      if (removed) {
         unholdEntry(id);
         toast("Removed");
         return;
@@ -566,11 +573,14 @@ export function useCare(): UseCare | null {
       } catch (e) {
         patchEntries((es) => es.filter((x) => x.id !== early.id));
         if (isTransient(e)) {
-          // Kept on this phone: it syncs when the connection is back, and its line says so meanwhile.
-          store.queue(input, early);
-          toast("Saved on this phone · will sync when you're back online", { tone: "info" });
-          const notes = plan ? doseNotes(plan, dosesOf(plan.id), { at: i.at, units: i.units, skipped: i.skipped }, nctx) : oneOffNotes(name, c.plans, nctx);
-          return { created: true, entry: { ...early, pending: true }, notes };
+          try {
+            store.queue(input, early);
+            toast("Saved on this phone · will sync when you're back online", { tone: "info" });
+            const notes = plan ? doseNotes(plan, dosesOf(plan.id), { at: i.at, units: i.units, skipped: i.skipped }, nctx) : oneOffNotes(name, c.plans, nctx);
+            return { created: true, entry: { ...early, pending: true }, notes };
+          } catch (error) {
+            e = error;
+          }
         }
         unholdEntry(early.id);
         throw fail(e, "Couldn't save that");
@@ -780,9 +790,13 @@ export function useCare(): UseCare | null {
         } catch (e) {
           if (isTransient(e)) {
             const kept = moodNow(temp.id, temp.id) ?? temp;
-            patchMood((m) => m.map((x) => (x.id === temp.id ? ({ ...x, pending: true } as MoodEntry) : x)));
-            store.queueMood({ ...input, data: kept.data, ...(kept.note ? { note: kept.note } : {}) }, kept);
-            return { entry: { ...kept, pending: true }, queued: true };
+            try {
+              store.queueMood({ ...input, data: kept.data, ...(kept.note ? { note: kept.note } : {}) }, kept);
+              patchMood((m) => m.map((x) => (x.id === temp.id ? ({ ...x, pending: true } as MoodEntry) : x)));
+              return { entry: { ...kept, pending: true }, queued: true };
+            } catch (error) {
+              e = error;
+            }
           }
           moodRejected.add(temp.id);
           patchMood((m) => m.filter((x) => x.id !== temp.id));
@@ -802,6 +816,15 @@ export function useCare(): UseCare | null {
   const changeMood = useCallback(
     (id: number, patch: { data?: Record<string, unknown>; note?: string | null }, apply: (m: MoodEntry) => MoodEntry): Promise<MoodEntry> => {
       if (moodRejected.has(id)) return Promise.reject(new Error("That check-in wasn't saved. Try again."));
+      const before = moodNow(id, moodTarget(id));
+      const queue = (input: Record<string, unknown>, entry: MoodEntry, serverId?: number) => {
+        try {
+          store.queueMood(input, entry, serverId);
+        } catch (error) {
+          if (before) patchMood((m) => m.map((x) => (x.id === id || x.id === moodTarget(id) ? { ...before, id: x.id } as MoodEntry : x)));
+          throw error;
+        }
+      };
       patchMood((m) => m.map((x) => (x.id === id || x.id === moodTarget(id) ? apply(x) : x)));
       return serialMood(async () => {
         // The first save may have failed while this edit waited its turn.
@@ -812,7 +835,7 @@ export function useCare(): UseCare | null {
         const base = moodNow(id, target);
         if (target < 0) {
           if (!base) throw new Error("That check-in isn't here anymore.");
-          store.queueMood(patch, apply(base));
+          queue(patch, apply(base));
           return { ...apply(base), pending: true } as MoodEntry;
         }
         try {
@@ -821,7 +844,7 @@ export function useCare(): UseCare | null {
           return entry;
         } catch (e) {
           if (isTransient(e) && base) {
-            store.queueMood(patch, apply(base), target);
+            queue(patch, apply(base), target);
             return { ...apply(base), pending: true } as MoodEntry;
           }
           // Deleted on her other phone meanwhile: it's gone here too.

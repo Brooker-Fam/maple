@@ -37,13 +37,22 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
   const now = useNow(60_000);
   const app = useAppNav();
   const phones = usePhones();
+  const [question, setQuestion] = useState("");
+  const [savingQuestion, setSavingQuestion] = useState(false);
   if (!state) return null;
   const tz = state.baby.timezone;
   const todayKey = dayKey(now, tz);
   const baby = (state.baby.nickname || state.baby.name).split(" ")[0];
 
-  const then = (fn: () => void) => {
+  const close = () => {
+    if (savingQuestion) return;
+    setQuestion("");
     onClose();
+  };
+  const then = (fn: () => void) => {
+    if (savingQuestion) return;
+    if (!window.dispatchEvent(new Event("maple-before-navigate", { cancelable: true }))) return;
+    close();
     window.setTimeout(fn, 120);
   };
   const toGrowth = () =>
@@ -59,8 +68,8 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
   ].filter((n): n is { label: string; phone: string } => !!n);
 
   return (
-    <Sheet open={open} onClose={onClose} title="For the doctor" subtitle={`${baby}'s checkups`}>
-      <DoctorQuestions open={open} focus={!!ask && open} />
+    <Sheet open={open} onClose={close} locked={savingQuestion} dirty={!!question.trim()} title="For the doctor" subtitle={`${baby}'s checkups`}>
+      <DoctorQuestions open={open} focus={!!ask && open} text={question} setText={setQuestion} saving={savingQuestion} setSaving={setSavingQuestion} />
 
       <VisitSummary state={state} todayKey={todayKey} tz={tz} now={now} />
 
@@ -108,13 +117,15 @@ function Disclosure({ label, summary, open, onToggle, children }: { label: strin
 }
 
 /** Questions for the next checkup (moved here from Family): add, tick off with the answer, put back, delete. */
-function DoctorQuestions({ open: sheetOpen, focus }: { open: boolean; focus: boolean }) {
+function DoctorQuestions({ open: sheetOpen, focus, text, setText, saving, setSaving }: { open: boolean; focus: boolean; text: string; setText: (value: string) => void; saving: boolean; setSaving: (value: boolean) => void }) {
   const { state, api, log, update, remove, readOnly, memberName, now } = useMaple();
   const w = useBabyWords();
   const tz = state!.baby.timezone;
   const rev = state!.rev;
   const [fetched, setFetched] = useState<Question[]>([]);
-  const [text, setText] = useState("");
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [attempt, setAttempt] = useState(0);
+  const savingRef = useRef(false);
   const [showDone, setShowDone] = useState(false);
   const field = useRef<HTMLInputElement>(null);
 
@@ -123,15 +134,20 @@ function DoctorQuestions({ open: sheetOpen, focus }: { open: boolean; focus: boo
   useEffect(() => {
     if (!sheetOpen) return;
     let live = true;
-    api<{ entries: Entry[] }>("/api/maple/entries?kind=note&limit=500")
-      .then((r) => live && setFetched(r.entries.filter(isQuestion)))
+    setLoadState("loading");
+    api<{ entries: Entry[]; truncated?: boolean }>("/api/maple/entries?kind=note&limit=500")
+      .then((r) => {
+        if (!live) return;
+        setFetched(r.entries.filter(isQuestion));
+        setLoadState((r.truncated ?? r.entries.length >= 500) ? "error" : "ready");
+      })
       .catch(() => {
-        // keep what we have
+        if (live) setLoadState("error");
       });
     return () => {
       live = false;
     };
-  }, [api, rev, sheetOpen]);
+  }, [api, rev, sheetOpen, attempt]);
 
   // More → For the doctor: straight to the add field.
   useEffect(() => {
@@ -152,9 +168,16 @@ function DoctorQuestions({ open: sheetOpen, focus }: { open: boolean; focus: boo
 
   const add = async () => {
     const t = text.trim();
-    if (!t) return;
-    setText("");
-    await log({ kind: "note", data: { for_doctor: true }, note: t }, { toast: "Added to the list for the doctor" });
+    if (!t || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const saved = await log({ kind: "note", data: { for_doctor: true }, note: t }, { toast: "Added to the list for the doctor" });
+      if (saved) setText("");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const patchLocal = (saved: Entry | null) => {
@@ -171,27 +194,33 @@ function DoctorQuestions({ open: sheetOpen, focus }: { open: boolean; focus: boo
               e.preventDefault();
               void add();
             }}
-            className="flex items-center gap-1 py-1.5 pr-2 pl-1.5"
+            className="grid gap-2 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
           >
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center text-mp-accent-fg" aria-hidden>
-              <Icon name="plus" size={20} strokeWidth={2} />
-            </span>
             <input
               ref={field}
-              className="min-h-[44px] min-w-0 flex-1 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
+              className="min-h-[44px] w-full min-w-0 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
               value={text}
+              disabled={saving}
               maxLength={300}
               placeholder={`Is ${w.his} cheek rash okay?`}
               aria-label="New question for the doctor"
               onChange={(e) => setText(e.target.value)}
             />
-            <Button type="submit" size="sm" disabled={!text.trim()}>
-              Add
+            <Button type="submit" size="sm" className="justify-self-end" disabled={!text.trim() || saving}>
+              {saving ? "Adding…" : "Add"}
             </Button>
           </form>
         )}
 
-        {open.length === 0 ? (
+        {loadState === "error" && (
+          <div role="alert" className="px-4 py-3">
+            <p className={cx(tone.body, "text-sm")}>Couldn&apos;t load all questions. The list may be incomplete.</p>
+            <Button size="sm" variant="ghost" className="mt-1" onClick={() => setAttempt((value) => value + 1)}>Retry questions</Button>
+          </div>
+        )}
+        {loadState === "loading" && <p role="status" className={cx(tone.muted, "px-4 py-3 text-sm")}>Loading questions…</p>}
+
+        {open.length === 0 && loadState === "ready" ? (
           <p className={cx(tone.muted, "px-4 py-4 text-center text-sm")}>{done.length ? "All asked." : "No questions yet."}</p>
         ) : (
           <ul className={tone.divide}>

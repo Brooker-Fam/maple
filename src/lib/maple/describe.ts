@@ -117,10 +117,12 @@ export function describeEntry(
     }
     case "pump": {
       title = live ? "Pumping now" : stopped ? "Pump timer" : "Pumped";
-      const total = e.data.total_ml ?? ((e.data.left_ml ?? 0) + (e.data.right_ml ?? 0) || null);
-      if (total) bits.push(formatVolume(total, units));
-      if (e.data.left_ml != null || e.data.right_ml != null) {
-        bits.push(`L ${formatVolume(e.data.left_ml ?? 0, units)} / R ${formatVolume(e.data.right_ml ?? 0, units)}`);
+      const hasSides = e.data.left_ml != null || e.data.right_ml != null;
+      const total = e.data.total_ml ?? (hasSides ? (e.data.left_ml ?? 0) + (e.data.right_ml ?? 0) : null);
+      bits.push(total != null ? formatVolume(total, units) : "Amount not logged");
+      if (hasSides) {
+        const side = (ml: number | undefined) => ml != null ? formatVolume(ml, units) : "not logged";
+        bits.push(`L ${side(e.data.left_ml)} / R ${side(e.data.right_ml)}`);
       }
       const d = durationOf(e, now);
       if (d) bits.push(formatDuration(d));

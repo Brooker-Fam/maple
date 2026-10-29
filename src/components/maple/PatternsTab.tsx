@@ -16,6 +16,7 @@ import {
 } from "@/lib/maple/guidelines";
 import { isVitaminD, statsFor, type DayStats } from "@/lib/maple/insights";
 import { nursingSpans } from "@/lib/maple/nursing-spans";
+import { pumpAmountLabel, pumpSessionLabel, pumpSummaryLabel } from "@/lib/maple/pump-summary";
 import {
   DEFAULT_TZ,
   addDays,
@@ -30,17 +31,18 @@ import {
   parseDayKey,
   zonedTimeToUtc,
 } from "@/lib/maple/time";
-import { formatTempBoth, formatVolume, formatWeightBoth, formatLengthBoth, mlToOz } from "@/lib/maple/units";
+import { formatTempBoth, formatVolume, formatWeightBoth, formatLengthBoth, mlToOz, ozToMl } from "@/lib/maple/units";
 import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/maple/types";
 import type { NavTarget } from "./AppNav";
 import { useCareNav } from "./care/CareNav";
 import { AskChatCard } from "./chat/AskChat";
 import DayDial from "./DayDial";
 import PatternCircles from "./PatternCircles";
+import { PumpSummary } from "./PumpSummary";
 import { ActivityFilter, type PatternActivity } from "./PatternActivity";
 import { DiaperBrigade } from "./StatusCard";
 import { Icon, KindBadge } from "./icons";
-import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
+import { bucketWindows, dstNote, fetchRange, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
 import { useNightActive } from "./nightLook";
 import { KIND_COLOR } from "./palette";
 import { familyBabyWords, useBabyWords } from "./familyWords";
@@ -111,7 +113,7 @@ const FRAME = { left: 30, right: 4, top: 10, bottom: 18 } as const;
 type Range = "7" | "14" | "30" | "all";
 type RibbonMode = "days" | "nights";
 type PatternView = "clock" | "compare" | "totals";
-const hasDailyTotals = (day: DayStats) => day.feeds + day.diapers + day.sleeps + day.sleepSec + day.tummySec + day.pumpMl > 0;
+const hasDailyTotals = (day: DayStats) => day.feeds + day.diapers + day.sleeps + day.sleepSec + day.tummySec + day.pumpSessions > 0;
 
 // For the doctor → "Growth chart": a request the tab takes once its charts have loaded (they sit above the growth
 // chart, so a scroll before then lands short). Like requestTimelineDay: read when it mounts, or at once if it's there.
@@ -678,7 +680,7 @@ function Ribbons({
     : null;
   const hasMarks = rows.some((row) => row.feeds.length + row.sleeps.length + row.diapers.length + row.tummies.length > 0);
   if (!hasMarks) return <Card><EmptyState title="No feeds, sleep, diapers or tummy time in this range">
-    {rows.some((row) => row.stats.pumpMl > 0) ? "Pumping amounts are in Daily totals." : "Choose another range to look for logged activity."}
+    {rows.some((row) => row.stats.pumpSessions > 0) ? "Pumping sessions and amounts are in Daily totals." : "Choose another range to look for logged activity."}
   </EmptyState></Card>;
 
   return (
@@ -1231,7 +1233,7 @@ function MoreCharts({ open, onToggle, summary, children }: { open: boolean; onTo
 }
 
 /** At night bottles are hollow outlines (the series' color is then the stroke). */
-type BarSeries = { id: string; label: string; color: string; values: number[]; hollow?: boolean };
+type BarSeries = { id: string; label: string; color: string; values: (number | null)[]; hollow?: boolean };
 
 /** Column chart, stacked when there's more than one series. Today's column (partial) is lighter. */
 function Columns({
@@ -1242,6 +1244,7 @@ function Columns({
   band,
   integer = false,
   night = false,
+  minPositiveHeight = 0,
   yLabel,
   valueLabel,
   ariaLabel,
@@ -1255,6 +1258,7 @@ function Columns({
   /** Counts: whole-number ticks. */
   integer?: boolean;
   night?: boolean;
+  minPositiveHeight?: number;
   yLabel: (v: number) => string;
   valueLabel: (v: number) => string;
   ariaLabel: string;
@@ -1280,14 +1284,15 @@ function Columns({
             const x = s.cx(i) - s.barW / 2;
             return (
               <g key={k} opacity={k === todayKey ? (night ? 0.7 : 0.55) : 1}>
+                {series.every((ser) => ser.values[i] === null) && <text x={s.cx(i)} y={s.bottom - 4} textAnchor="middle" className="fill-mp-ink-2 text-xs">?</text>}
                 {series.map((ser, j) => {
                   const v = ser.values[i] ?? 0;
                   if (v <= 0) return null;
                   const gap = cum > 0 ? seam : 0;
                   const y0 = s.y(cum) - gap;
                   cum += v;
-                  const y1 = s.y(cum);
-                  const h = y0 - y1;
+                  const h = Math.max(y0 - s.y(cum), minPositiveHeight);
+                  const y1 = y0 - h;
                   if (h <= 0.5) return null;
                   const top = j === topIdx;
                   // Hollow segments are inset by half the stroke so they cover the same footprint.
@@ -1523,10 +1528,12 @@ function DailyCharts({
     return m;
   }, [entries, tz]);
 
-  const vol = (ml: number) => (units === "us" ? Math.round(mlToOz(ml) * 4) / 4 : Math.round(ml));
+  const vol = (ml: number) => (units === "us" ? mlToOz(ml) : ml);
+  const volumeLabel = (value: number) => formatVolume(units === "us" ? ozToMl(value) : value, units);
   const volUnit = units === "us" ? "oz" : "ml";
   const anyBottle = days.some((d) => d.bottleMl > 0);
-  const anyPump = days.some((d) => d.pumpMl > 0);
+  const anyPump = days.some((d) => d.pumpSessions > 0);
+  const anyPumpAmount = days.some((d) => d.pumpMeasuredSessions > 0);
   const anyBottleFeeds = days.some((d) => d.bottleFeeds > 0);
   const anyNursing = days.some((d) => d.nursingSec > 0);
   const anyTummy = days.some((d) => d.tummySec > 0);
@@ -1705,8 +1712,9 @@ function DailyCharts({
                       todayKey={todayKey}
                       night={night}
                       series={[{ id: "bottle", label: "Bottle", color: "var(--v-bottle)", values: days.map((d) => vol(d.bottleMl)), hollow: night }]}
+                      minPositiveHeight={2}
                       yLabel={(v) => String(v)}
-                      valueLabel={(v) => `${v} ${volUnit}`}
+                      valueLabel={volumeLabel}
                       ariaLabel={`Bottle volume per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.bottleMl, units)}`).join(", ")}`}
                       tooltip={(i) => <TipRow color="var(--v-bottle)" hollow={night} value={formatVolume(days[i].bottleMl, units)} label={`by bottle${so(i)}`} />}
                     />
@@ -1714,16 +1722,33 @@ function DailyCharts({
                 )}
 
                 {anyPump && (
-                  <ChartBlock title={`Pumped per day (${volUnit})`}>
+                  <ChartBlock title="Pumping sessions per day">
                     <Columns
                       keys={keys}
                       todayKey={todayKey}
                       night={night}
-                      series={[{ id: "pump", label: "Pumped", color: "var(--v-pump)", values: days.map((d) => vol(d.pumpMl)) }]}
+                      integer
+                      series={[{ id: "pump-sessions", label: "Pumping sessions", color: "var(--v-pump)", values: days.map((d) => d.pumpSessions) }]}
+                      yLabel={String}
+                      valueLabel={(v) => `${v} session${v === 1 ? "" : "s"}`}
+                      ariaLabel={`Pumping sessions per day: ${days.map((d) => `${shortDate(d.key)} ${pumpSessionLabel(d)}, ${pumpAmountLabel(d, units)}`).join("; ")}`}
+                      tooltip={(i) => <PumpSummary day={days[i]} units={units} />}
+                    />
+                  </ChartBlock>
+                )}
+
+                {anyPumpAmount && (
+                  <ChartBlock title={`Recorded pump volume per day (${volUnit})`} subtitle="Recorded amounts only. ? means the amount was not logged.">
+                    <Columns
+                      keys={keys}
+                      todayKey={todayKey}
+                      night={night}
+                      series={[{ id: "pump", label: "Pumped", color: "var(--v-pump)", values: days.map((d) => d.pumpSessions && !d.pumpMeasuredSessions ? null : vol(d.pumpMl)) }]}
+                      minPositiveHeight={2}
                       yLabel={(v) => String(v)}
-                      valueLabel={(v) => `${v} ${volUnit}`}
-                      ariaLabel={`Pumped per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.pumpMl, units)}`).join(", ")}`}
-                      tooltip={(i) => <TipRow color="var(--v-pump)" value={formatVolume(days[i].pumpMl, units)} label={`pumped${so(i)}`} />}
+                      valueLabel={volumeLabel}
+                      ariaLabel={`Recorded pump volume per day: ${days.map((d) => `${shortDate(d.key)} ${pumpAmountLabel(d, units)}`).join(", ")}`}
+                      tooltip={(i) => <PumpSummary day={days[i]} units={units} />}
                     />
                   </ChartBlock>
                 )}
@@ -1762,7 +1787,7 @@ function DailyCharts({
 function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: string; units: UnitSystem }) {
   const anyBottle = days.some((d) => d.bottleMl > 0);
   const anyBoth = days.some((d) => d.bothSec > 0);
-  const anyPump = days.some((d) => d.pumpMl > 0);
+  const anyPump = days.some((d) => d.pumpSessions > 0);
   const anyTummy = days.some((d) => d.tummySec > 0);
   const scrollHint = useId();
   // The table scrolls sideways on a phone; the day column stays put, with a
@@ -1820,7 +1845,7 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
                 {anyBoth && ` / ${formatDuration(d.bothSec)}`}
               </td>
               {anyBottle && <td className={td}>{d.bottleMl ? formatVolume(d.bottleMl, units) : <span className={tone.faint}>—</span>}</td>}
-              {anyPump && <td className={td}>{d.pumpMl ? formatVolume(d.pumpMl, units) : <span className={tone.faint}>—</span>}</td>}
+              {anyPump && <td className={td}><PumpSummary day={d} units={units} /></td>}
               {anyTummy && <td className={td}>{formatDuration(d.tummySec)}</td>}
               </>}
             </tr>
@@ -1868,8 +1893,11 @@ export async function buildVisitSummary(opts: {
   now: Date;
 }): Promise<string> {
   const { state, todayKey, tz, now } = opts;
+  if (state.entries.some((entry) => entry.id < 0)) {
+    throw new Error("Some entries are still waiting to sync. Let them finish syncing before copying the summary.");
+  }
   const baby = state.baby;
-  const entries = mergeLive(opts.history, state);
+  const entries = opts.history;
   const born = baby.born_at ? Date.parse(baby.born_at) : null;
   const bornKey = born != null ? dayKey(born, tz) : null;
   let from = addDays(todayKey, -6);
@@ -1919,7 +1947,7 @@ export async function buildVisitSummary(opts: {
       `${d.wet} wet / ${d.dirty} dirty`,
       `sleep ${formatDuration(d.sleepSec)}`,
     ];
-    if (d.pumpMl) parts.push(`pumped ${formatVolume(d.pumpMl, "us")} (${Math.round(d.pumpMl)} ml)`);
+    if (d.pumpSessions) parts.push(`pumping ${pumpSummaryLabel(d)}`);
     out.push(`${shortDay(k)}${k === todayKey ? " (so far)" : ""}: ${parts.join(" · ")}`);
   }
 
@@ -2000,6 +2028,7 @@ export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; 
   const [text, setText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [fallback, setFallback] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -2009,13 +2038,20 @@ export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; 
   const build = async () => {
     setBusy(true);
     setCopied(false);
+    setText(null);
+    setFallback(false);
+    setProblem(null);
     try {
       const from = addDays(todayKey, -7);
-      const [hist, notes] = await Promise.all([
+      const [hist, notes, growth] = await Promise.all([
         fetchRange(api, from, todayKey),
-        api<{ entries: Entry[] }>(`/api/maple/entries?kind=note&limit=2000`).catch(() => ({ entries: [] as Entry[] })),
+        api<{ entries: Entry[]; truncated?: boolean }>(`/api/maple/entries?kind=note&limit=2000`),
+        api<{ entries: Entry[]; truncated?: boolean }>(`/api/maple/entries?kind=growth&limit=2000`),
       ]);
-      const summary = await buildVisitSummary({ state, history: hist.entries, notes: notes.entries, todayKey, tz, now });
+      if (hist.partialDays.length || (notes.truncated ?? notes.entries.length >= 2000) || (growth.truncated ?? growth.entries.length >= 2000)) {
+        throw new Error("Some records couldn't be loaded. Try again before copying the summary.");
+      }
+      const summary = await buildVisitSummary({ state: { ...state, growth: growth.entries }, history: hist.entries, notes: notes.entries, todayKey, tz, now });
       setText(summary);
       try {
         await navigator.clipboard.writeText(summary);
@@ -2026,7 +2062,7 @@ export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; 
         setFallback(true);
       }
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Couldn't build the summary", { tone: "error" });
+      setProblem(`Summary not copied. ${e instanceof Error ? e.message : "Couldn't load the records. Try again."}`);
     } finally {
       setBusy(false);
     }
@@ -2043,7 +2079,7 @@ export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; 
           <div className="min-w-0">
             <p className={cx(tone.heading, "text-[15px]")}>Visit summary</p>
             <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>
-              The last 7 days in plain text: doctor questions, feeds, wet and dirty diapers, poop colors, sleep, temperatures, vitamin D and weights.
+              The last 7 days in plain text: doctor questions, feeds, pumping, wet and dirty diapers, poop colors, sleep, temperatures, vitamin D and weights.
             </p>
           </div>
         </div>
@@ -2063,10 +2099,11 @@ export function VisitSummary({ state, todayKey, tz, now }: { state: MapleState; 
             <span className="sr-only">: download every entry as a spreadsheet</span>
           </a>
         </div>
+        {problem && <p role="alert" className={cx(tone.body, "mt-3 text-sm")}>{problem}</p>}
         {text && fallback && (
           <div className="mt-3">
             <p className={cx(tone.muted, "mb-1.5 text-xs")}>Your browser blocked copying. Select all and copy:</p>
-            <textarea ref={area} readOnly value={text} rows={10} className={cx(tone.input, "font-mono text-xs leading-snug")} onFocus={(e) => e.currentTarget.select()} />
+            <textarea ref={area} aria-label="Visit summary" readOnly value={text} rows={10} className={cx(tone.input, "font-mono text-xs leading-snug")} onFocus={(e) => e.currentTarget.select()} />
           </div>
         )}
         {text && !fallback && (

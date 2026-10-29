@@ -20,6 +20,7 @@ const baby = {
 };
 
 function App() {
+  const view = new URLSearchParams(location.search).get("view");
   const [state, setState] = useState({ baby, family: { id: 99, care_name: "Alex", ask: "an owner" }, entries: [], members: [member], me: member });
   const [units, setUnits] = useState("us");
   const [online, setOnline] = useState(true);
@@ -42,11 +43,11 @@ function App() {
     return result;
   }, []);
   const maple = {
-    state, units, setUnits, now: () => NOW, api, refresh: async () => {}, toast,
-    readOnly: false, auth: {}, online,
+    state: view?.endsWith("waiting") ? null : state, units, setUnits, now: () => NOW, api, refresh: async () => {}, toast,
+    readOnly: false, auth: { member: view === "invite-waiting" ? { ...member, email: "invite:41" } : member }, online,
     memberName: (id) => state.members.find((person) => person.email === id)?.display_name ?? "Guest",
     member: (id) => state.members.find((person) => person.email === id) ?? null,
-    memberLabel: () => "Alex", log: async () => null, toasts: [], dismissToast() {},
+    memberLabel: () => "Alex", log: async () => null, toasts: view?.endsWith("waiting") ? toasts.map((text, id) => ({ text, id, tone: "error" })) : [], dismissToast() {},
   };
   useEffect(() => {
     window.__settingsFixture = {
@@ -55,14 +56,15 @@ function App() {
       setBaby: (patch) => setState((previous) => ({ ...previous, baby: { ...previous.baby, ...patch } })),
     };
   }, []);
-  const view = new URLSearchParams(location.search).get("view");
   return <FixtureContext.Provider value={{ maple, care: { self: false, name: "Alex", rows: [] }, now: NOW }}>
     {view === "links"
       ? <InviteLinks links={[{ name: "Helper Synthetic", role: "viewer", url: "https://onboarding-recovery.example.test/maple/join#synthetic-onboarding-link" }]} />
       : view === "draft"
         ? <Onboarding initial={onboardingView} onDone={() => {}} />
-        : <FamilyTab />}
-    <div role="status">{toasts.at(-1)}</div>
+        : view?.endsWith("waiting")
+          ? <Onboarding initial={{ ...onboardingView, owner: false }} onDone={() => {}} />
+          : <FamilyTab />}
+    {!view?.endsWith("waiting") && <div role="status">{toasts.at(-1)}</div>}
   </FixtureContext.Provider>;
 }
 

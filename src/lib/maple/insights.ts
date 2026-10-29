@@ -77,6 +77,9 @@ export type DayStats = {
   bothSec: number;
   bottleMl: number;
   pumpMl: number;
+  pumpSessions: number;
+  pumpMeasuredSessions: number;
+  pumpSec: number;
   diapers: number;
   wet: number;
   dirty: number;
@@ -178,6 +181,9 @@ function emptyStats(key: string): DayStats {
     bothSec: 0,
     bottleMl: 0,
     pumpMl: 0,
+    pumpSessions: 0,
+    pumpMeasuredSessions: 0,
+    pumpSec: 0,
     diapers: 0,
     wet: 0,
     dirty: 0,
@@ -244,7 +250,14 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
         break;
       }
       case "pump":
-        if (inWindow) s.pumpMl += e.data.total_ml ?? (e.data.left_ml ?? 0) + (e.data.right_ml ?? 0);
+        if (inWindow) {
+          s.pumpSessions++;
+          s.pumpSec += Math.max(0, (Math.min(end, now.getTime()) - start) / 1000);
+          if (e.data.total_ml != null || e.data.left_ml != null || e.data.right_ml != null) {
+            s.pumpMeasuredSessions++;
+            s.pumpMl += e.data.total_ml ?? (e.data.left_ml ?? 0) + (e.data.right_ml ?? 0);
+          }
+        }
         break;
       case "diaper":
         if (!inWindow) break;

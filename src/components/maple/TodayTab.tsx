@@ -134,7 +134,7 @@ function LoggedToday({ onDetails }: { onDetails: () => void }) {
         <span><strong>{s.wet}</strong> wet</span>
         <span><strong>{s.dirty}</strong> dirty</span>
       </p>
-      <p className={cx(tone.muted, "mt-0.5 text-[13px]")}>{s.sleeps ? `${formatDuration(s.sleepSec)} sleep logged` : "No sleep logged today"}. Missing entries are not counted.</p>
+      <p className={cx(tone.muted, "mt-0.5 text-[13px]")}>{s.sleepSec > 0 ? `${formatDuration(s.sleepSec)} sleep logged` : "No sleep logged today"}. Missing entries are not counted.</p>
       <AskChatButton
         className="mt-2"
         label="Today's log"

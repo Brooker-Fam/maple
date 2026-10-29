@@ -76,6 +76,31 @@ try {
     assert.equal(await page.evaluate(() => window.notificationFixture.current.status), "off");
     assert.equal(await page.evaluate(() => window.notificationFixture.current.problem), null);
   });
+  await scenario("signout-retains-failed-subscription", async page => {
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    for (const result of ["reject", false]) {
+      await page.evaluate(value => { window.notificationFixture.unsubscribeResult = value; }, result);
+      await page.getByRole("button", { name: "Sign out", exact: true }).click();
+      await page.getByRole("button", { name: "Sign out", exact: true }).waitFor();
+      const observed = await page.evaluate(() => ({
+        status: window.notificationFixture.current.status,
+        problem: window.notificationFixture.current.problem,
+        mark: window.notificationFixture.mark,
+        signouts: window.notificationFixture.signouts,
+        toasts: window.notificationFixture.toasts,
+      }));
+      assert.equal(observed.status, "on", "Failed cleanup must not display Off");
+      assert.ok(observed.mark, "Failed cleanup must retain the endpoint for retry");
+      assert.ok(observed.problem, "Failed cleanup needs retry guidance");
+      assert.equal(observed.signouts, 0, "Keep the session until notifications can be stopped");
+      assert.match(observed.toasts.at(-1), /Try signing out again/, "A failed sign-out needs visible retry guidance");
+    }
+    await page.evaluate(() => { window.notificationFixture.unsubscribeResult = true; });
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await page.waitForFunction(() => window.notificationFixture.signouts === 1);
+    assert.equal(await page.evaluate(() => window.notificationFixture.current.status), "off");
+    assert.equal(await page.evaluate(() => window.notificationFixture.current.problem), null);
+  });
   await scenario("saved-preference-survives-stale-refresh", async page => {
     for (const holdSave of [false, true]) {
       await page.getByRole("button", { name: "Close", exact: true }).click();

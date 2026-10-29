@@ -66,6 +66,7 @@ import { FAMILY_ONE_VOICE, voiceFor, type Voice } from "./voice";
 import { carePersonName, careSession, deleteCareEntry, getCarePerson, momMedicineClash } from "./care-store";
 import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./care-mcp";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, summarize, type Summary } from "./insights";
+import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
 import { milestoneLabel, milestonesFor, milestoneWordsOf, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import {
   Conflict,
@@ -1000,7 +1001,6 @@ function targetsJson(s: Summary) {
     : null;
 }
 
-/** Bottles and pumping only when there are some (the family mostly nurses); a cluster's feeds when there was one. */
 function talliesJson(s: Summary) {
   const t = s.today;
   return {
@@ -1012,7 +1012,7 @@ function talliesJson(s: Summary) {
       dirty: t.dirty,
       sleep: durText(t.sleepSec),
       tummy_minutes: Math.round(t.tummySec / 60),
-      ...(t.pumpMl ? { pumped: formatVolumeBoth(t.pumpMl) } : {}),
+      ...(t.pumpSessions ? pumpTalliesJson(t) : {}),
     },
     last_24h: { feeds: s.last24h.feeds, wet: s.last24h.wet, dirty: s.last24h.dirty },
     targets_24h: targetsJson(s),
@@ -1120,7 +1120,7 @@ function tallyLines(s: Summary, kinds: Set<EntryKind>, vo: Voice, unknownBirthTi
   if (kinds.has("tummy") && t) {
     out.push(`Tummy time today: ${Math.round(s.today.tummySec / 60)} min (goal about ${t.tummyMin} min a day).`);
   }
-  if (kinds.has("pump") && s.today.pumpMl) out.push(`Pumped today: ${formatVolumeBoth(s.today.pumpMl)}.`);
+  if (kinds.has("pump") && s.today.pumpSessions) out.push(`Pumping today: ${pumpSummaryLabel(s.today)}.`);
   return out;
 }
 
@@ -2026,7 +2026,7 @@ function todayLine(s: Summary): string {
     tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
     tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${tb.bottleMl ? `, ${formatVolumeBoth(tb.bottleMl)}` : ""}` : "",
   ].filter(Boolean);
-  return `Today so far: ${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged${tb.pumpMl ? `, pumped ${formatVolumeBoth(tb.pumpMl)}` : ""}.`;
+  return `Today so far: ${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged${tb.pumpSessions ? `, pumping ${pumpSummaryLabel(tb)}` : ""}.`;
 }
 
 /**
@@ -2403,9 +2403,8 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     gapsByDay.set(k, [...(gapsByDay.get(k) ?? []), gap]);
   }
 
-  // Bottles and pumping only when there are some in these days (the family mostly nurses).
   const anyBottle = stats.some((d) => d.bottleFeeds > 0);
-  const anyPump = stats.some((d) => d.pumpMl > 0);
+  const anyPump = stats.some((d) => d.pumpSessions > 0);
   const anyBoth = stats.some((d) => d.bothSec > 0);
   const dayRows = stats.map((d) => {
     const list = byDay.get(d.key) ?? [];
@@ -2434,7 +2433,7 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       ...(anyBoth ? { nursing_both_minutes: Math.round(d.bothSec / 60) } : {}),
       ...gapStats(gapsByDay.get(d.key) ?? []),
       ...(anyBottle ? { bottle: d.bottleMl ? formatVolumeBoth(d.bottleMl) : null } : {}),
-      ...(anyPump ? { pumped: d.pumpMl ? formatVolumeBoth(d.pumpMl) : null } : {}),
+      ...(anyPump ? pumpTalliesJson(d) : {}),
       wet: d.wet,
       dirty: d.dirty,
       stool_colors: colors,
@@ -2536,7 +2535,15 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       const sleepH = round1(dayRows.reduce((n, r) => n + r.sleep_hours, 0));
       p.push(`So far ${vo.they}${vo.verb("'s had")} ${plural(f, "feed")}${perSession}, ${wet} wet and ${dirty} dirty diapers, and about ${sleepH} hours of logged sleep.`);
     }
-    // Clusters as counted from the log (3+ feeds, each under 30 minutes after the last ended): a fact, never a warning.
+    if (anyPump) {
+      const pumping = stats.reduce((total, day) => ({
+        pumpSessions: total.pumpSessions + day.pumpSessions,
+        pumpSec: total.pumpSec + day.pumpSec,
+        pumpMeasuredSessions: total.pumpMeasuredSessions + day.pumpMeasuredSessions,
+        pumpMl: total.pumpMl + day.pumpMl,
+      }), { pumpSessions: 0, pumpSec: 0, pumpMeasuredSessions: 0, pumpMl: 0 });
+      p.push(`Pumping: ${pumpSummaryLabel(pumping)}.`);
+    }
     const clusterDays = dayRows.filter((r) => (r.clusters ?? 0) > 0).length;
     if (clusterDays) p.push(`${vo.They} cluster fed (3 or more feeds close together) on ${clusterDays} of ${plural(dayRows.length, "day")}.`);
     const allColors = [...new Set(dayRows.flatMap((r) => r.stool_colors))];

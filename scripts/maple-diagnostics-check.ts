@@ -105,7 +105,7 @@ async function main() {
     assert.equal(b.sent[0].url, "/api/maple/diagnostics");
     assert.equal(b.sent[0].init.credentials, "same-origin");
     assert.equal(b.sent[0].init.mode, "same-origin");
-    assert.equal(b.sent[0].init.referrerPolicy, "no-referrer");
+    assert.equal(b.sent[0].init.referrerPolicy, "strict-origin");
     assert.equal(b.sent[0].init.redirect, "error");
     assert(!String(b.sent[0].init.body).includes(PRIVATE));
     b.crypto.randomUUID = () => { throw new Error(PRIVATE); };

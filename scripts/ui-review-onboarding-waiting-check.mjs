@@ -27,7 +27,7 @@ await build({
         if (response.current === "fail") throw new Error("Synthetic connection failure");
         return { needed: response.current !== "complete", view };
       };
-      return <FixtureContext.Provider value={{ maple: { api, refresh: async () => {}, online: true }, care: null }}>
+      return <FixtureContext.Provider value={{ maple: { api, refresh: async () => {}, online: true, toasts: [], dismissToast: () => {} }, care: null }}>
         {finished ? <h1>Log opened</h1> : <Onboarding initial={view} onDone={() => setFinished(true)} />}
       </FixtureContext.Provider>;
     }

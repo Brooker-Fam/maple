@@ -151,9 +151,9 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
       <div className="space-y-3">
         <div className={cx(tone.card, "p-4")}>
           <CrisisStrip inset className="mb-3" />
-          <p className={cx(tone.muted, "flex items-center gap-1.5 text-[14px] leading-snug")}>
-            <Icon name="lock" size={15} className="shrink-0 text-mp-ink-3" />
-            {CHECKIN_SUB}
+          <p className={cx(tone.muted, "text-[14px] leading-snug")}>{CHECKIN_SUB}</p>
+          <p className={cx(tone.muted, "mt-2 text-[14px] leading-snug")}>
+            Family owners and members can see and edit check-ins, answers and notes. View-only guests can&apos;t access them.
           </p>
           {asking ? (
             <div className="mt-3">

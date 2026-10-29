@@ -555,7 +555,7 @@ export function MiniStepper({
         aria-invalid={invalid || undefined}
         value={text}
         onChange={(e) => {
-          const t = e.target.value.replace(/[^\d.]/g, "");
+          const t = e.target.value;
           setText(t);
           onChange(parseTypedNumber(t, max).value);
         }}

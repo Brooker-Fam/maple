@@ -9,6 +9,7 @@ import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Label, MoreDetails, SheetFooter, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
+import { parseTypedNumber } from "../uiFields";
 import { ApiError, useMaple } from "../useMaple";
 import { useDraftChanged } from "../useDraftChanged";
 import MedicinePhotoHelp from "./MedicinePhotoHelp";
@@ -101,7 +102,7 @@ type Form = {
 };
 
 const hoursText = (min: number | null | undefined) => (min == null ? "" : String(Math.round((min / 60) * 100) / 100));
-const parseNum = (t: string) => (t.trim() === "" ? null : Number(t.trim().replace(",", ".")));
+const parseNum = (t: string) => parseTypedNumber(t.trim(), Infinity).value;
 
 function fromPlan(p: CarePlan | undefined, today: string): Form {
   const s = p?.schedule;
@@ -290,15 +291,9 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
             ) : (
               <div>
                 {tried && firstProblem && <p className={cx(tone.muted, "mb-2 text-center text-xs")}>{firstProblem}</p>}
-                <div className="flex items-center gap-3">
-                  {/* Text only, so Save stays the one filled button. */}
-                  <Button variant="ghost" size="lg" className="-ml-2 px-3" onClick={() => void save(true)} disabled={busy}>
-                    Save and add another
-                  </Button>
-                  <Button size="lg" className="flex-1" onClick={() => void save()} disabled={busy}>
-                    {busy ? "Saving…" : "Save"}
-                  </Button>
-                </div>
+                <Button size="lg" className="w-full min-w-0" onClick={() => void save()} disabled={busy}>
+                  {busy ? "Saving…" : "Save"}
+                </Button>
               </div>
             )}
           </div>
@@ -473,6 +468,11 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
             <input value={f.instructions} maxLength={120} aria-label="Instructions" onChange={(e) => set("instructions", e.target.value)} className={tone.input} />
           </FieldBlock>
         </MoreDetails>
+        {!base && (
+          <Button variant="ghost" size="lg" className="w-full min-w-0 px-3" onClick={() => void save(true)} disabled={busy}>
+            Save and add another
+          </Button>
+        )}
       </Sheet>
     </>
   );
@@ -524,7 +524,7 @@ function NumIn({ value, onChange, label, whole, decimals = true, bad }: { value:
       aria-label={label}
       aria-invalid={bad || undefined}
       value={value}
-      onChange={(e) => onChange(e.target.value.replace(dec ? /[^\d.,]/g : /\D/g, "").slice(0, 7))}
+      onChange={(e) => onChange(e.target.value)}
       className={cx(tone.input, "w-[5.5rem]! text-center text-lg font-semibold tabular-nums", bad && BAD)}
     />
   );

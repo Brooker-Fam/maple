@@ -103,6 +103,7 @@ function discardedText(err: unknown, what: string, label: (id: string | null | u
   return who ? `${who} ${done} this ${what}, so ${lost}.` : `This ${what} was ${done}, so ${lost}.`;
 }
 const ADD_BLOCKED = "Fix the side you're adding, or tap Don't add it.";
+const ZERO_BOTTLE_HINT = "Enter more than 0, or leave blank if the amount is unknown.";
 
 type FeedEntry = EntryOf<"feed">;
 type SidePart = Extract<Part, { kind: "side" }>;
@@ -328,23 +329,29 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const close = useCallback(() => (guarded.current ? setConfirming(true) : onClose()), [onClose]);
 
   // ── Bottle ──
-  const toDisplay = (ml: number) => (units === "metric" ? Math.round(ml / 5) * 5 : Math.round(mlToOz(ml) * 4) / 4);
+  const [initialAmountMl] = useState(() => e?.data.method === "bottle" ? e.data.amount_ml : (pnum(preset, "amount_ml") ?? lastBottle?.data.amount_ml));
   const [amount, setAmount] = useState<number | null>(() => {
-    const ml = e?.data.method === "bottle" ? e.data.amount_ml : (pnum(preset, "amount_ml") ?? lastBottle?.data.amount_ml);
-    return ml != null ? toDisplay(ml) : null;
+    if (initialAmountMl == null) return null;
+    if (units === "metric") return initialAmountMl;
+    const oz = mlToOz(initialAmountMl);
+    return Number(oz > 0 && oz < 0.01 ? oz.toPrecision(3) : oz.toFixed(2));
   });
   const [milk, setMilk] = useState<Milk | undefined>(() =>
     e?.data.method === "bottle" ? e.data.milk : ((pstr(preset, "milk") as Milk | undefined) ?? lastBottle?.data.milk)
   );
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
   const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, left, right, both, first, range, invalid: checks.invalid });
-  const amountMl = amount == null ? undefined : Math.round((units === "metric" ? amount : ozToMl(amount)) * 10) / 10;
+  const amountMl = !touched.amount ? initialAmountMl : amount == null ? undefined : Math.round((units === "metric" ? amount : ozToMl(amount)) * 10) / 10;
+  const bottleLimit = units === "metric" ? 500 : Math.floor(mlToOz(500) * 1000) / 1000;
+  const maxAmount = Math.max(bottleLimit, !touched.amount && initialAmountMl != null && initialAmountMl <= 500 ? amount ?? 0 : 0);
+  const amountOverLimit = method === "bottle" && !!touched.amount && amount != null && (units === "metric" ? amount : ozToMl(amount)) > 500;
+  const zeroBottle = method === "bottle" && amountMl === 0 && (!e || !!touched.amount);
   const amountLabel = amountMl != null ? formatVolume(amountMl, units) : null;
   const chips = units === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
 
   // ── Save ──
   const save = async () => {
-    if (busy || manualTimeInvalid || timeInvalid || addBlocked) return;
+    if (busy || manualTimeInvalid || timeInvalid || addBlocked || zeroBottle || amountOverLimit || (!running && checks.invalid)) return;
     if (e) {
       const patch = editPatch();
       // Nothing changed: close without a write (a bare write would bump the version under the other phone's edit).
@@ -425,7 +432,6 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     if (!e) return {};
     if (running) return { ...notePatch };
     if (method === "bottle") {
-      // Only what was changed: the amount shows rounded (¼ oz / 5 ml), so re-sending it would drift.
       const data: Record<string, unknown> = {};
       if (touched.amount) data.amount_ml = amountMl ?? null;
       if (touched.milk) data.milk = milk ?? null;
@@ -634,12 +640,14 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly}
+              disabled={manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly || zeroBottle || amountOverLimit}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
-                  : !running && checks.invalid
+                  : !running && (checks.invalid || amountOverLimit)
                   ? CHECK_NUMBER_HINT
+                  : zeroBottle
+                    ? ZERO_BOTTLE_HINT
                   : empty
                     ? `Add how long ${w.he} nursed.`
                     : addOnly
@@ -677,6 +685,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           {/* Bottles off (Family → On Today): a new feed is nursing, no choice to make. */}
           {!e && (bottlesOn || method === "bottle") && (
             <Segmented
+              aria-label="Feed type"
               value={method}
               onChange={setMethod}
               options={[
@@ -751,7 +760,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               <div>
                 <MiniStepper
                   key="amount"
-                  label="Amount"
+                  label="Amount consumed"
                   unit={units === "metric" ? "ml" : "oz"}
                   ariaLabel={units === "metric" ? "millilitres" : "ounces"}
                   value={amount}
@@ -761,9 +770,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   }}
                   onInvalid={checks.watch("amount")}
                   step={units === "metric" ? 5 : 0.5}
-                  decimals={units === "metric" ? 0 : 2}
-                  max={units === "metric" ? 500 : 16}
+                  decimals={units === "metric" ? 1 : 3}
+                  max={maxAmount}
                 />
+                {(checks.invalid || amountOverLimit) && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">Bottle amounts can be up to {units === "metric" ? "500 ml" : `${bottleLimit} oz (500 ml)`}. Correct the amount, or leave it blank if unknown.</p>}
+                {zeroBottle && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{ZERO_BOTTLE_HINT}</p>}
                 <div className="mt-2 flex flex-wrap gap-2">
                   {chips.map((c) => (
                     <Chip

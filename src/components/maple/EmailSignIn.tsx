@@ -116,12 +116,12 @@ export default function EmailSignIn({
         <>
           <p className="text-sm leading-relaxed text-mp-ink-2">Enter the code sent to <strong className="break-all font-medium text-mp-ink">{email.trim()}</strong>.</p>
           <label htmlFor={`${id}-code`} className="block text-sm font-medium text-mp-ink">Six-digit code</label>
-          <input ref={codeInput} id={`${id}-code`} className={`${field} font-mono tracking-[0.25em]`} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required aria-describedby={`${id}-notice`} />
+          <input ref={codeInput} disabled={!!busy} id={`${id}-code`} className={`${field} font-mono tracking-[0.25em]`} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required aria-describedby={`${id}-notice`} />
         </>
       ) : (
         <>
           <label htmlFor={`${id}-email`} className="block text-sm font-medium text-mp-ink">Email address</label>
-          <input ref={emailInput} id={`${id}-email`} className={field} value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} required />
+          <input ref={emailInput} disabled={!!busy} id={`${id}-email`} className={field} value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} required />
           <p className="text-sm leading-relaxed text-mp-ink-2">We&apos;ll email you a code. No password to remember.</p>
         </>
       )}

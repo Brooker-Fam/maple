@@ -44,6 +44,7 @@
     "check:maple-sync": "node scripts/maple-sync-check/run.mjs",
     "check:maple-feed-status": "tsx scripts/maple-feed-status-check.ts",
     "check:maple-diagnostics": "tsx scripts/maple-diagnostics-check.ts",
+    "check:maple-diagnostics-ui": "node scripts/diagnostics-browser-check.mjs",
     "check:maple-ui-review": "node scripts/ui-review-check.mjs",
     "check:maple-ui-recovery": "node scripts/ui-recovery-check.mjs",
     "check:maple-settings-ui": "node scripts/settings-ui/run.mjs && node scripts/shortcuts/check-ui.mjs setup && node scripts/shortcuts/check-ui.mjs retry && node scripts/shortcuts/check-ui.mjs revoke && node scripts/shortcuts/check-ui.mjs returning",

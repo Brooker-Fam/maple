@@ -222,7 +222,7 @@ try {
     for (const side of ["left", "right"]) assert.equal(await form.getByRole("textbox", { name: `${side}, oz`, exact: true }).inputValue(), "");
     assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled(), "A blank split cannot silently erase the recorded total");
     await form.getByRole("radio", { name: "Total", exact: true }).click();
-    assert.equal(await form.getByRole("textbox", { name: "total, oz", exact: true }).inputValue(), "3.5");
+    assert.equal(await form.getByRole("textbox", { name: "total, oz", exact: true }).inputValue(), "3.38");
     await form.getByRole("button", { name: "Save", exact: true }).click();
     assert.equal((await snapshot()).calls.find((x) => x.patch)?.patch.data, undefined, "Going back to the original total does not re-round it");
   });
@@ -246,13 +246,13 @@ try {
     await form.getByRole("button", { name: "Log it", exact: true }).click();
     const pump = (await snapshot()).calls.find((x) => x.log)?.log;
     assert.equal(pump.started_at, "2026-10-25T04:00:00.000Z", "A chosen midnight is not moved to the previous day by a duration default");
-    assert.equal(pump.ended_at, pump.started_at);
+    assert.equal(pump.ended_at, null);
   });
   await check("pump total preset and typed amount", async () => {
     await page.goto(`${url}?mode=form-pump-preset`);
     const form = page.getByRole("dialog").first();
     const amount = form.getByRole("textbox", { name: "total, oz", exact: true });
-    assert.equal(await amount.inputValue(), "3", "A combined amount preset opens Total");
+    assert.equal(await amount.inputValue(), "3.04", "A combined amount preset opens Total");
     await amount.fill("1.1");
     assert.equal(await amount.inputValue(), "1.1", "A typed amount stays at the user's precision");
     await form.getByRole("button", { name: "Log it", exact: true }).click();

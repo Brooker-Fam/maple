@@ -85,7 +85,7 @@ function FoodFields({ meal, setMeal, description, setDescription }: {
   meal: "meal" | "snack"; setMeal: (value: "meal" | "snack") => void; description: string; setDescription: (value: string) => void;
 }) {
   return <>
-    <Segmented value={meal} onChange={setMeal} options={[{ value: "meal", label: "Meal" }, { value: "snack", label: "Snack" }]} />
+    <Segmented aria-label="Meal type" value={meal} onChange={setMeal} options={[{ value: "meal", label: "Meal" }, { value: "snack", label: "Snack" }]} />
     <label className="block space-y-2">
       <span className={tone.label}>What was it? <span className={tone.faint}>(optional)</span></span>
       <textarea aria-label="What was it?" className={cx(tone.input, "min-h-[88px] resize-none")} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} placeholder="Toast and eggs, a bowl of soup…" rows={2} />

@@ -35,10 +35,6 @@ export type Notifications = {
   sendNow(): Promise<boolean>;
   /** Re-read the browser and the server. */
   refresh(): Promise<void>;
-  /**
-   * Sign-out: this phone's notifications off (DELETE, then unsubscribe), before
-   * the session goes. Resolves true when something was turned off. Never throws.
-   */
   forgetThisPhone(opts?: { everywhere?: boolean }): Promise<boolean>;
 };
 
@@ -65,7 +61,7 @@ const NONE: Notifications = {
   testInOneMinute: async () => null,
   sendNow: async () => false,
   refresh: noop,
-  forgetThisPhone: async () => false,
+  forgetThisPhone: async () => true,
 };
 
 export const NotificationsContext = createContext<Notifications | null>(null);

@@ -27,7 +27,8 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
  */
 export function parseTypedNumber(text: string, max: number): { value: number | null; invalid: boolean } {
   if (text === "") return { value: null, invalid: false };
-  const n = Number(text);
+  if (!/^(?:\d+(?:[.,]\d*)?|[.,]\d+)$/.test(text)) return { value: null, invalid: true };
+  const n = Number(text.replace(",", "."));
   if (!Number.isFinite(n) || n > max) return { value: null, invalid: true };
   return { value: n, invalid: false };
 }
@@ -43,7 +44,7 @@ export function useTypedNumber(value: number | null, max: number, onInvalid?: (i
   const [text, setText] = useState(value == null ? "" : String(value));
   useEffect(() => {
     setText((t) => {
-      if (t !== "" && Number(t) === value) return t; // same number ("2." mid-typing)
+      if (t !== "" && parseTypedNumber(t, max).value === value) return t;
       if (value == null && parseTypedNumber(t, max).invalid) return t; // keep the typo visible
       return value == null ? "" : String(value);
     });
@@ -117,7 +118,7 @@ export function Stepper({
             aria-invalid={invalid || undefined}
             value={text}
             onChange={(e) => {
-              const t = e.target.value.replace(/[^\d.]/g, "");
+              const t = e.target.value;
               setText(t);
               onChange(parseTypedNumber(t, max).value);
             }}

@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 
 const tasks = [
+  ["pnpm", ["exec", "tsx", "scripts/maple-volume-check.ts"]],
+  [process.execPath, ["scripts/maple-pump-summary-check.mjs"]],
   ["pnpm", ["exec", "tsx", "scripts/ui-review-settings-birth-check.ts"]],
   ["pnpm", ["exec", "tsx", "scripts/ui-review-birth-copy-check.ts"]],
   ["pnpm", ["exec", "tsx", "scripts/ui-review-moments-api-check.ts"]],

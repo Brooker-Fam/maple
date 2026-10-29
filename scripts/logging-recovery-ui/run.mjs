@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { saveCases } from "./save-cases.mjs";
+import { storageCases } from "./storage-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -25,7 +26,7 @@ await build({
         const source = await readFile(file, "utf8");
         const anchor = "  return <MapleContext.Provider value={value}>";
         assert(source.includes(anchor));
-        return { contents: source.replace(anchor, "  window.__loggingReview = { state, pending: outbox, online, update, refresh: forceRefresh };\n" + anchor), loader: "tsx" };
+        return { contents: source.replace(anchor, "  window.__loggingReview = { state, pending: outbox, online, update, remove, refresh: forceRefresh };\n" + anchor), loader: "tsx" };
       }
       const relative = path.relative(path.join(root, "src/components/maple"), file);
       if (process.env.LOGGING_BASELINE_REF && baselineFiles.has(relative)) {
@@ -94,6 +95,7 @@ async function openNote(page) {
 }
 
 const cases = [
+  ...storageCases({ assert, fixture, freshState }),
   ...saveCases({ assert, fixture, freshState, record, NOW }),
   ["Moment creation and editing lock pending saves and retain rejected drafts", async () => {
     for (const editing of [false, true]) {

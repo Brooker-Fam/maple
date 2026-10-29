@@ -62,11 +62,11 @@ export function formatTemp(c: number | null | undefined, units: UnitSystem = "us
   return units === "metric" ? `${c.toFixed(1)}°C` : `${cToF(c).toFixed(1)}°F`;
 }
 
-/** "3 oz" / "90 ml" (oz to the nearest quarter, ml to the nearest 5). */
 export function formatVolume(ml: number | null | undefined, units: UnitSystem = "us"): string {
   if (ml == null || !Number.isFinite(ml)) return "—";
-  if (units === "metric") return `${Math.round(ml / 5) * 5 || Math.round(ml)} ml`;
-  const oz = Math.round(mlToOz(ml) * 4) / 4;
+  if (units === "metric") return ml > 0 && ml < 0.05 ? "<0.1 ml" : `${trim(ml)} ml`;
+  const oz = mlToOz(ml);
+  if (oz > 0 && oz < 0.005) return "<0.01 oz";
   return `${trim(oz, 2)} oz`;
 }
 

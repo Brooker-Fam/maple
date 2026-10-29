@@ -5,6 +5,7 @@ import { cleanCareFoodItems } from "@/lib/maple/care-nutrition-validation";
 import type { CareFoodItem } from "@/lib/maple/care-nutrition-types";
 import type { CareNutritionEntry, CareNutritionInput } from "@/lib/maple/types";
 import { mlToOz, ozToMl } from "@/lib/maple/units";
+import { parseTypedNumber } from "../uiFields";
 import { useMaple } from "../useMaple";
 import { foodItemsValid } from "./FoodItemsFields";
 
@@ -25,10 +26,11 @@ export function useNutritionDraft(kind: "food" | "drink", entry?: CareNutritionE
   const [when, setWhen] = useState(entry ? new Date(entry.at) : now);
   const [timeInvalid, setTimeInvalid] = useState(false);
   const [showTime, setShowTime] = useState(!!entry);
-  const volume = amount.trim() === "" ? null : Number(amount);
+  const parsed = parseTypedNumber(amount.trim() === "" ? "" : amount, Infinity);
+  const volume = parsed.value;
   const amountMl = base?.kind === "drink" && amount === amountText(base, editUnits) ? base.data.amount_ml ?? null
     : volume == null ? null : editUnits === "metric" ? volume : ozToMl(volume);
-  const amountInvalid = amountMl != null && (!Number.isFinite(amountMl) || amountMl <= 0 || amountMl > 5000);
+  const amountInvalid = parsed.invalid || amountMl != null && (!Number.isFinite(amountMl) || amountMl <= 0 || amountMl > 5000);
   const invalid = timeInvalid || (kind === "drink" ? !name.trim() || amountInvalid : !foodItemsValid(items));
   const reset = (current: CareNutritionEntry) => {
     setBase(current);

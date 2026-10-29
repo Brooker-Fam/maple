@@ -66,6 +66,7 @@ import type { IconName } from "./icons";
 
 export type AuthInfo = {
   signedIn: boolean;
+  member?: Member;
   google: boolean;
   apple: boolean;
   email: boolean;
@@ -369,7 +370,7 @@ function writeOutbox(items: OutboxItem[]) {
     if (items.length) localStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
     else localStorage.removeItem(OUTBOX_KEY);
   } catch {
-    // storage blocked: the entry still shows until reload
+    throw new Error("Couldn't save on this phone. Keep this page open and try again.");
   }
 }
 
@@ -711,7 +712,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         if (outboxRef.current.some((i) => i.target === "care" || i.target === "mood")) {
           const kept = outboxRef.current.filter((i) => i.target !== "care" && i.target !== "mood");
           setOutbox(kept);
-          writeOutbox(kept);
+          try { writeOutbox(kept); } catch { setError("Couldn't clear saved entries from this phone. Clear this site's data before sharing the phone."); }
           outboxRef.current = kept;
         }
         void loadAuth();
@@ -733,8 +734,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   /** Replace the outbox everywhere at once (state, storage, ref). A new item is stamped with the session it was made in. */
   const setQueue = useCallback((items: OutboxItem[]) => {
     const stamped = stampOutbox(items, outboxRef.current, stateRef.current);
-    setOutbox(stamped);
     writeOutbox(stamped);
+    setOutbox(stamped);
     outboxRef.current = stamped;
   }, []);
 
@@ -791,17 +792,18 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     const done = new Set<string>();
     const bumped = new Set<string>();
     try {
-      for (const item of [...outboxRef.current]) {
-        // Removed from the queue while we were busy (the parent deleted it).
-        if (!outboxRef.current.some((i) => i.client_id === item.client_id)) continue;
+      for (const clientId of outboxRef.current.map((item) => item.client_id)) {
+        const item = outboxRef.current.find((queued) => queued.client_id === clientId);
+        if (!item) continue;
         // Another family's or person's: it waits until this phone is signed in as them again.
         if (!ownedBy(item, stateRef.current)) continue;
         const scope = syncedEntryIds.current;
+        let requestSucceeded = false;
         try {
           if (isEntryItem(item)) flushingEntry.current = item.entry.id;
           const target = item.target ?? "entries";
           const change = isMoodItem(item) && item.id != null;
-          const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; possible_duplicate?: DoseEntry }>(
+          const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; deduped?: boolean; possible_duplicate?: DoseEntry }>(
             change ? `${OUTBOX_URL.mood}?id=${(item as MoodItem).id}` : OUTBOX_URL[target],
             {
               method: change ? "PATCH" : "POST",
@@ -809,6 +811,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
               headers: { "X-Maple-Family": String(item.family ?? 1) },
             }
           );
+          requestSucceeded = true;
           done.add(item.client_id);
           if (isCareItem(item) && res.created === false && res.possible_duplicate) {
             // The other phone (or Siri) logged it first: ask instead of saving a second dose.
@@ -821,8 +824,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           if (isEntryItem(item) && current && res.entry && res.entry.id > 0 && syncedEntryIds.current === scope) {
             scope.ids.set(item.entry.id, res.entry.id);
           }
-          if (isMoodItem(item) && res.entry && current && current !== item) {
-            // She changed this check-in (a chip, the note) while it was uploading: send the change to the saved one.
+          if (isMoodItem(item) && res.entry && current && (current !== item || res.deduped)) {
             const later = current as MoodItem;
             const patch = { data: later.input.data, ...(later.input.note !== undefined ? { note: later.input.note } : {}) };
             setQueue([
@@ -837,6 +839,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             await fetchJson(del, { method: "DELETE", headers: { "X-Maple-Family": String(item.family ?? 1) } }).catch(() => {});
           }
         } catch (e) {
+          if (requestSucceeded) throw e;
           if (isFamilyMismatch(e)) continue;
           if (isTransient(e)) bumped.add(item.client_id);
           else {
@@ -856,6 +859,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         setOnline(true);
         await forceRefresh();
       }
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Couldn't update saved entries on this phone", { tone: "error" });
     } finally {
       flushing.current = false;
     }
@@ -999,13 +1004,18 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     async (id, opts = {}) => {
       // Still in the outbox: just drop it locally.
       const queued = outboxRef.current.filter(isEntryItem).find((i) => i.entry.id === id);
-      // Still being saved (temporary id, not queued): nothing to delete yet.
-      if (id < 0 && !queued) {
+      if (id < 0 && !queued) id = syncedEntryIds.current.ids.get(id) ?? id;
+      if (id < 0 && (!queued || flushing.current)) {
         toast("One sec, that's still saving", { tone: "info" });
         return false;
       }
       if (queued) {
-        setQueue(outboxRef.current.filter((i) => i.client_id !== queued.client_id));
+        try {
+          setQueue(outboxRef.current.filter((i) => i.client_id !== queued.client_id));
+        } catch (e) {
+          toast(e instanceof Error ? e.message : "Couldn't remove that", { tone: "error" });
+          return false;
+        }
         dropEntry(id);
         toast(opts.toast ?? "Removed");
         return true;
@@ -1070,11 +1080,14 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         return entry;
       } catch (e) {
         if (isTransient(e)) {
-          // Keep it: it'll sync when the connection is back.
-          setQueue([...outboxRef.current, { client_id, input: body, entry: optimistic, tries: 1 }]);
-          setOnline(false);
-          toast("Saved on this phone · will sync when you're back online", { tone: "info" });
-          return optimistic;
+          try {
+            setQueue([...outboxRef.current, { client_id, input: body, entry: optimistic, tries: 1 }]);
+            setOnline(false);
+            toast("Saved on this phone · will sync when you're back online", { tone: "info" });
+            return optimistic;
+          } catch (error) {
+            e = error;
+          }
         }
         dropEntry(id);
         toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
@@ -1111,7 +1124,12 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           note: input.note ?? null,
           data: input.data as never,
         } as Entry;
-        setQueue(outboxRef.current.map((i) => (i.client_id === queued.client_id ? ({ ...queued, input, entry } as OutboxItem) : i)));
+        try {
+          setQueue(outboxRef.current.map((i) => (i.client_id === queued.client_id ? ({ ...queued, input, entry } as OutboxItem) : i)));
+        } catch (e) {
+          toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
+          return null;
+        }
         upsert(entry);
         if (opts.toast !== "") toast(opts.toast ?? "Saved on this phone", { icon: toastIcon(entry) });
         return entry;
@@ -1373,6 +1391,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       unqueue: (entryId) => {
         const queued = outboxRef.current.find((i) => isCareItem(i) && i.entry.id === entryId);
         if (!queued) return false;
+        if (flushing.current) throw new Error("One sec, that's still saving");
         setQueue(outboxRef.current.filter((i) => i.client_id !== queued.client_id));
         setState((s) => (s?.care ? { ...s, care: { ...s.care, entries: s.care.entries.filter((e) => e.id !== entryId) } } : s));
         return true;
@@ -1398,6 +1417,10 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       unqueueMood: (entryId) => {
         const items = outboxRef.current;
         const isNew = items.some((i) => isMoodItem(i) && i.id == null && i.entry.id === entryId);
+        if (isNew && flushing.current) {
+          toast("One sec, that's still saving", { tone: "info" });
+          throw new Error("One sec, that's still saving");
+        }
         const kept = items.filter((i) => !(isMoodItem(i) && (i.id === entryId || (i.id == null && i.entry.id === entryId))));
         if (kept.length !== items.length) setQueue(kept);
         if (isNew) setState((s) => (s?.care?.mood ? { ...s, care: { ...s.care, mood: s.care.mood.filter((m) => m.id !== entryId) } } : s));
@@ -1405,7 +1428,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       },
       tempId: () => tempId--,
     }),
-    [setQueue, withInflight, withPending]
+    [setQueue, toast, withInflight, withPending]
   );
 
   const value = useMemo<MapleContextValue>(

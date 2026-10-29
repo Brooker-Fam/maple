@@ -236,6 +236,9 @@ function Flow({ open, onClose, care }: FullCheckInProps & { care: UseCare }) {
         {step.kind === "intro" && (
           <div className="space-y-4 pb-2">
             <p className={cx(tone.body, "text-[17px] leading-relaxed")}>{FULL_INTRO.body}</p>
+            <p className={cx(tone.muted, "text-[14px] leading-snug")}>
+              Family owners and members can see and edit check-ins, answers and notes. View-only guests can&apos;t access them.
+            </p>
             <p className={cx(tone.faint, "text-[12px] leading-snug")}>{FULL_INTRO.credit}</p>
           </div>
         )}

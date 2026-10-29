@@ -256,7 +256,7 @@ try {
 
   await fixture("care-drink");
   await page.getByText("Water · in the log", { exact: true }).waitFor();
-  await receiptCard.getByText(/8 oz/).waitFor();
+  await receiptCard.getByText(/8\.01 oz/).waitFor();
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   const drinkEditor = page.getByRole("dialog", { name: "Edit drink", exact: true });
   await drinkEditor.getByRole("textbox", { name: "Drink", exact: true }).fill("Tea");
