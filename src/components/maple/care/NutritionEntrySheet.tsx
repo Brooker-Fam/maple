@@ -22,7 +22,7 @@ export default function NutritionEntrySheet({ kind, entry, care, onClose, onSave
   currentEntry?: CareNutritionEntry | null;
   onRefresh?: () => void;
 }) {
-  const { state, refresh } = useMaple();
+  const { state, refresh, now } = useMaple();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const draft = useNutritionDraft(kind, entry);
   const { base } = draft;
@@ -66,10 +66,17 @@ export default function NutritionEntrySheet({ kind, entry, care, onClose, onSave
     </div>}
     {gone && <p role="status" className={cx(tone.muted, "text-[15px]")}>This entry was removed. Your change hasn&apos;t been saved.</p>}
     <fieldset disabled={saving} className="min-w-0 space-y-5">
-      {kind === "food" ? <><FoodFields meal={draft.meal} setMeal={draft.setMeal} description={draft.description} setDescription={draft.setDescription} /><FoodItemsFields items={draft.items} onChange={draft.setItems} /></>
+      {kind === "food" ? <FoodFields meal={draft.meal} setMeal={draft.setMeal} description={draft.description} setDescription={draft.setDescription} />
         : <DrinkFields name={draft.name} setName={draft.setName} amount={draft.amount} setAmount={draft.setAmount} units={draft.editUnits} invalid={draft.amountInvalid} />}
-      {draft.showTime ? <RecordedTimeField label={kind === "food" ? "Eaten at" : "Drank at"} value={draft.when} onChange={draft.setWhen} onInvalidChange={draft.setTimeInvalid} tz={tz} />
-        : <button type="button" className="min-h-[44px] text-[14px] font-medium text-mp-accent-fg" onClick={() => draft.setShowTime(true)}>Just now · Change time</button>}
+      {draft.showTime ? <div>
+        <RecordedTimeField label={kind === "food" ? "Eaten at" : "Drank at"} value={draft.when} onChange={draft.setWhen} onInvalidChange={draft.setTimeInvalid} tz={tz} />
+        {!base && <button type="button" className="mt-1 min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg" onClick={() => { draft.setTimeInvalid(false); draft.setShowTime(false); }}>Use current time</button>}
+      </div> : <div className={cx(tone.inset, "flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2")}>
+        <span className="min-w-0 flex-1 text-[15px] font-medium text-mp-ink">Just now</span>
+        <button type="button" className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg" onClick={() => { draft.setWhen(new Date(now().getTime() - 60_000)); draft.setShowTime(true); }}>1 min ago</button>
+        <button type="button" aria-label="Just now · Change time" className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg" onClick={() => { draft.setWhen(now()); draft.setShowTime(true); }}>Change time</button>
+      </div>}
+      {kind === "food" && <FoodItemsFields items={draft.items} onChange={draft.setItems} />}
     </fieldset>
   </Sheet>;
 }

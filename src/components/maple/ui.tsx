@@ -85,7 +85,7 @@ export function Button({ children, onClick, variant = "primary", size = "md", ty
       aria-expanded={rest["aria-expanded"]}
       aria-controls={rest["aria-controls"]}
       className={cx(
-        "inline-flex items-center justify-center gap-2 font-semibold transition active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100",
+        "mp-control inline-flex items-center justify-center gap-2 font-semibold transition active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100",
         v,
         s,
         className
@@ -123,7 +123,7 @@ export function Chip({
       aria-label={ariaLabel}
       style={selected && color ? { backgroundColor: color, borderColor: color } : undefined}
       className={cx(
-        "inline-flex min-h-[40px] items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition active:scale-[0.97]",
+        "mp-control inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition active:scale-[0.97]",
         selected
           ? color
             ? "mp-kind-fill text-white"
@@ -172,7 +172,7 @@ export function Segmented<T extends string>({
           }}
           onClick={() => onChange(o.value)}
           className={cx(
-            "min-h-[44px] flex-1 rounded-[10px] px-3 text-sm transition",
+            "mp-control min-h-[44px] flex-1 rounded-[10px] px-3 text-sm transition",
             value === o.value
               ? "bg-mp-raised font-semibold text-mp-ink shadow-[0_1px_3px_rgba(0,0,0,0.12)]"
               : "font-medium text-mp-ink-2"
@@ -385,7 +385,7 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
         t.undo?.();
         dismiss(t.id);
       }}
-      className={cx("min-h-[44px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold whitespace-nowrap", !!t.actions?.length && "ml-auto")}
+      className={cx("mp-control min-h-[44px] shrink-0 rounded-full bg-current/15 px-3 text-sm font-semibold whitespace-nowrap", !!t.actions?.length && "ml-auto")}
     >
       {t.undoLabel ?? "Undo"}
     </button>
@@ -414,7 +414,7 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
                 dismiss(t.id);
               }}
               className={cx(
-                "inline-flex min-h-[44px] items-center gap-1.5 bg-current/15 font-semibold",
+                "mp-control inline-flex min-h-[44px] items-center gap-1.5 bg-current/15 font-semibold",
                 // A chip with a second line (the time it produces) is a two-line tile.
                 a.sub ? "min-w-[72px] flex-col items-start justify-center rounded-xl px-3 py-1 text-left" : "rounded-full px-3 text-xs"
               )}

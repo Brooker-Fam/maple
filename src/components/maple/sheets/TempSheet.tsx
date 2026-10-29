@@ -239,7 +239,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
       <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting? Feeding, sleepy, fussy…`} />
 
       {!e && (
-        <MoreDetails label="Other readings" summary={hasVitals ? "saved as vitals" : "heart, breathing, oxygen"}>
+        <MoreDetails defaultOpen label="Other readings" summary={hasVitals ? "saved as vitals" : "heart, breathing, oxygen"}>
           <div>
             <Label optional>Heart rate</Label>
             <Stepper value={heart} onChange={setHeart} onInvalid={checks.watch("heart")} step={5} min={30} max={260} suffix="bpm" ariaLabel="heart rate, beats per minute" />

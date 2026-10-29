@@ -33,7 +33,7 @@ import {
  * reading asks for a recount, and the guidance says who to call.
  *
  * Opened as "Skin check" (preset { jaundice: "none" }) it leads with the skin
- * check and tucks the numbers away; otherwise the other way round.
+ * check first; otherwise the readings come first. Both stay visible.
  */
 
 const H = 3_600_000;
@@ -195,14 +195,14 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
       {skinMode ? (
         <>
           {skin}
-          <MoreDetails label="Other readings" summary={numberSummary ?? "heart, breathing, oxygen"}>
+          <MoreDetails defaultOpen label="Other readings" summary={numberSummary ?? "heart, breathing, oxygen"}>
             {numbers}
           </MoreDetails>
         </>
       ) : (
         <>
           {numbers}
-          <MoreDetails label="Skin check" summary={levelSummary ?? "jaundice"}>
+          <MoreDetails defaultOpen label="Skin check" summary={levelSummary ?? "jaundice"}>
             {skin}
           </MoreDetails>
         </>

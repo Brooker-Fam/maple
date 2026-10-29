@@ -51,6 +51,52 @@ const check = async (name, run) => {
   catch (e) { checks.push(name); console.log(`FAIL ${name}: ${e.message}`); await page.screenshot({ path: path.join(screenshots, `${name.replaceAll(" ", "-")}-failure.png`) }); }
 };
 try {
+  await check("one minute ago uses tap time", async () => {
+    await page.goto(`${url}?mode=time`);
+    // Let a form sit open without rerendering. "Ago" must use the clock at the tap.
+    await page.evaluate(() => { window.__sharedNow = "2026-10-28T12:05:00Z"; });
+    const quick = page.getByRole("region", {name:"Quick logged time", exact:true});
+    await quick.getByRole("button", {name:"1 min ago", exact:true}).click();
+    assert.equal(await page.locator("#when-value").textContent(), "2026-10-28T12:04:00.000Z");
+    assert.equal(await quick.getByRole("button", {name:"1 min ago", exact:true}).getAttribute("aria-pressed"), "true");
+    await quick.getByRole("button", {name:"5 min ago", exact:true}).click();
+    assert.equal(await page.locator("#when-value").textContent(), "2026-10-28T12:00:00.000Z");
+    await page.getByRole("region", {name:"Timer start", exact:true}).getByRole("button", {name:"1 min ago", exact:true}).click();
+    assert.equal(await page.locator("#scrub-value").textContent(), "2026-10-28T12:04:00.000Z");
+  });
+  await check("recorded time nudges preserve limits and feedback", async () => {
+    await page.goto(`${url}?mode=time`);
+    const field = page.getByRole("group", {name:"Recorded at", exact:true});
+    await field.getByRole("button", {name:"5 min earlier", exact:true}).click();
+    assert.equal(await page.getByLabel("Recorded at: time", {exact:true}).inputValue(), "11:40");
+    assert.match(await field.getByRole("status").textContent(), /11:40 AM/);
+    assert(await field.getByRole("button", {name:"1 min earlier", exact:true}).isDisabled());
+    assert(await field.getByRole("button", {name:"5 min earlier", exact:true}).isDisabled());
+    await field.getByRole("button", {name:"1 min later", exact:true}).click();
+    assert.equal(await page.locator("#recorded-value").textContent(), "2026-10-28T11:41:00.000Z");
+    await page.getByLabel("Recorded at: time", {exact:true}).fill("12:01");
+    assert.equal(await page.locator("#recorded-value").getAttribute("data-invalid"), "true");
+    assert(await field.getByRole("alert").isVisible());
+    await page.getByLabel("Recorded at: time", {exact:true}).fill("11:59");
+    assert.equal(await page.locator("#recorded-value").getAttribute("data-invalid"), "false");
+    assert.equal(await page.locator("#recorded-value").textContent(), "2026-10-28T11:59:00.000Z");
+  });
+  await check("shared time controls fit narrow phones", async () => {
+    await page.setViewportSize({width:320,height:844});
+    await page.goto(`${url}?mode=time`);
+    for (const theme of ["", "dark", "maple-night"]) {
+      await page.evaluate((theme) => { document.documentElement.className=`maple-ui ${theme}`; }, theme);
+      const chip=page.getByRole("region", {name:"Quick logged time",exact:true}).getByRole("button", {name:"1 min ago",exact:true});
+      await chip.focus();
+      const focus=await chip.evaluate(el=>({outline:getComputedStyle(el).outlineStyle,width:getComputedStyle(el).outlineWidth}));
+      assert.deepEqual(focus,{outline:"solid",width:"2px"}, `${theme||"day"} has visible keyboard focus`);
+      await page.screenshot({path:path.join(screenshots,`shared-time-controls-320-${theme||"day"}.png`),fullPage:true});
+    }
+    const sizes=await page.locator("button").evaluateAll(buttons=>buttons.map(el=>({text:el.textContent,width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height})));
+    for(const size of sizes) assert(size.height>=44 && size.width>=44, `${size.text} needs a 44px touch target`);
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth), "Time controls do not overflow at 320px");
+    assert(await page.getByRole("region", {name:"Useful details",exact:true}).getByRole("button", {name:"Available choice",exact:true}).isVisible());
+  });
   await check("radio keyboard", async () => {
     await page.goto(url);
     await page.getByRole("radio",{name:"One",exact:true}).focus();

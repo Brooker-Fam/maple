@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { KIND_LABELS } from "@/lib/maple/describe";
 import type { TapFeedData } from "@/lib/maple/feed";
 import { MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, overDailyMax, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
@@ -207,7 +207,7 @@ export function SheetFooter({
           <button
             type="button"
             onClick={onDelete}
-            className="-ml-2 min-h-[52px] rounded-[14px] px-3 text-base font-semibold text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97]"
+            className="mp-control -ml-2 min-h-[52px] rounded-[14px] px-3 text-base font-semibold text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97]"
           >
             Delete
           </button>
@@ -221,12 +221,13 @@ export function SheetFooter({
 }
 
 /**
- * Closed by default: the fields most people skip at 3am. A settings-style
+ * Optional fields, with defaultOpen for useful logging choices. A settings-style
  * row (label, what's set, chevron) on a card, so the chips and steppers
  * inside keep their contrast.
  */
-export function MoreDetails({ summary, children, label = "More details" }: { summary?: string; children: ReactNode; label?: string }) {
-  const [open, setOpen] = useState(false);
+export function MoreDetails({ summary, children, label = "More details", defaultOpen = false }: { summary?: string; children: ReactNode; label?: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const id = useId();
   const reduce = useReducedMotion();
   return (
     <div className={cx(tone.card, "overflow-hidden")}>
@@ -234,15 +235,19 @@ export function MoreDetails({ summary, children, label = "More details" }: { sum
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex min-h-[52px] w-full items-center gap-3 px-4 text-left"
+        aria-controls={open ? `${id}-details` : undefined}
+        className="mp-control flex min-h-[52px] w-full items-center gap-3 px-4 text-left"
       >
-        <span className={cx(tone.body, "shrink-0 text-[15px] font-medium")}>{label}</span>
+        <span id={`${id}-label`} className={cx(tone.body, "shrink-0 text-[15px] font-medium")}>{label}</span>
         <span className={cx(tone.muted, "min-w-0 flex-1 truncate text-right text-sm")}>{summary}</span>
         <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", open && "rotate-180")} />
       </button>
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
+            id={`${id}-details`}
+            role="region"
+            aria-labelledby={`${id}-label`}
             initial={reduce ? false : { height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={reduce ? undefined : { height: 0, opacity: 0 }}

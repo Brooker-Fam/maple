@@ -108,13 +108,13 @@ const cases = [
   }],
   ["scheduled dose guards its entered details", async () => {
     await visit("plan-dose");
-    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    assert(await page.getByRole("textbox", { name: "Dose, if different", exact: true }).isVisible());
     await confirmDraft(page.getByRole("textbox", { name: "Dose, if different", exact: true }), "Example label text");
   }],
   ["dose detail edits guard their entered details", async () => {
     await visit("detail");
     await page.getByRole("button", { name: "Dose details", exact: true }).click();
-    await page.getByRole("button", { name: /Note and dose/ }).click();
+    assert(await page.getByRole("textbox", { name: "Dose, if different", exact: true }).isVisible());
     await confirmDraft(page.getByRole("textbox", { name: "Dose, if different", exact: true }), "Updated example label", "Save dose");
   }],
   ["dose time edits guard their entered time", async () => {

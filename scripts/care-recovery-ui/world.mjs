@@ -16,6 +16,19 @@ export function world() {
     state.care.entries = [row];
     return row;
   };
+  controls.medicine = () => {
+    const plan = {
+      id: 901, name: "Example medicine", also_called: null, dose_text: null,
+      schedule: { type: "as_needed" }, max_24h: null, limit_unit: null, units_per_dose: null,
+      label_text: null, reason: null, contains_apap: false, instructions: null,
+      course_start: null, course_end: null, show_on_today: true, private: false,
+      stopped_at: null, reviewed_at: null, reviewed_by: null, sort: 0,
+      created_by: me.email, updated_by: null, source: "web", created_at: NOW, updated_at: NOW,
+    };
+    state.care.plans = [plan];
+    controls.changed();
+    return plan;
+  };
   controls.answerElsewhere = (answer) => {
     const row = state.care.entries.find((entry) => entry.kind === "question");
     state.care.entries = [{ ...row, data: { ...row.data, answer }, updated_at: controls.changed() }];

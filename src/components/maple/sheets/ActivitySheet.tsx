@@ -34,7 +34,8 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
       const s = new Date(e.started_at);
       return [s, e.ended_at ? new Date(e.ended_at) : running ? now() : s];
     }
-    const end = now();
+    const presetEnd = pstr(preset, "ended_at");
+    const end = presetEnd && Number.isFinite(Date.parse(presetEnd)) ? new Date(presetEnd) : now();
     const s = presetStart(preset);
     return s && s < end ? [s, end] : [new Date(end.getTime() - 5 * MIN), end];
   });

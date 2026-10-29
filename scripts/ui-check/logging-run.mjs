@@ -123,6 +123,79 @@ try {
     assert.equal(bottle.data.method, "bottle");
     assert.equal(bottle.data.milk, "formula", "The visible milk choice is included when logging");
   });
+  await check("pump mode carries measured amounts", async () => {
+    await page.goto(`${url}?mode=form-pump`);
+    const form = page.getByRole("dialog").first();
+    await form.getByRole("textbox", { name: "left, oz", exact: true }).fill("2");
+    await form.getByRole("textbox", { name: "right, oz", exact: true }).fill("1");
+    await form.getByRole("radio", { name: "Total", exact: true }).click();
+    assert.equal(await form.getByRole("textbox", { name: "total, oz", exact: true }).inputValue(), "3", "Total starts with the entered sides' sum");
+    await form.getByRole("radio", { name: "Each side", exact: true }).click();
+    assert.equal(await form.getByRole("textbox", { name: "left, oz", exact: true }).inputValue(), "2");
+    assert.equal(await form.getByRole("textbox", { name: "right, oz", exact: true }).inputValue(), "1");
+    await form.getByRole("radio", { name: "Total", exact: true }).click();
+    assert.equal((await snapshot()).calls.filter((x) => x.log || x.patch).length, 0, "Changing pump modes keeps the entry unsaved");
+    await form.getByRole("button", { name: "Log it", exact: true }).click();
+    const pump = (await snapshot()).calls.find((x) => x.log)?.log;
+    assert.equal(pump.kind, "pump");
+    assert(Math.abs(pump.data.total_ml - 88.7) < 0.001);
+    assert.equal(pump.data.left_ml, undefined);
+    assert.equal(pump.data.right_ml, undefined);
+  });
+  await check("pump mode preserves recorded precision", async () => {
+    for (const editLeft of [false, true]) {
+      await page.goto(`${url}?mode=form-pump-sides`);
+      const form = page.getByRole("dialog").first();
+      if (editLeft) await form.getByRole("textbox", { name: "left, oz", exact: true }).fill("2");
+      await form.getByRole("radio", { name: "Total", exact: true }).click();
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      const patch = (await snapshot()).calls.find((x) => x.patch)?.patch;
+      assert.deepEqual(patch.data, { total_ml: editLeft ? 99.1 : 140, left_ml: null, right_ml: null }, "Total uses edits and exact untouched ml, not the rounded display values");
+    }
+  });
+  await check("pump total never invents a split", async () => {
+    await page.goto(`${url}?mode=form-pump-total`);
+    const form = page.getByRole("dialog").first();
+    await form.getByRole("radio", { name: "Each side", exact: true }).click();
+    for (const side of ["left", "right"]) assert.equal(await form.getByRole("textbox", { name: `${side}, oz`, exact: true }).inputValue(), "");
+    assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled(), "A blank split cannot silently erase the recorded total");
+    await form.getByRole("radio", { name: "Total", exact: true }).click();
+    assert.equal(await form.getByRole("textbox", { name: "total, oz", exact: true }).inputValue(), "3.5");
+    await form.getByRole("button", { name: "Save", exact: true }).click();
+    assert.equal((await snapshot()).calls.find((x) => x.patch)?.patch.data, undefined, "Going back to the original total does not re-round it");
+  });
+  await check("pump total preset and typed amount", async () => {
+    await page.goto(`${url}?mode=form-pump-preset`);
+    const form = page.getByRole("dialog").first();
+    const amount = form.getByRole("textbox", { name: "total, oz", exact: true });
+    assert.equal(await amount.inputValue(), "3", "A combined amount preset opens Total");
+    await amount.fill("1.1");
+    assert.equal(await amount.inputValue(), "1.1", "A typed amount stays at the user's precision");
+    await form.getByRole("button", { name: "Log it", exact: true }).click();
+    assert.deepEqual((await snapshot()).calls.find((x) => x.log)?.log.data, { total_ml: 32.5 });
+  });
+  await check("expanded sleep and reading options", async () => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto(`${url}?mode=form-sleep`);
+    let form = page.getByRole("dialog").first();
+    const place = form.getByRole("button", { name: "Bassinet", exact: true });
+    assert(await place.isVisible(), "Sleep location is visible on first open");
+    await place.click();
+    assert.equal((await snapshot()).calls.filter((x) => x.log).length, 0);
+    await form.getByRole("button", { name: "Log it", exact: true }).click();
+    assert.equal((await snapshot()).calls.find((x) => x.log)?.log.data.place, "bassinet");
+    for (const mode of ["form-vitals", "form-vitals-skin"]) {
+      await page.goto(`${url}?mode=${mode}`);
+      form = page.getByRole("dialog").first();
+      assert(await form.getByRole("textbox", { name: "heart rate, beats per minute", exact: true }).isVisible(), "Numeric readings stay visible in both entry routes");
+      assert(await form.getByRole("radiogroup", { name: "How far the yellow has spread", exact: true }).isVisible(), "Skin choices stay visible in both entry routes");
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Expanded options fit a narrow phone");
+    }
+    await page.goto(`${url}?mode=form-temp`);
+    form = page.getByRole("dialog").first();
+    assert(await form.getByRole("textbox", { name: "heart rate, beats per minute", exact: true }).isVisible(), "A temperature can include other readings without expanding a section");
+    await page.setViewportSize({ width: 390, height: 844 });
+  });
   await check("expanded nursing side correction", async () => {
     await page.goto(`${url}?mode=form-nursing-details`);
     const form = page.getByRole("dialog").first();

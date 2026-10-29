@@ -51,6 +51,47 @@ async function visit(controls) {
 const question = (page) => page.getByLabel("A question for your OB", { exact: true });
 const answer = (page) => page.locator("textarea");
 const cases = [
+  ["earlier medicine logging exposes time and optional details before one save", async (page, controls) => {
+    controls.medicine();
+    await refresh(page, controls);
+    await page.getByRole("button", { name: "Log an earlier dose of Example medicine", exact: true }).click();
+    const time = page.getByLabel("Taken at: time", { exact: true });
+    assert.equal(await time.inputValue(), "09:29");
+    const dose = page.getByRole("textbox", { name: "Dose, if different", exact: true });
+    assert(await dose.isVisible());
+    assert.equal(await dose.inputValue(), "", "No dose is selected by default");
+    await page.setViewportSize({ width: 320, height: 844 });
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "Expanded dose details fit a small phone");
+    await page.getByPlaceholder("Anything to remember?", { exact: true }).fill("Synthetic note");
+    assert.equal(controls.requests.filter((request) => request.method === "POST").length, 0);
+    await page.getByRole("button", { name: "Use current time", exact: true }).click();
+    await page.getByRole("button", { name: "1 min ago", exact: true }).click();
+    assert.equal(await time.inputValue(), "09:29");
+    await page.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    assert.equal(await time.inputValue(), "09:28");
+    await page.getByRole("button", { name: /^Took it at/ }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    const writes = controls.requests.filter((request) => request.method === "POST" && request.path === "/api/maple/care/entries");
+    assert.equal(writes.length, 1);
+    assert.equal(Math.floor(Date.parse(writes[0].body.at) / 60_000), Date.parse("2026-10-28T13:28:00.000Z") / 60_000);
+    assert.equal(writes[0].body.note, "Synthetic note");
+    assert.equal(writes[0].body.data.dose, null);
+    assert.equal(writes[0].body.data.units, null);
+    assert.equal(writes[0].body.allow_duplicate, undefined);
+  }],
+  ["earlier medicine shortcut keeps the likely duplicate question", async (page, controls) => {
+    const plan = controls.medicine();
+    const at = "2026-10-28T13:25:00.000Z";
+    controls.state.care.entries = [{ id: 8001, kind: "dose", med_id: plan.id, at, data: { name: plan.name, dose: null, units: null, unit: null }, note: null, private: false, created_by: controls.state.me.email, updated_by: null, source: "web", created_at: at, updated_at: at }];
+    await refresh(page, controls);
+    await page.getByRole("button", { name: "Log an earlier dose of Example medicine", exact: true }).click();
+    await page.getByRole("group", { name: "Is this another dose?", exact: true }).waitFor();
+    assert.equal(controls.requests.filter((request) => request.method === "POST").length, 0);
+    await page.getByRole("button", { name: "No, same one", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    assert.equal(controls.state.care.entries.length, 1);
+    assert.equal(controls.requests.filter((request) => request.method === "POST").length, 0);
+  }],
   ["new OB questions guard tab changes", async (page) => {
     await question(page).fill("Synthetic question to preserve");
     const prompts = [];

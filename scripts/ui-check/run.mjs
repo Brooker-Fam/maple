@@ -164,6 +164,38 @@ try {
     await sheet.waitFor({ state: "hidden" });
   };
 
+  // Every live timer exposes the same precise start controls on the first screen.
+  for (const kind of ["sleep", "tummy", "pump"]) {
+    await page.evaluate((kind) => window.__mapleUiFixture.timerScenario(kind), kind);
+    await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+    const sheet = page.getByRole("dialog", { name: "Edit times", exact: true });
+    const clock = sheet.locator('input[type="time"]');
+    assert.equal(await clock.inputValue(), "09:00", "Start time is editable immediately without choosing an earlier preset");
+    await sheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    assert.equal(await clock.inputValue(), "08:59");
+    assert.equal((await snapshot()).calls.length, 0, "Start correction remains a draft");
+    await sheet.getByRole("button", { name: kind === "sleep" ? "She's already awake" : "Already done", exact: true }).click();
+    await sheet.getByRole("alertdialog", { name: "Discard this time change?" }).waitFor();
+    await sheet.getByRole("button", { name: "Keep editing", exact: true }).click();
+    assert.equal(await clock.inputValue(), "08:59", "Recovery navigation preserves an unsaved start correction");
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await sheet.waitFor({ state: "hidden" });
+    assert.equal((await snapshot()).calls.length, 0, "Cancel leaves the running timer unchanged");
+
+    await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+    await sheet.getByRole("button", { name: kind === "sleep" ? "She's already awake" : "Already done", exact: true }).click();
+    await sheet.getByRole("button", { name: kind === "sleep" ? "Fix when she fell asleep" : `Fix when ${kind === "tummy" ? "tummy time" : "pumping"} started`, exact: true }).click();
+    assert.equal(await clock.inputValue(), "09:00", "Returning from the end question opens the start editor directly");
+    await sheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    await sheet.getByRole("button", { name: "Save time", exact: true }).click();
+    await sheet.waitFor({ state: "hidden" });
+    const result = await snapshot();
+    assert.equal(result.calls.length, 1, "One Save makes one correction request");
+    assert.equal(result.activeFeed.started_at, "2026-10-28T12:59:00.000Z");
+    assert(result.activeFeed.active, "Correcting the start keeps the timer running");
+  }
+  console.log("PASS live timers: immediate ±1/±5 start controls, staged edits, recovery navigation, Cancel and one Save");
+
   // The same draft spans several parts in running, paused and completed feeds.
   for (const kind of ["running", "paused", "saved"]) {
     await page.evaluate((kind) => window.__mapleUiFixture.nursingScenario(kind === "paused" ? "paused-multi" : "switch"), kind);

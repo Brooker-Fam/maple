@@ -127,6 +127,12 @@ function App() {
       historicalFailure: (kind) => { timerFailure.current = kind; },
       loadHistorical: () => setHistoricalLoaded(true),
       evictHistorical: () => setHistoricalLoaded(false),
+      timerScenario: (kind) => {
+        setActiveFeed({ ...initialActiveFeed(), kind, started_at: iso("13:00"), data: {} });
+        setNow(new Date(INITIAL_NOW));
+        calls.current = [];
+        setToasts([]);
+      },
       nursingScenario: (kind = "switch") => {
         const saved = initialFeed();
         if (kind === "switch") {
@@ -198,6 +204,12 @@ function App() {
     setActiveFeed(saved);
     return { entry: saved };
   };
+  const adjust = async (entry, at) => {
+    const saved = { ...latest.current.activeFeed, started_at: at.toISOString(), updated_at: new Date(Date.parse(INITIAL_NOW) + ++version.current * 1000).toISOString() };
+    calls.current.push({ timer: true, action: "adjust", id: entry.id, at: at.toISOString() });
+    setActiveFeed(saved);
+    return { entry: saved };
+  };
   // The application router is the fixture boundary: actual EntryRow presets
   // and actual FixTimesSheet actions select which real editor to show. The
   // full-details marker only records that navigation and its exact entry.
@@ -208,7 +220,7 @@ function App() {
   };
 
   return (
-    <FixtureContext.Provider value={{ maple, care, nav: { openDoseTime }, now, sheets, timerActions: { retime, resume } }}>
+    <FixtureContext.Provider value={{ maple, care, nav: { openDoseTime }, now, sheets, timerActions: { retime, resume, adjust } }}>
       <main className="mx-auto min-h-screen max-w-md space-y-6 px-4 py-6 pb-32">
         <header><p className="text-[13px] text-mp-ink-2">Example family · synthetic records</p><h1 className="mt-1 text-[32px] font-semibold text-mp-ink">{page === "care" ? "Sam" : "Nursing"}</h1></header>
         <nav className="flex flex-wrap gap-2" aria-label="Fixture views">
@@ -236,7 +248,7 @@ function App() {
         {nursing && <Sheet open calm onClose={() => setNursing(false)} title="Edit nursing time" subtitle="Left ended">
           <MomentEditor entry={feed} tz={TZ} edge={{ edge: "side_end", ref: { side: "L", start: iso("12:45") } }} mode="commit" onSave={saveNursing} onCancel={() => setNursing(false)} />
         </Sheet>}
-        {activeNursing && <FixTimesSheet open kind="feed" entry={activeFeed} preset={{ fix: { target: "current" } }} onClose={() => setActiveNursing(false)} />}
+        {activeNursing && <FixTimesSheet open kind={activeFeed.kind} entry={activeFeed} preset={{ fix: { target: "current" } }} onClose={() => setActiveNursing(false)} />}
         {savedNursing && <FixTimesSheet open kind="feed" entry={feed} preset={{ fix: { target: "finish" } }} onClose={() => setSavedNursing(false)} />}
         {routedSheet?.preset?.fix && <FixTimesSheet key={`history-${routedSheet.entry.id}`} open {...routedSheet} onClose={sheets.close} />}
         {routedSheet && !routedSheet.preset?.fix && (readOnly || realDetails) && <FeedSheet open {...routedSheet} onClose={sheets.close} />}

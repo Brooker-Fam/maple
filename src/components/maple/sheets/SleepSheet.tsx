@@ -129,7 +129,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
       )}
 
       {!running && (
-        <MoreDetails summary={place ? PLACE[place] : undefined}>
+        <MoreDetails defaultOpen summary={place ? PLACE[place] : undefined}>
           <div>
             <Label>Where</Label>
             <div className="flex flex-wrap gap-2">

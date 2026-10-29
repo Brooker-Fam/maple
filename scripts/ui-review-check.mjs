@@ -7,6 +7,7 @@ const tasks = [
   [process.execPath, ["scripts/ui-review-onboarding-waiting-check.mjs"]],
   [process.execPath, ["scripts/ui-review-chat-navigation-check.mjs"]],
   [process.execPath, ["scripts/ui-review-checkin-check.mjs"]],
+  [process.execPath, ["scripts/first-use-ui/run.mjs"]],
   ...["scripts/ui-review-shared-check.mjs", "scripts/ui-check/logging-run.mjs", "scripts/ui-review-moments-check.mjs", "scripts/ui-review-care-check.mjs"].map((file) => [process.execPath, [file]]),
   ...["settings", "birth", "guest", "onboarding", "draft", "signout-error"].map((scenario) => [process.execPath, ["scripts/ui-review-settings-check.mjs"], { MAPLE_SETTINGS_SCENARIO: scenario }]),
 ];

@@ -175,7 +175,7 @@ export default function Dock() {
   const sleepPending = !!sleep && sleep.id < 0;
   const next = summary.nextSide;
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
-  const showHint = (!summary.age || summary.age.dayOfLife <= 3) && !summary.active.length;
+  const showHint = (!entries.length || !summary.age || summary.age.dayOfLife <= 3) && !summary.active.length;
   const { nursing: nursingOn, bottles } = logSwitches(state.baby);
   // The part she's on (or came off) goes back and forth; the side the paused tiles count from is the last one tracked.
   const both = !!feedN?.both;
@@ -378,7 +378,7 @@ export default function Dock() {
         <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none">
           {/* Her strip (her next medicine, 44px) rides on top; Maple's eight tiles stay exactly where they were. */}
           <CareStrip />
-          {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Hold a button to log an earlier one.</p>}
+          {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Tap to start or log now. Hold a button for earlier.</p>}
           {/* Eight columns, each tile two of them (four abreast), so Left and Right can take three each when Bottles is off. */}
           <div className="grid grid-cols-8 gap-2">
             {/* Row 1: feeding, which becomes the nursing controls while a feed runs. No tile shows a feed clock (the card has it). */}
@@ -537,7 +537,8 @@ export default function Dock() {
                     key={s}
                     id={s}
                     label={SIDE_NAME[s]}
-                    sub={next === s ? "Next side" : "Nurse"}
+                    sub={next === s ? "Next side" : "Start timer"}
+                    aria={`Start nursing timer on ${SIDE_NAME[s]}`}
                     letter={s}
                     color={SIDE_COLOR[s]}
                     next={next === s}
@@ -608,6 +609,9 @@ export default function Dock() {
               <Tile
                 id="sleep"
                 label="Sleep"
+                sub="Start timer"
+                aria="Start sleep timer"
+                inline
                 icon="moon"
                 color={TILE.sleep}
                 done={done.sleep}

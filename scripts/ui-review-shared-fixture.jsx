@@ -2,7 +2,22 @@ import {useState} from "react";
 import {createRoot} from "react-dom/client";
 import {AppNavProvider,useAppNav} from "../src/components/maple/AppNav";
 import HelpSheet from "../src/components/maple/HelpSheet";
-import {Button,Sheet,Segmented} from "../src/components/maple/ui";
+import {Button,Sheet,Segmented,WhenField,TimeScrubber} from "../src/components/maple/ui";
+import {RecordedTimeField} from "../src/components/maple/TimeField";
+import {MoreDetails} from "../src/components/maple/sheets/parts";
+function TimeControls(){
+ const [when,setWhen]=useState(null);
+ const [scrub,setScrub]=useState(new Date("2026-10-28T11:45:00Z"));
+ const [recorded,setRecorded]=useState(new Date("2026-10-28T11:45:00Z"));
+ const [invalid,setInvalid]=useState(false);
+ return <main className="mx-auto max-w-md space-y-4 p-4">
+ <section aria-label="Quick logged time"><WhenField value={when} onChange={setWhen} tz="UTC"/><output id="when-value">{when?.toISOString()??"now"}</output></section>
+ <section aria-label="Timer start"><TimeScrubber label="Started" value={scrub} onChange={setScrub} tz="UTC"/><output id="scrub-value">{scrub.toISOString()}</output></section>
+ <RecordedTimeField label="Recorded at" value={recorded} onChange={setRecorded} tz="UTC" min={new Date("2026-10-28T11:40:00Z")} max={new Date("2026-10-28T12:00:00Z")} onInvalidChange={setInvalid}/>
+ <output id="recorded-value" data-invalid={invalid}>{recorded.toISOString()}</output>
+ <MoreDetails defaultOpen label="Useful details" summary="Optional"><Button>Available choice</Button></MoreDetails>
+ </main>
+}
 function App(){
  const nav=useAppNav();
  const [open,setOpen]=useState(false);
@@ -25,4 +40,4 @@ function App(){
  <div id="contrast" style={{color:"var(--mp-ink-3)",background:"var(--mp-bg)"}}>Small text</div>
  </main>
 }
-createRoot(document.getElementById("root")).render(<AppNavProvider><App/></AppNavProvider>);
+createRoot(document.getElementById("root")).render(new URLSearchParams(location.search).get("mode")==="time"?<TimeControls/>:<AppNavProvider><App/></AppNavProvider>);

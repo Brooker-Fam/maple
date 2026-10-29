@@ -45,32 +45,39 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const toDisplay = (ml: number | undefined) => (ml == null ? null : metric ? Math.round(ml / 5) * 5 : Math.round(mlToOz(ml) * 4) / 4);
   const toMl = (v: number | null) => (v == null ? undefined : Math.round((metric ? v : ozToMl(v)) * 10) / 10);
 
-  const originalMode = e?.data.left_ml != null || e?.data.right_ml != null ? "sides" : e?.data.total_ml != null ? "total" : "sides";
-  const originalTotal = e?.data.total_ml ?? (e?.data.left_ml != null || e?.data.right_ml != null ? (e.data.left_ml ?? 0) + (e.data.right_ml ?? 0) : undefined);
+  const initialLeft = e?.data.left_ml ?? pnum(preset, "left_ml");
+  const initialRight = e?.data.right_ml ?? pnum(preset, "right_ml");
+  const initialTotal = e?.data.total_ml ?? pnum(preset, "total_ml");
+  const originalMode = initialLeft != null || initialRight != null ? "sides" : initialTotal != null ? "total" : "sides";
+  const originalTotal = initialTotal ?? (initialLeft != null || initialRight != null ? (initialLeft ?? 0) + (initialRight ?? 0) : undefined);
   const [mode, setMode] = useState<"sides" | "total">(originalMode);
-  const [left, setLeft] = useState<number | null>(() => toDisplay(e?.data.left_ml ?? pnum(preset, "left_ml")));
-  const [right, setRight] = useState<number | null>(() => toDisplay(e?.data.right_ml ?? pnum(preset, "right_ml")));
-  const [total, setTotal] = useState<number | null>(() => toDisplay(originalTotal ?? pnum(preset, "total_ml")));
+  const [left, setLeft] = useState<number | null>(() => toDisplay(initialLeft));
+  const [right, setRight] = useState<number | null>(() => toDisplay(initialRight));
+  // Keep the combined amount in ml so switching modes never re-rounds an
+  // untouched recorded amount through the display unit.
+  const [totalAmount, setTotalAmount] = useState(() => ({ ml: originalTotal, shown: toDisplay(originalTotal) }));
+  const { ml: totalMl, shown: total } = totalAmount;
   const [range, setRange] = useState<[Date, Date]>(() => {
     if (e) {
       const s = new Date(e.started_at);
       return [s, e.ended_at ? new Date(e.ended_at) : running ? now() : s];
     }
-    const end = now();
+    const presetEnd = pstr(preset, "ended_at");
+    const end = presetEnd && Number.isFinite(Date.parse(presetEnd)) ? new Date(presetEnd) : now();
     const s = presetStart(preset);
     return s && s < end ? [s, end] : [new Date(end.getTime() - 15 * MIN), end];
   });
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
   const checks = useNumberChecks();
-  const dirty = useDraftChanged({ mode, left, right, total, range, note, invalid: checks.invalid });
+  const dirty = useDraftChanged({ mode, left, right, totalMl, range, note, invalid: checks.invalid });
   const { touched, touch } = useTouched();
   const [start, end] = range;
 
   const data =
     mode === "sides"
       ? { left_ml: toMl(left), right_ml: toMl(right), total_ml: undefined }
-      : { left_ml: undefined, right_ml: undefined, total_ml: toMl(total) };
+      : { left_ml: undefined, right_ml: undefined, total_ml: totalMl };
   const sum = mode === "sides" ? (data.left_ml ?? 0) + (data.right_ml ?? 0) : (data.total_ml ?? 0);
   const step = metric ? 5 : 0.25;
   const edit = (key: "left_ml" | "right_ml" | "total_ml", set: (v: number | null) => void) => (v: number | null) => {
@@ -78,6 +85,22 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     set(v);
   };
   const unit = metric ? "ml" : "oz";
+  const chooseMode = (next: "sides" | "total") => {
+    if (next === mode) return;
+    if (next === "total") {
+      const l = touched.left_ml ? toMl(left) : initialLeft;
+      const r = touched.right_ml ? toMl(right) : initialRight;
+      // A combined bottle can use the measured sum. Going back to each side
+      // keeps those entries; a total alone cannot tell us their split.
+      if (l != null || r != null) {
+        const ml = (l ?? 0) + (r ?? 0);
+        setTotalAmount({ ml, shown: toDisplay(ml) });
+        touch("total_ml");
+      }
+    }
+    setMode(next);
+  };
+  const needsSplit = mode === "sides" && totalMl != null && left == null && right == null && !touched.left_ml && !touched.right_ml;
 
   const save = async () => {
     const noteVal = note.trim() || null;
@@ -91,7 +114,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
         else {
           changed.left_ml = null;
           changed.right_ml = null;
-          if (!touched.total_ml) changed.total_ml = originalTotal ?? null;
+          if (!touched.total_ml) changed.total_ml = totalMl ?? null;
         }
       }
       const patch = running
@@ -135,8 +158,8 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={(!!e && e.id < 0) || (!running && checks.invalid)}
-          hint={!running && checks.invalid ? CHECK_NUMBER_HINT : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
+          disabled={(!!e && e.id < 0) || (!running && (checks.invalid || needsSplit))}
+          hint={!running && checks.invalid ? CHECK_NUMBER_HINT : !running && needsSplit ? "Enter each side's amount, or choose Total to keep the combined amount." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
         />
       }
     >
@@ -146,7 +169,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
         <>
           <Segmented
             value={mode}
-            onChange={setMode}
+            onChange={chooseMode}
             options={[
               { value: "sides", label: "Each side" },
               { value: "total", label: "Total" },
@@ -158,7 +181,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
               <MiniStepper key="right" label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
             </div>
           ) : (
-            <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={edit("total_ml", setTotal)} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />
+            <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={edit("total_ml", (v) => setTotalAmount({ ml: toMl(v), shown: v }))} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />
           )}
           <TimeRange start={start} end={end} tz={tz} durations={[10, 15, 20, 30, 45]} onChange={(s, en) => setRange([s, en])} />
         </>

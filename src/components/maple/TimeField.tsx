@@ -59,6 +59,9 @@ export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, 
     <fieldset className={cx(tone.inset, "min-w-0 space-y-3 p-3")}>
       <legend className="sr-only">{label}</legend>
       {!hideLabel && <p className="text-[15px] font-semibold text-mp-ink">{label}</p>}
+      <p id={`${id}-status`} role={invalid ? "alert" : "status"} aria-atomic="true" className={cx("leading-snug tabular-nums", invalid ? "text-[13px] text-mp-danger" : "text-[17px] font-semibold text-mp-ink")}>
+        {result.valid ? `${formatDayLabel(dayKey(result.date, tz), dayKey(now, tz))} at ${formatTime(result.date, tz)}` : result.message}
+      </p>
       <div role="group" aria-label="Adjust time" className="grid grid-cols-4 gap-1.5">
         {[-5, -1, 1, 5].map((minutes) => {
           const next = result.valid ? result.date.getTime() + minutes * 60_000 : null;
@@ -69,9 +72,9 @@ export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, 
               aria-label={`${Math.abs(minutes)} min ${minutes < 0 ? "earlier" : "later"}`}
               disabled={next === null || (!!min && next < min.getTime()) || next > ceiling.getTime()}
               onClick={() => nudge(minutes)}
-              className="flex min-h-[52px] min-w-0 flex-col items-center justify-center rounded-xl border border-mp-line bg-mp-surface px-1 py-2 text-mp-ink disabled:opacity-40"
+              className="mp-control flex min-h-[52px] min-w-0 flex-col items-center justify-center rounded-xl border border-mp-line bg-mp-surface px-1 py-2 text-mp-ink disabled:opacity-40"
             >
-              <span className="text-[18px] leading-tight font-semibold tabular-nums">{minutes < 0 ? "−" : "+"}{Math.abs(minutes)}</span>
+              <span className="text-[15px] leading-tight font-semibold tabular-nums">{minutes < 0 ? "−" : "+"}{Math.abs(minutes)} min</span>
               <span className="text-[12px] leading-tight font-medium text-mp-ink-2">{minutes < 0 ? "earlier" : "later"}</span>
             </button>
           );
@@ -87,15 +90,12 @@ export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, 
           <input type="time" aria-label={`${label}: time`} aria-invalid={invalid || undefined} aria-describedby={`${id}-status`} value={draft.clock} onChange={(e) => change(draft.day, e.target.value)} className={cx(tone.input, "min-h-[48px] min-w-0 max-w-full")} />
         </label>
       </div>
-      <p id={`${id}-status`} role={invalid ? "alert" : undefined} className={cx("text-[13px] leading-snug tabular-nums", invalid ? "text-mp-danger" : tone.muted)}>
-        {result.valid ? `${formatDayLabel(dayKey(result.date, tz), dayKey(now, tz))} at ${formatTime(result.date, tz)}` : result.message}
-      </p>
       {result.alternatives && result.alternatives.length > 1 && (
         <div className="space-y-1.5">
           <p className={cx(tone.muted, "text-[13px]")}>The clocks go back. Which occurrence?</p>
           <div className="flex flex-wrap gap-2">
             {result.alternatives.map((at, i) => (
-              <button key={at.toISOString()} type="button" aria-pressed={!!result.date && Math.floor(at.getTime() / 60_000) === Math.floor(result.date.getTime() / 60_000)} disabled={(!!min && at < min) || at > ceiling} onClick={() => choose(at)} className="min-h-[44px] rounded-xl border border-mp-line bg-mp-surface px-3 text-sm font-medium text-mp-accent-fg disabled:opacity-40 aria-pressed:bg-mp-accent aria-pressed:text-mp-on-accent">
+              <button key={at.toISOString()} type="button" aria-pressed={!!result.date && Math.floor(at.getTime() / 60_000) === Math.floor(result.date.getTime() / 60_000)} disabled={(!!min && at < min) || at > ceiling} onClick={() => choose(at)} className="mp-control min-h-[44px] rounded-xl border border-mp-line bg-mp-surface px-3 text-sm font-medium text-mp-accent-fg disabled:opacity-40 aria-pressed:bg-mp-accent aria-pressed:text-mp-on-accent">
                 {i === 0 ? "First" : "Second"} {formatTime(at, tz)}
               </button>
             ))}

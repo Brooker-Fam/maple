@@ -61,6 +61,35 @@ const saveFood = async (description) => {
 
 try {
   await reset();
+  await page.getByRole("button", { name: "Ate something", exact: true }).click();
+  await page.getByLabel("What was it?", { exact: true }).fill("Synthetic recent meal");
+  const earlier = page.getByRole("button", { name: "1 min ago", exact: true });
+  const timing = await earlier.boundingBox();
+  const details = await page.getByText("Food details", { exact: false }).boundingBox();
+  assert(timing.y + timing.height <= details.y, "Time is available before optional food details");
+  await earlier.click();
+  assert.equal(await page.getByLabel("Eaten at: time", { exact: true }).inputValue(), "09:29");
+  assert.equal((await snapshot()).requests.length, 0, "Choosing an earlier time does not save a meal");
+  await page.getByRole("button", { name: "Log food", exact: true }).click();
+  await closeSaved();
+  assert.equal((await snapshot()).server[0].at, "2026-10-28T13:29:00.000Z");
+  console.log("PASS earlier meal: one-minute shortcut precedes optional details and saves the chosen time once");
+
+  await reset();
+  await page.getByRole("button", { name: "Other drink", exact: true }).click();
+  await page.getByRole("button", { name: "Tea", exact: true }).click();
+  await page.getByRole("button", { name: "Just now · Change time", exact: true }).click();
+  await page.getByLabel("Drank at: time", { exact: true }).fill("23:00");
+  assert(await page.getByRole("button", { name: "Log drink", exact: true }).isDisabled());
+  await page.getByRole("button", { name: "Use current time", exact: true }).click();
+  assert(await page.getByRole("button", { name: "Log drink", exact: true }).isEnabled());
+  await page.getByRole("button", { name: "Log drink", exact: true }).click();
+  await closeSaved();
+  assert.equal((await snapshot()).server[0].at, "2026-10-28T13:30:00.000Z");
+  assert.equal((await snapshot()).server[0].data.name, "Tea");
+  console.log("PASS current-time reset: clears invalid earlier time and preserves drink details");
+
+  await reset();
   await page.evaluate(() => window.__nutritionFixture.seedHistory());
   await page.getByLabel("Food and drink day", { exact: true }).selectOption("2026-10-24");
   await page.getByRole("button", { name: "Edit Lentil toast", exact: true }).click();

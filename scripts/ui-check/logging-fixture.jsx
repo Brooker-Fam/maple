@@ -40,9 +40,19 @@ const savedNursing = entry(7, "feed", "2026-10-28T12:00:00.000Z", {
     { side: "R", start: "2026-10-28T12:25:00.000Z", end: "2026-10-28T12:35:00.000Z" },
   ],
 }, { ended_at: "2026-10-28T12:35:00.000Z", updated_at: "2026-10-28T12:35:00.000Z" });
+const savedPumpSides = entry(8, "pump", "2026-10-28T12:00:00.000Z", { left_ml: 100, right_ml: 40 }, { ended_at: "2026-10-28T12:15:00.000Z" });
+const savedPumpTotal = entry(9, "pump", "2026-10-28T12:00:00.000Z", { total_ml: 100 }, { ended_at: "2026-10-28T12:15:00.000Z" });
 
 function App() {
-  const [target, setTarget] = useState(mode === "form-nursing-details" ? { kind: "feed", entry: savedNursing } : mode === "form-moment-earlier" ? { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } } : mode.startsWith("form-") ? { kind: mode.slice(5) } : null);
+  const [target, setTarget] = useState(() => {
+    if (mode === "form-nursing-details") return { kind: "feed", entry: savedNursing };
+    if (mode === "form-pump-sides") return { kind: "pump", entry: savedPumpSides };
+    if (mode === "form-pump-total") return { kind: "pump", entry: savedPumpTotal };
+    if (mode === "form-pump-preset") return { kind: "pump", preset: { total_ml: 90 } };
+    if (mode === "form-vitals-skin") return { kind: "vitals", preset: { jaundice: "none" } };
+    if (mode === "form-moment-earlier") return { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } };
+    return mode.startsWith("form-") ? { kind: mode.slice(5) } : null;
+  });
   const [more, setMore] = useState(mode.startsWith("more"));
   const failing = useRef(mode === "patterns-error");
   const calls = useRef([]);
@@ -70,7 +80,13 @@ function App() {
   const maple = { state, summary, api, now, readOnly: false, units: "imperial", seenAt: null,
     memberName: () => "Sam", memberLabel: () => "Sam", member: () => state.members[0],
     isNight: () => false, timerBusy: () => false, toasts: [], toast() {}, dismissToast() {},
-    log: async (value) => { calls.current.push({ log: value }); return value; }, remove() {}, update() {}, refresh: async () => {},
+    log: async (value) => { calls.current.push({ log: value }); return value; }, remove() {},
+    update: async (id, patch) => {
+      calls.current.push({ id, patch });
+      const previous = currentTarget.current?.entry;
+      return { ...previous, ...patch, data: { ...previous?.data, ...patch.data } };
+    },
+    refresh: async () => {},
   };
   const close = useCallback(() => setTarget(null), []);
   useEffect(() => {

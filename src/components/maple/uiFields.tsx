@@ -68,7 +68,7 @@ export function NumberProblem({ show }: { show: boolean }) {
   );
 }
 
-const STEP_BTN = "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink active:scale-95";
+const STEP_BTN = "mp-control flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink active:scale-95";
 
 /** Number input with − / + buttons. Empty string = no value; unreadable text = no value plus "Check this number". */
 export function Stepper({
@@ -138,7 +138,7 @@ export function WhenField({
   value,
   onChange,
   tz,
-  offsets = [5, 15, 30, 60, 120],
+  offsets = [1, 5, 15, 30, 60, 120],
 }: {
   label?: string;
   /** null = now */
@@ -170,10 +170,10 @@ export function WhenField({
             onClick={() => {
               setCustom(false);
               setChip(m);
-              onChange(new Date(n.getTime() - m * 60000));
+              onChange(new Date(now().getTime() - m * 60000));
             }}
           >
-            {m < 60 ? `${m}m ago` : `${m / 60}h ago`}
+            {m < 60 ? `${m} min ago` : `${m / 60}h ago`}
           </Chip>
         ))}
         <Chip selected={custom} onClick={() => { setCustom(true); setChip(null); }}>
@@ -276,7 +276,7 @@ export function RepeatButton({
       }}
       onContextMenu={(e) => e.preventDefault()}
       className={cx(
-        "touch-manipulation select-none [-webkit-touch-callout:none] transition active:scale-[0.96] disabled:opacity-35 disabled:active:scale-100",
+        "mp-control touch-manipulation select-none [-webkit-touch-callout:none] transition active:scale-[0.96] disabled:opacity-35 disabled:active:scale-100",
         className
       )}
     >
@@ -298,7 +298,7 @@ export function TimeScrubber({
   tz,
   label,
   hideLabel,
-  quick = [0, 5, 15, 30, 60, 120],
+  quick = [0, 1, 5, 15, 30, 60, 120],
   min,
   max,
   className,
@@ -362,7 +362,7 @@ export function TimeScrubber({
       type="button"
       onClick={() => setExact((x) => !x)}
       aria-expanded={exact}
-      className="-my-2 min-h-[44px] px-1 text-[13px] font-semibold text-mp-accent-fg"
+      className="mp-control -my-2 min-h-[44px] rounded-lg px-1 text-[13px] font-semibold text-mp-accent-fg"
     >
       Exact time…
     </button>
@@ -425,7 +425,7 @@ export function TimeScrubber({
 
       {quick && quick.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {quick.map((m, i) => (
+          {quick.map((m) => (
             <Chip
               key={m}
               raised
@@ -433,7 +433,7 @@ export function TimeScrubber({
               selected={chip?.m === m && chip.at === t}
               onClick={() => setChip({ m, at: set(nowFn().getTime() - m * MIN_MS) })}
             >
-              {m === 0 ? "Now" : `${m < 60 ? `${m}m` : `${m / 60}h`}${i === quick.length - 1 ? " ago" : ""}`}
+              {m === 0 ? "Now" : `${m < 60 ? `${m} min` : `${m / 60}h`} ago`}
             </Chip>
           ))}
         </div>
