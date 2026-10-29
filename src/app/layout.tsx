@@ -14,8 +14,8 @@ const cormorantGaramond = Cormorant_Garamond({
 
 export const metadata: Metadata = {
   metadataBase: new URL(MAPLE_ORIGIN),
-  title: "Maple",
-  description: "Understand your baby’s feeding patterns. Track feeds, diapers, and weight in one shared family log.",
+  title: "Maple Baby",
+  description: "Feeds, sleep, diapers, growth, and little firsts. Maple Baby brings everyday care into one shared family log.",
   icons: {
     icon: [
       { url: "/maple-icon.svg", type: "image/svg+xml" },

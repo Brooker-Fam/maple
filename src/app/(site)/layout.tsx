@@ -4,6 +4,8 @@ import { siteOpenGraph } from "@/components/site/meta";
 import SiteAnalytics from "@/components/analytics/SiteAnalytics";
 import "../maple/maple.css";
 import "./site.css";
+import "./home.css";
+import "@/components/site/feature-explorer.css";
 
 const cormorantItalic = Cormorant_Garamond({
   variable: "--font-site-italic",
@@ -13,13 +15,13 @@ const cormorantItalic = Cormorant_Garamond({
   display: "swap",
 });
 
-const TITLE = "Maple Baby | Understand your baby’s feeding patterns";
-const DESCRIPTION = "Track feeds, diapers, and weight. See feeding patterns, bring clear records to the doctor, and follow changes with Maple Baby. Free in early access.";
+const TITLE = "Maple Baby | Feeds, sleep, diapers & shared care";
+const DESCRIPTION = "Track feeds, sleep, diapers, growth, and little firsts with Maple Baby. One shared family log for everyday care, patterns, and appointments.";
 
 export const metadata: Metadata = {
-  title: { default: TITLE, template: "%s | Maple" },
+  title: { default: TITLE, template: "%s | Maple Baby" },
   description: DESCRIPTION,
-  applicationName: "Maple",
+  applicationName: "Maple Baby",
   robots: { index: true, follow: true },
   openGraph: siteOpenGraph(TITLE, DESCRIPTION, "/"),
   twitter: { card: "summary_large_image" },

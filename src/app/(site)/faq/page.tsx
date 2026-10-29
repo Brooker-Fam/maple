@@ -6,13 +6,13 @@ import { CONTACT_EMAIL } from "@/components/site/legal";
 import { siteOpenGraph } from "@/components/site/meta";
 
 const DESCRIPTION =
-  "How Maple helps you understand feeding patterns, prepare for doctor visits, and track feeds, diapers, and weight. Plus pricing, privacy, and access.";
+  "Get to know Maple Baby: feeds, sleep, diapers, growth, shared care, and little firsts. Plus practical answers on pricing, privacy, and getting started.";
 
 export const metadata: Metadata = {
   title: "Questions and answers",
   description: DESCRIPTION,
   alternates: { canonical: "/faq" },
-  openGraph: siteOpenGraph("Questions and answers | Maple", DESCRIPTION, "/faq"),
+  openGraph: siteOpenGraph("Questions and answers | Maple Baby", DESCRIPTION, "/faq"),
 };
 
 type Linked = { text: string; href: string };
@@ -24,45 +24,10 @@ const MAIL: Linked = { text: CONTACT_EMAIL, href: `mailto:${CONTACT_EMAIL}` };
 const FAQS: Faq[] = [
   {
     id: "patterns",
-    q: "What can Maple help me understand?",
+    q: "What can I keep track of with Maple Baby?",
     a: [
       [
-        "Maple brings your logged feeds, wet and dirty diapers, and weight records together. In History → Patterns, you can compare days and nights, see when feeds happened, and look back at daily totals and growth. That can help you notice gaps between feeds and follow changes to your routine. The picture comes from what you log.",
-      ],
-    ],
-  },
-  {
-    id: "doctor-visits",
-    q: "Can I bring Maple to a doctor’s appointment?",
-    a: [
-      [
-        "Yes. For the doctor keeps your questions and a visit summary in one place. You can copy the summary to share, review the recorded feeds and diapers, and open the growth chart. You can also save what the doctor said alongside a question.",
-      ],
-      [
-        "At Maple’s six-day appointment, our family could share direct data about her feeding patterns. Read ",
-        { text: "our story", href: "/about" },
-        " for how that helped us understand what to change.",
-      ],
-    ],
-  },
-  {
-    id: "breastfeeding",
-    q: "How did Maple help your family with breastfeeding?",
-    a: [
-      [
-        "Maple’s weight was down at her six-day appointment. Looking through our log helped us see that we were going too long between certain feeds, and when those gaps happened. We changed our routine and tracked feeds, wet and dirty diapers, and weight. Her weight went up, and she’s doing great. We had wondered whether we might need to supplement with formula; for our family, understanding those patterns helped breastfeeding work.",
-      ],
-      [
-        "That’s our family’s experience. Maple keeps records you can discuss with your pediatrician or lactation consultant; your feeding plan comes from them.",
-      ],
-    ],
-  },
-  {
-    id: "feeding-options",
-    q: "Can I use Maple for bottles or combination feeding?",
-    a: [
-      [
-        "Yes. Maple records nursing, bottles of expressed milk or formula, and pumping. Nursing and bottles appear together in your feeding history, so you can follow the routine your family uses.",
+        "Feeds, naps, wet and dirty diapers, growth, photos, and milestones all have a place in Maple. Share the baby’s log with your partner, keep questions for appointments, and use mom’s own page for her recovery. History → Patterns helps you explore the days and nights you’ve recorded. The picture comes from what you log.",
       ],
     ],
   },
@@ -107,6 +72,15 @@ const FAQS: Faq[] = [
     ],
   },
   {
+    id: "feeding-options",
+    q: "Can I use Maple for bottles or combination feeding?",
+    a: [
+      [
+        "Yes. Maple records nursing, bottles of expressed milk or formula, and pumping. Nursing and bottles appear together in your feeding history, so you can follow the routine your family uses.",
+      ],
+    ],
+  },
+  {
     id: "night",
     q: "Does it work at night, one-handed?",
     a: [
@@ -126,6 +100,20 @@ const FAQS: Faq[] = [
     a: [
       [
         "Once a side has run 45 minutes, the timer card shows “Still nursing?”, and from then on Done lets you pick when the feed ended instead of ending it at the moment you tap. A nap gets the same check after 5 hours, tummy time after 30 minutes and pumping after an hour, each with a button for when it really ended. Times can also be corrected later by opening the entry.",
+      ],
+    ],
+  },
+  {
+    id: "doctor-visits",
+    q: "Can I bring Maple to a doctor’s appointment?",
+    a: [
+      [
+        "Yes. For the doctor keeps your questions and a visit summary in one place. You can copy the summary to share, review the recorded feeds and diapers, and open the growth chart. You can also save what the doctor said alongside a question.",
+      ],
+      [
+        "At Maple’s six-day appointment, our family could share direct data about her feeding patterns. Read ",
+        { text: "our story", href: "/about" },
+        " for how that helped us understand what to change.",
       ],
     ],
   },
@@ -218,6 +206,18 @@ const FAQS: Faq[] = [
       ],
       [
         "Inside the app, a deleted entry is hidden so it can be restored, and Delete this chat removes a chat for good.",
+      ],
+    ],
+  },
+  {
+    id: "breastfeeding",
+    q: "How did Maple help your family with breastfeeding?",
+    a: [
+      [
+        "Maple’s weight was down at her six-day appointment. Looking through our log helped us see that we were going too long between certain feeds, and when those gaps happened. We changed our routine and tracked feeds, wet and dirty diapers, and weight. Her weight went up, and she’s doing great. We had wondered whether we might need to supplement with formula; for our family, understanding those patterns helped breastfeeding work.",
+      ],
+      [
+        "That’s our family’s experience. Maple keeps records you can discuss with your pediatrician or lactation consultant; your feeding plan comes from them.",
       ],
     ],
   },

@@ -3,132 +3,101 @@ import Link from "next/link";
 import GetStarted from "@/components/site/GetStarted";
 import SiteFooter from "@/components/site/SiteFooter";
 import SiteHeader from "@/components/site/SiteHeader";
-import { GrowthFragment, HandoffFragment, PatternQuestionFragment, QuestionsFragment } from "@/components/site/fragments";
-import { LanternMock, PatternsMock, Phone } from "@/components/site/phone";
+import FeatureExplorer from "@/components/site/FeatureExplorer";
+import HomeDayScene from "@/components/site/HomeDayScene";
+import Leaf from "@/components/site/Leaf";
+import { Icon } from "@/components/maple/icons";
 
 export const metadata: Metadata = { alternates: { canonical: "/" } };
 
-const BENEFITS = [
-  {
-    title: "See when the longer gaps happen.",
-    body: "A day can feel like one long feed. Look across your logged feeds to see their timing, the spaces between them, and how the pattern changes from day to day. Ask Maple’s chat to help you explore the record.",
-    visual: <PatternQuestionFragment />,
-  },
-  {
-    title: "Bring the details to the doctor.",
-    body: "When your pediatrician asks about feeds or wet diapers, have the record ready. Keep your questions together and copy a visit summary to share at an appointment or in the patient portal.",
-    visual: <QuestionsFragment />,
-  },
-  {
-    title: "Follow the changes you make.",
-    body: "As you adjust your routine, keep tracking feeds, wet and dirty diapers, and weight. Look back together with your care team to understand what changed over time.",
-    visual: <GrowthFragment />,
-  },
-];
-
-const NIGHT_FACTS = [
-  "Nursing timers, bottles, and wet and dirty diapers in one log.",
-  "Feeding side and duration, remembered for you.",
-  "Hands full? Log with Siri or Maple’s chat.",
-];
-
 export default function Home() {
   return (
-    <>
-      <SiteHeader />
+    <div className="maple-home">
+      <div className="home-sky home-header"><SiteHeader home /></div>
       <main id="main">
-        <section className="mx-auto grid w-full max-w-[76rem] items-center gap-12 px-4 pt-12 pb-20 sm:px-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-20 lg:pt-20 lg:pb-28">
-          <div>
-            <p className="mb-5 text-[14px] font-semibold tracking-wide text-mp-accent-fg">Made by Maple’s parents, for the early days</p>
-            <h1 className="site-display max-w-[15ch] text-[clamp(2.85rem,1.4rem+6vw,5.75rem)] leading-[0.98] text-mp-ink">
-              See the patterns in your baby’s feeding.
-            </h1>
-            <p className="site-prose mt-6 text-[19px] leading-[1.55]">
-              Track feeds, diapers, and weight. Understand your baby’s rhythm, bring clear records to the doctor, and follow the changes you make.
-            </p>
-            <div className="mt-9 flex flex-wrap items-center gap-x-6 gap-y-4">
-              <GetStarted placement="hero" />
-              <a className="site-link py-3 text-[16px]" href="#maples-story">Read Maple’s story</a>
+        <section className="home-sky home-hero" aria-labelledby="home-title">
+          <div className="home-hero-inner">
+            <div className="home-hero-copy">
+              <p className="home-eyebrow"><span className="home-tiny-star" aria-hidden>✦</span> Your family’s newborn companion</p>
+              <h1 id="home-title">Tiny days.<br />A whole<br /><em>new world.</em></h1>
+              <p className="home-hero-lead">Feeds, naps, little firsts.<br />A shared place to make sense of it all.</p>
+              <div className="home-actions">
+                <GetStarted placement="hero" />
+                <a href="#explore" className="home-explore-link">Take a little tour <Icon name="chevron-down" size={17} /></a>
+              </div>
+              <p className="home-access">Free in early access · Made by parents</p>
             </div>
-            <p className="mt-4 text-[14px] text-mp-ink-3">Free in early access. One shared log for your family.</p>
+            <HomeDayScene />
           </div>
-          <Phone className="mx-auto lg:mr-4" label="Illustrative sample using fictional data: June’s logged feeds across several days in Patterns, with wet and dirty diaper counts and a visit summary.">
-            <PatternsMock />
-          </Phone>
+          <div className="home-hero-bottom" aria-hidden><span>A little less to remember.</span><span>A little more room to be here.</span></div>
         </section>
 
-        <section id="maples-story" aria-labelledby="story-title" className="scroll-mt-8 border-y border-mp-line bg-mp-surface">
-          <div className="mx-auto grid w-full max-w-[76rem] gap-8 px-4 py-16 sm:px-8 lg:grid-cols-2 lg:gap-20 lg:py-20">
-            <div>
-              <p className="text-[14px] font-semibold text-mp-accent-fg">Our family’s story</p>
-              <h2 id="story-title" className="site-display mt-4 max-w-[20ch] text-[clamp(2.3rem,1.6rem+2.8vw,3.6rem)] leading-[1.05] text-mp-ink">It started at Maple’s six-day appointment.</h2>
-              <p className="site-prose mt-5">Her weight was down. We wanted to understand what was happening.</p>
-            </div>
-            <div className="space-y-4 text-[17px] leading-relaxed text-mp-ink-2">
-              <p>Looking through Maple Baby, we could see her feeding patterns and the times when we were going too long between feeds. At the doctor’s office, we had the actual data to talk through.</p>
-              <p>We changed our routine and kept tracking the feeds, wet diapers, dirty diapers, and weight. Maple’s weight went up, and she’s doing great.</p>
-              <p>We had wondered whether we might need to supplement with formula. For our family, seeing those patterns helped us make changes that made breastfeeding work.</p>
-              <p className="pt-2 font-medium text-mp-ink">That’s what we want Maple to help with: a clearer picture of your baby’s days.</p>
-              <Link href="/about" className="site-link inline-block py-2">More about Maple and our family</Link>
-            </div>
+        <section id="explore" aria-labelledby="explore-title" className="home-explore home-section">
+          <div className="home-section-heading">
+            <p className="home-eyebrow">Meet Maple</p>
+            <h2 id="explore-title">Their little world.<br /><em>All in one place.</em></h2>
+            <p>Pick a little part of the day. Try it for yourself.</p>
           </div>
+          <FeatureExplorer />
         </section>
 
-        <section aria-labelledby="patterns" className="mx-auto w-full max-w-[76rem] px-4 py-20 sm:px-8 lg:py-24">
-          <h2 id="patterns" className="site-display max-w-[22ch] text-[clamp(2.2rem,1.6rem+2.4vw,3.4rem)] leading-[1.05] text-mp-ink">Little details. A clearer picture.</h2>
-          <p className="site-prose mt-4">From the first few feeds to your next appointment, put the record to use.</p>
-          <div className="mt-14 space-y-16 lg:space-y-20">
-            {BENEFITS.map((benefit, i) => (
-              <article key={benefit.title} className="grid items-center gap-7 border-t border-mp-line pt-8 lg:grid-cols-2 lg:gap-20">
-                <div>
-                  <p className="text-[14px] font-semibold text-mp-accent-fg">0{i + 1}</p>
-                  <h3 className="site-display mt-3 max-w-[24ch] text-[clamp(1.8rem,1.4rem+1.2vw,2.5rem)] leading-[1.1] text-mp-ink">{benefit.title}</h3>
-                  <p className="site-prose mt-4">{benefit.body}</p>
-                </div>
-                <div className="w-full max-w-[34rem]">{benefit.visual}</div>
-              </article>
-            ))}
+        <section aria-labelledby="care-title" className="home-care home-section">
+          <div className="home-section-heading home-heading-inline">
+            <div><p className="home-eyebrow">For the people doing the caring</p><h2 id="care-title">You’re in this<br /><em>together.</em></h2></div>
+            <p>One shared log. More ways to feel connected.</p>
           </div>
-          <p className="mt-8 text-[13px] text-mp-ink-3">Illustrations use fictional sample data. Patterns reflect what you log; an unlogged feed is not necessarily a missed feed.</p>
+          <div className="home-care-grid">
+            <article className="home-care-card home-card-sage">
+              <div className="home-care-art home-handoff-art" aria-hidden>
+                <div className="home-avatar home-avatar-one">M</div><span className="home-avatar-line" /><div className="home-avatar home-avatar-two">D</div>
+                <div className="home-handoff-note"><Icon name="check" size={17} /><span>Bottle logged by Dad</span><small>Just now</small></div>
+              </div>
+              <h3>Pass the baby.<br />Keep the picture.</h3>
+              <p>Pick up where your partner left off, from your own phone.</p>
+            </article>
+            <article className="home-care-card home-card-lilac">
+              <div className="home-care-art home-chat-art" aria-hidden>
+                <span className="home-chat-bubble">What happened while I slept?</span>
+                <span className="home-chat-answer"><Leaf size={22} /><span>2 feeds. 3 diapers.<br />One busy little morning.</span></span>
+              </div>
+              <h3>Ask it like<br />you’d say it.</h3>
+              <p>Log a moment or explore your history with Maple’s chat.</p>
+            </article>
+            <article className="home-care-card home-card-peach">
+              <div className="home-care-art home-mom-art" aria-hidden>
+                <div className="home-mom-sun"><Icon name="heart" size={45} strokeWidth={1.2} /></div>
+                <span className="home-mom-note">A little space for you.</span>
+                <span className="home-mom-star">✧</span>
+              </div>
+              <h3>Because mom<br />matters, too.</h3>
+              <p>A place for your recovery, medicines, and daily check-ins.</p>
+            </article>
+          </div>
+          <p className="home-sample-note">Illustrations use fictional sample data.</p>
         </section>
 
-        <section aria-labelledby="together" className="border-t border-mp-line">
-          <div className="mx-auto grid w-full max-w-[76rem] items-center gap-8 px-4 py-16 sm:px-8 lg:grid-cols-2 lg:gap-20">
-            <div>
-              <h2 id="together" className="site-display max-w-[22ch] text-[clamp(2rem,1.5rem+2vw,3rem)] leading-[1.08] text-mp-ink">One picture, even when you take turns.</h2>
-              <p className="site-prose mt-4">Both parents can add to the same log from their own phones. See the feeds and diapers from your partner’s shift before yours begins.</p>
+        <section id="maples-story" aria-labelledby="story-title" className="home-story">
+          <div className="home-story-inner">
+            <div className="home-story-art" aria-hidden><span className="home-story-ring" /><Leaf size={100} /><span className="home-story-star">✧</span><span className="home-story-handwritten">for Maple,<br />with love.</span></div>
+            <div className="home-story-copy">
+              <p className="home-eyebrow">A real baby. A real beginning.</p>
+              <h2 id="story-title">Made for our little Maple.<br /><em>Here for your little world.</em></h2>
+              <p>At her six-day checkup, Maple’s weight was down. Her log helped us see feeding gaps, talk with her doctor, and follow the changes that helped breastfeeding work for us. Today, she’s doing great.</p>
+              <Link href="/about" className="home-text-link">Read our family’s story <Icon name="arrow-right" size={18} /></Link>
             </div>
-            <HandoffFragment />
-          </div>
-        </section>
-
-        <section aria-labelledby="lantern" className="site-night site-night-band">
-          <div className="mx-auto grid w-full max-w-[76rem] items-center gap-14 px-4 py-20 sm:px-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-24 lg:py-24">
-            <div>
-              <p className="site-italic text-[clamp(4.5rem,2.5rem+9vw,9.5rem)] leading-[0.9] tracking-[-0.02em] text-[#e8a23f]">
-                <time>3:12</time><span className="ml-3 text-[0.4em] opacity-70">am</span>
-              </p>
-              <h2 id="lantern" className="site-display mt-8 max-w-[22ch] text-[clamp(2.1rem,1.5rem+2.4vw,3.2rem)] leading-[1.05]">Easy to keep up with, even at 3am.</h2>
-              <p className="site-prose mt-4 text-mp-ink-2">The useful record starts with the everyday details. Keep them close on a screen dim enough for night feeds.</p>
-              <ul className="mt-10 grid max-w-[34rem] gap-y-6">
-                {NIGHT_FACTS.map((fact) => <li key={fact} className="border-t border-mp-line pt-4 text-[16px] font-semibold text-mp-ink">{fact}</li>)}
-              </ul>
-            </div>
-            <Phone night className="mx-auto lg:mr-4" label="Sample screen: the Lantern at night, with a nursing timer and large Switch, Pause and Done controls.">
-              <LanternMock />
-            </Phone>
           </div>
         </section>
 
-        <section aria-labelledby="join">
-          <div className="mx-auto w-full max-w-[76rem] px-4 py-20 sm:px-8 lg:py-24">
-            <h2 id="join" className="site-display max-w-[22ch] text-[clamp(2.4rem,1.6rem+3.2vw,4rem)] leading-[1.02] text-mp-ink">Start seeing your baby’s patterns.</h2>
-            <p className="site-prose mt-4">Build a record you can return to, share with your doctor, and learn from together. Maple is free while it’s in early access.</p>
-            <GetStarted className="mt-8" placement="footer" />
-          </div>
+        <section className="home-finale home-section" aria-labelledby="join">
+          <div className="home-privacy"><Icon name="lock" size={17} /><span>Your family’s space. No ads. Never sold for advertising.</span><Link href="/privacy">Our privacy promise <span aria-hidden>↗</span></Link></div>
+          <span className="home-finale-star" aria-hidden>✦</span>
+          <h2 id="join">Find your<br /><em>family’s rhythm.</em></h2>
+          <p>For the messy, sleepy, wonderful beginning.</p>
+          <GetStarted className="mt-7" placement="footer" />
+          <p className="home-access">Free while we grow. No paid plan in early access.</p>
         </section>
       </main>
       <SiteFooter />
-    </>
+    </div>
   );
 }

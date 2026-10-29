@@ -9,7 +9,12 @@ const LINKS = [
   { href: "/blog", label: "Blog" },
 ];
 
-export default function SiteHeader() {
+export default function SiteHeader({ home = false }: { home?: boolean }) {
+  const links = home ? [
+    { href: "#explore", label: "Explore" },
+    { href: "/about", label: "Our story" },
+    { href: "/faq", label: "FAQ" },
+  ] : LINKS;
   return (
     <header className="mx-auto flex w-full max-w-[76rem] flex-wrap items-center justify-between gap-y-1 px-4 pt-5 sm:flex-nowrap sm:gap-x-2 sm:px-8 sm:pt-7">
       <a href="#main" className="site-skip">
@@ -20,7 +25,7 @@ export default function SiteHeader() {
         <span className="font-display text-[1.7rem] leading-none font-semibold tracking-[-0.01em] text-mp-ink">Maple</span>
       </Link>
       <nav aria-label="Main" className="order-last -ml-3 flex w-full items-center sm:order-none sm:ml-auto sm:w-auto">
-        {LINKS.map((l) => (
+        {links.map((l) => (
           <Link key={l.href} href={l.href} className="site-focus rounded-xl px-3 py-2.5 text-[15px] text-mp-ink-2 hover:text-mp-ink">
             {l.label}
           </Link>

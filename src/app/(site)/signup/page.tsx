@@ -13,13 +13,13 @@ import SignupForm from "./SignupForm";
 
 export const dynamic = "force-dynamic";
 
-const DESCRIPTION = "Start a shared log of feeds, diapers, and weight. See patterns and bring clear records to appointments with Maple Baby.";
+const DESCRIPTION = "Start your family’s shared log with Maple Baby. Keep feeds, sleep, diapers, growth, and little firsts together.";
 
 export const metadata: Metadata = {
   title: "Get started",
   description: DESCRIPTION,
   robots: { index: false, follow: true },
-  openGraph: siteOpenGraph("Get started | Maple", DESCRIPTION, "/signup"),
+  openGraph: siteOpenGraph("Get started | Maple Baby", DESCRIPTION, "/signup"),
 };
 
 /** MAPLE_SIGNUP off: the waitlist. On: configured sign-in methods, with an invite code when needed. */

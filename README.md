@@ -1,6 +1,6 @@
-# Maple
+# Maple Baby
 
-A shared newborn log that helps parents understand feeding patterns, bring clear records to the doctor, and follow changes in their routine alongside diapers and weight.
+Feeds, naps, little firsts. A shared place to make sense of it all. Maple Baby brings feeding, sleep, diapers, growth, and shared care into one family log.
 
 Maple Baby grew out of our family's experience at Maple's six-day appointment. Reviewing her logged feeds helped us see when we were going too long between feeds and bring the actual data to the doctor. We changed our routine, kept tracking, and her weight went up. For our family, those insights helped make breastfeeding work. [Read our story](https://maplebaby.app/about).
 
