@@ -80,6 +80,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const [milestone, setMilestone] = useState(() => moment?.data.milestone ?? str(preset?.milestone));
   const [note, setNote] = useState(() => moment?.note ?? str(preset?.note));
   const [when, setWhen] = useState<Date | null>(() => (moment ? new Date(moment.started_at) : presetStart(preset)));
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const [whenFromPhoto, setWhenFromPhoto] = useState(false);
   const whenTouched = useRef(isEdit || !!presetStart(preset));
   const [showAllChips, setShowAllChips] = useState(() => {
@@ -88,8 +89,9 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   });
   const [items, setItems] = useState<Item[]>([]);
   const [storage, setStorage] = useState<Storage>("checking");
+  const [storageAttempt, setStorageAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
-  const dirty = useDraftChanged({ title, milestone, note, when, photos: items.map((item) => item.id) });
+  const dirty = useDraftChanged({ timeInvalid, title, milestone, note, when, photos: items.map((item) => item.id) });
 
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
@@ -106,13 +108,13 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   useEffect(() => {
     if (isEdit || !open || readOnly) return;
     let live = true;
-    getUploadMode()
+    getUploadMode(storageAttempt > 0)
       .then((m) => live && setStorage(m.ready ? "ready" : "off"))
       .catch(() => live && setStorage("error"));
     return () => {
       live = false;
     };
-  }, [isEdit, open, readOnly]);
+  }, [isEdit, open, readOnly, storageAttempt]);
 
   const patch = useCallback((id: string, p: Partial<Item>) => {
     setItems((list) => list.map((it) => (it.id === id ? { ...it, ...p } : it)));
@@ -268,7 +270,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const failed = items.filter((it) => it.status === "error").length;
   const pending = items.length - done.length - failed;
   const hasWords = !!(title.trim() || milestone || note.trim());
-  const canSave = !readOnly && !saving && !uploading && (isEdit || hasWords || done.length > 0);
+  const canSave = !timeInvalid && !readOnly && !saving && !uploading && (isEdit || hasWords || done.length > 0);
 
   const save = async () => {
     // A closed sheet's photos are already gone from storage.
@@ -318,22 +320,24 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const footer = (
-    <SheetFooter
-      onClose={onClose}
-      onDelete={isEdit ? del : undefined}
-      onPrimary={() => void save()}
-      disabled={!canSave}
-      busy={saving}
-      label={
-        isEdit
-          ? "Save"
-          : uploading
-            ? `Uploading ${pending} photo${pending === 1 ? "" : "s"}…`
-            : failed && done.length + (hasWords ? 1 : 0) > 0
-              ? `Save without ${failed} photo${failed === 1 ? "" : "s"}`
-              : "Save moment"
-      }
-    />
+    <fieldset disabled={saving} className="min-w-0">
+      <SheetFooter
+        onClose={onClose}
+        onDelete={isEdit ? del : undefined}
+        onPrimary={() => void save()}
+        disabled={!canSave}
+        busy={saving}
+        label={
+          isEdit
+            ? "Save"
+            : uploading
+              ? `Uploading ${pending} photo${pending === 1 ? "" : "s"}…`
+              : failed && done.length + (hasWords ? 1 : 0) > 0
+                ? `Save without ${failed} photo${failed === 1 ? "" : "s"}`
+                : "Save moment"
+        }
+      />
+    </fieldset>
   );
 
   // Chips: a non-preset tag (a monthly photo, a kept celebration) leads the row.
@@ -368,124 +372,137 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   }
 
   return (
-    <Sheet open={open} onClose={onClose} dirty={dirty} title={isEdit ? "Edit moment" : "New moment"} footer={footer}>
-      {moment && <LoggedBy entry={moment} />}
-      {/* Photos */}
-      {moment ? (
-        <ExistingPhotos
-          entryId={moment.id}
-          count={moment.data.photos?.length ?? 0}
-          onNew={() => openSheet({ kind: "moment" })}
-        />
-      ) : (
-        <section aria-label="Photos" className="ph-no-capture">
-          <Label>Photos</Label>
-          {items.length > 0 && (
-            <ul className="mb-3 grid grid-cols-3 gap-2">
-              {items.map((it) => (
-                <PhotoTile key={it.id} item={it} onRemove={() => removeItem(it.id)} onRetry={() => retryItem(it.id)} />
-              ))}
-            </ul>
-          )}
-          {items.some((it) => it.status === "error") && (
-            <ul className="mb-3 space-y-1 text-[13px] leading-snug text-mp-danger" aria-live="polite">
-              {items
-                .filter((it) => it.status === "error")
-                .map((it) => (
-                  <li key={it.id}>
-                    <span className="font-semibold">{shortName(it.file.name)}:</span> {it.error}
-                  </li>
+    <Sheet open={open} onClose={onClose} dirty={dirty} locked={saving} title={isEdit ? "Edit moment" : "New moment"} footer={footer}>
+      <fieldset disabled={saving} aria-busy={saving} className="min-w-0 space-y-5">
+        {moment && <LoggedBy entry={moment} />}
+        {/* Photos */}
+        {moment ? (
+          <ExistingPhotos
+            entryId={moment.id}
+            count={moment.data.photos?.length ?? 0}
+            onNew={() => openSheet({ kind: "moment" })}
+          />
+        ) : (
+          <section aria-label="Photos" className="ph-no-capture">
+            <Label>Photos</Label>
+            {items.length > 0 && (
+              <ul className="mb-3 grid grid-cols-3 gap-2">
+                {items.map((it) => (
+                  <PhotoTile key={it.id} item={it} onRemove={() => removeItem(it.id)} onRetry={() => retryItem(it.id)} />
                 ))}
-            </ul>
-          )}
-          {storage === "off" || storage === "error" ? (
-            <p className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-sm leading-snug")}>
-              <Icon name="cloud-off" size={18} className="mt-px shrink-0 text-mp-ink-3" />
-              <span>
-                {storage === "off"
-                  ? "Photo storage isn't set up yet, so this moment will be words only for now."
-                  : "Couldn't reach photo storage. You can still save the words, or close and try again."}
-              </span>
-            </p>
-          ) : (
-            items.length < MAX_PHOTOS && (
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="soft" size="lg" disabled={storage !== "ready"} onClick={() => cameraRef.current?.click()}>
-                  <Icon name="camera" size={20} />
-                  Take a photo
-                </Button>
-                <Button variant="soft" size="lg" disabled={storage !== "ready"} onClick={() => libraryRef.current?.click()}>
-                  <Icon name={items.length ? "image-plus" : "images"} size={20} />
-                  {items.length ? "Add more" : "Choose photos"}
-                </Button>
+              </ul>
+            )}
+            {items.some((it) => it.status === "error") && (
+              <ul className="mb-3 space-y-1 text-[13px] leading-snug text-mp-danger" aria-live="polite">
+                {items
+                  .filter((it) => it.status === "error")
+                  .map((it) => (
+                    <li key={it.id}>
+                      <span className="font-semibold">{shortName(it.file.name)}:</span> {it.error}
+                    </li>
+                  ))}
+              </ul>
+            )}
+            {storage === "off" || storage === "error" ? (
+              <div className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-sm leading-snug")}>
+                <Icon name="cloud-off" size={18} className="mt-px shrink-0 text-mp-ink-3" />
+                <div>
+                  <p>
+                    {storage === "off"
+                      ? "Photo storage isn't set up yet, so this moment will be words only for now."
+                      : "Couldn't reach photo storage. Your words are still here."}
+                  </p>
+                  {storage === "error" && (
+                    <Button variant="soft" size="sm" className="mt-2" onClick={() => {
+                      setStorage("checking");
+                      setStorageAttempt((attempt) => attempt + 1);
+                    }}>
+                      Retry photo storage
+                    </Button>
+                  )}
+                </div>
               </div>
-            )
-          )}
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => addFiles(e.target.files)} />
-          <input ref={libraryRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />
-        </section>
-      )}
+            ) : (
+              items.length < MAX_PHOTOS && (
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="soft" size="lg" disabled={storage !== "ready"} onClick={() => cameraRef.current?.click()}>
+                    <Icon name="camera" size={20} />
+                    Take a photo
+                  </Button>
+                  <Button variant="soft" size="lg" disabled={storage !== "ready"} onClick={() => libraryRef.current?.click()}>
+                    <Icon name={items.length ? "image-plus" : "images"} size={20} />
+                    {items.length ? "Add more" : "Choose photos"}
+                  </Button>
+                </div>
+              )
+            )}
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => addFiles(e.target.files)} />
+            <input ref={libraryRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />
+          </section>
+        )}
 
-      <Field label="Title">
-        <input
-          value={title}
-          maxLength={120}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={milestone ? milestoneLabel(milestone, mw) : "What happened?"}
-          className={tone.input}
-        />
-      </Field>
+        <Field label="Title">
+          <input
+            value={title}
+            maxLength={120}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={milestone ? milestoneLabel(milestone, mw) : "What happened?"}
+            className={tone.input}
+          />
+        </Field>
 
-      <div>
-        <Label optional>A first?</Label>
-        <div className="flex flex-wrap gap-2">
-          {custom && (
-            // Not on the shelf, so it can't be picked again: the x says tapping removes it.
-            <Chip selected onClick={() => setMilestone("")}>
-              {milestoneLabel(custom, mw)}
-              <Icon name="x" size={14} strokeWidth={2.25} label="Remove" />
-            </Chip>
-          )}
-          {chips.map((m) => (
-            <Chip key={m.id} selected={milestone === m.id} onClick={() => setMilestone(milestone === m.id ? "" : m.id)}>
-              {m.label}
-            </Chip>
-          ))}
-          {!showAllChips && (
-            <button
-              type="button"
-              onClick={() => setShowAllChips(true)}
-              className="inline-flex min-h-[40px] items-center gap-1 px-2 text-sm font-medium text-mp-accent-fg"
-            >
-              More firsts
-              <Icon name="chevron-down" size={16} />
-            </button>
+        <div>
+          <Label optional>A first?</Label>
+          <div className="flex flex-wrap gap-2">
+            {custom && (
+              // Not on the shelf, so it can't be picked again: the x says tapping removes it.
+              <Chip selected onClick={() => setMilestone("")}>
+                {milestoneLabel(custom, mw)}
+                <Icon name="x" size={14} strokeWidth={2.25} label="Remove" />
+              </Chip>
+            )}
+            {chips.map((m) => (
+              <Chip key={m.id} selected={milestone === m.id} onClick={() => setMilestone(milestone === m.id ? "" : m.id)}>
+                {m.label}
+              </Chip>
+            ))}
+            {!showAllChips && (
+              <button
+                type="button"
+                onClick={() => setShowAllChips(true)}
+                className="inline-flex min-h-[40px] items-center gap-1 px-2 text-sm font-medium text-mp-accent-fg"
+              >
+                More firsts
+                <Icon name="chevron-down" size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <Field label="Note">
+          <TextArea value={note} onChange={setNote} rows={3} placeholder={`A few words for ${w.name} to read someday…`} />
+        </Field>
+
+        <div>
+          <WhenField
+            value={when}
+            onInvalidChange={setTimeInvalid}
+            onChange={(d) => {
+              whenTouched.current = true;
+              setWhenFromPhoto(false);
+              setWhen(d);
+            }}
+            tz={tz}
+            offsets={[1, 5, 30, 60, 180]}
+          />
+          {whenFromPhoto && (
+            <p className={cx(tone.muted, "mt-1.5 flex items-center gap-1.5 text-xs")}>
+              <Icon name="camera" size={14} className="shrink-0 text-mp-ink-3" />
+              Set from when the photo was taken.
+            </p>
           )}
         </div>
-      </div>
-
-      <Field label="Note">
-        <TextArea value={note} onChange={setNote} rows={3} placeholder={`A few words for ${w.name} to read someday…`} />
-      </Field>
-
-      <div>
-        <WhenField
-          value={when}
-          onChange={(d) => {
-            whenTouched.current = true;
-            setWhenFromPhoto(false);
-            setWhen(d);
-          }}
-          tz={tz}
-          offsets={[30, 60, 180]}
-        />
-        {whenFromPhoto && (
-          <p className={cx(tone.muted, "mt-1.5 flex items-center gap-1.5 text-xs")}>
-            <Icon name="camera" size={14} className="shrink-0 text-mp-ink-3" />
-            Set from when the photo was taken.
-          </p>
-        )}
-      </div>
+      </fieldset>
     </Sheet>
   );
 }

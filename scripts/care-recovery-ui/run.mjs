@@ -51,6 +51,172 @@ async function visit(controls) {
 const question = (page) => page.getByLabel("A question for your OB", { exact: true });
 const answer = (page) => page.locator("textarea");
 const cases = [
+  ["rejected first check-in retains extras through one creation retry at its original time", async (page, controls) => {
+    controls.pauseMood = true;
+    controls.moodFailure = true;
+    await page.getByRole("radio", { name: "Okay", exact: true }).click();
+    await waitFor(() => controls.releaseMood);
+    const note = page.getByPlaceholder("Anything on your mind?", { exact: true });
+    await note.fill("Synthetic note while first check-in saves");
+    await page.getByRole("button", { name: "Anxious or on edge", exact: true }).click();
+    await page.getByText("Saving check-in…", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Check-in saved", { exact: true }).count(), 0);
+    assert(await page.getByRole("button", { name: "Change", exact: true }).isDisabled());
+    controls.releaseMood();
+    const retry = page.getByRole("button", { name: "Retry check-in", exact: true });
+    await retry.waitFor();
+    await page.getByText("Check-in not saved · your changes are still here", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Check-in saved", { exact: true }).count(), 0);
+    assert.equal(await note.inputValue(), "Synthetic note while first check-in saves");
+    assert.equal(await page.getByRole("button", { name: "Anxious or on edge", exact: true }).getAttribute("aria-pressed"), "true");
+    assert(await page.evaluate(() => {
+      const confirm = window.confirm;
+      window.confirm = () => false;
+      const event = new Event("maple-before-navigate", { cancelable: true });
+      window.dispatchEvent(event);
+      window.confirm = confirm;
+      return event.defaultPrevented;
+    }), "A rejected check-in remains guarded as unsaved");
+    controls.moodFailure = false;
+    controls.releaseMood = null;
+    await retry.click();
+    await waitFor(() => controls.releaseMood);
+    await note.fill("Synthetic note revised during retry");
+    await page.getByRole("button", { name: "Hopeful", exact: true }).click();
+    controls.releaseMood();
+    await page.getByText("Check-in saved", { exact: true }).waitFor();
+    await waitFor(() => controls.state.care.mood.length === 1);
+    await page.waitForTimeout(100);
+    assert.equal(await note.inputValue(), "Synthetic note revised during retry");
+    assert.equal(await page.getByRole("button", { name: "Anxious or on edge", exact: true }).getAttribute("aria-pressed"), "true");
+    assert.equal(await page.getByRole("button", { name: "Hopeful", exact: true }).getAttribute("aria-pressed"), "true");
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await note.waitFor({ state: "hidden" });
+    const writes = controls.requests.filter((request) => request.path === "/api/maple/care/mood");
+    const creates = writes.filter((request) => request.method === "POST");
+    assert.equal(creates.length, 2, "Only the rejected attempt and explicit retry create a check-in");
+    assert.equal(creates[1].body.at, creates[0].body.at, "Retry preserves the intended check-in time");
+    assert.equal(controls.state.care.mood.length, 1);
+    assert.equal(controls.state.care.mood[0].note, "Synthetic note revised during retry");
+    assert.deepEqual(controls.state.care.mood[0].data.tags, ["anxious", "hopeful"]);
+  }],
+  ["rejected check-in without extras cannot claim saved or dismiss until retried", async (page, controls) => {
+    controls.pauseMood = true;
+    controls.moodFailure = true;
+    await page.getByRole("radio", { name: "Okay", exact: true }).click();
+    await waitFor(() => controls.releaseMood);
+    assert(await page.evaluate(() => {
+      const confirm = window.confirm;
+      window.confirm = () => false;
+      const event = new Event("maple-before-navigate", { cancelable: true });
+      window.dispatchEvent(event);
+      window.confirm = confirm;
+      return event.defaultPrevented;
+    }), "The first mood is unsaved even before optional extras are typed");
+    controls.pauseMood = false;
+    controls.releaseMood();
+    const retry = page.getByRole("button", { name: "Retry check-in", exact: true });
+    await retry.waitFor();
+    assert.equal(await page.getByText("Check-in saved", { exact: true }).count(), 0);
+    assert(await page.getByRole("button", { name: "Done", exact: true }).isDisabled());
+    controls.moodFailure = false;
+    await retry.click();
+    await page.getByText("Check-in saved", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByPlaceholder("Anything on your mind?", { exact: true }).waitFor({ state: "hidden" });
+    assert.equal(controls.state.care.mood.length, 1);
+    assert.equal(controls.requests.filter((request) => request.path === "/api/maple/care/mood" && request.method === "PATCH").length, 0);
+  }],
+  ...[false, true].map((untick) => [`rejected check-in keeps crisis help immediate and retries its ${untick ? "ever-selected warning after unticking" : "retained tag automatically"}`, async (page, controls) => {
+    controls.pauseMood = true;
+    controls.moodFailure = true;
+    await page.getByRole("radio", { name: "Okay", exact: true }).click();
+    await waitFor(() => controls.releaseMood);
+    await page.getByRole("button", { name: "Thoughts of hurting myself", exact: true }).click();
+    const help = page.getByRole("dialog");
+    await help.getByRole("link", { name: "Call 988", exact: true }).waitFor();
+    controls.pauseMood = false;
+    controls.releaseMood();
+    await page.waitForTimeout(800);
+    await help.getByRole("button", { name: "Close", exact: true }).click();
+    await help.waitFor({ state: "hidden" });
+    if (untick) await page.getByRole("button", { name: "Thoughts of hurting myself", exact: true }).click();
+    controls.moodFailure = false;
+    await page.getByRole("button", { name: "Retry check-in", exact: true }).click();
+    await waitFor(() => controls.state.care.mood[0]?.data.harm_ever);
+    if (!untick) await waitFor(() => controls.state.care.mood[0]?.data.tags?.includes("harm_self"));
+    await page.getByPlaceholder("Anything on your mind?", { exact: true }).locator("../..").getByRole("status").filter({ hasText: /^Check-in saved$/ }).waitFor();
+    assert.deepEqual(controls.state.care.mood[0].data.tags ?? [], untick ? [] : ["harm_self"]);
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("maple-outbox-v1") ?? "[]").filter((item) => item.target === "mood")), [], "A rejected creation cannot leave an orphaned mood patch in the outbox");
+    assert(await page.getByRole("note").getByRole("link", { name: "Text 988", exact: true }).count() > 0, "The crisis strip remains available");
+  }]),
+  ["check-in retry retains a crisis selection made and cleared while its request is pending", async (page, controls) => {
+    controls.moodFailure = true;
+    await page.getByRole("radio", { name: "Okay", exact: true }).click();
+    const retry = page.getByRole("button", { name: "Retry check-in", exact: true });
+    await retry.waitFor();
+    controls.moodFailure = false;
+    controls.pauseMood = true;
+    await retry.click();
+    await waitFor(() => controls.releaseMood);
+    await page.getByRole("button", { name: "Thoughts of hurting myself", exact: true }).click();
+    const help = page.getByRole("dialog");
+    await help.getByRole("link", { name: "Call 988", exact: true }).waitFor();
+    await page.waitForTimeout(800);
+    await help.getByRole("button", { name: "Close", exact: true }).click();
+    await help.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Thoughts of hurting myself", exact: true }).click();
+    controls.pauseMood = false;
+    controls.releaseMood();
+    await waitFor(() => controls.state.care.mood[0]?.data.harm_ever);
+    await page.getByText("Check-in saved", { exact: true }).waitFor();
+    assert.deepEqual(controls.state.care.mood[0].data.tags ?? [], []);
+    const writes = controls.requests.filter((request) => request.path === "/api/maple/care/mood");
+    assert.equal(writes.filter((request) => request.method === "POST").length, 2);
+    assert(writes.some((request) => request.method === "PATCH" && request.body.data?.harm_ever === true), "Retry acknowledges the latest sticky flag");
+    assert(await page.getByRole("note").getByRole("link", { name: "Text 988", exact: true }).count() > 0);
+  }],
+  ["earlier medicine logging exposes time and optional details before one save", async (page, controls) => {
+    controls.medicine();
+    await refresh(page, controls);
+    await page.getByRole("button", { name: "Log an earlier dose of Example medicine", exact: true }).click();
+    const time = page.getByLabel("Taken at: time", { exact: true });
+    assert.equal(await time.inputValue(), "09:29");
+    const dose = page.getByRole("textbox", { name: "Dose, if different", exact: true });
+    assert(await dose.isVisible());
+    assert.equal(await dose.inputValue(), "", "No dose is selected by default");
+    await page.setViewportSize({ width: 320, height: 844 });
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "Expanded dose details fit a small phone");
+    await page.getByPlaceholder("Anything to remember?", { exact: true }).fill("Synthetic note");
+    assert.equal(controls.requests.filter((request) => request.method === "POST").length, 0);
+    await page.getByRole("button", { name: "Use current time", exact: true }).click();
+    await page.getByRole("button", { name: "1 min ago", exact: true }).click();
+    assert.equal(await time.inputValue(), "09:29");
+    await page.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    assert.equal(await time.inputValue(), "09:28");
+    await page.getByRole("button", { name: /^Took it at/ }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    const writes = controls.requests.filter((request) => request.method === "POST" && request.path === "/api/maple/care/entries");
+    assert.equal(writes.length, 1);
+    assert.equal(Math.floor(Date.parse(writes[0].body.at) / 60_000), Date.parse("2026-10-28T13:28:00.000Z") / 60_000);
+    assert.equal(writes[0].body.note, "Synthetic note");
+    assert.equal(writes[0].body.data.dose, null);
+    assert.equal(writes[0].body.data.units, null);
+    assert.equal(writes[0].body.allow_duplicate, undefined);
+  }],
+  ["earlier medicine shortcut keeps the likely duplicate question", async (page, controls) => {
+    const plan = controls.medicine();
+    const at = "2026-10-28T13:25:00.000Z";
+    controls.state.care.entries = [{ id: 8001, kind: "dose", med_id: plan.id, at, data: { name: plan.name, dose: null, units: null, unit: null }, note: null, private: false, created_by: controls.state.me.email, updated_by: null, source: "web", created_at: at, updated_at: at }];
+    await refresh(page, controls);
+    await page.getByRole("button", { name: "Log an earlier dose of Example medicine", exact: true }).click();
+    await page.getByRole("group", { name: "Is this another dose?", exact: true }).waitFor();
+    assert.equal(controls.requests.filter((request) => request.method === "POST").length, 0);
+    await page.getByRole("button", { name: "No, same one", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    assert.equal(controls.state.care.entries.length, 1);
+    assert.equal(controls.requests.filter((request) => request.method === "POST").length, 0);
+  }],
   ["new OB questions guard tab changes", async (page) => {
     await question(page).fill("Synthetic question to preserve");
     const prompts = [];

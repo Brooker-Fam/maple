@@ -88,6 +88,13 @@ html.maple-ui body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Shared controls keep keyboard focus visible in every look, including
+ * filled chips and toast actions. An inset outline survives clipped cards. */
+.mp-control:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -4px;
+}
+
 /*
  * Kind colors (feeds, diapers, sleep…) are information by day; at night
  * they fold into the amber, like everything else. Anything colored inline

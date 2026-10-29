@@ -409,8 +409,9 @@ function FixBody({
     }
     return null;
   };
-  // Edit times opens at the clock, with the neighbouring moments still available above it.
-  const [editor, setEditor] = useState<Editor | null>(() => expand || !timed(start) ? null : editorForPin(pin, start, nowFn()));
+  // Every running timer opens at the clock and its ±1/±5 controls. Recovery
+  // questions still open at the requested end or resume choices.
+  const [editor, setEditor] = useState<Editor | null>(() => expand || (!timed(start) && !start.active) ? null : editorForPin(pin, start, nowFn()));
   const [editorDirty, setEditorDirty] = useState(false);
   const showEditorActions = !!editor && !readOnly;
   useEffect(() => { onEditorActionsChange(showEditorActions); }, [showEditorActions, onEditorActionsChange]);
@@ -862,7 +863,7 @@ function FixBody({
       />
     );
   } else if (pin.kind === "timer") {
-    panel = <TimerPanel {...panelProps} finished={finished} setFinished={setFinished} actions={actions} />;
+    panel = <TimerPanel {...panelProps} finished={finished} setFinished={setFinished} actions={actions} onEditStart={() => applyPin({ kind: "timer" })} />;
   } else if (pin.kind === "finish") {
     panel = <FinishPanel {...panelProps} />;
   } else if (pin.kind === "after") {
@@ -936,6 +937,16 @@ function FixBody({
         </p>
       )}
       <div ref={editorHost}>{readOnly ? <p className="text-[15px] text-mp-ink-2">View only. Ask {ask} to fix the times.</p> : panel}</div>
+      {editor && !timed(e) && e.active && !readOnly && !dead && (
+        <div className="border-t border-mp-line pt-2">
+          <LinkRow disabled={disabled || !!leavingEditor} onClick={() => {
+            if (editorDirty) setLeavingEditor({ kind: "finished" });
+            else { setEditor(null); setFinished(true); }
+          }}>
+            {e.kind === "sleep" ? `${words.Hes} already awake` : "Already done"}
+          </LinkRow>
+        </div>
+      )}
       {editor?.edge && timed(e) && !readOnly && !dead && (
         <CorrectionOptions
           {...panelProps}
@@ -1966,7 +1977,7 @@ function FinishPanel({ e, tz, now, disabled, busy, openEditor }: PanelProps) {
 }
 
 /** Sleep, tummy time and pumping: when it started, and (folded) when it already ended. */
-function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, setFinished, actions }: PanelProps & { finished: boolean; setFinished: (v: boolean) => void; actions: Actions }) {
+function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, setFinished, actions, onEditStart }: PanelProps & { finished: boolean; setFinished: (v: boolean) => void; actions: Actions; onEditStart: () => void }) {
   const words = useBabyWords();
   const [tapped, setTapped] = useState(false);
   const sleep = e.kind === "sleep";
@@ -2001,7 +2012,7 @@ function TimerPanel({ e, tz, now, disabled, busy, run, openEditor, finished, set
         sub={`${sleep ? "Asleep" : what} since ${formatTime(start, tz)}.`}
         focus={tapped}
         back={
-          <LinkRow disabled={!!busy} onClick={() => setFinished(false)}>
+          <LinkRow disabled={!!busy} onClick={onEditStart}>
             {sleep ? `Fix when ${words.he} fell asleep` : `Fix when ${what.toLowerCase()} started`}
           </LinkRow>
         }

@@ -1,17 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { careNutritionSummary } from "@/lib/maple/care-nutrition";
 import { addDays, dayKey, DEFAULT_TZ, formatDayLabel } from "@/lib/maple/time";
 import type { CareNutritionEntry, CareNutritionInput } from "@/lib/maple/types";
-import { formatVolume, ozToMl } from "@/lib/maple/units";
-import { useAppNav } from "../AppNav";
-import { Icon } from "../icons";
 import { Button, SectionTitle, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { NutritionDaySummary } from "./NutritionDaySummary";
 import NutritionEntrySheet from "./NutritionEntrySheet";
 import { NutritionJournal } from "./NutritionJournal";
+import NutritionQuickActions from "./NutritionQuickActions";
 import { errorText } from "./parts";
 import type { UseCare } from "./useCare";
 import { useNutrition } from "./useNutrition";
@@ -43,7 +41,7 @@ export default function NutritionSection({ care }: { care: UseCare }) {
   };
   return <section aria-labelledby="her-nutrition" className="space-y-3">
     <SectionTitle><span id="her-nutrition">Food &amp; drink</span></SectionTitle>
-    {care.access.write && <NutritionQuickActions save={save} saving={saving} open={(kind) => setSheet({ kind })} />}
+    {care.access.write && <NutritionQuickActions care={care} day={day} today={today} tz={tz} save={save} saving={saving} open={(kind) => setSheet({ kind })} />}
     <div className="space-y-3 px-1">
       {summary.nursingLine && <p className={cx(tone.muted, "text-[13px] leading-relaxed")}>{summary.nursingLine}</p>}
       {summary.suggestions.map((suggestion) => <div key={suggestion.title} className="space-y-1">
@@ -65,28 +63,4 @@ export default function NutritionSection({ care }: { care: UseCare }) {
     {sheet && care.access.write && <NutritionEntrySheet key={sheet.entry?.id ?? sheet.kind} {...sheet} care={care} onClose={() => setSheet(null)} onSave={saveEntry} saving={saving}
       currentEntry={day === today ? undefined : sheet.entry ? history.entries.find((entry) => entry.id === sheet.entry?.id) ?? null : undefined} onRefresh={history.reload} />}
   </section>;
-}
-
-function NutritionQuickActions({ save, saving, open }: { save: (input: CareNutritionInput) => Promise<void>; saving: boolean; open: (kind: "food" | "drink") => void }) {
-  const { units, now, toast } = useMaple();
-  const nav = useAppNav();
-  const waterUntil = useRef(0);
-  const waterMl = units === "metric" ? 250 : ozToMl(8);
-  const waterLabel = formatVolume(waterMl, units);
-  const logWater = async () => {
-    if (saving || performance.now() < waterUntil.current) return;
-    waterUntil.current = performance.now() + 1500;
-    try { await save({ kind: "drink", at: now().toISOString(), data: { name: "Water", amount_ml: waterMl } }); }
-    catch (error) { toast(errorText(error), { tone: "error" }); }
-  };
-  return <div className="space-y-2">
-    <div className="grid grid-cols-2 gap-2" role="group" aria-label="Log food and drink">
-      <button type="button" disabled={saving} aria-label={`Log water, ${waterLabel}`} onClick={() => void logWater()} className={cx(tone.card, "row-span-2 flex min-h-[112px] min-w-0 flex-col items-center justify-center gap-1 px-3 py-4 text-mp-accent-fg transition active:bg-mp-sunken disabled:opacity-50")}>
-        <Icon name="droplet" size={24} /><span className="text-[17px] font-semibold">Water</span><span className="text-[13px] text-mp-ink-2">{waterLabel}</span>
-      </button>
-      <button type="button" disabled={saving} onClick={() => open("food")} className={cx(tone.card, "flex min-h-[54px] items-center justify-center gap-2 px-2 py-3 text-[15px] font-semibold text-mp-accent-fg active:bg-mp-sunken disabled:opacity-50")}>Ate something</button>
-      <button type="button" disabled={saving} onClick={() => open("drink")} className={cx(tone.card, "flex min-h-[54px] items-center justify-center gap-2 px-2 py-3 text-[15px] font-medium text-mp-accent-fg active:bg-mp-sunken disabled:opacity-50")}>Other drink</button>
-    </div>
-    <div className="px-1"><button type="button" onClick={() => nav.go("chat")} className="min-h-[44px] text-[14px] font-medium text-mp-accent-fg">Log with chat</button><p className={cx(tone.faint, "text-[12px] leading-relaxed")}>Describe a meal and ask for protein or fiber estimates.</p></div>
-  </div>;
 }

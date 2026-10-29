@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { KIND_LABELS } from "@/lib/maple/describe";
 import type { TapFeedData } from "@/lib/maple/feed";
 import { MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, overDailyMax, type AlertTier, type Assessment } from "@/lib/maple/guidelines";
@@ -207,7 +207,7 @@ export function SheetFooter({
           <button
             type="button"
             onClick={onDelete}
-            className="-ml-2 min-h-[52px] rounded-[14px] px-3 text-base font-semibold text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97]"
+            className="mp-control -ml-2 min-h-[52px] rounded-[14px] px-3 text-base font-semibold text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97]"
           >
             Delete
           </button>
@@ -221,12 +221,13 @@ export function SheetFooter({
 }
 
 /**
- * Closed by default: the fields most people skip at 3am. A settings-style
+ * Optional fields, with defaultOpen for useful logging choices. A settings-style
  * row (label, what's set, chevron) on a card, so the chips and steppers
  * inside keep their contrast.
  */
-export function MoreDetails({ summary, children, label = "More details" }: { summary?: string; children: ReactNode; label?: string }) {
-  const [open, setOpen] = useState(false);
+export function MoreDetails({ summary, children, label = "More details", defaultOpen = false }: { summary?: string; children: ReactNode; label?: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const id = useId();
   const reduce = useReducedMotion();
   return (
     <div className={cx(tone.card, "overflow-hidden")}>
@@ -234,15 +235,19 @@ export function MoreDetails({ summary, children, label = "More details" }: { sum
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex min-h-[52px] w-full items-center gap-3 px-4 text-left"
+        aria-controls={open ? `${id}-details` : undefined}
+        className="mp-control flex min-h-[52px] w-full items-center gap-3 px-4 text-left"
       >
-        <span className={cx(tone.body, "shrink-0 text-[15px] font-medium")}>{label}</span>
+        <span id={`${id}-label`} className={cx(tone.body, "shrink-0 text-[15px] font-medium")}>{label}</span>
         <span className={cx(tone.muted, "min-w-0 flex-1 truncate text-right text-sm")}>{summary}</span>
         <Icon name="chevron-down" size={18} className={cx("shrink-0 text-mp-ink-3 transition", open && "rotate-180")} />
       </button>
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
+            id={`${id}-details`}
+            role="region"
+            aria-labelledby={`${id}-label`}
             initial={reduce ? false : { height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={reduce ? undefined : { height: 0, opacity: 0 }}
@@ -506,6 +511,7 @@ export function MiniStepper({
   value,
   onChange,
   step = 1,
+  quickStep,
   min = 0,
   max = 9999,
   decimals = 0,
@@ -517,6 +523,8 @@ export function MiniStepper({
   value: number | null;
   onChange: (v: number | null) => void;
   step?: number;
+  /** Adds larger, labelled adjustments beside the normal steps; use in a full-width row. */
+  quickStep?: number;
   min?: number;
   max?: number;
   decimals?: number;
@@ -538,37 +546,48 @@ export function MiniStepper({
     onChange(next);
   };
   // The same round wells as ui.tsx's Stepper, a size down so two fit abreast.
-  const btn = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink";
+  const btn = cx("flex shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink", quickStep ? "h-[44px] w-[44px]" : "h-11 w-11");
+  const numberField = (
+    <span className={cx("relative min-w-0 flex-1", !!quickStep && "col-span-4 row-start-1 w-full @min-[18rem]/stepper:col-span-1 @min-[18rem]/stepper:col-start-3")}>
+      <input
+        inputMode="decimal"
+        aria-label={ariaLabel}
+        aria-invalid={invalid || undefined}
+        value={text}
+        onChange={(e) => {
+          const t = e.target.value.replace(/[^\d.]/g, "");
+          setText(t);
+          onChange(parseTypedNumber(t, max).value);
+        }}
+        className={cx(
+          "w-full rounded-xl border bg-mp-surface py-3 text-center text-lg font-semibold text-mp-ink tabular-nums outline-none transition focus:ring-2",
+          invalid ? "border-mp-danger ring-2 ring-mp-danger/25 focus:ring-mp-danger/25" : "border-mp-line focus:border-mp-focus focus:ring-mp-focus/25",
+          unit ? "pr-6 pl-1" : "px-1"
+        )}
+      />
+      {unit && <span className={cx(tone.muted, "pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs")}>{unit}</span>}
+    </span>
+  );
   return (
-    <div className="min-w-0">
+    <div className="@container/stepper min-w-0">
       <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
-      <div className="flex items-center gap-1">
-        <RepeatButton ariaLabel={`Less ${ariaLabel}`} onStep={() => bump(-step)} disabled={(value ?? 0) <= min} className={btn}>
-          <Icon name="minus" size={20} />
+      {/* Enlarged text needs room for the whole number and unit. On a narrow
+          row the four adjustments move below it, keeping their 44px targets. */}
+      <div className={cx("items-center", quickStep ? "grid grid-cols-4 justify-items-center gap-x-0.5 gap-y-2 @min-[18rem]/stepper:grid-cols-[44px_44px_minmax(0,1fr)_44px_44px]" : "flex gap-1")}>
+        {quickStep && numberField}
+        {quickStep && <RepeatButton ariaLabel={`${quickStep} fewer ${ariaLabel}`} onStep={() => bump(-quickStep)} disabled={(value ?? 0) <= min} className={cx(btn, "col-start-1 row-start-2 text-[15px] font-semibold @min-[18rem]/stepper:row-start-1")}>
+          −{quickStep}
+        </RepeatButton>}
+        <RepeatButton ariaLabel={`Less ${ariaLabel}`} onStep={() => bump(-step)} disabled={(value ?? 0) <= min} className={cx(btn, !!quickStep && "col-start-2 row-start-2 @min-[18rem]/stepper:row-start-1")}>
+          {quickStep ? <span className="text-[15px] font-semibold">−{step}</span> : <Icon name="minus" size={20} />}
         </RepeatButton>
-        <span className="relative min-w-0 flex-1">
-          <input
-            inputMode="decimal"
-            aria-label={ariaLabel}
-            aria-invalid={invalid || undefined}
-            value={text}
-            onChange={(e) => {
-              const t = e.target.value.replace(/[^\d.]/g, "");
-              setText(t);
-              onChange(parseTypedNumber(t, max).value);
-            }}
-            className={cx(
-              "w-full rounded-xl border bg-mp-surface py-3 text-center text-lg font-semibold text-mp-ink tabular-nums outline-none transition focus:ring-2",
-              invalid ? "border-mp-danger ring-2 ring-mp-danger/25 focus:ring-mp-danger/25" : "border-mp-line focus:border-mp-focus focus:ring-mp-focus/25",
-              // Two abreast leave ~70px for the number, so "0.25" plus "oz" must fit.
-              unit ? "pr-6 pl-1" : "px-1"
-            )}
-          />
-          {unit && <span className={cx(tone.muted, "pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs")}>{unit}</span>}
-        </span>
-        <RepeatButton ariaLabel={`More ${ariaLabel}`} onStep={() => bump(step)} disabled={(value ?? 0) >= max} className={btn}>
-          <Icon name="plus" size={20} />
+        {!quickStep && numberField}
+        <RepeatButton ariaLabel={`More ${ariaLabel}`} onStep={() => bump(step)} disabled={(value ?? 0) >= max} className={cx(btn, !!quickStep && "col-start-3 row-start-2 @min-[18rem]/stepper:col-start-4 @min-[18rem]/stepper:row-start-1")}>
+          {quickStep ? <span className="text-[15px] font-semibold">+{step}</span> : <Icon name="plus" size={20} />}
         </RepeatButton>
+        {quickStep && <RepeatButton ariaLabel={`${quickStep} more ${ariaLabel}`} onStep={() => bump(quickStep)} disabled={(value ?? 0) >= max} className={cx(btn, "col-start-4 row-start-2 text-[15px] font-semibold @min-[18rem]/stepper:col-start-5 @min-[18rem]/stepper:row-start-1")}>
+          +{quickStep}
+        </RepeatButton>}
       </div>
       <NumberProblem show={invalid} />
     </div>

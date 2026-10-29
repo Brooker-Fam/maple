@@ -668,7 +668,7 @@ export function useTimerActions() {
       const ref = first?.ref ?? { side, start: e.started_at };
       const chips = earlierChips(
         Date.parse(ref.start),
-        [2, 5, 10],
+        [1, 5, 10],
         (n, at) => `${name} started ${minutesWord(n)} earlier, at ${at}`,
         (to) => void retime(e, { op: "move", edge: "start", ref, to: to.toISOString() }),
         // Never over the feed before this one (two-phones #53): Fix times stops its chips there too.
@@ -783,7 +783,7 @@ export function useTimerActions() {
       timerToast(`${what} started ${clock(e.started_at)}. ${sleep ? "Fell asleep earlier?" : "Earlier?"}`, e, {
         actions: earlierChips(
           Date.parse(e.started_at),
-          sleep ? [5, 10] : [2, 5],
+          [1, 5],
           (n, at) => `${sleep ? "Fell asleep" : `${what} started`} ${minutesWord(n)} earlier, at ${at}`,
           (to) => void adjust(e, to)
         ),

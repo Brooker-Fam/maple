@@ -52,7 +52,7 @@ function FoodItemFields({ item, index, onChange, onRemove }: {
         <option value="manual">Entered manually</option><option value="estimate">Estimate</option><option value="label">Package label</option>
       </select>
     </label>
-    <details className="space-y-3">
+    <details open className="space-y-3">
       <summary className="min-h-[44px] cursor-pointer py-3 text-[14px] font-medium text-mp-accent-fg">Food groups &amp; more details</summary>
       <FoodGroups value={item.groups} onChange={(groups) => onChange({ ...item, groups })} label={label} />
       <div className="grid grid-cols-2 gap-3">{nutrients(["carbs_g", "fat_g", "energy_kcal"])}</div>

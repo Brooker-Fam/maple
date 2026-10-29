@@ -26,6 +26,7 @@ import { AskChatButton } from "./chat/AskChat";
 import { useClockMinute } from "./FeedParts";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
+import MoreSheet, { logSwitches } from "./MoreSheet";
 import { useSheets } from "./sheets";
 import { useClusterInfo } from "./sheets/ClusterInfoSheet";
 import { babyFirstName, useMilestoneWords } from "./familyWords";
@@ -227,6 +228,10 @@ export function useEntryRange(fromKey: string, toKey: string) {
     },
     [tz]
   );
+  /** New entries on an older day also need its cached week refreshed after saving. */
+  const touchDay = useCallback((day: string) => {
+    dirty.current.add(chunkOf(day));
+  }, []);
 
   let ready = true;
   let any = false;
@@ -251,7 +256,7 @@ export function useEntryRange(fromKey: string, toKey: string) {
     return out.filter((k) => k >= fromKey && k <= toKey);
   }, [chunks, first, last, fromKey, toKey]);
 
-  return { entries, ready, loaded: any, loadedFrom, error, reload, partialDays, touch };
+  return { entries, ready, loaded: any, loadedFrom, error, reload, partialDays, touch, touchDay };
 }
 
 export type TimeWindow = { key: string; start: number; end: number };
@@ -351,8 +356,15 @@ export default function LogTab({
   const [flash, setFlash] = useState<string | null>(null);
   const [scrollTarget, setScrollTarget] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  const [loggingDay, setLoggingDay] = useState(todayKey);
+  const [adding, setAdding] = useState(false);
+  const addOnDay = (day: string) => {
+    touchDay(day);
+    setLoggingDay(day);
+    setAdding(true);
+  };
 
-  const { entries, ready, loadedFrom, error, reload, partialDays, touch } = useEntryRange(oldestKey, todayKey);
+  const { entries, ready, loadedFrom, error, reload, partialDays, touch, touchDay } = useEntryRange(oldestKey, todayKey);
 
   const hasPreBirth = useMemo(
     () => (bornAt ? entries.some((e) => Date.parse(e.started_at) < Date.parse(bornAt) - H) : false),
@@ -546,10 +558,10 @@ export default function LogTab({
         </div>
       )}
 
-      {nothingAtAll && !running.length ? (
+      {nothingAtAll && !running.length && !pinned ? (
         <div className="mt-6">
           <EmptyState title="Nothing logged yet">Feeds, changes and naps show up here, newest first.</EmptyState>
-          {!readOnly && <QuickLog />}
+          {!readOnly && <QuickLog onMore={() => addOnDay(todayKey)} />}
         </div>
       ) : (
         <div className="space-y-5">
@@ -572,6 +584,7 @@ export default function LogTab({
               clusters={clusters}
               clusterOf={clusterOf}
               onClusterInfo={clusterInfo.open}
+              onAdd={() => addOnDay(d.key)}
             />
           ))}
         </div>
@@ -596,6 +609,7 @@ export default function LogTab({
 
       <NewArrivalsPill pill={pill} onDismiss={dismissPill} />
       {clusterInfo.sheet}
+      {!readOnly && <MoreSheet open={adding} onClose={() => setAdding(false)} earlierDay={loggingDay} />}
     </div>
   );
 }
@@ -619,6 +633,7 @@ function DaySection({
   clusters,
   clusterOf,
   onClusterInfo,
+  onAdd,
 }: {
   day: string;
   todayKey: string;
@@ -637,6 +652,7 @@ function DaySection({
   clusters: FeedCluster[];
   clusterOf: Map<number, number>;
   onClusterInfo: (c?: FeedCluster | null) => void;
+  onAdd: () => void;
 }) {
   const { open } = useSheets();
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
@@ -682,10 +698,15 @@ function DaySection({
           highlighted ? "bg-mp-sunken" : "bg-mp-bg"
         )}
       >
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <div className="flex flex-wrap items-center justify-between gap-x-3">
           <h2 className={cx(tone.heading, "text-[17px]")}>{label}</h2>
+          {!readOnly && (
+            <button type="button" onClick={onAdd} aria-label={`${key === todayKey ? "Log earlier" : "Add entry"} for ${label}`} className="-my-2 -mr-1 inline-flex min-h-[44px] items-center gap-1 px-1 text-[13px] font-semibold text-mp-accent-fg">
+              <Icon name="plus" size={16} /> {key === todayKey ? "Log earlier" : "Add entry"}
+            </button>
+          )}
           {dst && (
-            <span className={cx(tone.muted, "inline-flex items-center gap-1 text-xs")}>
+            <span className={cx(tone.muted, "inline-flex w-full items-center gap-1 text-xs")}>
               <Icon name="clock-3" size={12} className="self-center" />
               {dst}
             </span>
@@ -777,32 +798,33 @@ function DaySection({
                 ? "Nothing written down for today yet."
                 : `Nothing written down for ${label}.`}
           </p>
-          {!total && !readOnly && <QuickLog compact day={key} />}
+          {!total && !readOnly && <QuickLog compact day={key} onMore={onAdd} />}
         </div>
       )}
     </section>
   );
 }
 
-const QUICK: { kind: EntryKind; label: string }[] = [
-  { kind: "feed", label: "Feed" },
-  { kind: "diaper", label: "Diaper" },
-  { kind: "sleep", label: "Sleep" },
-];
-
 /** "Log an earlier one": open a sheet (each has its own time picker). */
-function QuickLog({ compact, day }: { compact?: boolean; day?: string }) {
+function QuickLog({ compact, day, onMore }: { compact?: boolean; day?: string; onMore: () => void }) {
   const { open } = useSheets();
   const { state, now } = useMaple();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const add = (kind: EntryKind) => {
+  const { nursing, bottles } = logSwitches(state?.baby);
+  const quick: { kind: EntryKind; label: string; preset?: Record<string, unknown> }[] = [
+    ...(nursing ? [{ kind: "feed" as const, label: "Nursing", preset: { method: "breast" } }] : []),
+    ...(bottles ? [{ kind: "feed" as const, label: "Bottle", preset: { method: "bottle" } }] : []),
+    { kind: "diaper", label: "Diaper" },
+    { kind: "sleep", label: "Sleep" },
+  ];
+  const add = (kind: EntryKind, preset?: Record<string, unknown>) => {
     const current = now();
-    if (!day || day === dayKey(current, tz)) return open({ kind });
+    if (!day || day === dayKey(current, tz)) return open({ kind, preset });
     const { year, month, day: date } = parseDayKey(day);
     const { hour, minute } = localParts(current, tz);
     const end = zonedTimeToUtc(year, month, date, hour, minute, tz);
     const start = kind === "sleep" ? new Date(Math.max(dayBounds(day, tz)[0].getTime(), end.getTime() - H)) : end;
-    open({ kind, preset: { started_at: start.toISOString(), ended_at: end.toISOString() } });
+    open({ kind, preset: { ...preset, started_at: start.toISOString(), ended_at: end.toISOString() } });
   };
   return (
     <div role="group" aria-label="Log an earlier one" className={cx("flex flex-wrap justify-center gap-2", compact ? "mt-3" : "mt-1")}>
@@ -811,12 +833,13 @@ function QuickLog({ compact, day }: { compact?: boolean; day?: string }) {
           Log an earlier one:
         </p>
       )}
-      {QUICK.map((q) => (
-        <Chip key={q.kind} onClick={() => add(q.kind)}>
-          <Icon name={KIND_ICON[q.kind]} size={16} className="mp-kind-ink" style={{ color: KIND_COLOR[q.kind] }} />
+      {quick.map((q) => (
+        <Chip key={q.label} onClick={() => add(q.kind, q.preset)}>
+          <Icon name={q.preset?.method === "bottle" ? "bottle" : KIND_ICON[q.kind]} size={16} className="mp-kind-ink" style={{ color: KIND_COLOR[q.kind] }} />
           {q.label}
         </Chip>
       ))}
+      <Chip onClick={onMore}>More</Chip>
     </div>
   );
 }

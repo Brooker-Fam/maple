@@ -242,6 +242,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // An open "Add a side" whose times don't fit: Save waits, so what was typed is never dropped.
   const [addBlocked, setAddBlocked] = useState(false);
   const [timeInvalid, setTimeInvalid] = useState(false);
+  const [manualTimeInvalid, setManualTimeInvalid] = useState(false);
   // "Add a side" open with no side picked: Save with nothing else to save would close as if it added one.
   const [addPending, setAddPending] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -336,13 +337,14 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     e?.data.method === "bottle" ? e.data.milk : ((pstr(preset, "milk") as Milk | undefined) ?? lastBottle?.data.milk)
   );
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
-  const fieldsDirty = useDraftChanged({ method, when, note: notePatch.note, amount, milk, left, right, both, first, range, invalid: checks.invalid });
+  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, left, right, both, first, range, invalid: checks.invalid });
   const amountMl = amount == null ? undefined : Math.round((units === "metric" ? amount : ozToMl(amount)) * 10) / 10;
   const amountLabel = amountMl != null ? formatVolume(amountMl, units) : null;
   const chips = units === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
 
   // ── Save ──
   const save = async () => {
+    if (busy || manualTimeInvalid || timeInvalid || addBlocked) return;
     if (e) {
       const patch = editPatch();
       // Nothing changed: close without a write (a bare write would bump the version under the other phone's edit).
@@ -357,13 +359,18 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       }
       return;
     }
-    onClose();
     if (method === "bottle") {
       const at = when ?? now();
-      void log(
-        { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk }, note: note.trim() || null },
-        { toast: `${amountLabel ? `${amountLabel} bottle` : "Bottle"} · ${clock(at)}` }
-      );
+      setBusy(true);
+      try {
+        const saved = await log(
+          { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk }, note: note.trim() || null },
+          { toast: `${amountLabel ? `${amountLabel} bottle` : "Bottle"} · ${clock(at)}` }
+        );
+        if (saved) onClose();
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     const [s, en] = range;
@@ -396,16 +403,22 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     };
     const next = nextSideWords(draft, t, w, state?.entries);
     const toastText = l + r + b > 0 ? doneText(draft, t, w, undefined, state?.entries).text : `Nursed · ${clock(s)}${next ? ` · ${next}` : ""}`;
-    void log(
-      {
-        kind: "feed",
-        started_at: s.toISOString(),
-        ended_at: endedAt,
-        data,
-        note: note.trim() || null,
-      },
-      { toast: toastText }
-    );
+    setBusy(true);
+    try {
+      const saved = await log(
+        {
+          kind: "feed",
+          started_at: s.toISOString(),
+          ended_at: endedAt,
+          data,
+          note: note.trim() || null,
+        },
+        { toast: toastText }
+      );
+      if (saved) onClose();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const editPatch = (): UpdateEntryInput => {
@@ -439,12 +452,15 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     } else if (first !== origFirst) {
       data.first_side = first;
     }
+    const hasData = Object.keys(data).length > 0;
+    // The store otherwise infers a manual feed's end after any start or data edit.
+    const keepEnd = endMoved || minutesChanged || (!timed && (startMoved || hasData));
     return {
       started_at: startMoved ? s.toISOString() : undefined,
       // Keep the end where it shows (otherwise new minutes would move it).
       // A timed session keeps an end even at its start, so the server retimes what the sheet previewed.
-      ended_at: endMoved || minutesChanged ? (en.getTime() > s.getTime() || (timed && !minutesChanged) ? en.toISOString() : null) : undefined,
-      data: Object.keys(data).length ? data : undefined,
+      ended_at: keepEnd ? (en.getTime() > s.getTime() || (timed && !minutesChanged) ? en.toISOString() : null) : undefined,
+      data: hasData ? data : undefined,
       ...notePatch,
     };
   };
@@ -496,7 +512,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
 
   /** The staged parts, in one PATCH against the version they were staged on (a newer one answers 409). */
   const saveTimes = async () => {
-    if (!e || !draft || !liveFeed) return;
+    if (busy || !e || !draft || !liveFeed || manualTimeInvalid || timeInvalid || addBlocked) return;
     setBusy(true);
     setTimesNotice(null);
     const data: Record<string, unknown> = { segments: draft.data.segments };
@@ -548,22 +564,25 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const primary = e ? (timed && (dirty || preset?.editTime) ? "Save time" : "Save") : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
 
-  // Left and Right abreast; back and forth (both sides, not split into made-up sides) under them, with what it means.
+  // Full-width rows leave room for precise minutes and ±1/±5 controls on narrow phones.
   const steppers = (
-    <div className="grid grid-cols-2 gap-3">
-      <MiniStepper key="left" label={<SideLabel side="L" />} unit="min" ariaLabel="minutes on the left" value={shownL} onChange={(v) => typeMinutes(v, shownR, shownB)} max={240} onInvalid={checks.watch("left")} />
-      <MiniStepper key="right" label={<SideLabel side="R" />} unit="min" ariaLabel="minutes on the right" value={shownR} onChange={(v) => typeMinutes(shownL, v, shownB)} max={240} onInvalid={checks.watch("right")} />
-      <MiniStepper
-        key="both"
-        label={<SideLabel side="B" />}
-        unit="min"
-        ariaLabel="minutes going back and forth"
-        value={shownB}
-        onChange={(v) => typeMinutes(shownL, shownR, v)}
-        max={720}
-        onInvalid={checks.watch("both")}
-      />
-      <p className={cx(tone.muted, "self-end pb-1 text-[13px] leading-snug")}>Both sides, without tracking which.</p>
+    <div className="space-y-3">
+      <MiniStepper key="left" label={<SideLabel side="L" />} unit="min" ariaLabel="minutes on the left" value={shownL} onChange={(v) => typeMinutes(v, shownR, shownB)} quickStep={5} max={240} onInvalid={checks.watch("left")} />
+      <MiniStepper key="right" label={<SideLabel side="R" />} unit="min" ariaLabel="minutes on the right" value={shownR} onChange={(v) => typeMinutes(shownL, v, shownB)} quickStep={5} max={240} onInvalid={checks.watch("right")} />
+      <div>
+        <MiniStepper
+          key="both"
+          label={<SideLabel side="B" />}
+          unit="min"
+          ariaLabel="minutes going back and forth"
+          value={shownB}
+          onChange={(v) => typeMinutes(shownL, shownR, v)}
+          quickStep={5}
+          max={720}
+          onInvalid={checks.watch("both")}
+        />
+        <p className={cx(tone.muted, "mt-1 text-[13px] leading-snug")}>Both sides, without tracking which.</p>
+      </div>
     </div>
   );
   const startedOn = (
@@ -584,6 +603,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      locked={busy}
       onClose={close}
       dirty={fieldsDirty && !dirty && !addBlocked && !timeInvalid && !readOnly}
       title={title}
@@ -598,7 +618,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
             }}
           />
         ) : (
-          <>
+          <fieldset disabled={busy} className="min-w-0">
             {dirty && !readOnly && (
               <p role="status" className="mb-3 flex items-center gap-2 rounded-xl bg-mp-sunken px-3 py-2 text-[13px] leading-snug font-medium text-mp-ink">
                 <Icon name={conflict ? "info" : "pencil"} size={14} className="shrink-0 text-mp-ink-2" />
@@ -614,7 +634,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly}
+              disabled={manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
@@ -626,7 +646,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     ? "Pick Left or Right to add a side."
                     : conflict
                     ? undefined
-                    : timeInvalid
+                    : timeInvalid || manualTimeInvalid
                       ? "Check the date and time above."
                     : addBlocked
                       ? ADD_BLOCKED
@@ -635,10 +655,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                         : undefined
               }
             />
-          </>
+          </fieldset>
         )
       }
     >
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
       {/* A timed feed's own times are its rows: the tap time up here would read as one more start. */}
       {e && <LoggedBy entry={e} noTime={e.data.method === "breast" && !!e.data.segments?.length} />}
 
@@ -708,11 +729,16 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 {steppers}
                 {startedOn}
                 <TimeRange
+                  onInvalidChange={(invalid) => {
+                    setManualTimeInvalid(invalid);
+                    // An explicit draft owns its time even before it is valid.
+                    if (invalid) setAnchor(null);
+                  }}
                   start={range[0]}
                   end={range[1]}
                   tz={tz}
                   durations={[]}
-                  startQuick={[10, 20, 30, 60, 120]}
+                  startQuick={[1, 5, 10, 20, 30, 60, 120]}
                   onChange={(s, en) => {
                     setAnchor(null);
                     setRange([s, en]);
@@ -759,7 +785,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   </p>
                 )}
               </div>
-              <WhenField value={when} onChange={setWhen} tz={tz} />
+              <WhenField value={when} onChange={setWhen} onInvalidChange={setManualTimeInvalid} tz={tz} />
               <section aria-label="Milk">
                 <Label>Milk</Label>
                 <div className="flex flex-wrap gap-2">
@@ -787,6 +813,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       )}
 
       <NoteField value={note} onChange={setNote} readOnly={readOnly} />
+      </fieldset>
     </Sheet>
   );
 }
@@ -1170,7 +1197,7 @@ function TimesSection({
       )}
       {add && (
         <InView>
-          <AddSide feed={add.base} form={add.form} tz={tz} disabled={disabled} onForm={(form) => putAdd(add.base, form)} onDrop={dropAdd} />
+          <AddSide onInvalidChange={onTimeInvalid} feed={add.base} form={add.form} tz={tz} disabled={disabled} onForm={(form) => putAdd(add.base, form)} onDrop={dropAdd} />
         </InView>
       )}
     </div>
@@ -1367,6 +1394,7 @@ function tryAdd(feed: FeedEntry, form: AddForm, now: Date, tz: string, vo: Voice
  * a guess: no side is picked, nothing is staged, and the line says what to do.
  */
 function AddSide({
+  onInvalidChange,
   feed,
   form,
   tz,
@@ -1374,6 +1402,7 @@ function AddSide({
   onForm,
   onDrop,
 }: {
+  onInvalidChange: (invalid: boolean) => void;
   /** The feed it's added to (without it). */
   feed: FeedEntry;
   form: AddForm;
@@ -1384,6 +1413,17 @@ function AddSide({
 }) {
   const { now: nowFn } = useMaple();
   const vo = useVoice();
+  const invalidFields = useRef({ start: false, end: false });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const reportInvalid = (edge: "start" | "end", invalid: boolean) => {
+    invalidFields.current[edge] = invalid;
+    const anyInvalid = invalidFields.current.start || invalidFields.current.end;
+    setTimeInvalid(anyInvalid);
+    onInvalidChange(anyInvalid);
+    // Once an end is being typed, moving the start must not replace that
+    // draft with another guessed five-minute end.
+    if (edge === "end" && invalid && form.end === null) onForm({ ...form, end });
+  };
   const n = nowFn();
   const { end, result, error } = tryAdd(feed, form, n, tz, vo);
   const set = (patch: Partial<AddForm>) => onForm({ ...form, ...patch, touched: true });
@@ -1410,14 +1450,16 @@ function AddSide({
           ]}
           className="[&>button]:min-h-[44px]"
         />
-        <TimeScrubber label="Started" value={form.start} onChange={(d) => set({ start: d, moved: "start" })} tz={tz} quick={false} nudgeStyle="words" max={n} />
+        <TimeScrubber label="Started" onInvalidChange={(invalid) => reportInvalid("start", invalid)} value={form.start} onChange={(d) => set({ start: d, moved: "start" })} tz={tz} quick={false} nudgeStyle="words" max={n} />
         {form.moved === "start" && note}
-        <TimeScrubber label="Ended" value={end} onChange={(d) => set({ end: d, moved: "end" })} tz={tz} quick={false} nudgeStyle="words" max={n} />
+        <TimeScrubber label="Ended" onInvalidChange={(invalid) => reportInvalid("end", invalid)} value={end} onChange={(d) => set({ end: d, moved: "end" })} tz={tz} quick={false} nudgeStyle="words" max={n} />
         {form.moved === "end" && note}
         <div className="flex min-h-[44px] items-center gap-3">
           <p aria-live="polite" className="min-w-0 flex-1 text-[13px] leading-snug text-mp-ink-2">
             {/* The times are just above; this says the footer's Save is what keeps them. */}
-            {!form.touched ? (
+            {timeInvalid ? (
+              "Check the date and time above before saving."
+            ) : !form.touched ? (
               "Pick the side and times, and Save adds it."
             ) : (
               result && (

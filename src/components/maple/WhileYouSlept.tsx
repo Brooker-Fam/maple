@@ -2,10 +2,12 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
+import { describeEntry } from "@/lib/maple/describe";
 import { nursingRuns } from "@/lib/maple/feed";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
+import { useAppNav } from "./AppNav";
 import { photoUrl } from "./EntryRow";
 import { SIDE_NAME } from "./TimerCard";
 import { Icon } from "./icons";
@@ -39,7 +41,8 @@ function overlapsNight(from: number, to: number, tz: string): boolean {
 }
 
 export default function WhileYouSlept() {
-  const { state, summary, seenAt, memberName, member, now } = useMaple();
+  const { state, summary, seenAt, memberName, member, now, units } = useMaple();
+  const { go } = useAppNav();
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -80,6 +83,10 @@ export default function WhileYouSlept() {
   const napping = sleeps.some((e) => e.active);
   const vitD = fresh.some((e) => e.kind === "med" && isVitaminD(e.data.name));
   const moments = fresh.filter((e) => e.kind === "moment");
+  // Every logging kind belongs in the handoff, even when it has no tally above.
+  const other = fresh.filter((e) =>
+    !["feed", "diaper", "sleep", "moment"].includes(e.kind) && !(e.kind === "med" && isVitaminD(e.data.name))
+  ).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const photo = moments.find((e) => e.kind === "moment" && e.data.photos?.length);
   const who = [...new Set(fresh.map((e) => e.created_by).filter((x): x is string => !!x))];
 
@@ -129,6 +136,7 @@ export default function WhileYouSlept() {
   if (napping) facts.push("asleep now");
   if (vitD) facts.push("vitamin D");
   if (!facts.length && moments.length) facts.push(`${moments.length} new moment${plural(moments.length)}`);
+  if (other.length) facts.push(`${other.length}${facts.length ? " other" : ""} update${plural(other.length)}`);
   const names = who.map((w) => memberName(w).split(" ")[0]);
   const by = names.length ? `by ${names.length < 3 ? names.join(" and ") : `${names.slice(0, 2).join(", ")} and more`}` : null;
 
@@ -202,6 +210,22 @@ export default function WhileYouSlept() {
                   {l}
                 </p>
               ))}
+            </div>
+          )}
+          {other.length > 0 && (
+            <div className={cx((lines.length > 0 || !overnight) && "mt-3")}>
+              {other.length > 3 && <p className="mb-2 text-[12px] text-mp-ink-2">Latest 3 of {other.length} other updates</p>}
+              <ul aria-label="Other logged updates" className="space-y-2">
+                {other.slice(0, 3).map((entry) => (
+                  <li key={entry.id} className="text-[14px] leading-snug text-mp-ink">
+                    <time dateTime={entry.started_at} className="text-[12px] text-mp-ink-2 tabular-nums">{formatTime(entry.started_at, tz)}</time>
+                    <p className="line-clamp-2">{describeEntry(entry, { units, now: new Date(nowMs) }).text}</p>
+                  </li>
+                ))}
+              </ul>
+              <Button variant="ghost" size="sm" className="-ml-3 mt-1" onClick={() => go("log")}>
+                View in History <Icon name="chevron-right" size={16} />
+              </Button>
             </div>
           )}
           {(extra.length > 0 || photo) && (

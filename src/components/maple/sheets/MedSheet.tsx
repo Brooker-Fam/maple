@@ -63,7 +63,8 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ name, dose, when, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, name, dose, when, note });
 
   // Other medicines they've logged lately, as one-tap names (never their doses).
   const recent = useMemo(() => {
@@ -106,32 +107,36 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const save = async () => {
-    const n = name.trim();
-    if (!n) return;
-    const noteVal = note.trim() || null;
-    const data = { name: n, dose: dose.trim() || undefined };
-    if (e) {
-      setBusy(true);
-      const res = await update(
-        e.id,
-        {
-          data: withNulls(data, ["dose"]),
-          started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
-          note: noteVal,
-        },
-        { toast: `${n} updated` }
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const n = name.trim();
+      if (!n) return;
+      const noteVal = note.trim() || null;
+      const data = { name: n, dose: dose.trim() || undefined };
+      if (e) {
+        const res = await update(
+          e.id,
+          {
+            data: withNulls(data, ["dose"]),
+            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            note: noteVal,
+          },
+          { toast: `${n} updated` }
+        );
+        if (res) onClose();
+        return;
+      }
+      const saved = await log(
+        { kind: "med", started_at: when?.toISOString(), data: data.dose ? data : { name: n }, note: noteVal },
+        isVitaminD(n)
+          ? { toast: when ? `Vitamin D drops logged · ${clock(when)}` : "Vitamin D drops logged" }
+          : { toast: `${n}${data.dose ? ` ${data.dose}` : ""} · ${clock(when ?? now())}` }
       );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    void log(
-      { kind: "med", started_at: when?.toISOString(), data: data.dose ? data : { name: n }, note: noteVal },
-      isVitaminD(n)
-        ? { toast: when ? `Vitamin D drops logged · ${clock(when)}` : "Vitamin D drops logged" }
-        : { toast: `${n}${data.dose ? ` ${data.dose}` : ""} · ${clock(when ?? now())}` }
-    );
   };
 
   const del = () => {
@@ -144,119 +149,124 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? describeEntry(e).title : vitD ? "Vitamin D" : `${w.Name}'s medicine`}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={!name.trim() || (!!e && e.id < 0)}
-          hint={!name.trim() ? "What was it?" : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || !name.trim() || (!!e && e.id < 0)}
+            hint={!name.trim() ? "What was it?" : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
 
-      <div>
-        <Label>What</Label>
-        <div className="flex flex-wrap gap-2">
-          <Chip selected={vitD} onClick={() => pickName(VITAMIN_D_DEFAULT.name)}>
-            <Icon name="sun" size={16} />
-            Vitamin D
-          </Chip>
-          {recent.map((r) => (
-            <Chip key={r} selected={name.trim().toLowerCase() === r.toLowerCase()} onClick={() => pickName(r)}>
-              <Icon name="pill" size={16} />
-              {r}
+        <div>
+          <Label>What</Label>
+          <div className="flex flex-wrap gap-2">
+            <Chip selected={vitD} onClick={() => pickName(VITAMIN_D_DEFAULT.name)}>
+              <Icon name="sun" size={16} />
+              Vitamin D
             </Chip>
-          ))}
+            {recent.map((r) => (
+              <Chip key={r} selected={name.trim().toLowerCase() === r.toLowerCase()} onClick={() => pickName(r)}>
+                <Icon name="pill" size={16} />
+                {r}
+              </Chip>
+            ))}
+          </div>
+          <input
+            value={name}
+            maxLength={80}
+            onChange={(ev) => pickName(ev.target.value)}
+            placeholder="Or type a name"
+            aria-label="Medicine name"
+            className={cx(tone.input, "mt-2.5")}
+          />
         </div>
-        <input
-          value={name}
-          maxLength={80}
-          onChange={(ev) => pickName(ev.target.value)}
-          placeholder="Or type a name"
-          aria-label="Medicine name"
-          className={cx(tone.input, "mt-2.5")}
-        />
-      </div>
 
-      {givenToday && (
-        // A heads-up, not an alarm: two caregivers shouldn't both give the day's drops.
-        <p className={cx(tone.inset, tone.body, "flex gap-2.5 px-3.5 py-3 text-sm leading-relaxed")}>
-          <Icon name="circle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
-          <span>
-            Already logged today at {clock(givenToday.givenAt)}
-            {givenToday.by ? ` by ${memberName(givenToday.by)}` : ""}. It&apos;s once a day, so check before giving another.
-          </span>
-        </p>
-      )}
-
-      <div>
-        <Label optional>Dose</Label>
-        <input
-          value={dose}
-          maxLength={80}
-          onChange={(ev) => setDose(ev.target.value)}
-          placeholder="As on the label"
-          aria-label="Dose"
-          className={tone.input}
-        />
-        {!vitD && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Follow the label or your pediatrician&apos;s instructions.</p>}
-      </div>
-
-      {herPlan && care && (
-        <div role="status" className={cx(tone.inset, "px-4 py-3")}>
-          <p className={cx(tone.body, "flex gap-2.5 text-sm leading-relaxed")}>
-            <Icon name="pill" size={18} className="mt-px shrink-0 text-mp-ink-2" />
+        {givenToday && (
+          // A heads-up, not an alarm: two caregivers shouldn't both give the day's drops.
+          <p className={cx(tone.inset, tone.body, "flex gap-2.5 px-3.5 py-3 text-sm leading-relaxed")}>
+            <Icon name="circle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
             <span>
-              {care.self ? `You have ${herPlan.name} on your list.` : `${care.name} has ${herPlan.name} on her list.`} Logging it here is for{" "}
-              {w.name}.
+              Already logged today at {clock(givenToday.givenAt)}
+              {givenToday.by ? ` by ${memberName(givenToday.by)}` : ""}. It&apos;s once a day, so check before giving another.
             </span>
           </p>
-          {careWrite && !e && (
-            <button
-              type="button"
-              onClick={() => toCare(() => careNav.openDose(herPlan.id))}
-              className="mt-1 -ml-1 min-h-[44px] rounded-lg px-1 text-sm font-semibold text-mp-accent-fg"
-            >
-              {care.self ? "Log it for yourself instead" : `Log it for ${care.name} instead`}
-            </button>
-          )}
-        </div>
-      )}
+        )}
 
-      {feverCaution && (
-        <div role="status" className={cx(tone.body, "rounded-xl border-l-[3px] border-mp-maple bg-mp-maple/[0.08] px-4 py-3 text-sm leading-relaxed")}>
-          <p className="flex gap-2.5">
-            <Icon name="triangle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
-            <span>{ageMonths < 3 ? babyFeverMedUnder3mHint(voice) : BABY_IBUPROFEN_UNDER_6M_HINT}</span>
-          </p>
-          {careWrite && !herPlan && !e && care && (
-            <button type="button" onClick={() => toCare(() => careNav.openOneOff(name.trim(), { at: when?.toISOString(), dose: dose.trim() || undefined }))} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
-              Is this for {care.self ? "you" : care.name}? Log it on {care.self ? "your" : "her"} medicines
-            </button>
-          )}
+        <div>
+          <Label optional>Dose</Label>
+          <input
+            value={dose}
+            maxLength={80}
+            onChange={(ev) => setDose(ev.target.value)}
+            placeholder="As on the label"
+            aria-label="Dose"
+            className={tone.input}
+          />
+          {!vitD && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Follow the label or your pediatrician&apos;s instructions.</p>}
         </div>
-      )}
 
-      <WhenField value={when} onChange={setWhen} tz={tz} />
-      <NoteField value={note} onChange={setNote} />
-      {vitD && <ContextNote icon="sun">{vitaminDNote(voice)}</ContextNote>}
-      {e && care && careWrite && !isVitaminD(e.data.name) && e.id > 0 && (
-        <button
-          type="button"
-          disabled={moving}
-          onClick={move}
-          className={cx(tone.card, tone.row, "min-h-[52px] py-2.5 text-[15px] font-medium text-mp-accent-fg disabled:opacity-50")}
-        >
-          <Icon name="arrow-right" size={18} className="shrink-0" />
-          {care.self ? "Move to my medicines" : `Move to ${care.name}'s medicines`}
-        </button>
-      )}
+        {herPlan && care && (
+          <div role="status" className={cx(tone.inset, "px-4 py-3")}>
+            <p className={cx(tone.body, "flex gap-2.5 text-sm leading-relaxed")}>
+              <Icon name="pill" size={18} className="mt-px shrink-0 text-mp-ink-2" />
+              <span>
+                {care.self ? `You have ${herPlan.name} on your list.` : `${care.name} has ${herPlan.name} on her list.`} Logging it here is for{" "}
+                {w.name}.
+              </span>
+            </p>
+            {careWrite && !e && (
+              <button
+                type="button"
+                onClick={() => toCare(() => careNav.openDose(herPlan.id))}
+                className="mt-1 -ml-1 min-h-[44px] rounded-lg px-1 text-sm font-semibold text-mp-accent-fg"
+              >
+                {care.self ? "Log it for yourself instead" : `Log it for ${care.name} instead`}
+              </button>
+            )}
+          </div>
+        )}
+
+        {feverCaution && (
+          <div role="status" className={cx(tone.body, "rounded-xl border-l-[3px] border-mp-maple bg-mp-maple/[0.08] px-4 py-3 text-sm leading-relaxed")}>
+            <p className="flex gap-2.5">
+              <Icon name="triangle-alert" size={18} className="mt-px shrink-0 text-mp-maple" />
+              <span>{ageMonths < 3 ? babyFeverMedUnder3mHint(voice) : BABY_IBUPROFEN_UNDER_6M_HINT}</span>
+            </p>
+            {careWrite && !herPlan && !e && care && (
+              <button type="button" onClick={() => toCare(() => careNav.openOneOff(name.trim(), { at: when?.toISOString(), dose: dose.trim() || undefined }))} className="mt-1 ml-[1.625rem] min-h-[44px] text-sm font-semibold text-mp-accent-fg">
+                Is this for {care.self ? "you" : care.name}? Log it on {care.self ? "your" : "her"} medicines
+              </button>
+            )}
+          </div>
+        )}
+
+        <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
+        <NoteField value={note} onChange={setNote} />
+        {vitD && <ContextNote icon="sun">{vitaminDNote(voice)}</ContextNote>}
+        {e && care && careWrite && !isVitaminD(e.data.name) && e.id > 0 && (
+          <button
+            type="button"
+            disabled={moving}
+            onClick={move}
+            className={cx(tone.card, tone.row, "min-h-[52px] py-2.5 text-[15px] font-medium text-mp-accent-fg disabled:opacity-50")}
+          >
+            <Icon name="arrow-right" size={18} className="shrink-0" />
+            {care.self ? "Move to my medicines" : `Move to ${care.name}'s medicines`}
+          </button>
+        )}
+      </fieldset>
     </Sheet>
   );
 }

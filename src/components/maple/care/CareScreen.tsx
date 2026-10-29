@@ -263,7 +263,7 @@ function MedRow({ view, care, onOpen, finished }: { view: PlanView; care: UseCar
       {!finished && care.access.write && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-3">
           <TookIt view={view} care={care} fixed label="Took it now" onAsk={(ask) => nav.openDose(view.plan.id, ask)} />
-          <button type="button" onClick={() => nav.openDose(view.plan.id, undefined, undefined, { at: new Date(now().getTime() - 15 * 60_000).toISOString() })} aria-label={`Log an earlier dose of ${planTitle(view.plan)}`} className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">
+          <button type="button" onClick={() => nav.openDose(view.plan.id, undefined, undefined, { at: new Date(now().getTime() - 60_000).toISOString() })} aria-label={`Log an earlier dose of ${planTitle(view.plan)}`} className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">
             Log earlier
           </button>
         </div>

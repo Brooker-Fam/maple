@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { saveCases } from "./save-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -14,7 +15,7 @@ const { chromium, webkit } = require("playwright");
 const postcss = createRequire(require.resolve("@tailwindcss/postcss"))("postcss");
 const tailwind = require("@tailwindcss/postcss");
 const out = await mkdtemp(path.join(tmpdir(), "maple-logging-recovery-"));
-const baselineFiles = new Set(["sheets/NoteSheet.tsx", "sheets/PumpSheet.tsx", "LogTab.tsx", "MomentsTab.tsx", "Celebrations.tsx"]);
+const baselineFiles = new Set(["sheets/NoteSheet.tsx", "sheets/MomentSheet.tsx", "sheets/PumpSheet.tsx", "sheets/SleepSheet.tsx", "sheets/ActivitySheet.tsx", "sheets/DiaperSheet.tsx", "sheets/GrowthSheet.tsx", "sheets/MedSheet.tsx", "sheets/TempSheet.tsx", "sheets/VitalsSheet.tsx", "sheets/FeedSheet.tsx", "LogTab.tsx", "MomentsTab.tsx", "Celebrations.tsx"]);
 await build({
   entryPoints: [path.join(here, "fixture.jsx")], outfile: path.join(out, "app.js"), bundle: true,
   format: "esm", jsx: "automatic", absWorkingDir: root, tsconfig: path.join(root, "tsconfig.json"),
@@ -24,7 +25,7 @@ await build({
         const source = await readFile(file, "utf8");
         const anchor = "  return <MapleContext.Provider value={value}>";
         assert(source.includes(anchor));
-        return { contents: source.replace(anchor, "  window.__loggingReview = { state, pending: outbox, online };\n" + anchor), loader: "tsx" };
+        return { contents: source.replace(anchor, "  window.__loggingReview = { state, pending: outbox, online, update, refresh: forceRefresh };\n" + anchor), loader: "tsx" };
       }
       const relative = path.relative(path.join(root, "src/components/maple"), file);
       if (process.env.LOGGING_BASELINE_REF && baselineFiles.has(relative)) {
@@ -50,7 +51,7 @@ const browserName = process.env.REVIEW_BROWSER === "webkit" ? "webkit" : "chromi
 const browser = await ({ chromium, webkit }[browserName]).launch({ headless: true });
 let failures = 0;
 
-async function fixture({ state = freshState(), records = [], entryResponse, rangeResponse } = {}) {
+async function fixture({ state = freshState(), records = [], entryResponse, rangeResponse, uploadResponse } = {}) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   const page = await context.newPage();
   const errors = [];
@@ -71,6 +72,7 @@ async function fixture({ state = freshState(), records = [], entryResponse, rang
     if (pathname === "/api/maple/auth/me") return json({ signedIn: true, google: false, email: false, apple: false, password: false });
     if (pathname === "/api/maple/state") return json(state);
     if (pathname === "/api/maple/diagnostics") return route.fulfill({ status: 204, body: "" });
+    if (pathname === "/api/maple/upload") return uploadResponse ? uploadResponse({ route, req }) : json({ ready: false, access: null });
     if (pathname === "/api/maple/entries") {
       if (req.method() !== "GET") return entryResponse ? entryResponse({ route, req, url, state, records }) : route.fulfill({ status: 400, json: { error: "Unexpected synthetic write" } });
       if (url.searchParams.has("from") && rangeResponse) return rangeResponse({ route, req, url, records });
@@ -92,6 +94,129 @@ async function openNote(page) {
 }
 
 const cases = [
+  ...saveCases({ assert, fixture, freshState, record, NOW }),
+  ["Moment creation and editing lock pending saves and retain rejected drafts", async () => {
+    for (const editing of [false, true]) {
+      let release;
+      let started;
+      let response = "reject";
+      const requestStarted = new Promise((resolve) => { started = resolve; });
+      const state = freshState();
+      if (editing) state.entries = [record(900, "moment", { title: "Synthetic saved moment" })];
+      const f = await fixture({ state, records: state.entries, entryResponse: async ({ route, req, state }) => {
+        if (response === "reject") {
+          await new Promise((resolve) => { release = resolve; started(); });
+          return route.fulfill({ status: 400, json: { error: "Synthetic moment rejection" } });
+        }
+        const body = req.postDataJSON();
+        const saved = record(900, "moment", body.data, body.started_at, { note: body.note, updated_at: NOW });
+        state.entries = [saved]; state.rev = "example-2";
+        return route.fulfill({ json: { entry: saved } });
+      } });
+      try {
+        await f.page.goto("https://logging-recovery.example.test/#today");
+        if (editing) await f.page.getByRole("button", { name: /Synthetic saved moment/ }).click();
+        else {
+          await f.page.getByRole("button", { name: "More", exact: true }).click();
+          await f.page.getByRole("dialog", { name: "More to log", exact: true }).getByRole("button", { name: /^Moment/ }).click();
+        }
+        const dialog = f.page.getByRole("dialog", { name: editing ? "Edit moment" : "New moment", exact: true });
+        const title = dialog.getByRole("textbox").first();
+        await title.fill("Synthetic moment draft");
+        await dialog.getByRole("button", { name: editing ? "Save" : "Save moment", exact: true }).click();
+        await requestStarted;
+        assert(await title.isDisabled(), "A pending moment save must keep the submitted draft fixed");
+        assert(await dialog.getByRole("button", { name: "First bath", exact: true }).isDisabled());
+        if (editing) assert(await dialog.getByRole("button", { name: "Delete", exact: true }).isDisabled());
+        assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 0);
+        await f.page.keyboard.press("Escape");
+        await f.page.goBack();
+        await f.page.waitForTimeout(100);
+        assert(await dialog.isVisible(), "Back and Escape must keep a pending moment save open");
+        release();
+        await f.page.getByText("Synthetic moment rejection", { exact: true }).waitFor();
+        assert.equal(await title.inputValue(), "Synthetic moment draft");
+        assert(await title.isEnabled());
+        response = "save";
+        await title.fill("Synthetic moment corrected");
+        await dialog.getByRole("button", { name: editing ? "Save" : "Save moment", exact: true }).click();
+        await dialog.waitFor({ state: "hidden" });
+        assert.equal(f.state.entries[0].data.title, "Synthetic moment corrected");
+        assert.equal(f.requests.filter((req) => req.method !== "GET" && req.pathname === "/api/maple/entries").length, 2);
+        assert.deepEqual(f.errors, []);
+      } finally { release?.(); await f.close(); }
+    }
+  }],
+  ["Moment photo storage retries in place without losing words or a first", async () => {
+    let unavailable = true;
+    const f = await fixture({
+      uploadResponse: ({ route }) => unavailable
+        ? route.fulfill({ status: 503, json: { error: "Synthetic photo storage outage" } })
+        : route.fulfill({ json: { ready: true, access: "private", maxBytes: 1000000 } }),
+      entryResponse: ({ route, req, state }) => {
+        const body = req.postDataJSON();
+        const saved = record(900, "moment", body.data, body.started_at, { note: body.note });
+        state.entries = [saved]; state.rev = "example-2";
+        return route.fulfill({ json: { entry: saved } });
+      },
+    });
+    try {
+      await f.page.goto("https://logging-recovery.example.test/#today");
+      await f.page.getByRole("button", { name: "More", exact: true }).click();
+      await f.page.getByRole("dialog", { name: "More to log", exact: true }).getByRole("button", { name: /^Moment/ }).click();
+      const dialog = f.page.getByRole("dialog", { name: "New moment", exact: true });
+      await dialog.getByRole("textbox").first().fill("A synthetic first bath");
+      await dialog.getByRole("textbox").nth(1).fill("A little story to keep");
+      await dialog.getByRole("button", { name: "First bath", exact: true }).click();
+      await dialog.getByRole("button", { name: "Retry photo storage", exact: true }).waitFor();
+      unavailable = false;
+      await dialog.getByRole("button", { name: "Retry photo storage", exact: true }).click();
+      await f.page.waitForFunction(() => [...document.querySelectorAll("button")].some((button) => button.textContent.includes("Choose photos") && !button.disabled));
+      assert(await dialog.getByRole("button", { name: "Take a photo", exact: true }).isEnabled());
+      assert.equal(await dialog.getByRole("textbox").first().inputValue(), "A synthetic first bath");
+      assert.equal(await dialog.getByRole("textbox").nth(1).inputValue(), "A little story to keep");
+      assert.equal(await dialog.getByRole("button", { name: "First bath", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(f.requests.filter((req) => req.pathname === "/api/maple/upload").length, 2);
+      assert.equal(f.requests.filter((req) => req.method !== "GET" && req.pathname === "/api/maple/entries").length, 0);
+      await dialog.getByRole("button", { name: "1 min ago", exact: true }).click();
+      await dialog.getByRole("button", { name: "Save moment", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      assert.equal(f.state.entries[0].data.milestone, "first-bath");
+      assert.equal(f.state.entries[0].note, "A little story to keep");
+      assert(Math.abs(Date.parse(f.state.entries[0].started_at) - (Date.parse(NOW) - 60_000)) < 10_000, "Moment must save the chosen minute-ago time");
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
+  ["Note can return from a doctor question with text, amount and time intact", async () => {
+    const f = await fixture({ entryResponse: ({ route, req, state }) => {
+      const body = req.postDataJSON();
+      const saved = record(900, "note", body.data, body.started_at, { note: body.note });
+      state.entries = [saved]; state.rev = "example-2";
+      return route.fulfill({ json: { entry: saved } });
+    } });
+    try {
+      await f.page.goto("https://logging-recovery.example.test/#today");
+      let dialog = await openNote(f.page);
+      await dialog.getByRole("button", { name: "Spit-up", exact: true }).click();
+      await dialog.getByRole("radio", { name: "A little", exact: true }).click();
+      await dialog.getByRole("textbox").first().fill("Synthetic note to keep");
+      await dialog.getByRole("button", { name: "1 min ago", exact: true }).click();
+      await dialog.getByRole("button", { name: "Make it a question for the doctor", exact: true }).click();
+      dialog = f.page.getByRole("dialog", { name: "Question for the doctor", exact: true });
+      assert.equal(await dialog.getByRole("textbox").first().inputValue(), "Synthetic note to keep");
+      await dialog.getByRole("button", { name: "Keep as a note instead", exact: true }).click();
+      dialog = f.page.getByRole("dialog", { name: "Note", exact: true });
+      assert.equal(await dialog.getByRole("textbox").first().inputValue(), "Synthetic note to keep");
+      assert.equal(await dialog.getByRole("button", { name: "Spit-up", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(await dialog.getByRole("radio", { name: "A little", exact: true }).getAttribute("aria-checked"), "true");
+      await dialog.getByRole("button", { name: "Log it", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      assert.deepEqual(f.state.entries[0].data, { tag: "spitup", amount: "little" });
+      assert.equal(f.state.entries[0].note, "Synthetic note to keep");
+      assert(Math.abs(Date.parse(f.state.entries[0].started_at) - (Date.parse(NOW) - 60_000)) < 10_000);
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
   ["Note fields and dismissal stay locked while a save is pending", async () => {
     let release;
     let started;

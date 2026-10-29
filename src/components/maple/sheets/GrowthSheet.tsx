@@ -98,41 +98,62 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
     };
   }, []);
 
-  // Stored in grams / cm; the fields hold whatever the current units show.
+  // Keep measured metric values separate from the rounded fields. Viewing
+  // another unit must not change a reading or revive one that was cleared.
   const initW = d.weight_g ?? pnum(preset, "weight_g");
+  const initLength = d.length_cm ?? pnum(preset, "length_cm");
+  const initHead = d.head_cm ?? pnum(preset, "head_cm");
+  const [weightG, setWeightG] = useState(initW);
+  const [lenCm, setLenCm] = useState(initLength);
+  const [headCm, setHeadCm] = useState(initHead);
   const [lb, setLb] = useState<number | null>(() => (initW != null ? gramsToLbOz(initW).lb : null));
   const [oz, setOz] = useState<number | null>(() => (initW != null ? gramsToLbOz(initW).oz : null));
   const [grams, setGrams] = useState<number | null>(() => (initW != null ? Math.round(initW) : null));
   const toLen = (cm: number | undefined, system: UnitSystem) =>
     cm == null ? null : system === "us" ? Math.round(cmToIn(cm) * 100) / 100 : Math.round(cm * 10) / 10;
-  const [length, setLength] = useState<number | null>(() => toLen(d.length_cm ?? pnum(preset, "length_cm"), units));
-  const [head, setHead] = useState<number | null>(() => toLen(d.head_cm ?? pnum(preset, "head_cm"), units));
-  const [at, setAt] = useState<"home" | "doctor">(() => d.at ?? (pstr(preset, "at") === "home" ? "home" : "doctor"));
+  const [length, setLength] = useState<number | null>(() => toLen(initLength, units));
+  const [head, setHead] = useState<number | null>(() => toLen(initHead, units));
+  const [at, setAt] = useState<"home" | "doctor" | undefined>(() => e ? d.at : pstr(preset, "at") === "home" ? "home" : "doctor");
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const checks = useNumberChecks();
-  const dirty = useDraftChanged({ sys, lb, oz, grams, length, head, at, when, note, invalid: checks.invalid });
-  // Switching lb ↔ kg converts what's shown; only typing or stepping counts as a change.
+  const dirty = useDraftChanged({ timeInvalid, sys, lb, oz, grams, length, head, weightG, lenCm, headCm, at, when, note, invalid: checks.invalid });
+  // Only typing or stepping changes the measured value.
   const { touched, touch } = useTouched();
-  const edit = (key: "weight" | "length" | "head", set: (v: number | null) => void) => (v: number | null) => {
+  const editWeight = (field: "lb" | "oz" | "g", value: number | null) => {
+    touch("weight");
+    if (field === "g") {
+      setGrams(value);
+      setWeightG(value ?? undefined);
+      return;
+    }
+    const nextLb = field === "lb" ? value : lb;
+    const nextOz = field === "oz" ? value : oz;
+    if (field === "lb") setLb(value);
+    else setOz(value);
+    setWeightG(nextLb == null && nextOz == null ? undefined : lbOzToGrams(nextLb ?? 0, nextOz ?? 0));
+  };
+  const editLength = (key: "length" | "head", value: number | null) => {
     touch(key);
-    set(v);
+    const cm = value == null ? undefined : us ? inToCm(value) : value;
+    if (key === "length") {
+      setLength(value);
+      setLenCm(cm);
+    } else {
+      setHead(value);
+      setHeadCm(cm);
+    }
   };
 
-  const weightG = us ? (lb == null && oz == null ? undefined : lbOzToGrams(lb ?? 0, oz ?? 0)) : (grams ?? undefined);
-  const lenCm = length == null ? undefined : us ? inToCm(length) : length;
-  const headCm = head == null ? undefined : us ? inToCm(head) : head;
-
-  /** Switch the form's units, carrying the numbers across. */
+  /** Convert the display from the measured values, never from a rounded display. */
   const switchUnits = (next: UnitSystem) => {
-    if (next === sys) return;
-    if (weightG != null) {
-      const w = gramsToLbOz(weightG);
-      setLb(w.lb);
-      setOz(w.oz);
-      setGrams(Math.round(weightG));
-    }
+    if (next === sys || checks.invalid) return;
+    const w = weightG == null ? null : gramsToLbOz(weightG);
+    setLb(w?.lb ?? null);
+    setOz(w?.oz ?? null);
+    setGrams(weightG == null ? null : Math.round(weightG));
     setLength(toLen(lenCm, next));
     setHead(toLen(headCm, next));
     setSys(next);
@@ -154,9 +175,9 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   const hasAny = weightG != null || lenCm != null || headCm != null;
 
   const data = {
-    weight_g: weightG != null ? Math.round(weightG) : undefined,
-    length_cm: lenCm != null ? Math.round(lenCm * 10) / 10 : undefined,
-    head_cm: headCm != null ? Math.round(headCm * 10) / 10 : undefined,
+    weight_g: weightG != null && touched.weight ? Math.round(weightG) : weightG,
+    length_cm: lenCm != null && touched.length ? Math.round(lenCm * 10) / 10 : lenCm,
+    head_cm: headCm != null && touched.head ? Math.round(headCm * 10) / 10 : headCm,
     at,
   };
   // The server's limits; anything outside can't be saved.
@@ -172,39 +193,43 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
     if (touched.weight) changed.weight_g = data.weight_g ?? null;
     if (touched.length) changed.length_cm = data.length_cm ?? null;
     if (touched.head) changed.head_cm = data.head_cm ?? null;
-    if (at !== e?.data.at) changed.at = at;
+    if (touched.at && at !== e?.data.at) changed.at = at;
     return Object.keys(changed).length ? changed : undefined;
   };
 
   const save = async () => {
-    const noteVal = note.trim() || null;
-    const bits = [
-      data.weight_g != null && formatWeight(data.weight_g, sys),
-      data.length_cm != null && formatLength(data.length_cm, sys),
-      data.head_cm != null && `head ${formatLength(data.head_cm, sys)}`,
-    ].filter(Boolean);
-    const p = pW ?? pL ?? pH;
-    const pLine = p ? ` · ${p.label} percentile` : "";
-    if (e) {
-      setBusy(true);
-      const res = await update(
-        e.id,
-        {
-          data: editData(),
-          started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
-          note: noteVal,
-        },
-        { toast: `Updated · ${bits.join(" · ")}${pLine}` }
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const noteVal = note.trim() || null;
+      const bits = [
+        data.weight_g != null && formatWeight(data.weight_g, sys),
+        data.length_cm != null && formatLength(data.length_cm, sys),
+        data.head_cm != null && `head ${formatLength(data.head_cm, sys)}`,
+      ].filter(Boolean);
+      const p = pW ?? pL ?? pH;
+      const pLine = p ? ` · ${p.label} percentile` : "";
+      if (e) {
+        const res = await update(
+          e.id,
+          {
+            data: editData(),
+            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            note: noteVal,
+          },
+          { toast: `Updated · ${bits.join(" · ")}${pLine}` }
+        );
+        if (res) onClose();
+        return;
+      }
+      const saved = await log(
+        { kind: "growth", started_at: when?.toISOString(), data: Object.fromEntries(Object.entries(data).filter(([, v]) => v != null)), note: noteVal },
+        { toast: `${bits.join(" · ")}${pLine} · ${clock(t)}` }
       );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    void log(
-      { kind: "growth", started_at: when?.toISOString(), data: Object.fromEntries(Object.entries(data).filter(([, v]) => v != null)), note: noteVal },
-      { toast: `${bits.join(" · ")}${pLine} · ${clock(t)}` }
-    );
   };
 
   const del = () => {
@@ -219,93 +244,103 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Growth"}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={checks.invalid || !savable || (!!e && e.id < 0)}
-          hint={
-            checks.invalid
-              ? CHECK_NUMBER_HINT
-              : !hasAny
-                ? "Add a weight, length or head measurement."
-                : !savable
-                  ? "One of those numbers is outside what can be saved."
-                  : undefined
-          }
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
+            hint={
+              checks.invalid
+                ? CHECK_NUMBER_HINT
+                : !hasAny
+                  ? "Add a weight, length or head measurement."
+                  : !savable
+                    ? "One of those numbers is outside what can be saved."
+                    : undefined
+            }
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
 
-      {/* Where and which units, side by side: both set how the numbers below read. */}
-      <div className="flex gap-3">
-        <div className="min-w-0 flex-1">
-          <Label>Weighed at</Label>
-          <Segmented<"home" | "doctor">
-            value={at}
-            onChange={setAt}
-            options={[
-              { value: "doctor", label: "Doctor" },
-              { value: "home", label: "Home" },
-            ]}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <Label>Units</Label>
-          <Segmented<UnitSystem>
-            value={sys}
-            onChange={switchUnits}
-            options={[
-              { value: "us", label: "lb · in" },
-              { value: "metric", label: "kg · cm" },
-            ]}
-          />
-        </div>
-      </div>
-
-      <section aria-label="Weight">
-        {/* One label; the units sit in the fields, so lb + oz read like the scale ("7 lb 2.6 oz"). */}
-        <Label optional className="mb-0">
-          Weight
-        </Label>
-        {us ? (
-          <div className="grid grid-cols-2 gap-3">
-            <MiniStepper key="lb" label={null} unit="lb" ariaLabel="pounds" value={lb} onChange={edit("weight", setLb)} max={40} onInvalid={checks.watch("lb")} />
-            <MiniStepper key="oz" label={null} unit="oz" ariaLabel="ounces" value={oz} onChange={edit("weight", setOz)} step={0.1} decimals={1} max={15.9} onInvalid={checks.watch("oz")} />
+        {/* Each choice keeps enough room for enlarged text on a phone. */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="min-w-0 flex-1">
+            <Label>Weighed at</Label>
+            <Segmented<"home" | "doctor" | "">
+              className="[&>button]:px-2"
+              value={at ?? ""}
+              onChange={(next) => { if (next) { touch("at"); setAt(next); } }}
+              options={[
+                { value: "doctor", label: "Doctor" },
+                { value: "home", label: "Home" },
+              ]}
+            />
           </div>
+          <div className="min-w-0 flex-1">
+            <Label>Units</Label>
+            <fieldset disabled={checks.invalid} className="min-w-0">
+              <Segmented<UnitSystem>
+                className="[&>button]:px-2"
+                value={sys}
+                onChange={switchUnits}
+                options={[
+                  { value: "us", label: "lb · in" },
+                  { value: "metric", label: "g · cm" },
+                ]}
+              />
+            </fieldset>
+            {checks.invalid && <p className="mt-1.5 text-xs text-mp-danger">Correct the number before changing units.</p>}
+          </div>
+        </div>
+
+        <section aria-label="Weight">
+          {/* Keep enough space for the measured numbers on narrow phones. */}
+          <Label optional className="mb-0">
+            Weight
+          </Label>
+          {us ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <MiniStepper key="lb" label={null} unit="lb" ariaLabel="pounds" value={lb} onChange={(v) => editWeight("lb", v)} max={40} onInvalid={checks.watch("lb")} />
+              <MiniStepper key="oz" label={null} unit="oz" ariaLabel="ounces" value={oz} onChange={(v) => editWeight("oz", v)} step={0.1} decimals={1} max={15.9} onInvalid={checks.watch("oz")} />
+            </div>
+          ) : (
+            <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={(v) => editWeight("g", v)} step={10} max={30000} onInvalid={checks.watch("grams")} />
+          )}
+          <Reading p={pW} warn={off("weight", weightG, rW)} extra={!us && weightG ? `${(weightG / 1000).toFixed(2)} kg` : undefined} />
+        </section>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <section aria-label="Length">
+            <MiniStepper label={`Length`} unit={lenUnit} ariaLabel={`length in ${us ? "inches" : "centimetres"}`} value={length} onChange={(v) => editLength("length", v)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 50 : 130} onInvalid={checks.watch("length")} />
+            <Reading p={pL} warn={off("length", lenCm, rL)} compact />
+          </section>
+          <section aria-label="Head">
+            <MiniStepper label={`Head`} unit={lenUnit} ariaLabel={`head circumference in ${us ? "inches" : "centimetres"}`} value={head} onChange={(v) => editLength("head", v)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 25 : 60} onInvalid={checks.watch("head")} />
+            <Reading p={pH} warn={off("head", headCm, rH)} compact />
+          </section>
+        </div>
+
+        <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} offsets={[30, 60, 120, 240]} />
+        <NoteField value={note} onChange={setNote} placeholder="Anything the doctor said?" />
+        {sex == null ? (
+          <ContextNote>
+            WHO&apos;s growth standards are separate for girls and boys. {w.Name}&apos;s sex isn&apos;t set, so there are no percentiles here.
+          </ContextNote>
         ) : (
-          <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={edit("weight", setGrams)} step={10} max={30000} onInvalid={checks.watch("grams")} />
+          !bornAt && <ContextNote>Percentiles show up once {w.his} birth time is added.</ContextNote>
         )}
-        <Reading p={pW} warn={off("weight", weightG, rW)} extra={!us && weightG ? `${(weightG / 1000).toFixed(2)} kg` : undefined} />
-      </section>
-
-      <div className="grid grid-cols-2 gap-3">
-        <section aria-label="Length">
-          <MiniStepper label={`Length`} unit={lenUnit} ariaLabel={`length in ${us ? "inches" : "centimetres"}`} value={length} onChange={edit("length", setLength)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 50 : 130} onInvalid={checks.watch("length")} />
-          <Reading p={pL} warn={off("length", lenCm, rL)} compact />
-        </section>
-        <section aria-label="Head">
-          <MiniStepper label={`Head`} unit={lenUnit} ariaLabel={`head circumference in ${us ? "inches" : "centimetres"}`} value={head} onChange={edit("head", setHead)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 25 : 60} onInvalid={checks.watch("head")} />
-          <Reading p={pH} warn={off("head", headCm, rH)} compact />
-        </section>
-      </div>
-
-      <WhenField value={when} onChange={setWhen} tz={tz} offsets={[30, 60, 120, 240]} />
-      <NoteField value={note} onChange={setNote} placeholder="Anything the doctor said?" />
-      {sex == null ? (
-        <ContextNote>
-          WHO&apos;s growth standards are separate for girls and boys. {w.Name}&apos;s sex isn&apos;t set, so there are no percentiles here.
-        </ContextNote>
-      ) : (
-        !bornAt && <ContextNote>Percentiles show up once {w.his} birth time is added.</ContextNote>
-      )}
-      <ContextNote icon="scale">{WEIGHT_GAIN_NOTE}</ContextNote>
+        <ContextNote icon="scale">{WEIGHT_GAIN_NOTE}</ContextNote>
+      </fieldset>
     </Sheet>
   );
 }
