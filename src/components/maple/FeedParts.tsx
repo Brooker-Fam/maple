@@ -741,6 +741,8 @@ type MomentEditorProps = {
   onCancel?: () => void;
   /** Commit: keep Save and Cancel in the sheet footer while its options scroll. */
   actionsContainer?: HTMLElement | null;
+  /** A multi-moment form shows the combined effect beside its shared Save. */
+  hidePreview?: boolean;
   /** A new moment can be saved at the initially offered time. */
   allowUnchanged?: boolean;
   /** Commit: saving (Save shows "Saving…", everything waits). */
@@ -868,6 +870,7 @@ function MomentEditorInner({
   onSave,
   onCancel,
   actionsContainer,
+  hidePreview,
   allowUnchanged,
   busy,
   disabled,
@@ -1030,7 +1033,7 @@ function MomentEditorInner({
           }}
         />
       </fieldset>
-      {preview && (
+      {preview && !hidePreview && (
         <p aria-live="polite" className="text-[13px] leading-snug text-mp-ink-2">
           {preview.split(" · ").map((bit, i) => (
             <span key={i}>

@@ -89,7 +89,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
           </div>
           <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
             {recent.map((e) => (
-              <EntryRow key={e.id} entry={e} now={now} showRelative onClick={readOnly ? undefined : () => open({ kind: e.kind, entry: e, preset: entryEditPreset(e) })} />
+              <EntryRow key={e.id} entry={e} now={now} showRelative onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
             ))}
           </div>
         </section>

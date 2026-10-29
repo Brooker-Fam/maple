@@ -18,3 +18,6 @@ export class ApiError extends Error {
     this.body = body;
   }
 }
+
+export { doneText, nextSideWords } from "../../src/components/maple/useTimerActions.tsx";
+export const logSwitches = () => ({ nursing: true, bottles: true, pumping: true });

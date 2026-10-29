@@ -2,6 +2,7 @@ import { query } from "@/lib/db";
 import { captureAppEventSoon } from "@/lib/analytics/server";
 import {
   addPart,
+  applyFeedCorrections,
   FeedEditError,
   feedCtx,
   feedParts,
@@ -658,7 +659,10 @@ const changed = (cur: Entry) => new Conflict(`Someone just changed this ${cur.ki
 /** The feed as an edit found it, for "Back to …" (retime restore), with the flag of a Done at its pause so that comes back too. */
 function beforeOf(cur: Entry): TimerResponse["before"] {
   if (cur.kind !== "feed") return undefined;
-  const b = { segments: cur.data.segments ?? [], started_at: cur.started_at, ended_at: cur.ended_at, updated_at: cur.updated_at };
+  const b = {
+    segments: cur.data.segments ?? [], started_at: cur.started_at, ended_at: cur.ended_at, updated_at: cur.updated_at,
+    first_side: cur.data.first_side ?? null, last_side: cur.data.last_side ?? null,
+  };
   return !cur.active && cur.data.paused_at_stop === true ? { ...b, paused_at_stop: true } : b;
 }
 
@@ -869,9 +873,10 @@ function timedFeed(cur: Entry): FeedData {
 }
 
 /**
- * Fix times: move one moment, fix which side a part was, undo the latest
- * tap, or put back what a fix replaced (the `before` it answered with). Each
- * names the stretch it means, so it merges with the other phone's taps.
+ * Fix times: save a guarded draft, move one moment, fix which side a part
+ * was, undo the latest tap, or restore the `before` a fix answered with.
+ * Legacy one-tap edits name their stretch to merge with the other phone's
+ * taps; a draft requires the exact revision its corrections were made on.
  */
 export async function retimeFeed(fam: FamilyRef, id: number, edit: FeedEdit, by?: string): Promise<TimerResponse> {
   return retime(fam, id, edit, by, true);
@@ -879,6 +884,16 @@ export async function retimeFeed(fam: FamilyRef, id: number, edit: FeedEdit, by?
 
 async function retime(fam: FamilyRef, id: number, edit: FeedEdit, by: string | undefined, allowFinished: boolean): Promise<TimerResponse> {
   switch (edit.op) {
+    case "batch": {
+      const res = await mutateTimer(fam, id, (cur) => {
+        const draft = applyFeedCorrections(cur, edit.edits, new Date());
+        return { data: draft.data, startedAt: draft.started_at, endedAt: draft.ended_at };
+      }, { by, allowFinished, expectUpdatedAt: edit.expect_updated_at });
+      const was = res.before?.started_at;
+      if (!was || Date.parse(res.entry.started_at) >= Date.parse(was)) return res;
+      const nap = await followNap(fam, id, was, res.entry.started_at, by);
+      return nap ? { ...res, nap } : res;
+    }
     case "move": {
       // The moment the winning attempt moved (a retry re-reads the feed).
       const last: { moment?: Moment } = {};
@@ -929,10 +944,15 @@ function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): T
   const segments = normalizeSegments(edit.segments, { active });
   noFutureEnds(segments, new Date());
   const sides = summarize(segments);
+  const data: TapFeedData = { ...d, segments, first_side: sides.first_side ?? d.first_side, last_side: sides.last_side ?? d.last_side };
+  // Both-side stretches cannot reconstruct these hints. New snapshots put
+  // them back exactly; older clients keep the inferred/stored fallback.
+  for (const key of ["first_side", "last_side"] as const) {
+    if (edit[key] === null) delete data[key];
+    else if (edit[key] !== undefined) data[key] = edit[key];
+  }
   if (active) {
     // The latest tap stays only if it still fits the stretches put back ("Put it back" after an undo brings it back too).
-    // A side summarize can't give (a feed that began going back and forth) stays the one stored.
-    const data: TapFeedData = { ...d, segments, first_side: sides.first_side ?? d.first_side, last_side: sides.last_side ?? d.last_side };
     const tap = restoredTap(d, segments, true);
     if (tap) data.last_tap = tap;
     else delete data.last_tap;
@@ -941,8 +961,9 @@ function restoreWrite(cur: Entry, edit: Extract<FeedEdit, { op: "restore" }>): T
   const lastEnd = Date.parse(segments[segments.length - 1].end!);
   if (!edit.ended_at || Date.parse(edit.ended_at) < lastEnd - NEAR) throw new Error("A finished feed can't end before its last side");
   const end = Math.max(Date.parse(edit.ended_at), lastEnd);
-  const data: TapFeedData = { ...d, segments, ...sides };
-  if (!sides.both_sec) delete data.both_sec;
+  Object.assign(data, { left_sec: sides.left_sec, right_sec: sides.right_sec });
+  if (sides.both_sec) data.both_sec = sides.both_sec;
+  else delete data.both_sec;
   if (finish) {
     // The tap the Continue made isn't on the finished feed; one that still fits it (the pause before Done) stays.
     const tap = restoredTap(d, segments, true);

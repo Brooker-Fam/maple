@@ -733,7 +733,7 @@ function DaySection({
                     }
                     onOpenEntry={(e) => {
                       onOpen(e);
-                      open({ kind: e.kind, entry: e, preset: entryEditPreset(e) });
+                      open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) });
                     }}
                     onInfo={() => onClusterInfo(null)}
                   />
@@ -761,7 +761,7 @@ function DaySection({
                 now={now}
                 onClick={() => {
                   onOpen(e);
-                  open({ kind: e.kind, entry: e, preset: entryEditPreset(e) });
+                  open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) });
                 }}
               />
             </li>
@@ -823,6 +823,7 @@ function QuickLog({ compact, day }: { compact?: boolean; day?: string }) {
 
 function RunningNow({ entries }: { entries: Entry[] }) {
   const now = useNow(1000);
+  const { readOnly } = useMaple();
   const { open } = useSheets();
   if (!entries.length) return null;
   return (
@@ -830,7 +831,7 @@ function RunningNow({ entries }: { entries: Entry[] }) {
       <SectionTitle>Happening now</SectionTitle>
       <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
         {entries.map((e) => (
-          <EntryRow key={e.id} entry={e} now={now} onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e) })} />
+          <EntryRow key={e.id} entry={e} now={now} onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
         ))}
       </div>
     </section>

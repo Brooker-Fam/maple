@@ -15,6 +15,7 @@ import {
 import { useVisiblePoll } from "@/lib/use-visible-poll";
 import {
   addPart,
+  applyFeedCorrections,
   feedCtx,
   moveEdge,
   normalizeSegments,
@@ -396,6 +397,10 @@ function restoredFeed(e: Entry & { kind: "feed" }, d: FeedData, edit: Extract<Fe
   const segments = normalizeSegments(edit.segments, { active });
   const t = summarizeSegments(segments);
   const data: FeedData = { ...d, segments, first_side: t.first_side ?? d.first_side, last_side: t.last_side ?? d.last_side };
+  for (const key of ["first_side", "last_side"] as const) {
+    if (edit[key] === null) delete data[key];
+    else if (edit[key] !== undefined) data[key] = edit[key];
+  }
   if (!active) {
     Object.assign(data, { left_sec: t.left_sec, right_sec: t.right_sec });
     // Back and forth minutes, as the server's restore stores them.
@@ -440,6 +445,7 @@ function optimisticTimer(e: Entry, input: TimerInput, at: Date, now: Date, by?: 
         case "retime": {
           const edit = input.edit;
           if (!edit) return undefined;
+          if (edit.op === "batch") return applyFeedCorrections(e, edit.edits, now);
           if (edit.op === "move") {
             const m = moveEdge(d, { edge: edit.edge, ref: edit.ref, to: new Date(edit.to) }, ctx);
             return { ...e, data: m.data, started_at: m.startedAt, ended_at: e.active ? null : m.endedAt };

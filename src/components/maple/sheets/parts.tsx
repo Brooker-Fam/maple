@@ -256,11 +256,11 @@ export function MoreDetails({ summary, children, label = "More details" }: { sum
   );
 }
 
-export function NoteField({ value, onChange, placeholder = "Anything to remember?" }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+export function NoteField({ value, onChange, placeholder = "Anything to remember?", readOnly = false }: { value: string; onChange: (v: string) => void; placeholder?: string; readOnly?: boolean }) {
   return (
     <div>
       <span className={cx(tone.label, "mb-1.5 block")}>Note</span>
-      <TextArea value={value} onChange={onChange} placeholder={placeholder} />
+      {readOnly ? <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-mp-ink-2">{value || "No note"}</p> : <TextArea value={value} onChange={onChange} placeholder={placeholder} />}
     </div>
   );
 }

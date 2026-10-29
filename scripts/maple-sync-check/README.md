@@ -13,6 +13,10 @@ warnings, recovery from unchanged responses, stalled requests, visit recap
 anchors, and the diagnostics sent by the production hook. Each case runs
 independently so one failure does not hide another.
 
+The production timer actions also exercise a batch of time and side corrections:
+all changes appear optimistically, Save sends one guarded request, and the toast's
+Undo restores the entire original feed in one request.
+
 Install dependencies and Chromium, then run:
 
 ```sh

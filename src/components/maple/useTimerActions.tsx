@@ -242,6 +242,8 @@ export function useTimerActions() {
         started_at: b.started_at,
         ended_at: b.ended_at,
         expect_updated_at: res.entry.updated_at,
+        ...(b.first_side !== undefined ? { first_side: b.first_side } : {}),
+        ...(b.last_side !== undefined ? { last_side: b.last_side } : {}),
         // A finished feed comes back as its Done left it: ended at its pause, so a later reopen brings it back paused.
         ...(b.paused_at_stop ? { paused_at_stop: true as const } : {}),
         ...(res.nap ? { nap: { id: res.nap.entry.id, ended_at: res.nap.before_ended_at, expect_updated_at: res.nap.entry.updated_at } } : {}),
@@ -280,7 +282,10 @@ export function useTimerActions() {
       let back = "Put it back";
       // "Left", "Right", "both sides" in the middle of a sentence.
       const word = (x: StretchSide) => (x === "B" ? "both sides" : SIDE_NAME[x]);
-      if (edit.op === "set_side") {
+      if (edit.op === "batch") {
+        text = "Nursing times and sides updated";
+        back = "Undo changes";
+      } else if (edit.op === "set_side") {
         text = edit.side === "B" ? "That part is now both sides" : `That part is now ${SIDE_NAME[edit.side]}`;
         back = `Back to ${word(edit.ref.side)}`;
       } else if (edit.op === "undo_tap") {

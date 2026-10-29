@@ -277,9 +277,14 @@ export type UpdateEntryInput = {
 /**
  * reopen: undo a stop (the timer runs again as if never stopped); with a
  * side, carry a finished feed on on that side in the same write.
- * retime: fix one recorded moment of a timed nursing feed (`edit`).
+ * retime: correct recorded times and sides of a timed nursing feed (`edit`).
  */
 export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "discard" | "adjust" | "reopen" | "retime" | "join";
+
+/** One staged time or side correction, addressing the preceding draft's stretches. */
+export type FeedCorrection =
+  | { op: "move"; edge: "start" | "end" | "side_end" | "ended"; ref?: StretchRef; to: string }
+  | { op: "set_side"; ref: StretchRef; side: StretchSide };
 
 /**
  * A Fix times edit (POST /api/maple/timer { action: "retime", id, edit }).
@@ -287,6 +292,7 @@ export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "di
  * first stretch for start and the last for end; "ended" is a finished feed's
  * ended_at alone). An editor may pass expect_updated_at to refuse a stale
  * draft; older one-tap clients can omit it and keep merging their intent.
+ * batch: save staged time and side corrections in one guarded write.
  * undo_tap: the latest switch, resume or pause, if the newest
  * stretch still matches `expect`. restore: put back the `before` a fix
  * answered with, only if nobody changed it since; an `ended_at` on a feed
@@ -295,8 +301,10 @@ export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "di
  * which moves its end there, only if nobody changed it since.
  */
 export type FeedEdit =
-  | { op: "move"; edge: "start" | "end" | "side_end" | "ended"; ref?: StretchRef; to: string; expect_updated_at?: string }
-  | { op: "set_side"; ref: StretchRef; side: StretchSide }
+  | (Extract<FeedCorrection, { op: "move" }> & { expect_updated_at?: string })
+  | Extract<FeedCorrection, { op: "set_side" }>
+  /** Save a draft in one write; each correction names the result of the preceding ones. */
+  | { op: "batch"; edits: FeedCorrection[]; expect_updated_at: string }
   | { op: "undo_tap"; expect: { side: StretchSide; start: string; end: string | null } }
   | { op: "add_part"; side: StretchSide; start: string; end: string; expect_updated_at: string }
   | {
@@ -305,6 +313,9 @@ export type FeedEdit =
       started_at: string;
       ended_at: string | null;
       expect_updated_at: string;
+      /** Stored side hints may outlive tracked stretches; null restores a hint that was absent. */
+      first_side?: Side | null;
+      last_side?: Side | null;
       /** A finished feed put back as Done left it at its pause (so a later reopen brings it back paused). */
       paused_at_stop?: true;
       nap?: { id: number; ended_at: string; expect_updated_at: string };
@@ -331,7 +342,11 @@ export type TimerResponse = {
   moved?: true;
   alreadyRunning?: boolean;
   /** paused_at_stop: the feed was finished at its pause, so a restore of it puts the flag back too. */
-  before?: { segments: Segment[]; started_at: string; ended_at: string | null; updated_at: string; paused_at_stop?: true };
+  before?: {
+    segments: Segment[]; started_at: string; ended_at: string | null; updated_at: string; paused_at_stop?: true;
+    /** Explicit null preserves an absent hint; older server answers may omit these fields. */
+    first_side?: Side | null; last_side?: Side | null;
+  };
   nap?: { entry: Entry; before_ended_at: string; before_updated_at: string };
   /** restore with a nap: false when the nap had changed and was left alone. */
   nap_restored?: boolean;
@@ -379,7 +394,7 @@ export type TimerInput = {
    * reopen with a side: when she went back on after the break (default now).
    */
   at?: string;
-  /** retime: the one moment to fix. */
+  /** retime: a correction, a batch of draft corrections, or an undo. */
   edit?: FeedEdit;
   /** join (`id` = the new feed): the finished feed it's part of, and that feed's updated_at as this phone saw it. */
   into?: number;

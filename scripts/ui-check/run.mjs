@@ -23,7 +23,8 @@ await build({
   define: { "process.env.NODE_ENV": '"test"' },
   plugins: [{ name: "synthetic-app-hooks", setup(plugin) {
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|useTimerActions|sheets)$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
-    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/FixTimesSheet.tsx") ? { path: path.join(here, "mocks.jsx") } : undefined);
+    plugin.onResolve({ filter: /(?:^|\/)MoreSheet$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:FixTimesSheet|NursingCorrections)\.tsx$/.test(args.importer) ? { path: path.join(here, "mocks.jsx") } : undefined);
     plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? { path: path.join(here, "mocks.jsx") } : undefined);
   } }],
 });
@@ -155,60 +156,120 @@ try {
   assert.equal(nursingAfter.ended_at, "2026-10-28T13:15:00.000Z", "Moving one boundary preserves the whole feed end");
   console.log("PASS nursing: actual MomentEditor + engine preserve independent boundaries");
 
-  await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
-  const activeSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
-  await activeSheet.waitFor();
-  const activeClock = activeSheet.locator('input[type="time"]');
-  await activeClock.fill("09:05");
-  await activeSheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left,/ }).click();
-  const discard = page.getByRole("alertdialog", { name: "Discard this time change?", exact: true });
-  await discard.waitFor();
-  await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
-  assert.equal(await activeClock.inputValue(), "09:05", "Switch guard preserves a dirty nursing draft");
-  await activeSheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left,/ }).click();
-  await discard.getByRole("button", { name: "Discard change", exact: true }).click();
-  assert.equal(await activeClock.inputValue(), "08:55", "Discard then switch opens the completed left side's end");
-  assert(!(await snapshot()).calls.some((call) => call.timer), "Switching moments and discarding never writes a timer edit");
-  await page.keyboard.press("Escape");
-  await activeSheet.waitFor({ state: "hidden" });
-  console.log("PASS active nursing: dirty-moment switching requires Keep editing or Discard change");
-
-  // A late side's timer is corrected independently. Exercise the real shared
-  // sheet for both running and saved feeds, including all four direct nudges.
-  for (const running of [true, false]) {
-    await page.evaluate(() => window.__mapleUiFixture.nursingScenario("switch"));
-    await page.getByRole("button", { name: running ? "Edit active nursing times" : "Edit saved nursing times", exact: true }).click();
-    const sheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
-    await sheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left,/ }).click();
-    const clock = sheet.locator('input[type="time"]');
-    assert.equal(await clock.inputValue(), "09:05", "A completed side opens at its end without another choice");
-    await sheet.getByRole("button", { name: "5 min earlier", exact: true }).click();
-    assert.equal(await clock.inputValue(), "09:00");
-    await sheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
-    assert.equal(await clock.inputValue(), "08:59");
-    await sheet.getByRole("button", { name: "1 min later", exact: true }).click();
-    assert.equal(await clock.inputValue(), "09:00");
-    await sheet.getByRole("button", { name: "5 min later", exact: true }).click();
-    assert.equal(await clock.inputValue(), "09:05");
-    assert(await sheet.getByRole("button", { name: "Save time", exact: true }).isDisabled(), "Returning to the saved minute clears the draft");
-    assert(await sheet.getByRole("button", { name: "1 min later", exact: true }).isDisabled(), "A finished side cannot overlap the next side");
-    await sheet.getByRole("button", { name: "5 min earlier", exact: true }).click();
-    assert.equal((await snapshot()).calls.length, 0, "Quick adjustments remain unsaved until Save time");
-    const before = (await snapshot())[running ? "activeFeed" : "feed"];
-    assert.equal(before.data.segments[0].end, "2026-10-28T13:05:00.000Z");
-    await sheet.getByRole("button", { name: "Save time", exact: true }).click();
+  const nursingSheet = () => page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  const selectPart = (sheet, side) => sheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: new RegExp(`^${side}\\b`) }).first().click();
+  const saveCorrections = (sheet) => sheet.getByRole("button", { name: "Save", exact: true });
+  const cancelCorrections = async (sheet) => {
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
     await sheet.waitFor({ state: "hidden" });
-    const after = (await snapshot())[running ? "activeFeed" : "feed"];
-    assert.equal(after.data.segments[0].end, "2026-10-28T13:00:00.000Z");
-    assert.equal(after.data.segments[1].start, "2026-10-28T13:05:00.000Z", "Removing five minutes from Left leaves Right's start unchanged");
-    assert.equal(after.ended_at, before.ended_at, "Correcting Left preserves the feed's end or running status");
-    assert.equal((await snapshot()).calls[0].edit.edge, "side_end");
+  };
+
+  // The same draft spans several parts in running, paused and completed feeds.
+  for (const kind of ["running", "paused", "saved"]) {
+    await page.evaluate((kind) => window.__mapleUiFixture.nursingScenario(kind === "paused" ? "paused-multi" : "switch"), kind);
+    await page.getByRole("button", { name: kind === "saved" ? "Edit saved nursing times" : "Edit active nursing times", exact: true }).click();
+    const sheet = nursingSheet();
+    const clock = sheet.locator('input[type="time"]');
+    await selectPart(sheet, "Left");
+    const originalLeft = kind === "paused" ? "08:55" : "09:05";
+    assert.equal(await clock.inputValue(), originalLeft, "A completed side opens at its end");
+    await sheet.getByRole("button", { name: "5 min earlier", exact: true }).click();
+    const correctedLeft = await clock.inputValue();
+    await sheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    await sheet.getByRole("button", { name: "1 min later", exact: true }).click();
+    assert.equal(await clock.inputValue(), correctedLeft);
+    await sheet.getByRole("button", { name: "5 min later", exact: true }).click();
+    assert.equal(await clock.inputValue(), originalLeft);
+    assert(await saveCorrections(sheet).isDisabled(), "Returning to the original time clears the draft");
+    if (kind !== "paused") assert(await sheet.getByRole("button", { name: "1 min later", exact: true }).isDisabled(), "A side end cannot overlap the next side");
+    await sheet.getByRole("button", { name: "5 min earlier", exact: true }).click();
+    await selectPart(sheet, "Right");
+    assert.equal(await page.getByRole("alertdialog").count(), 0, "Moving to another part never asks to discard the first correction");
+    await clock.fill("09:10");
+    await selectPart(sheet, "Left");
+    assert.equal(await clock.inputValue(), correctedLeft, "The first side's draft survives part navigation");
+    await selectPart(sheet, "Right");
+    assert.equal(await clock.inputValue(), "09:10", "The second side's draft survives part navigation");
+    assert.equal((await snapshot()).calls.length, 0, "All corrections stay local until Save");
+    const key = kind === "saved" ? "feed" : "activeFeed";
+    const before = (await snapshot())[key];
+    assert.equal(before.data.segments[0].end, kind === "paused" ? "2026-10-28T12:55:00.000Z" : "2026-10-28T13:05:00.000Z");
+    if (kind === "running") {
+      await settleView();
+      await page.screenshot({ path: path.join(screenshots, "nursing-390-staged.png"), fullPage: true });
+    }
+    await saveCorrections(sheet).click();
+    await sheet.waitFor({ state: "hidden" });
+    const result = await snapshot();
+    assert.equal(result.calls.length, 1, "One Save makes one timer request for the whole draft");
+    assert.equal(result.calls[0].edit.op, "batch");
+    assert(result.calls[0].edit.edits.length >= 2, "Both corrections are included in one batch");
+    assert.equal(result.calls[0].edit.expect_updated_at, before.updated_at);
+    assert.equal(result[key].data.segments[0].end, kind === "paused" ? "2026-10-28T12:50:00.000Z" : "2026-10-28T13:00:00.000Z");
+    assert.equal(result[key].data.segments[1][kind === "running" ? "start" : "end"], "2026-10-28T13:10:00.000Z");
+    assert.equal(result[key].active, before.active, "Corrections preserve active status");
+    if (kind !== "saved") assert.equal(result[key].ended_at, null, "A correction does not finish a running or paused feed");
+    if (kind === "running") assert.equal(result[key].data.segments[1].end, null);
+    if (kind === "paused") assert(result[key].data.segments.every((segment) => segment.end), "A paused feed stays paused");
   }
-  console.log("PASS nursing: active/saved parity, direct ±1/±5, staged Save, completed-side corrections preserve the next side");
+  console.log("PASS nursing: multiple corrections survive part navigation and save atomically on running, paused and saved feeds");
+
+  // Changing a side is another part of the same draft; it never writes on tap.
+  for (const save of [false, true]) {
+    await page.evaluate(() => window.__mapleUiFixture.nursingScenario("break"));
+    await page.getByRole("button", { name: "Edit saved nursing times", exact: true }).click();
+    const sheet = nursingSheet();
+    await selectPart(sheet, "Left");
+    await sheet.locator('input[type="time"]').fill("08:53");
+    await sheet.getByRole("button", { name: /^It was both sides:/ }).click();
+    await selectPart(sheet, "Right");
+    assert.equal((await snapshot()).calls.length, 0, "Choosing a side is staged alongside time changes");
+    assert.equal((await snapshot()).feed.data.segments[0].side, "L");
+    assert.equal((await snapshot()).feed.data.segments[0].end, "2026-10-28T12:55:00.000Z");
+    if (save) {
+      await saveCorrections(sheet).click();
+      await sheet.waitFor({ state: "hidden" });
+      const result = await snapshot();
+      assert.equal(result.calls.length, 1);
+      assert.equal(result.calls[0].edit.op, "batch");
+      assert(result.calls[0].edit.edits.some((edit) => edit.op === "move"));
+      assert(result.calls[0].edit.edits.some((edit) => edit.op === "set_side"));
+      assert.equal(result.feed.data.segments[0].side, "B");
+      assert.equal(result.feed.data.segments[0].end, "2026-10-28T12:53:00.000Z");
+      assert.equal(result.feed.data.segments[1].start, "2026-10-28T13:00:00.000Z");
+    } else {
+      await cancelCorrections(sheet);
+      assert.equal((await snapshot()).calls.length, 0, "Cancel discards every staged correction without a request");
+      assert.equal((await snapshot()).feed.data.segments[0].side, "L");
+    }
+  }
+  console.log("PASS nursing sides: time and side changes share one draft, Cancel makes no request, Save applies both once");
+
+
+  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("same-side-gap"));
+  await page.getByRole("button", { name: "Edit saved nursing times", exact: true }).click();
+  const mergeSheet = nursingSheet();
+  await mergeSheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left\b/ }).nth(1).click();
+  await mergeSheet.getByRole("button", { name: /^Started Left/ }).click();
+  await mergeSheet.getByRole("group", { name: "Quick time choices", exact: true }).getByRole("button", { name: /^No break,/ }).click();
+  assert.equal(await mergeSheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left\b/ }).count(), 1, "Removing the break merges adjacent parts on the same side");
+  assert(await mergeSheet.getByRole("button", { name: /^Started Left/ }).isVisible(), "The merged Left part stays selected after its index changes");
+  await mergeSheet.getByRole("button", { name: /^It was both sides:/ }).click();
+  assert.equal((await snapshot()).calls.length, 0);
+  await saveCorrections(mergeSheet).click();
+  await mergeSheet.waitFor({ state: "hidden" });
+  const merged = await snapshot();
+  assert.equal(merged.calls.length, 1);
+  assert.equal(merged.feed.data.segments.length, 2);
+  assert.equal(merged.feed.data.segments[0].side, "B", "A side correction after merging addresses the merged part");
+  assert.equal(merged.feed.data.segments[0].start, "2026-10-28T12:45:00.000Z");
+  assert.equal(merged.feed.data.segments[1].side, "R", "Merging never retargets a subsequent correction to the following side");
+  assert.equal(merged.feed.data.segments[1].start, "2026-10-28T13:10:00.000Z");
+  console.log("PASS nursing merge: No break preserves the selected part and later side correction uses its new reference");
 
   await page.evaluate(() => window.__mapleUiFixture.nursingScenario("switch"));
   await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
-  const switchSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  const switchSheet = nursingSheet();
   const switchClock = switchSheet.locator('input[type="time"]');
   const quick = switchSheet.getByRole("group", { name: "Quick time choices", exact: true });
   await quick.getByRole("button", { name: /^Usual,/ }).click();
@@ -216,66 +277,59 @@ try {
   await quick.getByRole("button", { name: /^Likely,/ }).click();
   assert.equal(await switchClock.inputValue(), "09:00", "Likely uses fifteen minutes on Left");
   await quick.getByRole("button", { name: /^Likely,/ }).click();
-  assert.equal(await switchClock.inputValue(), "09:00", "Tapping a preset twice never accumulates the correction");
+  assert.equal(await switchClock.inputValue(), "09:00", "Repeating a named preset never accumulates the correction");
   await switchClock.fill("");
-  assert(await switchSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled());
+  assert(await saveCorrections(switchSheet).isDisabled(), "Invalid current input cannot save the last valid draft");
   await quick.getByRole("button", { name: /^Likely,/ }).click();
-  assert.equal(await switchClock.inputValue(), "09:00", "A preset recovers invalid input even when it equals the last valid draft");
-  assert(!(await switchSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled()));
-  assert.equal((await snapshot()).calls.length, 0, "Named presets stage an absolute time without writing");
-  await switchSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  assert.equal(await switchClock.inputValue(), "09:00", "A preset recovers an incomplete input");
+  await selectPart(switchSheet, "Left");
+  await switchSheet.getByRole("button", { name: /^Started Left/ }).click();
+  await switchSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await selectPart(switchSheet, "Right");
+  const stagedPreset = switchSheet.getByRole("group", { name: "Quick time choices", exact: true }).getByRole("button", { name: /^Usual,/ });
+  await stagedPreset.click();
+  const stagedPresetTime = await switchClock.inputValue();
+  await stagedPreset.click();
+  assert.equal(await switchClock.inputValue(), stagedPresetTime, "A repeated preset stays absolute when another part is also staged");
+  assert.equal((await snapshot()).calls.length, 0);
+  await saveCorrections(switchSheet).click();
   await switchSheet.waitFor({ state: "hidden" });
   const switched = (await snapshot()).activeFeed;
-  assert.equal(switched.data.segments[0].end, "2026-10-28T13:00:00.000Z");
-  assert.equal(switched.data.segments[1].start, "2026-10-28T13:00:00.000Z", "Editing the switch itself intentionally moves both sides' common boundary");
-  assert.equal(switched.started_at, "2026-10-28T12:45:00.000Z", "A switch correction preserves total elapsed nursing time");
-  console.log("PASS nursing: usual/likely absolute presets, repeat tap, invalid-input recovery, intentional switch boundary transfer");
+  assert.equal(switched.data.segments[0].end, switched.data.segments[1].start, "Editing a switch intentionally transfers the shared boundary");
+  assert.equal(switched.started_at, "2026-10-28T12:44:00.000Z", "The additional first-start correction is saved too");
+  assert.equal((await snapshot()).calls.length, 1);
+  console.log("PASS nursing presets: Usual/Likely are absolute, recover invalid input and remain idempotent amid other staged corrections");
 
   await page.evaluate(() => window.__mapleUiFixture.nursingScenario("break"));
   await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
-  const breakSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  const breakSheet = nursingSheet();
   await breakSheet.getByRole("group", { name: "Quick time choices", exact: true }).getByRole("button", { name: /^No break,/ }).click();
   assert.equal(await breakSheet.locator('input[type="time"]').inputValue(), "08:55");
-  await breakSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await saveCorrections(breakSheet).click();
   await breakSheet.waitFor({ state: "hidden" });
-  assert.equal((await snapshot()).activeFeed.data.segments[1].start, "2026-10-28T12:55:00.000Z", "No break meets the previous side's end exactly");
+  assert.equal((await snapshot()).activeFeed.data.segments[1].start, "2026-10-28T12:55:00.000Z");
 
   await page.evaluate(() => window.__mapleUiFixture.nursingScenario("last-feed"));
   await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
-  const startSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
-  await startSheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left,/ }).click();
+  const startSheet = nursingSheet();
+  await selectPart(startSheet, "Left");
   await startSheet.getByRole("button", { name: /^Started Left/ }).click();
   await startSheet.getByRole("group", { name: "Quick time choices", exact: true }).getByRole("button", { name: /^Since the last feed,/ }).click();
   assert.equal(await startSheet.locator('input[type="time"]').inputValue(), "08:38");
   assert.equal((await snapshot()).calls.length, 0);
-  await startSheet.getByRole("button", { name: "Cancel", exact: true }).click();
-  await startSheet.waitFor({ state: "hidden" });
-  console.log("PASS nursing: No break and Since the last feed retain exact boundaries and remain drafts");
+  await cancelCorrections(startSheet);
 
   await page.evaluate(() => window.__mapleUiFixture.nursingScenario("break"));
   await page.getByRole("button", { name: "Edit completed break", exact: true }).click();
-  const completedBreakSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
-  assert.equal(await completedBreakSheet.locator('input[type="time"]').inputValue(), "09:00", "A completed break targets when the following side started, not ended");
+  const completedBreakSheet = nursingSheet();
+  assert.equal(await completedBreakSheet.locator('input[type="time"]').inputValue(), "09:00", "Opening a completed break selects the following start");
   await completedBreakSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
-  await completedBreakSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await saveCorrections(completedBreakSheet).click();
   await completedBreakSheet.waitFor({ state: "hidden" });
   assert.equal((await snapshot()).feed.data.segments[1].start, "2026-10-28T12:59:00.000Z");
   assert.equal((await snapshot()).feed.data.segments[1].end, "2026-10-28T13:15:00.000Z");
+  console.log("PASS nursing context: No break, Since the last feed and completed-break corrections retain the intended boundaries");
 
-  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("paused"));
-  await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
-  const pausedSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
-  await pausedSheet.getByRole("radiogroup", { name: "Which side is she on", exact: true }).getByRole("radio", { name: "Right", exact: true }).click();
-  assert.equal(await pausedSheet.locator('input[type="time"]').inputValue(), "09:30", "Already back on opens the current time without another choice");
-  assert(!(await pausedSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled()), "A new resume can save the default now without nudging it");
-  assert.equal((await snapshot()).calls.length, 0, "Choosing the resumed side does not save immediately");
-  await pausedSheet.getByRole("button", { name: "Save time", exact: true }).click();
-  await pausedSheet.waitFor({ state: "hidden" });
-  assert.equal((await snapshot()).calls[0].action, "resume");
-  assert.equal((await snapshot()).activeFeed.data.segments[1].start, "2026-10-28T13:30:00.000Z");
-  console.log("PASS nursing context: completed-break entry edits the resume start; Already back on saves its default now");
-
-  // Keep the nursing shortcuts usable on the narrowest supported phone too.
   await page.setViewportSize({ width: 320, height: 844 });
   await page.evaluate(() => window.__mapleUiFixture.nursingScenario("switch"));
   await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
@@ -286,50 +340,57 @@ try {
     assert(box && box.width >= 44 && box.height >= 44 && box.x >= 0 && box.x + box.width <= 321, `${label} remains a 44px target within 320px`);
   }
   await page.screenshot({ path: path.join(screenshots, "nursing-320-day.png"), fullPage: true });
-  await page.keyboard.press("Escape");
-  await page.getByRole("dialog", { name: "Edit nursing times", exact: true }).waitFor({ state: "hidden" });
+  await cancelCorrections(nursingSheet());
 
   await page.goto(url);
   await page.getByRole("button", { name: "History", exact: true }).click();
   const log = page.getByRole("region", { name: "Example log", exact: true });
   await log.getByRole("button", { name: /^Edit time:/ }).first().click();
-  const logSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  const logSheet = nursingSheet();
   await logSheet.waitFor();
-  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:15", "A logged feed opens the shared editor at its end");
-  assert.equal((await snapshot()).sheetTargets.at(-1).preset.fix.target, "finish", "The real EntryRow preset selects the nursing end editor");
-  await logSheet.getByRole("button", { name: "Cancel", exact: true }).click();
-  await logSheet.waitFor({ state: "hidden" });
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:15");
+  assert.equal((await snapshot()).sheetTargets.at(-1).preset.fix.target, "finish", "EntryRow opens the shared editor at the nursing end");
+  await cancelCorrections(logSheet);
 
-  // This historical entry is intentionally never included in state.entries.
+  // An old entry may never be loaded, or may fall out of the recent window later.
   await log.getByRole("button", { name: /^Edit time:/ }).last().click();
   await logSheet.waitFor();
   assert.equal(await logSheet.locator('input[type="date"]').inputValue(), "2026-10-23");
-  assert.equal(await logSheet.getByText(/discarded|no longer in the log/i).count(), 0, "Outside the recent-state window does not mean discarded");
+  assert.equal(await logSheet.getByText(/discarded|no longer in the log/i).count(), 0);
   await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
-  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await saveCorrections(logSheet).click();
   await logSheet.waitFor({ state: "hidden" });
   assert.equal((await snapshot()).historicalFeed.ended_at, "2026-10-23T13:14:00.000Z");
-  assert.equal((await snapshot()).calls.at(-1).id, 203, "History edits retain the exact old entry identity");
-  assert.equal((await snapshot()).calls.at(-1).edit.expect_updated_at, "2026-10-23T13:15:00.000Z", "Historical correction uses the version it opened");
-  console.log("PASS log entry: real EntryRow preset opens shared end editor; historical time outside recent state saves the exact entry/version");
+  assert.equal((await snapshot()).calls.at(-1).id, 203);
+  assert.equal((await snapshot()).calls.at(-1).edit.expect_updated_at, "2026-10-23T13:15:00.000Z");
+
+  await page.evaluate(() => window.__mapleUiFixture.loadHistorical());
+  await log.getByRole("button", { name: /^Edit time:/ }).last().click();
+  await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await page.evaluate(() => window.__mapleUiFixture.evictHistorical());
+  assert.equal(await logSheet.getByText(/discarded|no longer in the log/i).count(), 0, "An initially loaded historical entry is not deleted when the recent window evicts it");
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:13", "Recent-window eviction retains the historical draft");
+  assert(!(await saveCorrections(logSheet).isDisabled()));
+  await cancelCorrections(logSheet);
+  console.log("PASS history: absent and initially loaded old entries remain editable across recent-window eviction");
 
   await log.getByRole("button", { name: /^Edit time:/ }).last().click();
   await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
   await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).click();
-  const detailsGuard = page.getByRole("alertdialog", { name: "Discard this time change?", exact: true });
+  const detailsGuard = page.getByRole("alertdialog");
   await detailsGuard.waitFor();
   await detailsGuard.getByRole("button", { name: "Keep editing", exact: true }).click();
-  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:13", "Details navigation keeps the unsaved time until explicitly discarded");
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:13");
   const writesBeforeDetails = (await snapshot()).calls.length;
   await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).click();
-  await detailsGuard.getByRole("button", { name: "Discard change", exact: true }).click();
+  await detailsGuard.getByRole("button", { name: /Discard/ }).click();
   const detailsSheet = page.getByRole("dialog", { name: "Feed details", exact: true });
   await detailsSheet.waitFor();
   assert.equal((await snapshot()).sheetTargets.at(-1).entry.id, 203);
-  assert.equal((await snapshot()).sheetTargets.at(-1).preset, undefined, "Full details navigation leaves the quick-time route");
-  assert.equal((await snapshot()).sheetTargets.at(-1).entry.ended_at, "2026-10-23T13:14:00.000Z", "Details receives saved times, not a discarded draft");
-  assert.equal((await snapshot()).calls.length, writesBeforeDetails, "Discard and details navigation make no timer write");
-  assert(await detailsSheet.getByText("Historical example note", { exact: true }).isVisible());
+  assert.equal((await snapshot()).sheetTargets.at(-1).preset, undefined);
+  assert.equal((await snapshot()).sheetTargets.at(-1).entry.ended_at, "2026-10-23T13:14:00.000Z");
+  assert.equal((await snapshot()).calls.length, writesBeforeDetails);
+  assert(await detailsSheet.getByText((await snapshot()).historicalFeed.note, { exact: true }).isVisible());
   await page.keyboard.press("Escape");
   await detailsSheet.waitFor({ state: "hidden" });
 
@@ -345,60 +406,119 @@ try {
   await closeGuard.getByRole("button", { name: "Discard changes", exact: true }).click();
   await logSheet.waitFor({ state: "hidden" });
   assert.equal((await snapshot()).historicalFeed.ended_at, "2026-10-23T13:14:00.000Z");
-  console.log("PASS log details: explicit route, exact saved entry and note, dirty navigation/closing guards preserve unsaved work");
+  console.log("PASS nursing dismissal: details navigation and closing preserve the draft until explicitly discarded");
 
   await page.evaluate(() => window.__mapleUiFixture.setReadOnly(true));
-  assert.equal(await log.getByRole("button", { name: /^Edit time:/ }).count(), 0, "Read-only log offers no Edit time action");
+  assert.equal(await log.getByRole("button", { name: /^Edit time:/ }).count(), 0);
+  const viewerWrites = (await snapshot()).calls.length;
   await log.getByRole("button").last().click();
-  await logSheet.waitFor();
-  assert(await logSheet.getByText(/View only\. Ask/).isVisible());
-  assert.equal(await logSheet.locator('input').count(), 0, "Even a read-only history route exposes no time editor");
-  assert.equal(await logSheet.getByRole("button", { name: "Save time", exact: true }).count(), 0);
-  assert.equal(await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).count(), 0);
+  const viewerSheet = page.getByRole("dialog");
+  await viewerSheet.waitFor();
+  assert.equal((await snapshot()).sheetTargets.at(-1).preset, undefined, "A viewer opens full details rather than the correction form");
+  assert(await viewerSheet.getByText(/View only\. Ask/).isVisible());
+  assert.equal(await viewerSheet.getByRole("button", { name: /^Save(?: time)?$/ }).count(), 0);
+  assert.equal(await viewerSheet.getByRole("button", { name: "Delete", exact: true }).count(), 0);
+  const fullNote = (await snapshot()).historicalFeed.note;
+  const noteText = viewerSheet.getByText(fullNote, { exact: true });
+  if (await noteText.count()) {
+    await noteText.scrollIntoViewIfNeeded();
+    assert(await noteText.isVisible(), "The full historical note is readable in the real details sheet");
+    assert(await noteText.evaluate((element) => element.scrollHeight <= element.clientHeight + 1), "The viewer note has no clipped hidden lines");
+  } else {
+    assert.equal(await viewerSheet.locator("textarea").inputValue(), fullNote, "The full historical note survives the viewer route");
+    await viewerSheet.locator("textarea").scrollIntoViewIfNeeded();
+  }
+  assert.equal((await snapshot()).calls.length, viewerWrites);
   await page.keyboard.press("Escape");
-  await logSheet.waitFor({ state: "hidden" });
-  console.log("PASS log access: read-only entry route cannot edit times or open editing details");
+  await viewerSheet.waitFor({ state: "hidden" });
+  console.log("PASS viewer history: real FeedSheet exposes the complete long note without correction, Save or Delete actions");
 
   await page.evaluate(() => window.__mapleUiFixture.setReadOnly(false));
   await log.getByRole("button", { name: /^Edit time:/ }).last().click();
   await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await selectPart(logSheet, "Left");
+  await logSheet.locator('input[type="time"]').fill("08:53");
   await page.evaluate(() => window.__mapleUiFixture.historicalFailure("changed"));
-  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
-  await logSheet.getByRole("alert").filter({ hasText: "nothing was saved" }).waitFor();
+  const originalConflictFeed = (await snapshot()).historicalFeed;
+  await saveCorrections(logSheet).click();
+  await logSheet.getByRole("button", { name: "Use latest", exact: true }).waitFor();
+  assert(await saveCorrections(logSheet).isDisabled(), "A stale batch cannot overwrite the returned current entry");
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "08:53", "Conflict keeps the local draft available for review");
+  assert.equal((await snapshot()).historicalFeed.data.segments[0].end, originalConflictFeed.data.segments[0].end, "A rejected batch makes no partial first-side correction");
   const conflictTime = (await snapshot()).historicalFeed.ended_at;
   const conflictVersion = (await snapshot()).historicalFeed.updated_at;
-  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:16", "Conflict resets the historical editor to the returned current value");
+  await logSheet.getByRole("button", { name: "Use latest", exact: true }).click();
   await page.evaluate(() => window.__mapleUiFixture.evictHistorical());
-  assert.equal(await logSheet.getByText(/discarded|no longer in the log/i).count(), 0, "Polling the recent window must not turn the historical conflict response into a deletion");
+  assert.equal(await logSheet.getByText(/discarded|no longer in the log/i).count(), 0);
+  await selectPart(logSheet, "Right");
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:16", "Use latest starts a new draft on the returned version");
   await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
-  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await saveCorrections(logSheet).click();
   await logSheet.waitFor({ state: "hidden" });
-  assert.equal((await snapshot()).calls.at(-1).edit.expect_updated_at, conflictVersion, "Retry keeps the latest historical revision after poll eviction");
+  assert.equal((await snapshot()).calls.at(-1).edit.expect_updated_at, conflictVersion);
   assert.equal(Date.parse((await snapshot()).historicalFeed.ended_at), Date.parse(conflictTime) - 60_000);
   await log.getByRole("button", { name: /^Edit time:/ }).last().click();
   await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
   await page.evaluate(() => window.__mapleUiFixture.historicalFailure("gone"));
-  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await saveCorrections(logSheet).click();
   await logSheet.getByText(/Alex discarded this feed/).first().waitFor();
-  assert(await logSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled(), "An explicit deletion still disables historical editing");
-  await logSheet.getByRole("button", { name: "Close", exact: true }).last().click();
-  await logSheet.waitFor({ state: "hidden" });
-  console.log("PASS historical recovery: conflict revision survives recent-window eviction; explicit deletion disables editing");
+  assert(await saveCorrections(logSheet).isDisabled(), "An explicit deletion disables historical editing");
+  await cancelCorrections(logSheet);
+  console.log("PASS history conflicts: rejected batches apply nothing, retry uses the latest revision after eviction, and deletion stays blocked");
+
+  await page.evaluate(() => { window.__mapleUiFixture.setRealDetails(true); window.__mapleUiFixture.loadHistorical(); });
+  await log.getByRole("button", { name: /^Edit time:/ }).last().click();
+  await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).click();
+  const realDetails = page.getByRole("dialog");
+  await realDetails.getByRole("button", { name: /^Started Left/ }).click();
+  await realDetails.locator('input[type="time"]').fill("08:44");
+  await page.evaluate(() => window.__mapleUiFixture.failDetailsConflict());
+  await realDetails.getByRole("button", { name: "Save time", exact: true }).click();
+  await realDetails.getByRole("alert").filter({ hasText: "your change wasn't saved" }).waitFor();
+  const currentDetails = (await snapshot()).historicalFeed;
+  assert.equal(currentDetails.started_at, "2026-10-23T12:45:00.000Z", "Rejected full-details time change never partially saves");
+  assert.equal(await realDetails.getByText(/discarded|Nothing to save: it's gone/i).count(), 0, "A historical details conflict stays available after refresh eviction");
+  await realDetails.getByRole("button", { name: /^Started Left/ }).click();
+  assert.equal(await realDetails.locator('input[type="time"]').inputValue(), "08:45");
+  await realDetails.locator('input[type="time"]').fill("08:44");
+  await realDetails.getByRole("button", { name: "Save time", exact: true }).click();
+  await realDetails.waitFor({ state: "hidden" });
+  const detailsRetry = (await snapshot()).calls.filter((call) => call.details);
+  assert.equal(detailsRetry.length, 2, "One rejected details save can retry once without a conflict loop");
+  assert.equal(detailsRetry[1].patch.expect_updated_at, currentDetails.updated_at, "Full details retains the exact server-returned version outside recent state");
+  assert.equal((await snapshot()).historicalFeed.started_at, "2026-10-23T12:44:00.000Z");
+  assert.equal((await snapshot()).historicalFeed.ended_at, currentDetails.ended_at, "Retry preserves the other person's end-time change");
+  await page.evaluate(() => window.__mapleUiFixture.setRealDetails(false));
+  console.log("PASS full historical details: server-returned conflict revision survives recent-window eviction and retries successfully");
 
   await page.setViewportSize({ width: 320, height: 568 });
   await log.getByRole("button", { name: /^Edit time:/ }).first().click();
   await settleView();
-  const fixedSave = logSheet.getByRole("button", { name: "Save time", exact: true });
+  const fixedSave = saveCorrections(logSheet);
+  const fixedPreview = logSheet.locator("[data-nursing-correction-preview]");
   const initialSaveBox = await fixedSave.boundingBox();
-  assert(initialSaveBox && initialSaveBox.y >= 0 && initialSaveBox.y + initialSaveBox.height <= 568, "Save time is visible immediately at 320×568");
+  const initialPreviewBox = await fixedPreview.boundingBox();
+  assert(initialSaveBox && initialSaveBox.y >= 0 && initialSaveBox.y + initialSaveBox.height <= 568, "Save is visible immediately on a 320×568 phone");
+  assert(initialPreviewBox && initialPreviewBox.y >= 0 && initialPreviewBox.y + initialPreviewBox.height <= initialSaveBox.y + 1, "The complete preview is visible immediately above Save");
+  assert.match(await fixedPreview.textContent(), /total/i, "The pinned preview includes the total duration");
   await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).scrollIntoViewIfNeeded();
   const scrolledSaveBox = await fixedSave.boundingBox();
-  assert(scrolledSaveBox && Math.abs(scrolledSaveBox.y - initialSaveBox.y) <= 1 && scrolledSaveBox.y + scrolledSaveBox.height <= 568, "Save time stays fixed while editing controls scroll");
+  const scrolledPreviewBox = await fixedPreview.boundingBox();
+  assert(scrolledSaveBox && Math.abs(scrolledSaveBox.y - initialSaveBox.y) <= 1);
+  assert(scrolledPreviewBox && Math.abs(scrolledPreviewBox.y - initialPreviewBox.y) <= 1, "Preview stays with Save while controls scroll");
   await noOverflow();
+  await logSheet.getByRole("button", { name: "5 min later", exact: true }).click();
+  await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).scrollIntoViewIfNeeded();
+  await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).click();
+  const shortGuard = logSheet.getByRole("alertdialog", { name: "Unsaved nursing changes", exact: true });
+  await shortGuard.waitFor();
+  const shortGuardBox = await shortGuard.boundingBox();
+  assert(shortGuardBox && shortGuardBox.y >= 0 && shortGuardBox.y + shortGuardBox.height <= 568, "Unsaved navigation choices scroll into view on a short phone");
+  assert(await shortGuard.evaluate((element) => element.contains(document.activeElement)), "Focus moves to the visible unsaved navigation choices");
+  await shortGuard.getByRole("button", { name: "Keep editing", exact: true }).click();
   await page.screenshot({ path: path.join(screenshots, "nursing-320-short-fixed-save.png"), fullPage: true });
-  await logSheet.getByRole("button", { name: "Cancel", exact: true }).click();
-  await logSheet.waitFor({ state: "hidden" });
-  console.log("PASS short phone: nursing Save stays visible and fixed at 320×568 while controls scroll");
+  await cancelCorrections(logSheet);
+  console.log("PASS short phone: total preview and Save remain visible together at 320×568 while controls scroll");
 
   for (const width of [320, 390, 1024]) {
     await page.goto(url);
@@ -422,6 +542,7 @@ try {
   assert.deepEqual(errors, [], "Browser has no uncaught errors");
   console.log("PASS layout: 320/390/1024px, persistent footer, actual night tokens and large text");
 } catch (error) {
+  if (errors.length) console.error("Browser errors:", errors);
   await page.screenshot({ path: path.join(screenshots, "failure.png"), fullPage: true }).catch(() => {});
   throw error;
 } finally {

@@ -43,6 +43,7 @@ import { useHoldTimerToasts, useMaple, useNow, type TimerCallOptions, type Timer
 import { useTimerActions } from "../useTimerActions";
 import { useSheets, type SheetProps } from "./index";
 import { useOpenCount } from "./parts";
+import NursingCorrections from "./NursingCorrections";
 
 /**
  * Fix times: one sheet for every "the times are wrong" moment, opened from
@@ -51,14 +52,12 @@ import { useOpenCount } from "./parts";
  *
  *   open({ kind, entry, preset: fixPreset(target, expand?, doneAt?) })
  *
- * It pins one part when it opens (the live side, the open break, a past
- * side, or a finished feed's end) and shows that part's panel; each control
- * moves exactly one moment and names it. It reads the entry live, so when
- * the other phone switches, pauses, moves the same moment or ends the feed,
- * a banner says who and what, and the controls wait a moment before they
- * take another tap. Every commit goes to the server first: success closes
- * the sheet and the toast says what changed (with a way back); a 409, a
- * bounds error or no connection keeps the sheet open with a notice.
+ * Normal nursing corrections use NursingCorrections: every time and side
+ * belongs to one draft, sent atomically on Save. Other devices' revisions
+ * preserve that draft and require choosing the latest version or Cancel.
+ * Recovery questions (Done, already back on) and other timers keep the
+ * contextual panels below. Their commits go to the server first; success
+ * closes the sheet with Undo, while a conflict or error stays open.
  *
  * Timer toasts wait while it's open (one would cover its chips, and a toast
  * chip would fix the same moment twice); the sheet's own fix leaves the
@@ -263,20 +262,21 @@ function sameRecorded(a: string, b: string): boolean {
 }
 
 export default function FixTimesSheet({ open, onClose, kind, entry, preset }: SheetProps) {
-  const { state, memberLabel, timerBusy } = useMaple();
+  const { state, memberLabel, timerBusy, now: nowFn } = useMaple();
   const count = useOpenCount(open);
   useHoldTimerToasts(open);
   const [committing, setCommitting] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [hasEditorActions, setHasEditorActions] = useState(false);
   const [actionsContainer, setActionsContainer] = useState<HTMLDivElement | null>(null);
+  const [recovery, setRecovery] = useState<{ count: number; expand: FixExpand; side?: StretchSide } | null>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const loaded = entry ? state?.entries.find((e) => e.id === entry.id) ?? null : null;
   // A historical conflict briefly upserts the server's current entry, then
   // the next recent-state poll omits it again. Keep that reviewed version;
   // absence from the recent window is not a deletion. A 404 still takes the
   // existing discarded path in FixBody, and Save checks the retained version.
-  const [history, setHistory] = useState(() => ({ outside: !loaded, latest: loaded ?? entry ?? null }));
+  const [history, setHistory] = useState(() => ({ latest: loaded ?? entry ?? null }));
   const known = loaded ?? entry;
   if (known && !timerBusy(known.id) && history.latest?.updated_at !== known.updated_at &&
       (!history.latest || Date.parse(known.updated_at) >= Date.parse(history.latest.updated_at))) {
@@ -285,9 +285,13 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   const remember = useCallback((confirmed: Entry) => setHistory((h) =>
     !h.latest || Date.parse(confirmed.updated_at) >= Date.parse(h.latest.updated_at) ? { ...h, latest: confirmed } : h
   ), []);
-  const live = loaded ?? (history.outside && !history.latest?.active ? history.latest : null);
+  // A conflict can already have upserted an old entry when this sheet opens.
+  // Its presence then does not put it inside subsequent 72-hour state polls.
+  const outside = history.latest && !history.latest.active && Date.parse(history.latest.ended_at ?? history.latest.started_at) < nowFn().getTime() - 72 * 3600_000;
+  const live = loaded ?? (outside ? history.latest : null);
   const e = live ?? entry;
-  const fix = (preset?.fix ?? { target: "current" }) as FixPreset["fix"];
+  const initialFix = (preset?.fix ?? { target: "current" }) as FixPreset["fix"];
+  const fix = recovery?.count === count ? { target: "current" as const, expand: recovery.expand } : initialFix;
   // The Done tap that ended this feed at its pause (the Done toast's "She went back on…", asked of the finished feed:
   // nothing is reopened to ask, so closing without an answer, or a phone locked mid-question, leaves the Done as it was).
   const doneAt = fix.expand === "backOn" && fix.doneAt && Number.isFinite(Date.parse(fix.doneAt)) ? fix.doneAt : undefined;
@@ -302,7 +306,21 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   return (
     <Sheet open={open} onClose={() => { if (!committing) onClose(); }} dirty={dirty} title={saving ? `${fix.expand === "done" ? "Done" : "Edit times"} · saving…` : fix.expand === "done" ? "Done" : timed(e) ? "Edit nursing times" : "Edit times"} subtitle={subtitle} calm footer={hasEditorActions ? <div ref={setActionsContainer} /> : undefined}>
       {/* A fresh pin each time it opens (the router keeps one instance per entry mounted). */}
-      <FixBody
+      {timed(e) && !fix.expand ? <NursingCorrections
+        key={count}
+        start={e}
+        live={live}
+        target={fix.target}
+        open={open}
+        onClose={onClose}
+        tz={tz}
+        onCommitting={setCommitting}
+        onDirtyChange={setDirty}
+        actionsContainer={actionsContainer}
+        onEditorActionsChange={setHasEditorActions}
+        onKnownEntry={remember}
+        onRecovery={(expand, side) => setRecovery({ count, expand, side })}
+      /> : <FixBody
         key={count}
         start={e}
         live={live}
@@ -317,7 +335,8 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
         actionsContainer={actionsContainer}
         onEditorActionsChange={setHasEditorActions}
         onKnownEntry={remember}
-      />
+        initialBackSide={recovery?.count === count ? recovery.side : undefined}
+      />}
     </Sheet>
   );
 }
@@ -336,6 +355,7 @@ function FixBody({
   actionsContainer,
   onEditorActionsChange,
   onKnownEntry,
+  initialBackSide,
 }: {
   start: Entry;
   live: Entry | null;
@@ -350,6 +370,7 @@ function FixBody({
   actionsContainer: HTMLElement | null;
   onEditorActionsChange: (on: boolean) => void;
   onKnownEntry: (entry: Entry) => void;
+  initialBackSide?: StretchSide;
 }) {
   const { state, now: nowFn, memberLabel, readOnly, timerBusy, refresh, whoDiscarded } = useMaple();
   const words = useBabyWords();
@@ -409,6 +430,7 @@ function FixBody({
   // After going back and forth, the likely one is going back on that way ("B").
   const [backSide, setBackSide] = useState<StretchSide | null>(() => {
     if (expand !== "backOn") return null;
+    if (initialBackSide) return initialBackSide;
     const off = pin.kind === "break" ? pin.ref.side : pin.kind === "after" ? sidesOf(partsOf(start, nowFn())).at(-1)?.side : undefined;
     return off ? (isTracked(off) ? other(off) : "B") : null;
   });

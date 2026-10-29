@@ -95,9 +95,9 @@ export default function EntryRow({
   );
 }
 
-/** The same quick correction sheet as the live timer, starting at the saved end. */
-export function entryEditPreset(entry: Entry): Record<string, unknown> | undefined {
-  return entry.kind === "feed" && entry.data.method === "breast" && !entry.active && entry.data.segments?.length ? fixPreset("finish") : undefined;
+/** Editors get quick corrections; viewers retain the complete read-only record. */
+export function entryEditPreset(entry: Entry, readOnly = false): Record<string, unknown> | undefined {
+  return !readOnly && entry.kind === "feed" && entry.data.method === "breast" && !entry.active && entry.data.segments?.length ? fixPreset("finish") : undefined;
 }
 
 /**

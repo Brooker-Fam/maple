@@ -153,13 +153,21 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     return pstr(preset, "method") === "bottle" ? "bottle" : "breast";
   });
   // Read live by id: a change from the other phone shows here, and a staged change can't overwrite it.
-  const liveEntry = e ? state?.entries.find((x) => x.id === e.id) : undefined;
-  // Discarded on the other phone (or through Claude) while open: it was in the list and isn't now. An old feed
-  // that was never in the list isn't "gone".
+  const loadedEntry = e ? state?.entries.find((x) => x.id === e.id) : undefined;
+  // Old entries can briefly enter state after a save or conflict response. A
+  // recent-state poll dropping them again is not a deletion; retain what was
+  // reviewed and let the server check its version on Save.
+  const [lastLoaded, setLastLoaded] = useState<Entry | undefined>(loadedEntry ?? e);
+  if (loadedEntry && !base.timerBusy(loadedEntry.id) && lastLoaded !== loadedEntry &&
+      (!lastLoaded || Date.parse(loadedEntry.updated_at) >= Date.parse(lastLoaded.updated_at))) setLastLoaded(loadedEntry);
+  const knownEntry = loadedEntry && (!lastLoaded || Date.parse(loadedEntry.updated_at) >= Date.parse(lastLoaded.updated_at)) ? loadedEntry : lastLoaded ?? e;
+  const historical = !!knownEntry && !knownEntry.active && Date.parse(knownEntry.ended_at ?? knownEntry.started_at) < now().getTime() - 72 * 60 * MIN;
+  const liveEntry = loadedEntry || historical ? knownEntry : undefined;
+  // An entry that belongs in the recent list and disappears was discarded.
   const { whoDiscarded } = useMaple();
   const [seen, setSeen] = useState(false);
-  if (liveEntry && !seen) setSeen(true);
-  const gone = !!e && e.id > 0 && seen && !!state && !liveEntry;
+  if (loadedEntry && !seen) setSeen(true);
+  const gone = !!e && e.id > 0 && seen && !!state && !loadedEntry && !historical;
   const [goneBy, setGoneBy] = useState<string | null | undefined>(undefined);
   const eId = e?.id;
   useEffect(() => {
@@ -505,7 +513,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       onClose();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        const who = memberLabel((err.body as { entry?: Entry } | null)?.entry?.updated_by);
+        const current = (err.body as { entry?: Entry } | null)?.entry;
+        const who = memberLabel(current?.updated_by);
+        if (current?.id === e.id && current.kind === "feed") {
+          setLastLoaded((latest) => !latest || Date.parse(current.updated_at) >= Date.parse(latest.updated_at) ? current : latest);
+        }
         discardTimes();
         setTimesNotice(who ? `${who} changed this feed; your change wasn't saved. Make it again.` : `This feed changed ${ELSEWHERE}; your change wasn't saved. Make it again.`);
         // Make it again on the times the server has now.
@@ -774,7 +786,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         </>
       )}
 
-      <NoteField value={note} onChange={setNote} />
+      <NoteField value={note} onChange={setNote} readOnly={readOnly} />
     </Sheet>
   );
 }

@@ -8,7 +8,9 @@ adds a production route.
 Nursing cases cover the real log-row route into the shared correction sheet,
 including older history outside the current-state window, direct minute
 adjustments, fixed-target smart choices, independent side ends and shared switch
-boundaries. They check draft recovery and the fixed Save footer on narrow phones.
+boundaries. They check multiple time and side changes saved together, draft
+recovery, complete view-only notes, and the combined preview beside the fixed
+Save footer on narrow phones.
 `pnpm check:maple-tenancy timer-time-correction` separately exercises revision
 checks through the timer API against synthetic in-memory Postgres.
 

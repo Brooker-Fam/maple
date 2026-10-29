@@ -17,7 +17,7 @@
  */
 import { FEED_LENGTH_MIN } from "./guidelines";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatRange, formatTime, formatTimeNear } from "./time";
-import type { Entry, EntryOf, FeedData, Segment, Side, StretchRef, StretchSide } from "./types";
+import type { Entry, EntryOf, FeedCorrection, FeedData, Segment, Side, StretchRef, StretchSide } from "./types";
 import { makeVoice, type Voice } from "./voice";
 
 const NO_FAMILY_VOICE = makeVoice({ name: "the baby", pronoun: "they" });
@@ -133,6 +133,8 @@ const HOUR = 60 * MIN;
 /** Refs match within this, and a last end this close to ended_at ran to the stop. */
 const NEAR = 1500;
 const MAX_PARTS = 60;
+/** A draft may correct each of the maximum 60 stretches' time and side. */
+export const MAX_FEED_CORRECTIONS = 120;
 
 /**
  * Off the breast for under this long is the same feed, whether she tapped
@@ -701,6 +703,31 @@ export function setSide(data: FeedData, ref: StretchRef, side: StretchSide, ctx:
   S[find(S, ref)].side = side;
   const out = tidy(S, ctx.active, true);
   return { data: settle(data, out, ctx.active), startedAt: iso(out[0].start) };
+}
+
+/**
+ * Apply a draft in order using the same rules as individual corrections.
+ * Each ref addresses the preceding result: a moved start or merged side has
+ * its new ref for the next correction. Never mutates the source entry, and
+ * preserves whether the feed is running, paused, or finished.
+ */
+export function applyFeedCorrections(entry: Entry, edits: readonly FeedCorrection[], now: Date): EntryOf<"feed"> {
+  if (entry.kind !== "feed" || entry.data.method !== "breast" || !entry.data.segments?.length) throw new FeedEditError("not_timed");
+  if (!edits.length || edits.length > MAX_FEED_CORRECTIONS) throw new Error(`A draft needs 1 to ${MAX_FEED_CORRECTIONS} corrections`);
+  let draft: EntryOf<"feed"> = entry;
+  for (const edit of edits) {
+    const ctx = feedCtx(draft, now);
+    if (edit.op === "move") {
+      const moved = moveEdge(draft.data, { edge: edit.edge, ref: edit.ref, to: new Date(edit.to) }, ctx);
+      draft = { ...draft, data: moved.data, started_at: moved.startedAt, ended_at: moved.endedAt };
+    } else if (edit.op === "set_side") {
+      const changed = setSide(draft.data, edit.ref, edit.side, ctx);
+      draft = { ...draft, data: changed.data, started_at: changed.startedAt };
+    } else {
+      throw new Error("A draft can only correct times or sides");
+    }
+  }
+  return draft;
 }
 
 /** "Add a side she nursed on" to a finished feed. It may touch a stretch but not overlap one by over a second. */

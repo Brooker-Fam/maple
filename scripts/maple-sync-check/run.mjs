@@ -293,6 +293,85 @@ for (const held of [false, true]) check(`historical correction keeps ${held ? "h
   await f.answer(await f.take("/api/maple/state"), snapshot("historical-undo", [previous]));
 });
 
+check("batch correction previews every change in one request and toast Undo restores the whole feed", async (f) => {
+  const at = (minute) => `2026-01-01T09:${String(minute).padStart(2, "0")}:00.000Z`;
+  const before = { ...feed(903, at(0), at(40)), note: "Synthetic batch correction",
+    data: { method: "breast", first_side: "L", last_side: "R", left_sec: 1200, right_sec: 1200, segments: [
+      { side: "L", start: at(0), end: at(20) },
+      { side: "R", start: at(20), end: at(40) },
+    ] } };
+  const edit = { op: "batch", expect_updated_at: before.updated_at, edits: [
+    { op: "move", edge: "side_end", ref: { side: "L", start: at(0) }, to: at(15) },
+    { op: "set_side", ref: { side: "L", start: at(0) }, side: "B" },
+    { op: "move", edge: "start", ref: { side: "R", start: at(20) }, to: at(22) },
+    { op: "set_side", ref: { side: "R", start: at(22) }, side: "L" },
+    { op: "move", edge: "end", ref: { side: "L", start: at(22) }, to: at(35) },
+  ] };
+  const after = { ...before, ended_at: at(35), updated_at: now, updated_by: member.email,
+    data: { method: "breast", first_side: "L", last_side: "L", left_sec: 780, right_sec: 0, both_sec: 900, segments: [
+      { side: "B", start: at(0), end: at(15) },
+      { side: "L", start: at(22), end: at(35) },
+    ] } };
+  const content = ({ started_at, ended_at, active, data, note }) => ({ started_at, ended_at, active, data, note });
+  await poll(f.page);
+  await f.answer(await f.take("/api/maple/state"), snapshot("batch-before", [before, previous]));
+  const timerRequests = [];
+  f.page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/maple/timer" && request.method() === "POST") timerRequests.push(request.postDataJSON());
+  });
+  await f.page.evaluate(({ before, edit }) => { void window.__mapleTimerActions.retime(before, edit); }, { before, edit });
+  const request = await f.take("/api/maple/timer", "POST");
+  assert.deepEqual(request.body, { action: "retime", id: before.id, edit }, "The provider sends the complete guarded batch");
+  assert.deepEqual(content((await state(f.page)).state.entries.find((e) => e.id === before.id)), content(after),
+    "Before the server replies, the real provider shows every corrected time, side, and total");
+  assert.equal(timerRequests.length, 1, "A multi-correction Save sends one timer request");
+  await f.answer(request, { entry: after, before: { segments: before.data.segments, started_at: before.started_at, ended_at: before.ended_at, updated_at: before.updated_at,
+    first_side: before.data.first_side ?? null, last_side: before.data.last_side ?? null } });
+  await f.answer(await f.take("/api/maple/state"), snapshot("batch-saved", [after, previous]));
+  await f.page.waitForFunction(() => window.__mapleSync.toasts.some((t) => t.undo && t.watch?.entryId === 903));
+  assert.equal(await f.page.evaluate(() => window.__mapleSync.toasts.find((t) => t.watch?.entryId === 903)?.undoLabel), "Undo changes");
+  assert.equal(timerRequests.length, 1, "Success and refresh do not split the draft into further writes");
+  await f.page.evaluate(() => window.__mapleSync.toasts.find((t) => t.watch?.entryId === 903).undo());
+  const undo = await f.take("/api/maple/timer", "POST");
+  assert.deepEqual(undo.body, { action: "retime", id: before.id, edit: {
+    op: "restore", segments: before.data.segments, started_at: before.started_at, ended_at: before.ended_at, expect_updated_at: after.updated_at,
+    first_side: before.data.first_side, last_side: before.data.last_side,
+  } }, "Toast Undo restores the complete server before snapshot with the corrected revision");
+  assert.deepEqual(content((await state(f.page)).state.entries.find((e) => e.id === before.id)), content(before),
+    "Undo optimistically restores all times, sides, and totals together");
+  const restored = { ...before, updated_at: "2026-01-01T10:17:01.000Z", updated_by: member.email };
+  await f.answer(undo, { entry: restored });
+  await f.answer(await f.take("/api/maple/state"), snapshot("batch-undone", [restored, previous]));
+  assert.deepEqual((await state(f.page)).state.entries, [restored, previous]);
+  assert.equal(timerRequests.length, 2, "One Save plus one Undo are the only timer writes");
+});
+
+check("batch Undo restores stored and absent side hints on a both-side feed", async (f) => {
+  const before = { ...feed(904, "2026-01-01T09:00:00.000Z", "2026-01-01T09:20:00.000Z"),
+    data: { method: "breast", first_side: "L", left_sec: 0, right_sec: 0, both_sec: 1200,
+      segments: [{ side: "B", start: "2026-01-01T09:00:00.000Z", end: "2026-01-01T09:20:00.000Z" }] } };
+  const after = { ...before, updated_at: now, data: { method: "breast", first_side: "R", last_side: "R", left_sec: 0, right_sec: 1200,
+    segments: [{ ...before.data.segments[0], side: "R" }] } };
+  await poll(f.page);
+  await f.answer(await f.take("/api/maple/state"), snapshot("both-before", [before, previous]));
+  await f.page.evaluate((before) => { void window.__mapleTimerActions.retime(before, { op: "batch", expect_updated_at: before.updated_at,
+    edits: [{ op: "set_side", ref: { side: "B", start: before.started_at }, side: "R" }] }); }, before);
+  await f.answer(await f.take("/api/maple/timer", "POST"), { entry: after, before: {
+    segments: before.data.segments, started_at: before.started_at, ended_at: before.ended_at, updated_at: before.updated_at, first_side: "L", last_side: null,
+  } });
+  await f.answer(await f.take("/api/maple/state"), snapshot("both-saved", [after, previous]));
+  await f.page.waitForFunction(() => window.__mapleSync.toasts.some((t) => t.undo && t.watch?.entryId === 904));
+  await f.page.evaluate(() => window.__mapleSync.toasts.find((t) => t.watch?.entryId === 904).undo());
+  const undo = await f.take("/api/maple/timer", "POST");
+  assert.equal(undo.body.edit.first_side, "L", "The original start-side hint accompanies Undo");
+  assert.equal(undo.body.edit.last_side, null, "An absent original last-side hint accompanies Undo as null");
+  assert.deepEqual((await state(f.page)).state.entries.find((e) => e.id === before.id).data, before.data,
+    "Before the server replies, Undo restores the original hint and removes the introduced hint");
+  const restored = { ...before, updated_at: "2026-01-01T10:17:01.000Z" };
+  await f.answer(undo, { entry: restored });
+  await f.answer(await f.take("/api/maple/state"), snapshot("both-undone", [restored, previous]));
+});
+
 check("toast absence exemption still dismisses newer revisions and removed recent entries", async (f) => {
   await f.page.evaluate((entry) => {
     window.__mapleSync.toast("Historical", { duration: 60_000, watch: { entryId: entry.id, updatedAt: entry.updated_at, allowMissing: true } });

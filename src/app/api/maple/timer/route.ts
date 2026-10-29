@@ -1,6 +1,7 @@
 import { BadRequest, json, readJson, withMember } from "@/lib/maple/api";
 import { deviceOf } from "@/lib/maple/device";
 import type { FamilyCtx } from "@/lib/maple/family";
+import { MAX_FEED_CORRECTIONS } from "@/lib/maple/feed";
 import {
   adjustTimerStart,
   discardedBy,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/maple/store";
 import {
   TIMER_KINDS,
+  type FeedCorrection,
   type FeedEdit,
   type Segment,
   type Side,
@@ -54,24 +56,42 @@ function segment(v: unknown, i: number): Segment {
   return { side: v.side, start: v.start, end: v.end as string | null };
 }
 
+/** Batch contents are deliberately limited to times and sides; no nested actions or restores. */
+function feedCorrection(v: unknown, label: string): FeedCorrection {
+  if (!isObject(v)) throw new BadRequest(`${label} must be a time or side correction`);
+  switch (v.op) {
+    case "move":
+      if (v.edge !== "start" && v.edge !== "end" && v.edge !== "side_end" && v.edge !== "ended") throw new BadRequest(`${label}.edge must be start, end, side_end or ended`);
+      return {
+        op: "move", edge: v.edge, to: instant(v.to, `${label}.to`).toISOString(),
+        ...(v.ref != null ? { ref: stretchRef(v.ref, `${label}.ref`) } : {}),
+      };
+    case "set_side":
+      if (!isStretchSide(v.side)) throw new BadRequest(`${label}.side must be L, R or B`);
+      return { op: "set_side", ref: stretchRef(v.ref, `${label}.ref`), side: v.side };
+    default:
+      throw new BadRequest(`${label}.op must be move or set_side`);
+  }
+}
+
 /** Every field of a Fix times edit, checked before the store checks it against the feed. */
 function feedEdit(v: unknown): FeedEdit {
   if (!isObject(v)) throw new BadRequest("edit is required");
   switch (v.op) {
+    case "batch":
+      if (!Array.isArray(v.edits) || !v.edits.length || v.edits.length > MAX_FEED_CORRECTIONS) throw new BadRequest(`edit.edits must list 1 to ${MAX_FEED_CORRECTIONS} corrections`);
+      if (!isIso(v.expect_updated_at)) throw new BadRequest("edit.expect_updated_at must be an ISO timestamp");
+      return { op: "batch", edits: v.edits.map((edit, i) => feedCorrection(edit, `edit.edits[${i}]`)), expect_updated_at: v.expect_updated_at };
     case "move": {
-      if (v.edge !== "start" && v.edge !== "end" && v.edge !== "side_end" && v.edge !== "ended") throw new BadRequest("edit.edge must be start, end, side_end or ended");
-      const to = instant(v.to, "edit.to").toISOString();
       if (v.expect_updated_at !== undefined && !isIso(v.expect_updated_at)) throw new BadRequest("edit.expect_updated_at must be an ISO timestamp");
       return {
-        op: "move", edge: v.edge, to,
-        ...(v.ref != null ? { ref: stretchRef(v.ref, "edit.ref") } : {}),
+        ...feedCorrection(v, "edit"),
         ...(v.expect_updated_at !== undefined ? { expect_updated_at: v.expect_updated_at } : {}),
       };
     }
     case "set_side":
       // "That was both sides" (B) or "That was the Left".
-      if (!isStretchSide(v.side)) throw new BadRequest("edit.side must be L, R or B");
-      return { op: "set_side", ref: stretchRef(v.ref, "edit.ref"), side: v.side };
+      return feedCorrection(v, "edit");
     case "undo_tap": {
       const x = v.expect;
       if (!isObject(x) || !isStretchSide(x.side) || !isIso(x.start) || !(x.end === null || isIso(x.end))) {
@@ -91,6 +111,9 @@ function feedEdit(v: unknown): FeedEdit {
       if (!isIso(v.started_at)) throw new BadRequest("edit.started_at must be an ISO timestamp");
       if (!(v.ended_at === null || isIso(v.ended_at))) throw new BadRequest("edit.ended_at must be an ISO timestamp or null");
       if (!isIso(v.expect_updated_at)) throw new BadRequest("edit.expect_updated_at must be an ISO timestamp");
+      for (const key of ["first_side", "last_side"] as const) {
+        if (v[key] !== undefined && v[key] !== null && !isSide(v[key])) throw new BadRequest(`edit.${key} must be L, R or null`);
+      }
       let nap: Extract<FeedEdit, { op: "restore" }>["nap"];
       if (v.nap != null) {
         const n = v.nap;
@@ -104,12 +127,14 @@ function feedEdit(v: unknown): FeedEdit {
         started_at: v.started_at,
         ended_at: v.ended_at as string | null,
         expect_updated_at: v.expect_updated_at,
+        ...(v.first_side !== undefined ? { first_side: v.first_side as Side | null } : {}),
+        ...(v.last_side !== undefined ? { last_side: v.last_side as Side | null } : {}),
         ...(v.paused_at_stop === true ? { paused_at_stop: true as const } : {}),
         ...(nap ? { nap } : {}),
       };
     }
     default:
-      throw new BadRequest("edit.op must be move, set_side, undo_tap, add_part or restore");
+      throw new BadRequest("edit.op must be batch, move, set_side, undo_tap, add_part or restore");
   }
 }
 
@@ -132,7 +157,8 @@ const timerJson = (r: TimerResponse) =>
  * discard with expect_updated_at), with the same 409 "changed" rules.
  * Timers run on server time so every phone shows the same clock; `at` is
  * only for when it really happened (switch/resume/pause within the last 4
- * hours, stop, adjust). retime fixes one moment ({ id, edit }). A write that
+ * hours, stop, adjust). retime fixes one moment or saves a batch of time and
+ * side corrections against a required revision ({ id, edit }). A write that
  * loses to the other parent answers 409 with the current entry and a reason
  * ("stopped", "changed"), so the app can say "Brittany already stopped it";
  * an edit that doesn't fit the feed answers 400 { error, code }. resume was

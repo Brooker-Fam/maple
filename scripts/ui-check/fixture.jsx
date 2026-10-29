@@ -4,14 +4,16 @@ import DoseTimeSheet from "../../src/components/maple/care/DoseTimeSheet";
 import RecentDoses from "../../src/components/maple/care/RecentDoses";
 import EntryRow, { entryEditPreset } from "../../src/components/maple/EntryRow";
 import { MomentEditor } from "../../src/components/maple/FeedParts";
+import FeedSheet from "../../src/components/maple/sheets/FeedSheet";
 import FixTimesSheet from "../../src/components/maple/sheets/FixTimesSheet";
 import { Button, Sheet, ToastHost, tone } from "../../src/components/maple/ui";
-import { feedCtx, moveEdge, switchTo } from "../../src/lib/maple/feed";
+import { applyFeedCorrections, feedCtx, moveEdge, switchTo } from "../../src/lib/maple/feed";
 import { formatTime } from "../../src/lib/maple/time";
 import { ApiError, FixtureContext } from "./mocks";
 
 const TZ = "America/New_York";
 const INITIAL_NOW = "2026-10-28T13:30:00.000Z";
+const HISTORICAL_NOTE = "Historical example note. " + "This is synthetic text for checking that the entire note can be read. ".repeat(8) + "The final sentence must be visible in full.";
 const iso = (clock) => `2026-10-28T${clock}:00.000Z`;
 const initialDoses = () => [
   { id: 101, kind: "dose", med_id: 1, at: iso("12:00"), data: { name: "Example medicine", units: 2, unit: "tablets", dose: "Example label", skipped: false }, note: "Synthetic note to preserve", private: false, source: "web", created_by: "sam@example.test", updated_by: null, created_at: iso("12:00"), updated_at: iso("12:00") },
@@ -32,7 +34,7 @@ const initialActiveFeed = () => {
 const initialHistoricalFeed = () => {
   const entry = initialFeed();
   const previous = (at) => new Date(Date.parse(at) - 5 * 86400_000).toISOString();
-  return { ...entry, id: 203, started_at: previous(entry.started_at), ended_at: previous(entry.ended_at), created_at: previous(entry.created_at), updated_at: previous(entry.updated_at), note: "Historical example note", data: { ...entry.data, segments: entry.data.segments.map((part) => ({ ...part, start: previous(part.start), end: previous(part.end) })) } };
+  return { ...entry, id: 203, started_at: previous(entry.started_at), ended_at: previous(entry.ended_at), created_at: previous(entry.created_at), updated_at: previous(entry.updated_at), note: HISTORICAL_NOTE, data: { ...entry.data, segments: entry.data.segments.map((part) => ({ ...part, start: previous(part.start), end: previous(part.end) })) } };
 };
 
 function App() {
@@ -49,6 +51,7 @@ function App() {
   const [historicalLoaded, setHistoricalLoaded] = useState(false);
   const [routedSheet, setRoutedSheet] = useState(null);
   const [readOnly, setReadOnly] = useState(false);
+  const [realDetails, setRealDetails] = useState(false);
   const [sequence, setSequence] = useState(0);
   const [toasts, setToasts] = useState([]);
   const [page, setPage] = useState("care");
@@ -57,6 +60,7 @@ function App() {
   const calls = useRef([]);
   const failNext = useRef(false);
   const timerFailure = useRef(null);
+  const detailFailure = useRef(false);
   const version = useRef(0);
   latest.current = { doses, feed, activeFeed, historicalFeed, now };
 
@@ -76,15 +80,37 @@ function App() {
   };
   const openDoseTime = (dose) => { setTarget(dose); setSequence((n) => n + 1); };
   const care = { access: { write: true }, state: { entries: doses }, act: { editDoseTime } };
+  const detailApi = async (resource, request) => {
+    const patch = JSON.parse(request.body);
+    const before = latest.current.historicalFeed;
+    if (resource !== `entries?id=${before.id}` || request.method !== "PATCH") throw new Error("Unexpected synthetic details request");
+    calls.current.push({ details: true, id: before.id, patch });
+    if (detailFailure.current) {
+      detailFailure.current = false;
+      const end = new Date(Date.parse(before.ended_at) + 2 * 60_000).toISOString();
+      const newer = { ...before, ended_at: end, updated_at: new Date(Date.parse(INITIAL_NOW) + ++version.current * 1000).toISOString(), data: { ...before.data, segments: before.data.segments.map((part, index, all) => index === all.length - 1 ? { ...part, end } : part) } };
+      setHistoricalFeed(newer);
+      // A recent-window refresh omits this historical row; only the 409 carries its new version.
+      setHistoricalLoaded(false);
+      throw new ApiError(409, "This feed changed", { entry: newer });
+    }
+    if (patch.expect_updated_at !== before.updated_at) throw new ApiError(409, "This feed changed", { entry: before });
+    const saved = { ...before, ...patch, data: { ...before.data, ...patch.data }, updated_at: new Date(Date.parse(INITIAL_NOW) + ++version.current * 1000).toISOString() };
+    setHistoricalFeed(saved);
+    return { entry: saved };
+  };
   const maple = {
     state: { baby: { name: "River", nickname: null, sex: "female", timezone: TZ }, family: { id: 99, care_name: "Sam", ask: "an owner" }, entries: [feed, activeFeed, ...history, ...(historicalLoaded ? [historicalFeed] : [])], me: { email: "sam@example.test" } },
     now: () => latest.current.now,
     refresh: async () => {},
+    api: detailApi,
+    toast: (text, options) => message(text, options?.undo),
     readOnly,
     units: "us",
     member: () => ({ name: "Sam", email: "sam@example.test" }),
     timerBusy: () => false,
     memberLabel: () => "Sam",
+    memberName: () => "Sam",
     whoDiscarded: async () => null,
     toasts,
     dismissToast: (id) => setToasts((all) => all.filter((t) => t.id !== id)),
@@ -96,7 +122,10 @@ function App() {
       changeElsewhere: () => setDoses((all) => all.map((d) => d.id === 101 ? { ...d, at: iso("12:10"), updated_at: iso("13:29") } : d)),
       setNow: (at) => setNow(new Date(at)),
       setReadOnly,
+      setRealDetails,
+      failDetailsConflict: () => { detailFailure.current = true; },
       historicalFailure: (kind) => { timerFailure.current = kind; },
+      loadHistorical: () => setHistoricalLoaded(true),
       evictHistorical: () => setHistoricalLoaded(false),
       nursingScenario: (kind = "switch") => {
         const saved = initialFeed();
@@ -104,8 +133,14 @@ function App() {
           saved.data.segments[0].end = iso("13:05");
           saved.data.segments[1].start = iso("13:05");
         }
-        const active = { ...saved, id: 202, active: true, ended_at: null, data: { ...saved.data, segments: saved.data.segments.map((s, i) => i === 1 ? { ...s, end: null } : { ...s }) } };
+        if (kind === "same-side-gap") saved.data.segments = [
+          { side: "L", start: iso("12:45"), end: iso("12:55") },
+          { side: "L", start: iso("13:00"), end: iso("13:10") },
+          { side: "R", start: iso("13:10"), end: iso("13:15") },
+        ];
+        const active = { ...saved, id: 202, active: true, ended_at: null, data: { ...saved.data, segments: saved.data.segments.map((s, i, all) => i === all.length - 1 ? { ...s, end: null } : { ...s }) } };
         if (kind === "paused") active.data.segments = [{ ...saved.data.segments[0] }];
+        if (kind === "paused-multi") active.data.segments = saved.data.segments.map((segment) => ({ ...segment }));
         setFeed(saved);
         setActiveFeed(active);
         setNow(new Date(INITIAL_NOW));
@@ -129,6 +164,7 @@ function App() {
   };
   const retime = async (entry, edit, options = {}) => {
     const before = entry.id === 203 ? latest.current.historicalFeed : entry.id === 202 ? latest.current.activeFeed : latest.current.feed;
+    calls.current.push({ timer: true, id: entry.id, edit });
     if (timerFailure.current) {
       const failure = timerFailure.current;
       timerFailure.current = null;
@@ -143,9 +179,12 @@ function App() {
       options.onError?.({ kind: "changed", who: "Alex", message: "Alex just changed this feed", entry: newer });
       return null;
     }
-    const moved = moveEdge(before.data, { ...edit, to: new Date(edit.to) }, feedCtx(before, latest.current.now));
-    const saved = { ...before, data: moved.data, started_at: moved.startedAt, ended_at: moved.endedAt, updated_at: new Date(Date.parse(INITIAL_NOW) + ++version.current * 1000).toISOString() };
-    calls.current.push({ timer: true, id: entry.id, edit });
+    if (edit.expect_updated_at && edit.expect_updated_at !== before.updated_at) {
+      options.onError?.({ kind: "changed", who: "Alex", message: "Alex just changed this feed", entry: before });
+      return null;
+    }
+    const corrected = applyFeedCorrections(before, edit.op === "batch" ? edit.edits : [edit], latest.current.now);
+    const saved = { ...corrected, updated_at: new Date(Date.parse(INITIAL_NOW) + ++version.current * 1000).toISOString() };
     if (entry.id === 203) setHistoricalFeed(saved);
     else if (entry.id === 202) setActiveFeed(saved);
     else setFeed(saved);
@@ -179,8 +218,8 @@ function App() {
         </nav>
         {page === "care" ? <RecentDoses care={care} /> : page === "history" ? (
           <section aria-label="Example log" className={`${tone.card} p-2`}>
-            <EntryRow entry={feed} now={now} onClick={() => sheets.open({ kind: feed.kind, entry: feed, preset: entryEditPreset(feed) })} />
-            <EntryRow entry={historicalFeed} now={now} onClick={() => sheets.open({ kind: historicalFeed.kind, entry: historicalFeed, preset: entryEditPreset(historicalFeed) })} />
+            <EntryRow entry={feed} now={now} onClick={() => sheets.open({ kind: feed.kind, entry: feed, preset: entryEditPreset(feed, readOnly) })} />
+            <EntryRow entry={historicalFeed} now={now} onClick={() => sheets.open({ kind: historicalFeed.kind, entry: historicalFeed, preset: entryEditPreset(historicalFeed, readOnly) })} />
           </section>
         ) : (
           <section className={`${tone.card} space-y-3 p-4`}>
@@ -200,7 +239,8 @@ function App() {
         {activeNursing && <FixTimesSheet open kind="feed" entry={activeFeed} preset={{ fix: { target: "current" } }} onClose={() => setActiveNursing(false)} />}
         {savedNursing && <FixTimesSheet open kind="feed" entry={feed} preset={{ fix: { target: "finish" } }} onClose={() => setSavedNursing(false)} />}
         {routedSheet?.preset?.fix && <FixTimesSheet key={`history-${routedSheet.entry.id}`} open {...routedSheet} onClose={sheets.close} />}
-        {routedSheet && !routedSheet.preset?.fix && <Sheet open title="Feed details" onClose={sheets.close}>
+        {routedSheet && !routedSheet.preset?.fix && (readOnly || realDetails) && <FeedSheet open {...routedSheet} onClose={sheets.close} />}
+        {routedSheet && !routedSheet.preset?.fix && !readOnly && !realDetails && <Sheet open title="Feed details" onClose={sheets.close}>
           <p>Opened details for example entry {routedSheet.entry.id}</p>
           <p>{routedSheet.entry.note}</p>
         </Sheet>}
