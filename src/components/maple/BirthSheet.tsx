@@ -60,6 +60,7 @@ function BirthForm({ open, onClose, mode = "birth" }: Props) {
   const initialUnknown = mode === "edit" && baby?.settings.birth_time_approx === true;
   const lbOz = baby?.birth_weight_g ? gramsToLbOz(baby.birth_weight_g) : null;
   const [when, setWhen] = useState<Date | null>(initialBorn);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const [timeUnknown, setTimeUnknown] = useState(initialUnknown);
   const [exactChosen, setExactChosen] = useState(!initialUnknown);
   const [birthDate, setBirthDate] = useState(() => dayKey(initialBorn ?? now(), tz));
@@ -75,7 +76,7 @@ function BirthForm({ open, onClose, mode = "birth" }: Props) {
   const hasInvalid = Object.values(invalid).some(Boolean);
   const [problem, setProblem] = useState<string | null>(null);
 
-  const dirty = useDraftChanged({ when, timeUnknown, birthDate, showStats, lb, oz, grams, length, head, hasInvalid });
+  const dirty = useDraftChanged({ timeInvalid, when, timeUnknown, birthDate, showStats, lb, oz, grams, length, head, hasInvalid });
 
   if (!baby) return null;
 
@@ -85,6 +86,7 @@ function BirthForm({ open, onClose, mode = "birth" }: Props) {
   const firstName = baby.nickname || baby.name.split(" ")[0] || "Baby";
 
   const changeTimeCertainty = (unknown: boolean) => {
+    setTimeInvalid(false);
     if (unknown && exactChosen) setBirthDate(dayKey(when ?? now(), tz));
     if (!unknown) {
       setWhen(null);
@@ -108,6 +110,7 @@ function BirthForm({ open, onClose, mode = "birth" }: Props) {
   };
 
   const submit = async () => {
+    if (timeInvalid) return;
     const issue = check();
     setProblem(issue);
     if (issue || saving) return;
@@ -203,7 +206,7 @@ function BirthForm({ open, onClose, mode = "birth" }: Props) {
         onClose={onClose}
         title={mode === "birth" ? `${words.Hes} here!` : "Birth details"}
         footer={
-          <Button size="lg" className="w-full" onClick={() => void submit()} disabled={saving || hasInvalid || (timeUnknown && !birthDate) || (!timeUnknown && !exactChosen)}>
+          <Button size="lg" className="w-full" onClick={() => void submit()} disabled={timeInvalid || saving || hasInvalid || (timeUnknown && !birthDate) || (!timeUnknown && !exactChosen)}>
             {saving ? "Saving…" : mode === "birth" ? `Welcome ${firstName}` : "Save"}
           </Button>
         }
@@ -224,7 +227,7 @@ function BirthForm({ open, onClose, mode = "birth" }: Props) {
           </Field>
         ) : (
           <div className="space-y-2">
-            <WhenField label="Born" value={when} onChange={(value) => { setWhen(value); setExactChosen(true); }} tz={tz} offsets={[15, 60, 180, 360]} />
+            <WhenField label="Born" value={when} onInvalidChange={setTimeInvalid} onChange={(value) => { setWhen(value); setExactChosen(true); }} tz={tz} offsets={[15, 60, 180, 360]} />
             {!exactChosen && <p className={cx(tone.muted, "text-[13px]")}>Choose a time to replace the unknown birth time.</p>}
           </div>
         )}

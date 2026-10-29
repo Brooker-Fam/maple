@@ -71,6 +71,8 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   );
 
   const initialC = e?.data.temp_c ?? pnum(preset, "temp_c");
+  // The measured reading stays independent of its rounded °F / °C display.
+  const [tempC, setTempC] = useState<number | null>(initialC ?? null);
   const [value, setValue] = useState<number | null>(() => {
     const c = initialC;
     if (c == null) return null;
@@ -82,6 +84,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const checks = useNumberChecks();
   // Only a typed or stepped reading is re-sent on edit (°F ↔ °C display rounding would drift it).
   const { touched, touch } = useTouched();
@@ -89,15 +92,14 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const [heart, setHeart] = useState<number | null>(null);
   const [resp, setResp] = useState<number | null>(null);
   const [spo2, setSpo2] = useState<number | null>(null);
-  const dirty = useDraftChanged({ unit, value, method, when, note, heart, resp, spo2, invalid: checks.invalid });
+  const dirty = useDraftChanged({ timeInvalid, unit, value, tempC, method, when, note, heart, resp, spo2, invalid: checks.invalid });
 
   const switchUnit = (u: "F" | "C") => {
     if (u === unit) return;
-    if (value != null) setValue(u === "C" ? r1(fToC(value)) : r1(cToF(value)));
+    setValue(tempC == null ? null : u === "C" ? r1(tempC) : r1(cToF(tempC)));
     setUnit(u);
   };
 
-  const tempC = !touched.reading && initialC != null ? initialC : value == null ? null : unit === "C" ? value : fToC(value);
   // Only judge a finished-looking number (not "10" on the way to "100.4").
   const plausible = tempC != null && tempC >= 32 && tempC <= 43;
   const looksLikeC = unit === "F" && value != null && value >= 34 && value <= 43;
@@ -119,6 +121,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const savable = tempC != null && tempC >= 30 && tempC <= 45;
 
   const save = async () => {
+    if (timeInvalid) return;
     if (tempC == null) return;
     const temp_c = Math.round(tempC * 1000) / 1000;
     const data: Record<string, unknown> = { temp_c, method };
@@ -171,7 +174,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={checks.invalid || !savable || (!!e && e.id < 0)}
+          disabled={timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
           hint={
             checks.invalid ? CHECK_NUMBER_HINT : !savable ? "Enter the reading." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined
           }
@@ -198,6 +201,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
           onChange={(v) => {
             touch("reading");
             setValue(v);
+            setTempC(v == null ? null : unit === "C" ? v : fToC(v));
           }}
           onInvalid={checks.watch("reading")}
           step={0.1}
@@ -213,6 +217,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
             onClick={() => {
               // The number typed is already °C: relabel it, don't convert it.
               touch("reading");
+              setTempC(value);
               setUnit("C");
             }}
             className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-mp-accent-fg"
@@ -237,7 +242,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
 
       {assessment && <AssessmentCard a={assessment} />}
 
-      <WhenField value={when} onChange={setWhen} tz={tz} />
+      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
       <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting? Feeding, sleepy, fussy…`} />
 
       {!e && (

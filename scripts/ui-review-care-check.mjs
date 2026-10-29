@@ -98,6 +98,34 @@ const cases = [
     await visit("temp");
     await confirmDraft(page.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }), "98.6", "Save");
   }],
+  ["temperature units preserve a measured reading and blank stays blank", async () => {
+    for (const units of ["us", "metric"]) {
+      await visit(`temp&units=${units}`);
+      const form = page.getByRole("dialog").first();
+      const unit = units === "metric" ? "Celsius" : "Fahrenheit";
+      const input = () => form.getByRole("textbox", { name: `temperature in degrees ${unit}`, exact: true });
+      assert.equal(await input().inputValue(), "", "New temperatures do not supply a reading");
+      assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled());
+      await input().fill(units === "metric" ? "37.1" : "98.7");
+      for (let i = 0; i < 3; i++) {
+        await form.getByRole("radio", { name: units === "metric" ? "°F" : "°C", exact: true }).click();
+        await form.getByRole("radio", { name: units === "metric" ? "°C" : "°F", exact: true }).click();
+        await page.waitForFunction(([unit, expected]) => document.querySelector(`input[aria-label="temperature in degrees ${unit}"]`)?.value === expected, [unit, units === "metric" ? "37.1" : "98.7"]);
+      }
+      await page.evaluate(() => { window.__careFixture.failures.save = false; });
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      await form.waitFor({ state: "hidden" });
+      assert.deepEqual(await page.evaluate(() => window.__careFixture.readings), [{ tempC: units === "metric" ? 37.1 : 37.056, at: "2026-10-28T13:30:00.000Z" }], "Saving uses the measured value, not the rounded display");
+    }
+    await visit("temp");
+    const form = page.getByRole("dialog").first();
+    await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).fill("98.7");
+    await form.getByRole("radio", { name: "°C", exact: true }).click();
+    await form.getByRole("textbox", { name: "temperature in degrees Celsius", exact: true }).fill("");
+    await form.getByRole("radio", { name: "°F", exact: true }).click();
+    assert.equal(await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).inputValue(), "");
+    assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled());
+  }],
   ["care settings keep a failed save and guard discarding", async () => {
     await visit("settings");
     await confirmDraft(page.getByRole("textbox", { name: "OB or midwife", exact: true }), "202-555-0100", "Save");

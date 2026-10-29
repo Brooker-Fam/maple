@@ -11,6 +11,9 @@ adjustments, fixed-target smart choices, independent side ends and shared switch
 boundaries. They check multiple time and side changes saved together, draft
 recovery, complete view-only notes, and the combined preview beside the fixed
 Save footer on narrow phones.
+Manual nursing also covers readable minute inputs at 320px, staged ±1/±5
+adjustments and exact typing, 1/5-minute start choices, duration limits, draft
+recovery, and one complete save.
 `pnpm check:maple-tenancy timer-time-correction` separately exercises revision
 checks through the timer API against synthetic in-memory Postgres.
 

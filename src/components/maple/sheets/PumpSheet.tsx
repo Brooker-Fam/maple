@@ -69,8 +69,9 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   });
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const checks = useNumberChecks();
-  const dirty = useDraftChanged({ mode, left, right, totalMl, range, note, invalid: checks.invalid });
+  const dirty = useDraftChanged({ timeInvalid, mode, left, right, totalMl, range, note, invalid: checks.invalid });
   const { touched, touch } = useTouched();
   const [start, end] = range;
 
@@ -116,6 +117,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const needsSplit = mode === "sides" && totalMl != null && left == null && right == null;
 
   const save = async () => {
+    if (timeInvalid) return;
     const noteVal = note.trim() || null;
     if (e) {
       setBusy(true);
@@ -171,7 +173,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={(!!e && e.id < 0) || (!running && (checks.invalid || needsSplit))}
+          disabled={timeInvalid || (!!e && e.id < 0) || (!running && (checks.invalid || needsSplit))}
           hint={!running && checks.invalid ? CHECK_NUMBER_HINT : !running && needsSplit ? "Enter each side's amount, or choose Total to keep the combined amount." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
         />
       }
@@ -189,14 +191,14 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
             ]}
           />
           {mode === "sides" ? (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <MiniStepper key="left" label={<SideLabel side="L" />} unit={unit} ariaLabel={`left, ${unit}`} value={left} onChange={edit("left_ml", setLeft)} onInvalid={checks.watch("left")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
               <MiniStepper key="right" label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
             </div>
           ) : (
             <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={editTotal} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />
           )}
-          <TimeRange start={start} end={end} tz={tz} durations={[10, 15, 20, 30, 45]} onChange={(s, en) => setRange([s, en])} />
+          <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[10, 15, 20, 30, 45]} onChange={(s, en) => setRange([s, en])} />
         </>
       )}
       <NoteField value={note} onChange={setNote} />

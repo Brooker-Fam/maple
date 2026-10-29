@@ -45,12 +45,14 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const [answer, setAnswer] = useState(d.answer ?? "");
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ doctor, tag, amount, text, done, answer, when });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, doctor, tag, amount, text, done, answer, when });
 
   const words = text.trim();
   const canSave = doctor ? !!words : !!(tag || words);
 
   const save = async () => {
+    if (timeInvalid) return;
     if (!canSave || busy) return;
     const data = doctor
       ? { for_doctor: true, done: e ? done : undefined, answer: e ? answer.trim() || undefined : undefined, tag: undefined, amount: undefined }
@@ -107,7 +109,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : doctor ? "Add question" : "Log it"}
             busy={busy}
-            disabled={!canSave || (!!e && e.id < 0)}
+            disabled={timeInvalid || !canSave || (!!e && e.id < 0)}
             hint={!canSave ? (doctor ? "Type the question." : "Pick one or type a note.") : undefined}
           />
         </fieldset>
@@ -197,7 +199,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
               <Label optional={!!tag}>Note</Label>
               <TextArea value={text} onChange={setText} rows={3} placeholder="What happened?" />
             </div>
-            <WhenField value={when} onChange={setWhen} tz={tz} />
+            <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
             {!e && (
               <button
                 type="button"

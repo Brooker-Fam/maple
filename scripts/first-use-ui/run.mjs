@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { timeCases } from "./time-cases.mjs";
+import { handoffCases } from "./handoff-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -36,7 +38,7 @@ const browserName = process.env.REVIEW_BROWSER === "webkit" ? "webkit" : "chromi
 const browser = await ({ chromium, webkit }[browserName]).launch({ headless: true });
 let failures = 0;
 
-async function fixture({ state = freshState(), records = [], entryResponse, rangeResponse } = {}) {
+async function fixture({ state = freshState(), records = [], entryResponse, rangeResponse, apiResponse } = {}) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce", timezoneId: "UTC" });
   const page = await context.newPage();
   const errors = [];
@@ -66,6 +68,7 @@ async function fixture({ state = freshState(), records = [], entryResponse, rang
     if (pathname === "/api/maple/chat/consent") return json({ terms: true, care: false, self: false });
     if (pathname === "/api/maple/onboarding") return json({ needed: false });
     if (pathname === "/api/maple/push") return json({ publicKey: null, sub: null, health: { needs_resubscribe: false }, reminders: [] });
+    if (apiResponse) return apiResponse({ route, req, url, state });
     return route.fulfill({ status: 500, json: { error: "Unexpected synthetic endpoint" } });
   });
   return { page, state, records, requests, errors, close: () => context.close() };
@@ -77,6 +80,8 @@ const localDay = (at, timezone) => {
   return `${parts.year}-${parts.month}-${parts.day}`;
 };
 const cases = [
+  ...timeCases({ fixture, freshState, record, writes, assert }),
+  ...handoffCases({ fixture, freshState, record, writes, assert }),
   ["Every historical entry kind keeps an older family-local date", async () => {
     const kinds = [["Nursing", "feed"], ["Bottle", "feed"], ["Diaper", "diaper"], ["Sleep", "sleep"], ["Vitamin D", "med"], ["Tummy time", "tummy"], ["Bath", "bath"], ["Pump", "pump"], ["Temperature", "temp"], ["Skin check", "vitals"], ["Growth", "growth"], ["River's medicine", "med"], ["Other readings", "vitals"], ["Note", "note"], ["Moment", "moment"]];
     for (const [label, kind] of kinds) {
@@ -102,7 +107,17 @@ const cases = [
         if (label === "Note") await form.locator("textarea").fill("Synthetic historical note");
         if (label === "Moment") await form.getByRole("textbox", { name: "Title", exact: true }).fill("Synthetic historical moment");
         assert.equal(writes(f).length, 0, `${label} must remain unsaved while choosing details`);
-        await form.getByRole("button", { name: /^(?:Log it|Log .+|Save moment)$/ }).click();
+        const clock = form.locator('input[type="time"]').first();
+        const originalClock = await clock.inputValue();
+        const save = form.getByRole("button", { name: /^(?:Log it|Log .+|Save moment)$/ });
+        assert(await save.isEnabled(), `${label} is ready before changing its time`);
+        await clock.fill("");
+        assert(await save.isDisabled(), `${label} must not submit the old timestamp while its clock is incomplete`);
+        assert(await form.getByRole("alert").last().isVisible(), `${label} explains its invalid time inline`);
+        assert.equal(writes(f).length, 0);
+        await clock.fill(originalClock);
+        assert(await save.isEnabled(), `${label} recovers when its clock is completed`);
+        await save.click();
         await form.waitFor({ state: "hidden" });
         await f.page.waitForTimeout(50);
         const saved = writes(f)[0]?.body;

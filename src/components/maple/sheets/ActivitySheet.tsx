@@ -42,12 +42,14 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
   });
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ range, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, range, note });
   const [start, end] = range;
   const goal = summary?.targets?.tummyMin ?? tummyGoalMinutes(ageDays);
   const soFar = Math.round((summary?.today.tummySec ?? 0) / 60);
 
   const save = async () => {
+    if (timeInvalid) return;
     const noteVal = note.trim() || null;
     if (e) {
       setBusy(true);
@@ -89,7 +91,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={!!e && e.id < 0}
+          disabled={timeInvalid || (!!e && e.id < 0)}
           hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
         />
       }
@@ -98,7 +100,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
       {running ? (
         <RunningNote kind="tummy" />
       ) : (
-        <TimeRange start={start} end={end} tz={tz} durations={[3, 5, 10, 15, 20, 30]} onChange={(s, en) => setRange([s, en])} />
+        <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[3, 5, 10, 15, 20, 30]} onChange={(s, en) => setRange([s, en])} />
       )}
       <NoteField value={note} onChange={setNote} />
       {age && <TummyProgress soFar={soFar} goal={goal} />}
@@ -117,7 +119,8 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   );
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ when, minutes, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, when, minutes, note });
 
   /** A bath that "just" happened with a length ends now, so it started that long ago. */
   const times = () => {
@@ -129,6 +132,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   const inFuture = !!end && end.getTime() > current.getTime() + MIN;
 
   const save = async () => {
+    if (timeInvalid) return;
     const { start, end } = times();
     if (end && end.getTime() > now().getTime() + MIN) return;
     const noteVal = note.trim() || null;
@@ -173,13 +177,13 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={(!!e && e.id < 0) || inFuture}
+          disabled={timeInvalid || (!!e && e.id < 0) || inFuture}
           hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : inFuture ? "That ends in the future. Choose an earlier start or a shorter length." : undefined}
         />
       }
     >
       {e && <LoggedBy entry={e} />}
-      <WhenField value={when} onChange={setWhen} tz={tz} />
+      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
       <div>
         <Label optional>How long</Label>
         <div className="flex flex-wrap gap-2">

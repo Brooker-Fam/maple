@@ -63,7 +63,8 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ name, dose, when, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, name, dose, when, note });
 
   // Other medicines they've logged lately, as one-tap names (never their doses).
   const recent = useMemo(() => {
@@ -106,6 +107,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const save = async () => {
+    if (timeInvalid) return;
     const n = name.trim();
     if (!n) return;
     const noteVal = note.trim() || null;
@@ -153,7 +155,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={!name.trim() || (!!e && e.id < 0)}
+          disabled={timeInvalid || !name.trim() || (!!e && e.id < 0)}
           hint={!name.trim() ? "What was it?" : undefined}
         />
       }
@@ -243,7 +245,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
         </div>
       )}
 
-      <WhenField value={when} onChange={setWhen} tz={tz} />
+      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
       <NoteField value={note} onChange={setNote} />
       {vitD && <ContextNote icon="sun">{vitaminDNote(voice)}</ContextNote>}
       {e && care && careWrite && !isVitaminD(e.data.name) && e.id > 0 && (

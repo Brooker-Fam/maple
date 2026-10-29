@@ -68,12 +68,14 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
   const [place, setPlace] = useState<SleepPlace | undefined>(() => e?.data.place ?? (pstr(preset, "place") as SleepPlace | undefined));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ range, place, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, range, place, note });
 
   const [start, end] = range;
   const tip = place ? safeSleepTips(voice)[place] : undefined;
 
   const save = async () => {
+    if (timeInvalid) return;
     const noteVal = note.trim() || null;
     if (e) {
       setBusy(true);
@@ -116,7 +118,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={(!!e && e.id < 0) || (!running && end.getTime() < start.getTime())}
+          disabled={timeInvalid || (!!e && e.id < 0) || (!running && end.getTime() < start.getTime())}
           hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
         />
       }
@@ -125,7 +127,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
       {running ? (
         <RunningNote kind="sleep" />
       ) : (
-        <TimeRange start={start} end={end} tz={tz} labels={["Fell asleep", "Woke up"]} onChange={(s, en) => setRange([s, en])} />
+        <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} labels={["Fell asleep", "Woke up"]} onChange={(s, en) => setRange([s, en])} />
       )}
 
       {!running && (

@@ -65,8 +65,9 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const checks = useNumberChecks();
-  const dirty = useDraftChanged({ heart, resp, spo2, level, when, note, invalid: checks.invalid });
+  const dirty = useDraftChanged({ timeInvalid, heart, resp, spo2, level, when, note, invalid: checks.invalid });
 
   const t = when ?? now();
   const ago = (x: EntryOf<"vitals">) => (t.getTime() - Date.parse(x.started_at)) / 60_000;
@@ -90,6 +91,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const data = { ...vitals, jaundice: level };
 
   const save = async () => {
+    if (timeInvalid) return;
     const noteVal = note.trim() || null;
     const bits = [
       level && (level === "none" ? "no yellow" : `yellow: ${JAUNDICE_LABEL[level].toLowerCase()}`),
@@ -186,7 +188,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={checks.invalid || !hasAny || (!!e && e.id < 0)}
+          disabled={timeInvalid || checks.invalid || !hasAny || (!!e && e.id < 0)}
           hint={checks.invalid ? CHECK_NUMBER_HINT : !hasAny ? (skinMode ? "Pick what you see." : "Add a reading.") : undefined}
         />
       }
@@ -207,7 +209,7 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
           </MoreDetails>
         </>
       )}
-      <WhenField value={when} onChange={setWhen} tz={tz} />
+      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
       <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting?`} />
       {/* Always on this sheet, so it stays quiet: a hairline in the danger color, not a filled alert. */}
       <p className={cx(tone.muted, "flex gap-2.5 rounded-xl border border-mp-danger/25 px-3.5 py-3 text-[13px] leading-relaxed")}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { dayKey, formatDayLabel, formatTime, localParts } from "@/lib/maple/time";
 import { parseRecordedTime } from "@/lib/maple/time-edit";
 import { cx, tone } from "./ui";
@@ -12,10 +12,12 @@ function fields(value: Date, tz: string) {
 }
 
 /** The same visible date and clock for a dose, a nursing moment, or an earlier log. */
-export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, max, onInvalidChange }: {
+export function RecordedTimeField({ label, hideLabel, embedded, value, onChange, tz, min, max, onInvalidChange }: {
   label: string;
   /** The enclosing editor already displays the question; keep the accessible name. */
   hideLabel?: boolean;
+  /** A scrubber already supplies the summary and adjustments; show its date, clock and feedback inline. */
+  embedded?: boolean;
   value: Date;
   onChange: (value: Date) => void;
   tz: string;
@@ -28,24 +30,28 @@ export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, 
   const now = useNow(30_000);
   const [draft, setDraft] = useState(() => fields(value, tz));
   if (draft.basis !== value.getTime() || draft.tz !== tz) setDraft(fields(value, tz));
-  const ceiling = max ?? new Date(now.getTime() + 60_000);
+  const ceiling = new Date(Math.min(max?.getTime() ?? Infinity, now.getTime() + 60_000));
   const result = parseRecordedTime(draft.day, draft.clock, tz, value, { min, max: ceiling });
   const invalid = !result.valid;
-  useEffect(() => { onInvalidChange(invalid); }, [invalid, onInvalidChange]);
+  const report = useRef(onInvalidChange);
+  useLayoutEffect(() => { report.current = onInvalidChange; });
   const parsedTime = result.valid ? result.date.getTime() : null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     // A future draft can become valid as the clock advances. Save must use what
     // the visible fields say, rather than the previous valid value.
     if (parsedTime !== null && parsedTime !== value.getTime()) onChange(new Date(parsedTime));
-  }, [parsedTime, value, onChange]);
+    onInvalidChange(invalid);
+  }, [parsedTime, value, onChange, invalid, onInvalidChange]);
+  useLayoutEffect(() => () => report.current(false), []);
 
   const change = (day: string, clock: string) => {
     setDraft({ ...draft, day, clock });
-    const parsed = parseRecordedTime(day, clock, tz, value, { min, max: max ?? new Date(nowFn().getTime() + 60_000) });
+    const parsed = parseRecordedTime(day, clock, tz, value, { min, max: new Date(Math.min(max?.getTime() ?? Infinity, nowFn().getTime() + 60_000)) });
     onInvalidChange(!parsed.valid);
     if (parsed.valid) onChange(parsed.date);
   };
   const choose = (date: Date) => {
+    if ((min && date < min) || date.getTime() > Math.min(max?.getTime() ?? Infinity, nowFn().getTime() + 60_000)) return;
     const next = fields(date, tz);
     setDraft(next);
     onInvalidChange(false);
@@ -56,13 +62,13 @@ export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, 
   };
 
   return (
-    <fieldset className={cx(tone.inset, "min-w-0 space-y-3 p-3")}>
-      <legend className="sr-only">{label}</legend>
-      {!hideLabel && <p className="text-[15px] font-semibold text-mp-ink">{label}</p>}
-      <p id={`${id}-status`} role={invalid ? "alert" : "status"} aria-atomic="true" className={cx("leading-snug tabular-nums", invalid ? "text-[13px] text-mp-danger" : "text-[17px] font-semibold text-mp-ink")}>
+    <fieldset className={cx("min-w-0 space-y-3", !embedded && `${tone.inset} p-3`)}>
+      <legend className="sr-only">{embedded ? `${label}: date and time` : label}</legend>
+      {!hideLabel && !embedded && <p className="text-[15px] font-semibold text-mp-ink">{label}</p>}
+      <p id={`${id}-status`} role={invalid ? "alert" : "status"} aria-atomic="true" className={cx("leading-snug tabular-nums", invalid ? "text-[13px] text-mp-danger" : embedded ? "sr-only" : "text-[17px] font-semibold text-mp-ink")}>
         {result.valid ? `${formatDayLabel(dayKey(result.date, tz), dayKey(now, tz))} at ${formatTime(result.date, tz)}` : result.message}
       </p>
-      <div role="group" aria-label="Adjust time" className="grid grid-cols-4 gap-1.5">
+      {!embedded && <div role="group" aria-label="Adjust time" className="grid grid-cols-4 gap-1.5">
         {[-5, -1, 1, 5].map((minutes) => {
           const next = result.valid ? result.date.getTime() + minutes * 60_000 : null;
           return (
@@ -79,7 +85,7 @@ export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, 
             </button>
           );
         })}
-      </div>
+      </div>}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-3">
         <label className={cx(tone.label, "min-w-0 space-y-1.5")}>
           <span className="block">Date</span>
@@ -94,11 +100,14 @@ export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, 
         <div className="space-y-1.5">
           <p className={cx(tone.muted, "text-[13px]")}>The clocks go back. Which occurrence?</p>
           <div className="flex flex-wrap gap-2">
-            {result.alternatives.map((at, i) => (
-              <button key={at.toISOString()} type="button" aria-pressed={!!result.date && Math.floor(at.getTime() / 60_000) === Math.floor(result.date.getTime() / 60_000)} disabled={(!!min && at < min) || at > ceiling} onClick={() => choose(at)} className="mp-control min-h-[44px] rounded-xl border border-mp-line bg-mp-surface px-3 text-sm font-medium text-mp-accent-fg disabled:opacity-40 aria-pressed:bg-mp-accent aria-pressed:text-mp-on-accent">
+            {result.alternatives.map((at, i) => {
+              // Switching the occurrence of an unchanged clock keeps its saved seconds.
+              const current = fields(value, tz);
+              const candidate = current.day === draft.day && current.clock === draft.clock ? new Date(at.getTime() + value.getTime() % 60_000) : at;
+              return <button key={at.toISOString()} type="button" aria-pressed={!!result.date && Math.floor(at.getTime() / 60_000) === Math.floor(result.date.getTime() / 60_000)} disabled={(!!min && candidate < min) || candidate > ceiling} onClick={() => choose(candidate)} className="mp-control min-h-[44px] rounded-xl border border-mp-line bg-mp-surface px-3 text-sm font-medium text-mp-accent-fg disabled:opacity-40 aria-pressed:bg-mp-accent aria-pressed:text-mp-on-accent">
                 {i === 0 ? "First" : "Second"} {formatTime(at, tz)}
               </button>
-            ))}
+            })}
           </div>
         </div>
       )}

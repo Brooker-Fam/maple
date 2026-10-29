@@ -101,7 +101,8 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ type, color, texture, size, rash, when, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, type, color, texture, size, rash, when, note });
 
   const poop = type === "poop" || type === "both";
   const pee = type === "pee" || type === "both";
@@ -110,6 +111,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const flag = !poop || !color ? null : info?.group === "pale" ? PALE_STOOL : info?.group === "red" ? RED_STOOL : color === "black" && age && age.dayOfLife >= 5 ? lateBlackStool(voice) : null;
 
   const save = async () => {
+    if (timeInvalid) return;
     const data = {
       pee,
       poop,
@@ -159,7 +161,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={e ? e.id < 0 : false}
+          disabled={timeInvalid || (!!e && e.id < 0)}
           hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
         />
       }
@@ -201,7 +203,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
         </section>
       )}
 
-      <WhenField value={when} onChange={setWhen} tz={tz} />
+      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
 
       <section aria-label="Diaper details" className="space-y-4">
         {poop && (

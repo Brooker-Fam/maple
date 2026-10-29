@@ -272,6 +272,114 @@ try {
       else assert.equal(call.log.data.temp_c, expected, "A supplied measurement is not re-rounded through its display units");
     }
   });
+  await check("growth unit switches preserve measured values", async () => {
+    for (const editing of [false, true]) {
+      await page.goto(`${url}?mode=${editing ? "form-growth-edit" : "form-growth"}&units=metric`);
+      const form = page.getByRole("dialog").first();
+      if (editing) await form.getByRole("textbox", { name: "grams", exact: true }).fill("3372");
+      await form.getByRole("textbox", { name: "grams", exact: true }).fill("3373");
+      await form.getByRole("radio", { name: "lb · in", exact: true }).click();
+      if (editing) await form.getByRole("textbox", { name: "length in inches", exact: true }).fill("20.5");
+      await form.getByRole("textbox", { name: "length in inches", exact: true }).fill("20.25");
+      await form.getByRole("textbox", { name: "head circumference in inches", exact: true }).fill("13.25");
+      for (let i = 0; i < 3; i++) {
+        await form.getByRole("radio", { name: "g · cm", exact: true }).click();
+        assert.equal(await form.getByRole("textbox", { name: "grams", exact: true }).inputValue(), "3373", "Viewing lb and oz cannot change a measured gram value");
+        await form.getByRole("radio", { name: "lb · in", exact: true }).click();
+        assert.equal(await form.getByRole("textbox", { name: "length in inches", exact: true }).inputValue(), "20.25", "Returning to inches keeps the typed length");
+        assert.equal(await form.getByRole("textbox", { name: "head circumference in inches", exact: true }).inputValue(), "13.25", "Returning to inches keeps the typed head circumference");
+      }
+      await form.getByRole("button", { name: editing ? "Save" : "Log it", exact: true }).click();
+      const call = (await snapshot()).calls.find((x) => x.patch || x.log);
+      assert.deepEqual(editing ? call.patch.data : call.log.data, { weight_g: 3373, length_cm: 51.4, head_cm: 33.7, ...(!editing ? { at: "doctor" } : {}) });
+    }
+  });
+  await check("measurement fields fit narrow phones", async () => {
+    const cramped = [];
+    for (const width of [320, 390, 640]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const mode of ["form-growth", "form-pump"]) {
+        await page.goto(`${url}?mode=${mode}`);
+        const form = page.getByRole("dialog").first();
+        await form.waitFor();
+        for (const field of await form.locator('input[inputmode="decimal"]').all()) {
+          const [label, available] = await field.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return [node.getAttribute("aria-label"), node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)];
+          });
+          if (available < 64) cramped.push(`${label} at ${width}px has ${available}px for its number`);
+        }
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Measurement rows stay within the phone");
+      }
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.deepEqual(cramped, [], "Measured decimals need at least 64px of readable input space");
+  });
+  await check("growth cleared readings stay blank across units", async () => {
+    await page.goto(`${url}?mode=form-growth`);
+    const form = page.getByRole("dialog").first();
+    await form.getByRole("textbox", { name: "pounds", exact: true }).fill("7");
+    await form.getByRole("textbox", { name: "ounces", exact: true }).fill("2");
+    await form.getByRole("radio", { name: "g · cm", exact: true }).click();
+    await form.getByRole("textbox", { name: "grams", exact: true }).fill("");
+    await form.getByRole("radio", { name: "lb · in", exact: true }).click();
+    for (const name of ["pounds", "ounces"]) assert.equal(await form.getByRole("textbox", { name, exact: true }).inputValue(), "", "Clearing a measurement cannot bring back an old reading");
+    assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled(), "Blank measurements cannot be logged");
+    await form.getByRole("textbox", { name: "pounds", exact: true }).fill("0");
+    await form.getByRole("radio", { name: "g · cm", exact: true }).click();
+    assert.equal(await form.getByRole("textbox", { name: "grams", exact: true }).inputValue(), "0", "Zero stays distinct from an empty measurement");
+    assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled(), "A zero weight cannot be saved as a valid measurement");
+  });
+  await check("growth preserves supplied and saved precision", async () => {
+    for (const editing of [false, true]) {
+      await page.goto(`${url}?mode=${editing ? "form-growth-edit" : "form-growth-preset"}`);
+      const form = page.getByRole("dialog").first();
+      await form.getByRole("radio", { name: "g · cm", exact: true }).click();
+      await form.locator("textarea").first().fill("Synthetic measurements");
+      await form.getByRole("button", { name: editing ? "Save" : "Log it", exact: true }).click();
+      const call = (await snapshot()).calls.find((x) => x.patch || x.log);
+      if (editing) assert.equal(call.patch.data, undefined, "Note-only edits do not resend rounded measurements");
+      else assert.deepEqual(call.log.data, { weight_g: 3373, length_cm: 51.43, head_cm: 34.27, at: "doctor" }, "Supplied measurements do not round through display units");
+    }
+  });
+  await check("temperature unit switches preserve a typed reading", async () => {
+    for (const editing of [false, true]) {
+      await page.goto(`${url}?mode=${editing ? "form-temp-edit" : "form-temp"}`);
+      const form = page.getByRole("dialog").first();
+      await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).fill("98.7");
+      for (let i = 0; i < 3; i++) {
+        await form.getByRole("radio", { name: "°C", exact: true }).click();
+        await form.getByRole("radio", { name: "°F", exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('input[aria-label="temperature in degrees Fahrenheit"]')?.value === "98.7");
+        assert.equal(await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).inputValue(), "98.7", "Viewing Celsius cannot change the typed Fahrenheit reading");
+      }
+      await form.getByRole("button", { name: editing ? "Save" : "Log it", exact: true }).click();
+      const call = (await snapshot()).calls.find((x) => x.patch || x.log);
+      assert.equal((editing ? call.patch : call.log).data.temp_c, 37.056, "Save uses the typed reading, not a rounded unit conversion");
+    }
+  });
+  await check("temperature new unit edits and clearing replace the reading", async () => {
+    for (const relabel of [false, true]) {
+      await page.goto(`${url}?mode=form-temp`);
+      const form = page.getByRole("dialog").first();
+      await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).fill(relabel ? "37.2" : "98.7");
+      if (relabel) await form.getByRole("button", { name: "That looks like °C. Switch to °C?", exact: true }).click();
+      else {
+        await form.getByRole("radio", { name: "°C", exact: true }).click();
+        await form.getByRole("textbox", { name: "temperature in degrees Celsius", exact: true }).fill("37.2");
+      }
+      await form.getByRole("radio", { name: "°F", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('input[aria-label="temperature in degrees Fahrenheit"]')?.value === "99");
+      await form.getByRole("button", { name: "Log it", exact: true }).click();
+      assert.equal((await snapshot()).calls.find((x) => x.log)?.log.data.temp_c, 37.2, "An explicit Celsius correction replaces the previous reading");
+    }
+    await page.goto(`${url}?mode=form-temp-preset`);
+    const form = page.getByRole("dialog").first();
+    await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).fill("");
+    await form.getByRole("radio", { name: "°C", exact: true }).click();
+    assert.equal(await form.getByRole("textbox", { name: "temperature in degrees Celsius", exact: true }).inputValue(), "");
+    assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled(), "A cleared reading cannot be restored by switching units");
+  });
   await check("expanded nursing side correction", async () => {
     await page.goto(`${url}?mode=form-nursing-details`);
     const form = page.getByRole("dialog").first();

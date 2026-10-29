@@ -74,21 +74,22 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const [unit, setUnit] = useState<"F" | "C">(units === "metric" ? "C" : "F");
   const [value, setValue] = useState<number | null>(null);
+  const [tempC, setTempC] = useState<number | null>(null);
   const [when, setWhen] = useState<Date | null>(null);
   const [busy, setBusy] = useState(false);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [history, setHistory] = useState(false);
   const checks = useNumberChecks();
-  const dirty = useDraftChanged({ value, unit, when, invalid: checks.invalid });
+  const dirty = useDraftChanged({ timeInvalid, value, tempC, unit, when, invalid: checks.invalid });
   const write = care.access.write;
 
   const switchUnit = (u: "F" | "C") => {
     if (u === unit) return;
-    if (value != null) setValue(u === "C" ? r1(fToC(value)) : r1(cToF(value)));
+    setValue(tempC == null ? null : u === "C" ? r1(tempC) : r1(cToF(tempC)));
     setUnit(u);
   };
 
-  const tempC = value == null ? null : unit === "C" ? value : fToC(value);
   // Judge only a finished-looking number (not "10" on the way to "100.4"); the server takes 30–45 °C.
   const plausible = tempC != null && tempC >= 32 && tempC <= 43;
   const savable = tempC != null && tempC >= 30 && tempC <= 45;
@@ -99,6 +100,7 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
   const who = { members: state?.members ?? [], me: state?.me.email };
 
   const save = async () => {
+    if (timeInvalid) return;
     if (tempC == null || !savable) return;
     setBusy(true);
     setProblem(null);
@@ -125,7 +127,7 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
             onPrimary={() => void save()}
             label="Save"
             busy={busy}
-            disabled={checks.invalid || !savable}
+            disabled={timeInvalid || checks.invalid || !savable}
             hint={checks.invalid ? CHECK_NUMBER_HINT : !savable ? "Enter the reading." : undefined}
           />
         ) : undefined
@@ -148,7 +150,10 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
             </div>
             <Stepper
               value={value}
-              onChange={setValue}
+              onChange={(v) => {
+                setValue(v);
+                setTempC(v == null ? null : unit === "C" ? v : fToC(v));
+              }}
               onInvalid={checks.watch("reading")}
               step={0.1}
               decimals={1}
@@ -162,7 +167,7 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
               <button
                 type="button"
                 // The number typed is already °C: relabel it, don't convert it.
-                onClick={() => setUnit("C")}
+                onClick={() => { setTempC(value); setUnit("C"); }}
                 className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-mp-accent-fg"
               >
                 <Icon name="arrow-left-right" size={16} />
@@ -171,7 +176,7 @@ function TempForm({ open, onClose, care }: { open: boolean; onClose: () => void;
             )}
           </div>
           {note && <AssessmentCard a={note} audience="mom" />}
-          <WhenField value={when} onChange={setWhen} tz={tz} />
+          <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
           <Problem>{problem}</Problem>
         </>
       )}

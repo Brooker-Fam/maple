@@ -511,6 +511,7 @@ export function MiniStepper({
   value,
   onChange,
   step = 1,
+  quickStep,
   min = 0,
   max = 9999,
   decimals = 0,
@@ -522,6 +523,8 @@ export function MiniStepper({
   value: number | null;
   onChange: (v: number | null) => void;
   step?: number;
+  /** Adds larger, labelled adjustments beside the normal steps; use in a full-width row. */
+  quickStep?: number;
   min?: number;
   max?: number;
   decimals?: number;
@@ -543,13 +546,16 @@ export function MiniStepper({
     onChange(next);
   };
   // The same round wells as ui.tsx's Stepper, a size down so two fit abreast.
-  const btn = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink";
+  const btn = cx("flex shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink", quickStep ? "h-[44px] w-[44px]" : "h-11 w-11");
   return (
     <div className="min-w-0">
       <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
-      <div className="flex items-center gap-1">
+      <div className={cx("flex items-center", quickStep ? "gap-0.5" : "gap-1")}>
+        {quickStep && <RepeatButton ariaLabel={`${quickStep} fewer ${ariaLabel}`} onStep={() => bump(-quickStep)} disabled={(value ?? 0) <= min} className={cx(btn, "text-[15px] font-semibold")}>
+          −{quickStep}
+        </RepeatButton>}
         <RepeatButton ariaLabel={`Less ${ariaLabel}`} onStep={() => bump(-step)} disabled={(value ?? 0) <= min} className={btn}>
-          <Icon name="minus" size={20} />
+          {quickStep ? <span className="text-[15px] font-semibold">−{step}</span> : <Icon name="minus" size={20} />}
         </RepeatButton>
         <span className="relative min-w-0 flex-1">
           <input
@@ -572,8 +578,11 @@ export function MiniStepper({
           {unit && <span className={cx(tone.muted, "pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs")}>{unit}</span>}
         </span>
         <RepeatButton ariaLabel={`More ${ariaLabel}`} onStep={() => bump(step)} disabled={(value ?? 0) >= max} className={btn}>
-          <Icon name="plus" size={20} />
+          {quickStep ? <span className="text-[15px] font-semibold">+{step}</span> : <Icon name="plus" size={20} />}
         </RepeatButton>
+        {quickStep && <RepeatButton ariaLabel={`${quickStep} more ${ariaLabel}`} onStep={() => bump(quickStep)} disabled={(value ?? 0) >= max} className={cx(btn, "text-[15px] font-semibold")}>
+          +{quickStep}
+        </RepeatButton>}
       </div>
       <NumberProblem show={invalid} />
     </div>

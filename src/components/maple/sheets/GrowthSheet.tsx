@@ -98,41 +98,62 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
     };
   }, []);
 
-  // Stored in grams / cm; the fields hold whatever the current units show.
+  // Keep measured metric values separate from the rounded fields. Viewing
+  // another unit must not change a reading or revive one that was cleared.
   const initW = d.weight_g ?? pnum(preset, "weight_g");
+  const initLength = d.length_cm ?? pnum(preset, "length_cm");
+  const initHead = d.head_cm ?? pnum(preset, "head_cm");
+  const [weightG, setWeightG] = useState(initW);
+  const [lenCm, setLenCm] = useState(initLength);
+  const [headCm, setHeadCm] = useState(initHead);
   const [lb, setLb] = useState<number | null>(() => (initW != null ? gramsToLbOz(initW).lb : null));
   const [oz, setOz] = useState<number | null>(() => (initW != null ? gramsToLbOz(initW).oz : null));
   const [grams, setGrams] = useState<number | null>(() => (initW != null ? Math.round(initW) : null));
   const toLen = (cm: number | undefined, system: UnitSystem) =>
     cm == null ? null : system === "us" ? Math.round(cmToIn(cm) * 100) / 100 : Math.round(cm * 10) / 10;
-  const [length, setLength] = useState<number | null>(() => toLen(d.length_cm ?? pnum(preset, "length_cm"), units));
-  const [head, setHead] = useState<number | null>(() => toLen(d.head_cm ?? pnum(preset, "head_cm"), units));
+  const [length, setLength] = useState<number | null>(() => toLen(initLength, units));
+  const [head, setHead] = useState<number | null>(() => toLen(initHead, units));
   const [at, setAt] = useState<"home" | "doctor">(() => d.at ?? (pstr(preset, "at") === "home" ? "home" : "doctor"));
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const checks = useNumberChecks();
-  const dirty = useDraftChanged({ sys, lb, oz, grams, length, head, at, when, note, invalid: checks.invalid });
-  // Switching lb ↔ g converts what's shown; only typing or stepping counts as a change.
+  const dirty = useDraftChanged({ timeInvalid, sys, lb, oz, grams, length, head, weightG, lenCm, headCm, at, when, note, invalid: checks.invalid });
+  // Only typing or stepping changes the measured value.
   const { touched, touch } = useTouched();
-  const edit = (key: "weight" | "length" | "head", set: (v: number | null) => void) => (v: number | null) => {
+  const editWeight = (field: "lb" | "oz" | "g", value: number | null) => {
+    touch("weight");
+    if (field === "g") {
+      setGrams(value);
+      setWeightG(value ?? undefined);
+      return;
+    }
+    const nextLb = field === "lb" ? value : lb;
+    const nextOz = field === "oz" ? value : oz;
+    if (field === "lb") setLb(value);
+    else setOz(value);
+    setWeightG(nextLb == null && nextOz == null ? undefined : lbOzToGrams(nextLb ?? 0, nextOz ?? 0));
+  };
+  const editLength = (key: "length" | "head", value: number | null) => {
     touch(key);
-    set(v);
+    const cm = value == null ? undefined : us ? inToCm(value) : value;
+    if (key === "length") {
+      setLength(value);
+      setLenCm(cm);
+    } else {
+      setHead(value);
+      setHeadCm(cm);
+    }
   };
 
-  const weightG = us ? (lb == null && oz == null ? undefined : lbOzToGrams(lb ?? 0, oz ?? 0)) : (grams ?? undefined);
-  const lenCm = length == null ? undefined : us ? inToCm(length) : length;
-  const headCm = head == null ? undefined : us ? inToCm(head) : head;
-
-  /** Switch the form's units, carrying the numbers across. */
+  /** Convert the display from the measured values, never from a rounded display. */
   const switchUnits = (next: UnitSystem) => {
     if (next === sys) return;
-    if (weightG != null) {
-      const w = gramsToLbOz(weightG);
-      setLb(w.lb);
-      setOz(w.oz);
-      setGrams(Math.round(weightG));
-    }
+    const w = weightG == null ? null : gramsToLbOz(weightG);
+    setLb(w?.lb ?? null);
+    setOz(w?.oz ?? null);
+    setGrams(weightG == null ? null : Math.round(weightG));
     setLength(toLen(lenCm, next));
     setHead(toLen(headCm, next));
     setSys(next);
@@ -154,9 +175,9 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   const hasAny = weightG != null || lenCm != null || headCm != null;
 
   const data = {
-    weight_g: weightG != null ? Math.round(weightG) : undefined,
-    length_cm: lenCm != null ? Math.round(lenCm * 10) / 10 : undefined,
-    head_cm: headCm != null ? Math.round(headCm * 10) / 10 : undefined,
+    weight_g: weightG != null && touched.weight ? Math.round(weightG) : weightG,
+    length_cm: lenCm != null && touched.length ? Math.round(lenCm * 10) / 10 : lenCm,
+    head_cm: headCm != null && touched.head ? Math.round(headCm * 10) / 10 : headCm,
     at,
   };
   // The server's limits; anything outside can't be saved.
@@ -177,6 +198,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const save = async () => {
+    if (timeInvalid) return;
     const noteVal = note.trim() || null;
     const bits = [
       data.weight_g != null && formatWeight(data.weight_g, sys),
@@ -228,7 +250,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={checks.invalid || !savable || (!!e && e.id < 0)}
+          disabled={timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
           hint={
             checks.invalid
               ? CHECK_NUMBER_HINT
@@ -270,33 +292,33 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
       </div>
 
       <section aria-label="Weight">
-        {/* One label; the units sit in the fields, so lb + oz read like the scale ("7 lb 2.6 oz"). */}
+        {/* Keep enough space for the measured numbers on narrow phones. */}
         <Label optional className="mb-0">
           Weight
         </Label>
         {us ? (
-          <div className="grid grid-cols-2 gap-3">
-            <MiniStepper key="lb" label={null} unit="lb" ariaLabel="pounds" value={lb} onChange={edit("weight", setLb)} max={40} onInvalid={checks.watch("lb")} />
-            <MiniStepper key="oz" label={null} unit="oz" ariaLabel="ounces" value={oz} onChange={edit("weight", setOz)} step={0.1} decimals={1} max={15.9} onInvalid={checks.watch("oz")} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <MiniStepper key="lb" label={null} unit="lb" ariaLabel="pounds" value={lb} onChange={(v) => editWeight("lb", v)} max={40} onInvalid={checks.watch("lb")} />
+            <MiniStepper key="oz" label={null} unit="oz" ariaLabel="ounces" value={oz} onChange={(v) => editWeight("oz", v)} step={0.1} decimals={1} max={15.9} onInvalid={checks.watch("oz")} />
           </div>
         ) : (
-          <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={edit("weight", setGrams)} step={10} max={30000} onInvalid={checks.watch("grams")} />
+          <MiniStepper key="grams" label={null} unit="g" ariaLabel="grams" value={grams} onChange={(v) => editWeight("g", v)} step={10} max={30000} onInvalid={checks.watch("grams")} />
         )}
         <Reading p={pW} warn={off("weight", weightG, rW)} extra={!us && weightG ? `${(weightG / 1000).toFixed(2)} kg` : undefined} />
       </section>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <section aria-label="Length">
-          <MiniStepper label={`Length`} unit={lenUnit} ariaLabel={`length in ${us ? "inches" : "centimetres"}`} value={length} onChange={edit("length", setLength)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 50 : 130} onInvalid={checks.watch("length")} />
+          <MiniStepper label={`Length`} unit={lenUnit} ariaLabel={`length in ${us ? "inches" : "centimetres"}`} value={length} onChange={(v) => editLength("length", v)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 50 : 130} onInvalid={checks.watch("length")} />
           <Reading p={pL} warn={off("length", lenCm, rL)} compact />
         </section>
         <section aria-label="Head">
-          <MiniStepper label={`Head`} unit={lenUnit} ariaLabel={`head circumference in ${us ? "inches" : "centimetres"}`} value={head} onChange={edit("head", setHead)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 25 : 60} onInvalid={checks.watch("head")} />
+          <MiniStepper label={`Head`} unit={lenUnit} ariaLabel={`head circumference in ${us ? "inches" : "centimetres"}`} value={head} onChange={(v) => editLength("head", v)} step={us ? 0.25 : 0.5} decimals={2} max={us ? 25 : 60} onInvalid={checks.watch("head")} />
           <Reading p={pH} warn={off("head", headCm, rH)} compact />
         </section>
       </div>
 
-      <WhenField value={when} onChange={setWhen} tz={tz} offsets={[30, 60, 120, 240]} />
+      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} offsets={[30, 60, 120, 240]} />
       <NoteField value={note} onChange={setNote} placeholder="Anything the doctor said?" />
       {sex == null ? (
         <ContextNote>

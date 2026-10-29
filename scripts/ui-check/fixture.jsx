@@ -104,6 +104,7 @@ function App() {
     now: () => latest.current.now,
     refresh: async () => {},
     api: detailApi,
+    log: async (entry) => { calls.current.push({ log: true, entry }); return entry; },
     toast: (text, options) => message(text, options?.undo),
     readOnly,
     units: "us",
@@ -123,6 +124,13 @@ function App() {
       setNow: (at) => setNow(new Date(at)),
       setReadOnly,
       setRealDetails,
+      openManualFeed: () => {
+        setRealDetails(true);
+        setReadOnly(false);
+        setNow(new Date(INITIAL_NOW));
+        calls.current = [];
+        setRoutedSheet({ kind: "feed" });
+      },
       failDetailsConflict: () => { detailFailure.current = true; },
       historicalFailure: (kind) => { timerFailure.current = kind; },
       loadHistorical: () => setHistoricalLoaded(true),

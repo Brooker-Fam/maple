@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { planView } from "../src/lib/maple/care";
 import { FixtureContext } from "./ui-review-care-mocks";
@@ -29,8 +29,9 @@ function App() {
   const scenario = new URLSearchParams(location.search).get("scenario") ?? "detail";
   const [open, setOpen] = useState(true);
   const requests = [];
+  const readings = useRef([]);
   const failures = { history: false, save: true, cap: false };
-  window.__careFixture = { failures, requests };
+  window.__careFixture = { failures, requests, readings: readings.current };
   const api = useCallback(async (pathname) => {
     const url = new URL(pathname.startsWith("/") ? pathname : `/api/maple/${pathname}`, "https://maple-care.example.test");
     requests.push(url.search);
@@ -55,9 +56,9 @@ function App() {
     access: { read: true, write: true, private: true, therapist: true, mood: false, manage: true },
     state: { settings: {}, plans: [plan], entries: [recentDose, ...recentTemps], person: { member: email, name: "Example Parent", created_by: email } },
     plans: [view], finished: [], rows: [view], doses: () => [recentDose],
-    act: { savePlan: rejectSave, logTemp: rejectSave, logDose: rejectSave, patchPerson: rejectSave, editEntry: rejectSave, editDoseTime: rejectSave },
+    act: { savePlan: rejectSave, logTemp: async (tempC, at) => { readings.current.push({ tempC, at }); return rejectSave(); }, logDose: rejectSave, patchPerson: rejectSave, editEntry: rejectSave, editDoseTime: rejectSave },
   };
-  const maple = { state, now: () => now, api, units: "us", memberName: () => "Example Parent", memberLabel: () => "Example Parent", refresh: async () => {}, toast() {} };
+  const maple = { state, now: () => now, api, units: new URLSearchParams(location.search).get("units") === "metric" ? "metric" : "us", memberName: () => "Example Parent", memberLabel: () => "Example Parent", refresh: async () => {}, toast() {} };
   const close = () => setOpen(false);
   return <FixtureContext.Provider value={{ maple, care }}><main className="p-5"><h1>Example care</h1><button onClick={() => setOpen(true)}>Open example</button></main>
     {scenario === "detail" && <PlanDetail planId={open ? plan.id : null} care={care} onClose={close} />}

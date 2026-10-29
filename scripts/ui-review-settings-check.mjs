@@ -90,8 +90,8 @@ try {
     await dialog.getByLabel("Birth time not known").uncheck();
     assert(await dialog.getByRole("button", { name: "Save", exact: true }).isDisabled(), "An unknown time cannot become an exact time without choosing one");
     await dialog.getByRole("button", { name: "Pick a time", exact: true }).click();
-    await dialog.getByRole("button", { name: "Exact time…", exact: true }).click();
-    await dialog.getByLabel("Born: exact time: exact clock time", { exact: true }).fill("11:00");
+    await dialog.getByLabel("Born: exact time: date", { exact: true }).fill("2026-10-27");
+    await dialog.getByLabel("Born: exact time: time", { exact: true }).fill("11:00");
     await dialog.getByLabel("Birth time not known").check();
     assert.equal(await dialog.getByLabel("Birth date", { exact: true }).inputValue(), "2026-10-27", "Switching to an unknown time preserves the selected birth day");
     await dialog.getByLabel("Birth date", { exact: true }).fill("2026-10-29");

@@ -80,6 +80,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const [milestone, setMilestone] = useState(() => moment?.data.milestone ?? str(preset?.milestone));
   const [note, setNote] = useState(() => moment?.note ?? str(preset?.note));
   const [when, setWhen] = useState<Date | null>(() => (moment ? new Date(moment.started_at) : presetStart(preset)));
+  const [timeInvalid, setTimeInvalid] = useState(false);
   const [whenFromPhoto, setWhenFromPhoto] = useState(false);
   const whenTouched = useRef(isEdit || !!presetStart(preset));
   const [showAllChips, setShowAllChips] = useState(() => {
@@ -90,7 +91,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const [storage, setStorage] = useState<Storage>("checking");
   const [storageAttempt, setStorageAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
-  const dirty = useDraftChanged({ title, milestone, note, when, photos: items.map((item) => item.id) });
+  const dirty = useDraftChanged({ timeInvalid, title, milestone, note, when, photos: items.map((item) => item.id) });
 
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
@@ -269,7 +270,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   const failed = items.filter((it) => it.status === "error").length;
   const pending = items.length - done.length - failed;
   const hasWords = !!(title.trim() || milestone || note.trim());
-  const canSave = !readOnly && !saving && !uploading && (isEdit || hasWords || done.length > 0);
+  const canSave = !timeInvalid && !readOnly && !saving && !uploading && (isEdit || hasWords || done.length > 0);
 
   const save = async () => {
     // A closed sheet's photos are already gone from storage.
@@ -485,6 +486,7 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
         <div>
           <WhenField
             value={when}
+            onInvalidChange={setTimeInvalid}
             onChange={(d) => {
               whenTouched.current = true;
               setWhenFromPhoto(false);

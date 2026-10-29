@@ -103,6 +103,7 @@ export function Chip({
   color,
   raised,
   className,
+  disabled,
   "aria-label": ariaLabel,
 }: {
   children: ReactNode;
@@ -113,17 +114,19 @@ export function Chip({
   /** Sitting on a sunken well (the time scrubber): give it a surface so it still reads as a chip. */
   raised?: boolean;
   className?: string;
+  disabled?: boolean;
   "aria-label"?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={selected}
       aria-label={ariaLabel}
       style={selected && color ? { backgroundColor: color, borderColor: color } : undefined}
       className={cx(
-        "mp-control inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition active:scale-[0.97]",
+        "mp-control inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition active:scale-[0.97] disabled:opacity-40 disabled:active:scale-100",
         selected
           ? color
             ? "mp-kind-fill text-white"
