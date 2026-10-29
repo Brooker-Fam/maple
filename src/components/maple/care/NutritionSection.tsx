@@ -59,7 +59,9 @@ export default function NutritionSection({ care }: { care: UseCare }) {
     </label>
     {history.loading && !history.loaded && <p role="status" className={cx(tone.muted, "px-1 text-[14px]")}>Loading food and drink…</p>}
     {history.error && day !== today && <div role="alert" className={cx(tone.inset, "space-y-2 p-3 text-[14px]")}><p>{history.loaded ? "Couldn't refresh this day. Showing the last loaded entries." : "Couldn't load this day."} {history.error}</p><Button variant="soft" onClick={history.reload}>Try again</Button></div>}
-    {(day === today || history.loaded) && <><NutritionDaySummary entries={entries} units={units} /><NutritionJournal entries={entries} units={units} tz={tz} writable={care.access.write} saving={saving} onEdit={(entry) => setSheet({ kind: entry.kind, entry })} onRemove={(entry) => void remove(entry)} onRepeat={(entry) => void repeat(entry)} /></>}
+    {(day === today || history.loaded) && <NutritionDaySummary entries={entries} units={units} />}
+    {day !== today && !history.loaded && entries.length > 0 && <p className={cx(tone.muted, "px-1 text-[13px]")}>Entries saved on this phone are shown below. The rest of this day hasn&apos;t loaded yet.</p>}
+    {(day === today || history.loaded || entries.length > 0) && <NutritionJournal entries={entries} units={units} tz={tz} writable={care.access.write} saving={saving} onEdit={(entry) => setSheet({ kind: entry.kind, entry })} onRemove={(entry) => void remove(entry)} onRepeat={(entry) => void repeat(entry)} />}
     {sheet && care.access.write && <NutritionEntrySheet key={sheet.entry?.id ?? sheet.kind} {...sheet} care={care} onClose={() => setSheet(null)} onSave={saveEntry} saving={saving}
       currentEntry={day === today ? undefined : sheet.entry ? history.entries.find((entry) => entry.id === sheet.entry?.id) ?? null : undefined} onRefresh={history.reload} />}
   </section>;

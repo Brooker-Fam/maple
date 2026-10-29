@@ -6,7 +6,7 @@ import type { Celebration } from "@/lib/maple/insights";
 import { DEFAULT_TZ, dayKey } from "@/lib/maple/time";
 import { MAPLE_LEAF_PATH } from "./Hero";
 import { Icon } from "./icons";
-import { LeafMark, ageShort, keptDate } from "./keepsake";
+import { LeafMark, ageShort, keptDate, keepsakeBirthAt } from "./keepsake";
 import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
 import { Button, cx, tone } from "./ui";
@@ -106,7 +106,7 @@ export default function Celebrations() {
 
   // "Day 4 · Fri, Oct 23", and the words whoever logged it wrote on that entry ("Lifted her head for a second!").
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const bornAt = state?.baby.born_at ?? null;
+  const bornAt = keepsakeBirthAt(state?.baby);
   const dated = current
     ? [!AGE_TITLED.test(current.id) && ageShort(bornAt, current.reachedAt, tz), keptDate(dayKey(new Date(current.reachedAt), tz), dayKey(now(), tz))]
         .filter(Boolean)

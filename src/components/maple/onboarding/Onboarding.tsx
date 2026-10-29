@@ -35,12 +35,13 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
   const [careConsent, setCareConsent] = useState(false);
   const view = ob.view;
   const [dirty, setDirty] = useState(false);
+  const [chatDraft, setChatDraft] = useState("");
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty && !chatDraft.trim()) return;
     const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty]);
+  }, [dirty, chatDraft]);
 
   if (!view.owner) return <Waiting ob={ob} onDone={() => onDone(false)} />;
 
@@ -125,6 +126,8 @@ export default function Onboarding({ initial, onDone }: { initial: OnboardingVie
           <Suspense fallback={null}>
             <OnboardingChat
               ob={wrapped}
+              draft={chatDraft}
+              setDraft={setChatDraft}
               onCare={() => {
                 if (!discard()) return;
                 setDirty(false);

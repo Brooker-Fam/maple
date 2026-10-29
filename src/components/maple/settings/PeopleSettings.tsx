@@ -38,15 +38,21 @@ export default function People() {
   const owner = me.role === "owner";
   const members = state!.members;
   const [invites, setInvites] = useState<Invite[]>([]);
+  const [inviteProblem, setInviteProblem] = useState<string | null>(null);
+  const [loadingInvites, setLoadingInvites] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
 
   const loadInvites = useCallback(async () => {
     if (!owner) return;
+    setLoadingInvites(true);
     try {
       const r = await api<{ invites: Invite[] }>("/api/maple/invites");
       setInvites(r.invites);
+      setInviteProblem(null);
     } catch {
-      // the list just stays as it was
+      setInviteProblem("Couldn't check pending invites. Try again to see who still has a link.");
+    } finally {
+      setLoadingInvites(false);
     }
   }, [api, owner]);
 
@@ -98,6 +104,14 @@ export default function People() {
               );
             })}
         </ul>
+        {owner && inviteProblem && (
+          <div className={cx(tone.inset, "mt-3 space-y-2 px-4 py-3")}>
+            <p role="alert" className={cx(tone.body, "text-[14px] leading-snug")}>{inviteProblem}</p>
+            <Button variant="soft" size="sm" disabled={loadingInvites} onClick={() => void loadInvites()}>
+              {loadingInvites ? "Checking…" : "Try again"}
+            </Button>
+          </div>
+        )}
       </Section>
 
       {owner && (
@@ -366,7 +380,8 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
   const [emoji, setEmoji] = useState("");
   const [role, setRole] = useState<"member" | "viewer">("viewer");
   const [busy, setBusy] = useState(false);
-  const [url, setUrl] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ url: string; name: string; role: "member" | "viewer" } | null>(null);
+  const url = created?.url;
   const [canShare, setCanShare] = useState(false);
 
   useEffect(() => {
@@ -379,19 +394,20 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
       setName("");
       setEmoji("");
       setRole("viewer");
-      setUrl(null);
+      setCreated(null);
     }
   }, [open]);
 
   const create = async () => {
     if (!name.trim() || busy) return;
+    const submitted = { name: name.trim(), role };
     setBusy(true);
     try {
       const r = await api<{ url: string }>("/api/maple/invites", {
         method: "POST",
-        body: JSON.stringify({ display_name: name.trim(), emoji, role }),
+        body: JSON.stringify({ display_name: submitted.name, emoji, role: submitted.role }),
       });
-      setUrl(r.url);
+      setCreated({ ...submitted, url: r.url });
       onCreated();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't make a link", { tone: "error" });
@@ -401,12 +417,12 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
   };
 
   const share = async () => {
-    if (!url) return;
+    if (!created) return;
     try {
       await navigator.share({
         title: "Maple's Log",
-        text: `${name.trim() ? `${name.trim()}, here's` : "Here's"} your way into Maple's Log 🍁 (the link works once, for 7 days)`,
-        url,
+        text: `${created.name}, here's your way into Maple's Log 🍁 (the link works once, for 7 days)`,
+        url: created.url,
       });
     } catch {
       // cancelled
@@ -416,6 +432,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
   return (
     <Sheet
       open={open}
+      locked={busy}
       dirty={!url && (!!name.trim() || !!emoji || role !== "viewer")}
       onClose={onClose}
       title={url ? "Link ready" : "Invite with a link"}
@@ -431,8 +448,8 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
         )
       }
     >
-      {!url ? (
-        <>
+      {!created ? (
+        <fieldset disabled={busy} className="min-w-0 space-y-4">
           <Field label="Their name">
             <input className={tone.input} value={name} maxLength={40} placeholder="Grandma Sue" onChange={(e) => setName(e.target.value)} />
           </Field>
@@ -462,18 +479,26 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
                 : "Members can add and edit the baby's log. They can also see and add to the recovery page, including medicines, temperatures, food and drinks, questions and check-ins, when it is set up."}
             </p>
           </div>
-        </>
+        </fieldset>
       ) : (
         <>
           <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
-            Send this to {name.trim() || "them"}. It works <strong className="font-semibold">once</strong>, for <strong className="font-semibold">7 days</strong>, and signs them in on whichever phone
+            Send this to {created.name}. It works <strong className="font-semibold">once</strong>, for <strong className="font-semibold">7 days</strong>, and signs them in on whichever phone
             opens it. You won&apos;t see this link again.
           </p>
+          <div className="space-y-1">
+            <p className={cx(tone.body, "text-[15px] font-semibold")}>{created.role === "member" ? "Member · can log" : "Viewer · view only"}</p>
+            <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+              {created.role === "member"
+                ? "This link also gives access to the recovery page, including medicines, temperatures, food and drinks, questions and check-ins, when it is set up."
+                : "This link does not give access to the recovery page or allow changes to the baby's log."}
+            </p>
+          </div>
           <div className={cx(tone.inset, "p-3")}>
             <p className="font-mono text-[13px] leading-relaxed break-all text-mp-ink select-all">{url}</p>
           </div>
           <div className="flex gap-2">
-            <CopyButton text={url} label="Copy link" className="min-h-[48px] flex-1 text-[15px]" />
+            <CopyButton text={created.url} label="Copy link" className="min-h-[48px] flex-1 text-[15px]" />
             {canShare && (
               <Button className="min-h-[48px] flex-1" onClick={() => void share()}>
                 <Icon name="share" size={18} />

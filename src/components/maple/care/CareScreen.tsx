@@ -33,7 +33,7 @@ import { type UseCare, useCare } from "./useCare";
 export default function CareScreen() {
   const care = useCare();
   if (!care) return null;
-  return <Page care={care} />;
+  return <Page key={care.state.person.member} care={care} />;
 }
 
 type Sub = { kind: "detail"; planId: number } | { kind: "add" } | { kind: "settings" } | { kind: "questions" } | { kind: "history" } | null;
@@ -88,8 +88,6 @@ function Page({ care }: { care: UseCare }) {
         <CrisisStrip />
       </div>
 
-      <NutritionSection key={`${state?.family?.id}:${state?.me.email}:${care.state.person.member}`} care={care} />
-
       <div className={cx("grid gap-2", actions.length === 4 ? "grid-cols-4" : "grid-cols-1")} role="group" aria-label="Quick actions">
         {actions.map((a) => (
           <button
@@ -108,6 +106,8 @@ function Page({ care }: { care: UseCare }) {
           </button>
         ))}
       </div>
+
+      <NutritionSection key={`${state?.family?.id}:${state?.me.email}:${care.state.person.member}`} care={care} />
 
       <RecentDoses care={care} />
       <div className={GROUP}><NavRow icon="history" label="Care history" note="Older doses and temperatures by date" onClick={() => setSub({ kind: "history" })} /></div>

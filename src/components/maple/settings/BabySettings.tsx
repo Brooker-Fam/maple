@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { alertsOn } from "@/lib/maple/insights";
 import { dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import { formatLength, formatWeight } from "@/lib/maple/units";
@@ -45,6 +45,8 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
   const [busy, setBusy] = useState<"profile" | "doctor" | null>(null);
   const [birthOpen, setBirthOpen] = useState(false);
   const [toggles, setToggles] = useState<Record<string, boolean>>({});
+  const settingsInFlight = useRef(new Set<string>());
+  const [savingSettings, setSavingSettings] = useState(new Set<string>());
 
   const p = { ...profileSrc, ...pEdits };
   const d = { ...doctorSrc, ...dEdits };
@@ -76,8 +78,8 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
     try {
       await api("/api/maple/baby", { method: "PATCH", body: JSON.stringify(body) });
       await refresh();
-      if (which === "profile") setPEdits({});
-      else setDEdits({});
+      if (which === "profile") setPEdits((edits) => Object.fromEntries(Object.entries(edits).filter(([key, value]) => value !== pEdits[key as keyof Profile])));
+      else setDEdits((edits) => Object.fromEntries(Object.entries(edits).filter(([key, value]) => value !== dEdits[key as keyof Doctor])));
       toast("Saved");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't save", { tone: "error" });
@@ -87,13 +89,23 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
   };
 
   const setSetting = async (key: string, value: boolean) => {
+    if (settingsInFlight.current.has(key)) return;
+    settingsInFlight.current.add(key);
+    setSavingSettings(new Set(settingsInFlight.current));
     setToggles((t) => ({ ...t, [key]: value }));
     try {
       await api("/api/maple/baby", { method: "PATCH", body: JSON.stringify({ settings: { [key]: value } }) });
       await refresh();
     } catch (e) {
-      setToggles((t) => ({ ...t, [key]: !value }));
       toast(e instanceof Error ? e.message : "Couldn't save", { tone: "error" });
+    } finally {
+      settingsInFlight.current.delete(key);
+      setSavingSettings(new Set(settingsInFlight.current));
+      setToggles((t) => {
+        const next = { ...t };
+        delete next[key];
+        return next;
+      });
     }
   };
   const flag = (key: string) => toggles[key] ?? settings[key] !== false;
@@ -233,6 +245,7 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
             label="Warnings & reminders"
             hint="Feed gaps, diaper counts, weight, vitamin D and checkups. They only make sense when everything gets logged. A temperature, oxygen reading or poop color is still checked as you enter it."
             checked={warnings}
+            disabled={savingSettings.has("show_alerts")}
             onChange={(v) => void setSetting("show_alerts", v)}
           />
           {warnings && (
@@ -240,6 +253,7 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
               label="Vitamin D reminder"
               hint="A gentle evening nudge if no vitamin D drops are logged that day."
               checked={flag("vitamin_d_reminder")}
+              disabled={savingSettings.has("vitamin_d_reminder")}
               onChange={(v) => void setSetting("vitamin_d_reminder", v)}
             />
           )}
@@ -247,24 +261,28 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
             label="Show diaper brigade"
             hint="Who changed how many this week, nights included."
             checked={flag("show_brigade")}
+            disabled={savingSettings.has("show_brigade")}
             onChange={(v) => void setSetting("show_brigade", v)}
           />
           <Toggle
             label="Nursing"
             hint="Left and Right on Today. Running feeds and nursing already logged still show."
             checked={toggles.track_nursing ?? logSwitches(baby).nursing}
+            disabled={savingSettings.has("track_nursing")}
             onChange={(v) => void setSetting("track_nursing", v)}
           />
           <Toggle
             label="Bottles"
             hint="The Bottle button on Today. Bottles already logged still show."
             checked={flag("feeds_bottle")}
+            disabled={savingSettings.has("feeds_bottle")}
             onChange={(v) => void setSetting("feeds_bottle", v)}
           />
           <Toggle
             label="Pumping"
             hint="Pump in More. Off, it's hidden; pumping already logged still shows."
             checked={flag("track_pump")}
+            disabled={savingSettings.has("track_pump")}
             onChange={(v) => void setSetting("track_pump", v)}
           />
         </div>

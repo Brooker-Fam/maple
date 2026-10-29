@@ -34,8 +34,14 @@ export function useNutritionHistory(day: string, today: string) {
       });
     return () => { active = false; controller.abort(); };
   }, [api, allowed, day, entryVersion, family, key, revision, stateVersion, today]);
+  const pending = allowed ? (state?.care?.entries ?? []).filter((entry): entry is CareNutritionEntry =>
+    (entry.kind === "food" || entry.kind === "drink") && (entry.pending === true || entry.id < 0) && dayKey(new Date(entry.at), tz) === day
+  ) : [];
+  const saved = result?.key === key && allowed ? result.entries : [];
+  const entries = [...pending, ...saved.filter((entry) => !pending.some((item) => item.id === entry.id))]
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id);
   return {
-    entries: result?.key === key && allowed ? result.entries : [],
+    entries,
     loaded: result?.key === key && result.loaded,
     loading: day !== today && allowed && (result?.key !== key || result.loading),
     error: result?.key === key ? result.error : null,

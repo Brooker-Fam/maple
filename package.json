@@ -33,7 +33,8 @@
     "check:maple-sync": "node scripts/maple-sync-check/run.mjs",
     "check:maple-feed-status": "tsx scripts/maple-feed-status-check.ts",
     "check:maple-diagnostics": "tsx scripts/maple-diagnostics-check.ts",
-    "check:maple-ui-review": "node scripts/ui-review-check.mjs"
+    "check:maple-ui-review": "node scripts/ui-review-check.mjs",
+    "check:maple-ui-recovery": "node scripts/ui-recovery-check.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.45",

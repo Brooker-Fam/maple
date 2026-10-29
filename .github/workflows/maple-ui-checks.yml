@@ -93,6 +93,11 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: pnpm check:maple-ui-review
+      - name: Check failed saves and family changes
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-ui-recovery
       - name: Save synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -110,6 +115,10 @@ jobs:
             test-results/maple-settings-ui
             test-results/maple-moments-ui
             test-results/maple-care-ui
+            test-results/maple-notification-recovery
+            test-results/maple-onboarding-recovery
+            test-results/maple-logging-recovery
+            test-results/maple-care-recovery
           if-no-files-found: ignore
       - name: Build without database migrations
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

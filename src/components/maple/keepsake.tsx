@@ -1,6 +1,7 @@
 "use client";
 
-import { babyAge, parseDayKey } from "@/lib/maple/time";
+import { babyAge, dayBounds, dayKey, parseDayKey } from "@/lib/maple/time";
+import type { Baby } from "@/lib/maple/types";
 import { MAPLE_LEAF_PATH } from "./Hero";
 import { cx } from "./ui";
 
@@ -22,7 +23,13 @@ export function LeafMark({ size = 22, className }: { size?: number; className?: 
   );
 }
 
-/** Compact age for Firsts, cards and celebrations: "Day 3", "2w 3d", "3mo"; null before she's born. */
+export function keepsakeBirthAt(baby: Pick<Baby, "born_at" | "timezone" | "settings"> | null | undefined): string | null {
+  if (!baby?.born_at) return null;
+  return baby.settings.birth_time_approx === true
+    ? dayBounds(dayKey(new Date(baby.born_at), baby.timezone), baby.timezone)[0].toISOString()
+    : baby.born_at;
+}
+
 export function ageShort(bornAt: string | null, at: string, tz: string): string | null {
   if (!bornAt) return null;
   if (Date.parse(at) < Date.parse(bornAt)) return "Before birth";

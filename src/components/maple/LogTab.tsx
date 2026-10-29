@@ -140,6 +140,7 @@ export function useEntryRange(fromKey: string, toKey: string) {
   const [attempt, setAttempt] = useState(0);
   const [fails, setFails] = useState(0);
   const inflight = useRef(new Set<number>());
+  const failedWeeks = useRef(new Map<number, string>());
   /** Weeks holding an entry someone opened (and may have edited or deleted): refresh on the next change. */
   const dirty = useRef(new Set<number>());
   const mounted = useRef(true);
@@ -180,11 +181,14 @@ export function useEntryRange(fromKey: string, toKey: string) {
             const chunk: Chunk = { entries: res.entries, at: Date.now(), rev, partialDays: res.partialDays };
             dirty.current.delete(i);
             setChunks((m) => new Map(m).set(i, chunk));
-            setError(null);
-            setFails(0);
+            failedWeeks.current.delete(i);
+            setError(failedWeeks.current.values().next().value ?? null);
+            if (!failedWeeks.current.size) setFails(0);
           } catch (e) {
             if (!mounted.current) return;
-            setError(e instanceof Error ? e.message : "Couldn't load the log");
+            const message = e instanceof Error ? e.message : "Couldn't load the log";
+            failedWeeks.current.set(i, message);
+            setError(message);
             setFails((n) => n + 1);
           } finally {
             inflight.current.delete(i);
@@ -212,7 +216,6 @@ export function useEntryRange(fromKey: string, toKey: string) {
 
   const reload = useCallback(() => {
     setFails(0);
-    setError(null);
     setAttempt((a) => a + 1);
   }, []);
 
@@ -533,10 +536,10 @@ export default function LogTab({
         </p>
       )}
 
-      {error && !ready && (
+      {error && (
         <div className={cx(tone.card, "mb-5 flex items-center gap-3 py-2.5 pr-2.5 pl-4")} role="status">
           <Icon name="cloud-off" size={20} className="shrink-0 text-mp-ink-3" />
-          <p className={cx(tone.body, "flex-1 text-sm")}>Couldn&apos;t load older days. Recent entries are below.</p>
+          <p className={cx(tone.body, "flex-1 text-sm")}>{ready ? "Couldn't refresh the log. Showing the entries already loaded." : "Couldn't load older days. Recent entries are below."}</p>
           <Button size="sm" variant="soft" onClick={reload}>
             Try again
           </Button>

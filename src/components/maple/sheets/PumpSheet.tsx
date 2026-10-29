@@ -45,12 +45,12 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const toDisplay = (ml: number | undefined) => (ml == null ? null : metric ? Math.round(ml / 5) * 5 : Math.round(mlToOz(ml) * 4) / 4);
   const toMl = (v: number | null) => (v == null ? undefined : Math.round((metric ? v : ozToMl(v)) * 10) / 10);
 
-  const [mode, setMode] = useState<"sides" | "total">(() =>
-    e ? (e.data.left_ml != null || e.data.right_ml != null ? "sides" : e.data.total_ml != null ? "total" : "sides") : "sides"
-  );
+  const originalMode = e?.data.left_ml != null || e?.data.right_ml != null ? "sides" : e?.data.total_ml != null ? "total" : "sides";
+  const originalTotal = e?.data.total_ml ?? (e?.data.left_ml != null || e?.data.right_ml != null ? (e.data.left_ml ?? 0) + (e.data.right_ml ?? 0) : undefined);
+  const [mode, setMode] = useState<"sides" | "total">(originalMode);
   const [left, setLeft] = useState<number | null>(() => toDisplay(e?.data.left_ml ?? pnum(preset, "left_ml")));
   const [right, setRight] = useState<number | null>(() => toDisplay(e?.data.right_ml ?? pnum(preset, "right_ml")));
-  const [total, setTotal] = useState<number | null>(() => toDisplay(e?.data.total_ml ?? pnum(preset, "total_ml")));
+  const [total, setTotal] = useState<number | null>(() => toDisplay(originalTotal ?? pnum(preset, "total_ml")));
   const [range, setRange] = useState<[Date, Date]>(() => {
     if (e) {
       const s = new Date(e.started_at);
@@ -83,11 +83,17 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     const noteVal = note.trim() || null;
     if (e) {
       setBusy(true);
-      // Only amounts that were changed (and only those showing): they display rounded, so
-      // re-sending untouched ones would drift, and the other mode's fields stay as they were.
       const changed: Record<string, unknown> = {};
       const fields = mode === "sides" ? (["left_ml", "right_ml"] as const) : (["total_ml"] as const);
       for (const k of fields) if (touched[k]) changed[k] = data[k] ?? null;
+      if (mode !== originalMode || Object.keys(changed).length) {
+        if (mode === "sides") changed.total_ml = null;
+        else {
+          changed.left_ml = null;
+          changed.right_ml = null;
+          if (!touched.total_ml) changed.total_ml = originalTotal ?? null;
+        }
+      }
       const patch = running
         ? { note: noteVal }
         : {

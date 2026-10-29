@@ -48,11 +48,10 @@ const FALLBACK: readonly string[] = ["form", "off", "limit"];
 const STOPPED = "The chat stopped there. Your answers so far are kept; carry on with the card below.";
 const UNAVAILABLE = "The chat isn't available right now, so the questions carry on here with buttons.";
 
-export default function OnboardingChat({ ob, onCare, onReview, onDecline, onFallback }: { ob: Onboarding; onCare: () => void; onReview: () => void; onDecline: () => void; onFallback: (why: string) => void }) {
+export default function OnboardingChat({ ob, draft, setDraft, onCare, onReview, onDecline, onFallback }: { ob: Onboarding; draft: string; setDraft: (value: string) => void; onCare: () => void; onReview: () => void; onDecline: () => void; onFallback: (why: string) => void }) {
   const { api, online } = useMaple();
   const [consent, setConsent] = useState<ChatConsent | null>(null);
   const [requestVersions, setRequestVersions] = useState(ob.versions);
-  const [draft, setDraft] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [confirmationNeeded, setConfirmationNeeded] = useState(false);
   const [help, setHelp] = useState(false);

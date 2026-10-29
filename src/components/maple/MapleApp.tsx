@@ -140,7 +140,7 @@ function Screens() {
   const tabs = TABS.flatMap((t) => (t.id !== "care" ? [t] : care ? [{ ...t, label: care.name.split(" ")[0] || care.name }] : []));
 
   return (
-    <div className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
+    <div key={`${state.family?.id ?? 1}:${state.me.email}`} className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
       <SyncStatus />
       <AnimatePresence mode="wait">
         <motion.div

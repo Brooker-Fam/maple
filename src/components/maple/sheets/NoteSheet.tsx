@@ -51,7 +51,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const canSave = doctor ? !!words : !!(tag || words);
 
   const save = async () => {
-    if (!canSave) return;
+    if (!canSave || busy) return;
     const data = doctor
       ? { for_doctor: true, done: e ? done : undefined, answer: e ? answer.trim() || undefined : undefined, tag: undefined, amount: undefined }
       : { tag, amount: tag === "spitup" ? amount : undefined, for_doctor: undefined, done: undefined, answer: undefined };
@@ -71,14 +71,19 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
       if (res) onClose();
       return;
     }
-    onClose();
+    setBusy(true);
     const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
-    void log(
-      { kind: "note", started_at: doctor ? undefined : when?.toISOString(), data: clean, note: words || null },
-      doctor
-        ? { toast: `Saved for ${w.his} next visit` }
-        : { toast: `${label} · ${clock(when ?? now())}` }
-    );
+    try {
+      const saved = await log(
+        { kind: "note", started_at: doctor ? undefined : when?.toISOString(), data: clean, note: words || null },
+        doctor
+          ? { toast: `Saved for ${w.his} next visit` }
+          : { toast: `${label} · ${clock(when ?? now())}` }
+      );
+      if (saved) onClose();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const del = () => {
@@ -91,108 +96,113 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? describeEntry(e).title : doctor ? "Question for the doctor" : "Note"}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : doctor ? "Add question" : "Log it"}
-          busy={busy}
-          disabled={!canSave || (!!e && e.id < 0)}
-          hint={!canSave ? (doctor ? "Type the question." : "Pick one or type a note.") : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : doctor ? "Add question" : "Log it"}
+            busy={busy}
+            disabled={!canSave || (!!e && e.id < 0)}
+            hint={!canSave ? (doctor ? "Type the question." : "Pick one or type a note.") : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
 
-      {doctor ? (
-        <>
-          <div>
-            <Label>Question</Label>
-            <TextArea value={text} onChange={setText} rows={3} placeholder={`Ask about the rash on ${w.his} cheek…`} />
-            {!e && <p className={cx(tone.muted, "mt-1.5 text-xs")}>It goes on the list for {w.his} next checkup. Anyone can add to it.</p>}
-          </div>
-          {!e && care?.access.write && (
-            <button
-              type="button"
-              onClick={() => {
-                // Close first; her tab opens at her questions with the words typed in (nothing is saved here).
-                onClose();
-                window.setTimeout(() => careNav.openQuestion(words), 120);
-              }}
-              className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
-            >
-              <Icon name="message-square" size={20} className="shrink-0 text-mp-ink-2" />
-              <span className={cx(tone.body, "min-w-0 flex-1 text-[15px]")}>
-                {care.self ? "For your OB?" : "For her OB?"}{" "}
-                <span className="font-medium text-mp-accent-fg">{care.self ? "Add it to your questions" : "Add it to her questions"}</span>
-              </span>
-              <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
-            </button>
-          )}
-          {e && (
-            <>
+        {doctor ? (
+          <>
+            <div>
+              <Label>Question</Label>
+              <TextArea value={text} onChange={setText} rows={3} placeholder={`Ask about the rash on ${w.his} cheek…`} />
+              {!e && <p className={cx(tone.muted, "mt-1.5 text-xs")}>It goes on the list for {w.his} next checkup. Anyone can add to it.</p>}
+            </div>
+            {!e && care?.access.write && (
+              <button
+                type="button"
+                onClick={() => {
+                  // Close first; her tab opens at her questions with the words typed in (nothing is saved here).
+                  onClose();
+                  window.setTimeout(() => careNav.openQuestion(words), 120);
+                }}
+                className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
+              >
+                <Icon name="message-square" size={20} className="shrink-0 text-mp-ink-2" />
+                <span className={cx(tone.body, "min-w-0 flex-1 text-[15px]")}>
+                  {care.self ? "For your OB?" : "For her OB?"}{" "}
+                  <span className="font-medium text-mp-accent-fg">{care.self ? "Add it to your questions" : "Add it to her questions"}</span>
+                </span>
+                <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
+              </button>
+            )}
+            {e && (
+              <>
+                <div>
+                  <Label>Asked?</Label>
+                  <Segmented<"open" | "done">
+                    value={done ? "done" : "open"}
+                    onChange={(v) => setDone(v === "done")}
+                    options={[
+                      { value: "open", label: "Not yet" },
+                      { value: "done", label: "Asked" },
+                    ]}
+                  />
+                </div>
+                <div>
+                  <Label optional>Answer</Label>
+                  <TextArea value={answer} onChange={setAnswer} rows={3} placeholder="What the doctor said…" />
+                </div>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <div>
+              <Label>What</Label>
+              <div className="flex flex-wrap gap-2">
+                {/* Labels only: the app keeps lib's tag emoji out of its chrome. */}
+                {NOTE_TAGS.map((t) => (
+                  <Chip key={t} selected={tag === t} onClick={() => setTag(tag === t ? undefined : t)}>
+                    {NOTE_TAG_LABELS[t].label}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+            {tag === "spitup" && (
               <div>
-                <Label>Asked?</Label>
-                <Segmented<"open" | "done">
-                  value={done ? "done" : "open"}
-                  onChange={(v) => setDone(v === "done")}
-                  options={[
-                    { value: "open", label: "Not yet" },
-                    { value: "done", label: "Asked" },
-                  ]}
+                <Label optional>How much</Label>
+                <Segmented<Amount>
+                  value={amount ?? ("" as Amount)}
+                  onChange={(v) => setAmount(amount === v ? undefined : v)}
+                  options={(Object.keys(AMOUNT_LABEL) as Amount[]).map((a) => ({ value: a, label: AMOUNT_LABEL[a] }))}
                 />
               </div>
-              <div>
-                <Label optional>Answer</Label>
-                <TextArea value={answer} onChange={setAnswer} rows={3} placeholder="What the doctor said…" />
-              </div>
-            </>
-          )}
-        </>
-      ) : (
-        <>
-          <div>
-            <Label>What</Label>
-            <div className="flex flex-wrap gap-2">
-              {/* Labels only: the app keeps lib's tag emoji out of its chrome. */}
-              {NOTE_TAGS.map((t) => (
-                <Chip key={t} selected={tag === t} onClick={() => setTag(tag === t ? undefined : t)}>
-                  {NOTE_TAG_LABELS[t].label}
-                </Chip>
-              ))}
-            </div>
-          </div>
-          {tag === "spitup" && (
+            )}
             <div>
-              <Label optional>How much</Label>
-              <Segmented<Amount>
-                value={amount ?? ("" as Amount)}
-                onChange={(v) => setAmount(amount === v ? undefined : v)}
-                options={(Object.keys(AMOUNT_LABEL) as Amount[]).map((a) => ({ value: a, label: AMOUNT_LABEL[a] }))}
-              />
+              <Label optional={!!tag}>Note</Label>
+              <TextArea value={text} onChange={setText} rows={3} placeholder="What happened?" />
             </div>
-          )}
-          <div>
-            <Label optional={!!tag}>Note</Label>
-            <TextArea value={text} onChange={setText} rows={3} placeholder="What happened?" />
-          </div>
-          <WhenField value={when} onChange={setWhen} tz={tz} />
-          {!e && (
-            <button
-              type="button"
-              onClick={() => setDoctor(true)}
-              className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
-            >
-              <Icon name="stethoscope" size={20} className="shrink-0 text-mp-ink-2" />
-              <span className={cx(tone.body, "flex-1 text-[15px] font-medium")}>Make it a question for the doctor</span>
-              <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
-            </button>
-          )}
-        </>
-      )}
+            <WhenField value={when} onChange={setWhen} tz={tz} />
+            {!e && (
+              <button
+                type="button"
+                onClick={() => setDoctor(true)}
+                className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
+              >
+                <Icon name="stethoscope" size={20} className="shrink-0 text-mp-ink-2" />
+                <span className={cx(tone.body, "flex-1 text-[15px] font-medium")}>Make it a question for the doctor</span>
+                <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
+              </button>
+            )}
+          </>
+        )}
+      </fieldset>
     </Sheet>
   );
 }

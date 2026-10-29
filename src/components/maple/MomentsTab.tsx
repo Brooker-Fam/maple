@@ -17,7 +17,7 @@ import type { Entry, EntryOf } from "@/lib/maple/types";
 import { photoUrl } from "./EntryRow";
 import { AskChatButton } from "./chat/AskChat";
 import { Icon, KindBadge } from "./icons";
-import { LeafMark, ageShort, keptDate } from "./keepsake";
+import { LeafMark, ageShort, keptDate, keepsakeBirthAt } from "./keepsake";
 import { captionOf, extraNote, Lightbox, SafeImg, type Slide } from "./MomentPhotos";
 import { useMoments } from "./useMoments";
 import { useSheets } from "./sheets";
@@ -102,7 +102,7 @@ export default function MomentsTab() {
   const [viewing, setViewing] = useState<{ id: number; photo: number | null } | null>(null);
   const rev = state?.rev;
   const tz = state?.baby.timezone ?? "America/New_York";
-  const bornAt = state?.baby.born_at ?? null;
+  const bornAt = keepsakeBirthAt(state?.baby);
   const viewer = readOnly;
   const babyName = state?.baby.name?.split(" ")[0] || "Baby";
 

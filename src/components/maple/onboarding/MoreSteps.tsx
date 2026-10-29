@@ -45,13 +45,16 @@ export function InvitesStep({ ob }: Props) {
 /** The links the server just made: shown once, since only their hashes are kept. */
 export function InviteLinks({ links }: { links: InviteLink[] }) {
   const [copied, setCopied] = useState<string | null>(null);
+  const [copyProblem, setCopyProblem] = useState<string | null>(null);
   if (!links.length) return null;
   const copy = async (url: string) => {
+    setCopyProblem(null);
     try {
       await navigator.clipboard.writeText(url);
       setCopied(url);
     } catch {
       setCopied(null);
+      setCopyProblem(url);
     }
   };
   const share = (l: InviteLink) => void navigator.share?.({ title: "Join our baby's log", text: `${l.name}, here's your link to join our log in Maple:`, url: l.url }).catch(() => {});
@@ -59,17 +62,28 @@ export function InviteLinks({ links }: { links: InviteLink[] }) {
     <section className={cx(tone.card, "space-y-3 p-4")} aria-label="Invite links">
       <p className={cx(tone.body, "text-[15px] leading-snug")}>Send each link to its person. It works once, for 7 days, and shows only here, so send it now.</p>
       {links.map((l) => (
-        <div key={l.url} className={cx(tone.inset, "flex items-center gap-2 p-3")}>
-          <span className={cx(tone.body, "min-w-0 flex-1 truncate text-[15px] font-medium")}>{l.name}</span>
-          <Button size="sm" variant="soft" onClick={() => void copy(l.url)} aria-label={`Copy ${l.name}'s link`}>
-            <Icon name={copied === l.url ? "check" : "copy"} size={16} />
-            {copied === l.url ? "Copied" : "Copy"}
-          </Button>
-          {typeof navigator !== "undefined" && "share" in navigator && (
-            <Button size="sm" variant="soft" onClick={() => share(l)} aria-label={`Share ${l.name}'s link`}>
-              <Icon name="share" size={16} />
+        <div key={l.url} className={cx(tone.inset, "space-y-2 p-3")}>
+          <div className="flex items-center gap-2">
+            <span className={cx(tone.body, "min-w-0 flex-1 truncate text-[15px] font-medium")}>{l.name}</span>
+            <Button size="sm" variant="soft" onClick={() => void copy(l.url)} aria-label={`Copy ${l.name}'s link`}>
+              <Icon name={copied === l.url ? "check" : "copy"} size={16} />
+              {copied === l.url ? "Copied" : "Copy"}
             </Button>
-          )}
+            {typeof navigator !== "undefined" && "share" in navigator && (
+              <Button size="sm" variant="soft" onClick={() => share(l)} aria-label={`Share ${l.name}'s link`}>
+                <Icon name="share" size={16} />
+              </Button>
+            )}
+          </div>
+          <textarea
+            aria-label={`${l.name}'s invite link`}
+            className={cx(tone.input, "resize-none font-mono text-[13px]")}
+            readOnly
+            rows={3}
+            value={l.url}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          {copyProblem === l.url && <p role="alert" className={cx(tone.body, "text-[13px] leading-snug")}>Couldn&apos;t copy automatically. Select the link above to copy it.</p>}
         </div>
       ))}
     </section>

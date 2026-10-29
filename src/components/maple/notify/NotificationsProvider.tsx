@@ -63,8 +63,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const live = useRef({ me, status, prefs, endpoint, state });
   live.current = { me, status, prefs, endpoint, state };
 
-  // Bumped by every turn on or off: a check that started before one says nothing (it read the phone as it was).
   const epoch = useRef(0);
+  const savingPrefs = useRef(false);
 
   /** Read the browser and the server; returns what this phone is now. */
   const check = useCallback(async (): Promise<NotifyStatus> => {
@@ -107,7 +107,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     if (early || !sub) return early ?? settle("off");
     if (!res) return settle(mine && mine.endpoint === sub.endpoint ? "on" : "off", mine ? sub.endpoint : null);
     if (!phone.keyMatches(sub, res.publicKey)) return settle(res.sub || mine ? "stopped" : "off");
-    if (epoch.current !== started) return live.current.status;
+    if (epoch.current !== started || savingPrefs.current) return live.current.status;
     if (res.sub) {
       setPrefsState(res.sub.prefs);
       phone.writeMark({ endpoint: sub.endpoint, member: who });
@@ -214,9 +214,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         epoch.current++;
         const sub = await phone.existing();
         const ep = sub?.endpoint ?? live.current.endpoint;
-        // Off on this phone even when the server can't be told: an unsubscribed endpoint is dropped at its next send.
-        if (ep) await api(`/api/maple/push?endpoint=${enc(ep)}`, { method: "DELETE" }).catch(() => null);
-        await sub?.unsubscribe().catch(() => false);
+        const serverRemoved = !ep || await api(`/api/maple/push?endpoint=${enc(ep)}`, { method: "DELETE" }).then(() => true, () => false);
+        const phoneRemoved = !sub || await sub.unsubscribe().catch(() => false);
+        if (!serverRemoved && !phoneRemoved) throw new Error("Couldn't turn notifications off. They're still on for this phone. Try again.");
         phone.writeMark(null);
         epoch.current++;
         setEndpoint(null);
@@ -231,6 +231,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         const ep = live.current.endpoint;
         if (!ep) return;
         const before = live.current.prefs;
+        epoch.current++;
+        savingPrefs.current = true;
         setPrefsState(p);
         try {
           const res = await api<{ sub: { prefs: PushPrefs } }>("/api/maple/push", { method: "PATCH", body: JSON.stringify({ endpoint: ep, prefs: p }) });
@@ -238,6 +240,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           setPrefsState(before);
           throw e;
+        } finally {
+          epoch.current++;
+          savingPrefs.current = false;
         }
       }, undefined),
     [api, run]

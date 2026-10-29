@@ -865,7 +865,7 @@ export type CareEntryPatch = {
 export async function updateCareEntry(s: CareSession, id: number, patch: CareEntryPatch): Promise<{ entry: CareEntry; notes: Assessment[]; status?: PlanStatus }> {
   const p = needWrite(s);
   const cur = await readableEntry(s, id);
-  const expected = cur.kind === "food" || cur.kind === "drink" ? patch.expect_updated_at ?? cur.updated_at : null;
+  const expected = cur.kind === "food" || cur.kind === "drink" || cur.kind === "question" ? patch.expect_updated_at ?? cur.updated_at : null;
   const at = patch.at !== undefined ? cleanAt(patch.at, s.now) : new Date(cur.at);
   let plan: CarePlan | null = null;
   if (cur.kind === "dose" && cur.med_id != null) plan = await readablePlan(s, cur.med_id, { includeDeleted: true }).catch(() => null);
@@ -911,7 +911,7 @@ export async function deleteCareEntry(s: CareSession, id: number): Promise<CareE
   await readableEntry(s, id);
   const rows = await q(
     `UPDATE maple_care_entries SET deleted_at = NOW(), updated_by = $3,
-       updated_at = CASE WHEN kind IN ('food', 'drink') THEN GREATEST(NOW(), date_trunc('milliseconds', updated_at) + INTERVAL '1 millisecond') ELSE NOW() END
+       updated_at = CASE WHEN kind IN ('food', 'drink', 'question') THEN GREATEST(NOW(), date_trunc('milliseconds', updated_at) + INTERVAL '1 millisecond') ELSE NOW() END
      WHERE id = $1 AND family_id = $4 AND person = $2 AND deleted_at IS NULL RETURNING *`,
     [id, p.member, s.viewer.id, s.familyId]
   );
@@ -926,7 +926,7 @@ export async function restoreCareEntry(s: CareSession, id: number): Promise<Care
   await readableEntry(s, id, { includeDeleted: true });
   const rows = await q(
     `UPDATE maple_care_entries SET deleted_at = NULL, updated_by = $3,
-       updated_at = CASE WHEN kind IN ('food', 'drink') THEN GREATEST(NOW(), date_trunc('milliseconds', updated_at) + INTERVAL '1 millisecond') ELSE NOW() END
+       updated_at = CASE WHEN kind IN ('food', 'drink', 'question') THEN GREATEST(NOW(), date_trunc('milliseconds', updated_at) + INTERVAL '1 millisecond') ELSE NOW() END
      WHERE id = $1 AND family_id = $4 AND person = $2 AND deleted_at IS NOT NULL RETURNING *`,
     [id, p.member, s.viewer.id, s.familyId]
   );
