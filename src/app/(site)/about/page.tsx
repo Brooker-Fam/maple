@@ -35,8 +35,8 @@ export default function About() {
         )}
         <div className="site-legal mt-6 text-[18px] leading-[1.65]">
           <p>
-            I&rsquo;m Matt Brooker, a software engineer. My daughter, Maple, was born in October 2026, and that month I made the
-            first version of this app for my wife and me to keep track of her days. It&rsquo;s named after her.
+            We&rsquo;re Matt and Brittany. When our daughter Maple was born, we struggled to keep track of feeds and poops
+            in the hospital, so I made Maple Baby.
           </p>
           <h2>The six-day appointment</h2>
           <p>
@@ -74,12 +74,10 @@ export default function About() {
             family&rsquo;s data. None of the entries or photos my family logs are in it.
           </p>
           <p>
-            I write Maple with Claude, Anthropic&rsquo;s AI model, and most of the commits in its history list Claude as an author
-            or co-author.
+            I build Maple with help from AI.
           </p>
           <p>
-            Ready to try Maple? <Link href="/signup">Get started</Link> shows the current sign-up options. When sign-up is
-            closed, you can join the waitlist there. To reach me, write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+            <Link href="/signup">Get started with Maple</Link> or reach us at <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
           </p>
         </div>
       </main>

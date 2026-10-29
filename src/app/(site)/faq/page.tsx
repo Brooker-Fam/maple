@@ -226,7 +226,7 @@ const FAQS: Faq[] = [
     q: "Who builds Maple?",
     a: [
       [
-        "Matt Brooker, a software engineer, made Maple for his own family when his daughter, Maple, was born in October 2026. He and his wife use it every day. ",
+        "Matt made Maple Baby after he and Brittany struggled to track feeds and poops in the hospital with their daughter, Maple. They still use it every day. ",
         { text: "Their story", href: "/about" },
         " explains how understanding Maple’s feeding patterns helped shape the app. The code is open source under the MIT license, on ",
         { text: "GitHub", href: "https://github.com/Brooker-Fam/maple" },
