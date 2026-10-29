@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { encryptSecret } from "../../src/lib/secret-box";
 import * as store from "../../src/lib/maple/store";
 import { NotFound } from "../../src/lib/maple/store";
+import { DEVELOPMENT_MILESTONES } from "../../src/lib/maple/guidelines/development";
+import { MILESTONES } from "../../src/lib/maple/milestones";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type FamilySeed, type Shape } from "./harness";
 
 /**
@@ -258,6 +260,21 @@ async function routeChecks(shape: Shape) {
   const sessA = cookie(alpha.owner, 1);
   const sessB = cookie(beta.owner, 2);
   const ids = (body: Record<string, unknown>) => ((body.entries ?? []) as { id: number }[]).map((e) => e.id).sort((x, y) => x - y);
+
+  await test(`${shape}: developmental highlights keep the first saved moment across history and family boundaries`, async () => {
+    const milestone = DEVELOPMENT_MILESTONES.find((item) => !MILESTONES.some((preset) => preset.id === item.id))!.id;
+    const create = (family: number, seed: FamilySeed, daysAgo: number) => store.createEntry(family, {
+      babyId: seed.babyId, kind: "moment", startedAt: new Date(Date.now() - daysAgo * 86400_000),
+      data: { milestone, title: "Synthetic first" }, createdBy: seed.owner, source: "web",
+    });
+    const firstA = await create(1, alpha, 30);
+    const firstB = await create(2, beta, 20);
+    await create(1, alpha, 10);
+    const path = "/api/maple/entries?kind=moment&highlights=1";
+    eq(ids((await call(entries.GET, "GET", path, sessA)).body), [firstA.id]);
+    eq(ids((await call(entries.GET, "GET", path, sessB)).body), [firstB.id]);
+    eq(ids((await call(entries.GET, "GET", path, cookie(alpha.viewer, 1))).body), [firstA.id]);
+  });
 
   await test(`${shape}: GET state: each family sees only its own baby, people and log; an old cookie opens family 1 only`, async () => {
     const recent = async (fam: number, seed: FamilySeed) =>

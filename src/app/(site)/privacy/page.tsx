@@ -160,7 +160,7 @@ export default function Privacy() {
       </p>
       <h3>To keep things working</h3>
       <ul>
-        <li>A sign-in cookie, so you stay signed in. Your theme and a few app settings are saved on your own phone.</li>
+        <li>A sign-in cookie, so you stay signed in. Your theme and a few app settings are saved on your own phone. Daily discovery topics, whether to show discoveries, and the day you hide one stay in this browser, separately for your account and family. These choices are not sent to analytics or an AI model.</li>
         <li>
           A keyed hash of your IP address, counted per hour to limit how often one connection can try to sign in, upload or
           join the waitlist. Invite email limits use a keyed hash of the sender&rsquo;s member id; sign-in code limits also

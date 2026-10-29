@@ -5,6 +5,7 @@ import { isEntryKind } from "@/lib/maple/validate";
 import type { FamilyCtx } from "@/lib/maple/family";
 import type { CreateEntryInput, EntryKind, UpdateEntryInput } from "@/lib/maple/types";
 import { milestonesFor, milestoneWordsOf, monthlyId } from "@/lib/maple/milestones";
+import { DEVELOPMENT_MILESTONES } from "@/lib/maple/guidelines/development";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +72,11 @@ export const GET = withMember("GET /api/maple/entries", async (request, _me, ctx
 
   if (sp.get("highlights") === "1") {
     if (kinds?.length !== 1 || kinds[0] !== "moment" || before || fromKey || sp.has("to")) throw new BadRequest("Highlights requires kind=moment without a date range or cursor");
-    const milestones = [...milestonesFor(milestoneWordsOf(ctx.familyId, baby)).map((preset) => preset.id), ...Array.from({ length: 12 }, (_, index) => monthlyId(index + 1))];
+    const milestones = [...new Set([
+      ...milestonesFor(milestoneWordsOf(ctx.familyId, baby)).map((preset) => preset.id),
+      ...DEVELOPMENT_MILESTONES.map((milestone) => milestone.id),
+      ...Array.from({ length: 12 }, (_, index) => monthlyId(index + 1)),
+    ])];
     const entries = await listMomentHighlights(ctx, baby.id, milestones);
     return json({ entries: entries.map(toClientEntry), tz: baby.timezone });
   }
