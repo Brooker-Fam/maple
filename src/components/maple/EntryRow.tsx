@@ -61,35 +61,37 @@ export default function EntryRow({
       type="button"
       onClick={onClick}
       aria-label={canEdit ? `${editLabel}: ${d.title}, ${entryWhen}` : undefined}
-      className={cx(tone.row, "min-h-[64px] py-3")}
+      className={cx(tone.row, "@container/entry min-h-[64px] py-3")}
     >
-      {firstPhoto ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={photoUrl(entry.id, 0)} alt="" className="h-9 w-9 shrink-0 rounded-[10px] object-cover" loading="lazy" />
-      ) : (
-        <KindBadge entry={entry} />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className={cx(tone.body, "block text-[15px] leading-snug font-medium")}>{d.title}</span>
-        {(d.detail || entry.note) && (
-          <span className={cx(tone.muted, "mt-0.5 block truncate text-[13px]")}>
-            {[d.detail, entry.note ? `“${entry.note}”` : ""].filter(Boolean).join(" · ")}
-          </span>
+      <span className="grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 @min-[18rem]/entry:grid-cols-[auto_minmax(0,1fr)_auto]">
+        {firstPhoto ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photoUrl(entry.id, 0)} alt="" className="h-9 w-9 shrink-0 rounded-[10px] object-cover" loading="lazy" />
+        ) : (
+          <KindBadge entry={entry} />
         )}
-        {(VIA[entry.source] || showRelative) && (
-          <span className={cx(tone.faint, "mt-0.5 block text-[12px]")}>
-            {[VIA[entry.source] && `via ${VIA[entry.source]}`, showRelative && entry.source !== "epic" && formatRelative(entry.started_at, now)].filter(Boolean).join(" · ")}
-          </span>
-        )}
-      </span>
-      <span className="flex shrink-0 flex-col items-end gap-0.5 text-right">
-        {entryDay !== today && entry.source !== "epic" && <span className={cx(tone.muted, "text-[12px]")}>{formatDayLabel(entryDay, today)}</span>}
-        <span className={cx(tone.body, "inline-flex items-center gap-1.5 text-sm tabular-nums")}>
-          {entry.id < 0 && <Icon name="refresh-cw" size={12} label="Not synced yet" className="text-mp-ink-3" />}
-          {entry.created_by && entry.created_by !== state?.me.email && <Avatar member={who} size={16} />}
-          {entry.source === "epic" ? formatDayLabel(entryDay, today) : formatTime(entry.started_at, tz)}
+        <span className="col-span-2 row-start-2 min-w-0 @min-[18rem]/entry:col-span-1 @min-[18rem]/entry:col-start-2 @min-[18rem]/entry:row-start-1">
+          <span className={cx(tone.body, "block text-[15px] leading-snug font-medium")}>{d.title}</span>
+          {(d.detail || entry.note) && (
+            <span className={cx(tone.muted, "mt-0.5 block text-[13px] break-words")}>
+              {[d.detail, entry.note ? `“${entry.note}”` : ""].filter(Boolean).join(" · ")}
+            </span>
+          )}
+          {(VIA[entry.source] || showRelative) && (
+            <span className={cx(tone.faint, "mt-0.5 block text-[12px]")}>
+              {[VIA[entry.source] && `via ${VIA[entry.source]}`, showRelative && entry.source !== "epic" && formatRelative(entry.started_at, now)].filter(Boolean).join(" · ")}
+            </span>
+          )}
         </span>
-        {canEdit && <span className="text-[13px] font-medium text-mp-accent-fg">{editLabel}</span>}
+        <span className="col-start-2 row-start-1 flex min-w-0 flex-col items-end gap-0.5 text-right @min-[18rem]/entry:col-start-3">
+          {entryDay !== today && entry.source !== "epic" && <span className={cx(tone.muted, "text-[12px]")}>{formatDayLabel(entryDay, today)}</span>}
+          <span className={cx(tone.body, "inline-flex items-center gap-1.5 text-sm tabular-nums")}>
+            {entry.id < 0 && <Icon name="refresh-cw" size={12} label="Not synced yet" className="text-mp-ink-3" />}
+            {entry.created_by && entry.created_by !== state?.me.email && <Avatar member={who} size={16} />}
+            {entry.source === "epic" ? formatDayLabel(entryDay, today) : formatTime(entry.started_at, tz)}
+          </span>
+          {canEdit && <span className="text-[13px] font-medium text-mp-accent-fg">{editLabel}</span>}
+        </span>
       </span>
     </button>
   );

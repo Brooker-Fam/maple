@@ -1941,7 +1941,7 @@ export async function buildVisitSummary(opts: {
       feedBits.push(`nursing ${formatDuration(d.nursingSec)}: L ${formatDuration(d.leftSec)} / R ${formatDuration(d.rightSec)}${both}`);
     }
     if (d.clusters) feedBits.push(d.clusters === 1 ? "one cluster" : `${d.clusters} clusters`);
-    if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${d.bottleMl ? `, ${formatVolume(d.bottleMl, "us")} (${Math.round(d.bottleMl)} ml)` : ""}`);
+    if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${d.bottleMl ? `, ${formatVolume(d.bottleMl, "us")} (${formatVolume(d.bottleMl, "metric")})` : ""}`);
     const parts = [
       `${d.feeds} feed${d.feeds === 1 ? "" : "s"}${feedBits.length ? ` (${feedBits.join("; ")})` : ""}`,
       `${d.wet} wet / ${d.dirty} dirty`,

@@ -18,15 +18,24 @@ import { Segmented } from "./ui";
  * Today's "See all", lands on the Timeline.
  */
 
-/** The pinned bar's height (the switch plus its padding): the day headings and the ribbon clock pin under it. */
-const BAR_PX = 60;
-
 export default function HistoryTab() {
   const { seg, setSeg, go } = useAppNav();
   const [seen, setSeen] = useState<Record<HistorySeg, boolean>>({ timeline: seg === "timeline", patterns: seg === "patterns" });
   if (!seen[seg]) setSeen((s) => ({ ...s, [seg]: true }));
   const scroll = useRef<Record<HistorySeg, number>>({ timeline: 0, patterns: 0 });
   const last = useRef<HistorySeg>(seg);
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barHeight, setBarHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const measure = () => setBarHeight(bar.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [seg]);
 
   // Back to where that segment was (once its page has drawn), and remember where the other one was left.
   useLayoutEffect(() => {
@@ -53,7 +62,7 @@ export default function HistoryTab() {
   };
 
   const bar = (
-    <div className="sticky top-[env(safe-area-inset-top)] z-20 -mx-4 mb-4 bg-mp-bg px-4 py-2">
+    <div ref={barRef} className="sticky top-[env(safe-area-inset-top)] z-20 -mx-4 mb-4 bg-mp-bg px-4 py-2">
       <Segmented<HistorySeg>
         aria-label="Show"
         value={seg}
@@ -67,7 +76,7 @@ export default function HistoryTab() {
   );
 
   return (
-    <div style={{ "--maple-history-bar": `${BAR_PX}px` } as CSSProperties}>
+    <div style={{ "--maple-history-bar": `${barHeight}px` } as CSSProperties}>
       {seen.timeline && (
         <div hidden={seg !== "timeline"}>
           <LogTab title="History" below={seg === "timeline" ? bar : null} />

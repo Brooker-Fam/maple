@@ -46,6 +46,9 @@ jobs:
       - name: Feed status and sync diagnostics
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-feed-status && pnpm check:maple-diagnostics
+      - name: Offline save durability and queue ordering
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-tenancy client-state outbox-storage
       - name: Medicine checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-care

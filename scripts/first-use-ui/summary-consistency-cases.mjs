@@ -9,6 +9,17 @@ export function summaryConsistencyCases({ fixture, freshState, record, assert })
     return dialog;
   };
   return [
+    ["Summary consistency: doctor exports preserve small bottle measurements", async () => {
+      const state = freshState();
+      state.entries = [record(919, "feed", { method: "bottle", milk: "formula", amount_ml: 1.5 })];
+      const f = await fixture({ state, records: state.entries });
+      try {
+        const dialog = await copySummary(f);
+        const text = await dialog.getByRole("textbox", { name: "Visit summary", exact: true }).inputValue();
+        assert.match(text, /1 bottle, 0\.05 oz \(1\.5 ml\)/);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Summary freshness: copied totals include fetched corrections and new entries", async () => {
       const state = freshState();
       state.entries = [record(920, "pump", { total_ml: 60 }, undefined, { ended_at: "2026-10-28T12:20:00.000Z" })];

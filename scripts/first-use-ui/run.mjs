@@ -105,7 +105,7 @@ const cases = [
   ...medicinePlanCases({ fixture, freshState, assert }),
   ...checkinPrivacyCases({ fixture, freshState, assert }),
   ...doctorReviewCases({ fixture, freshState, record, writes, assert }),
-  ...accessibilityReviewCases({ fixture, freshState, assert }),
+  ...accessibilityReviewCases({ fixture, freshState, record, assert }),
   ...timeCases({ fixture, freshState, record, writes, assert }),
   ...handoffCases({ fixture, freshState, record, writes, assert }),
   ["Every historical entry kind keeps an older family-local date", async () => {

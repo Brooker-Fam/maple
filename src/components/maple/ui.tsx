@@ -156,7 +156,7 @@ export function Segmented<T extends string>({
   "aria-label"?: string;
 }) {
   return (
-    <div className={cx("flex rounded-xl bg-mp-sunken p-[2px]", className)} role="radiogroup" aria-label={ariaLabel}>
+    <div className={cx("flex flex-wrap rounded-xl bg-mp-sunken p-[2px]", className)} role="radiogroup" aria-label={ariaLabel}>
       {options.map((o, index) => (
         <button
           key={o.value}
