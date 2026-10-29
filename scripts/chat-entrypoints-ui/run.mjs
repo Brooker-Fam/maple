@@ -184,7 +184,7 @@ try {
     await scenario(`dirty entry ${sameTab ? "already in Chat" : "on Today"} stays on cancel and opens on confirmed discard`, "", async (page) => {
       if (sameTab) await page.getByRole("button", { name: "Chat tab", exact: true }).click();
       await page.getByRole("button", { name: "Open saved entry", exact: true }).click();
-      const note = page.getByRole("dialog").getByRole("textbox");
+      const note = page.getByRole("dialog").getByPlaceholder("Anything to remember?", { exact: true });
       await note.fill("Unsaved synthetic note");
       let confirmations = 0;
       const cancel = async (dialog) => { confirmations++; assert.match(dialog.message(), /discard your unsaved changes/); await dialog.dismiss(); };

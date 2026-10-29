@@ -97,9 +97,9 @@ export type CareActions = {
   logTemp(tempC: number, at: string): Promise<DoseResult>;
   addQuestion(text: string, priv?: boolean): Promise<void>;
   /** One tap saves (toast CHECKIN_SAVED). Resolves with the entry; its id is temporary (negative) while it waits on this phone, and every action below takes either. */
-  checkin(level: 1 | 2 | 3 | 4 | 5): Promise<MoodEntry>;
+  checkin(level: 1 | 2 | 3 | 4 | 5, retry?: { at: string; harmEver?: boolean }): Promise<MoodEntry>;
   /** The chips, the note, or a changed answer ("Change"): shown at once, saved as she goes with no toast; rejects with the server's words. */
-  updateCheckin(id: number, p: { level?: 1 | 2 | 3 | 4 | 5; tags?: MoodTag[]; note?: string }): Promise<void>;
+  updateCheckin(id: number, p: { level?: 1 | 2 | 3 | 4 | 5; tags?: MoodTag[]; note?: string; harmEver?: true }): Promise<void>;
   /** A hard delete (after "Delete this check-in for good?"): no Undo. */
   deleteMood(id: number): Promise<void>;
   /**
@@ -181,6 +181,8 @@ function newClientId(): string {
 const moodChain: { current: Promise<unknown> } = { current: Promise.resolve() };
 /** Temporary id → saved id, for a caller still holding the temporary one. */
 const moodSaved = new Map<number, number>();
+/** A definitive rejection must not let a queued edit recreate a partial row. */
+const moodRejected = new Set<number>();
 
 /** "Call Poison Help now: Ibuprofen: over your daily limit" (a note, in one toast line). */
 const noteLine = (n: Assessment) => `${n.label ?? MOM_TIER_LABEL[n.tier]}: ${n.title}`;
@@ -758,8 +760,8 @@ export function useCare(): UseCare | null {
 
   /** A new check-in or fuller check-in: on screen at once, then saved, or kept on this phone while offline. */
   const createMood = useCallback(
-    async (kind: MoodEntry["kind"], data: Record<string, unknown>): Promise<{ entry: MoodEntry; queued: boolean }> => {
-      const at = clock().toISOString();
+    async (kind: MoodEntry["kind"], data: Record<string, unknown>, recordedAt?: string): Promise<{ entry: MoodEntry; queued: boolean }> => {
+      const at = recordedAt ?? clock().toISOString();
       const input = { kind, at, data, client_id: newClientId() };
       const shown = kind === "screen" ? scoreScreen(data as Parameters<typeof scoreScreen>[0]) : data;
       const temp = { id: store.tempId(), kind, at, data: shown, note: null, created_at: at, updated_at: at } as MoodEntry;
@@ -782,6 +784,7 @@ export function useCare(): UseCare | null {
             store.queueMood({ ...input, data: kept.data, ...(kept.note ? { note: kept.note } : {}) }, kept);
             return { entry: { ...kept, pending: true }, queued: true };
           }
+          moodRejected.add(temp.id);
           patchMood((m) => m.filter((x) => x.id !== temp.id));
           throw fail(e, "Couldn't save that");
         }
@@ -798,8 +801,12 @@ export function useCare(): UseCare | null {
    */
   const changeMood = useCallback(
     (id: number, patch: { data?: Record<string, unknown>; note?: string | null }, apply: (m: MoodEntry) => MoodEntry): Promise<MoodEntry> => {
+      if (moodRejected.has(id)) return Promise.reject(new Error("That check-in wasn't saved. Try again."));
       patchMood((m) => m.map((x) => (x.id === id || x.id === moodTarget(id) ? apply(x) : x)));
       return serialMood(async () => {
+        // The first save may have failed while this edit waited its turn.
+        // careRef can still contain its optimistic row until React renders.
+        if (moodRejected.has(id)) throw new Error("That check-in wasn't saved. Try again.");
         const target = moodTarget(id);
         if (target !== id) patchMood((m) => m.map((x) => (x.id === target ? apply(x) : x)));
         const base = moodNow(id, target);
@@ -827,9 +834,9 @@ export function useCare(): UseCare | null {
   );
 
   const checkin = useCallback<CareActions["checkin"]>(
-    async (level) => {
+    async (level, retry) => {
       try {
-        const { entry, queued } = await createMood("checkin", { level });
+        const { entry, queued } = await createMood("checkin", { level, ...(retry?.harmEver ? { harm_ever: true } : {}) }, retry?.at);
         toast(queued ? "Saved on this phone · will sync when you're back online" : CHECKIN_SAVED, { tone: queued ? "info" : "ok" });
         return entry;
       } catch (e) {
@@ -842,7 +849,7 @@ export function useCare(): UseCare | null {
 
   const updateCheckin = useCallback<CareActions["updateCheckin"]>(
     async (id, p) => {
-      const data: Record<string, unknown> = { ...(p.level != null ? { level: p.level } : {}), ...(p.tags ? { tags: p.tags } : {}) };
+      const data: Record<string, unknown> = { ...(p.level != null ? { level: p.level } : {}), ...(p.tags ? { tags: p.tags } : {}), ...(p.harmEver ? { harm_ever: true } : {}) };
       const note = p.note === undefined ? undefined : p.note.trim() || null;
       const patch = { ...(Object.keys(data).length ? { data } : {}), ...(note !== undefined ? { note } : {}) };
       if (!Object.keys(patch).length) return;

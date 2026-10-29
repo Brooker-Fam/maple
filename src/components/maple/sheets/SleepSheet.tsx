@@ -63,38 +63,43 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
     const presetEnd = pstr(preset, "ended_at");
     const end = presetEnd && Number.isFinite(Date.parse(presetEnd)) ? new Date(presetEnd) : now();
     const s = presetStart(preset);
-    return s && s.getTime() < end.getTime() ? [s, end] : [new Date(end.getTime() - H), end];
+    return s && s.getTime() <= end.getTime() ? [s, end] : [new Date(end.getTime() - H), end];
   });
   const [place, setPlace] = useState<SleepPlace | undefined>(() => e?.data.place ?? (pstr(preset, "place") as SleepPlace | undefined));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ range, place, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, range, place, note });
 
   const [start, end] = range;
   const tip = place ? safeSleepTips(voice)[place] : undefined;
 
   const save = async () => {
-    const noteVal = note.trim() || null;
-    if (e) {
-      setBusy(true);
-      const patch = running
-        ? { note: noteVal }
-        : {
-            started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
-            ended_at: end.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : NaN) ? end.toISOString() : undefined,
-            data: withNulls({ place }, ["place"]),
-            note: noteVal,
-          };
-      const res = await update(e.id, patch, { toast: "Sleep updated" });
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const noteVal = note.trim() || null;
+      if (e) {
+        const patch = running
+          ? { note: noteVal }
+          : {
+              started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
+              ended_at: end.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : NaN) ? end.toISOString() : undefined,
+              data: withNulls({ place }, ["place"]),
+              note: noteVal,
+            };
+        const res = await update(e.id, patch, { toast: "Sleep updated" });
+        if (res) onClose();
+        return;
+      }
+      const saved = await log(
+        { kind: "sleep", started_at: start.toISOString(), ended_at: end.toISOString(), data: place ? { place } : {}, note: noteVal },
+        { toast: `Slept ${formatDuration((end.getTime() - start.getTime()) / 1000)}` }
+      );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    void log(
-      { kind: "sleep", started_at: start.toISOString(), ended_at: end.toISOString(), data: place ? { place } : {}, note: noteVal },
-      { toast: `Slept ${formatDuration((end.getTime() - start.getTime()) / 1000)}` }
-    );
   };
 
   const del = () => {
@@ -107,49 +112,54 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Sleep"}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={(!!e && e.id < 0) || (!running && end.getTime() < start.getTime())}
-          hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || (!!e && e.id < 0) || (!running && end.getTime() < start.getTime())}
+            hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
-      {running ? (
-        <RunningNote kind="sleep" />
-      ) : (
-        <TimeRange start={start} end={end} tz={tz} labels={["Fell asleep", "Woke up"]} onChange={(s, en) => setRange([s, en])} />
-      )}
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
+        {running ? (
+          <RunningNote kind="sleep" />
+        ) : (
+          <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} labels={["Fell asleep", "Woke up"]} onChange={(s, en) => setRange([s, en])} />
+        )}
 
-      {!running && (
-        <MoreDetails summary={place ? PLACE[place] : undefined}>
-          <div>
-            <Label>Where</Label>
-            <div className="flex flex-wrap gap-2">
-              {SLEEP_PLACES.map((p) => (
-                <Chip key={p} selected={place === p} onClick={() => setPlace(place === p ? undefined : p)}>
-                  {PLACE[p]}
-                </Chip>
-              ))}
+        {!running && (
+          <MoreDetails defaultOpen summary={place ? PLACE[place] : undefined}>
+            <div>
+              <Label>Where</Label>
+              <div className="flex flex-wrap gap-2">
+                {SLEEP_PLACES.map((p) => (
+                  <Chip key={p} selected={place === p} onClick={() => setPlace(place === p ? undefined : p)}>
+                    {PLACE[p]}
+                  </Chip>
+                ))}
+              </div>
+              {tip && (
+                <ContextNote icon="moon" className="mt-3">
+                  {tip}
+                </ContextNote>
+              )}
             </div>
-            {tip && (
-              <ContextNote icon="moon" className="mt-3">
-                {tip}
-              </ContextNote>
-            )}
-          </div>
-        </MoreDetails>
-      )}
+          </MoreDetails>
+        )}
 
-      <NoteField value={note} onChange={setNote} />
-      <ContextNote>{SLEEP_TOTAL_NOTE}</ContextNote>
+        <NoteField value={note} onChange={setNote} />
+        <ContextNote>{SLEEP_TOTAL_NOTE}</ContextNote>
+      </fieldset>
     </Sheet>
   );
 }

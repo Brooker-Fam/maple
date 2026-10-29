@@ -44,6 +44,7 @@ type Checkin = Extract<MoodEntry, { kind: "checkin" }>;
 type ScreenEntry = Extract<MoodEntry, { kind: "screen" }>;
 type Level = 1 | 2 | 3 | 4 | 5;
 type Mood = NonNullable<UseCare["mood"]>;
+type ExtrasTarget = { entry: Checkin; key: number } | { after: number[] };
 
 /** "Change" this soon after a check-in corrects it; later it's a new one (more than one a day is fine). */
 const CORRECT_MS = 30 * 60_000;
@@ -67,7 +68,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   const todayKey = dayKey(t, tz);
   const today = mood.todayCheckin;
   const [changing, setChanging] = useState(false);
-  const [extras, setExtras] = useState(false);
+  const [extras, setExtras] = useState<ExtrasTarget | null>(null);
   const [crisis, setCrisis] = useState(false);
   const [full, setFull] = useState(false);
   const [history, setHistory] = useState(false);
@@ -75,25 +76,55 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   const [results, setResults] = useState<ScreenEntry | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [creationError, setCreationError] = useState<string | null>(null);
+  const creationHarmEver = useRef(false);
   const saveExtras = useRef<(() => Promise<boolean>) | null>(null);
+  // Keep editing this check-in when another phone adds a newer one. Its
+  // temporary id can change after saving; its recorded time stays the same.
+  const pinned = extras && "entry" in extras ? extras.entry : null;
+  const current = pinned
+    ? mood.checkins.find((entry) => entry.id === pinned.id)
+      ?? (pinned.id < 0 ? mood.checkins.find((entry) => Date.parse(entry.at) === Date.parse(pinned.at)) : null)
+      ?? pinned
+    : extras && "after" in extras
+      ? mood.checkins.find((entry) => !extras.after.includes(entry.id)) ?? null
+      : today;
+  if (current && extras && ("after" in extras || (pinned && pinned.id < 0 && current.id > 0))) setExtras({ entry: current, key: "entry" in extras ? extras.key : Date.parse(current.at) });
 
   const pick = async (level: Level) => {
     if (busy) return;
     setProblem(null);
+    setCreationError(null);
+    creationHarmEver.current = false;
     setChanging(false);
     // A quick change is a correction to the same check-in; later in the day it's another one.
     if (today && changing && t.getTime() - Date.parse(today.at) < CORRECT_MS) {
       if (level !== today.data.level) void care.act.updateCheckin(today.id, { level }).catch((e) => setProblem(errorText(e)));
-      setExtras(true);
+      setExtras({ entry: today, key: Date.parse(today.at) });
       return;
     }
     // It shows at once (useCare), so "Anything else?" opens with it rather than after the server answers.
-    setExtras(true);
+    setExtras({ after: mood.checkins.map((entry) => entry.id) });
     setBusy(true);
     try {
       await care.act.checkin(level);
-    } catch {
-      // useCare's toast says why; the choices come back to try again.
+    } catch (error) {
+      // Keep the optimistic entry's open note/tags, but never call it saved.
+      setCreationError(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryCreation = async () => {
+    if (busy || !current || !extras || !("entry" in extras)) return;
+    setBusy(true);
+    try {
+      const saved = await care.act.checkin(current.data.level, { at: current.at, harmEver: creationHarmEver.current || current.data.harm_ever });
+      if (saved.kind === "checkin") setExtras({ entry: saved, key: extras.key });
+      setCreationError(null);
+    } catch (error) {
+      setCreationError(errorText(error));
     } finally {
       setBusy(false);
     }
@@ -112,7 +143,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   cards.sort((a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier));
 
   const past = [...mood.checkins, ...(mood.latestScreen ? [mood.latestScreen] : [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id);
-  const asking = !today || changing;
+  const asking = !current || changing;
 
   return (
     <section>
@@ -134,20 +165,21 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
               )}
             </div>
           ) : (
-            today && (
+            current && (
               <div className="mt-2">
                 <div className="flex min-h-[44px] items-center gap-3">
                   <p className={cx(tone.body, "min-w-0 flex-1 text-[17px] leading-snug")}>
-                    Today: <span className="font-semibold">{levelLabel(today.data.level)}</span>
+                    Today: <span className="font-semibold">{levelLabel(current.data.level)}</span>
                   </p>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="-mr-3 shrink-0"
                     data-checkin-save
+                    disabled={busy || !!creationError}
                     onClick={async () => {
                       if (saveExtras.current && !(await saveExtras.current())) return;
-                      setExtras(false);
+                      setExtras(null);
                       setChanging(true);
                     }}
                   >
@@ -155,15 +187,15 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
                   </Button>
                 </div>
                 {extras ? (
-                  // Keyed by its time, which stays put when its temporary id becomes the saved one (a note being typed survives).
-                  <Extras key={Date.parse(today.at)} entry={today} care={care} onCrisis={() => setCrisis(true)} onDone={() => setExtras(false)} saveRef={saveExtras} />
+                  // Keep this editing session through both id sync and a retried creation.
+                  <Extras key={"entry" in extras ? extras.key : Date.parse(current.at)} entry={current} care={care} onCrisis={() => { creationHarmEver.current = true; setCrisis(true); }} onDone={() => setExtras(null)} saveRef={saveExtras} creationBusy={busy} creationError={creationError} onRetryCreation={() => void retryCreation()} />
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setExtras(true)}
+                    onClick={() => setExtras({ entry: current, key: Date.parse(current.at) })}
                     className="-ml-1 flex min-h-[44px] w-full items-center gap-1.5 rounded-lg px-1 text-left text-[15px] text-mp-ink-2"
                   >
-                    <span className="min-w-0 flex-1 truncate">{tagText(today.data.tags, moodTags(voice)) || today.note || "Anything else? (optional)"}</span>
+                    <span className="min-w-0 flex-1 truncate">{tagText(current.data.tags, moodTags(voice)) || current.note || "Anything else? (optional)"}</span>
                     <Icon name="pencil" size={15} className="shrink-0 text-mp-ink-3" />
                   </button>
                 )}
@@ -261,21 +293,25 @@ function Levels({ value, onPick, disabled }: { value?: number; onPick: (l: Level
   );
 }
 
-type ExtrasDraft = { note: string; tags: MoodTag[] };
+type ExtrasInput = { note: string; tags: MoodTag[] };
+type ExtrasDraft = ExtrasInput & { harmEver: boolean };
 
-function useExtrasDraft(entry: Checkin, care: UseCare) {
+function useExtrasDraft(entry: Checkin, care: UseCare, blocked = false) {
   const [note, setNote] = useState(entry.note ?? "");
   const [tags, setTags] = useState<MoodTag[]>(entry.data.tags ?? []);
   const [problem, setProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const initial = { note: entry.note ?? "", tags: entry.data.tags ?? [] };
+  const harmEver = useRef(!!entry.data.harm_ever || !!entry.data.tags?.includes("harm_self"));
+  const initial = { note: entry.note ?? "", tags: entry.data.tags ?? [], harmEver: harmEver.current };
   const saved = useRef(initial);
   const [savedKey, setSavedKey] = useState(() => extrasKey(initial));
   const pending = useRef<{ key: string; id: number; promise: Promise<boolean> } | null>(null);
   const sequence = useRef(0);
-  const latest = useRef({ note, tags });
-  latest.current = { note, tags };
-  const dirty = extrasKey({ note, tags }) !== savedKey;
+  const latest = useRef({ note, tags, harmEver: harmEver.current });
+  latest.current = { note, tags, harmEver: harmEver.current };
+  const dirty = extrasKey(latest.current) !== savedKey;
+
+  useEffect(() => { if (!blocked) setProblem(null); }, [blocked]);
 
   useEffect(() => {
     const current = latest.current.tags;
@@ -288,7 +324,12 @@ function useExtrasDraft(entry: Checkin, care: UseCare) {
     setTags(merged);
   }, [entry.data.tags]);
 
-  const save = (draft: ExtrasDraft): Promise<boolean> => {
+  const save = (input: ExtrasInput): Promise<boolean> => {
+    // Clearing a crisis tag never clears the fact that it was selected,
+    // including when creation or its retry has not reached the server yet.
+    harmEver.current ||= input.tags.includes("harm_self");
+    const draft: ExtrasDraft = { ...input, harmEver: harmEver.current };
+    if (blocked) return Promise.resolve(false);
     const key = extrasKey(draft);
     if (pending.current?.key === key) return pending.current.promise;
     if (!pending.current && key === extrasKey(saved.current)) return Promise.resolve(true);
@@ -301,6 +342,7 @@ function useExtrasDraft(entry: Checkin, care: UseCare) {
         const patch = {
           ...(draft.note.trim() !== saved.current.note.trim() ? { note: draft.note } : {}),
           ...(tagKey(draft.tags) !== tagKey(saved.current.tags) ? { tags: draft.tags } : {}),
+          ...(draft.harmEver && !saved.current.harmEver && !draft.tags.includes("harm_self") ? { harmEver: true as const } : {}),
         };
         if (Object.keys(patch).length) await care.act.updateCheckin(entry.id, patch);
         saved.current = draft;
@@ -352,6 +394,10 @@ function Extras({
   onDone,
   saveRef,
   onDirtyChange,
+  onSavingChange,
+  creationBusy = false,
+  creationError = null,
+  onRetryCreation,
 }: {
   entry: Checkin;
   care: UseCare;
@@ -359,10 +405,24 @@ function Extras({
   onDone?: () => void;
   saveRef: RefObject<(() => Promise<boolean>) | null>;
   onDirtyChange?: (dirty: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
+  creationBusy?: boolean;
+  creationError?: string | null;
+  onRetryCreation?: () => void;
 }) {
-  const { note, setNote, tags, setTags, problem, saving, dirty, save, saveCurrent } = useExtrasDraft(entry, care);
+  const { note, setNote, tags, setTags, problem, saving, dirty, save, saveCurrent } = useExtrasDraft(entry, care, !!creationError);
   const labels = moodTags(useVoice());
-  useCheckinNavigationGuard(!!onDone && (dirty || saving));
+  useCheckinNavigationGuard(!!onDone && (dirty || saving || creationBusy || !!creationError));
+  const recoveringCreation = useRef(false);
+  useEffect(() => {
+    if (creationError) recoveringCreation.current = true;
+    else if (recoveringCreation.current) {
+      recoveringCreation.current = false;
+      // Retry saves the retained extras too, including any crisis tag picked
+      // while the first request was failing. This render has the new saved id.
+      void saveCurrent();
+    }
+  }, [creationError, saveCurrent]);
   useEffect(() => {
     saveRef.current = saveCurrent;
     return () => { saveRef.current = null; };
@@ -371,6 +431,10 @@ function Extras({
     onDirtyChange?.(dirty || saving);
     return () => onDirtyChange?.(false);
   }, [dirty, saving, onDirtyChange]);
+  useEffect(() => {
+    onSavingChange?.(saving);
+    return () => onSavingChange?.(false);
+  }, [saving, onSavingChange]);
 
   const toggle = (tag: MoodTag) => {
     const on = !tags.includes(tag);
@@ -410,8 +474,12 @@ function Extras({
       }}>
         <TextArea value={note} onChange={setNote} placeholder={CHECKIN_NOTE_PLACEHOLDER} rows={2} />
       </div>
-      <Problem>{problem}</Problem>
-      {problem && <Button variant="soft" size="sm" data-checkin-save disabled={saving} onClick={() => void saveCurrent()}>Try again</Button>}
+      <p role="status" className={cx(tone.muted, "text-[13px]")}>
+        {creationBusy ? "Saving check-in…" : creationError ? "Check-in not saved · your changes are still here" : saving ? "Saving changes…" : dirty ? "Unsaved changes" : entry.pending ? "Saved on this phone · not synced" : "Check-in saved"}
+      </p>
+      <Problem>{creationError ?? problem}</Problem>
+      {creationError ? <Button variant="soft" size="sm" data-checkin-save disabled={creationBusy} onClick={onRetryCreation}>Retry check-in</Button>
+        : problem && <Button variant="soft" size="sm" data-checkin-save disabled={saving} onClick={() => void saveCurrent()}>Try again</Button>}
       {onDone && (
         <div className="flex justify-end">
           <Button
@@ -419,11 +487,12 @@ function Extras({
             size="sm"
             className="-mr-3"
             data-checkin-save
+            disabled={saving || creationBusy || !!creationError}
             onClick={async () => {
               if (await saveCurrent()) onDone();
             }}
           >
-            Done
+            {saving ? "Saving…" : dirty ? "Save changes" : "Done"}
           </Button>
         </div>
       )}
@@ -432,7 +501,7 @@ function Extras({
 }
 
 const tagKey = (tags: MoodTag[]) => [...tags].sort().join(",");
-const extrasKey = (draft: ExtrasDraft) => JSON.stringify({ note: draft.note.trim(), tags: tagKey(draft.tags) });
+const extrasKey = (draft: ExtrasDraft) => JSON.stringify({ note: draft.note.trim(), tags: tagKey(draft.tags), harmEver: draft.harmEver });
 
 /** One row of "Your check-ins": "Thu, Oct 29 · Low · Tearful, Overwhelmed", her note under it, the time on the right. */
 function PastRow({ m, todayKey, tz, onOpen }: { m: MoodEntry; todayKey: string; tz: string; onOpen: () => void }) {
@@ -478,6 +547,7 @@ function CheckInSheet({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [extrasDirty, setExtrasDirty] = useState(false);
+  const [extrasSaving, setExtrasSaving] = useState(false);
   const saveExtras = useRef<(() => Promise<boolean>) | null>(null);
   // Keep the last one while the sheet slides away; read the live copy so chips show as they're tapped.
   const [shown, setShown] = useState<Checkin | null>(entry);
@@ -510,8 +580,8 @@ function CheckInSheet({
         title="Your check-in"
         subtitle={when}
         footer={
-          <Button size="lg" className="w-full" data-checkin-save onClick={async () => { if (!saveExtras.current || await saveExtras.current()) onClose(); }}>
-            Done
+          <Button size="lg" className="w-full" data-checkin-save disabled={extrasSaving} onClick={async () => { if (!saveExtras.current || await saveExtras.current()) onClose(); }}>
+            {extrasSaving ? "Saving…" : extrasDirty ? "Save changes" : "Done"}
           </Button>
         }
       >
@@ -529,7 +599,7 @@ function CheckInSheet({
           />
           <Problem>{problem}</Problem>
         </div>
-        <Extras key={Date.parse(live.at)} entry={live} care={care} onCrisis={onCrisis} saveRef={saveExtras} onDirtyChange={setExtrasDirty} />
+        <Extras key={Date.parse(live.at)} entry={live} care={care} onCrisis={onCrisis} saveRef={saveExtras} onDirtyChange={setExtrasDirty} onSavingChange={setExtrasSaving} />
         {cards.map((a) => (
           <AssessmentCard key={a.title} a={a} audience="mom" more={hotlineLinks(a)} />
         ))}

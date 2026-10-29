@@ -6,7 +6,7 @@ import { DEFAULT_TZ, dayKey, formatDayLabel } from "@/lib/maple/time";
 import type { CarePlan, DoseEntry } from "@/lib/maple/types";
 import { Icon } from "../icons";
 import { RecordedTimeField } from "../TimeField";
-import { Label, MoreDetails, NoteField, SheetFooter, useOpenCount } from "../sheets/parts";
+import { Label, NoteField, SheetFooter, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Segmented, Sheet, cx, tone } from "../ui";
 import { ApiError, useMaple, useNow } from "../useMaple";
 import { useDraftChanged } from "../useDraftChanged";
@@ -266,13 +266,13 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
             {unitsBad && <Problem>Check this number.</Problem>}
           </div>
         )}
-        <MoreDetails label="Note and dose" summary={[note.trim() && "Note", doseText.trim() && doseText.trim()].filter(Boolean).join(" · ")}>
+        <div className="space-y-4">
           <NoteField value={note} onChange={setNote} />
           <div>
             <Label optional>Dose, if different</Label>
             <input value={doseText} maxLength={80} onChange={(e) => setDoseText(e.target.value)} aria-label="Dose, if different" className={tone.input} />
           </div>
-        </MoreDetails>
+        </div>
       </fieldset>
     </Sheet>
   );

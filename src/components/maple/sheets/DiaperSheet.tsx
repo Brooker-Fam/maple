@@ -101,7 +101,8 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
-  const dirty = useDraftChanged({ type, color, texture, size, rash, when, note });
+  const [timeInvalid, setTimeInvalid] = useState(false);
+  const dirty = useDraftChanged({ timeInvalid, type, color, texture, size, rash, when, note });
 
   const poop = type === "poop" || type === "both";
   const pee = type === "pee" || type === "both";
@@ -110,34 +111,38 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const flag = !poop || !color ? null : info?.group === "pale" ? PALE_STOOL : info?.group === "red" ? RED_STOOL : color === "black" && age && age.dayOfLife >= 5 ? lateBlackStool(voice) : null;
 
   const save = async () => {
-    const data = {
-      pee,
-      poop,
-      color: poop ? color : undefined,
-      texture: poop ? texture : undefined,
-      size,
-      rash: rash || undefined,
-    };
-    if (e) {
-      setBusy(true);
-      const res = await update(
-        e.id,
-        {
-          data: withNulls(data, ["color", "texture", "size", "rash"]),
-          started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
-          note: note.trim() || null,
-        },
-        { toast: `${TYPE_TOAST[type]} updated` }
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const data = {
+        pee,
+        poop,
+        color: poop ? color : undefined,
+        texture: poop ? texture : undefined,
+        size,
+        rash: rash || undefined,
+      };
+      if (e) {
+        const res = await update(
+          e.id,
+          {
+            data: withNulls(data, ["color", "texture", "size", "rash"]),
+            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            note: note.trim() || null,
+          },
+          { toast: `${TYPE_TOAST[type]} updated` }
+        );
+        if (res) onClose();
+        return;
+      }
+      const saved = await log(
+        { kind: "diaper", started_at: when?.toISOString(), data: compact(data), note: note.trim() || null },
+        { toast: `${TYPE_TOAST[type]} · ${clock(when ?? now())}` }
       );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    void log(
-      { kind: "diaper", started_at: when?.toISOString(), data: compact(data), note: note.trim() || null },
-      { toast: `${TYPE_TOAST[type]} · ${clock(when ?? now())}` }
-    );
   };
 
   const del = () => {
@@ -150,91 +155,96 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Diaper"}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={e ? e.id < 0 : false}
-          hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || (!!e && e.id < 0)}
+            hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
 
-      <Segmented<Type>
-        value={type}
-        onChange={setType}
-        // Plain words, like any segmented control (Dry has no mark, so marks made the row ragged).
-        options={(["pee", "poop", "both", "dry"] as Type[]).map((t) => ({ value: t, label: TYPE_LABEL[t] }))}
-        className="[&>button]:min-h-[48px] [&>button]:text-[15px]"
-      />
+        <Segmented<Type>
+          value={type}
+          onChange={setType}
+          // Plain words, like any segmented control (Dry has no mark, so marks made the row ragged).
+          options={(["pee", "poop", "both", "dry"] as Type[]).map((t) => ({ value: t, label: TYPE_LABEL[t] }))}
+          className="[&>button]:min-h-[48px] [&>button]:text-[15px]"
+        />
 
-      {poop && (
-        <section aria-label="Poop color">
-          <Label optional>Color</Label>
-          {/* Like a hospital stool card: the usual shades on top, the ones to watch below, each group apart. */}
-          <div className={cx(tone.card, "divide-y divide-mp-line")}>
-            {GROUPS.filter((g) => g.id === "normal").map((g) => (
-              <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} className="px-3 pt-2.5 pb-2" />
-            ))}
-            <div className="flex divide-x divide-mp-line">
-              {GROUPS.filter((g) => g.id !== "normal").map((g) => (
-                <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} className="px-2 pt-2.5 pb-2 first:pl-3 last:pr-3" />
-              ))}
-            </div>
-          </div>
-          {flag ? (
-            <AssessmentCard a={flag} className="mt-3" />
-          ) : (
-            info && (
-              <p className={cx(tone.body, "mt-3 text-sm")}>
-                <span className="font-semibold">{info.label}.</span> <span className={tone.muted}>{info.note}</span>
-              </p>
-            )
-          )}
-          <ContextNote className="mt-2">{STOOL_TIMELINE}</ContextNote>
-        </section>
-      )}
-
-      <WhenField value={when} onChange={setWhen} tz={tz} />
-
-      <section aria-label="Diaper details" className="space-y-4">
         {poop && (
+          <section aria-label="Poop color">
+            <Label optional>Color</Label>
+            {/* Like a hospital stool card: the usual shades on top, the ones to watch below, each group apart. */}
+            <div className={cx(tone.card, "divide-y divide-mp-line")}>
+              {GROUPS.filter((g) => g.id === "normal").map((g) => (
+                <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} className="px-3 pt-2.5 pb-2" />
+              ))}
+              <div className="flex divide-x divide-mp-line">
+                {GROUPS.filter((g) => g.id !== "normal").map((g) => (
+                  <SwatchGroup key={g.id} label={g.label} colors={ORDER.filter((c) => STOOL_COLOR_INFO[c].group === g.id)} value={color} onChange={setColor} className="px-2 pt-2.5 pb-2 first:pl-3 last:pr-3" />
+                ))}
+              </div>
+            </div>
+            {flag ? (
+              <AssessmentCard a={flag} className="mt-3" />
+            ) : (
+              info && (
+                <p className={cx(tone.body, "mt-3 text-sm")}>
+                  <span className="font-semibold">{info.label}.</span> <span className={tone.muted}>{info.note}</span>
+                </p>
+              )
+            )}
+            <ContextNote className="mt-2">{STOOL_TIMELINE}</ContextNote>
+          </section>
+        )}
+
+        <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
+
+        <section aria-label="Diaper details" className="space-y-4">
+          {poop && (
+            <div>
+              <Label>Texture</Label>
+              <div className="flex flex-wrap gap-2">
+                {STOOL_TEXTURES.map((t) => (
+                  <Chip key={t} selected={texture === t} onClick={() => setTexture(texture === t ? undefined : t)}>
+                    {TEXTURE_LABEL[t]}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
-            <Label>Texture</Label>
+            <Label>Size</Label>
             <div className="flex flex-wrap gap-2">
-              {STOOL_TEXTURES.map((t) => (
-                <Chip key={t} selected={texture === t} onClick={() => setTexture(texture === t ? undefined : t)}>
-                  {TEXTURE_LABEL[t]}
+              {DIAPER_SIZES.map((s) => (
+                <Chip key={s} selected={size === s} onClick={() => setSize(size === s ? undefined : s)}>
+                  {SIZE_LABEL[s]}
                 </Chip>
               ))}
             </div>
           </div>
-        )}
-        <div>
-          <Label>Size</Label>
-          <div className="flex flex-wrap gap-2">
-            {DIAPER_SIZES.map((s) => (
-              <Chip key={s} selected={size === s} onClick={() => setSize(size === s ? undefined : s)}>
-                {SIZE_LABEL[s]}
-              </Chip>
-            ))}
+          <div>
+            <Label>Skin</Label>
+            <Chip selected={rash} onClick={() => setRash((r) => !r)}>
+              Diaper rash
+            </Chip>
           </div>
-        </div>
-        <div>
-          <Label>Skin</Label>
-          <Chip selected={rash} onClick={() => setRash((r) => !r)}>
-            Diaper rash
-          </Chip>
-        </div>
-      </section>
+        </section>
 
-      <NoteField value={note} onChange={setNote} />
+        <NoteField value={note} onChange={setNote} />
+      </fieldset>
     </Sheet>
   );
 }

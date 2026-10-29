@@ -493,6 +493,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const revRef = useRef<string | null>(null);
   const inflight = useRef(0);
   const flushing = useRef(false);
+  const flushingEntry = useRef<number | null>(null);
   const seenRef = useRef(false);
   const lastPollRef = useRef(0);
   const tzRef = useRef("America/New_York");
@@ -500,6 +501,11 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const confirmedRef = useRef(new Map<number, { updatedAt: string; at: number }>());
   const stateRef = useRef<MapleState | null>(null);
   stateRef.current = state;
+  // An open form may keep a queued entry's temporary id after it syncs.
+  // Only a confirmed response supplies its replacement, within this scope.
+  const entryScope = state ? JSON.stringify([state.family?.id ?? 1, state.me.email, state.baby.id]) : null;
+  const syncedEntryIds = useRef({ scope: entryScope, ids: new Map<number, number>() });
+  if (syncedEntryIds.current.scope !== entryScope) syncedEntryIds.current = { scope: entryScope, ids: new Map() };
   /** How many holds are on (the Lantern, Fix times); timer toasts wait while any is. */
   const holdRef = useRef(0);
   const heldRef = useRef<{ text: string; opts: Partial<Omit<Toast, "id" | "text">>; at: number; seen: number } | null>(null);
@@ -790,7 +796,9 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         if (!outboxRef.current.some((i) => i.client_id === item.client_id)) continue;
         // Another family's or person's: it waits until this phone is signed in as them again.
         if (!ownedBy(item, stateRef.current)) continue;
+        const scope = syncedEntryIds.current;
         try {
+          if (isEntryItem(item)) flushingEntry.current = item.entry.id;
           const target = item.target ?? "entries";
           const change = isMoodItem(item) && item.id != null;
           const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; possible_duplicate?: DoseEntry }>(
@@ -810,6 +818,9 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           // A change goes out whole each time, so there's nothing to take back.
           if (change) continue;
           const current = outboxRef.current.find((i) => i.client_id === item.client_id);
+          if (isEntryItem(item) && current && res.entry && res.entry.id > 0 && syncedEntryIds.current === scope) {
+            scope.ids.set(item.entry.id, res.entry.id);
+          }
           if (isMoodItem(item) && res.entry && current && current !== item) {
             // She changed this check-in (a chip, the note) while it was uploading: send the change to the saved one.
             const later = current as MoodItem;
@@ -832,6 +843,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             done.add(item.client_id);
             toast(`Couldn't save an earlier entry: ${(e as Error).message}`, { tone: "error", duration: 8000 });
           }
+        } finally {
+          flushingEntry.current = null;
         }
       }
       setQueue(
@@ -1075,11 +1088,12 @@ export function MapleProvider({ children }: { children: ReactNode }) {
 
   const update = useCallback<MapleContextValue["update"]>(
     async (id, patch, opts = {}) => {
+      if (id < 0) id = syncedEntryIds.current.ids.get(id) ?? id;
       if (id < 0) {
         // Not on the server yet. If it's waiting in the outbox, fold the edit
         // into the queued save; otherwise it's mid-save, so ask for a moment.
         const queued = outboxRef.current.filter(isEntryItem).find((i) => i.entry.id === id);
-        if (!queued) {
+        if (!queued || flushingEntry.current === id) {
           toast("One sec, that's still saving", { tone: "info" });
           return null;
         }

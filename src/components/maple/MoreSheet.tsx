@@ -5,7 +5,7 @@ import { tick } from "@/components/atlas/haptics";
 import { NOTE_TAG_LABELS } from "@/lib/maple/describe";
 import { JAUNDICE_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
-import { DEFAULT_TZ, dayKey, daysBetween, formatTime, formatTimeNear, parseDayKey } from "@/lib/maple/time";
+import { DEFAULT_TZ, dayBounds, dayKey, daysBetween, formatDayLabel, formatTime, formatTimeNear, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Baby, Entry, EntryKind, EntryOf } from "@/lib/maple/types";
 import { formatTemp, formatVolume, formatWeight } from "@/lib/maple/units";
 import { careTime } from "@/lib/maple/care";
@@ -160,7 +160,12 @@ function useOpenQuestions(active: boolean): number {
   return [...all.values()].filter(Boolean).length;
 }
 
-export default function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function MoreSheet({ open, onClose, earlierDay }: {
+  open: boolean;
+  onClose: () => void;
+  /** History opens the earlier picker directly for this family-local day. */
+  earlierDay?: string;
+}) {
   const { state, summary, log, memberName, now, units } = useMaple();
   const sheets = useSheets();
   const care = useCare();
@@ -192,14 +197,25 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
     }
   };
 
-  const go = (kind: EntryKind, preset?: Record<string, unknown>) => {
+  const go = (kind: EntryKind, preset?: Record<string, unknown>, entry?: Entry) => {
     onClose();
     // Let this sheet start closing before the next one opens.
-    window.setTimeout(() => sheets.open({ kind, preset }), 120);
+    window.setTimeout(() => sheets.open({ kind, preset, entry }), 120);
   };
   const earlier = (kind: EntryKind, preset: Record<string, unknown> = {}) => () => {
     noteHeld();
-    go(kind, { ...preset, started_at: new Date(now().getTime() - 15 * 60_000).toISOString() });
+    const current = now();
+    let end = current;
+    if (earlierDay && earlierDay !== dayKey(current, tz)) {
+      const { year, month, day } = parseDayKey(earlierDay);
+      const { hour, minute } = localParts(current, tz);
+      end = zonedTimeToUtc(year, month, day, hour, minute, tz);
+    }
+    // Keep both ends on the day chosen in History, including shortly after midnight.
+    const from = end.getTime() - 15 * 60_000;
+    const start = new Date(earlierDay ? Math.max(dayBounds(earlierDay, tz)[0].getTime(), from) : from);
+    const timed = kind === "sleep" || kind === "tummy" || kind === "pump";
+    go(kind, { ...preset, started_at: start.toISOString(), ...(timed ? { ended_at: end.toISOString() } : {}) });
   };
 
   // ── When each was last done, from the loaded days ──
@@ -300,8 +316,8 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
     icon: "sun",
     color: KIND_COLOR.med,
     onTap: () => {
-      // One tap logs today's drops; if they're already logged, open the form instead of double-logging.
-      if (vitD) return go("med", { ...VITAMIN_D_DEFAULT });
+      // A saved status opens that record, so its time can still be corrected after the toast disappears.
+      if (vitD) return go("med", lastVitD ? undefined : { ...VITAMIN_D_DEFAULT }, lastVitD);
       tick();
       onClose();
       void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops logged" });
@@ -423,17 +439,19 @@ export default function MoreSheet({ open, onClose }: { open: boolean; onClose: (
   const earlierGroups = groups.map((items) => items.flatMap((it) => it.onHold ? [{
     ...it,
     label: it.id === "vitd" ? "Vitamin D" : it.id === "tummy" ? "Tummy time" : it.label,
+    sub: undefined,
     onTap: it.onHold,
     onHold: undefined,
   }] : []));
 
   return (
-    <Sheet open={open} onClose={onClose} title={loggingEarlier ? "Log earlier" : "More to log"}>
-      {loggingEarlier ? (
+    <Sheet open={open} onClose={onClose} title={loggingEarlier || earlierDay ? "Log earlier" : "More to log"}>
+      {loggingEarlier || earlierDay ? (
         <>
-          <button type="button" onClick={() => setLoggingEarlier(false)} className="inline-flex min-h-[44px] items-center gap-1 text-[15px] font-semibold text-mp-accent-fg">
+          {!earlierDay && <button type="button" onClick={() => setLoggingEarlier(false)} className="inline-flex min-h-[44px] items-center gap-1 text-[15px] font-semibold text-mp-accent-fg">
             <Icon name="chevron-left" size={18} /> More to log
-          </button>
+          </button>}
+          {earlierDay && <p className={cx(tone.heading, "text-[16px]")}>{formatDayLabel(earlierDay, todayKey)}</p>}
           <p className={cx(tone.muted, "text-[15px]")}>Choose what happened. Check the date and time before saving.</p>
           <Cells items={everyday} />
           {earlierGroups.map((items) => <Cells key={items[0].id} items={items} />)}

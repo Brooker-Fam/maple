@@ -393,6 +393,40 @@ check("refresh failures and recovery reach diagnostics", async (f) => {
   assert(!JSON.stringify(f.diagnostics).includes("sentinel"), "Server error messages stay out of diagnostics");
 });
 
+for (const kind of ["feed", "sleep", "tummy", "pump"]) check(`one-minute start correction: ${kind}`, async (f) => {
+  await f.page.evaluate((kind) => {
+    if (kind === "feed") void window.__mapleTimerActions.startFeed("L");
+    else void window.__mapleTimerActions.startTimer(kind);
+  }, kind);
+  const start = await f.take("/api/maple/timer", "POST");
+  assert.equal(start.body.action, "start", "The first tap immediately starts the timer");
+  const entry = { ...feed(905, now, null), kind, ...(kind === "feed" ? {} : { data: {} }) };
+  await f.answer(start, { entry, alreadyRunning: false });
+  await f.page.waitForFunction(() => window.__mapleSync.toasts.some((t) => t.actions?.some((a) => /^1 min/.test(a.label))));
+  await f.page.evaluate(() => window.__mapleSync.toasts.find((t) => t.actions?.some((a) => /^1 min/.test(a.label))).actions.find((a) => /^1 min/.test(a.label)).onClick());
+  const correction = await f.take("/api/maple/timer", "POST");
+  const at = kind === "feed" ? correction.body.edit.to : correction.body.at;
+  assert.equal(at, "2026-01-01T10:16:00.000Z", "One minute is measured from the saved start, not the later toast tap");
+  assert.equal(correction.body.action, kind === "feed" ? "retime" : "adjust");
+  await f.answer(correction, { entry: { ...entry, started_at: at, updated_at: "2026-01-01T10:17:01.000Z", ...(kind === "feed" ? { data: { ...entry.data, segments: [{ side: "L", start: at, end: null }] } } : {}) } });
+});
+
+check("one-minute start correction: previous feed boundary", async (f) => {
+  const prior = { ...previous, ended_at: "2026-01-01T10:14:30.000Z", data: { method: "bottle", amount_ml: 60 } };
+  await f.page.evaluate(() => { void window.__mapleSync.refresh(); });
+  await f.answer(await f.take("/api/maple/state"), snapshot("nearby", [prior]));
+  await f.page.evaluate(() => { void window.__mapleTimerActions.startFeed("L"); });
+  const entry = feed(905, now, null);
+  await f.answer(await f.take("/api/maple/timer", "POST"), { entry, alreadyRunning: false });
+  await f.page.waitForFunction(() => window.__mapleSync.toasts.some((t) => t.actions?.some((a) => a.label === "Since the last feed")));
+  const labels = await f.page.evaluate(() => window.__mapleSync.toasts.find((t) => t.watch?.entryId === 905).actions.map((a) => a.label));
+  assert.deepEqual(labels, ["Since the last feed", "1 min"], "Longer choices stop at the previous feed while one minute remains available");
+  await f.page.evaluate(() => window.__mapleSync.toasts.find((t) => t.watch?.entryId === 905).actions.find((a) => a.label === "Since the last feed").onClick());
+  const correction = await f.take("/api/maple/timer", "POST");
+  assert.equal(correction.body.edit.to, prior.ended_at, "The boundary retains the previous feed's exact seconds");
+  await f.answer(correction, { entry: { ...entry, started_at: prior.ended_at, updated_at: "2026-01-01T10:17:01.000Z", data: { ...entry.data, segments: [{ side: "L", start: prior.ended_at, end: null }] } } });
+});
+
 let failures = 0;
 try {
   for (const { name, run } of cases) {

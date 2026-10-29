@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { RECENT_MS, type PlanView, careTime, countedAs, doseNotes, loggedBy, matchPlan, normName, oneOffNotes, parseUnits, planTitle, planView, recentDose } from "@/lib/maple/care";
 import type { DoseEntry, DoseResult, OneTapAsk } from "@/lib/maple/types";
 import { RecordedTimeField } from "../TimeField";
-import { ContextNote, Label, MoreDetails, NoteField, useOpenCount } from "../sheets/parts";
+import { ContextNote, Label, NoteField, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Sheet, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { useDraftChanged } from "../useDraftChanged";
@@ -294,13 +294,13 @@ function PlanDose({
           {future && <Problem>That time is in the future.</Problem>}
         </div>
 
-        <MoreDetails label="Add a note">
+        <div className="space-y-4">
           <NoteField value={note} onChange={setNote} />
           <div>
             <Label optional>Dose, if different</Label>
             <input value={doseText} maxLength={80} onChange={(e) => setDoseText(e.target.value)} aria-label="Dose, if different" className={tone.input} />
           </div>
-        </MoreDetails>
+        </div>
       </fieldset>
     </Sheet>
   );
@@ -544,7 +544,8 @@ function DoseWhen({ value, onChange, onInvalidChange, now, tz }: { value: Date |
   ) : (
     <div className={cx(tone.inset, "flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2")}>
       <span className="min-w-0 flex-1 text-[15px] font-medium text-mp-ink tabular-nums">Now · {careTime(now.toISOString(), now, tz)}</span>
-      <button type="button" onClick={() => onChange(new Date(now.getTime() - 15 * 60_000))} className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">Log earlier</button>
+      <button type="button" onClick={() => onChange(new Date(now.getTime() - 60_000))} className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">1 min ago</button>
+      <button type="button" onClick={() => onChange(now)} className="min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">Change time</button>
     </div>
   );
 }

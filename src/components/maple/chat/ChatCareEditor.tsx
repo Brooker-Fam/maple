@@ -13,6 +13,7 @@ import { RecordedTimeField } from "../TimeField";
 import { AssessmentCard } from "../sheets/parts";
 import { Button, Segmented, Sheet, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { useDraftChanged } from "../useDraftChanged";
 
 /** The same version-checked care actions used on her page, including old entries outside its recent window. */
 export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; onClose: () => void }) {
@@ -31,6 +32,7 @@ export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; o
   const [amount, setAmount] = useState(entry.kind === "drink" ? nutritionAmountText(entry, units) : "");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const dirty = useDraftChanged({ when, invalid, text, temperature, description, meal, items, drinkName, amount });
   if (!care?.access.write) return null;
   const temp = Number(temperature);
   const tempC = editUnits === "us" ? fToC(temp) : temp;
@@ -61,7 +63,7 @@ export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; o
     } catch { setProblem("Couldn't confirm this change. Close this editor and check the latest entry before trying again."); }
     finally { setBusy(false); }
   };
-  return <Sheet open onClose={() => { if (!busy) onClose(); }} title={entry.kind === "dose" ? "Edit dose time" : entry.kind === "temp" ? "Edit temperature" : entry.kind === "food" ? "Edit food" : entry.kind === "drink" ? "Edit drink" : "Edit question"} calm footer={
+  return <Sheet open dirty={dirty} onClose={() => { if (!busy) onClose(); }} title={entry.kind === "dose" ? "Edit dose time" : entry.kind === "temp" ? "Edit temperature" : entry.kind === "food" ? "Edit food" : entry.kind === "drink" ? "Edit drink" : "Edit question"} calm footer={
     <div className="space-y-3">
       {problem && <p role="alert" className="text-[14px] text-mp-danger">{problem}</p>}
       <div className="flex gap-3"><Button variant="soft" onClick={onClose} disabled={busy}>Cancel</Button><Button className="flex-1" onClick={() => void save()} disabled={busy || !valid || !online}>{busy ? "Saving…" : "Save"}</Button></div>

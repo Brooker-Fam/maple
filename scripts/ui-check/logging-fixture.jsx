@@ -40,9 +40,31 @@ const savedNursing = entry(7, "feed", "2026-10-28T12:00:00.000Z", {
     { side: "R", start: "2026-10-28T12:25:00.000Z", end: "2026-10-28T12:35:00.000Z" },
   ],
 }, { ended_at: "2026-10-28T12:35:00.000Z", updated_at: "2026-10-28T12:35:00.000Z" });
+const savedPumpSides = entry(8, "pump", "2026-10-28T12:00:00.000Z", { left_ml: 100, right_ml: 40 }, { ended_at: "2026-10-28T12:15:00.000Z" });
+const savedPumpTotal = entry(9, "pump", "2026-10-28T12:00:00.000Z", { total_ml: 100 }, { ended_at: "2026-10-28T12:15:00.000Z" });
+const savedTemperature = entry(10, "temp", "2026-10-28T12:00:00.000Z", { temp_c: 37.123, method: "rectal" });
+const growthMeasurements = { weight_g: 3373, length_cm: 51.43, head_cm: 34.27, at: "doctor" };
+const savedGrowth = entry(11, "growth", "2026-10-28T12:00:00.000Z", growthMeasurements);
 
 function App() {
-  const [target, setTarget] = useState(mode === "form-nursing-details" ? { kind: "feed", entry: savedNursing } : mode === "form-moment-earlier" ? { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } } : mode.startsWith("form-") ? { kind: mode.slice(5) } : null);
+  const [target, setTarget] = useState(() => {
+    if (mode === "form-nursing-details") return { kind: "feed", entry: savedNursing };
+    if (mode === "form-pump-sides") return { kind: "pump", entry: savedPumpSides };
+    if (mode === "form-pump-total") return { kind: "pump", entry: savedPumpTotal };
+    if (mode === "form-pump-preset") return { kind: "pump", preset: { total_ml: 90 } };
+    if (mode === "form-pump-sides-preset") return { kind: "pump", preset: { left_ml: 100, right_ml: 40 } };
+    if (mode === "form-pump-midnight") return { kind: "pump", preset: { started_at: "2026-10-25T04:00:00.000Z", ended_at: "2026-10-25T04:00:00.000Z" } };
+    if (mode === "form-temp-edit") return { kind: "temp", entry: savedTemperature };
+    if (mode === "form-temp-edit-unknown") return { kind: "temp", entry: { ...savedTemperature, id: 12, data: { temp_c: savedTemperature.data.temp_c } } };
+    if (mode === "form-temp-preset") return { kind: "temp", preset: { temp_c: 37 } };
+    if (mode === "form-temp-precise-preset") return { kind: "temp", preset: { temp_c: 37.123 } };
+    if (mode === "form-growth-edit") return { kind: "growth", entry: savedGrowth };
+    if (mode === "form-growth-edit-unknown") return { kind: "growth", entry: { ...savedGrowth, id: 13, data: { weight_g: 3373, length_cm: 51.43, head_cm: 34.27 } } };
+    if (mode === "form-growth-preset") return { kind: "growth", preset: growthMeasurements };
+    if (mode === "form-vitals-skin") return { kind: "vitals", preset: { jaundice: "none" } };
+    if (mode === "form-moment-earlier") return { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } };
+    return mode.startsWith("form-") ? { kind: mode.slice(5) } : null;
+  });
   const [more, setMore] = useState(mode.startsWith("more"));
   const failing = useRef(mode === "patterns-error");
   const calls = useRef([]);
@@ -53,7 +75,7 @@ function App() {
     baby: { name: "River", nickname: null, sex: "female", timezone: "America/New_York", born_at: "2026-10-01T12:00:00.000Z", settings: {} },
     family: { id: 99, care_name: "Sam", ask: "an owner" },
     me: { email: EMAIL }, members: [{ email: EMAIL, display_name: "Sam", role: "owner", color: "#674b7b" }],
-    entries: mode === "today-empty" ? [] : mode.startsWith("more") ? [entry(6, "feed", "2026-10-28T13:20:00.000Z", { method: "breast", first_side: "L", segments: [{ side: "L", start: "2026-10-28T13:20:00.000Z", end: mode === "more-paused" ? "2026-10-28T13:25:00.000Z" : null }] }, { active: true })] : entries,
+    entries: mode === "today-empty" ? [] : mode.startsWith("more") ? [entry(6, "feed", "2026-10-28T13:20:00.000Z", { method: "breast", first_side: "L", segments: [{ side: "L", start: "2026-10-28T13:20:00.000Z", end: mode === "more-paused" ? "2026-10-28T13:25:00.000Z" : null }] }, { active: true })] : mode === "form-temp-edit-unknown" ? [...entries, savedTemperature] : entries,
   }), []);
   const summary = useMemo(() => summarize({ ...state, now: NOW, vo: makeVoice({ name: "River", pronoun: "she", mom: "Sam" }) }), [state]);
   const api = useCallback(async (pathname, options) => {
@@ -67,10 +89,16 @@ function App() {
     return { entries: pathname.includes("deleted=1") ? [] : state.entries };
   }, [state]);
   const now = useCallback(() => NOW, []);
-  const maple = { state, summary, api, now, readOnly: false, units: "imperial", seenAt: null,
+  const maple = { state, summary, api, now, readOnly: false, units: new URLSearchParams(location.search).get("units") === "metric" ? "metric" : "us", seenAt: null,
     memberName: () => "Sam", memberLabel: () => "Sam", member: () => state.members[0],
     isNight: () => false, timerBusy: () => false, toasts: [], toast() {}, dismissToast() {},
-    log: async (value) => { calls.current.push({ log: value }); return value; }, remove() {}, update() {}, refresh: async () => {},
+    log: async (value) => { calls.current.push({ log: value }); return value; }, remove() {},
+    update: async (id, patch) => {
+      calls.current.push({ id, patch });
+      const previous = currentTarget.current?.entry;
+      return { ...previous, ...patch, data: { ...previous?.data, ...patch.data } };
+    },
+    refresh: async () => {},
   };
   const close = useCallback(() => setTarget(null), []);
   useEffect(() => {

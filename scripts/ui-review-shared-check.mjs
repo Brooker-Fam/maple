@@ -51,6 +51,174 @@ const check = async (name, run) => {
   catch (e) { checks.push(name); console.log(`FAIL ${name}: ${e.message}`); await page.screenshot({ path: path.join(screenshots, `${name.replaceAll(" ", "-")}-failure.png`) }); }
 };
 try {
+  await check("one minute ago uses tap time", async () => {
+    await page.goto(`${url}?mode=time`);
+    // Let a form sit open without rerendering. "Ago" must use the clock at the tap.
+    await page.evaluate(() => { window.__sharedNow = "2026-10-28T12:05:00Z"; });
+    const quick = page.getByRole("region", {name:"Quick logged time", exact:true});
+    await quick.getByRole("button", {name:"1 min ago", exact:true}).click();
+    assert.equal(await page.locator("#when-value").textContent(), "2026-10-28T12:04:00.000Z");
+    assert.equal(await quick.getByRole("button", {name:"1 min ago", exact:true}).getAttribute("aria-pressed"), "true");
+    await quick.getByRole("button", {name:"5 min ago", exact:true}).click();
+    assert.equal(await page.locator("#when-value").textContent(), "2026-10-28T12:00:00.000Z");
+    await page.getByRole("region", {name:"Timer start", exact:true}).getByRole("button", {name:"1 min ago", exact:true}).click();
+    assert.equal(await page.locator("#scrub-value").textContent(), "2026-10-28T12:04:00.000Z");
+  });
+  await check("recorded time nudges preserve limits and feedback", async () => {
+    await page.goto(`${url}?mode=time`);
+    const field = page.getByRole("group", {name:"Recorded at", exact:true});
+    await field.getByRole("button", {name:"5 min earlier", exact:true}).click();
+    assert.equal(await page.getByLabel("Recorded at: time", {exact:true}).inputValue(), "11:40");
+    assert.match(await field.getByRole("status").textContent(), /11:40 AM/);
+    assert(await field.getByRole("button", {name:"1 min earlier", exact:true}).isDisabled());
+    assert(await field.getByRole("button", {name:"5 min earlier", exact:true}).isDisabled());
+    await field.getByRole("button", {name:"1 min later", exact:true}).click();
+    assert.equal(await page.locator("#recorded-value").textContent(), "2026-10-28T11:41:00.000Z");
+    await page.getByLabel("Recorded at: time", {exact:true}).fill("12:01");
+    assert.equal(await page.locator("#recorded-value").getAttribute("data-invalid"), "true");
+    assert(await field.getByRole("alert").isVisible());
+    await page.getByLabel("Recorded at: time", {exact:true}).fill("11:59");
+    assert.equal(await page.locator("#recorded-value").getAttribute("data-invalid"), "false");
+    assert.equal(await page.locator("#recorded-value").textContent(), "2026-10-28T11:59:00.000Z");
+  });
+  await check("explicit future and incomplete clocks preserve the draft until one Save", async () => {
+    await page.goto(`${url}?mode=explicit`);
+    assert(await page.getByLabel("Recorded: date", {exact:true}).isVisible(), "Date and clock are available without another reveal");
+    await page.getByLabel("Recorded: time", {exact:true}).fill("13:00");
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:30:42.125Z", "A future clock cannot become yesterday or now");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled());
+    assert(await page.getByRole("alert").isVisible());
+    assert.equal(await page.getByLabel("Recorded: time", {exact:true}).inputValue(), "13:00");
+    await page.getByLabel("Recorded: date", {exact:true}).fill("2026-10-27");
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-27T13:00:00.000Z");
+    await page.getByLabel("Recorded: time", {exact:true}).fill("");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled());
+    await page.getByLabel("Recorded: time", {exact:true}).fill("13:15");
+    assert.equal(await page.getByRole("dialog").count(), 0);
+    assert.equal(await page.getByRole("button", {name:/Apply/}).count(), 0);
+    await page.getByRole("button", {name:"Save",exact:true}).click();
+    assert.equal(await page.locator("#explicit-saved").textContent(), "2026-10-27T13:15:00.000Z");
+  });
+  await check("bounded quick choices and nudges stay visible without clamping", async () => {
+    await page.goto(`${url}?mode=explicit&range=1&at=2026-10-28T11:44:42.125Z&end=2026-10-28T11:45:00Z`);
+    const start=page.getByRole("group", {name:"Started",exact:true});
+    const end=page.getByRole("group", {name:"Ended",exact:true});
+    for (const name of ["Now","1 min ago","5 min ago","1 minute later","5 minutes later"]) assert(await start.getByRole("button", {name,exact:true}).isDisabled(), name);
+    assert(await end.getByRole("button", {name:"1 minute earlier",exact:true}).isDisabled());
+    assert(await end.getByRole("button", {name:"30 min ago",exact:true}).isDisabled());
+    await start.getByLabel("Started: time", {exact:true}).fill("11:50");
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:44:42.125Z");
+    assert.equal(await page.locator("#explicit-end").textContent(), "2026-10-28T11:45:00.000Z");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled());
+  });
+  await check("both range drafts must be valid before Save", async () => {
+    await page.goto(`${url}?mode=explicit&range=1`);
+    await page.getByLabel("Started: time", {exact:true}).fill("11:50");
+    await page.getByLabel("Ended: time", {exact:true}).fill("11:20");
+    assert.equal(await page.getByRole("alert").count(), 2);
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:30:42.125Z");
+    assert.equal(await page.locator("#explicit-end").textContent(), "2026-10-28T11:45:42.125Z");
+    await page.getByLabel("Started: time", {exact:true}).fill("11:35");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled(), "Fixing start cannot clear the end's invalid flag");
+    await page.getByLabel("Ended: time", {exact:true}).fill("11:55");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isEnabled());
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:35:00.000Z");
+    assert.equal(await page.locator("#explicit-end").textContent(), "2026-10-28T11:55:00.000Z");
+  });
+  await check("changed range bounds commit the now-valid visible draft before Save", async () => {
+    await page.goto(`${url}?mode=explicit&range=1`);
+    await page.getByLabel("Started: time", {exact:true}).fill("11:50");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled());
+    await page.getByLabel("Ended: time", {exact:true}).fill("11:55");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isEnabled());
+    await page.getByRole("button", {name:"Save",exact:true}).click();
+    assert.equal(await page.locator("#explicit-saved").textContent(), "2026-10-28T11:50:00.000Z", "Save must never use the old start after validation becomes valid");
+  });
+  await check("duration presets wait for a valid end draft", async () => {
+    await page.goto(`${url}?mode=explicit&range=1&at=2026-10-28T11:30:00Z&end=2026-10-28T11:45:00Z`);
+    const end = page.getByLabel("Ended: time", { exact: true });
+    const duration = page.getByRole("group", { name: "Duration", exact: true });
+    await end.fill("11:20");
+    assert(await page.getByRole("button", { name: "Save", exact: true }).isDisabled());
+    assert(await duration.getByRole("button", { name: "1h", exact: true }).isDisabled(), "A duration cannot use the previous accepted end while another end is visible");
+    assert.equal(await end.inputValue(), "11:20");
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:30:00.000Z");
+    await end.fill("11:40");
+    await duration.getByRole("button", { name: "1h", exact: true }).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T10:40:00.000Z");
+    assert.equal(await page.locator("#explicit-end").textContent(), "2026-10-28T11:40:00.000Z");
+    assert(await page.getByRole("button", { name: "Save", exact: true }).isEnabled());
+  });
+  await check("same-value quick and duration choices replace invalid raw text", async () => {
+    await page.goto(`${url}?mode=explicit&at=2026-10-28T11:30:00Z`);
+    await page.getByLabel("Recorded: time", {exact:true}).fill("13:00");
+    await page.getByRole("button", {name:"30 min ago",exact:true}).click();
+    assert.equal(await page.getByLabel("Recorded: time", {exact:true}).inputValue(), "11:30");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isEnabled());
+    await page.goto(`${url}?mode=explicit&range=1`);
+    await page.getByLabel("Started: time", {exact:true}).fill("13:00");
+    await page.getByRole("group", {name:"Duration",exact:true}).getByRole("button", {name:"15m",exact:true}).click();
+    assert.equal(await page.getByLabel("Started: time", {exact:true}).inputValue(), "11:30");
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:30:42.125Z");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isEnabled());
+    await page.goto(`${url}?mode=explicit&when=1`);
+    await page.getByRole("button", {name:"Pick a time",exact:true}).click();
+    await page.getByLabel("When: exact time: time", {exact:true}).fill("13:00");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled());
+    await page.getByRole("button", {name:"Now",exact:true}).click();
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isEnabled(), "Unmounting custom fields clears their invalid flag");
+  });
+  await check("missing DST clocks stay invalid and repeated clocks expose both occurrences", async () => {
+    await page.goto(`${url}?mode=explicit&tz=America/New_York&now=2026-03-08T08:00:00Z&at=2026-03-08T06:30:42.125Z`);
+    await page.getByLabel("Recorded: time", {exact:true}).fill("02:30");
+    assert.match(await page.getByRole("alert").textContent(), /clocks skip/);
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-03-08T06:30:42.125Z");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled());
+    await page.getByLabel("Recorded: time", {exact:true}).fill("03:30");
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-03-08T07:30:00.000Z");
+    await page.goto(`${url}?mode=explicit&tz=America/New_York&now=2026-11-01T08:00:00Z&at=2026-11-01T05:30:42.125Z`);
+    await page.getByRole("button", {name:"Second 1:30 AM",exact:true}).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-11-01T06:30:42.125Z");
+    await page.getByRole("button", {name:"1 minute later",exact:true}).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-11-01T06:31:42.125Z");
+    await page.getByRole("button", {name:"First 1:31 AM",exact:true}).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-11-01T05:31:42.125Z");
+  });
+  await check("day choices preserve seconds and never shift future clocks", async () => {
+    await page.goto(`${url}?mode=explicit&now=2026-10-28T00:10:00Z&at=2026-10-27T23:50:42.125Z`);
+    assert(await page.getByRole("button", {name:"Today",exact:true}).isDisabled(), "Today at 11:50 PM is future, not a request for now");
+    await page.getByRole("button", {name:"1 minute later",exact:true}).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-27T23:51:42.125Z");
+    await page.goto(`${url}?mode=explicit&now=2026-10-28T12:00:00Z&at=2026-10-27T11:30:42.125Z`);
+    await page.getByRole("button", {name:"Today",exact:true}).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:30:42.125Z");
+  });
+  await check("opening an exact Now freezes the draft across clock ticks", async () => {
+    await page.goto(`${url}?mode=explicit&when=1&at=now&tick=1`);
+    await page.getByRole("button", {name:"Pick a time",exact:true}).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T12:00:00.000Z");
+    await page.getByLabel("When: exact time: time", {exact:true}).fill("");
+    await page.getByRole("button", {name:"Advance clock",exact:true}).click();
+    assert.equal(await page.getByLabel("When: exact time: time", {exact:true}).inputValue(), "");
+    assert(await page.getByRole("button", {name:"Save",exact:true}).isDisabled());
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T12:00:00.000Z");
+  });
+  await check("shared time controls fit narrow phones", async () => {
+    await page.setViewportSize({width:320,height:844});
+    await page.goto(`${url}?mode=time`);
+    for (const theme of ["", "dark", "maple-night"]) {
+      await page.evaluate((theme) => { document.documentElement.className=`maple-ui ${theme}`; }, theme);
+      const chip=page.getByRole("region", {name:"Quick logged time",exact:true}).getByRole("button", {name:"1 min ago",exact:true});
+      await chip.focus();
+      const focus=await chip.evaluate(el=>({outline:getComputedStyle(el).outlineStyle,width:getComputedStyle(el).outlineWidth}));
+      assert.deepEqual(focus,{outline:"solid",width:"2px"}, `${theme||"day"} has visible keyboard focus`);
+      await page.screenshot({path:path.join(screenshots,`shared-time-controls-320-${theme||"day"}.png`),fullPage:true});
+    }
+    const sizes=await page.locator("button").evaluateAll(buttons=>buttons.map(el=>({text:el.textContent,width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height})));
+    for(const size of sizes) assert(size.height>=44 && size.width>=44, `${size.text} needs a 44px touch target`);
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth), "Time controls do not overflow at 320px");
+    assert(await page.getByRole("region", {name:"Useful details",exact:true}).getByRole("button", {name:"Available choice",exact:true}).isVisible());
+  });
   await check("radio keyboard", async () => {
     await page.goto(url);
     await page.getByRole("radio",{name:"One",exact:true}).focus();

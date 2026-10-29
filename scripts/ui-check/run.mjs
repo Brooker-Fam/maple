@@ -82,6 +82,156 @@ const settleView = async () => {
 try {
   await checkProductionCare({ page, url, screenshots, settleView, noOverflow });
   await page.goto(url);
+  await page.evaluate(() => window.__mapleUiFixture.openManualFeed());
+  await page.setViewportSize({ width: 320, height: 844 });
+  const manualFeed = page.getByRole("dialog", { name: "Feed", exact: true });
+  const leftMinutes = manualFeed.getByLabel("minutes on the left", { exact: true });
+  const rightMinutes = manualFeed.getByLabel("minutes on the right", { exact: true });
+  const bothMinutes = manualFeed.getByLabel("minutes going back and forth", { exact: true });
+  const logFeed = manualFeed.getByRole("button", { name: "Log it", exact: true });
+  assert(await logFeed.isDisabled(), "An empty nursing duration cannot be logged");
+  for (const field of [leftMinutes, rightMinutes, bothMinutes]) {
+    const usable = await field.evaluate((el) => el.clientWidth - parseFloat(getComputedStyle(el).paddingLeft) - parseFloat(getComputedStyle(el).paddingRight));
+    assert(usable >= 48, "Nursing minutes have room for three digits beside the unit at 320px");
+  }
+  await manualFeed.getByRole("button", { name: "5 more minutes on the left", exact: true }).click();
+  await manualFeed.getByRole("button", { name: "5 more minutes on the left", exact: true }).click();
+  await manualFeed.getByRole("button", { name: "5 more minutes on the right", exact: true }).click();
+  await manualFeed.getByRole("button", { name: "More minutes on the left", exact: true }).click();
+  assert.equal(await leftMinutes.inputValue(), "11", "Exact one-minute adjustment remains available");
+  await manualFeed.getByRole("button", { name: "Less minutes on the left", exact: true }).click();
+  await manualFeed.getByRole("button", { name: "5 more minutes going back and forth", exact: true }).click();
+  await manualFeed.getByRole("button", { name: "5 fewer minutes going back and forth", exact: true }).click();
+  assert.equal(await bothMinutes.inputValue(), "0");
+  assert.equal(await rightMinutes.inputValue(), "5");
+  assert.equal((await snapshot()).calls.length, 0, "Duration controls stage all sides without saving");
+  await leftMinutes.fill("12");
+  await leftMinutes.blur();
+  await settleView();
+  await noOverflow();
+  await page.screenshot({ path: path.join(screenshots, "manual-feed-320.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settleView();
+  await noOverflow();
+  await page.screenshot({ path: path.join(screenshots, "manual-feed-390.png") });
+  await logFeed.click();
+  await manualFeed.waitFor({ state: "hidden" });
+  const loggedFeed = (await snapshot()).calls;
+  assert.equal(loggedFeed.length, 1, "One Log saves the complete manual feed");
+  assert.equal(loggedFeed[0].entry.data.left_sec, 12 * 60);
+  assert.equal(loggedFeed[0].entry.data.right_sec, 5 * 60);
+  assert.equal(loggedFeed[0].entry.started_at, "2026-10-28T13:13:00.000Z", "Duration moves the inferred start back from the end");
+  assert.equal(loggedFeed[0].entry.ended_at, "2026-10-28T13:30:00.000Z");
+
+  await page.evaluate(() => window.__mapleUiFixture.openManualFeed());
+  await leftMinutes.fill("2");
+  await rightMinutes.fill("1");
+  await manualFeed.getByLabel("Started", { exact: true }).getByRole("button", { name: "5 min ago", exact: true }).click();
+  assert.equal(await leftMinutes.inputValue(), "2", "Choosing an earlier start preserves the typed left duration");
+  assert.equal(await rightMinutes.inputValue(), "1", "Choosing an earlier start preserves the typed right duration");
+  await manualFeed.getByRole("button", { name: "More minutes on the left", exact: true }).click();
+  await logFeed.click();
+  await manualFeed.waitFor({ state: "hidden" });
+  const anchoredFeed = (await snapshot()).calls;
+  assert.equal(anchoredFeed.length, 1);
+  assert.equal(anchoredFeed[0].entry.started_at, "2026-10-28T13:25:00.000Z", "A chosen start stays fixed when side minutes change afterward");
+  assert.equal(anchoredFeed[0].entry.ended_at, "2026-10-28T13:30:00.000Z");
+  assert.equal(anchoredFeed[0].entry.data.left_sec, 3 * 60);
+  assert.equal(anchoredFeed[0].entry.data.right_sec, 60);
+
+  await page.evaluate(() => window.__mapleUiFixture.openManualFeed());
+  const runningBeforeManual = (await snapshot()).activeFeed;
+  await manualFeed.getByLabel("Started", { exact: true }).getByRole("button", { name: "1 min ago", exact: true }).click();
+  await logFeed.click();
+  await manualFeed.waitFor({ state: "hidden" });
+  const minuteAgoFeed = (await snapshot()).calls;
+  assert.equal(minuteAgoFeed.length, 1);
+  assert.equal(minuteAgoFeed[0].entry.started_at, "2026-10-28T13:29:00.000Z");
+  assert.equal(minuteAgoFeed[0].entry.ended_at, "2026-10-28T13:30:00.000Z");
+  assert.equal(minuteAgoFeed[0].entry.data.left_sec, 60, "Without typed minutes, the chosen span counts on the starting side");
+  assert.equal(minuteAgoFeed[0].entry.active, undefined, "Logging an earlier feed does not start a timer");
+  assert.deepEqual((await snapshot()).activeFeed, runningBeforeManual, "Logging earlier leaves the running timer unchanged");
+
+  await page.evaluate(() => window.__mapleUiFixture.openManualFeed());
+  await leftMinutes.fill("5");
+  const manualStart = manualFeed.getByLabel("Started: time", { exact: true });
+  await manualStart.fill("09:45");
+  assert(await logFeed.isDisabled());
+  await leftMinutes.fill("6");
+  assert.equal(await manualStart.inputValue(), "09:45", "Changing side minutes preserves an invalid explicit start");
+  assert(await logFeed.isDisabled(), "Side minutes cannot silently replace an invalid start with an inferred time");
+  assert.equal((await snapshot()).calls.length, 0);
+  await manualFeed.getByRole("group", { name: "Started", exact: true }).getByRole("button", { name: "5 min ago", exact: true }).click();
+  assert.equal(await manualStart.inputValue(), "09:25", "A deliberate time preset can recover the invalid draft");
+  await logFeed.click();
+  await manualFeed.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).calls[0].entry.started_at, "2026-10-28T13:25:00.000Z");
+
+  for (const change of ["start", "first side"]) {
+    await page.evaluate((change) => window.__mapleUiFixture.openSavedFeed("manual", change === "first side" ? 3 : 0), change);
+    const form = page.getByRole("dialog").last();
+    const end = form.getByLabel("Ended: time", { exact: true });
+    const shownEnd = await end.inputValue();
+    if (change === "start") await form.getByRole("group", { name: "Started", exact: true }).getByRole("button", { name: "1 minute earlier", exact: true }).click();
+    else await form.getByRole("radio", { name: "Right", exact: true }).click();
+    assert.equal(await end.inputValue(), shownEnd);
+    await form.getByRole("button", { name: "Save", exact: true }).click();
+    await form.waitFor({ state: "hidden" });
+    const patches = (await snapshot()).calls.filter((call) => call.patch);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].patch.ended_at, `2026-10-28T12:${change === "start" ? "12" : "15"}:00.000Z`, `${change} edits pin the displayed end instead of allowing the store to infer a new end`);
+    if (change === "start") assert.equal(patches[0].patch.started_at, "2026-10-28T11:59:00.000Z");
+    else assert.equal(patches[0].patch.data.first_side, "R");
+  }
+
+  await page.evaluate(() => window.__mapleUiFixture.openSavedFeed("timed"));
+  const addSideForm = page.getByRole("dialog").last();
+  await addSideForm.getByRole("button", { name: /^Add a side/ }).click();
+  await addSideForm.getByRole("radio", { name: "Left", exact: true }).click();
+  const addedStart = addSideForm.getByLabel("Started: time", { exact: true });
+  const addedEnd = addSideForm.getByLabel("Ended: time", { exact: true });
+  const saveSide = addSideForm.getByRole("button", { name: /^Save(?: time)?$/ });
+  await addedEnd.fill("10:00");
+  assert(await saveSide.isDisabled());
+  await addedStart.fill("09:16");
+  assert.equal(await addedEnd.inputValue(), "10:00", "Changing an added side's start cannot replace its invalid end with a five-minute guess");
+  assert(await saveSide.isDisabled());
+  assert.equal((await snapshot()).calls.length, 0);
+  await addedEnd.fill("09:23");
+  await saveSide.click();
+  await addSideForm.waitFor({ state: "hidden" });
+  const addedSidePatch = (await snapshot()).calls.find((call) => call.patch).patch;
+  assert.equal(addedSidePatch.data.segments.at(-1).start, "2026-10-28T13:16:00.000Z");
+  assert.equal(addedSidePatch.data.segments.at(-1).end, "2026-10-28T13:23:00.000Z");
+  console.log("PASS nursing drafts: invalid clocks survive related edits; one Save preserves the displayed start and end");
+
+  await page.evaluate(() => window.__mapleUiFixture.openManualFeed());
+  await leftMinutes.fill("238");
+  await manualFeed.getByRole("button", { name: "5 more minutes on the left", exact: true }).click();
+  assert.equal(await leftMinutes.inputValue(), "240", "Quick duration adjustment respects the existing maximum");
+  await leftMinutes.fill("2");
+  await manualFeed.getByRole("button", { name: "5 fewer minutes on the left", exact: true }).click();
+  assert.equal(await leftMinutes.inputValue(), "0", "Quick duration adjustment does not go below zero");
+  await manualFeed.getByRole("button", { name: "5 more minutes going back and forth", exact: true }).click();
+  await manualFeed.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+  assert.equal(await bothMinutes.inputValue(), "5", "Closing and keeping a draft preserves the selected duration");
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() => { document.documentElement.classList.add("dark", "maple-night"); document.documentElement.style.fontSize = "20px"; });
+  await leftMinutes.fill("123");
+  await leftMinutes.blur();
+  await settleView();
+  await noOverflow();
+  const largeTextWidth = await leftMinutes.evaluate((el) => el.clientWidth - parseFloat(getComputedStyle(el).paddingLeft) - parseFloat(getComputedStyle(el).paddingRight));
+  assert(largeTextWidth >= 44, "Three-digit minutes remain readable with large text at 320px");
+  await page.screenshot({ path: path.join(screenshots, "manual-feed-320-night-large-text.png") });
+  await manualFeed.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await manualFeed.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).calls.length, 0, "Discarding duration changes makes no write");
+  console.log("PASS manual nursing: readable ±1/±5 controls, exact typing, duration bounds, preserved drafts and one complete save");
+  await page.goto(url);
+  await page.setViewportSize({ width: 390, height: 844 });
   await openDose();
   assert.equal(await page.getByLabel("Taken at: time", { exact: true }).inputValue(), "08:00");
   assert(await page.getByRole("button", { name: "Save time", exact: true }).isDisabled(), "An unchanged dose cannot save");
@@ -163,6 +313,38 @@ try {
     await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
     await sheet.waitFor({ state: "hidden" });
   };
+
+  // Every live timer exposes the same precise start controls on the first screen.
+  for (const kind of ["sleep", "tummy", "pump"]) {
+    await page.evaluate((kind) => window.__mapleUiFixture.timerScenario(kind), kind);
+    await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+    const sheet = page.getByRole("dialog", { name: "Edit times", exact: true });
+    const clock = sheet.locator('input[type="time"]');
+    assert.equal(await clock.inputValue(), "09:00", "Start time is editable immediately without choosing an earlier preset");
+    await sheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    assert.equal(await clock.inputValue(), "08:59");
+    assert.equal((await snapshot()).calls.length, 0, "Start correction remains a draft");
+    await sheet.getByRole("button", { name: kind === "sleep" ? "She's already awake" : "Already done", exact: true }).click();
+    await sheet.getByRole("alertdialog", { name: "Discard this time change?" }).waitFor();
+    await sheet.getByRole("button", { name: "Keep editing", exact: true }).click();
+    assert.equal(await clock.inputValue(), "08:59", "Recovery navigation preserves an unsaved start correction");
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await sheet.waitFor({ state: "hidden" });
+    assert.equal((await snapshot()).calls.length, 0, "Cancel leaves the running timer unchanged");
+
+    await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+    await sheet.getByRole("button", { name: kind === "sleep" ? "She's already awake" : "Already done", exact: true }).click();
+    await sheet.getByRole("button", { name: kind === "sleep" ? "Fix when she fell asleep" : `Fix when ${kind === "tummy" ? "tummy time" : "pumping"} started`, exact: true }).click();
+    assert.equal(await clock.inputValue(), "09:00", "Returning from the end question opens the start editor directly");
+    await sheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    await sheet.getByRole("button", { name: "Save time", exact: true }).click();
+    await sheet.waitFor({ state: "hidden" });
+    const result = await snapshot();
+    assert.equal(result.calls.length, 1, "One Save makes one correction request");
+    assert.equal(result.activeFeed.started_at, "2026-10-28T12:59:00.000Z");
+    assert(result.activeFeed.active, "Correcting the start keeps the timer running");
+  }
+  console.log("PASS live timers: immediate ±1/±5 start controls, staged edits, recovery navigation, Cancel and one Save");
 
   // The same draft spans several parts in running, paused and completed feeds.
   for (const kind of ["running", "paused", "saved"]) {

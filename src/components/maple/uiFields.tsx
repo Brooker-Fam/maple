@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { addDays, dayKey, formatDayLabel, formatDuration, formatRelative, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
+import { parseRecordedTime } from "@/lib/maple/time-edit";
 import { Icon } from "./icons";
+import { RecordedTimeField } from "./TimeField";
 import { useMaple, useNow } from "./useMaple";
-import { Chip, Segmented, cx, tone } from "./ui";
+import { Chip, cx, tone } from "./ui";
 
 // ── Fields ───────────────────────────────────────────────────────────────
 
@@ -68,7 +70,7 @@ export function NumberProblem({ show }: { show: boolean }) {
   );
 }
 
-const STEP_BTN = "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink active:scale-95";
+const STEP_BTN = "mp-control flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink active:scale-95";
 
 /** Number input with − / + buttons. Empty string = no value; unreadable text = no value plus "Check this number". */
 export function Stepper({
@@ -138,7 +140,8 @@ export function WhenField({
   value,
   onChange,
   tz,
-  offsets = [5, 15, 30, 60, 120],
+  offsets = [1, 5, 15, 30, 60, 120],
+  onInvalidChange,
 }: {
   label?: string;
   /** null = now */
@@ -146,6 +149,7 @@ export function WhenField({
   onChange: (d: Date | null) => void;
   tz: string;
   offsets?: number[];
+  onInvalidChange?: (invalid: boolean) => void;
 }) {
   const { now } = useMaple();
   // Opening at one of the quick offsets (holding a dock button presets 15m ago) lights that chip;
@@ -160,7 +164,7 @@ export function WhenField({
     <div>
       <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
       <div className="flex flex-wrap gap-2">
-        <Chip selected={!value && !custom} onClick={() => { setCustom(false); setChip(null); onChange(null); }}>
+        <Chip selected={!value && !custom} onClick={() => { setCustom(false); setChip(null); onInvalidChange?.(false); onChange(null); }}>
           Now
         </Chip>
         {offsets.map((m) => (
@@ -170,18 +174,19 @@ export function WhenField({
             onClick={() => {
               setCustom(false);
               setChip(m);
-              onChange(new Date(n.getTime() - m * 60000));
+              onInvalidChange?.(false);
+              onChange(new Date(now().getTime() - m * 60000));
             }}
           >
-            {m < 60 ? `${m}m ago` : `${m / 60}h ago`}
+            {m < 60 ? `${m} min ago` : `${m / 60}h ago`}
           </Chip>
         ))}
-        <Chip selected={custom} onClick={() => { setCustom(true); setChip(null); }}>
+        <Chip selected={custom} onClick={() => { setCustom(true); setChip(null); if (value === null) onChange(now()); }}>
           <Icon name="clock-3" size={16} />
           Pick a time
         </Chip>
       </div>
-      {custom && <TimeScrubber value={value ?? n} onChange={onChange} tz={tz} quick={false} label={`${label}: exact time`} hideLabel className="mt-2" />}
+      {custom && <TimeScrubber value={value ?? n} onChange={onChange} onInvalidChange={onInvalidChange} tz={tz} quick={false} label={`${label}: exact time`} hideLabel className="mt-2" />}
       {value && !custom && (
         <p className={cx(tone.muted, "mt-1.5 text-xs")}>
           {formatDayLabel(dayKey(value, tz), dayKey(n, tz))} at {formatTime(value, tz)}
@@ -194,7 +199,6 @@ export function WhenField({
 // ── Time scrubber ────────────────────────────────────────────────────────
 
 const MIN_MS = 60_000;
-const pad2 = (x: number) => String(x).padStart(2, "0");
 
 /**
  * A wall-clock time on a local day, as an instant. The night clocks fall
@@ -210,16 +214,6 @@ export function resolveWallTime(key: string, hour: number, minute: number, tz: s
   const repeats = p.hour === hour && p.minute === minute && dayKey(second, tz) === key;
   if (repeats && now.getTime() - first.getTime() > 120 * MIN_MS && second.getTime() <= now.getTime() + MIN_MS) return second;
   return first;
-}
-
-/** Which pass through a repeated (clocks fell back) hour this instant is, if any. */
-function repeatedPass(d: Date, tz: string): "first" | "second" | null {
-  const p = localParts(d, tz);
-  const later = localParts(d.getTime() + 60 * MIN_MS, tz);
-  if (later.hour === p.hour && later.minute === p.minute) return "first";
-  const earlier = localParts(d.getTime() - 60 * MIN_MS, tz);
-  if (earlier.hour === p.hour && earlier.minute === p.minute) return "second";
-  return null;
 }
 
 /**
@@ -260,11 +254,18 @@ export function RepeatButton({
       aria-label={ariaLabel}
       disabled={disabled}
       onPointerDown={(e) => {
-        if (e.button !== 0 || disabled) return;
+        // Pointer events can still reach a button disabled by its enclosing
+        // fieldset. A pending form save must freeze held nudges too.
+        const button = e.currentTarget;
+        if (e.button !== 0 || button.matches(":disabled")) return;
         stop();
-        step.current();
+        const advance = () => {
+          if (!button.isConnected || button.matches(":disabled")) stop();
+          else step.current();
+        };
+        advance();
         timers.current.wait = window.setTimeout(() => {
-          timers.current.tick = window.setInterval(() => step.current(), 110);
+          timers.current.tick = window.setInterval(advance, 110);
         }, 400);
       }}
       onPointerUp={stop}
@@ -272,11 +273,11 @@ export function RepeatButton({
       onPointerCancel={stop}
       // Keyboard (Enter/Space) clicks have detail 0; pointer presses already stepped.
       onClick={(e) => {
-        if (e.detail === 0) step.current();
+        if (e.detail === 0 && !e.currentTarget.matches(":disabled")) step.current();
       }}
       onContextMenu={(e) => e.preventDefault()}
       className={cx(
-        "touch-manipulation select-none [-webkit-touch-callout:none] transition active:scale-[0.96] disabled:opacity-35 disabled:active:scale-100",
+        "mp-control touch-manipulation select-none [-webkit-touch-callout:none] transition active:scale-[0.96] disabled:opacity-35 disabled:active:scale-100",
         className
       )}
     >
@@ -287,9 +288,9 @@ export function RepeatButton({
 
 /**
  * Pick a time with one thumb: the time big, −5/−1/+1/+5 (hold to keep
- * going), "minutes ago" chips, a Yesterday/Today toggle around midnight, and
- * an "Exact time…" escape hatch (a native time-only picker). Never later than
- * now + 1 minute. nudgeStyle "words" spells the nudges out ("5 min" over
+ * going), "minutes ago" chips, day choices around midnight, and an explicit
+ * date and clock. Invalid drafts stay visible and keep the previous value
+ * until corrected. nudgeStyle "words" spells the nudges out ("5 min" over
  * "earlier"), for Fix times, where a bare − or + reads as arithmetic.
  */
 export function TimeScrubber({
@@ -298,11 +299,12 @@ export function TimeScrubber({
   tz,
   label,
   hideLabel,
-  quick = [0, 5, 15, 30, 60, 120],
+  quick = [0, 1, 5, 15, 30, 60, 120],
   min,
   max,
   className,
   nudgeStyle = "signed",
+  onInvalidChange,
 }: {
   value: Date;
   onChange: (d: Date) => void;
@@ -319,28 +321,39 @@ export function TimeScrubber({
   className?: string;
   /** "signed": −5 −1 +1 +5. "words": "5 min / earlier" … "5 min / later". */
   nudgeStyle?: "signed" | "words";
+  /** Hold the form's Save while the visible date or clock needs correction. */
+  onInvalidChange?: (invalid: boolean) => void;
 }) {
   const { now: nowFn } = useMaple();
   const now = useNow(30_000);
   // The chip tapped and the instant it produced: it stays lit until the time changes, not until the clock ticks.
   const [chip, setChip] = useState<{ m: number; at: number } | null>(null);
-  const [exact, setExact] = useState(false);
+  const [invalid, setInvalid] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const reportInvalid = useCallback((next: boolean) => {
+    setInvalid(next);
+    onInvalidChange?.(next);
+  }, [onInvalidChange]);
   const latest = useRef(value.getTime());
   useEffect(() => {
     latest.current = value.getTime();
   }, [value]);
 
   const ceiling = () => Math.min(nowFn().getTime() + MIN_MS, max?.getTime() ?? Infinity);
+  const allowed = (t: number) => t >= (min?.getTime() ?? -Infinity) && t <= ceiling();
   const set = (t: number) => {
-    const next = Math.max(min?.getTime() ?? -Infinity, Math.min(ceiling(), t));
-    latest.current = next;
-    onChange(new Date(next));
-    return next;
+    if (!allowed(t)) return false;
+    latest.current = t;
+    // A deliberate quick choice also replaces an invalid draft at the same instant.
+    setRevision((current) => current + 1);
+    reportInvalid(false);
+    onChange(new Date(t));
+    return true;
   };
   const step = (mins: number) => {
     setChip(null);
-    // Step from the minute that's shown (seconds are hidden), so "1 min earlier" always changes it.
-    set(Math.floor(latest.current / MIN_MS) * MIN_MS + mins * MIN_MS);
+    // A one-minute adjustment preserves seconds, just like the recorded-time controls.
+    set(latest.current + mins * MIN_MS);
   };
 
   const t = value.getTime();
@@ -351,44 +364,29 @@ export function TimeScrubber({
   // Around midnight "11:50" could mean either day, so offer the toggle (and whenever it's not today).
   const showDays = localParts(now, tz).hour < 3 || key !== todayKey;
   const days = [...(key < yesterdayKey ? [key] : []), yesterdayKey, todayKey];
-  const pass = repeatedPass(value, tz);
-  // "Later" stops at now (the extra minute in the clamp only absorbs rounding and clock skew).
-  const atMax = t >= Math.min(nowFn().getTime() - 30_000, (max?.getTime() ?? Infinity) - 1000);
-  const atMin = min ? t <= min.getTime() + 1000 : false;
+  const clock = `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+  const parsed = parseRecordedTime(key, clock, tz, value);
+  const occurrences = parsed.alternatives ?? [];
+  const pass = occurrences.length > 1 ? (occurrences.findIndex((at) => Math.floor(at.getTime() / MIN_MS) === Math.floor(t / MIN_MS)) === 0 ? "first" : "second") : null;
 
   const showLabel = !!label && !hideLabel;
-  const exactButton = (
-    <button
-      type="button"
-      onClick={() => setExact((x) => !x)}
-      aria-expanded={exact}
-      className="-my-2 min-h-[44px] px-1 text-[13px] font-semibold text-mp-accent-fg"
-    >
-      Exact time…
-    </button>
-  );
-
-  const pickDay = (k: string) => {
-    setChip(null);
-    const n = nowFn();
-    set(Math.min(resolveWallTime(k, p.hour, p.minute, tz, n).getTime(), n.getTime()));
+  const dayChoice = (k: string) => {
+    const result = parseRecordedTime(k, clock, tz, value);
+    if (!result.valid) return null;
+    const candidate = Math.floor(result.date.getTime() / MIN_MS) * MIN_MS + t % MIN_MS;
+    return allowed(candidate) ? candidate : null;
   };
 
   return (
-    <div role="group" aria-label={label ?? "Time"} className={cx(tone.inset, "p-3", className)}>
+    <div role="group" aria-label={label ?? "Time"} className={cx(tone.inset, "min-w-0 space-y-2 p-3", className)}>
       {showLabel && (
-        <div className="-mt-1 flex items-center justify-between gap-3">
-          <span className={tone.label}>{label}</span>
-          {exactButton}
-        </div>
+        <p className={tone.label}>{label}</p>
       )}
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
         <span className="text-[28px] leading-tight font-semibold tracking-[-0.02em] text-mp-ink tabular-nums">{formatTime(value, tz)}</span>
         <span className={cx(tone.muted, "text-sm")}>
           {formatDayLabel(key, todayKey)} · {formatRelative(value, now)}
         </span>
-        {/* Without a label row, "Exact time…" sits beside the time instead of alone on a line. */}
-        {!showLabel && <span className="ml-auto self-center">{exactButton}</span>}
       </div>
       {pass && (
         <p className={cx(tone.muted, "text-xs")}>
@@ -396,12 +394,12 @@ export function TimeScrubber({
         </p>
       )}
 
-      <div className="mt-2 grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {[-5, -1, 1, 5].map((d) => (
           <RepeatButton
             key={d}
             onStep={() => step(d)}
-            disabled={d < 0 ? atMin : atMax}
+            disabled={invalid || !allowed(t + d * MIN_MS)}
             ariaLabel={`${Math.abs(d)} minute${Math.abs(d) === 1 ? "" : "s"} ${d < 0 ? "earlier" : "later"}`}
             className={cx(
               "h-[52px] rounded-xl border border-mp-line bg-mp-raised font-semibold text-mp-ink tabular-nums",
@@ -424,49 +422,34 @@ export function TimeScrubber({
       </div>
 
       {quick && quick.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {quick.map((m, i) => (
+        <div className="flex flex-wrap gap-1.5">
+          {quick.map((m) => (
             <Chip
               key={m}
               raised
               className="min-h-[44px]!"
+              disabled={!allowed(nowFn().getTime() - m * MIN_MS)}
               selected={chip?.m === m && chip.at === t}
-              onClick={() => setChip({ m, at: set(nowFn().getTime() - m * MIN_MS) })}
+              onClick={() => {
+                const at = nowFn().getTime() - m * MIN_MS;
+                if (set(at)) setChip({ m, at });
+              }}
             >
-              {m === 0 ? "Now" : `${m < 60 ? `${m}m` : `${m / 60}h`}${i === quick.length - 1 ? " ago" : ""}`}
+              {m === 0 ? "Now" : `${m < 60 ? `${m} min` : `${m / 60}h`} ago`}
             </Chip>
           ))}
         </div>
       )}
 
       {showDays && (
-        <Segmented
-          className="mt-2"
-          value={key}
-          onChange={pickDay}
-          options={days.map((k) => ({ value: k, label: formatDayLabel(k, todayKey) }))}
-        />
+        <div role="group" aria-label="Day" className="flex flex-wrap gap-1.5">
+          {days.map((k) => {
+            const at = dayChoice(k);
+            return <Chip key={k} raised selected={key === k} disabled={invalid || at === null} onClick={() => { if (at !== null && set(at)) setChip(null); }}>{formatDayLabel(k, todayKey)}</Chip>;
+          })}
+        </div>
       )}
-      {exact && (
-        <input
-          type="time"
-          aria-label={`${label ?? "Time"}: exact clock time`}
-          value={`${pad2(p.hour)}:${pad2(p.minute)}`}
-          onChange={(e) => {
-            const m = /^(\d{2}):(\d{2})/.exec(e.target.value);
-            if (!m) return;
-            const n = nowFn();
-            let at = resolveWallTime(key, +m[1], +m[2], tz, n);
-            // "11:30" typed at 1 AM means last night, not later today.
-            if (at.getTime() > n.getTime() + MIN_MS && key === dayKey(n, tz)) {
-              at = resolveWallTime(addDays(key, -1), +m[1], +m[2], tz, n);
-            }
-            setChip(null);
-            set(at.getTime());
-          }}
-          className={cx(tone.input, "mt-2")}
-        />
-      )}
+      <RecordedTimeField key={revision} embedded label={label ?? "Time"} value={value} onChange={(next) => { setChip(null); onChange(next); }} tz={tz} min={min} max={max} onInvalidChange={reportInvalid} />
     </div>
   );
 }
@@ -485,6 +468,7 @@ export function TimeRange({
   labels = ["Started", "Ended"],
   durations = [15, 30, 45, 60, 90, 120, 180],
   startQuick,
+  onInvalidChange,
 }: {
   start: Date;
   end: Date;
@@ -493,16 +477,27 @@ export function TimeRange({
   labels?: [string, string];
   /** Minutes; [] hides the chips. */
   durations?: number[];
-  /** "{N}m ago" chips under the start (only the ones that leave the start before the end). */
+  /** "{N}m ago" chips under the start; choices after the end stay visible but disabled. */
   startQuick?: number[];
+  onInvalidChange?: (invalid: boolean) => void;
 }) {
-  const { now } = useMaple();
+  const invalid = useRef({ start: false, end: false });
+  const [endInvalid, setEndInvalid] = useState(false);
+  const [startRevision, setStartRevision] = useState(0);
+  const reportStart = useCallback((next: boolean) => {
+    invalid.current.start = next;
+    onInvalidChange?.(next || invalid.current.end);
+  }, [onInvalidChange]);
+  const reportEnd = useCallback((next: boolean) => {
+    invalid.current.end = next;
+    setEndInvalid(next);
+    onInvalidChange?.(next || invalid.current.start);
+  }, [onInvalidChange]);
   const ms = Math.max(0, end.getTime() - start.getTime());
-  const startChips = startQuick?.filter((m) => now().getTime() - m * MIN_MS <= end.getTime() - MIN_MS);
   const fmt = (m: number) => (m < 60 ? `${m}m` : `${Math.round((m / 60) * 10) / 10}h`);
   return (
     <div className="space-y-2">
-      <TimeScrubber label={labels[0]} value={start} max={end} quick={startChips?.length ? startChips : false} tz={tz} onChange={(s) => onChange(s, end)} />
+      <TimeScrubber key={startRevision} label={labels[0]} value={start} max={end} quick={startQuick?.length ? startQuick : false} tz={tz} onChange={(s) => onChange(s, end)} onInvalidChange={reportStart} />
       <div className="px-1" role="group" aria-label="Duration">
         <p className={cx(tone.body, "flex items-baseline gap-2 text-sm")}>
           <Icon name="arrow-right" size={14} className="rotate-90 self-center text-mp-ink-3" />
@@ -512,18 +507,21 @@ export function TimeRange({
         {durations.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {durations.map((m) => (
-              <Chip key={m} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => onChange(new Date(end.getTime() - m * MIN_MS), end)}>
+              <Chip key={m} disabled={endInvalid} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => { setStartRevision((current) => current + 1); onChange(new Date(end.getTime() - m * MIN_MS), end); }}>
                 {fmt(m)}
               </Chip>
             ))}
           </div>
         )}
+        {durations.length > 0 && endInvalid && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Check the end date and time before choosing a duration.</p>}
       </div>
       <TimeScrubber
         label={labels[1]}
         value={end}
+        min={start}
         tz={tz}
-        onChange={(e) => onChange(e.getTime() < start.getTime() ? e : start, e)}
+        onChange={(e) => onChange(start, e)}
+        onInvalidChange={reportEnd}
       />
     </div>
   );

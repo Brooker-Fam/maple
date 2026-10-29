@@ -17,7 +17,7 @@ import type { UseCare } from "./useCare";
 
 /**
  * "Add a medicine" / "Edit {name}" (§5.1): the name and its Also called
- * names, then a few rows, the rest folded under "More details". Every number
+ * names, then the label's details shown together. Every number
  * is typed from her label, discharge papers or clinician: fields start
  * blank, no placeholder or hint holds a digit, and no unit is preselected.
  * The limit is kept in the label's own unit, so the 24-hour count adds up
@@ -446,7 +446,7 @@ function PlanForm({ open, onClose, care, plan, onDeleted }: MedPlanSheetProps) {
 
         {opioid && <NoteCard note={forMom(opioidNote(voice), care.name, care.self)} care={care} />}
 
-        <MoreDetails summary={f.reason ? (REASONS.find((r) => r.value === f.reason)?.label ?? "") : ""}>
+        <MoreDetails defaultOpen summary={f.reason ? (REASONS.find((r) => r.value === f.reason)?.label ?? "") : ""}>
           <FieldBlock label="The label's words" optional hint="Copy how the label says it, so it's here to check.">
             <input value={f.label} maxLength={120} aria-label="The label's words" onChange={(e) => set("label", e.target.value)} className={tone.input} />
           </FieldBlock>
