@@ -107,33 +107,33 @@ try {
     try {
       let form = await f.edit();
       await form.locator("textarea").fill("Synthetic note-only edit");
-      await form.getByRole("button", { name: "Save", exact: true }).click();
+      await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).click();
       await form.waitFor({ state: "hidden" });
       assert.equal(f.saved().started_at, START, "An unchanged time keeps its seconds and milliseconds");
       form = await f.edit();
       const date = form.locator('input[type="date"]');
       await date.fill("");
-      assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled(), "An incomplete date cannot submit");
+      assert(await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).isDisabled(), "An incomplete date cannot submit");
       assert.equal(f.writes.length, 1);
       await date.fill("2026-10-28");
-      assert(await form.getByRole("button", { name: "Save", exact: true }).isEnabled(), "Completing the date restores Save");
+      assert(await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).isEnabled(), "Completing the date restores Save");
       await form.locator('input[type="time"]').fill("");
-      assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled(), "An incomplete time cannot submit");
+      assert(await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).isDisabled(), "An incomplete time cannot submit");
       await form.getByRole("button", { name: "Now", exact: true }).click();
-      assert(await form.getByRole("button", { name: "Save", exact: true }).isEnabled(), "Now recovers an invalid clock");
+      assert(await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).isEnabled(), "Now recovers an invalid clock");
       await form.locator("textarea").fill("Synthetic retry draft");
       await f.advance(LATER);
       f.reject();
       await Promise.all([
         f.page.waitForResponse((response) => response.request().method() === "PATCH" && response.status() === 422),
-        form.getByRole("button", { name: "Save", exact: true }).click(),
+        form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).click(),
       ]);
-      await form.getByRole("button", { name: "Save", exact: true }).waitFor();
+      await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).waitFor();
       assert.equal(f.writes[1].started_at, LATER, "Now resolves when saving, not when the sheet opened or the chip was tapped");
       assert.equal(f.saved().started_at, START, "A rejected save leaves the saved timestamp untouched");
       assert.equal(await form.locator("textarea").inputValue(), "Synthetic retry draft");
       await f.advance(RETRY);
-      await form.getByRole("button", { name: "Save", exact: true }).click();
+      await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).click();
       await form.waitFor({ state: "hidden" });
       assert.equal(f.writes.length, 3);
       assert.equal(f.saved().started_at, RETRY, "A retry with Now selected records the retry's current time");
@@ -156,17 +156,17 @@ try {
       await form.locator("textarea").fill("Synthetic unsaved draft");
       await Promise.all([
         f.page.waitForResponse((response) => response.request().method() === "GET" && response.url().includes("/api/maple/state")),
-        form.getByRole("button", { name: "Save", exact: true }).click(),
+        form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).click(),
       ]);
       assert.equal(f.saved().started_at, "2026-10-28T12:02:00.000Z", "A stale editor preserves the other phone's timestamp");
       assert.equal(await time.inputValue(), "07:59", "A rejected time remains in the draft");
       assert.equal(await form.locator("textarea").inputValue(), "Synthetic unsaved draft");
-      assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled());
+      assert(await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).isDisabled());
       await form.getByRole("button", { name: "Discard draft and use latest", exact: true }).click();
       assert.equal(await time.inputValue(), "08:02");
       assert.equal(await form.locator("textarea").inputValue(), "Synthetic note from another phone");
       await time.fill("08:01");
-      await form.getByRole("button", { name: "Save", exact: true }).click();
+      await form.getByRole("button", { name: kind === "moment" ? "Save changes" : "Save", exact: true }).click();
       await form.waitFor({ state: "hidden" });
       assert.equal(f.writes.length, 2);
       assert.equal(f.writes[1].expect_updated_at, "2026-10-28T13:29:00.000Z");

@@ -54,7 +54,7 @@ export function familyMismatch(request: NextRequest, ctx: Pick<FamilyCtx, "famil
  * race with the other parent; body carries the current entry), 503 (no
  * database), or 500 (reported to PostHog).
  */
-export function withMember(route: string, handler: Handler, opts: { write?: boolean; setup?: boolean } = {}) {
+export function withMember(route: string, handler: Handler, opts: { write?: boolean; setup?: boolean; photos?: boolean } = {}) {
   return async function (request: NextRequest): Promise<Response> {
     let fam: FamilyCtx | undefined;
     const requestId = syncRequestFor(route, request);
@@ -76,6 +76,7 @@ export function withMember(route: string, handler: Handler, opts: { write?: bool
       if (ctx.status === "onboarding" && !opts.setup) return finish(json(STILL_SETTING_UP, 403));
       const mismatch = familyMismatch(request, ctx);
       if (mismatch) return finish(mismatch);
+      if (member.role === "photos" && (!opts.photos || opts.write)) return finish(json({ error: "Your access is limited to shared moments.", code: "photos_only" }, 403));
       if (opts.write && member.role === "viewer") return finish(json({ error: viewOnlyCopy() }, 403));
       return finish(await handler(request, member, ctx));
     } catch (error) {
@@ -189,6 +190,7 @@ export function withCare(route: string, handler: CareHandler, opts: { write?: bo
       if (ctx.status === "onboarding") return json(STILL_SETTING_UP, 403);
       const mismatch = familyMismatch(request, ctx);
       if (mismatch) return mismatch;
+      if (member.role === "photos") return json({ error: "Not found" }, 404);
       const s = await sessionCare(member, ctx);
       if (!s.person || !s.access.read || (opts.mood && !s.access.mood)) return json({ error: "Not found" }, 404);
       if (opts.write && !s.access.write) return json({ error: `You can't change ${s.name}'s medicines from this account.` }, 403);

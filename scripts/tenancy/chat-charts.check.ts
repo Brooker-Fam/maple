@@ -17,14 +17,14 @@ async function entry(family: FamilySeed, kind: string, data: Record<string, unkn
   );
 }
 
-function toolsFor(family: FamilySeed, role: Role = "member", care = false, email = family[role]) {
+function toolsFor(family: FamilySeed, role: Exclude<Role, "photos"> = "member", care = false, email = family[role]) {
   return chatTools({ email, role }, {
     fam: family.familyId, born: true, care,
     copy: toolCopy(family.familyId, { name: family.babyName, nickname: null, sex: null }, family.care?.person ?? null, family.tz),
   });
 }
 
-async function show(family: FamilySeed, kind: "activity" | "growth", role: Role = "member", care = false) {
+async function show(family: FamilySeed, kind: "activity" | "growth", role: Exclude<Role, "photos"> = "member", care = false) {
   const tool = toolsFor(family, role, care).show_chart;
   if (!tool?.execute) throw new Error("show_chart must execute for this member");
   const result = await tool.execute({ kind, days: 14, metric: "diapers" }, { toolCallId: "synthetic-chart", messages: [], context: undefined }) as ChatToolOutput;

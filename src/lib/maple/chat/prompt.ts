@@ -81,7 +81,7 @@ export function markTailForCache(messages: ModelMessage[]): ModelMessage[] {
   });
 }
 
-const ROLE_WORD: Record<Role, string> = { owner: "owner", member: "member", viewer: "view only" };
+const ROLE_WORD: Record<Role, string> = { owner: "owner", member: "member", viewer: "view only", photos: "photos only" };
 
 const plainSpaces = (text: string) => text.replace(/[\u202f\u00a0]/g, " ");
 

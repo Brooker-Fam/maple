@@ -235,7 +235,7 @@ export async function getCarePerson(fam: Fam): Promise<CarePerson | null> {
 }
 
 /** Eligible to be the care person, or to be shared with: a current owner or member, never "admin". */
-export const eligible = (m: Member | undefined): m is Member => !!m && m.email !== "admin" && m.role !== "viewer";
+export const eligible = (m: Member | undefined): m is Member => !!m && m.email !== "admin" && m.role !== "viewer" && m.role !== "photos";
 
 /** Every other current owner (not admin, not her): who sees her medicines to start. */
 export function defaultShares(member: string, members: Member[]): string[] {

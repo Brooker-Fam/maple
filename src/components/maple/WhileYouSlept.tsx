@@ -232,7 +232,7 @@ export default function WhileYouSlept() {
             <div className="mt-3 flex items-center gap-2.5">
               {photo && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={photoUrl(photo.id, 0)} alt="" className="h-10 w-10 shrink-0 rounded-[10px] object-cover [.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]" />
+                <img src={photoUrl(photo.id, photo.data.photos?.[0]?.id ?? 0)} alt="" className="h-10 w-10 shrink-0 rounded-[10px] object-cover [.maple-night_&]:brightness-[.55] [.maple-night_&]:saturate-[.8]" />
               )}
               <p className="text-sm text-mp-ink-2">{extra.join(" · ")}</p>
             </div>

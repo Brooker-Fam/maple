@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { del } from "@vercel/blob";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { query } from "@/lib/db";
-import { STILL_SETTING_UP } from "@/lib/maple/api";
-import { sessionContext } from "@/lib/maple/auth";
+import { errorResponse, withMember } from "@/lib/maple/api";
+import { StoreUnavailable } from "@/lib/maple/store";
 import {
   blobBelongsTo,
   blobToken,
@@ -14,9 +14,8 @@ import {
   uploadStore,
 } from "@/lib/maple/blob";
 import type { FamilyCtx } from "@/lib/maple/family";
-import { claimUpload, QUOTA_MESSAGE } from "@/lib/maple/upload-quota";
+import { claimUpload, QUOTA_MESSAGE, UploadQuotaUnavailable } from "@/lib/maple/upload-quota";
 import { MAPLE_BLOB_RE } from "@/lib/maple/validate";
-import { captureServerException } from "@/lib/posthog-server";
 import { checkUploadRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -44,23 +43,25 @@ function noStore(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export async function GET(request: NextRequest) {
-  const writer = await writerCheck(request);
-  if (writer instanceof NextResponse) return writer;
+export const GET = withMember("GET /api/maple/upload", async (_request, _member, writer) => {
   const store = uploadStore();
+  if (!store) return unavailable("GET /api/maple/upload", writer);
   return noStore({
-    ready: !!store,
-    access: store?.access ?? null,
+    ready: true,
+    access: store.access,
     maxBytes: MAPLE_PHOTO_MAX_BYTES,
     types: MAPLE_PHOTO_TYPES,
     prefix: familyBlobPrefix(writer.familyId),
   });
-}
+}, { write: true });
 
 export async function POST(request: NextRequest) {
   const { allowed } = await checkUploadRateLimit(request);
   if (!allowed) return noStore({ error: "That's a lot of uploads at once. Try again in a little while." }, 429);
+  return startUpload(request);
+}
 
+const startUpload = withMember("POST /api/maple/upload", async (request, _member, writer) => {
   let body: HandleUploadBody;
   try {
     body = (await request.json()) as HandleUploadBody;
@@ -71,11 +72,12 @@ export async function POST(request: NextRequest) {
   // Token requests are the only event: no callback URL is ever registered, so
   // a "blob.upload-completed" here is noise (no cookies, nothing to do).
   if (body?.type !== "blob.generate-client-token") return noStore({ error: "Unexpected event" }, 400);
-  const writer = await writerCheck(request);
-  if (writer instanceof NextResponse) return writer;
-
+  const payload = body.payload;
+  if (!payload || typeof payload.pathname !== "string" || (payload.clientPayload != null && typeof payload.clientPayload !== "string") || (payload.multipart !== undefined && typeof payload.multipart !== "boolean")) {
+    return noStore({ error: "Invalid upload request" }, 400);
+  }
   const store = uploadStore();
-  if (!store) return noStore({ error: "Photo storage isn't set up yet" }, 503);
+  if (!store) return unavailable("POST /api/maple/upload", writer);
 
   try {
     const result = await handleUpload({
@@ -105,10 +107,16 @@ export async function POST(request: NextRequest) {
     return noStore(result);
   } catch (error) {
     if (error instanceof UploadRejected) return noStore({ error: error.message }, error.status);
-    console.error("POST /api/maple/upload error:", error);
-    await captureServerException(error, { route: "POST /api/maple/upload" });
-    return noStore({ error: "Couldn't start the upload" }, 400);
+    if (error instanceof UploadQuotaUnavailable) throw new StoreUnavailable();
+    throw error;
   }
+}, { write: true });
+
+class PhotoStorageUnavailable extends Error {}
+
+async function unavailable(route: string, family: FamilyCtx) {
+  await errorResponse(route, new PhotoStorageUnavailable("photo_storage_unavailable"), family);
+  return noStore({ error: "Photo storage isn't set up yet" }, 503);
 }
 
 class UploadRejected extends Error {
@@ -120,24 +128,13 @@ class UploadRejected extends Error {
   }
 }
 
-/** Uploading (and tidying up) is for members who can log, in their own family: viewers are read-only. */
-async function writerCheck(request: NextRequest): Promise<FamilyCtx | NextResponse> {
-  const signedIn = await sessionContext(request);
-  if (!signedIn) return noStore({ error: "Sign in first" }, 401);
-  if (signedIn.member.role === "viewer") return noStore({ error: "You have view-only access" }, 403);
-  if (signedIn.ctx.status === "onboarding") return noStore(STILL_SETTING_UP, 403);
-  return signedIn.ctx;
-}
-
 /**
  * DELETE { urls } — tidy up photos uploaded for a moment that was never saved
  * (removed from the sheet, or the sheet was closed). Only this family's Maple
  * paths, and never a blob one of its moments (deleted ones included, for
  * undo) still points at.
  */
-export async function DELETE(request: NextRequest) {
-  const writer = await writerCheck(request);
-  if (writer instanceof NextResponse) return writer;
+export const DELETE = withMember("DELETE /api/maple/upload", async (request, _member, writer) => {
   let urls: string[] = [];
   try {
     const body = (await request.json()) as { urls?: unknown };
@@ -148,28 +145,23 @@ export async function DELETE(request: NextRequest) {
   urls = [...new Set(urls.filter((u) => MAPLE_BLOB_RE.test(u) && blobBelongsTo(u, writer.familyId)))].slice(0, 48);
   if (!urls.length) return noStore({ deleted: 0 });
 
-  try {
-    const rows = await query(
-      `SELECT p->>'key' AS k, p->>'thumb_key' AS t
-       FROM maple_entries, jsonb_array_elements(COALESCE(data->'photos', '[]'::jsonb)) AS p
-       WHERE family_id = $2 AND kind = 'moment' AND (p->>'key' = ANY($1::text[]) OR p->>'thumb_key' = ANY($1::text[]))`,
-      [urls, writer.familyId]
-    );
-    if (rows === null) return noStore({ deleted: 0 });
-    const inUse = new Set(rows.flatMap((r) => [r.k, r.t]).filter(Boolean));
-    const orphans = urls.filter((u) => !inUse.has(u));
-    let deleted = 0;
-    for (const access of ["private", "public"] as const) {
-      const mine = orphans.filter((u) => u.includes(`.${access}.blob.`));
-      const token = blobToken(access);
-      if (!mine.length || !token) continue;
-      await del(mine, { token });
-      deleted += mine.length;
-    }
-    return noStore({ deleted });
-  } catch (error) {
-    console.error("DELETE /api/maple/upload error:", error);
-    await captureServerException(error, { route: "DELETE /api/maple/upload" });
-    return noStore({ error: "Couldn't tidy up those photos" }, 500);
+  const rows = await query(
+    `SELECT p->>'key' AS k, p->>'thumb_key' AS t
+     FROM maple_entries, jsonb_array_elements(COALESCE(data->'photos', '[]'::jsonb)) AS p
+     WHERE family_id = $2 AND kind = 'moment' AND (p->>'key' = ANY($1::text[]) OR p->>'thumb_key' = ANY($1::text[]))`,
+    [urls, writer.familyId]
+  );
+  if (rows === null) throw new StoreUnavailable();
+  const inUse = new Set(rows.flatMap((r) => [r.k, r.t]).filter(Boolean));
+  const orphans = urls.filter((u) => !inUse.has(u));
+  let deleted = 0;
+  for (const access of ["private", "public"] as const) {
+    const mine = orphans.filter((u) => u.includes(`.${access}.blob.`));
+    const token = blobToken(access);
+    if (!mine.length) continue;
+    if (!token) return unavailable("DELETE /api/maple/upload", writer);
+    await del(mine, { token });
+    deleted += mine.length;
   }
-}
+  return noStore({ deleted });
+}, { write: true });

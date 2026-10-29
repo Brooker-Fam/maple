@@ -7,7 +7,7 @@ import { NotFound } from "../../src/lib/maple/store";
 import type { Role } from "../../src/lib/maple/types";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type FamilySeed } from "./harness";
 
-async function actor(family: FamilySeed, role: Role = "owner") {
+async function actor(family: FamilySeed, role: Exclude<Role, "photos"> = "owner") {
   const fam = await familyForAuth({ sub: `maple:${family[role]}`, fam: family.familyId });
   if (!fam) throw new Error("Synthetic member missing");
   const member = (await listMembers(fam)).find((m) => m.email === family[role]);

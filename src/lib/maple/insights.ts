@@ -335,6 +335,7 @@ export function memberName(id: string | null | undefined, members: Member[]): st
   const m = members.find((x) => x.email === id);
   if (m?.display_name) return m.display_name;
   if (id === "admin") return "Admin";
+  if (id.startsWith("person:")) return "Family member";
   return id.split("@")[0];
 }
 
@@ -357,7 +358,7 @@ export function adminActsAs(baby: Baby, members: Member[]): Member | null {
   const as = (baby.settings as { admin_as?: unknown }).admin_as;
   if (typeof as !== "string") return null;
   const m = members.find((x) => x.email === as);
-  return m && m.email !== "admin" && m.role !== "viewer" ? m : null;
+  return m && m.email !== "admin" && m.role !== "viewer" && m.role !== "photos" ? m : null;
 }
 
 /**

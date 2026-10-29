@@ -1,6 +1,6 @@
 import type { Entry, MapleState } from "./types";
 
-type ClientOwner = { family?: { id: number }; me: { email: string } };
+type ClientOwner = { family?: { id: number }; me: { email: string; role?: string } };
 type QueuedOwner = { client_id: string; family?: number; member?: string };
 
 export function stampOutbox<T extends QueuedOwner>(items: T[], previous: readonly QueuedOwner[], owner: ClientOwner | null): T[] {
@@ -18,7 +18,7 @@ export function keepConfirmed<T extends ClientOwner & Pick<MapleState, "entries"
   confirmed: Map<number, { updatedAt: string; at: number }>,
   sentAt: number
 ): T {
-  if (!prev || (prev.family?.id ?? 1) !== (next.family?.id ?? 1) || prev.me.email !== next.me.email) {
+  if (!prev || (prev.family?.id ?? 1) !== (next.family?.id ?? 1) || prev.me.email !== next.me.email || prev.me.role !== next.me.role) {
     confirmed.clear();
     return next;
   }

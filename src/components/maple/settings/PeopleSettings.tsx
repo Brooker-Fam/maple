@@ -6,10 +6,11 @@ import { MAPLE_HOST } from "@/lib/maple/origin";
 import { useCare } from "../care/useCare";
 import { useBabyWords } from "../familyWords";
 import { Icon } from "../icons";
-import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, Sheet, cx, memberColor, tone } from "../ui";
+import { Avatar, Button, Field, MEMBER_PALETTE, Sheet, cx, memberColor, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { ActionRow, CopyButton, DANGER_TEXT, EmojiPicker, GROUP, Section } from "./parts";
 import { useSettingsDraft } from "./DraftContext";
+import SharingRolePicker, { SHARING_ROLES, type InviteRole } from "./SharingRolePicker";
 
 type Invite = {
   id: number;
@@ -27,6 +28,7 @@ const ROLE_LINE: Record<Role, string> = {
   owner: "Owner · can invite and manage",
   member: "Can log",
   viewer: "View only",
+  photos: "Photos only",
 };
 
 
@@ -76,7 +78,7 @@ export default function People() {
     <>
       <Section
         title={`${w.name}'s people`}
-        footnote={members.length === 1 ? `It's just you so far. Invite ${care && !care.self ? care.name : "family"}, grandparents, or anyone helping out.` : undefined}
+        footnote={owner && members.length === 1 ? `It's just you so far. Invite ${care && !care.self ? care.name : "family"}, grandparents, or anyone helping out.` : undefined}
       >
         <ul className={GROUP}>
           {members.map((m) => (
@@ -94,7 +96,7 @@ export default function People() {
                   <div className="min-w-0 flex-1">
                     <p className={cx(tone.body, "truncate text-[15px] font-medium")}>{inv.display_name ?? inv.email ?? "Someone"}</p>
                     <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-                      Invite link waiting · {inv.role === "viewer" ? "View only" : "Can log"} · expires {d <= 1 ? "within a day" : `in ${d} days`}
+                      Invite link waiting · {ROLE_LINE[inv.role]} · expires {d <= 1 ? "within a day" : `in ${d} days`}
                     </p>
                   </div>
                   <button type="button" onClick={() => void revoke(inv)} className={DANGER_TEXT}>
@@ -263,15 +265,11 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
 
       {managing && !isAdminLogin && (
         <div className="mt-3 space-y-3 pb-1.5">
-          <Segmented
-            value={m.role === "viewer" ? "viewer" : "member"}
-            onChange={(r) => void patch({ email: m.email, role: r }, r === "viewer" ? "Now view only" : "Can log now")}
-            options={[
-              { value: "member", label: "Can log" },
-              { value: "viewer", label: "View only" },
-            ]}
+          <SharingRolePicker
+            value={m.role === "owner" ? "member" : m.role}
+            disabled={busy}
+            onChange={(role) => void patch({ email: m.email, role }, `Access updated: ${SHARING_ROLES[role].label.toLowerCase()}`)}
           />
-          <RoleDisclosure />
           {!confirmRemove ? (
             <Button variant="danger" size="sm" className="w-full" onClick={() => setConfirmRemove(true)}>
               Remove from Maple&apos;s Log
@@ -288,7 +286,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
 function InviteByEmail({ onInvited }: { onInvited: () => void }) {
   const { api, refresh, toast } = useMaple();
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"member" | "viewer">("member");
+  const [role, setRole] = useState<InviteRole>("photos");
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<{ email: string; url: string; emailed: boolean } | null>(null);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -334,21 +332,10 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
-      <div className="flex gap-2">
-        <Segmented
-          className="flex-1"
-          value={role}
-          onChange={setRole}
-          options={[
-            { value: "member", label: "Can log" },
-            { value: "viewer", label: "View only" },
-          ]}
-        />
-        <Button type="submit" disabled={!valid || busy}>
-          Add
-        </Button>
-      </div>
-      <RoleDisclosure />
+      <SharingRolePicker value={role} onChange={setRole} disabled={busy} />
+      <Button type="submit" className="w-full" disabled={!valid || busy}>
+        {busy ? "Inviting…" : "Invite by email"}
+      </Button>
       {pending?.emailed && (
         <div className="space-y-2 pt-1" aria-live="polite">
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>
@@ -377,9 +364,9 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
   const w = useBabyWords();
   const [name, setName] = useState("");
   const [emoji, setEmoji] = useState("");
-  const [role, setRole] = useState<"member" | "viewer">("viewer");
+  const [role, setRole] = useState<InviteRole>("photos");
   const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<{ url: string; name: string; role: "member" | "viewer" } | null>(null);
+  const [created, setCreated] = useState<{ url: string; name: string; role: InviteRole } | null>(null);
   const url = created?.url;
   const [canShare, setCanShare] = useState(false);
 
@@ -392,7 +379,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
     if (open) {
       setName("");
       setEmoji("");
-      setRole("viewer");
+      setRole("photos");
       setCreated(null);
     }
   }, [open]);
@@ -419,8 +406,8 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
     if (!created) return;
     try {
       await navigator.share({
-        title: "Maple's Log",
-        text: `${created.name}, here's your way into Maple's Log 🍁 (the link works once, for 7 days)`,
+        title: `${w.name}'s moments`,
+        text: `${created.name}, join ${w.name}'s family in Maple with ${SHARING_ROLES[created.role].label.toLowerCase()} access. This link works once, for 7 days.`,
         url: created.url,
       });
     } catch {
@@ -432,7 +419,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
     <Sheet
       open={open}
       locked={busy}
-      dirty={!url && (!!name.trim() || !!emoji || role !== "viewer")}
+      dirty={!url && (!!name.trim() || !!emoji || role !== "photos")}
       onClose={onClose}
       title={url ? "Link ready" : "Invite with a link"}
       footer={
@@ -462,22 +449,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
               color={MEMBER_PALETTE[(state?.members.length ?? 0) % MEMBER_PALETTE.length]}
             />
           </div>
-          <div>
-            <span className={cx(tone.label, "mb-1.5 block")}>What they can do</span>
-            <Segmented
-              value={role}
-              onChange={setRole}
-              options={[
-                { value: "member", label: "Member · can log" },
-                { value: "viewer", label: "Viewer · can see" },
-              ]}
-            />
-            <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>
-              {role === "viewer"
-                ? `Viewers see ${w.name}'s day and ${w.his} moments, but can't log or change anything.`
-                : "Members can add and edit the baby's log. They can also see and add to the recovery page, including medicines, temperatures, food and drinks, questions and check-ins, when it is set up."}
-            </p>
-          </div>
+          <SharingRolePicker value={role} onChange={setRole} disabled={busy} />
         </fieldset>
       ) : (
         <>
@@ -486,11 +458,9 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
             opens it. You won&apos;t see this link again.
           </p>
           <div className="space-y-1">
-            <p className={cx(tone.body, "text-[15px] font-semibold")}>{created.role === "member" ? "Member · can log" : "Viewer · view only"}</p>
+            <p className={cx(tone.body, "text-[15px] font-semibold")}>{SHARING_ROLES[created.role].label}</p>
             <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-              {created.role === "member"
-                ? "This link also gives access to the recovery page, including medicines, temperatures, food and drinks, questions and check-ins, when it is set up."
-                : "This link does not give access to the recovery page or allow changes to the baby's log."}
+              {SHARING_ROLES[created.role].description}
             </p>
           </div>
           <div className={cx(tone.inset, "p-3")}>
@@ -509,8 +479,4 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
       )}
     </Sheet>
   );
-}
-
-function RoleDisclosure() {
-  return <p className={cx(tone.muted, "text-[13px] leading-snug")}>Can log also gives access to the recovery page, including medicines, temperatures, food and drinks, questions and check-ins, when it is set up. View-only guests cannot see that page.</p>;
 }

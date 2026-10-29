@@ -32,7 +32,7 @@ async function rows(sql: string, params: unknown[]): Promise<Record<string, unkn
  * it acts as her), and never a viewer: careAccess's `self`.
  */
 export const isCarePerson = (member: Pick<Member, "email" | "role">, person: string | null): boolean =>
-  person != null && member.email !== ADMIN_ID && member.role !== "viewer" && member.email === person;
+  person != null && member.email !== ADMIN_ID && member.role !== "viewer" && member.role !== "photos" && member.email === person;
 
 export async function chatConsent(fam: Fam, member: Pick<Member, "email" | "role">): Promise<ChatConsent> {
   const r = await rows(

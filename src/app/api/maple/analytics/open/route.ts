@@ -23,4 +23,4 @@ export const POST = withMember("POST /api/maple/analytics/open", async (request,
     if (cookie) failure.headers.set("set-cookie", cookie);
     return failure;
   } catch { await reportAnalyticsFailure(); return analyticsResponse(false); }
-}, { setup: true });
+}, { setup: true, photos: true });

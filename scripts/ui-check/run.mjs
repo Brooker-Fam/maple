@@ -24,7 +24,7 @@ await build({
   plugins: [{ name: "synthetic-app-hooks", setup(plugin) {
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|useTimerActions|sheets)$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
     plugin.onResolve({ filter: /(?:^|\/)MoreSheet$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
-    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:FixTimesSheet|NursingCorrections)\.tsx$/.test(args.importer) ? { path: path.join(here, "mocks.jsx") } : undefined);
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:FixTimesSheet|NursingCorrections|useSavedEntryConflict)\.tsx$/.test(args.importer) ? { path: path.join(here, "mocks.jsx") } : undefined);
     plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? { path: path.join(here, "mocks.jsx") } : undefined);
   } }],
 });

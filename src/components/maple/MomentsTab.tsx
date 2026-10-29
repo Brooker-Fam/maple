@@ -1,6 +1,7 @@
 "use client";
 
 import AccountMenu from "./AccountMenu";
+import { useAppNav } from "./AppNav";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { statsFor } from "@/lib/maple/insights";
@@ -16,7 +17,7 @@ import {
   parseDayKey,
 } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
-import { photoUrl } from "./EntryRow";
+import { momentPhotoUrl } from "./moments/photo";
 import { AskChatButton } from "./chat/AskChat";
 import MilestonesToNotice from "./development/MilestonesToNotice";
 import { Icon, KindBadge } from "./icons";
@@ -100,6 +101,7 @@ function groupByWeek(moments: Moment[], bornAt: string | null, tz: string): Week
 
 export default function MomentsTab() {
   const { state, now, readOnly } = useMaple();
+  const nav = useAppNav();
   const { open } = useSheets();
   const { moments, highlights, all, error, moreError, loading, loadingMore, hasMore, load, loadMore } = useMoments();
   const [viewing, setViewing] = useState<{ id: number; photo: number | null } | null>(null);
@@ -107,6 +109,7 @@ export default function MomentsTab() {
   const tz = state?.baby.timezone ?? "America/New_York";
   const bornAt = keepsakeBirthAt(state?.baby);
   const viewer = readOnly;
+  const photosOnly = state?.me.role === "photos";
   const babyName = state?.baby.name?.split(" ")[0] || "Baby";
 
   const slides = useMemo<Slide[]>(
@@ -141,9 +144,10 @@ export default function MomentsTab() {
             <AccountMenu />
           </div>
         </div>
+        {state.me.role === "owner" && <Button variant="ghost" className="-ml-3 mt-2" onClick={() => nav.go("family/people")}><Icon name="share" size={18} />Invite family to see photos</Button>}
       </header>
 
-      {moments && moments.length > 0 && (
+      {!photosOnly && moments && moments.length > 0 && (
         <div className="mb-5">
           <AskChatButton
             label="Moments"
@@ -172,7 +176,7 @@ export default function MomentsTab() {
 
         {moments && moments.length === 0 && <EmptyScrapbook viewer={viewer} onAdd={() => add()} />}
 
-        {highlights && (
+        {!photosOnly && highlights && (
           <MilestonesToNotice baby={state.baby} moments={highlights} viewer={viewer} onOpen={show} onAdd={add} />
         )}
 
@@ -499,7 +503,7 @@ function GrowingUp({
                 >
                   {m ? (
                     photoCount(m) ? (
-                      <SafeImg src={photoUrl(m.id, 0)} className="h-full w-full object-cover" />
+                      <SafeImg src={momentPhotoUrl(m.id, m.data.photos![0], 0)} className="h-full w-full object-cover" />
                     ) : (
                       <LeafMark size={22} />
                     )
@@ -704,7 +708,7 @@ function MomentCard({
       {count > 0 && (
         // Flex, so the photo sits flush (no inline-image gap) and a broken one centers its placeholder.
         <span className="relative flex">
-          <SafeImg src={photoUrl(m.id, 0)} className={cx("w-full bg-mp-sunken object-cover", aspect)} />
+          <SafeImg src={momentPhotoUrl(m.id, m.data.photos![0], 0)} className={cx("w-full bg-mp-sunken object-cover", aspect)} />
           {count > 1 && (
             <span className="absolute top-2 right-2 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-white tabular-nums [.maple-night_&]:text-mp-ink">
               <Icon name="images" size={12} strokeWidth={2} />

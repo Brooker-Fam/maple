@@ -229,7 +229,7 @@ async function main() {
         const r = await call(routes.photo.GET, `/api/maple/photo?entry=${entry}&size=full`, who);
         return [r.status, r.body.error];
       };
-      const reached = [404, "Photo storage isn't set up"];
+      const reached = [503, "Photo storage isn't set up"];
       const missing = [404, "Photo not found"];
       eq(await photo(alphaMoment, { id: alpha.owner }), reached, "Alpha's own");
       eq(await photo(betaMoment, as(s, "viewer", "beta")), reached, "Beta's own");

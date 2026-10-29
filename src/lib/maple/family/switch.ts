@@ -32,7 +32,7 @@ export async function familyChoices(member: string, currentFamily: number): Prom
   return rows.flatMap((r) => {
     const familyId = parseFamilyId(r.id);
     if (familyId === null) return [];
-    const role: Role = r.role === "owner" || r.role === "viewer" ? r.role : "member";
+    const role: Role = r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member";
     return [{ familyId, label: labelFor(r.name, r.baby, familyId), role, current: familyId === currentFamily, onboarding: r.status === "onboarding" }];
   });
 }

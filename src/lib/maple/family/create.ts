@@ -123,7 +123,7 @@ WITH inv AS (
   DELETE FROM maple_removed r USING inv WHERE r.family_id = inv.family_id AND r.email = $2
 ), added AS (
   INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at)
-  SELECT family_id, $2, CASE WHEN role = 'viewer' THEN 'viewer' ELSE 'member' END, COALESCE(display_name, $3), emoji, created_by, NOW() FROM inv
+  SELECT family_id, $2, CASE WHEN role IN ('viewer', 'photos') THEN role ELSE 'member' END, COALESCE(display_name, $3), emoji, created_by, NOW() FROM inv
   ON CONFLICT (family_id, email) DO NOTHING
   RETURNING family_id
 )

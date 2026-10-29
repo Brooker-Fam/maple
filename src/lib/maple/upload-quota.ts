@@ -29,7 +29,11 @@ WHERE used.total < $2 AND used.today < $3 AND photos.n < $4
 ON CONFLICT (family_id, day) DO UPDATE SET tokens = maple_upload_counts.tokens + 1
 RETURNING tokens`;
 
-/** True when this family may sign one more upload (and counts it). Family 1 always may; anyone else fails closed. */
+export class UploadQuotaUnavailable extends Error {
+  constructor(cause?: unknown) {
+    super("Photo upload quota is unavailable", { cause });
+  }
+}
 export async function claimUpload(familyId: number): Promise<boolean> {
   if (familyId === FAMILY_ONE) return true;
   try {
@@ -37,8 +41,9 @@ export async function claimUpload(familyId: number): Promise<boolean> {
       { sql: `SELECT pg_advisory_xact_lock(${UPLOAD_LOCK})` },
       { sql: CLAIM, params: [familyId, FAMILY_UPLOAD_LIMITS.tokensTotal, FAMILY_UPLOAD_LIMITS.tokensPerDay, FAMILY_UPLOAD_LIMITS.photos] },
     ]);
-    return !!result?.[1]?.length;
-  } catch {
-    return false;
+    if (result === null) throw new UploadQuotaUnavailable();
+    return !!result[1]?.length;
+  } catch (error) {
+    throw error instanceof UploadQuotaUnavailable ? error : new UploadQuotaUnavailable(error);
   }
 }

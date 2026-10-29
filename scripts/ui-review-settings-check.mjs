@@ -156,7 +156,7 @@ try {
     await page.goBack();
     await index();
     await open("People & permissions");
-    await page.getByText(/Can log also gives access to the recovery page/).waitFor();
+    await page.getByText(/Also see and add to the recovery page/).waitFor();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await open("Sign-in & account");
     await page.getByRole("link", { name: /Download River's log/ }).waitFor();

@@ -70,7 +70,7 @@ export async function familyMembers(familyId: number): Promise<Member[]> {
   const rows = await q(`SELECT email, role, display_name, emoji, color FROM maple_members WHERE family_id = $1 ORDER BY added_at, email`, [familyId]);
   return rows.map((r) => ({
     email: String(r.email),
-    role: (r.role === "owner" || r.role === "viewer" ? r.role : "member") as Role,
+    role: (r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member") as Role,
     display_name: r.display_name == null ? null : String(r.display_name),
     emoji: r.emoji == null ? null : String(r.emoji),
     color: r.color == null ? null : String(r.color),

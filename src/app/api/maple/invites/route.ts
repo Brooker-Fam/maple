@@ -31,7 +31,7 @@ export const POST = withMember("POST /api/maple/invites", async (request, me, ct
     throw new BadRequest("That's a lot of people already!");
   }
   const { invite, token } = await createInvite(ctx, {
-    role: body.role === "viewer" ? "viewer" : "member",
+    role: body.role === "viewer" || body.role === "photos" ? body.role : "member",
     displayName: name,
     emoji: emoji || null,
     createdBy: me.email,

@@ -137,6 +137,22 @@ function duplicateNotice() {
 }
 
 async function main() {
+  await test("a role downgrade drops entries retained from an earlier read", () => {
+    const previous = { ...state(1, "owner@example.test", [entry]), me: { email: "owner@example.test", role: "member" } };
+    const next = { ...state(1), me: { email: "owner@example.test", role: "photos" } };
+    const saved = confirmed();
+    eq(keepConfirmed(next, previous, saved, 1000).entries, []);
+    eq(saved.size, 0);
+  });
+
+  await test("a photo guest does not render baby entries retained in an offline outbox", () => {
+    const next = { ...state(1), me: { email: "owner@example.test", role: "photos" } };
+    const merge = clientFunction<(value: typeof next, queued: unknown[]) => typeof next>("withPending", {
+      ownedBy: () => true, isEntryItem: () => true, isCareItem: () => false, isMoodItem: () => false,
+    });
+    eq(merge(next, [{ target: "entries", entry }]).entries, []);
+  });
+
   await test("every family's client wording uses its saved nickname, sex and care-person name", () => {
     for (const id of [1, 2]) {
       const male = renderedWords({ family: { id, ask: "a family owner" }, baby: { name: "Rory Example", nickname: "Ro", sex: "male" }, care: { person: { name: "Jamie Example" } } });

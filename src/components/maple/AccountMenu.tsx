@@ -70,7 +70,7 @@ export default function AccountMenu() {
     }
   };
   const name = memberName(state.me.email);
-  const role = state.me.role === "viewer" ? "View-only guest" : state.me.role === "owner" ? "Family owner" : "Family member";
+  const role = state.me.role === "photos" ? "Photos-only guest" : state.me.role === "viewer" ? "View-only guest" : state.me.role === "owner" ? "Family owner" : "Family member";
 
   return (
     <>

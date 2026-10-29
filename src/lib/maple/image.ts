@@ -1,5 +1,5 @@
 import { upload } from "@vercel/blob/client";
-import { MAPLE_PHOTO_MAX_BYTES, MAPLE_PHOTO_TYPES, type BlobAccess } from "./blob";
+import { MAPLE_PHOTO_MAX_BYTES, MAPLE_PHOTO_TYPES, blobFamily, type BlobAccess } from "./blob";
 import type { PhotoRef } from "./types";
 
 /**
@@ -25,7 +25,6 @@ export class PhotoError extends Error {}
 
 export type EncodedPhoto = {
   full: Blob;
-  /** Null when the browser couldn't decode it and the original went up as-is. */
   thumb: Blob | null;
   contentType: (typeof MAPLE_PHOTO_TYPES)[number];
   w?: number;
@@ -89,12 +88,6 @@ async function render(
   return { blob, w, h };
 }
 
-/**
- * One decode → a ~2560px JPEG to keep and a 512px thumbnail. If the browser
- * can't decode the file (HEIC on desktop Chrome, a corrupt file), an original
- * JPEG/PNG/WebP goes up as-is without a thumb; anything else gets a friendly
- * explanation instead.
- */
 export async function encodeForUpload(file: File): Promise<EncodedPhoto> {
   if (/svg/i.test(file.type) || /\.svg$/i.test(file.name)) throw new PhotoError("SVG drawings can't be added, only photos");
   if (!file.type.startsWith("image/") && !isHeic(file) && file.type !== "") throw new PhotoError("That isn't a photo");
@@ -102,9 +95,6 @@ export async function encodeForUpload(file: File): Promise<EncodedPhoto> {
   const takenAt = await readExifTakenAt(file).catch(() => undefined);
   const decoded = await decode(file);
   if (!decoded) {
-    if ((MAPLE_PHOTO_TYPES as readonly string[]).includes(file.type) && file.size <= MAPLE_PHOTO_MAX_BYTES) {
-      return { full: file, thumb: null, contentType: file.type as EncodedPhoto["contentType"], takenAt };
-    }
     if (isHeic(file)) {
       throw new PhotoError("This browser can't open HEIC photos. Add it from your phone, or save it as a JPEG first.");
     }
@@ -182,25 +172,33 @@ function parseTiff(v: DataView, tiff: number): EncodedPhoto["takenAt"] {
 
 // ── upload ───────────────────────────────────────────────────────────────
 
-export type UploadMode = { ready: boolean; access: BlobAccess | null; maxBytes: number };
+export type UploadMode = { ready: boolean; access: BlobAccess | null; maxBytes: number; prefix: string; familyId: number };
 
-let modePromise: Promise<UploadMode> | null = null;
+const modes = new Map<number, Promise<UploadMode>>();
 
-/** Which store uploads go to (asked once per page load; see /api/maple/upload). */
-export function getUploadMode(fresh = false): Promise<UploadMode> {
-  if (!modePromise || fresh) {
-    modePromise = fetch("/api/maple/upload", { cache: "no-store" })
-      .then(async (res) => {
-        const body = (await res.json().catch(() => ({}))) as Partial<UploadMode> & { error?: string };
-        if (!res.ok) throw new PhotoError(body.error || "Couldn't reach photo storage");
-        return { ready: !!body.ready, access: body.access ?? null, maxBytes: body.maxBytes ?? MAPLE_PHOTO_MAX_BYTES };
-      })
-      .catch((e) => {
-        modePromise = null;
-        throw e;
-      });
-  }
-  return modePromise;
+export function getUploadMode(fresh = false, familyId?: number): Promise<UploadMode> {
+  const cacheKey = familyId ?? 0;
+  if (fresh) modes.delete(cacheKey);
+  const cached = modes.get(cacheKey);
+  if (cached) return cached;
+  const request = fetch("/api/maple/upload", {
+    cache: "no-store",
+    headers: familyId === undefined ? {} : { "X-Maple-Family": String(familyId) },
+  }).then(async (res) => {
+    const body = (await res.json().catch(() => ({}))) as Partial<UploadMode> & { error?: string };
+    if (!res.ok) throw new PhotoError(body.error || "Couldn't reach photo storage");
+    const match = /^maple\/f([1-9]\d*)\/$/.exec(body.prefix ?? "");
+    const owner = Number(match?.[1]);
+    if (!match || !Number.isSafeInteger(owner) || (familyId !== undefined && familyId !== owner)) {
+      throw new PhotoError("The family's photo storage changed. Close this moment and try again.");
+    }
+    return { ready: !!body.ready, access: body.access ?? null, maxBytes: body.maxBytes ?? MAPLE_PHOTO_MAX_BYTES, prefix: body.prefix!, familyId: owner };
+  }).catch((error) => {
+    if (modes.get(cacheKey) === request) modes.delete(cacheKey);
+    throw error;
+  });
+  modes.set(cacheKey, request);
+  return request;
 }
 
 function randomName(): string {
@@ -232,7 +230,7 @@ async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal, tries = 
   if (/too large|file size/i.test(msg)) throw new PhotoError("That photo is too big to upload");
   if (/content type/i.test(msg)) throw new PhotoError("Only JPEG, PNG or WebP photos can be added");
   if (/access denied/i.test(msg)) {
-    modePromise = null; // the store changed under us; ask again next time
+    modes.clear();
     throw new PhotoError("Photo storage changed. Close the sheet and try again.");
   }
   throw new PhotoError("Couldn't upload. Check the signal and try again.");
@@ -247,9 +245,9 @@ const EXT: Record<EncodedPhoto["contentType"], string> = { "image/jpeg": "jpg", 
  */
 export async function uploadPhoto(
   photo: EncodedPhoto,
-  opts: { signal?: AbortSignal; onProgress?: (pct: number) => void } = {}
+  opts: { signal?: AbortSignal; onProgress?: (pct: number) => void; familyId?: number } = {}
 ): Promise<PhotoRef> {
-  const mode = await getUploadMode();
+  const mode = await getUploadMode(false, opts.familyId);
   if (!mode.ready || !mode.access) throw new PhotoError("Photo storage isn't set up yet");
   const access = mode.access;
   const name = randomName();
@@ -258,11 +256,12 @@ export async function uploadPhoto(
     handleUploadUrl: "/api/maple/upload",
     clientPayload: JSON.stringify({ access }),
     abortSignal: opts.signal,
+    headers: { "X-Maple-Family": String(mode.familyId) },
   } as const;
 
   const full = await withRetry(
     () =>
-      upload(`maple/moments/${name}.${EXT[photo.contentType]}`, photo.full, {
+      upload(`${mode.prefix}moments/${name}.${EXT[photo.contentType]}`, photo.full, {
         ...common,
         contentType: photo.contentType,
         onUploadProgress: (e) => opts.onProgress?.(Math.min(92, Math.round(e.percentage * 0.92))),
@@ -274,7 +273,7 @@ export async function uploadPhoto(
   if (photo.thumb) {
     try {
       const t = await withRetry(
-        () => upload(`maple/thumbs/${name}.jpg`, photo.thumb!, { ...common, contentType: "image/jpeg" }),
+        () => upload(`${mode.prefix}thumbs/${name}.jpg`, photo.thumb!, { ...common, contentType: "image/jpeg" }),
         opts.signal,
         2
       );
@@ -293,24 +292,35 @@ export async function uploadPhoto(
  */
 export async function uploadMoment(
   files: File[],
-  opts: { signal?: AbortSignal; onProgress?: (index: number, pct: number) => void } = {}
+  opts: { signal?: AbortSignal; onProgress?: (index: number, pct: number) => void; familyId?: number } = {}
 ): Promise<PhotoRef[]> {
   const refs: PhotoRef[] = [];
   for (let i = 0; i < files.length; i++) {
     const encoded = await encodeForUpload(files[i]);
-    refs.push(await uploadPhoto(encoded, { signal: opts.signal, onProgress: (p) => opts.onProgress?.(i, p) }));
+    refs.push(await uploadPhoto(encoded, { signal: opts.signal, familyId: opts.familyId, onProgress: (p) => opts.onProgress?.(i, p) }));
   }
   return refs;
 }
 
 /** Tidy up photos uploaded for a moment that was never saved (best effort). */
 export function discardUploads(refs: PhotoRef[]): void {
-  const urls = refs.flatMap((r) => [r.key, r.thumb_key]).filter((u): u is string => !!u);
-  if (!urls.length) return;
-  void fetch("/api/maple/upload", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ urls }),
-    keepalive: true,
-  }).catch(() => {});
+  const families = new Map<number, string[]>();
+  for (const ref of refs) {
+    for (const url of [ref.key, ref.thumb_key]) {
+      if (!url) continue;
+      const familyId = blobFamily(url);
+      if (familyId === null) continue;
+      const urls = families.get(familyId) ?? [];
+      urls.push(url);
+      families.set(familyId, urls);
+    }
+  }
+  for (const [familyId, urls] of families) {
+    void fetch("/api/maple/upload", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", "X-Maple-Family": String(familyId) },
+      body: JSON.stringify({ urls }),
+      keepalive: true,
+    }).catch(() => {});
+  }
 }

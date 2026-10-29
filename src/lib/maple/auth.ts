@@ -192,7 +192,7 @@ export function familyOf(fam: Fam): number {
 function rowToMember(r: Record<string, unknown>): Member {
   return {
     email: String(r.email),
-    role: (r.role === "owner" || r.role === "viewer" ? r.role : "member") as Role,
+    role: (r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member") as Role,
     display_name: r.display_name == null ? null : String(r.display_name),
     emoji: r.emoji == null ? null : String(r.emoji),
     color: r.color == null ? null : String(r.color),
@@ -318,7 +318,7 @@ export async function signedInAs(body: SessionBody | null | undefined): Promise<
   const familyId = carrierFamily(body.fam);
   if (familyId === null) return null;
   const [ctx, member] = await Promise.all([familyForSession(body), memberFor({ familyId }, body.id)]);
-  return ctx && member && ctx.familyId === familyId ? { member, ctx } : null;
+  return ctx && member && ctx.familyId === familyId ? { member: { ...member, role: ctx.role }, ctx } : null;
 }
 
 /** The signed-in member behind a request's cookie, and their family, or null. */
@@ -334,7 +334,7 @@ export function sessionContext(request: NextRequest): Promise<SignedIn | null> {
  * instead (createInvite with `email`), so nobody lands in a family they
  * didn't accept.
  */
-export async function addMember(fam: Fam, email: string, addedBy: string, emoji: string | null, role: "member" | "viewer" = "member"): Promise<void> {
+export async function addMember(fam: Fam, email: string, addedBy: string, emoji: string | null, role: "member" | "viewer" | "photos" = "member"): Promise<void> {
   const familyId = familyOf(fam);
   if (familyId !== FAMILY_ONE) throw Object.assign(new Error("invite_by_email"), { code: "invite_by_email" });
   const identity = `COALESCE((SELECT member_id FROM maple_auth_identities WHERE provider = 'email' AND subject = $2), $2)`;
@@ -405,13 +405,12 @@ export async function leaveFamily(fam: Fam, email: string): Promise<LeaveRefusal
 export async function updateMember(
   fam: Fam,
   email: string,
-  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: "member" | "viewer" }
+  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: "member" | "viewer" | "photos" }
 ): Promise<void> {
   const familyId = familyOf(fam);
   const rows = await q(`SELECT display_name, emoji, color, role FROM maple_members WHERE family_id = $1 AND email = $2`, [familyId, email]);
   if (!rows.length) throw new NotFound("Member not found");
   const cur = rows[0];
-  // Owners stay owners; only members and viewers swap roles.
   const role = patch.role && cur.role !== "owner" ? patch.role : cur.role;
   await q(
     `UPDATE maple_members SET display_name = $3, emoji = $4, color = $5, role = $6, updated_at = NOW() WHERE family_id = $1 AND email = $2`,
@@ -448,7 +447,7 @@ const isoOrNull = (v: unknown): string | null => (v == null ? null : new Date(v 
 function rowToInvite(r: Record<string, unknown>): Invite {
   return {
     id: Number(r.id),
-    role: (r.role === "owner" || r.role === "viewer" ? r.role : "member") as Role,
+    role: (r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member") as Role,
     email: r.email == null ? null : String(r.email),
     display_name: r.display_name == null ? null : String(r.display_name),
     emoji: r.emoji == null ? null : String(r.emoji),
@@ -526,7 +525,7 @@ export async function redeemInvite(token: string): Promise<{ id: string; familyI
   await q(
     `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())
      ON CONFLICT (family_id, email) DO NOTHING`,
-    [familyId, id, r.role === "viewer" ? "viewer" : "member", r.display_name, r.emoji, r.created_by]
+    [familyId, id, r.role === "viewer" || r.role === "photos" ? r.role : "member", r.display_name, r.emoji, r.created_by]
   );
   return { id, familyId };
 }

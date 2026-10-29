@@ -174,7 +174,7 @@ export type MapleContextValue = {
       actions?: (entry: Entry) => ToastAction[];
     }
   ) => Promise<Entry | null>;
-  update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string; onConflict?: (entry: Entry) => void }) => Promise<Entry | null>;
+  update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string; onConflict?: (entry: Entry) => void; throwOnError?: boolean }) => Promise<Entry | null>;
   /** True when the entry is removed (including one already removed elsewhere); false when the change failed. */
   remove: (id: number, opts?: { toast?: string }) => Promise<boolean>;
   /** `quiet`: no "Restored" toast (an Undo that says its own "Undone"). */
@@ -505,7 +505,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   // An open form may keep a queued entry's temporary id after it syncs.
   // Only a confirmed response supplies its replacement, within this scope.
   const entryScope = state ? JSON.stringify([state.family?.id ?? 1, state.me.email, state.baby.id]) : null;
-  const syncedEntryIds = useRef({ scope: entryScope, ids: new Map<number, number>() });
+  const syncedEntryIds = useRef({ scope: entryScope, ids: new Map<number, { id: number; updatedAt?: string }>() });
   if (syncedEntryIds.current.scope !== entryScope) syncedEntryIds.current = { scope: entryScope, ids: new Map() };
   /** How many holds are on (the Lantern, Fix times); timer toasts wait while any is. */
   const holdRef = useRef(0);
@@ -632,6 +632,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
 
   /** Server entries plus anything still waiting in the outbox (care items as pending care entries). */
   const withPending = useCallback((s: MapleState, all: OutboxItem[]): MapleState => {
+    if (s.me.role === "photos") return s;
     const items = all.filter((i) => ownedBy(i, s));
     if (!items.length) return s;
     const ids = new Set(s.entries.map((e) => e.id));
@@ -803,7 +804,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           if (isEntryItem(item)) flushingEntry.current = item.entry.id;
           const target = item.target ?? "entries";
           const change = isMoodItem(item) && item.id != null;
-          const res = await fetchJson<{ entry: { id: number } | null; created?: boolean; deduped?: boolean; possible_duplicate?: DoseEntry }>(
+          const res = await fetchJson<{ entry: { id: number; updated_at?: string } | null; created?: boolean; deduped?: boolean; possible_duplicate?: DoseEntry }>(
             change ? `${OUTBOX_URL.mood}?id=${(item as MoodItem).id}` : OUTBOX_URL[target],
             {
               method: change ? "PATCH" : "POST",
@@ -822,7 +823,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           if (change) continue;
           const current = outboxRef.current.find((i) => i.client_id === item.client_id);
           if (isEntryItem(item) && current && res.entry && res.entry.id > 0 && syncedEntryIds.current === scope) {
-            scope.ids.set(item.entry.id, res.entry.id);
+            scope.ids.set(item.entry.id, { id: res.entry.id, updatedAt: res.entry.updated_at });
           }
           if (isMoodItem(item) && res.entry && current && (current !== item || res.deduped)) {
             const later = current as MoodItem;
@@ -1004,7 +1005,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     async (id, opts = {}) => {
       // Still in the outbox: just drop it locally.
       const queued = outboxRef.current.filter(isEntryItem).find((i) => i.entry.id === id);
-      if (id < 0 && !queued) id = syncedEntryIds.current.ids.get(id) ?? id;
+      if (id < 0 && !queued) id = syncedEntryIds.current.ids.get(id)?.id ?? id;
       if (id < 0 && (!queued || flushing.current)) {
         toast("One sec, that's still saving", { tone: "info" });
         return false;
@@ -1101,7 +1102,11 @@ export function MapleProvider({ children }: { children: ReactNode }) {
 
   const update = useCallback<MapleContextValue["update"]>(
     async (id, patch, opts = {}) => {
-      if (id < 0) id = syncedEntryIds.current.ids.get(id) ?? id;
+      const synced = id < 0 ? syncedEntryIds.current.ids.get(id) : undefined;
+      if (synced) {
+        id = synced.id;
+        if (patch.expect_updated_at && synced.updatedAt) patch = { ...patch, expect_updated_at: synced.updatedAt };
+      }
       if (id < 0) {
         // Not on the server yet. If it's waiting in the outbox, fold the edit
         // into the queued save; otherwise it's mid-save, so ask for a moment.
@@ -1115,7 +1120,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           ...(patch.started_at ? { started_at: patch.started_at } : {}),
           ...(patch.ended_at !== undefined ? { ended_at: patch.ended_at } : {}),
           ...(patch.note !== undefined ? { note: patch.note } : {}),
-          data: { ...(queued.input.data ?? {}), ...(patch.data ?? {}) },
+          data: Object.fromEntries(Object.entries({ ...(queued.input.data ?? {}), ...(patch.data ?? {}) }).filter(([, value]) => value !== null)),
         };
         const entry = {
           ...queued.entry,
@@ -1151,6 +1156,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
             opts.onConflict?.(body.entry);
           }
         }
+        if (opts.throwOnError) throw e;
         const onlyNote = Object.keys(patch).every((k) => k === "note" || k === "expect_updated_at");
         const gone = discardedLine(e, kind, labelFor, onlyNote ? "note" : "change");
         if (gone) {
@@ -1369,7 +1375,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     [state]
   );
 
-  const readOnly = state?.me.role === "viewer";
+  const readOnly = state?.me.role === "viewer" || state?.me.role === "photos";
 
   // Stable (memberLabel changes with every poll), so a sheet asking once per disappearance doesn't ask again on each poll.
   const labelRef = useRef(memberLabel);

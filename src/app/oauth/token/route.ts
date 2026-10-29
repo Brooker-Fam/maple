@@ -149,6 +149,14 @@ export async function POST(request: NextRequest) {
     return err("invalid_grant", "resource does not match the authorization request");
   }
 
+  if (payload.sub.startsWith("maple:")) {
+    try {
+      if (!(await familyForAuth(payload))) return err("invalid_grant", "This account cannot connect to the family log.");
+    } catch {
+      return err("temporarily_unavailable", "Membership could not be checked. Try again.", 503);
+    }
+  }
+
   return issue(
     {
       sub: payload.sub,

@@ -19,15 +19,16 @@ try {
   await build({
     entryPoints: [path.join(here, "fixture.jsx")], outfile: path.join(out, "app.js"), bundle: true, format: "esm", jsx: "automatic", absWorkingDir: root, define: { "process.env": "{}" },
     plugins: [{ name: "synthetic-dose-hooks", setup(plugin) {
-      plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|sheets)$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
+      plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|sheets|MedPlanSheet|CareHistorySheet)$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
       plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? { path: path.join(here, "mocks.jsx") } : undefined);
-      if (baseline) plugin.onLoad({ filter: /\/DoseTimeSheet\.tsx$/ }, ({ path: file }) => ({ contents: execFileSync("git", ["show", `${baseline}:${path.relative(root, file)}`], { cwd: root, encoding: "utf8" }), loader: "tsx", resolveDir: path.dirname(file) }));
+      if (baseline) plugin.onLoad({ filter: /\/(DoseTimeSheet|DoseSheet|PlanDetail|ChatCareEditor)\.tsx$/ }, ({ path: file }) => ({ contents: execFileSync("git", ["show", `${baseline}:${path.relative(root, file)}`], { cwd: root, encoding: "utf8" }), loader: "tsx", resolveDir: path.dirname(file) }));
     } }],
   });
   const context = await browser.newContext({ timezoneId: "UTC", reducedMotion: "reduce" });
   const page = await context.newPage();
+  page.setDefaultTimeout(10_000);
   const errors = [];
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (error) => { errors.push(error.message); console.error(error.message); });
   await page.clock.install({ time: new Date("2026-10-28T13:30:50.000Z") });
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -54,6 +55,22 @@ try {
     await save.click();
     assert.equal((await page.evaluate(() => window.doseFixture.snapshot())).calls.at(-1).at, "2026-10-28T13:32:00.000Z");
     console.log(`PASS dose corrections use the live future-time limit (${browserName})`);
+  }
+  for (const form of ["plan", "one-off", "details", "chat"]) {
+    if (scenario && scenario !== form) continue;
+    await page.clock.setSystemTime(new Date("2026-10-28T13:30:50.000Z"));
+    await page.goto(`https://timing-dose.example.test?form=${form}`);
+    if (form === "details") await page.getByRole("button", { name: "Dose details", exact: true }).click();
+    await clock.waitFor();
+    if (form === "chat") await clock.fill("09:35");
+    await page.clock.setSystemTime(new Date("2026-10-28T13:31:10.000Z"));
+    await clock.fill("09:32");
+    const submit = page.getByRole("button", { name: form === "chat" ? "Save" : form === "details" ? "Save dose" : /^Took it at / });
+    assert(await submit.isEnabled(), `${form} validates against the current minute instead of the last sampled clock`);
+    await submit.click();
+    const submitted = (await page.evaluate(() => window.doseFixture.snapshot())).calls.at(-1);
+    assert.equal((form === "chat" ? submitted : form === "details" ? submitted.patch : submitted.input).at, "2026-10-28T13:32:00.000Z");
+    console.log(`PASS ${form} dose form uses the live future-time limit (${browserName})`);
   }
   assert.deepEqual(errors, []);
 } finally {

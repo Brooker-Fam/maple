@@ -129,6 +129,7 @@ export type MedData = { name: string; dose?: string };
  * /api/maple/photo?entry=<id>&i=<index>&size=thumb|full.
  */
 export type PhotoRef = {
+  id?: string;
   key?: string;
   thumb_key?: string;
   w?: number;
@@ -206,8 +207,7 @@ export type Baby = {
   settings: Record<string, unknown>;
 };
 
-/** owner: everything incl. invites; member: can log; viewer: read-only (for relatives who just want to peek). */
-export type Role = "owner" | "member" | "viewer";
+export type Role = "owner" | "member" | "viewer" | "photos";
 
 export type Member = {
   email: string;

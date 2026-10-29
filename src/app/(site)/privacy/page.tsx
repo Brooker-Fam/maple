@@ -91,6 +91,10 @@ export default function Privacy() {
         removes it for good at once, and so does deleting everything on her page. The separate control to remove imported
         MyChart measurements also removes those entries for good, as described below.
       </p>
+      <p>
+        Removing a photo from a saved moment stops it appearing in that moment. Its file can remain in private storage
+        until your family&rsquo;s log is deleted. Copies someone already saved or shared are outside Maple&rsquo;s control.
+      </p>
       <h3>Optional MyChart imports</h3>
       <p>
         Where this feature is available, a family owner can authorize an import from a supported healthcare organization
@@ -199,7 +203,8 @@ export default function Privacy() {
           invites, sign-in identities and code challenges, waitlist addresses and the records that keep Maple working.
         </li>
         <li>
-          <strong>Vercel Blob</strong> stores photos. They are only ever shown through Maple to someone signed in to your log.
+          <strong>Vercel Blob</strong> stores shared Moments photos privately. Maple checks family access when serving them.
+          A family member or photos-only guest can choose to save a copy or share it through another app.
         </li>
         <li>
           <strong>Vercel</strong> hosts Maple. Like any web host, it keeps request logs (such as IP addresses and the pages asked
@@ -277,9 +282,14 @@ export default function Privacy() {
 
       <h2>Who can see it</h2>
       <p>
-        In Maple, the members of your family&rsquo;s log, and no one else. An owner invites people as members or as view-only
-        guests. View-only guests can read the baby&rsquo;s log but not mom&rsquo;s page. Removing someone ends their sign-ins,
-        connections and Siri shortcuts at once.
+        An owner chooses each person&rsquo;s access. Photos-only guests see shared moments, photos and captions, along with
+        the baby&rsquo;s display name and age. They cannot read the daily baby log, recovery page or chat. View-only guests
+        can read the baby&rsquo;s log and moments but not mom&rsquo;s page. Members can add and edit the baby log and access
+        the recovery page when it is set up. New invitations default to photos-only access.
+      </p>
+      <p>
+        Removing someone ends their access through Maple. It cannot remove copies they already downloaded, shared or
+        captured. When you use Share, the app and recipients you choose handle that copy under their own policies.
       </p>
       <p>
         The person who runs Maple can reach the database to keep it working. They don&rsquo;t read families&rsquo; logs, except to

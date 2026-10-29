@@ -216,7 +216,7 @@ function LatestMoment() {
   return (
     <figure className={cx(tone.card, "overflow-hidden p-2", m.data.title ? "pb-3" : "")}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={photoUrl(m.id, 0, "full")} alt={m.data.title ?? babyFirstName(state?.baby)} className="aspect-[4/3] w-full rounded-[14px] object-cover" />
+      <img src={photoUrl(m.id, m.data.photos?.[0]?.id ?? 0, "full")} alt={m.data.title ?? babyFirstName(state?.baby)} className="aspect-[4/3] w-full rounded-[14px] object-cover" />
       {m.data.title && <figcaption className="mt-2.5 px-2 text-center text-[15px] font-medium text-mp-ink">{m.data.title}</figcaption>}
     </figure>
   );

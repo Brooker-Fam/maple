@@ -351,6 +351,18 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
               Still nursing? {n.both ? "Back and forth" : SIDE_NAME[side]} {minutesText(n.current.min)}
             </p>
           )}
+          {askWhen && !n.paused && isTracked(n.current.side) && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                open({ kind: "feed", entry: live, preset: fixPreset("current", "switch") });
+              }}
+              className="mb-2 min-h-[48px] w-full rounded-xl border border-current px-4 text-lg font-semibold active:opacity-70"
+            >
+              Switch earlier…
+            </button>
+          )}
           {offerBoth && (
             <BothHoldRow
               onHint={() => showHint("Hold to stop tracking sides")}
