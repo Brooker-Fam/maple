@@ -23,6 +23,7 @@ const browser = await ({ chromium, webkit }[browserName]).launch({ headless: tru
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
 const page = await context.newPage();
 page.setDefaultTimeout(3000);
+const syntheticPhoto = await require("sharp")({ create: { width: 80, height: 100, channels: 3, background: "#7b9277" } }).png().toBuffer();
 let photos = "ok";
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
@@ -31,7 +32,7 @@ await page.route("**/*", async (route) => {
   assert.equal(url.origin, "https://maple-moments.example.test", "Every request must remain inside the synthetic fixture");
   if (url.pathname === "/api/maple/photo") {
     if (photos === "all-fail" || photos === "full-fail" && url.searchParams.get("size") === "full") return route.fulfill({ status: 503, body: "Synthetic image failure" });
-    return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><rect width="80" height="100" fill="#7b9277"/></svg>' });
+    return route.fulfill({ contentType: "image/png", body: syntheticPhoto });
   }
   const file = url.pathname === "/app.js" || url.pathname === "/app.css" ? url.pathname.slice(1) : null;
   return route.fulfill({ contentType: file?.endsWith("js") ? "text/javascript" : file ? "text/css" : "text/html", body: file ? await readFile(path.join(output, file)) : '<!doctype html><html class="maple-ui"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/app.js"></script></body></html>' });
@@ -108,9 +109,14 @@ const cases = [
     await card.focus();
     await page.keyboard.press("Enter");
     const dialog = page.getByRole("dialog", { name: "Moment", exact: true });
-    await dialog.getByRole("button", { name: "Close", exact: true }).focus();
+    await dialog.getByRole("link", { name: "Save photo", exact: true }).waitFor();
+    const controls = dialog.locator('button:not(:disabled), a[href], [tabindex="0"]');
+    await controls.last().focus();
     await page.keyboard.press("Tab");
-    assert(await page.evaluate(() => document.querySelector('[role="dialog"]').contains(document.activeElement)), "Tab from the final viewer control must stay in the viewer");
+    assert(await controls.first().evaluate((control) => control === document.activeElement), "Tab from the final viewer control must return to the first viewer control");
+    await page.keyboard.press("Shift+Tab");
+    assert(await controls.last().evaluate((control) => control === document.activeElement), "Shift+Tab from the first viewer control must return to the final viewer control");
+    assert(await page.getByRole("button", { name: "Background action", includeHidden: true }).evaluate((button) => !!button.closest("[inert]")), "Background controls must remain inert while the viewer is open");
     await page.keyboard.press("Escape");
     await dialog.waitFor({ state: "hidden" });
     assert(await card.evaluate((button) => document.activeElement === button));

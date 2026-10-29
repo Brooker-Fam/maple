@@ -41,9 +41,14 @@ function ageAt(bornAt: string | null, at: string, tz: string, w: BabyWords): str
   return `${age.label} old`;
 }
 
-export function SafeImg({ src, className, alt = "" }: { src: string; className?: string; alt?: string }) {
+type SafeImageProps = { src: string; className?: string; alt?: string };
+
+export function SafeImg(props: SafeImageProps) {
+  return <MomentImage key={props.src} {...props} />;
+}
+
+function MomentImage({ src, className, alt = "" }: SafeImageProps) {
   const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [src]);
   if (broken) {
     return (
       <span role="img" aria-label="Couldn't load photo. Open to retry." className={cx("flex w-full flex-col items-center justify-center gap-1 bg-mp-sunken px-1 text-center text-mp-ink-2", className)}>
