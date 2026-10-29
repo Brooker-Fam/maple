@@ -129,11 +129,6 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: node scripts/admin-ui-check/run.mjs
-      - name: Check app flow regressions
-        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
-        env:
-          NODE_PATH: /tmp/maple-ui-tools/node_modules
-        run: pnpm check:maple-ui-review
       - name: Check account menu, settings and Siri setup
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm check:maple-settings-ui
@@ -142,11 +137,6 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: pnpm check:maple-photos
-      - name: Check failed saves and family changes
-        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
-        env:
-          NODE_PATH: /tmp/maple-ui-tools/node_modules
-        run: pnpm check:maple-ui-recovery
       - name: Save synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -177,3 +167,47 @@ jobs:
       - name: Build without database migrations
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm exec next build
+
+  recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - name: Install dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+      - name: Install browser check tools
+        id: browser_tools
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm install --prefix /tmp/maple-ui-tools --no-save esbuild@0.25.10 playwright@1.56.1 postcss@8.5.6
+      - name: Install Chromium
+        id: browser
+        if: ${{ !cancelled() && steps.browser_tools.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: node /tmp/maple-ui-tools/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Check app flow regressions
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-ui-review
+      - name: Check failed saves and family changes
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-ui-recovery
+      - name: Save synthetic recovery screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maple-recovery-ui-screenshots
+          path: test-results/
+          if-no-files-found: ignore
