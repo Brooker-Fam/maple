@@ -24,7 +24,6 @@ export default function Privacy() {
           What you log stays in your family&rsquo;s log, and in Maple only the people in it can see it. The services that run
           Maple, and the AI model behind its chat, are listed below.
         </li>
-        <li>No ads. Your data is never sold or shared for advertising.</li>
         <li>Limited usage counts help improve Maple. No session replay, and no names, email addresses or log contents in analytics.</li>
         <li>
           If you use Maple&rsquo;s chat, your messages go to an AI model through Vercel AI Gateway, and every request asks for zero
@@ -314,11 +313,6 @@ export default function Privacy() {
         on, the nursing timer on the lock screen. By default a medicine notice names the medicine and says when it was last
         taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a dose amount. Signing
         out turns them off on that phone.
-      </p>
-
-      <h2>Ads and selling data</h2>
-      <p>
-        Maple shows no ads and has no advertising or tracking cookies. Your data is never sold, rented or shared for advertising.
       </p>
 
       <h2>Children</h2>

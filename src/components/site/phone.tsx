@@ -83,7 +83,6 @@ export function PatternsMock() {
           <p className="text-[23px] font-semibold tracking-[-0.03em] text-mp-ink">History</p>
           <p className="text-[11px] text-mp-ink-3">June&rsquo;s log</p>
         </div>
-        <span className="rounded-full bg-mp-sunken px-2 py-1 text-[10px] font-medium text-mp-ink-3">Sample data</span>
       </div>
       <div className="flex rounded-xl bg-mp-sunken p-1 text-center text-[12px] font-semibold">
         <span className="flex-1 px-3 py-1.5 text-mp-ink-3">Timeline</span>

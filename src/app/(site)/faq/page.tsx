@@ -6,7 +6,7 @@ import { CONTACT_EMAIL } from "@/components/site/legal";
 import { siteOpenGraph } from "@/components/site/meta";
 
 const DESCRIPTION =
-  "Get to know Maple Baby: feeds, sleep, diapers, growth, shared care, and little firsts. Plus practical answers on pricing, privacy, and getting started.";
+  "Get to know Maple Baby: feeds, sleep, diapers, growth, shared care, and firsts. Plus practical answers on pricing, privacy, and getting started.";
 
 export const metadata: Metadata = {
   title: "Questions and answers",
@@ -123,17 +123,6 @@ const FAQS: Faq[] = [
     a: [
       [
         "Only if you turn them on, phone by phone. Once they’re on, a phone gets notices about mom’s medicines when one is OK again by her schedule, at her set times, and when a dose is logged on another phone. The nursing timer on the lock screen is a separate switch, off until you turn it on. Nothing else notifies, and no notice ever gives a dose amount. On an iPhone they work from the Home Screen app, on iOS 16.4 or later.",
-      ],
-    ],
-  },
-  {
-    id: "data-sold",
-    q: "Is my data sold?",
-    a: [
-      [
-        "No. Maple shows no ads, and your data is never sold, rented or shared for advertising. Limited usage counts help improve Maple, without names, email addresses or log contents. There is no session replay. The ",
-        { text: "privacy page", href: "/privacy" },
-        " lists each service that stores or carries your data, and why.",
       ],
     ],
   },

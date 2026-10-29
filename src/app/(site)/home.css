@@ -88,8 +88,6 @@
 .home-story-star { position: absolute; font-size: 45px; top: 18px; right: 18%; }
 .home-story-handwritten { font-family: var(--font-site-italic),var(--font-display); font-style: italic; font-size: 32px; line-height: .95; transform: rotate(-10deg); margin-top: 18px; margin-left: 65px; }
 .home-finale { text-align: center; padding-top: 0; padding-bottom: 85px; }
-.home-privacy { padding: 25px 0; border-bottom: 1px solid var(--mp-line); display: flex; justify-content: center; align-items: center; gap: 10px; font-size: 12px; color: var(--mp-ink-2); }
-.home-privacy a { margin-left: 12px; text-decoration: underline; text-underline-offset: 3px; }
 .home-finale-star { display: inline-block; font-size: 23px; color: var(--mp-accent-fg); margin-top: 60px; }
 .home-finale h2 { font-size: clamp(58px,7vw,93px); margin-top: 17px; }
 .home-finale h2 em { color: var(--mp-accent-fg); }
@@ -161,8 +159,6 @@
   .home-story-handwritten { font-size: 27px; }
   .home-story h2 { font-size: 39px; }
   .home-story-copy > p:not(.home-eyebrow) { font-size: 14px; }
-  .home-privacy { flex-wrap: wrap; padding: 23px 0; font-size: 10px; gap: 8px; }
-  .home-privacy a { margin: 0; }
   .home-finale { padding-top: 0; }
   .home-finale-star { margin-top: 45px; }
   .home-finale h2 { font-size: 62px; }

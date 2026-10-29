@@ -87,7 +87,6 @@ export default function Home() {
         </section>
 
         <section className="home-finale home-section" aria-labelledby="join">
-          <div className="home-privacy"><Icon name="lock" size={17} /><span>Your family’s space. Never sold for advertising.</span><Link href="/privacy">Our privacy promise <span aria-hidden>↗</span></Link></div>
           <span className="home-finale-star" aria-hidden>✦</span>
           <h2 id="join">Find your<br /><em>family’s rhythm.</em></h2>
           <p>For the messy, sleepy, wonderful beginning.</p>

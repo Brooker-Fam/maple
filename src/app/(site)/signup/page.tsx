@@ -13,7 +13,7 @@ import SignupForm from "./SignupForm";
 
 export const dynamic = "force-dynamic";
 
-const DESCRIPTION = "Start your family’s shared log with Maple Baby. Keep feeds, sleep, diapers, growth, and little firsts together.";
+const DESCRIPTION = "Start your family’s shared log with Maple Baby. Keep feeds, sleep, diapers, growth, and firsts together.";
 
 export const metadata: Metadata = {
   title: "Get started",
