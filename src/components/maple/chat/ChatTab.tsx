@@ -1,5 +1,7 @@
 "use client";
 
+import AccountMenu from "../AccountMenu";
+
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CHAT_MAX_CHARS } from "@/lib/maple/chat/types";
 import { useCareNav } from "../care/CareNav";
@@ -130,9 +132,12 @@ export default function ChatTab({ active }: { active: boolean }) {
     >
       <header className="flex shrink-0 items-center justify-between gap-3 px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-2">
         <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>Chat</h1>
-        <button type="button" onClick={nav.openHelp} className="-mr-2.5 min-h-[44px] rounded-xl px-2.5 text-[15px] font-semibold text-mp-danger">
-          Help
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button type="button" onClick={nav.openHelp} className="min-h-[44px] rounded-xl px-2.5 text-[15px] font-semibold text-mp-danger">
+            Help
+          </button>
+          <AccountMenu />
+        </div>
       </header>
 
       <div

@@ -82,27 +82,29 @@ export function InputRow({
   );
 }
 
-/** A tappable row that does something: an icon, accent text, an optional note, and a chevron when it goes somewhere. */
 export function ActionRow({
   icon,
   label,
   note,
+  value,
   chevron,
   onClick,
 }: {
   icon: IconName;
   label: string;
   note?: string;
+  value?: ReactNode;
   chevron?: boolean;
   onClick: () => void;
 }) {
   return (
     <button type="button" onClick={onClick} className={cx(tone.row, "min-h-[52px] py-2.5")}>
-      <Icon name={icon} size={20} className="shrink-0 text-mp-accent-fg" />
+      <Icon name={icon} size={20} className={cx("shrink-0", chevron ? "text-mp-ink-2" : "text-mp-accent-fg")} />
       <span className="min-w-0 flex-1">
-        <span className="block text-[15px] font-medium text-mp-accent-fg">{label}</span>
+        <span className={cx("block text-[15px]", chevron ? "text-mp-ink" : "font-medium text-mp-accent-fg")}>{label}</span>
         {note && <span className={cx(tone.muted, "block text-[13px] leading-snug")}>{note}</span>}
       </span>
+      {value != null && <span className={cx(tone.muted, "max-w-[40%] truncate text-right text-[14px]")}>{value}</span>}
       {chevron && <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />}
     </button>
   );

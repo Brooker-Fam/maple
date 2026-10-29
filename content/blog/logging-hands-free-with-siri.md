@@ -8,36 +8,29 @@ draft: false
 
 Maple's Log works with the Shortcuts app on iPhone. Each shortcut sends one action to the log, such as `pee` or `nurse_left`, and Siri reads out the sentence the log sends back. Saying "Hey Siri, Maple pee" logs a wet diaper with nothing to tap.
 
-To set it up, open Family → Shortcuts & assistants → Claude, ChatGPT and Siri in the app. The sheet that opens has a section called Hands-free with Siri.
+To set it up, tap your avatar in the app, then Settings → Siri & assistants. Maple provides ready-made shortcuts, so you don't need to build the actions yourself.
 
 ## Each person makes a key
 
-Each adult makes their own key, so what their shortcuts log carries their name. Type a name for the key, or leave the field blank for "iPhone Shortcuts", and tap Make a key. The key appears once, under "Your new key · shown once", with a Copy key button. Anyone who has it can log as you, so keep it private.
+Each adult makes their own key, so what their shortcuts log carries their name. Tap Set up Siri, then Copy key. Maple shows this key only during setup. Anyone who has it can access your family's log as you, so keep it private.
 
-Each key in the list shows when it was last used, with a Revoke button beside it. With a revoked key, Siri says "That shortcut isn't connected to Maple's log anymore." Removing someone from the family's log in Family ends their keys at the same time.
+Your Siri keys lists when each key was last used. Remove a key there to disconnect every shortcut using it. Removing someone in Settings → People & permissions ends their keys at the same time.
 
-## Building the first shortcut
+## Add the first shortcut
 
-Under the keys, Set up the shortcut opens these steps for the Shortcuts app.
+Start with Maple status. It reads the latest update without adding an entry.
 
-1. Tap +, and name the shortcut Maple pee.
-2. Add the action Get Contents of URL, and set its URL to this address.
+1. Tap Set up Siri and copy your key.
+2. Tap Download Maple status. Open the downloaded file in Apple Shortcuts, paste your key when asked, and tap Add Shortcut.
+3. Run Maple status once while your phone is unlocked and allow access to Maple. Then say "Hey Siri, Maple status."
 
-   ```
-   https://maplebaby.app/api/maple/quick
-   ```
+The shortcut needs an internet connection. Siri may ask you to unlock your phone. You can also assign a shortcut to the Action Button or add it to your Home Screen.
 
-3. Tap › to show more, and set Method to POST.
-4. Under Headers, add `Authorization` with the value `Bearer` followed by a space and your key.
-5. Set Request Body to JSON and add a Text field with the key `action` and the value `pee`.
-6. Add Get Dictionary Value to get the value for `speak` in Contents of URL.
-7. Add Speak Text with that Dictionary Value.
-
-Try "Hey Siri, Maple pee." For one press with the phone locked, choose it under Settings → Action Button → Shortcut, add it as a Lock Screen control, or set it under Settings → Accessibility → Touch → Back Tap.
+The download contains the actions and Maple's address, with a blank field for your key. Your personal key is added on your device. Advanced setup remains available for building a shortcut manually.
 
 ## The actions and what Siri says
 
-Duplicate the first shortcut for each action, changing its name and the `action` value. The times below are examples.
+Open More Siri commands to download the commands you need, and paste the same key into each. If you return later, you can find the key in the Text action of an installed shortcut. The times below are examples.
 
 | Shortcut | `action` | Siri says |
 | --- | --- | --- |
@@ -69,11 +62,11 @@ There's no pause action. A stop and a new feed within 10 minutes count as one fe
 
 Status reads back the same Last fed and next side that Today shows, for example "Maple last ate 45 minutes ago, starting on the left, so start on the right next. 6 wet and 3 dirty diapers in the last 24 hours." During a feed it says which side she's on and how many minutes in. After a cluster it names the cluster first.
 
-With Warnings & reminders on (Family → On Today), status also names anything urgent and who to call. They're off by default.
+With Warnings & reminders on (Settings → On Today), status also names anything urgent and who to call. They're off by default.
 
-View-only guests can use status and nothing else. Any other action answers "You have view-only access to Maple's log."
+Creating a Siri key requires permission to log. If an existing key's owner becomes a viewer, only status remains available.
 
-People who can log mom's medicines also see a separate Mom meds shortcut in the same sheet. It's set up the same way.
+People who can log mom's medicines can build a Mom meds shortcut using the instructions under Advanced setup.
 
 ## What Maple and Apple receive
 

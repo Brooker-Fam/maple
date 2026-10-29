@@ -1,5 +1,7 @@
 "use client";
 
+import AccountMenu from "./AccountMenu";
+
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeEntry } from "@/lib/maple/describe";
@@ -495,8 +497,8 @@ export default function LogTab({
     <div className="px-4">
       {/* px-1 lines the title up with the section and day titles below it. */}
       <header className="mb-4 px-1 pt-[max(1.25rem,env(safe-area-inset-top))]">
-        <div className="flex min-h-[44px] items-center justify-between gap-3">
-          <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>{title}</h1>
+        <div className="flex min-h-[44px] flex-wrap items-center justify-between gap-3">
+          <h1 className={cx(tone.display, "min-w-0 flex-1 text-[34px] leading-[1.05]")}>{title}</h1>
           <div className="flex items-center gap-1">
             {/* The open date field needs the room at phone width; the trash comes back when it closes. */}
             {!readOnly && <RecentlyRemoved onRestore={touch} hidden={picking} />}
@@ -507,6 +509,7 @@ export default function LogTab({
               open={picking}
               onOpenChange={setPicking}
             />
+            <AccountMenu />
           </div>
         </div>
       </header>

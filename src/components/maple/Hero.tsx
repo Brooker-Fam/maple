@@ -3,6 +3,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { type ReactNode, useLayoutEffect, useState } from "react";
 import { DEFAULT_TZ, localParts } from "@/lib/maple/time";
+import AccountMenu from "./AccountMenu";
 import { useNightActive } from "./nightLook";
 import { cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -266,6 +267,7 @@ export default function Hero() {
         <Sapling leaves={leaves} season={season} fresh={fresh} className="h-[72px] w-[66px]" />
         {night && <PetDog alert={timerRunning} className="absolute bottom-[1px] left-0 h-[20px] w-[33px]" />}
       </button>
+      <AccountMenu />
     </header>
   );
 }

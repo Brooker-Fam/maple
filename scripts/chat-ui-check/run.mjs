@@ -323,7 +323,7 @@ try {
   console.log("PASS charts: metric and range controls, data tables, growth measurements, mobile layout");
 
   await fixture("long");
-  const scroller = page.locator('[aria-label="Chat"] .overflow-y-auto').first();
+  const scroller = page.locator('[aria-label="Chat"] > .overflow-y-auto').first();
   await scroller.evaluate((el) => { el.scrollTop = 100; el.dispatchEvent(new Event("scroll", { bubbles: true })); });
   const before = await scroller.evaluate((el) => el.scrollTop);
   await page.evaluate(() => window.__chatFixture.appendReply());

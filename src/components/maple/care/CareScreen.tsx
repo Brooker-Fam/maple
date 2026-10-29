@@ -1,5 +1,7 @@
 "use client";
 
+import AccountMenu from "../AccountMenu";
+
 import { useState } from "react";
 import { listNotes, planTitle, type PlanView } from "@/lib/maple/care";
 import { MOM_DISCLAIMER } from "@/lib/maple/guidelines";
@@ -82,6 +84,7 @@ function Page({ care }: { care: UseCare }) {
           <Icon name="siren" size={16} />
           Help
         </Button>
+        <AccountMenu />
       </header>
 
       <div className="space-y-3 empty:hidden">

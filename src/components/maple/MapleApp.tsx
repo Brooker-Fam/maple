@@ -55,7 +55,6 @@ const TABS: TabItem[] = [
   { id: "history", label: "History", icon: "history" },
   { id: "moments", label: "Moments", icon: "image" },
   { id: "chat", label: "Chat", icon: "message-square" },
-  { id: "family", label: "Settings", icon: "settings" },
 ];
 
 export default function MapleApp() {

@@ -360,6 +360,7 @@ try {
     await entry.click();
     const detail = page.getByRole("region", { name: "Selected log entries", exact: true });
     const edit = detail.getByRole("button", { name: /^Edit / });
+    await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Selected log entries"]'));
     await edit.focus();
     await page.keyboard.press("Enter");
     const sheet = page.getByRole("dialog", { name: "Edit recorded entry", exact: true });
@@ -482,6 +483,7 @@ try {
       await page.locator(".mp-dial-log").getByRole("button", { name: /Bottle/ }).click();
       const detail = page.getByRole("region", { name: "Selected log entries", exact: true });
       const edit = detail.getByRole("button", { name: /^Edit / });
+      await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Selected log entries"]'));
       await edit.focus();
       const sheet = page.getByRole("dialog", { name: "Edit recorded entry", exact: true });
       if (whileEditing) {

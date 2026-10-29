@@ -105,7 +105,7 @@ function App() {
       me: MEMBER, members: [MEMBER], entries: query.has("missingRecent") ? [] : records.current.filter((entry) => Date.parse(entry.ended_at ?? entry.started_at) >= Date.parse(NOW) - 72 * 3600_000),
       growth: [], care: null, now: snapshotNow, rev: `synthetic-${revision}`,
     },
-    summary: { targets: null, age: { days: 28, dayOfLife: 29 }, teamDiapers: 0 },
+    summary: { targets: null, age: { days: 28, dayOfLife: 29 }, teamDiapers: 0, active: [], today: { tummySec: 0 } },
     api, now, readOnly: MEMBER.role === "viewer", online: true, units: query.has("metric") ? "metric" : "us", isNight: () => false,
     member: () => MEMBER, memberName: () => MEMBER.display_name, memberLabel: () => MEMBER.display_name,
     toast: () => {}, toasts: [], dismissToast: () => {},

@@ -85,7 +85,7 @@ const FAQS: Faq[] = [
     q: "Does it work at night, one-handed?",
     a: [
       [
-        "The logging buttons sit in a dock at the bottom of Today. One tap starts a side or a nap, or logs a diaper at the current time, and holding a button opens the full form. By default the app turns dim amber on black from 8pm to 7am (Family → On this phone → Night look).",
+        "The logging buttons sit in a dock at the bottom of Today. One tap starts a side or a nap, or logs a diaper at the current time, and holding a button opens the full form. By default the app turns dim amber on black from 8pm to 7am (avatar → Settings → Appearance & units → Night look).",
       ],
       [
         "During a feed, the Lantern button on the timer card opens a nearly black full-screen timer. Its buttons each need a half-second hold, and it asks the phone to keep the screen on. On an iPhone, a Siri shortcut can log without touching the screen, as ",

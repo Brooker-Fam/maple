@@ -7,7 +7,8 @@ import { useBabyWords, useFamilyOne } from "../familyWords";
 import { Icon } from "../icons";
 import { LegalLinks } from "../Legal";
 import { useNotifications } from "../notify";
-import { Button, cx, tone } from "../ui";
+import SignOutButton from "../SignOutButton";
+import { cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { DANGER_TEXT, GROUP, Row, Section } from "./parts";
 
@@ -42,20 +43,6 @@ export function DataAndAccount() {
   const w = useBabyWords();
   const notify = useNotifications();
   const [busy, setBusy] = useState(false);
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
-  const guest = state!.me.email.startsWith("invite:");
-  const signOut = async () => {
-    setBusy(true);
-    // This phone stops getting notices first (it tells the server and unsubscribes), while the session still works.
-    await notify.forgetThisPhone({ everywhere: true });
-    try {
-      await api("/api/maple/auth/signout", { method: "POST" });
-    } catch {
-      toast("Couldn't confirm sign-out. Try again.", { tone: "error" });
-    }
-    await refresh();
-    setBusy(false);
-  };
   // What you logged stays in their log; this phone stops its notices first, as signing out does.
   const leave = async () => {
     setBusy(true);
@@ -80,19 +67,8 @@ export function DataAndAccount() {
           </span>
         </a>
         <Row label={<span className="block truncate">Signed in as {memberName(state!.me.email)}</span>}>
-          <button type="button" disabled={busy} onClick={() => guest ? setConfirmSignOut(true) : void signOut()} className={DANGER_TEXT}>
-            Sign out
-          </button>
+          <SignOutButton disabled={busy} className={DANGER_TEXT} />
         </Row>
-        {guest && confirmSignOut && (
-          <div className="space-y-3 px-4 py-3">
-            <p className={cx(tone.body, "text-[15px] leading-relaxed")}>You joined with a one-time link. After signing out, you will need a new invite from a family owner. The link you used cannot sign you in again.</p>
-            <div className="flex gap-2">
-              <Button variant="danger" disabled={busy} onClick={() => void signOut()}>{busy ? "Signing out…" : "Sign out anyway"}</Button>
-              <Button variant="ghost" disabled={busy} onClick={() => setConfirmSignOut(false)}>Stay signed in</Button>
-            </div>
-          </div>
-        )}
         {!one && state!.me.email !== "admin" && (
           <Row label={<span className="block truncate">Leave this family&apos;s log</span>}>
             {leaving ? (

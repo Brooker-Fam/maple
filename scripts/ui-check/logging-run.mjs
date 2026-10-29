@@ -51,6 +51,15 @@ await page.route("**/*", async (route) => {
 });
 const url = "https://logging.example.test";
 const snapshot = () => page.evaluate(() => window.__loggingFixture.snapshot());
+const assertInputValue = async (input, value, message) => {
+  const element = await input.elementHandle();
+  try {
+    await page.waitForFunction(({ element, value }) => element?.value === value, { element, value });
+    assert.equal(await input.inputValue(), value, message);
+  } finally {
+    await element?.dispose();
+  }
+};
 const checks = [];
 const check = async (name, run) => {
   if (process.env.LOGGING_CHECK && !name.includes(process.env.LOGGING_CHECK)) return;
@@ -317,10 +326,10 @@ try {
       await form.getByRole("textbox", { name: "head circumference in inches", exact: true }).fill("13.25");
       for (let i = 0; i < 3; i++) {
         await form.getByRole("radio", { name: "g · cm", exact: true }).click();
-        assert.equal(await form.getByRole("textbox", { name: "grams", exact: true }).inputValue(), "3373", "Viewing lb and oz cannot change a measured gram value");
+        await assertInputValue(form.getByRole("textbox", { name: "grams", exact: true }), "3373", "Viewing lb and oz cannot change a measured gram value");
         await form.getByRole("radio", { name: "lb · in", exact: true }).click();
-        assert.equal(await form.getByRole("textbox", { name: "length in inches", exact: true }).inputValue(), "20.25", "Returning to inches keeps the typed length");
-        assert.equal(await form.getByRole("textbox", { name: "head circumference in inches", exact: true }).inputValue(), "13.25", "Returning to inches keeps the typed head circumference");
+        await assertInputValue(form.getByRole("textbox", { name: "length in inches", exact: true }), "20.25", "Returning to inches keeps the typed length");
+        await assertInputValue(form.getByRole("textbox", { name: "head circumference in inches", exact: true }), "13.25", "Returning to inches keeps the typed head circumference");
       }
       await form.getByRole("button", { name: editing ? "Save" : "Log it", exact: true }).click();
       const call = (await snapshot()).calls.find((x) => x.patch || x.log);

@@ -1,0 +1,16 @@
+{
+  "origin": "https://maplebaby.app",
+  "files": {
+    "maple-status.shortcut": "0e53dee2b335678abfc762ff895f1c50f3bcfdba11aacd644147a8a6933e6035",
+    "maple-pee.shortcut": "bafe09a2a9a2ce3752aa10364a0bf74345359e93a58eed8e827018c18cb7a54b",
+    "maple-poop.shortcut": "6ea8a323f1636e7dc7e3f40c21420cdcf696b4bf25d0699f07fe75df99d0db7e",
+    "maple-both.shortcut": "96aa24de04e8a54f4cbabc998c1cb83281bb68cd4e5619156b909547df93cbb6",
+    "maple-left.shortcut": "b27a6cb6153730637dd8b71efa56bb3206dfd945dbdcd04184c965cce5fa92ee",
+    "maple-right.shortcut": "aba5e3563fcb586bacab055f08024521960777f2f873646aea747fe899c85d1f",
+    "maple-switch.shortcut": "aece096016419adce01d37ff549b9149d695b3b2b031e5f3a072ff5dfe40552c",
+    "maple-back-and-forth.shortcut": "d8b064264b5eea1ef8a83847c780e9825bef553275466b0607b8a0914309f219",
+    "maple-stop.shortcut": "b5797f648245105265b05f92a4670325629e57788ac9bd72eb25ebed22f7da23",
+    "maple-sleep.shortcut": "1915a6b717b0fb1914dfe9fe42442654f3756244a68cd2e64ad398bcf1a2f91d",
+    "maple-awake.shortcut": "d202730923966be6dcae23637a7551b10918322379e715a71183a51770e99f4a"
+  }
+}

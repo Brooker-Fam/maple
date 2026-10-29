@@ -1,5 +1,7 @@
 "use client";
 
+import AccountMenu from "./AccountMenu";
+
 import dynamic from "next/dynamic";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { clockFraction, clockSpans } from "@/lib/maple/clock-spans";
@@ -224,9 +226,12 @@ export default function PatternsTab({
     <div className={cx("px-4 pt-[max(1.25rem,env(safe-area-inset-top))]", VIZ_VARS)}>
       <header className="mb-4 flex items-center justify-between gap-3 px-1">
         <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>{title}</h1>
-        <button type="button" onClick={() => careNav.openDoctor()} aria-label={`For the doctor: ${w.his} pediatrician`} className="mp-pattern-doctor">
-          <Icon name="stethoscope" size={18} /><span>For the doctor</span>
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button type="button" onClick={() => careNav.openDoctor()} aria-label={`For the doctor: ${w.his} pediatrician`} className="mp-pattern-doctor">
+            <Icon name="stethoscope" size={18} /><span className="hidden min-[390px]:inline">For the doctor</span>
+          </button>
+          <AccountMenu />
+        </div>
       </header>
       {below}
 

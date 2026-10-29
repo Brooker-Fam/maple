@@ -109,6 +109,9 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: pnpm check:maple-ui-review
+      - name: Check account menu, settings and Siri setup
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm check:maple-settings-ui
       - name: Check failed saves and family changes
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:
@@ -131,6 +134,7 @@ jobs:
             test-results/maple-shared-ui
             test-results/maple-logging-ui
             test-results/maple-settings-ui
+            test-results/settings-ui
             test-results/maple-moments-ui
             test-results/maple-care-ui
             test-results/maple-notification-recovery

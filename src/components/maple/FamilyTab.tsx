@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
+import AccountMenu from "./AccountMenu";
 import { useCareNav } from "./care/CareNav";
 import { useCare } from "./care/useCare";
 import { ChatCareRow } from "./chat/ChatTerms";
@@ -28,7 +29,7 @@ const PAGES = {
   "medical-records": "Medical records",
   today: "On Today",
   appearance: "Appearance & units",
-  assistants: "Shortcuts & assistants",
+  assistants: "Siri & assistants",
   chat: "Chat privacy",
   account: "Sign-in & account",
   about: "About Maple",
@@ -42,7 +43,7 @@ function pageFromHash(): Page | null {
 }
 
 export default function FamilyTab() {
-  const { state, readOnly, auth } = useMaple();
+  const { state, readOnly, auth, units } = useMaple();
   const medicalRecordsAvailable = useMedicalRecordsAvailable();
   const care = useCare();
   const nav = useCareNav();
@@ -111,8 +112,8 @@ export default function FamilyTab() {
     else window.location.assign("#family");
     fromIndex.current = false;
   };
-  const row = (target: Page, icon: IconName, note?: string) => allowed(target) && (
-    <ActionRow key={target} icon={icon} label={PAGES[target]} note={note} chevron onClick={() => open(target)} />
+  const row = (target: Page, icon: IconName, value?: string, note?: string) => allowed(target) && (
+    <ActionRow key={target} icon={icon} label={PAGES[target]} value={value} note={note} chevron onClick={() => open(target)} />
   );
   const screens: Record<Page, ReactNode> = {
     people: <PeopleSettings />,
@@ -126,41 +127,49 @@ export default function FamilyTab() {
     account: <><SignInMethods memberId={state.me.email} /><DataAndAccount /></>,
     about: <About />,
   };
+  const pageHeading = <h1 ref={heading} tabIndex={-1} className={cx(tone.display, "min-w-0 text-[34px] leading-[1.1] outline-none")}>{active ? PAGES[active] : "Settings"}</h1>;
 
   return (
     <SettingsDraftContext.Provider value={registerDraft}>
       <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8">
-        <header className="px-1">
-          {active && <button type="button" onClick={back} className="-ml-2 mb-2 flex min-h-[44px] items-center gap-1 rounded-xl px-2 text-[15px] font-semibold text-mp-accent-fg"><Icon name="chevron-left" size={18} />Settings</button>}
-          <h1 ref={heading} tabIndex={-1} className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05] outline-none")}>{active ? PAGES[active] : "Settings"}</h1>
+        <header className="space-y-2 px-1">
+          <div className="flex min-h-[44px] items-center justify-between gap-3">
+            {active
+              ? <button type="button" onClick={back} className="-ml-2 flex min-h-[44px] items-center gap-1 rounded-xl px-2 text-[15px] font-semibold text-mp-accent-fg"><Icon name="chevron-left" size={18} />Settings</button>
+              : pageHeading}
+            <AccountMenu />
+          </div>
+          {active && pageHeading}
         </header>
 
         <div hidden={!!active} className="space-y-6">
-          <Section title="Family">
+          <Section title="Your account">
             <div className={GROUP}>
-              {row("people", "users", "Who's in the log and what they can see")}
-              {row("baby", "baby", "Name, birth details and growth charts")}
-              {row("doctor", "stethoscope", "Phone numbers and your pediatrician's plan")}
-              {medicalRecordsAvailable && row("medical-records", "download", "Import growth measurements from MyChart")}
-              {row("today", "house", "Logging buttons, warnings and reminders")}
+              {row("account", "key-round", undefined, "Sign-in methods and data export")}
+              {row("assistants", "message-square", undefined, "Hands-free logging and connected apps")}
+              {row("chat", "lock", undefined, "Access to your recovery page")}
             </div>
           </Section>
-          <Section title="This phone">
+          <Section title="This device">
             <div className={GROUP}>
               <NotificationsRow />
-              {row("appearance", "sun", "Theme, night look and measurement units")}
+              {row("appearance", "sun", units === "metric" ? "Metric" : "US units")}
             </div>
           </Section>
-          <Section title="Account & help">
+          <Section title="Your family" action={<span className={cx(tone.faint, "text-[13px]")}>Shared settings</span>}>
             <div className={GROUP}>
-              {row("account", "key-round", "Sign-in methods, download and sign out")}
-              {row("assistants", "message-square", "Claude, ChatGPT and Siri")}
-              {row("chat", "lock", "Let the chat read your recovery page")}
-              <ActionRow icon="life-buoy" label="Help and doctor numbers" note="Warning signs, call buttons and support" chevron onClick={nav.openHelp} />
-              {row("about", "info", "Feedback, terms and privacy")}
+              {row("baby", "baby", state.baby.nickname || state.baby.name)}
+              {row("people", "users", `${state.members.length} ${state.members.length === 1 ? "person" : "people"}`)}
+              {row("doctor", "stethoscope")}
+              {medicalRecordsAvailable && row("medical-records", "download", "MyChart")}
+              {row("today", "house", undefined, "Logging buttons and reminders")}
             </div>
           </Section>
-          {auth?.metricsAdmin && <Section title="Administration"><Link href="/maple/admin" className={cx(GROUP, tone.row, "min-h-[60px] text-mp-accent-fg")}><Icon name="chart-column" size={20} /><span className="flex-1 text-[15px] font-medium">Site metrics</span><Icon name="chevron-right" size={18} /></Link></Section>}
+          <div className={cx(tone.divide, "border-t border-mp-line")}>
+            <ActionRow icon="life-buoy" label="Help and doctor numbers" chevron onClick={nav.openHelp} />
+            {row("about", "info", undefined, "Feedback, terms and privacy")}
+            {auth?.metricsAdmin && <Link href="/maple/admin" className={cx(tone.row, "min-h-[52px]")}><Icon name="chart-column" size={20} className="text-mp-ink-2" /><span className="flex-1 text-[15px] text-mp-ink">Site metrics</span><Icon name="chevron-right" size={18} className="text-mp-ink-3" /></Link>}
+          </div>
           <p className={cx(tone.faint, "px-4 text-center text-xs leading-relaxed")}>{DISCLAIMER}</p>
         </div>
 

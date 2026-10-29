@@ -1,5 +1,7 @@
 "use client";
 
+import AccountMenu from "./AccountMenu";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { statsFor } from "@/lib/maple/insights";
 import { milestoneLabel, milestonesFor, monthlyId, monthlyNumber } from "@/lib/maple/milestones";
@@ -128,13 +130,15 @@ export default function MomentsTab() {
       <header className="mb-5 px-1 pt-[max(1.25rem,env(safe-area-inset-top))]">
         <div className="flex min-h-[44px] items-center justify-between gap-3">
           <h1 className={cx(tone.display, "text-[34px] leading-[1.05]")}>Moments</h1>
-          {/* The empty scrapbook has its own "Add a photo"; one invitation is enough. */}
-          {!viewer && moments?.length !== 0 && (
-            <Button className="shrink-0" onClick={() => add()} aria-label="Add a moment">
-              <Icon name="plus" size={18} strokeWidth={2.25} />
-              Add
-            </Button>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {!viewer && moments?.length !== 0 && (
+              <Button className="shrink-0" onClick={() => add()} aria-label="Add a moment">
+                <Icon name="plus" size={18} strokeWidth={2.25} />
+                Add
+              </Button>
+            )}
+            <AccountMenu />
+          </div>
         </div>
       </header>
 

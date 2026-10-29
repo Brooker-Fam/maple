@@ -49,7 +49,7 @@ export default function Privacy() {
       </p>
       <p>
         Maple keeps records connecting verified sign-in methods to your member account, so those methods open the same family
-        memberships. You can connect another email address or Apple account from Family settings while signed in. This does
+        memberships. You can connect another email address or Apple account from Settings while signed in. This does
         not combine separate family logs or give you access to someone else&rsquo;s membership.
       </p>
       <p>
@@ -301,8 +301,8 @@ export default function Privacy() {
       <h3>Siri</h3>
       <p>
         A Siri shortcut uses a personal key you make in Maple and sends short actions such as &ldquo;pee&rdquo; or
-        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. Revoke the key in Maple (Family &rarr;
-        Shortcuts &amp; assistants) to stop it.
+        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. Remove the key in Maple (avatar &rarr; Settings &rarr;
+        Siri &amp; assistants &rarr; Your Siri keys) to stop it.
       </p>
 
       <h2>Notifications</h2>
@@ -325,7 +325,7 @@ export default function Privacy() {
         Your log stays until you ask for it to be deleted. Email{" "}
         <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> from an address in your family&rsquo;s log, and the log, its
         photos, chats and members are deleted within 30 days. Copies in the database host&rsquo;s short-term backups expire on
-        their own after that. First, you can download every entry in the baby&rsquo;s log as a CSV from Family &rarr; Data &amp;
+        their own after that. First, you can download every entry in the baby&rsquo;s log as a CSV from Settings &rarr; Sign-in &amp;
         account; mom&rsquo;s page and photos aren&rsquo;t in that file. Sign-in records needed for another family you still
         belong to are kept for that access. To delete your account&rsquo;s sign-in records or leave the waitlist, email the
         same address.

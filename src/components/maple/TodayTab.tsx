@@ -4,6 +4,7 @@ import { AnimatePresence } from "framer-motion";
 import { useEffect, useRef } from "react";
 import { dayKey, formatClock, formatDuration } from "@/lib/maple/time";
 import AlertStack from "./AlertCard";
+import AccountMenu from "./AccountMenu";
 import type { NavTarget } from "./AppNav";
 import { babyFirstName, useBabyWords } from "./familyWords";
 import Celebrations from "./Celebrations";
@@ -38,10 +39,15 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   return (
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
       {timing && <TitleTicker />}
+      {(!born || timing) && (
+        <header className="flex min-h-[44px] items-center justify-between gap-3 px-1">
+          {born ? <h1 className={cx(tone.display, "min-w-0 truncate text-[34px] leading-[1.05]")}>{state.baby.name}</h1> : <p className={cx(tone.display, "text-[34px] leading-[1.05]")}>Today</p>}
+          <AccountMenu />
+        </header>
+      )}
       {born ? (
         timing ? (
-          // The hero folds away while a timer runs; her name stays the page's heading.
-          <h1 className="sr-only">{state.baby.name}</h1>
+          null
         ) : (
           <Hero />
         )

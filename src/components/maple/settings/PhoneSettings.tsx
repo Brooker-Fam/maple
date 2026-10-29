@@ -32,60 +32,72 @@ export default function PhoneSettings() {
   }, []);
 
   return (
-    <Section title="On this phone" id="phone-preferences">
-      <div className={GROUP}>
-        <SegmentRow label="Units">
-          <Segmented
-            value={units}
-            onChange={setUnits}
-            options={[
-              { value: "us", label: "lb · oz · °F" },
-              { value: "metric", label: "kg · ml · °C" },
-            ]}
-          />
-        </SegmentRow>
-        <SegmentRow
-          label="Night look"
-          note={
-            night === "auto"
-              ? "Dim amber from 8pm to 7am, easy on sleepy eyes."
-              : night === "always"
-                ? "Dim amber all the time."
-                : "Follows the light or dark theme below."
-          }
-        >
-          <Segmented<NightPref>
-            value={night}
-            onChange={setNight}
-            options={[
-              { value: "auto", label: "Auto" },
-              { value: "always", label: "Always" },
-              { value: "off", label: "Off" },
-            ]}
-          />
-        </SegmentRow>
-        <SegmentRow label="Theme">
-          <Segmented
-            value={theme}
-            onChange={setTheme}
-            options={[
-              { value: "light", label: "Light" },
-              { value: "system", label: "Auto" },
-              { value: "dark", label: "Dark" },
-            ]}
-          />
-        </SegmentRow>
-        {!standalone && (
-          <div className="flex gap-3 px-4 py-3.5">
-            <Icon name="share" size={20} className="mt-0.5 shrink-0 text-mp-accent-fg" />
-            <p className={cx(tone.muted, "text-sm leading-relaxed")}>
-              <strong className="font-semibold text-mp-ink">Add Maple&apos;s Log to your Home Screen</strong> for one-tap logging. On iPhone, open
-              this page in Safari, tap <strong className="font-semibold text-mp-ink">Share</strong>, then{" "}
-              <strong className="font-semibold text-mp-ink">Add to Home Screen</strong>.
-            </p>
-          </div>
-        )}
-      </div>
-    </Section>
+    <>
+      <Section title="Appearance" id="phone-preferences">
+        <div className={GROUP}>
+          <SegmentRow label="Theme">
+            <Segmented
+              aria-label="Theme"
+              value={theme}
+              onChange={setTheme}
+              options={[
+                { value: "light", label: "Light" },
+                { value: "system", label: "System" },
+                { value: "dark", label: "Dark" },
+              ]}
+            />
+          </SegmentRow>
+          <SegmentRow
+            label="Night look"
+            note={
+              night === "auto"
+                ? "Switches to dim amber from 8pm to 7am."
+                : night === "always"
+                  ? "Uses dim amber instead of your theme."
+                  : "Uses your theme throughout the day and night."
+            }
+          >
+            <Segmented<NightPref>
+              aria-label="Night look"
+              value={night}
+              onChange={setNight}
+              options={[
+                { value: "auto", label: "Auto" },
+                { value: "always", label: "Always" },
+                { value: "off", label: "Off" },
+              ]}
+            />
+          </SegmentRow>
+        </div>
+      </Section>
+      <Section title="Measurements" footnote="These preferences stay on this device. Everyone else keeps their own.">
+        <div className={GROUP}>
+          <SegmentRow label="Units">
+            <Segmented
+              aria-label="Measurement units"
+              value={units}
+              onChange={setUnits}
+              options={[
+                { value: "us", label: "lb · oz · °F" },
+                { value: "metric", label: "kg · ml · °C" },
+              ]}
+            />
+          </SegmentRow>
+        </div>
+      </Section>
+      {!standalone && (
+        <details className="group border-t border-mp-line">
+          <summary className="flex min-h-[52px] cursor-pointer list-none items-center gap-3 px-1 text-[15px] text-mp-ink [&::-webkit-details-marker]:hidden">
+            <Icon name="share" size={20} className="shrink-0 text-mp-ink-2" />
+            <span className="flex-1">Add Maple to your Home Screen</span>
+            <Icon name="chevron-down" size={18} className="shrink-0 text-mp-ink-3 group-open:rotate-180" />
+          </summary>
+          <p className={cx(tone.muted, "px-1 pb-3 text-sm leading-relaxed")}>
+            On iPhone, open Maple in Safari, tap <strong className="font-semibold text-mp-ink">Share</strong>, then{" "}
+            <strong className="font-semibold text-mp-ink">Add to Home Screen</strong>.
+          </p>
+        </details>
+      )}
+    </>
   );
 }
