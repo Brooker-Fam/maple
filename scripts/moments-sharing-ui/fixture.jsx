@@ -21,7 +21,11 @@ function Fixture() {
       const patch = JSON.parse(options.body);
       calls.current.push({ patch });
       if (window.__failSave) throw new ApiError("Synthetic failure", 503, {});
-      if (window.__conflict) throw new ApiError("Changed", 409, { entry: { ...original, updated_at: "2026-10-28T13:31:00.000Z", data: { ...original.data, title: "Latest family caption" } }, reason: "changed" });
+      if (window.__conflict) {
+        const latest = { ...original, updated_at: "2026-10-28T13:31:00.000Z", data: { ...original.data, title: "Latest family caption" } };
+        setRecord(latest);
+        throw new ApiError("Changed", 409, { entry: latest, reason: "changed" });
+      }
       const next = { ...record, ...patch, data: { ...record.data, ...patch.data }, updated_at: "2026-10-28T13:32:00.000Z" };
       setRecord(next);
       return { entry: next };

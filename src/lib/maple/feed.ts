@@ -1022,7 +1022,7 @@ export function switchTo(
       flags.resided = true;
       tap = { ...last, side };
     } else {
-      if (t - O.start < 15 * SEC && P && P.end === O.start && P.side === side) {
+      if (!opts.explicit && t - O.start < 15 * SEC && P && P.end === O.start && P.side === side) {
         S.pop();
         P.end = null;
         flags.reverted = true;

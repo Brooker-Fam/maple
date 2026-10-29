@@ -10,6 +10,7 @@ import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Chip, Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
   AssessmentCard,
   ContextNote,
@@ -77,13 +78,14 @@ const typeOf = (d: { pee?: boolean; poop?: boolean }): Type => (d.pee && d.poop 
 
 export default function DiaperSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <DiaperForm key={n} {...props} />;
+  return <DiaperForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, clock, age, now } = useSheetBase();
   const voice = useVoice();
   const e = entry?.kind === "diaper" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const d: Partial<DiaperData> = e?.data ?? {};
 
   const [type, setType] = useState<Type>(() => {
@@ -111,7 +113,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const flag = !poop || !color ? null : info?.group === "pale" ? PALE_STOOL : info?.group === "red" ? RED_STOOL : color === "black" && age && age.dayOfLife >= 5 ? lateBlackStool(voice) : null;
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || changed) return;
     setBusy(true);
     try {
       const data = {
@@ -123,14 +125,16 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
         rash: rash || undefined,
       };
       if (e) {
+        const at = when ?? now();
         const res = await update(
           e.id,
           {
+            expect_updated_at: e.updated_at,
             data: withNulls(data, ["color", "texture", "size", "rash"]),
-            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            started_at: at.getTime() !== Date.parse(e.started_at) ? at.toISOString() : undefined,
             note: note.trim() || null,
           },
-          { toast: `${TYPE_TOAST[type]} updated` }
+          { toast: `${TYPE_TOAST[type]} updated`, onConflict }
         );
         if (res) onClose();
         return;
@@ -166,7 +170,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || (!!e && e.id < 0)}
+            disabled={changed || timeInvalid || (!!e && e.id < 0)}
             hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
           />
         </fieldset>
@@ -174,6 +178,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
 
         <Segmented<Type>
           value={type}

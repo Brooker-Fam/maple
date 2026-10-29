@@ -127,7 +127,9 @@ const cases = [
     await page.evaluate(() => { window.__conflict = true; }); await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await page.getByText("Someone changed this moment while you were editing.", { exact: false }).waitFor();
     assert.equal(await page.getByRole("textbox", { name: "Title", exact: true }).inputValue(), "My conflicting draft"); assert.equal(discarded.length, 0);
-    await page.getByRole("button", { name: "Discard draft and load latest", exact: true }).click();
+    assert(await page.getByRole("button", { name: "Save changes", exact: true }).isDisabled());
+    assert.equal(await page.locator('[aria-label="Uploaded"]').count(), 2);
+    await page.getByRole("button", { name: "Discard draft and use latest", exact: true }).click();
     assert.equal(await page.getByRole("textbox", { name: "Title", exact: true }).inputValue(), "Latest family caption");
     await page.waitForFunction(() => document.querySelectorAll('[aria-label="Uploaded"]').length === 2);
     assert.equal(discarded.flat().length, 2); assert(discarded.flat().every((url) => url.includes("synthetic.private.blob")));

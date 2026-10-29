@@ -21,6 +21,7 @@ import { Icon } from "../icons";
 import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import { ContextNote, Label, LoggedBy, NoteField, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase, withNulls } from "./parts";
 
 /**
@@ -47,7 +48,7 @@ function herPlanNamed(name: string, plans: CarePlan[]): CarePlan | undefined {
 
 export default function MedSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <MedForm key={n} {...props} />;
+  return <MedForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function MedForm({ open, onClose, entry, preset }: SheetProps) {
@@ -55,6 +56,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   const w = useBabyWords();
   const voice = useVoice();
   const e = entry?.kind === "med" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const care = useCare();
   const careNav = useCareNav();
 
@@ -107,7 +109,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || changed) return;
     setBusy(true);
     try {
       const n = name.trim();
@@ -118,11 +120,12 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
         const res = await update(
           e.id,
           {
+            expect_updated_at: e.updated_at,
             data: withNulls(data, ["dose"]),
-            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            started_at: !when || when.getTime() !== Date.parse(e.started_at) ? (when ?? now()).toISOString() : undefined,
             note: noteVal,
           },
-          { toast: `${n} updated` }
+          { toast: `${n} updated`, onConflict }
         );
         if (res) onClose();
         return;
@@ -160,7 +163,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || !name.trim() || (!!e && e.id < 0)}
+            disabled={changed || timeInvalid || !name.trim() || (!!e && e.id < 0)}
             hint={!name.trim() ? "What was it?" : undefined}
           />
         </fieldset>
@@ -168,6 +171,7 @@ function MedForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
 
         <div>
           <Label>What</Label>

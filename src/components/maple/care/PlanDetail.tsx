@@ -8,7 +8,7 @@ import { Icon } from "../icons";
 import { RecordedTimeField } from "../TimeField";
 import { Label, NoteField, SheetFooter, useOpenCount } from "../sheets/parts";
 import { Button, Chip, Segmented, Sheet, cx, tone } from "../ui";
-import { ApiError, useMaple, useNow } from "../useMaple";
+import { ApiError, useMaple } from "../useMaple";
 import { useDraftChanged } from "../useDraftChanged";
 import CareHistorySheet from "./CareHistorySheet";
 import { useCareNav } from "./CareNav";
@@ -164,7 +164,6 @@ function DoseEdit(props: { open: boolean; dose: DoseEntry | null; plan: CarePlan
 
 function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose: DoseEntry; plan: CarePlan; care: UseCare; onClose: () => void }) {
   const { state, memberLabel } = useMaple();
-  const now = useNow(30_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const [when, setWhen] = useState(new Date(dose.at));
   const [timeInvalid, setTimeInvalid] = useState(false);
@@ -242,7 +241,7 @@ function DoseEditForm({ open, dose, plan, care, onClose }: { open: boolean; dose
             { value: "skipped", label: "Skipped" },
           ]}
         />
-        <RecordedTimeField label={skipped ? "Skipped at" : "Taken at"} value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} max={new Date(now.getTime() + 60_000)} />
+        <RecordedTimeField label={skipped ? "Skipped at" : "Taken at"} value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
         {counted && !skipped && plan.limit_unit && (
           <div>
             <Label>How many {plan.limit_unit}</Label>

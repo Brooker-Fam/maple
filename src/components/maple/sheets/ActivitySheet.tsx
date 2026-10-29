@@ -10,6 +10,7 @@ import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Sheet, TimeRange, WhenField, cx, tone } from "../ui";
 import { useNow } from "../useMaple";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import { ContextNote, Label, LoggedBy, NoteField, RunningNote, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase } from "./parts";
 
 /**
@@ -22,13 +23,15 @@ const BATH_MINUTES = [5, 10, 15, 20, 30];
 
 export default function ActivitySheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return props.kind === "bath" ? <BathForm key={n} {...props} /> : <TummyForm key={n} {...props} />;
+  const key = `${n}-${props.entry?.updated_at ?? "new"}`;
+  return props.kind === "bath" ? <BathForm key={key} {...props} /> : <TummyForm key={key} {...props} />;
 }
 
 function TummyForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, summary, log, update, remove, now, ageDays, age } = useSheetBase();
   const voice = useVoice();
   const e = entry?.kind === "tummy" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const running = !!e?.active;
   const [range, setRange] = useState<[Date, Date]>(() => {
     if (e) {
@@ -49,7 +52,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
   const soFar = Math.round((summary?.today.tummySec ?? 0) / 60);
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || changed) return;
     setBusy(true);
     try {
       const noteVal = note.trim() || null;
@@ -61,7 +64,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
               ended_at: end.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : NaN) ? end.toISOString() : undefined,
               note: noteVal,
             };
-        const res = await update(e.id, patch, { toast: "Tummy time updated" });
+        const res = await update(e.id, { ...patch, expect_updated_at: e.updated_at }, { toast: "Tummy time updated", onConflict });
         if (res) onClose();
         return;
       }
@@ -96,7 +99,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || (!!e && e.id < 0)}
+            disabled={changed || timeInvalid || (!!e && e.id < 0)}
             hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
           />
         </fieldset>
@@ -104,6 +107,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
         {running ? (
           <RunningNote kind="tummy" />
         ) : (
@@ -121,6 +125,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, now, clock } = useSheetBase();
   const current = useNow(30_000);
   const e = entry?.kind === "bath" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [minutes, setMinutes] = useState<number | null>(() =>
     e?.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / MIN : null
@@ -140,7 +145,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   const inFuture = !!end && end.getTime() > current.getTime() + MIN;
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || changed) return;
     setBusy(true);
     try {
       const { start, end } = times();
@@ -150,11 +155,12 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
         const res = await update(
           e.id,
           {
+            expect_updated_at: e.updated_at,
             started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
             ended_at: (end?.toISOString() ?? null) !== e.ended_at ? end?.toISOString() ?? null : undefined,
             note: noteVal,
           },
-          { toast: "Bath updated" }
+          { toast: "Bath updated", onConflict }
         );
         if (res) onClose();
         return;
@@ -190,7 +196,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || (!!e && e.id < 0) || inFuture}
+            disabled={changed || timeInvalid || (!!e && e.id < 0) || inFuture}
             hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : inFuture ? "That ends in the future. Choose an earlier start or a shorter length." : undefined}
           />
         </fieldset>
@@ -198,6 +204,7 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
         <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
         <div>
           <Label optional>How long</Label>

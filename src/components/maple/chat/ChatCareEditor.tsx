@@ -18,7 +18,7 @@ import { useDraftChanged } from "../useDraftChanged";
 /** The same version-checked care actions used on her page, including old entries outside its recent window. */
 export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; onClose: () => void }) {
   const care = useCare();
-  const { state, units, online, now } = useMaple();
+  const { state, units, online } = useMaple();
   // A preference change elsewhere cannot reinterpret an amount already being edited.
   const [editUnits] = useState(units);
   const [when, setWhen] = useState(new Date(entry.at));
@@ -70,7 +70,7 @@ export default function ChatCareEditor({ entry, onClose }: { entry: CareEntry; o
     </div>
   }>
     <fieldset disabled={busy} className="space-y-4">
-      <RecordedTimeField label={entry.kind === "dose" ? entry.data.skipped ? "Skipped at" : "Taken at" : entry.kind === "food" ? "Eaten at" : entry.kind === "drink" ? "Drank at" : "Recorded at"} value={when} onChange={setWhen} onInvalidChange={setInvalid} tz={state?.baby.timezone ?? "America/New_York"} max={new Date(now().getTime() + 60_000)} />
+      <RecordedTimeField label={entry.kind === "dose" ? entry.data.skipped ? "Skipped at" : "Taken at" : entry.kind === "food" ? "Eaten at" : entry.kind === "drink" ? "Drank at" : "Recorded at"} value={when} onChange={setWhen} onInvalidChange={setInvalid} tz={state?.baby.timezone ?? "America/New_York"} />
       {entry.kind === "temp" && <label className={cx(tone.body, "block space-y-2 text-[15px]")}><span>Temperature (°{editUnits === "us" ? "F" : "C"})</span><input inputMode="decimal" type="number" step="0.1" value={temperature} onChange={(event) => setTemperature(event.target.value)} className={tone.input} /></label>}
       {assessment && <AssessmentCard a={forMom(assessment, care.name, care.self)} audience="mom" />}
       {entry.kind === "question" && <label className={cx(tone.body, "block space-y-2 text-[15px]")}><span>Question for her OB</span><textarea value={text} onChange={(event) => setText(event.target.value)} maxLength={2000} rows={4} className={tone.input} /></label>}

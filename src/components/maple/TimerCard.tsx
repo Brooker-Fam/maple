@@ -228,7 +228,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
               </button>
               <AnimatePresence>
                 {menuOpen && !pending && (
-                  <TimerMenu key="menu" entry={entry} n={n} close={() => setMenuOpen(false)} actions={actions} confirm={discardQuestion} onInfo={() => clusterInfo.open()} />
+                  <TimerMenu key="menu" entry={entry} n={n} close={() => setMenuOpen(false)} actions={actions} confirm={discardQuestion} onInfo={() => clusterInfo.open()} onSwitchEarlier={() => openFix("current", "switch")} />
                 )}
               </AnimatePresence>
             </div>
@@ -262,6 +262,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
           tz={tz}
           onSnooze={snooze}
           onEarlier={() => openFix("current", "finished")}
+          onSwitchEarlier={() => openFix("current", "switch")}
           onBackOn={() => openFix("current", "backOn")}
           onDone={() => void actions.stop(entry)}
           stale={entry.kind === "feed" && n.paused && staleFeed(entry as Entry & { data: FeedData }, now)}
@@ -340,6 +341,7 @@ function TimerMenu({
   actions,
   confirm,
   onInfo,
+  onSwitchEarlier,
 }: {
   entry: Entry;
   n: TimerNumbers;
@@ -347,6 +349,7 @@ function TimerMenu({
   actions: Actions;
   confirm: string | null;
   onInfo: () => void;
+  onSwitchEarlier: () => void;
 }) {
   const w = useBabyWords();
   const ref = useRef<HTMLDivElement>(null);
@@ -392,6 +395,14 @@ function TimerMenu({
         </div>
       ) : (
         <>
+          {entry.kind === "feed" && n.parts.length > 0 && !n.paused && !n.both && (
+            <MenuItem
+              icon="arrow-left-right"
+              label="Switch earlier"
+              sub="Record when you changed sides"
+              onClick={() => { close(); onSwitchEarlier(); }}
+            />
+          )}
           {entry.kind === "feed" && n.parts.length > 0 &&
             (n.both ? (
               <>
@@ -482,6 +493,7 @@ function ForgottenPrompt({
   tz,
   onSnooze,
   onEarlier,
+  onSwitchEarlier,
   onBackOn,
   onDone,
   stale,
@@ -494,6 +506,7 @@ function ForgottenPrompt({
   tz: string;
   onSnooze: () => void;
   onEarlier: () => void;
+  onSwitchEarlier: () => void;
   onBackOn: () => void;
   onDone: () => void;
   /** On a break over an hour (staleFeed, the dock's "New feed"): the next latch is a new feed, so ending this one leads. */
@@ -575,11 +588,16 @@ function ForgottenPrompt({
     <div className={className}>
       <p className={cx(tone.heading, "text-[22px] leading-tight")}>{question}</p>
       <p className="mt-1 text-sm text-mp-ink-2 tabular-nums">{sub}</p>
+      {isFeed && !n.both && (
+        <Button size="lg" disabled={disabled} onClick={onSwitchEarlier} className={cx("mt-3 w-full", btn)}>
+          Switch earlier…
+        </Button>
+      )}
       <div className={cx("flex gap-2", compact ? "mt-3" : "mt-4")}>
         <Button variant="soft" size="lg" onClick={onSnooze} className={cx("flex-1", btn)}>
           Still going
         </Button>
-        <Button size="lg" disabled={disabled} onClick={primary.onClick} className={cx("flex-[1.4]", btn)}>
+        <Button variant={isFeed && !n.both ? "soft" : "primary"} size="lg" disabled={disabled} onClick={primary.onClick} className={cx("flex-[1.4]", btn)}>
           {primary.label}
         </Button>
       </div>

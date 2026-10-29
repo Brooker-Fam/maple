@@ -26,15 +26,21 @@ export default function MomentSheet(props: SheetProps) {
 }
 
 function useMomentSave(moment: Moment | undefined, draft: ReturnType<typeof useMomentDraft>, photos: ReturnType<typeof useMomentPhotos>, onClose: () => void) {
-  const { update, log } = useMaple();
+  const { update, log, now, state } = useMaple();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [conflict, setConflict] = useState<Moment | null>(null);
+  const [received, setConflict] = useState<Moment | null>(null);
+  const live = moment && state?.entries.find((entry): entry is Moment => entry.id === moment.id && entry.kind === "moment");
+  const latest = received && (!live || Date.parse(received.updated_at) >= Date.parse(live.updated_at)) ? received : live;
+  const conflict = moment && latest && Date.parse(latest.updated_at) > Date.parse(moment.updated_at) ? latest : null;
   const save = async () => {
     setSaving(true);
     setError("");
     const data = { title: draft.title.trim() || null, milestone: draft.milestone || null, photos: photos.done.map((item) => item.ref!) };
-    const patch = { started_at: draft.when?.toISOString(), data, note: draft.note.trim() || null };
+    const startedAt = moment
+      ? !draft.when || draft.when.getTime() !== Date.parse(moment.started_at) ? (draft.when ?? now()).toISOString() : undefined
+      : draft.when?.toISOString();
+    const patch = { started_at: startedAt, data, note: draft.note.trim() || null };
     photos.markSaved(true);
     try {
       if (moment) {
@@ -78,7 +84,7 @@ function MomentForm({ open, onClose, entry, preset, onReload }: SheetProps & { o
       {error && <p role="alert" className="text-sm text-mp-danger">{error}</p>}
       {conflict && <div role="alert" className={cx(tone.inset, "space-y-3 p-4")}>
         <p className={cx(tone.body, "text-sm")}>Someone changed this moment while you were editing. Your draft is still here. Load their version to start again.</p>
-        <Button variant="soft" onClick={() => onReload(conflict)}>Discard draft and load latest</Button>
+        <Button variant="soft" onClick={() => onReload(conflict)}>Discard draft and use latest</Button>
       </div>}
       <fieldset disabled={saving} aria-busy={saving} className="min-w-0 space-y-5">
         {moment && <LoggedBy entry={moment} />}

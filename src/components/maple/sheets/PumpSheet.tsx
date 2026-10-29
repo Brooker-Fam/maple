@@ -8,6 +8,7 @@ import { formatDuration } from "@/lib/maple/time";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
 import { Segmented, Sheet, TimeRange } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
   CHECK_NUMBER_HINT,
   LoggedBy,
@@ -34,12 +35,13 @@ const MIN = 60_000;
 
 export default function PumpSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <PumpForm key={n} {...props} />;
+  return <PumpForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, units, log, update, remove, now } = useSheetBase();
   const e = entry?.kind === "pump" ? entry : undefined;
+  const { changed: entryChanged, onConflict, notice } = useSavedEntryConflict(e);
   const running = !!e?.active;
   const metric = units === "metric";
   const toDisplay = (ml: number | undefined) => (ml == null ? null : metric ? Math.round(ml / 5) * 5 : Math.round(mlToOz(ml) * 4) / 4);
@@ -117,7 +119,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const needsSplit = mode === "sides" && totalMl != null && left == null && right == null;
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || entryChanged) return;
     setBusy(true);
     try {
       const noteVal = note.trim() || null;
@@ -141,7 +143,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
               data: Object.keys(changed).length ? changed : undefined,
               note: noteVal,
             };
-        const res = await update(e.id, patch, { toast: "Pump updated" });
+        const res = await update(e.id, { ...patch, expect_updated_at: e.updated_at }, { toast: "Pump updated", onConflict });
         if (res) onClose();
         return;
       }
@@ -178,7 +180,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || (!!e && e.id < 0) || (!running && (checks.invalid || needsSplit))}
+            disabled={entryChanged || timeInvalid || (!!e && e.id < 0) || (!running && (checks.invalid || needsSplit))}
             hint={!running && checks.invalid ? CHECK_NUMBER_HINT : !running && needsSplit ? "Enter each side's amount, or choose Total to keep the combined amount." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
           />
         </fieldset>
@@ -186,6 +188,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
         {running && <RunningNote kind="pump" />}
         {!running && (
           <>

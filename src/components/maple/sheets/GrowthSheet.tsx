@@ -11,6 +11,7 @@ import { useBabyWords } from "../familyWords";
 import { Icon } from "../icons";
 import { Button, Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
   CHECK_NUMBER_HINT,
   ContextNote,
@@ -48,7 +49,7 @@ export default function GrowthSheet(props: SheetProps) {
   if (props.entry?.kind === "growth" && props.entry.source === "epic") {
     return <ImportedGrowth key={n} open={props.open} onClose={props.onClose} entry={props.entry} />;
   }
-  return <GrowthForm key={n} {...props} />;
+  return <GrowthForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 /** Clinical copies stay as received; deleting a copy still uses Maple's usual Undo. */
@@ -81,6 +82,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, units, log, update, remove, now, bornAt, clock, state } = useSheetBase();
   const w = useBabyWords();
   const e = entry?.kind === "growth" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const d: Partial<GrowthData> = e?.data ?? {};
   const [sys, setSys] = useState<UnitSystem>(units);
   const us = sys === "us";
@@ -198,7 +200,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   };
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || changed) return;
     setBusy(true);
     try {
       const noteVal = note.trim() || null;
@@ -213,11 +215,12 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
         const res = await update(
           e.id,
           {
+            expect_updated_at: e.updated_at,
             data: editData(),
-            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            started_at: !when || when.getTime() !== Date.parse(e.started_at) ? (when ?? now()).toISOString() : undefined,
             note: noteVal,
           },
-          { toast: `Updated · ${bits.join(" · ")}${pLine}` }
+          { toast: `Updated · ${bits.join(" · ")}${pLine}`, onConflict }
         );
         if (res) onClose();
         return;
@@ -255,7 +258,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
+            disabled={changed || timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
             hint={
               checks.invalid
                 ? CHECK_NUMBER_HINT
@@ -271,6 +274,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
 
         {/* Each choice keeps enough room for enlarged text on a phone. */}
         <div className="grid gap-3 sm:grid-cols-2">
