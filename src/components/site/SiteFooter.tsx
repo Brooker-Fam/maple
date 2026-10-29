@@ -22,6 +22,9 @@ export default function SiteFooter() {
           </p>
         </div>
         <nav aria-label="Site" className="flex max-w-[30rem] flex-wrap content-start gap-x-6 gap-y-3 text-[15px] text-mp-ink-2">
+          <Link className="site-link-quiet" href="/about">
+            Our story
+          </Link>
           <Link className="site-link-quiet" href="/faq">
             FAQ
           </Link>

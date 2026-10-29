@@ -6,7 +6,7 @@ import { CONTACT_EMAIL } from "@/components/site/legal";
 import { siteOpenGraph } from "@/components/site/meta";
 
 const DESCRIPTION =
-  "Short answers about what Maple costs, who can see your log, what the AI sees, and how to export or delete your data.";
+  "How Maple helps you understand feeding patterns, prepare for doctor visits, and track feeds, diapers, and weight. Plus pricing, privacy, and access.";
 
 export const metadata: Metadata = {
   title: "Questions and answers",
@@ -23,6 +23,50 @@ const MAIL: Linked = { text: CONTACT_EMAIL, href: `mailto:${CONTACT_EMAIL}` };
 
 const FAQS: Faq[] = [
   {
+    id: "patterns",
+    q: "What can Maple help me understand?",
+    a: [
+      [
+        "Maple brings your logged feeds, wet and dirty diapers, and weight records together. In History → Patterns, you can compare days and nights, see when feeds happened, and look back at daily totals and growth. That can help you notice gaps between feeds and follow changes to your routine. The picture comes from what you log.",
+      ],
+    ],
+  },
+  {
+    id: "doctor-visits",
+    q: "Can I bring Maple to a doctor’s appointment?",
+    a: [
+      [
+        "Yes. For the doctor keeps your questions and a visit summary in one place. You can copy the summary to share, review the recorded feeds and diapers, and open the growth chart. You can also save what the doctor said alongside a question.",
+      ],
+      [
+        "At Maple’s six-day appointment, our family could share direct data about her feeding patterns. Read ",
+        { text: "our story", href: "/about" },
+        " for how that helped us understand what to change.",
+      ],
+    ],
+  },
+  {
+    id: "breastfeeding",
+    q: "How did Maple help your family with breastfeeding?",
+    a: [
+      [
+        "Maple’s weight was down at her six-day appointment. Looking through our log helped us see that we were going too long between certain feeds, and when those gaps happened. We changed our routine and tracked feeds, wet and dirty diapers, and weight. Her weight went up, and she’s doing great. We had wondered whether we might need to supplement with formula; for our family, understanding those patterns helped breastfeeding work.",
+      ],
+      [
+        "That’s our family’s experience. Maple keeps records you can discuss with your pediatrician or lactation consultant; your feeding plan comes from them.",
+      ],
+    ],
+  },
+  {
+    id: "feeding-options",
+    q: "Can I use Maple for bottles or combination feeding?",
+    a: [
+      [
+        "Yes. Maple records nursing, bottles of expressed milk or formula, and pumping. Nursing and bottles appear together in your feeding history, so you can follow the routine your family uses.",
+      ],
+    ],
+  },
+  {
     id: "free",
     q: "Is Maple free?",
     a: [
@@ -38,9 +82,9 @@ const FAQS: Faq[] = [
     q: "Can I sign up?",
     a: [
       [
-        "Not yet. One family uses Maple today. ",
-        { text: "Join the waitlist", href: "/waitlist" },
-        " and you’ll hear when Maple opens to more families.",
+        "Visit ",
+        { text: "Get started", href: "/signup" },
+        " for the current sign-up options. When sign-up is closed, you can leave your email there to hear when Maple opens to more families.",
       ],
     ],
   },
@@ -182,7 +226,9 @@ const FAQS: Faq[] = [
     q: "Who builds Maple?",
     a: [
       [
-        "Matt Brooker, a software engineer, made Maple for his own family when his daughter, Maple, was born in October 2026. He and his wife use it every day. The code is open source under the MIT license, on ",
+        "Matt Brooker, a software engineer, made Maple for his own family when his daughter, Maple, was born in October 2026. He and his wife use it every day. ",
+        { text: "Their story", href: "/about" },
+        " explains how understanding Maple’s feeding patterns helped shape the app. The code is open source under the MIT license, on ",
         { text: "GitHub", href: "https://github.com/Brooker-Fam/maple" },
         ".",
       ],

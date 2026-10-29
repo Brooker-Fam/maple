@@ -24,7 +24,7 @@ export default function Pricing() {
           Maple is free while it&rsquo;s in early access.
         </h1>
         <p className="site-prose mt-5 text-[19px] leading-[1.55]">
-          Anyone can sign up. There is no paid plan during the beta.
+          There is no paid plan during the beta. <Link href="/signup" className="site-link">Get started</Link> shows the current sign-up options.
         </p>
 
         <div className="site-legal mt-6">

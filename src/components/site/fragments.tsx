@@ -38,6 +38,19 @@ function Row({ icon, color, title, meta, time }: { icon: IconName; color: string
   );
 }
 
+export function PatternQuestionFragment() {
+  return (
+    <Fragment label="Illustrative sample: asking Maple’s chat how the timing of logged feeds changed this week, alongside the day ribbons in History.">
+      <p className="text-[13px] font-medium text-mp-ink-3">Explore your log with Maple’s chat</p>
+      <div className="mt-4 ml-auto max-w-[90%] rounded-[18px] rounded-br-[6px] bg-mp-accent px-4 py-3 text-[16px] leading-snug text-mp-on-accent">
+        How has the timing of her feeds changed this week?
+      </div>
+      <p className="mt-5 text-[15px] leading-relaxed text-mp-ink-2">Start with the days you want to understand. Ask about feeding times, longer gaps, or changes in the routine you’ve recorded.</p>
+      <p className="mt-4 border-t border-mp-line pt-3 text-[13px] text-mp-ink-3">History → Patterns · Questions about these patterns?</p>
+    </Fragment>
+  );
+}
+
 export function HandoffFragment() {
   return (
     <Fragment label="Sample screen: a 'While you slept' line saying Dad gave a bottle, changed two wet diapers and put June down for a nap, with each entry below it.">

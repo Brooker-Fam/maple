@@ -1,12 +1,24 @@
 ---
 title: Maple's first week
-description: Maple started as a private page on my family's website, for logging my daughter's feeds and diapers. Its commit history shows what came next.
+description: How Maple began, with an October 29 update on the feeding patterns, doctor visit, and changes that helped our family with breastfeeding.
 date: 2026-10-26
 author: Matt Brooker
 draft: false
 ---
 
 Maple's Log is a log for my daughter, Maple, that my wife and I can both write to from our phones.
+
+## Update — October 29, 2026: what the log helped us see
+
+At Maple's six-day appointment, her weight was down. Looking back through Maple Baby helped us understand her feeding patterns. We were going too long between certain feeds, and we could see the times when those gaps were happening.
+
+At the doctor's office, we could share direct data about her feeds. We changed our routine and kept tracking the feeds, wet diapers, dirty diapers, and weight. That gave us a way to follow the changes we were making. Maple's weight went up, and she's doing great.
+
+We had wondered whether we might need to supplement with formula. For our family, understanding those patterns and making changes helped breastfeeding work.
+
+That experience shaped what we want Maple to offer: a clearer picture of your baby's patterns, useful records for appointments, and a way to follow changes over time. The timers and quick logging help make that possible. You can read more on the [Our story page](/about).
+
+The original October 26 account of how we built Maple follows.
 
 ## A page on the family website
 

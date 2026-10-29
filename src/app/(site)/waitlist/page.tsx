@@ -6,7 +6,7 @@ import WaitlistForm from "@/components/site/WaitlistForm";
 import { siteOpenGraph } from "@/components/site/meta";
 import { WAITLIST_ERRORS, type WaitlistError } from "@/lib/waitlist";
 
-const DESCRIPTION = "Leave your email to hear when Maple opens to more families. One family uses Maple today.";
+const DESCRIPTION = "Leave your email to hear when Maple opens to more families, or visit Get started for the current sign-up options.";
 
 export const metadata: Metadata = {
   title: "Waitlist",
@@ -32,7 +32,7 @@ export default async function Waitlist({ searchParams }: { searchParams: Promise
         <p className={`site-prose mt-4 ${error ? "text-mp-danger" : ""}`} role={error ? "alert" : undefined}>
           {joined
             ? "You’ll get one email when Maple opens to more families, and no others."
-            : (error ?? "Maple is open to one family for now. Leave your email to hear when other families can sign up.")}
+            : (error ?? "Leave your email to hear when Maple opens to more families.")}
         </p>
         {!joined && (
           <div className="mt-8">
@@ -40,6 +40,12 @@ export default async function Waitlist({ searchParams }: { searchParams: Promise
           </div>
         )}
         <p className="mt-12 text-[15px]">
+          <Link className="site-link" href="/signup">
+            See current sign-up options
+          </Link>
+          <span className="mx-2 text-mp-ink-3" aria-hidden>
+            ·
+          </span>
           <Link className="site-link" href="/">
             Back to Maple
           </Link>

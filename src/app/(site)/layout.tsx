@@ -13,8 +13,8 @@ const cormorantItalic = Cormorant_Garamond({
   display: "swap",
 });
 
-const TITLE = "Maple | Left boob or right boob?";
-const DESCRIPTION = "A newborn log for both parents' phones. Free in early access.";
+const TITLE = "Maple Baby | Understand your baby’s feeding patterns";
+const DESCRIPTION = "Track feeds, diapers, and weight. See feeding patterns, bring clear records to the doctor, and follow changes with Maple Baby. Free in early access.";
 
 export const metadata: Metadata = {
   title: { default: TITLE, template: "%s | Maple" },

@@ -30,7 +30,7 @@ export function GET() {
     <title>Maple blog</title>
     <link>${MAPLE_ORIGIN}/blog</link>
     <atom:link href="${feed}" rel="self" type="application/rss+xml" />
-    <description>Posts about how Maple, a newborn tracker, works.</description>
+    <description>Our family’s story and ways to understand feeding patterns with Maple Baby.</description>
     <language>en-us</language>
 ${posts[0] ? `    <lastBuildDate>${postInstant(posts[0].date).toUTCString()}</lastBuildDate>\n` : ""}${items}
   </channel>

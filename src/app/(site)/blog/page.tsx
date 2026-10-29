@@ -5,7 +5,7 @@ import SiteHeader from "@/components/site/SiteHeader";
 import { siteOpenGraph } from "@/components/site/meta";
 import { type Post, postDateText, publishedPosts } from "@/lib/blog";
 
-const DESCRIPTION = "Posts by Matt Brooker, who built Maple for his family, about how it works.";
+const DESCRIPTION = "Our family’s story and practical ways to understand feeding patterns, prepare for appointments, and use Maple Baby.";
 
 export const metadata: Metadata = {
   title: "Blog",
@@ -32,7 +32,7 @@ export default function BlogIndex() {
       <main id="main" className="mx-auto w-full max-w-[42rem] px-4 pt-10 pb-20 sm:px-6 sm:pt-16">
         <h1 className="site-display text-[2.75rem] leading-[1.05] text-mp-ink sm:text-[3.5rem]">Blog</h1>
         <p className="site-prose mt-4 text-[19px] leading-[1.6]">
-          Posts by Matt Brooker on how parts of Maple work.
+          Our family’s story, the patterns we noticed, and how to put Maple’s features to use.
         </p>
         {days.map((day) => (
           <section key={day.date} className="mt-12">

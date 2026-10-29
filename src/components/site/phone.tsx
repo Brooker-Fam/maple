@@ -67,6 +67,74 @@ function RecentRow({ icon, color, title, time }: { icon: IconName; color: string
   );
 }
 
+/** A simplified Patterns screen. Every mark and count is fictional sample data. */
+export function PatternsMock() {
+  const days = [
+    { day: "Wed", feeds: [0.5, 3, 5.5, 8, 10.5, 13, 15.5, 18, 21], wet: [2, 6, 9, 13.5, 17, 22], dirty: [6, 13.5, 22] },
+    { day: "Tue", feeds: [1, 3.5, 6, 8.5, 11, 14, 16.5, 19, 22], wet: [1.5, 5, 9, 12, 17, 21], dirty: [5, 12, 21] },
+    { day: "Mon", feeds: [0.5, 6, 8, 10.5, 13.5, 16, 19, 22], wet: [1, 7, 10, 14, 19, 22.5], dirty: [7, 14] },
+  ];
+  const x = (hour: number) => 3 + (hour / 24) * 210;
+
+  return (
+    <div className="flex h-full flex-col gap-2 bg-mp-bg px-3.5 pt-5 pb-4">
+      <div className="flex items-center justify-between px-1">
+        <div>
+          <p className="text-[23px] font-semibold tracking-[-0.03em] text-mp-ink">History</p>
+          <p className="text-[11px] text-mp-ink-3">June&rsquo;s log</p>
+        </div>
+        <span className="rounded-full bg-mp-sunken px-2 py-1 text-[10px] font-medium text-mp-ink-3">Sample data</span>
+      </div>
+      <div className="flex rounded-xl bg-mp-sunken p-1 text-center text-[12px] font-semibold">
+        <span className="flex-1 px-3 py-1.5 text-mp-ink-3">Timeline</span>
+        <span className="flex-1 rounded-lg bg-mp-surface px-3 py-1.5 text-mp-ink">Patterns</span>
+      </div>
+
+      <div className="rounded-[20px] border border-[var(--mp-edge)] bg-mp-surface p-3">
+        <div className="flex items-center justify-between">
+          <p className="text-[14px] font-semibold text-mp-ink">Day ribbons</p>
+          <span className="text-[11px] font-semibold text-mp-accent-fg">Days</span>
+        </div>
+        <div className="mt-2 flex gap-3 text-[10px] text-mp-ink-2">
+          <span className="flex items-center gap-1"><span className="h-2.5 w-1 rounded-sm bg-mp-maple" />Nursing</span>
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: DETAIL_COLOR.pee }} />Wet</span>
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: DETAIL_COLOR.poop }} />Dirty</span>
+        </div>
+        <div className="mt-3 flex justify-between text-[9px] font-medium text-mp-ink-3 tabular-nums">
+          {["12a", "6a", "12p", "6p", "12a"].map((tick, i) => <span key={i}>{tick}</span>)}
+        </div>
+        <div className="mt-1 space-y-1.5">
+          {days.map((day) => (
+            <div key={day.day}>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] font-semibold text-mp-ink">{day.day}</span>
+                <span className="text-[10px] text-mp-ink-3 tabular-nums">{day.feeds.length} feeds · {day.wet.length} wet · {day.dirty.length} dirty</span>
+              </div>
+              <svg viewBox="0 0 216 27" className="mt-1 block h-[22px] w-full" role="presentation">
+                <rect x="0" y="4" width="216" height="15" rx="3" fill="var(--mp-sunken)" />
+                {[6, 12, 18].map((hour) => <line key={hour} x1={x(hour)} x2={x(hour)} y1="0" y2="27" stroke="var(--mp-line)" />)}
+                {day.feeds.map((hour) => <rect key={hour} x={x(hour)} y="2" width="4" height="17" rx="1.5" fill="var(--mp-maple)" />)}
+                {day.wet.map((hour) => <circle key={hour} cx={x(hour)} cy="23" r="2" fill={DETAIL_COLOR.pee} />)}
+                {day.dirty.map((hour) => <circle key={hour} cx={x(hour) + 4} cy="23" r="2" fill={DETAIL_COLOR.poop} />)}
+              </svg>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[10px] leading-snug text-mp-ink-3">Each row is one day, midnight to midnight.</p>
+      </div>
+
+      <div className="rounded-[20px] border border-[var(--mp-edge)] bg-mp-surface p-3">
+        <p className="flex items-center gap-2 text-[13px] font-semibold text-mp-ink">
+          <Icon name="stethoscope" size={17} className="text-mp-accent-fg" />
+          For the doctor
+        </p>
+        <p className="mt-1 text-[11px] leading-snug text-mp-ink-2">Visit summary · questions · growth</p>
+      </div>
+      <p className="mt-auto text-center text-[10px] leading-snug text-mp-ink-3">Counts include only what you log.</p>
+    </div>
+  );
+}
+
 /** Today in the daytime, mid-feed: the hero folds away, the card shows what happened, the dock holds every action. */
 export function TodayMock() {
   return (
