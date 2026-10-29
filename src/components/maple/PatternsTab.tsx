@@ -30,10 +30,10 @@ import { formatTempBoth, formatVolume, formatWeightBoth, formatLengthBoth, mlToO
 import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/maple/types";
 import type { NavTarget } from "./AppNav";
 import { useCareNav } from "./care/CareNav";
-import { NavRow } from "./care/parts";
 import { AskChatCard } from "./chat/AskChat";
 import DayDial from "./DayDial";
 import PatternCircles from "./PatternCircles";
+import { ActivityFilter, type PatternActivity } from "./PatternActivity";
 import { DiaperBrigade } from "./StatusCard";
 import { Icon, KindBadge } from "./icons";
 import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
@@ -107,7 +107,6 @@ const FRAME = { left: 30, right: 4, top: 10, bottom: 18 } as const;
 type Range = "7" | "14" | "30" | "all";
 type RibbonMode = "days" | "nights";
 type PatternView = "clock" | "compare" | "totals";
-type PatternActivity = "all" | "feeds" | "sleep" | "diapers";
 
 // For the doctor → "Growth chart": a request the tab takes once its charts have loaded (they sit above the growth
 // chart, so a scroll before then lands short). Like requestTimelineDay: read when it mounts, or at once if it's there.
@@ -146,6 +145,7 @@ export default function PatternsTab({
   const [range, setRange] = useState<Range>("7");
   const [mode, setMode] = useState<RibbonMode>("days");
   const [view, setView] = useState<PatternView>("clock");
+  const [activity, setActivity] = useState<PatternActivity>("all");
   const [growthOpen, setGrowthOpen] = useState(false);
 
   const span = range === "all" ? Math.min(daysBetween(bornKey ?? addDays(todayKey, -29), todayKey) + 1, 399) : Number(range);
@@ -214,26 +214,18 @@ export default function PatternsTab({
 
   return (
     <div className={cx("px-4 pt-[max(1.25rem,env(safe-area-inset-top))]", VIZ_VARS)}>
-      <header className="mb-4 px-1">
+      <header className="mb-4 flex items-center justify-between gap-3 px-1">
         <h1 className={cx(tone.display, "flex min-h-[44px] items-center text-[34px] leading-[1.05]")}>{title}</h1>
+        <button type="button" onClick={() => careNav.openDoctor()} aria-label={`For the doctor: ${w.his} pediatrician`} className="mp-pattern-doctor">
+          <Icon name="stethoscope" size={18} /><span>For the doctor</span>
+        </button>
       </header>
       {below}
 
-      {/* Her checkup things, one tap from the top: questions, the visit summary, her doctor's numbers. */}
-      <div className={cx(tone.card, "mb-5 overflow-hidden")}>
-        <NavRow
-          icon="stethoscope"
-          iconColor={KIND_COLOR.vitals}
-          label={`For ${w.his} pediatrician`}
-          note={`Questions to ask, the visit summary, ${w.his} doctor's numbers`}
-          onClick={() => careNav.openDoctor()}
-        />
-      </div>
-
-      <div className="mb-5 space-y-3">
-        <div className="px-1">
-          <h2 className={cx(tone.heading, "text-[20px]")}>A rhythm to the days</h2>
-          <p className={cx(tone.muted, "mt-1 text-sm leading-snug")}>Choose the view that makes sense to you. Everything here is based on what was logged.</p>
+      <div className="mb-3 space-y-3">
+        <div className="mp-pattern-intro px-1">
+          <h2>Their days, in view.</h2>
+          <p>Explore what’s been logged.</p>
         </div>
         <Segmented<PatternView>
           aria-label="Pattern view"
@@ -245,14 +237,12 @@ export default function PatternsTab({
             { value: "totals", label: "Daily totals" },
           ]}
         />
-        <p className={cx(tone.muted, "px-1 text-sm leading-snug")}>
-          {view === "clock" ? "One day around a circle. Tap the rings to see what happened."
-            : view === "compare" ? "Look for similar times across days. Try ribbons or circles, then focus on one activity."
-              : "See how much was logged each day, as a table or charts. Today is still in progress."}
-        </p>
+        {view !== "totals" ? <ActivityFilter value={activity} onChange={setActivity} /> : (
+          <p className={cx(tone.muted, "px-1 text-sm leading-snug")}>Logged totals by day. Today is still in progress.</p>
+        )}
       </div>
 
-      <div hidden={view !== "clock"} className="mb-6"><DayDial /></div>
+      <div hidden={view !== "clock"} className="mb-6"><DayDial activity={activity} /></div>
 
       <div hidden={view === "clock"}>
         <Segmented
@@ -312,6 +302,7 @@ export default function PatternsTab({
                   onPickDay={onNavigate ? goToDay : undefined}
                   units={units}
                   showChatSuggestions={ready}
+                  activity={activity}
                 />
               </div>}
 
@@ -619,6 +610,7 @@ function Ribbons({
   onPickDay,
   units,
   showChatSuggestions,
+  activity,
 }: {
   entries: Entry[];
   fromKey: string;
@@ -631,6 +623,7 @@ function Ribbons({
   onPickDay?: (key: string) => void;
   units: UnitSystem;
   showChatSuggestions: boolean;
+  activity: PatternActivity;
 }) {
   const w = useBabyWords();
   const rows = useMemo(
@@ -639,7 +632,6 @@ function Ribbons({
   );
   const [showAll, setShowAll] = useState(false);
   const [layout, setLayout] = useState<"ribbons" | "circles">("ribbons");
-  const [activity, setActivity] = useState<PatternActivity>("all");
   const [ref, W] = useWidth<HTMLDivElement>();
   const night = useNightActive();
   const shown = showAll ? rows : rows.slice(0, RIBBON_PAGE);
@@ -680,15 +672,6 @@ function Ribbons({
 
       <div className="mb-3 space-y-3">
         <Segmented aria-label="Comparison layout" value={layout} onChange={setLayout} options={[{ value: "ribbons", label: "Ribbons" }, { value: "circles", label: "Circles" }]} />
-        <label className="flex items-center gap-3 px-1">
-          <span className={cx(tone.muted, "text-sm")}>Focus on</span>
-          <select aria-label="Activity to show" value={activity} onChange={(event) => setActivity(event.target.value as PatternActivity)} className={cx(tone.input, "min-h-[44px] flex-1 text-sm")}>
-            <option value="all">All activity</option>
-            <option value="feeds">Feeds</option>
-            <option value="sleep">Sleep</option>
-            <option value="diapers">Diapers</option>
-          </select>
-        </label>
         <p className={cx(tone.muted, "px-1 text-[13px] leading-snug")}>
           {layout === "ribbons" ? "Read left to right. Each row is one " : "Read clockwise. Each circle is one "}
           {mode === "days" ? "day, midnight to midnight." : "night, noon to noon, so overnight sleep stays together."}

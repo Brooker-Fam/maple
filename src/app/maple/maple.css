@@ -153,3 +153,177 @@ html.maple-night {
   background: rgb(217 119 43 / 0.35);
   color: #f0c27a;
 }
+/* Today's personal opening stays compact; the existing tree remains still. */
+.mp-today-intro {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 24px;
+  background: radial-gradient(ellipse at 88% 45%, color-mix(in srgb, var(--mp-accent) 10%, transparent), transparent 70%);
+}
+.mp-today-age {
+  display: inline-block;
+  max-width: 100%;
+  margin-top: 5px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--mp-accent) 6%, transparent);
+  color: var(--mp-ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.mp-tree-portrait {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+}
+.mp-tree-portrait::before,
+.mp-tree-portrait::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  inset: 1px;
+  border: 1px solid color-mix(in srgb, var(--mp-accent) 13%, transparent);
+  border-radius: 50%;
+}
+.mp-tree-portrait::after {
+  inset: 10px;
+  border-color: color-mix(in srgb, var(--mp-accent) 8%, transparent);
+  background: color-mix(in srgb, var(--mp-surface) 48%, transparent);
+}
+.mp-tree-portrait:focus-visible,
+.mp-explore-today:focus-visible {
+  outline: 2px solid var(--mp-focus);
+  outline-offset: 3px;
+}
+.mp-day-summary {
+  background: linear-gradient(125deg, color-mix(in srgb, var(--mp-accent) 4%, var(--mp-surface)), var(--mp-surface) 72%);
+}
+.mp-day-summary-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 22px;
+  margin-top: 6px;
+  margin-bottom: 5px;
+  color: var(--mp-ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.mp-day-summary-values > span { white-space: nowrap; }
+.mp-day-summary-values strong {
+  margin-right: 2px;
+  color: var(--mp-ink);
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.maple-night .mp-today-intro,
+.maple-night .mp-day-summary { background: var(--mp-surface); }
+.maple-night .mp-today-age { background: var(--mp-sunken); }
+.maple-night .mp-tree-portrait::before,
+.maple-night .mp-tree-portrait::after { border-color: var(--mp-line); background: none; }
+
+/* Patterns puts the recorded day at the center; controls keep their native sizing. */
+.mp-pattern-doctor {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border: 1px solid var(--mp-line);
+  border-radius: 99px;
+  color: var(--mp-accent-fg);
+  background: color-mix(in srgb, var(--mp-accent) 5%, var(--mp-bg));
+  font-size: 12px;
+  font-weight: 600;
+}
+.mp-pattern-intro h2 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.08;
+  letter-spacing: -.015em;
+  color: var(--mp-ink);
+}
+.mp-pattern-intro p { margin-top: 4px; font-size: 12px; color: var(--mp-ink-2); }
+.mp-activity-picker { gap: 6px; padding: 0; background: transparent; }
+.mp-activity-picker > button {
+  min-width: 0;
+  padding-inline: 8px;
+  border: 1px solid var(--mp-line);
+  border-radius: 99px;
+  background: transparent;
+  box-shadow: none;
+}
+.mp-activity-picker > button[aria-checked="true"] {
+  background: var(--mp-accent);
+  border-color: var(--mp-accent);
+  color: var(--mp-on-accent);
+}
+.mp-day-explorer { padding-top: 4px; padding-bottom: 16px; }
+.mp-day-scene {
+  isolation: isolate;
+  background: radial-gradient(circle, color-mix(in srgb, var(--mp-accent) 11%, transparent), transparent 69%);
+}
+.mp-day-scene::before {
+  content: "";
+  position: absolute;
+  inset: 7%;
+  z-index: -1;
+  border-radius: 50%;
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--mp-accent) 10%, transparent);
+}
+.mp-day-scene .mp-dial-face { fill: color-mix(in srgb, var(--mp-accent) 3%, var(--mp-surface)); }
+.mp-day-scene .mp-dial-center { fill: color-mix(in srgb, var(--mp-accent) 9%, var(--mp-surface)); }
+.mp-dial-summary { margin: 16px 8px; text-align: center; color: var(--mp-ink); font-size: 13px; line-height: 1.6; }
+.mp-dial-summary > span { display: block; color: var(--mp-ink-3); font-size: 11px; }
+.mp-dial-details {
+  margin-top: 12px;
+  border: 1px solid var(--mp-line);
+  border-radius: 20px;
+  background: var(--mp-surface);
+  overflow: hidden;
+  scroll-margin-block: 100px;
+}
+.mp-dial-log { margin-top: 12px; border: 1px solid var(--mp-line); border-radius: 18px; background: var(--mp-surface); overflow: hidden; }
+.mp-dial-log > summary {
+  display: flex;
+  min-height: 48px;
+  cursor: pointer;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  list-style: none;
+  color: var(--mp-ink-2);
+  font-size: 13px;
+  font-weight: 500;
+}
+.mp-dial-log > summary::-webkit-details-marker { display: none; }
+.mp-dial-log > summary::before { content: "+"; width: 14px; font-size: 18px; text-align: center; font-weight: 400; }
+.mp-dial-log[open] > summary::before { content: "−"; }
+.mp-dial-log > summary > span:first-child { flex: 1; }
+.mp-dial-log-entry { display: flex; min-height: 52px; width: 100%; align-items: center; gap: 10px; padding: 9px 12px; color: var(--mp-ink); }
+.mp-dial-log-entry[aria-pressed="true"] { background: var(--mp-sunken); }
+.mp-pattern-doctor:focus-visible,
+.mp-activity-picker > button:focus-visible,
+.mp-dial-log > summary:focus-visible,
+.mp-dial-log-entry:focus-visible,
+.mp-dial-details:focus-visible { outline: 2px solid var(--mp-focus); outline-offset: -3px; }
+.maple-night .mp-pattern-doctor { background: var(--mp-surface); }
+.maple-night .mp-day-scene { background: none; }
+.maple-night .mp-day-scene::before { box-shadow: none; }
+.maple-night .mp-day-scene .mp-dial-face { fill: var(--mp-surface); }
+.maple-night .mp-day-scene .mp-dial-center { fill: var(--mp-bg); }
+.maple-night .mp-activity-picker > button,
+.maple-night .mp-pattern-doctor { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .mp-activity-picker > button, .mp-pattern-doctor { transition: none; }
+}

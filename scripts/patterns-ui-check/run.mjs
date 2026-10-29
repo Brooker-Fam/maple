@@ -112,12 +112,12 @@ try {
     const blankDay = page.getByRole("button", { name: /Oct 26.*No activity logged/ });
     await blankDay.waitFor();
     assert(!(await blankDay.getAttribute("aria-label")).includes("0 feeds"), "A blank day describes missing logs, not a missed feed");
-    await page.getByLabel("Activity to show", { exact: true }).selectOption({ label: "Sleep" });
+    await page.getByRole("radiogroup", { name: "Activity to show", exact: true }).getByRole("radio", { name: "Sleep", exact: true }).click();
     const sleepLabel = await todayCircle.getAttribute("aria-label");
     assert(sleepLabel.includes("4h 00m sleep"));
     assert(!sleepLabel.includes("feeds") && !sleepLabel.includes("wet"), "Activity filter removes unrelated numbers");
     await noOverflow(page);
-    await page.getByLabel("Activity to show", { exact: true }).selectOption({ label: "All activity" });
+    await page.getByRole("radiogroup", { name: "Activity to show", exact: true }).getByRole("radio", { name: "All", exact: true }).click();
     await page.getByRole("radio", { name: "Nights", exact: true }).click();
     await page.getByText(/noon to noon/).first().waitFor();
     await page.evaluate(() => window.__patterns.night(true));
@@ -128,6 +128,78 @@ try {
     assert((await page.evaluate(() => window.__patterns.calls())).some((call) => call.kind === "navigate" && call.target === "log"));
     await page.evaluate(() => window.__patterns.growth());
     await page.getByText("Growth chart fixture", { exact: true }).waitFor();
+  });
+
+  await scenario("clock activity layers persist across views and entries open by keyboard", "", 320, async (page) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    const activity = page.getByRole("radiogroup", { name: "Activity to show", exact: true });
+    await activity.getByRole("radio", { name: "All", exact: true }).focus();
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await activity.getByRole("radio", { name: "Feeds", exact: true }).getAttribute("aria-checked"), "true");
+    await page.getByText("Browse logged entries", { exact: true }).click();
+    const entries = page.locator(".mp-dial-log").getByRole("button");
+    assert.equal(await entries.count(), 2, "The feed layer exposes only the two recorded feeds");
+    const entry = entries.last();
+    await entry.scrollIntoViewIfNeeded();
+    await entry.focus();
+    await page.keyboard.press("Enter");
+    const detail = page.getByRole("region", { name: "Selected log entries", exact: true });
+    await detail.waitFor();
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Selected log entries");
+    assert(await detail.getByRole("heading").evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; }), "Opening a scrolled entry brings its detail heading into view");
+    assert.equal((await page.evaluate(() => window.__patterns.calls())).filter((call) => call.kind === "sheet").length, 0, "Browsing an event does not open an edit sheet");
+    await page.keyboard.press("Escape");
+    await detail.waitFor({ state: "hidden" });
+    assert(await entry.evaluate((el) => el === document.activeElement), "Escape restores the selected entry's keyboard focus");
+    assert(await entry.evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; }), "Restored entry focus stays visible on a short phone");
+
+    await page.getByRole("radio", { name: "Compare days", exact: true }).click();
+    assert.equal(await activity.getByRole("radio", { name: "Feeds", exact: true }).getAttribute("aria-checked"), "true", "Activity selection carries into comparison");
+    await page.getByRole("radio", { name: "Circles", exact: true }).click();
+    const today = await page.getByRole("button", { name: /^Today.*Open this day in the Timeline/ }).getAttribute("aria-label");
+    assert(today.includes("2 feeds") && !today.includes("wet") && !today.includes("sleep"), "Comparison shows the selected feed layer");
+    await page.getByRole("radio", { name: "Day clock", exact: true }).click();
+    assert.equal(await activity.getByRole("radio", { name: "Feeds", exact: true }).getAttribute("aria-checked"), "true");
+    await activity.getByRole("radio", { name: "Feeds", exact: true }).focus();
+    await page.keyboard.press("End");
+    assert.equal(await activity.getByRole("radio", { name: "Diapers", exact: true }).getAttribute("aria-checked"), "true");
+    if (await page.locator(".mp-dial-log").getAttribute("open") === null) await page.getByText("Browse logged entries", { exact: true }).click();
+    assert.equal(await entries.count(), 1, "The diaper layer exposes the one recorded change");
+    await entries.first().click();
+    await detail.getByRole("button", { name: /^Edit / }).click();
+    const opened = (await page.evaluate(() => window.__patterns.calls())).find((call) => call.kind === "sheet");
+    assert.equal(opened.value.kind, "diaper", "Explicit Edit opens the selected record's sheet");
+    assert.equal(opened.value.entry.started_at, "2026-10-29T09:00:00-04:00");
+    await noOverflow(page);
+  });
+
+  await scenario("viewers can explore recorded entries without edit controls", "viewer=1", 375, async (page) => {
+    await page.getByText("Browse logged entries", { exact: true }).click();
+    const entry = page.locator(".mp-dial-log").getByRole("button").last();
+    await entry.focus();
+    await page.keyboard.press("Enter");
+    const detail = page.getByRole("region", { name: "Selected log entries", exact: true });
+    await detail.waitFor();
+    assert.equal(await detail.getByRole("button", { name: /^Edit / }).count(), 0, "View-only members get detail without an editing action");
+    assert.equal((await page.evaluate(() => window.__patterns.calls())).filter((call) => call.kind === "sheet").length, 0);
+    await page.keyboard.press("Escape");
+    await detail.waitFor({ state: "hidden" });
+  });
+
+  await scenario("tapping a clock mark reveals its details on a short phone", "", 320, async (page) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    const dial = page.getByRole("region", { name: "Day dial", exact: true }).getByRole("img");
+    await dial.scrollIntoViewIfNeeded();
+    const box = await dial.boundingBox();
+    // The synthetic 6 AM feed is on the right of the 24-hour dial's middle ring.
+    await dial.click({ position: { x: box.width * 284 / 348, y: box.height / 2 } });
+    const detail = page.getByRole("region", { name: "Selected log entries", exact: true });
+    await detail.waitFor();
+    await settled(page);
+    await page.screenshot({ path: path.join(screenshots, "clock-320-selected-event.png"), fullPage: true });
+    const heading = await detail.getByRole("heading").boundingBox();
+    assert(heading.y >= 0 && heading.y + heading.height <= 568, `Tapped entry details must be visible without another scroll; heading starts at ${heading.y}`);
+    assert.equal((await page.evaluate(() => window.__patterns.calls())).filter((call) => call.kind === "sheet").length, 0);
   });
 
   await scenario("historical clock failure exposes retry instead of empty totals", "historyError=1", 375, async (page) => {

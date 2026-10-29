@@ -6,7 +6,7 @@ import { dayBounds } from "../../src/lib/maple/time";
 import { FixtureContext } from "./mocks";
 
 const NOW = "2026-10-29T16:00:00.000Z";
-const MEMBER = { email: "alex@example.test", display_name: "Alex Example", role: "owner" };
+const MEMBER = { email: "alex@example.test", display_name: "Alex Example", role: new URLSearchParams(window.location.search).has("viewer") ? "viewer" : "owner" };
 const now = () => new Date(NOW);
 const entries = [];
 let nextId = 900;
@@ -51,7 +51,7 @@ function App() {
       growth: [], care: null, now: NOW, rev: "synthetic-1",
     },
     summary: { targets: null, age: { days: 28, dayOfLife: 29 }, teamDiapers: 0 },
-    api, now, readOnly: false, online: true, units: "us", isNight: () => false,
+    api, now, readOnly: MEMBER.role === "viewer", online: true, units: "us", isNight: () => false,
     member: () => MEMBER, memberName: () => MEMBER.display_name, memberLabel: () => MEMBER.display_name,
     toast: () => {}, toasts: [], dismissToast: () => {},
     log: () => { throw new Error("Unexpected log write"); }, update: () => { throw new Error("Unexpected log write"); }, remove: () => { throw new Error("Unexpected log write"); },

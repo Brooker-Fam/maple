@@ -1,7 +1,7 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { clusterLine, feedClusters, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
 import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from "@/lib/maple/guidelines";
@@ -11,6 +11,7 @@ import type { Entry, FeedData } from "@/lib/maple/types";
 import { useMilestoneWords } from "./familyWords";
 import { useClockMinute } from "./FeedParts";
 import { MAPLE_LEAF_PATH } from "./Hero";
+import type { PatternActivity } from "./PatternActivity";
 import { DROPLET_PATH, Icon, KindBadge } from "./icons";
 import { logSwitches } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
@@ -104,34 +105,6 @@ type Arc = {
  */
 type Dot = { key: string; entry: Entry; a: number; pee: boolean; poop: boolean; color: string | null; edge: "dark" | "light" | null; opacity: number; t: number };
 
-/** The lowest point the popover may reach: the top of the dock (fixed over the page, her strip on it), or of the tab bar. */
-function usableBottom(): number {
-  if (typeof window === "undefined") return Infinity;
-  const tops = ['[role="region"][aria-label="Log something"]', 'nav[aria-label="Maple\'s Log"]']
-    .map((q) => document.querySelector(q)?.getBoundingClientRect().top)
-    .filter((t): t is number => t != null && t > 0);
-  return Math.min(window.innerHeight, ...tops);
-}
-
-/**
- * Where the popover opens: above the tap in the dial's lower part and below
- * it in the upper part, as before, when it fits there between the top of the
- * screen and the dock; else the other way if it fits there; else the side
- * with more room. `maxList` caps its list to the room on that side (it
- * scrolls inside), so the newest feeds of a tall cluster never sit under the
- * dock.
- */
-function placePop(clientY: number, y: number, w: number, items: number, cluster: boolean): { above: boolean; maxList: number } {
-  const head = cluster ? 68 : 48;
-  const height = head + Math.max(1, items) * 52;
-  const roomAbove = clientY - 12 - 8;
-  const roomBelow = usableBottom() - 8 - (clientY + 12);
-  const wantAbove = y > w * 0.55;
-  const fits = (above: boolean) => (above ? roomAbove : roomBelow) >= height;
-  const above = fits(wantAbove) ? wantAbove : fits(!wantAbove) ? !wantAbove : roomAbove > roomBelow;
-  return { above, maxList: Math.max(52, (above ? roomAbove : roomBelow) - head) };
-}
-
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const pt = (r: number, deg: number): [number, number] => [C + r * Math.sin(rad(deg)), C - r * Math.cos(rad(deg))];
 const f = (n: number) => Math.round(n * 100) / 100;
@@ -198,7 +171,7 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
       }
     } else if (entry.kind === "diaper") {
       if (start < lo || start > hi) continue;
-      // At night every poop is the same amber: the stool color is in the popover and the entry. A poop with no color
+      // At night every poop is the same amber: the stool color is in the details and the entry. A poop with no color
       // logged is neutral, never a made-up brown.
       const stool = entry.data.poop ? entry.data.color : undefined;
       const color = night ? pal.poop : stool ? STOOL_COLOR_INFO[stool].hex : null;
@@ -211,25 +184,27 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
   return { arcs, dots };
 }
 
-export default function DayDial() {
+export default function DayDial({ activity = "all" }: { activity?: PatternActivity }) {
   const { state, summary, api, units, readOnly } = useMaple();
   const words = useMilestoneWords();
   const { open } = useSheets();
   // On the clock minute, so a running feed's minutes in the list flip with the card's and the Timeline's.
   const now = useClockMinute();
   const night = useNightActive();
+  const reduceMotion = useReducedMotion();
   const uid = useId().replace(/[^\w-]/g, "");
   const hatchId = `maple-dial-hatch-${uid}`;
   const bothId = `maple-dial-both-${uid}`;
   const hintId = `maple-dial-hint-${uid}`;
   const orientationId = `maple-dial-orientation-${uid}`;
+  const detailId = `maple-dial-detail-${uid}`;
   const [choice, setChoice] = useState<View | null>(null);
   const [fetched, setFetched] = useState<{ key: string; entries: Entry[]; error?: boolean } | null>(null);
-  const [pop, setPop] = useState<{ x: number; y: number; w: number; t: number; items: Entry[]; cluster?: FeedCluster; above: boolean; maxList: number } | null>(null);
+  const [pop, setPop] = useState<{ t: number; items: Entry[]; cluster?: FeedCluster } | null>(null);
   const [hint, setHint] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const todayKey = dayKey(now, tz);
   const yesterday = addDays(todayKey, -1);
@@ -283,27 +258,16 @@ export default function DayDial() {
     }
   };
 
-  // A cluster's list capped to fit (placePop) opens at its newest feeds, oldest first above them: "when did she last eat".
-  useLayoutEffect(() => {
-    const el = listRef.current;
-    if (el && pop?.cluster) el.scrollTop = el.scrollHeight;
-  }, [pop]);
+  // A new activity has its own events. Never leave a hidden event selected.
+  useEffect(() => { setPop(null); }, [activity]);
 
-  // The popover closes with Escape or a tap anywhere outside the dial.
-  const popOpen = !!pop;
-  useEffect(() => {
-    if (!popOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPop(null);
-    const onDown = (e: PointerEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setPop(null);
-    };
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("pointerdown", onDown);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("pointerdown", onDown);
-    };
-  }, [popOpen]);
+  const closeDetails = () => {
+    setPop(null);
+    triggerRef.current?.focus();
+  };
+  const revealDetails = () => requestAnimationFrame(() => {
+    detailRef.current?.scrollIntoView({ block: "nearest", behavior: night || reduceMotion ? "instant" : "smooth" });
+  });
 
   const nowMs = now.getTime();
   const [lo, hi] = useMemo(() => {
@@ -321,21 +285,23 @@ export default function DayDial() {
   }, [dayView, fetched, needsFetch, state]);
 
   const pal = night ? NIGHT_COLORS : COLORS;
-  const { arcs, dots } = useMemo(() => buildMarks(source, lo, hi, nowMs, tz, rolling, pal, night), [source, lo, hi, nowMs, tz, rolling, pal, night]);
+  const marks = useMemo(() => buildMarks(source, lo, hi, nowMs, tz, rolling, pal, night), [source, lo, hi, nowMs, tz, rolling, pal, night]);
+  const arcs = marks.arcs.filter((mark) => activity === "all" || (activity === "sleep" ? mark.lane === "sleep" : activity === "feeds" && mark.lane !== "sleep"));
+  const dots = activity === "all" || activity === "diapers" ? marks.dots : [];
   // One set of numbers for the dial's label and the tallies below, from the same entries and window.
   const runs = useMemo(() => nursingRuns(source, now), [source, now]);
   const stats = useMemo(() => statsFor(source, new Date(lo), new Date(hi + 1), dayView ?? "last24h", now, runs), [source, lo, hi, dayView, now, runs]);
   // A bracket outside the feed ring for each cluster that reaches into the view.
   const brackets = useMemo(
     () =>
-      feedClusters(runs)
+      (activity === "all" || activity === "feeds" ? feedClusters(runs) : [])
         .map((c) => {
           const s = Math.max(c.start, lo);
           const e = Math.min(c.end ?? nowMs, hi);
           return e > s ? { c, a0: clockDeg(s, tz), span: Math.max(MIN_ARC_DEG, (e - s) / 60_000 / 4), s, e } : null;
         })
         .filter((b): b is NonNullable<typeof b> => !!b),
-    [runs, lo, hi, nowMs, tz]
+    [runs, lo, hi, nowMs, tz, activity]
   );
 
   if (!state || !summary) return null;
@@ -346,7 +312,11 @@ export default function DayDial() {
   const pastAge = past && state.baby.born_at ? babyAge(state.baby.born_at, new Date(hi), tz) : null;
   const plotted = [...arcs.map((a) => a.entry), ...dots.map((d) => d.entry)].filter((e, i, all) => all.findIndex((x) => x.id === e.id) === i);
   const rangeName = rolling ? "Last 24 hours" : formatDayLabel(dayView ?? todayKey, todayKey, { long: true });
-  const label = loading ? `${rangeName}: loading logged events.` : loadError ? `${rangeName}: couldn't load logged events.` : `${rangeName}: ${stats.feeds} feeds, ${stats.wet} wet and ${stats.dirty} dirty diapers, ${formatDuration(stats.sleepSec)} asleep.`;
+  const activitySummary = activity === "feeds" ? `${stats.feeds} feeds logged`
+    : activity === "sleep" ? `${formatDuration(stats.sleepSec)} sleep logged`
+      : activity === "diapers" ? `${stats.wet} wet and ${stats.dirty} dirty diapers logged`
+        : `${stats.feeds} feeds, ${stats.wet} wet and ${stats.dirty} dirty diapers, ${formatDuration(stats.sleepSec)} sleep logged`;
+  const label = loading ? `${rangeName}: loading logged events.` : loadError ? `${rangeName}: couldn't load logged events.` : `${rangeName}: ${activitySummary}.`;
 
   // The usual numbers for her day of life (on a past day, for the age she was then). Off while warnings are off.
   const targets = summary.targets && pastAge ? { ...diaperTargets(pastAge.dayOfLife), feeds: FEEDS_PER_DAY, tummyMin: tummyGoalMinutes(pastAge.days) } : summary.targets;
@@ -367,6 +337,7 @@ export default function DayDial() {
       return;
     }
     hintDone();
+    triggerRef.current = null;
     const deg = (Math.atan2(x, -y) * 180) / Math.PI;
     const tapMin = (((deg + 360) % 360) / 360) * 1440;
     let t: number;
@@ -378,13 +349,13 @@ export default function DayDial() {
       const d = parseDayKey(dayView);
       t = zonedTimeToUtc(d.year, d.month, d.day, Math.floor(tapMin / 60), Math.floor(tapMin % 60), tz).getTime();
     }
-    // In a cluster, on the feed ring or its bracket: the popover says so ("Cluster 6:02–8:40 PM · 4 feeds · …"). On the
+    // In a cluster, on the feed ring or its bracket: the details say so ("Cluster 6:02–8:40 PM · 4 feeds · …"). On the
     // bracket itself (between the feed and sleep rings) it lists the cluster's feeds.
     const inCluster = r >= R.feed - 8 && r <= R.sleep - 6 ? brackets.find((b) => t >= b.s - 10 * 60_000 && t <= b.e + 10 * 60_000) : undefined;
     if (inCluster && r >= R.feed + 6) {
-      // Its last few feeds (the header says how many there were), so the popover stays on screen.
-      const feeds = [...inCluster.c.entries].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at)).slice(-4);
-      setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: feeds, cluster: inCluster.c, ...placePop(ev.clientY, ev.clientY - box.top, box.width, feeds.length, true) });
+      const feeds = [...inCluster.c.entries].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
+      setPop({ t, items: feeds, cluster: inCluster.c });
+      revealDetails();
       return;
     }
     const near = plotted
@@ -395,7 +366,8 @@ export default function DayDial() {
       })
       .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))
       .slice(0, 6);
-    setPop({ x: ev.clientX - box.left, y: ev.clientY - box.top, w: box.width, t, items: near, cluster: inCluster?.c, ...placePop(ev.clientY, ev.clientY - box.top, box.width, near.length, !!inCluster) });
+    setPop({ t, items: near, cluster: inCluster?.c });
+    revealDetails();
   };
 
   // Earlier from the last 24 hours or today is yesterday; later from yesterday is today.
@@ -418,16 +390,15 @@ export default function DayDial() {
   // The center readout: the time (or the day), and what the ring covers. The counts are in the tallies below.
   const sub = loading ? "Loading…" : loadError ? "Couldn't load" : past ? (pastAge ? `Day ${pastAge.dayOfLife}` : "") : rolling ? "Last 24 hours" : "Since midnight";
   const mainY = sub ? C - 8 : C;
-  // Wide enough for a title and its detail, never wider than the dial.
-  const popW = pop ? Math.min(296, pop.w) : 0;
+
 
   return (
     <>
-      <section aria-label="Day dial" className="pt-2" aria-busy={loading}>
-        <p id={orientationId} className={cx(tone.muted, "mx-auto mb-3 max-w-[380px] px-2 text-center text-[13px] leading-snug")}>
+      <section aria-label="Day dial" className="mp-day-explorer" aria-busy={loading}>
+        <p id={orientationId} className="sr-only">
           A 24-hour clock: midnight at the top, noon at the bottom. Read clockwise.
         </p>
-        <div ref={boxRef} className="relative mx-auto w-full max-w-[380px]">
+        <div className="mp-day-scene relative mx-auto w-full max-w-[380px]">
           <svg
             ref={svgRef}
             viewBox="-14 -14 348 348"
@@ -463,7 +434,7 @@ export default function DayDial() {
             </defs>
 
             {/* face, with the night hours (8pm–7am) shaded in the paper's own ink */}
-            <circle cx={C} cy={C} r={R.night} strokeWidth={1} className="fill-mp-surface stroke-mp-line" />
+            <circle cx={C} cy={C} r={R.night} strokeWidth={1} className="mp-dial-face fill-mp-surface stroke-mp-line" />
             <path d={sectorPath(R.night, nightStart, nightSpan)} className="fill-mp-ink/[0.035] [.maple-night_&]:fill-mp-ink/[0.05]" />
             {/* lanes: the whole ring, or for today only midnight to now */}
             {isToday ? (
@@ -618,7 +589,7 @@ export default function DayDial() {
             )}
 
             {/* center */}
-            <circle cx={C} cy={C} r={66} className="fill-mp-surface" />
+            <circle cx={C} cy={C} r={66} className="mp-dial-center fill-mp-surface" />
             <text
               x={C}
               y={mainY}
@@ -646,59 +617,6 @@ export default function DayDial() {
             )}
           </svg>
 
-          <AnimatePresence>
-            {pop && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="absolute z-10 overflow-hidden rounded-2xl border border-mp-line bg-mp-surface shadow-[0_10px_30px_rgba(0,0,0,0.16)] [.maple-night_&]:shadow-none"
-                style={{
-                  width: popW,
-                  left: Math.max(0, Math.min(pop.x - popW / 2, pop.w - popW)),
-                  top: pop.above ? pop.y - 12 : pop.y + 12,
-                  y: pop.above ? "-100%" : 0,
-                }}
-              >
-                <div className="flex items-center justify-between pl-3.5">
-                  <p className={cx(tone.label, "min-w-0 py-1 leading-snug")}>{pop.cluster ? clusterLine(pop.cluster, tz) : `Around ${formatTime(pop.t, tz)}`}</p>
-                  <button type="button" onClick={() => setPop(null)} aria-label="Close" className="flex h-11 w-11 items-center justify-center text-mp-ink-3">
-                    <Icon name="x" size={18} />
-                  </button>
-                </div>
-                {pop.items.length ? (
-                  // Capped to the room on its side of the tap (placePop), scrolling inside, so it never runs under the dock.
-                  <div ref={listRef} className={cx(tone.divide, "overflow-y-auto overscroll-contain border-t border-mp-line")} style={{ maxHeight: pop.maxList }}>
-                    {pop.items.map((e) => {
-                      const d = describeEntry(e, { units, now, words });
-                      return (
-                        <button
-                          key={e.id}
-                          type="button"
-                          disabled={readOnly}
-                          onClick={() => {
-                            setPop(null);
-                            open({ kind: e.kind, entry: e });
-                          }}
-                          className="flex min-h-[52px] w-full items-center gap-2.5 px-3.5 py-2 text-left transition enabled:active:bg-mp-ink/[0.04]"
-                        >
-                          <KindBadge entry={e} size={30} />
-                          <span className="min-w-0 flex-1">
-                            <span className={cx(tone.body, "block truncate text-[15px] font-medium")}>{d.title}</span>
-                            {d.detail && <span className={cx(tone.muted, "block truncate text-[13px]")}>{d.detail}</span>}
-                          </span>
-                          <span className={cx(tone.muted, "shrink-0 text-[13px] tabular-nums")}>{formatTime(e.started_at, tz)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className={cx(tone.muted, "px-3.5 pb-3.5 text-sm")}>Nothing logged around then.</p>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
 
         {/* Shown until the first tap on this device; screen readers always have it. */}
@@ -713,21 +631,10 @@ export default function DayDial() {
           </div>
         )}
 
-        <ul className="sr-only">
-          {brackets.map((b, i) => (
-            <li key={`k${i}`}>{clusterLine(b.c, tz)}</li>
-          ))}
-          {plotted.map((e) => (
-            <li key={e.id}>
-              {formatTime(e.started_at, tz)}: {describeEntry(e, { units, now, words }).text}
-            </li>
-          ))}
-        </ul>
-
         <p className={cx(tone.muted, "mt-3 px-2 text-center text-[12px] leading-relaxed")}>
-          Outer ring: sleep · Middle: feeds · Inner: diapers
+          {activity === "sleep" ? "Sleep · outer ring" : activity === "feeds" ? "Feeds · middle ring" : activity === "diapers" ? "Diapers · inner ring" : "Sleep outside · Feeds in the middle · Diapers inside"}
         </p>
-        <Legend pal={pal} night={night} nursing={logSwitches(state.baby).nursing || arcs.some((a) => a.lane === "feed")} both={arcs.some((a) => a.both)} cluster={brackets.length > 0} bottle={arcs.some((a) => a.lane === "bottle")} />
+        <Legend pal={pal} night={night} nursing={(activity === "all" || activity === "feeds") && (logSwitches(state.baby).nursing || arcs.some((a) => a.lane === "feed"))} both={arcs.some((a) => a.both)} cluster={brackets.length > 0} bottle={arcs.some((a) => a.lane === "bottle")} activity={activity} />
 
         {/* One range for the dial and the tallies under it. */}
         <div className="mt-4 flex items-center justify-center gap-1">
@@ -772,9 +679,84 @@ export default function DayDial() {
             <Icon name="chevron-right" size={22} />
           </button>
         </div>
+
+        {!unavailable && <>
+          <p className="mp-dial-summary" role="status">{activitySummary}.<span>Missing entries are not counted.</span></p>
+
+          <AnimatePresence initial={false}>
+            {pop && (
+              <motion.div
+                id={detailId}
+                ref={detailRef}
+                role="region"
+                aria-label="Selected log entries"
+                tabIndex={-1}
+                onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); closeDetails(); } }}
+                initial={night || reduceMotion ? false : { opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: night || reduceMotion ? 1 : 0 }}
+                transition={{ duration: night || reduceMotion ? 0 : 0.18 }}
+                className="mp-dial-details"
+              >
+                <div className="flex items-center justify-between gap-2 pl-4">
+                  <h3 className={cx(tone.heading, "min-w-0 py-2 text-[14px] leading-snug")}>{pop.cluster ? clusterLine(pop.cluster, tz) : `Around ${formatTime(pop.t, tz)}`}</h3>
+                  <button type="button" onClick={closeDetails} aria-label="Close event details" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-mp-ink-2">
+                    <Icon name="x" size={18} />
+                  </button>
+                </div>
+                {pop.items.length ? (
+                  <div className={cx(tone.divide, "max-h-[320px] overflow-y-auto overscroll-contain border-t border-mp-line")}>
+                    {pop.items.map((entry) => {
+                      const description = describeEntry(entry, { units, now, words });
+                      return (
+                        <div key={entry.id} className="flex items-start gap-2.5 px-4 py-3">
+                          <KindBadge entry={entry} size={30} />
+                          <div className="min-w-0 flex-1">
+                            <p className={cx(tone.heading, "text-[15px] leading-snug")}>{description.title}</p>
+                            {description.detail && <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-relaxed")}>{description.detail}</p>}
+                            <p className={cx(tone.muted, "mt-1 text-[12px] tabular-nums")}>{formatTime(entry.started_at, tz)}</p>
+                            {!readOnly && <button type="button" onClick={() => { setPop(null); open({ kind: entry.kind, entry }); }} aria-label={`Edit ${description.title.toLowerCase()} at ${formatTime(entry.started_at, tz)}`} className="-ml-2 mt-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 text-[13px] font-semibold text-mp-accent-fg">Edit entry <Icon name="pencil" size={13} /></button>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : <p className={cx(tone.muted, "px-4 pb-4 text-sm")}>Nothing logged around then.</p>}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <details className="mp-dial-log">
+            <summary><span>Browse logged entries</span><span className="tabular-nums">{plotted.length}</span></summary>
+            {brackets.length > 0 && <ul className={cx(tone.muted, "space-y-1 px-3 pb-2 text-[12px]")}>{brackets.map((bracket, index) => <li key={index}>{clusterLine(bracket.c, tz)}</li>)}</ul>}
+            {plotted.length ? <div className={cx(tone.divide, "max-h-[280px] overflow-y-auto overscroll-contain")}>
+              {[...plotted].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at)).map((entry) => {
+                const description = describeEntry(entry, { units, now, words });
+                return <button
+                  key={entry.id}
+                  type="button"
+                  aria-label={`${formatTime(entry.started_at, tz)}: ${description.text}`}
+                  aria-controls={pop ? detailId : undefined}
+                  aria-pressed={pop?.items.some((item) => item.id === entry.id) ?? false}
+                  onClick={(event) => {
+                    triggerRef.current = event.currentTarget;
+                    hintDone();
+                    setPop({ t: Date.parse(entry.started_at), items: [entry] });
+                    requestAnimationFrame(() => detailRef.current?.focus());
+                  }}
+                  className="mp-dial-log-entry"
+                >
+                  <KindBadge entry={entry} size={26} />
+                  <span className="min-w-0 flex-1 text-left"><span className="block truncate text-[14px] font-medium">{description.title}</span>{description.detail && <span className="block truncate text-[12px] text-mp-ink-2">{description.detail}</span>}</span>
+                  <span className="shrink-0 text-[12px] tabular-nums text-mp-ink-2">{formatTime(entry.started_at, tz)}</span>
+                </button>;
+              })}
+            </div> : <p className={cx(tone.muted, "px-3 pb-3 text-[13px]")}>No {activity === "all" ? "feeds, sleep or diapers" : activity} logged in this window.</p>}
+          </details>
+        </>}
       </section>
 
-      {!unavailable && <Tallies stats={stats} title={talliesTitle} targets={targets} targetDay={targetDay} />}
+      {!unavailable && <Tallies stats={stats} title={activity === "all" ? talliesTitle : `All activity · ${talliesTitle}`} targets={targets} targetDay={targetDay} />}
     </>
   );
 }
@@ -787,7 +769,7 @@ const LEGEND_STOOLS = [STOOL_COLOR_INFO.black.hex, STOOL_COLOR_INFO.green.hex, S
  * Back and forth, the cluster bracket and bottles join the key only when the dial shows them (a family with
  * Bottles off never sees a Bottle key).
  */
-function Legend({ pal, night, nursing, both, cluster, bottle }: { pal: Palette; night: boolean; nursing: boolean; both?: boolean; cluster?: boolean; bottle?: boolean }) {
+function Legend({ pal, night, nursing, both, cluster, bottle, activity }: { pal: Palette; night: boolean; nursing: boolean; both?: boolean; cluster?: boolean; bottle?: boolean; activity: PatternActivity }) {
   const dot = "h-[7px] w-[7px] rounded-full";
   // Sleep, and the sides at night, are short bands as on the ring (Right striped); a bottle is a hollow pill.
   const band = "h-2 w-4 rounded-full";
@@ -865,7 +847,7 @@ function Legend({ pal, night, nursing, both, cluster, bottle }: { pal: Palette; 
   ];
   return (
     <div className={cx(tone.faint, "mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 px-2 text-[11px]")} aria-hidden>
-      {items.map((it) => (
+      {items.filter((it) => activity === "all" || (it.label === "Sleep" ? activity === "sleep" : it.label === "Pee" || it.label === "Poop" ? activity === "diapers" : activity === "feeds")).map((it) => (
         <span key={it.label} className="inline-flex items-center gap-1.5">
           {it.mark}
           {it.label}

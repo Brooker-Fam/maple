@@ -252,16 +252,16 @@ export default function Hero() {
     );
 
   return (
-    <header className="flex items-center gap-3 px-1">
+    <header className="mp-today-intro">
       <div className="min-w-0 flex-1 pb-1">
-        <h1 className={cx(tone.display, "truncate text-[34px] leading-[1.05]")}>{state.baby.name}</h1>
+        <h1 className={cx(tone.display, "truncate text-[38px] leading-[1.05]")}>{state.baby.name}</h1>
         {age && (
-          <p className={cx(tone.muted, "mt-1 text-[15px]")}>
+          <p className="mp-today-age">
             {age.days < 14 ? <span className="font-semibold text-mp-maple [.maple-night_&]:text-mp-ink">Day {age.dayOfLife}</span> : monthDay ? onMonthDay : age.label}
           </p>
         )}
       </div>
-      <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} ${leaves === 1 ? "leaf" : "leaves"}, one for each week`} className="relative shrink-0 rounded-2xl active:scale-[0.98]">
+      <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} ${leaves === 1 ? "leaf" : "leaves"}, one for each week`} className="mp-tree-portrait">
         {/* Still, not swaying: nothing on Today moves unless something happened. */}
         <Sapling leaves={leaves} season={season} fresh={fresh} className="h-[72px] w-[66px]" />
         {night && <Zoe alert={timerRunning} className="absolute bottom-[1px] left-0 h-[20px] w-[33px]" />}

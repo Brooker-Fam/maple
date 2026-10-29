@@ -18,7 +18,9 @@ account, production route or write access.
 The cases cover the visible default clock; keyboard view switching; narrow-phone
 layout at 320 and 375 pixels; ribbon/circle totals including sleep across midnight;
 an unlogged day; activity filtering; day/night windows and night appearance;
-opening a day in Timeline; the growth shortcut even when comparison history fails;
+opening a day in Timeline; activity selection shared between clock and comparison;
+keyboard event details with visible focus restoration, view-only event access,
+and tap-to-detail visibility on a short phone; the growth shortcut even when comparison history fails;
 daily totals opening as a table with an optional charts view; and failed historical
 clock loading followed by a successful retry without false zero totals.
 

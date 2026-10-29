@@ -114,17 +114,17 @@ function LoggedToday({ onDetails }: { onDetails: () => void }) {
   const s = summary.today;
   const today = dayKey(now, state.baby.timezone);
   return (
-    <section aria-labelledby="logged-today" className={cx(tone.card, "px-4 py-3")}>
-      <div className="flex items-center justify-between gap-3">
-        <h2 id="logged-today" className={cx(tone.heading, "text-[17px]")}>Logged today</h2>
-        <button type="button" onClick={onDetails} className="-my-2 -mr-2 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-semibold text-mp-accent-fg">
-          Patterns <Icon name="chevron-right" size={16} />
+    <section aria-labelledby="logged-today" className={cx(tone.card, "mp-day-summary px-4 py-3")}>
+      <div className="flex flex-wrap items-center justify-between gap-x-2">
+        <h2 id="logged-today" className={cx(tone.display, "text-[25px] leading-tight")}>Logged today</h2>
+        <button type="button" onClick={onDetails} className="mp-explore-today -my-1 -mr-1 inline-flex min-h-[44px] items-center gap-1 px-1 text-[13px] font-semibold text-mp-accent-fg">
+          <Icon name="clock-3" size={16} /> Explore patterns <Icon name="chevron-right" size={15} />
         </button>
       </div>
-      <p className="mt-2 text-[15px] leading-relaxed text-mp-ink">
-        <span className="whitespace-nowrap">{s.feeds} {s.feeds === 1 ? "feed" : "feeds"}</span>{" · "}
-        <span className="whitespace-nowrap">{s.wet} wet</span>{" · "}
-        <span className="whitespace-nowrap">{s.dirty} dirty</span>
+      <p className="mp-day-summary-values">
+        <span><strong>{s.feeds}</strong> {s.feeds === 1 ? "feed" : "feeds"}</span>
+        <span><strong>{s.wet}</strong> wet</span>
+        <span><strong>{s.dirty}</strong> dirty</span>
       </p>
       <p className={cx(tone.muted, "mt-0.5 text-[13px]")}>{s.sleeps ? `${formatDuration(s.sleepSec)} sleep logged` : "No sleep logged today"}. Missing entries are not counted.</p>
       <AskChatButton
