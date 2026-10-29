@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { keepConfirmed, stampOutbox } from "../../src/lib/maple/client-state";
+import * as voice from "../../src/lib/maple/voice";
 import type { Entry } from "../../src/lib/maple/types";
 import type { Toast } from "../../src/components/maple/useMaple";
 import { done, eq, test } from "./harness";
@@ -28,6 +31,40 @@ function state(family: number, email = "owner@example.test", entries: Entry[] = 
 const confirmed = () => new Map([[entry.id, { updatedAt: entry.updated_at, at: 2000 }]]);
 
 const clientSource = ts.createSourceFile("useMaple.tsx", readFileSync("src/components/maple/useMaple.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+
+type FamilyWordsModule = typeof import("../../src/components/maple/familyWords");
+type WordState = {
+  family?: { id: number; ask?: string };
+  baby?: { name: string; nickname: string | null; sex: "male" | "female" | null };
+  care?: { person: { name: string } };
+} | null;
+
+/** Render the real wording hooks with only the signed-in state boundary replaced. */
+function renderedWords(snapshot: WordState) {
+  const exports = {};
+  const source = ts.transpileModule(readFileSync("src/components/maple/familyWords.ts", "utf8"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  runInNewContext(source, {
+    exports,
+    require: (id: string) => {
+      if (id === "react") return React;
+      if (id === "@/lib/maple/voice") return voice;
+      if (id === "./useMaple") return { useMaple: () => ({ state: snapshot }) };
+      throw new Error(`Unexpected familyWords dependency: ${id}`);
+    },
+  });
+  const wording = exports as FamilyWordsModule;
+  let result: { baby: ReturnType<FamilyWordsModule["useBabyWords"]>; voice: voice.Voice; milestones: ReturnType<FamilyWordsModule["useMilestoneWords"]>; ask: string } | undefined;
+  function Probe() {
+    result = { baby: wording.useBabyWords(), voice: wording.useVoice(), milestones: wording.useMilestoneWords(), ask: wording.useAskWho() };
+    if (snapshot?.baby) eq(wording.familyBabyWords(snapshot as Parameters<FamilyWordsModule["familyBabyWords"]>[0]), result.baby, "snapshot and hooks agree");
+    return null;
+  }
+  renderToStaticMarkup(React.createElement(Probe));
+  if (!result) throw new Error("Wording probe did not render");
+  return result;
+}
 
 function clientFunction<T>(name: string, context: Record<string, unknown> = {}): T {
   let found: ts.Node | undefined;
@@ -100,6 +137,27 @@ function duplicateNotice() {
 }
 
 async function main() {
+  await test("every family's client wording uses its saved nickname, sex and care-person name", () => {
+    for (const id of [1, 2]) {
+      const male = renderedWords({ family: { id, ask: "a family owner" }, baby: { name: "Rory Example", nickname: "Ro", sex: "male" }, care: { person: { name: "Jamie Example" } } });
+      eq([male.baby.name, male.baby.he, male.baby.him, male.baby.his], ["Ro", "he", "him", "his"]);
+      eq([male.voice.name, male.voice.pronoun, male.voice.mom, male.voice.hasMom], ["Ro", "he", "Jamie", true]);
+      eq(male.milestones, { familyOne: id === 1, name: "Ro" });
+      eq(male.ask, "a family owner");
+      const female = renderedWords({ family: { id }, baby: { name: "Avery Example", nickname: null, sex: "female" } });
+      eq([female.baby.name, female.baby.he, female.voice.pronoun, female.voice.mom, female.voice.hasMom], ["Avery", "she", "she", "Mom", false]);
+    }
+  });
+
+  await test("missing client state and an unnamed original-family profile stay neutral", () => {
+    for (const snapshot of [null, { family: { id: 1 }, baby: { name: "Baby", nickname: null, sex: null } }] satisfies WordState[]) {
+      const words = renderedWords(snapshot);
+      eq([words.baby.name, words.baby.he, words.voice.name, words.voice.pronoun, words.voice.mom, words.voice.hasMom], ["the baby", "the baby", "the baby", "they", "Mom", false]);
+      eq(words.milestones.name, "the baby");
+      eq(words.ask, "an owner");
+    }
+  });
+
   await test("adding an entry in another family leaves legacy queued entries in family 1", () => {
     const legacy = { client_id: "synthetic-legacy", entry, tries: 1 };
     const fresh = { client_id: "synthetic-new", entry: { ...entry, id: 124 }, tries: 1 };

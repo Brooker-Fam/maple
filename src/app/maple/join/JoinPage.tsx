@@ -29,7 +29,7 @@ const attempts = new Map<string, Promise<Response>>();
 
 const TITLE = cx(tone.display, "mt-6 text-[32px] leading-[1.08] text-balance");
 
-/** `askWho`: who sent the link, as page.tsx words it ("Matt or Brittany" while theirs is the only family). */
+/** `askWho`: who sent the link, as page.tsx words it. */
 export default function JoinPage({ askWho }: { askWho: string }) {
   const [phase, setPhase] = useState<Phase>({ kind: "working" });
   const [token, setToken] = useState<string | null>(null);

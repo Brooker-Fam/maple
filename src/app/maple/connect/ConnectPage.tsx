@@ -158,7 +158,7 @@ function Section({ mark, title, children }: { mark: ReactNode; title: string; ch
   );
 }
 
-/** `calendarNote`: the Brookers' calendar connector carries these tools too (page.tsx shows it while theirs is the only family). */
+/** `calendarNote`: the legacy family calendar connector carries these tools too. */
 export default function MapleConnectPage({ calendarNote }: { calendarNote: boolean }) {
   return (
     <div className="min-h-[100dvh]">
@@ -201,7 +201,7 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
             </p>
             {calendarNote && (
               <Note icon="calendar-check">
-                <strong>Already have the Brooker Family Calendar connector?</strong>{" "}
+                <strong>Already have the family calendar connector?</strong>{" "}
                 Maple&apos;s tools are in it too, so you can skip this. Reconnect it
                 if Claude asks, then in Maple&apos;s Log <Then /> <strong>Family</strong>,
                 turn on <strong>Calendar connector logs as me</strong>.

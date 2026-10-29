@@ -1,13 +1,14 @@
 import { NextRequest } from "next/server";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { done, eq, freshDb, ok, seedFamilies, sql, test } from "./harness";
+import { FAMILY_ONE_MILESTONE_WORDS, NEUTRAL_MILESTONE_WORDS, milestoneLabel, milestonesFor, milestoneWordsOf } from "../../src/lib/maple/milestones";
 
 /**
  * What another family's assistants are told: the MCP endpoint's initialize
  * and tools/list, and the in-app chat's whole prompt (instructions and tool
  * text, through the same wiring the chat route uses), for a made-up family 2
  * token. None of it may carry family 1's names, people, pets or clock, and it
- * must carry family 2's own. Family 1's instructions stay word for word. The
+ * must carry the current family's own, including family 1. The
  * model is a stand-in; nothing leaves the process.
  */
 
@@ -22,9 +23,33 @@ function familyOneWordsIn(text: string): string[] {
 }
 
 async function main() {
+  await test("all families get neutral milestone presets and legacy moments retain neutral labels", async () => {
+    const legacy = {
+      "met-zoe": "Met a pet",
+      "met-bruce": "Met a pet",
+      "emmett-held": "Held by a sibling",
+      "sapphire-read": "A story from a sibling",
+    };
+    for (const words of [FAMILY_ONE_MILESTONE_WORDS, NEUTRAL_MILESTONE_WORDS, { familyOne: false, name: "Ro" }]) {
+      const presets = milestonesFor(words);
+      eq(familyOneWordsIn(JSON.stringify(presets)), [], "selectable presets have no personal names or ids");
+      ok(presets.some((preset) => preset.id === "first-smile"), "ordinary firsts remain available");
+      for (const [id, label] of Object.entries(legacy)) {
+        ok(!presets.some((preset) => preset.id === id), "legacy preset is not offered for new moments");
+        eq(milestoneLabel(id, words), label, "saved legacy moment displays a neutral label");
+      }
+      eq(milestoneLabel("our-own-memory", words), "Our own memory", "custom saved milestones still render");
+    }
+    for (const familyId of [1, 2]) {
+      const words = milestoneWordsOf(familyId, { name: "Rory", nickname: "Ro" });
+      eq(milestoneLabel("day-10", words), "10 days of Ro", "saved profile names every family's celebrations");
+      eq(milestoneLabel("day-10", milestoneWordsOf(familyId, null)), "10 days old", "missing profile uses neutral celebration copy");
+    }
+  });
+
   const mcpRoute = await import("../../src/app/api/maple/[transport]/route");
   const { mintAccessToken } = await import("../../src/lib/mcp/auth");
-  const { MAPLE_INSTRUCTIONS } = await import("../../src/lib/maple/mcp-tools");
+  const { copyForFamily, mapleInstructions } = await import("../../src/lib/maple/mcp-tools");
   const { answerPost } = await import("../../src/lib/maple/chat/post");
   const { familyPostDeps } = await import("../../src/lib/maple/chat/family-deps");
   const { resolveFamily } = await import("../../src/lib/maple/family");
@@ -70,9 +95,13 @@ async function main() {
       ok(r.text.includes("America/Los_Angeles") && /\bRo\b/.test(r.text), "family 2's baby and clock");
     });
 
-    await test(`${shape}: family 1's token still gets the instructions word for word`, async () => {
+    await test(`${shape}: family 1's token gets its own saved baby, parent and clock`, async () => {
       const r = await mcp(`maple:${alpha.owner}`, undefined, initialize);
-      eq(instructionsOf(r.text), MAPLE_INSTRUCTIONS);
+      const expected = await copyForFamily({ familyId: 1, tz: "America/Chicago" });
+      const text = instructionsOf(r.text);
+      eq(text, mapleInstructions(expected));
+      eq(familyOneWordsIn(text), [], "no hardcoded family names or clock");
+      ok(text.includes("June") && text.includes("Dana") && text.includes("America/Chicago"), "saved family-1 profile");
     });
 
     await test(`${shape}: a family-2 chat turn's prompt and tools carry none of family 1's words`, async () => {

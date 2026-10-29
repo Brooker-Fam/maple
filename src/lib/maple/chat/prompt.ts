@@ -110,8 +110,8 @@ export function contextLine(opts: {
   const tz = baby.timezone || DEFAULT_TZ;
   const zone = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" }).formatToParts(now).find((p) => p.type === "timeZoneName")?.value ?? tz;
   const day = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "long", month: "short", day: "numeric" }).format(now);
-  const vo = opts.familyId === undefined ? FAMILY_ONE_VOICE : voiceFor(opts.familyId, baby);
-  const first = vo === FAMILY_ONE_VOICE ? (baby.nickname || baby.name || "Maple").split(" ")[0] : vo.Name;
+  const vo = voiceFor(opts.familyId ?? 0, baby);
+  const first = vo.Name;
   let age: string;
   if (baby.born_at) {
     const a = babyAge(baby.born_at, now, tz);

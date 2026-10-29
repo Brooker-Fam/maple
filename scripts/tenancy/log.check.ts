@@ -271,7 +271,7 @@ async function routeChecks(shape: Shape) {
     eq(((b.body.members as { email: string }[]) ?? []).map((m) => m.email).sort(), [beta.member, beta.owner, beta.viewer].sort());
     eq((await call(state.GET, "GET", "/api/maple/state", cookie(beta.owner))).status, 401);
     eq((await call(state.GET, "GET", "/api/maple/state", cookie(beta.owner, 1))).status, 401);
-    eq([a.body.family, b.body.family], [{ id: 1, ask: "Matt or Brittany" }, { id: 2, ask: "Emery" }], "who a viewer asks: family 1's words are fixed");
+    eq([a.body.family, b.body.family], [{ id: 1, ask: "Avery" }, { id: 2, ask: "Emery" }], "who a viewer asks comes from that family's current owners");
   });
 
   await test(`${shape}: GET state: family A's writes never change family B's rev`, async () => {

@@ -192,6 +192,22 @@ async function main() {
       eq((await sql(`SELECT family_id FROM maple_members WHERE email = $1`, [alphaId])).map((r) => r.family_id), ["1"]);
     });
 
+    await test(`${shape}: invalid and used invite errors reveal no family names, in every signup mode`, async () => {
+      const previous = process.env.MAPLE_SIGNUP;
+      try {
+        for (const mode of ["off", "invite", "open"]) {
+          process.env.MAPLE_SIGNUP = mode;
+          for (const token of ["invalid", alpha.inviteToken]) {
+            const result = await call(routes.join.POST, "/api/maple/auth/join", null, { method: "POST", body: { token } });
+            eq([result.status, result.body.error, sessionOf(result.res)], [400, "This invite link has already been used or has expired. Ask whoever sent it for a fresh one.", null], `${mode}: ${token === "invalid" ? "invalid" : "used"}`);
+          }
+        }
+      } finally {
+        if (previous === undefined) delete process.env.MAPLE_SIGNUP;
+        else process.env.MAPLE_SIGNUP = previous;
+      }
+    });
+
     const blobUrl = (path: string) => `${STORE}/${path}`;
     const moment = async (familyId: number, babyId: number, keys: string[]) =>
       Number(
@@ -365,9 +381,9 @@ async function main() {
       eq((await one(`SELECT sex FROM maple_babies WHERE id = $1`, [alpha.babyId])).sex, "female", "Alpha's baby untouched");
     });
 
-    await test(`${shape}: a viewer is told to ask an owner; only family 1's copy names the Brookers`, async () => {
+    await test(`${shape}: every family's viewer is told to ask an owner without hardcoded names`, async () => {
       eq((await call(routes.baby.PATCH, "/api/maple/baby", as(s, "viewer", "beta"), { method: "PATCH", body: { nickname: "X" } })).body.error, "You have view-only access. Ask an owner of this log if you'd like to help log.");
-      eq((await call(routes.baby.PATCH, "/api/maple/baby", { id: alpha.viewer }, { method: "PATCH", body: { nickname: "X" } })).body.error, "You have view-only access. Ask Matt or Brittany if you'd like to help log.");
+      eq((await call(routes.baby.PATCH, "/api/maple/baby", { id: alpha.viewer }, { method: "PATCH", body: { nickname: "X" } })).body.error, "You have view-only access. Ask an owner of this log if you'd like to help log.");
     });
 
     await test(`${shape}: accepting the chat's terms is recorded in the caller's family`, async () => {

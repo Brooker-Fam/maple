@@ -88,7 +88,7 @@ function ConnectAI() {
 }
 
 /**
- * The "Brooker Family Calendar" connector (the site admin login) carries
+ * The legacy family calendar connector (the site admin login) carries
  * Maple's tools too. An owner can have what it logs count as them, so it
  * isn't split off under "Admin".
  */
@@ -120,7 +120,7 @@ function CalendarConnectorAsMe() {
   return (
     <Toggle
       label="Calendar connector logs as me"
-      hint={`The Brooker Family Calendar connector (the site's admin login) can log ${w.name} too. ${
+      hint={`The family calendar connector (the site's admin login) can log ${w.name} too. ${
         someoneElse ? `Right now it logs as ${memberName(someoneElse)}.` : "Turn this on so what it logs counts as you, not “Admin”."
       }`}
       checked={stored === me.email}
@@ -152,7 +152,6 @@ const KEY_MARK = "flex h-9 w-9 shrink-0 items-center justify-center rounded-full
 function HandsFree() {
   const { api, toast, now } = useMaple();
   const w = useBabyWords();
-  const one = useFamilyOne();
   const [tokens, setTokens] = useState<PersonalToken[] | null>(null);
   const [fresh, setFresh] = useState<string | null>(null);
   const [label, setLabel] = useState("");
@@ -263,7 +262,7 @@ function HandsFree() {
               className="min-h-[44px] min-w-0 flex-1 bg-transparent text-base text-mp-ink outline-none placeholder:text-mp-ink-3"
               value={label}
               maxLength={40}
-              placeholder={one ? "Matt's iPhone" : "My iPhone"}
+              placeholder="My iPhone"
               aria-label="Key name"
               onChange={(e) => setLabel(e.target.value)}
             />

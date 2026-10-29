@@ -1,8 +1,7 @@
 import { clearAnalyticsContext, readAnalyticsContext } from "@/lib/analytics/context";
 import { identifyAnalyticsSoon, captureAppEventSoon } from "@/lib/analytics/server";
 import { NextRequest, NextResponse } from "next/server";
-import { inviteFamily, memberFor, redeemInvite, setSessionCookies } from "@/lib/maple/auth";
-import { FAMILY_ONE, signupMode } from "@/lib/maple/family";
+import { memberFor, redeemInvite, setSessionCookies } from "@/lib/maple/auth";
 import { checkUploadRateLimit } from "@/lib/rate-limit";
 import { captureServerException } from "@/lib/posthog-server";
 
@@ -24,7 +23,7 @@ export async function POST(request: NextRequest) {
     if (joined === "google") {
       return NextResponse.json({ error: "This invite is for a Google account. Join with Google, as the address it was sent to.", google: true }, { status: 400 });
     }
-    if (!joined) return NextResponse.json({ error: usedCopy(await inviteFamily(body.token)) }, { status: 400 });
+    if (!joined) return NextResponse.json({ error: "This invite link has already been used or has expired. Ask whoever sent it for a fresh one." }, { status: 400 });
     const member = await memberFor({ familyId: joined.familyId }, joined.id);
     const res = NextResponse.json({ ok: true, member });
     const actor = { familyId: joined.familyId, member: joined.id, role: member?.role };
@@ -38,10 +37,4 @@ export async function POST(request: NextRequest) {
     await captureServerException(error, { route: "POST /api/maple/auth/join" });
     return NextResponse.json({ error: "Couldn't join right now" }, { status: 500 });
   }
-}
-
-/** Only the Brookers' owners are Matt and Brittany; a link nobody can place reads as theirs only while they're the only family. */
-function usedCopy(familyId: number | null): string {
-  const theirs = familyId === FAMILY_ONE || (familyId === null && signupMode() === "off");
-  return `This invite link has already been used or has expired. Ask ${theirs ? "Matt or Brittany" : "whoever sent it"} for a fresh one.`;
 }

@@ -213,7 +213,7 @@ const cleanClientId = (raw: unknown): string | null => (typeof raw === "string" 
 // ── the person ────────────────────────────────────────────────────────
 
 /** Whose page it is when nobody has named anyone: the family's mom. */
-export const DEFAULT_CARE_PERSON = "Brittany";
+export const DEFAULT_CARE_PERSON = "Mom";
 
 /**
  * The family's one care person, or null when it has none. Family 1's page

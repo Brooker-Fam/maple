@@ -9,7 +9,7 @@ import {
   uploadPhoto,
   type EncodedPhoto,
 } from "@/lib/maple/image";
-import { milestoneLabel, milestonePreset, milestonesFor } from "@/lib/maple/milestones";
+import { milestoneLabel, milestonesFor } from "@/lib/maple/milestones";
 import { dayKey, formatDayLabel, formatTime, zonedTimeToUtc } from "@/lib/maple/time";
 import type { MomentData, PhotoRef } from "@/lib/maple/types";
 import { photoUrl } from "../EntryRow";
@@ -337,7 +337,8 @@ function MomentForm({ open, onClose, entry, preset }: SheetProps) {
   );
 
   // Chips: a non-preset tag (a monthly photo, a kept celebration) leads the row.
-  const custom = milestone && !milestonePreset(milestone, mw) ? milestone : null;
+  // Saved custom and retired tags remain visible and removable while editing.
+  const custom = milestone && !presets.some((m) => m.id === milestone) ? milestone : null;
   const chips = showAllChips ? presets : presets.slice(0, COLLAPSED_CHIPS);
 
   // Viewers (read-only role) see the moment, not a form.

@@ -21,7 +21,7 @@ import { LeafMark, ageShort, keptDate, keepsakeBirthAt } from "./keepsake";
 import { captionOf, extraNote, Lightbox, SafeImg, type Slide } from "./MomentPhotos";
 import { useMoments } from "./useMoments";
 import { useSheets } from "./sheets";
-import { useBabyWords, useMilestoneWords, type BabyWords } from "./familyWords";
+import { useBabyWords, useMilestoneWords } from "./familyWords";
 import { Button, Chip, EmptyState, SectionTitle, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
@@ -287,16 +287,13 @@ function MonthlyPrompt({
 // ── Firsts ───────────────────────────────────────────────────────────────
 
 /** Shorter names for the "still to come" chips (the found list has room for the full label). */
-const short = (w: BabyWords): Record<string, string> => ({
-  "met-bruce": "Bruce (eventually)",
-  "emmett-held": `Emmett held ${w.him}`,
-  "sapphire-read": `Sapphire read to ${w.him}`,
+const short: Record<string, string> = {
   "cord-stump": "Cord stump off",
   "first-outing": "First walk",
   "met-grandparents": "Grandparents",
   "first-smile": "First smile",
   "crib-night": "Crib night",
-});
+};
 
 function FirstsShelf({
   moments,
@@ -314,7 +311,7 @@ function FirstsShelf({
   onAdd: (milestone: string) => void;
 }) {
   const [all, setAll] = useState(false);
-  const shortLabels = short(useBabyWords());
+  const shortLabels = short;
   const presets = milestonesFor(useMilestoneWords());
   // The earliest moment for each first.
   const found = new Map<string, Moment>();

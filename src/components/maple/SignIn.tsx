@@ -139,7 +139,7 @@ export default function SignIn() {
         </div>
         <h1 className={cx(tone.display, "mt-6 text-[34px] leading-[1.05]")}>Maple&apos;s Log</h1>
         <p className={cx(tone.muted, "mx-auto mt-2 max-w-[18rem] text-[15px] leading-relaxed text-balance")}>
-          {open ? "Your family's newborn log." : <>Just for Maple&apos;s family.</>}
+          Your family&apos;s newborn log.
         </p>
 
         {notice && (
@@ -177,7 +177,7 @@ export default function SignIn() {
           {error && !showPassword && <p role="alert" className="text-sm text-mp-danger">{error}</p>}
           {nothing && (
             <p className={cx(tone.muted, "text-sm")}>
-              {open ? "Sign-in isn't set up yet." : <>Sign-in isn&apos;t set up yet. Ask Matt to finish setting up Maple&apos;s Log.</>}
+              Sign-in isn&apos;t set up yet. Please contact the app administrator.
             </p>
           )}
         </div>

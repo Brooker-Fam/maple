@@ -3,7 +3,7 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { publicOrigin, verifyAccessToken, verifyBasicAuthHeader } from "@/lib/mcp/auth";
 import { isRemoved } from "@/lib/maple/auth";
 import { ADMIN_MEMBER_ID, adminFamilyId, carrierFamily, familyForAuth, FAMILY_ONE, memberIdFromSub } from "@/lib/maple/family";
-import { copyForFamily, FAMILY_ONE_COPY, mapleInstructions, registerMapleTools, unknownFamilyCopy, type ToolCopy } from "@/lib/maple/mcp-tools";
+import { copyForFamily, mapleInstructions, registerMapleTools, unknownFamilyCopy, type ToolCopy } from "@/lib/maple/mcp-tools";
 import { captureServerException } from "@/lib/posthog-server";
 
 /**
@@ -58,7 +58,7 @@ function buildHandler(copy: ToolCopy): Handler {
  * The tool text and instructions speak in the caller's own family's words
  * (copyForFamily: its baby, its mom, its clock), so one family's names never
  * reach another's assistant. One handler per family's words, kept while
- * they're in use; family 1's is FAMILY_ONE_COPY's, read from nothing.
+ * they're in use. Every family's copy comes from its own saved profile.
  */
 const handlers = new Map<string, Handler>();
 const HANDLERS_KEPT = 64;
@@ -78,7 +78,6 @@ function handlerFor(familyId: number, copy: ToolCopy): Handler {
 
 async function copyFor(extra: { sub?: unknown; fam?: unknown } | undefined): Promise<{ familyId: number; copy: ToolCopy }> {
   const familyId = carrierFamily(extra?.fam) ?? FAMILY_ONE;
-  if (familyId === FAMILY_ONE) return { familyId, copy: FAMILY_ONE_COPY };
   try {
     const ctx = await familyForAuth({ sub: extra?.sub, fam: familyId });
     if (ctx) return { familyId, copy: await copyForFamily(ctx) };

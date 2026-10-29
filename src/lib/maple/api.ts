@@ -76,7 +76,7 @@ export function withMember(route: string, handler: Handler, opts: { write?: bool
       if (ctx.status === "onboarding" && !opts.setup) return finish(json(STILL_SETTING_UP, 403));
       const mismatch = familyMismatch(request, ctx);
       if (mismatch) return finish(mismatch);
-      if (opts.write && member.role === "viewer") return finish(json({ error: viewOnlyCopy(ctx) }, 403));
+      if (opts.write && member.role === "viewer") return finish(json({ error: viewOnlyCopy() }, 403));
       return finish(await handler(request, member, ctx));
     } catch (error) {
       const response = await errorResponse(route, error, fam);
@@ -111,11 +111,9 @@ export function familyName(ctx: Pick<FamilyCtx, "familyId">, raw: unknown, max: 
   }
 }
 
-/** Family 1's copy names its owners; another family must never read the Brookers' names. */
-export function viewOnlyCopy(ctx: Pick<FamilyCtx, "familyId">): string {
-  return ctx.familyId === FAMILY_ONE
-    ? "You have view-only access. Ask Matt or Brittany if you'd like to help log."
-    : "You have view-only access. Ask an owner of this log if you'd like to help log.";
+/** Permission errors use the same help text for every family. */
+export function viewOnlyCopy(): string {
+  return "You have view-only access. Ask an owner of this log if you'd like to help log.";
 }
 
 /** `fam`: the caller's family, so a feed-time error reads in its clock and words. */

@@ -406,7 +406,7 @@ check("GLM gets no Anthropic cache markers; a chat closed to her says so in its 
   eq(glm[1].content, CHAT_ADDENDUM, "her page open: the usual addendum");
   eq(systemBlocks({ viewer: false, care: false, model: GLM, copy: FAMILY_ONE_COPY })[1].content, CHAT_ADDENDUM_CARE_CLOSED, "closed: says so");
   ok(CHAT_ADDENDUM_CARE_CLOSED.startsWith(CHAT_ADDENDUM) && /hasn't let this chat see her food, drinks, medicines/.test(CHAT_ADDENDUM_CARE_CLOSED), "the closed addendum adds to the usual one");
-  ok(/before logging any medicine other than vitamin D, ask "Maple's or \w+'s\?"/.test(CHAT_ADDENDUM_CARE_CLOSED), "closed: asks whose before any medicine but vitamin D, since her list is out of sight");
+  ok(/before logging any medicine other than vitamin D, ask "The baby's or Mom's\?"/.test(CHAT_ADDENDUM_CARE_CLOSED), "closed: asks whose before any medicine but vitamin D, since her list is out of sight");
   eq(systemBlocks({ viewer: true, care: false, model: GLM, copy: FAMILY_ONE_COPY })[1].content, CHAT_ADDENDUM_VIEWER, "a viewer's stays the viewer's");
 });
 

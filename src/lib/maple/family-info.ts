@@ -1,4 +1,4 @@
-import { FAMILY_ONE, type FamilyScope } from "./family";
+import type { FamilyScope } from "./family";
 import type { FamilyInfo, Member } from "./types";
 
 /**
@@ -13,7 +13,7 @@ export function ownersToAsk(members: readonly Member[]): string {
   return names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
 
-/** What the app learns about its family (MapleState.family). Family 1's words are fixed, whatever its rows say. */
+/** What the app learns about its family (MapleState.family), using its current owners. */
 export function familyInfo(fam: Pick<FamilyScope, "familyId">, members: readonly Member[]): FamilyInfo {
-  return { id: fam.familyId, ask: fam.familyId === FAMILY_ONE ? "Matt or Brittany" : ownersToAsk(members) };
+  return { id: fam.familyId, ask: ownersToAsk(members) };
 }

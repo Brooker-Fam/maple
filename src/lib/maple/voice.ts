@@ -1,14 +1,6 @@
 import type { Baby } from "./types";
 
-/**
- * How copy names the baby and her mom. Every family but the Brookers gets
- * its words from its own rows: the baby's nickname or first name, pronouns
- * from `sex` ("they" when it isn't set), and the care person's first name.
- * The Brookers' family keeps exactly the words the app has always used,
- * whatever their rows say, so nothing they read changes.
- */
-
-const BROOKERS = 1;
+/** Names and pronouns come only from this family's saved profile. */
 
 export type Pronoun = "she" | "he" | "they";
 
@@ -90,11 +82,10 @@ export function makeVoice(opts: { name: string; pronoun: Pronoun; mom?: string |
   };
 }
 
-/** The Brookers' words, as the app has always said them. */
-export const FAMILY_ONE_VOICE: Voice = makeVoice({ name: "Maple", pronoun: "she", mom: "Brittany" });
+/** Neutral compatibility fallback for callers without a saved family profile. */
+export const FAMILY_ONE_VOICE: Voice = makeVoice({ name: "the baby", pronoun: "they" });
 
 /** One family's voice. `mom`: the care person's name (carePersonName), null without a page. */
-export function voiceFor(familyId: number, baby: (Pick<Baby, "name" | "nickname"> & { sex?: Baby["sex"] }) | null | undefined, mom?: string | null): Voice {
-  if (familyId === BROOKERS) return FAMILY_ONE_VOICE;
+export function voiceFor(_familyId: number, baby: (Pick<Baby, "name" | "nickname"> & { sex?: Baby["sex"] }) | null | undefined, mom?: string | null): Voice {
   return makeVoice({ name: babyFirstName(baby), pronoun: pronounFor(baby?.sex), mom });
 }

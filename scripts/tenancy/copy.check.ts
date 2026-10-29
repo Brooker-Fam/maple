@@ -18,10 +18,10 @@ import * as quickRoute from "../../src/app/api/maple/quick/route";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type Seed } from "./harness";
 
 /**
- * Family 1 reads exactly what it read before names and pronouns came from
- * data: every string below is compared with copy.family-one.json, recorded
- * from the code as it was. `--write` records it again (only ever from that
- * code). The clock is frozen once the made-up families are seeded, so tool
+ * Neutral default copy and family-scoped replies are compared with the
+ * reviewed copy.family-one.json fixture. `--write` refreshes the fixture
+ * after intentional copy changes. The clock is frozen once the made-up
+ * families are seeded, so tool
  * and Siri replies come out the same on every run.
  */
 
@@ -373,21 +373,23 @@ function libCopy(baby: Pick<Baby, "name" | "nickname" | "sex">, vo: Voice): Reco
 }
 
 async function otherFamilies(seed: Seed, want: Record<string, string>) {
-  await test("today's alerts, celebrations, feed questions and errors, and her notes: family 1's words exactly as before", () => {
-    const t = libCopy({ name: "Maple Jane", nickname: "Maple", sex: "female" }, FAMILY_ONE_VOICE);
-    eq(t["alert.weight-10"], "Down 11.4% from birth weight | Maple has lost 11.4% of her birth weight. That's more than expected, so please call your pediatrician today.");
+  await test("today's alerts, celebrations, feed questions and errors, and her notes: family 1 uses its saved profile without changing the medical guidance", () => {
+    const baby = { name: "Juniper Test", nickname: "June", sex: "female" } as const;
+    const voice = voiceFor(1, baby, "Dana");
+    const t = libCopy(baby, voice);
+    eq(t["alert.weight-10"], "Down 11.4% from birth weight | June has lost 11.4% of her birth weight. That's more than expected, so please call your pediatrician today.");
     eq(t["alert.no-pee-8h"], "No wet diaper in 8 hours | No wet diaper in 8 hours can mean she needs more milk. Please call your pediatrician now, especially if her pee was dark or her mouth looks dry.");
     eq(t["alert.feed-gap"], "5h 00m since her last feed | Please wake her to feed: undress her, change her diaper, or try skin-to-skin. If she's too sleepy to feed, call your pediatrician.");
-    eq(t["alert.first-checkup"], `First checkup | ${guidelines.FIRST_CHECKUP_NOTE}`);
+    eq(t["alert.first-checkup"], `First checkup | ${guidelines.firstCheckupNote(voice)}`);
     eq([t["celebration.first-poop"], t["celebration.first-bath"]], ["Her first poop", "Her first bath"]);
     eq(t["feed.question"], "When did she go on the Right? When did she come off the Right? When did she go on the Right?");
-    eq(t["feed.future"], "That time is in the future; it's 10:04 AM for Maple.");
+    eq(t["feed.future"], "That time is in the future; it's 10:04 AM for June.");
     eq(t["feed.break"], "Can't be before she came off (10:04 AM). For no break, pick 10:04.");
     eq(t["feed.lastFed"], "Counted from when her last feed began. A long back-and-forth stretch counts from 40 minutes before she finished, or from when she went on her last side if that side alone ran longer.");
-    eq(t["care.opioid"], guidelines.OPIOID_NOTE.body);
-    eq(t["care.nursing"], guidelines.LABEL_NOT_WHILE_NURSING.body);
-    eq(t["care.intrusive"], guidelines.INTRUSIVE.body);
-    eq(t["care.crisis"], guidelines.CRISIS.body);
+    eq(t["care.opioid"], guidelines.opioidNote(voice).body);
+    eq(t["care.nursing"], guidelines.labelNotWhileNursing(voice).body);
+    eq(t["care.intrusive"], guidelines.intrusive(voice).body);
+    eq(t["care.crisis"], guidelines.crisis(voice).body);
   });
 
   await test("today's alerts, celebrations, feed questions and errors, and her notes: a boy in another family is he and Ro", () => {
@@ -405,12 +407,24 @@ async function otherFamilies(seed: Seed, want: Record<string, string>) {
   const dana = toolCopy(3, { name: "Sage Test", nickname: null, sex: "female" }, "Dana Test", "America/Denver");
   const unnamed = toolCopy(4, UNNAMED, null, "America/Chicago");
 
-  await test("family 1's copy is pinned, whatever its rows say", () => {
-    eq(toolCopy(1, RO, "Dana", "America/Chicago"), FAMILY_ONE_COPY);
+  await test("assistant instructions and examples contain no hardcoded relatives, pets or family pedigree", () => {
+    for (const copy of [FAMILY_ONE_COPY, beta, dana, unnamed]) {
+      const text = JSON.stringify([mapleInstructions(copy), recordTools((server) => registerMapleTools(server, copy))]);
+      ok(!/\b(?:Zoe|Emmett|Sapphire|Bruce|Matt|Brooker|Maple Jane)\b/i.test(text), "tool examples and instructions are generic");
+    }
+  });
+
+  await test("family 1's copy uses its saved baby, parent and clock, with neutral fallbacks", () => {
+    const copy = toolCopy(1, RO, "Dana", "America/Chicago");
+    eq(copy.v.name, "Ro");
+    eq(copy.v.pronoun, "he");
+    eq(copy.v.mom, "Dana");
+    eq(copy.tz, "America/Chicago");
     eq(voiceFor(1, UNNAMED, null), FAMILY_ONE_COPY.v);
-    eq(mapleInstructions(FAMILY_ONE_COPY), want.MAPLE_INSTRUCTIONS, "the instructions template renders family 1's literal");
-    const pinned = toolText(recordTools((server) => registerMapleTools(server, toolCopy(1, RO, "Dana", "America/Chicago"))), "tool");
-    eq(Object.keys(pinned).filter((k) => pinned[k] !== want[k]), [], "tool text");
+    eq(mapleInstructions(FAMILY_ONE_COPY), want.MAPLE_INSTRUCTIONS, "neutral compatibility instructions are still reviewed");
+    const named = JSON.stringify(recordTools((server) => registerMapleTools(server, copy)));
+    ok(named.includes("Ro") && named.includes("America/Chicago"), "tool text uses the supplied profile");
+    ok(!/Brittany|Brooker|Maple Jane/.test(named), "no hardcoded identity overrides the profile");
   });
 
   await test("the server's they-voice: no \"they\" written straight before a verb in -s", () => {
@@ -517,7 +531,7 @@ async function main() {
       eq(Object.keys(want).filter((k) => !(k in got)), []);
     });
     const changed = Object.keys(want).filter((k) => k in got && got[k] !== want[k]);
-    await test("family 1: every string reads exactly as before", () => {
+    await test("reviewed default and family copy matches its fixture", () => {
       if (changed.length) {
         const k = changed[0];
         const a = got[k];

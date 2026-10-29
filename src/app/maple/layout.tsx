@@ -1,12 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import MapleUiScope from "@/components/maple/MapleUiScope";
-import { signupMode } from "@/lib/maple/family";
 import "./maple.css";
 
-/** Names the Brookers' baby only while theirs is the only family. */
 export const generateMetadata = (): Metadata => ({
   title: "Maple's Log",
-  description: signupMode() === "off" ? "Feeds, diapers, sleep and little moments for Maple Jane." : "Feeds, diapers, sleep and little moments, for the whole family.",
+  description: "Feeds, diapers, sleep and little moments, for the whole family.",
   manifest: "/maple.webmanifest",
   appleWebApp: {
     capable: true,

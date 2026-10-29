@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Member, Role } from "@/lib/maple/types";
 import { MAPLE_HOST } from "@/lib/maple/origin";
 import { useCare } from "../care/useCare";
-import { useBabyWords, useFamilyOne } from "../familyWords";
+import { useBabyWords } from "../familyWords";
 import { Icon } from "../icons";
 import { Avatar, Button, Field, MEMBER_PALETTE, Segmented, Sheet, cx, memberColor, tone } from "../ui";
 import { useMaple } from "../useMaple";
@@ -287,7 +287,6 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
 
 function InviteByEmail({ onInvited }: { onInvited: () => void }) {
   const { api, refresh, toast } = useMaple();
-  const one = useFamilyOne();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "viewer">("member");
   const [busy, setBusy] = useState(false);
@@ -330,7 +329,7 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
         autoCapitalize="none"
         autoComplete="off"
         spellCheck={false}
-        placeholder={one ? "brittany@gmail.com" : "name@gmail.com"}
+        placeholder="name@example.com"
         aria-label="Their email address"
         value={email}
         onChange={(e) => setEmail(e.target.value)}

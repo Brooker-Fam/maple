@@ -6,9 +6,8 @@
  * also turn up: "monthly-N" (her monthly photo, lined up in "Growing up") and
  * celebration ids from insights.ts kept as moments ("week-1", "month-2", ...).
  *
- * Four presets name the Brookers' own people and pets, so only family 1
- * gets them (and only family 1's labels read them); every other family
- * gets the rest, and its baby's name where a label has one.
+ * Every family gets the same neutral presets. Older saved personal preset
+ * ids still render with neutral labels, without changing anyone's records.
  *
  * Isomorphic: used by the app, describe.ts and the MCP tools.
  */
@@ -27,10 +26,6 @@ export type MilestonePreset = {
 export const MILESTONES: readonly MilestonePreset[] = [
   { id: "hello-world", label: "First photo", emoji: "🍁", hint: "The very first photo" },
   { id: "held-finger", label: "Held a finger", emoji: "🤲", hint: "That tiny grip" },
-  { id: "met-zoe", label: "Met Zoe", emoji: "🐾", hint: "The couch commander approves" },
-  { id: "met-bruce", label: "Bruce acknowledged Maple (eventually)", emoji: "🐈", hint: "From a dignified distance" },
-  { id: "emmett-held", label: "Emmett held Maple", emoji: "🥋", hint: "Big brother, steady arms" },
-  { id: "sapphire-read", label: "Sapphire read to Maple", emoji: "📖", hint: "A story from big sister" },
   { id: "first-bath", label: "First bath", emoji: "🛁", hint: "Sponge bath or the first real one" },
   { id: "cord-stump", label: "Cord stump fell off", emoji: "🌰", hint: "A tiny acorn moment" },
   { id: "first-checkup", label: "First checkup", emoji: "🩺" },
@@ -45,32 +40,39 @@ export const MILESTONES: readonly MilestonePreset[] = [
   { id: "rolled-over", label: "Rolled over", emoji: "🔄" },
 ];
 
-const FAMILY_ONE_ONLY = new Set(["met-zoe", "met-bruce", "emmett-held", "sapphire-read"]);
+/** Compatibility labels only: these ids are never offered for new moments. */
+const LEGACY_PRESETS: readonly MilestonePreset[] = [
+  { id: "met-zoe", label: "Met a pet", emoji: "🐾" },
+  { id: "met-bruce", label: "Met a pet", emoji: "🐈" },
+  { id: "emmett-held", label: "Held by a sibling", emoji: "🤲" },
+  { id: "sapphire-read", label: "A story from a sibling", emoji: "📖" },
+];
 
 /** Whose presets a list or label uses, and the baby's first name ("the baby" before one is picked). */
 export type MilestoneWords = { familyOne: boolean; name: string };
 
-export const FAMILY_ONE_MILESTONE_WORDS: MilestoneWords = { familyOne: true, name: "Maple" };
+export const FAMILY_ONE_MILESTONE_WORDS: MilestoneWords = { familyOne: true, name: "the baby" };
 
-/** One family's words, on the server: family 1's are fixed, every other family's name comes from its baby. */
+/** Every family's words come from its saved baby profile. */
 export function milestoneWordsOf(familyId: number, baby: Pick<Baby, "name" | "nickname"> | null | undefined): MilestoneWords {
-  return familyId === 1 ? FAMILY_ONE_MILESTONE_WORDS : { familyOne: false, name: babyFirstName(baby) };
+  return { familyOne: familyId === 1, name: babyFirstName(baby) };
 }
 
 /** No family to go by: no family's own presets or names. */
 export const NEUTRAL_MILESTONE_WORDS: MilestoneWords = { familyOne: false, name: "the baby" };
 
-const GENERIC = MILESTONES.filter((m) => !FAMILY_ONE_ONLY.has(m.id));
-
 /** The presets this family gets, in shelf order. */
 export function milestonesFor(w: MilestoneWords): readonly MilestonePreset[] {
-  return w.familyOne ? MILESTONES : GENERIC;
+  // Keep the shared caller contract while every family uses the same list.
+  void w;
+  return MILESTONES;
 }
 
-const BY_ID = new Map(MILESTONES.map((m) => [m.id, m]));
+const BY_ID = new Map([...MILESTONES, ...LEGACY_PRESETS].map((m) => [m.id, m]));
 
 export function milestonePreset(id: string | null | undefined, w: MilestoneWords): MilestonePreset | null {
-  if (!id || (!w.familyOne && FAMILY_ONE_ONLY.has(id))) return null;
+  void w;
+  if (!id) return null;
   return BY_ID.get(id) ?? null;
 }
 
@@ -98,7 +100,7 @@ export function milestoneLabel(id: string | null | undefined, w: MilestoneWords)
   if (id === "born") return "Hello, world";
   if ((m = /^week-(\d+)$/.exec(id))) return `${plural(Number(m[1]), "week")} old`;
   if ((m = /^month-(\d+)$/.exec(id))) return `${plural(Number(m[1]), "month")} old`;
-  if ((m = /^day-(\d+)$/.exec(id))) return w.familyOne ? `${m[1]} days of Maple` : w.name === "the baby" ? `${m[1]} days old` : `${m[1]} days of ${w.name}`;
+  if ((m = /^day-(\d+)$/.exec(id))) return w.name === "the baby" ? `${m[1]} days old` : `${m[1]} days of ${w.name}`;
   if ((m = /^diapers-(\d+)$/.exec(id))) return `Diaper #${m[1]}`;
   if ((m = /^feeds-(\d+)$/.exec(id))) return `Feed #${m[1]}`;
   if (/^regained-/.test(id)) return "Back to birth weight";

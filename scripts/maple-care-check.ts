@@ -13,6 +13,7 @@
  * admin login. Times are wall clock in America/New_York.
  */
 import { FAMILY_ONE_VOICE } from "../src/lib/maple/voice";
+import { MAPLE_INSTRUCTIONS } from "../src/lib/maple/mcp-tools";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -1063,7 +1064,7 @@ check("T-ENG-16 MOM_SIGNS: 20 signs, 5 emergency, 13 now, 2 today, with racing_h
 // ── T-ENG-17 copy ────────────────────────────────────────────────────────
 
 check("T-ENG-17 crisis and opioid copy", () => {
-  has(G.CRISIS.body, "they're about hurting Maple or someone else");
+  has(G.CRISIS.body, "they're about hurting the baby or someone else");
   eq(G.CRISIS.label, "Call 911 or 988 now");
   eq(G.CRISIS_PARTNER.label, "Call 911 now");
   eq(G.CRISIS_LEAD, "Thank you for being honest about this.");
@@ -1072,18 +1073,14 @@ check("T-ENG-17 crisis and opioid copy", () => {
 });
 
 const INSTRUCTIONS_ADDITION =
-  'Her mom\'s own medicines and recovery: use mom_status, log_mom_medicine, set_mom_medicine, log_mom_temperature, add_mom_question and fix_mom_entry, never log_medicine (that\'s Maple\'s). Answer "can she take X yet?" only from mom_status, using its line and sentence (for example "Ibuprofen OK after 8:10 AM, by her schedule. Last: 2:10 AM · Matt. 1 of 4 tablets in the last 24 hours."). Never say whether a medicine is safe while nursing; suggest her OB, Maple\'s pediatrician or a pharmacist. Never fill in a dose, interval, limit or how many to take. If anyone mentions thoughts of harming themselves or someone else, tell them: call 911 if anyone is in immediate danger; otherwise call or text 988, any time. The National Maternal Mental Health Hotline (call or text 1-833-852-6262, 24/7) is there too, but it isn\'t a crisis line.';
+  'Their mom\'s own medicines and recovery: use mom_status, log_mom_medicine, set_mom_medicine, log_mom_temperature, add_mom_question and fix_mom_entry, never log_medicine (that\'s the baby\'s). Answer "can she take X yet?" only from mom_status, using its line and sentence (for example "Ibuprofen OK after 8:10 AM, by her schedule. Last: 2:10 AM. 1 of 4 tablets in the last 24 hours."). Never say whether a medicine is safe while nursing; suggest her OB, the baby\'s pediatrician or a pharmacist. Never fill in a dose, interval, limit or how many to take. If anyone mentions thoughts of harming themselves or someone else, tell them: call 911 if anyone is in immediate danger; otherwise call or text 988, any time. The National Maternal Mental Health Hotline (call or text 1-833-852-6262, 24/7) is there too, but it isn\'t a crisis line.';
 
-check("T-ENG-17 the MAPLE_INSTRUCTIONS paragraph (§10.1, verbatim; D's mcp-tools.ts)", () => {
-  // Read as text: importing mcp-tools would pull in the server.
-  const src = fs.readFileSync(path.join(ROOT, "src/lib/maple/mcp-tools.ts"), "utf8");
-  const start = src.indexOf("export const MAPLE_INSTRUCTIONS = `");
-  ok(start >= 0, "MAPLE_INSTRUCTIONS not found");
-  const body = src.slice(start + "export const MAPLE_INSTRUCTIONS = `".length, src.indexOf("`;", start));
+check("T-ENG-17 generated assistant instructions preserve the medicine and crisis guidance", () => {
+  const body = MAPLE_INSTRUCTIONS;
   has(body, "call 911 if anyone is in immediate danger; otherwise call or text 988");
   // ChatGPT may show only the first ~500 characters: the crisis numbers are inside them too.
   ok(body.slice(0, 500).includes("988") && body.slice(0, 500).includes("911"), "988 and 911 within the first 500 characters");
-  has(body.replace(/\\`/g, "`"), INSTRUCTIONS_ADDITION, "the whole paragraph");
+  has(body, INSTRUCTIONS_ADDITION, "the whole paragraph");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -8,12 +8,12 @@ import { cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
 /**
- * Today's hero: a maple sapling that grows a leaf for every week of Maple's
+ * Today's hero: a maple sapling that grows a leaf for every week of the baby's
  * life and follows the real seasons (rust in October, bare with fairy lights
  * in winter, buds in spring, green in summer, red again on her birthday).
  * It stands still (no ambient motion); `sway` is there for a page that wants it.
  * The one movement is earned: the first daytime visit after a week turns
- * over, the new leaf unfurls once. Zoe naps at its roots at night and pricks
+ * over, the new leaf unfurls once. A dog naps at its roots at night and pricks
  * up an ear while a timer runs.
  */
 
@@ -164,8 +164,8 @@ function Unfurl({ on, children }: { on: boolean; children: ReactNode }) {
   );
 }
 
-/** Zoe, the small black couch commander with the grey muzzle, curled up asleep. */
-export function Zoe({ alert, className }: { alert?: boolean; className?: string }) {
+/** A small dog curled up asleep. */
+export function PetDog({ alert, className }: { alert?: boolean; className?: string }) {
   return (
     <svg viewBox="0 0 48 30" className={className} aria-hidden>
       {!alert && (
@@ -264,7 +264,7 @@ export default function Hero() {
       <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} ${leaves === 1 ? "leaf" : "leaves"}, one for each week`} className="mp-tree-portrait">
         {/* Still, not swaying: nothing on Today moves unless something happened. */}
         <Sapling leaves={leaves} season={season} fresh={fresh} className="h-[72px] w-[66px]" />
-        {night && <Zoe alert={timerRunning} className="absolute bottom-[1px] left-0 h-[20px] w-[33px]" />}
+        {night && <PetDog alert={timerRunning} className="absolute bottom-[1px] left-0 h-[20px] w-[33px]" />}
       </button>
     </header>
   );

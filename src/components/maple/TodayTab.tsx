@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { dayKey, formatClock, formatDuration } from "@/lib/maple/time";
 import AlertStack from "./AlertCard";
 import type { NavTarget } from "./AppNav";
-import { babyFirstName, useBabyWords, useFamilyOne } from "./familyWords";
+import { babyFirstName, useBabyWords } from "./familyWords";
 import Celebrations from "./Celebrations";
 import { AskChatButton } from "./chat/AskChat";
 import Dock from "./Dock";
@@ -171,8 +171,8 @@ function TitleTicker() {
   return null;
 }
 
-/** Bruce, curled up, guarding the empty page. */
-function Bruce({ className }: { className?: string }) {
+/** A curled-up cat for the empty page. */
+function RestingCat({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 64 36" className={className} aria-hidden>
       <g className="fill-mp-ink-2">
@@ -189,15 +189,13 @@ function Bruce({ className }: { className?: string }) {
 
 function FreshPage({ readOnly }: { readOnly: boolean }) {
   const w = useBabyWords();
-  const one = useFamilyOne();
   return (
     <section className={cx(tone.card, "px-6 py-8 text-center")}>
-      <Bruce className="mx-auto h-10 w-[72px]" />
+      <RestingCat className="mx-auto h-10 w-[72px]" />
       <p className={cx(tone.heading, "mt-3 text-[20px]")}>A fresh page</p>
       <p className={cx(tone.muted, "mx-auto mt-1 max-w-[18rem] text-[15px]")}>
         {readOnly ? "Nothing logged yet today. Check back soon." : `Tap a button below when ${w.name} eats, sleeps, or needs a change.`}
       </p>
-      {one && <p className={cx(tone.faint, "mt-3 text-xs")}>Bruce is guarding an empty page.</p>}
     </section>
   );
 }
