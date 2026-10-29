@@ -47,8 +47,13 @@ const clearToasts = async () => {
   await page.waitForFunction(() => ![...document.querySelectorAll("button")].some((button) => button.textContent === "Undo"));
 };
 const closeSaved = () => page.getByRole("dialog").waitFor({ state: "hidden" });
+const openManual = async (label) => {
+  const button = page.getByRole("button", { name: label, exact: true });
+  if (!await button.isVisible()) await page.getByText("Log manually", { exact: true }).click();
+  await button.click();
+};
 const saveFood = async (description) => {
-  await page.getByRole("button", { name: "Ate something", exact: true }).click();
+  await openManual("Ate something");
   await page.getByLabel("What was it?", { exact: true }).fill(description);
   await page.getByRole("button", { name: "Log food", exact: true }).click();
   await closeSaved();
@@ -76,7 +81,7 @@ try {
   console.log("PASS item-only draft: Close and Escape protect protein edits; explicit discard saves nothing");
 
   await reset();
-  await page.getByRole("button", { name: "Other drink", exact: true }).click();
+  await openManual("Other drink");
   await page.getByLabel("Amount in oz", { exact: true }).fill("7..2");
   await page.getByRole("dialog", { name: "Had a drink", exact: true }).getByRole("button", { name: "Close", exact: true }).click();
   await discardDraft.waitFor();
@@ -88,7 +93,7 @@ try {
   console.log("PASS invalid drink draft: closing keeps typed text behind discard confirmation");
 
   await reset();
-  await page.getByRole("button", { name: "Ate something", exact: true }).click();
+  await openManual("Ate something");
   await page.getByLabel("What was it?", { exact: true }).fill("Synthetic egg toast");
   await page.getByRole("button", { name: "Add food item", exact: true }).click();
   await page.getByLabel("Food 1 name", { exact: true }).fill("Egg");
@@ -193,7 +198,7 @@ try {
   console.log("PASS historical refresh failure: existing editor retains its record and draft");
 
   await reset();
-  await page.getByRole("button", { name: "Other drink", exact: true }).click();
+  await openManual("Other drink");
   await page.getByLabel("Drink", { exact: true }).fill("Water");
   await page.getByLabel("Amount in oz", { exact: true }).fill("8");
   await page.evaluate(() => window.__nutritionFixture.setUnits("metric"));
@@ -203,12 +208,12 @@ try {
   console.log("PASS draft units: settings changes do not reinterpret typed quantities");
 
   await reset();
-  await page.getByRole("button", { name: "Ate something", exact: true }).click();
+  await openManual("Ate something");
   await page.getByLabel("What was it?", { exact: true }).fill("Sam's private meal draft");
   await page.evaluate(() => window.__nutritionFixture.switchFamily());
   await page.getByRole("heading", { name: "Casey", exact: true }).waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0, "Switching families closes the previous family's nutrition draft");
-  await page.getByRole("button", { name: "Ate something", exact: true }).click();
+  await openManual("Ate something");
   assert.equal(await page.getByLabel("What was it?", { exact: true }).inputValue(), "");
   assert.equal((await snapshot()).requests.length, 0);
   console.log("PASS family switch: maternal drafts never carry into another family");
@@ -252,7 +257,7 @@ try {
   console.log("PASS food: capture, editing exact local time, removal and restoration");
 
   await clearToasts();
-  await page.getByRole("button", { name: "Other drink", exact: true }).click();
+  await openManual("Other drink");
   await page.getByLabel("Drink", { exact: true }).fill("Tea");
   await page.getByRole("button", { name: "Log drink", exact: true }).click();
   await closeSaved();
@@ -279,7 +284,7 @@ try {
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   console.log("PASS concurrency: stale edits cannot overwrite another caregiver");
 
-  await page.getByRole("button", { name: "Ate something", exact: true }).click();
+  await openManual("Ate something");
   await page.getByLabel("What was it?", { exact: true }).fill("Fruit and yogurt");
   await page.getByRole("button", { name: "Just now · Change time", exact: true }).click();
   await page.getByLabel("Eaten at: time", { exact: true }).fill("23:00");
