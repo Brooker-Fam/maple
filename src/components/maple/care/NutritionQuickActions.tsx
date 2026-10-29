@@ -45,7 +45,7 @@ export default function NutritionQuickActions({ care, day, today, tz, save, savi
     <button type="button" disabled={saving} aria-label={`Log water, ${waterLabel}`} onClick={() => void logWater()} className={cx(tone.card, "flex min-h-[52px] w-full items-center gap-2 px-3 py-3 text-mp-accent-fg transition active:bg-mp-sunken disabled:opacity-50")}>
       <Icon name="droplet" size={20} /><span className="text-[15px] font-semibold">Water</span><span className="ml-auto text-[13px] text-mp-ink-2">{waterLabel} · just now</span>
     </button>
-    <details open className="px-1">
+    <details className="px-1">
       <summary className="min-h-[44px] cursor-pointer py-3 text-[14px] font-medium text-mp-accent-fg">Log manually</summary>
       <p className={cx(tone.muted, "mb-2 text-[13px] leading-relaxed")}>Save only what you enter, without AI analysis. Works offline too.</p>
       <div className="grid grid-cols-2 gap-2" role="group" aria-label="Log food and drink manually">
