@@ -91,35 +91,38 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
   const data = { ...vitals, jaundice: level };
 
   const save = async () => {
-    if (timeInvalid) return;
-    const noteVal = note.trim() || null;
-    const bits = [
-      level && (level === "none" ? "no yellow" : `yellow: ${JAUNDICE_LABEL[level].toLowerCase()}`),
-      heart != null && `heart ${heart}`,
-      resp != null && `breathing ${resp}/min`,
-      spo2 != null && `SpO₂ ${spo2}%`,
-    ].filter(Boolean);
-    const what = !hasVitals ? "Skin check" : "Vitals";
-    if (e) {
-      setBusy(true);
-      const res = await update(
-        e.id,
-        {
-          data: withNulls(data, ["heart_bpm", "resp_rate", "spo2", "jaundice"]),
-          started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
-          note: noteVal,
-        },
-        { toast: `${what} updated` }
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const noteVal = note.trim() || null;
+      const bits = [
+        level && (level === "none" ? "no yellow" : `yellow: ${JAUNDICE_LABEL[level].toLowerCase()}`),
+        heart != null && `heart ${heart}`,
+        resp != null && `breathing ${resp}/min`,
+        spo2 != null && `SpO₂ ${spo2}%`,
+      ].filter(Boolean);
+      const what = !hasVitals ? "Skin check" : "Vitals";
+      if (e) {
+        const res = await update(
+          e.id,
+          {
+            data: withNulls(data, ["heart_bpm", "resp_rate", "spo2", "jaundice"]),
+            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            note: noteVal,
+          },
+          { toast: `${what} updated` }
+        );
+        if (res) onClose();
+        return;
+      }
+      const saved = await log(
+        { kind: "vitals", started_at: when?.toISOString(), data: Object.fromEntries(Object.entries(data).filter(([, v]) => v != null)), note: noteVal },
+        { toast: `${what} · ${bits.join(" · ")} · ${clock(t)}` }
       );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    void log(
-      { kind: "vitals", started_at: when?.toISOString(), data: Object.fromEntries(Object.entries(data).filter(([, v]) => v != null)), note: noteVal },
-      { toast: `${what} · ${bits.join(" · ")} · ${clock(t)}` }
-    );
   };
 
   const del = () => {
@@ -179,43 +182,48 @@ function VitalsForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? (skinMode ? "Skin check" : describeEntry(e).title) : skinMode ? "Skin check" : "Vitals"}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={timeInvalid || checks.invalid || !hasAny || (!!e && e.id < 0)}
-          hint={checks.invalid ? CHECK_NUMBER_HINT : !hasAny ? (skinMode ? "Pick what you see." : "Add a reading.") : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || checks.invalid || !hasAny || (!!e && e.id < 0)}
+            hint={checks.invalid ? CHECK_NUMBER_HINT : !hasAny ? (skinMode ? "Pick what you see." : "Add a reading.") : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
-      {skinMode ? (
-        <>
-          {skin}
-          <MoreDetails defaultOpen label="Other readings" summary={numberSummary ?? "heart, breathing, oxygen"}>
-            {numbers}
-          </MoreDetails>
-        </>
-      ) : (
-        <>
-          {numbers}
-          <MoreDetails defaultOpen label="Skin check" summary={levelSummary ?? "jaundice"}>
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
+        {skinMode ? (
+          <>
             {skin}
-          </MoreDetails>
-        </>
-      )}
-      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
-      <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting?`} />
-      {/* Always on this sheet, so it stays quiet: a hairline in the danger color, not a filled alert. */}
-      <p className={cx(tone.muted, "flex gap-2.5 rounded-xl border border-mp-danger/25 px-3.5 py-3 text-[13px] leading-relaxed")}>
-        <Icon name="siren" size={16} className="mt-[2px] shrink-0 text-mp-danger" />
-        <span>{emergencySigns(voice)}</span>
-      </p>
+            <MoreDetails defaultOpen label="Other readings" summary={numberSummary ?? "heart, breathing, oxygen"}>
+              {numbers}
+            </MoreDetails>
+          </>
+        ) : (
+          <>
+            {numbers}
+            <MoreDetails defaultOpen label="Skin check" summary={levelSummary ?? "jaundice"}>
+              {skin}
+            </MoreDetails>
+          </>
+        )}
+        <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
+        <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting?`} />
+        {/* Always on this sheet, so it stays quiet: a hairline in the danger color, not a filled alert. */}
+        <p className={cx(tone.muted, "flex gap-2.5 rounded-xl border border-mp-danger/25 px-3.5 py-3 text-[13px] leading-relaxed")}>
+          <Icon name="siren" size={16} className="mt-[2px] shrink-0 text-mp-danger" />
+          <span>{emergencySigns(voice)}</span>
+        </p>
+      </fieldset>
     </Sheet>
   );
 }

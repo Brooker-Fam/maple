@@ -49,27 +49,30 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
   const soFar = Math.round((summary?.today.tummySec ?? 0) / 60);
 
   const save = async () => {
-    if (timeInvalid) return;
-    const noteVal = note.trim() || null;
-    if (e) {
-      setBusy(true);
-      const patch = running
-        ? { note: noteVal }
-        : {
-            started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
-            ended_at: end.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : NaN) ? end.toISOString() : undefined,
-            note: noteVal,
-          };
-      const res = await update(e.id, patch, { toast: "Tummy time updated" });
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const noteVal = note.trim() || null;
+      if (e) {
+        const patch = running
+          ? { note: noteVal }
+          : {
+              started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
+              ended_at: end.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : NaN) ? end.toISOString() : undefined,
+              note: noteVal,
+            };
+        const res = await update(e.id, patch, { toast: "Tummy time updated" });
+        if (res) onClose();
+        return;
+      }
+      const saved = await log(
+        { kind: "tummy", started_at: start.toISOString(), ended_at: end.toISOString(), data: {}, note: noteVal },
+        { toast: `Tummy time ${formatDuration((end.getTime() - start.getTime()) / 1000)}` }
+      );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    void log(
-      { kind: "tummy", started_at: start.toISOString(), ended_at: end.toISOString(), data: {}, note: noteVal },
-      { toast: `Tummy time ${formatDuration((end.getTime() - start.getTime()) / 1000)}` }
-    );
   };
 
   const del = () => {
@@ -84,27 +87,32 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
       onClose={onClose}
       title="Tummy time"
       dirty={dirty}
+      locked={busy}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={timeInvalid || (!!e && e.id < 0)}
-          hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || (!!e && e.id < 0)}
+            hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
-      {running ? (
-        <RunningNote kind="tummy" />
-      ) : (
-        <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[3, 5, 10, 15, 20, 30]} onChange={(s, en) => setRange([s, en])} />
-      )}
-      <NoteField value={note} onChange={setNote} />
-      {age && <TummyProgress soFar={soFar} goal={goal} />}
-      <ContextNote>{tummyNote(voice)}</ContextNote>
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
+        {running ? (
+          <RunningNote kind="tummy" />
+        ) : (
+          <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[3, 5, 10, 15, 20, 30]} onChange={(s, en) => setRange([s, en])} />
+        )}
+        <NoteField value={note} onChange={setNote} />
+        {age && <TummyProgress soFar={soFar} goal={goal} />}
+        <ContextNote>{tummyNote(voice)}</ContextNote>
+      </fieldset>
     </Sheet>
   );
 }
@@ -132,30 +140,33 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   const inFuture = !!end && end.getTime() > current.getTime() + MIN;
 
   const save = async () => {
-    if (timeInvalid) return;
-    const { start, end } = times();
-    if (end && end.getTime() > now().getTime() + MIN) return;
-    const noteVal = note.trim() || null;
-    if (e) {
-      setBusy(true);
-      const res = await update(
-        e.id,
-        {
-          started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
-          ended_at: (end?.toISOString() ?? null) !== e.ended_at ? end?.toISOString() ?? null : undefined,
-          note: noteVal,
-        },
-        { toast: "Bath updated" }
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const { start, end } = times();
+      if (end && end.getTime() > now().getTime() + MIN) return;
+      const noteVal = note.trim() || null;
+      if (e) {
+        const res = await update(
+          e.id,
+          {
+            started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
+            ended_at: (end?.toISOString() ?? null) !== e.ended_at ? end?.toISOString() ?? null : undefined,
+            note: noteVal,
+          },
+          { toast: "Bath updated" }
+        );
+        if (res) onClose();
+        return;
+      }
+      const saved = await log(
+        { kind: "bath", started_at: start.toISOString(), ended_at: end?.toISOString(), data: {}, note: noteVal },
+        { toast: `Bath${minutes ? ` ${minutes}m` : ""} · ${clock(start)}` }
       );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    void log(
-      { kind: "bath", started_at: start.toISOString(), ended_at: end?.toISOString(), data: {}, note: noteVal },
-      { toast: `Bath${minutes ? ` ${minutes}m` : ""} · ${clock(start)}` }
-    );
   };
 
   const del = () => {
@@ -170,36 +181,41 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
       onClose={onClose}
       title="Bath"
       dirty={dirty}
+      locked={busy}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={timeInvalid || (!!e && e.id < 0) || inFuture}
-          hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : inFuture ? "That ends in the future. Choose an earlier start or a shorter length." : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || (!!e && e.id < 0) || inFuture}
+            hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : inFuture ? "That ends in the future. Choose an earlier start or a shorter length." : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
-      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
-      <div>
-        <Label optional>How long</Label>
-        <div className="flex flex-wrap gap-2">
-          {BATH_MINUTES.map((m) => (
-            <Chip key={m} selected={minutes === m} onClick={() => setMinutes(minutes === m ? null : m)}>
-              {m}m
-            </Chip>
-          ))}
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
+        <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
+        <div>
+          <Label optional>How long</Label>
+          <div className="flex flex-wrap gap-2">
+            {BATH_MINUTES.map((m) => (
+              <Chip key={m} selected={minutes === m} onClick={() => setMinutes(minutes === m ? null : m)}>
+                {m}m
+              </Chip>
+            ))}
+          </div>
+          {end && (
+            <p className={cx(tone.muted, "mt-1.5 text-xs tabular-nums")}>
+              {clock(start)} – {clock(end)}
+            </p>
+          )}
         </div>
-        {end && (
-          <p className={cx(tone.muted, "mt-1.5 text-xs tabular-nums")}>
-            {clock(start)} – {clock(end)}
-          </p>
-        )}
-      </div>
-      <NoteField value={note} onChange={setNote} placeholder="Sponge bath, first tub bath, hair wash…" />
+        <NoteField value={note} onChange={setNote} placeholder="Sponge bath, first tub bath, hair wash…" />
+      </fieldset>
     </Sheet>
   );
 }

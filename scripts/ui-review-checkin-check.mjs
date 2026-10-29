@@ -48,6 +48,68 @@ const reachCrisis = async () => {
   await page.waitForFunction(() => [...document.querySelectorAll("button")].find((button) => button.textContent === "Continue the check-in")?.getAttribute("aria-disabled") !== "true");
 };
 const cases = [
+  ...["daily", "daily-pending"].map((scenario) => [`new remote check-in preserves the ${scenario === "daily" ? "saved" : "syncing"} entry's active note and save target`, async () => {
+    await visit(scenario);
+    await page.getByRole("button", { name: "Anything else? (optional)", exact: true }).click();
+    const note = page.getByRole("textbox");
+    await note.fill("Synthetic original check-in draft");
+    await page.evaluate((pending) => {
+      const controls = window.__checkinFixture;
+      controls.externalEntry({ id: 703, kind: "checkin", at: "2026-10-28T13:31:00Z", data: { level: 3, tags: [] }, note: "Newer check-in from my other phone", created_at: "2026-10-28T13:31:00Z", updated_at: "2026-10-28T13:31:00Z" });
+      if (pending) controls.syncEntry(-701, 701);
+      controls.externalTags(["tearful"]);
+    }, scenario === "daily-pending");
+    await page.waitForFunction(() => document.querySelector('button[aria-pressed="true"]')?.textContent === "Tearful");
+    assert.equal(await note.inputValue(), "Synthetic original check-in draft");
+    await page.getByText("Today: Okay", { exact: true }).waitFor();
+    assert.equal((await page.evaluate(() => window.__checkinFixture.calls)).length, 0, "A remote update neither blurs nor saves the draft");
+    assert(await page.evaluate(() => {
+      const confirm = window.confirm;
+      window.confirm = () => false;
+      const event = new Event("maple-before-navigate", { cancelable: true });
+      window.dispatchEvent(event);
+      window.confirm = confirm;
+      return event.defaultPrevented;
+    }), "The original note still guards navigation after the remote update");
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await note.waitFor({ state: "hidden" });
+    const saved = await page.evaluate(() => ({ calls: window.__checkinFixture.calls, entries: window.__checkinFixture.entries }));
+    assert.deepEqual(saved.calls, [{ kind: "checkin", id: 701, patch: { note: "Synthetic original check-in draft" } }]);
+    assert.equal(saved.entries.find((entry) => entry.id === 701).note, "Synthetic original check-in draft");
+    assert.equal(saved.entries.find((entry) => entry.id === 703).note, "Newer check-in from my other phone");
+    await page.getByText("Today: Up and down", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Newer check-in from my other phone", exact: true }).click();
+    assert.equal(await note.inputValue(), "Newer check-in from my other phone");
+  }]),
+  ["a new check-in opens immediately and retains its note when its temporary id syncs", async () => {
+    await visit("daily-empty");
+    await page.evaluate(() => { window.__checkinFixture.hold = true; });
+    await page.getByRole("radio", { name: "Okay", exact: true }).click();
+    const note = page.getByRole("textbox");
+    await note.fill("Synthetic note during first save");
+    await page.evaluate(() => { window.__checkinFixture.hold = false; window.__checkinFixture.pending(); });
+    await page.waitForFunction(() => window.__checkinFixture.entries.some((entry) => entry.id === 702));
+    assert.equal(await note.inputValue(), "Synthetic note during first save");
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await note.waitFor({ state: "hidden" });
+    assert.deepEqual(await page.evaluate(() => window.__checkinFixture.calls), [
+      { kind: "checkin-create", level: 4 },
+      { kind: "checkin", id: 702, patch: { note: "Synthetic note during first save" } },
+    ]);
+  }],
+  ["crisis selection opens help and saves the pinned check-in immediately", async () => {
+    await visit("daily");
+    await page.getByRole("button", { name: "Anything else? (optional)", exact: true }).click();
+    await page.evaluate(() => {
+      const controls = window.__checkinFixture;
+      controls.externalEntry({ id: 703, kind: "checkin", at: "2026-10-28T13:31:00Z", data: { level: 3, tags: [] }, note: "Newer check-in", created_at: "2026-10-28T13:31:00Z", updated_at: "2026-10-28T13:31:00Z" });
+      controls.hold = true;
+    });
+    await page.getByRole("button", { name: "Thoughts of hurting myself", exact: true }).click();
+    await page.getByRole("dialog").getByRole("link", { name: "Call 988", exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.__checkinFixture.calls), [{ kind: "checkin", id: 701, patch: { tags: ["harm_self"] } }]);
+    await page.evaluate(() => { window.__checkinFixture.hold = false; window.__checkinFixture.pending(); });
+  }],
   ["late partial failure does not survive a successful final save", async () => {
     await start();
     await page.evaluate(() => { window.__checkinFixture.hold = true; window.__checkinFixture.failFirst = true; });

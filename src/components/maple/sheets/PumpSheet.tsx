@@ -100,7 +100,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     setTotalAmount({ ml, shown: v });
   };
   const chooseMode = (next: "sides" | "total") => {
-    if (next === mode) return;
+    if (next === mode || checks.invalid) return;
     if (next === "total") {
       const l = touched.left_ml ? toMl(left) : initialLeft;
       const r = touched.right_ml ? toMl(right) : initialRight;
@@ -117,41 +117,44 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const needsSplit = mode === "sides" && totalMl != null && left == null && right == null;
 
   const save = async () => {
-    if (timeInvalid) return;
-    const noteVal = note.trim() || null;
-    if (e) {
-      setBusy(true);
-      const changed: Record<string, unknown> = {};
-      const fields = mode === "sides" ? (["left_ml", "right_ml"] as const) : (["total_ml"] as const);
-      for (const k of fields) if (touched[k]) changed[k] = data[k] ?? null;
-      if (mode !== originalMode || Object.keys(changed).length) {
-        if (mode === "sides") changed.total_ml = null;
-        else {
-          changed.left_ml = null;
-          changed.right_ml = null;
-          if (!touched.total_ml) changed.total_ml = totalMl ?? null;
+    if (busy || timeInvalid) return;
+    setBusy(true);
+    try {
+      const noteVal = note.trim() || null;
+      if (e) {
+        const changed: Record<string, unknown> = {};
+        const fields = mode === "sides" ? (["left_ml", "right_ml"] as const) : (["total_ml"] as const);
+        for (const k of fields) if (touched[k]) changed[k] = data[k] ?? null;
+        if (mode !== originalMode || Object.keys(changed).length) {
+          if (mode === "sides") changed.total_ml = null;
+          else {
+            changed.left_ml = null;
+            changed.right_ml = null;
+            if (!touched.total_ml) changed.total_ml = totalMl ?? null;
+          }
         }
+        const patch = running
+          ? { note: noteVal }
+          : {
+              started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
+              ended_at: end.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : NaN) ? end.toISOString() : undefined,
+              data: Object.keys(changed).length ? changed : undefined,
+              note: noteVal,
+            };
+        const res = await update(e.id, patch, { toast: "Pump updated" });
+        if (res) onClose();
+        return;
       }
-      const patch = running
-        ? { note: noteVal }
-        : {
-            started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
-            ended_at: end.getTime() !== (e.ended_at ? Date.parse(e.ended_at) : NaN) ? end.toISOString() : undefined,
-            data: Object.keys(changed).length ? changed : undefined,
-            note: noteVal,
-          };
-      const res = await update(e.id, patch, { toast: "Pump updated" });
+      const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v != null));
+      const mins = formatDuration((end.getTime() - start.getTime()) / 1000);
+      const saved = await log(
+        { kind: "pump", started_at: start.toISOString(), ended_at: end.toISOString(), data: clean, note: noteVal },
+        { toast: `Pumped ${sum > 0 ? `${formatVolume(sum, units)} · ` : ""}${mins}` }
+      );
+      if (saved) onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
     }
-    onClose();
-    const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v != null));
-    const mins = formatDuration((end.getTime() - start.getTime()) / 1000);
-    void log(
-      { kind: "pump", started_at: start.toISOString(), ended_at: end.toISOString(), data: clean, note: noteVal },
-      { toast: `Pumped ${sum > 0 ? `${formatVolume(sum, units)} · ` : ""}${mins}` }
-    );
   };
 
   const del = () => {
@@ -164,44 +167,54 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Pump"}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={timeInvalid || (!!e && e.id < 0) || (!running && (checks.invalid || needsSplit))}
-          hint={!running && checks.invalid ? CHECK_NUMBER_HINT : !running && needsSplit ? "Enter each side's amount, or choose Total to keep the combined amount." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || (!!e && e.id < 0) || (!running && (checks.invalid || needsSplit))}
+            hint={!running && checks.invalid ? CHECK_NUMBER_HINT : !running && needsSplit ? "Enter each side's amount, or choose Total to keep the combined amount." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
-      {running && <RunningNote kind="pump" />}
-      {!running && (
-        <>
-          <Segmented
-            value={mode}
-            onChange={chooseMode}
-            options={[
-              { value: "sides", label: "Each side" },
-              { value: "total", label: "Total" },
-            ]}
-          />
-          {mode === "sides" ? (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <MiniStepper key="left" label={<SideLabel side="L" />} unit={unit} ariaLabel={`left, ${unit}`} value={left} onChange={edit("left_ml", setLeft)} onInvalid={checks.watch("left")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
-              <MiniStepper key="right" label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
+        {running && <RunningNote kind="pump" />}
+        {!running && (
+          <>
+            <div>
+              <fieldset disabled={checks.invalid} className="min-w-0">
+                <Segmented
+                  value={mode}
+                  onChange={chooseMode}
+                  options={[
+                    { value: "sides", label: "Each side" },
+                    { value: "total", label: "Total" },
+                  ]}
+                />
+              </fieldset>
+              {checks.invalid && <p className="mt-1.5 text-xs text-mp-danger">Correct the number before changing how amounts are entered.</p>}
             </div>
-          ) : (
-            <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={editTotal} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />
-          )}
-          <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[10, 15, 20, 30, 45]} onChange={(s, en) => setRange([s, en])} />
-        </>
-      )}
-      <NoteField value={note} onChange={setNote} />
+            {mode === "sides" ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <MiniStepper key="left" label={<SideLabel side="L" />} unit={unit} ariaLabel={`left, ${unit}`} value={left} onChange={edit("left_ml", setLeft)} onInvalid={checks.watch("left")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
+                <MiniStepper key="right" label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
+              </div>
+            ) : (
+              <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={editTotal} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />
+            )}
+            <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[10, 15, 20, 30, 45]} onChange={(s, en) => setRange([s, en])} />
+          </>
+        )}
+        <NoteField value={note} onChange={setNote} />
+      </fieldset>
     </Sheet>
   );
 }

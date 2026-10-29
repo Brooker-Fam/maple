@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { saveCases } from "./save-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -14,7 +15,7 @@ const { chromium, webkit } = require("playwright");
 const postcss = createRequire(require.resolve("@tailwindcss/postcss"))("postcss");
 const tailwind = require("@tailwindcss/postcss");
 const out = await mkdtemp(path.join(tmpdir(), "maple-logging-recovery-"));
-const baselineFiles = new Set(["sheets/NoteSheet.tsx", "sheets/MomentSheet.tsx", "sheets/PumpSheet.tsx", "LogTab.tsx", "MomentsTab.tsx", "Celebrations.tsx"]);
+const baselineFiles = new Set(["sheets/NoteSheet.tsx", "sheets/MomentSheet.tsx", "sheets/PumpSheet.tsx", "sheets/SleepSheet.tsx", "sheets/ActivitySheet.tsx", "sheets/DiaperSheet.tsx", "sheets/GrowthSheet.tsx", "sheets/MedSheet.tsx", "sheets/TempSheet.tsx", "sheets/VitalsSheet.tsx", "sheets/FeedSheet.tsx", "LogTab.tsx", "MomentsTab.tsx", "Celebrations.tsx"]);
 await build({
   entryPoints: [path.join(here, "fixture.jsx")], outfile: path.join(out, "app.js"), bundle: true,
   format: "esm", jsx: "automatic", absWorkingDir: root, tsconfig: path.join(root, "tsconfig.json"),
@@ -93,6 +94,7 @@ async function openNote(page) {
 }
 
 const cases = [
+  ...saveCases({ assert, fixture, freshState, record, NOW }),
   ["Moment creation and editing lock pending saves and retain rejected drafts", async () => {
     for (const editing of [false, true]) {
       let release;

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { accessCases } from "./access-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -158,6 +159,8 @@ try {
   assert.deepEqual(await calls(), ["stop"]);
   assert.deepEqual(errors, []);
   console.log(`PASS Lantern: sleep stops once; no runtime errors (${browserName})`);
+  await accessCases({ assert, page, browserName, open, dialog, close, pause, calls, center });
+  assert.deepEqual(errors, []);
 } finally {
   await browser.close();
   await rm(output, { recursive: true, force: true });

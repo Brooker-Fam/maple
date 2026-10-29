@@ -344,7 +344,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
 
   // ── Save ──
   const save = async () => {
-    if (manualTimeInvalid || timeInvalid || addBlocked) return;
+    if (busy || manualTimeInvalid || timeInvalid || addBlocked) return;
     if (e) {
       const patch = editPatch();
       // Nothing changed: close without a write (a bare write would bump the version under the other phone's edit).
@@ -359,13 +359,18 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       }
       return;
     }
-    onClose();
     if (method === "bottle") {
       const at = when ?? now();
-      void log(
-        { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk }, note: note.trim() || null },
-        { toast: `${amountLabel ? `${amountLabel} bottle` : "Bottle"} · ${clock(at)}` }
-      );
+      setBusy(true);
+      try {
+        const saved = await log(
+          { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk }, note: note.trim() || null },
+          { toast: `${amountLabel ? `${amountLabel} bottle` : "Bottle"} · ${clock(at)}` }
+        );
+        if (saved) onClose();
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     const [s, en] = range;
@@ -398,16 +403,22 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     };
     const next = nextSideWords(draft, t, w, state?.entries);
     const toastText = l + r + b > 0 ? doneText(draft, t, w, undefined, state?.entries).text : `Nursed · ${clock(s)}${next ? ` · ${next}` : ""}`;
-    void log(
-      {
-        kind: "feed",
-        started_at: s.toISOString(),
-        ended_at: endedAt,
-        data,
-        note: note.trim() || null,
-      },
-      { toast: toastText }
-    );
+    setBusy(true);
+    try {
+      const saved = await log(
+        {
+          kind: "feed",
+          started_at: s.toISOString(),
+          ended_at: endedAt,
+          data,
+          note: note.trim() || null,
+        },
+        { toast: toastText }
+      );
+      if (saved) onClose();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const editPatch = (): UpdateEntryInput => {
@@ -441,12 +452,15 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     } else if (first !== origFirst) {
       data.first_side = first;
     }
+    const hasData = Object.keys(data).length > 0;
+    // The store otherwise infers a manual feed's end after any start or data edit.
+    const keepEnd = endMoved || minutesChanged || (!timed && (startMoved || hasData));
     return {
       started_at: startMoved ? s.toISOString() : undefined,
       // Keep the end where it shows (otherwise new minutes would move it).
       // A timed session keeps an end even at its start, so the server retimes what the sheet previewed.
-      ended_at: endMoved || minutesChanged ? (en.getTime() > s.getTime() || (timed && !minutesChanged) ? en.toISOString() : null) : undefined,
-      data: Object.keys(data).length ? data : undefined,
+      ended_at: keepEnd ? (en.getTime() > s.getTime() || (timed && !minutesChanged) ? en.toISOString() : null) : undefined,
+      data: hasData ? data : undefined,
       ...notePatch,
     };
   };
@@ -498,7 +512,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
 
   /** The staged parts, in one PATCH against the version they were staged on (a newer one answers 409). */
   const saveTimes = async () => {
-    if (!e || !draft || !liveFeed || manualTimeInvalid || timeInvalid || addBlocked) return;
+    if (busy || !e || !draft || !liveFeed || manualTimeInvalid || timeInvalid || addBlocked) return;
     setBusy(true);
     setTimesNotice(null);
     const data: Record<string, unknown> = { segments: draft.data.segments };
@@ -589,6 +603,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   return (
     <Sheet
       open={open}
+      locked={busy}
       onClose={close}
       dirty={fieldsDirty && !dirty && !addBlocked && !timeInvalid && !readOnly}
       title={title}
@@ -603,7 +618,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
             }}
           />
         ) : (
-          <>
+          <fieldset disabled={busy} className="min-w-0">
             {dirty && !readOnly && (
               <p role="status" className="mb-3 flex items-center gap-2 rounded-xl bg-mp-sunken px-3 py-2 text-[13px] leading-snug font-medium text-mp-ink">
                 <Icon name={conflict ? "info" : "pencil"} size={14} className="shrink-0 text-mp-ink-2" />
@@ -640,10 +655,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                         : undefined
               }
             />
-          </>
+          </fieldset>
         )
       }
     >
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
       {/* A timed feed's own times are its rows: the tap time up here would read as one more start. */}
       {e && <LoggedBy entry={e} noTime={e.data.method === "breast" && !!e.data.segments?.length} />}
 
@@ -713,7 +729,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 {steppers}
                 {startedOn}
                 <TimeRange
-                  onInvalidChange={setManualTimeInvalid}
+                  onInvalidChange={(invalid) => {
+                    setManualTimeInvalid(invalid);
+                    // An explicit draft owns its time even before it is valid.
+                    if (invalid) setAnchor(null);
+                  }}
                   start={range[0]}
                   end={range[1]}
                   tz={tz}
@@ -793,6 +813,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       )}
 
       <NoteField value={note} onChange={setNote} readOnly={readOnly} />
+      </fieldset>
     </Sheet>
   );
 }
@@ -1399,6 +1420,9 @@ function AddSide({
     const anyInvalid = invalidFields.current.start || invalidFields.current.end;
     setTimeInvalid(anyInvalid);
     onInvalidChange(anyInvalid);
+    // Once an end is being typed, moving the start must not replace that
+    // draft with another guessed five-minute end.
+    if (edge === "end" && invalid && form.end === null) onForm({ ...form, end });
   };
   const n = nowFn();
   const { end, result, error } = tryAdd(feed, form, n, tz, vo);

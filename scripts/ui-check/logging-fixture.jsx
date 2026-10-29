@@ -55,9 +55,11 @@ function App() {
     if (mode === "form-pump-sides-preset") return { kind: "pump", preset: { left_ml: 100, right_ml: 40 } };
     if (mode === "form-pump-midnight") return { kind: "pump", preset: { started_at: "2026-10-25T04:00:00.000Z", ended_at: "2026-10-25T04:00:00.000Z" } };
     if (mode === "form-temp-edit") return { kind: "temp", entry: savedTemperature };
+    if (mode === "form-temp-edit-unknown") return { kind: "temp", entry: { ...savedTemperature, id: 12, data: { temp_c: savedTemperature.data.temp_c } } };
     if (mode === "form-temp-preset") return { kind: "temp", preset: { temp_c: 37 } };
     if (mode === "form-temp-precise-preset") return { kind: "temp", preset: { temp_c: 37.123 } };
     if (mode === "form-growth-edit") return { kind: "growth", entry: savedGrowth };
+    if (mode === "form-growth-edit-unknown") return { kind: "growth", entry: { ...savedGrowth, id: 13, data: { weight_g: 3373, length_cm: 51.43, head_cm: 34.27 } } };
     if (mode === "form-growth-preset") return { kind: "growth", preset: growthMeasurements };
     if (mode === "form-vitals-skin") return { kind: "vitals", preset: { jaundice: "none" } };
     if (mode === "form-moment-earlier") return { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } };
@@ -73,7 +75,7 @@ function App() {
     baby: { name: "River", nickname: null, sex: "female", timezone: "America/New_York", born_at: "2026-10-01T12:00:00.000Z", settings: {} },
     family: { id: 99, care_name: "Sam", ask: "an owner" },
     me: { email: EMAIL }, members: [{ email: EMAIL, display_name: "Sam", role: "owner", color: "#674b7b" }],
-    entries: mode === "today-empty" ? [] : mode.startsWith("more") ? [entry(6, "feed", "2026-10-28T13:20:00.000Z", { method: "breast", first_side: "L", segments: [{ side: "L", start: "2026-10-28T13:20:00.000Z", end: mode === "more-paused" ? "2026-10-28T13:25:00.000Z" : null }] }, { active: true })] : entries,
+    entries: mode === "today-empty" ? [] : mode.startsWith("more") ? [entry(6, "feed", "2026-10-28T13:20:00.000Z", { method: "breast", first_side: "L", segments: [{ side: "L", start: "2026-10-28T13:20:00.000Z", end: mode === "more-paused" ? "2026-10-28T13:25:00.000Z" : null }] }, { active: true })] : mode === "form-temp-edit-unknown" ? [...entries, savedTemperature] : entries,
   }), []);
   const summary = useMemo(() => summarize({ ...state, now: NOW, vo: makeVoice({ name: "River", pronoun: "she", mom: "Sam" }) }), [state]);
   const api = useCallback(async (pathname, options) => {

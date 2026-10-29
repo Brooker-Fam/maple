@@ -65,6 +65,9 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const [mounted, setMounted] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [scrollable, setScrollable] = useState(false);
   // The parent re-renders every second; keep the latest onClose without re-running effects.
   const closeRef = useRef(onClose);
   useEffect(() => {
@@ -72,6 +75,20 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   });
 
   useEffect(() => setMounted(true), []);
+
+  // Small screens and enlarged text may need to scroll. That gesture must
+  // never be interpreted as swipe-to-close, including when already at the top.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (!mounted || !scroller || !content) return;
+    const measure = () => setScrollable(scroller.scrollHeight > scroller.clientHeight + 1);
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    observer.observe(content);
+    measure();
+    return () => observer.disconnect();
+  }, [mounted]);
 
   // This screen covers every timer control. Keep keyboard and assistive focus here,
   // then return it to the lamp when closing, just as the app's sheets do.
@@ -234,13 +251,15 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[120] flex touch-none flex-col bg-black select-none"
+      className={cx("fixed inset-0 z-[120] flex flex-col overflow-hidden bg-black select-none", scrollable ? "touch-pan-y" : "touch-none")}
       style={{ color: AMBER }}
       // In the capture phase, so a swipe that starts on a hold row (her medicine, back and forth) still closes it. Only
       // one finger swipes: a second touch (her hand, a cheek) during a hold never turns the thumb's lift into a close.
       onPointerDownCapture={(e) => {
         fingers.current.add(e.pointerId);
-        swipe.current = fingers.current.size === 1 ? { id: e.pointerId, y: e.clientY, t: Date.now() } : "off";
+        const scroller = scrollRef.current;
+        const canScroll = !!scroller && scroller.scrollHeight > scroller.clientHeight + 1;
+        swipe.current = fingers.current.size === 1 && !canScroll ? { id: e.pointerId, y: e.clientY, t: Date.now() } : "off";
       }}
       onPointerUpCapture={(e) => {
         fingers.current.delete(e.pointerId);
@@ -255,28 +274,30 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
         if (!fingers.current.size) swipe.current = null;
       }}
     >
-      <div className="flex items-center justify-between px-4 pt-[max(12px,env(safe-area-inset-top))]">
-        <p className="text-[13px] opacity-50">Lantern · swipe down to close</p>
+      <div className="flex shrink-0 items-center justify-between gap-2 px-4 pt-[max(12px,env(safe-area-inset-top))]">
+        <p className="text-[13px] opacity-50">{scrollable ? "Lantern · scroll for controls" : "Lantern · swipe down to close"}</p>
         <button
           ref={closeButtonRef}
           type="button"
           onClick={onClose}
           aria-label="Close lantern"
-          className="-mr-2 flex h-12 w-12 items-center justify-center rounded-full opacity-50 active:opacity-80"
+          className="-mr-2 flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-full opacity-50 active:opacity-80"
         >
           <Icon name="x" size={26} />
         </button>
       </div>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+      <div ref={contentRef} className="flex min-h-full flex-col">
       {/* Her mom's medicine: a hold-to-log row when one tap would just save it, else read-only, as dim as the line above. */}
-      <div className="-mt-1.5 px-4">
+      <div className="shrink-0 px-4">
         <CareLanternRow onHint={showHint} />
       </div>
 
       <div
-        className="flex flex-1 flex-col items-center justify-center px-6 text-center"
+        className="flex min-w-0 flex-1 flex-col items-center justify-center px-4 py-2 text-center [@media(max-height:600px)]:py-0"
         onClick={() => showHint(both ? (n.paused ? "Hold Back on or Done" : "Hold Pause or Done") : isFeed && !n.paused ? "Hold Switch, Pause or Done" : "Hold a button to use it")}
       >
-        <p className="mb-3 flex items-center gap-2.5 text-2xl font-semibold" style={{ opacity: n.paused ? 0.55 : 0.75 }}>
+        <p className="mb-2 flex max-w-full flex-wrap items-center justify-center gap-2.5 text-2xl font-semibold" style={{ opacity: n.paused ? 0.55 : 0.75 }}>
           {/* The side's letter in a ring, as the card and dock show it at night. */}
           {isFeed && !n.paused && (
             <span
@@ -290,13 +311,13 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           {heading}
         </p>
         <p
-          className="text-[80px] leading-none font-semibold tracking-[-0.03em] tabular-nums"
+          className="text-[clamp(56px,18vw,80px)] leading-none font-semibold tracking-[-0.03em] tabular-nums"
           style={{ opacity: n.paused ? 0.5 : dim ? 0.7 : 0.75 }}
           aria-live="off"
         >
           {formatClock(isFeed ? n.current.sec : n.elapsed)}
         </p>
-        <p className="mt-3 text-[17px] whitespace-nowrap tabular-nums opacity-65">{detail}</p>
+        <p className="mt-3 text-[17px] tabular-nums opacity-65">{detail}</p>
         {/* Total only with more than one side (on one side it's the big clock, said twice); on a break, what she had so far. */}
         {isFeed && !n.paused && n.parts.filter((p) => p.kind === "side").length > 1 && <p className="mt-1 text-base tabular-nums opacity-60">Total nursing {minutesText(n.totalMin)}</p>}
         {isFeed && n.paused && (
@@ -304,7 +325,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
             {stale ? `Over an hour: ${w.his} side starts a new feed` : n.current.sec >= 20 * 60 ? `Still on a break? Nursed ${minutesText(n.totalMin)} so far` : `Nursed ${minutesText(n.totalMin)} so far`}
           </p>
         )}
-        <p className="mt-6 h-5 text-sm opacity-60" aria-live="polite">
+        <p className="mt-3 min-h-5 text-sm opacity-60" aria-live="polite">
           {hint?.text ?? ""}
           {hint?.undo && (
             <button
@@ -324,7 +345,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       </div>
 
       {!locked && (
-        <div className="px-4 pb-3 text-center">
+        <div className="shrink-0 px-4 pb-3 text-center">
           {askWhen && (
             <p className="mb-1 text-lg font-semibold tabular-nums opacity-60">
               Still nursing? {n.both ? "Back and forth" : SIDE_NAME[side]} {minutesText(n.current.min)}
@@ -339,7 +360,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
           <p className="text-[13px] opacity-50">{both ? (n.paused ? "Hold Back on or Done" : "Hold Pause or Done") : "Hold a button to use it"}</p>
         </div>
       )}
-      <div className="flex h-[40dvh] gap-3 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">
+      <div className="grid min-h-[132px] flex-1 auto-rows-[minmax(132px,1fr)] grid-cols-[repeat(auto-fit,minmax(min(100%,5rem),1fr))] gap-3 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">
         {locked && <p className="m-auto text-sm opacity-50">{readOnly ? "Viewing only" : "Starting…"}</p>}
         {/* Nursing: Switch and Pause where the dock has them, so a mid-feed diaper is a break, not the end of the feed. */}
         {/* Going back and forth: Pause and Done only (two bigger targets); on a break, Back on where Pause was. */}
@@ -406,6 +427,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
             }}
           />
         )}
+      </div>
+      </div>
       </div>
     </motion.div>,
     document.body
@@ -634,10 +657,10 @@ function HoldButton({
       type="button"
       aria-label={`${aria ?? label} (press and hold)`}
       {...handlers}
-      className="relative flex flex-1 flex-col items-center justify-center gap-3 rounded-[28px] border text-xl font-semibold"
+      className="relative flex min-w-0 flex-col items-center justify-center gap-[12px] rounded-[28px] border px-[8px] py-[12px] text-xl font-semibold"
       style={{ borderColor: "rgba(224,169,59,0.18)", backgroundColor: "rgba(224,169,59,0.05)", color: "rgba(224,169,59,0.8)", WebkitTouchCallout: "none" }}
     >
-      <span className="relative flex h-16 w-16 items-center justify-center">
+      <span className="relative flex h-[64px] w-[64px] shrink-0 items-center justify-center">
       <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden className="absolute inset-0">
         <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(224,169,59,0.15)" strokeWidth="4" />
         <circle

@@ -134,6 +134,21 @@ try {
     await page.getByRole("button", {name:"Save",exact:true}).click();
     assert.equal(await page.locator("#explicit-saved").textContent(), "2026-10-28T11:50:00.000Z", "Save must never use the old start after validation becomes valid");
   });
+  await check("duration presets wait for a valid end draft", async () => {
+    await page.goto(`${url}?mode=explicit&range=1&at=2026-10-28T11:30:00Z&end=2026-10-28T11:45:00Z`);
+    const end = page.getByLabel("Ended: time", { exact: true });
+    const duration = page.getByRole("group", { name: "Duration", exact: true });
+    await end.fill("11:20");
+    assert(await page.getByRole("button", { name: "Save", exact: true }).isDisabled());
+    assert(await duration.getByRole("button", { name: "1h", exact: true }).isDisabled(), "A duration cannot use the previous accepted end while another end is visible");
+    assert.equal(await end.inputValue(), "11:20");
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T11:30:00.000Z");
+    await end.fill("11:40");
+    await duration.getByRole("button", { name: "1h", exact: true }).click();
+    assert.equal(await page.locator("#explicit-value").textContent(), "2026-10-28T10:40:00.000Z");
+    assert.equal(await page.locator("#explicit-end").textContent(), "2026-10-28T11:40:00.000Z");
+    assert(await page.getByRole("button", { name: "Save", exact: true }).isEnabled());
+  });
   await check("same-value quick and duration choices replace invalid raw text", async () => {
     await page.goto(`${url}?mode=explicit&at=2026-10-28T11:30:00Z`);
     await page.getByLabel("Recorded: time", {exact:true}).fill("13:00");

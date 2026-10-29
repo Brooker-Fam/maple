@@ -130,8 +130,8 @@ try {
   await page.getByLabel("Food 1 protein (g)", { exact: true }).fill("6");
   await page.getByLabel("Food 1 fiber (g)", { exact: true }).fill("0");
   await page.getByLabel("Food 1 source", { exact: true }).selectOption("estimate");
-  assert.equal(await page.getByLabel("Food 1 energy (kcal)", { exact: true }).isVisible(), false);
-  await page.getByText("Food groups & more details", { exact: true }).click();
+  assert.equal(await page.getByLabel("Food 1 energy (kcal)", { exact: true }).isVisible(), true);
+  assert(await page.getByLabel("Food 1 carbs (g)", { exact: true }).isVisible(), "food details start expanded");
   await page.getByRole("button", { name: "Food 1: Protein foods", exact: true }).click();
   await page.getByLabel("Food 1 note", { exact: true }).fill("Synthetic portion estimate");
   await page.getByRole("button", { name: "Add food item", exact: true }).click();

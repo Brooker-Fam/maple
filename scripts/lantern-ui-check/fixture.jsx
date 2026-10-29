@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { MotionConfig } from "framer-motion";
 import Lantern from "../../src/components/maple/Lantern";
 import { Sheet } from "../../src/components/maple/Sheet";
+import { MiniStepper } from "../../src/components/maple/sheets/parts";
 import { FixtureContext } from "./mocks";
 
 const now = new Date("2026-10-28T13:30:00.000Z");
@@ -23,6 +24,7 @@ const entry = {
 function Fixture() {
   const [open, setOpen] = useState(false);
   const [sheet, setSheet] = useState(null);
+  const [minutes, setMinutes] = useState(120);
   const calls = useRef([]);
   const act = (action) => async () => { calls.current.push(action); return entry; };
   const maple = {
@@ -51,6 +53,9 @@ function Fixture() {
     <Sheet open={!!sheet} title="When did the feed end?" onClose={() => setSheet(null)}>
       <button type="button">Choose the finish time</button>
     </Sheet>
+    {params.has("minutes") && <Sheet open title="Nursing minutes" onClose={() => {}}>
+      <MiniStepper label="Left" unit="min" ariaLabel="minutes on the left" value={minutes} onChange={setMinutes} quickStep={5} max={240} />
+    </Sheet>}
   </FixtureContext.Provider>;
 }
 

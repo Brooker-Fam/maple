@@ -153,6 +153,59 @@ try {
   assert.deepEqual((await snapshot()).activeFeed, runningBeforeManual, "Logging earlier leaves the running timer unchanged");
 
   await page.evaluate(() => window.__mapleUiFixture.openManualFeed());
+  await leftMinutes.fill("5");
+  const manualStart = manualFeed.getByLabel("Started: time", { exact: true });
+  await manualStart.fill("09:45");
+  assert(await logFeed.isDisabled());
+  await leftMinutes.fill("6");
+  assert.equal(await manualStart.inputValue(), "09:45", "Changing side minutes preserves an invalid explicit start");
+  assert(await logFeed.isDisabled(), "Side minutes cannot silently replace an invalid start with an inferred time");
+  assert.equal((await snapshot()).calls.length, 0);
+  await manualFeed.getByRole("group", { name: "Started", exact: true }).getByRole("button", { name: "5 min ago", exact: true }).click();
+  assert.equal(await manualStart.inputValue(), "09:25", "A deliberate time preset can recover the invalid draft");
+  await logFeed.click();
+  await manualFeed.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).calls[0].entry.started_at, "2026-10-28T13:25:00.000Z");
+
+  for (const change of ["start", "first side"]) {
+    await page.evaluate((change) => window.__mapleUiFixture.openSavedFeed("manual", change === "first side" ? 3 : 0), change);
+    const form = page.getByRole("dialog").last();
+    const end = form.getByLabel("Ended: time", { exact: true });
+    const shownEnd = await end.inputValue();
+    if (change === "start") await form.getByRole("group", { name: "Started", exact: true }).getByRole("button", { name: "1 minute earlier", exact: true }).click();
+    else await form.getByRole("radio", { name: "Right", exact: true }).click();
+    assert.equal(await end.inputValue(), shownEnd);
+    await form.getByRole("button", { name: "Save", exact: true }).click();
+    await form.waitFor({ state: "hidden" });
+    const patches = (await snapshot()).calls.filter((call) => call.patch);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].patch.ended_at, `2026-10-28T12:${change === "start" ? "12" : "15"}:00.000Z`, `${change} edits pin the displayed end instead of allowing the store to infer a new end`);
+    if (change === "start") assert.equal(patches[0].patch.started_at, "2026-10-28T11:59:00.000Z");
+    else assert.equal(patches[0].patch.data.first_side, "R");
+  }
+
+  await page.evaluate(() => window.__mapleUiFixture.openSavedFeed("timed"));
+  const addSideForm = page.getByRole("dialog").last();
+  await addSideForm.getByRole("button", { name: /^Add a side/ }).click();
+  await addSideForm.getByRole("radio", { name: "Left", exact: true }).click();
+  const addedStart = addSideForm.getByLabel("Started: time", { exact: true });
+  const addedEnd = addSideForm.getByLabel("Ended: time", { exact: true });
+  const saveSide = addSideForm.getByRole("button", { name: /^Save(?: time)?$/ });
+  await addedEnd.fill("10:00");
+  assert(await saveSide.isDisabled());
+  await addedStart.fill("09:16");
+  assert.equal(await addedEnd.inputValue(), "10:00", "Changing an added side's start cannot replace its invalid end with a five-minute guess");
+  assert(await saveSide.isDisabled());
+  assert.equal((await snapshot()).calls.length, 0);
+  await addedEnd.fill("09:23");
+  await saveSide.click();
+  await addSideForm.waitFor({ state: "hidden" });
+  const addedSidePatch = (await snapshot()).calls.find((call) => call.patch).patch;
+  assert.equal(addedSidePatch.data.segments.at(-1).start, "2026-10-28T13:16:00.000Z");
+  assert.equal(addedSidePatch.data.segments.at(-1).end, "2026-10-28T13:23:00.000Z");
+  console.log("PASS nursing drafts: invalid clocks survive related edits; one Save preserves the displayed start and end");
+
+  await page.evaluate(() => window.__mapleUiFixture.openManualFeed());
   await leftMinutes.fill("238");
   await manualFeed.getByRole("button", { name: "5 more minutes on the left", exact: true }).click();
   assert.equal(await leftMinutes.inputValue(), "240", "Quick duration adjustment respects the existing maximum");

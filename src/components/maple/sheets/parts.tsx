@@ -547,40 +547,45 @@ export function MiniStepper({
   };
   // The same round wells as ui.tsx's Stepper, a size down so two fit abreast.
   const btn = cx("flex shrink-0 items-center justify-center rounded-full bg-mp-sunken text-mp-ink", quickStep ? "h-[44px] w-[44px]" : "h-11 w-11");
+  const numberField = (
+    <span className={cx("relative min-w-0 flex-1", !!quickStep && "col-span-4 row-start-1 w-full @min-[18rem]/stepper:col-span-1 @min-[18rem]/stepper:col-start-3")}>
+      <input
+        inputMode="decimal"
+        aria-label={ariaLabel}
+        aria-invalid={invalid || undefined}
+        value={text}
+        onChange={(e) => {
+          const t = e.target.value.replace(/[^\d.]/g, "");
+          setText(t);
+          onChange(parseTypedNumber(t, max).value);
+        }}
+        className={cx(
+          "w-full rounded-xl border bg-mp-surface py-3 text-center text-lg font-semibold text-mp-ink tabular-nums outline-none transition focus:ring-2",
+          invalid ? "border-mp-danger ring-2 ring-mp-danger/25 focus:ring-mp-danger/25" : "border-mp-line focus:border-mp-focus focus:ring-mp-focus/25",
+          unit ? "pr-6 pl-1" : "px-1"
+        )}
+      />
+      {unit && <span className={cx(tone.muted, "pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs")}>{unit}</span>}
+    </span>
+  );
   return (
-    <div className="min-w-0">
+    <div className="@container/stepper min-w-0">
       <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
-      <div className={cx("flex items-center", quickStep ? "gap-0.5" : "gap-1")}>
-        {quickStep && <RepeatButton ariaLabel={`${quickStep} fewer ${ariaLabel}`} onStep={() => bump(-quickStep)} disabled={(value ?? 0) <= min} className={cx(btn, "text-[15px] font-semibold")}>
+      {/* Enlarged text needs room for the whole number and unit. On a narrow
+          row the four adjustments move below it, keeping their 44px targets. */}
+      <div className={cx("items-center", quickStep ? "grid grid-cols-4 justify-items-center gap-x-0.5 gap-y-2 @min-[18rem]/stepper:grid-cols-[44px_44px_minmax(0,1fr)_44px_44px]" : "flex gap-1")}>
+        {quickStep && numberField}
+        {quickStep && <RepeatButton ariaLabel={`${quickStep} fewer ${ariaLabel}`} onStep={() => bump(-quickStep)} disabled={(value ?? 0) <= min} className={cx(btn, "col-start-1 row-start-2 text-[15px] font-semibold @min-[18rem]/stepper:row-start-1")}>
           −{quickStep}
         </RepeatButton>}
-        <RepeatButton ariaLabel={`Less ${ariaLabel}`} onStep={() => bump(-step)} disabled={(value ?? 0) <= min} className={btn}>
+        <RepeatButton ariaLabel={`Less ${ariaLabel}`} onStep={() => bump(-step)} disabled={(value ?? 0) <= min} className={cx(btn, !!quickStep && "col-start-2 row-start-2 @min-[18rem]/stepper:row-start-1")}>
           {quickStep ? <span className="text-[15px] font-semibold">−{step}</span> : <Icon name="minus" size={20} />}
         </RepeatButton>
-        <span className="relative min-w-0 flex-1">
-          <input
-            inputMode="decimal"
-            aria-label={ariaLabel}
-            aria-invalid={invalid || undefined}
-            value={text}
-            onChange={(e) => {
-              const t = e.target.value.replace(/[^\d.]/g, "");
-              setText(t);
-              onChange(parseTypedNumber(t, max).value);
-            }}
-            className={cx(
-              "w-full rounded-xl border bg-mp-surface py-3 text-center text-lg font-semibold text-mp-ink tabular-nums outline-none transition focus:ring-2",
-              invalid ? "border-mp-danger ring-2 ring-mp-danger/25 focus:ring-mp-danger/25" : "border-mp-line focus:border-mp-focus focus:ring-mp-focus/25",
-              // Two abreast leave ~70px for the number, so "0.25" plus "oz" must fit.
-              unit ? "pr-6 pl-1" : "px-1"
-            )}
-          />
-          {unit && <span className={cx(tone.muted, "pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs")}>{unit}</span>}
-        </span>
-        <RepeatButton ariaLabel={`More ${ariaLabel}`} onStep={() => bump(step)} disabled={(value ?? 0) >= max} className={btn}>
+        {!quickStep && numberField}
+        <RepeatButton ariaLabel={`More ${ariaLabel}`} onStep={() => bump(step)} disabled={(value ?? 0) >= max} className={cx(btn, !!quickStep && "col-start-3 row-start-2 @min-[18rem]/stepper:col-start-4 @min-[18rem]/stepper:row-start-1")}>
           {quickStep ? <span className="text-[15px] font-semibold">+{step}</span> : <Icon name="plus" size={20} />}
         </RepeatButton>
-        {quickStep && <RepeatButton ariaLabel={`${quickStep} more ${ariaLabel}`} onStep={() => bump(quickStep)} disabled={(value ?? 0) >= max} className={cx(btn, "text-[15px] font-semibold")}>
+        {quickStep && <RepeatButton ariaLabel={`${quickStep} more ${ariaLabel}`} onStep={() => bump(quickStep)} disabled={(value ?? 0) >= max} className={cx(btn, "col-start-4 row-start-2 text-[15px] font-semibold @min-[18rem]/stepper:col-start-5 @min-[18rem]/stepper:row-start-1")}>
           +{quickStep}
         </RepeatButton>}
       </div>

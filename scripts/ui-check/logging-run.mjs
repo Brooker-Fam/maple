@@ -142,6 +142,39 @@ try {
     assert.equal(pump.data.left_ml, undefined);
     assert.equal(pump.data.right_ml, undefined);
   });
+  await check("pump mode changes preserve invalid amount drafts", async () => {
+    for (const editing of [false, true]) {
+      await page.goto(`${url}?mode=${editing ? "form-pump-sides" : "form-pump"}`);
+      const form = page.getByRole("dialog").first();
+      if (!editing) await form.getByRole("textbox", { name: "right, oz", exact: true }).fill("1");
+      const left = form.getByRole("textbox", { name: "left, oz", exact: true });
+      await left.fill("7..2");
+      const total = form.getByRole("radio", { name: "Total", exact: true });
+      const save = form.getByRole("button", { name: editing ? "Save" : "Log it", exact: true });
+      assert(await total.isDisabled(), "A mode change cannot discard an invalid side amount");
+      assert(await save.isDisabled());
+      assert(await form.getByText("Correct the number before changing how amounts are entered.", { exact: true }).isVisible());
+      await total.evaluate((node) => node.click());
+      assert.equal(await left.inputValue(), "7..2", "The raw draft remains available to correct");
+      assert.equal((await snapshot()).calls.filter((x) => x.log || x.patch).length, 0);
+      await left.fill("2");
+      await total.click();
+      await save.click();
+      const writes = (await snapshot()).calls.filter((x) => x.log || x.patch);
+      assert.equal(writes.length, 1);
+      assert.deepEqual(editing ? writes[0].patch.data : writes[0].log.data, editing ? { total_ml: 99.1, left_ml: null, right_ml: null } : { total_ml: 88.7 });
+    }
+    await page.goto(`${url}?mode=form-pump-total`);
+    const form = page.getByRole("dialog").first();
+    const total = form.getByRole("textbox", { name: "total, oz", exact: true });
+    await total.fill("7..2");
+    const sides = form.getByRole("radio", { name: "Each side", exact: true });
+    assert(await sides.isDisabled(), "An invalid combined amount cannot disappear into empty side fields");
+    await sides.evaluate((node) => node.click());
+    assert.equal(await total.inputValue(), "7..2");
+    assert(await form.getByRole("button", { name: "Save", exact: true }).isDisabled());
+    assert.equal((await snapshot()).calls.filter((x) => x.log || x.patch).length, 0);
+  });
   await check("pump mode preserves recorded precision", async () => {
     for (const editLeft of [false, true]) {
       await page.goto(`${url}?mode=form-pump-sides`);
@@ -293,6 +326,69 @@ try {
       const call = (await snapshot()).calls.find((x) => x.patch || x.log);
       assert.deepEqual(editing ? call.patch.data : call.log.data, { weight_g: 3373, length_cm: 51.4, head_cm: 33.7, ...(!editing ? { at: "doctor" } : {}) });
     }
+  });
+  await check("growth unit changes preserve invalid measurement drafts", async () => {
+    for (const editing of [false, true]) {
+      await page.goto(`${url}?mode=${editing ? "form-growth-edit&units=metric" : "form-growth"}`);
+      const form = page.getByRole("dialog").first();
+      if (!editing) await form.getByRole("textbox", { name: "length in inches", exact: true }).fill("20");
+      const weight = form.getByRole("textbox", { name: editing ? "grams" : "pounds", exact: true });
+      await weight.fill("7..2");
+      const units = form.getByRole("radio", { name: editing ? "lb · in" : "g · cm", exact: true });
+      const save = form.getByRole("button", { name: editing ? "Save" : "Log it", exact: true });
+      assert(await units.isDisabled(), "Changing units cannot turn a typo into a missing measurement");
+      assert(await save.isDisabled());
+      assert(await form.getByText("Correct the number before changing units.", { exact: true }).isVisible());
+      await units.evaluate((node) => node.click());
+      assert.equal(await weight.inputValue(), "7..2");
+      assert.equal((await snapshot()).calls.filter((x) => x.log || x.patch).length, 0);
+      await weight.fill(editing ? "3374" : "7");
+      await units.click();
+      await save.click();
+      const writes = (await snapshot()).calls.filter((x) => x.log || x.patch);
+      assert.equal(writes.length, 1);
+      if (editing) assert.deepEqual(writes[0].patch.data, { weight_g: 3374 }, "Correcting the weight preserves untouched measurements");
+      else assert.deepEqual(writes[0].log.data, { weight_g: 3175, length_cm: 50.8, at: "doctor" });
+    }
+  });
+  await check("measurement note edits preserve unknown context", async () => {
+    for (const kind of ["growth", "temp"]) {
+      await page.goto(`${url}?mode=form-${kind}-edit-unknown`);
+      const form = page.getByRole("dialog").first();
+      if (kind === "growth") {
+        for (const name of ["Doctor", "Home"]) assert.equal(await form.getByRole("radio", { name, exact: true }).getAttribute("aria-checked"), "false");
+      } else {
+        assert.equal(await form.getByRole("button", { name: "Rectal", exact: true }).getAttribute("aria-pressed"), "false", "Another reading's method is not assigned to this recorded temperature");
+      }
+      await form.locator("textarea").first().fill("Synthetic note-only edit");
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      const writes = (await snapshot()).calls.filter((x) => x.patch || x.log);
+      assert.equal(writes.length, 1);
+      assert.deepEqual(writes[0].patch.data ?? {}, {}, "A note-only edit adds no unknown measurement context");
+      assert.equal(writes[0].patch.note, "Synthetic note-only edit");
+      await page.goto(`${url}?mode=form-${kind}-edit-unknown`);
+      const editable = page.getByRole("dialog").first();
+      await editable.getByRole(kind === "growth" ? "radio" : "button", { name: kind === "growth" ? "Home" : "Armpit", exact: true }).click();
+      await editable.getByRole("button", { name: "Save", exact: true }).click();
+      assert.deepEqual((await snapshot()).calls.find((x) => x.patch)?.patch.data, kind === "growth" ? { at: "home" } : { method: "armpit" }, "An explicit context choice is still saved");
+    }
+  });
+  await check("temperature unit changes preserve invalid reading drafts", async () => {
+    await page.goto(`${url}?mode=form-temp&units=metric`);
+    const form = page.getByRole("dialog").first();
+    const reading = form.getByRole("textbox", { name: "temperature in degrees Celsius", exact: true });
+    await reading.fill("50");
+    const fahrenheit = form.getByRole("radio", { name: "°F", exact: true });
+    assert(await fahrenheit.isDisabled(), "An out-of-range Celsius draft cannot disappear when Fahrenheit has a larger numeric limit");
+    await fahrenheit.evaluate((node) => node.click());
+    assert.equal(await reading.inputValue(), "50");
+    assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled());
+    assert(await form.getByText("Correct the number before changing units.", { exact: true }).isVisible());
+    assert.equal((await snapshot()).calls.filter((x) => x.log || x.patch).length, 0);
+    await reading.fill("37.1");
+    await fahrenheit.click();
+    await form.getByRole("button", { name: "Log it", exact: true }).click();
+    assert.deepEqual((await snapshot()).calls.find((x) => x.log)?.log.data, { temp_c: 37.1 });
   });
   await check("measurement fields fit narrow phones", async () => {
     const cramped = [];

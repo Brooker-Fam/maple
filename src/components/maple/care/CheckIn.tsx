@@ -44,6 +44,7 @@ type Checkin = Extract<MoodEntry, { kind: "checkin" }>;
 type ScreenEntry = Extract<MoodEntry, { kind: "screen" }>;
 type Level = 1 | 2 | 3 | 4 | 5;
 type Mood = NonNullable<UseCare["mood"]>;
+type ExtrasTarget = { entry: Checkin } | { after: number[] };
 
 /** "Change" this soon after a check-in corrects it; later it's a new one (more than one a day is fine). */
 const CORRECT_MS = 30 * 60_000;
@@ -67,7 +68,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   const todayKey = dayKey(t, tz);
   const today = mood.todayCheckin;
   const [changing, setChanging] = useState(false);
-  const [extras, setExtras] = useState(false);
+  const [extras, setExtras] = useState<ExtrasTarget | null>(null);
   const [crisis, setCrisis] = useState(false);
   const [full, setFull] = useState(false);
   const [history, setHistory] = useState(false);
@@ -76,6 +77,17 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const saveExtras = useRef<(() => Promise<boolean>) | null>(null);
+  // Keep editing this check-in when another phone adds a newer one. Its
+  // temporary id can change after saving; its recorded time stays the same.
+  const pinned = extras && "entry" in extras ? extras.entry : null;
+  const current = pinned
+    ? mood.checkins.find((entry) => entry.id === pinned.id)
+      ?? (pinned.id < 0 ? mood.checkins.find((entry) => Date.parse(entry.at) === Date.parse(pinned.at)) : null)
+      ?? pinned
+    : extras && "after" in extras
+      ? mood.checkins.find((entry) => !extras.after.includes(entry.id)) ?? null
+      : today;
+  if (current && extras && ("after" in extras || (pinned && pinned.id < 0 && current.id > 0))) setExtras({ entry: current });
 
   const pick = async (level: Level) => {
     if (busy) return;
@@ -84,11 +96,11 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
     // A quick change is a correction to the same check-in; later in the day it's another one.
     if (today && changing && t.getTime() - Date.parse(today.at) < CORRECT_MS) {
       if (level !== today.data.level) void care.act.updateCheckin(today.id, { level }).catch((e) => setProblem(errorText(e)));
-      setExtras(true);
+      setExtras({ entry: today });
       return;
     }
     // It shows at once (useCare), so "Anything else?" opens with it rather than after the server answers.
-    setExtras(true);
+    setExtras({ after: mood.checkins.map((entry) => entry.id) });
     setBusy(true);
     try {
       await care.act.checkin(level);
@@ -112,7 +124,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
   cards.sort((a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier));
 
   const past = [...mood.checkins, ...(mood.latestScreen ? [mood.latestScreen] : [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id);
-  const asking = !today || changing;
+  const asking = !current || changing;
 
   return (
     <section>
@@ -134,11 +146,11 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
               )}
             </div>
           ) : (
-            today && (
+            current && (
               <div className="mt-2">
                 <div className="flex min-h-[44px] items-center gap-3">
                   <p className={cx(tone.body, "min-w-0 flex-1 text-[17px] leading-snug")}>
-                    Today: <span className="font-semibold">{levelLabel(today.data.level)}</span>
+                    Today: <span className="font-semibold">{levelLabel(current.data.level)}</span>
                   </p>
                   <Button
                     variant="ghost"
@@ -147,7 +159,7 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
                     data-checkin-save
                     onClick={async () => {
                       if (saveExtras.current && !(await saveExtras.current())) return;
-                      setExtras(false);
+                      setExtras(null);
                       setChanging(true);
                     }}
                   >
@@ -156,14 +168,14 @@ function CheckIn({ care, mood }: { care: UseCare; mood: Mood }) {
                 </div>
                 {extras ? (
                   // Keyed by its time, which stays put when its temporary id becomes the saved one (a note being typed survives).
-                  <Extras key={Date.parse(today.at)} entry={today} care={care} onCrisis={() => setCrisis(true)} onDone={() => setExtras(false)} saveRef={saveExtras} />
+                  <Extras key={Date.parse(current.at)} entry={current} care={care} onCrisis={() => setCrisis(true)} onDone={() => setExtras(null)} saveRef={saveExtras} />
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setExtras(true)}
+                    onClick={() => setExtras({ entry: current })}
                     className="-ml-1 flex min-h-[44px] w-full items-center gap-1.5 rounded-lg px-1 text-left text-[15px] text-mp-ink-2"
                   >
-                    <span className="min-w-0 flex-1 truncate">{tagText(today.data.tags, moodTags(voice)) || today.note || "Anything else? (optional)"}</span>
+                    <span className="min-w-0 flex-1 truncate">{tagText(current.data.tags, moodTags(voice)) || current.note || "Anything else? (optional)"}</span>
                     <Icon name="pencil" size={15} className="shrink-0 text-mp-ink-3" />
                   </button>
                 )}

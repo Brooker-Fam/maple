@@ -79,11 +79,14 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
     return units === "metric" ? r1(c) : r1(cToF(c));
   });
   const [method, setMethod] = useState<TempMethod | undefined>(
-    () => e?.data.method ?? (pstr(preset, "method") as TempMethod | undefined) ?? temps[0]?.data.method
+    () => e ? e.data.method : (pstr(preset, "method") as TempMethod | undefined) ?? temps[0]?.data.method
   );
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
+  // A temperature can save before its optional vitals fail. Retry against
+  // that same row, preserving its time when "Now" was chosen.
+  const [createdTemp, setCreatedTemp] = useState<{ id: number; started_at: string; data: Record<string, unknown>; note: string | null } | null>(null);
   const [timeInvalid, setTimeInvalid] = useState(false);
   const checks = useNumberChecks();
   // Only a typed or stepped reading is re-sent on edit (°F ↔ °C display rounding would drift it).
@@ -95,7 +98,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const dirty = useDraftChanged({ timeInvalid, unit, value, tempC, method, when, note, heart, resp, spo2, invalid: checks.invalid });
 
   const switchUnit = (u: "F" | "C") => {
-    if (u === unit) return;
+    if (u === unit || checks.invalid) return;
     setValue(tempC == null ? null : u === "C" ? r1(tempC) : r1(cToF(tempC)));
     setUnit(u);
   };
@@ -121,37 +124,44 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
   const savable = tempC != null && tempC >= 30 && tempC <= 45;
 
   const save = async () => {
-    if (timeInvalid) return;
-    if (tempC == null) return;
-    const temp_c = Math.round(tempC * 1000) / 1000;
-    const data: Record<string, unknown> = { temp_c, method };
-    const noteVal = note.trim() || null;
-    const shown = `${formatTemp(temp_c, unit === "C" ? "metric" : "us")}${method ? ` · ${method}` : ""}`;
-    if (e) {
-      setBusy(true);
-      const res = await update(
-        e.id,
-        {
-          data: { ...(touched.reading ? { temp_c } : {}), method: method ?? null },
-          started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
-          note: noteVal,
-        },
-        { toast: `Updated · ${shown}` }
-      );
+    if (busy || timeInvalid || tempC == null) return;
+    setBusy(true);
+    try {
+      const temp_c = Math.round(tempC * 1000) / 1000;
+      const data: Record<string, unknown> = method ? { temp_c, method } : { temp_c };
+      const noteVal = note.trim() || null;
+      const shown = `${formatTemp(temp_c, unit === "C" ? "metric" : "us")}${method ? ` · ${method}` : ""}`;
+      if (e) {
+        const res = await update(
+          e.id,
+          {
+            data: { ...(touched.reading ? { temp_c } : {}), ...(touched.method ? { method: method ?? null } : {}) },
+            started_at: when && when.getTime() !== Date.parse(e.started_at) ? when.toISOString() : undefined,
+            note: noteVal,
+          },
+          { toast: `Updated · ${shown}` }
+        );
+        if (res) onClose();
+        return;
+      }
+      // Both at the same instant so they line up in the timeline. A retry
+      // must not create a second temperature if only its vitals failed.
+      const at = when?.toISOString() ?? createdTemp?.started_at ?? now().toISOString();
+      const sameTemperature = createdTemp && createdTemp.started_at === at && createdTemp.note === noteVal
+        && createdTemp.data.temp_c === temp_c && createdTemp.data.method === method;
+      const saved = sameTemperature ? createdTemp : createdTemp
+        ? await update(createdTemp.id, { started_at: at, data: { temp_c, method: method ?? null }, note: noteVal }, { toast: `Updated · ${shown}` })
+        : await log({ kind: "temp", started_at: at, data, note: noteVal }, { toast: `Temperature ${shown} · ${clock(at)}` });
+      if (!saved) return;
+      setCreatedTemp({ id: saved.id, started_at: at, data, note: noteVal });
+      if (hasVitals) {
+        const clean = Object.fromEntries(Object.entries(vitals).filter(([, v]) => v != null));
+        const readings = await log({ kind: "vitals", started_at: at, data: clean }, { toast: "Other readings saved" });
+        if (!readings) return;
+      }
+      onClose();
+    } finally {
       setBusy(false);
-      if (res) onClose();
-      return;
-    }
-    onClose();
-    // Both at the same instant so they line up in the timeline.
-    const at = (when ?? now()).toISOString();
-    void log(
-      { kind: "temp", started_at: at, data: method ? data : { temp_c }, note: noteVal },
-      { toast: `Temperature ${shown} · ${clock(at)}` }
-    );
-    if (hasVitals) {
-      const clean = Object.fromEntries(Object.entries(vitals).filter(([, v]) => v != null));
-      void log({ kind: "vitals", started_at: at, data: clean }, { toast: "Other readings saved" });
     }
   };
 
@@ -165,126 +175,135 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
     <Sheet
       open={open}
       dirty={dirty}
+      locked={busy}
       onClose={onClose}
       title={e ? describeEntry(e).title : "Temperature"}
       footer={
-        <SheetFooter
-          onClose={onClose}
-          onDelete={e ? del : undefined}
-          onPrimary={() => void save()}
-          label={e ? "Save" : "Log it"}
-          busy={busy}
-          disabled={timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
-          hint={
-            checks.invalid ? CHECK_NUMBER_HINT : !savable ? "Enter the reading." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined
-          }
-        />
+        <fieldset disabled={busy} className="min-w-0">
+          <SheetFooter
+            onClose={onClose}
+            onDelete={e ? del : undefined}
+            onPrimary={() => void save()}
+            label={e ? "Save" : "Log it"}
+            busy={busy}
+            disabled={timeInvalid || checks.invalid || !savable || (!!e && e.id < 0)}
+            hint={
+              checks.invalid ? CHECK_NUMBER_HINT : !savable ? "Enter the reading." : e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined
+            }
+          />
+        </fieldset>
       }
     >
-      {e && <LoggedBy entry={e} />}
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+        {e && <LoggedBy entry={e} />}
+        {!busy && createdTemp && hasVitals && <ContextNote>Temperature saved. The other readings still need saving.</ContextNote>}
 
-      <div>
-        <div className="mb-1.5 flex items-center justify-between gap-3">
-          <Label className="mb-0">Reading</Label>
-          <Segmented<"F" | "C">
-            value={unit}
-            onChange={switchUnit}
-            options={[
-              { value: "F", label: "°F" },
-              { value: "C", label: "°C" },
-            ]}
-            className="w-28"
+        <div>
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <Label className="mb-0">Reading</Label>
+            <fieldset disabled={checks.invalid} className="min-w-0">
+              <Segmented<"F" | "C">
+                value={unit}
+                onChange={switchUnit}
+                options={[
+                  { value: "F", label: "°F" },
+                  { value: "C", label: "°C" },
+                ]}
+                className="w-28"
+              />
+            </fieldset>
+          </div>
+          {checks.invalid && <p className="mb-1.5 text-xs text-mp-danger">Correct the number before changing units.</p>}
+          <Stepper
+            value={value}
+            onChange={(v) => {
+              touch("reading");
+              setValue(v);
+              setTempC(v == null ? null : unit === "C" ? v : fToC(v));
+            }}
+            onInvalid={checks.watch("reading")}
+            step={0.1}
+            decimals={1}
+            min={unit === "F" ? 90 : 32}
+            max={unit === "F" ? 110 : 43}
+            suffix={unit === "F" ? "°F" : "°C"}
+            ariaLabel={`temperature in degrees ${unit === "F" ? "Fahrenheit" : "Celsius"}`}
           />
+          {looksLikeC && (
+            <button
+              type="button"
+              onClick={() => {
+                // The number typed is already °C: relabel it, don't convert it.
+                touch("reading");
+                setTempC(value);
+                setUnit("C");
+              }}
+              className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-mp-accent-fg"
+            >
+              <Icon name="arrow-left-right" size={16} />
+              That looks like °C. Switch to °C?
+            </button>
+          )}
         </div>
-        <Stepper
-          value={value}
-          onChange={(v) => {
-            touch("reading");
-            setValue(v);
-            setTempC(v == null ? null : unit === "C" ? v : fToC(v));
-          }}
-          onInvalid={checks.watch("reading")}
-          step={0.1}
-          decimals={1}
-          min={unit === "F" ? 90 : 32}
-          max={unit === "F" ? 110 : 43}
-          suffix={unit === "F" ? "°F" : "°C"}
-          ariaLabel={`temperature in degrees ${unit === "F" ? "Fahrenheit" : "Celsius"}`}
-        />
-        {looksLikeC && (
+
+        <div>
+          <Label>How did you take it?</Label>
+          <div className="flex flex-wrap gap-2">
+            {methods.map((m) => (
+              <Chip key={m} selected={method === m} onClick={() => { touch("method"); setMethod(method === m ? undefined : m); }}>
+                {METHOD_LABEL[m]}
+              </Chip>
+            ))}
+          </div>
+          {!earThermometerOk(ageMonths) && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Rectal is the most accurate at {w.his} age. Ear thermometers aren&apos;t reliable before 6 months.</p>}
+        </div>
+
+        {assessment && <AssessmentCard a={assessment} />}
+
+        <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
+        <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting? Feeding, sleepy, fussy…`} />
+
+        {!e && (
+          <MoreDetails defaultOpen label="Other readings" summary={hasVitals ? "saved as vitals" : "heart, breathing, oxygen"}>
+            <div>
+              <Label optional>Heart rate</Label>
+              <Stepper value={heart} onChange={setHeart} onInvalid={checks.watch("heart")} step={5} min={30} max={260} suffix="bpm" ariaLabel="heart rate, beats per minute" />
+            </div>
+            <div>
+              <Label optional>Breathing</Label>
+              <Stepper value={resp} onChange={setResp} onInvalid={checks.watch("resp")} step={1} min={5} max={150} suffix="/min" ariaLabel="breaths per minute" />
+              <p className={cx(tone.muted, "mt-1 text-xs")}>Count for a full minute while {w.hes} calm or asleep.</p>
+            </div>
+            <div>
+              <Label optional>Oxygen (SpO₂)</Label>
+              <Stepper value={spo2} onChange={setSpo2} onInvalid={checks.watch("spo2")} step={1} min={50} max={100} suffix="%" ariaLabel="oxygen saturation percent" />
+            </div>
+            {vitalNotes.map((a) => (
+              <AssessmentCard key={a.title} a={a} />
+            ))}
+            <ContextNote icon="siren">{emergencySigns(voice)}</ContextNote>
+          </MoreDetails>
+        )}
+
+        {!e && care?.access.write && (
           <button
             type="button"
             onClick={() => {
-              // The number typed is already °C: relabel it, don't convert it.
-              touch("reading");
-              setTempC(value);
-              setUnit("C");
+              // Close first, so hers opens on top of the screen, not under this one.
+              onClose();
+              window.setTimeout(careNav.openTemp, 120);
             }}
-            className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-mp-accent-fg"
+            className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
           >
-            <Icon name="arrow-left-right" size={16} />
-            That looks like °C. Switch to °C?
+            <Icon name="thermometer" size={20} className="shrink-0 text-mp-ink-2" />
+            <span className={cx(tone.body, "min-w-0 flex-1 text-[15px]")}>
+              {care.self ? "Taking your own temperature?" : `Taking ${care.name}'s temperature?`}{" "}
+              <span className="font-medium whitespace-nowrap text-mp-accent-fg">{care.self ? "Log yours" : "Log hers"}</span>
+            </span>
+            <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
           </button>
         )}
-      </div>
-
-      <div>
-        <Label>How did you take it?</Label>
-        <div className="flex flex-wrap gap-2">
-          {methods.map((m) => (
-            <Chip key={m} selected={method === m} onClick={() => setMethod(method === m ? undefined : m)}>
-              {METHOD_LABEL[m]}
-            </Chip>
-          ))}
-        </div>
-        {!earThermometerOk(ageMonths) && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Rectal is the most accurate at {w.his} age. Ear thermometers aren&apos;t reliable before 6 months.</p>}
-      </div>
-
-      {assessment && <AssessmentCard a={assessment} />}
-
-      <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
-      <NoteField value={note} onChange={setNote} placeholder={`How is ${w.he} acting? Feeding, sleepy, fussy…`} />
-
-      {!e && (
-        <MoreDetails defaultOpen label="Other readings" summary={hasVitals ? "saved as vitals" : "heart, breathing, oxygen"}>
-          <div>
-            <Label optional>Heart rate</Label>
-            <Stepper value={heart} onChange={setHeart} onInvalid={checks.watch("heart")} step={5} min={30} max={260} suffix="bpm" ariaLabel="heart rate, beats per minute" />
-          </div>
-          <div>
-            <Label optional>Breathing</Label>
-            <Stepper value={resp} onChange={setResp} onInvalid={checks.watch("resp")} step={1} min={5} max={150} suffix="/min" ariaLabel="breaths per minute" />
-            <p className={cx(tone.muted, "mt-1 text-xs")}>Count for a full minute while {w.hes} calm or asleep.</p>
-          </div>
-          <div>
-            <Label optional>Oxygen (SpO₂)</Label>
-            <Stepper value={spo2} onChange={setSpo2} onInvalid={checks.watch("spo2")} step={1} min={50} max={100} suffix="%" ariaLabel="oxygen saturation percent" />
-          </div>
-          {vitalNotes.map((a) => (
-            <AssessmentCard key={a.title} a={a} />
-          ))}
-          <ContextNote icon="siren">{emergencySigns(voice)}</ContextNote>
-        </MoreDetails>
-      )}
-
-      {!e && care?.access.write && (
-        <button
-          type="button"
-          onClick={() => {
-            // Close first, so hers opens on top of the screen, not under this one.
-            onClose();
-            window.setTimeout(careNav.openTemp, 120);
-          }}
-          className={cx(tone.card, tone.row, "min-h-[52px] py-2.5")}
-        >
-          <Icon name="thermometer" size={20} className="shrink-0 text-mp-ink-2" />
-          <span className={cx(tone.body, "min-w-0 flex-1 text-[15px]")}>
-            {care.self ? "Taking your own temperature?" : `Taking ${care.name}'s temperature?`}{" "}
-            <span className="font-medium whitespace-nowrap text-mp-accent-fg">{care.self ? "Log yours" : "Log hers"}</span>
-          </span>
-          <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
-        </button>
-      )}
+      </fieldset>
     </Sheet>
   );
 }

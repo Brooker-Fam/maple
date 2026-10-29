@@ -254,11 +254,18 @@ export function RepeatButton({
       aria-label={ariaLabel}
       disabled={disabled}
       onPointerDown={(e) => {
-        if (e.button !== 0 || disabled) return;
+        // Pointer events can still reach a button disabled by its enclosing
+        // fieldset. A pending form save must freeze held nudges too.
+        const button = e.currentTarget;
+        if (e.button !== 0 || button.matches(":disabled")) return;
         stop();
-        step.current();
+        const advance = () => {
+          if (!button.isConnected || button.matches(":disabled")) stop();
+          else step.current();
+        };
+        advance();
         timers.current.wait = window.setTimeout(() => {
-          timers.current.tick = window.setInterval(() => step.current(), 110);
+          timers.current.tick = window.setInterval(advance, 110);
         }, 400);
       }}
       onPointerUp={stop}
@@ -266,7 +273,7 @@ export function RepeatButton({
       onPointerCancel={stop}
       // Keyboard (Enter/Space) clicks have detail 0; pointer presses already stepped.
       onClick={(e) => {
-        if (e.detail === 0) step.current();
+        if (e.detail === 0 && !e.currentTarget.matches(":disabled")) step.current();
       }}
       onContextMenu={(e) => e.preventDefault()}
       className={cx(
@@ -475,6 +482,7 @@ export function TimeRange({
   onInvalidChange?: (invalid: boolean) => void;
 }) {
   const invalid = useRef({ start: false, end: false });
+  const [endInvalid, setEndInvalid] = useState(false);
   const [startRevision, setStartRevision] = useState(0);
   const reportStart = useCallback((next: boolean) => {
     invalid.current.start = next;
@@ -482,6 +490,7 @@ export function TimeRange({
   }, [onInvalidChange]);
   const reportEnd = useCallback((next: boolean) => {
     invalid.current.end = next;
+    setEndInvalid(next);
     onInvalidChange?.(next || invalid.current.start);
   }, [onInvalidChange]);
   const ms = Math.max(0, end.getTime() - start.getTime());
@@ -498,12 +507,13 @@ export function TimeRange({
         {durations.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {durations.map((m) => (
-              <Chip key={m} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => { setStartRevision((current) => current + 1); onChange(new Date(end.getTime() - m * MIN_MS), end); }}>
+              <Chip key={m} disabled={endInvalid} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => { setStartRevision((current) => current + 1); onChange(new Date(end.getTime() - m * MIN_MS), end); }}>
                 {fmt(m)}
               </Chip>
             ))}
           </div>
         )}
+        {durations.length > 0 && endInvalid && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Check the end date and time before choosing a duration.</p>}
       </div>
       <TimeScrubber
         label={labels[1]}

@@ -105,6 +105,7 @@ function App() {
     refresh: async () => {},
     api: detailApi,
     log: async (entry) => { calls.current.push({ log: true, entry }); return entry; },
+    update: async (id, patch) => (await detailApi(`entries?id=${id}`, { method: "PATCH", body: JSON.stringify({ ...patch, expect_updated_at: latest.current.historicalFeed.updated_at }) })).entry,
     toast: (text, options) => message(text, options?.undo),
     readOnly,
     units: "us",
@@ -130,6 +131,19 @@ function App() {
         setNow(new Date(INITIAL_NOW));
         calls.current = [];
         setRoutedSheet({ kind: "feed" });
+      },
+      openSavedFeed: (kind = "manual", extraMinutes = 0) => {
+        const saved = kind === "timed" ? { ...initialFeed(), id: 203 } : {
+          ...initialFeed(), id: 203, started_at: iso("12:00"), ended_at: new Date(Date.parse(iso("12:12")) + extraMinutes * 60_000).toISOString(),
+          data: { method: "breast", left_sec: 300, right_sec: 420, first_side: "L", last_side: "R" },
+        };
+        setHistoricalFeed(saved);
+        setHistoricalLoaded(true);
+        setRealDetails(true);
+        setReadOnly(false);
+        setNow(new Date(INITIAL_NOW));
+        calls.current = [];
+        setRoutedSheet({ kind: "feed", entry: saved });
       },
       failDetailsConflict: () => { detailFailure.current = true; },
       historicalFailure: (kind) => { timerFailure.current = kind; },
