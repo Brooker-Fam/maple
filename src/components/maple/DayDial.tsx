@@ -3,11 +3,13 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
+import { clockContains, clockFraction, clockSpans } from "@/lib/maple/clock-spans";
 import { clusterLine, feedClusters, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
 import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from "@/lib/maple/guidelines";
 import { statsFor } from "@/lib/maple/insights";
-import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
-import type { Entry, FeedData } from "@/lib/maple/types";
+import { nursingSpans } from "@/lib/maple/nursing-spans";
+import { addDays, babyAge, dayBounds, dayKey, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts, parseDayKey, tzOffsetMinutes, zonedTimeToUtc } from "@/lib/maple/time";
+import type { Entry } from "@/lib/maple/types";
 import { useMilestoneWords } from "./familyWords";
 import { useClockMinute } from "./FeedParts";
 import { MAPLE_LEAF_PATH } from "./Hero";
@@ -20,6 +22,7 @@ import { useSheets } from "./sheets";
 import { Tallies } from "./StatusCard";
 import { Button, Segmented, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
+import { useDayHistory } from "./useDayHistory";
 
 /**
  * The Day Dial: a 24-hour clock face (midnight at the top, clockwise) in
@@ -124,20 +127,22 @@ function sectorPath(r: number, a0: number, span: number): string {
 
 /** Clock angle (0° = midnight at the top) of an instant in the baby's zone. */
 function clockDeg(t: number, tz: string): number {
-  const p = localParts(t, tz);
-  return ((p.hour * 60 + p.minute + p.second / 60) / 1440) * 360;
+  return clockFraction(t, 0, tz) * 360;
 }
 
-function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz: string, fade: boolean, pal: Palette, night: boolean) {
+export function buildDayDialMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz: string, fade = false, pal: Palette = COLORS, night = false) {
   const arcs: Arc[] = [];
   const dots: Dot[] = [];
   const opacityAt = (t: number) => (fade ? Math.max(0.4, 1 - 0.6 * ((nowMs - t) / 3600_000 / 24)) : 1);
   const addArc = (entry: Entry, key: string, lane: Arc["lane"], s0: number, e0: number, r: number, color: string, width: number, live: boolean, hatch = false, both = false) => {
-    const s = Math.max(s0, lo);
-    const e = Math.min(e0, hi);
-    if (e < s || s0 > hi || e0 < lo) return;
-    const span = Math.max(MIN_ARC_DEG, (e - s) / 60_000 / 4);
-    arcs.push({ key, entry, lane, r, a0: clockDeg(s, tz), span, color, width, opacity: opacityAt(e), live, hatch, both, s: s0, e: e0 });
+    if (s0 === e0 && lane !== "sleep") {
+      if (s0 < lo || s0 >= hi || s0 > nowMs) return;
+      arcs.push({ key, entry, lane, r, a0: clockDeg(s0, tz), span: MIN_ARC_DEG, color, width, opacity: opacityAt(s0), live, hatch, both, s: s0, e: e0 });
+      return;
+    }
+    for (const [i, piece] of clockSpans(s0, e0, lo, Math.min(hi, nowMs), 0, tz).entries()) {
+      arcs.push({ key: `${key}-${i}`, entry, lane, r, a0: piece.x1 * 360, span: (piece.x2 - piece.x1) * 360, color, width, opacity: opacityAt(piece.end), live, hatch, both, s: piece.start, e: piece.end });
+    }
   };
 
   for (const entry of entries) {
@@ -146,31 +151,16 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
     if (entry.kind === "sleep") {
       addArc(entry, `s${entry.id}`, "sleep", start, end, R.sleep, pal.sleep, 16, entry.active);
     } else if (entry.kind === "feed") {
-      const d = entry.data as FeedData;
+      const d = entry.data;
       if (d.method === "bottle") {
         addArc(entry, `b${entry.id}`, "bottle", start, Math.max(end, start), R.feed, pal.bottleEdge, 14, false);
-      } else if (d.segments?.length) {
-        d.segments.forEach((seg, i) => {
-          const s = Date.parse(seg.start);
-          const e = seg.end ? Date.parse(seg.end) : entry.active ? nowMs : s;
-          // Each side keeps its own color; back and forth ("B") is its own striped mark, never painted as Right.
-          const color = seg.side === "R" ? pal.right : pal.left;
-          addArc(entry, `f${entry.id}-${i}`, "feed", s, e, R.feed, color, 14, entry.active && !seg.end, night && seg.side === "R", seg.side === "B");
-        });
       } else {
-        // A feed logged by minutes: first side, then the other, then any back and forth.
-        const first = d.first_side ?? (d.left_sec ? "L" : "R");
-        const a = (first === "L" ? d.left_sec : d.right_sec) ?? 0;
-        const b = (first === "L" ? d.right_sec : d.left_sec) ?? 0;
-        const c = d.both_sec ?? 0;
-        const col = (side: string) => (side === "L" ? pal.left : pal.right);
-        const then = first === "L" ? "R" : "L";
-        if (a > 0 || (b === 0 && c === 0)) addArc(entry, `f${entry.id}-a`, "feed", start, start + a * 1000, R.feed, col(first), 14, false, night && first === "R");
-        if (b > 0) addArc(entry, `f${entry.id}-b`, "feed", start + a * 1000, start + (a + b) * 1000, R.feed, col(then), 14, false, night && then === "R");
-        if (c > 0) addArc(entry, `f${entry.id}-c`, "feed", start + (a + b) * 1000, start + (a + b + c) * 1000, R.feed, pal.left, 14, false, false, true);
+        nursingSpans(entry, new Date(nowMs)).forEach((part, i) => {
+          addArc(entry, `f${entry.id}-${i}`, "feed", part.start, part.end, R.feed, part.side === "R" ? pal.right : pal.left, 14, part.live, night && part.side === "R", part.side === "B");
+        });
       }
     } else if (entry.kind === "diaper") {
-      if (start < lo || start > hi) continue;
+      if (start < lo || start >= hi || start > nowMs) continue;
       // At night every poop is the same amber: the stool color is in the details and the entry. A poop with no color
       // logged is neutral, never a made-up brown.
       const stool = entry.data.poop ? entry.data.color : undefined;
@@ -185,9 +175,9 @@ function buildMarks(entries: Entry[], lo: number, hi: number, nowMs: number, tz:
 }
 
 export default function DayDial({ activity = "all" }: { activity?: PatternActivity }) {
-  const { state, summary, api, units, readOnly } = useMaple();
+  const { state, summary, units, readOnly } = useMaple();
   const words = useMilestoneWords();
-  const { open } = useSheets();
+  const { open, current: currentSheet } = useSheets();
   // On the clock minute, so a running feed's minutes in the list flip with the card's and the Timeline's.
   const now = useClockMinute();
   const night = useNightActive();
@@ -199,12 +189,14 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
   const orientationId = `maple-dial-orientation-${uid}`;
   const detailId = `maple-dial-detail-${uid}`;
   const [choice, setChoice] = useState<View | null>(null);
-  const [fetched, setFetched] = useState<{ key: string; entries: Entry[]; error?: boolean } | null>(null);
   const [pop, setPop] = useState<{ t: number; items: Entry[]; cluster?: FeedCluster } | null>(null);
   const [hint, setHint] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const browseRef = useRef<HTMLElement>(null);
+  const detailFocusRef = useRef<HTMLElement | null>(null);
+  const editOpenerRef = useRef<HTMLElement | null>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const todayKey = dayKey(now, tz);
   const yesterday = addDays(todayKey, -1);
@@ -221,24 +213,10 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
   const past = dayView != null && !isToday;
   // The state snapshot holds ~72h; older days come from the API.
   const needsFetch = dayView != null && dayView < yesterday;
-  // A request belongs to its day. Switching days must never show the previous
-  // day's failure, or a moment of zero totals before the next request starts.
-  const loading = needsFetch && fetched?.key !== dayView;
-  const loadError = needsFetch && fetched?.key === dayView && !!fetched.error;
-  const unavailable = loading || loadError;
-
-  useEffect(() => {
-    if (!needsFetch || !dayView || fetched?.key === dayView) return;
-    let cancelled = false;
-    // From the day before too: a feed that began late that night runs into this day's first minutes, and a feed
-    // counts on the day it began (statsFor, runs from the whole window), as History's day line counts it.
-    api<{ entries: Entry[] }>(`entries?from=${addDays(dayView, -1)}&to=${dayView}`)
-      .then((r) => !cancelled && setFetched({ key: dayView, entries: r.entries }))
-      .catch(() => !cancelled && setFetched({ key: dayView, entries: [], error: true }));
-    return () => {
-      cancelled = true;
-    };
-  }, [api, dayView, fetched?.key, needsFetch]);
+  const history = useDayHistory(needsFetch ? dayView : null);
+  const loading = needsFetch && history.loading;
+  const loadError = needsFetch && history.error;
+  const unavailable = needsFetch && !history.loaded;
 
   // The "tap the ring" hint shows until the first tap on this device (screen readers always get it).
   useEffect(() => {
@@ -263,44 +241,69 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
 
   const closeDetails = () => {
     setPop(null);
-    triggerRef.current?.focus();
+    if (triggerRef.current?.isConnected) triggerRef.current.focus();
+    else browseRef.current?.focus();
   };
   const revealDetails = () => requestAnimationFrame(() => {
     detailRef.current?.scrollIntoView({ block: "nearest", behavior: night || reduceMotion ? "instant" : "smooth" });
   });
 
-  const nowMs = now.getTime();
+  // A fresh snapshot may contain a log newer than the minute tick. Include it
+  // immediately, while never extending a duration beyond the current clock.
+  const nowMs = Math.max(now.getTime(), state ? Date.parse(state.now) : 0);
   const [lo, hi] = useMemo(() => {
-    // A little slack past "now": the dial's clock ticks every 30s, and a diaper logged a second ago belongs on it.
-    if (!dayView) return [nowMs - 24 * 3600_000, nowMs + 5 * 60_000];
+    // Point events exactly at now belong in the window; local midnight does not.
+    if (!dayView) return [nowMs - 24 * 3600_000, nowMs + 1];
     // DST-safe local midnights; today runs to now, a past day to its end.
     const [a, b] = dayBounds(dayView, tz);
-    return [a.getTime(), Math.min(b.getTime(), nowMs + 5 * 60_000)];
+    return [a.getTime(), Math.min(b.getTime(), nowMs + 1)];
   }, [dayView, nowMs, tz]);
 
   const source = useMemo(() => {
     if (!state) return [];
     if (!needsFetch) return state.entries;
-    return fetched?.key === dayView ? fetched.entries : [];
-  }, [dayView, fetched, needsFetch, state]);
+    return history.entries;
+  }, [history.entries, needsFetch, state]);
+
+  // A remote deletion can remove the focused Edit action. Keep Escape and
+  // keyboard navigation in the surviving details, without interrupting a sheet.
+  useEffect(() => {
+    if (currentSheet || !pop) return;
+    const lost = [detailFocusRef.current, editOpenerRef.current].some((element) => element && !element.isConnected);
+    if (!lost) { editOpenerRef.current = null; return; }
+    const recover = () => {
+      const active = document.activeElement;
+      if (active === document.body && detailRef.current?.getClientRects().length) {
+        detailRef.current.focus();
+        editOpenerRef.current = null;
+        observer.disconnect();
+      } else if (active instanceof HTMLElement && active !== document.body && !active.closest('[role="dialog"]')) {
+        // Focus has already moved deliberately, or the sheet restored it.
+        editOpenerRef.current = null;
+        observer.disconnect();
+      }
+    };
+    // A closing sheet remains mounted for its exit animation. Wait for its
+    // actual removal instead of racing it with a fixed delay.
+    const observer = new MutationObserver(recover);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const frame = requestAnimationFrame(recover);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+  }, [source, pop, currentSheet]);
 
   const pal = night ? NIGHT_COLORS : COLORS;
-  const marks = useMemo(() => buildMarks(source, lo, hi, nowMs, tz, rolling, pal, night), [source, lo, hi, nowMs, tz, rolling, pal, night]);
+  const marks = useMemo(() => buildDayDialMarks(source, lo, hi, nowMs, tz, rolling, pal, night), [source, lo, hi, nowMs, tz, rolling, pal, night]);
   const arcs = marks.arcs.filter((mark) => activity === "all" || (activity === "sleep" ? mark.lane === "sleep" : activity === "feeds" && mark.lane !== "sleep"));
   const dots = activity === "all" || activity === "diapers" ? marks.dots : [];
   // One set of numbers for the dial's label and the tallies below, from the same entries and window.
   const runs = useMemo(() => nursingRuns(source, now), [source, now]);
-  const stats = useMemo(() => statsFor(source, new Date(lo), new Date(hi + 1), dayView ?? "last24h", now, runs), [source, lo, hi, dayView, now, runs]);
+  const stats = useMemo(() => statsFor(source, new Date(lo), new Date(hi), dayView ?? "last24h", now, runs), [source, lo, hi, dayView, now, runs]);
   // A bracket outside the feed ring for each cluster that reaches into the view.
   const brackets = useMemo(
     () =>
       (activity === "all" || activity === "feeds" ? feedClusters(runs) : [])
-        .map((c) => {
-          const s = Math.max(c.start, lo);
-          const e = Math.min(c.end ?? nowMs, hi);
-          return e > s ? { c, a0: clockDeg(s, tz), span: Math.max(MIN_ARC_DEG, (e - s) / 60_000 / 4), s, e } : null;
-        })
-        .filter((b): b is NonNullable<typeof b> => !!b),
+        .flatMap((c) => clockSpans(c.start, c.end ?? nowMs, lo, Math.min(hi, nowMs), 0, tz)
+          .map((piece) => ({ c, a0: piece.x1 * 360, span: (piece.x2 - piece.x1) * 360, s: piece.start, e: piece.end }))),
     [runs, lo, hi, nowMs, tz, activity]
   );
 
@@ -308,15 +311,20 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
 
   const showHand = rolling || isToday;
   const nowDeg = clockDeg(nowMs, tz);
+  const offsetChange = tzOffsetMinutes(hi - 1, tz) - tzOffsetMinutes(lo, tz);
   // Her day of life on a past day (today's is in the header).
-  const pastAge = past && state.baby.born_at ? babyAge(state.baby.born_at, new Date(hi), tz) : null;
+  const pastAge = past && state.baby.born_at ? babyAge(state.baby.born_at, new Date(hi - 1), tz) : null;
   const plotted = [...arcs.map((a) => a.entry), ...dots.map((d) => d.entry)].filter((e, i, all) => all.findIndex((x) => x.id === e.id) === i);
+  // Selection stores identity, never a stale version of an edited/deleted log.
+  const selectedIds = new Set(pop?.items.map((entry) => entry.id));
+  const selectedCluster = pop?.cluster ? brackets.find(({ c }) => c.entries.some((entry) => selectedIds.has(entry.id)))?.c : undefined;
+  const selectedItems = selectedCluster ? selectedCluster.entries : plotted.filter((entry) => selectedIds.has(entry.id));
   const rangeName = rolling ? "Last 24 hours" : formatDayLabel(dayView ?? todayKey, todayKey, { long: true });
   const activitySummary = activity === "feeds" ? `${stats.feeds} feeds logged`
     : activity === "sleep" ? `${formatDuration(stats.sleepSec)} sleep logged`
       : activity === "diapers" ? `${stats.wet} wet and ${stats.dirty} dirty diapers logged`
         : `${stats.feeds} feeds, ${stats.wet} wet and ${stats.dirty} dirty diapers, ${formatDuration(stats.sleepSec)} sleep logged`;
-  const label = loading ? `${rangeName}: loading logged events.` : loadError ? `${rangeName}: couldn't load logged events.` : `${rangeName}: ${activitySummary}.`;
+  const label = loading ? `${rangeName}: loading logged events.` : loadError && unavailable ? `${rangeName}: couldn't load logged events.` : `${rangeName}: ${activitySummary}.`;
 
   // The usual numbers for her day of life (on a past day, for the age she was then). Off while warnings are off.
   const targets = summary.targets && pastAge ? { ...diaperTargets(pastAge.dayOfLife), feeds: FEEDS_PER_DAY, tummyMin: tummyGoalMinutes(pastAge.days) } : summary.targets;
@@ -351,21 +359,27 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
     }
     // In a cluster, on the feed ring or its bracket: the details say so ("Cluster 6:02–8:40 PM · 4 feeds · …"). On the
     // bracket itself (between the feed and sleep rings) it lists the cluster's feeds.
-    const inCluster = r >= R.feed - 8 && r <= R.sleep - 6 ? brackets.find((b) => t >= b.s - 10 * 60_000 && t <= b.e + 10 * 60_000) : undefined;
-    if (inCluster && r >= R.feed + 6) {
-      const feeds = [...inCluster.c.entries].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
-      setPop({ t, items: feeds, cluster: inCluster.c });
+    const fraction = tapMin / 1440;
+    const matchingClusters = r >= R.feed - 8 && r <= R.sleep - 6
+      ? [...new Map(brackets.filter((b) => clockContains(fraction, b.a0 / 360, (b.a0 + b.span) / 360, 10)).map((b) => [b.c.start, b])).values()] : [];
+    const inCluster = matchingClusters.length === 1 ? matchingClusters[0] : undefined;
+    if (matchingClusters.length && r >= R.feed + 6) {
+      const feeds = [...new Map(matchingClusters.flatMap((b) => b.c.entries).map((entry) => [entry.id, entry])).values()]
+        .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
+      setPop({ t: matchingClusters[0].s, items: feeds, cluster: inCluster?.c });
       revealDetails();
       return;
     }
-    const near = plotted
-      .filter((e) => {
-        const s = Date.parse(e.started_at);
-        const end = e.ended_at ? Date.parse(e.ended_at) : e.active ? nowMs : s;
-        return t >= s - TAP_WINDOW_MS && t <= end + TAP_WINDOW_MS;
-      })
-      .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))
-      .slice(0, 6);
+    // Hit the same pieces we drew. Reconstructing one UTC instant from the
+    // angle would miss the second occurrence of 1 AM when clocks fall back,
+    // and an entry's overall start/end would incorrectly include nursing pauses.
+    const nearArcs = arcs.filter((a) => clockContains(fraction, a.a0 / 360, a.a0 / 360 + (a.e - a.s) / (24 * 3600_000), a.s === a.e ? TAP_WINDOW_MS / 60_000 : Math.max(0, 6 - (a.e - a.s) / 120_000)));
+    const nearDots = dots.filter((d) => clockContains(fraction, d.a / 360, d.a / 360, TAP_WINDOW_MS / 60_000));
+    const firstArc = nearArcs[0];
+    if (firstArc) t = firstArc.s + Math.max(0, Math.min(firstArc.e - firstArc.s, (fraction - firstArc.a0 / 360) * 24 * 3600_000));
+    else if (nearDots[0]) t = nearDots[0].t;
+    const near = [...new Map([...nearArcs.map((a) => a.entry), ...nearDots.map((d) => d.entry)].map((entry) => [entry.id, entry])).values()]
+      .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
     setPop({ t, items: near, cluster: inCluster?.c });
     revealDetails();
   };
@@ -388,16 +402,19 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
   const nightSpan = (11 / 24) * 360;
 
   // The center readout: the time (or the day), and what the ring covers. The counts are in the tallies below.
-  const sub = loading ? "Loading…" : loadError ? "Couldn't load" : past ? (pastAge ? `Day ${pastAge.dayOfLife}` : "") : rolling ? "Last 24 hours" : "Since midnight";
+  const sub = loading ? "Loading…" : loadError && unavailable ? "Couldn't load" : past ? (pastAge ? `Day ${pastAge.dayOfLife}` : "") : rolling ? "Last 24 hours" : "Since midnight";
   const mainY = sub ? C - 8 : C;
 
 
   return (
     <>
-      <section aria-label="Day dial" className="mp-day-explorer" aria-busy={loading}>
+      <section aria-label="Day dial" className="mp-day-explorer" aria-busy={loading || history.refreshing}>
         <p id={orientationId} className="sr-only">
           A 24-hour clock: midnight at the top, noon at the bottom. Read clockwise.
         </p>
+        {offsetChange !== 0 && <p className={cx(tone.muted, "mx-auto mb-3 max-w-[380px] px-2 text-center text-[13px] leading-snug")}>
+          {offsetChange < 0 ? "Some clock times repeat here. Both occurrences share the ring; totals include both." : "The clock skips ahead here. Skipped times stay blank on the ring."}
+        </p>}
         <div className="mp-day-scene relative mx-auto w-full max-w-[380px]">
           <svg
             ref={svgRef}
@@ -626,10 +643,12 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
 
         {loadError && (
           <div className={cx(tone.inset, "mx-auto mt-3 flex max-w-[380px] items-center gap-3 px-3 py-2")} role="status">
-            <p className={cx(tone.muted, "flex-1 text-[13px] leading-snug")}>{"Couldn't load this day's log."}</p>
-            <Button size="sm" variant="soft" onClick={() => setFetched(null)}>Try again</Button>
+            <p className={cx(tone.muted, "flex-1 text-[13px] leading-snug")}>{history.loaded ? "Couldn't update this day. Showing the last loaded entries." : "Couldn't load this day's log."}</p>
+            <Button size="sm" variant="soft" onClick={history.reload}>Try again</Button>
           </div>
         )}
+        {history.refreshing && <p role="status" className={cx(tone.muted, "mt-3 text-center text-[13px]")}>Updating this day…</p>}
+        {needsFetch && history.partialDays.length > 0 && <p role="status" className={cx(tone.muted, "mt-3 px-3 text-center text-[13px]")}>Some entries could not be loaded. Totals for this day may be incomplete.</p>}
 
         <p className={cx(tone.muted, "mt-3 px-2 text-center text-[12px] leading-relaxed")}>
           {activity === "sleep" ? "Sleep · outer ring" : activity === "feeds" ? "Feeds · middle ring" : activity === "diapers" ? "Diapers · inner ring" : "Sleep outside · Feeds in the middle · Diapers inside"}
@@ -681,7 +700,10 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
         </div>
 
         {!unavailable && <>
-          <p className="mp-dial-summary" role="status">{activitySummary}.<span>Missing entries are not counted.</span></p>
+          <p className="mp-dial-summary" role="status">{activitySummary}.
+            {stats.breastFeeds === 0 && arcs.some((arc) => arc.lane === "feed") && <span>Nursing continued from earlier. Feeds count in the window where they started.</span>}
+            <span>Missing entries are not counted.</span>
+          </p>
 
           <AnimatePresence initial={false}>
             {pop && (
@@ -691,6 +713,8 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
                 role="region"
                 aria-label="Selected log entries"
                 tabIndex={-1}
+                onFocusCapture={(event) => { detailFocusRef.current = event.target as HTMLElement; }}
+                onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) detailFocusRef.current = null; }}
                 onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); closeDetails(); } }}
                 initial={night || reduceMotion ? false : { opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -699,14 +723,14 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
                 className="mp-dial-details"
               >
                 <div className="flex items-center justify-between gap-2 pl-4">
-                  <h3 className={cx(tone.heading, "min-w-0 py-2 text-[14px] leading-snug")}>{pop.cluster ? clusterLine(pop.cluster, tz) : `Around ${formatTime(pop.t, tz)}`}</h3>
+                  <h3 className={cx(tone.heading, "min-w-0 py-2 text-[14px] leading-snug")}>{selectedCluster ? clusterLine(selectedCluster, tz) : `Around ${formatTime(pop.t, tz)}`}</h3>
                   <button type="button" onClick={closeDetails} aria-label="Close event details" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-mp-ink-2">
                     <Icon name="x" size={18} />
                   </button>
                 </div>
-                {pop.items.length ? (
+                {selectedItems.length ? (
                   <div className={cx(tone.divide, "max-h-[320px] overflow-y-auto overscroll-contain border-t border-mp-line")}>
-                    {pop.items.map((entry) => {
+                    {selectedItems.map((entry) => {
                       const description = describeEntry(entry, { units, now, words });
                       return (
                         <div key={entry.id} className="flex items-start gap-2.5 px-4 py-3">
@@ -715,20 +739,20 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
                             <p className={cx(tone.heading, "text-[15px] leading-snug")}>{description.title}</p>
                             {description.detail && <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-relaxed")}>{description.detail}</p>}
                             <p className={cx(tone.muted, "mt-1 text-[12px] tabular-nums")}>{formatTime(entry.started_at, tz)}</p>
-                            {!readOnly && <button type="button" onClick={() => { setPop(null); open({ kind: entry.kind, entry }); }} aria-label={`Edit ${description.title.toLowerCase()} at ${formatTime(entry.started_at, tz)}`} className="-ml-2 mt-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 text-[13px] font-semibold text-mp-accent-fg">Edit entry <Icon name="pencil" size={13} /></button>}
+                            {!readOnly && <button type="button" onClick={(event) => { editOpenerRef.current = event.currentTarget; open({ kind: entry.kind, entry }); }} aria-label={`Edit ${description.title.toLowerCase()} at ${formatTime(entry.started_at, tz)}`} className="-ml-2 mt-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 text-[13px] font-semibold text-mp-accent-fg">Edit entry <Icon name="pencil" size={13} /></button>}
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                ) : <p className={cx(tone.muted, "px-4 pb-4 text-sm")}>Nothing logged around then.</p>}
+                ) : <p className={cx(tone.muted, "px-4 pb-4 text-sm")}>{pop.items.length ? "This entry is no longer in this view." : "Nothing logged around then."}</p>}
               </motion.div>
             )}
           </AnimatePresence>
 
           <details className="mp-dial-log">
-            <summary><span>Browse logged entries</span><span className="tabular-nums">{plotted.length}</span></summary>
-            {brackets.length > 0 && <ul className={cx(tone.muted, "space-y-1 px-3 pb-2 text-[12px]")}>{brackets.map((bracket, index) => <li key={index}>{clusterLine(bracket.c, tz)}</li>)}</ul>}
+            <summary ref={browseRef}><span>Browse logged entries</span><span className="tabular-nums">{plotted.length}</span></summary>
+            {brackets.length > 0 && <ul className={cx(tone.muted, "space-y-1 px-3 pb-2 text-[12px]")}>{[...new Map(brackets.map(({ c }) => [c.start, c])).values()].map((cluster) => <li key={cluster.start}>{clusterLine(cluster, tz)}</li>)}</ul>}
             {plotted.length ? <div className={cx(tone.divide, "max-h-[280px] overflow-y-auto overscroll-contain")}>
               {[...plotted].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at)).map((entry) => {
                 const description = describeEntry(entry, { units, now, words });

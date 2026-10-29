@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { clockFraction, clockSpans } from "@/lib/maple/clock-spans";
 import { feedClusters, feedTotals, nursingRuns, spanText, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
 import {
   DISCLAIMER,
@@ -12,6 +13,7 @@ import {
   tummyGoalMinutes,
 } from "@/lib/maple/guidelines";
 import { isVitaminD, statsFor, type DayStats } from "@/lib/maple/insights";
+import { nursingSpans } from "@/lib/maple/nursing-spans";
 import {
   DEFAULT_TZ,
   addDays,
@@ -107,6 +109,7 @@ const FRAME = { left: 30, right: 4, top: 10, bottom: 18 } as const;
 type Range = "7" | "14" | "30" | "all";
 type RibbonMode = "days" | "nights";
 type PatternView = "clock" | "compare" | "totals";
+const hasDailyTotals = (day: DayStats) => day.feeds + day.diapers + day.sleeps + day.sleepSec + day.tummySec + day.pumpMl > 0;
 
 // For the doctor → "Growth chart": a request the tab takes once its charts have loaded (they sit above the growth
 // chart, so a scroll before then lands short). Like requestTimelineDay: read when it mounts, or at once if it's there.
@@ -136,7 +139,11 @@ export default function PatternsTab({
   const w = useBabyWords();
   const { open } = useSheets();
   const careNav = useCareNav();
-  const now = useNow(60_000);
+  const tickMs = useNow(60_000).getTime();
+  const snapshotMs = state?.now ? Date.parse(state.now) : 0;
+  // A fresh log can arrive between minute ticks. Match the accepted snapshot
+  // immediately while still excluding entries that are actually in the future.
+  const now = useMemo(() => new Date(Math.max(tickMs, snapshotMs)), [tickMs, snapshotMs]);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const todayKey = dayKey(now, tz);
   const bornAt = state?.baby.born_at ?? null;
@@ -155,11 +162,12 @@ export default function PatternsTab({
   const { entries, ready, loaded, loadedFrom, partialDays, error, reload } = useEntryRange(addDays(fromKey, -1), todayKey);
   // While older weeks load (newest first), show only what has arrived instead of empty days.
   const viewFrom = ready || !loadedFrom || loadedFrom <= fromKey ? fromKey : loadedFrom;
+  const hasCoverage = loadedFrom !== null;
 
-  const days = useMemo(() => statsByDay(entries, viewFrom, todayKey, now, tz), [entries, viewFrom, todayKey, now, tz]);
-  const loggedDays = days.filter((d) => d.feeds + d.diapers + d.sleeps > 0).length;
+  const days = useMemo(() => hasCoverage ? statsByDay(entries, viewFrom, todayKey, now, tz) : [], [entries, viewFrom, todayKey, now, tz, hasCoverage]);
+  const loggedDays = days.filter(hasDailyTotals).length;
   // Charts start at the first logged day: blank days before logging began would read as "0 feeds".
-  const firstLogged = days.findIndex((d) => d.feeds + d.diapers + d.sleeps > 0);
+  const firstLogged = days.findIndex(hasDailyTotals);
   const chartDays = firstLogged > 0 ? days.slice(firstLogged) : days;
 
   // "Growth chart" from For the doctor: scroll to it once everything above it has drawn (two frames after the last
@@ -257,29 +265,36 @@ export default function PatternsTab({
             { value: "all", label: "All" },
           ]}
         />
+        {range === "all" && <p className={cx(tone.muted, "-mt-3 mb-5 px-1 text-[13px]")}>
+          Showing {formatDayLabel(fromKey, todayKey)} through Today.
+          {!bornKey ? " Without a birth date, this view covers the last 30 days." : daysBetween(bornKey, todayKey) + 1 > 399 ? " This view covers the most recent 399 days." : " All days since birth."}
+        </p>}
 
         {error && (
           <div className={cx(tone.card, "mb-5 flex items-center gap-3 py-2.5 pr-2.5 pl-4")} role="status">
             <Icon name="cloud-off" size={20} className="shrink-0 text-mp-ink-3" />
-            <p className={cx(tone.body, "flex-1 text-sm")}>{loaded ? "Couldn't load every day. The days already loaded are below." : "Couldn't load the history for these patterns."}</p>
+            <p className={cx(tone.body, "flex-1 text-sm")}>{hasCoverage ? "Couldn't load every day. The days already loaded are below." : "Couldn't load the history for these patterns."}</p>
             <Button size="sm" variant="soft" onClick={reload}>Try again</Button>
           </div>
         )}
         <div className={cx("space-y-6 transition-opacity", !ready && loaded && !error && "opacity-60")} aria-busy={!ready && !error}>
-          {!loaded && !error ? (
+          {!hasCoverage && !error ? (
             <EmptyState title="Loading…" />
-          ) : loaded ? (
+          ) : hasCoverage ? (
             <>
-              {loggedDays === 0 && ready && (
+              {view === "totals" && loggedDays === 0 && ready && (
                 <Card>
-                  <EmptyState title="No feeds, sleep or diapers logged in this range">
-                    Choose a longer range, or come back after logging feeds, sleep or diapers.
+                  <EmptyState title="No daily totals logged in this range">
+                    Choose a longer range, or come back after logging an activity.
                   </EmptyState>
                 </Card>
               )}
               {view === "totals" && loggedDays >= 2 && <Insights days={chartDays} entries={entries} todayKey={todayKey} tz={tz} now={now} />}
 
               {!ready && !error && <p className={cx(tone.faint, "px-1 text-xs")}>Gathering earlier days…</p>}
+              {!ready && loadedFrom && loadedFrom > addDays(fromKey, -1) && (
+                <p role="status" className={cx(tone.muted, "px-1 text-[13px]")}>Earlier history has not loaded yet. Feed counts for {formatDayLabel(loadedFrom, todayKey)} may change.</p>
+              )}
               {partialDays.length > 0 && (
                 <p className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-[13px] leading-snug")} role="status">
                   <Icon name="info" size={16} className="mt-px shrink-0 text-mp-ink-3" />
@@ -289,10 +304,11 @@ export default function PatternsTab({
                   </span>
                 </p>
               )}
-              {loggedDays >= 1 && <div hidden={view !== "compare"}>
+              <div hidden={view !== "compare"}>
                 <Ribbons
                   entries={entries}
                   fromKey={viewFrom}
+                  knownFrom={loadedFrom!}
                   todayKey={todayKey}
                   tz={tz}
                   now={now}
@@ -304,7 +320,7 @@ export default function PatternsTab({
                   showChatSuggestions={ready}
                   activity={activity}
                 />
-              </div>}
+              </div>
 
               {loggedDays >= 1 && <div hidden={view !== "totals"}>
                 <DailyCharts days={chartDays} entries={entries} todayKey={todayKey} tz={tz} bornAt={bornAt} units={units} now={now} />
@@ -452,20 +468,7 @@ export type RibbonRow = TimeWindow & {
 export function wallFrac(t: number, start: number, end: number, wallStartMin: number, tz: string): number {
   if (t <= start) return 0;
   if (t >= end) return 1;
-  const p = localParts(t, tz);
-  let m = p.hour * 60 + p.minute + p.second / 60 - wallStartMin;
-  if (m < 0) m += 1440;
-  return Math.min(1, m / 1440);
-}
-
-/** A span clipped to the row; when clocks fall back the repeated hour keeps its real length. */
-export function spanFrac(s: number, e: number, start: number, end: number, wallStartMin: number, tz: string): [number, number] {
-  const a = Math.max(s, start);
-  const b = Math.min(e, end);
-  const x1 = wallFrac(a, start, end, wallStartMin, tz);
-  let x2 = wallFrac(b, start, end, wallStartMin, tz);
-  if (x2 < x1) x2 = Math.min(1, x1 + (b - a) / (24 * H));
-  return [x1, x2];
+  return clockFraction(t, wallStartMin, tz);
 }
 
 function nightLabel(key: string, todayKey: string): string {
@@ -493,14 +496,21 @@ export function buildRibbon(
   tz: string,
   now: Date,
   bornAt: string | null,
-  units: UnitSystem
+  units: UnitSystem,
+  knownFrom?: string
 ): RibbonRow[] {
   const nowMs = now.getTime();
   const bornMs = bornAt ? Date.parse(bornAt) : null;
   const wallStartMin = mode === "nights" ? 720 : 0;
+  const knownStart = knownFrom ? dayBounds(knownFrom, tz)[0].getTime() : -Infinity;
+  const recorded = entries.filter((entry) => Date.parse(entry.started_at) <= nowMs);
   // Feeds and clusters by the one rule (feed.ts), worked out once from everything loaded.
-  const runs: NursingRun[] = nursingRuns(entries, now);
+  const runs: NursingRun[] = nursingRuns(recorded, now);
   const clusters: FeedCluster[] = feedClusters(runs);
+  // Keep each actual stretch, including those whose entry began before the
+  // row. Bucketing an entry by its start alone would lose nursing after midnight.
+  const nursing = recorded.flatMap((entry) => entry.kind === "feed" && entry.data.method !== "bottle"
+    ? nursingSpans(entry, now) : []);
 
   // Row windows, oldest first: local days, or noon → noon for nights.
   const windows: TimeWindow[] = [];
@@ -517,10 +527,10 @@ export function buildRibbon(
       start = a.getTime();
       end = b.getTime();
     }
-    if (start > nowMs || (bornMs != null && end <= bornMs)) continue;
+    if (start < knownStart || start > nowMs || (bornMs != null && end <= bornMs)) continue;
     windows.push({ key: k, start, end });
   }
-  const buckets = bucketWindows(entries, windows, now);
+  const buckets = bucketWindows(recorded, windows, now);
 
   const rows: RibbonRow[] = [];
   windows.forEach(({ key: k, start, end }, w) => {
@@ -532,7 +542,7 @@ export function buildRibbon(
       label: mode === "nights" ? nightLabel(k, todayKey) : formatDayLabel(k, todayKey),
       jumpKey: mode === "nights" && addDays(k, 1) <= todayKey ? addDays(k, 1) : k,
       dst: null,
-      stats: statsFor(inRow, new Date(start), new Date(end), k, now, runs),
+      stats: statsFor(inRow, new Date(start), new Date(Math.min(end, nowMs + 1)), k, now, runs),
       sleeps: [],
       tummies: [],
       feeds: [],
@@ -545,33 +555,41 @@ export function buildRibbon(
     if (hours === 23) row.dst = mode === "days" ? dstNote(k, tz) : "23 hours (clocks sprang forward)";
 
     const when = (s: number, e: number) => `${formatTime(s, tz)}${e > s + MIN ? `–${formatTime(e, tz)}` : ""}`;
+    const spans = (s: number, e: number) => clockSpans(s, e, start, Math.min(end, nowMs), wallStartMin, tz);
     for (const e of inRow) {
       const s = Date.parse(e.started_at);
       if (e.kind === "sleep" || e.kind === "tummy") {
-        const eEnd = entryEnd(e, now);
+        const eEnd = Math.min(entryEnd(e, now), nowMs);
         if (eEnd <= start || s >= end || eEnd <= s) continue;
-        const [x1, x2] = spanFrac(s, eEnd, start, end, wallStartMin, tz);
         const title = `${e.kind === "sleep" ? "Sleep" : "Tummy time"} ${formatDuration((eEnd - s) / 1000)} · ${when(s, eEnd)}`;
-        (e.kind === "sleep" ? row.sleeps : row.tummies).push({ x1, x2, title });
-      } else if (e.kind === "feed") {
+        (e.kind === "sleep" ? row.sleeps : row.tummies).push(...spans(s, eEnd).map(({ x1, x2 }) => ({ x1, x2, title })));
+      } else if (e.kind === "feed" && e.data.method === "bottle") {
         if (s < start || s >= end) continue;
-        const bottle = e.data.method === "bottle";
-        const eEnd = entryEnd(e, now);
-        const [x1, x2] = spanFrac(s, Math.max(eEnd, s + (bottle ? 10 * MIN : 0)), start, end, wallStartMin, tz);
-        const what = bottle
-          ? `Bottle${e.data.amount_ml ? ` ${formatVolume(e.data.amount_ml, units)}` : ""}`
-          : `Nursed ${formatDuration(feedTotals(e.data, now).total)}`;
-        row.feeds.push({ x1, x2, bottle, title: `${what} · ${when(s, eEnd)}` });
+        const eEnd = Math.min(entryEnd(e, now), nowMs);
+        const title = `Bottle${e.data.amount_ml ? ` ${formatVolume(e.data.amount_ml, units)}` : ""} · ${when(s, eEnd)}`;
+        const pieces = spans(s, eEnd);
+        // A bottle without a duration is a point, not an invented ten minutes.
+        if (eEnd === s) {
+          const x = wallFrac(s, start, end, wallStartMin, tz);
+          row.feeds.push({ x1: x, x2: x, bottle: true, title });
+        } else row.feeds.push(...pieces.map(({ x1, x2 }) => ({ x1, x2, bottle: true, title })));
       } else if (e.kind === "diaper") {
         if (s < start || s >= end) continue;
         const what = e.data.pee && e.data.poop ? "Wet + dirty" : e.data.poop ? "Dirty" : e.data.pee ? "Wet" : "Dry";
         row.diapers.push({ x: wallFrac(s, start, end, wallStartMin, tz), pee: !!e.data.pee, poop: !!e.data.poop, title: `${what} diaper · ${formatTime(s, tz)}` });
       }
     }
+    for (const part of nursing) {
+      if (part.start >= end || part.end < start || (part.end === start && part.end > part.start)) continue;
+      const title = `Nursing · ${when(part.start, part.end)}`;
+      if (part.start === part.end) {
+        if (part.start < start || part.start >= end) continue;
+        const x = wallFrac(part.start, start, end, wallStartMin, tz);
+        row.feeds.push({ x1: x, x2: x, bottle: false, title });
+      } else row.feeds.push(...spans(part.start, part.end).map(({ x1, x2 }) => ({ x1, x2, bottle: false, title })));
+    }
     for (const c of clusters) {
-      if (c.start < start || c.start >= end) continue;
-      const [x1, x2] = spanFrac(c.start - 5 * MIN, (c.end ?? nowMs) + 5 * MIN, start, end, wallStartMin, tz);
-      row.clusters.push({ x1, x2, count: c.feeds, title: `Cluster ${spanText(c.start, c.end, tz)} · ${c.feeds} feeds` });
+      row.clusters.push(...spans(c.start, c.end ?? nowMs).map(({ x1, x2 }) => ({ x1, x2, count: c.feeds, title: `Cluster ${spanText(c.start, c.end, tz)} · ${c.feeds} feeds` })));
     }
     rows.push(row);
   });
@@ -601,6 +619,7 @@ const RIBBON_PAGE = 30;
 function Ribbons({
   entries,
   fromKey,
+  knownFrom,
   todayKey,
   tz,
   now,
@@ -614,6 +633,7 @@ function Ribbons({
 }: {
   entries: Entry[];
   fromKey: string;
+  knownFrom: string;
   todayKey: string;
   tz: string;
   now: Date;
@@ -627,14 +647,15 @@ function Ribbons({
 }) {
   const w = useBabyWords();
   const rows = useMemo(
-    () => buildRibbon(entries, fromKey, todayKey, mode, tz, now, bornAt, units),
-    [entries, fromKey, todayKey, mode, tz, now, bornAt, units]
+    () => buildRibbon(entries, fromKey, todayKey, mode, tz, now, bornAt, units, knownFrom),
+    [entries, fromKey, todayKey, mode, tz, now, bornAt, units, knownFrom]
   );
   const [showAll, setShowAll] = useState(false);
+  const [circleLimit, setCircleLimit] = useState(7);
   const [layout, setLayout] = useState<"ribbons" | "circles">("ribbons");
   const [ref, W] = useWidth<HTMLDivElement>();
   const night = useNightActive();
-  const shown = showAll ? rows : rows.slice(0, RIBBON_PAGE);
+  const shown = layout === "circles" ? rows.slice(0, circleLimit) : showAll ? rows : rows.slice(0, RIBBON_PAGE);
   const focused = shown.map((row) => ({
     ...row,
     sleeps: activity === "all" || activity === "sleep" ? row.sleeps : [],
@@ -650,6 +671,10 @@ function Ribbons({
   const chatWindow = first
     ? `${mode === "nights" ? "noon-to-noon nights" : "local days"} shown from ${dayKey(first.start, tz)} at ${formatTime(first.start, tz)} through ${dayKey(through, tz)} at ${formatTime(through, tz)} (${tz})`
     : null;
+  const hasMarks = rows.some((row) => row.feeds.length + row.sleeps.length + row.diapers.length + row.tummies.length > 0);
+  if (!hasMarks) return <Card><EmptyState title="No feeds, sleep, diapers or tummy time in this range">
+    {rows.some((row) => row.stats.pumpMl > 0) ? "Pumping amounts are in Daily totals." : "Choose another range to look for logged activity."}
+  </EmptyState></Card>;
 
   return (
     <section aria-labelledby="maple-ribbons">
@@ -709,8 +734,8 @@ function Ribbons({
         </>}
         {rows.length > shown.length && (
           <div className="pt-3 text-center">
-            <Button variant="soft" onClick={() => setShowAll(true)}>
-              Show all {rows.length} {mode}
+            <Button variant="soft" onClick={() => layout === "circles" ? setCircleLimit((limit) => limit + 7) : setShowAll(true)}>
+              {layout === "circles" ? `Show ${Math.min(7, rows.length - shown.length)} more ${mode}` : `Show all ${rows.length} ${mode}`}
             </Button>
           </div>
         )}
@@ -785,9 +810,10 @@ function RibbonRowView({ row, W, units, night, activity, onPick }: { row: Ribbon
   const s = row.stats;
   const noMarks = row.feeds.length + row.sleeps.length + row.diapers.length + row.tummies.length === 0;
   const summary = noMarks ? (activity === "all" ? "No activity logged" : `No ${activity} logged`) : [
-    activity === "all" || activity === "feeds" ? `${s.feeds} feed${s.feeds === 1 ? "" : "s"}` : null,
+    activity === "all" || activity === "feeds" ? `${s.feeds} feed${s.feeds === 1 ? "" : "s"}${s.breastFeeds === 0 && row.feeds.some((feed) => !feed.bottle) ? " started · nursing continued from earlier" : ""}` : null,
     activity === "all" || activity === "diapers" ? `${s.wet} wet · ${s.dirty} dirty` : null,
-    activity === "all" || activity === "sleep" ? (s.sleepSec >= 60 ? `${formatDuration(s.sleepSec)} sleep` : "No sleep logged") : null,
+    activity === "all" || activity === "sleep" ? (s.sleepSec > 0 ? `${formatDuration(s.sleepSec)} sleep` : "No sleep logged") : null,
+    activity === "all" && s.tummySec > 0 ? `${formatDuration(s.tummySec)} tummy time` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1037,7 +1063,7 @@ function ChartFrame({
           role="img"
           aria-label={ariaLabel}
           tabIndex={0}
-          className="block touch-pan-y overflow-visible rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60"
+          className="block touch-pan-y overflow-visible rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-mp-accent-fg"
           onPointerLeave={(e) => e.pointerType === "mouse" && setActive(null)}
           onFocus={() => setActive((a) => a ?? n - 1)}
           onBlur={() => setActive(null)}
@@ -1731,6 +1757,9 @@ function DailyCharts({
 function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: string; units: UnitSystem }) {
   const anyBottle = days.some((d) => d.bottleMl > 0);
   const anyBoth = days.some((d) => d.bothSec > 0);
+  const anyPump = days.some((d) => d.pumpMl > 0);
+  const anyTummy = days.some((d) => d.tummySec > 0);
+  const scrollHint = useId();
   // The table scrolls sideways on a phone; the day column stays put, with a
   // hairline (an inset shadow, so it travels with the sticky cell) to show
   // the other columns slide under it.
@@ -1738,8 +1767,14 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
   const th = cx(tone.faint, "px-2.5 pt-3 pb-2 text-left text-xs font-medium whitespace-nowrap", sticky);
   const td = cx(tone.body, "px-2.5 py-2.5 tabular-nums whitespace-nowrap", sticky);
   return (
+    <>
+    <p id={scrollHint} className={cx(tone.muted, "px-1 text-xs")}>Swipe or scroll sideways for more totals. The day stays in place.</p>
     <div
-      className={cx(tone.card, "overflow-x-auto")}
+      role="region"
+      aria-label="Daily totals table"
+      aria-describedby={scrollHint}
+      tabIndex={0}
+      className={cx(tone.card, "overflow-x-auto focus-visible:outline-2 focus-visible:outline-mp-accent-fg")}
       // A soft edge on the right while more columns are off-screen: the cover
       // scrolls with the content and hides the edge once you reach the end.
       style={{
@@ -1755,11 +1790,13 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
           <tr className="border-b border-mp-line">
             <th scope="col" className={th}>Day</th>
             <th scope="col" className={th}>Feeds</th>
-            <th scope="col" className={th}>{anyBoth ? "Nursing L / R / both" : "Nursing L / R"}</th>
-            {anyBottle && <th scope="col" className={th}>Bottle</th>}
+            <th scope="col" className={th}>Sleep</th>
             <th scope="col" className={th}>Wet</th>
             <th scope="col" className={th}>Dirty</th>
-            <th scope="col" className={th}>Sleep</th>
+            <th scope="col" className={th}>{anyBoth ? "Nursing L / R / both" : "Nursing L / R"}</th>
+            {anyBottle && <th scope="col" className={th}>Bottle</th>}
+            {anyPump && <th scope="col" className={th}>Pumped</th>}
+            {anyTummy && <th scope="col" className={th}>Tummy time</th>}
           </tr>
         </thead>
         <tbody>
@@ -1768,20 +1805,25 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
               <th scope="row" className={cx(td, "text-left font-medium")}>
                 {formatDayLabel(d.key, todayKey)}
               </th>
+              {!hasDailyTotals(d) ? <td colSpan={5 + Number(anyBottle) + Number(anyPump) + Number(anyTummy)} className={cx(td, tone.muted)}>Nothing logged</td> : <>
               <td className={td}>{d.feeds}</td>
+              <td className={td}>{formatDuration(d.sleepSec)}</td>
+              <td className={td}>{d.wet}</td>
+              <td className={td}>{d.dirty}</td>
               <td className={td}>
                 {formatDuration(d.leftSec)} / {formatDuration(d.rightSec)}
                 {anyBoth && ` / ${formatDuration(d.bothSec)}`}
               </td>
               {anyBottle && <td className={td}>{d.bottleMl ? formatVolume(d.bottleMl, units) : <span className={tone.faint}>—</span>}</td>}
-              <td className={td}>{d.wet}</td>
-              <td className={td}>{d.dirty}</td>
-              <td className={td}>{formatDuration(d.sleepSec)}</td>
+              {anyPump && <td className={td}>{d.pumpMl ? formatVolume(d.pumpMl, units) : <span className={tone.faint}>—</span>}</td>}
+              {anyTummy && <td className={td}>{formatDuration(d.tummySec)}</td>}
+              </>}
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 

@@ -34,6 +34,9 @@ jobs:
       - name: Nursing checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-feed
+      - name: Pattern clock and data checks
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-patterns
       - name: Feed status and sync diagnostics
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-feed-status && pnpm check:maple-diagnostics

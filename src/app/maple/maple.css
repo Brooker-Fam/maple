@@ -316,7 +316,10 @@ html.maple-night {
 .mp-activity-picker > button:focus-visible,
 .mp-dial-log > summary:focus-visible,
 .mp-dial-log-entry:focus-visible,
-.mp-dial-details:focus-visible { outline: 2px solid var(--mp-focus); outline-offset: -3px; }
+.mp-dial-details:focus-visible { outline: 2px solid var(--mp-accent-fg); outline-offset: -3px; }
+/* A selected activity has an accent fill, so its focus ring sits outside
+   the pill, against the page, in every theme. */
+.mp-activity-picker > button:focus-visible { outline-offset: 2px; }
 .maple-night .mp-pattern-doctor { background: var(--mp-surface); }
 .maple-night .mp-day-scene { background: none; }
 .maple-night .mp-day-scene::before { box-shadow: none; }

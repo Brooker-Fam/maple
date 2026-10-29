@@ -36,9 +36,9 @@ function arc(radius: number, start: number, end: number): string {
   return `M ${x} ${y} A ${radius} ${radius} 0 ${end - start > 0.5 ? 1 : 0} 1 ${ex} ${ey}`;
 }
 
-/** A short feed still needs a visible mark, without wrapping it into tomorrow. */
+/** Point events need a visible mark; durations keep their actual clock span. */
 function markArc(radius: number, start: number, end: number): string {
-  return arc(radius, start, Math.min(1, Math.max(end, start + 1 / 180)));
+  return arc(radius, start, end > start ? end : Math.min(1, start + 1 / 180));
 }
 
 function Track({ radius, nowX }: { radius: number; nowX: number | null }) {
@@ -58,16 +58,17 @@ function Circle({ row, mode, units, night, activity, onPickDay }: Omit<Props, "r
   const hasLogs = activity === "sleep" ? s.sleeps > 0 || s.sleepSec > 0
     : activity === "feeds" ? s.feeds > 0 || row.feeds.length > 0
       : activity === "diapers" ? s.diapers > 0
-        : s.feeds + s.diapers + s.sleeps + s.tummySec > 0 || row.feeds.length > 0;
+        : s.feeds + s.diapers + s.sleeps + s.sleepSec + s.tummySec > 0 || row.feeds.length > 0;
   const empty = activity === "all" ? "No activity logged" : `No ${activity === "feeds" ? "feeds" : activity} logged`;
   const summary = [
     showFeeds && `${s.feeds} feed${s.feeds === 1 ? "" : "s"}`,
+    showFeeds && s.breastFeeds === 0 && row.feeds.some((feed) => !feed.bottle) && "Nursing continued from earlier",
     showSleep && `${formatDuration(s.sleepSec)} sleep`,
     showDiapers && `${s.wet} wet · ${s.dirty} dirty`,
     showFeeds && s.bottleMl > 0 && `${formatVolume(s.bottleMl, units)} by bottle`,
     activity === "all" && s.tummySec > 0 && `${formatDuration(s.tummySec)} tummy time`,
   ].filter((part): part is string => typeof part === "string");
-  const ticks = mode === "days" ? ["12 AM", "6 AM", "12 PM", "6 PM"] : ["12 PM", "6 PM", "12 AM", "6 AM"];
+  const ticks = mode === "days" ? ["Midnight", "6 AM", "Noon", "6 PM"] : ["Noon", "6 PM", "Midnight", "6 AM"];
   const [nowInnerX, nowInnerY] = point(39, row.nowX ?? 0);
   const [nowOuterX, nowOuterY] = point(102, row.nowX ?? 0);
   const aria = `${row.label}${row.nowX != null ? ", so far" : ""}. ${hasLogs ? `Logged: ${summary.join("; ")}` : empty}.${row.dst ? ` ${row.dst}.` : ""}${onPickDay ? " Open this day in the Timeline." : ""}`;
@@ -132,7 +133,7 @@ function Circle({ row, mode, units, night, activity, onPickDay }: Omit<Props, "r
       {row.dst && <span className="mt-2 block text-center text-xs text-mp-ink-2">{row.dst}</span>}
     </>
   );
-  const className = cx("min-w-0 rounded-2xl border border-mp-line px-3 pt-2 pb-3 text-left", onPickDay && "transition hover:bg-mp-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mp-focus active:bg-mp-sunken");
+  const className = cx("min-w-0 rounded-2xl border border-mp-line px-3 pt-2 pb-3 text-left", onPickDay && "transition hover:bg-mp-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mp-accent-fg active:bg-mp-sunken");
   return onPickDay ? <button type="button" className={className} aria-label={aria} onClick={() => onPickDay(row.jumpKey)}>{body}</button>
     : <div className={className}>{body}</div>;
 }
