@@ -308,6 +308,7 @@ const cases = [
   ...[false, true].map((historyFailure) => [`pending historical food stays visible${historyFailure ? " when history fails" : " and removable"}`, async (page, controls) => {
     controls.foodFailure = true;
     controls.historyFailure = historyFailure;
+    await page.getByText("Log manually", { exact: true }).click();
     await page.getByRole("button", { name: "Ate something", exact: true }).click();
     await page.getByLabel("What was it?", { exact: true }).fill("Synthetic earlier meal");
     await page.getByRole("button", { name: "Just now · Change time", exact: true }).click();
