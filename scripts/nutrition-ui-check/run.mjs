@@ -61,7 +61,7 @@ const saveFood = async (description) => {
 
 try {
   await reset();
-  await page.getByRole("button", { name: "Ate something", exact: true }).click();
+  await openManual("Ate something");
   await page.getByLabel("What was it?", { exact: true }).fill("Synthetic recent meal");
   const earlier = page.getByRole("button", { name: "1 min ago", exact: true });
   const timing = await earlier.boundingBox();
@@ -76,7 +76,7 @@ try {
   console.log("PASS earlier meal: one-minute shortcut precedes optional details and saves the chosen time once");
 
   await reset();
-  await page.getByRole("button", { name: "Other drink", exact: true }).click();
+  await openManual("Other drink");
   await page.getByRole("button", { name: "Tea", exact: true }).click();
   await page.getByRole("button", { name: "Just now · Change time", exact: true }).click();
   await page.getByLabel("Drank at: time", { exact: true }).fill("23:00");
