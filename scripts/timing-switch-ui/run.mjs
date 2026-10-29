@@ -112,6 +112,35 @@ const open = async (f) => {
   return form;
 };
 const cases = [
+  ["Lantern reminder opens a safe earlier switch and records the selected time", async () => {
+    const f = await fixture("success", 320, 568);
+    try {
+      const lamp = f.page.getByRole("button", { name: "Lantern: dim full-screen timer that keeps the screen on", exact: true });
+      const lantern = f.page.getByRole("dialog", { name: "Lantern timer", exact: true });
+      const form = f.page.getByRole("dialog", { name: "Switch earlier", exact: true });
+      await lamp.click();
+      await lantern.getByText(/^Still nursing\?/).waitFor();
+      await lantern.getByRole("button", { name: "Switch earlier…", exact: true }).click();
+      await form.waitFor();
+      await lantern.waitFor({ state: "hidden" });
+      assert.equal(f.writes.length, 0, "Opening the correction leaves the timer running unchanged");
+      await form.getByRole("button", { name: "Cancel", exact: true }).click();
+      await form.waitFor({ state: "hidden" });
+      assert.equal(f.writes.length, 0, "Cancelling the correction writes nothing");
+      assert.deepEqual(f.state.entries[0], original());
+      await lamp.focus();
+      await f.page.keyboard.press("Enter");
+      await lantern.getByRole("button", { name: "Switch earlier…", exact: true }).focus();
+      await f.page.keyboard.press("Enter");
+      await form.getByRole("button", { name: /10 min ago/ }).click();
+      await form.getByRole("button", { name: "Save switch", exact: true }).click();
+      await form.waitFor({ state: "hidden" });
+      assert.deepEqual(f.writes, [{ action: "switch", id: 401, side: "R", at: "2026-10-28T13:20:00.000Z", expect_updated_at: original().updated_at }]);
+      assert.equal(f.state.entries[0].data.segments.at(-1).side, "R");
+      assert.equal(f.state.entries[0].active, true);
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
   ["Forgotten switch stages a bounded earlier time, retries, and undoes one write", async () => {
     const f = await fixture("retry");
     try {

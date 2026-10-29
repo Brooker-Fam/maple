@@ -34,7 +34,7 @@ await build({
     }
     const mocks = { path: path.join(here, "logging-mocks.jsx") };
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|useTimerActions|AppNav|sheets)$/ }, () => mocks);
-    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:parts|MomentSheet)\.tsx$/.test(args.importer) ? mocks : undefined);
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:parts|MomentSheet|useSavedEntryConflict)\.tsx$/.test(args.importer) ? mocks : undefined);
   } }],
 });
 const compiled = await postcss([tailwind({ base: root })]).process(await readFile(path.join(root, "src/app/globals.css"), "utf8"), { from: path.join(root, "src/app/globals.css") });

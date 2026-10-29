@@ -538,7 +538,7 @@ function OneOffDose({
 function DoseWhen({ value, onChange, onInvalidChange, now, tz }: { value: Date | null; onChange: (value: Date | null) => void; onInvalidChange: (invalid: boolean) => void; now: Date; tz: string }) {
   return value ? (
     <div>
-      <RecordedTimeField label="Taken at" value={value} onChange={onChange} onInvalidChange={onInvalidChange} tz={tz} max={new Date(now.getTime() + 60_000)} />
+      <RecordedTimeField label="Taken at" value={value} onChange={onChange} onInvalidChange={onInvalidChange} tz={tz} />
       <button type="button" onClick={() => { onInvalidChange(false); onChange(null); }} className="mt-1 min-h-[44px] px-1 text-[14px] font-medium text-mp-accent-fg">Use current time</button>
     </div>
   ) : (

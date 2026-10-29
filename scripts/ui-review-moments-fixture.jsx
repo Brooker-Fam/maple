@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import MomentsTab from "../src/components/maple/MomentsTab";
 import { AppNavProvider, useAppNav } from "../src/components/maple/AppNav";
 import { milestoneLabel, NEUTRAL_MILESTONE_WORDS } from "../src/lib/maple/milestones";
-import { FixtureContext } from "./ui-review-moments-mocks";
+import { FixtureContext } from "../src/components/maple/useMaple";
+import { SheetProvider } from "../src/components/maple/sheets";
 
 const NOW = "2026-10-28T13:30:00.000Z";
 const AT = "2026-10-01T12:00:00.000Z";
@@ -45,10 +46,10 @@ function Fixture() {
     };
   }, []);
   const state = { rev: String(rev), now: NOW, family: { id: 99 }, baby: { name: "Example Baby", nickname: null, sex: "female", born_at: "2026-09-01T12:00:00.000Z", timezone: "America/New_York", settings: {} }, entries: recent, members: [], me: { email: "reader@example.test" } };
-  return <FixtureContext.Provider value={{ state, api, now: () => new Date(NOW), readOnly: false, memberName: () => "Example parent", member: () => null }}><button type="button">Background action</button>
+  return <FixtureContext.Provider value={{ state, api, now: () => new Date(NOW), readOnly: false, memberName: () => "Example parent", member: () => null, holdTimerToasts: () => {} }}><SheetProvider><button type="button">Background action</button>
     {scenario === "navigation" && <nav><button onClick={() => nav.go("today")}>Go to Today</button><button onClick={() => nav.go("moments")}>Go to Moments</button></nav>}
     {(scenario !== "navigation" || nav.tab === "moments") && <MomentsTab />}
-  </FixtureContext.Provider>;
+  </SheetProvider></FixtureContext.Provider>;
 }
 
 createRoot(document.getElementById("root")).render(<AppNavProvider><Fixture /></AppNavProvider>);
