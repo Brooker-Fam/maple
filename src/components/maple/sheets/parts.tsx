@@ -73,6 +73,7 @@ const VIA: Partial<Record<Source, string>> = {
   mcp: "an AI assistant",
   shortcut: "Siri",
   chat: "Maple chat",
+  epic: "MyChart import",
 };
 
 /** A Done can land after the end it records (at the pause, or a time given), but a change this long after the end is an edit. */
@@ -131,7 +132,8 @@ export function LoggedBy({ entry, noTime }: { entry: Entry; noTime?: boolean }) 
   const day = formatDayLabel(dayKey(created, tz), dayKey(now(), tz));
   const when = `${day === "Today" ? "" : `${day} `}${formatTime(created, tz)}`;
   const editor = editedText(entry, memberName);
-  const entryWhen = `${dayKey(new Date(entry.started_at), tz)} at ${formatTime(entry.started_at, tz)}`;
+  const entryDay = dayKey(new Date(entry.started_at), tz);
+  const entryWhen = entry.source === "epic" ? `${entryDay} (MyChart import; see the source note for the original date or time)` : `${entryDay} at ${formatTime(entry.started_at, tz)}`;
   const kind = KIND_LABELS[entry.kind];
   return (
     <div>

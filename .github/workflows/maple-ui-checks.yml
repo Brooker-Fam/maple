@@ -40,6 +40,9 @@ jobs:
       - name: Medicine checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-care
+      - name: Epic import authorization, parsing and isolation
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-epic
       - name: Maternal food and drink checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-nutrition && pnpm check:maple-tenancy nutrition nutrition-tools
@@ -78,6 +81,11 @@ jobs:
       - name: Check save and refresh ordering in the browser
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm check:maple-sync
+      - name: Check medical record import in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-epic-ui
       - name: Check maternal food and drinks in the browser
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:

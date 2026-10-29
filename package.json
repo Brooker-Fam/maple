@@ -24,6 +24,8 @@
     "check:usage-alerts": "tsx scripts/usage-alerts-check.ts",
     "check:usage-health": "node --test scripts/usage-health-monitor.check.mjs",
     "check:maple-growth": "tsx scripts/maple-growth-check.ts",
+    "check:maple-epic": "tsx scripts/maple-epic-fhir-check.ts && tsx scripts/maple-epic-store-check.ts && tsx scripts/maple-epic-flow-check.ts",
+    "check:maple-epic-ui": "node scripts/epic-ui-check/run.mjs",
     "check:maple-tenancy": "tsx scripts/tenancy/run.ts",
     "check:maple-parity": "tsx scripts/tenancy/parity/run.ts",
     "check:maple-time-edit": "tsx scripts/maple-time-edit-check.ts",

@@ -421,6 +421,9 @@ function noFutureEnds(segments: Segment[], now: Date) {
 export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
   const cur = await getEntry(fam, id);
   if (!cur) throw new NotFound(`Entry ${id} not found`);
+  if (cur.kind === "growth" && cur.source === "epic") {
+    throw new Error("Imported measurements keep their original values. Remove this point and log a separate measurement if needed.");
+  }
   if (opts.expectUpdatedAt !== undefined && !sameInstant(opts.expectUpdatedAt, cur.updated_at)) {
     throw new Conflict("Someone else just changed this. Have another look and try again.", cur, "changed");
   }

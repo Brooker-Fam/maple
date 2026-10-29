@@ -89,7 +89,36 @@ export default function Privacy() {
       <p>
         Deleting an entry from the baby&rsquo;s log, or one of mom&rsquo;s food, drink, medicine, dose, temperature or question entries, hides it so
         you can restore it; it stays in the database until your family&rsquo;s log is deleted. Deleting one of her check-ins
-        removes it for good at once, and so does deleting everything on her page.
+        removes it for good at once, and so does deleting everything on her page. The separate control to remove imported
+        MyChart measurements also removes those entries for good, as described below.
+      </p>
+      <h3>Optional MyChart imports</h3>
+      <p>
+        Where this feature is available, a family owner can authorize an import from a supported healthcare organization
+        using MyChart. You sign in with the healthcare organization; Maple never receives or stores your MyChart password.
+        Maple first reads the selected patient&rsquo;s name and date of birth so you can confirm the record belongs to your
+        baby. The date of birth must match the baby&rsquo;s details in Maple before it requests supported growth measurements.
+      </p>
+      <p>
+        Maple temporarily keeps the access token, patient identifiers and the information needed to confirm and preview the
+        import encrypted in its database. The pending import stops working after at most 15 minutes. Finishing or discarding
+        it removes that temporary record; expired records are cleared on later import requests and by Maple&rsquo;s scheduled
+        cleanup when it runs, so encrypted records may remain until that cleanup runs. Maple does not keep a refresh token or sync your chart in the background. Each new import
+        requires you to authorize access again.
+      </p>
+      <p>
+        You choose which growth measurements to save and explicitly agree to share them with everyone who can read your
+        family&rsquo;s baby log, including view-only guests. Saved measurements can also be read by Maple&rsquo;s chat and
+        connected AI tools under the permissions described below. Maple keeps the selected values, dates, units, source and
+        references needed to recognize a previously imported measurement; it does not save the full medical chart. Sandbox
+        test records can be previewed but cannot be saved to your family&rsquo;s log.
+      </p>
+      <p>
+        The control to remove your imported MyChart measurements deletes those entries from Maple&rsquo;s database, including any
+        that were hidden with an ordinary delete. It does not remove copies already included in chat history, exports or
+        another service; delete chat history separately and manage external copies with their recipients. The database
+        host&rsquo;s short-term backups expire under its retention policy. Importing or deleting a measurement in Maple does
+        not change the healthcare organization&rsquo;s medical record or send your family&rsquo;s log to your care team.
       </p>
       <h3>The chat</h3>
       <p>
@@ -179,6 +208,11 @@ export default function Privacy() {
           <strong>Google and Apple</strong> verify your identity when you choose their sign-in option. They receive the
           sign-in request and handle it under their own policies. Apple&rsquo;s private email relay forwards messages if
           you use Hide My Email. Your family&rsquo;s log is not sent to either provider to sign you in.
+        </li>
+        <li>
+          <strong>Your healthcare organization and its Epic/MyChart service</strong>, when you choose a supported import,
+          handle your sign-in, authorization and record requests under their policies. They receive Maple&rsquo;s access
+          requests, but Maple does not send them your family&rsquo;s log.
         </li>
         <li>
           <strong>Resend</strong> sends sign-in codes, invites, waitlist invitations and welcome emails. It receives the recipient&rsquo;s address and the message,

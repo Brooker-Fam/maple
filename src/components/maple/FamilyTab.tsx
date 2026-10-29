@@ -14,6 +14,7 @@ import AssistantSettings from "./settings/AssistantSettings";
 import BabySettings from "./settings/BabySettings";
 import PeopleSettings from "./settings/PeopleSettings";
 import PhoneSettings from "./settings/PhoneSettings";
+import MedicalRecordsSettings, { useMedicalRecordsAvailable } from "./settings/MedicalRecordsSettings";
 import { SettingsDraftContext } from "./settings/DraftContext";
 import { ActionRow, GROUP, Section } from "./settings/parts";
 import { useSectionFocus } from "./sectionFocus";
@@ -24,6 +25,7 @@ const PAGES = {
   people: "People & permissions",
   baby: "Baby details",
   doctor: "Doctor & care plan",
+  "medical-records": "Medical records",
   today: "On Today",
   appearance: "Appearance & units",
   assistants: "Shortcuts & assistants",
@@ -41,6 +43,7 @@ function pageFromHash(): Page | null {
 
 export default function FamilyTab() {
   const { state, readOnly, auth } = useMaple();
+  const medicalRecordsAvailable = useMedicalRecordsAvailable();
   const care = useCare();
   const nav = useCareNav();
   const [page, setPage] = useState<Page | null>(null);
@@ -94,6 +97,7 @@ export default function FamilyTab() {
   if (!state) return null;
 
   const allowed = (target: Page) => {
+    if (target === "medical-records") return state.me.role === "owner";
     if (target === "chat") return !!care?.self;
     return !readOnly || !["doctor", "today", "assistants"].includes(target);
   };
@@ -114,6 +118,7 @@ export default function FamilyTab() {
     people: <PeopleSettings />,
     baby: <BabySettings section="baby" />,
     doctor: <BabySettings section="doctor" />,
+    "medical-records": <MedicalRecordsSettings key={`${state.family?.id ?? 1}:${state.me.email}:${state.baby.id}`} active={active === "medical-records"} />,
     today: <BabySettings section="today" />,
     appearance: <PhoneSettings />,
     assistants: <AssistantSettings />,
@@ -136,6 +141,7 @@ export default function FamilyTab() {
               {row("people", "users", "Who's in the log and what they can see")}
               {row("baby", "baby", "Name, birth details and growth charts")}
               {row("doctor", "stethoscope", "Phone numbers and your pediatrician's plan")}
+              {medicalRecordsAvailable && row("medical-records", "download", "Import growth measurements from MyChart")}
               {row("today", "house", "Logging buttons, warnings and reminders")}
             </div>
           </Section>

@@ -17,6 +17,7 @@ const VIA: Record<string, string> = {
   mcp: "AI",
   shortcut: "Siri",
   chat: "Maple chat",
+  epic: "MyChart import",
 };
 
 /** Photo thumbnail URL for a moment's photo by position (served through the auth proxy). */
@@ -49,15 +50,17 @@ export default function EntryRow({
   const firstPhoto = entry.kind === "moment" && entry.data.photos?.length && entry.id > 0;
 
   const canEdit = !!onClick && !readOnly && entry.id > 0;
-  const editLabel = entryEditPreset(entry) ? "Edit time" : "Edit";
+  const editLabel = entry.source === "epic" ? "View" : entryEditPreset(entry) ? "Edit time" : "Edit";
   const entryDay = dayKey(new Date(entry.started_at), tz);
   const today = dayKey(now, tz);
+  // A date-only clinical observation has an internal day anchor, not a known clock time.
+  const entryWhen = entry.source === "epic" ? formatDayLabel(entryDay, today) : `${formatDayLabel(entryDay, today)} at ${formatTime(entry.started_at, tz)}`;
 
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={canEdit ? `${editLabel}: ${d.title}, ${formatDayLabel(entryDay, today)} at ${formatTime(entry.started_at, tz)}` : undefined}
+      aria-label={canEdit ? `${editLabel}: ${d.title}, ${entryWhen}` : undefined}
       className={cx(tone.row, "min-h-[64px] py-3")}
     >
       {firstPhoto ? (
@@ -75,16 +78,16 @@ export default function EntryRow({
         )}
         {(VIA[entry.source] || showRelative) && (
           <span className={cx(tone.faint, "mt-0.5 block text-[12px]")}>
-            {[VIA[entry.source] && `via ${VIA[entry.source]}`, showRelative && formatRelative(entry.started_at, now)].filter(Boolean).join(" · ")}
+            {[VIA[entry.source] && `via ${VIA[entry.source]}`, showRelative && entry.source !== "epic" && formatRelative(entry.started_at, now)].filter(Boolean).join(" · ")}
           </span>
         )}
       </span>
       <span className="flex shrink-0 flex-col items-end gap-0.5 text-right">
-        {entryDay !== today && <span className={cx(tone.muted, "text-[12px]")}>{formatDayLabel(entryDay, today)}</span>}
+        {entryDay !== today && entry.source !== "epic" && <span className={cx(tone.muted, "text-[12px]")}>{formatDayLabel(entryDay, today)}</span>}
         <span className={cx(tone.body, "inline-flex items-center gap-1.5 text-sm tabular-nums")}>
           {entry.id < 0 && <Icon name="refresh-cw" size={12} label="Not synced yet" className="text-mp-ink-3" />}
           {entry.created_by && entry.created_by !== state?.me.email && <Avatar member={who} size={16} />}
-          {formatTime(entry.started_at, tz)}
+          {entry.source === "epic" ? formatDayLabel(entryDay, today) : formatTime(entry.started_at, tz)}
         </span>
         {canEdit && <span className="text-[13px] font-medium text-mp-accent-fg">{editLabel}</span>}
       </span>

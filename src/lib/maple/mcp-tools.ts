@@ -349,6 +349,7 @@ const VIA_LABEL: Record<string, string> = {
   mcp: "an AI assistant",
   shortcut: "a Shortcut",
   chat: "Maple chat",
+  epic: "a MyChart import",
 };
 const viaLabel = (s: string | null | undefined) => VIA_LABEL[s ?? "web"] ?? String(s);
 

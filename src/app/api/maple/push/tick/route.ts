@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { captureServerException } from "@/lib/posthog-server";
 import { query } from "@/lib/db";
 import { deleteAbandonedFamilies } from "@/lib/maple/family/cleanup";
+import { cleanupExpired as cleanupEpicReviews } from "@/lib/maple/epic/store";
 import { errCode, runPushTick } from "@/lib/maple/push";
 import { schedulerMode, verifyQstash, wakeFamily, type Via } from "@/lib/maple/push-wake";
 
@@ -93,7 +94,10 @@ async function dailyCleanup(now: Date): Promise<void> {
   const claimed = await query(`INSERT INTO maple_push_sent (key, sent_at) VALUES ($1, NOW()) ON CONFLICT (key) DO NOTHING RETURNING key`, [
     `cleanup:${now.toISOString().slice(0, 10)}`,
   ]);
-  if (claimed?.length) await deleteAbandonedFamilies(now);
+  if (claimed?.length) {
+    await cleanupEpicReviews();
+    await deleteAbandonedFamilies(now);
+  }
 }
 
 export { handle as GET, handle as POST };

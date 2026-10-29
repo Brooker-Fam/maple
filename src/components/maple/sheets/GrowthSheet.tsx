@@ -6,10 +6,10 @@ import { useEffect, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { WEIGHT_GAIN_NOTE } from "@/lib/maple/guidelines";
 import { cmToIn, formatLength, formatWeight, gramsToLbOz, inToCm, lbOzToGrams } from "@/lib/maple/units";
-import type { GrowthData, UnitSystem } from "@/lib/maple/types";
+import type { EntryOf, GrowthData, UnitSystem } from "@/lib/maple/types";
 import { useBabyWords } from "../familyWords";
 import { Icon } from "../icons";
-import { Segmented, Sheet, WhenField, cx, tone } from "../ui";
+import { Button, Segmented, Sheet, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import {
   CHECK_NUMBER_HINT,
@@ -45,7 +45,36 @@ const SANE = { weight: [1000, 20000], length: [35, 100], head: [25, 55] } as con
 
 export default function GrowthSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
+  if (props.entry?.kind === "growth" && props.entry.source === "epic") {
+    return <ImportedGrowth key={n} open={props.open} onClose={props.onClose} entry={props.entry} />;
+  }
   return <GrowthForm key={n} {...props} />;
+}
+
+/** Clinical copies stay as received; deleting a copy still uses Maple's usual Undo. */
+function ImportedGrowth({ open, onClose, entry }: { open: boolean; onClose: () => void; entry: EntryOf<"growth"> }) {
+  const { tz, units, remove, readOnly } = useSheetBase();
+  const date = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: tz }).format(new Date(entry.started_at));
+  const values = [
+    entry.data.weight_g != null ? { name: "Weight", value: formatWeight(entry.data.weight_g, units) } : null,
+    entry.data.length_cm != null ? { name: "Length", value: formatLength(entry.data.length_cm, units) } : null,
+    entry.data.head_cm != null ? { name: "Head circumference", value: formatLength(entry.data.head_cm, units) } : null,
+  ].filter((value): value is { name: string; value: string } => value !== null);
+  return <Sheet open={open} onClose={onClose} title="Imported measurements" footer={
+    <div className="flex items-center gap-3">
+      {!readOnly && <button type="button" onClick={() => { onClose(); void remove(entry.id, { toast: "Imported measurements deleted" }); }} className="-ml-2 min-h-[52px] rounded-[14px] px-3 text-base font-semibold text-mp-danger transition hover:bg-mp-danger/10 active:scale-[0.97]">Delete</button>}
+      <Button size="lg" className="flex-1" onClick={onClose}>Close</Button>
+    </div>
+  }>
+    <LoggedBy entry={entry} />
+    <dl className={cx(tone.card, tone.divide, "overflow-hidden")}>
+      <div className="flex items-start justify-between gap-4 px-4 py-3"><dt className={tone.muted}>Source</dt><dd className={cx(tone.body, "text-right")}>MyChart import</dd></div>
+      <div className="flex items-start justify-between gap-4 px-4 py-3"><dt className={tone.muted}>Measurement date</dt><dd className={cx(tone.body, "text-right")}>{date}</dd></div>
+      {values.map((value) => <div key={value.name} className="flex items-start justify-between gap-4 px-4 py-3"><dt className={tone.muted}>{value.name}</dt><dd className={cx(tone.body, "text-right font-medium")}>{value.value}</dd></div>)}
+    </dl>
+    {entry.note && <p className={cx(tone.muted, "whitespace-pre-wrap break-words text-[13px] leading-relaxed")}>{entry.note}</p>}
+    <ContextNote>Imported measurements keep the values and date received from MyChart. They cannot be edited in Maple.</ContextNote>
+  </Sheet>;
 }
 
 function GrowthForm({ open, onClose, entry, preset }: SheetProps) {

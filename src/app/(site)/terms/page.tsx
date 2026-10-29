@@ -61,6 +61,22 @@ export default function Terms() {
         these emails contain, how invite addresses are kept, and the limited usage events sent to PostHog.
       </p>
 
+      <h2>Optional MyChart imports</h2>
+      <p>
+        Where offered, a family owner can import selected growth measurements from a supported healthcare organization.
+        Use only records you are authorized to access and share on your baby&rsquo;s behalf. Confirm the selected child and
+        review the dates, units and values before saving. Imported measurements become part of your shared baby log and can
+        be used by the AI features you or other permitted family members use, as explained on the{" "}
+        <Link href="/privacy">privacy page</Link>.
+      </p>
+      <p>
+        Availability depends on the healthcare organization and your access there, including permission to access a child&rsquo;s
+        record. Imports can be incomplete or out of date and do not update automatically. Maple does not replace the medical
+        record, correct it or send your entries to a clinician. Check the source record and contact your care team about
+        errors or medical questions. Removing imported measurements from Maple does not remove copies already exported or
+        included in a chat.
+      </p>
+
       <h2>Who owns what you log</h2>
       <p>
         You own what you add to Maple. You let Maple store it, show it to the members of your family&rsquo;s log, and process
