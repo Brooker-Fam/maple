@@ -33,6 +33,7 @@ import { useCareNav } from "./care/CareNav";
 import { NavRow } from "./care/parts";
 import { AskChatCard } from "./chat/AskChat";
 import DayDial from "./DayDial";
+import PatternCircles from "./PatternCircles";
 import { DiaperBrigade } from "./StatusCard";
 import { Icon, KindBadge } from "./icons";
 import { bucketWindows, dstNote, fetchRange, mergeLive, requestTimelineDay, statsByDay, useEntryRange, type TimeWindow } from "./LogTab";
@@ -105,6 +106,8 @@ const FRAME = { left: 30, right: 4, top: 10, bottom: 18 } as const;
 
 type Range = "7" | "14" | "30" | "all";
 type RibbonMode = "days" | "nights";
+type PatternView = "clock" | "compare" | "totals";
+type PatternActivity = "all" | "feeds" | "sleep" | "diapers";
 
 // For the doctor → "Growth chart": a request the tab takes once its charts have loaded (they sit above the growth
 // chart, so a scroll before then lands short). Like requestTimelineDay: read when it mounts, or at once if it's there.
@@ -142,7 +145,8 @@ export default function PatternsTab({
 
   const [range, setRange] = useState<Range>("7");
   const [mode, setMode] = useState<RibbonMode>("days");
-  const [dayDetails, setDayDetails] = useState(false);
+  const [view, setView] = useState<PatternView>("clock");
+  const [growthOpen, setGrowthOpen] = useState(false);
 
   const span = range === "all" ? Math.min(daysBetween(bornKey ?? addDays(todayKey, -29), todayKey) + 1, 399) : Number(range);
   let fromKey = addDays(todayKey, -(span - 1));
@@ -170,11 +174,18 @@ export default function PatternsTab({
   }, []);
   const shown = below !== null;
   useEffect(() => {
-    if (!pendingGrowth || !ready || !shown) return;
+    if (!pendingGrowth || !shown) return;
     if (Date.now() - pendingGrowth > GROWTH_ASK_MS) {
       pendingGrowth = 0;
       return;
     }
+    if (!growthOpen) {
+      setGrowthOpen(true);
+      return;
+    }
+    // Clock uses its own data. An unavailable comparison range must never
+    // block the doctor's growth shortcut; growth is already in state.growth.
+    if (view !== "clock" && !ready && !error) return;
     let second = 0;
     const first = requestAnimationFrame(() => {
       second = requestAnimationFrame(() => {
@@ -188,7 +199,7 @@ export default function PatternsTab({
       cancelAnimationFrame(first);
       cancelAnimationFrame(second);
     };
-  }, [ready, shown, growthAsk]);
+  }, [ready, shown, growthAsk, growthOpen, view, error]);
 
   const goToDay = useCallback(
     (key: string) => {
@@ -219,87 +230,109 @@ export default function PatternsTab({
         />
       </div>
 
-      <div className="mb-5">
-        <button type="button" onClick={() => setDayDetails((shown) => !shown)} aria-expanded={dayDetails} className={cx(tone.card, "flex min-h-[56px] w-full items-center gap-3 px-4 text-left")}>
-          <Icon name="clock-3" size={20} className="text-mp-ink-2" />
-          <span className="flex-1 text-[15px] font-semibold text-mp-ink">Day details <span className="block text-[13px] font-normal text-mp-ink-2">24-hour clock and logged totals</span></span>
-          <Icon name={dayDetails ? "chevron-up" : "chevron-down"} size={18} className="text-mp-ink-2" />
-        </button>
-        {dayDetails && <div className="mt-4"><DayDial /></div>}
+      <div className="mb-5 space-y-3">
+        <div className="px-1">
+          <h2 className={cx(tone.heading, "text-[20px]")}>A rhythm to the days</h2>
+          <p className={cx(tone.muted, "mt-1 text-sm leading-snug")}>Choose the view that makes sense to you. Everything here is based on what was logged.</p>
+        </div>
+        <Segmented<PatternView>
+          aria-label="Pattern view"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "clock", label: "Day clock" },
+            { value: "compare", label: "Compare days" },
+            { value: "totals", label: "Daily totals" },
+          ]}
+        />
+        <p className={cx(tone.muted, "px-1 text-sm leading-snug")}>
+          {view === "clock" ? "One day around a circle. Tap the rings to see what happened."
+            : view === "compare" ? "Look for similar times across days. Try ribbons or circles, then focus on one activity."
+              : "See how much was logged each day, as a table or charts. Today is still in progress."}
+        </p>
       </div>
 
-      <Segmented
-        className="mb-6"
-        value={range}
-        onChange={setRange}
-        options={[
-          { value: "7", label: "7 days" },
-          { value: "14", label: "14 days" },
-          { value: "30", label: "30 days" },
-          { value: "all", label: "All" },
-        ]}
-      />
+      <div hidden={view !== "clock"} className="mb-6"><DayDial /></div>
 
-      {error && (
-        <div className={cx(tone.card, "mb-5 flex items-center gap-3 py-2.5 pr-2.5 pl-4")} role="status">
-          <Icon name="cloud-off" size={20} className="shrink-0 text-mp-ink-3" />
-          <p className={cx(tone.body, "flex-1 text-sm")}>{loaded ? "Couldn't load every day. The days already loaded are below." : "Couldn't load the history for these patterns."}</p>
-          <Button size="sm" variant="soft" onClick={reload}>Try again</Button>
+      <div hidden={view === "clock"}>
+        <Segmented
+          aria-label="Date range"
+          className="mb-6"
+          value={range}
+          onChange={setRange}
+          options={[
+            { value: "7", label: "7 days" },
+            { value: "14", label: "14 days" },
+            { value: "30", label: "30 days" },
+            { value: "all", label: "All" },
+          ]}
+        />
+
+        {error && (
+          <div className={cx(tone.card, "mb-5 flex items-center gap-3 py-2.5 pr-2.5 pl-4")} role="status">
+            <Icon name="cloud-off" size={20} className="shrink-0 text-mp-ink-3" />
+            <p className={cx(tone.body, "flex-1 text-sm")}>{loaded ? "Couldn't load every day. The days already loaded are below." : "Couldn't load the history for these patterns."}</p>
+            <Button size="sm" variant="soft" onClick={reload}>Try again</Button>
+          </div>
+        )}
+        <div className={cx("space-y-6 transition-opacity", !ready && loaded && !error && "opacity-60")} aria-busy={!ready && !error}>
+          {!loaded && !error ? (
+            <EmptyState title="Loading…" />
+          ) : loaded ? (
+            <>
+              {loggedDays === 0 && ready && (
+                <Card>
+                  <EmptyState title="No feeds, sleep or diapers logged in this range">
+                    Choose a longer range, or come back after logging feeds, sleep or diapers.
+                  </EmptyState>
+                </Card>
+              )}
+              {view === "totals" && loggedDays >= 2 && <Insights days={chartDays} entries={entries} todayKey={todayKey} tz={tz} now={now} />}
+
+              {!ready && !error && <p className={cx(tone.faint, "px-1 text-xs")}>Gathering earlier days…</p>}
+              {partialDays.length > 0 && (
+                <p className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-[13px] leading-snug")} role="status">
+                  <Icon name="info" size={16} className="mt-px shrink-0 text-mp-ink-3" />
+                  <span>
+                    {partialDays.map((k) => formatDayLabel(k, todayKey)).join(", ")} had more entries than we can load at once, so the
+                    counts for {partialDays.length === 1 ? "that day" : "those days"} only include the most recent ones.
+                  </span>
+                </p>
+              )}
+              {loggedDays >= 1 && <div hidden={view !== "compare"}>
+                <Ribbons
+                  entries={entries}
+                  fromKey={viewFrom}
+                  todayKey={todayKey}
+                  tz={tz}
+                  now={now}
+                  bornAt={bornAt}
+                  mode={mode}
+                  onMode={setMode}
+                  onPickDay={onNavigate ? goToDay : undefined}
+                  units={units}
+                  showChatSuggestions={ready}
+                />
+              </div>}
+
+              {loggedDays >= 1 && <div hidden={view !== "totals"}>
+                <DailyCharts days={chartDays} entries={entries} todayKey={todayKey} tz={tz} bornAt={bornAt} units={units} now={now} />
+              </div>}
+            </>
+          ) : null}
+
+          {view === "totals" && <DiaperBrigade />}
         </div>
-      )}
-      <div className={cx("space-y-6 transition-opacity", !ready && loaded && !error && "opacity-60")} aria-busy={!ready && !error}>
-        {!loaded && !error ? (
-          <EmptyState title="Loading…" />
-        ) : loaded ? (
-          <>
-            {loggedDays < 2 && ready && (
-              <Card>
-                <EmptyState title="Patterns show up after two days">
-                  {loggedDays > 0 && `Day ${loggedDays} of 2. `}Keep logging and {w.his} rhythms will appear here.
-                </EmptyState>
-              </Card>
-            )}
-            {loggedDays >= 2 && <Insights days={chartDays} entries={entries} todayKey={todayKey} tz={tz} now={now} />}
+      </div>
 
-            {!ready && !error && <p className={cx(tone.faint, "px-1 text-xs")}>Gathering earlier days…</p>}
-            {partialDays.length > 0 && (
-              <p className={cx(tone.inset, tone.muted, "flex gap-2.5 px-4 py-3 text-[13px] leading-snug")} role="status">
-                <Icon name="info" size={16} className="mt-px shrink-0 text-mp-ink-3" />
-                <span>
-                  {partialDays.map((k) => formatDayLabel(k, todayKey)).join(", ")} had more entries than we can load at once, so the
-                  counts for {partialDays.length === 1 ? "that day" : "those days"} only include the most recent ones.
-                </span>
-              </p>
-            )}
-            {loggedDays >= 1 && (
-              <Ribbons
-                entries={entries}
-                fromKey={viewFrom}
-                todayKey={todayKey}
-                tz={tz}
-                now={now}
-                bornAt={bornAt}
-                mode={mode}
-                onMode={setMode}
-                onPickDay={onNavigate ? goToDay : undefined}
-                units={units}
-                showChatSuggestions={ready}
-              />
-            )}
-
-            {loggedDays >= 2 && (
-              <DailyCharts days={chartDays} entries={entries} todayKey={todayKey} tz={tz} bornAt={bornAt} units={units} now={now} />
-            )}
-          </>
-        ) : null}
-
-        <DiaperBrigade />
-
-        <section aria-labelledby="maple-growth" id="maple-growth-chart" className="scroll-mt-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px)+12px)]">
-          <SectionTitle>
-            <span id="maple-growth">Growth</span>
-          </SectionTitle>
-          <Card>
+      <section aria-labelledby="maple-growth" id="maple-growth-chart" className="scroll-mt-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px)+12px)]">
+        <button type="button" aria-expanded={growthOpen} aria-controls="maple-growth-content" onClick={() => setGrowthOpen((open) => !open)} className={cx(tone.card, "mt-6 mb-3 flex min-h-[64px] w-full items-center gap-3 px-4 text-left")}>
+          <Icon name="chart-column" size={20} className="text-mp-ink-2" />
+          <span className="flex-1"><span id="maple-growth" className={cx(tone.heading, "block text-[15px]")}>Growth</span><span className={cx(tone.muted, "text-[13px]")}>Weight, length and head measurements</span></span>
+          <Icon name={growthOpen ? "chevron-up" : "chevron-down"} size={18} className="text-mp-ink-2" />
+        </button>
+        <div id="maple-growth-content" hidden={!growthOpen}>
+          {growthOpen && <Card>
             <GrowthChart
               baby={state.baby}
               growth={state.growth}
@@ -308,11 +341,11 @@ export default function PatternsTab({
               onAdd={readOnly ? undefined : () => open({ kind: "growth" })}
               onEdit={(e) => open({ kind: "growth", entry: e })}
             />
-          </Card>
-        </section>
+          </Card>}
+        </div>
+      </section>
 
-        <p className={cx(tone.muted, "px-2 pb-4 text-center text-xs leading-snug")}>{DISCLAIMER}</p>
-      </div>
+      <p className={cx(tone.muted, "px-2 pb-4 text-center text-xs leading-snug")}>{DISCLAIMER}</p>
     </div>
   );
 }
@@ -406,7 +439,7 @@ function Insights({ days, entries, todayKey, tz, now }: { days: DayStats[]; entr
 type Span = { x1: number; x2: number; title: string };
 type FeedMark = Span & { bottle: boolean };
 type DiaperMark = { x: number; pee: boolean; poop: boolean; title: string };
-type RibbonRow = TimeWindow & {
+export type RibbonRow = TimeWindow & {
   label: string;
   /** The day to open in the Timeline when tapped. */
   jumpKey: string;
@@ -461,7 +494,7 @@ function entryEnd(e: Entry, now: Date): number {
   return s;
 }
 
-function buildRibbon(
+export function buildRibbon(
   entries: Entry[],
   fromKey: string,
   todayKey: string,
@@ -605,10 +638,20 @@ function Ribbons({
     [entries, fromKey, todayKey, mode, tz, now, bornAt, units]
   );
   const [showAll, setShowAll] = useState(false);
+  const [layout, setLayout] = useState<"ribbons" | "circles">("ribbons");
+  const [activity, setActivity] = useState<PatternActivity>("all");
   const [ref, W] = useWidth<HTMLDivElement>();
   const night = useNightActive();
   const shown = showAll ? rows : rows.slice(0, RIBBON_PAGE);
-  const ticks = mode === "days" ? ["12a", "6a", "12p", "6p", "12a"] : ["12p", "6p", "12a", "6a", "12p"];
+  const focused = shown.map((row) => ({
+    ...row,
+    sleeps: activity === "all" || activity === "sleep" ? row.sleeps : [],
+    feeds: activity === "all" || activity === "feeds" ? row.feeds : [],
+    diapers: activity === "all" || activity === "diapers" ? row.diapers : [],
+    tummies: activity === "all" ? row.tummies : [],
+    clusters: activity === "all" || activity === "feeds" ? row.clusters : [],
+  }));
+  const ticks = mode === "days" ? ["Midnight", "6 AM", "Noon", "6 PM", "Midnight"] : ["Noon", "6 PM", "Midnight", "6 AM", "Noon"];
   const first = shown.at(-1);
   const last = shown[0];
   const through = last ? Math.min(last.end, now.getTime()) : now.getTime();
@@ -622,6 +665,7 @@ function Ribbons({
         action={
           <Segmented
             className="w-[152px] shrink-0"
+            aria-label="Day or night windows"
             value={mode}
             onChange={onMode}
             options={[
@@ -631,11 +675,30 @@ function Ribbons({
           />
         }
       >
-        <span id="maple-ribbons">Day ribbons</span>
+        <span id="maple-ribbons">{mode === "days" ? "Day" : "Night"} {layout}</span>
       </SectionTitle>
 
+      <div className="mb-3 space-y-3">
+        <Segmented aria-label="Comparison layout" value={layout} onChange={setLayout} options={[{ value: "ribbons", label: "Ribbons" }, { value: "circles", label: "Circles" }]} />
+        <label className="flex items-center gap-3 px-1">
+          <span className={cx(tone.muted, "text-sm")}>Focus on</span>
+          <select aria-label="Activity to show" value={activity} onChange={(event) => setActivity(event.target.value as PatternActivity)} className={cx(tone.input, "min-h-[44px] flex-1 text-sm")}>
+            <option value="all">All activity</option>
+            <option value="feeds">Feeds</option>
+            <option value="sleep">Sleep</option>
+            <option value="diapers">Diapers</option>
+          </select>
+        </label>
+        <p className={cx(tone.muted, "px-1 text-[13px] leading-snug")}>
+          {layout === "ribbons" ? "Read left to right. Each row is one " : "Read clockwise. Each circle is one "}
+          {mode === "days" ? "day, midnight to midnight." : "night, noon to noon, so overnight sleep stays together."}
+          {" Blank space means nothing was logged. Today is shown so far."}
+          {layout === "ribbons" && " The line marks now."}
+        </p>
+      </div>
       <div className={cx(tone.card, "px-3 pb-3")}>
-        <RibbonLegend night={night} />
+        <RibbonLegend night={night} activity={activity} />
+        {layout === "circles" ? <PatternCircles rows={focused} mode={mode} units={units} night={night} activity={activity} onPickDay={onPickDay} /> : <>
         {/* Sticky clock: stays put while the rows scroll under it. */}
         <div className="sticky top-[calc(env(safe-area-inset-top)+var(--maple-history-bar,0px))] z-10 -mx-3 bg-mp-surface px-3 pt-1.5 pb-1">
           <div className="relative h-4" aria-hidden>
@@ -656,10 +719,11 @@ function Ribbons({
 
         <div ref={ref}>
           {W > 0 &&
-            shown.map((r) => (
-              <RibbonRowView key={r.key} row={r} W={W} units={units} night={night} onPick={onPickDay ? () => onPickDay(r.jumpKey) : undefined} />
+            focused.map((r) => (
+              <RibbonRowView key={r.key} row={r} W={W} units={units} night={night} activity={activity} onPick={onPickDay ? () => onPickDay(r.jumpKey) : undefined} />
             ))}
         </div>
+        </>}
         {rows.length > shown.length && (
           <div className="pt-3 text-center">
             <Button variant="soft" onClick={() => setShowAll(true)}>
@@ -668,8 +732,7 @@ function Ribbons({
           </div>
         )}
         <p className={cx(tone.faint, "px-2 pt-3 text-center text-xs leading-snug")}>
-          Each row is one {mode === "days" ? "day, midnight to midnight" : "night, noon to noon"}.
-          {onPickDay && " Tap a row to open that day in the Timeline."}
+          {onPickDay && `Tap a ${layout === "ribbons" ? "row" : "circle"} to open that day in the Timeline.`}
         </p>
       </div>
       {showChatSuggestions && chatWindow && (
@@ -695,7 +758,7 @@ function Ribbons({
 }
 
 /** The ribbon key, drawn like the marks (bottles and pee turn hollow at night, as they do in the rows). */
-function RibbonLegend({ night }: { night: boolean }) {
+function RibbonLegend({ night, activity = "all" }: { night: boolean; activity?: PatternActivity }) {
   const item = (swatch: ReactNode, label: string) => (
     <span className="inline-flex items-center gap-1.5">
       <svg width="16" height="10" aria-hidden className="shrink-0">
@@ -706,7 +769,8 @@ function RibbonLegend({ night }: { night: boolean }) {
   );
   return (
     <div className={cx(tone.muted, "flex flex-wrap gap-x-3 gap-y-1 pt-3 pb-1 text-[11px] font-medium")}>
-      {item(<rect x="0" y="1" width="16" height="8" rx="2.5" fill="var(--v-sleep)" />, "Sleep")}
+      {(activity === "all" || activity === "sleep") && item(<rect x="0" y="1" width="16" height="8" rx="2.5" fill="var(--v-sleep)" />, "Sleep")}
+      {(activity === "all" || activity === "feeds") && <>
       {item(<rect x="5" y="0" width="5" height="10" rx="1" fill="var(--v-nurse)" />, "Nursing")}
       {item(
         night ? (
@@ -716,6 +780,8 @@ function RibbonLegend({ night }: { night: boolean }) {
         ),
         "Bottle"
       )}
+      </>}
+      {(activity === "all" || activity === "diapers") && <>
       {item(
         night ? (
           <circle cx="8" cy="5" r="3.25" fill="none" stroke="var(--v-pee)" strokeWidth="1.5" />
@@ -725,25 +791,26 @@ function RibbonLegend({ night }: { night: boolean }) {
         "Pee"
       )}
       {item(<circle cx="8" cy="5" r="4" fill="var(--v-poop)" />, "Poop")}
-      {item(<rect x="0" y="2.5" width="16" height="5" rx="2" fill="var(--v-tummy)" />, "Tummy")}
-      {item(<rect x="0" y="0" width="16" height="10" rx="2" fill="var(--v-bottle)" opacity="0.22" />, "Cluster")}
+      </>}
+      {activity === "all" && item(<rect x="0" y="2.5" width="16" height="5" rx="2" fill="var(--v-tummy)" />, "Tummy")}
+      {(activity === "all" || activity === "feeds") && item(<rect x="0" y="0" width="16" height="10" rx="2" fill="var(--v-bottle)" opacity="0.22" />, "Cluster")}
     </div>
   );
 }
 
-function RibbonRowView({ row, W, units, night, onPick }: { row: RibbonRow; W: number; units: UnitSystem; night: boolean; onPick?: () => void }) {
+function RibbonRowView({ row, W, units, night, activity, onPick }: { row: RibbonRow; W: number; units: UnitSystem; night: boolean; activity: PatternActivity; onPick?: () => void }) {
   const s = row.stats;
-  const summary = [
-    `${s.feeds} feed${s.feeds === 1 ? "" : "s"}`,
-    `${s.wet} wet`,
-    `${s.dirty} dirty`,
-    s.sleepSec >= 60 ? `${formatDuration(s.sleepSec)} sleep` : null,
+  const noMarks = row.feeds.length + row.sleeps.length + row.diapers.length + row.tummies.length === 0;
+  const summary = noMarks ? (activity === "all" ? "No activity logged" : `No ${activity} logged`) : [
+    activity === "all" || activity === "feeds" ? `${s.feeds} feed${s.feeds === 1 ? "" : "s"}` : null,
+    activity === "all" || activity === "diapers" ? `${s.wet} wet · ${s.dirty} dirty` : null,
+    activity === "all" || activity === "sleep" ? (s.sleepSec >= 60 ? `${formatDuration(s.sleepSec)} sleep` : "No sleep logged") : null,
   ]
     .filter(Boolean)
     .join(" · ");
   const x = (f: number) => f * W;
-  const aria = `${row.label}: ${summary}${row.clusters.length ? `; ${row.clusters.map((c) => c.title).join("; ")}` : ""}${
-    s.bottleMl ? `; ${formatVolume(s.bottleMl, units)} by bottle` : ""
+  const aria = `${row.label}${row.nowX != null ? ", so far" : ""}: ${summary}${row.clusters.length ? `; ${row.clusters.map((c) => c.title).join("; ")}` : ""}${
+    (activity === "all" || activity === "feeds") && s.bottleMl ? `; ${formatVolume(s.bottleMl, units)} by bottle` : ""
   }`;
 
   const body = (
@@ -751,6 +818,7 @@ function RibbonRowView({ row, W, units, night, onPick }: { row: RibbonRow; W: nu
       <span className="flex flex-wrap items-baseline justify-between gap-x-2 pt-2 pb-1">
         <span className={cx(tone.body, "text-[13px] font-semibold")}>
           {row.label}
+          {row.nowX != null && <span className={cx(tone.muted, "ml-1 text-[11px] font-normal")}>so far</span>}
           {row.dst && (
             <span className="ml-1.5 inline-flex items-center gap-1 align-[-1px] text-[11px] font-semibold text-mp-maple">
               <Icon name="clock-3" size={12} strokeWidth={2} />
@@ -1412,7 +1480,7 @@ function DailyCharts({
 }) {
   const night = useNightActive();
   const w = useBabyWords();
-  const [asTable, setAsTable] = useState(false);
+  const [asTable, setAsTable] = useState(true);
   const [moreOpen, setMoreOpen] = useState(false);
   const keys = days.map((d) => d.key);
   const so = (i: number) => (keys[i] === todayKey ? " so far" : "");

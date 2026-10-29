@@ -17,12 +17,12 @@ import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, SIDE_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { Tallies } from "./StatusCard";
-import { Segmented, cx, tone } from "./ui";
+import { Button, Segmented, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
 
 /**
- * The Day Dial: a 24-hour clock face (midnight at the top, clockwise). It's
- * Today's hero, so it sits on the page without a card or a title. Sleep is the
+ * The Day Dial: a 24-hour clock face (midnight at the top, clockwise) in
+ * History's Day clock view. Sleep is the
  * outer ring, feeds the middle (rust = left, honey = right, a hollow gold pill
  * = bottle), diapers the inner track: pee an upright blue drop, poop a dot in
  * its logged color, both a dot with a small drop. Tap anywhere on the ring to
@@ -222,9 +222,9 @@ export default function DayDial() {
   const hatchId = `maple-dial-hatch-${uid}`;
   const bothId = `maple-dial-both-${uid}`;
   const hintId = `maple-dial-hint-${uid}`;
+  const orientationId = `maple-dial-orientation-${uid}`;
   const [choice, setChoice] = useState<View | null>(null);
-  const [fetched, setFetched] = useState<{ key: string; entries: Entry[] } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [fetched, setFetched] = useState<{ key: string; entries: Entry[]; error?: boolean } | null>(null);
   const [pop, setPop] = useState<{ x: number; y: number; w: number; t: number; items: Entry[]; cluster?: FeedCluster; above: boolean; maxList: number } | null>(null);
   const [hint, setHint] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -246,17 +246,20 @@ export default function DayDial() {
   const past = dayView != null && !isToday;
   // The state snapshot holds ~72h; older days come from the API.
   const needsFetch = dayView != null && dayView < yesterday;
+  // A request belongs to its day. Switching days must never show the previous
+  // day's failure, or a moment of zero totals before the next request starts.
+  const loading = needsFetch && fetched?.key !== dayView;
+  const loadError = needsFetch && fetched?.key === dayView && !!fetched.error;
+  const unavailable = loading || loadError;
 
   useEffect(() => {
     if (!needsFetch || !dayView || fetched?.key === dayView) return;
     let cancelled = false;
-    setLoading(true);
     // From the day before too: a feed that began late that night runs into this day's first minutes, and a feed
     // counts on the day it began (statsFor, runs from the whole window), as History's day line counts it.
     api<{ entries: Entry[] }>(`entries?from=${addDays(dayView, -1)}&to=${dayView}`)
       .then((r) => !cancelled && setFetched({ key: dayView, entries: r.entries }))
-      .catch(() => !cancelled && setFetched({ key: dayView, entries: [] }))
-      .finally(() => !cancelled && setLoading(false));
+      .catch(() => !cancelled && setFetched({ key: dayView, entries: [], error: true }));
     return () => {
       cancelled = true;
     };
@@ -343,7 +346,7 @@ export default function DayDial() {
   const pastAge = past && state.baby.born_at ? babyAge(state.baby.born_at, new Date(hi), tz) : null;
   const plotted = [...arcs.map((a) => a.entry), ...dots.map((d) => d.entry)].filter((e, i, all) => all.findIndex((x) => x.id === e.id) === i);
   const rangeName = rolling ? "Last 24 hours" : formatDayLabel(dayView ?? todayKey, todayKey, { long: true });
-  const label = `${rangeName}: ${stats.feeds} feeds, ${stats.wet} wet and ${stats.dirty} dirty diapers, ${formatDuration(stats.sleepSec)} asleep.`;
+  const label = loading ? `${rangeName}: loading logged events.` : loadError ? `${rangeName}: couldn't load logged events.` : `${rangeName}: ${stats.feeds} feeds, ${stats.wet} wet and ${stats.dirty} dirty diapers, ${formatDuration(stats.sleepSec)} asleep.`;
 
   // The usual numbers for her day of life (on a past day, for the age she was then). Off while warnings are off.
   const targets = summary.targets && pastAge ? { ...diaperTargets(pastAge.dayOfLife), feeds: FEEDS_PER_DAY, tummyMin: tummyGoalMinutes(pastAge.days) } : summary.targets;
@@ -351,6 +354,7 @@ export default function DayDial() {
   const talliesTitle = rolling ? "Last 24 hours" : isToday ? "The day so far" : formatDayLabel(dayView ?? todayKey, todayKey, { long: true });
 
   const onTap = (ev: React.MouseEvent<SVGSVGElement>) => {
+    if (unavailable) return;
     const svg = svgRef.current;
     if (!svg) return;
     const box = svg.getBoundingClientRect();
@@ -412,23 +416,26 @@ export default function DayDial() {
   const nightSpan = (11 / 24) * 360;
 
   // The center readout: the time (or the day), and what the ring covers. The counts are in the tallies below.
-  const sub = loading ? "Loading…" : past ? (pastAge ? `Day ${pastAge.dayOfLife}` : "") : rolling ? "Last 24 hours" : "Since midnight";
+  const sub = loading ? "Loading…" : loadError ? "Couldn't load" : past ? (pastAge ? `Day ${pastAge.dayOfLife}` : "") : rolling ? "Last 24 hours" : "Since midnight";
   const mainY = sub ? C - 8 : C;
   // Wide enough for a title and its detail, never wider than the dial.
   const popW = pop ? Math.min(296, pop.w) : 0;
 
   return (
     <>
-      <section aria-label="Day dial" className="pt-2">
+      <section aria-label="Day dial" className="pt-2" aria-busy={loading}>
+        <p id={orientationId} className={cx(tone.muted, "mx-auto mb-3 max-w-[380px] px-2 text-center text-[13px] leading-snug")}>
+          A 24-hour clock: midnight at the top, noon at the bottom. Read clockwise.
+        </p>
         <div ref={boxRef} className="relative mx-auto w-full max-w-[380px]">
           <svg
             ref={svgRef}
             viewBox="-14 -14 348 348"
             role="img"
             aria-label={label}
-            aria-describedby={hintId}
+            aria-describedby={`${orientationId}${unavailable ? "" : ` ${hintId}`}`}
             onClick={onTap}
-            className="block h-auto w-full cursor-pointer select-none"
+            className={cx("block h-auto w-full select-none", !unavailable && "cursor-pointer")}
           >
             <style>{`
               @keyframes maple-dial-dash { to { stroke-dashoffset: -24; } }
@@ -480,14 +487,14 @@ export default function DayDial() {
               return <line key={i} x1={f(x0)} y1={f(y0)} x2={f(x1)} y2={f(y1)} strokeWidth={1.4} strokeLinecap="round" className="stroke-mp-ink/25" />;
             })}
             {[
-              ["12a", 0],
-              ["6a", 90],
-              ["12p", 180],
-              ["6p", 270],
+              ["Midnight", 0],
+              ["6 AM", 90],
+              ["Noon", 180],
+              ["6 PM", 270],
             ].map(([t, a]) => {
               const [x, y] = pt(R.label, a as number);
               return (
-                <text key={t} x={f(x)} y={f(y)} textAnchor="middle" dominantBaseline="central" fontSize="11" fontWeight="500" className="fill-mp-ink-3">
+                <text key={t} x={f(x)} y={f(y)} textAnchor={a === 90 ? "end" : a === 270 ? "start" : "middle"} dominantBaseline="central" fontSize="11" fontWeight="500" className="fill-mp-ink-3">
                   {t}
                 </text>
               );
@@ -630,9 +637,9 @@ export default function DayDial() {
                 y={C + 17}
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize={past && !loading ? 13 : 11}
-                fontWeight={past && !loading ? 600 : 500}
-                className={past && !loading ? "fill-mp-maple [.maple-night_&]:fill-mp-ink-2" : "fill-mp-ink-3"}
+                fontSize={past && !unavailable ? 13 : 11}
+                fontWeight={past && !unavailable ? 600 : 500}
+                className={past && !unavailable ? "fill-mp-maple [.maple-night_&]:fill-mp-ink-2" : "fill-mp-ink-3"}
               >
                 {sub}
               </text>
@@ -695,9 +702,16 @@ export default function DayDial() {
         </div>
 
         {/* Shown until the first tap on this device; screen readers always have it. */}
-        <p id={hintId} className={hint ? cx(tone.faint, "mt-1 text-center text-[13px]") : "sr-only"}>
+        {!unavailable && <p id={hintId} className={hint ? cx(tone.faint, "mt-1 text-center text-[13px]") : "sr-only"}>
           Tap the ring to see what happened
-        </p>
+        </p>}
+
+        {loadError && (
+          <div className={cx(tone.inset, "mx-auto mt-3 flex max-w-[380px] items-center gap-3 px-3 py-2")} role="status">
+            <p className={cx(tone.muted, "flex-1 text-[13px] leading-snug")}>{"Couldn't load this day's log."}</p>
+            <Button size="sm" variant="soft" onClick={() => setFetched(null)}>Try again</Button>
+          </div>
+        )}
 
         <ul className="sr-only">
           {brackets.map((b, i) => (
@@ -710,6 +724,9 @@ export default function DayDial() {
           ))}
         </ul>
 
+        <p className={cx(tone.muted, "mt-3 px-2 text-center text-[12px] leading-relaxed")}>
+          Outer ring: sleep · Middle: feeds · Inner: diapers
+        </p>
         <Legend pal={pal} night={night} nursing={logSwitches(state.baby).nursing || arcs.some((a) => a.lane === "feed")} both={arcs.some((a) => a.both)} cluster={brackets.length > 0} bottle={arcs.some((a) => a.lane === "bottle")} />
 
         {/* One range for the dial and the tallies under it. */}
@@ -757,7 +774,7 @@ export default function DayDial() {
         </div>
       </section>
 
-      <Tallies stats={stats} title={talliesTitle} targets={targets} targetDay={targetDay} loading={loading} />
+      {!unavailable && <Tallies stats={stats} title={talliesTitle} targets={targets} targetDay={targetDay} />}
     </>
   );
 }

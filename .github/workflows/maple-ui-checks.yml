@@ -83,6 +83,11 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: pnpm check:maple-nutrition-ui
+      - name: Check pattern views in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-patterns-ui
       - name: Check admin in the browser
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:
@@ -108,6 +113,7 @@ jobs:
             test-results/maple-chat-ui
             test-results/maple-entrypoints-ui
             test-results/maple-nutrition-ui
+            test-results/maple-patterns-ui
             test-results/maple-admin-ui
             test-results/maple-search-ui
             test-results/maple-shared-ui
