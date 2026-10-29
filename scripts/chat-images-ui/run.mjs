@@ -75,6 +75,7 @@ await page.route("**/*", async (route) => {
   return route.fulfill({ status: 200, contentType: file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html", body: await readFile(path.join(output, file)) });
 });
 const photoFile = { name: "synthetic-photo.png", mimeType: "image/png", buffer: syntheticPng };
+const photoBatch = Array.from({ length: 8 }, (_, index) => ({ ...photoFile, name: `synthetic-photo-${index + 1}.png` }));
 const add = () => page.getByRole("button", { name: "Add photo", exact: true });
 const message = () => page.getByRole("textbox", { name: "Message", exact: true });
 const choose = async (files = [photoFile]) => {
@@ -112,23 +113,31 @@ const checks = [
     await page.reload(); await page.getByRole("img", { name: "Attached photo 1", exact: true }).waitFor();
     assert.equal(sends.length, 1, "History reload does not resend images");
   }],
-  ["two-photo cap, removal, and optional caption", async () => {
+  ["eight-photo batch, removal, and optional caption", async () => {
     await message().fill("Describe this synthetic meal without saving it.");
-    await choose([photoFile, { ...photoFile, name: "synthetic-second.png" }]);
-    await page.getByRole("button", { name: "Remove photo 2", exact: true }).waitFor();
+    await choose(photoBatch);
+    await page.getByRole("button", { name: "Remove photo 8", exact: true }).waitFor();
     assert(await add().isDisabled());
     await attached().click();
     assert(await add().isEnabled());
-    assert.equal(await page.getByRole("img", { name: "Attached photo 1", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("img", { name: /^Attached photo / }).count(), 7);
+    await choose();
+    await page.getByRole("button", { name: "Remove photo 8", exact: true }).waitFor();
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.getByText("I can describe this example photo.", { exact: true }).waitFor();
     assert.equal(sends[0].message.parts.find((part) => part.type === "text").text, "Describe this synthetic meal without saving it.");
-    assert.equal(sends[0].message.parts.filter((part) => part.type === "file").length, 1);
+    assert.equal(sends[0].message.parts.filter((part) => part.type === "file").length, 8);
+    const history = page.getByLabel("Message photos", { exact: true });
+    assert.equal(await history.getByRole("img").count(), 8);
+    const grid = await history.boundingBox();
+    assert(grid && grid.height > 200, "Sent photos remain in the full-size history grid");
   }],
-  ["draft reload, tab switch, offline queue, edit and deliberate resume", async () => {
-    await choose(); await attached().waitFor();
+  ["eight-photo draft reload, tab switch, offline queue, edit and deliberate resume", async () => {
+    await choose(photoBatch);
+    await page.getByRole("button", { name: "Remove photo 8", exact: true }).waitFor();
     await fixture("setActive", false); await fixture("setActive", true); await attached().waitFor();
-    await page.reload(); await attached().waitFor();
+    await page.reload();
+    await page.getByRole("button", { name: "Remove photo 8", exact: true }).waitFor();
     assert(!JSON.stringify(await page.evaluate(() => ({ ...localStorage }))).includes("data:image"), "Only image references persist in browser storage");
     await fixture("setOnline", false); assert(await add().isDisabled());
     await page.getByRole("button", { name: "Queue message", exact: true }).click();
@@ -139,11 +148,12 @@ const checks = [
     await queue.getByRole("button", { name: "Resume", exact: true }).waitFor();
     assert.equal(sends.length, 0);
     await queue.getByRole("button", { name: "Edit", exact: true }).click();
+    assert.equal(await queue.getByRole("button", { name: /^Remove photo / }).count(), 8);
     await queue.getByRole("button", { name: "Save changes", exact: true }).click();
     await queue.getByRole("button", { name: "Edit", exact: true }).waitFor();
     await queue.getByRole("button", { name: "Resume", exact: true }).click();
     await page.getByText("I can describe this example photo.", { exact: true }).waitFor();
-    assert.equal(sends[0].message.parts.filter((part) => part.type === "file").length, 1);
+    assert.equal(sends[0].message.parts.filter((part) => part.type === "file").length, 8);
   }],
   ["queued editing can explicitly remove a photo without losing the caption", async () => {
     await message().fill("This synthetic caption should stay.");
@@ -218,13 +228,27 @@ const checks = [
     assert.equal(sends.length, 2);
     assert.deepEqual(sends[0], sends[1], "Retry preserves the exact attachment and original delivery identity");
   }],
-  ["mobile photo composer fits day and night screens", async () => {
-    await choose([photoFile, { ...photoFile, name: "synthetic-second.png" }]);
-    await page.getByRole("button", { name: "Remove photo 2", exact: true }).waitFor();
+  ["eight-photo mobile composer fits day and night screens", async () => {
+    await choose(photoBatch);
+    await page.getByRole("button", { name: "Remove photo 8", exact: true }).waitFor();
     await message().fill("What can you tell from these synthetic photos?");
     for (const width of [320, 375]) {
       await page.setViewportSize({ width, height: 667 });
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      const photos = page.getByLabel("Attached photos", { exact: true });
+      const strip = await photos.boundingBox();
+      assert(strip && strip.height <= 104, "Eight previews stay in one compact row");
+      assert(await photos.evaluate((element) => element.scrollWidth > element.clientWidth), "All eight previews remain available by scrolling");
+      await page.getByRole("button", { name: "Remove photo 8", exact: true }).scrollIntoViewIfNeeded();
+      const remove = await page.getByRole("button", { name: "Remove photo 8", exact: true }).boundingBox();
+      assert(remove && remove.width >= 44 && remove.height >= 44 && remove.x >= 0 && remove.x + remove.width <= width, "The last photo keeps a reachable 44px removal control");
+      await message().click();
+      assert(await message().evaluate((element) => document.activeElement === element), "The caption stays editable below eight photos");
+      assert(await page.evaluate(() => {
+        const caption = document.querySelector('textarea[aria-label="Message"]').getBoundingClientRect();
+        const strip = document.querySelector('[aria-label="Attached photos"]').getBoundingClientRect();
+        return caption.top >= strip.bottom && caption.bottom <= innerHeight;
+      }), "The caption stays below the photos and inside the viewport");
       const box = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
       assert(box && box.width >= 44 && box.height >= 44 && box.y + box.height <= 667);
       await page.screenshot({ path: path.join(screenshots, `composer-${width}-day.png`) });

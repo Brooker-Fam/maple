@@ -8,9 +8,9 @@ import { cx } from "../ui";
 export default function ChatImages({ images, onRemove, compact = false }: { images: ChatImage[]; onRemove?: (url: string) => void; compact?: boolean }) {
   if (!images.length) return null;
   return (
-    <div className="flex flex-wrap gap-2" aria-label={onRemove ? "Attached photos" : "Message photos"}>
+    <div className={cx("flex gap-2", compact ? "-m-2 overflow-x-auto p-2" : "flex-wrap")} aria-label={onRemove ? "Attached photos" : "Message photos"}>
       {images.map((image, i) => (
-        <div key={image.url} className="relative">
+        <div key={image.url} className="relative shrink-0">
           <a href={image.url} target="_blank" rel="noopener noreferrer" aria-label={`Open photo ${i + 1}`} className="block overflow-hidden rounded-xl border border-mp-line bg-mp-surface">
             <ChatThumbnail key={image.url} src={image.url} index={i + 1} compact={compact} />
           </a>

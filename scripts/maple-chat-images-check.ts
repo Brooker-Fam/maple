@@ -90,17 +90,18 @@ async function main() {
     const [resolved] = await s.resolveChatImages(fam, member, [original]);
     assert(resolved.parts.some((part) => part.type === "file" && part.url.startsWith("data:image/jpeg;base64,")));
     assert.equal(original.parts[0].type === "file" && original.parts[0].url, image.url);
-    await assert.rejects(s.validateChatImages(fam, member, [image, image, image]));
+    await assert.rejects(s.validateChatImages(fam, member, Array(9).fill(image)));
     await assert.rejects(s.resolveChatImages(fam, member, [message([{ ...image, url: "https://example.test/private.jpg" }])]));
     await assert.rejects(s.validateChatImages(fam, member, [{ ...image, url: `/api/maple/chat/images?id=${randomUUID()}` }]));
   });
-  await check("model photo history is bounded while preserving the newest two images", async () => {
+  await check("model photo history preserves an entire eight-photo batch and omits older images", async () => {
     const [, s] = await modules();
     const images = await Promise.all(Array.from({ length: 10 }, async () => s.uploadChatImage(fam, member, await source(), "image/png")));
-    const messages = Array.from({ length: 5 }, (_, i) => message(images.slice(i * 2, i * 2 + 2)));
+    await s.validateChatImages(fam, member, images.slice(2));
+    const messages = [message(images.slice(0, 2)), message(images.slice(2))];
     const resolved = await s.resolveChatImages(fam, member, messages);
     assert.equal(resolved.flatMap((m) => m.parts).filter((p) => p.type === "file").length, 8);
-    assert.equal(resolved.at(-1)!.parts.filter((p) => p.type === "file").length, 2);
+    assert.equal(resolved.at(-1)!.parts.filter((p) => p.type === "file").length, 8);
     assert(resolved[0].parts.every((p) => p.type === "text"));
   });
   await check("unused drafts expire after seven days while referenced photos survive", async () => {

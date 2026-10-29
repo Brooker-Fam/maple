@@ -1,4 +1,4 @@
-export const CHAT_MAX_IMAGES = 2;
+export const CHAT_MAX_IMAGES = 8;
 export const CHAT_IMAGE_MAX_BYTES = 512 * 1024;
 export const CHAT_IMAGE_SOURCE_MAX_BYTES = 4 * 1024 * 1024;
 export const CHAT_IMAGE_MAX_DIMENSION = 1600;
