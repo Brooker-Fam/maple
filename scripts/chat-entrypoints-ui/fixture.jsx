@@ -74,6 +74,7 @@ function App() {
       me: { ...MEMBER, email: identity.email, role: viewer ? "viewer" : "owner" }, members: [MEMBER], entries: [savedEntry], care: null,
     },
     api, now: () => new Date(NOW), readOnly: viewer, online: true, units: "us",
+    timerBusy: () => false,
     member: () => MEMBER, memberName: () => MEMBER.display_name, memberLabel: () => MEMBER.display_name,
     toast: () => {}, toasts: [], dismissToast: () => {},
     log: () => { throw new Error("Unexpected log write"); },

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import MedicalRecordsSettings, { useMedicalRecordsAvailable } from "../../src/components/maple/settings/MedicalRecordsSettings";
 import GrowthSheet from "../../src/components/maple/sheets/GrowthSheet";
@@ -65,7 +66,9 @@ function Fixture() {
       scenario: value => {
         current.current = { config: value, status: scenarioStatus(value), calls: [], failures: value.failures ?? {}, refreshes: 0 };
         Object.defineProperty(navigator, "userAgent", { configurable: true, value: value.native ? "Maple-Native-App/1.1 (ios)" : "Synthetic browser" });
-        setConfig(value); setEpoch(count => count + 1);
+        // Tests may switch between sheets with the same heading and no loader.
+        // Finish the new scenario's render before exposing it to assertions.
+        flushSync(() => { setConfig(value); setEpoch(count => count + 1); });
       },
       snapshot: () => structuredClone(current.current),
     };
