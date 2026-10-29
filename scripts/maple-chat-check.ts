@@ -1021,20 +1021,21 @@ function post(f: ReturnType<typeof fakeStore>, h: ReturnType<typeof harness>, ov
 
 async function postChecks() {
   const image = { type: "file" as const, mediaType: "image/jpeg" as const, url: "/api/maple/chat/images?id=11111111-1111-4111-8111-111111111111" };
-  await checkAsync("a photo-only message reaches the model as image bytes and persists only its private reference", async () => {
+  const batch = Array.from({ length: 8 }, (_, i) => ({ ...image, url: `/api/maple/chat/images?id=${String(i + 1).padStart(8, "0")}-1111-4111-8111-111111111111` }));
+  await checkAsync("an eight-photo message reaches the model in full and persists only private references", async () => {
     const f = fakeStore();
     const h = harness([[...textChunks("A synthetic picture."), finishPart("stop")]]);
     const r = await post(f, h, {
       images: {
-        validate: async (images) => eq(images, [image]),
+        validate: async (images) => eq(images, batch),
         resolve: async (messages) => messages.map((message) => ({ ...message, parts: message.parts.map((part) => part.type === "file" ? { ...part, url: "data:image/jpeg;base64,/9j/2Q==" } : part) })),
       },
-    })({ threadId: THREAD, message: { role: "user", parts: [image] } });
+    })({ threadId: THREAD, message: { role: "user", parts: batch } });
     eq(r.status, 200);
-    eq(f.threads.get(THREAD)!.messages[0].parts.filter((part) => part.type === "file"), [image]);
+    eq(f.threads.get(THREAD)!.messages[0].parts.filter((part) => part.type === "file"), batch);
     const content = h.model.doStreamCalls[0].prompt.find((message) => message.role === "user")!.content;
-    ok(Array.isArray(content) && content.some((part) => part.type === "file" && part.mediaType === "image/jpeg"), "image reaches the provider");
-    ok(!JSON.stringify(h.model.doStreamCalls[0].prompt).includes(image.url), "private route is never sent to the provider");
+    ok(Array.isArray(content) && content.filter((part) => part.type === "file" && part.mediaType === "image/jpeg").length === 8, "all eight images reach the provider");
+    ok(!JSON.stringify(h.model.doStreamCalls[0].prompt).includes("/api/maple/chat/images?id="), "private route is never sent to the provider");
   });
   check("attachment substitutions cannot replay an accepted delivery", () => {
     process.env.MAPLE_SESSION_SECRET = "synthetic-image-delivery-key";
@@ -1048,8 +1049,8 @@ async function postChecks() {
     const photo: ChatMessage = { id: "image_window", role: "user", parts: [image] };
     ok(messageTokens(photo) >= 8192, "reserve image input tokens");
   });
-  check("a reply to a photo clarification retains both photos and the question", () => {
-    const photos: ChatMessage = { id: "photos", role: "user", parts: [image, { ...image, url: image.url.replace(/1/g, "2") }] };
+  check("a reply to a photo clarification retains all eight photos and the question", () => {
+    const photos: ChatMessage = { id: "photos", role: "user", parts: batch };
     const question: ChatMessage = { id: "question", role: "assistant", parts: [{ type: "text", text: "Whose food is this, and how much was eaten?" }] };
     const followup = userMessage("followup", "Mine, and I ate all of it. Log it.", LINE);
     eq(modelWindow([photos, question, followup]).map((message) => message.id), ["photos", "question", "followup"]);

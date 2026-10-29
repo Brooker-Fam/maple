@@ -1,4 +1,5 @@
 import type { ChatMessage } from "./types";
+import { CHAT_MAX_IMAGES } from "./images";
 
 /**
  * Each person has one chat that never ends, so the model reads only its
@@ -48,7 +49,7 @@ export function modelWindow(messages: ChatMessage[]): ChatMessage[] {
   for (let i = messages.length - 1; i >= start; i--) count(messages[i]);
   for (let i = start - 1; i >= 0; i--) {
     count(messages[i]);
-    if (messages.length - i > WINDOW_MESSAGES || tokens > WINDOW_TOKENS + Math.min(images, 2) * IMAGE_INPUT_TOKENS) break;
+    if (messages.length - i > WINDOW_MESSAGES || tokens > WINDOW_TOKENS + Math.min(images, CHAT_MAX_IMAGES) * IMAGE_INPUT_TOKENS) break;
     if (messages[i].role === "user") start = i;
   }
   return messages.slice(start);

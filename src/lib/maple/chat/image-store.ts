@@ -10,7 +10,6 @@ import type { ChatMessage } from "./types";
 type Fam = Pick<FamilyScope, "familyId">;
 type ImageMember = Pick<Member, "email" | "role">;
 const MAX_BODY_BYTES = CHAT_IMAGE_SOURCE_MAX_BYTES + 64 * 1024;
-const MAX_MODEL_IMAGES = 8;
 const MAX_DAILY_UPLOADS = 40;
 const MAX_FAMILY_DAILY_UPLOADS = 100;
 const IMAGE_PREFIX = "/api/maple/chat/images?id=";
@@ -155,7 +154,7 @@ export async function readChatImage(fam: Fam, member: ImageMember, id: string): 
 }
 
 export async function validateChatImages(fam: Fam, member: ImageMember, images: readonly ChatImage[]): Promise<void> {
-  if (images.length > CHAT_MAX_IMAGES) throw new ChatImageError("Attach up to two photos to one message.");
+  if (images.length > CHAT_MAX_IMAGES) throw new ChatImageError(`Attach up to ${CHAT_MAX_IMAGES} photos to one message.`);
   const ids = imageIds(images);
   if (!ids.length) return;
   const found = await rows(`UPDATE maple_chat_images i SET reserved_until = NOW() + INTERVAL '2 minutes'
@@ -167,7 +166,7 @@ export async function validateChatImages(fam: Fam, member: ImageMember, images: 
 export async function resolveChatImages(fam: Fam, member: ImageMember, messages: ChatMessage[]): Promise<ChatMessage[]> {
   const images = messages.flatMap((message) => {
     const parts = message.parts.filter((part) => part.type === "file");
-    if (parts.length > CHAT_MAX_IMAGES) throw new ChatImageError("Attach up to two photos to one message.");
+    if (parts.length > CHAT_MAX_IMAGES) throw new ChatImageError(`Attach up to ${CHAT_MAX_IMAGES} photos to one message.`);
     return parts.map((part) => {
       const parsed = parseChatImage(part);
       if (!parsed || message.role !== "user") throw new ChatImageError("This photo is unavailable. Choose it again.");
@@ -176,14 +175,14 @@ export async function resolveChatImages(fam: Fam, member: ImageMember, messages:
   });
   const ids = imageIds(images);
   await availableImages(fam, member, ids);
-  const selected = ids.slice(-MAX_MODEL_IMAGES);
+  const selected = ids.slice(-CHAT_MAX_IMAGES);
   const loaded = await availableImages(fam, member, selected, true);
   const data = new Map(loaded.map((row) => [String(row.id), `data:image/jpeg;base64,${row.data_base64}`]));
   let imageNumber = 0;
   return messages.map((message) => ({ ...message, parts: message.parts.map((part) => {
     if (part.type !== "file") return part;
     const index = imageNumber++;
-    if (index < ids.length - MAX_MODEL_IMAGES) return { type: "text" as const, text: "[An earlier photo is omitted from this turn. Ask the person to attach it again if needed.]" };
+    if (index < ids.length - CHAT_MAX_IMAGES) return { type: "text" as const, text: "[An earlier photo is omitted from this turn. Ask the person to attach it again if needed.]" };
     return { ...part, url: data.get(ids[index])! };
   }) }));
 }
