@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import {
   CLUSTER_GAP_MS,
   edgeBounds,
@@ -41,7 +41,7 @@ import { useNightActive } from "../nightLook";
 import { Sheet, cx } from "../ui";
 import { useHoldTimerToasts, useMaple, useNow, type TimerCallOptions, type TimerFailure } from "../useMaple";
 import { useTimerActions } from "../useTimerActions";
-import type { SheetProps } from "./index";
+import { useSheets, type SheetProps } from "./index";
 import { useOpenCount } from "./parts";
 
 /**
@@ -98,10 +98,12 @@ type RunMeta = { backOn?: BackOnMeta; stop?: { ref: StretchRef } };
  * the other phone moves it and commit `retime move` on it; `free` ones (a new
  * moment: back on at, ended at) commit through `commit`.
  */
-type EditorNavigation = { kind: "pin"; pin: Pin } | { kind: "editor"; editor: Editor } | { kind: "more" };
+type EditorNavigation = { kind: "pin"; pin: Pin } | { kind: "editor"; editor: Editor } | { kind: "finished" } | { kind: "details" };
 
 type Editor = {
   id: string;
+  /** A new moment (e.g. back on now) can be saved without changing its default. */
+  allowUnchanged?: boolean;
   /** A picked correction is a draft until Save time. */
   initial?: Date;
   edge?: MomentEdge;
@@ -265,8 +267,25 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   const count = useOpenCount(open);
   useHoldTimerToasts(open);
   const [committing, setCommitting] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [hasEditorActions, setHasEditorActions] = useState(false);
+  const [actionsContainer, setActionsContainer] = useState<HTMLDivElement | null>(null);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const live = entry ? state?.entries.find((e) => e.id === entry.id) ?? null : null;
+  const loaded = entry ? state?.entries.find((e) => e.id === entry.id) ?? null : null;
+  // A historical conflict briefly upserts the server's current entry, then
+  // the next recent-state poll omits it again. Keep that reviewed version;
+  // absence from the recent window is not a deletion. A 404 still takes the
+  // existing discarded path in FixBody, and Save checks the retained version.
+  const [history, setHistory] = useState(() => ({ outside: !loaded, latest: loaded ?? entry ?? null }));
+  const known = loaded ?? entry;
+  if (known && !timerBusy(known.id) && history.latest?.updated_at !== known.updated_at &&
+      (!history.latest || Date.parse(known.updated_at) >= Date.parse(history.latest.updated_at))) {
+    setHistory({ ...history, latest: known });
+  }
+  const remember = useCallback((confirmed: Entry) => setHistory((h) =>
+    !h.latest || Date.parse(confirmed.updated_at) >= Date.parse(h.latest.updated_at) ? { ...h, latest: confirmed } : h
+  ), []);
+  const live = loaded ?? (history.outside ? history.latest : null);
   const e = live ?? entry;
   const fix = (preset?.fix ?? { target: "current" }) as FixPreset["fix"];
   // The Done tap that ended this feed at its pause (the Done toast's "She went back on…", asked of the finished feed:
@@ -281,7 +300,7 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
   // A tap from this phone (the dock, a toast) still on its way: the sheet waits for its answer, as for a timer that's still starting.
   const saving = e.id > 0 && timerBusy(e.id) && !committing;
   return (
-    <Sheet open={open} onClose={onClose} title={saving ? `${fix.expand === "done" ? "Done" : "Edit times"} · saving…` : fix.expand === "done" ? "Done" : timed(e) ? "Edit nursing times" : "Edit times"} subtitle={subtitle} calm>
+    <Sheet open={open} onClose={() => { if (!committing) onClose(); }} dirty={dirty} title={saving ? `${fix.expand === "done" ? "Done" : "Edit times"} · saving…` : fix.expand === "done" ? "Done" : timed(e) ? "Edit nursing times" : "Edit times"} subtitle={subtitle} calm footer={hasEditorActions ? <div ref={setActionsContainer} /> : undefined}>
       {/* A fresh pin each time it opens (the router keeps one instance per entry mounted). */}
       <FixBody
         key={count}
@@ -294,6 +313,10 @@ export default function FixTimesSheet({ open, onClose, kind, entry, preset }: Sh
         onClose={onClose}
         tz={tz}
         onCommitting={setCommitting}
+        onDirtyChange={setDirty}
+        actionsContainer={actionsContainer}
+        onEditorActionsChange={setHasEditorActions}
+        onKnownEntry={remember}
       />
     </Sheet>
   );
@@ -309,6 +332,10 @@ function FixBody({
   onClose,
   tz,
   onCommitting,
+  onDirtyChange,
+  actionsContainer,
+  onEditorActionsChange,
+  onKnownEntry,
 }: {
   start: Entry;
   live: Entry | null;
@@ -319,11 +346,16 @@ function FixBody({
   onClose: () => void;
   tz: string;
   onCommitting: (on: boolean) => void;
+  onDirtyChange: (on: boolean) => void;
+  actionsContainer: HTMLElement | null;
+  onEditorActionsChange: (on: boolean) => void;
+  onKnownEntry: (entry: Entry) => void;
 }) {
   const { state, now: nowFn, memberLabel, readOnly, timerBusy, refresh, whoDiscarded } = useMaple();
   const words = useBabyWords();
   const ask = useAskWho();
   const actions = useTimerActions();
+  const sheets = useSheets();
   const now = useNow(1000);
   const e = live ?? start;
   const me = state?.me.email ?? null;
@@ -347,7 +379,7 @@ function FixBody({
         commit: (to, o) => actions.adjust(on, to, o),
       };
     }
-    if (p.kind === "side") return { id: "editor", edge: { edge: "start", ref: p.ref } };
+    if (p.kind === "side") return { id: "editor", edge: { edge: p.panel === "closed" && !p.fromBreak ? "side_end" : "start", ref: p.ref } };
     if (p.kind === "break") return { id: "editor", edge: { edge: "end", ref: p.ref } };
     if (p.kind === "finish") {
       const ps = partsOf(on, at);
@@ -359,6 +391,9 @@ function FixBody({
   // Edit times opens at the clock, with the neighbouring moments still available above it.
   const [editor, setEditor] = useState<Editor | null>(() => expand || !timed(start) ? null : editorForPin(pin, start, nowFn()));
   const [editorDirty, setEditorDirty] = useState(false);
+  const showEditorActions = !!editor && !readOnly;
+  useEffect(() => { onEditorActionsChange(showEditorActions); }, [showEditorActions, onEditorActionsChange]);
+  useLayoutEffect(() => { onDirtyChange(editorDirty); }, [editorDirty, onDirtyChange]);
   const [editorRevision, setEditorRevision] = useState(0);
   const [leavingEditor, setLeavingEditor] = useState<EditorNavigation | null>(null);
   const keepEditingButton = useRef<HTMLButtonElement>(null);
@@ -451,7 +486,7 @@ function FixBody({
   let moveRef: StretchRef | null = null;
   // (Not while a commit or this phone's own tap is in flight: its early copy isn't someone else's change.)
   if (open && !busy && !flight) {
-    if (!live) {
+    if (!live || notice?.gone) {
       const g = notice?.gone;
       // The 404 that stopped this sheet's commit may name who discarded it; else the server's list of discarded entries
       // (null: this viewer, or nobody worth naming); only if that lookup found nothing, the last person to change it.
@@ -670,6 +705,10 @@ function FixBody({
     onCommitting(false);
     const f = failure as TimerFailure | null;
     const r = isResponse(res) ? res : null;
+    // Keep historical answers even if an immediate recent-state poll omits
+    // the transient upsert before React renders it.
+    if (r?.entry) onKnownEntry(r.entry);
+    else if (f && "entry" in f && f.entry) onKnownEntry(f.entry);
     // "Already back on?" after the other phone's Resume on that side: nothing moved, so say what's there instead of closing as if saved.
     if (meta.backOn && !f && r?.noop) {
       setBusy(null);
@@ -760,7 +799,8 @@ function FixBody({
     setEditorDirty(false);
     if (target?.kind === "pin") applyPin(target.pin);
     else if (target?.kind === "editor") applyEditor(target.editor);
-    else if (target?.kind === "more") setEditor(null);
+    else if (target?.kind === "finished") { setEditor(null); setFinished(true); }
+    else if (target?.kind === "details") sheets.open({ kind: e.kind, entry: e });
     focusEditor();
   };
 
@@ -778,7 +818,9 @@ function FixBody({
         edge={ed.edge}
         free={ed.free}
         initial={ed.initial}
+        allowUnchanged={ed.allowUnchanged}
         mode="commit"
+        actionsContainer={actionsContainer}
         onDirtyChange={setEditorDirty}
         busy={busy === ed.id}
         disabled={disabled || !!leavingEditor}
@@ -790,7 +832,7 @@ function FixBody({
             ed.id,
             (o) =>
               ed.edge
-                ? actions.retime(e, { op: "move", edge: ed.edge.edge, ...(ed.edge.ref ? { ref: ed.edge.ref } : {}), to: to.toISOString() } as FeedEdit, o)
+                ? actions.retime(e, { op: "move", edge: ed.edge.edge, ...(ed.edge.ref ? { ref: ed.edge.ref } : {}), to: to.toISOString(), expect_updated_at: e.updated_at } as FeedEdit, o)
                 : ed.commit!(to, o),
             ed.meta?.(to)
           )
@@ -872,8 +914,80 @@ function FixBody({
         </p>
       )}
       <div ref={editorHost}>{readOnly ? <p className="text-[15px] text-mp-ink-2">View only. Ask {ask} to fix the times.</p> : panel}</div>
-      {editor && !expand && !readOnly && <LinkRow disabled={!!busy || !!leavingEditor} onClick={() => editorDirty ? setLeavingEditor({ kind: "more" }) : setEditor(null)}>More timer options</LinkRow>}
+      {editor?.edge && timed(e) && !readOnly && !dead && (
+        <CorrectionOptions
+          {...panelProps}
+          pin={pin}
+          actions={actions}
+          dirty={editorDirty}
+          disabled={disabled || !!leavingEditor}
+          onFinished={() => {
+            if (editorDirty) setLeavingEditor({ kind: "finished" });
+            else { setEditor(null); setFinished(true); }
+          }}
+        />
+      )}
+      {timed(e) && !e.active && !readOnly && !dead && (
+        <LinkRow disabled={!!busy || !!leavingEditor} onClick={() => editorDirty ? setLeavingEditor({ kind: "details" }) : sheets.open({ kind: e.kind, entry: e })}>
+          Edit feed details or add a side
+        </LinkRow>
+      )}
     </>
+  );
+}
+
+/** Contextual actions stay visible alongside the shared time controls. */
+function CorrectionOptions({ e, pin, tz, now, disabled, busy, run, openEditor, actions, dirty, onFinished }: PanelProps & {
+  pin: Pin;
+  actions: Actions;
+  dirty: boolean;
+  onFinished: () => void;
+}) {
+  const { state } = useMaple();
+  const words = useBabyWords();
+  const vo = useVoice();
+  const parts = partsOf(e, now);
+  const sides = sidesOf(parts);
+  const part = pin.kind === "side" || pin.kind === "break" ? locate(pin, e, now).part : sides.at(-1);
+  if (!part || !timed(e)) return null;
+  const last = sides.at(-1);
+  const current = part === last || (part.start === last?.start && part.side === last.side);
+  const paused = e.active && parts.at(-1)?.kind === "break";
+  const tap = current && e.active ? freshTap(e, now, ["switch", "pause", "resume"]) : null;
+  const before = current && e.active && !paused && sides.length === 1 ? previousFeed(state?.entries, e) : null;
+  const join = before && timed(before) && before.ended_at && Date.parse(e.started_at) - Date.parse(before.ended_at) <= CLUSTER_GAP_MS ? before : null;
+  const mutationDisabled = disabled || dirty;
+  return (
+    <div className="space-y-3 border-t border-mp-line pt-3">
+      <SideFixRow side={part.side} disabled={mutationDisabled} busy={busy?.startsWith("side-") ? busy.slice(5) as StretchSide : null} onPick={(side) => void run(`side-${side}`, (o) => actions.setSide(e, part.ref, side, o))} />
+      {dirty && <Caption>Save or cancel the time change before changing the side.</Caption>}
+      {current && e.active && !paused && <LinkRow disabled={disabled} onClick={onFinished}>{words.He} already finished</LinkRow>}
+      {current && paused && part.end && (
+        <div className="space-y-2">
+          <p className="text-[15px] font-medium text-mp-ink">Already back on?</p>
+          <SidePicker
+            side={null}
+            label={`Which side is ${words.he} on`}
+            disabled={disabled}
+            withBoth={part.side === "B"}
+            onPick={(side) => openEditor({
+              id: "back-on-editor",
+              allowUnchanged: true,
+              free: {
+                title: momentQuestion("resume", side, part.side, vo),
+                recorded: now,
+                min: new Date(part.end!),
+                max: now,
+              },
+              commit: (at, o) => actions.resume(e, side, at, o),
+              meta: (at) => ({ backOn: { side, at: at.getTime() } }),
+            })}
+          />
+        </div>
+      )}
+      {join && <QuestionRow question={`Same feed as ${formatTime(join.started_at, tz)}?`} label="Join them" disabled={mutationDisabled} busy={busy === "join"} onClick={() => void run("join", (o) => actions.sameFeed(e, join, part.side, o))} />}
+      {tap && <QuestionRow question={`Tapped ${tap === "switch" ? "Switch" : tap === "pause" ? "Pause" : "Resume"} by mistake?`} label={`Undo ${tap}`} disabled={mutationDisabled} busy={busy === "undo"} onClick={() => void run("undo", (o) => actions.undoTap(e, o))} />}
+    </div>
   );
 }
 

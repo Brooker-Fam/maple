@@ -5,6 +5,13 @@ This harness bundles the real `RecentDoses`, `DoseTimeSheet`, `RecordedTimeField
 uses Maple's actual CSS and nursing engine. It never connects to a family log or
 adds a production route.
 
+Nursing cases cover the real log-row route into the shared correction sheet,
+including older history outside the current-state window, direct minute
+adjustments, fixed-target smart choices, independent side ends and shared switch
+boundaries. They check draft recovery and the fixed Save footer on narrow phones.
+`pnpm check:maple-tenancy timer-time-correction` separately exercises revision
+checks through the timer API against synthetic in-memory Postgres.
+
 The first fixture uses synthetic actions for focused field and nursing tests.
 The production-care fixture runs the actual `Dock`, `CareStrip`, `useCare`,
 `CareNavProvider`, `PlanPicker`, and toast actions, with only the app store and HTTP

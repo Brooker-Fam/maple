@@ -285,7 +285,9 @@ export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "di
  * A Fix times edit (POST /api/maple/timer { action: "retime", id, edit }).
  * move: one moment of one stretch (start/end of `ref`, which defaults to the
  * first stretch for start and the last for end; "ended" is a finished feed's
- * ended_at alone). undo_tap: the latest switch, resume or pause, if the newest
+ * ended_at alone). An editor may pass expect_updated_at to refuse a stale
+ * draft; older one-tap clients can omit it and keep merging their intent.
+ * undo_tap: the latest switch, resume or pause, if the newest
  * stretch still matches `expect`. restore: put back the `before` a fix
  * answered with, only if nobody changed it since; an `ended_at` on a feed
  * that's running again ends it there (the Undo of a Continue). add_part: a
@@ -293,7 +295,7 @@ export type TimerAction = "start" | "switch" | "pause" | "resume" | "stop" | "di
  * which moves its end there, only if nobody changed it since.
  */
 export type FeedEdit =
-  | { op: "move"; edge: "start" | "end" | "side_end" | "ended"; ref?: StretchRef; to: string }
+  | { op: "move"; edge: "start" | "end" | "side_end" | "ended"; ref?: StretchRef; to: string; expect_updated_at?: string }
   | { op: "set_side"; ref: StretchRef; side: StretchSide }
   | { op: "undo_tap"; expect: { side: StretchSide; start: string; end: string | null } }
   | { op: "add_part"; side: StretchSide; start: string; end: string; expect_updated_at: string }

@@ -748,25 +748,23 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 )}
               </div>
               <WhenField value={when} onChange={setWhen} tz={tz} />
-              <MoreDetails summary={milk ? MILK_LABEL[milk] : undefined}>
-                <div>
-                  <Label>Milk</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {(Object.keys(MILK_LABEL) as Milk[]).map((m) => (
-                      <Chip
-                        key={m}
-                        selected={milk === m}
-                        onClick={() => {
-                          touch("milk");
-                          setMilk(milk === m ? undefined : m);
-                        }}
-                      >
-                        {MILK_LABEL[m]}
-                      </Chip>
-                    ))}
-                  </div>
+              <section aria-label="Milk">
+                <Label>Milk</Label>
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(MILK_LABEL) as Milk[]).map((m) => (
+                    <Chip
+                      key={m}
+                      selected={milk === m}
+                      onClick={() => {
+                        touch("milk");
+                        setMilk(milk === m ? undefined : m);
+                      }}
+                    >
+                      {MILK_LABEL[m]}
+                    </Chip>
+                  ))}
                 </div>
-              </MoreDetails>
+              </section>
               <ContextNote>
                 {age ? <>Typical at {w.his} age: {typicalBottle(ageDays)}. </> : null}
                 {bottleCues(voice)}
@@ -1085,10 +1083,10 @@ function TimesSection({
         <Detail>
           {line("start", `${startLabel} · ${clock(v.start)}`, p, i)}
           {end && i < parts.length - 1 && line("end", `${endLabel} · ${clock(end)}`, p, i)}
-          {!readOnly && <details className="text-[14px] text-mp-ink-2">
-            <summary className="min-h-[44px] cursor-pointer py-3">Change side</summary>
+          {!readOnly && <section aria-label="Change side" className="pt-3 text-[14px] text-mp-ink-2">
+            <Label>Change side</Label>
             <SideFixRow side={p.side} disabled={disabled} onPick={(side) => flip(side, p, i)} />
-          </details>}
+          </section>}
         </Detail>
       );
     }

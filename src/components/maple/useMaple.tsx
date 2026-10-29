@@ -99,7 +99,7 @@ export type Toast = {
   /** One toast per group: a new timer toast replaces the one showing. */
   group?: "timer";
   /** Close early once this entry is newer than the version the toast was built from (someone else changed it). */
-  watch?: { entryId: number; updatedAt: string };
+  watch?: { entryId: number; updatedAt: string; /** Historical records are omitted by recent-state polls. */ allowMissing?: boolean };
   /** The mark in place of the check: a saved diaper wears its drop or pile (toastIcon). */
   icon?: IconName;
   owner?: Owner;
@@ -587,7 +587,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         if (!held || Date.now() - held.at >= TIMER_TOAST_HOLD_MS || shownRef.current !== held.seen) return false;
         const w = held.opts.watch;
         const live = w ? stateRef.current?.entries.find((e) => e.id === w.entryId) : null;
-        return !w || (!!live && live.updated_at === w.updatedAt);
+        return !w || (live ? live.updated_at === w.updatedAt : !!w.allowMissing);
       };
       if (!held || !current()) return;
       if (inflight.current === 0) return show(Date.now() + Math.random(), held.text, held.opts);
@@ -1312,7 +1312,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       if (t.owner && !ownedBy(t.owner, state)) return true;
       if (!state || !t.watch) return false;
       const live = state.entries.find((e) => e.id === t.watch!.entryId);
-      return !live || Date.parse(live.updated_at) > Date.parse(t.watch.updatedAt);
+      return live ? Date.parse(live.updated_at) > Date.parse(t.watch.updatedAt) : !t.watch.allowMissing;
     });
     if (stale.length) setToasts((ts) => ts.filter((t) => !stale.includes(t)));
   }, [state, toasts]);

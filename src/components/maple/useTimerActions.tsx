@@ -170,10 +170,16 @@ export function useTimerActions() {
       toast(text, {
         group: "timer",
         duration: isNight() ? 20_000 : 10_000,
-        ...(entry ? { watch: { entryId: entry.id, updatedAt: entry.updated_at } } : {}),
+        ...(entry ? { watch: {
+          entryId: entry.id,
+          updatedAt: entry.updated_at,
+          // /state includes 72 hours plus running timers. History can correct
+          // an older finished feed; its next poll must not erase Undo.
+          allowMissing: !entry.active && Date.parse(entry.ended_at ?? entry.started_at) < now().getTime() - 72 * 3600_000,
+        } } : {}),
         ...opts,
       }),
-    [isNight, toast]
+    [isNight, now, toast]
   );
 
   /**

@@ -45,7 +45,7 @@ jobs:
         run: pnpm check:maple-nutrition && pnpm check:maple-tenancy nutrition nutrition-tools
       - name: Time editing checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm check:maple-time-edit
+        run: pnpm check:maple-time-edit && pnpm check:maple-tenancy timer-time-correction
       - name: Admin access, drilldowns and waitlist email
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-tenancy admin admin-details admin-email

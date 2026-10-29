@@ -269,6 +269,41 @@ check("saving records a correlated refresh and discarded late response", async (
   }
 });
 
+for (const held of [false, true]) check(`historical correction keeps ${held ? "held " : ""}Undo after recent-state eviction`, async (f) => {
+  const before = feed(899, "2025-12-25T07:00:00.000Z", "2025-12-25T07:20:00.000Z");
+  const after = { ...before, ended_at: "2025-12-25T07:15:00.000Z", updated_at: now,
+    data: { ...before.data, segments: [{ ...before.data.segments[0], end: "2025-12-25T07:15:00.000Z" }] } };
+  await f.page.evaluate(({ before, held }) => {
+    if (held) window.__mapleSync.holdTimerToasts(true);
+    void window.__mapleTimerActions.retime(before, { op: "move", edge: "end", ref: { side: "L", start: before.started_at }, to: "2025-12-25T07:15:00.000Z", expect_updated_at: before.updated_at });
+  }, { before, held });
+  const request = await f.take("/api/maple/timer", "POST");
+  assert.equal(request.body.edit.expect_updated_at, before.updated_at);
+  await f.answer(request, { entry: after, before: { segments: before.data.segments, started_at: before.started_at, ended_at: before.ended_at, updated_at: before.updated_at } });
+  await f.answer(await f.take("/api/maple/state"), snapshot("historical-save", [previous]));
+  if (held) await f.page.evaluate(() => window.__mapleSync.holdTimerToasts(false));
+  await f.page.waitForFunction(() => window.__mapleSync.toasts.some((t) => t.undo && t.watch?.entryId === 899));
+  assert(!(await state(f.page)).state.entries.some((e) => e.id === before.id), "The historical feed really left the recent-state snapshot");
+  assert(await f.page.evaluate(() => window.__mapleSync.toasts.some((t) => t.undo && t.watch?.allowMissing)), "Version-guarded Undo remains available after history eviction");
+  await f.page.evaluate(() => window.__mapleSync.toasts.find((t) => t.watch?.entryId === 899).undo());
+  const undo = await f.take("/api/maple/timer", "POST");
+  assert.equal(undo.body.edit.op, "restore");
+  assert.equal(undo.body.edit.expect_updated_at, after.updated_at, "Undo still guards the exact corrected revision");
+  await f.answer(undo, { entry: { ...before, updated_at: "2026-01-01T10:17:01.000Z" } });
+  await f.answer(await f.take("/api/maple/state"), snapshot("historical-undo", [previous]));
+});
+
+check("toast absence exemption still dismisses newer revisions and removed recent entries", async (f) => {
+  await f.page.evaluate((entry) => {
+    window.__mapleSync.toast("Historical", { duration: 60_000, watch: { entryId: entry.id, updatedAt: entry.updated_at, allowMissing: true } });
+    window.__mapleSync.toast("Recent", { duration: 60_000, watch: { entryId: 901, updatedAt: "2026-01-01T07:12:00.000Z" } });
+  }, feed(899, "2025-12-25T07:00:00.000Z", "2025-12-25T07:20:00.000Z"));
+  const newer = { ...feed(899, "2025-12-25T07:00:00.000Z", "2025-12-25T07:20:00.000Z"), updated_at: now };
+  await f.page.evaluate(() => { void window.__mapleSync.refresh(); });
+  await f.answer(await f.take("/api/maple/state"), snapshot("newer-and-removed", [newer]));
+  assert.equal(await f.page.evaluate(() => window.__mapleSync.toasts.length), 0, "Newer historical revisions and missing recent entries both invalidate watches");
+});
+
 check("refresh failures and recovery reach diagnostics", async (f) => {
   await poll(f.page);
   await f.answer(await f.take("/api/maple/state"), { error: "Synthetic private diagnostic sentinel" }, 500);

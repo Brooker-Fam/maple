@@ -90,6 +90,58 @@ try {
       assert.equal((await snapshot()).calls.filter((x) => x.log).length, 0, "Opening a bottle must not write");
     }
   });
+  await check("expanded diaper details", async () => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto(`${url}?mode=form-diaper`);
+    const form = page.getByRole("dialog", { name: "Diaper", exact: true });
+    await form.getByRole("radio", { name: "Poop", exact: true }).click();
+    const details = form.getByRole("region", { name: "Diaper details", exact: true });
+    for (const name of ["Seedy", "Big", "Diaper rash"]) {
+      const choice = details.getByRole("button", { name, exact: true });
+      assert(await choice.isVisible(), `${name} is available without opening More details`);
+      await choice.click();
+    }
+    assert.equal((await snapshot()).calls.filter((x) => x.log).length, 0, "Choosing details keeps the diaper unsaved");
+    await form.getByRole("button", { name: "Log it", exact: true }).click();
+    const diaper = (await snapshot()).calls.find((x) => x.log)?.log;
+    assert.equal(diaper.kind, "diaper");
+    assert.deepEqual(diaper.data, { pee: false, poop: true, texture: "seedy", size: "big", rash: true }, "Visible options are included in the logged diaper");
+    await page.setViewportSize({ width: 390, height: 844 });
+  });
+  await check("expanded bottle milk", async () => {
+    await page.goto(`${url}?mode=form-feed`);
+    const form = page.getByRole("dialog", { name: "Feed", exact: true });
+    await form.getByRole("radio", { name: "Bottle", exact: true }).click();
+    const milk = form.getByRole("region", { name: "Milk", exact: true });
+    for (const name of ["Breast milk", "Formula", "Mixed"]) {
+      assert(await milk.getByRole("button", { name, exact: true }).isVisible(), `${name} is available without opening More details`);
+    }
+    await milk.getByRole("button", { name: "Formula", exact: true }).click();
+    assert.equal((await snapshot()).calls.filter((x) => x.log).length, 0, "Choosing milk keeps the bottle unsaved");
+    await form.getByRole("button", { name: /^Log / }).click();
+    const bottle = (await snapshot()).calls.find((x) => x.log)?.log;
+    assert.equal(bottle.data.method, "bottle");
+    assert.equal(bottle.data.milk, "formula", "The visible milk choice is included when logging");
+  });
+  await check("expanded nursing side correction", async () => {
+    await page.goto(`${url}?mode=form-nursing-details`);
+    const form = page.getByRole("dialog").first();
+    const side = form.getByRole("region", { name: "Change side", exact: true }).first();
+    const both = side.getByRole("button", { name: /^It was both sides:/ });
+    assert(await both.isVisible(), "A saved side can be corrected without expanding Change side");
+    await both.click();
+    assert(await form.getByRole("status").filter({ hasText: "Unsaved change to the times" }).isVisible());
+    assert.equal((await snapshot()).calls.filter((x) => x.patch).length, 0, "Changing a side stays a draft until Save");
+    await form.getByRole("button", { name: "Save time", exact: true }).click();
+    await form.waitFor({ state: "hidden" });
+    const call = (await snapshot()).calls.find((x) => x.patch);
+    assert.equal(call.id, 7);
+    assert.equal(call.patch.expect_updated_at, "2026-10-28T12:35:00.000Z");
+    assert.deepEqual(call.patch.data.segments, [
+      { side: "B", start: "2026-10-28T12:00:00.000Z", end: "2026-10-28T12:20:00.000Z" },
+      { side: "R", start: "2026-10-28T12:25:00.000Z", end: "2026-10-28T12:35:00.000Z" },
+    ], "Correcting a side preserves both stretches' recorded times");
+  });
   await check("visible earlier action", async () => {
     await page.goto(`${url}?mode=more-active`);
     await page.getByRole("dialog", { name: "More to log" }).waitFor();

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   describeChange,
   edgeBounds,
@@ -14,9 +15,11 @@ import {
   moveEdge,
   type Moment,
   partTotals,
+  previousFeedEnd,
   spanMinutes,
   type Part,
 } from "@/lib/maple/feed";
+import { earlierPresets, LIKELY_SIDE_MIN, usualBreakMin, usualSideMin } from "@/lib/maple/presets";
 import { DEFAULT_TZ, formatClock, formatRange, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, FeedData, FeedEdit, Side, StretchRef, StretchSide, TimerKind } from "@/lib/maple/types";
 import { Icon } from "./icons";
@@ -736,6 +739,10 @@ type MomentEditorProps = {
   onDraft?: (to: Date) => void;
   onSave?: (to: Date) => void;
   onCancel?: () => void;
+  /** Commit: keep Save and Cancel in the sheet footer while its options scroll. */
+  actionsContainer?: HTMLElement | null;
+  /** A new moment can be saved at the initially offered time. */
+  allowUnchanged?: boolean;
   /** Commit: saving (Save shows "Saving…", everything waits). */
   busy?: boolean;
   disabled?: boolean;
@@ -803,7 +810,7 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
     };
     // The guesses ("likely", "usual") count from the side this moment ends (a switch's, a pause's, the feed's end),
     // or from the pause for a Resume.
-    const ends = b.moment === "switch" && edge.edge === "start" ? sides[i - 1] : b.moment === "switch" || b.moment === "pause" || b.moment === "feed_end" ? sides[i] : undefined;
+    const ends = edge.edge === "side_end" ? sides[i] : b.moment === "switch" && edge.edge === "start" ? sides[i - 1] : b.moment === "switch" || b.moment === "pause" || b.moment === "feed_end" ? sides[i] : undefined;
     const anchor: MomentInfo["anchor"] = ends && isTracked(ends.side) ? { at: Date.parse(ends.start), of: "side" } : b.floor ? { at: b.floor.getTime(), of: "break" } : undefined;
     return {
       floor: b.floor?.getTime(),
@@ -826,6 +833,28 @@ function momentInfo(entry: Entry, edge: MomentEdge | undefined, free: MomentEdit
 const sameMinute = (a: Date, b: Date) => Math.floor(a.getTime() / 60_000) === Math.floor(b.getTime() / 60_000);
 /** The engine's "same moment" slack. */
 const NEAR_MS = 1500;
+const MINUTE = 60_000;
+
+/** Named shortcuts use the recorded moment, so picking one twice never adds time twice. */
+function momentPresets(info: MomentInfo, entry: Entry, entries: readonly Entry[], now: Date) {
+  const smart: { kind: "likely" | "usual"; at: number }[] = [];
+  if (info.anchor?.of === "side") {
+    smart.push({ kind: "likely", at: info.anchor.at + LIKELY_SIDE_MIN * MINUTE });
+    const usual = usualSideMin(entries, now);
+    if (usual !== null && Math.abs(usual - LIKELY_SIDE_MIN) >= 3) smart.push({ kind: "usual", at: info.anchor.at + usual * MINUTE });
+  } else if (info.anchor?.of === "break") {
+    const usual = usualBreakMin(entries, now);
+    if (usual !== null) smart.push({ kind: "usual", at: info.anchor.at + usual * MINUTE });
+  }
+  // Keep the named answers compact; the signed buttons handle plain minute changes.
+  return earlierPresets({
+    recorded: info.recorded.getTime(),
+    min: info.min.getTime(),
+    floor: info.moment === "resume" ? (info.floor ?? null) : null,
+    feedFloor: info.moment === "feed_start" ? previousFeedEnd(entries, entry) : null,
+    smart,
+  }).filter((p) => p.kind !== "earlier" && p.at <= info.max.getTime());
+}
 
 function MomentEditorInner({
   entry,
@@ -838,6 +867,8 @@ function MomentEditorInner({
   onDraft,
   onSave,
   onCancel,
+  actionsContainer,
+  allowUnchanged,
   busy,
   disabled,
   who,
@@ -851,14 +882,24 @@ function MomentEditorInner({
   const [local, setLocal] = useState(initial ?? info.recorded);
   const [invalid, setInvalid] = useState(false);
   const [touched, setTouched] = useState(false);
+  const [fieldRevision, setFieldRevision] = useState(0);
   const draft = mode === "staged" ? controlled ?? info.recorded : local;
   const draftMs = draft.getTime();
+  const presets = info.edge && entry.kind === "feed" ? momentPresets(info, entry, state?.entries ?? [], now()) : [];
   const dirty = invalid || !sameMinute(draft, info.recorded);
-  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   const set = (d: Date) => {
     setTouched(true);
     if (mode === "staged") onDraft?.(d);
     else setLocal(d);
+  };
+  const choosePreset = (at: number) => {
+    // An invalid typed clock keeps the last valid value in the parent. Choosing
+    // that same preset again must replace the text too, not leave Save blocked.
+    setFieldRevision((revision) => revision + 1);
+    setInvalid(false);
+    onInvalidChange?.(false);
+    set(new Date(at));
   };
 
   // What the change does, worked out only when the draft moves (never on the clock tick).
@@ -903,6 +944,33 @@ function MomentEditorInner({
   const atHigh = draftMs >= Math.min(info.max.getTime(), now().getTime() - 30_000) - 999;
   const note = touched ? (atLow ? limitNote("low") : atHigh ? limitNote("high") : null) : null;
   const locked = busy || disabled;
+  const editorActions = mode === "commit" ? (
+    <div className="flex gap-2">
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={locked}
+        className="min-h-[48px] rounded-[14px] bg-mp-sunken px-5 text-[15px] font-semibold text-mp-ink disabled:opacity-45"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={() => onSave?.(draft)}
+        disabled={locked || invalid || (!allowUnchanged && sameMinute(draft, info.recorded))}
+        className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-[14px] bg-mp-accent px-5 text-[15px] font-semibold text-mp-on-accent disabled:opacity-45"
+      >
+        {busy ? (
+          <>
+            <Spinner />
+            Saving…
+          </>
+        ) : (
+          "Save time"
+        )}
+      </button>
+    </div>
+  ) : null;
 
   return (
     <div className="space-y-3">
@@ -918,14 +986,44 @@ function MomentEditorInner({
           </p>
         )}
       </div>
+      {presets.length > 0 && (
+        <fieldset disabled={locked} className="min-w-0 space-y-2">
+          <div role="group" aria-label="Quick time choices" className="grid grid-cols-2 gap-2">
+            {presets.map((p) => {
+              const label = p.kind === "likely" ? "Likely" : p.kind === "usual" ? "Usual" : p.kind === "floor" ? "No break" : "Since the last feed";
+              return (
+                <TimeChip
+                  key={p.id}
+                  line1={label}
+                  line2={formatTimeNear(p.at, info.recorded.getTime(), tz)}
+                  ariaLabel={`${label}, ${formatTime(p.at, tz)}`}
+                  ring={!invalid && sameMinute(draft, new Date(p.at))}
+                  onClick={() => choosePreset(p.at)}
+                  className={p.wide ? "col-span-2" : undefined}
+                />
+              );
+            })}
+          </div>
+          {presets.some((p) => p.kind === "likely" || p.kind === "usual") && (
+            <p className="text-[13px] leading-snug text-mp-ink-2">
+              {[
+                presets.some((p) => p.kind === "likely") ? `“Likely” is ${LIKELY_SIDE_MIN} min on the side.` : "",
+                presets.some((p) => p.kind === "usual") ? `“Usual” is ${w.his} usual ${info.anchor?.of === "break" ? "break" : "time on a side"}.` : "",
+              ].filter(Boolean).join(" ")}
+            </p>
+          )}
+        </fieldset>
+      )}
       <fieldset disabled={locked} className="min-w-0">
         <RecordedTimeField
+          key={fieldRevision}
           value={draft}
           onChange={set}
           tz={tz}
           min={info.min}
           max={info.max}
           label={info.title}
+          hideLabel
           onInvalidChange={(bad) => {
             setInvalid(bad);
             onInvalidChange?.(bad);
@@ -943,33 +1041,7 @@ function MomentEditorInner({
         </p>
       )}
       {note && <p className="text-[13px] leading-snug text-mp-ink-2">{note}</p>}
-      {mode === "commit" && (
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={locked}
-            className="min-h-[48px] rounded-[14px] bg-mp-sunken px-5 text-[15px] font-semibold text-mp-ink disabled:opacity-45"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => onSave?.(draft)}
-            disabled={locked || invalid || sameMinute(draft, info.recorded)}
-            className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-[14px] bg-mp-accent px-5 text-[15px] font-semibold text-mp-on-accent disabled:opacity-45"
-          >
-            {busy ? (
-              <>
-                <Spinner />
-                Saving…
-              </>
-            ) : (
-              "Save time"
-            )}
-          </button>
-        </div>
-      )}
+      {editorActions && (actionsContainer ? createPortal(editorActions, actionsContainer) : editorActions)}
     </div>
   );
 }

@@ -9,7 +9,7 @@ export const useCareNav = () => useFixture().nav;
 export const useNow = () => useFixture().now;
 export const useTimerActions = () => useFixture().timerActions;
 export const useHoldTimerToasts = () => {};
-export const useSheets = () => ({ open: () => {}, close: () => {}, current: null });
+export const useSheets = () => useFixture().sheets ?? { open: () => {}, close: () => {}, current: null };
 
 export class ApiError extends Error {
   constructor(status, message, body = null) {

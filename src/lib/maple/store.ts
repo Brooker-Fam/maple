@@ -883,7 +883,7 @@ async function retime(fam: FamilyRef, id: number, edit: FeedEdit, by: string | u
         const moved = moveEdge(timedFeed(cur), { edge: edit.edge, ref: edit.ref, to: new Date(edit.to) }, feedCtx(cur, new Date()));
         last.moment = moved.moment;
         return { data: moved.data, startedAt: moved.startedAt, endedAt: moved.endedAt };
-      }, { by, allowFinished });
+      }, { by, allowFinished, expectUpdatedAt: edit.expect_updated_at });
       const was = res.before?.started_at;
       if (last.moment !== "feed_start" || !was || Date.parse(res.entry.started_at) >= Date.parse(was)) return res;
       const nap = await followNap(fam, id, was, res.entry.started_at, by);

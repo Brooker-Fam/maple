@@ -34,9 +34,15 @@ const entries = [
   entry(4, "note", "2026-10-28T10:10:00.000Z", {}, { note: "Synthetic example note" }),
   entry(5, "feed", "2026-10-27T11:10:00.000Z", { method: "bottle", amount_ml: 60 }),
 ];
+const savedNursing = entry(7, "feed", "2026-10-28T12:00:00.000Z", {
+  method: "breast", first_side: "L", last_side: "R", segments: [
+    { side: "L", start: "2026-10-28T12:00:00.000Z", end: "2026-10-28T12:20:00.000Z" },
+    { side: "R", start: "2026-10-28T12:25:00.000Z", end: "2026-10-28T12:35:00.000Z" },
+  ],
+}, { ended_at: "2026-10-28T12:35:00.000Z", updated_at: "2026-10-28T12:35:00.000Z" });
 
 function App() {
-  const [target, setTarget] = useState(mode === "form-moment-earlier" ? { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } } : mode.startsWith("form-") ? { kind: mode.slice(5) } : null);
+  const [target, setTarget] = useState(mode === "form-nursing-details" ? { kind: "feed", entry: savedNursing } : mode === "form-moment-earlier" ? { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } } : mode.startsWith("form-") ? { kind: mode.slice(5) } : null);
   const [more, setMore] = useState(mode.startsWith("more"));
   const failing = useRef(mode === "patterns-error");
   const calls = useRef([]);
@@ -50,16 +56,21 @@ function App() {
     entries: mode === "today-empty" ? [] : mode.startsWith("more") ? [entry(6, "feed", "2026-10-28T13:20:00.000Z", { method: "breast", first_side: "L", segments: [{ side: "L", start: "2026-10-28T13:20:00.000Z", end: mode === "more-paused" ? "2026-10-28T13:25:00.000Z" : null }] }, { active: true })] : entries,
   }), []);
   const summary = useMemo(() => summarize({ ...state, now: NOW, vo: makeVoice({ name: "River", pronoun: "she", mom: "Sam" }) }), [state]);
-  const api = useCallback(async (pathname) => {
+  const api = useCallback(async (pathname, options) => {
     calls.current.push(pathname);
     if (failing.current) throw new Error("Synthetic connection failure");
+    if (pathname === `entries?id=${savedNursing.id}` && options?.method === "PATCH") {
+      const patch = JSON.parse(options.body);
+      calls.current.push({ id: savedNursing.id, patch });
+      return { entry: { ...savedNursing, ...patch, data: { ...savedNursing.data, ...patch.data }, updated_at: NOW.toISOString() } };
+    }
     return { entries: pathname.includes("deleted=1") ? [] : state.entries };
   }, [state]);
   const now = useCallback(() => NOW, []);
   const maple = { state, summary, api, now, readOnly: false, units: "imperial", seenAt: null,
     memberName: () => "Sam", memberLabel: () => "Sam", member: () => state.members[0],
     isNight: () => false, timerBusy: () => false, toasts: [], toast() {}, dismissToast() {},
-    log: async (value) => { calls.current.push({ log: value }); return value; }, remove() {}, update() {},
+    log: async (value) => { calls.current.push({ log: value }); return value; }, remove() {}, update() {}, refresh: async () => {},
   };
   const close = useCallback(() => setTarget(null), []);
   useEffect(() => {

@@ -61,7 +61,12 @@ function feedEdit(v: unknown): FeedEdit {
     case "move": {
       if (v.edge !== "start" && v.edge !== "end" && v.edge !== "side_end" && v.edge !== "ended") throw new BadRequest("edit.edge must be start, end, side_end or ended");
       const to = instant(v.to, "edit.to").toISOString();
-      return { op: "move", edge: v.edge, to, ...(v.ref != null ? { ref: stretchRef(v.ref, "edit.ref") } : {}) };
+      if (v.expect_updated_at !== undefined && !isIso(v.expect_updated_at)) throw new BadRequest("edit.expect_updated_at must be an ISO timestamp");
+      return {
+        op: "move", edge: v.edge, to,
+        ...(v.ref != null ? { ref: stretchRef(v.ref, "edit.ref") } : {}),
+        ...(v.expect_updated_at !== undefined ? { expect_updated_at: v.expect_updated_at } : {}),
+      };
     }
     case "set_side":
       // "That was both sides" (B) or "That was the Left".

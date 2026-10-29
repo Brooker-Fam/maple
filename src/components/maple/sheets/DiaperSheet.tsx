@@ -15,7 +15,6 @@ import {
   ContextNote,
   Label,
   LoggedBy,
-  MoreDetails,
   NoteField,
   SheetFooter,
   compact,
@@ -30,7 +29,7 @@ import {
 /**
  * Log or edit a diaper: Pee / Poop / Both / Dry, the stool color on a swatch
  * card (grouped like the infant stool color cards hospitals hand out, so pale
- * shades never sit next to yellow), and texture / size / rash tucked away.
+ * shades never sit next to yellow), with texture / size / rash visible below.
  */
 
 type Type = "pee" | "poop" | "both" | "dry";
@@ -109,8 +108,6 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
   const info = color ? STOOL_COLOR_INFO[color] : null;
   // Black after Day 4 is worth a call (once stools should have turned yellow).
   const flag = !poop || !color ? null : info?.group === "pale" ? PALE_STOOL : info?.group === "red" ? RED_STOOL : color === "black" && age && age.dayOfLife >= 5 ? lateBlackStool(voice) : null;
-
-  const details = [texture && TEXTURE_LABEL[texture], size && SIZE_LABEL[size], rash && "rash"].filter(Boolean).join(", ");
 
   const save = async () => {
     const data = {
@@ -206,7 +203,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
 
       <WhenField value={when} onChange={setWhen} tz={tz} />
 
-      <MoreDetails summary={details || undefined}>
+      <section aria-label="Diaper details" className="space-y-4">
         {poop && (
           <div>
             <Label>Texture</Label>
@@ -235,7 +232,7 @@ function DiaperForm({ open, onClose, entry, preset }: SheetProps) {
             Diaper rash
           </Chip>
         </div>
-      </MoreDetails>
+      </section>
 
       <NoteField value={note} onChange={setNote} />
     </Sheet>

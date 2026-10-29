@@ -22,7 +22,8 @@ await build({
   format: "esm", jsx: "automatic", sourcemap: "inline", absWorkingDir: root,
   define: { "process.env.NODE_ENV": '"test"' },
   plugins: [{ name: "synthetic-app-hooks", setup(plugin) {
-    plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|useTimerActions)$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
+    plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|useTimerActions|sheets)$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/FixTimesSheet.tsx") ? { path: path.join(here, "mocks.jsx") } : undefined);
     plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? { path: path.join(here, "mocks.jsx") } : undefined);
   } }],
 });
@@ -166,11 +167,238 @@ try {
   assert.equal(await activeClock.inputValue(), "09:05", "Switch guard preserves a dirty nursing draft");
   await activeSheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left,/ }).click();
   await discard.getByRole("button", { name: "Discard change", exact: true }).click();
-  assert.equal(await activeClock.inputValue(), "08:45", "Discard then switch opens the saved left start");
+  assert.equal(await activeClock.inputValue(), "08:55", "Discard then switch opens the completed left side's end");
   assert(!(await snapshot()).calls.some((call) => call.timer), "Switching moments and discarding never writes a timer edit");
   await page.keyboard.press("Escape");
   await activeSheet.waitFor({ state: "hidden" });
   console.log("PASS active nursing: dirty-moment switching requires Keep editing or Discard change");
+
+  // A late side's timer is corrected independently. Exercise the real shared
+  // sheet for both running and saved feeds, including all four direct nudges.
+  for (const running of [true, false]) {
+    await page.evaluate(() => window.__mapleUiFixture.nursingScenario("switch"));
+    await page.getByRole("button", { name: running ? "Edit active nursing times" : "Edit saved nursing times", exact: true }).click();
+    const sheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+    await sheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left,/ }).click();
+    const clock = sheet.locator('input[type="time"]');
+    assert.equal(await clock.inputValue(), "09:05", "A completed side opens at its end without another choice");
+    await sheet.getByRole("button", { name: "5 min earlier", exact: true }).click();
+    assert.equal(await clock.inputValue(), "09:00");
+    await sheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+    assert.equal(await clock.inputValue(), "08:59");
+    await sheet.getByRole("button", { name: "1 min later", exact: true }).click();
+    assert.equal(await clock.inputValue(), "09:00");
+    await sheet.getByRole("button", { name: "5 min later", exact: true }).click();
+    assert.equal(await clock.inputValue(), "09:05");
+    assert(await sheet.getByRole("button", { name: "Save time", exact: true }).isDisabled(), "Returning to the saved minute clears the draft");
+    assert(await sheet.getByRole("button", { name: "1 min later", exact: true }).isDisabled(), "A finished side cannot overlap the next side");
+    await sheet.getByRole("button", { name: "5 min earlier", exact: true }).click();
+    assert.equal((await snapshot()).calls.length, 0, "Quick adjustments remain unsaved until Save time");
+    const before = (await snapshot())[running ? "activeFeed" : "feed"];
+    assert.equal(before.data.segments[0].end, "2026-10-28T13:05:00.000Z");
+    await sheet.getByRole("button", { name: "Save time", exact: true }).click();
+    await sheet.waitFor({ state: "hidden" });
+    const after = (await snapshot())[running ? "activeFeed" : "feed"];
+    assert.equal(after.data.segments[0].end, "2026-10-28T13:00:00.000Z");
+    assert.equal(after.data.segments[1].start, "2026-10-28T13:05:00.000Z", "Removing five minutes from Left leaves Right's start unchanged");
+    assert.equal(after.ended_at, before.ended_at, "Correcting Left preserves the feed's end or running status");
+    assert.equal((await snapshot()).calls[0].edit.edge, "side_end");
+  }
+  console.log("PASS nursing: active/saved parity, direct ±1/±5, staged Save, completed-side corrections preserve the next side");
+
+  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("switch"));
+  await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+  const switchSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  const switchClock = switchSheet.locator('input[type="time"]');
+  const quick = switchSheet.getByRole("group", { name: "Quick time choices", exact: true });
+  await quick.getByRole("button", { name: /^Usual,/ }).click();
+  assert.equal(await switchClock.inputValue(), "08:55", "Usual uses the synthetic history's ten minutes on Left");
+  await quick.getByRole("button", { name: /^Likely,/ }).click();
+  assert.equal(await switchClock.inputValue(), "09:00", "Likely uses fifteen minutes on Left");
+  await quick.getByRole("button", { name: /^Likely,/ }).click();
+  assert.equal(await switchClock.inputValue(), "09:00", "Tapping a preset twice never accumulates the correction");
+  await switchClock.fill("");
+  assert(await switchSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled());
+  await quick.getByRole("button", { name: /^Likely,/ }).click();
+  assert.equal(await switchClock.inputValue(), "09:00", "A preset recovers invalid input even when it equals the last valid draft");
+  assert(!(await switchSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled()));
+  assert.equal((await snapshot()).calls.length, 0, "Named presets stage an absolute time without writing");
+  await switchSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await switchSheet.waitFor({ state: "hidden" });
+  const switched = (await snapshot()).activeFeed;
+  assert.equal(switched.data.segments[0].end, "2026-10-28T13:00:00.000Z");
+  assert.equal(switched.data.segments[1].start, "2026-10-28T13:00:00.000Z", "Editing the switch itself intentionally moves both sides' common boundary");
+  assert.equal(switched.started_at, "2026-10-28T12:45:00.000Z", "A switch correction preserves total elapsed nursing time");
+  console.log("PASS nursing: usual/likely absolute presets, repeat tap, invalid-input recovery, intentional switch boundary transfer");
+
+  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("break"));
+  await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+  const breakSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  await breakSheet.getByRole("group", { name: "Quick time choices", exact: true }).getByRole("button", { name: /^No break,/ }).click();
+  assert.equal(await breakSheet.locator('input[type="time"]').inputValue(), "08:55");
+  await breakSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await breakSheet.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).activeFeed.data.segments[1].start, "2026-10-28T12:55:00.000Z", "No break meets the previous side's end exactly");
+
+  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("last-feed"));
+  await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+  const startSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  await startSheet.getByRole("group", { name: "Which part", exact: true }).getByRole("button", { name: /^Left,/ }).click();
+  await startSheet.getByRole("button", { name: /^Started Left/ }).click();
+  await startSheet.getByRole("group", { name: "Quick time choices", exact: true }).getByRole("button", { name: /^Since the last feed,/ }).click();
+  assert.equal(await startSheet.locator('input[type="time"]').inputValue(), "08:38");
+  assert.equal((await snapshot()).calls.length, 0);
+  await startSheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await startSheet.waitFor({ state: "hidden" });
+  console.log("PASS nursing: No break and Since the last feed retain exact boundaries and remain drafts");
+
+  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("break"));
+  await page.getByRole("button", { name: "Edit completed break", exact: true }).click();
+  const completedBreakSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  assert.equal(await completedBreakSheet.locator('input[type="time"]').inputValue(), "09:00", "A completed break targets when the following side started, not ended");
+  await completedBreakSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await completedBreakSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await completedBreakSheet.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).feed.data.segments[1].start, "2026-10-28T12:59:00.000Z");
+  assert.equal((await snapshot()).feed.data.segments[1].end, "2026-10-28T13:15:00.000Z");
+
+  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("paused"));
+  await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+  const pausedSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  await pausedSheet.getByRole("radiogroup", { name: "Which side is she on", exact: true }).getByRole("radio", { name: "Right", exact: true }).click();
+  assert.equal(await pausedSheet.locator('input[type="time"]').inputValue(), "09:30", "Already back on opens the current time without another choice");
+  assert(!(await pausedSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled()), "A new resume can save the default now without nudging it");
+  assert.equal((await snapshot()).calls.length, 0, "Choosing the resumed side does not save immediately");
+  await pausedSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await pausedSheet.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).calls[0].action, "resume");
+  assert.equal((await snapshot()).activeFeed.data.segments[1].start, "2026-10-28T13:30:00.000Z");
+  console.log("PASS nursing context: completed-break entry edits the resume start; Already back on saves its default now");
+
+  // Keep the nursing shortcuts usable on the narrowest supported phone too.
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() => window.__mapleUiFixture.nursingScenario("switch"));
+  await page.getByRole("button", { name: "Edit active nursing times", exact: true }).click();
+  await settleView();
+  await noOverflow();
+  for (const label of ["5 min earlier", "1 min earlier", "1 min later", "5 min later"]) {
+    const box = await page.getByRole("button", { name: label, exact: true }).boundingBox();
+    assert(box && box.width >= 44 && box.height >= 44 && box.x >= 0 && box.x + box.width <= 321, `${label} remains a 44px target within 320px`);
+  }
+  await page.screenshot({ path: path.join(screenshots, "nursing-320-day.png"), fullPage: true });
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog", { name: "Edit nursing times", exact: true }).waitFor({ state: "hidden" });
+
+  await page.goto(url);
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const log = page.getByRole("region", { name: "Example log", exact: true });
+  await log.getByRole("button", { name: /^Edit time:/ }).first().click();
+  const logSheet = page.getByRole("dialog", { name: "Edit nursing times", exact: true });
+  await logSheet.waitFor();
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:15", "A logged feed opens the shared editor at its end");
+  assert.equal((await snapshot()).sheetTargets.at(-1).preset.fix.target, "finish", "The real EntryRow preset selects the nursing end editor");
+  await logSheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await logSheet.waitFor({ state: "hidden" });
+
+  // This historical entry is intentionally never included in state.entries.
+  await log.getByRole("button", { name: /^Edit time:/ }).last().click();
+  await logSheet.waitFor();
+  assert.equal(await logSheet.locator('input[type="date"]').inputValue(), "2026-10-23");
+  assert.equal(await logSheet.getByText(/discarded|no longer in the log/i).count(), 0, "Outside the recent-state window does not mean discarded");
+  await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await logSheet.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).historicalFeed.ended_at, "2026-10-23T13:14:00.000Z");
+  assert.equal((await snapshot()).calls.at(-1).id, 203, "History edits retain the exact old entry identity");
+  assert.equal((await snapshot()).calls.at(-1).edit.expect_updated_at, "2026-10-23T13:15:00.000Z", "Historical correction uses the version it opened");
+  console.log("PASS log entry: real EntryRow preset opens shared end editor; historical time outside recent state saves the exact entry/version");
+
+  await log.getByRole("button", { name: /^Edit time:/ }).last().click();
+  await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).click();
+  const detailsGuard = page.getByRole("alertdialog", { name: "Discard this time change?", exact: true });
+  await detailsGuard.waitFor();
+  await detailsGuard.getByRole("button", { name: "Keep editing", exact: true }).click();
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:13", "Details navigation keeps the unsaved time until explicitly discarded");
+  const writesBeforeDetails = (await snapshot()).calls.length;
+  await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).click();
+  await detailsGuard.getByRole("button", { name: "Discard change", exact: true }).click();
+  const detailsSheet = page.getByRole("dialog", { name: "Feed details", exact: true });
+  await detailsSheet.waitFor();
+  assert.equal((await snapshot()).sheetTargets.at(-1).entry.id, 203);
+  assert.equal((await snapshot()).sheetTargets.at(-1).preset, undefined, "Full details navigation leaves the quick-time route");
+  assert.equal((await snapshot()).sheetTargets.at(-1).entry.ended_at, "2026-10-23T13:14:00.000Z", "Details receives saved times, not a discarded draft");
+  assert.equal((await snapshot()).calls.length, writesBeforeDetails, "Discard and details navigation make no timer write");
+  assert(await detailsSheet.getByText("Historical example note", { exact: true }).isVisible());
+  await page.keyboard.press("Escape");
+  await detailsSheet.waitFor({ state: "hidden" });
+
+  await log.getByRole("button", { name: /^Edit time:/ }).last().click();
+  await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await page.keyboard.press("Escape");
+  const closeGuard = page.getByRole("dialog", { name: "Discard unsaved changes?", exact: true });
+  await closeGuard.waitFor();
+  await closeGuard.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await closeGuard.waitFor({ state: "hidden" });
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:13");
+  await page.keyboard.press("Escape");
+  await closeGuard.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await logSheet.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).historicalFeed.ended_at, "2026-10-23T13:14:00.000Z");
+  console.log("PASS log details: explicit route, exact saved entry and note, dirty navigation/closing guards preserve unsaved work");
+
+  await page.evaluate(() => window.__mapleUiFixture.setReadOnly(true));
+  assert.equal(await log.getByRole("button", { name: /^Edit time:/ }).count(), 0, "Read-only log offers no Edit time action");
+  await log.getByRole("button").last().click();
+  await logSheet.waitFor();
+  assert(await logSheet.getByText(/View only\. Ask/).isVisible());
+  assert.equal(await logSheet.locator('input').count(), 0, "Even a read-only history route exposes no time editor");
+  assert.equal(await logSheet.getByRole("button", { name: "Save time", exact: true }).count(), 0);
+  assert.equal(await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).count(), 0);
+  await page.keyboard.press("Escape");
+  await logSheet.waitFor({ state: "hidden" });
+  console.log("PASS log access: read-only entry route cannot edit times or open editing details");
+
+  await page.evaluate(() => window.__mapleUiFixture.setReadOnly(false));
+  await log.getByRole("button", { name: /^Edit time:/ }).last().click();
+  await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await page.evaluate(() => window.__mapleUiFixture.historicalFailure("changed"));
+  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await logSheet.getByRole("alert").filter({ hasText: "nothing was saved" }).waitFor();
+  const conflictTime = (await snapshot()).historicalFeed.ended_at;
+  const conflictVersion = (await snapshot()).historicalFeed.updated_at;
+  assert.equal(await logSheet.locator('input[type="time"]').inputValue(), "09:16", "Conflict resets the historical editor to the returned current value");
+  await page.evaluate(() => window.__mapleUiFixture.evictHistorical());
+  assert.equal(await logSheet.getByText(/discarded|no longer in the log/i).count(), 0, "Polling the recent window must not turn the historical conflict response into a deletion");
+  await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await logSheet.waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).calls.at(-1).edit.expect_updated_at, conflictVersion, "Retry keeps the latest historical revision after poll eviction");
+  assert.equal(Date.parse((await snapshot()).historicalFeed.ended_at), Date.parse(conflictTime) - 60_000);
+  await log.getByRole("button", { name: /^Edit time:/ }).last().click();
+  await logSheet.getByRole("button", { name: "1 min earlier", exact: true }).click();
+  await page.evaluate(() => window.__mapleUiFixture.historicalFailure("gone"));
+  await logSheet.getByRole("button", { name: "Save time", exact: true }).click();
+  await logSheet.getByText(/Alex discarded this feed/).first().waitFor();
+  assert(await logSheet.getByRole("button", { name: "Save time", exact: true }).isDisabled(), "An explicit deletion still disables historical editing");
+  await logSheet.getByRole("button", { name: "Close", exact: true }).last().click();
+  await logSheet.waitFor({ state: "hidden" });
+  console.log("PASS historical recovery: conflict revision survives recent-window eviction; explicit deletion disables editing");
+
+  await page.setViewportSize({ width: 320, height: 568 });
+  await log.getByRole("button", { name: /^Edit time:/ }).first().click();
+  await settleView();
+  const fixedSave = logSheet.getByRole("button", { name: "Save time", exact: true });
+  const initialSaveBox = await fixedSave.boundingBox();
+  assert(initialSaveBox && initialSaveBox.y >= 0 && initialSaveBox.y + initialSaveBox.height <= 568, "Save time is visible immediately at 320×568");
+  await logSheet.getByRole("button", { name: "Edit feed details or add a side", exact: true }).scrollIntoViewIfNeeded();
+  const scrolledSaveBox = await fixedSave.boundingBox();
+  assert(scrolledSaveBox && Math.abs(scrolledSaveBox.y - initialSaveBox.y) <= 1 && scrolledSaveBox.y + scrolledSaveBox.height <= 568, "Save time stays fixed while editing controls scroll");
+  await noOverflow();
+  await page.screenshot({ path: path.join(screenshots, "nursing-320-short-fixed-save.png"), fullPage: true });
+  await logSheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await logSheet.waitFor({ state: "hidden" });
+  console.log("PASS short phone: nursing Save stays visible and fixed at 320×568 while controls scroll");
 
   for (const width of [320, 390, 1024]) {
     await page.goto(url);

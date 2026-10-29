@@ -12,8 +12,10 @@ function fields(value: Date, tz: string) {
 }
 
 /** The same visible date and clock for a dose, a nursing moment, or an earlier log. */
-export function RecordedTimeField({ label, value, onChange, tz, min, max, onInvalidChange }: {
+export function RecordedTimeField({ label, hideLabel, value, onChange, tz, min, max, onInvalidChange }: {
   label: string;
+  /** The enclosing editor already displays the question; keep the accessible name. */
+  hideLabel?: boolean;
   value: Date;
   onChange: (value: Date) => void;
   tz: string;
@@ -56,7 +58,25 @@ export function RecordedTimeField({ label, value, onChange, tz, min, max, onInva
   return (
     <fieldset className={cx(tone.inset, "min-w-0 space-y-3 p-3")}>
       <legend className="sr-only">{label}</legend>
-      <p className="text-[15px] font-semibold text-mp-ink">{label}</p>
+      {!hideLabel && <p className="text-[15px] font-semibold text-mp-ink">{label}</p>}
+      <div role="group" aria-label="Adjust time" className="grid grid-cols-4 gap-1.5">
+        {[-5, -1, 1, 5].map((minutes) => {
+          const next = result.valid ? result.date.getTime() + minutes * 60_000 : null;
+          return (
+            <button
+              key={minutes}
+              type="button"
+              aria-label={`${Math.abs(minutes)} min ${minutes < 0 ? "earlier" : "later"}`}
+              disabled={next === null || (!!min && next < min.getTime()) || next > ceiling.getTime()}
+              onClick={() => nudge(minutes)}
+              className="flex min-h-[52px] min-w-0 flex-col items-center justify-center rounded-xl border border-mp-line bg-mp-surface px-1 py-2 text-mp-ink disabled:opacity-40"
+            >
+              <span className="text-[18px] leading-tight font-semibold tabular-nums">{minutes < 0 ? "−" : "+"}{Math.abs(minutes)}</span>
+              <span className="text-[12px] leading-tight font-medium text-mp-ink-2">{minutes < 0 ? "earlier" : "later"}</span>
+            </button>
+          );
+        })}
+      </div>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-3">
         <label className={cx(tone.label, "min-w-0 space-y-1.5")}>
           <span className="block">Date</span>
@@ -82,13 +102,6 @@ export function RecordedTimeField({ label, value, onChange, tz, min, max, onInva
           </div>
         </div>
       )}
-      <div className="grid grid-cols-2 gap-2">
-        {[-5, 5].map((minutes) => (
-          <button key={minutes} type="button" disabled={!result.valid || (minutes < 0 && !!min && result.date.getTime() - 5 * 60_000 < min.getTime()) || (minutes > 0 && result.date.getTime() + 5 * 60_000 > ceiling.getTime())} onClick={() => nudge(minutes)} className="min-h-[44px] rounded-xl border border-mp-line bg-mp-surface px-2 py-2 text-sm font-medium text-mp-ink disabled:opacity-40">
-            5 min {minutes < 0 ? "earlier" : "later"}
-          </button>
-        ))}
-      </div>
     </fieldset>
   );
 }

@@ -5,6 +5,7 @@ import { minutesShort, nursingRuns, sideMinutesText, spanText, type NursingRun }
 import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
 import { useMilestoneWords } from "./familyWords";
+import { fixPreset } from "./FeedParts";
 import { Icon, KIND_ICON, KindBadge } from "./icons";
 import { KIND_COLOR } from "./palette";
 import { Avatar, cx, tone } from "./ui";
@@ -91,9 +92,9 @@ export default function EntryRow({
   );
 }
 
-/** A nursing correction opens the first recorded moment directly. */
+/** The same quick correction sheet as the live timer, starting at the saved end. */
 export function entryEditPreset(entry: Entry): Record<string, unknown> | undefined {
-  return entry.kind === "feed" && entry.data.method === "breast" && !entry.active && entry.data.segments?.length ? { editTime: true } : undefined;
+  return entry.kind === "feed" && entry.data.method === "breast" && !entry.active && entry.data.segments?.length ? fixPreset("finish") : undefined;
 }
 
 /**
