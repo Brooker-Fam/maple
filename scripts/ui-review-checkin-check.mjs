@@ -89,7 +89,7 @@ const cases = [
     await page.waitForFunction(() => [...document.querySelectorAll('button[aria-pressed="true"]')].some((button) => button.textContent === "Tearful"));
     assert.equal(await page.locator("button[aria-pressed]").filter({ hasText: "Anxious" }).getAttribute("aria-pressed"), "true");
     await page.evaluate(() => { window.__checkinFixture.fail = false; });
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await page.getByRole("textbox").waitFor({ state: "hidden" });
     const calls = await page.evaluate(() => window.__checkinFixture.calls);
     assert.deepEqual([...calls.at(-1).patch.tags].sort(), ["anxious", "tearful"]);
@@ -100,12 +100,12 @@ const cases = [
     await page.evaluate(() => { window.__checkinFixture.fail = true; });
     await page.getByRole("button", { name: "Tearful", exact: true }).click();
     await page.getByText("Synthetic check-in save failure", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await page.waitForTimeout(400);
     await page.getByText("Synthetic check-in save failure", { exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: "Tearful", exact: true }).getAttribute("aria-pressed"), "true");
     await page.evaluate(() => { window.__checkinFixture.fail = false; });
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await page.getByRole("button", { name: "Tearful", exact: true }).and(page.locator("[aria-pressed]")).waitFor({ state: "hidden" });
     const calls = await page.evaluate(() => window.__checkinFixture.calls);
     assert.deepEqual(calls.at(-1).patch, { tags: ["tearful"] });
@@ -165,18 +165,24 @@ const cases = [
     assert(calls.slice(1).every((call) => call.options?.id === 901), "Every partial retry updates the first saved row");
     assert.equal(calls.at(-1).data.gad7.length, 1);
   }],
-  ["daily note Done retains failed optimistic text and retries once", async () => {
+  ["daily note reports saving, keeps failed text, and retries once", async () => {
     await visit("daily");
     await page.getByRole("button", { name: "Anything else? (optional)", exact: true }).click();
-    await page.evaluate(() => { window.__checkinFixture.fail = true; });
+    await page.getByRole("status").filter({ hasText: "Check-in saved" }).waitFor();
+    await page.evaluate(() => { window.__checkinFixture.fail = true; window.__checkinFixture.hold = true; });
     const note = page.getByRole("textbox");
     await note.fill("Synthetic note to keep");
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "Unsaved changes" }).waitFor();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "Saving changes…" }).waitFor();
+    assert(await page.getByRole("button", { name: "Saving…", exact: true }).isDisabled());
+    assert.equal((await page.evaluate(() => window.__checkinFixture.calls)).length, 1, "Save changes bypasses blur and makes one request");
+    await page.evaluate(() => { window.__checkinFixture.hold = false; window.__checkinFixture.pending(); });
     await page.getByText("Synthetic check-in save failure", { exact: true }).waitFor();
     assert.equal(await note.inputValue(), "Synthetic note to keep");
     assert.equal((await page.evaluate(() => window.__checkinFixture.calls)).length, 1);
     await page.evaluate(() => { window.__checkinFixture.fail = false; });
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await note.waitFor({ state: "hidden" });
     assert.equal((await page.evaluate(() => window.__checkinFixture.calls)).length, 2);
   }],
@@ -189,15 +195,15 @@ const cases = [
     await page.getByText("Synthetic check-in save failure", { exact: true }).waitFor();
     assert.equal(await page.getByRole("textbox").inputValue(), "Synthetic unfinished note");
   }],
-  ["past check-in Done keeps failed note edits visible", async () => {
+  ["past check-in explicit save keeps failed note edits visible", async () => {
     await visit("daily");
     await page.getByRole("button", { name: "Your check-ins", exact: true }).click();
     await page.getByRole("button", { name: /^Today ·/ }).click();
     await page.evaluate(() => { window.__checkinFixture.fail = true; });
     await page.getByRole("textbox").fill("Synthetic historical note");
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await page.getByText("Synthetic check-in save failure", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await page.waitForTimeout(500);
     assert.equal(await page.getByRole("textbox").inputValue(), "Synthetic historical note");
   }],

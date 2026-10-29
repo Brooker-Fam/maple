@@ -23,6 +23,7 @@ import {
   NoteField,
   SheetFooter,
   presetStart,
+  pnum,
   pstr,
   useOpenCount,
   useNumberChecks,
@@ -69,9 +70,10 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
     [state]
   );
 
+  const initialC = e?.data.temp_c ?? pnum(preset, "temp_c");
   const [value, setValue] = useState<number | null>(() => {
-    const c = e?.data.temp_c;
-    if (c == null) return units === "metric" ? 37 : 98.6;
+    const c = initialC;
+    if (c == null) return null;
     return units === "metric" ? r1(c) : r1(cToF(c));
   });
   const [method, setMethod] = useState<TempMethod | undefined>(
@@ -95,7 +97,7 @@ function TempForm({ open, onClose, entry, preset }: SheetProps) {
     setUnit(u);
   };
 
-  const tempC = value == null ? null : unit === "C" ? value : fToC(value);
+  const tempC = !touched.reading && initialC != null ? initialC : value == null ? null : unit === "C" ? value : fToC(value);
   // Only judge a finished-looking number (not "10" on the way to "100.4").
   const plausible = tempC != null && tempC >= 32 && tempC <= 43;
   const looksLikeC = unit === "F" && value != null && value >= 34 && value <= 43;

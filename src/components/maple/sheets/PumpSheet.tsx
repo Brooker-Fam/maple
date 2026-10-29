@@ -65,7 +65,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     const presetEnd = pstr(preset, "ended_at");
     const end = presetEnd && Number.isFinite(Date.parse(presetEnd)) ? new Date(presetEnd) : now();
     const s = presetStart(preset);
-    return s && s < end ? [s, end] : [new Date(end.getTime() - 15 * MIN), end];
+    return s && s <= end ? [s, end] : [new Date(end.getTime() - 15 * MIN), end];
   });
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
@@ -76,7 +76,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
 
   const data =
     mode === "sides"
-      ? { left_ml: toMl(left), right_ml: toMl(right), total_ml: undefined }
+      ? { left_ml: touched.left_ml ? toMl(left) : initialLeft, right_ml: touched.right_ml ? toMl(right) : initialRight, total_ml: undefined }
       : { left_ml: undefined, right_ml: undefined, total_ml: totalMl };
   const sum = mode === "sides" ? (data.left_ml ?? 0) + (data.right_ml ?? 0) : (data.total_ml ?? 0);
   const step = metric ? 5 : 0.25;
@@ -85,13 +85,26 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     set(v);
   };
   const unit = metric ? "ml" : "oz";
+  const editTotal = (v: number | null) => {
+    const ml = toMl(v);
+    if (ml !== totalMl) {
+      // Once the measured total changes, the previous side amounts no
+      // longer describe it. Keep the new total until a split is entered.
+      setLeft(null);
+      setRight(null);
+      touch("left_ml");
+      touch("right_ml");
+    }
+    touch("total_ml");
+    setTotalAmount({ ml, shown: v });
+  };
   const chooseMode = (next: "sides" | "total") => {
     if (next === mode) return;
     if (next === "total") {
       const l = touched.left_ml ? toMl(left) : initialLeft;
       const r = touched.right_ml ? toMl(right) : initialRight;
-      // A combined bottle can use the measured sum. Going back to each side
-      // keeps those entries; a total alone cannot tell us their split.
+      // A combined bottle can use the measured sum. An unchanged total
+      // keeps those entries; an edited total cannot tell us their split.
       if (l != null || r != null) {
         const ml = (l ?? 0) + (r ?? 0);
         setTotalAmount({ ml, shown: toDisplay(ml) });
@@ -100,7 +113,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     }
     setMode(next);
   };
-  const needsSplit = mode === "sides" && totalMl != null && left == null && right == null && !touched.left_ml && !touched.right_ml;
+  const needsSplit = mode === "sides" && totalMl != null && left == null && right == null;
 
   const save = async () => {
     const noteVal = note.trim() || null;
@@ -181,7 +194,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
               <MiniStepper key="right" label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 0 : 2} max={metric ? 600 : 20} />
             </div>
           ) : (
-            <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={edit("total_ml", (v) => setTotalAmount({ ml: toMl(v), shown: v }))} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />
+            <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={editTotal} onInvalid={checks.watch("total")} step={step} decimals={metric ? 0 : 2} max={metric ? 1200 : 40} />
           )}
           <TimeRange start={start} end={end} tz={tz} durations={[10, 15, 20, 30, 45]} onChange={(s, en) => setRange([s, en])} />
         </>

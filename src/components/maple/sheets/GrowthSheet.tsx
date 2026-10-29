@@ -113,7 +113,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
   const [busy, setBusy] = useState(false);
   const checks = useNumberChecks();
   const dirty = useDraftChanged({ sys, lb, oz, grams, length, head, at, when, note, invalid: checks.invalid });
-  // Switching lb ↔ kg converts what's shown; only typing or stepping counts as a change.
+  // Switching lb ↔ g converts what's shown; only typing or stepping counts as a change.
   const { touched, touch } = useTouched();
   const edit = (key: "weight" | "length" | "head", set: (v: number | null) => void) => (v: number | null) => {
     touch(key);
@@ -263,7 +263,7 @@ function GrowthForm({ open, onClose, entry, preset }: SheetProps) {
             onChange={switchUnits}
             options={[
               { value: "us", label: "lb · in" },
-              { value: "metric", label: "kg · cm" },
+              { value: "metric", label: "g · cm" },
             ]}
           />
         </div>

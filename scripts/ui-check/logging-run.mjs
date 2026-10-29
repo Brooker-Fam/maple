@@ -153,6 +153,26 @@ try {
       assert.deepEqual(patch.data, { total_ml: editLeft ? 99.1 : 140, left_ml: null, right_ml: null }, "Total uses edits and exact untouched ml, not the rounded display values");
     }
   });
+  await check("pump edited total clears stale split", async () => {
+    for (const saved of [false, true]) {
+      await page.goto(`${url}?mode=${saved ? "form-pump-sides" : "form-pump"}`);
+      const form = page.getByRole("dialog").first();
+      if (!saved) {
+        await form.getByRole("textbox", { name: "left, oz", exact: true }).fill("2");
+        await form.getByRole("textbox", { name: "right, oz", exact: true }).fill("1");
+      }
+      await form.getByRole("radio", { name: "Total", exact: true }).click();
+      await form.getByRole("textbox", { name: "total, oz", exact: true }).fill("4");
+      await form.getByRole("radio", { name: "Each side", exact: true }).click();
+      for (const side of ["left", "right"]) assert.equal(await form.getByRole("textbox", { name: `${side}, oz`, exact: true }).inputValue(), "", "A changed combined amount cannot retain an outdated split");
+      assert(await form.getByRole("button", { name: saved ? "Save" : "Log it", exact: true }).isDisabled(), "An unknown split cannot silently replace the edited total");
+      await form.getByRole("radio", { name: "Total", exact: true }).click();
+      assert.equal(await form.getByRole("textbox", { name: "total, oz", exact: true }).inputValue(), "4", "Returning to Total keeps the last measured combined amount");
+      await form.getByRole("button", { name: saved ? "Save" : "Log it", exact: true }).click();
+      const call = (await snapshot()).calls.find((x) => saved ? x.patch : x.log);
+      assert.deepEqual(saved ? call.patch.data : call.log.data, saved ? { total_ml: 118.3, left_ml: null, right_ml: null } : { total_ml: 118.3 });
+    }
+  });
   await check("pump total never invents a split", async () => {
     await page.goto(`${url}?mode=form-pump-total`);
     const form = page.getByRole("dialog").first();
@@ -163,6 +183,28 @@ try {
     assert.equal(await form.getByRole("textbox", { name: "total, oz", exact: true }).inputValue(), "3.5");
     await form.getByRole("button", { name: "Save", exact: true }).click();
     assert.equal((await snapshot()).calls.find((x) => x.patch)?.patch.data, undefined, "Going back to the original total does not re-round it");
+  });
+  await check("pump replacement split clears the old opposite side", async () => {
+    await page.goto(`${url}?mode=form-pump-sides`);
+    const form = page.getByRole("dialog").first();
+    await form.getByRole("radio", { name: "Total", exact: true }).click();
+    await form.getByRole("textbox", { name: "total, oz", exact: true }).fill("4");
+    await form.getByRole("radio", { name: "Each side", exact: true }).click();
+    await form.getByRole("textbox", { name: "left, oz", exact: true }).fill("4");
+    await form.getByRole("button", { name: "Save", exact: true }).click();
+    assert.deepEqual((await snapshot()).calls.find((x) => x.patch)?.patch.data, { left_ml: 118.3, right_ml: null, total_ml: null }, "A newly entered split cannot keep a hidden amount from the old split");
+  });
+  await check("pump presets preserve exact amounts and midnight", async () => {
+    await page.goto(`${url}?mode=form-pump-sides-preset`);
+    let form = page.getByRole("dialog").first();
+    await form.getByRole("button", { name: "Log it", exact: true }).click();
+    assert.deepEqual((await snapshot()).calls.find((x) => x.log)?.log.data, { left_ml: 100, right_ml: 40 }, "Untouched supplied amounts keep their recorded precision");
+    await page.goto(`${url}?mode=form-pump-midnight`);
+    form = page.getByRole("dialog").first();
+    await form.getByRole("button", { name: "Log it", exact: true }).click();
+    const pump = (await snapshot()).calls.find((x) => x.log)?.log;
+    assert.equal(pump.started_at, "2026-10-25T04:00:00.000Z", "A chosen midnight is not moved to the previous day by a duration default");
+    assert.equal(pump.ended_at, pump.started_at);
   });
   await check("pump total preset and typed amount", async () => {
     await page.goto(`${url}?mode=form-pump-preset`);
@@ -195,6 +237,40 @@ try {
     form = page.getByRole("dialog").first();
     assert(await form.getByRole("textbox", { name: "heart rate, beats per minute", exact: true }).isVisible(), "A temperature can include other readings without expanding a section");
     await page.setViewportSize({ width: 390, height: 844 });
+  });
+  await check("temperature requires a measured reading", async () => {
+    for (const units of ["us", "metric"]) {
+      await page.goto(`${url}?mode=form-temp&units=${units}`);
+      const form = page.getByRole("dialog").first();
+      const field = form.getByRole("textbox", { name: `temperature in degrees ${units === "metric" ? "Celsius" : "Fahrenheit"}`, exact: true });
+      assert.equal(await field.inputValue(), "", "A new temperature has no invented normal reading");
+      assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled());
+      await form.getByRole("textbox", { name: "heart rate, beats per minute", exact: true }).fill("120");
+      assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled(), "Optional readings do not substitute for a temperature");
+      await field.fill("7..2");
+      assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled(), "An invalid reading cannot be logged");
+      await field.fill(units === "metric" ? "37.0" : "98.6");
+      await form.getByRole("button", { name: "Rectal", exact: true }).click();
+      await form.getByRole("button", { name: "Log it", exact: true }).click();
+      const logs = (await snapshot()).calls.filter((x) => x.log).map((x) => x.log);
+      assert.equal(logs.length, 2);
+      assert.deepEqual(logs[0].data, { temp_c: 37, method: "rectal" });
+      assert.deepEqual(logs[1].data, { heart_bpm: 120 });
+      assert.equal(logs[0].started_at, logs[1].started_at, "Temperature and other readings stay at the same measured time");
+    }
+  });
+  await check("temperature preserves supplied and saved readings", async () => {
+    for (const [mode, expected] of [["form-temp-preset", 37], ["form-temp-precise-preset", 37.123], ["form-temp-edit", 37.123]]) {
+      await page.goto(`${url}?mode=${mode}`);
+      const form = page.getByRole("dialog").first();
+      assert.notEqual(await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).inputValue(), "");
+      await form.getByRole("radio", { name: "°C", exact: true }).click();
+      await form.locator("textarea").first().fill("Synthetic measured reading");
+      await form.getByRole("button", { name: mode === "form-temp-edit" ? "Save" : "Log it", exact: true }).click();
+      const call = (await snapshot()).calls.find((x) => x.patch || x.log);
+      if (mode === "form-temp-edit") assert.equal(call.patch.data.temp_c, undefined, "An untouched saved reading is not re-rounded after switching units");
+      else assert.equal(call.log.data.temp_c, expected, "A supplied measurement is not re-rounded through its display units");
+    }
   });
   await check("expanded nursing side correction", async () => {
     await page.goto(`${url}?mode=form-nursing-details`);

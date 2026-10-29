@@ -339,8 +339,8 @@ export function TimeScrubber({
   };
   const step = (mins: number) => {
     setChip(null);
-    // Step from the minute that's shown (seconds are hidden), so "1 min earlier" always changes it.
-    set(Math.floor(latest.current / MIN_MS) * MIN_MS + mins * MIN_MS);
+    // A one-minute adjustment preserves seconds, just like the recorded-time controls.
+    set(latest.current + mins * MIN_MS);
   };
 
   const t = value.getTime();

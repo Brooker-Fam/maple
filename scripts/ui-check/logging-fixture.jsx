@@ -42,6 +42,7 @@ const savedNursing = entry(7, "feed", "2026-10-28T12:00:00.000Z", {
 }, { ended_at: "2026-10-28T12:35:00.000Z", updated_at: "2026-10-28T12:35:00.000Z" });
 const savedPumpSides = entry(8, "pump", "2026-10-28T12:00:00.000Z", { left_ml: 100, right_ml: 40 }, { ended_at: "2026-10-28T12:15:00.000Z" });
 const savedPumpTotal = entry(9, "pump", "2026-10-28T12:00:00.000Z", { total_ml: 100 }, { ended_at: "2026-10-28T12:15:00.000Z" });
+const savedTemperature = entry(10, "temp", "2026-10-28T12:00:00.000Z", { temp_c: 37.123, method: "rectal" });
 
 function App() {
   const [target, setTarget] = useState(() => {
@@ -49,6 +50,11 @@ function App() {
     if (mode === "form-pump-sides") return { kind: "pump", entry: savedPumpSides };
     if (mode === "form-pump-total") return { kind: "pump", entry: savedPumpTotal };
     if (mode === "form-pump-preset") return { kind: "pump", preset: { total_ml: 90 } };
+    if (mode === "form-pump-sides-preset") return { kind: "pump", preset: { left_ml: 100, right_ml: 40 } };
+    if (mode === "form-pump-midnight") return { kind: "pump", preset: { started_at: "2026-10-25T04:00:00.000Z", ended_at: "2026-10-25T04:00:00.000Z" } };
+    if (mode === "form-temp-edit") return { kind: "temp", entry: savedTemperature };
+    if (mode === "form-temp-preset") return { kind: "temp", preset: { temp_c: 37 } };
+    if (mode === "form-temp-precise-preset") return { kind: "temp", preset: { temp_c: 37.123 } };
     if (mode === "form-vitals-skin") return { kind: "vitals", preset: { jaundice: "none" } };
     if (mode === "form-moment-earlier") return { kind: "moment", preset: { started_at: "2026-10-25T13:30:00.000Z" } };
     return mode.startsWith("form-") ? { kind: mode.slice(5) } : null;
@@ -77,7 +83,7 @@ function App() {
     return { entries: pathname.includes("deleted=1") ? [] : state.entries };
   }, [state]);
   const now = useCallback(() => NOW, []);
-  const maple = { state, summary, api, now, readOnly: false, units: "imperial", seenAt: null,
+  const maple = { state, summary, api, now, readOnly: false, units: new URLSearchParams(location.search).get("units") === "metric" ? "metric" : "us", seenAt: null,
     memberName: () => "Sam", memberLabel: () => "Sam", member: () => state.members[0],
     isNight: () => false, timerBusy: () => false, toasts: [], toast() {}, dismissToast() {},
     log: async (value) => { calls.current.push({ log: value }); return value; }, remove() {},

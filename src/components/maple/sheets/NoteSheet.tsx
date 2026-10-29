@@ -160,6 +160,15 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
                 </div>
               </>
             )}
+            {!e && (
+              <button
+                type="button"
+                onClick={() => setDoctor(false)}
+                className="min-h-[44px] text-sm font-medium text-mp-accent-fg"
+              >
+                Keep as a note instead
+              </button>
+            )}
           </>
         ) : (
           <>

@@ -8,6 +8,7 @@ import { formatDuration } from "@/lib/maple/time";
 import { KIND_COLOR } from "../palette";
 import { useBabyWords, useVoice } from "../familyWords";
 import { Chip, Sheet, TimeRange, WhenField, cx, tone } from "../ui";
+import { useNow } from "../useMaple";
 import type { SheetProps } from "./index";
 import { ContextNote, Label, LoggedBy, NoteField, RunningNote, SheetFooter, presetStart, pstr, useOpenCount, useSheetBase } from "./parts";
 
@@ -37,7 +38,7 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
     const presetEnd = pstr(preset, "ended_at");
     const end = presetEnd && Number.isFinite(Date.parse(presetEnd)) ? new Date(presetEnd) : now();
     const s = presetStart(preset);
-    return s && s < end ? [s, end] : [new Date(end.getTime() - 5 * MIN), end];
+    return s && s <= end ? [s, end] : [new Date(end.getTime() - 5 * MIN), end];
   });
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
@@ -108,10 +109,11 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
 
 function BathForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, now, clock } = useSheetBase();
+  const current = useNow(30_000);
   const e = entry?.kind === "bath" ? entry : undefined;
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
   const [minutes, setMinutes] = useState<number | null>(() =>
-    e?.ended_at ? Math.round((Date.parse(e.ended_at) - Date.parse(e.started_at)) / MIN) || null : null
+    e?.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / MIN : null
   );
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
@@ -119,21 +121,26 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
 
   /** A bath that "just" happened with a length ends now, so it started that long ago. */
   const times = () => {
-    let s = (when ?? now()).getTime();
-    if (!minutes) return { start: new Date(s), end: null };
-    const cap = now().getTime();
-    if (s + minutes * MIN > cap) s = cap - minutes * MIN;
+    const s = when?.getTime() ?? now().getTime() - (minutes ?? 0) * MIN;
+    if (minutes == null) return { start: new Date(s), end: null };
     return { start: new Date(s), end: new Date(s + minutes * MIN) };
   };
   const { start, end } = times();
+  const inFuture = !!end && end.getTime() > current.getTime() + MIN;
 
   const save = async () => {
+    const { start, end } = times();
+    if (end && end.getTime() > now().getTime() + MIN) return;
     const noteVal = note.trim() || null;
     if (e) {
       setBusy(true);
       const res = await update(
         e.id,
-        { started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined, ended_at: end ? end.toISOString() : null, note: noteVal },
+        {
+          started_at: start.getTime() !== Date.parse(e.started_at) ? start.toISOString() : undefined,
+          ended_at: (end?.toISOString() ?? null) !== e.ended_at ? end?.toISOString() ?? null : undefined,
+          note: noteVal,
+        },
         { toast: "Bath updated" }
       );
       setBusy(false);
@@ -166,13 +173,13 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
           onPrimary={() => void save()}
           label={e ? "Save" : "Log it"}
           busy={busy}
-          disabled={!!e && e.id < 0}
-          hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
+          disabled={(!!e && e.id < 0) || inFuture}
+          hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : inFuture ? "That ends in the future. Choose an earlier start or a shorter length." : undefined}
         />
       }
     >
       {e && <LoggedBy entry={e} />}
-      <WhenField value={when} onChange={setWhen} tz={tz} offsets={[15, 30, 60, 120]} />
+      <WhenField value={when} onChange={setWhen} tz={tz} />
       <div>
         <Label optional>How long</Label>
         <div className="flex flex-wrap gap-2">

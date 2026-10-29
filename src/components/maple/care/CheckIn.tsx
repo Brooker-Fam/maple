@@ -352,6 +352,7 @@ function Extras({
   onDone,
   saveRef,
   onDirtyChange,
+  onSavingChange,
 }: {
   entry: Checkin;
   care: UseCare;
@@ -359,6 +360,7 @@ function Extras({
   onDone?: () => void;
   saveRef: RefObject<(() => Promise<boolean>) | null>;
   onDirtyChange?: (dirty: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
 }) {
   const { note, setNote, tags, setTags, problem, saving, dirty, save, saveCurrent } = useExtrasDraft(entry, care);
   const labels = moodTags(useVoice());
@@ -371,6 +373,10 @@ function Extras({
     onDirtyChange?.(dirty || saving);
     return () => onDirtyChange?.(false);
   }, [dirty, saving, onDirtyChange]);
+  useEffect(() => {
+    onSavingChange?.(saving);
+    return () => onSavingChange?.(false);
+  }, [saving, onSavingChange]);
 
   const toggle = (tag: MoodTag) => {
     const on = !tags.includes(tag);
@@ -410,6 +416,9 @@ function Extras({
       }}>
         <TextArea value={note} onChange={setNote} placeholder={CHECKIN_NOTE_PLACEHOLDER} rows={2} />
       </div>
+      <p role="status" className={cx(tone.muted, "text-[13px]")}>
+        {saving ? "Saving changes…" : dirty ? "Unsaved changes" : entry.pending ? "Saved on this phone · not synced" : "Check-in saved"}
+      </p>
       <Problem>{problem}</Problem>
       {problem && <Button variant="soft" size="sm" data-checkin-save disabled={saving} onClick={() => void saveCurrent()}>Try again</Button>}
       {onDone && (
@@ -419,11 +428,12 @@ function Extras({
             size="sm"
             className="-mr-3"
             data-checkin-save
+            disabled={saving}
             onClick={async () => {
               if (await saveCurrent()) onDone();
             }}
           >
-            Done
+            {saving ? "Saving…" : dirty ? "Save changes" : "Done"}
           </Button>
         </div>
       )}
@@ -478,6 +488,7 @@ function CheckInSheet({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [extrasDirty, setExtrasDirty] = useState(false);
+  const [extrasSaving, setExtrasSaving] = useState(false);
   const saveExtras = useRef<(() => Promise<boolean>) | null>(null);
   // Keep the last one while the sheet slides away; read the live copy so chips show as they're tapped.
   const [shown, setShown] = useState<Checkin | null>(entry);
@@ -510,8 +521,8 @@ function CheckInSheet({
         title="Your check-in"
         subtitle={when}
         footer={
-          <Button size="lg" className="w-full" data-checkin-save onClick={async () => { if (!saveExtras.current || await saveExtras.current()) onClose(); }}>
-            Done
+          <Button size="lg" className="w-full" data-checkin-save disabled={extrasSaving} onClick={async () => { if (!saveExtras.current || await saveExtras.current()) onClose(); }}>
+            {extrasSaving ? "Saving…" : extrasDirty ? "Save changes" : "Done"}
           </Button>
         }
       >
@@ -529,7 +540,7 @@ function CheckInSheet({
           />
           <Problem>{problem}</Problem>
         </div>
-        <Extras key={Date.parse(live.at)} entry={live} care={care} onCrisis={onCrisis} saveRef={saveExtras} onDirtyChange={setExtrasDirty} />
+        <Extras key={Date.parse(live.at)} entry={live} care={care} onCrisis={onCrisis} saveRef={saveExtras} onDirtyChange={setExtrasDirty} onSavingChange={setExtrasSaving} />
         {cards.map((a) => (
           <AssessmentCard key={a.title} a={a} audience="mom" more={hotlineLinks(a)} />
         ))}

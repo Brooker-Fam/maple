@@ -63,7 +63,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
     const presetEnd = pstr(preset, "ended_at");
     const end = presetEnd && Number.isFinite(Date.parse(presetEnd)) ? new Date(presetEnd) : now();
     const s = presetStart(preset);
-    return s && s.getTime() < end.getTime() ? [s, end] : [new Date(end.getTime() - H), end];
+    return s && s.getTime() <= end.getTime() ? [s, end] : [new Date(end.getTime() - H), end];
   });
   const [place, setPlace] = useState<SleepPlace | undefined>(() => e?.data.place ?? (pstr(preset, "place") as SleepPlace | undefined));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");

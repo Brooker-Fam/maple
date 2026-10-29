@@ -37,7 +37,7 @@ const browser = await ({ chromium, webkit }[browserName]).launch({ headless: tru
 let failures = 0;
 
 async function fixture({ state = freshState(), records = [], entryResponse, rangeResponse } = {}) {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce", timezoneId: "UTC" });
   const page = await context.newPage();
   const errors = [];
   const requests = [];
@@ -72,7 +72,131 @@ async function fixture({ state = freshState(), records = [], entryResponse, rang
 }
 
 const writes = (f) => f.requests.filter((r) => r.pathname === "/api/maple/entries" && r.method !== "GET");
+const localDay = (at, timezone) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(at)).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
 const cases = [
+  ["Every historical entry kind keeps an older family-local date", async () => {
+    const kinds = [["Nursing", "feed"], ["Bottle", "feed"], ["Diaper", "diaper"], ["Sleep", "sleep"], ["Vitamin D", "med"], ["Tummy time", "tummy"], ["Bath", "bath"], ["Pump", "pump"], ["Temperature", "temp"], ["Skin check", "vitals"], ["Growth", "growth"], ["River's medicine", "med"], ["Other readings", "vitals"], ["Note", "note"], ["Moment", "moment"]];
+    for (const [label, kind] of kinds) {
+      const state = freshState();
+      state.now = "2026-10-29T03:55:00.000Z"; // Oct 28 in the family's zone; browser stays in UTC.
+      const f = await fixture({ state, entryResponse: ({ route, req }) => route.fulfill({ json: { entry: record(99, kind, req.postDataJSON().data, req.postDataJSON().started_at, req.postDataJSON()) } }) });
+      try {
+        await f.page.goto("https://first-use.example.test/#log");
+        await f.page.getByRole("button", { name: "Jump to a day", exact: true }).click();
+        await f.page.getByLabel("Jump to a day", { exact: true }).fill("2026-10-25");
+        await f.page.locator("#maple-day-2026-10-25").getByRole("button", { name: "Add entry for Sun, Oct 25", exact: true }).click();
+        const picker = f.page.getByRole("dialog", { name: "Log earlier", exact: true });
+        await picker.getByRole("button", { name: label, exact: true }).click();
+        await picker.waitFor({ state: "hidden" });
+        const form = f.page.getByRole("dialog").last();
+        await form.waitFor();
+        if (label === "Nursing") await form.getByRole("textbox", { name: "minutes on the left", exact: true }).fill("5");
+        if (label === "Bottle") await form.getByRole("textbox", { name: "ounces", exact: true }).fill("2");
+        if (label === "Temperature") await form.getByRole("textbox", { name: "temperature in degrees Fahrenheit", exact: true }).fill("98.6");
+        if (label === "Growth") await form.getByRole("textbox", { name: "pounds", exact: true }).fill("8");
+        if (label === "River's medicine") await form.getByRole("textbox", { name: "Medicine name", exact: true }).fill("Synthetic medicine");
+        if (label === "Other readings") await form.getByRole("textbox", { name: "heart rate, beats per minute", exact: true }).fill("120");
+        if (label === "Note") await form.locator("textarea").fill("Synthetic historical note");
+        if (label === "Moment") await form.getByRole("textbox", { name: "Title", exact: true }).fill("Synthetic historical moment");
+        assert.equal(writes(f).length, 0, `${label} must remain unsaved while choosing details`);
+        await form.getByRole("button", { name: /^(?:Log it|Log .+|Save moment)$/ }).click();
+        await form.waitFor({ state: "hidden" });
+        await f.page.waitForTimeout(50);
+        const saved = writes(f)[0]?.body;
+        assert.equal(saved?.kind, kind, `${label} must save its own kind`);
+        assert.equal(localDay(saved.started_at, state.baby.timezone), "2026-10-25", `${label} must keep the chosen family-local date across UTC midnight`);
+        if (saved.ended_at) assert.equal(localDay(saved.ended_at, state.baby.timezone), "2026-10-25", `${label} must not stretch until today`);
+        if (["diaper", "temp", "vitals", "growth", "med", "note", "moment", "bath"].includes(kind)) assert.equal(saved.ended_at, undefined, `${label} must not invent a duration`);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }
+  }],
+  ["One-minute sleep corrections preserve seconds across midnight and DST", async () => {
+    for (const [start, end, now, direction, expected] of [
+      ["2026-10-28T12:00:42.500Z", "2026-10-28T12:30:12.500Z", NOW, "earlier", "2026-10-28T11:59:42.500Z"],
+      ["2026-10-28T04:00:42.500Z", "2026-10-28T04:30:12.500Z", NOW, "earlier", "2026-10-28T03:59:42.500Z"],
+      ["2026-03-08T06:59:42.500Z", "2026-03-08T07:30:12.500Z", "2026-03-08T08:30:00.000Z", "later", "2026-03-08T07:00:42.500Z"],
+      ["2026-11-01T05:59:42.500Z", "2026-11-01T06:30:12.500Z", "2026-11-01T08:30:00.000Z", "later", "2026-11-01T06:00:42.500Z"],
+    ]) {
+      const state = freshState();
+      state.now = now;
+      state.baby.born_at = "2026-03-01T12:00:00.000Z";
+      const original = record(55, "sleep", {}, start, { ended_at: end });
+      state.entries = [original];
+      const f = await fixture({ state, records: state.entries, entryResponse: ({ route, req }) => route.fulfill({ json: { entry: { ...original, ...req.postDataJSON() } } }) });
+      try {
+        await f.page.goto("https://first-use.example.test/#log");
+        await f.page.getByRole("button", { name: /^Edit: Slept,/ }).click();
+        const form = f.page.getByRole("dialog", { name: "Slept", exact: true });
+        await form.getByRole("group", { name: "Fell asleep", exact: true }).getByRole("button", { name: `1 minute ${direction}`, exact: true }).click();
+        await form.getByRole("button", { name: "Save", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        const patch = writes(f)[0]?.body;
+        assert.equal(patch?.started_at, expected, "One minute must adjust exactly 60 seconds across day and clock changes");
+        assert.equal(patch.ended_at, undefined, "Adjusting the start must preserve the saved end");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }
+  }],
+  ["Bath note-only edits preserve recorded seconds and duration", async () => {
+    const state = freshState();
+    const original = record(54, "bath", {}, "2026-10-28T12:00:42.500Z", { ended_at: "2026-10-28T12:03:12.500Z" });
+    state.entries = [original];
+    const f = await fixture({ state, records: state.entries, entryResponse: ({ route, req }) => route.fulfill({ json: { entry: { ...original, ...req.postDataJSON() } } }) });
+    try {
+      await f.page.goto("https://first-use.example.test/#log");
+      await f.page.getByRole("button", { name: /^Edit: Bath,/ }).click();
+      const form = f.page.getByRole("dialog", { name: "Bath", exact: true });
+      await form.locator("textarea").fill("Synthetic bath note");
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      await form.waitFor({ state: "hidden" });
+      const patch = writes(f)[0]?.body;
+      assert.equal(patch?.note, "Synthetic bath note");
+      assert.equal(patch.started_at, undefined, "A note-only edit must not rewrite the saved start");
+      assert.equal(patch.ended_at, undefined, "A note-only edit must not round or clear the saved 150-second bath");
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
+  ["Bath length does not silently move an explicit start", async () => {
+    const f = await fixture();
+    try {
+      await f.page.goto("https://first-use.example.test/#today");
+      await f.page.getByRole("button", { name: "More", exact: true }).click();
+      await f.page.getByRole("dialog", { name: "More to log", exact: true }).getByRole("button", { name: /^Bath(?:$|\s)/ }).click();
+      const form = f.page.getByRole("dialog", { name: "Bath", exact: true });
+      await form.getByRole("button", { name: "15 min ago", exact: true }).click();
+      await form.getByRole("button", { name: "30m", exact: true }).click();
+      assert(await form.getByRole("button", { name: "Log it", exact: true }).isDisabled(), "A chosen duration beyond now must not silently move an explicit start");
+      assert.match(await form.textContent(), /Choose an earlier start or a shorter length/);
+      assert.equal(writes(f).length, 0);
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
+  ["History at local midnight preserves the selected day without invented duration", async () => {
+    for (const [label, kind] of [["Sleep", "sleep"], ["Pump", "pump"], ["Tummy time", "tummy"]]) {
+      const state = freshState();
+      state.now = "2026-10-28T04:00:00.000Z";
+      state.entries = [record(52, "diaper", { pee: true, poop: false }, "2026-10-27T12:00:00.000Z")];
+      const f = await fixture({ state, records: state.entries, entryResponse: ({ route, req }) => route.fulfill({ json: { entry: record(99, kind, req.postDataJSON().data, req.postDataJSON().started_at, req.postDataJSON()) } }) });
+      try {
+        await f.page.goto("https://first-use.example.test/#log");
+        await f.page.locator("#maple-day-2026-10-27").getByRole("button", { name: "Add entry for Yesterday", exact: true }).click();
+        await f.page.getByRole("dialog", { name: "Log earlier", exact: true }).getByRole("button", { name: label, exact: true }).click();
+        const form = f.page.getByRole("dialog", { name: label, exact: true });
+        await form.getByRole("button", { name: "Log it", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        await f.page.waitForTimeout(50);
+        const saved = writes(f)[0]?.body;
+        assert.equal(saved?.kind, kind);
+        assert.equal(saved.started_at, "2026-10-27T04:00:00.000Z", `${kind} must remain on the chosen local day`);
+        assert.equal(saved.ended_at, saved.started_at, `${kind} must not replace a zero-span preset with invented duration`);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }
+  }],
   ["Saved Vitamin D opens its recorded dose for correction", async () => {
     const state = freshState();
     state.entries = [record(51, "med", { name: "Vitamin D", dose: "Recorded label amount" }, undefined, { note: "Synthetic saved note" })];

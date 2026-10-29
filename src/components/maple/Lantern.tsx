@@ -63,6 +63,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const swipe = useRef<{ id: number; y: number; t: number } | "off" | null>(null);
   const fingers = useRef(new Set<number>());
   const [mounted, setMounted] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   // The parent re-renders every second; keep the latest onClose without re-running effects.
   const closeRef = useRef(onClose);
   useEffect(() => {
@@ -70,6 +72,47 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   });
 
   useEffect(() => setMounted(true), []);
+
+  // This screen covers every timer control. Keep keyboard and assistive focus here,
+  // then return it to the lamp when closing, just as the app's sheets do.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!mounted || !dialog) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const outside = [...document.body.children].filter((element): element is HTMLElement =>
+      element instanceof HTMLElement && element !== dialog && !element.inert && !element.matches("script, style, link, template")
+    );
+    outside.forEach((element) => { element.inert = true; });
+    closeButtonRef.current?.focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls = [...dialog.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')]
+        .filter((element) => element.tabIndex >= 0 && !element.matches(":disabled") && !element.closest("[inert]") && element.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (!first) {
+        event.preventDefault();
+        dialog.focus();
+      } else if (event.shiftKey && (document.activeElement === first || !controls.includes(document.activeElement as HTMLElement))) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !controls.includes(document.activeElement as HTMLElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      outside.forEach((element) => { element.inert = false; });
+      if (opener?.isConnected && !opener.closest("[inert]")) opener.focus({ preventScroll: true });
+    };
+  }, [mounted]);
 
   // Open: no timer toast behind it; taps in here keep theirs for when it closes.
   useHoldTimerToasts(true);
@@ -89,7 +132,10 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
     const request = async () => {
       if (!nav.wakeLock) return;
       try {
-        sentinel = await nav.wakeLock.request("screen");
+        const acquired = await nav.wakeLock.request("screen");
+        // A permission request can finish after the lantern has already closed.
+        if (cancelled) void acquired.release().catch(() => {});
+        else sentinel = acquired;
       } catch {
         // Not supported or denied (e.g. page not visible). Fail quiet.
       }
@@ -99,14 +145,11 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       if (document.visibilityState === "visible" && !cancelled) void request();
     };
     document.addEventListener("visibilitychange", onVisible);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
-    document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
-      document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
       if (sentinel) void sentinel.release().catch(() => {});
     };
@@ -183,9 +226,11 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   if (!mounted) return null;
   return createPortal(
     <motion.div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Lantern timer"
+      tabIndex={-1}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -213,6 +258,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
       <div className="flex items-center justify-between px-4 pt-[max(12px,env(safe-area-inset-top))]">
         <p className="text-[13px] opacity-50">Lantern · swipe down to close</p>
         <button
+          ref={closeButtonRef}
           type="button"
           onClick={onClose}
           aria-label="Close lantern"
@@ -548,10 +594,15 @@ function useHold(onConfirm: () => void, onHint: () => void) {
     onPointerLeave: () => cancel(false),
     onPointerCancel: () => cancel(false),
     onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
-    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    onClick: (e: React.MouseEvent) => {
+      e.stopPropagation();
+      // Native keyboard (Enter or Space) and assistive activation have no pointer
+      // clicks. Touch/mouse clicks still require the half-second hold above.
+      if (e.detail === 0) onConfirm();
+    },
     onKeyDown: (e: React.KeyboardEvent) => {
-      // Keyboard users can't "hold": Enter confirms directly.
-      if (e.key === "Enter") onConfirm();
+      // Holding Enter must not submit the same action on every key repeat.
+      if (e.key === "Enter" && e.repeat) e.preventDefault();
     },
   };
   return { progress, handlers };
