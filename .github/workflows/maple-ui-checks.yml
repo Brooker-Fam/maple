@@ -77,6 +77,9 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: node /tmp/maple-ui-tools/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Check live time validation in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm check:maple-timing-ui
       - name: Check time editing in the browser
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:

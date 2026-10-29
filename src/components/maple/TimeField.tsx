@@ -27,7 +27,8 @@ export function RecordedTimeField({ label, hideLabel, embedded, value, onChange,
 }) {
   const id = useId();
   const { now: nowFn } = useMaple();
-  const now = useNow(30_000);
+  useNow(30_000);
+  const now = nowFn();
   const [draft, setDraft] = useState(() => fields(value, tz));
   if (draft.basis !== value.getTime() || draft.tz !== tz) setDraft(fields(value, tz));
   const ceiling = new Date(Math.min(max?.getTime() ?? Infinity, now.getTime() + 60_000));
