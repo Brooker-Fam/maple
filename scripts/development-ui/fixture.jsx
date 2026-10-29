@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AppNavProvider, useAppNav } from "../../src/components/maple/AppNav";
+import Hero from "../../src/components/maple/Hero";
 import DailyDiscovery from "../../src/components/maple/development/DailyDiscovery";
 import DiscoveryPreferences from "../../src/components/maple/development/DiscoveryPreferences";
 import MilestonesToNotice from "../../src/components/maple/development/MilestonesToNotice";
@@ -9,6 +10,7 @@ import ActivitySheet from "../../src/components/maple/sheets/ActivitySheet";
 import { FixtureContext } from "./mocks";
 import { dailyDiscovery } from "../../src/lib/maple/development";
 import { DISCOVERIES } from "../../src/lib/maple/guidelines/development";
+import { babyAge } from "../../src/lib/maple/time";
 
 const MEMBER = { email: "alex@example.test", display_name: "Alex Example", role: "owner" };
 const NOW = "2026-10-29T16:00:00.000Z";
@@ -22,8 +24,7 @@ function Contents({ baby, viewer, calls, open }) {
   const nav = useAppNav();
   return <>
     <main className="min-h-screen bg-mp-bg px-4 pt-6 pb-24 text-mp-ink">
-      <h1 className="mb-6 text-[30px] font-semibold">{nav.tab === "moments" ? "Moments" : nav.tab === "family" ? "Settings" : "Today"}</h1>
-      {nav.tab === "today" && <DailyDiscovery />}
+      {nav.tab === "today" ? <><Hero /><div className="mt-6"><DailyDiscovery /></div></> : <h1 className="mb-6 text-[30px] font-semibold">{nav.tab === "moments" ? "Moments" : "Settings"}</h1>}
       {nav.tab === "family" && <DiscoveryPreferences />}
       {nav.tab === "moments" && <MilestonesToNotice baby={baby} moments={[MOMENT]} viewer={viewer} onOpen={(entry) => calls.current.push({ kind: "open-moment", id: entry.id })} onAdd={(preset) => open({ kind: "moment", preset })} />}
     </main>
@@ -51,8 +52,8 @@ function App() {
   const refuseWrite = () => { calls.current.push({ kind: "write" }); throw new Error("Unexpected synthetic write"); };
   const maple = {
     state: { baby: { ...baby, id: identity.baby }, family: { id: identity.family }, me: { ...MEMBER, email: identity.email, role: viewer ? "viewer" : "owner" }, members: [MEMBER], entries: [], care: null },
-    summary: { active, today: { tummySec: 0 }, targets: { tummyMin: 0 } },
-    now: () => new Date(clock), readOnly: viewer, online: true, units: "us", timerBusy: () => false,
+    summary: { active, age: baby.born_at ? babyAge(baby.born_at, new Date(clock), baby.timezone) : null, today: { tummySec: 0 }, targets: { tummyMin: 0 } },
+    now: () => new Date(clock), isNight: () => theme === "night", readOnly: viewer, online: true, units: "us", timerBusy: () => false,
     member: () => MEMBER, memberName: () => MEMBER.display_name, memberLabel: () => MEMBER.display_name,
     toast: () => {}, toasts: [], dismissToast: () => {}, log: refuseWrite, update: refuseWrite, remove: refuseWrite,
   };

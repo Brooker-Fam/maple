@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
 const output = await mkdtemp(path.join(tmpdir(), "maple-development-ui-"));
 const baseline = process.env.MAPLE_DEVELOPMENT_BASELINE;
+const ageBrowserBaseline = process.env.MAPLE_DEVELOPMENT_BASELINE_REF ?? "94c534d9b2cabe1c1b1e4b30eecda11420067765";
 const only = process.env.MAPLE_DEVELOPMENT_ONLY;
 const screenshots = path.join(root, "test-results/maple-development-ui");
 await mkdir(screenshots, { recursive: true });
@@ -23,9 +25,22 @@ await build({
   plugins: [{ name: "synthetic-development-boundaries", setup(plugin) {
     const mocks = { path: path.join(here, "mocks.jsx") };
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|sheets)$/ }, () => mocks);
+    plugin.onResolve({ filter: /(?:^|\/)AccountMenu$/ }, () => mocks);
     plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? mocks : undefined);
-    if (baseline) plugin.onLoad({ filter: /\/development\/[A-Za-z]+\.tsx?$/ }, async (args) => {
+    if (baseline) plugin.onLoad({ filter: /\.tsx?$/ }, async (args) => {
       const name = path.basename(args.path);
+      if (baseline === "age-browser") {
+        const relative = path.relative(root, args.path);
+        if (!["src/components/maple/Hero.tsx", "src/components/maple/development/DailyDiscovery.tsx"].includes(relative)) return undefined;
+        return { contents: execFileSync("git", ["show", `${ageBrowserBaseline}:${relative}`], { cwd: root, encoding: "utf8" }), loader: "tsx", resolveDir: path.dirname(args.path) };
+      }
+      if (!args.path.includes("/development/")) return undefined;
+      if (baseline === "age-back-focus" && name === "DiscoveryBrowser.tsx") {
+        const source = await readFile(args.path, "utf8");
+        const scroll = 'button?.scrollIntoView({ block: "nearest" });';
+        assert(source.includes(scroll), "The return-to-topic scroll must exist before removing it for the baseline");
+        return { contents: source.replace(scroll, ""), loader: "tsx", resolveDir: path.dirname(args.path) };
+      }
       if (baseline === "storage" && name === "useDiscoveryPreferences.ts") {
         const contents = (await readFile(args.path, "utf8")).replace("  const temporary = memory.get(key);\n  if (temporary !== undefined) return temporary;\n", "");
         return { contents, loader: "ts", resolveDir: path.dirname(args.path) };
@@ -38,7 +53,7 @@ await build({
         const contents = (await readFile(args.path, "utf8")).replace("heading.current?.focus({ preventScroll: true })", "void heading.current");
         return { contents, loader: "tsx", resolveDir: path.dirname(args.path) };
       }
-      if (!["storage", "disable", "focus"].includes(baseline) && ["DailyDiscovery.tsx", "DiscoveryPreferences.tsx", "MilestonesToNotice.tsx"].includes(name)) {
+      if (!["storage", "disable", "focus", "age-back-focus"].includes(baseline) && ["DailyDiscovery.tsx", "DiscoveryPreferences.tsx", "MilestonesToNotice.tsx", "DiscoveryBrowser.tsx"].includes(name)) {
         return { contents: "export default function AbsentFeature() { return null; }", loader: "tsx" };
       }
       return undefined;
@@ -57,6 +72,18 @@ const card = (page) => page.locator('section[aria-labelledby="daily-discovery-ti
 const options = (page) => page.getByRole("button", { name: "Discovery options", exact: true }).click();
 const done = async (page) => { await page.getByRole("button", { name: "Done", exact: true }).click(); await page.getByRole("dialog").waitFor({ state: "hidden" }); };
 const choose = async (page, label) => { await options(page); await page.getByRole("checkbox", { name: label, exact: true }).check(); await done(page); };
+const ageTrigger = (page) => page.getByRole("button", { name: /: explore development$/ });
+const openAgeBrowser = async (page) => {
+  await ageTrigger(page).click();
+  await page.getByRole("dialog", { name: "Growing today", exact: true }).waitFor();
+  return page.getByRole("dialog");
+};
+const closeBrowser = async (page) => {
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+};
+const openTopics = (dialog) => dialog.locator("summary").filter({ hasText: /^Explore all topics$/ }).click();
+const savedDiscoveryPreferences = (page) => page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter((key) => key.startsWith("maple-discoveries-v1:")).map((key) => [key, localStorage.getItem(key)])));
 const screenshot = async (page, filename, fullPage = false) => {
   await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] > div')].every((layer) => {
     const style = getComputedStyle(layer);
@@ -266,6 +293,153 @@ try {
     assert(await movement.isChecked());
     await done(page);
     assert((await page.evaluate(() => window.__development.topicTitles("movement"))).includes(await card(page).getByRole("heading").textContent()));
+  });
+
+  await scenario("age browser: Day 10 opens one discovery and optional topics with keyboard and Back focus", "", async (page) => {
+    await card(page).waitFor();
+    const title = await card(page).getByRole("heading").textContent();
+    const trigger = page.getByRole("button", { name: "Day 10: explore development", exact: true });
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("dialog", { name: "Growing today", exact: true }).waitFor();
+    const dialog = page.getByRole("dialog");
+    assert.equal(await dialog.getByRole("article").count(), 1);
+    assert(await dialog.getByRole("heading", { name: title, exact: true }).isVisible());
+    assert.equal(await dialog.getByRole("button", { name: "Brain & senses", exact: true }).count(), 0);
+    const disclosure = dialog.locator("summary").filter({ hasText: /^Explore all topics$/ });
+    assert.equal(await disclosure.locator("..").getAttribute("open"), null);
+    await screenshot(page, "age-browser-320-day.png");
+    await disclosure.focus();
+    await page.keyboard.press("Enter");
+    for (const label of ["Brain & senses", "Connection & feelings", "Feeding & nutrition", "Movement & play", "Language & listening", "Sleep & rhythms"]) {
+      assert(await dialog.getByRole("button", { name: label, exact: true }).isVisible());
+    }
+    await dialog.getByRole("button", { name: "Brain & senses", exact: true }).click();
+    await page.getByRole("dialog", { name: "Brain & senses", exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "Back to topics", exact: true }).click();
+    await page.waitForFunction(() => document.activeElement?.textContent === "Brain & senses");
+    await page.goBack();
+    await dialog.waitFor({ state: "hidden" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Day 10: explore development");
+  });
+
+  await scenario("age browser: explicit entry remains available when the daily discovery is hidden or disabled", "", async (page) => {
+    await options(page);
+    await page.getByRole("button", { name: "Hide for today", exact: true }).click();
+    await page.getByRole("button", { name: "Show again", exact: true }).waitFor();
+    let dialog = await openAgeBrowser(page);
+    assert.equal(await dialog.getByRole("article").count(), 1);
+    await closeBrowser(page);
+    await page.getByRole("button", { name: "Show again", exact: true }).click();
+    await options(page);
+    await page.getByRole("switch", { name: "Show on Today", exact: true }).click();
+    await done(page);
+    assert.equal(await card(page).count(), 0);
+    dialog = await openAgeBrowser(page);
+    assert.equal(await dialog.getByRole("article").count(), 1);
+    await openTopics(dialog);
+    assert(await dialog.getByRole("button", { name: "Brain & senses", exact: true }).isVisible());
+  });
+
+  await scenario("age browser: category browsing follows age and leaves chosen interests unchanged", "", async (page) => {
+    await choose(page, "Movement & play");
+    const title = await card(page).getByRole("heading").textContent();
+    const preferences = await savedDiscoveryPreferences(page);
+    let dialog = await openAgeBrowser(page);
+    await openTopics(dialog);
+    await dialog.getByRole("button", { name: "Brain & senses", exact: true }).click();
+    await dialog.getByRole("heading", { name: "Your face is in focus", exact: true }).waitFor();
+    assert.equal(await dialog.getByRole("heading", { name: "Hands worth watching", exact: true }).count(), 0);
+    assert.deepEqual(await savedDiscoveryPreferences(page), preferences);
+    await screenshot(page, "age-browser-brain-320-day.png");
+    await closeBrowser(page);
+    assert.equal(await card(page).getByRole("heading").textContent(), title);
+    await options(page);
+    assert(await page.getByRole("checkbox", { name: "Movement & play", exact: true }).isChecked());
+    assert.equal(await page.getByRole("checkbox", { name: "Brain & senses", exact: true }).isChecked(), false);
+    await done(page);
+    await page.evaluate(() => window.__development.setBaby({ born_at: "2026-07-01T12:00:00.000Z" }));
+    dialog = await openAgeBrowser(page);
+    await openTopics(dialog);
+    await dialog.getByRole("button", { name: "Brain & senses", exact: true }).click();
+    await dialog.getByRole("heading", { name: "Hands worth watching", exact: true }).waitFor();
+    assert.equal(await dialog.getByRole("heading", { name: "Your face is in focus", exact: true }).count(), 0);
+    assert.deepEqual(await savedDiscoveryPreferences(page), preferences);
+  });
+
+  await scenario("age browser: the daily detail entry opens all topics immediately", "", async (page) => {
+    await card(page).locator("summary").click();
+    await card(page).getByRole("button", { name: "Explore all topics", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Growing today", exact: true });
+    await dialog.waitFor();
+    assert.equal(await dialog.getByRole("article").count(), 0);
+    assert.equal(await dialog.getByRole("button", { name: /^(Brain & senses|Connection & feelings|Feeding & nutrition|Movement & play|Language & listening|Sleep & rhythms)$/ }).count(), 6);
+    await screenshot(page, "age-browser-topics-320-day.png");
+    await dialog.getByRole("button", { name: "Feeding & nutrition", exact: true }).click();
+    await page.getByRole("dialog", { name: "Feeding & nutrition", exact: true }).waitFor();
+    assert((await page.getByRole("dialog").getByRole("article").count()) > 1);
+  });
+
+  await scenario("age browser: a viewer can explore corrected-age ideas at night without log actions", "theme=night&role=viewer&born=2026-08-20T12%3A00%3A00.000Z&gestation=32", async (page) => {
+    await page.getByRole("button", { name: "Today's little discovery", exact: true }).waitFor();
+    const dialog = await openAgeBrowser(page);
+    assert.equal(await dialog.getByRole("article").count(), 1);
+    await openTopics(dialog);
+    await dialog.getByRole("button", { name: "Movement & play", exact: true }).click();
+    const tummy = dialog.getByRole("article", { name: "A little tummy time", exact: true });
+    await tummy.locator("summary").click();
+    await tummy.getByText(/14 days corrected age/).waitFor();
+    assert.equal(await tummy.getByRole("button", { name: "Log tummy time", exact: true }).count(), 0);
+    assert.match(await tummy.getByRole("link", { name: "About corrected age", exact: true }).getAttribute("href"), /^https:\/\/www\.healthychildren\.org\//);
+    await screenshot(page, "age-browser-movement-320-night.png");
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.endsWith(": explore development"));
+  });
+
+  await scenario("age browser: activity and milestone actions close browsing before opening their destination", "", async (page) => {
+    let dialog = await openAgeBrowser(page);
+    await openTopics(dialog);
+    await dialog.getByRole("button", { name: "Movement & play", exact: true }).click();
+    const tummy = dialog.getByRole("article", { name: "A little tummy time", exact: true });
+    await tummy.locator("summary").click();
+    await tummy.getByRole("button", { name: "Log tummy time", exact: true }).click();
+    await page.getByRole("dialog", { name: "Tummy time", exact: true }).waitFor();
+    await page.getByRole("dialog", { name: "Movement & play", exact: true }).waitFor({ state: "hidden" });
+    assert.equal(await page.getByRole("dialog").count(), 1);
+    assert(await page.getByRole("button", { name: "Log it", exact: true }).isVisible());
+    assert.deepEqual(await page.evaluate(() => window.__development.calls()), [{ kind: "sheet", value: { kind: "tummy", entry: undefined } }]);
+    await closeBrowser(page);
+    dialog = await openAgeBrowser(page);
+    await dialog.getByRole("button", { name: "Milestones to notice in Moments", exact: true }).click();
+    await page.waitForURL(/#moments$/);
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    await page.locator("summary").filter({ hasText: "Milestones to notice" }).waitFor();
+  });
+
+  await scenario("age browser: Back keeps the focused topic visible on a short screen", "", async (page) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    const dialog = await openAgeBrowser(page);
+    await openTopics(dialog);
+    await dialog.getByRole("button", { name: "Sleep & rhythms", exact: true }).click();
+    await page.getByRole("dialog", { name: "Sleep & rhythms", exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "Back to topics", exact: true }).click();
+    await page.waitForFunction(() => document.activeElement?.textContent === "Sleep & rhythms");
+    const bounds = await dialog.getByRole("button", { name: "Sleep & rhythms", exact: true }).evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      let top = 0;
+      let bottom = innerHeight;
+      for (let ancestor = button.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (/auto|scroll|hidden|clip/.test(getComputedStyle(ancestor).overflowY)) {
+          const clipping = ancestor.getBoundingClientRect();
+          top = Math.max(top, clipping.top);
+          bottom = Math.min(bottom, clipping.bottom);
+        }
+      }
+      return { top: rect.top, bottom: rect.bottom, clipTop: top, clipBottom: bottom };
+    });
+    assert(bounds.top >= bounds.clipTop - 1 && bounds.bottom <= bounds.clipBottom + 1, `Focused topic must remain inside the sheet viewport: ${JSON.stringify(bounds)}`);
+    await screenshot(page, "age-browser-back-320x568.png");
   });
   assert(scenarios > 0, "At least one scenario must run");
   if (baseline) {

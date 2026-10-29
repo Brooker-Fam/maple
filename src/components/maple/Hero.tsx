@@ -3,7 +3,10 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { type ReactNode, useLayoutEffect, useState } from "react";
 import { DEFAULT_TZ, localParts } from "@/lib/maple/time";
+import { eligibleDiscoveries } from "@/lib/maple/development";
 import AccountMenu from "./AccountMenu";
+import DiscoveryBrowser from "./development/DiscoveryBrowser";
+import { Icon } from "./icons";
 import { useNightActive } from "./nightLook";
 import { cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -242,6 +245,8 @@ export default function Hero() {
   // month-day on its day ("1 month old today", "1 year old today"), otherwise her age.
   const years = age && age.months % 12 === 0 ? age.months / 12 : 0;
   const onMonthDay = years ? `${years} year${years === 1 ? "" : "s"} old today` : `${age?.months} month${age?.months === 1 ? "" : "s"} old today`;
+  const ageLabel = age ? age.days < 14 ? `Day ${age.dayOfLife}` : monthDay ? onMonthDay : age.label : "";
+  const canDiscover = eligibleDiscoveries(state.baby, now).length > 0;
   const timerRunning = summary.active.length > 0;
 
   const aboutTree = () =>
@@ -256,11 +261,18 @@ export default function Hero() {
     <header className="mp-today-intro">
       <div className="min-w-0 flex-1 pb-1">
         <h1 className={cx(tone.display, "truncate text-[38px] leading-[1.05]")}>{state.baby.name}</h1>
-        {age && (
+        {age && (canDiscover ? (
+          <DiscoveryBrowser label={`${ageLabel}: explore development`} className="-mb-2 -mt-1 -ml-2 flex min-h-[44px] max-w-full items-center rounded-full px-2 outline-none focus-visible:ring-2 focus-visible:ring-mp-focus/60">
+            <span className="mp-today-age inline-flex items-center gap-1">
+              <span className={cx(age.days < 14 && "font-semibold text-mp-maple [.maple-night_&]:text-mp-ink")}>{ageLabel}</span>
+              <Icon name="chevron-right" size={14} className="inline shrink-0" />
+            </span>
+          </DiscoveryBrowser>
+        ) : (
           <p className="mp-today-age">
-            {age.days < 14 ? <span className="font-semibold text-mp-maple [.maple-night_&]:text-mp-ink">Day {age.dayOfLife}</span> : monthDay ? onMonthDay : age.label}
+            {ageLabel}
           </p>
-        )}
+        ))}
       </div>
       <button type="button" onClick={aboutTree} aria-label={`${first}'s tree: ${leaves} ${leaves === 1 ? "leaf" : "leaves"}, one for each week`} className="mp-tree-portrait">
         {/* Still, not swaying: nothing on Today moves unless something happened. */}

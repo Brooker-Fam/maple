@@ -47,14 +47,20 @@ export function developmentAge(baby: DevelopmentBaby, now: Date): DevelopmentAge
   return ages(baby, now)?.developmental ?? null;
 }
 
-export function dailyDiscovery(baby: DevelopmentBaby, now: Date, topics: readonly string[]): Discovery | null {
+export function eligibleDiscoveries(baby: DevelopmentBaby, now: Date, topics: readonly string[] = []): readonly Discovery[] {
   const age = ages(baby, now);
-  if (!age?.chronological) return null;
+  if (!age?.chronological) return [];
   const selected = new Set(topics.filter((topic) => DEVELOPMENT_TOPICS.some(({ id }) => id === topic)));
-  const eligible = DISCOVERIES.filter((item) => {
+  return DISCOVERIES.filter((item) => {
     const contentAge = item.ageBasis === "chronological" ? age.chronological : age.developmental;
     return contentAge && (!selected.size || selected.has(item.topic)) && contentAge.months >= item.minMonths && contentAge.months < item.maxMonths;
   });
+}
+
+export function dailyDiscovery(baby: DevelopmentBaby, now: Date, topics: readonly string[]): Discovery | null {
+  const age = ages(baby, now);
+  if (!age?.chronological) return null;
+  const eligible = eligibleDiscoveries(baby, now, topics);
   if (!eligible.length) return null;
   return eligible[daysBetween(age.birthDay, age.today) % eligible.length];
 }

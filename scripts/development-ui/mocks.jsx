@@ -8,6 +8,7 @@ export const useSheets = () => useFixture().sheets;
 export const useCare = () => null;
 export const useCareNav = () => ({});
 export const useHoldTimerToasts = () => {};
+export default function AccountMenu() { return null; }
 
 export class ApiError extends Error {
   constructor(status, message, body = null) {
