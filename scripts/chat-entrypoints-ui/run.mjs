@@ -29,7 +29,7 @@ await build({
   plugins: [{ name: "synthetic-entrypoint-boundaries", setup(plugin) {
     const mocks = { path: path.join(here, "mocks.jsx") };
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|useChatThread|useTimerActions|sheets)$/ }, () => mocks);
-    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? mocks : undefined);
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:parts|useSavedEntryConflict)\.tsx$/.test(args.importer) ? mocks : undefined);
     if (baseline) plugin.onLoad({ filter: /\.[tj]sx?$/ }, (args) => {
       const relative = path.relative(root, args.path);
       if (!baselineFiles.has(relative)) return undefined;

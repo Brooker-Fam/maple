@@ -125,7 +125,7 @@ const cases = [
         const dialog = f.page.getByRole("dialog", { name: editing ? "Edit moment" : "New moment", exact: true });
         const title = dialog.getByRole("textbox").first();
         await title.fill("Synthetic moment draft");
-        await dialog.getByRole("button", { name: editing ? "Save" : "Save moment", exact: true }).click();
+        await dialog.getByRole("button", { name: editing ? "Save changes" : "Save moment", exact: true }).click();
         await requestStarted;
         assert(await title.isDisabled(), "A pending moment save must keep the submitted draft fixed");
         assert(await dialog.getByRole("button", { name: "First bath", exact: true }).isDisabled());
@@ -136,12 +136,12 @@ const cases = [
         await f.page.waitForTimeout(100);
         assert(await dialog.isVisible(), "Back and Escape must keep a pending moment save open");
         release();
-        await f.page.getByText("Synthetic moment rejection", { exact: true }).waitFor();
+        await dialog.getByRole("alert").filter({ hasText: "Couldn't save this moment. Your draft is still here. Try again." }).waitFor();
         assert.equal(await title.inputValue(), "Synthetic moment draft");
         assert(await title.isEnabled());
         response = "save";
         await title.fill("Synthetic moment corrected");
-        await dialog.getByRole("button", { name: editing ? "Save" : "Save moment", exact: true }).click();
+        await dialog.getByRole("button", { name: editing ? "Save changes" : "Save moment", exact: true }).click();
         await dialog.waitFor({ state: "hidden" });
         assert.equal(f.state.entries[0].data.title, "Synthetic moment corrected");
         assert.equal(f.requests.filter((req) => req.method !== "GET" && req.pathname === "/api/maple/entries").length, 2);
@@ -154,7 +154,7 @@ const cases = [
     const f = await fixture({
       uploadResponse: ({ route }) => unavailable
         ? route.fulfill({ status: 503, json: { error: "Synthetic photo storage outage" } })
-        : route.fulfill({ json: { ready: true, access: "private", maxBytes: 1000000 } }),
+        : route.fulfill({ json: { ready: true, access: "private", maxBytes: 1000000, prefix: "maple/f99/" } }),
       entryResponse: ({ route, req, state }) => {
         const body = req.postDataJSON();
         const saved = record(900, "moment", body.data, body.started_at, { note: body.note });

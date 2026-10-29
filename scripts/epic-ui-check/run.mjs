@@ -24,7 +24,7 @@ if (screenshots) {
 await build({ entryPoints: [path.join(here, "fixture.jsx")], outfile: path.join(output, "app.js"), bundle: true, format: "esm", jsx: "automatic", absWorkingDir: root, define: { "process.env.NODE_ENV": '"test"', "process.env.NEXT_PUBLIC_MAPLE_ORIGIN": '"https://maple-epic.example.test"' }, plugins: [{ name: "synthetic-medical-records", setup(plugin) {
   plugin.onResolve({ filter: /(?:^|\/)useMaple$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
   plugin.onResolve({ filter: /(?:^|\/)AskChat$/ }, () => ({ path: path.join(here, "mocks.jsx") }));
-  plugin.onResolve({ filter: /^\.\/index$/ }, args => args.importer.endsWith("sheets/parts.tsx") ? ({ path: path.join(here, "mocks.jsx") }) : undefined);
+  plugin.onResolve({ filter: /^\.\/index$/ }, args => /\/sheets\/(?:parts|useSavedEntryConflict)\.tsx$/.test(args.importer) ? ({ path: path.join(here, "mocks.jsx") }) : undefined);
 } }] });
 const browser = await chromium.launch({ headless: true, ...(process.env.MAPLE_UI_CHROMIUM ? { executablePath: process.env.MAPLE_UI_CHROMIUM } : {}) });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 } });

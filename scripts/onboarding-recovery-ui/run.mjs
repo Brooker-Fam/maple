@@ -185,35 +185,46 @@ try {
   }
 
   await check("invite result keeps its submitted recipient and granted role", async () => {
-    let release;
-    let submitted;
-    const page = await fixture(async (route, url) => {
-      if (url.pathname !== "/api/maple/invites" || route.request().method() !== "POST") return false;
-      submitted = route.request().postDataJSON();
-      await new Promise(resolve => { release = resolve; });
-      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ url: `${origin}/maple/join#synthetic-only` }) });
-      return true;
-    });
-    await open(page, "People & permissions");
-    await page.getByRole("button", { name: /^Invite with a one-time link/ }).click();
-    const dialog = page.getByRole("dialog", { name: "Invite with a link" });
-    await dialog.getByLabel("Their name", { exact: true }).fill("Helper One");
-    await dialog.getByRole("radio", { name: "Member · can log", exact: true }).click();
-    await dialog.getByRole("button", { name: "Create invite link", exact: true }).click();
-    await page.waitForFunction(() => window.__settingsFixture.snapshot().calls.some(x => x.method === "POST"));
-    const name = dialog.getByLabel("Their name", { exact: true });
-    if (await name.isEnabled()) {
-      await name.fill("Helper Two");
-      await dialog.getByRole("radio", { name: "Viewer · can see", exact: true }).click();
+    for (const [role, label, description] of [
+      ["photos", "Photos only", "See shared moments, photos and captions. Save or share photos. No baby log, recovery page or chat."],
+      ["viewer", "View baby log", "See moments and the baby's daily log. Read through chat. No recovery page or changes."],
+      ["member", "Can log", "Add and edit the baby log and moments. Also see and add to the recovery page, including medicines, food and check-ins."],
+    ]) {
+      let release;
+      let submitted;
+      const page = await fixture(async (route, url) => {
+        if (url.pathname !== "/api/maple/invites" || route.request().method() !== "POST") return false;
+        submitted = route.request().postDataJSON();
+        await new Promise(resolve => { release = resolve; });
+        await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ url: `${origin}/maple/join#synthetic-only` }) });
+        return true;
+      });
+      await open(page, "People & permissions");
+      await page.getByRole("button", { name: /^Invite with a one-time link/ }).click();
+      const dialog = page.getByRole("dialog", { name: "Invite with a link" });
+      const choices = dialog.getByRole("group", { name: "What they can access", exact: true });
+      assert.equal(await choices.getByRole("radio").count(), 3);
+      assert(await choices.getByRole("radio", { name: /^Photos only / }).isChecked(), "New invitations begin with photos-only access");
+      await dialog.getByLabel("Their name", { exact: true }).fill("Helper One");
+      const choice = choices.getByRole("radio", { name: new RegExp(`^${label} `) });
+      if (role !== "photos") await choice.click();
+      assert(await choice.isChecked());
+      await dialog.getByRole("button", { name: "Create invite link", exact: true }).click();
+      await page.waitForFunction(() => window.__settingsFixture.snapshot().calls.some(x => x.method === "POST"));
+      assert(await dialog.getByLabel("Their name", { exact: true }).isDisabled(), "The recipient cannot change while creating the link");
+      for (const radio of await choices.getByRole("radio").all()) {
+        assert(await radio.isDisabled(), "Granted access cannot change while creating the link");
+      }
+      release();
+      const ready = page.getByRole("dialog", { name: "Link ready" });
+      await ready.waitFor();
+      assert.deepEqual({ name: submitted.display_name, role: submitted.role }, { name: "Helper One", role });
+      assert.match(await ready.innerText(), /Send this to Helper One/);
+      assert(await ready.getByText(label, { exact: true }).isVisible());
+      assert(await ready.getByText(description, { exact: true }).isVisible());
+      await capture(page, `invite-result-${role}`);
+      await page.context().close();
     }
-    release();
-    const ready = page.getByRole("dialog", { name: "Link ready" });
-    await ready.waitFor();
-    assert.deepEqual({ name: submitted.display_name, role: submitted.role }, { name: "Helper One", role: "member" });
-    assert.match(await ready.innerText(), /Send this to Helper One/);
-    assert.match(await ready.innerText(), /Member · can log/);
-    assert.match(await ready.innerText(), /recovery page/);
-    await capture(page, "invite-result");
   });
 
   await check("On Today prevents overlapping saves of the same switch", async () => {

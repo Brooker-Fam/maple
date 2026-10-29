@@ -26,7 +26,7 @@ await build({
     const mocks = { path: path.join(here, "mocks.jsx") };
     plugin.onResolve({ filter: /(?:^|\/)(?:useMaple|useCare|CareNav|sheets)$/ }, () => mocks);
     plugin.onResolve({ filter: /(?:^|\/)AccountMenu$/ }, () => mocks);
-    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => args.importer.endsWith("/sheets/parts.tsx") ? mocks : undefined);
+    plugin.onResolve({ filter: /^\.\/index$/ }, (args) => /\/sheets\/(?:parts|useSavedEntryConflict)\.tsx$/.test(args.importer) ? mocks : undefined);
     if (baseline) plugin.onLoad({ filter: /\.tsx?$/ }, async (args) => {
       const name = path.basename(args.path);
       if (baseline === "age-browser") {
