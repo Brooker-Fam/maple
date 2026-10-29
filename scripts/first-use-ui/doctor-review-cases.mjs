@@ -12,10 +12,13 @@ export function doctorReviewCases({ fixture, freshState, record, writes, assert 
     ...["Escape", "Growth chart"].map((action) => [`Doctor question pending saves prevent leaving through ${action}`, async () => {
       let release;
       const gate = new Promise((resolve) => { release = resolve; });
-      const f = await fixture({ entryResponse: async ({ route, req }) => {
+      const f = await fixture({ entryResponse: async ({ route, req, state, records }) => {
         await gate;
         const body = req.postDataJSON();
-        return route.fulfill({ json: { entry: record(994, body.kind, body.data, body.started_at, { note: body.note }) } });
+        const entry = record(994, body.kind, body.data, body.started_at, { note: body.note });
+        state.entries = [entry];
+        records.push(entry);
+        return route.fulfill({ json: { entry } });
       } });
       try {
         let confirmations = 0;
@@ -49,13 +52,16 @@ export function doctorReviewCases({ fixture, freshState, record, writes, assert 
       let release;
       let reject = true;
       const gate = new Promise((resolve) => { release = resolve; });
-      const f = await fixture({ entryResponse: async ({ route, req }) => {
+      const f = await fixture({ entryResponse: async ({ route, req, state, records }) => {
         if (reject) {
           await gate;
           return route.fulfill({ status: 400, json: { error: "Synthetic question rejection" } });
         }
         const body = req.postDataJSON();
-        return route.fulfill({ json: { entry: record(991, body.kind, body.data, body.started_at, { note: body.note }) } });
+        const entry = record(991, body.kind, body.data, body.started_at, { note: body.note });
+        state.entries = [entry];
+        records.push(entry);
+        return route.fulfill({ json: { entry } });
       } });
       try {
         const dialog = await openDoctor(f);
