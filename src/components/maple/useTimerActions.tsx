@@ -33,6 +33,7 @@ import { useBabyWords, type BabyWords } from "./familyWords";
 import { fixPreset, KIND_TITLE, SIDE_NAME } from "./FeedParts";
 import type { IconName } from "./icons";
 import { useSheets } from "./sheets";
+import { useEarlierSwitch } from "./useEarlierSwitch";
 import { useMaple, type TimerCallOptions, type TimerFailure, type ToastAction } from "./useMaple";
 
 /**
@@ -396,7 +397,7 @@ export function useTimerActions() {
   );
 
   /** Put a just-stopped timer back to running (a paused feed comes back paused). */
-  const reopen = useCallback(async (e: Entry) => (await timerCall({ action: "reopen", id: e.id }))?.entry ?? null, [timerCall]);
+  const reopen = useCallback(async (e: Entry) => (await timerCall({ action: "reopen", id: e.id, expect_updated_at: e.updated_at }))?.entry ?? null, [timerCall]);
 
   /** After undoing a Continue or a side added after Done, what's back: "Undone · the 8:10 feed ended 8:24". */
   const endedAgain = useCallback(
@@ -539,7 +540,7 @@ export function useTimerActions() {
       tick();
       // When Done was tapped here: "She went back on…" ends the side it adds then, so that tap isn't lost.
       const doneAt = now().toISOString();
-      const res = await timerCall({ action: "stop", id: e.id, at: at?.toISOString() }, opts);
+      const res = await timerCall({ action: "stop", id: e.id, at: at?.toISOString(), ...(at ? { expect_updated_at: e.updated_at } : {}) }, opts);
       if (!res || res.noop || res.entry.active) return res?.entry ?? null;
       const saved = res.entry;
       const ended = saved.ended_at ?? new Date().toISOString();
@@ -744,20 +745,20 @@ export function useTimerActions() {
   /** Move a sleep, tummy-time or pumping start (Fix times, a start toast chip). */
   const adjust = useCallback(
     async (e: Entry, at: Date, opts: TimerCallOptions = {}) => {
-      const was = live(e).started_at;
-      const res = await timerCall({ action: "adjust", id: e.id, at: at.toISOString() }, opts);
+      const was = e.started_at;
+      const res = await timerCall({ action: "adjust", id: e.id, at: at.toISOString(), expect_updated_at: e.updated_at }, opts);
       if (!res?.entry.active) return res;
       const what = e.kind === "sleep" ? "Sleep" : KIND_TITLE[e.kind as TimerKind] ?? "Timer";
       timerToast(`${what} now starts ${short(res.entry.started_at)}`, res.entry, {
         undoLabel: `Back to ${short(was)}`,
         undo: () =>
           void (async () => {
-            if (await timerCall({ action: "adjust", id: e.id, at: was })) toast("Undone", { group: "timer" });
+            if (await timerCall({ action: "adjust", id: e.id, at: was, expect_updated_at: res.entry.updated_at })) toast("Undone", { group: "timer" });
           })(),
       });
       return res;
     },
-    [live, short, timerCall, timerToast, toast]
+    [short, timerCall, timerToast, toast]
   );
 
   const startTimer = useCallback(
@@ -890,6 +891,12 @@ export function useTimerActions() {
     },
     [askless, backAndForth, bothChip, continueAction, earlierChips, live, now, restoreFrom, retime, short, timerCall, timerToast, undoTap]
   );
+
+  const switchEarlier = useEarlierSwitch(useCallback((res, side, at) => {
+    timerToast(`Switched to ${SIDE_NAME[side]} at ${short(at)}`, res.entry, {
+      undo: () => void restoreFrom(res),
+    });
+  }, [restoreFrom, short, timerToast]));
 
   const pause = useCallback(
     async (e: Entry) => {
@@ -1058,6 +1065,7 @@ export function useTimerActions() {
     stop,
     fellAsleep,
     switchSide,
+    switchEarlier,
     /** Back and forth from now (both sides, not tracked); on a break, back on going back and forth. */
     backAndForth,
     /** Ask "Which side is she on now?" (saves nothing until answered), then track sides again from that side. */

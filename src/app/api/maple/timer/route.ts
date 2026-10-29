@@ -217,7 +217,8 @@ async function act(ctx: FamilyCtx, body: TimerInput & { expect_updated_at?: unkn
     case "resume": {
       // B: back and forth from now (or, on resume, back on going both); L/R while going both: tracking sides again.
       if (!isStretchSide(body.side)) throw new BadRequest("side must be L, R or B (back and forth)");
-      return timerJson(await switchSide(ctx, id, body.side, at, by, { resume: body.action === "resume" }));
+      const expectUpdatedAt = body.expect_updated_at === undefined ? undefined : instant(body.expect_updated_at, "expect_updated_at").toISOString();
+      return timerJson(await switchSide(ctx, id, body.side, at, by, { resume: body.action === "resume", expectUpdatedAt }));
     }
     case "pause":
       return timerJson(await pauseTimer(ctx, id, at, by));
@@ -229,8 +230,10 @@ async function act(ctx: FamilyCtx, body: TimerInput & { expect_updated_at?: unkn
     }
     case "retime":
       return timerJson(await retimeFeed(ctx, id, feedEdit(body.edit), by));
-    case "adjust":
-      return json({ entry: toClientEntry(await adjustTimerStart(ctx, id, instant(body.at, "at"), by)) });
+    case "adjust": {
+      const expectUpdatedAt = body.expect_updated_at === undefined ? undefined : instant(body.expect_updated_at, "expect_updated_at").toISOString();
+      return json({ entry: toClientEntry(await adjustTimerStart(ctx, id, instant(body.at, "at"), by, { expectUpdatedAt })) });
+    }
     case "discard": {
       const expect = body.expect_updated_at;
       const expectUpdatedAt = expect == null ? undefined : instant(expect, "expect_updated_at").toISOString();

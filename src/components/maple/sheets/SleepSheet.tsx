@@ -10,6 +10,7 @@ import { SLEEP_PLACES, type SleepPlace } from "@/lib/maple/types";
 import { useVoice } from "../familyWords";
 import { Chip, Sheet, TimeRange } from "../ui";
 import type { SheetProps } from "./index";
+import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
   ContextNote,
   Label,
@@ -46,13 +47,14 @@ const H = 3_600_000;
 
 export default function SleepSheet(props: SheetProps) {
   const n = useOpenCount(props.open);
-  return <SleepForm key={n} {...props} />;
+  return <SleepForm key={`${n}-${props.entry?.updated_at ?? "new"}`} {...props} />;
 }
 
 function SleepForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, log, update, remove, now } = useSheetBase();
   const voice = useVoice();
   const e = entry?.kind === "sleep" ? entry : undefined;
+  const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const running = !!e?.active;
 
   const [range, setRange] = useState<[Date, Date]>(() => {
@@ -75,7 +77,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
   const tip = place ? safeSleepTips(voice)[place] : undefined;
 
   const save = async () => {
-    if (busy || timeInvalid) return;
+    if (busy || timeInvalid || changed) return;
     setBusy(true);
     try {
       const noteVal = note.trim() || null;
@@ -88,7 +90,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
               data: withNulls({ place }, ["place"]),
               note: noteVal,
             };
-        const res = await update(e.id, patch, { toast: "Sleep updated" });
+        const res = await update(e.id, { ...patch, expect_updated_at: e.updated_at }, { toast: "Sleep updated", onConflict });
         if (res) onClose();
         return;
       }
@@ -123,7 +125,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
             onPrimary={() => void save()}
             label={e ? "Save" : "Log it"}
             busy={busy}
-            disabled={timeInvalid || (!!e && e.id < 0) || (!running && end.getTime() < start.getTime())}
+            disabled={changed || timeInvalid || (!!e && e.id < 0) || (!running && end.getTime() < start.getTime())}
             hint={e && e.id < 0 ? "Still syncing, so it can't be edited yet." : undefined}
           />
         </fieldset>
@@ -131,6 +133,7 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
     >
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
+        {notice}
         {running ? (
           <RunningNote kind="sleep" />
         ) : (

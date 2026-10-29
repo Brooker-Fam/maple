@@ -57,7 +57,7 @@ jobs:
         run: pnpm check:maple-nutrition && pnpm check:maple-tenancy nutrition nutrition-tools
       - name: Time editing checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm check:maple-time-edit && pnpm check:maple-tenancy timer-time-correction
+        run: pnpm check:maple-time-edit && pnpm check:maple-tenancy timer-time-correction && pnpm check:maple-timing
       - name: Admin access, drilldowns and waitlist email
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-tenancy admin admin-details admin-email
@@ -80,6 +80,9 @@ jobs:
       - name: Check diagnostics transport in both browsers
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm check:maple-diagnostics-ui
+      - name: Check timing corrections in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm check:maple-timing-ui
       - name: Check time editing in the browser
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:

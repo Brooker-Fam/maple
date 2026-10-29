@@ -78,7 +78,7 @@ function DoseTimeForm({ open, onClose, dose, care }: { open: boolean; onClose: (
       )}
       {gone && <p role="status" className={cx(tone.muted, "text-[15px]")}>This dose is no longer in the log. Your change hasn&apos;t been saved.</p>}
       <fieldset disabled={busy} className="min-w-0">
-        <RecordedTimeField label={base.data.skipped ? "Skipped at" : "Taken at"} value={when} onChange={setWhen} onInvalidChange={setInvalid} tz={tz} max={new Date(now.getTime() + 60_000)} />
+        <RecordedTimeField key={base.updated_at} label={base.data.skipped ? "Skipped at" : "Taken at"} value={when} onChange={setWhen} onInvalidChange={setInvalid} tz={tz} />
       </fieldset>
       <p className={cx(tone.muted, "text-[14px] leading-relaxed tabular-nums")}>
         {dirty ? <>Change {careTime(base.at, now, tz)} to <strong className="font-medium text-mp-ink">{careTime(when.toISOString(), now, tz)}</strong>.</> : <>Recorded {careTime(base.at, now, tz)}.</>}

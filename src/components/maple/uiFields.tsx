@@ -326,7 +326,8 @@ export function TimeScrubber({
   onInvalidChange?: (invalid: boolean) => void;
 }) {
   const { now: nowFn } = useMaple();
-  const now = useNow(30_000);
+  useNow(30_000);
+  const now = nowFn();
   // The chip tapped and the instant it produced: it stays lit until the time changes, not until the clock ticks.
   const [chip, setChip] = useState<{ m: number; at: number } | null>(null);
   const [invalid, setInvalid] = useState(false);
