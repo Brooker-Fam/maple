@@ -31,6 +31,9 @@ jobs:
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint
+      - name: Development content and saved milestones
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-development && pnpm check:maple-tenancy log
       - name: Nursing checks
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-feed
@@ -76,6 +79,11 @@ jobs:
         env:
           NODE_PATH: /tmp/maple-ui-tools/node_modules
         run: node scripts/ui-check/run.mjs
+      - name: Check daily discoveries and milestones in the browser
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        env:
+          NODE_PATH: /tmp/maple-ui-tools/node_modules
+        run: pnpm check:maple-development-ui
       - name: Check chat in the browser
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         env:
@@ -121,6 +129,7 @@ jobs:
           name: maple-ui-screenshots
           path: |
             test-results/maple-ui
+            test-results/maple-development-ui
             test-results/maple-chat-ui
             test-results/maple-entrypoints-ui
             test-results/maple-nutrition-ui

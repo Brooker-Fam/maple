@@ -9,6 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "check:maple-development": "tsx scripts/maple-development-check.ts",
+    "check:maple-development-ui": "node scripts/development-ui/run.mjs",
     "check:maple-feed": "tsx scripts/maple-feed-check.ts",
     "check:maple-care": "tsx scripts/maple-care-check.ts",
     "check:maple-nutrition": "tsx scripts/maple-nutrition-check.ts",

@@ -13,6 +13,7 @@
  */
 
 import type { Baby } from "./types";
+import { DEVELOPMENT_MILESTONES } from "./guidelines/development";
 import { babyFirstName } from "./voice";
 
 export type MilestonePreset = {
@@ -94,6 +95,8 @@ export function milestoneLabel(id: string | null | undefined, w: MilestoneWords)
   if (!id) return "";
   const preset = milestonePreset(id, w);
   if (preset) return preset.label;
+  const development = DEVELOPMENT_MILESTONES.find((milestone) => milestone.id === id);
+  if (development) return development.label;
   const monthly = monthlyNumber(id);
   if (monthly != null) return `Month ${monthly} photo`;
   let m: RegExpExecArray | null;
