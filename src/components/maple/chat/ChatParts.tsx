@@ -7,6 +7,7 @@ import { chatRefusal, emergencySigns, momHelp } from "@/lib/maple/guidelines";
 import { careTime } from "@/lib/maple/care";
 import { formatTime } from "@/lib/maple/time";
 import { chatDisplayText, receiptText } from "@/lib/maple/chat/display";
+import { isChatImage } from "@/lib/maple/chat/images";
 import type { ChatAlert, ChatMessage, ChatToolOutput, HelpAbout } from "@/lib/maple/chat/types";
 import { AlertNote, EMERGENCY_FILL, usePhones } from "../AlertCard";
 import { useCareNav } from "../care/CareNav";
@@ -18,6 +19,7 @@ import { Icon, KindBadge } from "../icons";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { chatToolErrorText } from "@/lib/maple/chat/receipts";
+import ChatImages from "./ChatImages";
 import ChatChart from "./ChatChart";
 import ChatReceipt, { CareReceipt } from "./ChatReceipt";
 import ChatEntries from "./ChatEntries";
@@ -40,9 +42,13 @@ type ToolPart = Extract<Part, { toolCallId: string }>;
 export function MessageView({ message, threadId, last, busy, onApprove, onAnswerQuestion, onAsk }: { message: ChatMessage; threadId?: string; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
   if (message.role === "user") {
     const text = message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
+    const images = message.parts.filter(isChatImage);
     return (
       <div className="flex justify-end pl-10">
-        <p className="rounded-[18px] rounded-br-[6px] bg-mp-accent px-3.5 py-2.5 text-[16px] leading-snug whitespace-pre-wrap wrap-anywhere text-mp-on-accent">{text}</p>
+        <div className="min-w-0 space-y-2 rounded-[18px] rounded-br-[6px] bg-mp-accent px-3.5 py-2.5 text-mp-on-accent">
+          <ChatImages images={images} />
+          {text && <p className="text-[16px] leading-snug whitespace-pre-wrap wrap-anywhere">{text}</p>}
+        </div>
       </div>
     );
   }

@@ -16,6 +16,7 @@ import { CHAT_TERMS_NEEDED, THREAD_ID_RE, type ChatConsent, type ChatMessage, ty
 import { deliveryTimeProblem, parseDelivery, type ChatDelivery } from "./delivery";
 import { matchesDeliveryFingerprint, type DeliveryReceipt } from "./delivery-store";
 import { CHAT_FAILED } from "./types";
+import type { ChatImage } from "./images";
 
 /**
  * One POST to the chat, from the raw body to a streamed answer or a refusal.
@@ -50,6 +51,10 @@ export type PostDeps = {
   model: LanguageModel;
   modelKey: string;
   price: ModelPrice | null;
+  images?: {
+    validate: (images: ChatImage[]) => Promise<void>;
+    resolve: (messages: ChatMessage[]) => Promise<ChatMessage[]>;
+  };
   /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). */
   tools: (opts: { born: boolean; care: boolean; copy: ToolCopy; submittedAt?: Date }) => ToolSet;
   /** The log as it stands (logState in mcp-tools.ts), for the new user message's [App] lines; `care` as for `tools`. */
@@ -142,11 +147,20 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     const previous = await store.deliveries.find(member.email, delivery.requestId);
     if (!previous) return null;
     if (previous.cancelled) return refuse({ error: "This message was cancelled before it was received. Nothing was changed.", code: "cancelled", requestId: delivery.requestId }, 409);
-    if (!matchesDeliveryFingerprint(previous.fingerprint, delivery, incoming.text)) return refuse({ error: "This delivery reference belongs to a different message. Review the message before sending it again.", code: "stale" }, 409);
+    if (!matchesDeliveryFingerprint(previous.fingerprint, delivery, incoming.text, incoming.images)) return refuse({ error: "This delivery reference belongs to a different message. Review the message before sending it again.", code: "stale" }, 409);
     return refuse({ error: "This message was already received. Checking its saved reply.", code: "received", requestId: delivery.requestId, threadId: previous.threadId ?? undefined }, 409);
   };
   const received = await alreadyReceived();
   if (received) return received;
+  if (incoming.kind === "user" && incoming.images?.length) {
+    if (!deps.images) return reply({ error: "Photos aren't available in this chat." }, 400);
+    try { await deps.images.validate(incoming.images); }
+    catch (error) {
+      if (error instanceof StoreUnavailable) throw error;
+      if (!(error instanceof ChatInputError)) deps.report(error);
+      return reply({ error: "A photo is no longer available. Remove it and attach it again." }, 400);
+    }
+  }
   if (delivery) {
     const problem = deliveryTimeProblem(delivery, deps.now);
     if (problem) return reply({ error: problem }, 400);
@@ -192,7 +206,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
         submittedAt = new Date(Math.min(Date.parse(delivery.submittedAt), deps.now.getTime()));
         state.unshift(`Submitted at ${delivery.submittedAt}. The log and Now line are current; times relative to this message (now or minutes ago) refer to its submitted time.`);
       }
-      const stored = userMessage(newMessageId(), incoming.text, line, state, delivery ?? undefined);
+      const stored = userMessage(newMessageId(), incoming.text, line, state, delivery ?? undefined, incoming.images);
       const prior = denyPending(history);
       responseId = newMessageId();
       failedResponseId = responseId;
@@ -204,7 +218,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
         await store.saveMessage(thread.id, member.email, stored);
       }
       for (const m of prior.changed) await store.saveMessage(thread.id, member.email, m);
-      if (!thread.title) await store.setTitle(thread.id, titleFrom(incoming.text));
+      if (!thread.title) await store.setTitle(thread.id, titleFrom(incoming.text) || "Photo");
       messages = [...prior.messages, stored];
     } else {
       const original = history.findLast((message) => message.role === "user")?.parts.find((p) => p.type === "data-delivery");
@@ -244,6 +258,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       crisis,
       stepsDone,
       questionContinuation,
+      resolveImages: deps.images?.resolve,
       deps: {
         save: async (m) => {
           await store.saveMessage(thread.id, member.email, m);

@@ -10,6 +10,7 @@ import { babyFirstName, useBabyWords } from "./familyWords";
 import Celebrations from "./Celebrations";
 import { AskChatButton } from "./chat/AskChat";
 import Dock from "./Dock";
+import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
@@ -102,6 +103,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       )}
 
       {!nothingYet && <LoggedToday onDetails={() => onNavigate("patterns")} />}
+      <DailyDiscovery />
       <Celebrations />
 
       <HelpFooter />

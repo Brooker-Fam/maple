@@ -15,6 +15,7 @@ import AssistantSettings from "./settings/AssistantSettings";
 import BabySettings from "./settings/BabySettings";
 import PeopleSettings from "./settings/PeopleSettings";
 import PhoneSettings from "./settings/PhoneSettings";
+import DiscoveryPreferences from "./development/DiscoveryPreferences";
 import MedicalRecordsSettings, { useMedicalRecordsAvailable } from "./settings/MedicalRecordsSettings";
 import { SettingsDraftContext } from "./settings/DraftContext";
 import { ActionRow, GROUP, Section } from "./settings/parts";
@@ -29,6 +30,7 @@ const PAGES = {
   "medical-records": "Medical records",
   today: "On Today",
   appearance: "Appearance & units",
+  discoveries: "Daily discoveries",
   assistants: "Siri & assistants",
   chat: "Chat privacy",
   account: "Sign-in & account",
@@ -122,6 +124,7 @@ export default function FamilyTab() {
     "medical-records": <MedicalRecordsSettings key={`${state.family?.id ?? 1}:${state.me.email}:${state.baby.id}`} active={active === "medical-records"} />,
     today: <BabySettings section="today" />,
     appearance: <PhoneSettings />,
+    discoveries: <DiscoveryPreferences />,
     assistants: <AssistantSettings />,
     chat: <Section title="What the chat can read"><div className={GROUP}><ChatCareRow /></div></Section>,
     account: <><SignInMethods memberId={state.me.email} /><DataAndAccount /></>,
@@ -154,6 +157,7 @@ export default function FamilyTab() {
             <div className={GROUP}>
               <NotificationsRow />
               {row("appearance", "sun", units === "metric" ? "Metric" : "US units")}
+              {row("discoveries", "leaf", undefined, "Topics you enjoy and whether to show them")}
             </div>
           </Section>
           <Section title="Your family" action={<span className={cx(tone.faint, "text-[13px]")}>Shared settings</span>}>

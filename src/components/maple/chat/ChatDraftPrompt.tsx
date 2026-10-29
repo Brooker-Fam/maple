@@ -5,20 +5,21 @@ import { CHAT_MAX_CHARS } from "@/lib/maple/chat/types";
 import { Button, cx, tone } from "../ui";
 import { useChatNav } from "./ChatNav";
 
-export default function ChatDraftPrompt({ active, draft, setDraft, composer }: {
+export default function ChatDraftPrompt({ active, draft, hasAttachments = false, setDraft, composer }: {
   active: boolean;
   draft: string;
+  hasAttachments?: boolean;
   setDraft: (draft: string) => void;
   composer: RefObject<HTMLDivElement | null>;
 }) {
   const { pendingPrompt, dismissPrompt } = useChatNav();
 
   useEffect(() => {
-    if (!active || !pendingPrompt || draft.trim()) return;
+    if (!active || !pendingPrompt || draft.trim() || hasAttachments) return;
     setDraft(pendingPrompt.prompt);
     dismissPrompt(pendingPrompt.id);
     requestAnimationFrame(() => composer.current?.querySelector("textarea")?.focus({ preventScroll: true }));
-  }, [active, pendingPrompt, draft, setDraft, dismissPrompt, composer]);
+  }, [active, pendingPrompt, draft, hasAttachments, setDraft, dismissPrompt, composer]);
 
   if (!pendingPrompt) return null;
   const combined = `${draft.trimEnd()}\n\n${pendingPrompt.prompt}`;

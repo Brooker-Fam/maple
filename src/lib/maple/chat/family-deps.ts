@@ -10,6 +10,7 @@ import type { PostDeps } from "./post";
 import { priceFor } from "./prices";
 import { chatBudget, chatStore } from "./store";
 import { chatLogState, chatTools } from "./tools";
+import { resolveChatImages, validateChatImages } from "./image-store";
 
 /**
  * Everything one chat POST reads, bound to the signed-in member's family:
@@ -35,6 +36,10 @@ export function familyPostDeps(
     model: opts.model,
     modelKey: opts.modelKey,
     price: priceFor(opts.modelKey),
+    images: {
+      validate: (images) => validateChatImages(fam, member, images),
+      resolve: (messages) => resolveChatImages(fam, member, messages),
+    },
     tools: (t) => chatTools(member, { ...t, fam: fam.familyId, device: opts.device }),
     state: ({ care }) => chatLogState(member, { fam: fam.familyId, care, now: opts.now }),
     budget: () => chatBudget(fam, opts.now),

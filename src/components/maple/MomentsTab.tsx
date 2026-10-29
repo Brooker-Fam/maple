@@ -18,6 +18,7 @@ import {
 import type { Entry, EntryOf } from "@/lib/maple/types";
 import { photoUrl } from "./EntryRow";
 import { AskChatButton } from "./chat/AskChat";
+import MilestonesToNotice from "./development/MilestonesToNotice";
 import { Icon, KindBadge } from "./icons";
 import { LeafMark, ageShort, keptDate, keepsakeBirthAt } from "./keepsake";
 import { captionOf, extraNote, Lightbox, SafeImg, type Slide } from "./MomentPhotos";
@@ -170,6 +171,10 @@ export default function MomentsTab() {
         {!moments && !error && <LoadingCards />}
 
         {moments && moments.length === 0 && <EmptyScrapbook viewer={viewer} onAdd={() => add()} />}
+
+        {highlights && (
+          <MilestonesToNotice baby={state.baby} moments={highlights} viewer={viewer} onOpen={show} onAdd={add} />
+        )}
 
         {highlights && (
           <FirstsShelf moments={highlights} bornAt={bornAt} tz={tz} viewer={viewer} onOpen={show} onAdd={(id) => add({ milestone: id })} />

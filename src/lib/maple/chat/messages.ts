@@ -2,25 +2,31 @@ import { isToolUIPart } from "ai";
 import { CHAT_MAX_CHARS, type ChatMessage } from "./types";
 import { questionAnswerText, supersedeQuestions } from "./questions";
 import type { ChatDelivery } from "./delivery";
-
-/**
- * What the chat route takes from the phone, and how it changes stored
- * history. The phone sends only its newest message; history comes from the
- * database. A user message is plain text. An assistant message is only ever
- * a carrier for approval taps or question answers: separate mergers copy
- * only validated answers onto the server's own stored parts.
- */
+import { CHAT_MAX_IMAGES, parseChatImage, type ChatImage } from "./images";
 
 export class ChatInputError extends Error {}
 
-export type Incoming = { kind: "user"; text: string } | { kind: "continuation"; message: { id: string; parts: unknown[] } };
+export type Incoming = { kind: "user"; text: string; images?: ChatImage[] } | { kind: "continuation"; message: { id: string; parts: unknown[] } };
 
 const MSG_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
 export function readIncoming(raw: unknown): Incoming {
   const m = raw as { id?: unknown; role?: unknown; parts?: unknown } | null;
   if (!m || typeof m !== "object" || !Array.isArray(m.parts)) throw new ChatInputError("Expected a message");
-  if (m.role === "user") return { kind: "user", text: userText(m.parts) };
+  if (m.role === "user") {
+    if (!m.parts.length || m.parts.length > 20) throw new ChatInputError("Type a message or add a photo first.");
+    const images: ChatImage[] = [];
+    const texts: unknown[] = [];
+    for (const part of m.parts) {
+      const image = parseChatImage(part);
+      if (image) images.push(image);
+      else texts.push(part);
+    }
+    if (images.length > CHAT_MAX_IMAGES) throw new ChatInputError(`Add up to ${CHAT_MAX_IMAGES} photos per message.`);
+    if (new Set(images.map((image) => image.url)).size !== images.length) throw new ChatInputError("Each photo can appear only once in a message.");
+    const text = userText(texts, images.length > 0);
+    return { kind: "user", text, ...(images.length ? { images } : {}) };
+  }
   if (m.role === "assistant" && typeof m.id === "string" && MSG_ID_RE.test(m.id) && m.parts.length <= 200) return { kind: "continuation", message: { id: m.id, parts: m.parts } };
   throw new ChatInputError("Expected a message");
 }
@@ -59,23 +65,22 @@ export function storable(text: string): string {
   return text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]|[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, (c) => (c.length === 2 ? c : ""));
 }
 
-/** The text of a user message: text parts only, at most CHAT_MAX_CHARS once trimmed. */
-export function userText(parts: unknown[]): string {
-  if (!parts.length || parts.length > 20) throw new ChatInputError("Type a message first.");
+export function userText(parts: unknown[], allowEmpty = false): string {
+  if ((!parts.length && !allowEmpty) || parts.length > 20) throw new ChatInputError("Type a message first.");
   const texts = parts.map((p) => {
     const part = p as { type?: unknown; text?: unknown } | null;
-    if (!part || part.type !== "text" || typeof part.text !== "string") throw new ChatInputError("Messages here are text only.");
+    if (!part || part.type !== "text" || typeof part.text !== "string") throw new ChatInputError("Use text and photos uploaded in this chat.");
     return part.text;
   });
   const text = storable(texts.join("\n")).trim();
-  if (!text) throw new ChatInputError("Type a message first.");
+  if (!text && !allowEmpty) throw new ChatInputError("Type a message first.");
   if (text.length > CHAT_MAX_CHARS) throw new ChatInputError(`That's over ${CHAT_MAX_CHARS.toLocaleString("en-US")} characters. Try a shorter message.`);
   return text;
 }
 
 /** The user message as stored: the app's context lines for the model, then their words. */
-export function userMessage(id: string, text: string, line: string, state: string[] = [], delivery?: ChatDelivery): ChatMessage {
-  return { id, role: "user", parts: [{ type: "data-context", data: { line, ...(state.length ? { state } : {}) } }, ...(delivery ? [{ type: "data-delivery" as const, data: delivery }] : []), { type: "text", text }] };
+export function userMessage(id: string, text: string, line: string, state: string[] = [], delivery?: ChatDelivery, images: ChatImage[] = []): ChatMessage {
+  return { id, role: "user", parts: [{ type: "data-context", data: { line, ...(state.length ? { state } : {}) } }, ...(delivery ? [{ type: "data-delivery" as const, data: delivery }] : []), ...(text ? [{ type: "text" as const, text }] : []), ...images] };
 }
 
 /** How many model steps a stored reply has run, so an approval's continuation shares the turn's step cap. */

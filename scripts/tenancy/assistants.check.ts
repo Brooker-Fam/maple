@@ -455,7 +455,7 @@ async function bothFamiliesRouteChecks(seed: Seed) {
     eq([(home.current as { id: string } | null)?.id, (home.items as StreamItem[]).map((i) => i.thread)], [alpha.threadId, [alpha.threadId]]);
     eq((await chatRoute.DELETE(req("/api/maple/chat", { method: "DELETE", headers: away }))).status, 200);
     eq((await sql(`SELECT id FROM maple_chat_messages WHERE id = $1`, [alpha.messageId])).length, 1, "a delete in their other family leaves this one's chat");
-    await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES (2, $1, 'chat', 1)`, [alpha.owner]);
+    await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES (2, $1, 'chat', 2)`, [alpha.owner]);
     await sql(`UPDATE maple_chat_threads SET busy_until = NOW() + INTERVAL '1 minute' WHERE id = $1`, [alpha.threadId]);
     const posted = await chatRoute.POST(req("/api/maple/chat", { method: "POST", headers: { ...away, "content-type": "application/json" }, body: userMessage(alpha.threadId) }));
     await sql(`UPDATE maple_chat_threads SET busy_until = NULL WHERE id = $1`, [alpha.threadId]);

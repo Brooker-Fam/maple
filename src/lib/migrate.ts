@@ -422,9 +422,39 @@ export async function migrate() {
   await migrateAuth();
   await migrateAnalytics();
   await migrateChatDelivery();
+  await migrateChatImages();
   await migrateEpic();
 
   console.log("Migrations complete.");
+}
+
+async function migrateChatImages(): Promise<void> {
+  await sql`CREATE TABLE IF NOT EXISTS maple_chat_images (
+    id TEXT PRIMARY KEY,
+    family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
+    member TEXT NOT NULL,
+    viewer_only BOOLEAN NOT NULL,
+    data_base64 TEXT NOT NULL CHECK (length(data_base64) <= 699052),
+    byte_length INTEGER NOT NULL CHECK (byte_length > 0 AND byte_length <= 524288),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reserved_until TIMESTAMPTZ,
+    CHECK (octet_length(decode(data_base64, 'base64')) = byte_length)
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_chat_images_member ON maple_chat_images (family_id, member, created_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_chat_images_expiry ON maple_chat_images (created_at)`;
+  await sql`CREATE TABLE IF NOT EXISTS maple_chat_image_uploads (
+    family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
+    member TEXT NOT NULL,
+    day DATE NOT NULL,
+    uploads INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (family_id, member, day)
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS maple_chat_image_generations (
+    family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
+    member TEXT NOT NULL,
+    generation BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (family_id, member)
+  )`;
 }
 
 // ========================================

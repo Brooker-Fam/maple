@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, transaction } from "@/lib/db";
 import type { FamilyScope } from "../family";
 import { StoreUnavailable } from "../store";
 import type { ChatMessage } from "./types";
@@ -65,9 +65,23 @@ export async function chatStream(fam: Fam, member: string, viewer: boolean, befo
 export async function deleteChats(fam: Fam, member: string, viewer: boolean): Promise<number> {
   // Keep only non-content delivery receipts so a lost acknowledgement cannot replay a write after deletion.
   // A running turn keeps its member lease until it finishes, even if its conversation is deleted.
-  return (await rows(`WITH removed AS (
+  const params = [fam.familyId, member, viewer];
+  const result = await transaction([{
+    sql: `INSERT INTO maple_chat_image_generations (family_id, member, generation) VALUES ($1, $2, 1)
+      ON CONFLICT (family_id, member) DO UPDATE SET generation = maple_chat_image_generations.generation + 1`,
+    params: params.slice(0, 2),
+  }, { sql: `WITH removed AS (
     DELETE FROM maple_chat_threads t WHERE t.family_id = $1 AND t.member = $2 AND (t.viewer_only OR NOT $3) RETURNING t.id
   ), detached AS (
     UPDATE maple_chat_deliveries SET thread_id = NULL WHERE family_id = $1 AND member = $2 AND thread_id IN (SELECT id FROM removed)
-  ) SELECT id FROM removed`, [fam.familyId, member, viewer])).length;
+  ), removed_images AS (
+    DELETE FROM maple_chat_images i WHERE i.family_id = $1 AND i.member = $2 AND (i.viewer_only OR NOT $3)
+    AND NOT EXISTS (
+      SELECT 1 FROM maple_chat_messages m JOIN maple_chat_threads t ON t.id = m.thread_id AND t.family_id = m.family_id
+      WHERE m.family_id = i.family_id AND m.member = i.member AND NOT (t.viewer_only OR NOT $3)
+      AND m.parts @> jsonb_build_array(jsonb_build_object('type', 'file', 'url', '/api/maple/chat/images?id=' || i.id))
+    )
+  ) SELECT id FROM removed`, params }]);
+  if (result === null) throw new StoreUnavailable();
+  return result[1].length;
 }
