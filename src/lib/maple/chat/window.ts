@@ -36,10 +36,27 @@ export const messageTokens = (m: ChatMessage) => inputTokens(m.parts.map((p) => 
   return { ...p, output: { text: p.output.text } };
 }));
 
-export function modelWindow(messages: ChatMessage[]): ChatMessage[] {
+/**
+ * `forgotten`: messages from before the family's last memory Forget
+ * (forgottenMessageIds in memory/store.ts). They stay on the phone but leave
+ * the window, so a fact someone forgot can't come back from an old message;
+ * the newest exchange still goes whole.
+ */
+export function modelWindow(messages: ChatMessage[], forgotten: ReadonlySet<string> = new Set()): ChatMessage[] {
   if (!messages.length) return messages;
   let start = messages.length - 1;
   while (start > 0 && messages[start].role !== "user") start--;
+  if (forgotten.size) {
+    const older = messages.slice(0, start);
+    let cut = older.length;
+    while (cut > 0 && !forgotten.has(older[cut - 1].id)) cut--;
+    if (cut > 0) {
+      // Whole exchanges only: what's left of an exchange the floor cut through starts at its next user message.
+      while (cut < older.length && older[cut].role !== "user") cut++;
+      messages = [...older.slice(cut), ...messages.slice(start)];
+      start = older.length - cut;
+    }
+  }
   let tokens = 0;
   let images = 0;
   const count = (message: ChatMessage) => {

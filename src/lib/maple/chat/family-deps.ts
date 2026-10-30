@@ -11,6 +11,7 @@ import { priceFor } from "./prices";
 import { chatBudget, chatStore } from "./store";
 import { chatLogState, chatTools } from "./tools";
 import { resolveChatImages, validateChatImages } from "./image-store";
+import { chatMemories } from "../memory/chat";
 
 /**
  * Everything one chat POST reads, bound to the signed-in member's family:
@@ -41,6 +42,7 @@ export function familyPostDeps(
       resolve: (messages) => resolveChatImages(fam, member, messages),
     },
     tools: (t) => chatTools(member, { ...t, fam: fam.familyId, device: opts.device }),
+    memories: (m) => chatMemories(fam, { threadId: m.threadId, viewer: m.viewer, members: m.members, now: opts.now, tz: fam.tz }),
     state: ({ care }) => chatLogState(member, { fam: fam.familyId, care, now: opts.now }),
     budget: () => chatBudget(fam, opts.now),
     now: opts.now,

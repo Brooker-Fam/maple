@@ -9,6 +9,7 @@ import { familyPostDeps } from "@/lib/maple/chat/family-deps";
 import { chatStream, deleteChats } from "@/lib/maple/chat/history";
 import { CHAT_REQUEST_ID_RE } from "@/lib/maple/chat/delivery";
 import { deliveryStatus } from "@/lib/maple/chat/delivery-store";
+import { forgetChatWords } from "@/lib/maple/memory/store";
 import { captureServerException } from "@/lib/posthog-server";
 
 /**
@@ -49,6 +50,8 @@ export const GET = withMember("GET /api/maple/chat", async (request, member, fam
 
 export const DELETE = withMember("DELETE /api/maple/chat", async (_request, member, fam) => {
   await deleteChats(fam, member.email, member.role === "viewer");
+  // Their words quoted with the family's memories came from this chat, so they go with it; the memories stay.
+  await forgetChatWords(fam, member.email);
   return json({ ok: true });
 });
 

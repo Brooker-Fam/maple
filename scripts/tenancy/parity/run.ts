@@ -30,16 +30,19 @@ const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
   { path: /^db\.[^.]+\.\[[^\]]+\]\.[^.]+$/, added: true, why: "a column new code added" },
   { path: /^db\.maple_push_sent\.\[cleanup:[^\]]+\]$/, added: true, why: "the daily cleanup of abandoned onboarding families claims its day" },
   { path: /^db\.maple_members\.\[[^\]]+\]\.accepted_at$/, why: "new code records when someone took up a membership; old code leaves it null" },
+  { path: /^out\.mcp\.(maple_status|admin)\.sc\.family_memories$/, added: true, why: "maple_status carries the family's memories (none in this scenario) for a connected app" },
   {
     path: /^out\.mcp\.(stranger|removed)\.(isError|sc|text)$/,
     why: "the scenario calls tools without the MCP route, which turned these callers away (401) before; now the tools refuse them too",
   },
 ];
 
-const OVERLAY = ["src/lib/db.ts", "src/lib/migrate.ts", "src/lib/maple/family-tables.ts", "src/lib/maple/family/schema.ts", "src/lib/maple/auth-schema.ts"];
+const OVERLAY = ["src/lib/db.ts", "src/lib/migrate.ts", "src/lib/maple/family-tables.ts", "src/lib/maple/family/schema.ts", "src/lib/maple/auth-schema.ts", "src/lib/maple/memory/schema.ts"];
 
 const FIXED_DAY = "2026-10-27";
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/;
+/** maple_status's JSON line ends with the family's memories now; with none, that exact ending reads as before. */
+const NO_MEMORIES = /,"family_memories":\{"as_of":"\d{4}-\d{2}-\d{2}","memories":\[\]\}\}$/;
 
 const work = mkdtempSync(join(tmpdir(), "maple-parity-"));
 try {
@@ -108,7 +111,11 @@ function steady(run: unknown): unknown {
   return walk({ out, db: keyed });
 }
 
-/** family_id is ignored (every family-1 row has it now); a time from Postgres' own NOW() isn't frozen, so it's masked. */
+/**
+ * family_id is ignored (every family-1 row has it now); a time from Postgres'
+ * own NOW() isn't frozen, so it's masked; an empty family_memories at the end
+ * of a tool's text is dropped (its key in sc is an allowed addition).
+ */
 function normal(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(normal);
   if (v && typeof v === "object") {
@@ -120,6 +127,7 @@ function normal(v: unknown): unknown {
     );
   }
   if (typeof v === "string" && ISO.test(v)) return v.startsWith(FIXED_DAY) || v < "2026-10-27T14:00:01" ? v : "<pg-now>";
+  if (typeof v === "string" && NO_MEMORIES.test(v)) return v.replace(NO_MEMORIES, "}");
   return v;
 }
 

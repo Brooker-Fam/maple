@@ -25,6 +25,7 @@ import ChatReceipt, { CareReceipt } from "./ChatReceipt";
 import ChatEntries from "./ChatEntries";
 import ChatSetting, { SettingsSummary } from "./ChatSetting";
 import ChatNavigation from "./ChatNavigation";
+import ChatMemory from "./ChatMemory";
 import ChatQuestion, { type AnswerQuestion } from "./ChatQuestion";
 
 /**
@@ -132,6 +133,7 @@ function OutputView({ output, busy, onAsk, threadId, messageId, toolCallId }: { 
   if (output.chart) return <ChatChart chart={output.chart} onAsk={onAsk} disabled={busy} />;
   if (output.about) return <HelpCard about={output.about} />;
   if (!output.write) return null;
+  if (output.memory) return <ChatMemory change={output.memory} />;
   if (output.careReceipts?.length) return <div className={GROUP}>{output.careReceipts.map((receipt) => <CareReceipt key={receipt.id} receipt={receipt} />)}</div>;
   if (output.saved?.length) {
     return (

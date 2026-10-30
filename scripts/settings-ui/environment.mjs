@@ -44,7 +44,7 @@ export async function environment() {
 }
 
 async function visit(browser, output, { hash = "today", guest = false, role, width = 390, theme = "light" } = {}) {
-  const controls = { ...world(), signedIn: true, signoutFailure: false, tokens: [] };
+  const controls = { ...world(), signedIn: true, signoutFailure: false, tokens: [], memories: syntheticMemories(), memoryConflict: false };
   if (guest) {
     controls.state.me = { ...controls.state.me, email: "invite:900", role: "viewer", display_name: "Helper" };
     controls.state.members = [controls.state.me];
@@ -106,7 +106,11 @@ async function settingsRoute(route, controls) {
     }
     return json(req.method() === "POST" ? { url: `${origin}/maple/invite/synthetic-local-only`, emailed: false } : { members: controls.state.members });
   }
+  if (url.pathname === "/api/maple/memories") return memoriesRoute(req, controls, json);
   if (url.pathname === "/api/maple/epic") return json({ available: false });
+  // A check that sets controls.chatStream reads that conversation instead, with its terms accepted.
+  if (controls.chatStream && url.pathname === "/api/maple/chat/consent") return json({ terms: true, care: false, self: false });
+  if (controls.chatStream && url.pathname === "/api/maple/chat") return json(controls.chatStream);
   if (url.pathname === "/api/maple/chat") return json({ messages: [], has_more: false, thread_id: "synthetic-settings-thread" });
   if (url.pathname === "/api/maple/baby" && req.method() === "PATCH") {
     const body = req.postDataJSON();
@@ -125,4 +129,51 @@ async function settingsRoute(route, controls) {
     return json({ tokens: controls.tokens });
   }
   return apiRoute(route, controls);
+}
+
+/** Settings → Memories over made-up records (memory/types.ts MemoryList); `controls.memoryConflict` answers the next edit with 409. */
+function memoriesRoute(req, controls, json) {
+  const list = controls.memories;
+  const canEdit = controls.state.me.role === "owner" || controls.state.me.role === "member";
+  const reply = () => json({ ...list, canEdit });
+  if (req.method() === "GET") return reply();
+  const body = req.postDataJSON();
+  controls.requests.push({ path: "/api/maple/memories", method: "POST", body });
+  if (!canEdit) return json({ error: "You have view-only access." }, 403);
+  const at = controls.state.now;
+  const find = (id) => list.records.find((m) => m.id === id);
+  if (controls.memoryConflict && body.action === "correct") {
+    controls.memoryConflict = false;
+    const current = find(body.id);
+    current.fact = "Someone else's newer words.";
+    current.revision += 1;
+    return json({ error: "Someone changed that memory just now. Here it is as it is now.", code: "changed", current, list: { ...list, canEdit } }, 409);
+  }
+  if (body.action === "save" || body.action === "correct") {
+    const id = Math.max(0, ...list.records.map((m) => m.id)) + 1;
+    if (body.action === "correct") Object.assign(find(body.id), { status: "superseded", ended_at: at, ended_by: controls.state.me.email });
+    list.records.unshift({ id, ...body.memory, status: "active", revision: 1, predecessor_id: body.action === "correct" ? body.id : null, said_by: controls.state.me.email, via: "web", source_text: null, source_words: true, stated_at: at, ended_at: null, ended_by: null, ended_via: null, updated_at: at });
+  }
+  if (body.action === "resolve" || body.action === "archive") Object.assign(find(body.id), { status: body.action === "resolve" ? "resolved" : "archived", ended_at: at, ended_by: controls.state.me.email, ended_via: "web" });
+  if (body.action === "forget") list.records = list.records.filter((m) => m.id !== body.id && m.predecessor_id !== body.id);
+  if (body.action === "forget_all") list.records = [];
+  if (body.action === "switches") list.state = { ...list.state, ...(body.capture === undefined ? {} : { capture: body.capture }), ...(body.use === undefined ? {} : { use: body.use }) };
+  return reply();
+}
+
+/** Made-up family memories for River's family: current ones of several kinds, one ended, one replaced. */
+export function syntheticMemories() {
+  const base = { reason: null, valid_from: null, valid_to: null, review_on: null, revision: 1, predecessor_id: null, said_by: "sam@example.test", via: "chat", source_text: null, source_words: false, ended_at: null, ended_by: null, ended_via: null };
+  const at = (day) => `2026-10-${day}T14:00:00.000Z`;
+  return {
+    state: { revision: 7, epoch: 2, capture: true, use: true },
+    today: "2026-10-28",
+    records: [
+      { ...base, id: 1, kind: "routine", fact: "Sam does the 2am feed on weeknights.", status: "active", stated_at: at(20), updated_at: at(20), via: "web", source_words: true },
+      { ...base, id: 2, kind: "feeding", fact: "River takes a sensitive formula; regular formula gave her gas.", reason: "Gas and fussiness after feeds", predecessor_id: 5, status: "active", stated_at: at(22), updated_at: at(22), source_text: "the sensitive one works way better for her", source_words: true, review_on: "2026-11-15" },
+      { ...base, id: 3, kind: "health", fact: "River's pediatrician wants her woken to eat every 3 hours until her weight check.", status: "active", valid_to: "2026-11-03", stated_at: at(24), updated_at: at(24), source_text: "Saved because the parent asked to remember the doctor's instruction.", via: "claude" },
+      { ...base, id: 4, kind: "sleep", fact: "River sleeps swaddled in the bassinet.", status: "active", valid_to: "2026-10-25", stated_at: at(12), updated_at: at(12) },
+      { ...base, id: 5, kind: "feeding", fact: "River takes regular formula.", status: "superseded", stated_at: at(10), updated_at: at(22), ended_at: at(22), ended_by: "sam@example.test", ended_via: "chat" },
+    ],
+  };
 }

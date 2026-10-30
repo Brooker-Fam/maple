@@ -150,6 +150,22 @@ export default function Privacy() {
         times and a keyed fingerprint, without the message text. These receipts can remain after chat history is deleted.
         Receipts more than eight days old are cleared as chat is used.
       </p>
+      <h3>Family memories</h3>
+      <p>
+        When you ask Maple&rsquo;s chat or a connected assistant to remember something about your baby or your family&rsquo;s
+        routine, such as the feeding plan or who does the night feeds, it is saved as a family memory, with who said it, where,
+        when, any dates you gave, and a short note or your own words. You can also add memories yourself in Settings &rarr;
+        Memories. Memories belong to the family: everyone in it except photos-only guests can read them there, and owners and
+        members can add, edit, resolve, archive or forget them. The chat and assistants are told not to save mom&rsquo;s own
+        health, medicines, food or mood as memories; her page keeps those.
+      </p>
+      <p>
+        Editing a memory keeps the earlier version until it is forgotten. Forget deletes a memory and its earlier versions for
+        good, and from then on the chat stops sending older messages, from anyone in the family, to the AI model, so the
+        memory can&rsquo;t come back from them; chat history on your phones stays. Deleting your chat history removes your
+        words quoted with memories, not the memories. In Settings &rarr; Memories you can stop chats from saving memories, or
+        from using them. Memories are deleted with the family&rsquo;s data.
+      </p>
       <h3>The waitlist</h3>
       <p>
         If you join the waitlist, Maple keeps your email address and the date you joined. It is used only to tell you when Maple
@@ -300,7 +316,7 @@ export default function Privacy() {
       <h2>The AI features</h2>
       <h3>Maple&rsquo;s chat</h3>
       <p>
-        When you use the chat, your message and attached photos, answers to question cards, the recent conversation, and the log or supported family settings it reads to answer are sent to
+        When you use the chat, your message and attached photos, answers to question cards, the recent conversation, your family&rsquo;s memories, and the log or supported family settings it reads to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
         see her page can use the chat with her food, drinks, portions and nutrient details, medicines and doses, temperatures and questions for her OB. If you ask for food estimates,
         the chat can save approximate nutrient values with the entry, marked as estimates that you can edit. Her check-ins never
@@ -310,7 +326,8 @@ export default function Privacy() {
       </p>
       <h3>Claude, ChatGPT, Muse and Grok</h3>
       <p>
-        You can connect Maple to your own Claude, ChatGPT, Muse or Grok account. What those assistants read from your log or add to it goes
+        You can connect Maple to your own Claude, ChatGPT, Muse or Grok account. Connected assistants can read and change your
+        family&rsquo;s memories too, unless they&rsquo;re turned off in Settings &rarr; Memories. What those assistants read from your log or add to it goes
         through your account with Anthropic, OpenAI, Meta or xAI, under their terms and your privacy settings there; Maple doesn&rsquo;t
         control what they keep. You can disconnect at any time.
       </p>

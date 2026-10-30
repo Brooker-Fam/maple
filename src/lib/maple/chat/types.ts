@@ -55,7 +55,12 @@ export type ChatToolOutput = {
   navigation?: ChatNavigationCard;
   setting?: SettingProposal;
   settings?: SettingsSnapshot;
+  /** A family memory the tool saved or changed (memory/mcp.ts memory_change), for its card. */
+  memory?: ChatMemoryChange;
 };
+
+/** What a memory tool did, as its card shows it: never an id. */
+export type ChatMemoryChange = { status: "saved" | "supported" | "corrected" | "resolved" | "archived"; kind: string; fact: string; previous?: string };
 
 export type HelpAbout = "maple" | "mom" | "anyone";
 
