@@ -192,7 +192,7 @@ async function main() {
     await test(`${shape}: the chat proposes, never saves, and files its cost under its own family`, async () => {
       const before = await snapshot();
       eq((await runChat(gammaOwner, [{ role: "user", text: "Her name is Wren" }])).status, 403, "no chat terms yet");
-      await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES (3, $1, 'chat', 2)`, [GAMMA.owner]);
+      await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES (3, $1, 'chat', 3)`, [GAMMA.owner]);
       const model = standIn([
         [{ type: "tool-call", toolCallId: "c1", toolName: "propose_baby_name", input: JSON.stringify({ name: "Wren Test", nickname: null }) }, finish("tool-calls")],
         [...text("Wren Test it is: tap to confirm."), finish("stop")],

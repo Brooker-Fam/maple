@@ -28,6 +28,7 @@ import ChatNavigation from "./ChatNavigation";
 import ChatMemory from "./ChatMemory";
 import ChatQuestion, { type AnswerQuestion } from "./ChatQuestion";
 import { approvalWords, InviteCard, PEOPLE_APPROVALS, PeopleApproval } from "./ChatPeople";
+import ChatWeb from "./ChatWeb";
 
 /**
  * One message in the chat. The person's words sit in a bubble on the right,
@@ -91,7 +92,7 @@ function uniqueAlerts(parts: Part[]): { title: string; body: string; alert: Chat
   return out;
 }
 
-const Muted = ({ icon, children }: { icon?: "clock-3" | "circle-alert" | "info" | "check"; children: React.ReactNode }) => (
+const Muted = ({ icon, children }: { icon?: "clock-3" | "circle-alert" | "info" | "check" | "globe"; children: React.ReactNode }) => (
   <p className={cx(tone.muted, "flex items-start gap-2 text-[14px] leading-snug")}>
     {icon && <Icon name={icon} size={16} className="mt-0.5 shrink-0" />}
     <span className="min-w-0 wrap-anywhere">{children}</span>
@@ -108,7 +109,8 @@ function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQu
   switch (part.state) {
     case "input-streaming":
     case "input-available":
-      return null;
+      // Only while it's running: a search an answer never finished leaves nothing behind.
+      return name === "web_search" && last && busy ? <Muted icon="globe">Searching the web…</Muted> : null;
     case "approval-requested":
       if (!last || part.approval.isAutomatic) return <Muted icon="info">{words.idle}</Muted>;
       if (busy) return null;
@@ -138,6 +140,7 @@ function OutputView({ output, busy, onAsk, threadId, messageId, toolCallId }: { 
   if (output.chart) return <ChatChart chart={output.chart} onAsk={onAsk} disabled={busy} />;
   if (output.about) return <HelpCard about={output.about} />;
   if (output.invite) return <InviteCard invite={output.invite} />;
+  if (output.web) return <ChatWeb web={output.web} />;
   if (!output.write) return null;
   if (output.memory) return <ChatMemory change={output.memory} />;
   if (output.careReceipts?.length) return <div className={GROUP}>{output.careReceipts.map((receipt) => <CareReceipt key={receipt.id} receipt={receipt} />)}</div>;

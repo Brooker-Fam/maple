@@ -27,7 +27,7 @@ export default function Privacy() {
         <li>Limited usage counts help improve Maple. No session replay, and no names, email addresses or log contents in analytics.</li>
         <li>
           If you use Maple&rsquo;s chat, your messages go to an AI model through Vercel AI Gateway, and every request asks for zero
-          data retention and no training.
+          data retention and no training. Its web searches send only a short phrase, without your family&rsquo;s names, to Perplexity.
         </li>
         <li>
           Email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and your family&rsquo;s log is deleted within 30 days.
@@ -251,6 +251,10 @@ export default function Privacy() {
           feedback and replies to an invite or welcome email.
         </li>
         <li>
+          <strong>Perplexity</strong>, through Vercel AI Gateway, runs the chat&rsquo;s web searches. It receives only the short
+          search phrase described under Maple&rsquo;s chat, never your log, messages or names.
+        </li>
+        <li>
           <strong>PostHog</strong> receives the limited usage events described below and scrubbed error reports.
         </li>
       </ul>
@@ -330,6 +334,14 @@ export default function Privacy() {
         reach the chat. Every request asks the
         Gateway for zero data retention and no training on your data, and names the only providers it may be sent to, each one
         the Gateway lists as keeping no data. Nothing about your messages goes into Maple&rsquo;s logs or error reports.
+      </p>
+      <p>
+        When you ask the chat about something on the web, it can search for it. Only a short search phrase leaves Maple:
+        Maple takes your family&rsquo;s names, email addresses, phone numbers and links out of it first, and the search runs in a
+        request that carries nothing else. The phrase goes through Vercel AI Gateway to Perplexity, whose search isn&rsquo;t
+        covered by the zero data retention above, so Perplexity handles the phrase under its own terms. Health questions search
+        only public health and medical sites. The chat shows the exact phrase with the pages it found, and keeps the results
+        with your chat history.
       </p>
       <h3>Claude, ChatGPT, Muse and Grok</h3>
       <p>

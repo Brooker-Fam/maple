@@ -19,6 +19,7 @@ import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints, with
 import { TOOL_APPROVAL } from "./tools";
 import { CHAT_FAILED, CHAT_OFF, type ChatData, type ChatMessage } from "./types";
 import { inputTokens, modelWindow } from "./window";
+import { SEARCH_FINISH, withoutSpend, type SearchSpend, type WebSearchOutput } from "./web-search";
 
 /**
  * One chat turn as a streamed response: the model with the member's tools,
@@ -137,6 +138,11 @@ export async function chatTurn(opts: {
     const cost = costMicro(opts.modelKey, opts.price, tokens);
     return deps.record({ step: stepsDone + step, tokens, costMicro: cost.micro, priceKey: cost.key, finishReason, generationId }).catch(deps.report);
   };
+  /** A web search's own request and fee (web-search.ts), counted against the same budgets as the step that asked for it. */
+  const recordSearch = (step: number, s: SearchSpend) =>
+    /^\d{1,15}$/.test(s.costMicro)
+      ? deps.record({ step: stepsDone + step, tokens: s.tokens, costMicro: BigInt(s.costMicro), priceKey: s.priceKey, finishReason: SEARCH_FINISH, generationId: s.generationId }).catch(deps.report)
+      : Promise.resolve();
   let inFlight: { step: number; prompt: number } | null = null;
   let failedStatus: number | null = null;
   let cut = false;
@@ -174,6 +180,10 @@ export async function chatTurn(opts: {
       inFlight = null;
       const gen = (step.providerMetadata?.gateway as { generationId?: unknown } | undefined)?.generationId;
       await record(step.stepNumber, stepTokens(step.usage), step.finishReason ?? null, typeof gen === "string" ? gen.slice(0, 200) : null);
+      for (const r of step.toolResults) {
+        const spend = (r.output as WebSearchOutput | undefined)?.spend;
+        if (spend) await recordSearch(step.stepNumber, spend);
+      }
     },
     // Set, so the SDK's own handler never prints the failed request (it carries the prompt) to the logs.
     onError: ({ error }) => {
@@ -223,6 +233,11 @@ export async function chatTurn(opts: {
           const rest = dashes.get(value.id)?.end();
           if (rest) writer.write({ type: "text-delta", id: value.id, delta: rest });
           dashes.delete(value.id);
+        }
+        // A search's spend is for the budgets alone: the phone and the saved chat never get it.
+        if (value.type === "tool-output-available") {
+          writer.write({ ...value, output: withoutSpend(value.output) });
+          continue;
         }
         writer.write(value);
       }

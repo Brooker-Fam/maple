@@ -24,6 +24,7 @@ export function familyPostDeps(
   member: Member,
   opts: { model: LanguageModel; modelKey: string; device: string | null; now: Date } & Pick<PostDeps, "report" | "waitUntil">
 ): PostDeps {
+  const price = priceFor(opts.modelKey);
   return {
     store: { consent: (m) => chatConsent(fam, m), ...chatStore(fam) },
     household: async () => {
@@ -36,12 +37,13 @@ export function familyPostDeps(
     },
     model: opts.model,
     modelKey: opts.modelKey,
-    price: priceFor(opts.modelKey),
+    price,
     images: {
       validate: (images) => validateChatImages(fam, member, images),
       resolve: (messages) => resolveChatImages(fam, member, messages),
     },
-    tools: (t) => chatTools(member, { ...t, fam: fam.familyId, device: opts.device }),
+    // Web search runs on the chat's own model, so it's priced and routed as the chat is (a model with no price row never answers).
+    tools: ({ names, ...t }) => chatTools(member, { ...t, fam: fam.familyId, device: opts.device, ...(price ? { search: { model: opts.model, modelKey: opts.modelKey, price, names } } : {}) }),
     memories: (m) => chatMemories(fam, { threadId: m.threadId, viewer: m.viewer, members: m.members, now: opts.now, tz: fam.tz }),
     state: ({ care }) => chatLogState(member, { fam: fam.familyId, care, now: opts.now }),
     budget: () => chatBudget(fam, opts.now),

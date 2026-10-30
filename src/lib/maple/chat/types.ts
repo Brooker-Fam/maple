@@ -62,7 +62,15 @@ export type ChatToolOutput = {
   memory?: ChatMemoryChange;
   /** An invite invite_person made, for its card (Copy invite link). */
   invite?: ChatInvite;
+  /** What web_search sent and found (web-search.ts), for its card of links. */
+  web?: ChatWebSearch;
 };
+
+/** A web page a search found: its title, link and site ("healthychildren.org"). */
+export type ChatSource = { title: string; url: string; site: string };
+
+/** A web search as its card shows it: the exact phrase that left Maple, whether it kept to health sites, and what it found. */
+export type ChatWebSearch = { query: string; health: boolean; sources: ChatSource[] };
 
 /** What a memory tool did, as its card shows it: never an id. */
 export type ChatMemoryChange = { status: "saved" | "supported" | "corrected" | "resolved" | "archived"; kind: string; fact: string; previous?: string };

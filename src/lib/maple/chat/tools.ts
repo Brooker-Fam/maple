@@ -16,6 +16,7 @@ import { openScreenTool } from "./navigation-tools";
 import { careReceiptOutput } from "./receipts";
 import { searchEntriesTool } from "./search-tools";
 import { settingsTools } from "./settings-tools";
+import { webSearchTool, type SearchDeps } from "./web-search";
 
 /**
  * The MCP tools as an AI SDK ToolSet for the in-app chat. The registrations
@@ -177,7 +178,8 @@ export async function chatLogState(member: Pick<Member, "email">, opts: { fam: n
   return logState({ ...ctx, now: opts.now });
 }
 
-export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts: { fam: number; born: boolean; care: boolean; self?: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null }): ToolSet {
+/** `search`: the chat's model and the family's names for web_search (web-search.ts); without it there's no web search. */
+export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts: { fam: number; born: boolean; care: boolean; self?: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null; search?: SearchDeps }): ToolSet {
   const { all, mom } = registrations(opts.copy);
   const vo = opts.copy.v;
   const care = chatCareLevel(member, opts);
@@ -231,6 +233,7 @@ export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts:
   set.search_entries = searchEntriesTool(extra);
   set.open_screen = openScreenTool({ viewer });
   Object.assign(set, settingsTools(extra));
+  if (opts.search) set.web_search = webSearchTool(opts.search);
   return set;
 }
 

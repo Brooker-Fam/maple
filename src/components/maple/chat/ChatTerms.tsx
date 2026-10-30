@@ -40,6 +40,10 @@ export function TermsCard({ consent, onAccepted }: { consent: ChatConsent; onAcc
           and no training on it requested.
         </li>
         <li>Chat photos are private to you and stay with your conversation until you delete its history. Photo descriptions and food estimates can be wrong; a photo cannot diagnose a health problem.</li>
+        <li>
+          When the chat searches the web, only a short search phrase leaves Maple, with your family&apos;s names, email addresses and phone numbers taken out. It goes through Vercel AI Gateway to
+          Perplexity, which zero data retention doesn&apos;t cover. The chat shows the exact phrase with the results.
+        </li>
       </ul>
       {consent.self ? (
         <div className={cx(tone.inset, "overflow-hidden")}>

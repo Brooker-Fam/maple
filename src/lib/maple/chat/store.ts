@@ -70,13 +70,14 @@ async function lockOneThread(fam: Fam, id: string, member: string, model: string
     `INSERT INTO maple_chat_threads (family_id, id, member, model, viewer_only, care_open) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
     [fam.familyId, id, member, model, viewer, care]
   );
+  // last_prompt is the latest model step's; a web search's row ('web_search', SEARCH_FINISH in web-search.ts) isn't one.
   const r = await rows(
     `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = $4, care_open = t.care_open OR $5
      WHERE t.id = $1 AND t.family_id = $2 AND t.member = $3 AND (t.viewer_only OR NOT $4) AND (t.busy_until IS NULL OR t.busy_until < NOW())
      RETURNING t.id, t.title, t.care_open,
        (SELECT COUNT(*) FROM maple_chat_messages m WHERE m.thread_id = t.id AND m.family_id = t.family_id AND m.role = 'user') AS user_messages,
        (SELECT u.input_tokens + u.cache_read_tokens + u.cache_write_tokens FROM maple_ai_usage u
-         WHERE u.thread_id = t.id AND ${costOf("t.family_id", "u.family_id")} ORDER BY u.id DESC LIMIT 1) AS last_prompt`,
+         WHERE u.thread_id = t.id AND ${costOf("t.family_id", "u.family_id")} AND u.finish_reason IS DISTINCT FROM 'web_search' ORDER BY u.id DESC LIMIT 1) AS last_prompt`,
     [id, fam.familyId, member, viewer, care]
   );
   if (r.length) {

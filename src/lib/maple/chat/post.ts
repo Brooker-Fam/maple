@@ -19,6 +19,7 @@ import { deliveryTimeProblem, parseDelivery, type ChatDelivery } from "./deliver
 import { matchesDeliveryFingerprint, type DeliveryReceipt } from "./delivery-store";
 import { CHAT_FAILED } from "./types";
 import type { ChatImage } from "./images";
+import type { SearchNames } from "./web-search";
 
 /**
  * One POST to the chat, from the raw body to a streamed answer or a refusal.
@@ -60,8 +61,9 @@ export type PostDeps = {
   /**
    * `care`: her page is open to this member's chat (chatCareOpen): her tools are in, as their level allows, and Maple's tools may read her page.
    * `self`: the member is her. `memoryEpoch`: the memories' epoch this turn started with.
+   * `names`: the family's names, which web searches never carry (web-search.ts).
    */
-  tools: (opts: { born: boolean; care: boolean; self?: boolean; copy: ToolCopy; submittedAt?: Date; memoryEpoch?: number | null }) => ToolSet;
+  tools: (opts: { born: boolean; care: boolean; self?: boolean; copy: ToolCopy; submittedAt?: Date; memoryEpoch?: number | null; names: SearchNames }) => ToolSet;
   /**
    * The family's memories for this turn (memory/chat.ts): the prompt block, the
    * epoch its memory writes need, and this thread's messages from before the
@@ -119,6 +121,15 @@ async function logStateOrNone(deps: Pick<PostDeps, "state"> & { report: (e: unkn
     deps.report(e);
     return [];
   }
+}
+
+/** Everyone's names in this family, which its web searches take out: the baby's, mom's (only real ones, never the "the baby" or "Mom" stand-ins) and each member's. */
+export function familyNames(baby: Pick<Baby, "name" | "nickname">, members: Member[], copy: Pick<ToolCopy, "v">): SearchNames {
+  return {
+    baby: [baby.name, baby.nickname, copy.v.named ? copy.v.name : null],
+    mom: [copy.v.hasMom ? copy.v.mom : null],
+    people: members.map((m) => (m.email === "admin" || m.email.startsWith("person:") ? m.display_name : memberName(m.email, members))),
+  };
 }
 
 /** The turn's memories, or none when reading them fails: the turn goes on without them, and its memory writes are refused. */
@@ -281,7 +292,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       model: deps.model,
       modelKey: deps.modelKey,
       price,
-      tools: deps.tools({ born: !!baby.born_at, care, ...(consent.self ? { self: true } : {}), copy, ...(submittedAt ? { submittedAt } : {}), memoryEpoch: memories?.epoch ?? null }),
+      tools: deps.tools({ born: !!baby.born_at, care, ...(consent.self ? { self: true } : {}), copy, ...(submittedAt ? { submittedAt } : {}), memoryEpoch: memories?.epoch ?? null, names: familyNames(baby, members, copy) }),
       viewer,
       care,
       ...(page ? { page } : {}),

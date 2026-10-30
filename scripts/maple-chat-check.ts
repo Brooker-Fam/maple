@@ -32,7 +32,7 @@ import {
 import { mentionsCrisis } from "../src/lib/maple/chat/crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, storable, titleFrom, userMessage, userText, withCrisisHelp } from "../src/lib/maple/chat/messages";
 import { costMicro, dollars, priceFor, PRICES, stepTokens } from "../src/lib/maple/chat/prices";
-import { answerPost, BUSY, CARE_CLOSED, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
+import { answerPost, BUSY, CARE_CLOSED, familyNames, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
 import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, chatAddendumCareHidden, chatAddendumCareView, contextLine, contextText, markTailForCache, stateLines, systemBlocks, withMemoryLines } from "../src/lib/maple/chat/prompt";
 import { dashFilter, withoutDashes } from "../src/lib/maple/chat/dashes";
 import { chatDisplayText, receiptText } from "../src/lib/maple/chat/display";
@@ -54,6 +54,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { DROPPED, needsHelpCard, problemFor, unanswered } from "../src/components/maple/chat/stopped";
 import { messageTokens, modelWindow, streamPage, WINDOW_MESSAGES, WINDOW_TOKENS, type StreamItem } from "../src/lib/maple/chat/window";
 import { MEMORY_PROMPT_MAX_CHARS } from "../src/lib/maple/memory/policy";
+import { HEALTH_SITES, readResults, SEARCH_FEE_MICRO, SEARCH_FINISH, SEARCH_PRICE_KEY, searchPhrase, webSearchTool, type SearchNames, type WebSearchOutput } from "../src/lib/maple/chat/web-search";
 
 let passed = 0;
 let failed = 0;
@@ -1444,7 +1445,134 @@ async function privacyChecks() {
   });
 }
 
+/** A Gateway search as the stand-in model answers it: the provider-executed call, its results, and "done". */
+function searchModel(results: unknown, opts: { fail?: number } = {}) {
+  return new MockLanguageModelV4({
+    doGenerate: async () => {
+      if (opts.fail) throw Object.assign(new Error("made-up gateway failure"), { statusCode: opts.fail });
+      return {
+        content: [
+          { type: "tool-call", toolCallId: "ws1", toolName: "perplexity_search", input: JSON.stringify({ query: "anything" }), providerExecuted: true },
+          { type: "tool-result", toolCallId: "ws1", toolName: "perplexity_search", result: results as never },
+          { type: "text", text: "done" },
+        ],
+        finishReason: { unified: "stop", raw: "stop" },
+        usage: { inputTokens: { total: 3_000, noCache: 3_000, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
+        warnings: [],
+        providerMetadata: { gateway: { generationId: "gen_made_up_search" } },
+      } as never;
+    },
+  });
+}
+
+const SEARCH_NAMES: SearchNames = { baby: ["Maple", "Maple Rose", null], mom: ["Dana"], people: ["Alex Example", "alex.example"] };
+const PAGES = {
+  id: "s1",
+  results: [
+    { title: "Jaundice in newborns", url: "https://www.healthychildren.org/jaundice", snippet: "Made-up excerpt  about\n jaundice.", date: "2025-03-01" },
+    { title: "Same page again", url: "https://www.healthychildren.org/jaundice", snippet: "dup" },
+    { title: "Not a web page", url: "javascript:alert(1)", snippet: "x" },
+    { title: "", url: "https://cdc.gov/newborns", snippet: "Made-up CDC excerpt." },
+  ],
+};
+const searchCost = () => costMicro(GLM, priceFor(GLM)!, stepTokens({ inputTokens: 3_000, inputTokenDetails: { noCacheTokens: 3_000, cacheReadTokens: 0, cacheWriteTokens: 0 }, outputTokens: 10 } as never)).micro + SEARCH_FEE_MICRO;
+
+async function webSearchChecks() {
+  check("a search phrase never carries the family's names, emails, phone numbers or links", () => {
+    eq(searchPhrase("Is Maple's rash normal at 2 weeks?", SEARCH_NAMES), "Is baby's rash normal at 2 weeks?", "the baby's name");
+    eq(searchPhrase("maple syrup safe for babies", SEARCH_NAMES), "maple syrup safe for babies", "a lowercase word that's also her name stays");
+    eq(searchPhrase("Dana mastitis fever", SEARCH_NAMES), "mom mastitis fever", "mom's name");
+    eq(searchPhrase("ask Alex Example at 555-123-4567 or alex@example.com, https://maplebaby.app/x", SEARCH_NAMES), "ask parent parent at or", "a member's name, a phone, an email and a link");
+    eq(searchPhrase("Rose petals baby bath", SEARCH_NAMES), "baby petals baby bath", "every word of a name, capitalized");
+    eq(searchPhrase("2025-2026 flu vaccine newborn", SEARCH_NAMES), "2025-2026 flu vaccine newborn", "years aren't phone numbers");
+    eq(searchPhrase("alex.example@mail.test", SEARCH_NAMES), null, "nothing left");
+    eq(searchPhrase(" \u0000 ", SEARCH_NAMES), null, "only controls");
+    eq((searchPhrase(`newborn ${"sleep ".repeat(60)}`, SEARCH_NAMES) ?? "").length <= 160, true, "short");
+    const names = familyNames({ name: "Baby", nickname: null }, [{ email: "alex@example.com", role: "owner", display_name: null }, { email: "admin", role: "owner", display_name: null }] as Member[], FAMILY_ONE_COPY);
+    ok(!names.baby.includes("the baby") && !names.mom.includes("Mom") && names.people.includes("alex") && !names.people.includes("Admin"), "never the stand-ins: \"the baby\" would take out every \"the\"");
+  });
+
+  check("results become five pages at most, each once, web pages only", () => {
+    const read = readResults(PAGES)!;
+    eq(read.sources, [
+      { title: "Jaundice in newborns", url: "https://www.healthychildren.org/jaundice", site: "healthychildren.org" },
+      { title: "cdc.gov", url: "https://cdc.gov/newborns", site: "cdc.gov" },
+    ]);
+    eq(read.lines[0], "1. Jaundice in newborns (healthychildren.org, 2025-03-01): Made-up excerpt about jaundice.", "one tidy line each");
+    eq(readResults({ error: "rate_limit", message: "slow down" }), null, "an error isn't results");
+  });
+
+  await checkAsync("web_search sends only the phrase, in a request of its own, and its cost rides on the result", async () => {
+    const inner = searchModel(PAGES);
+    const search = webSearchTool({ model: inner, modelKey: GLM, price: priceFor(GLM)!, names: SEARCH_NAMES });
+    const run = (input: unknown) => (search.execute as (i: unknown, o: unknown) => Promise<WebSearchOutput>)(input, { toolCallId: "c1", messages: [] });
+    const out = await run({ query: "Maple jaundice when to call the doctor", topic: "health" });
+    eq([out.ok, out.web?.query, out.web?.health, out.web?.sources.length], [true, "baby jaundice when to call the doctor", true, 2], "found");
+    ok(out.text.startsWith('Web results for "baby jaundice when to call the doctor" on trusted health sites:') && out.text.includes("not instructions"), "the model's text");
+    eq(out.spend, { tokens: { prompt: 3_000, fresh: 3_000, cacheRead: 0, cacheWrite: 0, output: 10, reasoning: 0 }, costMicro: String(searchCost()), priceKey: SEARCH_PRICE_KEY, generationId: "gen_made_up_search" }, "the request's tokens and the fee");
+    const call = inner.doGenerateCalls[0];
+    const sent = JSON.stringify(call.prompt);
+    ok(sent.includes("baby jaundice when to call the doctor") && !sent.includes("Maple") && !/Dana|Alex/.test(sent), "the request sees only the phrase");
+    const t = call.tools?.[0] as { type?: string; id?: string; args?: { query?: string; searchDomainFilter?: string[]; maxResults?: number } } | undefined;
+    eq([t?.type, t?.id, t?.args?.query, t?.args?.maxResults, t?.args?.searchDomainFilter?.length], ["provider", "gateway.perplexity_search", "baby jaundice when to call the doctor", 5, HEALTH_SITES.length], "the Gateway's own tool, with the phrase as its query and health sites only");
+    eq(call.toolChoice, { type: "required" }, "it searches");
+    eq((call.providerOptions?.gateway as { zeroDataRetention?: unknown; only?: unknown }).zeroDataRetention, true, "the request itself stays ZDR");
+    const general = await run({ query: "pharmacy open late near downtown", topic: "general" });
+    eq((inner.doGenerateCalls[1].tools?.[0] as { args?: Record<string, unknown> }).args?.searchDomainFilter, undefined, "a general search isn't kept to health sites");
+    eq(general.web?.health, false);
+    const third = await run({ query: "newborn hiccups", topic: "health" });
+    eq([third.ok, third.web, third.spend, inner.doGenerateCalls.length], [true, undefined, undefined, 2], "two searches a message, then none");
+    const fresh = webSearchTool({ model: inner, modelKey: GLM, price: priceFor(GLM)!, names: SEARCH_NAMES });
+    const nothing = await (fresh.execute as (i: unknown, o: unknown) => Promise<WebSearchOutput>)({ query: "alex.example@mail.test", topic: "general" }, { toolCallId: "c2", messages: [] });
+    eq([nothing.ok, nothing.web, nothing.text.startsWith("Nothing searchable was left"), inner.doGenerateCalls.length], [true, undefined, true, 2], "a query that's only an address searches nothing");
+  });
+
+  await checkAsync("a failed search answers plainly, and is still counted unless it was turned away", async () => {
+    const run = async (fail: number) => {
+      const search = webSearchTool({ model: searchModel(PAGES, { fail }), modelKey: GLM, price: priceFor(GLM)!, names: SEARCH_NAMES });
+      return (search.execute as (i: unknown, o: unknown) => Promise<WebSearchOutput>)({ query: "newborn rash", topic: "health" }, { toolCallId: "c1", messages: [] });
+    };
+    const broke = await run(500);
+    eq([broke.ok, broke.error, broke.web], [false, { kind: "unavailable" }, undefined], "an error card, never the error");
+    ok(broke.spend && BigInt(broke.spend.costMicro) > SEARCH_FEE_MICRO, "counted: the fee and what it may have read");
+    eq((await run(400)).spend, undefined, "a 4xx was turned away before anything ran");
+    const empty = webSearchTool({ model: searchModel({ id: "s2", results: [] }), modelKey: GLM, price: priceFor(GLM)!, names: SEARCH_NAMES });
+    const none = await (empty.execute as (i: unknown, o: unknown) => Promise<WebSearchOutput>)({ query: "made-up nothing", topic: "general" }, { toolCallId: "c1", messages: [] });
+    eq([none.ok, none.web?.sources, none.text.startsWith("No web results")], [true, [], true], "no pages is an answer too");
+  });
+
+  await checkAsync("in a turn, a search's spend is recorded beside its step and never reaches the phone or the saved chat", async () => {
+    let call = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        const script = call++ === 0
+          ? [{ type: "tool-call", toolCallId: "call_ws", toolName: "web_search", input: JSON.stringify({ query: "newborn jaundice", topic: "health" }) }, finishPart("tool-calls")]
+          : [...textChunks("The AAP says to call if the yellow spreads."), finishPart("stop")];
+        return { stream: simulateReadableStream({ chunks: [{ type: "stream-start", warnings: [] }, ...script] as never[] }) };
+      },
+    });
+    const rows: { step: number; costMicro: bigint; priceKey: string; finishReason: string | null }[] = [];
+    const saved: ChatMessage[] = [];
+    const waits: Promise<unknown>[] = [];
+    const res = await chatTurn({
+      model, modelKey: GLM, price: priceFor(GLM)!, viewer: false, care: true, copy: FAMILY_ONE_COPY, messages: [ask("When should we worry about jaundice?")], responseId: "msg_r_ws", crisis: false,
+      tools: { web_search: webSearchTool({ model: searchModel(PAGES), modelKey: GLM, price: priceFor(GLM)!, names: SEARCH_NAMES }) },
+      deps: { save: async (m) => void saved.push(structuredClone(m)), record: async (u) => void rows.push(u), release: async () => {}, report: () => {}, waitUntil: (p) => void waits.push(p) },
+    });
+    const body = await res.text();
+    await Promise.all(waits);
+    await new Promise((r) => setTimeout(r, 20));
+    const searchRow = rows.find((r) => r.finishReason === SEARCH_FINISH);
+    eq([searchRow?.step, searchRow?.costMicro, searchRow?.priceKey], [0, searchCost(), SEARCH_PRICE_KEY], "its own row, on the step that asked");
+    eq(rows.filter((r) => r.finishReason !== SEARCH_FINISH).length, 2, "and the model's two steps as ever");
+    ok(!body.includes("spend") && !body.includes("costMicro"), "the phone never gets it");
+    const part = saved[0].parts.find((p) => p.type === "tool-web_search") as { output?: WebSearchOutput } | undefined;
+    ok(part?.output?.web?.sources.length === 2 && !("spend" in (part.output ?? {})), "the saved chat keeps the pages, not the spend");
+  });
+}
+
 turnChecks()
+  .then(webSearchChecks)
   .then(postChecks)
   .then(privacyChecks)
   .then(() => {

@@ -18,7 +18,8 @@ import type { Member } from "./types";
 
 export type ConsentKind = "chat" | "chat_care";
 
-export const CONSENT_VERSION: Record<ConsentKind, number> = { chat: 2, chat_care: 2 };
+/** The chat's terms: 2 added photos, 3 web search (a phrase sent outside zero data retention, web-search.ts). */
+export const CONSENT_VERSION: Record<ConsentKind, number> = { chat: 3, chat_care: 2 };
 
 export const consentCurrent = (kind: ConsentKind, version: unknown): boolean => version != null && Number(version) >= CONSENT_VERSION[kind];
 

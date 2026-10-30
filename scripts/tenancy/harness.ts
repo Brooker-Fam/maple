@@ -230,7 +230,7 @@ async function seedOne(f: Spec): Promise<FamilySeed> {
     [fam, messageId, threadId, owner]
   );
   await sql(`INSERT INTO maple_chat_daily (family_id, member, day, messages) VALUES ($1, $2, DATE '2026-10-20', 3)`, [fam, owner]);
-  await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES ($1, $2, 'chat', 2)`, [fam, owner]);
+  await sql(`INSERT INTO maple_consents (family_id, member, kind, version) VALUES ($1, $2, 'chat', 3)`, [fam, owner]);
   await sql(
     `INSERT INTO maple_ai_usage (family_id, member, thread_id, message_id, step, model, input_tokens, output_tokens, cost_micro_usd, price_key) VALUES ($1, $2, $3, $4, 1, 'zai/glm-5.3-flash', 1000, 100, 200, 'zai/glm-5.3-flash')`,
     [fam, owner, threadId, messageId]

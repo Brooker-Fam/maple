@@ -387,7 +387,22 @@ try {
   await noOverflow();
   console.log("PASS people: invite, change, make owner and remove wait for their own card, and an invite's link is copied from its card");
 
-  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel", "people-invite", "people-owner", "people-remove", "people-invited"]) {
+  await fixture("web-searching");
+  await page.getByText("Searching the web…", { exact: true }).waitFor();
+  await fixture("web");
+  const web = page.getByRole("region", { name: "Searched trusted health sites", exact: true });
+  await web.getByText("\u201cnewborn jaundice when to call the doctor\u201d", { exact: true }).waitFor();
+  const page1 = web.getByRole("link", { name: /^Jaundice in Newborns/ });
+  assert.equal(await page1.getAttribute("href"), "https://www.healthychildren.org/jaundice");
+  assert.equal(await page1.getAttribute("target"), "_blank");
+  assert.equal(await page1.getAttribute("rel"), "noopener noreferrer");
+  await tapTarget(page1);
+  await web.getByText("nhs.uk", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Searching the web…").count(), 0, "a finished search leaves no spinner line");
+  await noOverflow();
+  console.log("PASS web search: a running search says so, and its card shows the exact phrase and opens each page in the browser");
+
+  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel", "people-invite", "people-owner", "people-remove", "people-invited", "web"]) {
     await fixture(name);
     if (name === "receipt") await page.getByText("Feeding in the log", { exact: true }).waitFor();
     if (name === "care-receipt") await page.getByText("Example medicine · in the log", { exact: true }).waitFor();
