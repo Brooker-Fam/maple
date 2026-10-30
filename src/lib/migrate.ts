@@ -528,6 +528,11 @@ export async function migrateFamilies() {
   await addColumn("maple_members", "role_word", "TEXT");
   await addColumn("maple_members", "accepted_at", "TIMESTAMPTZ");
   await addColumn("maple_invites", "email", "TEXT");
+  // How far someone reaches into her page, when an owner set it apart from their role's default
+  // (src/lib/maple/access.ts): 'none', 'view' or 'log'; NULL is the role's default. Code from before
+  // it reads every owner and member as reaching all of her page, so clear these before rolling back past it.
+  await addColumn("maple_members", "care_access", "TEXT");
+  await addColumn("maple_invites", "care_access", "TEXT");
 
   // With every row in family 1 these hold exactly when the old keys do, so they build cleanly beside them.
   await index("uniq_maple_babies_family_id", "maple_babies (family_id, id)", true);

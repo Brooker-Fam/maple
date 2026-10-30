@@ -34,6 +34,7 @@ export default function ChatNavigation({ navigation: raw }: { navigation: ChatNa
       case "phone_preferences": if (app.go("family/appearance")) requestSection("phone-preferences"); break;
       case "mom_medicines": if (app.go("care")) requestSection("mom-medicines"); break;
       case "family_settings": app.go("family"); break;
+      case "people": app.go("family/people"); break;
       case "history": app.go("log"); break;
       default: app.go(destination);
     }

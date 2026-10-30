@@ -48,7 +48,8 @@ export default function Terms() {
       <p>
         Maple is for adults 18 and older. The <Link href="/signup">sign-up page</Link> says whether new families can join or
         leave an email address on the waitlist. The owner of a family&rsquo;s log decides who is in it and can remove anyone.
-        Invite only people who expect an invitation from you, and check their email address before sending it. You&rsquo;re
+        Invite only people who expect an invitation from you, and check their email address and access before sending it,
+        including on the card Maple&rsquo;s chat shows or what a connected assistant reads back to you. You&rsquo;re
         responsible for who you invite and for keeping your sign-in and email codes to yourself. Google, Apple and email
         sign-in are available when shown on the sign-in page. Connecting a sign-in method to your existing account does not
         combine separate family logs.

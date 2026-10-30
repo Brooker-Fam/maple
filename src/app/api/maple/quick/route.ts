@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { careErrorResponse, errorResponse, json } from "@/lib/maple/api";
 import { listMembers, memberFor } from "@/lib/maple/auth";
+import { careLevelOf } from "@/lib/maple/access";
 import { familyForRow, type FamilyCtx } from "@/lib/maple/family";
 import { aheadOfSlot, careTime, countedAs, matchPlan, pressingFirst, type PlanMatch, type PlanView } from "@/lib/maple/care";
 import { momSpeak, samePlans, spokenLine } from "@/lib/maple/care-mcp";
@@ -93,7 +94,8 @@ export async function POST(request: NextRequest) {
       return json({ error: `action must be one of ${ACTIONS.join(", ")}`, speak: "I didn't catch what to log." }, 400);
     }
     const mom = action === "mom_status" || action === "mom_dose";
-    if (me.role === "viewer" && action !== "status") {
+    // Her status is a read: a viewer an owner let see her page hears it (momAction checks it again).
+    if (me.role === "viewer" && action !== "status" && !(action === "mom_status" && careLevelOf(me) !== "none")) {
       return json({ error: "View-only", speak: "You have view-only access to Maple's log.", ...(mom ? { help_now: MOM_HELP.now } : {}) }, 403);
     }
     if (mom) return momAction(action, me, fam, body);
@@ -247,8 +249,8 @@ export async function POST(request: NextRequest) {
         const urgent = s.alerts.find((a) => a.tier === "emergency" || a.tier === "now" || a.tier === "today");
         // Say who to call, not just what happened ("Call your pediatrician now: No wet diaper in 8 hours.").
         if (urgent) bits.push(`${TIER_LABEL[urgent.tier]}: ${urgent.title.replace(/[.:]?$/, "")}.`);
-        // Her medicines after Maple's, capped at two; never for a viewer.
-        const mom = me.role === "viewer" ? null : await momForStatus(me, fam, members, baby);
+        // Her medicines after Maple's, capped at two; only for someone whose level lets them read her page.
+        const mom = await momForStatus(me, fam, members, baby);
         if (mom) bits.push(mom);
         speak = bits.join(" ");
         break;
@@ -303,7 +305,9 @@ async function momAction(action: "mom_status" | "mom_dose", me: Member, fam: Fam
     const help = { help_now: MOM_HELP.now };
     if (!s.person) return json({ error: "Not found", speak: "There's no page for mom's medicines in this log.", ...help }, 404);
     const name = carePersonName(s.person, members);
-    if (!s.access.read || !s.access.write) return json({ error: "Not shared", speak: `You can't change ${name}'s medicines from this account.`, ...help }, 403);
+    // Never her name to someone her page is hidden from.
+    if (!s.access.read) return json({ error: "Not shared", speak: "Mom's medicines aren't shared with this account.", ...help }, 403);
+    if (action === "mom_dose" && !s.access.write) return json({ error: "Not shared", speak: `You can't change ${name}'s medicines from this account.`, ...help }, 403);
     const self = s.access.self;
     const whose = self ? "your" : "her";
     const views = okFirst(await carePlanViews(s));

@@ -9,6 +9,7 @@
  */
 import type { Assessment, MoodTag } from "./guidelines";
 import type { CareFoodItem } from "./care-nutrition-types";
+import type { CareLevel } from "./access";
 
 export type Side = "L" | "R";
 
@@ -215,6 +216,8 @@ export type Member = {
   display_name: string | null;
   emoji: string | null;
   color: string | null;
+  /** Her page, when an owner set it apart from the role's default (access.ts); absent otherwise. */
+  care?: CareLevel;
 };
 
 export type Me = Member;

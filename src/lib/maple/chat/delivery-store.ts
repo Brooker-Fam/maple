@@ -5,6 +5,7 @@ import { StoreUnavailable } from "../store";
 import type { ChatDelivery, ChatDeliveryStatus } from "./delivery";
 import type { ChatMessage } from "./types";
 import { isChatImage, type ChatImage } from "./images";
+import { asThreadAccess, openable, type ThreadAccess } from "./history";
 
 type Fam = Pick<FamilyScope, "familyId">;
 async function rows(sql: string, params: unknown[]) {
@@ -32,18 +33,19 @@ export async function findDelivery(fam: Fam, member: string, requestId: string):
 }
 
 /** A requested receipt is readable after its conversation page or entire history has been removed. */
-export async function deliveryStatus(fam: Fam, member: string, viewer: boolean, requestId: string): Promise<ChatDeliveryStatus> {
+export async function deliveryStatus(fam: Fam, member: string, open: boolean | ThreadAccess, requestId: string): Promise<ChatDeliveryStatus> {
+  const { viewer, careHidden } = asThreadAccess(open);
   const r = await rows(`SELECT d.completed_at IS NOT NULL AS completed, d.cancelled_at IS NOT NULL AS cancelled, t.id AS thread_id,
       EXISTS (SELECT 1 FROM maple_chat_member_locks l WHERE l.family_id = d.family_id AND l.member = d.member AND l.thread_id = d.thread_id AND l.busy_until > NOW()) AS busy
     FROM maple_chat_deliveries d LEFT JOIN maple_chat_threads t
-      ON t.id = d.thread_id AND t.family_id = d.family_id AND t.member = d.member AND (t.viewer_only OR NOT $4)
-    WHERE d.family_id = $1 AND d.member = $2 AND d.request_id = $3`, [fam.familyId, member, requestId, viewer]);
+      ON t.id = d.thread_id AND t.family_id = d.family_id AND t.member = d.member AND ${openable("t", "$4", "$5")}
+    WHERE d.family_id = $1 AND d.member = $2 AND d.request_id = $3`, [fam.familyId, member, requestId, viewer, careHidden]);
   return { requestId, state: !r.length ? "missing" : r[0].cancelled === true ? "cancelled" : r[0].completed === true ? "completed" : "received", threadId: r[0]?.thread_id == null ? null : String(r[0].thread_id), busy: r[0]?.busy === true };
 }
 
 /** Race acceptance on the same key. This only cancels an unaccepted request; an active write is never interrupted. */
-export async function cancelDelivery(fam: Fam, member: string, viewer: boolean, delivery: ChatDelivery): Promise<ChatDeliveryStatus | null> {
-  const existing = await deliveryStatus(fam, member, viewer, delivery.requestId);
+export async function cancelDelivery(fam: Fam, member: string, open: boolean | ThreadAccess, delivery: ChatDelivery): Promise<ChatDeliveryStatus | null> {
+  const existing = await deliveryStatus(fam, member, open, delivery.requestId);
   if (existing.state !== "missing") return existing;
   // Reserve the bounded attempt before touching the receipt key. Holding the quota row while
   // waiting for acceptance's receipt key would invert acceptance's lock order and could deadlock.
@@ -54,7 +56,7 @@ export async function cancelDelivery(fam: Fam, member: string, viewer: boolean, 
       (family_id, member, request_id, fingerprint, submitted_at, message_id, cancelled_at, completed_at)
     VALUES ($1, $2, $3, 'cancelled', $4, '', NOW(), NOW())
     ON CONFLICT (family_id, member, request_id) DO NOTHING`, [fam.familyId, member, delivery.requestId, delivery.submittedAt]);
-  const status = await deliveryStatus(fam, member, viewer, delivery.requestId);
+  const status = await deliveryStatus(fam, member, open, delivery.requestId);
   return status.state === "missing" ? null : status;
 }
 

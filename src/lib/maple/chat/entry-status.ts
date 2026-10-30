@@ -1,7 +1,7 @@
 import { query } from "@/lib/db";
 import { sessionCare } from "../api";
 import { readableEntryStatus } from "../care-store";
-import { chatConsent } from "../consent";
+import { chatCareOpen, chatConsent } from "../consent";
 import type { FamilyCtx } from "../family";
 import { getBaby, NotFound, rowToEntry, StoreUnavailable, toClientEntry } from "../store";
 import type { Member } from "../types";
@@ -11,7 +11,7 @@ export async function chatEntryStatus(fam: FamilyCtx, member: Member, target: "b
   const consent = await chatConsent(fam, member);
   if (!consent.terms) throw new NotFound("Not found");
   if (target === "care") {
-    if (member.role === "viewer" || !consent.care) throw new NotFound("Not found");
+    if (!chatCareOpen(member, consent)) throw new NotFound("Not found");
     const session = await sessionCare(member, fam);
     return readableEntryStatus(session, id, { includeDeleted: true });
   }

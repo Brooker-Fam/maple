@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { careLevelOf } from "./access";
 import { ADMIN_ID, familyOf, type Fam } from "./auth";
 import type { ChatConsent } from "./chat/types";
 import { StoreUnavailable } from "./store";
@@ -33,6 +34,16 @@ async function rows(sql: string, params: unknown[]): Promise<Record<string, unkn
  */
 export const isCarePerson = (member: Pick<Member, "email" | "role">, person: string | null): boolean =>
   person != null && member.email !== ADMIN_ID && member.role !== "viewer" && member.role !== "photos" && member.email === person;
+
+/**
+ * Her page is open to this member's chat: she let the chat see it
+ * (chat_care), and this member can read it (her own account always can;
+ * anyone else by their level on it, careAccess's rule). Never a view-only
+ * guest: their chats stay without her (viewer_only threads), even when an
+ * owner lets them read her page in the app.
+ */
+export const chatCareOpen = (member: Pick<Member, "role" | "care">, consent: Pick<ChatConsent, "care" | "self">): boolean =>
+  consent.care && member.role !== "viewer" && (consent.self || careLevelOf(member) !== "none");
 
 export async function chatConsent(fam: Fam, member: Pick<Member, "email" | "role">): Promise<ChatConsent> {
   const r = await rows(

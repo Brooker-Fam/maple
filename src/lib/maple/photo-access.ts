@@ -14,7 +14,11 @@ function authorId(ctx: FamilyCtx, id: string | null): string | null {
 
 export function membersForReader(ctx: FamilyCtx, members: Member[]): Member[] {
   if (ctx.role !== "photos") return members;
-  return members.map((member) => ({ ...member, email: authorId(ctx, member.email)! }));
+  // Who reaches her page is nothing a photos-only guest needs.
+  return members.map(({ care: _care, ...member }) => {
+    void _care;
+    return { ...member, email: authorId(ctx, member.email)! };
+  });
 }
 
 export function entryForReader(ctx: FamilyCtx, entry: Entry): Entry {

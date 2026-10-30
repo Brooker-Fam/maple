@@ -26,13 +26,16 @@ import ChatEntries from "./ChatEntries";
 import ChatSetting, { SettingsSummary } from "./ChatSetting";
 import ChatNavigation from "./ChatNavigation";
 import ChatQuestion, { type AnswerQuestion } from "./ChatQuestion";
+import { approvalWords, InviteCard, PEOPLE_APPROVALS, PeopleApproval } from "./ChatPeople";
 
 /**
  * One message in the chat. The person's words sit in a bubble on the right,
  * the reply's text in one on the left, then what the tools did as compact
  * receipts (Undo for an entry this reply added), each health alert as its
  * card word for word, a Delete / Keep card before delete_entry or a delete of
- * hers, and the help card when it's called for. Reasoning and the app's context line are never shown.
+ * hers, an Invite, Change or Remove card before a change to who's in the
+ * family (ChatPeople.tsx), and the help card when it's called for. Reasoning
+ * and the app's context line are never shown.
  */
 
 type Part = ChatMessage["parts"][number];
@@ -100,19 +103,21 @@ function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQu
     if (part.state === "input-streaming") return null;
     return <ChatQuestion key={part.state} input={part.input} output={"output" in part ? part.output : undefined} toolState={part.state} active={last} busy={busy} onAnswer={(answer) => onAnswerQuestion(part.toolCallId, answer)} />;
   }
+  const words = approvalWords(name);
   switch (part.state) {
     case "input-streaming":
     case "input-available":
       return null;
     case "approval-requested":
-      if (!last || part.approval.isAutomatic) return <Muted icon="info">Nothing was deleted.</Muted>;
+      if (!last || part.approval.isAutomatic) return <Muted icon="info">{words.idle}</Muted>;
       if (busy) return null;
+      if (PEOPLE_APPROVALS.has(name)) return <PeopleApproval name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
       return <ApprovalCard name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
     case "approval-responded":
-      if (!part.approval.approved) return <Muted icon="info">Kept. Nothing was deleted.</Muted>;
-      return last && busy ? null : <Muted icon="circle-alert">That didn&apos;t finish. Check the log to see whether it was deleted.</Muted>;
+      if (!part.approval.approved) return <Muted icon="info">{words.kept}</Muted>;
+      return last && busy ? null : <Muted icon="circle-alert">{words.unknown}</Muted>;
     case "output-denied":
-      return <Muted icon="info">Kept. Nothing was deleted.</Muted>;
+      return <Muted icon="info">{words.kept}</Muted>;
     case "output-error":
       return <Muted icon="circle-alert">That step didn&apos;t finish. Check the log before trying again.</Muted>;
     case "output-available":
@@ -131,6 +136,7 @@ function OutputView({ output, busy, onAsk, threadId, messageId, toolCallId }: { 
   if (output.entries) return <ChatEntries results={output.entries} disabled={busy} />;
   if (output.chart) return <ChatChart chart={output.chart} onAsk={onAsk} disabled={busy} />;
   if (output.about) return <HelpCard about={output.about} />;
+  if (output.invite) return <InviteCard invite={output.invite} />;
   if (!output.write) return null;
   if (output.careReceipts?.length) return <div className={GROUP}>{output.careReceipts.map((receipt) => <CareReceipt key={receipt.id} receipt={receipt} />)}</div>;
   if (output.saved?.length) {

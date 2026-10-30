@@ -185,10 +185,11 @@ try {
   }
 
   await check("invite result keeps its submitted recipient and granted role", async () => {
-    for (const [role, label, description] of [
-      ["photos", "Photos only", "See shared moments, photos and captions. Save or share photos. No baby log, recovery page or chat."],
-      ["viewer", "View baby log", "See moments and the baby's daily log. Read through chat. No recovery page or changes."],
-      ["member", "Can log", "Add and edit the baby log and moments. Also see and add to the recovery page, including medicines, food and check-ins."],
+    // The fixture has a recovery page (Alex's), so its own choice sits beside the role and the role's words leave it out.
+    for (const [role, label, description, care] of [
+      ["photos", "Photos only", "See shared moments, photos and captions. Save or share photos. No baby log, recovery page or chat.", null],
+      ["viewer", "View baby log", "See moments and the baby's daily log. Read through chat. No changes.", "none"],
+      ["member", "Can log", "Add and edit the baby log and moments.", "log"],
     ]) {
       let release;
       let submitted;
@@ -218,10 +219,11 @@ try {
       release();
       const ready = page.getByRole("dialog", { name: "Link ready" });
       await ready.waitFor();
-      assert.deepEqual({ name: submitted.display_name, role: submitted.role }, { name: "Helper One", role });
+      assert.deepEqual({ name: submitted.display_name, role: submitted.role, care: submitted.care ?? null }, { name: "Helper One", role, care });
       assert.match(await ready.innerText(), /Send this to Helper One/);
       assert(await ready.getByText(label, { exact: true }).isVisible());
       assert(await ready.getByText(description, { exact: true }).isVisible());
+      if (care) assert(await ready.getByText(`Alex's page: ${care === "log" ? "can view and add" : "hidden"}`, { exact: true }).isVisible(), "Her page's level is read back");
       await capture(page, `invite-result-${role}`);
       await page.context().close();
     }
