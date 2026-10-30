@@ -191,7 +191,7 @@ export default function Privacy() {
           no names or email addresses and are cleared after a day, like the other rate limits.
         </li>
         <li>
-          A hashed copy of each personal key behind a Siri shortcut, so each entry from a shortcut records who logged it. Claude and ChatGPT
+          A hashed copy of each personal key behind a Siri shortcut, so each entry from a shortcut records who logged it. Claude, ChatGPT and Muse
           connections use signed keys that Maple doesn&rsquo;t store.
         </li>
       </ul>
@@ -308,10 +308,10 @@ export default function Privacy() {
         Gateway for zero data retention and no training on your data, and names the only providers it may be sent to, each one
         the Gateway lists as keeping no data. Nothing about your messages goes into Maple&rsquo;s logs or error reports.
       </p>
-      <h3>Claude and ChatGPT</h3>
+      <h3>Claude, ChatGPT and Muse</h3>
       <p>
-        You can connect Maple to your own Claude or ChatGPT account. What those assistants read from your log or add to it goes
-        through your account with Anthropic or OpenAI, under their terms and your privacy settings there; Maple doesn&rsquo;t
+        You can connect Maple to your own Claude, ChatGPT or Muse account. What those assistants read from your log or add to it goes
+        through your account with Anthropic, OpenAI or Meta, under their terms and your privacy settings there; Maple doesn&rsquo;t
         control what they keep. You can disconnect at any time.
       </p>
       <h3>Siri</h3>

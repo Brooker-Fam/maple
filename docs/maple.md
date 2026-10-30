@@ -18,12 +18,13 @@ All families get the same neutral milestone presets. Personal preset ids from ol
 
 Migrations run on build. Existing family records are retained; new families create their own baby record during onboarding.
 
-## Connecting Claude and ChatGPT
+## Connecting Claude, ChatGPT and Muse
 
 Full instructions with copy buttons are at `/maple/connect`. The MCP server URL is `https://maplebaby.app/api/maple/mcp` (Streamable HTTP; there is no SSE).
 
 - **Claude** (web, desktop, mobile): Customize → Connectors → Add custom connector → paste the URL. Keep **Use Claude's published identity (Recommended)** if Claude shows an OAuth client choice. Add the connector, then Connect → sign in to Maple → Approve.
 - **ChatGPT** (web, developer mode / custom connectors): add a custom MCP server with the same URL and OAuth.
+- **Muse** (Meta): ask Muse to create a custom connector named Maple's Log (remote Streamable HTTP, the URL, OAuth; no API key). Its Connect form asks for a Client ID: have Muse register at `/oauth/register` with its callback and paste the `client_id` it gets back. Maple keeps no client list, so the ID itself isn't checked; the callback is, and Maple accepts only `https://agent.meta.ai/api/hatch/oauth/callback`, exactly (`MUSE_CALLBACK`). Its entries show "via AI".
 - **Claude Code:** `claude mcp add --transport http maple https://maplebaby.app/api/maple/mcp`.
 - **brooker-wedding's "Brooker Family Calendar" connector** (`brooker.family/api/mcp`, admin login) still carries Maple's tools next to `calendar_exec`, from its own copy of this code, until Maple is removed from brooker-wedding. Its entries are credited to "Admin" unless an owner signed in with Google turns on Avatar → Settings → Siri & assistants → "Calendar connector logs as me" (`settings.admin_as`, which can only be set to yourself). If an owner turns off the admin login for Maple, those tools refuse.
 
@@ -35,7 +36,7 @@ OAuth uses `/oauth/*` and the same member session as the app. The token names `m
 
 - **Bound to this server.** Tokens are bound to exactly `https://maplebaby.app/api/maple/mcp`. Any other resource is refused at consent, so another MCP server can't obtain or replay a parent's token.
 - **One server per token.** A Maple token names this server's URL, so brooker-wedding's calendar and RSVP servers refuse it, and Maple refuses theirs.
-- **Refresh tokens, for Claude, ChatGPT and local apps only.** A code sent anywhere else (say, a phishing page) gets a 30-day token and no renewal. Each refresh hands out a new refresh token, so connectors in use don't expire. They're stateless, so an old one stays valid until it expires. Admin-login ones last 90 days (the admin login can run code on the calendar and RSVP servers) and die when `ADMIN_PASS` or `MCP_SECRET` changes. Family members' last a year and are re-checked against membership.
+- **Refresh tokens, for Claude, ChatGPT, Muse and local apps only.** A code sent anywhere else (say, a phishing page) gets a 30-day token and no renewal. Each refresh hands out a new refresh token, so connectors in use don't expire. They're stateless, so an old one stays valid until it expires. Admin-login ones last 90 days (the admin login can run code on the calendar and RSVP servers) and die when `ADMIN_PASS` or `MCP_SECRET` changes. Family members' last a year and are re-checked against membership.
 
 ## Access and revocation
 

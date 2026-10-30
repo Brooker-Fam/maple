@@ -1,4 +1,4 @@
-import { trustedRedirect } from "./auth";
+import { MUSE_CALLBACK, trustedRedirect } from "./auth";
 
 const METADATA_URLS = new Set([
   "https://claude.ai/oauth/mcp-oauth-client-metadata",
@@ -37,6 +37,7 @@ function legacyClient(redirectUri: string): OAuthClientInfo {
   const uri = new URL(redirectUri);
   if (["claude.ai", "claude.com"].includes(uri.hostname)) return { name: "Claude", host: uri.host };
   if (["chatgpt.com", "chat.openai.com"].includes(uri.hostname)) return { name: "ChatGPT", host: uri.host };
+  if (redirectUri === MUSE_CALLBACK) return { name: "Muse", host: uri.host };
   return { name: "this app", host: uri.host };
 }
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { MUSE_CALLBACK, trustedRedirect } from "../src/lib/mcp/auth";
 import { createOAuthClientResolver, OAuthClientError } from "../src/lib/mcp/clients";
 
 const HOSTED = "https://claude.ai/oauth/mcp-oauth-client-metadata";
@@ -78,6 +79,7 @@ const checks: [string, () => Promise<void>][] = [
     assert.deepEqual(await fixture.resolve(HOSTED, CALLBACK), { name: "Synthetic Connector", host: "claude.ai", metadataUrl: HOSTED });
     assert.deepEqual(await fixture.resolve("mcp-synthetic-legacy", "https://chatgpt.com/synthetic-callback"), { name: "ChatGPT", host: "chatgpt.com" });
     assert.deepEqual(await fixture.resolve("mcp-synthetic-local", "http://localhost:4321/legacy-callback"), { name: "this app", host: "localhost:4321" });
+    assert.deepEqual(await fixture.resolve("mcp-synthetic-muse", MUSE_CALLBACK), { name: "Muse", host: "agent.meta.ai" });
     await rejected(fixture.resolve("mcp-synthetic-legacy", "https://untrusted.example.test/callback"), "invalid_redirect");
     assert.equal(fixture.calls.length, 1);
     assert.equal(fixture.calls[0].input, HOSTED);
@@ -85,6 +87,15 @@ const checks: [string, () => Promise<void>][] = [
     assert.equal(fixture.calls[0].init?.redirect, "error");
     assert.equal(fixture.calls[0].init?.cache, "no-store");
     assert.equal(new Headers(fixture.calls[0].init?.headers).get("accept"), "application/json");
+  }],
+  ["Muse is trusted at its exact callback only", async () => {
+    assert.equal(trustedRedirect(MUSE_CALLBACK), true, "Muse's codes get refresh tokens");
+    const fixture = setup();
+    for (const redirect of [`${MUSE_CALLBACK}?other=1`, `${MUSE_CALLBACK}/`, `${MUSE_CALLBACK}#fragment`, "https://agent.meta.ai/api/hatch/oauth/another-callback", "https://agent.meta.ai/api/hatch/oauth/../oauth/callback", "https://agent.meta.ai/", "http://agent.meta.ai/api/hatch/oauth/callback", "https://AGENT.meta.ai/api/hatch/oauth/callback", "https://agent.meta.ai:443/api/hatch/oauth/callback", "https://user@agent.meta.ai/api/hatch/oauth/callback", "https://meta.ai/api/hatch/oauth/callback", "https://agent.meta.ai.attacker.example.test/api/hatch/oauth/callback"]) {
+      assert.equal(trustedRedirect(redirect), false, redirect);
+      await rejected(fixture.resolve("mcp-synthetic-muse", redirect), "invalid_redirect");
+    }
+    assert.equal(fixture.calls.length, 0);
   }],
   ["URL client identifiers outside the exact allowlist never fetch", async () => {
     const fixture = setup();
