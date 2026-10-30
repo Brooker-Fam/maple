@@ -24,7 +24,8 @@ export const SEARCH_FINISH = "web_search";
 /** One message's searches: enough to look twice, never a crawl. */
 export const SEARCHES_PER_REQUEST = 2;
 const SEARCH_TIMEOUT_MS = 12_000;
-const SEARCH_OUTPUT_TOKENS = 64;
+/** Room for the call and "done": reasoning is off, so a model that thinks first can't run out before it searches. */
+const SEARCH_OUTPUT_TOKENS = 256;
 const MAX_RESULTS = 5;
 const PHRASE_MAX = 160;
 const SNIPPET_MAX = 600;
@@ -157,6 +158,7 @@ async function search(phrase: string, health: boolean, opts: SearchDeps, abortSi
       toolChoice: "required",
       stopWhen: isStepCount(1),
       maxOutputTokens: SEARCH_OUTPUT_TOKENS,
+      reasoning: "none",
       maxRetries: 1,
       timeout: SEARCH_TIMEOUT_MS,
       ...(abortSignal ? { abortSignal } : {}),

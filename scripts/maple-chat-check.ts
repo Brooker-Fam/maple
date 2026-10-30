@@ -1516,6 +1516,7 @@ async function webSearchChecks() {
     const t = call.tools?.[0] as { type?: string; id?: string; args?: { query?: string; searchDomainFilter?: string[]; maxResults?: number } } | undefined;
     eq([t?.type, t?.id, t?.args?.query, t?.args?.maxResults, t?.args?.searchDomainFilter?.length], ["provider", "gateway.perplexity_search", "baby jaundice when to call the doctor", 5, HEALTH_SITES.length], "the Gateway's own tool, with the phrase as its query and health sites only");
     eq(call.toolChoice, { type: "required" }, "it searches");
+    eq([call.reasoning, call.maxOutputTokens], ["none", 256], "no thinking to run out of room on before it searches");
     eq((call.providerOptions?.gateway as { zeroDataRetention?: unknown; only?: unknown }).zeroDataRetention, true, "the request itself stays ZDR");
     const general = await run({ query: "pharmacy open late near downtown", topic: "general" });
     eq((inner.doGenerateCalls[1].tools?.[0] as { args?: Record<string, unknown> }).args?.searchDomainFilter, undefined, "a general search isn't kept to health sites");
