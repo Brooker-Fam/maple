@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { Member, Role } from "@/lib/maple/types";
+import { accessLine, CARE_LEVEL_LABEL, careLevelOf, type CareLevel } from "@/lib/maple/access";
 import { MAPLE_HOST } from "@/lib/maple/origin";
 import { useCare } from "../care/useCare";
 import { useBabyWords } from "../familyWords";
@@ -10,11 +11,13 @@ import { Avatar, Button, Field, MEMBER_PALETTE, Sheet, cx, memberColor, tone } f
 import { useMaple } from "../useMaple";
 import { ActionRow, CopyButton, DANGER_TEXT, EmojiPicker, GROUP, Section } from "./parts";
 import { useSettingsDraft } from "./DraftContext";
-import SharingRolePicker, { SHARING_ROLES, type InviteRole } from "./SharingRolePicker";
+import SharingRolePicker, { CarePagePicker, defaultPageLevel, roleDescription, SHARING_ROLES, type InviteRole } from "./SharingRolePicker";
 
 type Invite = {
   id: number;
   role: Role;
+  /** Her page for whoever takes it up, when set apart from the role's default. */
+  care?: CareLevel;
   /** A pending invite for one email address (outside family 1). */
   email?: string | null;
   display_name: string | null;
@@ -24,12 +27,11 @@ type Invite = {
   used_at: string | null;
 };
 
-const ROLE_LINE: Record<Role, string> = {
-  owner: "Owner · can invite and manage",
-  member: "Can log",
-  viewer: "View only",
-  photos: "Photos only",
-};
+/** Her page's name ("Dana's page") for this reader's People list, or null when there's none or it isn't theirs to see. */
+function usePageName(): string | null {
+  const care = useCare();
+  return care ? `${care.name}'s page` : null;
+}
 
 
 export default function People() {
@@ -73,6 +75,7 @@ export default function People() {
   };
 
   const daysLeft = (iso: string) => Math.max(0, Math.ceil((Date.parse(iso) - now().getTime()) / 864e5));
+  const page = usePageName();
 
   return (
     <>
@@ -96,7 +99,7 @@ export default function People() {
                   <div className="min-w-0 flex-1">
                     <p className={cx(tone.body, "truncate text-[15px] font-medium")}>{inv.display_name ?? inv.email ?? "Someone"}</p>
                     <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-                      Invite link waiting · {ROLE_LINE[inv.role]} · expires {d <= 1 ? "within a day" : `in ${d} days`}
+                      Invite link waiting · {accessLine(inv, page)} · expires {d <= 1 ? "within a day" : `in ${d} days`}
                     </p>
                   </div>
                   <button type="button" onClick={() => void revoke(inv)} className={DANGER_TEXT}>
@@ -137,6 +140,10 @@ export default function People() {
 
 function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) {
   const { state, api, refresh, toast, memberName } = useMaple();
+  const care = useCare();
+  const page = usePageName();
+  // Her own page is always hers: there's nothing to choose for her.
+  const herself = care?.state?.person?.member === m.email;
   const isMe = m.email === me.email;
   // The site admin password signs in as the "admin" owner; a real owner can switch it off.
   const isAdminLogin = m.email === "admin";
@@ -150,7 +157,8 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
 
   const who = m.email === "admin" ? "Site admin login" : m.email.startsWith("invite:") ? "Joined with an invite link" : m.email;
   useSettingsDraft(`member:${m.email}`, editing && (name !== (m.display_name ?? "") || emoji !== (m.emoji ?? "")));
-  const sub = owner && !isMe ? `${ROLE_LINE[m.role]} · ${who}` : ROLE_LINE[m.role];
+  const line = accessLine(herself ? { role: m.role } : m, page);
+  const sub = owner && !isMe ? `${line} · ${who}` : line;
 
   const patch = async (body: Record<string, unknown>, done: string) => {
     setBusy(true);
@@ -268,8 +276,18 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
           <SharingRolePicker
             value={m.role === "owner" ? "member" : m.role}
             disabled={busy}
+            page={page && !herself ? page : null}
             onChange={(role) => void patch({ email: m.email, role }, `Access updated: ${SHARING_ROLES[role].label.toLowerCase()}`)}
           />
+          {page && !herself && m.role !== "owner" && (
+            <CarePagePicker
+              role={m.role}
+              page={page}
+              value={careLevelOf(m)}
+              disabled={busy}
+              onChange={(level) => void patch({ email: m.email, care: level }, `Access updated: ${page}: ${CARE_LEVEL_LABEL[level].toLowerCase()}`)}
+            />
+          )}
           {!confirmRemove ? (
             <Button variant="danger" size="sm" className="w-full" onClick={() => setConfirmRemove(true)}>
               Remove from Maple&apos;s Log
@@ -285,8 +303,10 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
 
 function InviteByEmail({ onInvited }: { onInvited: () => void }) {
   const { api, refresh, toast } = useMaple();
+  const page = usePageName();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<InviteRole>("photos");
+  const [level, setLevel] = useState<CareLevel>(defaultPageLevel("photos"));
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<{ email: string; url: string; emailed: boolean } | null>(null);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -296,7 +316,7 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const r = await api<{ url?: string; emailed?: boolean }>("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role }) });
+      const r = await api<{ url?: string; emailed?: boolean }>("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role, ...(page && role !== "photos" ? { care: level } : {}) }) });
       await refresh();
       // Outside the Brookers' log an address only gets an invite: they join by its link, signed in as that address.
       if (r.url) {
@@ -332,7 +352,16 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
-      <SharingRolePicker value={role} onChange={setRole} disabled={busy} />
+      <SharingRolePicker
+        value={role}
+        page={page}
+        onChange={(next) => {
+          setRole(next);
+          setLevel(defaultPageLevel(next));
+        }}
+        disabled={busy}
+      />
+      {page && <CarePagePicker role={role} page={page} value={level} onChange={setLevel} disabled={busy} />}
       <Button type="submit" className="w-full" disabled={!valid || busy}>
         {busy ? "Inviting…" : "Invite by email"}
       </Button>
@@ -362,11 +391,13 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
 function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
   const { state, api, toast } = useMaple();
   const w = useBabyWords();
+  const page = usePageName();
   const [name, setName] = useState("");
   const [emoji, setEmoji] = useState("");
   const [role, setRole] = useState<InviteRole>("photos");
+  const [level, setLevel] = useState<CareLevel>(defaultPageLevel("photos"));
   const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<{ url: string; name: string; role: InviteRole } | null>(null);
+  const [created, setCreated] = useState<{ url: string; name: string; role: InviteRole; care: CareLevel | null } | null>(null);
   const url = created?.url;
   const [canShare, setCanShare] = useState(false);
 
@@ -380,18 +411,19 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
       setName("");
       setEmoji("");
       setRole("photos");
+      setLevel(defaultPageLevel("photos"));
       setCreated(null);
     }
   }, [open]);
 
   const create = async () => {
     if (!name.trim() || busy) return;
-    const submitted = { name: name.trim(), role };
+    const submitted = { name: name.trim(), role, care: page && role !== "photos" ? level : null };
     setBusy(true);
     try {
       const r = await api<{ url: string }>("/api/maple/invites", {
         method: "POST",
-        body: JSON.stringify({ display_name: submitted.name, emoji, role: submitted.role }),
+        body: JSON.stringify({ display_name: submitted.name, emoji, role: submitted.role, ...(submitted.care ? { care: submitted.care } : {}) }),
       });
       setCreated({ ...submitted, url: r.url });
       onCreated();
@@ -419,7 +451,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
     <Sheet
       open={open}
       locked={busy}
-      dirty={!url && (!!name.trim() || !!emoji || role !== "photos")}
+      dirty={!url && (!!name.trim() || !!emoji || role !== "photos" || level !== defaultPageLevel(role))}
       onClose={onClose}
       title={url ? "Link ready" : "Invite with a link"}
       footer={
@@ -449,7 +481,16 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
               color={MEMBER_PALETTE[(state?.members.length ?? 0) % MEMBER_PALETTE.length]}
             />
           </div>
-          <SharingRolePicker value={role} onChange={setRole} disabled={busy} />
+          <SharingRolePicker
+            value={role}
+            page={page}
+            onChange={(next) => {
+              setRole(next);
+              setLevel(defaultPageLevel(next));
+            }}
+            disabled={busy}
+          />
+          {page && <CarePagePicker role={role} page={page} value={level} onChange={setLevel} disabled={busy} />}
         </fieldset>
       ) : (
         <>
@@ -460,8 +501,13 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
           <div className="space-y-1">
             <p className={cx(tone.body, "text-[15px] font-semibold")}>{SHARING_ROLES[created.role].label}</p>
             <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-              {SHARING_ROLES[created.role].description}
+              {roleDescription(created.role, created.care ? page : null)}
             </p>
+            {page && created.care && (
+              <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+                {page}: {CARE_LEVEL_LABEL[created.care].toLowerCase()}
+              </p>
+            )}
           </div>
           <div className={cx(tone.inset, "p-3")}>
             <p className="font-mono text-[13px] leading-relaxed break-all text-mp-ink select-all">{url}</p>

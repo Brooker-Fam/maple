@@ -156,7 +156,10 @@ try {
     await page.goBack();
     await index();
     await open("People & permissions");
-    await page.getByText(/Also see and add to the recovery page/).waitFor();
+    // Her page has its own choice beside the role: Can log starts at "Can add", which says what that opens.
+    await page.getByRole("radio", { name: /^Can log/ }).first().check();
+    await page.getByRole("radiogroup", { name: "Alex's page" }).first().getByRole("radio", { name: "Can add", exact: true }).waitFor();
+    await page.getByText("Everything on it, and they can add to it.").first().waitFor();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await open("Sign-in & account");
     await page.getByRole("link", { name: /Download River's log/ }).waitFor();

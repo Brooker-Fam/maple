@@ -118,12 +118,13 @@ WITH inv AS (
     AND (i.email = $2 OR i.email = $4 OR (i.email IS NULL AND NOT EXISTS (SELECT 1 FROM maple_removed r WHERE r.family_id = i.family_id AND r.email = $2)))
     AND EXISTS (SELECT 1 FROM maple_families f WHERE f.id = i.family_id AND f.status <> 'deleting')
     AND NOT EXISTS (SELECT 1 FROM maple_members m WHERE m.family_id = i.family_id AND m.email = $2)
-  RETURNING i.family_id, i.role, i.display_name, i.emoji, i.created_by
+  RETURNING i.family_id, i.role, i.display_name, i.emoji, i.created_by, i.care_access
 ), lifted AS (
   DELETE FROM maple_removed r USING inv WHERE r.family_id = inv.family_id AND r.email = $2
 ), added AS (
-  INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at)
-  SELECT family_id, $2, CASE WHEN role IN ('viewer', 'photos') THEN role ELSE 'member' END, COALESCE(display_name, $3), emoji, created_by, NOW() FROM inv
+  INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at, care_access)
+  SELECT family_id, $2, CASE WHEN role IN ('viewer', 'photos') THEN role ELSE 'member' END, COALESCE(display_name, $3), emoji, created_by, NOW(),
+    CASE WHEN care_access IN ('none', 'view', 'log') THEN care_access END FROM inv
   ON CONFLICT (family_id, email) DO NOTHING
   RETURNING family_id
 )

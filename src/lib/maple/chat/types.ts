@@ -24,6 +24,9 @@ export type ChatAlert = { tier: AlertTier; label: string; title: string; body: s
 /** One "Saved #1234: …" line from a write, with the entry it made (Undo removes it). */
 export type ChatReceipt = { id: number; line: string };
 
+/** An invite invite_person made: its link stays on the card (Copy link), out of the model's text. Only that address can use it. */
+export type ChatInvite = { email: string; url: string; emailed: boolean };
+
 /** A small question in the conversation. The stored options, never the phone, supply each choice's meaning. */
 export type ChatQuestionInput = { question: string; options: { id: string; label: string }[] };
 export type ChatQuestionAnswer = { choiceId: string; text?: never } | { text: string; choiceId?: never };
@@ -57,6 +60,8 @@ export type ChatToolOutput = {
   settings?: SettingsSnapshot;
   /** A family memory the tool saved or changed (memory/mcp.ts memory_change), for its card. */
   memory?: ChatMemoryChange;
+  /** An invite invite_person made, for its card (Copy invite link). */
+  invite?: ChatInvite;
 };
 
 /** What a memory tool did, as its card shows it: never an id. */

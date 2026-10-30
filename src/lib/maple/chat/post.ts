@@ -7,6 +7,8 @@ import { capsVerdict, CHAT_MAX_STEPS, type Usage } from "./caps";
 import { mentionsCrisis } from "./crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, titleFrom, userMessage, withCrisisHelp, type Incoming } from "./messages";
 import type { ToolCopy } from "../mcp-tools";
+import { chatCareOpen } from "../consent";
+import { careLevelOf } from "../access";
 import type { ModelPrice } from "./prices";
 import { contextLine, stateLines } from "./prompt";
 import type { LockedThread, UsageRow } from "./store";
@@ -55,8 +57,11 @@ export type PostDeps = {
     validate: (images: ChatImage[]) => Promise<void>;
     resolve: (messages: ChatMessage[]) => Promise<ChatMessage[]>;
   };
-  /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). `memoryEpoch`: the memories' epoch this turn started with. */
-  tools: (opts: { born: boolean; care: boolean; copy: ToolCopy; submittedAt?: Date; memoryEpoch?: number | null }) => ToolSet;
+  /**
+   * `care`: her page is open to this member's chat (chatCareOpen): her tools are in, as their level allows, and Maple's tools may read her page.
+   * `self`: the member is her. `memoryEpoch`: the memories' epoch this turn started with.
+   */
+  tools: (opts: { born: boolean; care: boolean; self?: boolean; copy: ToolCopy; submittedAt?: Date; memoryEpoch?: number | null }) => ToolSet;
   /**
    * The family's memories for this turn (memory/chat.ts): the prompt block, the
    * epoch its memory writes need, and this thread's messages from before the
@@ -159,7 +164,10 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
 
   const consent = await store.consent(member);
   if (!consent.terms) return refuse({ error: CHAT_TERMS_NEEDED, code: "terms" }, 403);
-  const care = consent.care && member.role !== "viewer";
+  const care = chatCareOpen(member, consent);
+  // What an owner set for this person on her page, for the prompt (her own account always has all of it).
+  const level = consent.self ? "log" : careLevelOf(member);
+  const page = level === "view" ? "view" as const : level === "none" ? "hidden" as const : undefined;
   let delivery: ChatDelivery | null = null;
   if (incoming.kind === "user") {
     try { delivery = parseDelivery(body); } catch (error) { return reply({ error: (error as Error).message }, 400); }
@@ -273,9 +281,10 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       model: deps.model,
       modelKey: deps.modelKey,
       price,
-      tools: deps.tools({ born: !!baby.born_at, care, copy, ...(submittedAt ? { submittedAt } : {}), memoryEpoch: memories?.epoch ?? null }),
+      tools: deps.tools({ born: !!baby.born_at, care, ...(consent.self ? { self: true } : {}), copy, ...(submittedAt ? { submittedAt } : {}), memoryEpoch: memories?.epoch ?? null }),
       viewer,
       care,
+      ...(page ? { page } : {}),
       copy,
       messages,
       responseId,

@@ -2,11 +2,13 @@ import { jsonSchema, tool, zodSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { careLevelOf, type CareLevel } from "../access";
 import { ADMIN_ID } from "../auth";
 import { registerCareTools } from "../care-mcp";
 import { context, FAMILY_ONE_COPY, logState, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
+import { OWNER_TOOLS, PEOPLE_CHANGE_TOOLS } from "../people-mcp";
 import type { Member } from "../types";
-import type { ChatAlert, ChatMemoryChange, ChatReceipt, ChatToolOutput, HelpAbout } from "./types";
+import type { ChatAlert, ChatInvite, ChatMemoryChange, ChatReceipt, ChatToolOutput, HelpAbout } from "./types";
 import type { ChatQuestionInput, ChatQuestionOutput } from "./types";
 import { questionOutputSchema, questionSchema } from "./questions";
 import { showChartTool } from "./chart-tools";
@@ -58,13 +60,35 @@ export function registrations(copy: ToolCopy = FAMILY_ONE_COPY): { all: Registra
 /** Her medicine list changes only in the app, where adding one is a real tap, not the model's word. */
 export const EXCLUDED_TOOLS = new Set(["set_mom_medicine", "add_mom_medicines"]);
 
-/** `care`: she has let the chat see her page (chat_care); until then none of her tools are in. */
-export function allowed(r: Registration, opts: { viewer: boolean; born: boolean; care: boolean; mom: Set<string> }): boolean {
+/** The people tools that change something wait for a tap on their card, which stands in for a connector's `confirmed: true`. */
+const TAP_CONFIRMED = new Set<string>(PEOPLE_CHANGE_TOOLS);
+
+/** A tap-confirmed tool's shape as the chat's model sees it: its card is the yes, so no `confirmed` (people-mcp.ts reads a chat call as confirmed). */
+function tapShape(shape: z.ZodRawShape): z.ZodRawShape {
+  const { confirmed: _confirmed, ...rest } = shape;
+  void _confirmed;
+  return rest;
+}
+
+/**
+ * `care`: her page as this member's chat reaches it: "none" until she has let
+ * the chat see it (chat_care), and otherwise the member's level on it
+ * (careLevelOf), so "view" brings only her reads. `owner`: only owners get
+ * the tools that change who's in the family.
+ */
+export function allowed(r: Registration, opts: { viewer: boolean; born: boolean; care: CareLevel; mom: Set<string>; owner?: boolean }): boolean {
   if (EXCLUDED_TOOLS.has(r.name)) return false;
   if (r.name === "record_birth" && opts.born) return false;
-  if (opts.mom.has(r.name) && (opts.viewer || !opts.care)) return false;
+  if (OWNER_TOOLS.has(r.name) && !opts.owner) return false;
+  if (opts.mom.has(r.name) && (opts.care === "none" || (opts.care === "view" && !r.ann.readOnlyHint))) return false;
   if (opts.viewer) return r.ann.readOnlyHint;
   return true;
+}
+
+/** Her page for this member's chat: closed until she lets the chat see it, and always to a viewer (chatCareOpen); then their level (her own account always logs). */
+export function chatCareLevel(member: Pick<Member, "role" | "care">, opts: { care: boolean; self?: boolean }): CareLevel {
+  if (!opts.care || member.role === "viewer") return "none";
+  return opts.self && (member.role === "owner" || member.role === "member") ? "log" : careLevelOf(member);
 }
 
 /** A tool result past this is cut before the model reads it, so one long answer can't balloon a step's prompt and its cost. */
@@ -93,6 +117,7 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
   const dup = (sc.possible_duplicate as { id?: unknown } | undefined)?.id;
   const alerts = Array.isArray(sc.alerts) ? (sc.alerts as ChatAlert[]) : [];
   const memory = memoryChangeOf(sc.memory_change);
+  const invite = sc.invite_link as Partial<ChatInvite> | undefined;
   return {
     ok: !res.isError,
     text,
@@ -104,6 +129,7 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
     ...(typeof dup === "number" ? { duplicateOf: dup } : {}),
     ...(sc.deleted === true && typeof sc.id === "number" ? { deleted: sc.id } : {}),
     ...(memory && !res.isError ? { memory } : {}),
+    ...(typeof invite?.email === "string" && typeof invite.url === "string" && typeof invite.emailed === "boolean" ? { invite: { email: invite.email, url: invite.url, emailed: invite.emailed } } : {}),
   };
 }
 
@@ -151,17 +177,19 @@ export async function chatLogState(member: Pick<Member, "email">, opts: { fam: n
   return logState({ ...ctx, now: opts.now });
 }
 
-export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null }): ToolSet {
+export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts: { fam: number; born: boolean; care: boolean; self?: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null }): ToolSet {
   const { all, mom } = registrations(opts.copy);
   const vo = opts.copy.v;
-  const extra = chatExtra(member, { ...opts, submittedAt: undefined });
-  const writeExtra = chatExtra(member, opts);
+  const care = chatCareLevel(member, opts);
+  const extra = chatExtra(member, { ...opts, care: care !== "none", submittedAt: undefined });
+  const writeExtra = chatExtra(member, { ...opts, care: care !== "none" });
 
   const viewer = member.role === "viewer";
+  const owner = member.role === "owner";
   const set: ToolSet = {};
   for (const r of all) {
-    if (!allowed(r, { viewer, born: opts.born, care: opts.care, mom })) continue;
-    const parser = z.object(r.shape);
+    if (!allowed(r, { viewer, born: opts.born, care, mom, owner })) continue;
+    const parser = z.object(TAP_CONFIRMED.has(r.name) ? tapShape(r.shape) : r.shape);
     const write = !r.ann.readOnlyHint;
     const isMom = mom.has(r.name);
     set[r.name] = tool({
@@ -207,12 +235,17 @@ export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: n
 }
 
 /**
- * The only calls that wait for a tap: delete_entry, and fix_mom_entry deleting
- * one of hers. undo_last (her doses too), restore_entry, update_entry and
+ * The only calls that wait for a tap: delete_entry, fix_mom_entry deleting
+ * one of hers, and inviting, changing the access of or removing a person
+ * (people-mcp.ts). undo_last (her doses too), restore_entry, update_entry and
  * fix_mom_entry's update (a dose's time, or skipped) run on the model's word,
- * and can move her next "OK after" time.
+ * and can move her next "OK after" time; so does cancel_invite, which only
+ * stops a link nobody has used.
  */
 export const TOOL_APPROVAL = {
   delete_entry: "user-approval" as const,
   fix_mom_entry: (input: { action?: unknown } | undefined) => (input?.action === "delete" ? ("user-approval" as const) : undefined),
+  invite_person: "user-approval" as const,
+  change_access: "user-approval" as const,
+  remove_person: "user-approval" as const,
 };

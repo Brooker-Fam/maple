@@ -100,8 +100,10 @@ export async function chatTurn(opts: {
   price: ModelPrice;
   tools: ToolSet;
   viewer: boolean;
-  /** She has let the chat see her page (chat_care); `tools` must match. */
+  /** Her page is open to this chat (chatCareOpen); `tools` must match. */
   care: boolean;
+  /** What an owner set for this person on her page, when it isn't everything (systemBlocks). */
+  page?: "view" | "hidden";
   /** The family's words: the instructions must match the tools' (both from one ToolCopy). */
   copy: ToolCopy;
   messages: ChatMessage[];
@@ -127,7 +129,7 @@ export async function chatTurn(opts: {
   }
   const window = modelWindow(messages, opts.memories?.forgotten);
   const hasImages = window.some((message) => message.parts.some((part) => part.type === "file"));
-  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey, copy: opts.copy, images: hasImages });
+  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, ...(opts.page ? { page: opts.page } : {}), model: opts.modelKey, copy: opts.copy, images: hasImages });
   const breakpoints = usesCacheBreakpoints(opts.modelKey);
   const prefixChars = JSON.stringify([instructions, Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
 

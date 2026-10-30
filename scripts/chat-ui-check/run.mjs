@@ -348,7 +348,37 @@ try {
   await page.screenshot({ path: path.join(screenshots, "queue-panel-375-day.png") });
   console.log("PASS queue layout: three long messages scroll above the capped draft composer");
 
-  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel"]) {
+  await fixture("people-invite");
+  const inviting = page.getByRole("region", { name: "Invite this person?", exact: true });
+  await inviting.getByText("aunt@example.test", { exact: true }).waitFor();
+  await inviting.getByText("Aunt Example", { exact: true }).waitFor();
+  await inviting.getByText("Can log", { exact: true }).waitFor();
+  await inviting.getByText("Sam's page", { exact: true }).waitFor();
+  await inviting.getByText("Hidden", { exact: true }).waitFor();
+  await tapTarget(inviting.getByRole("button", { name: "Invite", exact: true }));
+  await noOverflow();
+  await inviting.getByRole("button", { name: "Invite", exact: true }).click();
+  assert.deepEqual((await snapshot()).calls.at(-1), { kind: "approve", id: "approval_invite", approved: true }, "Invite approves only this stored request");
+  await fixture("people-change");
+  const changing = page.getByRole("region", { name: "Change Blake's access?", exact: true });
+  await changing.getByText("blake@example.test", { exact: true }).waitFor();
+  await changing.getByText("Hidden → Can view", { exact: true }).waitFor();
+  await changing.getByRole("button", { name: "Keep", exact: true }).click();
+  assert.deepEqual((await snapshot()).calls.at(-1), { kind: "approve", id: "approval_change", approved: false }, "Keep turns the change down");
+  await fixture("people-remove");
+  const removing = page.getByRole("region", { name: "Remove Blake?", exact: true });
+  await removing.getByText("blake@example.test", { exact: true }).waitFor();
+  await removing.getByRole("button", { name: "Remove", exact: true }).click();
+  assert.deepEqual((await snapshot()).calls.at(-1), { kind: "approve", id: "approval_remove", approved: true });
+  await fixture("people-invited");
+  const invited = page.getByRole("region", { name: "Invite ready", exact: true });
+  await invited.getByText("aunt@example.test", { exact: true }).waitFor();
+  await invited.getByRole("button", { name: "Copy invite link", exact: true }).waitFor();
+  assert.equal(await page.getByText(/join=/).count(), 0, "The invite link is copied, never printed");
+  await noOverflow();
+  console.log("PASS people: invite, change and remove wait for their own card, and an invite's link is copied from its card");
+
+  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel", "people-invite", "people-remove", "people-invited"]) {
     await fixture(name);
     if (name === "receipt") await page.getByText("Feeding in the log", { exact: true }).waitFor();
     if (name === "care-receipt") await page.getByText("Example medicine · in the log", { exact: true }).waitFor();

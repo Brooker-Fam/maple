@@ -141,8 +141,10 @@ async function run() {
     for (const name of ["log_mom_food", "log_mom_drink", "mom_nutrition"]) {
       const registration = all.find((r) => r.name === name);
       ok(registration && mom.has(name), `${name} must be a maternal care tool`);
-      eq(allowed(registration!, { viewer: false, born: true, care: false, mom }), false);
-      eq(allowed(registration!, { viewer: true, born: true, care: true, mom }), false);
+      eq(allowed(registration!, { viewer: false, born: true, care: "none", mom }), false);
+      // The chat never opens her page to a viewer (chatCareLevel); a member set to "view" gets her reads only.
+      eq(allowed(registration!, { viewer: true, born: true, care: "none", mom }), false);
+      eq(allowed(registration!, { viewer: false, born: true, care: "view", mom }), name === "mom_nutrition");
       const args = name === "log_mom_food" ? { description: "Synthetic oat bowl", meal: "meal" } : name === "log_mom_drink" ? { name: "Synthetic water", amount_ml: 240 } : {};
       eq((await tool(name, args, { ...owner, via: "chat", care: false })).error, true);
       eq((await tool(name, args, { sub: `maple:${alpha.viewer}`, fam: alpha.familyId })).error, true);

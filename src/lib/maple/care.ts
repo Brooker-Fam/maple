@@ -35,6 +35,7 @@ import {
   type AlertTier,
   type Assessment,
 } from "./guidelines";
+import { careLevelOf } from "./access";
 import { memberName } from "./insights";
 import { addDays, dayKey, daysBetween, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "./time";
 import type {
@@ -84,18 +85,27 @@ export const NO_CARE_ACCESS: CareAccess = {
   manage: false,
 };
 
+/** Her page read only ("view", access.ts): her medicines, doses, food, temperatures and OB questions, never her check-ins, therapist, Only me rows or settings. */
+const VIEW_CARE_ACCESS: CareAccess = { ...NO_CARE_ACCESS, read: true };
+
 /**
- * One rule: everyone who can sign in to Maple's Log (owners, members, the
- * family's admin login and the calendar connector) sees and does everything
- * on her page. View-only guests don't see it. Roles are read fresh from
- * `members`, so a demoted or removed member loses it at once. `self` only
+ * One rule, by each person's level on her page (careLevelOf in access.ts):
+ * owners, the family's admin login and the calendar connector see and do
+ * everything there, and so does a member unless an owner set them to "view"
+ * (read only) or "none"; view-only guests see it only when set to "view", and
+ * photos-only guests never. Her own account always has all of it, unless
+ * she's a view-only or photos-only guest. Levels and roles are read fresh
+ * from `members`, so a change or a removal takes effect at once. `self` only
  * picks the wording ("your" or "Brittany's").
  */
 export function careAccess(viewer: CareViewer, person: CarePerson | null, members: Member[]): CareAccess {
   if (!person) return { ...NO_CARE_ACCESS };
   const m = viewer.id === "admin" ? { role: "owner" as const } : members.find((x) => x.email === viewer.id);
-  if (!m || m.role === "viewer" || m.role === "photos") return { ...NO_CARE_ACCESS };
+  if (!m) return { ...NO_CARE_ACCESS };
   const self = viewer.id === person.member && !viewer.viaAdmin;
+  const level = self && (m.role === "owner" || m.role === "member") ? "log" : careLevelOf(m);
+  if (level === "none") return { ...NO_CARE_ACCESS };
+  if (level === "view") return { ...VIEW_CARE_ACCESS, self };
   return { self, read: true, write: true, private: true, mood: true, therapist: true, manage: true };
 }
 

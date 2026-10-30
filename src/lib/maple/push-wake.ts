@@ -5,7 +5,8 @@ import { planStatus } from "./care";
 import { rowToCareEntry, rowToPlan } from "./care-store";
 import { FAMILY_ONE, type FamilyScope } from "./family";
 import { addDays, dayKey, parseDayKey, zonedTimeToUtc } from "./time";
-import type { CarePerson, CarePlan, CareSettings, DoseEntry, Member, Role } from "./types";
+import type { CarePerson, CarePlan, CareSettings, DoseEntry, Member } from "./types";
+import { MEMBER_COLS, rowToMember } from "./auth";
 import { MAPLE_ORIGIN } from "./origin";
 
 /**
@@ -67,14 +68,8 @@ export const familySent = (n: number) => `(family_id = $${n} OR (family_id IS NU
 // ── who's in the family ──────────────────────────────────────────────
 
 export async function familyMembers(familyId: number): Promise<Member[]> {
-  const rows = await q(`SELECT email, role, display_name, emoji, color FROM maple_members WHERE family_id = $1 ORDER BY added_at, email`, [familyId]);
-  return rows.map((r) => ({
-    email: String(r.email),
-    role: (r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member") as Role,
-    display_name: r.display_name == null ? null : String(r.display_name),
-    emoji: r.emoji == null ? null : String(r.emoji),
-    color: r.color == null ? null : String(r.color),
-  }));
+  const rows = await q(`SELECT ${MEMBER_COLS} FROM maple_members WHERE family_id = $1 ORDER BY added_at, email`, [familyId]);
+  return rows.map(rowToMember);
 }
 
 /** The family's care page, if it has one (read only: a notification never makes one). */

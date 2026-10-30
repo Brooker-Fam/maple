@@ -36,7 +36,7 @@ export function TermsCard({ consent, onAccepted }: { consent: ChatConsent; onAcc
         <li>{TRACKER_NOTE} The chat&apos;s answers come from an AI and can be wrong.</li>
         <li>{CHAT_TERMS_HELP}</li>
         <li>
-          What you type or choose, photos you send in the chat, and the parts of the log the chat reads to answer, are sent to an AI model through Vercel AI Gateway, with zero data retention
+          What you type or choose, photos you send in the chat, and the parts of the log and family list the chat reads to answer, are sent to an AI model through Vercel AI Gateway, with zero data retention
           and no training on it requested.
         </li>
         <li>Chat photos are private to you and stay with your conversation until you delete its history. Photo descriptions and food estimates can be wrong; a photo cannot diagnose a health problem.</li>

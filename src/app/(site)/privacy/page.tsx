@@ -64,9 +64,10 @@ export default function Privacy() {
         later code requests. The code email contains no information from your family&rsquo;s log.
       </p>
       <p>
-        When an owner invites you by email, Maple keeps your address with the invite and sends its link through Resend.
-        The email includes the inviter&rsquo;s name, the baby&rsquo;s name if set, and when the link expires. A new family&rsquo;s
-        owner also gets a welcome email, with their first name and a link to Maple.
+        When an owner invites you by email, from Maple&rsquo;s settings, its chat or a connected assistant, Maple keeps your
+        address with the invite and sends its link through Resend. The email includes the inviter&rsquo;s name, the baby&rsquo;s
+        name if set, and when the link expires. A new family&rsquo;s owner also gets a welcome email, with their first name and a
+        link to Maple.
       </p>
       <p>
         An invite link works once and expires after seven days. Using it or letting it expire does not delete its record or
@@ -298,10 +299,13 @@ export default function Privacy() {
 
       <h2>Who can see it</h2>
       <p>
-        An owner chooses each person&rsquo;s access. Photos-only guests see shared moments, photos and captions, along with
-        the baby&rsquo;s display name and age. They cannot read the daily baby log, recovery page or chat. View-only guests
-        can read the baby&rsquo;s log and moments but not mom&rsquo;s page. Members can add and edit the baby log and access
-        the recovery page when it is set up. New invitations default to photos-only access.
+        An owner chooses each person&rsquo;s access, in Maple&rsquo;s settings, its chat or a connected assistant. Photos-only
+        guests see shared moments, photos and captions, along with the baby&rsquo;s display name and age. They cannot read the
+        daily baby log, recovery page or chat. View-only guests can read the baby&rsquo;s log and moments; members can also add
+        and edit them. Separately, the owner chooses what each person sees of the recovery page when it is set up: members see
+        and add to it unless the owner limits them to reading it or hides it, and view-only guests don&rsquo;t see it unless the
+        owner lets them read it. Reading it never includes mom&rsquo;s check-ins. Mom always has her own page. New invitations
+        default to photos-only access.
       </p>
       <p>
         Removing someone ends their access through Maple. It cannot remove copies they already downloaded, shared or
@@ -316,8 +320,10 @@ export default function Privacy() {
       <h2>The AI features</h2>
       <h3>Maple&rsquo;s chat</h3>
       <p>
-        When you use the chat, your message and attached photos, answers to question cards, the recent conversation, your family&rsquo;s memories, and the log or supported family settings it reads to answer are sent to
-        an AI model chosen by Maple, through Vercel AI Gateway. Only after mom turns on chat access herself, members who can
+        When you use the chat, your message and attached photos, answers to question cards, the recent conversation, your family&rsquo;s memories, and the log, supported family settings or list of people in the family it reads to answer are sent to
+        an AI model chosen by Maple, through Vercel AI Gateway. That list has each person&rsquo;s name and access; when an owner asks,
+        it also has each person&rsquo;s email address and the invites still waiting, and an owner&rsquo;s request to invite someone
+        sends the address they typed. Only after mom turns on chat access herself, members who can
         see her page can use the chat with her food, drinks, portions and nutrient details, medicines and doses, temperatures and questions for her OB. If you ask for food estimates,
         the chat can save approximate nutrient values with the entry, marked as estimates that you can edit. Her check-ins never
         reach the chat. Every request asks the

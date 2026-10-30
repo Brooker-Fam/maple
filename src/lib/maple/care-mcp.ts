@@ -177,11 +177,16 @@ async function careFor(ctx: Ctx): Promise<CareSession> {
   return { ...session, now: ctx.now };
 }
 
-/** The one access error: a view-only guest. Everyone else can do everything here. */
+/** Her page as this caller's level on it allows (careAccess): hidden, read only, or everything. */
 function needAccess(ctx: Ctx, s: CareSession, write: boolean) {
-  if (ctx.who.role === "viewer" || !s.access.read || (write && !s.access.write)) {
-    throw new CareAccessError(`You're a viewer on Maple's Log, so ${voiceOf(ctx).their} mom's page isn't open to you. An owner can make you a member in Maple's Log → Family.`);
+  if (s.access.read && (!write || s.access.write)) return;
+  const their = voiceOf(ctx).their;
+  if (!s.person) throw new CareAccessError(`There's no page for ${their} mom in Maple's Log.`);
+  if (ctx.who.role === "viewer" && !s.access.read) {
+    throw new CareAccessError(`You're a viewer on Maple's Log, so ${their} mom's page isn't open to you. An owner can make you a member in Maple's Log → Family.`);
   }
+  const change = "An owner can change that in Maple's Log → Settings → People & permissions.";
+  throw new CareAccessError(s.access.read ? `You can see ${their} mom's page but not change it. ${change}` : `${voiceOf(ctx).Their} mom's page isn't open to you on Maple's Log. ${change}`);
 }
 
 function accessFail(message: string): CallToolResult {
@@ -499,7 +504,7 @@ const UNITS = ["tablets", "caplets", "capsules", "doses", "mL"] as const;
 export async function momStatus(ctx: Ctx): Promise<{ name: string; line: string; speak: string; top: string } | null> {
   try {
     const s = await careFor(ctx);
-    if (!s.person || !s.access.read || ctx.who.role === "viewer") return null;
+    if (!s.person || !s.access.read) return null;
     const { active } = await viewsFor(s);
     // The pressing one leads (a set time not logged comes before OK now), then sortPlans' order.
     const views = pressingFirst(active.map((x) => x.view));
@@ -530,7 +535,7 @@ export async function momStatus(ctx: Ctx): Promise<{ name: string; line: string;
 export async function momSameMedicine(ctx: Ctx, name: string): Promise<{ name: string; plans: CarePlan[] } | null> {
   if (isVitaminD(name) || !sameNames(name).length) return null;
   const s = await careFor(ctx);
-  if (!s.person || !s.access.read || ctx.who.role === "viewer") return null;
+  if (!s.person || !s.access.read) return null;
   const plans = samePlans(name, (await visiblePlans(s)).filter((p) => planActive(p, s.now, s.tz)));
   return plans.length ? { name: s.name, plans } : null;
 }
@@ -546,7 +551,7 @@ export async function momSameMedicine(ctx: Ctx, name: string): Promise<{ name: s
 export async function momSummary(ctx: Ctx, from: Date): Promise<{ line: string; json: Record<string, unknown> } | null> {
   try {
     const s = await careFor(ctx);
-    if (!s.person || !s.access.read || ctx.who.role === "viewer") return null;
+    if (!s.person || !s.access.read) return null;
     const [entries, questions, plans] = await Promise.all([
       listCareEntries(s, { kinds: ["dose", "temp"], from }),
       listCareEntries(s, { kinds: ["question"], limit: 200 }),

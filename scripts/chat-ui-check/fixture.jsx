@@ -16,6 +16,12 @@ const question = { question: "Was this the same feeding?", options: [{ id: "same
 const user = (id, text) => ({ id, role: "user", parts: [{ type: "text", text }] });
 const assistant = (id, parts) => ({ id, role: "assistant", parts });
 const tool = (name, output, id = "call_result") => ({ type: `tool-${name}`, toolCallId: id, input: {}, state: "output-available", output });
+const asking = (name, input, id) => ({ type: `tool-${name}`, toolCallId: `call_${id}`, state: "approval-requested", input, approval: { id: `approval_${id}` } });
+const MEMBERS = [
+  { email: "alex@example.test", role: "owner", display_name: "Alex", emoji: null, color: null },
+  { email: "blake@example.test", role: "member", display_name: "Blake", emoji: null, color: null, care: "none" },
+];
+const INVITE_URL = "https://maple-chat-ui.example.test/signup#join=syntheticInviteToken0123456789";
 
 const activity = {
   version: 1, kind: "activity", asOf: NOW, timezone: TZ, from: "2026-10-15", to: "2026-10-28", range: 7, metric: "feeds",
@@ -55,6 +61,10 @@ function scenario(name) {
     return { ...base, messages: [user("msg_user", food ? "I ate toast and eggs." : "I had some water."), assistant("msg_care", [tool(food ? "log_mom_food" : "log_mom_drink", { ok: true, write: true, text: line, careReceipts: [{ id: 901, action: "saved", line }] })])] };
   }
   if (name === "activity" || name === "growth") return { ...base, messages: [user("msg_user", name === "activity" ? "Show the last two weeks." : "Show her weight trend."), assistant("msg_chart", [tool("show_chart", { ok: true, write: false, text: "Here is the chart.", chart: name === "activity" ? activity : growth })])] };
+  if (name === "people-invite") return { ...base, messages: [user("msg_user", "Invite aunt@example.test so she can log, but not see Sam's page."), assistant("msg_people", [asking("invite_person", { email: "aunt@example.test", access: "log", mom_page: "none", name: "Aunt Example" }, "invite")])] };
+  if (name === "people-change") return { ...base, messages: [user("msg_user", "Let Blake see Sam's page, read only."), assistant("msg_people", [asking("change_access", { person: "Blake", mom_page: "view" }, "change")])] };
+  if (name === "people-remove") return { ...base, messages: [user("msg_user", "Remove Blake."), assistant("msg_people", [asking("remove_person", { person: "Blake" }, "remove")])] };
+  if (name === "people-invited") return { ...base, messages: [user("msg_user", "Invite aunt@example.test to view the log."), assistant("msg_people", [tool("invite_person", { ok: true, write: true, text: "Invited aunt@example.test: sees River's log and moments, no changes. Email isn't set up, so copy the invite link from the card and send it to them.", invite: { email: "aunt@example.test", url: INVITE_URL, emailed: false } })])] };
   if (name === "long") return { ...base, messages: Array.from({ length: 30 }, (_, i) => i % 2 ? assistant(`msg_${i}`, [{ type: "text", text: `Synthetic reply ${i}. The log shows a completed entry at the recorded time. This example is long enough to exercise reading and scrolling.` }]) : user(`msg_${i}`, `Synthetic question ${i}: What happened in this example?`)) };
   return base;
 }
@@ -110,12 +120,12 @@ function App() {
     return structuredClone({ entry: record.entry, deleted: record.deleted });
   }, []);
   const maple = {
-    state: { baby: BABY, family: { id: 99, care_name: "Sam", ask: "an owner" }, entries, me: { email: "alex@example.test", role: "owner" }, members: [], care: null, rev: String(rev) },
+    state: { baby: BABY, family: { id: 99, care_name: "Sam", ask: "an owner" }, entries, me: { email: "alex@example.test", role: "owner" }, members: MEMBERS, care: null, rev: String(rev) },
     api,
     units, setUnits, now: () => new Date(NOW), readOnly: false, online: true, refresh: async () => {},
     remove: (id) => deferred("remove", { id }, () => updateRecord("baby", { deleted: true })),
     restore: async (id) => (await deferred("restore", { id }, () => updateRecord("baby", { deleted: false }))) ? records.current.baby.entry : null,
-    toast: () => {}, memberLabel: () => "Alex", memberName: () => "Alex", toasts: [], dismissToast: () => {},
+    toast: () => {}, memberLabel: () => "Alex", memberName: (id) => MEMBERS.find((m) => m.email === id)?.display_name ?? "Alex", toasts: [], dismissToast: () => {},
   };
   const nav = { openHelp: () => calls.current.push({ kind: "help" }), openCare: () => {}, openSupport: () => {}, openDoctor: () => {} };
   const sheets = { open: (value) => calls.current.push({ kind: "edit", value }), close: () => {}, current: null };
@@ -136,7 +146,7 @@ function App() {
 
   useEffect(() => {
     window.__chatFixture = {
-      scenario: (name) => { records.current = { baby: { entry: structuredClone(ENTRY), deleted: name === "restore", available: true }, care: { entry: structuredClone(name === "care-food" ? FOOD : name === "care-drink" ? DRINK : CARE), deleted: false, available: true } }; setState(scenario(name)); setEntries(name === "restore" ? [] : [ENTRY]); setCareEnabled(name.startsWith("care-")); setUnits("us"); setRev((n) => n + 1); setDraft(name === "queue-panel" ? QUEUE_DRAFT : ""); setActive(true); setEpoch((e) => e + 1); calls.current = []; pending.current = null; },
+      scenario: (name) => { records.current = { baby: { entry: structuredClone(ENTRY), deleted: name === "restore", available: true }, care: { entry: structuredClone(name === "care-food" ? FOOD : name === "care-drink" ? DRINK : CARE), deleted: false, available: true } }; setState(scenario(name)); setEntries(name === "restore" ? [] : [ENTRY]); setCareEnabled(name.startsWith("care-") || name.startsWith("people-")); setUnits("us"); setRev((n) => n + 1); setDraft(name === "queue-panel" ? QUEUE_DRAFT : ""); setActive(true); setEpoch((e) => e + 1); calls.current = []; pending.current = null; },
       snapshot: () => ({ ...latest.current, calls: calls.current, pending: !!pending.current, records: records.current }),
       resolveAction: (success) => pending.current?.(success),
       remount: () => setEpoch((n) => n + 1),
