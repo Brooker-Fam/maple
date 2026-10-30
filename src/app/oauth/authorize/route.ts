@@ -9,7 +9,7 @@ import { captureServerException } from "@/lib/posthog-server";
 
 /**
  * OAuth 2.1 Authorization endpoint with PKCE, for connecting Claude, ChatGPT,
- * Muse or a local app to the MCP server at /api/maple/mcp.
+ * Muse, Grok or a local app to the MCP server at /api/maple/mcp.
  *
  * Family members sign in with Google (the maple_session cookie from
  * /api/maple/auth/*), see a consent card naming the app and their account, and

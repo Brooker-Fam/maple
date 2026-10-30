@@ -39,9 +39,9 @@ export default function Terms() {
 
       <h2>AI answers can be wrong</h2>
       <p>
-        Maple&rsquo;s chat, and Claude, ChatGPT or Muse when you connect them, can misread what you say or log the wrong thing. Each
+        Maple&rsquo;s chat, and Claude, ChatGPT, Muse or Grok when you connect them, can misread what you say or log the wrong thing. Each
         entry they save shows up in your log with who added it, and can be undone; check them. Don&rsquo;t use their answers to
-        make medical decisions. When you connect your own Claude, ChatGPT or Muse account, that provider&rsquo;s terms apply to it too.
+        make medical decisions. When you connect your own Claude, ChatGPT, Muse or Grok account, that provider&rsquo;s terms apply to it too.
       </p>
 
       <h2>Who can use Maple</h2>

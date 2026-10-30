@@ -8,8 +8,8 @@ import { cx, tone } from "@/components/maple/ui";
 import { MCP_URL } from "@/lib/maple/origin";
 
 /**
- * /maple/connect — how to hook Maple's Log up to Claude, ChatGPT and Muse (the
- * MCP server at /api/maple/mcp). Unlinked on purpose, like the rest of /maple;
+ * /maple/connect — how to hook Maple's Log up to Claude, ChatGPT, Muse and Grok
+ * (the MCP server at /api/maple/mcp). Unlinked on purpose, like the rest of /maple;
  * the Family tab points here. Outside the app shell, so it reads like one of
  * the app's own pages: the mp-* tokens (MapleUiScope sets the font and page
  * background), plain cards, line icons.
@@ -194,7 +194,7 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
           </div>
           <h1 className={cx(tone.display, "mt-5 text-[34px] leading-[1.05] sm:text-[40px]")}>Just say it out loud</h1>
           <p className={cx(tone.muted, "mt-3 text-[15px] leading-relaxed sm:text-base")}>
-            Connect Claude, ChatGPT or Muse to Maple&apos;s Log, then tell it what
+            Connect Claude, ChatGPT, Muse or Grok to Maple&apos;s Log, then tell it what
             happened (&ldquo;wet and dirty diaper, mustard&rdquo;) or ask
             what you need to know (&ldquo;which side next?&rdquo;). It lands in
             the same log as the app, with your name on it.
@@ -320,7 +320,27 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
             </ol>
           </Section>
 
-          <Section mark="D" title="Claude Code (terminal)">
+          <Section mark="D" title="Grok">
+            <p>
+              Grok, from xAI, registers itself with Maple, so there&apos;s no
+              Client ID to paste.
+            </p>
+            <ol className="ml-5 list-decimal space-y-2 marker:text-mp-ink-3">
+              <li>
+                Open <ExtLink href="https://grok.com/connectors">grok.com/connectors</ExtLink>.
+              </li>
+              <li>
+                Click <strong>New Connector</strong>, then <strong>Custom</strong>,
+                and paste the URL: <Code>{MCP_URL}</Code>.
+              </li>
+              <li>
+                When Maple&apos;s page opens, choose <strong>Continue with Google</strong>{" "}
+                <Then /> <strong>Approve</strong>.
+              </li>
+            </ol>
+          </Section>
+
+          <Section mark="E" title="Claude Code (terminal)">
             <p>For the terminal-inclined. Run this once:</p>
             <CodeBlock>{CLAUDE_CODE_CMD}</CodeBlock>
             <p>
@@ -372,14 +392,14 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
 
           <Section mark={<Icon name="lock" size={18} />} title="Who can connect">
             <p>
-              Only people invited to Maple&apos;s Log can connect. Claude,
-              ChatGPT or Muse signs in <em>as you</em>, so everything it logs
-              shows your name and &ldquo;via Claude&rdquo; or &ldquo;via
-              ChatGPT&rdquo; (Muse shows as &ldquo;via AI&rdquo;). Viewers can
-              ask questions but can&apos;t add anything.
+              Only people invited to Maple&apos;s Log can connect. Your
+              assistant signs in <em>as you</em>, so everything it logs shows
+              your name and &ldquo;via Claude&rdquo; or &ldquo;via
+              ChatGPT&rdquo; (Muse and Grok show as &ldquo;via AI&rdquo;).
+              Viewers can ask questions but can&apos;t add anything.
             </p>
             <p>
-              To disconnect, remove the connector in Claude, ChatGPT or Muse. An owner
+              To disconnect, remove the connector in your assistant. An owner
               can also remove someone in Maple&apos;s Log <Then />{" "}
               <strong>Family</strong>, which cuts off their connector too.
             </p>

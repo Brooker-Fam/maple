@@ -195,19 +195,21 @@ export function verifyRefreshToken(token: string): RefreshTokenPayload | null {
 }
 
 /**
- * Muse (Meta's assistant) registers this one callback for every connector, so
- * it's trusted exactly: no other path on its host, no query.
+ * Muse (Meta's assistant) and Grok (xAI's) each register one callback for
+ * every connector, so each is trusted exactly: no other path on its host, no
+ * query. Grok's keeps its trailing slash.
  */
 export const MUSE_CALLBACK = "https://agent.meta.ai/api/hatch/oauth/callback";
+export const GROK_CALLBACK = "https://grok.com/connectors-oauth-exchange-code/";
 
 /**
- * Redirects we trust with long-lived grants: Claude, ChatGPT, Muse's callback,
- * or an app on this machine (Claude Code, Inspector). Maple consent requires
- * one, and only these get refresh tokens, so a login phished to a stranger's
- * site can't keep renewing.
+ * Redirects we trust with long-lived grants: Claude, ChatGPT, Muse's and
+ * Grok's callbacks, or an app on this machine (Claude Code, Inspector). Maple
+ * consent requires one, and only these get refresh tokens, so a login phished
+ * to a stranger's site can't keep renewing.
  */
 export function trustedRedirect(uri: string): boolean {
-  if (uri === MUSE_CALLBACK) return true;
+  if (uri === MUSE_CALLBACK || uri === GROK_CALLBACK) return true;
   let u: URL;
   try {
     u = new URL(uri);

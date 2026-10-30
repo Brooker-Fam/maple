@@ -23,7 +23,7 @@ import { captureServerException } from "@/lib/posthog-server";
  *
  * Refresh tokens are stateless too (see mintRefreshToken): each refresh hands
  * out a new one, so connectors don't lapse monthly. They only go to codes
- * sent to Claude, ChatGPT, Muse or a local app (trustedRedirect). Admin ones die when
+ * sent to Claude, ChatGPT, Muse, Grok or a local app (trustedRedirect). Admin ones die when
  * ADMIN_PASS changes or after 90 idle days. For Maple family members (sub
  * "maple:<email>") a refresh re-checks membership in the grant's family (`fam`;
  * none means family 1), so someone removed from the family loses the connector
