@@ -59,8 +59,9 @@ export async function readAdminDetails(options: AdminDetailsOptions, now = new D
       GROUP BY m.email`;
     order = "joined_at DESC NULLS LAST, email";
   } else if (opts.view === "feedback") {
+    // Every family's, the original family's too: feedback is a message to read, not a usage count.
     source = `SELECT fb.id, fb.family_id, fb.member AS email, fb.role, fb.via, fb.topic, fb.rating, fb.message, fb.emailed_at, fb.created_at
-      FROM maple_feedback fb WHERE fb.family_id <> $1`;
+      FROM maple_feedback fb WHERE $1::bigint > 0`;
     order = "created_at DESC, id DESC";
   } else {
     source = "SELECT id, email, created_at FROM maple_waitlist";
@@ -117,7 +118,7 @@ export async function revealAdminEmail(ref: AdminRef): Promise<string> {
       ? `SELECT m.email FROM maple_members m JOIN maple_families f ON f.id = m.family_id
          WHERE m.email = $1 AND f.id <> $2 AND m.accepted_at IS NOT NULL AND m.email <> 'admin' AND m.email NOT LIKE 'invite:%' LIMIT 1`
       : ref.kind === "feedback"
-        ? "SELECT member AS email FROM maple_feedback WHERE id = $1 AND family_id <> $2"
+        ? "SELECT member AS email FROM maple_feedback WHERE id = $1 AND $2::bigint > 0"
         : "SELECT email FROM maple_waitlist WHERE id = $1 AND $2::bigint > 0";
   const rows = await query(statement, [ref.kind === "person" ? ref.email : ref.id, FAMILY_ONE]);
   if (!rows) throw new StoreUnavailable();

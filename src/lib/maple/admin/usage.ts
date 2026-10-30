@@ -10,7 +10,8 @@ import { ADMIN_FEATURES, ADMIN_SOURCES, type AdminFeature, type AdminSource, typ
  * 24-hour periods counted back from the snapshot, so no family's timezone is
  * needed. Chat counts come from maple_chat_daily, which outlives deleted chat
  * history; its days are each family's dates, read inside the UTC window with
- * a day's slack ahead for zones east of UTC.
+ * a day's slack ahead for zones east of UTC. Feedback counts every family's,
+ * the original family's too, as its list does (admin/details.ts).
  */
 
 /** The group an entry's kind falls in. */
@@ -99,7 +100,7 @@ export async function readAdminUsage(now: Date): Promise<{ usage: AdminUsage; fe
          'well', (COUNT(*) FILTER (WHERE fb.rating = 'well'))::int,
          'okay', (COUNT(*) FILTER (WHERE fb.rating = 'okay'))::int,
          'notWell', (COUNT(*) FILTER (WHERE fb.rating = 'not_well'))::int
-       ) FROM maple_feedback fb JOIN fams f ON f.id = fb.family_id WHERE fb.created_at <= $2::timestamptz)
+       ) FROM maple_feedback fb WHERE fb.created_at <= $2::timestamptz)
      ) AS usage`,
     [FAMILY_ONE, now.toISOString()]
   );

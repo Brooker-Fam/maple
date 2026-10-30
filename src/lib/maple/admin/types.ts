@@ -8,7 +8,7 @@ export type AdminSource = (typeof ADMIN_SOURCES)[number];
 
 export type AdminUsageCount<K extends string> = { key: K; families: number; entries: number };
 
-/** Aggregate-only response. Family 1 is excluded from every family/member/activity metric. */
+/** Aggregate-only response. Family 1 is excluded from every family/member/activity metric; feedback counts include it. */
 export type AdminMetrics = {
   generatedAt: string;
   families: {

@@ -167,7 +167,7 @@ function Overview({ metrics: m, onAuthProblem }: { metrics: AdminMetrics; onAuth
         <MetricCard label="Waitlist" value={m.waitlist.total} note="Email signups to the waitlist" icon="list" actionLabel="View waitlist" onClick={() => showDetails({ view: "waitlist", filter: "all" })} />
       </div>
 
-      <p className="px-1 text-xs leading-relaxed text-mp-ink-3">Family and people counts exclude the original family. Updated {updatedFormat.format(new Date(m.generatedAt))}.</p>
+      <p className="px-1 text-xs leading-relaxed text-mp-ink-3">Family, people and usage counts exclude the original family; feedback includes it. Updated {updatedFormat.format(new Date(m.generatedAt))}.</p>
 
       <FeedbackSummary metrics={m} onSelect={showDetails} />
 
@@ -210,7 +210,7 @@ function Overview({ metrics: m, onAuthProblem }: { metrics: AdminMetrics; onAuth
           <p>Signups count families. People counts each accepted account once, even if it belongs to more than one family. Pending invitations and guests using an invite link aren’t included in that total.</p>
           <p>These are current totals, so deleted accounts are no longer included. Activity covers log opens and saved entries; deleted entries are excluded. The chart uses UTC calendar dates; other 7 and 30 day totals use the time of this snapshot.</p>
           <p>Usage counts entries by when they were saved, grouped by kind and by where they came from, never what they say. Logging days are 24-hour periods counted back from this snapshot. Chat counts come from a daily tally that stays when someone deletes their chat history.</p>
-          <p>Feedback shows each message in full, with the sender&rsquo;s address hidden until you reveal it. The question on Today goes to owners and members of set-up families once they have used Maple for a few days, and at most twice.</p>
+          <p>Feedback shows every message saved from every family, the original family included, in full, with the sender&rsquo;s address hidden until you reveal it. The question on Today goes to owners and members of set-up families once they have used Maple for a few days, and at most twice.</p>
         </div>
         <div className="mt-5 border-t border-mp-line pt-4 sm:flex sm:items-center sm:justify-between sm:gap-6">
           <p className="max-w-2xl text-sm leading-relaxed text-mp-ink-2">PostHog has separate event trends, including site visits, signup conversion and app opens. Its sign-in and project access are managed there.</p>

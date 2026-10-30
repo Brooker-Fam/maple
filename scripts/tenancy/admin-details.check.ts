@@ -136,24 +136,29 @@ async function data(shape: Shape) {
     }
   });
 
-  await test(`${shape}: feedback lists each message in full, newest first, with the sender masked until revealed`, async () => {
+  await test(`${shape}: feedback lists every family's messages in full, newest first, with the sender masked until revealed`, async () => {
     const [older] = await sql(`INSERT INTO maple_feedback (family_id, member, role, via, topic, message, emailed_at, created_at)
       VALUES (2, $1, 'member', 'app', 'idea', 'Could pumping show a weekly total?', NOW(), '2026-10-20T12:00:00Z') RETURNING id`, [beta.member]);
     const [newer] = await sql(`INSERT INTO maple_feedback (family_id, member, role, via, rating, message, created_at)
       VALUES (2, 'admin', 'owner', 'prompt', 'okay', NULL, '2026-10-27T12:00:00Z') RETURNING id`);
-    await sql(`INSERT INTO maple_feedback (family_id, member, role, via, message) VALUES (1, $1, 'owner', 'chat', 'Family 1 feedback')`, [alpha.owner]);
+    // The original family's too, unlike every count on the page: it's a message to read, and where the operator tests it.
+    const [own] = await sql(`INSERT INTO maple_feedback (family_id, member, role, via, message, created_at)
+      VALUES (1, $1, 'owner', 'chat', 'Family 1 feedback', '2026-10-25T12:00:00Z') RETURNING id`, [alpha.owner]);
     const list = await readAdminDetails({ view: "feedback", filter: "all", page: 1 }, NOW);
-    eq(list.total, 2, "family 1 left out");
+    eq(list.total, 3, "every family's");
     eq(list.rows.map((r) => r.kind === "feedback" && [r.id, r.familyId, r.role, r.via, r.topic, r.rating, r.message, r.emailed, r.emailMasked]), [
       [Number(newer.id), 2, "owner", "prompt", null, "okay", null, false, null],
+      [Number(own.id), 1, "owner", "chat", null, null, "Family 1 feedback", false, "a•••@•••"],
       [Number(older.id), 2, "member", "app", "idea", null, "Could pumping show a weekly total?", true, "f•••@•••"],
     ]);
-    const [first, second] = list.rows;
+    const [first, second, third] = list.rows;
     ok(first.kind === "feedback" && first.ref === null, "no reply address for the shared admin login");
-    ok(second.kind === "feedback" && second.ref !== null && !JSON.stringify(list).includes(beta.member), "sender masked");
-    const ref = second.kind === "feedback" ? openAdminRef(second.ref) : null;
+    const body = JSON.stringify(list);
+    ok(third.kind === "feedback" && third.ref !== null && !body.includes(beta.member) && !body.includes(alpha.owner), "senders masked");
+    const ref = third.kind === "feedback" ? openAdminRef(third.ref) : null;
     eq(ref, { kind: "feedback", id: Number(older.id) });
     eq(await revealAdminEmail(ref!), beta.member);
+    eq(await revealAdminEmail(second.kind === "feedback" ? openAdminRef(second.ref)! : ref!), alpha.owner, "the original family's sender can be revealed too");
     let missing = false;
     try { await revealAdminEmail({ kind: "feedback", id: Number(newer.id) }); } catch (error) { missing = error instanceof NotFound; }
     ok(missing, "no address to reveal for the admin login");

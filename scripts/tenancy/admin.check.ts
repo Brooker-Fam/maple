@@ -115,7 +115,8 @@ async function aggregates(shape: Shape) {
     eq(more.usage.logging, { families7d: 1, entries7d: 5, mostDays: 1, someDays: 0, noDays: 1 });
     eq(more.usage.chat, { families30d: 1, people30d: 2, messages7d: 4, messages30d: 7 });
     eq(more.usage.turnedOn.memories, 1);
-    eq(more.feedback, { total: 2, last7d: 1, well: 1, okay: 0, notWell: 0 });
+    // Feedback counts the original family's too (Oct 27's chat message), unlike every other number here.
+    eq(more.feedback, { total: 3, last7d: 2, well: 1, okay: 0, notWell: 0 });
     ok(!JSON.stringify(more).includes("Made-up"), "no feedback words or memories in the aggregate");
     await sql(`DELETE FROM maple_entries WHERE created_at >= '2026-10-21T13:00:00Z' AND kind IN ('feed', 'temp', 'tummy', 'sleep', 'pump') AND created_at <> '2026-10-27T12:00:00Z'`);
     await sql(`DELETE FROM maple_chat_daily WHERE day IN ('2026-10-27', '2026-10-28')`);

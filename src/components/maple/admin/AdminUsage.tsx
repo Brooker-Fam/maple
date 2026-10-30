@@ -76,7 +76,7 @@ export function FeedbackSummary({ metrics: m, onSelect }: { metrics: AdminMetric
     <section className={cx(tone.card, "p-5 sm:p-6")} aria-labelledby="feedback-title">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Heading id="feedback-title" title="What families think" note="Feedback from the chat, Settings and the question on Today. Each one is also emailed to Maple's inbox." />
+          <Heading id="feedback-title" title="What families think" note="Every message sent from the chat, Settings or the question on Today, saved in Maple and emailed to its inbox. Includes the original family's." />
         </div>
         <Button variant="soft" onClick={() => onSelect({ view: "feedback", filter: "all" })}>
           <Icon name="message-square" size={17} /> Read feedback
