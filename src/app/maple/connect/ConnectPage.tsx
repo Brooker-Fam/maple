@@ -8,14 +8,22 @@ import { cx, tone } from "@/components/maple/ui";
 import { MCP_URL } from "@/lib/maple/origin";
 
 /**
- * /maple/connect — how to hook Maple's Log up to Claude and ChatGPT (the MCP
- * server at /api/maple/mcp). Unlinked on purpose, like the rest of /maple;
+ * /maple/connect — how to hook Maple's Log up to Claude, ChatGPT and Muse (the
+ * MCP server at /api/maple/mcp). Unlinked on purpose, like the rest of /maple;
  * the Family tab points here. Outside the app shell, so it reads like one of
  * the app's own pages: the mp-* tokens (MapleUiScope sets the font and page
  * background), plain cards, line icons.
  */
 
 const CLAUDE_CODE_CMD = `claude mcp add --transport http maple ${MCP_URL}`;
+
+const MUSE_MESSAGE = `Create a custom connector named Maple's Log: remote Streamable HTTP, URL ${MCP_URL}, OAuth authentication. There's no API key.`;
+/**
+ * Muse's connector form asks for a Client ID. Maple keeps no client list, so
+ * any ID works (it checks Muse's callback instead, MUSE_CALLBACK); this is the
+ * one Muse registered, shared so nobody has to register their own.
+ */
+const MUSE_CLIENT_ID = "mcp-d8d903ce-ccd8-4f69-b863-42bd479125bb";
 
 const PROMPTS: { when: string; icon: IconName; lines: string[] }[] = [
   {
@@ -98,6 +106,18 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   );
 }
 
+/** A value to paste somewhere else, on one line with its Copy button. */
+function CopyField({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={cx("flex items-center gap-2 rounded-xl bg-mp-sunken py-1.5 pr-1.5 pl-3.5", className)}>
+      <code className="min-w-0 flex-1 font-mono text-[13px] text-mp-ink [overflow-wrap:anywhere] sm:text-sm">
+        <Breakable text={text} />
+      </code>
+      <CopyButton text={text} />
+    </div>
+  );
+}
+
 function CodeBlock({ children, copyText }: { children: string; copyText?: string }) {
   return (
     <div className="relative">
@@ -174,7 +194,7 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
           </div>
           <h1 className={cx(tone.display, "mt-5 text-[34px] leading-[1.05] sm:text-[40px]")}>Just say it out loud</h1>
           <p className={cx(tone.muted, "mt-3 text-[15px] leading-relaxed sm:text-base")}>
-            Connect Claude or ChatGPT to Maple&apos;s Log, then tell it what
+            Connect Claude, ChatGPT or Muse to Maple&apos;s Log, then tell it what
             happened (&ldquo;wet and dirty diaper, mustard&rdquo;) or ask
             what you need to know (&ldquo;which side next?&rdquo;). It lands in
             the same log as the app, with your name on it.
@@ -187,12 +207,7 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
               <h2 id="connector-url" className={tone.label}>
                 Connector URL
               </h2>
-              <div className="mt-2 flex items-center gap-2 rounded-xl bg-mp-sunken py-1.5 pr-1.5 pl-3.5">
-                <code className="min-w-0 flex-1 font-mono text-[13px] text-mp-ink [overflow-wrap:anywhere] sm:text-sm">
-                  <Breakable text={MCP_URL} />
-                </code>
-                <CopyButton text={MCP_URL} />
-              </div>
+              <CopyField text={MCP_URL} className="mt-2" />
             </div>
             <p className="text-[15px] leading-relaxed text-mp-ink [&_strong]:font-semibold">
               When it asks you to sign in, choose <strong>Continue with Google</strong>{" "}
@@ -281,7 +296,31 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
             </ol>
           </Section>
 
-          <Section mark="C" title="Claude Code (terminal)">
+          <Section mark="C" title="Muse">
+            <p>
+              Meta&apos;s Muse sets up the connector itself when you ask. Its
+              form asks for a Client ID, so use the one below.
+            </p>
+            <ol className="ml-5 list-decimal space-y-2 marker:text-mp-ink-3">
+              <li>
+                Send Muse this message:
+                <div className="mt-2">
+                  <CodeBlock>{MUSE_MESSAGE}</CodeBlock>
+                </div>
+              </li>
+              <li>
+                When Muse asks for a <strong>Client ID</strong>, paste this one.
+                Leave any client secret empty.
+                <CopyField text={MUSE_CLIENT_ID} className="mt-2" />
+              </li>
+              <li>
+                Tap <strong>Connect</strong> <Then /> <strong>Continue with Google</strong>{" "}
+                <Then /> <strong>Approve</strong>.
+              </li>
+            </ol>
+          </Section>
+
+          <Section mark="D" title="Claude Code (terminal)">
             <p>For the terminal-inclined. Run this once:</p>
             <CodeBlock>{CLAUDE_CODE_CMD}</CodeBlock>
             <p>
@@ -333,13 +372,14 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
 
           <Section mark={<Icon name="lock" size={18} />} title="Who can connect">
             <p>
-              Only people invited to Maple&apos;s Log can connect. Claude or
-              ChatGPT signs in <em>as you</em>, so everything it logs shows your
-              name and &ldquo;via Claude&rdquo; or &ldquo;via ChatGPT&rdquo;.
-              Viewers can ask questions but can&apos;t add anything.
+              Only people invited to Maple&apos;s Log can connect. Claude,
+              ChatGPT or Muse signs in <em>as you</em>, so everything it logs
+              shows your name and &ldquo;via Claude&rdquo; or &ldquo;via
+              ChatGPT&rdquo; (Muse shows as &ldquo;via AI&rdquo;). Viewers can
+              ask questions but can&apos;t add anything.
             </p>
             <p>
-              To disconnect, remove the connector in Claude or ChatGPT. An owner
+              To disconnect, remove the connector in Claude, ChatGPT or Muse. An owner
               can also remove someone in Maple&apos;s Log <Then />{" "}
               <strong>Family</strong>, which cuts off their connector too.
             </p>
