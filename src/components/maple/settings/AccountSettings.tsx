@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { CONTACT_EMAIL } from "@/components/site/legal";
 import { TRACKER_NOTE } from "@/lib/maple/guidelines";
 import { useBabyWords, useFamilyOne } from "../familyWords";
 import { Icon } from "../icons";
@@ -10,26 +9,27 @@ import { useNotifications } from "../notify";
 import SignOutButton from "../SignOutButton";
 import { cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { FeedbackSheet } from "./FeedbackSheet";
 import { DANGER_TEXT, GROUP, Row, Section } from "./parts";
 
-const FEEDBACK_HREF = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent("Maple feedback")}`;
-
 export function About() {
+  const [feedback, setFeedback] = useState(false);
   return (
     <Section title="About">
       <div className={GROUP}>
-        <a href={FEEDBACK_HREF} className={cx(tone.row, "min-h-[52px] py-2.5")}>
+        <button type="button" onClick={() => setFeedback(true)} className={cx(tone.row, "min-h-[52px] py-2.5")}>
           <Icon name="lightbulb" size={20} className="shrink-0 text-mp-accent-fg" />
           <span className="min-w-0 flex-1">
             <span className="block text-[15px] font-medium text-mp-accent-fg">Send feedback</span>
-            <span className={cx(tone.muted, "block truncate text-[13px] leading-snug")}>{CONTACT_EMAIL}</span>
+            <span className={cx(tone.muted, "block truncate text-[13px] leading-snug")}>A problem, an idea, or what you like</span>
           </span>
-        </a>
+        </button>
         <div className="flex items-center gap-3 py-1 pr-2 pl-4">
           <p className={cx(tone.muted, "min-w-0 flex-1 text-[13px] leading-snug")}>{TRACKER_NOTE}</p>
           <LegalLinks className="shrink-0" />
         </div>
       </div>
+      <FeedbackSheet open={feedback} onClose={() => setFeedback(false)} />
     </Section>
   );
 }

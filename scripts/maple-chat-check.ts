@@ -94,7 +94,7 @@ const ALEX = { email: "alex@example.com", role: "owner" as const };
 const VI = { email: "vi@example.com", role: "viewer" as const };
 const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions", "recall_memories", "list_people"];
 const PEOPLE = ["cancel_invite", "change_access", "invite_person", "list_people", "remove_person"];
-const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting"];
+const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting", "send_feedback"];
 
 // ── the adapter ──────────────────────────────────────────────────────────
 
@@ -158,13 +158,14 @@ check("every tool has a description and a JSON object schema", () => {
   }
 });
 
-check("approvals: delete_entry always, fix_mom_entry only for a delete", () => {
+check("approvals: delete_entry and send_feedback always, fix_mom_entry only for a delete", () => {
   eq(TOOL_APPROVAL.delete_entry, "user-approval", "delete_entry");
+  eq(TOOL_APPROVAL.send_feedback, "user-approval", "send_feedback");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "delete" }), "user-approval", "fix_mom_entry delete");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "update" }), undefined, "fix_mom_entry update");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "restore" }), undefined, "fix_mom_entry restore");
   eq(TOOL_APPROVAL.fix_mom_entry(undefined), undefined, "no input");
-  eq(Object.keys(TOOL_APPROVAL).sort(), ["change_access", "delete_entry", "fix_mom_entry", "invite_person", "remove_person"], "nothing else asks");
+  eq(Object.keys(TOOL_APPROVAL).sort(), ["change_access", "delete_entry", "fix_mom_entry", "invite_person", "remove_person", "send_feedback"], "nothing else asks");
 });
 
 check("people: every change to who's in the family waits for a tap, and only owners get those tools", () => {

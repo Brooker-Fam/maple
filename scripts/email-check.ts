@@ -194,6 +194,16 @@ async function main() {
     ok(payload.text === invite().text && payload.html === invite().html, "text and html");
     eq(options, { idempotencyKey: "invite/42" }, "idempotency key");
   });
+  await check("feedback's reply-to goes to its sender, normalized; a bad one is refused before Resend is asked", async () => {
+    const h = harness();
+    eq(await s.sendEmail({ ...message(), replyTo: " Sam.Parent@Example.com " }, h.deps), { sent: true, id: "em_1" });
+    eq(h.calls[0].payload.replyTo, "sam.parent@example.com", "the sender, normalized");
+    for (const replyTo of ["", "not an address", "a@b.com\nbcc@example.com"]) {
+      const bad = harness();
+      eq(await s.sendEmail({ ...message(), replyTo }, bad.deps), { sent: false, reason: "invalid" }, JSON.stringify(replyTo));
+      eq(bad.calls.length, 0, "not sent");
+    }
+  });
   await check("the reply-to is the inbox the legal pages name", () => {
     const legal = readFileSync(join(ROOT, "src/components/site/legal.tsx"), "utf8");
     const m = legal.match(/export const CONTACT_EMAIL = "([^"]+)"/);

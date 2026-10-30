@@ -7,6 +7,7 @@ import { migrateAnalytics } from "./analytics/schema";
 import { migrateChatDelivery } from "./maple/chat/delivery-schema";
 import { migrateEpic } from "./maple/epic/schema";
 import { migrateMemories } from "./maple/memory/schema";
+import { migrateFeedback } from "./maple/feedback/schema";
 
 async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   const text = strings.reduce((out, part, i) => `${out}$${i}${part}`);
@@ -426,6 +427,7 @@ export async function migrate() {
   await migrateChatImages();
   await migrateEpic();
   await migrateMemories();
+  await migrateFeedback();
 
   console.log("Migrations complete.");
 }

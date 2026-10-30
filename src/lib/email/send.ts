@@ -13,6 +13,8 @@ export type Email = {
   kind: string;
   /** The same key within 24 hours sends once. Build it from ids, never from an address. */
   idempotencyKey?: string;
+  /** Where a reply goes, when not REPLY_TO: only feedback sets it, to the person who sent it. */
+  replyTo?: string;
 };
 
 /** `off`: no Resend key or domain here, so the caller shows the link to copy instead. */
@@ -77,13 +79,14 @@ export async function sendEmail(email: Email, deps: Partial<EmailDeps> = {}): Pr
   const config = emailConfig(env);
   if (!config) return { sent: false, reason: "off" };
   const to = normalizeEmail(email.to);
+  const replyTo = email.replyTo === undefined ? REPLY_TO : normalizeEmail(email.replyTo);
   const key = email.idempotencyKey;
-  if (!to || !email.subject || /[\r\n]/.test(email.subject) || !email.text || !email.html || (key !== undefined && !KEY_RE.test(key))) {
+  if (!to || !replyTo || !email.subject || /[\r\n]/.test(email.subject) || !email.text || !email.html || (key !== undefined && !KEY_RE.test(key))) {
     return { sent: false, reason: "invalid" };
   }
   try {
     const { data, error } = await transport(config.key)(
-      { from: config.from, to, replyTo: REPLY_TO, subject: email.subject, text: email.text, html: email.html },
+      { from: config.from, to, replyTo, subject: email.subject, text: email.text, html: email.html },
       key ? { idempotencyKey: key } : {}
     );
     if (error || !data?.id) {

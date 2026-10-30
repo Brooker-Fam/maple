@@ -12,6 +12,7 @@ import { AskChatButton } from "./chat/AskChat";
 import Dock from "./Dock";
 import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
+import { FeedbackPrompt } from "./FeedbackPrompt";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
 import StatusCard from "./StatusCard";
@@ -103,6 +104,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       )}
 
       {!nothingYet && <LoggedToday onDetails={() => onNavigate("patterns")} />}
+      <FeedbackPrompt />
       <DailyDiscovery />
       <Celebrations />
 

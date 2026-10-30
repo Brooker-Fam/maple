@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GET } from "../../src/app/api/maple/admin/metrics/route";
 import { clearMetricsAccess, grantMetricsAccess, isMetricsAdmin, isMetricsAdminSession, METRICS_ACCESS_COOKIE, METRICS_ACCESS_TTL_MS } from "../../src/lib/maple/admin/auth";
 import { readAdminMetrics } from "../../src/lib/maple/admin/metrics";
+import { ADMIN_FEATURES, ADMIN_SOURCES } from "../../src/lib/maple/admin/types";
 import { SESSION_COOKIE, sealSession } from "../../src/lib/maple/auth";
 import { StoreUnavailable } from "../../src/lib/maple/store";
 import { encryptSecret, openSecret } from "../../src/lib/secret-box";
@@ -37,6 +38,12 @@ async function aggregates(shape: Shape) {
     eq(result.dailySignups[0], { date: "2026-09-29", count: 0 });
     eq(result.dailySignups[29], { date: "2026-10-28", count: 0 });
     eq(result.dailySignups.reduce((sum, day) => sum + day.count, 0), 0);
+    eq(result.usage.features.map((f) => [f.key, f.families, f.entries]), ADMIN_FEATURES.map((key) => [key, 0, 0]), "every part of Maple, at zero");
+    eq(result.usage.sources.map((f) => [f.key, f.families, f.entries]), ADMIN_SOURCES.map((key) => [key, 0, 0]), "every source, at zero");
+    eq(result.usage.logging, { families7d: 0, entries7d: 0, mostDays: 0, someDays: 0, noDays: 0 });
+    eq(result.usage.chat, { families30d: 0, people30d: 0, messages7d: 0, messages30d: 0 });
+    eq(result.usage.turnedOn, { notifications: 0, siri: 0, recoveryPage: 0, memories: 0, shared: 0 });
+    eq(result.feedback, { total: 0, last7d: 0, well: 0, okay: 0, notWell: 0 });
   });
 
   const { alpha, beta } = await seedFamilies();
@@ -70,9 +77,50 @@ async function aggregates(shape: Shape) {
       { date: "2026-10-28", count: 1 },
     ]);
     const body = JSON.stringify(result);
-    for (const privateValue of [alpha.owner, beta.owner, "waiting-one@example.test", "Juniper", "Rowan", "diaper", "Ibuprofen"]) {
+    // Usage names parts of Maple ("diapers"), never what was logged in them.
+    for (const privateValue of [alpha.owner, beta.owner, "waiting-one@example.test", "Juniper", "Rowan", "first bath", "Ibuprofen", "How many diapers today"]) {
       ok(!body.includes(privateValue), "aggregate result contains no identity or log details");
     }
+  });
+
+  await test(`${shape}: usage counts parts of Maple, sources, logging days, chat and switches, never family 1`, async () => {
+    const result = await readAdminMetrics(NOW);
+    const used = (rows: { key: string; families: number; entries: number }[]) => rows.filter((r) => r.families || r.entries).map((r) => [r.key, r.families, r.entries]);
+    // Beta's moment on Oct 27 is its only entry in 30 days (its diaper is deleted, its feed is 30 days old); family 1's are left out.
+    eq(used(result.usage.features), [["moments", 1, 1], ["chat", 1, 3]]);
+    eq(used(result.usage.sources), [["app", 1, 1]]);
+    // Set-up families: beta saved on one of the last 7 days, family 5 on none.
+    eq(result.usage.logging, { families7d: 1, entries7d: 1, mostDays: 0, someDays: 1, noDays: 1 });
+    eq(result.usage.chat, { families30d: 1, people30d: 1, messages7d: 0, messages30d: 3 });
+    // Beta's phone, Siri key and two accepted adults; family 1's care page and the rest are left out.
+    eq(result.usage.turnedOn, { notifications: 1, siri: 1, recoveryPage: 0, memories: 0, shared: 1 });
+
+    await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, data, created_by, source, created_at) VALUES
+      (2, $1, 'feed', '2026-10-28T09:00:00Z', '{"method":"bottle"}', $2, 'chat', '2026-10-28T11:00:00Z'),
+      (2, $1, 'temp', '2026-10-26T09:00:00Z', '{}', $2, 'shortcut', '2026-10-26T11:59:00Z'),
+      (2, $1, 'tummy', '2026-10-24T09:00:00Z', '{}', $2, 'claude', '2026-10-24T13:00:00Z'),
+      (2, $1, 'sleep', '2026-10-21T09:00:00Z', '{}', $2, 'web', '2026-10-21T13:00:00Z'),
+      (1, (SELECT id FROM maple_babies WHERE family_id = 1), 'pump', '2026-10-28T09:00:00Z', '{}', $3, 'web', '2026-10-28T10:00:00Z')`,
+      [beta.babyId, beta.owner, alpha.owner]);
+    await sql(`INSERT INTO maple_chat_daily (family_id, member, day, messages) VALUES (2, $1, '2026-10-27', 4), (1, $2, '2026-10-28', 9)`, [beta.member, alpha.owner]);
+    await sql(`INSERT INTO maple_memories (family_id, kind, fact, fact_key, via) VALUES (2, 'routine', 'Made-up memory', 'made-up memory', 'web')`);
+    await sql(`INSERT INTO maple_feedback (family_id, member, role, via, rating, message, created_at) VALUES
+      (2, $1, 'owner', 'prompt', 'well', NULL, '2026-10-27T12:00:00Z'),
+      (2, $2, 'member', 'app', NULL, 'Made-up idea', '2026-10-01T12:00:00Z'),
+      (1, $3, 'owner', 'chat', NULL, 'From family 1', '2026-10-27T12:00:00Z')`, [beta.owner, beta.member, alpha.owner]);
+    const more = await readAdminMetrics(NOW);
+    eq(used(more.usage.features), [["feeds", 1, 1], ["sleep", 1, 1], ["health", 1, 1], ["moments", 1, 1], ["routines", 1, 1], ["chat", 1, 7]]);
+    eq(used(more.usage.sources), [["app", 1, 2], ["chat", 1, 1], ["siri", 1, 1], ["assistant", 1, 1]]);
+    // Oct 28 11:00 (period 0), 27 12:00 (exactly a day: 1), 26 11:59 (just over 2 days: 2), 24 13:00 (3) and 21 13:00 (6): five periods.
+    eq(more.usage.logging, { families7d: 1, entries7d: 5, mostDays: 1, someDays: 0, noDays: 1 });
+    eq(more.usage.chat, { families30d: 1, people30d: 2, messages7d: 4, messages30d: 7 });
+    eq(more.usage.turnedOn.memories, 1);
+    eq(more.feedback, { total: 2, last7d: 1, well: 1, okay: 0, notWell: 0 });
+    ok(!JSON.stringify(more).includes("Made-up"), "no feedback words or memories in the aggregate");
+    await sql(`DELETE FROM maple_entries WHERE created_at >= '2026-10-21T13:00:00Z' AND kind IN ('feed', 'temp', 'tummy', 'sleep', 'pump') AND created_at <> '2026-10-27T12:00:00Z'`);
+    await sql(`DELETE FROM maple_chat_daily WHERE day IN ('2026-10-27', '2026-10-28')`);
+    await sql(`DELETE FROM maple_memories`);
+    await sql(`DELETE FROM maple_feedback`);
   });
 
   if (shape === "final") {
@@ -146,7 +194,7 @@ async function operatorIntegration() {
     eq(response.status, 200);
     eq(response.headers.get("cache-control"), "no-store");
     const body = await response.json();
-    eq(Object.keys(body).sort(), ["activity", "dailySignups", "families", "generatedAt", "people", "waitlist"]);
+    eq(Object.keys(body).sort(), ["activity", "dailySignups", "families", "feedback", "generatedAt", "people", "usage", "waitlist"]);
     ok(!JSON.stringify(body).includes(operator), "operator identity is not returned");
   });
   await test("configured operator: expired, future, wrong-purpose, tampered and previous-key proofs are refused", async () => {

@@ -2,16 +2,18 @@ import { query } from "@/lib/db";
 import { FAMILY_ONE } from "../family";
 import { StoreUnavailable } from "../store";
 import type { AdminMetrics } from "./types";
+import { readAdminUsage } from "./usage";
 
 /**
  * Operator-only aggregate read. Call only after the metrics-admin check.
  * Counts describe records that still exist, not a historical signup ledger.
  * Rolling windows end at `now`; the chart has 30 UTC calendar days including
  * today. "Active" family status means setup completed, not recent usage.
+ * What families use (admin/usage.ts) and feedback counts come with it.
  */
 export async function readAdminMetrics(now = new Date()): Promise<AdminMetrics> {
   const at = now.toISOString();
-  const rows = await query(
+  const [rows, usage] = await Promise.all([query(
     `WITH families AS (
        SELECT id, status, created_at FROM maple_families WHERE id <> $1
      ), members AS (
@@ -54,7 +56,7 @@ export async function readAdminMetrics(now = new Date()): Promise<AdminMetrics> 
        'dailySignups', (SELECT jsonb_agg(jsonb_build_object('date', to_char(day, 'YYYY-MM-DD'), 'count', count) ORDER BY day) FROM daily)
      ) AS metrics`,
     [FAMILY_ONE, at]
-  );
+  ), readAdminUsage(now)]);
   if (!rows?.[0]?.metrics) throw new StoreUnavailable();
-  return { ...(rows[0].metrics as AdminMetrics), generatedAt: at };
+  return { ...(rows[0].metrics as Omit<AdminMetrics, "usage" | "feedback">), ...usage, generatedAt: at };
 }

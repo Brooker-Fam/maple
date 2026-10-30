@@ -367,6 +367,7 @@ export async function removeMember(fam: Fam, email: string, by: string): Promise
   );
   if (!rows.length) return false;
   await q(`UPDATE maple_tokens SET revoked_at = NOW() WHERE family_id = $1 AND member = $2 AND revoked_at IS NULL`, [familyId, email]);
+  await q(`DELETE FROM maple_feedback_asks WHERE family_id = $1 AND member = $2`, [familyId, email]);
   await q(
     `INSERT INTO maple_removed (family_id, email, removed_by) VALUES ($1, $2, $3)
      ON CONFLICT (family_id, email) DO UPDATE SET removed_at = NOW(), removed_by = EXCLUDED.removed_by`,
@@ -401,6 +402,7 @@ export async function leaveFamily(fam: Fam, email: string): Promise<LeaveRefusal
   await q(`UPDATE maple_tokens SET revoked_at = NOW() WHERE family_id = $1 AND member = $2 AND revoked_at IS NULL`, [familyId, email]);
   await q(`DELETE FROM maple_push_subs WHERE family_id = $1 AND member = $2`, [familyId, email]);
   await q(`DELETE FROM maple_chat_threads WHERE family_id = $1 AND member = $2`, [familyId, email]);
+  await q(`DELETE FROM maple_feedback_asks WHERE family_id = $1 AND member = $2`, [familyId, email]);
   await q(
     `UPDATE maple_care_people SET shared_with = shared_with - $2::text, updated_at = NOW() WHERE family_id = $1 AND shared_with ? $2::text`,
     [familyId, email]

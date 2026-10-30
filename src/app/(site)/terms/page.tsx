@@ -58,9 +58,11 @@ export default function Terms() {
 
       <h2>Email and feedback</h2>
       <p>
-        Maple sends requested sign-in codes, invite links and a new owner&rsquo;s welcome email through Resend. Feedback and replies go to{" "}
-        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. The <Link href="/privacy">privacy page</Link> explains what
-        these emails contain, how invite addresses are kept, and the limited usage events sent to PostHog.
+        Maple sends requested sign-in codes, invite links and a new owner&rsquo;s welcome email through Resend. Feedback you
+        send from Settings, the chat or the question on Today is saved with your family&rsquo;s account and emailed to{" "}
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>, where replies to Maple&rsquo;s emails go too. The{" "}
+        <Link href="/privacy">privacy page</Link> explains what these emails contain, how invite addresses and feedback are
+        kept, and the limited usage events sent to PostHog.
       </p>
 
       <h2>Optional MyChart imports</h2>

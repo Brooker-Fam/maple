@@ -56,7 +56,9 @@ async function references() {
     }
   });
   await test("invalid list filters and unbounded or injected pagination are rejected", () => {
-    for (const input of ["view=other", "view=people&filter=7d", "view=waitlist&filter=onboarding", "page=0", "page=-1", "page=1.5", "page=100000000", "filter=all%27%3BDROP"]) {
+    eq(parseAdminDetailsOptions(new URLSearchParams("view=feedback")), { view: "feedback", filter: "all", page: 1 });
+    eq(parseAdminDetailsOptions(new URLSearchParams("filter=chat30d")), { view: "families", filter: "chat30d", page: 1 });
+    for (const input of ["view=other", "view=people&filter=7d", "view=feedback&filter=logged7d", "view=waitlist&filter=onboarding", "page=0", "page=-1", "page=1.5", "page=100000000", "filter=all%27%3BDROP"]) {
       let rejected = false;
       try { parseAdminDetailsOptions(new URLSearchParams(input)); } catch (error) { rejected = error instanceof BadRequest; }
       ok(rejected, "invalid options rejected");
@@ -81,7 +83,7 @@ async function data(shape: Shape) {
     eq([row.id, row.members, row.status, row.emailMasked], [2, 3, "active", "e•••@•••"]);
     eq(openAdminRef(row.ref), { kind: "family", id: 2 });
     const serialized = JSON.stringify(list);
-    for (const privateValue of [alpha.owner, beta.owner, "Rowan", "Family Beta", "Ibuprofen", "diaper"]) ok(!serialized.includes(privateValue), "no private data in list response");
+    for (const privateValue of [alpha.owner, beta.owner, "Rowan", "Family Beta", "Ibuprofen", "first bath"]) ok(!serialized.includes(privateValue), "no private data in list response");
     eq((await readAdminDetails({ view: "families", filter: "7d", page: 1 }, NOW)).total, 1);
     eq((await readAdminDetails({ view: "families", filter: "active7d", page: 1 }, NOW)).total, 1);
     eq((await readAdminDetails({ view: "families", filter: "onboarding", page: 1 }, NOW)).total, 0);
@@ -96,6 +98,68 @@ async function data(shape: Shape) {
     ]);
     ok(!JSON.stringify(list).includes("example"), "no raw domain or email payload");
   });
+  await test(`${shape}: family and people rows say what they used, counted up to the snapshot and never what was logged`, async () => {
+    await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, data, note, created_by, source, created_at) VALUES
+      (2, $1, 'feed', '2026-10-28T09:00:00Z', '{}', NULL, $2, 'chat', '2026-10-28T11:00:00Z'),
+      (2, $1, 'diaper', '2026-10-27T09:00:00Z', '{}', NULL, $3, 'web', '2026-10-27T09:30:00Z'),
+      (2, $1, 'diaper', '2026-10-27T08:00:00Z', '{}', NULL, $3, 'web', '2026-10-27T08:30:00Z'),
+      (2, $1, 'note', '2026-10-20T09:00:00Z', '{}', 'Made-up private note', $2, 'shortcut', '2026-10-20T09:00:00Z'),
+      (2, $1, 'growth', '2026-09-01T09:00:00Z', '{}', NULL, $2, 'epic', '2026-09-01T09:00:00Z'),
+      (2, $1, 'sleep', '2026-10-29T09:00:00Z', '{}', NULL, $2, 'web', '2026-10-29T09:00:00Z')`, [beta.babyId, beta.owner, beta.member]);
+    await sql(`INSERT INTO maple_chat_daily (family_id, member, day, messages) VALUES (2, $1, '2026-10-26', 5), (2, $2, '2026-09-01', 7)`, [beta.owner, beta.member]);
+    const list = await readAdminDetails({ view: "families", filter: "all", page: 1 }, NOW);
+    const row = list.rows[0];
+    ok(row.kind === "family", "family row");
+    if (row.kind !== "family") return;
+    // Oct 28 11:00 is period 0, Oct 27 is period 1; Oct 29's entry is after the snapshot and Sept 1's is outside 30 days.
+    eq(row.usage, {
+      entries7d: 3, entries30d: 4, days7d: 2, lastEntryAt: "2026-10-28T11:00:00.000Z", lastSeenAt: "2026-10-28T11:00:00.000Z",
+      chat30d: 8, features: ["feeds", "diapers", "notes", "chat"], sources: ["app", "chat", "siri"],
+    });
+    ok(!JSON.stringify(list).includes("Made-up private note"), "no entry contents");
+    const people = await readAdminDetails({ view: "people", filter: "all", page: 1 }, NOW);
+    const usage = Object.fromEntries(people.rows.map((p) => p.kind === "person" ? [p.emailMasked, p.usage] : []));
+    eq(usage, { "e•••@•••": { entries30d: 2, chat30d: 8 }, "f•••@•••": { entries30d: 2, chat30d: 0 } });
+    eq((await readAdminDetails({ view: "families", filter: "logged7d", page: 1 }, NOW)).total, 1);
+    eq((await readAdminDetails({ view: "families", filter: "chat30d", page: 1 }, NOW)).total, 1);
+    await sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE family_id = 2`);
+    await sql(`DELETE FROM maple_chat_daily WHERE family_id = 2`);
+    eq((await readAdminDetails({ view: "families", filter: "logged7d", page: 1 }, NOW)).total, 0, "deleted entries don't count");
+    eq((await readAdminDetails({ view: "families", filter: "chat30d", page: 1 }, NOW)).total, 0);
+    if (shape === "final") {
+      await sql(`INSERT INTO maple_care_people (family_id, member, created_by) VALUES (2, $1, $1)`, [beta.owner]);
+      await sql(`INSERT INTO maple_care_entries (family_id, id, person, kind, at, data, created_by, created_at) VALUES (2, 30000001, $1, 'temp', '2026-10-27T10:00:00Z', '{}', $1, '2026-10-27T10:00:00Z')`, [beta.owner]);
+      const withPage = (await readAdminDetails({ view: "families", filter: "all", page: 1 }, NOW)).rows[0];
+      eq(withPage.kind === "family" && withPage.usage.features, ["recovery"], "her page counts as used, with nothing about it");
+      await sql(`DELETE FROM maple_care_entries WHERE family_id = 2`);
+      await sql(`DELETE FROM maple_care_people WHERE family_id = 2`);
+    }
+  });
+
+  await test(`${shape}: feedback lists each message in full, newest first, with the sender masked until revealed`, async () => {
+    const [older] = await sql(`INSERT INTO maple_feedback (family_id, member, role, via, topic, message, emailed_at, created_at)
+      VALUES (2, $1, 'member', 'app', 'idea', 'Could pumping show a weekly total?', NOW(), '2026-10-20T12:00:00Z') RETURNING id`, [beta.member]);
+    const [newer] = await sql(`INSERT INTO maple_feedback (family_id, member, role, via, rating, message, created_at)
+      VALUES (2, 'admin', 'owner', 'prompt', 'okay', NULL, '2026-10-27T12:00:00Z') RETURNING id`);
+    await sql(`INSERT INTO maple_feedback (family_id, member, role, via, message) VALUES (1, $1, 'owner', 'chat', 'Family 1 feedback')`, [alpha.owner]);
+    const list = await readAdminDetails({ view: "feedback", filter: "all", page: 1 }, NOW);
+    eq(list.total, 2, "family 1 left out");
+    eq(list.rows.map((r) => r.kind === "feedback" && [r.id, r.familyId, r.role, r.via, r.topic, r.rating, r.message, r.emailed, r.emailMasked]), [
+      [Number(newer.id), 2, "owner", "prompt", null, "okay", null, false, null],
+      [Number(older.id), 2, "member", "app", "idea", null, "Could pumping show a weekly total?", true, "f•••@•••"],
+    ]);
+    const [first, second] = list.rows;
+    ok(first.kind === "feedback" && first.ref === null, "no reply address for the shared admin login");
+    ok(second.kind === "feedback" && second.ref !== null && !JSON.stringify(list).includes(beta.member), "sender masked");
+    const ref = second.kind === "feedback" ? openAdminRef(second.ref) : null;
+    eq(ref, { kind: "feedback", id: Number(older.id) });
+    eq(await revealAdminEmail(ref!), beta.member);
+    let missing = false;
+    try { await revealAdminEmail({ kind: "feedback", id: Number(newer.id) }); } catch (error) { missing = error instanceof NotFound; }
+    ok(missing, "no address to reveal for the admin login");
+    await sql(`DELETE FROM maple_feedback`);
+  });
+
   await test(`${shape}: waitlist list and explicit reveal reread current rows`, async () => {
     const list = await readAdminDetails({ view: "waitlist", filter: "all", page: 1 }, NOW);
     eq(list.total, 1);

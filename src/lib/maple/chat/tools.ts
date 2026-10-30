@@ -12,6 +12,7 @@ import type { ChatAlert, ChatInvite, ChatMemoryChange, ChatReceipt, ChatToolOutp
 import type { ChatQuestionInput, ChatQuestionOutput } from "./types";
 import { questionOutputSchema, questionSchema } from "./questions";
 import { showChartTool } from "./chart-tools";
+import { feedbackTool } from "./feedback-tools";
 import { openScreenTool } from "./navigation-tools";
 import { careReceiptOutput } from "./receipts";
 import { searchEntriesTool } from "./search-tools";
@@ -233,14 +234,16 @@ export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts:
   set.search_entries = searchEntriesTool(extra);
   set.open_screen = openScreenTool({ viewer });
   Object.assign(set, settingsTools(extra));
+  set.send_feedback = feedbackTool(member, { familyId: opts.fam });
   if (opts.search) set.web_search = webSearchTool(opts.search);
   return set;
 }
 
 /**
  * The only calls that wait for a tap: delete_entry, fix_mom_entry deleting
- * one of hers, and inviting, changing the access of or removing a person
- * (people-mcp.ts). undo_last (her doses too), restore_entry, update_entry and
+ * one of hers, inviting, changing the access of or removing a person
+ * (people-mcp.ts), and sending feedback (feedback-tools.ts). undo_last (her
+ * doses too), restore_entry, update_entry and
  * fix_mom_entry's update (a dose's time, or skipped) run on the model's word,
  * and can move her next "OK after" time; so does cancel_invite, which only
  * stops a link nobody has used.
@@ -251,4 +254,5 @@ export const TOOL_APPROVAL = {
   invite_person: "user-approval" as const,
   change_access: "user-approval" as const,
   remove_person: "user-approval" as const,
+  send_feedback: "user-approval" as const,
 };

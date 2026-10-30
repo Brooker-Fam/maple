@@ -36,6 +36,14 @@ const metrics = {
   people: { total: 26 }, waitlist: { total: 2 },
   activity: { families7d: 6, families30d: 10, entries30d: 253 },
   dailySignups: Array.from({ length: 28 }, (_, index) => ({ date: `2026-10-${String(index + 1).padStart(2, "0")}`, count: index % 6 === 0 ? 2 : 0 })),
+  usage: {
+    logging: { families7d: 6, entries7d: 88, mostDays: 4, someDays: 2, noDays: 3 },
+    features: ["feeds", "diapers", "sleep", "pumping", "growth", "health", "moments", "notes", "routines", "recovery", "chat"].map((key, index) => ({ key, families: Math.max(0, 8 - index), entries: Math.max(0, 120 - index * 12) })),
+    sources: [["app", 7, 200], ["chat", 3, 30], ["siri", 2, 18], ["assistant", 1, 5], ["import", 0, 0]].map(([key, families, entries]) => ({ key, families, entries })),
+    chat: { families30d: 3, people30d: 4, messages7d: 12, messages30d: 41 },
+    turnedOn: { notifications: 5, siri: 2, recoveryPage: 3, memories: 2, shared: 6 },
+  },
+  feedback: { total: 3, last7d: 2, well: 1, okay: 1, notWell: 0 },
 };
 // Recipient addresses live only in this Node fixture. Lists/previews never supply them.
 const emails = new Map([
@@ -45,10 +53,16 @@ const emails = new Map([
   ["synthetic-family-21", "family.owner@example.test"],
   ["synthetic-waitlist-31", "waitlist.person@example.test"],
   ["synthetic-waitlist-32", "second.waitlist.person@example.test"],
+  ["synthetic-feedback-41", "feedback.sender@example.test"],
 ]);
 const waitlist = [31, 32].map((id) => ({ kind: "waitlist", id, ref: `synthetic-waitlist-${id}`, emailMasked: "w•••@•••", createdAt: NOW }));
-const families = [{ kind: "family", id: 21, ref: "synthetic-family-21", emailMasked: "f•••@•••", createdAt: NOW, status: "active", members: 2 }];
-const people = Array.from({ length: 26 }, (_, index) => ({ kind: "person", ref: `synthetic-person-${index + 1}`, emailMasked: "a•••@•••", familyIds: [21], joinedAt: NOW, lastSeenAt: NOW }));
+const usage = { entries7d: 31, entries30d: 120, days7d: 6, lastEntryAt: NOW, lastSeenAt: NOW, chat30d: 9, features: ["feeds", "diapers", "sleep", "chat"], sources: ["app", "chat", "siri"] };
+const families = [{ kind: "family", id: 21, ref: "synthetic-family-21", emailMasked: "f•••@•••", createdAt: NOW, status: "active", members: 2, usage }];
+const people = Array.from({ length: 26 }, (_, index) => ({ kind: "person", ref: `synthetic-person-${index + 1}`, emailMasked: "a•••@•••", familyIds: [21], joinedAt: NOW, lastSeenAt: NOW, usage: { entries30d: 40, chat30d: 3 } }));
+const feedback = [
+  { kind: "feedback", id: 41, familyId: 21, createdAt: NOW, role: "member", via: "chat", topic: "idea", rating: null, message: "A synthetic idea about a weekly pumping total that runs long enough to wrap across the narrow phone layout.", emailed: true, emailMasked: "f•••@•••", ref: "synthetic-feedback-41" },
+  { kind: "feedback", id: 40, familyId: 21, createdAt: NOW, role: "owner", via: "prompt", topic: null, rating: "okay", message: null, emailed: false, emailMasked: null, ref: null },
+];
 const preview = (reason = null) => ({
   subject: "Your Maple invitation is ready", text: "Hello,\n\nMaple is ready for your family. Create your own baby log when you’re ready.\n\nhttps://maple.example.test/signup\n\nYou joined the Maple waitlist. No reply is needed.",
   from: "Maple <hello@example.test>", replyTo: "support@example.test", toMasked: "w•••@•••",
@@ -86,7 +100,7 @@ await page.route("**/*", async (route) => {
       if (detailsFailure) return json(route, { code: detailsFailure.code }, detailsFailure.status);
       const { view } = call.query;
       const currentPage = Number(call.query.page);
-      const rows = view === "people" ? people : view === "waitlist" ? waitlist : families;
+      const rows = view === "people" ? people : view === "waitlist" ? waitlist : view === "feedback" ? feedback : families;
       return json(route, { view, page: currentPage, pageSize: 25, total: rows.length, rows: rows.slice((currentPage - 1) * 25, currentPage * 25) });
     }
     if (call.path === "/api/maple/admin/reveal" && call.method === "POST") {
@@ -197,6 +211,34 @@ try {
   await details().waitFor({ state: "hidden" });
   await noRecipientEmails();
   console.log("PASS drilldowns: keyboard launch, masked responses, explicit reveal/hide, pagination, filters, refresh, page leave and close clear identities");
+
+  await page.getByRole("heading", { name: "What families use", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "How entries are added", exact: true }).waitFor();
+  await button("View families logging in 7 days").click();
+  await details().getByText("Family 21", { exact: true }).waitFor();
+  assert.equal(calls.at(-1).query.filter, "logged7d");
+  await details().getByText("Feeds", { exact: true }).waitFor();
+  await noRecipientEmails();
+  await button("View families in 30 days").click();
+  await details().getByText("Family 21", { exact: true }).waitFor();
+  assert.equal(calls.at(-1).query.filter, "chat30d");
+  const reveals = count("reveal");
+  await button("Read feedback").click();
+  await details().getByText(feedback[0].message, { exact: true }).waitFor();
+  assert.deepEqual(calls.at(-1).query, { view: "feedback", filter: "all", page: "1" });
+  await details().getByText("No reply address", { exact: true }).waitFor();
+  assert.equal(count("reveal"), reveals, "Reading feedback reveals nobody");
+  await noRecipientEmails();
+  await noOverflow();
+  await page.screenshot({ path: path.join(screenshots, "feedback-375.png"), fullPage: true });
+  await revealFirst();
+  await page.getByText(emails.get("synthetic-feedback-41"), { exact: true }).waitFor();
+  assert.deepEqual(calls.at(-1).body, { ref: "synthetic-feedback-41" });
+  await noOverflow();
+  await button("Close details").click();
+  await details().waitFor({ state: "hidden" });
+  await noRecipientEmails();
+  console.log("PASS usage and feedback: usage sections render, their numbers open filtered lists, feedback shows each message with its sender hidden until revealed");
 
   await open("View new families in 7 days", "Families");
   assert.equal(calls.at(-1).query.filter, "7d");

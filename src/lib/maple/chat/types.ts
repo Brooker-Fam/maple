@@ -64,6 +64,8 @@ export type ChatToolOutput = {
   invite?: ChatInvite;
   /** What web_search sent and found (web-search.ts), for its card of links. */
   web?: ChatWebSearch;
+  /** Whether send_feedback's message went (chat/feedback-tools.ts), and the line its card shows. */
+  feedback?: { sent: boolean; note: string };
 };
 
 /** A web page a search found: its title, link and site ("healthychildren.org"). */

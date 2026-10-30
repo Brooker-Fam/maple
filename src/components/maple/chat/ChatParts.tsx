@@ -29,6 +29,7 @@ import ChatMemory from "./ChatMemory";
 import ChatQuestion, { type AnswerQuestion } from "./ChatQuestion";
 import { approvalWords, InviteCard, PEOPLE_APPROVALS, PeopleApproval } from "./ChatPeople";
 import ChatWeb from "./ChatWeb";
+import { FEEDBACK_WORDS, FeedbackApproval } from "./ChatFeedback";
 
 /**
  * One message in the chat. The person's words sit in a bubble on the right,
@@ -36,8 +37,9 @@ import ChatWeb from "./ChatWeb";
  * receipts (Undo for an entry this reply added), each health alert as its
  * card word for word, a Delete / Keep card before delete_entry or a delete of
  * hers, an Invite, Change or Remove card before a change to who's in the
- * family (ChatPeople.tsx), and the help card when it's called for. Reasoning
- * and the app's context line are never shown.
+ * family (ChatPeople.tsx), a Send card before feedback goes (ChatFeedback.tsx),
+ * and the help card when it's called for. Reasoning and the app's context
+ * line are never shown.
  */
 
 type Part = ChatMessage["parts"][number];
@@ -105,7 +107,7 @@ function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQu
     if (part.state === "input-streaming") return null;
     return <ChatQuestion key={part.state} input={part.input} output={"output" in part ? part.output : undefined} toolState={part.state} active={last} busy={busy} onAnswer={(answer) => onAnswerQuestion(part.toolCallId, answer)} />;
   }
-  const words = approvalWords(name);
+  const words = name === "send_feedback" ? FEEDBACK_WORDS : approvalWords(name);
   switch (part.state) {
     case "input-streaming":
     case "input-available":
@@ -115,6 +117,7 @@ function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQu
       if (!last || part.approval.isAutomatic) return <Muted icon="info">{words.idle}</Muted>;
       if (busy) return null;
       if (PEOPLE_APPROVALS.has(name)) return <PeopleApproval name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
+      if (name === "send_feedback") return <FeedbackApproval input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
       return <ApprovalCard name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
     case "approval-responded":
       if (!part.approval.approved) return <Muted icon="info">{words.kept}</Muted>;
@@ -132,6 +135,7 @@ function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQu
 function OutputView({ output, busy, onAsk, threadId, messageId, toolCallId }: { output: ChatToolOutput | undefined; busy: boolean; onAsk?: (text: string) => void; threadId: string; messageId: string; toolCallId: string }) {
   if (!output) return null;
   const first = receiptText(output.text.split("\n")[0] ?? "");
+  if (output.feedback) return <Muted icon={output.feedback.sent ? "check" : "circle-alert"}>{output.feedback.note}</Muted>;
   if (!output.ok) return <Muted icon="circle-alert">{chatToolErrorText(output.error, output.write)}</Muted>;
   if (output.setting) return <ChatSetting setting={output.setting} threadId={threadId} messageId={messageId} toolCallId={toolCallId} busy={busy} />;
   if (output.settings) return <SettingsSummary settings={output.settings} />;

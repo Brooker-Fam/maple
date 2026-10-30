@@ -43,8 +43,8 @@ export async function environment() {
   };
 }
 
-async function visit(browser, output, { hash = "today", guest = false, role, width = 390, theme = "light" } = {}) {
-  const controls = { ...world(), signedIn: true, signoutFailure: false, tokens: [], memories: syntheticMemories(), memoryConflict: false };
+async function visit(browser, output, { hash = "today", guest = false, role, width = 390, theme = "light", feedbackAsk = false } = {}) {
+  const controls = { ...world(), signedIn: true, signoutFailure: false, tokens: [], memories: syntheticMemories(), memoryConflict: false, feedbackAsk };
   if (guest) {
     controls.state.me = { ...controls.state.me, email: "invite:900", role: "viewer", display_name: "Helper" };
     controls.state.members = [controls.state.me];

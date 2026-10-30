@@ -180,10 +180,18 @@ export default function Privacy() {
       </p>
       <h3>Feedback and support</h3>
       <p>
-        &ldquo;Send feedback&rdquo; opens your email app. It sends nothing until you send the email yourself. What you choose to
-        send, including your email address, reaches the person who makes Maple at{" "}
-        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. Keep health details out unless they are needed for your question.
-        These emails are separate from your family&rsquo;s log. Write to the same address to ask for a feedback message to be removed.
+        You can send feedback to the person who makes Maple from Settings, from Maple&rsquo;s chat, or by answering the one
+        question Maple asks on Today once you have used it for a few days. Nothing is sent until you tap Send; in the chat, a
+        card shows the exact words first. Maple keeps the message and any answer you chose, with your account, your role in
+        the family and where you sent it from, and emails a copy through Resend to{" "}
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>, with your email address (when your account has one) so the
+        person who makes Maple can reply. Keep health details out unless they are needed for your question.
+      </p>
+      <p>
+        Saved feedback stays with your family&rsquo;s account and is deleted with it. Choosing &ldquo;Not now&rdquo; on that
+        question is saved too, so it isn&rsquo;t asked again too soon; leaving or being removed from a family clears that.
+        You can also write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> from your own email app. Write to
+        the same address to ask for a feedback message, saved or emailed, to be removed.
       </p>
       <h3>To keep things working</h3>
       <ul>
@@ -242,13 +250,14 @@ export default function Privacy() {
           requests, but Maple does not send them your family&rsquo;s log.
         </li>
         <li>
-          <strong>Resend</strong> sends sign-in codes, invites, waitlist invitations and welcome emails. It receives the recipient&rsquo;s address and the message,
+          <strong>Resend</strong> sends sign-in codes, invites, waitlist invitations, welcome emails and copies of feedback sent from the app.
+          It receives the recipient&rsquo;s address and the message, and for feedback the sender&rsquo;s address to reply to,
           and keeps email and delivery records under its <a href="https://resend.com/security">retention policy</a>.
           Email open and click tracking are off.
         </li>
         <li>
-          <strong>Forward Email</strong> receives emails you send to Maple&rsquo;s contact address, including
-          feedback and replies to an invite or welcome email.
+          <strong>Forward Email</strong> receives emails sent to Maple&rsquo;s contact address, including
+          feedback, copies of feedback sent from the app, and replies to an invite or welcome email.
         </li>
         <li>
           <strong>Perplexity</strong>, through Vercel AI Gateway, runs the chat&rsquo;s web searches. It receives only the short
@@ -266,11 +275,19 @@ export default function Privacy() {
 
       <h2>Usage counts</h2>
       <p>
-        Maple&rsquo;s operator has a private metrics page showing totals for signups, member accounts, completed setup,
-        recent activity, saved entries and the waitlist. These totals come from existing database records. The operator can
-        open account and waitlist lists, where email addresses are masked until they choose to reveal one. These views show
-        account dates, family membership and setup status, but do not show names, individual logs or chat messages.
-        The admin page does not send its metrics or revealed addresses to PostHog.
+        Maple&rsquo;s operator has a private metrics page built from existing database records. It shows totals for signups,
+        member accounts, completed setup, recent activity, saved entries, chat messages and the waitlist, and which parts of
+        Maple families use: how many families saved each kind of entry (such as feeds, diapers or sleep) in the last 30 days,
+        how entries were added (in the app, the chat, Siri, a connected assistant or a MyChart import), and how many families
+        have features such as notifications or a recovery page turned on.
+      </p>
+      <p>
+        The operator can open lists of families, accounts and the waitlist, where email addresses are masked until they
+        choose to reveal one. For each family these show its dates, setup status, how many entries it saved recently and on
+        how many days, how many chat messages its members sent, and which parts of Maple it used. For each account they show
+        how many entries it saved and chat messages it sent recently. They never show names, what was logged, what the
+        recovery page holds or chat messages. Feedback people send appears there in full. The admin page does not send its
+        metrics, feedback or revealed addresses to PostHog.
       </p>
       <p>
         Maple uses PostHog to understand how people find the app, whether they finish setup, and whether they come back.

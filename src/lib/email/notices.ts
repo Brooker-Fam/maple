@@ -13,7 +13,8 @@ export type NoticeDeps = Partial<EmailDeps> & {
   waitMs?: number;
 };
 
-function within<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
+/** `work`, or `fallback` once `ms` pass first: a slow provider never holds the person who's waiting. */
+export function within<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<T>((resolve) => {
     timer = setTimeout(() => resolve(fallback), ms);

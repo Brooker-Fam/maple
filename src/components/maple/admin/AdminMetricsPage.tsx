@@ -8,6 +8,7 @@ import { Icon, type IconName } from "../icons";
 import { Button, cx, tone } from "../ui";
 import AdminDetails, { type DetailsSelection } from "./AdminDetails";
 import type { AdminAuthProblem } from "./admin-request";
+import { FeaturesSection, FeedbackSummary, LoggingSection, SourcesAndChat, Stat, TurnedOnSection } from "./AdminUsage";
 
 type Problem = "signin" | "reauth" | "forbidden" | "unavailable";
 const number = new Intl.NumberFormat("en-US");
@@ -76,7 +77,7 @@ export default function AdminMetricsPage() {
         <div>
           <p className="mb-2 text-sm font-medium text-mp-accent-fg">Maple admin</p>
           <h1 className={cx(tone.display, "text-4xl leading-tight sm:text-5xl")}>Signups and activity</h1>
-          <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-mp-ink-2">Signups, setup and recent activity across Maple.</p>
+          <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-mp-ink-2">Signups, setup, what families use and what they think of Maple.</p>
         </div>
         <Button variant="soft" onClick={() => void load()} disabled={loading}>
           <Icon name="refresh-cw" size={17} /> {loading ? "Refreshing…" : "Refresh"}
@@ -168,6 +169,8 @@ function Overview({ metrics: m, onAuthProblem }: { metrics: AdminMetrics; onAuth
 
       <p className="px-1 text-xs leading-relaxed text-mp-ink-3">Family and people counts exclude the original family. Updated {updatedFormat.format(new Date(m.generatedAt))}.</p>
 
+      <FeedbackSummary metrics={m} onSelect={showDetails} />
+
       {selection && <AdminDetails key={`${selection.view}/${selection.filter}`} selection={selection} onSelect={showDetails} onClose={() => setSelection(null)} onAuthProblem={onAuthProblem} />}
 
       <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr]">
@@ -190,20 +193,27 @@ function Overview({ metrics: m, onAuthProblem }: { metrics: AdminMetrics; onAuth
         <h2 id="activity-title" className={cx(tone.heading, "text-lg")}>Coming back to Maple</h2>
         <p className="mt-1 text-sm text-mp-ink-2">A family counts once when someone opens its log.</p>
         <div className="mt-5 grid gap-6 sm:grid-cols-3 sm:gap-4">
-          <ActivityStat label="Families active in 7 days" value={m.activity.families7d} onClick={() => showDetails({ view: "families", filter: "active7d" })} />
-          <ActivityStat label="Families active in 30 days" value={m.activity.families30d} onClick={() => showDetails({ view: "families", filter: "active30d" })} />
-          <ActivityStat label="Entries added in 30 days" value={m.activity.entries30d} />
+          <Stat label="Families active in 7 days" value={m.activity.families7d} onClick={() => showDetails({ view: "families", filter: "active7d" })} />
+          <Stat label="Families active in 30 days" value={m.activity.families30d} onClick={() => showDetails({ view: "families", filter: "active30d" })} />
+          <Stat label="Entries added in 30 days" value={m.activity.entries30d} />
         </div>
       </section>
+
+      <LoggingSection metrics={m} onSelect={showDetails} />
+      <FeaturesSection metrics={m} onSelect={showDetails} />
+      <SourcesAndChat metrics={m} onSelect={showDetails} />
+      <TurnedOnSection metrics={m} />
 
       <section className={cx(tone.card, "p-5 sm:p-6")} aria-labelledby="numbers-title">
         <h2 id="numbers-title" className={cx(tone.heading, "text-lg")}>About these numbers</h2>
         <div className="mt-3 grid gap-5 text-sm leading-relaxed text-mp-ink-2 sm:grid-cols-2">
           <p>Signups count families. People counts each accepted account once, even if it belongs to more than one family. Pending invitations and guests using an invite link aren’t included in that total.</p>
           <p>These are current totals, so deleted accounts are no longer included. Activity covers log opens and saved entries; deleted entries are excluded. The chart uses UTC calendar dates; other 7 and 30 day totals use the time of this snapshot.</p>
+          <p>Usage counts entries by when they were saved, grouped by kind and by where they came from, never what they say. Logging days are 24-hour periods counted back from this snapshot. Chat counts come from a daily tally that stays when someone deletes their chat history.</p>
+          <p>Feedback shows each message in full, with the sender&rsquo;s address hidden until you reveal it. The question on Today goes to owners and members of set-up families once they have used Maple for a few days, and at most twice.</p>
         </div>
         <div className="mt-5 border-t border-mp-line pt-4 sm:flex sm:items-center sm:justify-between sm:gap-6">
-          <p className="max-w-2xl text-sm leading-relaxed text-mp-ink-2">PostHog has separate event trends, including site visits and chat usage. Its sign-in and project access are managed there.</p>
+          <p className="max-w-2xl text-sm leading-relaxed text-mp-ink-2">PostHog has separate event trends, including site visits, signup conversion and app opens. Its sign-in and project access are managed there.</p>
           <a href="https://us.posthog.com" target="_blank" rel="noopener noreferrer" className={cx(linkClass, "mt-2 shrink-0 sm:mt-0")}>
             Open PostHog <Icon name="arrow-right" size={16} /><span className="sr-only"> (opens in a new tab)</span>
           </a>
@@ -215,11 +225,6 @@ function Overview({ metrics: m, onAuthProblem }: { metrics: AdminMetrics; onAuth
 
 function CountRow({ label, value, onClick }: { label: string; value: number; onClick: () => void }) {
   return <button type="button" onClick={onClick} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-lg py-3 text-left text-sm focus-visible:outline-2 focus-visible:outline-mp-focus"><span className="text-mp-ink-2">{label}</span><span className="flex items-center gap-2 font-semibold tabular-nums">{number.format(value)}<Icon name="chevron-right" size={14} className="text-mp-ink-3" /></span></button>;
-}
-
-function ActivityStat({ label, value, onClick }: { label: string; value: number; onClick?: () => void }) {
-  const content = <><span className="block text-3xl font-semibold tracking-tight tabular-nums">{number.format(value)}</span><span className="mt-2 flex items-center gap-1 text-sm text-mp-ink-2">{label}{onClick && <Icon name="chevron-right" size={14} />}</span></>;
-  return onClick ? <button type="button" onClick={onClick} aria-label={`View ${label.toLowerCase()}`} className="rounded-lg text-left focus-visible:outline-2 focus-visible:outline-mp-focus">{content}</button> : <div>{content}</div>;
 }
 
 function SignupChart({ days, rollingTotal, onViewSignups }: { days: AdminMetrics["dailySignups"]; rollingTotal: number; onViewSignups: () => void }) {

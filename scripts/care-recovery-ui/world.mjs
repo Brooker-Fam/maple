@@ -51,6 +51,8 @@ export async function apiRoute(route, controls) {
   if (url.pathname === "/api/maple/onboarding") return json({ needed: false });
   if (url.pathname === "/api/maple/push") return json({ publicKey: null, sub: null, health: { needs_resubscribe: false }, reminders: [] });
   if (url.pathname === "/api/maple/diagnostics") return route.fulfill({ status: 204, body: "" });
+  // Today's question stays away unless a check sets controls.feedbackAsk; sends are recorded with every other request.
+  if (url.pathname === "/api/maple/feedback") return json(method === "GET" ? { ask: !!controls.feedbackAsk, replyable: true } : { ok: true, emailed: false });
   if (url.pathname === "/api/maple/care/mood") {
     if (method === "POST") {
       if (controls.pauseMood) await new Promise((resolve) => { controls.releaseMood = resolve; });

@@ -50,7 +50,7 @@
     "check:maple-diagnostics-ui": "node scripts/diagnostics-browser-check.mjs",
     "check:maple-ui-review": "node scripts/ui-review-check.mjs",
     "check:maple-ui-recovery": "node scripts/ui-recovery-check.mjs",
-    "check:maple-settings-ui": "node scripts/settings-ui/run.mjs && node scripts/settings-ui/memories.mjs && node scripts/shortcuts/check-ui.mjs setup && node scripts/shortcuts/check-ui.mjs retry && node scripts/shortcuts/check-ui.mjs revoke && node scripts/shortcuts/check-ui.mjs returning",
+    "check:maple-settings-ui": "node scripts/settings-ui/run.mjs && node scripts/settings-ui/memories.mjs && node scripts/settings-ui/feedback.mjs && node scripts/shortcuts/check-ui.mjs setup && node scripts/shortcuts/check-ui.mjs retry && node scripts/shortcuts/check-ui.mjs revoke && node scripts/shortcuts/check-ui.mjs returning",
     "check:maple-photos": "pnpm check:maple-tenancy photo-guests moment-photos moment-upload client-state && node scripts/ui-review-moments-check.mjs && node scripts/moments-sharing-ui/run.mjs && node scripts/settings-ui/photo-sharing.mjs",
     "eval:maple-chat-images": "tsx scripts/chat-images-eval.ts"
   },

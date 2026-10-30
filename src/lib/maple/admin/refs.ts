@@ -1,7 +1,7 @@
 import { encryptSecret, openSecret } from "@/lib/secret-box";
 import { normalizeEmail } from "@/lib/waitlist";
 
-export type AdminRef = { kind: "person"; email: string } | { kind: "family"; id: number } | { kind: "waitlist"; id: number };
+export type AdminRef = { kind: "person"; email: string } | { kind: "family"; id: number } | { kind: "feedback"; id: number } | { kind: "waitlist"; id: number };
 export const ADMIN_REF_TTL_MS = 15 * 60_000;
 const PURPOSE = "maple-admin-contact-ref";
 
@@ -15,7 +15,7 @@ function validRef(value: unknown): value is AdminRef {
   if (!value || typeof value !== "object") return false;
   const ref = value as Record<string, unknown>;
   if (ref.kind === "person") return typeof ref.email === "string" && normalizeEmail(ref.email) === ref.email;
-  return (ref.kind === "family" || ref.kind === "waitlist") && Number.isSafeInteger(ref.id) && Number(ref.id) > 0;
+  return (ref.kind === "family" || ref.kind === "feedback" || ref.kind === "waitlist") && Number.isSafeInteger(ref.id) && Number(ref.id) > 0;
 }
 
 /** Opaque, short-lived handles keep account addresses out of URLs and initial payloads. */
