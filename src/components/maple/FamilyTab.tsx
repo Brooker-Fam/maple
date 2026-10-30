@@ -17,6 +17,7 @@ import PeopleSettings from "./settings/PeopleSettings";
 import PhoneSettings from "./settings/PhoneSettings";
 import DiscoveryPreferences from "./development/DiscoveryPreferences";
 import MedicalRecordsSettings, { useMedicalRecordsAvailable } from "./settings/MedicalRecordsSettings";
+import MemorySettings from "./settings/MemorySettings";
 import { SettingsDraftContext } from "./settings/DraftContext";
 import { ActionRow, GROUP, Section } from "./settings/parts";
 import { useSectionFocus } from "./sectionFocus";
@@ -29,6 +30,7 @@ const PAGES = {
   doctor: "Doctor & care plan",
   "medical-records": "Medical records",
   today: "On Today",
+  memories: "Memories",
   appearance: "Appearance & units",
   discoveries: "Daily discoveries",
   assistants: "Siri & assistants",
@@ -125,6 +127,7 @@ export default function FamilyTab() {
     doctor: <BabySettings section="doctor" />,
     "medical-records": <MedicalRecordsSettings key={`${state.family?.id ?? 1}:${state.me.email}:${state.baby.id}`} active={active === "medical-records"} />,
     today: <BabySettings section="today" />,
+    memories: <MemorySettings active={active === "memories"} />,
     appearance: <PhoneSettings />,
     discoveries: <DiscoveryPreferences />,
     assistants: <AssistantSettings />,
@@ -169,6 +172,7 @@ export default function FamilyTab() {
               {row("doctor", "stethoscope")}
               {medicalRecordsAvailable && row("medical-records", "download", "MyChart")}
               {row("today", "house", undefined, "Logging buttons and reminders")}
+              {row("memories", "sticky-note", undefined, "What the chat and assistants keep in mind")}
             </div>
           </Section>
           <div className={cx(tone.divide, "border-t border-mp-line")}>

@@ -55,8 +55,15 @@ export type PostDeps = {
     validate: (images: ChatImage[]) => Promise<void>;
     resolve: (messages: ChatMessage[]) => Promise<ChatMessage[]>;
   };
-  /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). */
-  tools: (opts: { born: boolean; care: boolean; copy: ToolCopy; submittedAt?: Date }) => ToolSet;
+  /** `care`: her medicine tools are in, and Maple's tools may read her page (chat_care). `memoryEpoch`: the memories' epoch this turn started with. */
+  tools: (opts: { born: boolean; care: boolean; copy: ToolCopy; submittedAt?: Date; memoryEpoch?: number | null }) => ToolSet;
+  /**
+   * The family's memories for this turn (memory/chat.ts): the prompt block, the
+   * epoch its memory writes need, and this thread's messages from before the
+   * last Forget. Read once the thread is locked; a failed read leaves them out
+   * (and the turn's memory writes refused), as the log's lines are.
+   */
+  memories?: (opts: { threadId: string; viewer: boolean; members: Member[] }) => Promise<ChatMemories>;
   /** The log as it stands (logState in mcp-tools.ts), for the new user message's [App] lines; `care` as for `tools`. */
   state: (opts: { care: boolean }) => Promise<string[]>;
   /** The family's chat budget, read only once the request is worth answering. */
@@ -69,6 +76,8 @@ export type PostDeps = {
 };
 
 export type PostBody = { threadId?: unknown; message?: unknown; requestId?: unknown; submittedAt?: unknown };
+
+export type ChatMemories = { block: string; epoch: number; forgotten: string[] };
 
 export const BUSY = "One message at a time: the last answer is still coming.";
 export const CARE_CLOSED = "Her page is closed to the chat now, so a new chat starts here.";
@@ -104,6 +113,20 @@ async function logStateOrNone(deps: Pick<PostDeps, "state"> & { report: (e: unkn
     if (e instanceof StoreUnavailable) throw e;
     deps.report(e);
     return [];
+  }
+}
+
+/** The turn's memories, or none when reading them fails: the turn goes on without them, and its memory writes are refused. */
+async function memoriesOrNone(
+  deps: Pick<PostDeps, "memories"> & { report: (e: unknown) => void },
+  opts: Parameters<NonNullable<PostDeps["memories"]>>[0]
+): Promise<ChatMemories | null> {
+  try {
+    return (await deps.memories?.(opts)) ?? null;
+  } catch (e) {
+    if (e instanceof StoreUnavailable) throw e;
+    deps.report(e);
+    return null;
   }
 }
 
@@ -245,11 +268,12 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       if (waiting || exhausted) return questionReply(merged, { ...(exhausted ? { notice: CHAT_CUT } : {}), crisis });
       messages = [...history.slice(0, -1), merged];
     }
+    const memories = deps.memories ? await memoriesOrNone(deps, { threadId: thread.id, viewer, members }) : null;
     const res = await chatTurn({
       model: deps.model,
       modelKey: deps.modelKey,
       price,
-      tools: deps.tools({ born: !!baby.born_at, care, copy, ...(submittedAt ? { submittedAt } : {}) }),
+      tools: deps.tools({ born: !!baby.born_at, care, copy, ...(submittedAt ? { submittedAt } : {}), memoryEpoch: memories?.epoch ?? null }),
       viewer,
       care,
       copy,
@@ -259,6 +283,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       stepsDone,
       questionContinuation,
       resolveImages: deps.images?.resolve,
+      memories: memories ? { block: memories.block, forgotten: new Set(memories.forgotten) } : null,
       deps: {
         save: async (m) => {
           await store.saveMessage(thread.id, member.email, m);

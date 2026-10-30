@@ -6,7 +6,7 @@ import { ADMIN_ID } from "../auth";
 import { registerCareTools } from "../care-mcp";
 import { context, FAMILY_ONE_COPY, logState, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
 import type { Member } from "../types";
-import type { ChatAlert, ChatReceipt, ChatToolOutput, HelpAbout } from "./types";
+import type { ChatAlert, ChatMemoryChange, ChatReceipt, ChatToolOutput, HelpAbout } from "./types";
 import type { ChatQuestionInput, ChatQuestionOutput } from "./types";
 import { questionOutputSchema, questionSchema } from "./questions";
 import { showChartTool } from "./chart-tools";
@@ -92,6 +92,7 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
   }
   const dup = (sc.possible_duplicate as { id?: unknown } | undefined)?.id;
   const alerts = Array.isArray(sc.alerts) ? (sc.alerts as ChatAlert[]) : [];
+  const memory = memoryChangeOf(sc.memory_change);
   return {
     ok: !res.isError,
     text,
@@ -102,7 +103,17 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
     ...(saved.length ? { saved } : {}),
     ...(typeof dup === "number" ? { duplicateOf: dup } : {}),
     ...(sc.deleted === true && typeof sc.id === "number" ? { deleted: sc.id } : {}),
+    ...(memory && !res.isError ? { memory } : {}),
   };
+}
+
+const MEMORY_CHANGES = new Set(["saved", "supported", "corrected", "resolved", "archived"]);
+
+/** A memory tool's memory_change (memory/mcp.ts), kept to what its card shows. */
+function memoryChangeOf(raw: unknown): ChatMemoryChange | null {
+  const c = raw as { status?: unknown; kind?: unknown; fact?: unknown; previous_fact?: unknown } | null;
+  if (!c || typeof c.status !== "string" || !MEMORY_CHANGES.has(c.status) || typeof c.fact !== "string" || typeof c.kind !== "string") return null;
+  return { status: c.status as ChatMemoryChange["status"], kind: c.kind, fact: c.fact, ...(typeof c.previous_fact === "string" ? { previous: c.previous_fact } : {}) };
 }
 
 const HELP_TEXT = "The help card is showing under your reply.";
@@ -112,14 +123,21 @@ const HELP_TEXT = "The help card is showing under your reply.";
  * (context() in mcp-tools.ts), as an MCP token's `fam` does. `device`: the
  * phone's X-Maple-Device id, so a dose logged here sends "Logged" to the
  * other phones only. `care` also rides on every call, so Maple's tools leave
- * her out of their results until she has turned it on.
+ * her out of their results until she has turned it on. `memoryEpoch`: the
+ * family memories' epoch this turn started with, which its memory writes
+ * need (null when they couldn't be read, so those writes are refused).
  */
-function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boolean; device?: string | null; submittedAt?: Date }): Extra {
+function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boolean; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null }): Extra {
   const sub = member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`;
   return {
     signal: new AbortController().signal,
     requestId: "maple-chat",
-    authInfo: { token: "maple-chat", clientId: "maple-chat", scopes: ["maple"], extra: { sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care, ...(opts.submittedAt ? { requestAt: opts.submittedAt.toISOString() } : {}) } },
+    authInfo: {
+      token: "maple-chat",
+      clientId: "maple-chat",
+      scopes: ["maple"],
+      extra: { sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care, memoryEpoch: opts.memoryEpoch ?? null, ...(opts.submittedAt ? { requestAt: opts.submittedAt.toISOString() } : {}) },
+    },
     sendNotification: async () => {},
     sendRequest: async () => {
       throw new Error("unsupported");
@@ -133,7 +151,7 @@ export async function chatLogState(member: Pick<Member, "email">, opts: { fam: n
   return logState({ ...ctx, now: opts.now });
 }
 
-export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date }): ToolSet {
+export function chatTools(member: Pick<Member, "email" | "role">, opts: { fam: number; born: boolean; care: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null }): ToolSet {
   const { all, mom } = registrations(opts.copy);
   const vo = opts.copy.v;
   const extra = chatExtra(member, { ...opts, submittedAt: undefined });

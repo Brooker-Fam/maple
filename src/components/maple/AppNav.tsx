@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 export type TabId = "today" | "care" | "history" | "moments" | "chat" | "family";
 export type HistorySeg = "timeline" | "patterns";
-export type SettingsTarget = "family/baby" | "family/doctor" | "family/today" | "family/appearance" | "family/medical-records" | "family/people";
+export type SettingsTarget = "family/baby" | "family/doctor" | "family/today" | "family/appearance" | "family/medical-records" | "family/people" | "family/memories";
 export type NavTarget = TabId | "log" | "patterns" | SettingsTarget;
 
 export type AppNav = {
@@ -26,7 +26,7 @@ export function useAppNav(): AppNav {
 function resolve(t: NavTarget): { tab: TabId; seg?: HistorySeg; settings?: SettingsTarget } {
   if (t === "log") return { tab: "history", seg: "timeline" };
   if (t === "patterns") return { tab: "history", seg: "patterns" };
-  if (t === "family/baby" || t === "family/doctor" || t === "family/today" || t === "family/appearance" || t === "family/medical-records" || t === "family/people") return { tab: "family", settings: t };
+  if (t === "family/baby" || t === "family/doctor" || t === "family/today" || t === "family/appearance" || t === "family/medical-records" || t === "family/people" || t === "family/memories") return { tab: "family", settings: t };
   return { tab: t };
 }
 

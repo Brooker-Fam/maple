@@ -33,7 +33,7 @@ import { mentionsCrisis } from "../src/lib/maple/chat/crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, storable, titleFrom, userMessage, userText, withCrisisHelp } from "../src/lib/maple/chat/messages";
 import { costMicro, dollars, priceFor, PRICES, stepTokens } from "../src/lib/maple/chat/prices";
 import { answerPost, BUSY, CARE_CLOSED, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
-import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, contextText, markTailForCache, stateLines, systemBlocks } from "../src/lib/maple/chat/prompt";
+import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, contextText, markTailForCache, stateLines, systemBlocks, withMemoryLines } from "../src/lib/maple/chat/prompt";
 import { dashFilter, withoutDashes } from "../src/lib/maple/chat/dashes";
 import { chatDisplayText, receiptText } from "../src/lib/maple/chat/display";
 import type { LockedThread, UsageRow } from "../src/lib/maple/chat/store";
@@ -52,6 +52,7 @@ import { jsonSchema, tool, type ToolSet } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { DROPPED, needsHelpCard, problemFor, unanswered } from "../src/components/maple/chat/stopped";
 import { messageTokens, modelWindow, streamPage, WINDOW_MESSAGES, WINDOW_TOKENS, type StreamItem } from "../src/lib/maple/chat/window";
+import { MEMORY_PROMPT_MAX_CHARS } from "../src/lib/maple/memory/policy";
 
 let passed = 0;
 let failed = 0;
@@ -89,15 +90,16 @@ function throws(fn: () => unknown, what: string) {
 
 const ALEX = { email: "alex@example.com", role: "owner" as const };
 const VI = { email: "vi@example.com", role: "viewer" as const };
-const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions"];
+const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions", "recall_memories"];
 const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting"];
 
 // ── the adapter ──────────────────────────────────────────────────────────
 
-check("captures every registered tool (29 Maple + 10 of hers)", () => {
+check("captures every registered tool (29 Maple + 10 of hers + 5 family memory)", () => {
   const { all, mom } = registrations();
-  eq(all.length, 39, "registrations");
-  eq(new Set(all.map((r) => r.name)).size, 39, "distinct names");
+  eq(all.length, 44, "registrations");
+  eq(new Set(all.map((r) => r.name)).size, 44, "distinct names");
+  eq(all.filter((r) => r.name.endsWith("_memory") || r.name === "recall_memories").map((r) => [r.name, r.ann.readOnlyHint]), [["recall_memories", true], ["save_memory", false], ["correct_memory", false], ["resolve_memory", false], ["archive_memory", false]], "memory tools, one read");
   eq([...mom].sort(), ["add_mom_medicines", "add_mom_question", "fix_mom_entry", "log_mom_drink", "log_mom_food", "log_mom_medicine", "log_mom_temperature", "mom_nutrition", "mom_status", "set_mom_medicine"], "her tools");
   for (const r of all) ok(r.description && typeof r.handler === "function" && r.shape && typeof r.ann.readOnlyHint === "boolean", `${r.name} is complete`);
 });
@@ -105,7 +107,7 @@ check("captures every registered tool (29 Maple + 10 of hers)", () => {
 check("a member gets the allowed log tools and interactive app cards", () => {
   const names = registrations().all.map((r) => r.name);
   const born = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true }));
-  eq(born.length, 39 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
+  eq(born.length, 44 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
   ok(born.includes("ask_user") && born.includes("show_chart"), "interactive questions and charts");
@@ -464,6 +466,7 @@ function rawLogLines(now: string, entries: Entry[], baby: Baby = STATE_BABY): st
     who: { id: STATE_MEMBER.email, via: "chat", role: "owner", name: "Alex", viaAdmin: false },
     device: null,
     care: false,
+    memoryEpoch: null,
   };
   return logStateLines(summarize({ entries: all, baby, members: [STATE_MEMBER], now: new Date(now), vo: voiceOf(ctx) }), ctx);
 }
@@ -636,7 +639,9 @@ check("the window leaves room under the step cap for the cached prefix, a full m
   const tools = chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true, device: null });
   const prefixChars = JSON.stringify([systemBlocks({ viewer: false, care: true, model: GLM, copy: FAMILY_ONE_COPY }), Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
   const prefix = Math.ceil(prefixChars / 3);
-  const newest = messageTokens(userMessage("msg_u", "x".repeat(CHAT_MAX_CHARS), LINE, Array.from({ length: 12 }, () => "A made-up line of the log as it stands now, as long as most.")));
+  // The family's memories at the most a prompt carries (MEMORY_PROMPT_MAX_CHARS) ride on the newest message.
+  const memories = "m".repeat(MEMORY_PROMPT_MAX_CHARS + 600);
+  const newest = messageTokens(withMemoryLines([userMessage("msg_u", "x".repeat(CHAT_MAX_CHARS), LINE, Array.from({ length: 12 }, () => "A made-up line of the log as it stands now, as long as most."))], memories)[0]);
   const first = prefix + WINDOW_TOKENS + newest;
   ok(first + Math.ceil(MODEL_TEXT_MAX / 3) <= STEP_PROMPT_LIMIT, `prefix ${prefix} + window ${WINDOW_TOKENS} + message ${newest} + a cut result is over ${STEP_PROMPT_LIMIT}`);
   const cost = costMicro(GLM, priceFor(GLM)!, { prompt: first, fresh: first, cacheRead: 0, cacheWrite: 0, output: 1500, reasoning: 0 }).micro;
@@ -1346,6 +1351,7 @@ async function privacyChecks() {
       who: { id: ALEX.email, via: "chat", role: "owner", name: "Alex", viaAdmin: false },
       device: null,
       care: false,
+      memoryEpoch: null,
     };
     eq(await momSameMedicine(ctx, "acetaminophen"), null, "log_medicine's her-namesake line: nothing, and no read");
   });

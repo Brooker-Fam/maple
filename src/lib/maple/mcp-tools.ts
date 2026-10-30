@@ -65,6 +65,8 @@ import {
 import { FAMILY_ONE_VOICE, voiceFor, type Voice } from "./voice";
 import { carePersonName, careSession, deleteCareEntry, getCarePerson, momMedicineClash } from "./care-store";
 import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./care-mcp";
+import { registerMemoryTools, statusMemories } from "./memory/mcp";
+import { memoryRules } from "./memory/policy";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, summarize, type Summary } from "./insights";
 import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
 import { milestoneLabel, milestonesFor, milestoneWordsOf, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
@@ -226,8 +228,11 @@ const wordsOf = (ctx: Pick<Ctx, "fam" | "baby">): MilestoneWords => milestoneWor
 /** The words for this call's results: the caller's own family's. */
 export const voiceOf = (ctx: Pick<Ctx, "fam" | "baby">): Voice => voiceFor(ctx.fam.familyId, ctx.baby);
 
-/** Instructions derived from the signed-in family's profile, or neutral fallback copy. */
-export function mapleInstructions(c: ToolCopy, { entryNumbers = true }: { entryNumbers?: boolean } = {}): string {
+/**
+ * Instructions derived from the signed-in family's profile, or neutral fallback copy.
+ * `memories`: where the family's memories reach the reader (memoryRules): maple_status for a connected app, a block after these in Maple's chat.
+ */
+export function mapleInstructions(c: ToolCopy, { entryNumbers = true, memories = "mcp" }: { entryNumbers?: boolean; memories?: "mcp" | "chat" } = {}): string {
   const { v } = c;
   const m = v.mom;
   const momRule = v.hasMom
@@ -257,7 +262,9 @@ ${momWords} mean the mom tools below (add_mom_medicines too). "${v.They}" and "$
 
 ${v.Their} mom's own medicines and recovery: use mom_status, log_mom_medicine, set_mom_medicine, log_mom_temperature, add_mom_question and fix_mom_entry, never log_medicine (that's ${v.name}'s). Answer "can she take X yet?" only from mom_status, using its line and sentence (for example "Ibuprofen OK after 8:10 AM, by her schedule. Last: 2:10 AM${by}. 1 of 4 tablets in the last 24 hours."). Never say whether a medicine is safe while nursing; suggest her OB, ${v.name}'s pediatrician or a pharmacist. Never fill in a dose, interval, limit or how many to take. If anyone mentions thoughts of harming themselves or someone else, tell them: call 911 if anyone is in immediate danger; otherwise call or text 988, any time. The National Maternal Mental Health Hotline (call or text 1-833-852-6262, 24/7) is there too, but it isn't a crisis line.
 
-${m}'s label or discharge papers in a photo: when the user shares one, you may copy her medicines into her list. Copy each value exactly as printed (the name, the dose, how often, the most in 24 hours with its unit) and leave out anything that isn't printed. Read every medicine and number back to the user, and save (add_mom_medicines for several, set_mom_medicine for one) only after they say yes. Never invent, guess, suggest or fill in a number that isn't on the paper. A 24-hour limit needs its unit (tablets, caplets, capsules, doses or mL): with none printed, leave the limit out and say so.`;
+${m}'s label or discharge papers in a photo: when the user shares one, you may copy her medicines into her list. Copy each value exactly as printed (the name, the dose, how often, the most in 24 hours with its unit) and leave out anything that isn't printed. Read every medicine and number back to the user, and save (add_mom_medicines for several, set_mom_medicine for one) only after they say yes. Never invent, guess, suggest or fill in a number that isn't on the paper. A 24-hour limit needs its unit (tablets, caplets, capsules, doses or mL): with none printed, leave the limit out and say so.
+
+${memoryRules(v, memories)}`;
 }
 
 /** Compatibility export for callers without a family profile; it contains no personal names. */
@@ -354,6 +361,8 @@ export type Ctx = {
   device: string | null;
   /** Her page is open here: false only in the in-app chat until she lets it see her page (chat_care). */
   care: boolean;
+  /** The in-app chat's turn: the family memories' epoch it started with (memory/store.ts), which its memory writes need; null for every other caller. */
+  memoryEpoch: number | null;
 };
 
 /** A chat call without the flag counts as closed. */
@@ -362,7 +371,7 @@ export const careOpen = (auth: { via?: unknown; care?: unknown }): boolean => au
 export const NOT_MEMBER_MESSAGE = "You're not a member of this family's log anymore, so nothing was read or saved. Reconnect the connector and sign in again.";
 
 export async function context(extra: Extra): Promise<Ctx> {
-  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; fam?: unknown; via?: unknown; device?: unknown; care?: unknown; requestAt?: unknown };
+  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; fam?: unknown; via?: unknown; device?: unknown; care?: unknown; requestAt?: unknown; memoryEpoch?: unknown };
   const sub = typeof auth.sub === "string" ? auth.sub : "";
   if (!sub) throw new ToolError("You're not signed in to Maple's Log. Reconnect the connector and sign in again.");
   const signedIn = memberIdFromSub(sub);
@@ -403,6 +412,7 @@ export async function context(extra: Extra): Promise<Ctx> {
     who: { id, via, role, name: memberName(id, members), viaAdmin },
     device: via === "chat" ? cleanDevice(auth.device) : null,
     care: careOpen(auth),
+    memoryEpoch: via === "chat" && typeof auth.memoryEpoch === "number" && Number.isSafeInteger(auth.memoryEpoch) ? auth.memoryEpoch : null,
   };
 }
 
@@ -2299,6 +2309,11 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   // Voice reads hers after Maple's, capped at two medicines.
   const speak = [speakLine(s, ctx), mom?.speak].filter(Boolean).join(" ");
   json.speak = speak;
+  // What the family asked to be remembered, for a connected app; Maple's own chat has them with its instructions.
+  if (ctx.who.via !== "chat") {
+    const memories = await statusMemories(ctx);
+    if (memories) json.family_memories = memories;
+  }
   return ok(lines.join("\n"), json);
 }
 
@@ -4669,4 +4684,6 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
 
   // Her mom's medicines, temperature and questions (care-mcp.ts): the same server, so the calendar connector carries them too.
   registerCareTools(server, copy);
+  // The family's memories (memory/mcp.ts): Maple's chat and every connected app share them.
+  registerMemoryTools(server, copy);
 }

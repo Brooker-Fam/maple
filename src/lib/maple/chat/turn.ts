@@ -15,7 +15,7 @@ import { chatProviderOptions, CHAT_MAX_OUTPUT_TOKENS, CHAT_MAX_STEPS, CHAT_TIMEO
 import type { ToolCopy } from "../mcp-tools";
 import { costMicro, stepTokens, type ModelPrice, type StepTokens } from "./prices";
 import { dashFilter } from "./dashes";
-import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints } from "./prompt";
+import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints, withMemoryLines } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
 import { CHAT_FAILED, CHAT_OFF, type ChatData, type ChatMessage } from "./types";
 import { inputTokens, modelWindow } from "./window";
@@ -112,6 +112,8 @@ export async function chatTurn(opts: {
   /** Question answers cannot extend the message's model-step budget. Approval-only completion keeps its existing final reporting step. */
   questionContinuation?: boolean;
   resolveImages?: (messages: ChatMessage[]) => Promise<ChatMessage[]>;
+  /** The family memories' block (memoryPromptBlock), read onto the newest user message, and this thread's messages from before their last Forget, which the model no longer reads. */
+  memories?: { block: string; forgotten: ReadonlySet<string> } | null;
   deps: TurnDeps;
 }): Promise<Response> {
   const { tools, messages, responseId, deps } = opts;
@@ -123,7 +125,7 @@ export async function chatTurn(opts: {
     try { await deps.save(completed); } finally { await deps.release(); }
     return questionReply(completed, { notice: CHAT_CUT, crisis: opts.crisis });
   }
-  const window = modelWindow(messages);
+  const window = modelWindow(messages, opts.memories?.forgotten);
   const hasImages = window.some((message) => message.parts.some((part) => part.type === "file"));
   const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, model: opts.modelKey, copy: opts.copy, images: hasImages });
   const breakpoints = usesCacheBreakpoints(opts.modelKey);
@@ -142,7 +144,7 @@ export async function chatTurn(opts: {
   let failed = false;
   let completed = false;
   if (!opts.resolveImages && hasImages) throw new Error("chat_images_unavailable");
-  const modelMessages = opts.resolveImages ? await opts.resolveImages(window) : window;
+  const modelMessages = withMemoryLines(opts.resolveImages ? await opts.resolveImages(window) : window, opts.memories?.block);
   deps.lifecycle?.("chat_started");
   const result = streamText({
     model: opts.model,
