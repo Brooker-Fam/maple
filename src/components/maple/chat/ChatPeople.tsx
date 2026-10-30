@@ -101,6 +101,18 @@ export function PeopleApproval({ name, input, onAnswer }: { name: string; input:
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>Their sign-ins, connected assistants and Siri keys stop working. What they logged stays.</p>
         </div>
       );
+    } else if (raw.access === "owner") {
+      title = `Make ${who} an owner?`;
+      yes = "Make owner";
+      body = (
+        <div className="space-y-2">
+          {person}
+          <Row label="Baby's log" value={target && target.role !== "owner" ? `${ROLE_LABEL[target.role]} → ${ROLE_LABEL.owner}` : ROLE_LABEL.owner} />
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+            Owners see and change everything{page ? `, ${page} included,` : ""} and can invite, change and remove people. Another owner can&apos;t change or remove them afterwards.
+          </p>
+        </div>
+      );
     } else {
       const role = roleOf(raw.access) ?? target?.role ?? null;
       const set = parseCareLevel(raw.mom_page);

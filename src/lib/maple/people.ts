@@ -95,22 +95,31 @@ export async function inviteByEmail(
   return { kind: "invited", invite, url, emailed };
 }
 
+/** A role an owner can give someone already in the family: the invite roles, or owner. */
+export type ChangeRole = AccessRole | "owner";
+
 /**
  * The checked patch for changing someone's role and/or their level on her
  * page: owners only, never their own or another owner's (owners always have
  * all of it), and never her page for her own account (it's always hers).
- * `care` null puts the role's default back.
+ * `care` null puts the role's default back. Making someone an owner clears
+ * their level on her page, since owners always have all of it; it can't be
+ * undone here, as owners can't be changed or removed.
  */
 export async function accessPatch(
   ctx: FamilyCtx,
   me: Actor,
   target: Member,
-  change: { role?: AccessRole; care?: CareLevel | null }
-): Promise<{ role?: AccessRole; care?: CareLevel | null }> {
+  change: { role?: ChangeRole; care?: CareLevel | null }
+): Promise<{ role?: ChangeRole; care?: CareLevel | null }> {
   if (change.role !== undefined) ownerOnly(me, "change roles");
   if (change.care !== undefined) ownerOnly(me, "change who sees her page");
   if (target.email === me.email) throw new BadRequest("You can't change your own access");
-  if (target.role === "owner") throw new BadRequest("Owners always have full access");
+  if (target.role === "owner") throw new BadRequest(change.role === "owner" ? "They're already an owner" : "Owners always have full access");
+  if (change.role === "owner") {
+    if (change.care != null && change.care !== "log") throw new BadRequest("Owners always have all of her page");
+    return { role: "owner", care: null };
+  }
   const role = change.role ?? (target.role as AccessRole);
   const patch: { role?: AccessRole; care?: CareLevel | null } = {};
   if (change.role !== undefined) patch.role = change.role;
@@ -128,7 +137,7 @@ export async function changeAccess(
   ctx: FamilyCtx,
   me: Actor,
   targetId: string,
-  change: { role?: AccessRole; care?: CareLevel | null }
+  change: { role?: ChangeRole; care?: CareLevel | null }
 ): Promise<{ before: Member; after: Member }> {
   const before = await memberFor(ctx, targetId);
   if (!before) throw new BadRequest("Not a member");

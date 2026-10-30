@@ -365,6 +365,15 @@ try {
   await changing.getByText("Hidden → Can view", { exact: true }).waitFor();
   await changing.getByRole("button", { name: "Keep", exact: true }).click();
   assert.deepEqual((await snapshot()).calls.at(-1), { kind: "approve", id: "approval_change", approved: false }, "Keep turns the change down");
+  await fixture("people-owner");
+  const owning = page.getByRole("region", { name: "Make Blake an owner?", exact: true });
+  await owning.getByText("blake@example.test", { exact: true }).waitFor();
+  await owning.getByText("Can log → Owner", { exact: true }).waitFor();
+  await owning.getByText(/Another owner can't change or remove them afterwards\./).waitFor();
+  await tapTarget(owning.getByRole("button", { name: "Make owner", exact: true }));
+  await noOverflow();
+  await owning.getByRole("button", { name: "Make owner", exact: true }).click();
+  assert.deepEqual((await snapshot()).calls.at(-1), { kind: "approve", id: "approval_owner", approved: true }, "Make owner approves only this stored request");
   await fixture("people-remove");
   const removing = page.getByRole("region", { name: "Remove Blake?", exact: true });
   await removing.getByText("blake@example.test", { exact: true }).waitFor();
@@ -376,9 +385,9 @@ try {
   await invited.getByRole("button", { name: "Copy invite link", exact: true }).waitFor();
   assert.equal(await page.getByText(/join=/).count(), 0, "The invite link is copied, never printed");
   await noOverflow();
-  console.log("PASS people: invite, change and remove wait for their own card, and an invite's link is copied from its card");
+  console.log("PASS people: invite, change, make owner and remove wait for their own card, and an invite's link is copied from its card");
 
-  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel", "people-invite", "people-remove", "people-invited"]) {
+  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel", "people-invite", "people-owner", "people-remove", "people-invited"]) {
     await fixture(name);
     if (name === "receipt") await page.getByText("Feeding in the log", { exact: true }).waitFor();
     if (name === "care-receipt") await page.getByText("Example medicine · in the log", { exact: true }).waitFor();

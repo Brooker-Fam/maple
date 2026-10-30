@@ -416,7 +416,7 @@ export async function leaveFamily(fam: Fam, email: string): Promise<LeaveRefusal
 export async function updateMember(
   fam: Fam,
   email: string,
-  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: AccessRole; care?: CareLevel | null }
+  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: AccessRole | "owner"; care?: CareLevel | null }
 ): Promise<void> {
   const familyId = familyOf(fam);
   const rows = await q(`SELECT display_name, emoji, color, role, care_access FROM maple_members WHERE family_id = $1 AND email = $2`, [familyId, email]);

@@ -150,6 +150,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
   const [editing, setEditing] = useState(false);
   const [managing, setManaging] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmOwner, setConfirmOwner] = useState(false);
   const [name, setName] = useState(m.display_name ?? "");
   // "" is their initial: emoji are opt-in.
   const [emoji, setEmoji] = useState(m.emoji ?? "");
@@ -287,6 +288,33 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
               disabled={busy}
               onChange={(level) => void patch({ email: m.email, care: level }, `Access updated: ${page}: ${CARE_LEVEL_LABEL[level].toLowerCase()}`)}
             />
+          )}
+          {!confirmOwner ? (
+            <Button variant="soft" size="sm" className="w-full" onClick={() => setConfirmOwner(true)}>
+              Make owner
+            </Button>
+          ) : (
+            <div className="space-y-2">
+              <p className={cx(tone.body, "text-sm leading-snug")}>
+                Make {memberName(m.email)} an owner? Owners see and change everything{page ? `, ${page} included,` : ""} and can invite, change and remove
+                people. Another owner can&apos;t change or remove them afterwards.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  className="flex-1"
+                  disabled={busy}
+                  onClick={async () => {
+                    if (await patch({ email: m.email, role: "owner" }, `${memberName(m.email)} is now an owner`)) setManaging(false);
+                  }}
+                >
+                  Make owner
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmOwner(false)}>
+                  Keep
+                </Button>
+              </div>
+            </div>
           )}
           {!confirmRemove ? (
             <Button variant="danger" size="sm" className="w-full" onClick={() => setConfirmRemove(true)}>

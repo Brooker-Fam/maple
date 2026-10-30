@@ -55,6 +55,27 @@ const cases = [
       assert.deepEqual(f.errors, []);
     } finally { await f.close(); }
   }],
+  ["An owner makes a member an owner only after confirming, and the row then reads Owner", async () => {
+    const f = await env.visit({ hash: "family/people" });
+    try {
+      f.controls.state.members = [f.controls.state.me, { email: "synthetic-helper@example.test", role: "member", display_name: "Synthetic Helper", emoji: null, color: null }];
+      f.controls.changed();
+      await f.page.reload();
+      await f.page.getByRole("heading", { name: "People & permissions", exact: true }).waitFor();
+      await f.page.getByRole("button", { name: "Manage Synthetic Helper", exact: true }).click();
+      await f.page.getByRole("button", { name: "Make owner", exact: true }).click();
+      await f.page.getByText(/Make Synthetic Helper an owner\? .*Another owner can't change or remove them afterwards\./).waitFor();
+      assert.equal(f.controls.requests.some((request) => request.path === "/api/maple/members" && request.method === "PATCH"), false, "nothing changes before the second tap");
+      await f.page.getByRole("button", { name: "Keep", exact: true }).click();
+      await f.page.getByRole("button", { name: "Make owner", exact: true }).click();
+      await f.page.getByRole("button", { name: "Make owner", exact: true }).nth(0).click();
+      await f.page.getByText("Synthetic Helper is now an owner").waitFor();
+      assert.deepEqual(f.controls.requests.filter((request) => request.path === "/api/maple/members" && request.method === "PATCH").map((request) => request.body), [{ email: "synthetic-helper@example.test", role: "owner" }]);
+      await f.page.getByText("Owner · can invite and manage · synthetic-helper@example.test", { exact: true }).waitFor();
+      assert.equal(await f.page.getByRole("button", { name: "Manage Synthetic Helper", exact: true }).count(), 0, "an owner has nothing to manage");
+      assert.deepEqual(f.errors, []);
+    } finally { await f.close(); }
+  }],
   ["Downgrading an open Chat to Photos only removes the retained chat", async () => {
     const f = await env.visit({ hash: "chat" });
     try {

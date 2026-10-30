@@ -305,7 +305,8 @@ export default function Privacy() {
         and edit them. Separately, the owner chooses what each person sees of the recovery page when it is set up: members see
         and add to it unless the owner limits them to reading it or hides it, and view-only guests don&rsquo;t see it unless the
         owner lets them read it. Reading it never includes mom&rsquo;s check-ins. Mom always has her own page. New invitations
-        default to photos-only access.
+        default to photos-only access. Owners see and change everything, the recovery page included, and an owner can make
+        someone already in the family an owner too. In Maple, an owner can&rsquo;t change or remove another owner.
       </p>
       <p>
         Removing someone ends their access through Maple. It cannot remove copies they already downloaded, shared or

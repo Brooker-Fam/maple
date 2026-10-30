@@ -11,7 +11,7 @@ import {
 } from "@/lib/maple/auth";
 import { parseCareLevel, type AccessRole, type CareLevel } from "@/lib/maple/access";
 import { FAMILY_ONE } from "@/lib/maple/family";
-import { accessPatch, inviteByEmail, removePerson } from "@/lib/maple/people";
+import { accessPatch, inviteByEmail, removePerson, type ChangeRole } from "@/lib/maple/people";
 import { publicOrigin } from "@/lib/mcp/auth";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +43,7 @@ export const POST = withMember("POST /api/maple/members", async (request, me, ct
 /**
  * PATCH { email?, display_name?, emoji?, color?, role?, care? } — rename
  * yourself or pick an emoji; owners can tidy anyone's, and change someone
- * else's role or their level on her page (people.ts).
+ * else's role or their level on her page, or make them an owner (people.ts).
  */
 export const PATCH = withMember("PATCH /api/maple/members", async (request, me, ctx) => {
   const body = await readJson(request);
@@ -53,7 +53,7 @@ export const PATCH = withMember("PATCH /api/maple/members", async (request, me, 
   const current = await memberFor(ctx, target);
   if (!current) throw new BadRequest("Not a member");
 
-  const patch: { display_name?: string | null; emoji?: string | null; color?: string | null; role?: AccessRole; care?: CareLevel | null } = {};
+  const patch: { display_name?: string | null; emoji?: string | null; color?: string | null; role?: ChangeRole; care?: CareLevel | null } = {};
   if ("display_name" in body) patch.display_name = familyName(ctx, body.display_name, 40, "The name");
   if ("emoji" in body) {
     const e = String(body.emoji ?? "").trim();
@@ -62,9 +62,9 @@ export const PATCH = withMember("PATCH /api/maple/members", async (request, me, 
   }
   if ("role" in body || "care" in body) {
     if (me.role !== "owner") throw new Forbidden("Only an owner can change roles");
-    if ("role" in body && body.role !== "member" && body.role !== "viewer" && body.role !== "photos") throw new BadRequest("role must be member, viewer, or photos");
+    if ("role" in body && body.role !== "owner" && body.role !== "member" && body.role !== "viewer" && body.role !== "photos") throw new BadRequest("role must be owner, member, viewer, or photos");
     if (target === me.email) throw new BadRequest("You can't change your own role");
-    Object.assign(patch, await accessPatch(ctx, me, current, { role: "role" in body ? (body.role as AccessRole) : undefined, care: careOf(body) }));
+    Object.assign(patch, await accessPatch(ctx, me, current, { role: "role" in body ? (body.role as ChangeRole) : undefined, care: careOf(body) }));
   }
   if ("color" in body) {
     if (body.color !== null && !HEX_RE.test(String(body.color))) throw new BadRequest("color must be #RRGGBB");

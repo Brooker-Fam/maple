@@ -35,6 +35,8 @@ const ROUTE = "/api/maple/mcp";
 
 const ACCESS = ["log", "view", "photos"] as const;
 type AccessWord = (typeof ACCESS)[number];
+/** change_access can also make someone already in the family an owner; an invite never does. */
+const CHANGE_ACCESS = ["owner", ...ACCESS] as const;
 
 /** A change waits for a yes: a connector's `confirmed: true`, or the chat's card (the only way a chat call runs). */
 const confirmedBy = (ctx: Ctx, confirmed: boolean | null | undefined) => confirmed === true || ctx.who.via === "chat";
@@ -268,10 +270,13 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
     "change_access",
     {
       title: "Change what someone can reach",
-      description: `Owners only. Changes one person's access to ${vo.name}'s log and moments ("access") and/or to ${MOM}'s page ("mom_page"); give at least one. Owners always have everything, and ${MOM} always has her own page. Use only when the user asked for this change, in their own words. E.g. "let Grandpa log diapers but not see ${MOM}'s medicines" → access "log", mom_page "none".`,
+      description: `Owners only. Changes one person's access to ${vo.name}'s log and moments ("access") and/or to ${MOM}'s page ("mom_page"); give at least one. Access "owner" makes someone already in the family an owner (what people often call an admin). Owners always have everything, and ${MOM} always has her own page. Use only when the user asked for this change, in their own words. E.g. "let Grandpa log diapers but not see ${MOM}'s medicines" → access "log", mom_page "none"; "make Sam an admin" → access "owner".`,
       inputSchema: {
         person: person(),
-        access: access().nullish(),
+        access: z
+          .enum(CHANGE_ACCESS)
+          .nullish()
+          .describe(`Their access to ${vo.name}'s log and moments: "log" adds and edits them, "view" only sees them, "photos" sees shared moments and photos only, "owner" has everything, ${MOM}'s page included, and invites, changes and removes people. Another owner can't change or remove an owner afterwards. Leave it out to change only mom_page.`),
         mom_page: momPage(),
         confirmed: confirmed(),
       },
@@ -285,8 +290,17 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
       const target = findPerson(ctx, a.person);
       const name = memberName(target.email, ctx.members);
       if (target.email === ctx.who.id) throw new ToolError("You can't change your own access.");
-      if (target.role === "owner") throw new ToolError(`${name} is an owner, and owners always have everything.`);
+      if (target.role === "owner") throw new ToolError(a.access === "owner" ? `${name} is already an owner.` : `${name} is an owner, and owners always have everything.`);
       const page = await pageOf(ctx);
+      if (a.access === "owner") {
+        if (a.mom_page != null && a.mom_page !== "log") throw new ToolError(`Owners always have all of ${MOM}'s page. Leave mom_page out to make ${name} an owner.`);
+        const everything = `everything${page.label ? `, ${page.label} included,` : ""} and inviting, changing and removing people`;
+        if (!confirmedBy(ctx, a.confirmed)) {
+          return ok(`Nothing changed yet. Read this back to the user: make ${name} an owner (now ${memberAccess(target, ctx, page)}), with ${everything}. Another owner can't change or remove them afterwards. Only if they say yes, call change_access again with confirmed: true.`, { confirm_needed: true });
+        }
+        const done = await changeAccess(ctx.fam, actor(ctx), target.email, { role: "owner" });
+        return ok(`${name} is now an owner, with ${everything}. It applies now, on every phone and assistant they use.`, { changed: true, access: ACCESS_WORD[done.after.role] });
+      }
       const role: AccessRole = a.access ? ROLE_FROM_WORD[a.access] : (target.role as AccessRole);
       const care = a.mom_page ?? undefined;
       const problem = care ? careLevelProblem(role, care) : null;

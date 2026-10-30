@@ -231,6 +231,40 @@ async function main() {
       eq((await tool(alpha.owner, A, "change_access", { person: "co.owner.alpha@example.com", mom_page: "none", confirmed: true })).error, true, "owners always have everything");
     });
 
+    await test(`${shape}: an owner makes someone already in the family an owner, in the chat, over MCP and in settings, once`, async () => {
+      const add = (email: string) =>
+        sql(`INSERT INTO maple_members (family_id, email, role, display_name, accepted_at, care_access) VALUES ($1, $2, 'member', $3, NOW(), 'view')`, [A, email, `Made-up ${email.split("@")[0]}`]);
+      const row = async (email: string) => (await sql(`SELECT role, care_access FROM maple_members WHERE family_id = $1 AND email = $2`, [A, email]))[0];
+      await add("helper.alpha@example.com");
+      const preview = await tool(alpha.owner, A, "change_access", { person: "helper.alpha@example.com", access: "owner" });
+      eq(preview.json.confirm_needed, true, "a connector reads it back first");
+      ok(preview.text.includes("an owner") && preview.text.includes("Another owner can't change or remove them afterwards"), "and says it can't be undone");
+      eq(await row("helper.alpha@example.com"), { role: "member", care_access: "view" }, "the preview changes nothing");
+      eq((await tool(alpha.owner, A, "change_access", { person: "helper.alpha@example.com", access: "owner", mom_page: "view", confirmed: true })).error, true, "owners always have all of her page");
+      eq((await tool(alpha.member, A, "change_access", { person: "helper.alpha@example.com", access: "owner", confirmed: true })).error, true, "a member can't make owners");
+      eq((await tool(beta.owner, B, "change_access", { person: "helper.alpha@example.com", access: "owner", confirmed: true })).error, true, "nor another family's owner");
+      const made = await tool(alpha.owner, A, "change_access", { person: "helper.alpha@example.com", access: "owner", confirmed: true });
+      eq([made.error, made.json.access], [false, "owner"], "made an owner");
+      eq(await row("helper.alpha@example.com"), { role: "owner", care_access: null }, "with her page's level cleared: owners have all of it");
+      eq((await tool(alpha.owner, A, "change_access", { person: "helper.alpha@example.com", access: "owner", confirmed: true })).text.includes("already an owner"), true, "only once");
+      eq((await tool(alpha.owner, A, "change_access", { person: "helper.alpha@example.com", access: "log", confirmed: true })).error, true, "and never back down");
+      eq((await tool(alpha.owner, A, "remove_person", { person: "helper.alpha@example.com", confirmed: true })).error, true, "or removed by another owner");
+      ok("id" in ((await tool("helper.alpha@example.com", A, "list_people")).json.people as Record<string, unknown>[])[0], "the new owner sees what owners see");
+
+      await add("helper2.alpha@example.com");
+      eq((await tool(alpha.owner, A, "change_access", { person: "helper2.alpha@example.com", access: "owner" }, "chat")).json.access, "owner", "the chat's tap is the yes");
+      eq(await row("helper2.alpha@example.com"), { role: "owner", care_access: null });
+
+      await add("helper3.alpha@example.com");
+      eq((await call(routes.members.PATCH, "/api/maple/members", { id: alpha.member, fam: A }, { method: "PATCH", body: { email: "helper3.alpha@example.com", role: "owner" } })).status, 403, "settings: members can't");
+      eq((await call(routes.members.PATCH, "/api/maple/members", owner, { method: "PATCH", body: { email: "helper3.alpha@example.com", role: "owner", care: "none" } })).status, 400, "settings: never with less of her page");
+      eq((await call(routes.members.PATCH, "/api/maple/members", owner, { method: "PATCH", body: { email: "helper3.alpha@example.com", role: "owner" } })).status, 200, "settings: Make owner");
+      eq(await row("helper3.alpha@example.com"), { role: "owner", care_access: null });
+      eq((await call(routes.members.PATCH, "/api/maple/members", owner, { method: "PATCH", body: { email: "helper3.alpha@example.com", role: "member" } })).status, 400, "settings: an owner stays one");
+      eq((await call(routes.members.PATCH, "/api/maple/members", owner, { method: "PATCH", body: { email: "helper3.alpha@example.com", role: "admin" } })).status, 400, "only the roles there are");
+      await sql(`DELETE FROM maple_members WHERE family_id = $1 AND email LIKE 'helper%.alpha@example.com'`, [A]);
+    });
+
     await test(`${shape}: cancel_invite takes an id or an address, in its own family only`, async () => {
       eq((await tool(beta.owner, B, "cancel_invite", { invite: `i${alpha.inviteId}` })).error, true, "Alpha's invite from Beta");
       eq((await sql(`SELECT 1 FROM maple_invites WHERE id = $1`, [alpha.inviteId])).length, 1, "still there");
