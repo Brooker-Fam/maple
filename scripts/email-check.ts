@@ -1,7 +1,8 @@
 /**
  * Assertions for outgoing email (src/lib/email/): the invite and welcome
  * templates (copy rules, escaping, the expiry in the family's zone, nothing
- * about one family baked in), sendEmail (the no-key fallback, what reaches
+ * about one family baked in, nothing loaded when opened, and the app screens
+ * and choices the welcome names), sendEmail (the no-key fallback, what reaches
  * Resend, and that no address, subject or body reaches a log or an error
  * report), and the per-sender daily cap on invite emails.
  *
@@ -92,13 +93,55 @@ async function main() {
   });
   await check("the welcome points to the app, and greets only by a known name", () => {
     const e = welcome();
-    eq(e.subject, "Robin’s log on Maple is ready", "subject");
-    ok(e.text.startsWith("Hi Alex,\n\nRobin’s log is ready."), "opening");
-    ok(e.text.includes("https://maplebaby.app/maple\n"), "app link");
+    eq(e.subject, "Welcome to Maple, Alex", "subject");
+    ok(e.text.startsWith("Welcome, Alex.\n\nRobin’s log is ready."), "opening");
+    ok(e.text.includes("Open Maple: https://maplebaby.app/maple\n"), "app link");
     ok(e.html.includes('href="https://maplebaby.app/maple"'), "html link");
+    ok(e.text.includes("knows when Robin last ate"), "the baby's name where it's known");
     const bare = welcome({ name: null, baby: null });
-    eq(bare.subject, "Your family’s log on Maple is ready", "subject without a baby");
-    ok(bare.text.startsWith("Your family’s log is ready."), "no greeting without a name");
+    eq(bare.subject, "Welcome to Maple", "subject without a name");
+    ok(bare.text.startsWith("Welcome to Maple.\n\nYour family’s log is ready."), "no greeting without a name");
+    ok(bare.text.includes("knows when the baby last ate"), "the baby, without a name");
+  });
+  await check("the welcome's directions name screens and choices the app still has", () => {
+    const e = welcome({ baby: null });
+    const app = (path: string) => readFileSync(join(ROOT, path), "utf8");
+    const places: [string, string, string][] = [
+      ["Settings → People & permissions", "src/components/maple/AccountMenu.tsx", "<span>Settings</span>"],
+      ["Settings → People & permissions", "src/components/maple/FamilyTab.tsx", 'people: "People & permissions"'],
+      ["Choose Can log", "src/components/maple/settings/SharingRolePicker.tsx", 'label: "Can log"'],
+      ["or Photos only", "src/components/maple/settings/SharingRolePicker.tsx", 'label: "Photos only"'],
+      ["bottom of Today", "src/components/maple/MapleApp.tsx", 'label: "Today"'],
+      ["type it in Chat", "src/components/maple/MapleApp.tsx", 'label: "Chat"'],
+      ["https://maplebaby.app/maple#family/people", "src/components/maple/AppNav.tsx", '"family/people"'],
+    ];
+    for (const [words, file, source] of places) {
+      ok(e.text.includes(words), `the welcome says ${JSON.stringify(words)}`);
+      ok(app(file).includes(source), `${file} still has ${source}: change the welcome with it`);
+    }
+    ok(e.html.includes('href="https://maplebaby.app/maple#family/people"'), "html links People & permissions");
+    for (const words of ["In Safari, open maplebaby.app/maple, tap Share, then Add to Home Screen", "In Chrome, open maplebaby.app/maple"]) {
+      ok(e.text.includes(words), `Home Screen steps: ${words}`);
+    }
+  });
+  await check("opening either email loads nothing: no images, fonts or remote styles", () => {
+    for (const e of [invite(), welcome()]) {
+      for (const remote of [/<img/i, /\ssrc=/i, /url\(/i, /@import/i, /<link/i, /@font-face/i, /background=/i]) ok(!remote.test(e.html), `no ${remote}`);
+      const hrefs = [...e.html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]);
+      ok(hrefs.length > 0 && hrefs.every((h) => h === "https://maplebaby.app" || h.startsWith("https://maplebaby.app/")), `only Maple's own links: ${hrefs}`);
+    }
+  });
+  await check("both emails lead the inbox preview with their own line, and carry dark colors", () => {
+    const e = welcome({ baby: null });
+    const preview = e.html.indexOf("Your family’s log is ready. Here are three quick things to do first.");
+    ok(preview > 0 && preview < e.html.indexOf("Welcome, Alex."), "the welcome's preview line comes before the card");
+    ok(invite().html.indexOf("It works once, until") < invite().html.indexOf("invited you to Robin’s log on Maple.</h1>"), "the invite's preview line");
+    for (const m of [e, invite()]) {
+      ok(m.html.includes('<meta name="color-scheme" content="light dark">'), "color-scheme meta");
+      const dark = m.html.slice(m.html.indexOf("@media (prefers-color-scheme:dark){"), m.html.indexOf("</style>", m.html.indexOf("prefers-color-scheme:dark")));
+      ok(dark.includes(".m-card{background-color:#171d18 !important}"), "the card's dark color");
+      ok(m.html.includes('class="m-card" style="padding:36px 32px 20px;border:1px solid;border-radius:20px;'), "the card");
+    }
   });
   await check("names can't inject HTML into either email", () => {
     const evil = `<script>alert("x")</script>`;
@@ -130,7 +173,9 @@ async function main() {
   });
   await check("the copy keeps the site's voice: no em dashes, exclamation marks or \"we\"", () => {
     for (const e of [invite(), invite({ inviter: null, baby: null }), welcome(), welcome({ name: null, baby: null })]) {
-      const words = `${e.subject}\n${e.text}`;
+      // The HTML's own words too: the preview line, the wordmark, the steps' headings and the footer.
+      const shown = e.html.replace(/<style>[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ");
+      const words = `${e.subject}\n${e.text}\n${shown}`;
       ok(!/[—–]/.test(words), "no em or en dash");
       ok(!words.includes("!"), "no exclamation mark");
       ok(!/\bwe\b|\bwe['’]|\bour\b|\bus\b/i.test(words), "no we, our or us");
@@ -384,12 +429,13 @@ async function main() {
     const r = await n.emailWelcome({ familyId: 7, to: RECIPIENT, name: "  Alex   Rivera ", origin: "https://maplebaby.app" }, h.deps);
     eq(r, { sent: true, id: "em_1" });
     eq(h.calls[0].options, { idempotencyKey: "welcome/7" }, "key");
-    eq(h.calls[0].payload.subject, "Your family’s log on Maple is ready", "subject");
-    ok(h.calls[0].payload.text.startsWith("Hi Alex,\n\nYour family’s log is ready."), "first name only");
+    eq(h.calls[0].payload.subject, "Welcome to Maple, Alex", "subject");
+    ok(h.calls[0].payload.text.startsWith("Welcome, Alex.\n\nYour family’s log is ready."), "first name only");
     ok(h.calls[0].payload.text.includes("https://maplebaby.app/maple\n"), "the app's link");
     const nameless = harness();
     await n.emailWelcome({ familyId: 8, to: RECIPIENT, name: null, origin: "https://maplebaby.app" }, nameless.deps);
-    ok(nameless.calls[0].payload.text.startsWith("Your family’s log is ready."), "no greeting without a name");
+    eq(nameless.calls[0].payload.subject, "Welcome to Maple", "subject without a name");
+    ok(nameless.calls[0].payload.text.startsWith("Welcome to Maple.\n\nYour family’s log is ready."), "no greeting without a name");
   });
   await check("the welcome is off without a key and never throws on a bad origin", async () => {
     const h = harness();
