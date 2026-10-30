@@ -15,6 +15,8 @@ import { useMaple } from "./useMaple";
 const VIA: Record<string, string> = {
   claude: "Claude",
   chatgpt: "ChatGPT",
+  muse: "Muse",
+  grok: "Grok",
   mcp: "AI",
   shortcut: "Siri",
   chat: "Maple chat",

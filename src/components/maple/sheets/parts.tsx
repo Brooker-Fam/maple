@@ -70,6 +70,8 @@ export function presetStart(p: Record<string, unknown> | undefined): Date | null
 const VIA: Partial<Record<Source, string>> = {
   claude: "Claude",
   chatgpt: "ChatGPT",
+  muse: "Muse",
+  grok: "Grok",
   mcp: "an AI assistant",
   shortcut: "Siri",
   chat: "Maple chat",

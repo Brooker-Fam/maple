@@ -572,7 +572,7 @@ export function planSentence(plan: CarePlan, status: PlanStatus, ctx: PlanTextCt
   }
 }
 
-const VIA: Partial<Record<Source, string>> = { claude: "Claude", chatgpt: "ChatGPT", mcp: "an assistant", shortcut: "Siri", chat: "Maple chat" };
+const VIA: Partial<Record<Source, string>> = { claude: "Claude", chatgpt: "ChatGPT", muse: "Muse", grok: "Grok", mcp: "an assistant", shortcut: "Siri", chat: "Maple chat" };
 
 /** Who logged a dose, for "Last: 3:05 AM · Matt": "You" for the reader. */
 export function loggedBy(by: string | null, ctx: { members: Member[]; me?: string }): string {

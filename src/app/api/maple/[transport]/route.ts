@@ -92,7 +92,7 @@ const baseHandler: Handler = async (req) => {
   return handlerFor(familyId, copy)(req);
 };
 
-const VIAS = new Set(["claude", "chatgpt", "mcp"]);
+const VIAS = new Set(["claude", "chatgpt", "muse", "grok", "mcp"]);
 
 /** An owner can turn off the admin login for Maple (Family → remove "Admin"). */
 async function adminRemoved(): Promise<boolean> {

@@ -255,7 +255,7 @@ export type CareToolRegistrar = typeof addCareTool;
 
 // ── how her things read ─────────────────────────────────────────────────
 
-const VIA: Partial<Record<Source, string>> = { web: "the app", claude: "Claude", chatgpt: "ChatGPT", mcp: "an AI assistant", shortcut: "Siri", chat: "Maple chat" };
+const VIA: Partial<Record<Source, string>> = { web: "the app", claude: "Claude", chatgpt: "ChatGPT", muse: "Muse", grok: "Grok", mcp: "an AI assistant", shortcut: "Siri", chat: "Maple chat" };
 const viaWord = (s: Source) => VIA[s] ?? "the app";
 
 /** Who logged it, for a sentence to the person asking: "you" when it was them. */

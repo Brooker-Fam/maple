@@ -68,7 +68,7 @@ Grok, from xAI, registers itself with Maple, so there's no Client ID to paste.
 Sign in with the same Google account you use for Maple's Log. If you're signed in already, the approval card opens straight away. It names the assistant and its address, such as Claude (claude.ai), and your name and email address, then lists what the connection allows.
 
 - Read and add to Maple's log, including feeds, diapers, sleep, growth, temperatures and moments. A view-only guest's card says it can read and can't add anything.
-- Anything it logs shows your name and "via Claude" or "via ChatGPT". Muse and Grok show as "via AI".
+- Anything it logs shows your name and which assistant it came through, like "via Claude" or "via Muse".
 - You can disconnect anytime by removing the connector.
 
 Tap Approve to connect, or Cancel.

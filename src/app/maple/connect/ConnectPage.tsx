@@ -394,9 +394,9 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
             <p>
               Only people invited to Maple&apos;s Log can connect. Your
               assistant signs in <em>as you</em>, so everything it logs shows
-              your name and &ldquo;via Claude&rdquo; or &ldquo;via
-              ChatGPT&rdquo; (Muse and Grok show as &ldquo;via AI&rdquo;).
-              Viewers can ask questions but can&apos;t add anything.
+              your name and which assistant it came through, like &ldquo;via
+              Claude&rdquo; or &ldquo;via Muse&rdquo;. Viewers can ask
+              questions but can&apos;t add anything.
             </p>
             <p>
               To disconnect, remove the connector in your assistant. An owner

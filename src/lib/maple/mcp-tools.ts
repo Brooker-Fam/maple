@@ -314,6 +314,8 @@ const VIA_LABEL: Record<string, string> = {
   web: "the app",
   claude: "Claude",
   chatgpt: "ChatGPT",
+  muse: "Muse",
+  grok: "Grok",
   mcp: "an AI assistant",
   shortcut: "a Shortcut",
   chat: "Maple chat",
@@ -321,7 +323,7 @@ const VIA_LABEL: Record<string, string> = {
 };
 const viaLabel = (s: string | null | undefined) => VIA_LABEL[s ?? "web"] ?? String(s);
 
-const MCP_SOURCES = ["claude", "chatgpt", "mcp", "chat"];
+const MCP_SOURCES = ["claude", "chatgpt", "muse", "grok", "mcp", "chat"];
 
 const sideWord = (s: Side) => (s === "L" ? "left" : "right");
 const toSide = (s: "left" | "right") => (s === "left" ? "L" : "R") as Side;
@@ -367,7 +369,7 @@ export async function context(extra: Extra): Promise<Ctx> {
   if (!sub) throw new ToolError("You're not signed in to Maple's Log. Reconnect the connector and sign in again.");
   const signedIn = memberIdFromSub(sub);
   if (!signedIn) throw new ToolError(NOT_MEMBER_MESSAGE);
-  const via: Source = auth.via === "claude" || auth.via === "chatgpt" || auth.via === "chat" ? auth.via : "mcp";
+  const via: Source = auth.via === "claude" || auth.via === "chatgpt" || auth.via === "muse" || auth.via === "grok" || auth.via === "chat" ? auth.via : "mcp";
   // Before the admin_as swap below: the password is Matt's, so it never reads as her own.
   const viaAdmin = signedIn === ADMIN_ID;
   if (viaAdmin) {

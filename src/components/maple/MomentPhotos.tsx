@@ -320,7 +320,7 @@ function Caption({
   // A photo-less slide already shows its (short) note as the picture, or else its title: say each once.
   const showNote = m.note && m.note !== title && !pictureNote(slide, mw);
   const showTitle = slide.photo != null || !!pictureNote(slide, mw);
-  const via = m.source === "claude" ? " via Claude" : m.source === "chatgpt" ? " via ChatGPT" : m.source === "mcp" ? " via AI" : m.source === "chat" ? " via Maple chat" : "";
+  const via = m.source === "claude" ? " via Claude" : m.source === "chatgpt" ? " via ChatGPT" : m.source === "muse" ? " via Muse" : m.source === "grok" ? " via Grok" : m.source === "mcp" ? " via AI" : m.source === "chat" ? " via Maple chat" : "";
   return (
     <div className="max-h-[42%] shrink-0 overflow-y-auto px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
       {milestone && milestone !== title && <p className="mb-1 text-[13px] font-semibold text-mp-accent-fg">{milestone}</p>}

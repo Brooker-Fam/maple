@@ -229,7 +229,9 @@ export function trustedRedirect(uri: string): boolean {
  * Which assistant a redirect_uri belongs to, so entries can say "via Claude".
  * Loopback redirects (Claude Code, Inspector, other local apps) are "mcp".
  */
-export function viaForRedirect(redirectUri: string): "claude" | "chatgpt" | "mcp" {
+export function viaForRedirect(redirectUri: string): "claude" | "chatgpt" | "muse" | "grok" | "mcp" {
+  if (redirectUri === MUSE_CALLBACK) return "muse";
+  if (redirectUri === GROK_CALLBACK) return "grok";
   try {
     const host = new URL(redirectUri).hostname.toLowerCase();
     if (host === "claude.ai" || host === "claude.com") return "claude";

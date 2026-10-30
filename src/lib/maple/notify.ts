@@ -88,6 +88,8 @@ export async function afterCareWrite(familyId: number, opts: { doseId?: number; 
 function origin(source: Source): { sentence: string; phrase: string } {
   if (source === "shortcut") return { sentence: "From Siri.", phrase: "with Siri" };
   if (source === "chatgpt") return { sentence: "From ChatGPT.", phrase: "from ChatGPT" };
+  if (source === "muse") return { sentence: "From Muse.", phrase: "from Muse" };
+  if (source === "grok") return { sentence: "From Grok.", phrase: "from Grok" };
   if (source === "chat") return { sentence: "From Maple chat.", phrase: "from Maple chat" };
   if (source === "claude" || source === "mcp") return { sentence: "From Claude.", phrase: "from Claude" };
   return { sentence: "On another phone.", phrase: "on another phone" };

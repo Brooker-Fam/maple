@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { GROK_CALLBACK, MUSE_CALLBACK, trustedRedirect } from "../src/lib/mcp/auth";
+import { GROK_CALLBACK, MUSE_CALLBACK, trustedRedirect, viaForRedirect } from "../src/lib/mcp/auth";
 import { createOAuthClientResolver, OAuthClientError } from "../src/lib/mcp/clients";
 
 const HOSTED = "https://claude.ai/oauth/mcp-oauth-client-metadata";
@@ -100,6 +100,7 @@ const checks: [string, () => Promise<void>][] = [
   }],
   ["Grok is trusted at its exact callback only", async () => {
     assert.equal(trustedRedirect(GROK_CALLBACK), true, "Grok's codes get refresh tokens");
+    assert.deepEqual([viaForRedirect(MUSE_CALLBACK), viaForRedirect(GROK_CALLBACK), viaForRedirect("https://grok.com/connectors/oauth/callback")], ["muse", "grok", "mcp"]);
     const fixture = setup();
     for (const redirect of ["https://grok.com/connectors-oauth-exchange-code", `${GROK_CALLBACK}?other=1`, `${GROK_CALLBACK}#fragment`, `${GROK_CALLBACK}extra`, "https://grok.com/connectors/oauth/callback", "https://grok.com/", "http://grok.com/connectors-oauth-exchange-code/", "https://GROK.com/connectors-oauth-exchange-code/", "https://grok.com:443/connectors-oauth-exchange-code/", "https://user@grok.com/connectors-oauth-exchange-code/", "https://www.grok.com/connectors-oauth-exchange-code/", "https://grok.com.attacker.example.test/connectors-oauth-exchange-code/", "https://x.ai/connectors-oauth-exchange-code/"]) {
       assert.equal(trustedRedirect(redirect), false, redirect);

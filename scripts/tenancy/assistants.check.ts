@@ -192,6 +192,18 @@ async function mcpToolChecks(shape: Shape, seed: Seed) {
     ok(!b.isError && b.text.includes("Ro is") && !b.text.includes("June"), `family 2 reads its baby: ${b.text.slice(0, 80)}`);
   });
 
+  await test(`${shape}: Muse and Grok entries are saved and credited under their own names, and undo_last reaches them`, async () => {
+    for (const [via, name] of [["muse", "Muse"], ["grok", "Grok"]] as const) {
+      const r = await tool("log_diaper", { diaper: "wet", allow_duplicate: true }, { ...asBeta, via });
+      const id = Number(/Saved #(\d+)/.exec(r.text)?.[1]);
+      ok(id > 0 && r.text.includes(`via ${name}`), `${via}: ${r.text.slice(0, 120)}`);
+      eq((await sql(`SELECT source FROM maple_entries WHERE id = $1`, [id]))[0].source, via);
+      const undo = await tool("undo_last", {}, { ...asBeta, via });
+      ok(!undo.isError && undo.text.includes(`#${id}`), `${via} undo: ${undo.text.slice(0, 120)}`);
+      ok((await entryRow(id)).deleted_at !== null, `${via}: #${id} removed`);
+    }
+  });
+
   await test(`${shape}: list_entries shows only the caller's family's entries`, async () => {
     const ids = (r: ToolOut) => [...r.text.matchAll(/"id":(\d+)/g)].map((m) => Number(m[1]));
     const b = ids(await tool("list_entries", { hours: 744, limit: 200 }, asBeta));
