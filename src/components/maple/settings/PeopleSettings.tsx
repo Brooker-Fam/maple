@@ -251,7 +251,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
         <div className="mt-3 space-y-3 pb-1.5">
           <p className={cx(tone.muted, "text-[13px] leading-snug")}>
             This is the site&apos;s admin password. Turning it off here means it no longer opens Maple&apos;s Log (or connects
-            Claude/ChatGPT to it). Other sign-in methods keep working for everyone else.
+            an assistant to it). Other sign-in methods keep working for everyone else.
           </p>
           {!confirmRemove ? (
             <Button variant="danger" size="sm" className="w-full" onClick={() => setConfirmRemove(true)}>

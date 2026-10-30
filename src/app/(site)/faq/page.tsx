@@ -136,8 +136,8 @@ const FAQS: Faq[] = [
         " lists each part of a request.",
       ],
       [
-        "Mom’s medicines, temperatures and questions for her OB reach the chat only after she turns that on herself, and her check-ins never do. If you connect your own Claude or ChatGPT account, what it reads goes through that account, under that company’s terms. ",
-        { text: "Connect Maple to Claude or ChatGPT", href: "/blog/connect-maple-to-claude-or-chatgpt" },
+        "Mom’s medicines, temperatures and questions for her OB reach the chat only after she turns that on herself, and her check-ins never do. If you connect your own Claude, ChatGPT, Muse or Grok account, what it reads goes through that account, under that company’s terms. ",
+        { text: "Connect Maple to Claude, ChatGPT, Muse or Grok", href: "/blog/connect-maple-to-claude-or-chatgpt" },
         " covers the setup.",
       ],
     ],

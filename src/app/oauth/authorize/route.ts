@@ -112,7 +112,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
 
   // Without a trustworthy redirect_uri, errors can only be shown here.
   if (!p.client_id || !p.redirect_uri) {
-    return maplePage(400, "Something's missing", `<p>This sign-in link is missing its app details. Start again from Claude or ChatGPT.</p>`);
+    return maplePage(400, "Something's missing", `<p>This sign-in link is missing its app details. Start again from your AI app.</p>`);
   }
   let client: OAuthClientInfo;
   try {
@@ -124,7 +124,7 @@ async function mapleAuthorize(request: NextRequest, url: URL, form?: FormData) {
     return maplePage(
       400,
       "Couldn't verify the connection",
-      `<p>The app's identity or return address doesn't match. Start a new connection from Claude or ChatGPT.</p>`
+      `<p>The app's identity or return address doesn't match. Start a new connection from your AI app.</p>`
     );
   }
   if (p.response_type !== "code") {

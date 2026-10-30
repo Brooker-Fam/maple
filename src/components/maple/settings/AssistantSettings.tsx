@@ -35,7 +35,7 @@ function ConnectAI() {
     </ul>
   );
   return (
-    <Section title="Claude & ChatGPT">
+    <Section title="AI assistants">
       <div className={GROUP}>
         <p className="px-4 py-3.5 text-[15px] leading-relaxed text-mp-ink-2">
           Connect an assistant to log by conversation and ask about your baby&apos;s day.
@@ -56,6 +56,14 @@ function ConnectAI() {
             <div>
               <dt className={cx(tone.body, "font-semibold")}>ChatGPT</dt>
               <dd className={tone.muted}>Settings → Connectors, with developer mode on.</dd>
+            </div>
+            <div>
+              <dt className={cx(tone.body, "font-semibold")}>Muse</dt>
+              <dd className={tone.muted}>Send Muse the message from the setup page and paste its Client ID, then sign in to Maple.</dd>
+            </div>
+            <div>
+              <dt className={cx(tone.body, "font-semibold")}>Grok</dt>
+              <dd className={tone.muted}>grok.com/connectors → New Connector → Custom, then sign in to Maple.</dd>
             </div>
             <div>
               <dt className={cx(tone.body, "font-semibold")}>Claude Code</dt>
