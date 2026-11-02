@@ -5,17 +5,20 @@ import type { FamilyCtx } from "@/lib/maple/family";
 import { FeedEditError } from "@/lib/maple/feed";
 import { memberName } from "@/lib/maple/insights";
 import { holdingChanged } from "@/lib/maple/push-hooks";
-import { numberTries, tryDayKey, tryDayLabel } from "@/lib/maple/sleep/engine";
+import { numberTries, sleepSignals, tryDayKey, tryDayLabel } from "@/lib/maple/sleep/engine";
 import { goalStartKey, lastNightKey, nightWords, seesCheckins, windowOn, windowOnNight } from "@/lib/maple/sleep/goals";
 import {
+  acceptHandoff,
+  askHandoff,
+  cancelAsk,
   deleteCheckin,
   deleteTry,
   finishTry,
-  handOff,
   listCheckins,
   listGoals,
   listShifts,
   listTries,
+  looksSameTry,
   openShift,
   reopenShift,
   rowToCheckin,
@@ -29,8 +32,8 @@ import {
   undoFinish,
   undoHandOff,
 } from "@/lib/maple/sleep/store";
-import { PROTECTED_ANSWERS, TRY_OUTCOMES, type BassinetTry, type HoldingShift, type ProtectedAnswer, type RosterWindow, type SleepCheckin, type SleepGoal, type TryOutcome } from "@/lib/maple/sleep/types";
-import { CHECKIN_QUESTION, OUTCOME_LABEL, PROTECTED_LABEL } from "@/lib/maple/sleep/words";
+import { MAX_SPAN_MS, PROTECTED_ANSWERS, TRY_OUTCOMES, type BassinetTry, type HoldingShift, type ProtectedAnswer, type RosterWindow, type SleepCheckin, type SleepGoal, type TryOutcome } from "@/lib/maple/sleep/types";
+import { CHECKIN_QUESTION, cryingLine, OUTCOME_LABEL, PROTECTED_LABEL } from "@/lib/maple/sleep/words";
 import { activeTimers, Conflict, createEntryOnce, getEntry, listEntries, NotFound, reopenTimer, rowToEntry, softDeleteEntry, stopTimer, StoreUnavailable, toClientEntry } from "@/lib/maple/store";
 import { dayKey, formatTime, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Baby, Entry, FeedData, Member, Role } from "@/lib/maple/types";
@@ -99,6 +102,16 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const ms = (v: string | null | undefined) => (v ? Date.parse(v) : NaN);
 const near = (a: string | null | undefined, b: string | null | undefined, within = 1500) => !!a && !!b && Math.abs(ms(a) - ms(b)) <= within;
 
+/** Where a sleep was, as Siri says it after "slept 25 minutes": "in arms", "in the bassinet". */
+const SLEPT_IN: Record<string, string> = { arms: "in arms", bassinet: "in the bassinet", crib: "in the crib", carrier: "in the carrier", stroller: "in the stroller", car: "in the car seat", bed: "in a grown-up bed" };
+
+/** A stopped sleep, spoken: "She slept 1 hour 5 minutes, in arms." ("under a minute" for a short one), never the card's "Slept · 0s · in arms". */
+export function sleptWords(e: Entry, vo: Voice): string {
+  const min = e.ended_at ? (ms(e.ended_at) - ms(e.started_at)) / MIN : 0;
+  const place = SLEPT_IN[(e.data as { place?: string }).place ?? ""];
+  return `${vo.They} slept ${minutesSaid(min)}${place ? `, ${place}` : ""}.`;
+}
+
 /**
  * When it happened: minutes_ago left out, blank or 0 is now; up to
  * MAX_MINUTES_AGO back; anything else is refused (null). `given`: a time
@@ -166,17 +179,60 @@ export async function stopFeedForSleep(fam: FamilyCtx, feed: Entry, when: { at: 
 
 // ── put_down ─────────────────────────────────────────────────────────────
 
+/** A try this family saved under that client id (a Shortcut retrying the same put down): it gets its first answer, never a twin's. */
+async function tryByClient(fam: FamilyCtx, clientId: string | null): Promise<boolean> {
+  if (!clientId) return false;
+  const r = await query(`SELECT 1 FROM maple_sleep_tries WHERE family_id = $1 AND client_id = $2`, [fam.familyId, clientId]);
+  if (r === null) throw new StoreUnavailable();
+  return r.length > 0;
+}
+
+/**
+ * After a retry that ended awake, the plan pauses until the next try (the
+ * app's sleepSignals retry_done, the strip's "Pause until the next try"):
+ * the first put down says so and saves nothing; said again within two
+ * minutes, it goes ahead. The "said" moment lives on that retry
+ * (pause_said_at), set without moving its updated_at. Null: go ahead.
+ */
+async function pauseFirst(c: QuickCtx): Promise<Response | null> {
+  const tries = await listTries(c.fam, c.baby.id, { from: new Date(c.now.getTime() - 26 * HOUR), limit: 60 });
+  if (!sleepSignals(tries, c.now, c.tz).has("retry_done")) return null;
+  const retry = tries.find((t) => t.ended_at && t.outcome);
+  if (!retry) return null;
+  const rows = await query(`SELECT pause_said_at FROM maple_sleep_tries WHERE id = $1 AND family_id = $2`, [retry.id, c.fam.familyId]);
+  if (rows === null) throw new StoreUnavailable();
+  const said = rows[0]?.pause_said_at ? new Date(rows[0].pause_said_at as string).getTime() : NaN;
+  if (Number.isFinite(said) && c.now.getTime() - said <= AGAIN_MS) return null;
+  if ((await query(`UPDATE maple_sleep_tries SET pause_said_at = NOW() WHERE id = $1 AND family_id = $2`, [retry.id, c.fam.familyId])) === null) throw new StoreUnavailable();
+  return notDone("The plan says pause until the next try. Say it again to try anyway.", { pause: true, try: { id: `t${retry.id}` } });
+}
+
 /**
  * Laid down in the bassinet: the app's Put down (startTry), with "Recently
  * fed" when a feed ended in the 30 minutes before, as the app pre-ticks it.
  * It sits on the running sleep, else a logged one it overlaps, else makes a
  * running bassinet sleep, and ends the holding turn. A feed still running
  * is said, never stopped (the app asks too). A second put down while she's
- * down is the try already running.
+ * down is the try already running. Said with a time, a try already logged
+ * then (Log an earlier try's twin check: starting within 3 minutes, or
+ * overlapping) saves nothing; said right after a retry that ended awake,
+ * the plan's pause comes first (pauseFirst).
  */
 export async function putDown(c: QuickCtx): Promise<Response> {
   const when = minutesAgo(c.body.minutes_ago, c.now);
   if (!when) return badMinutes(c.body.minutes_ago);
+  // The family in the try's client id (below): a retry of this request finds its own try, never a twin of it.
+  const retried = await tryByClient(c.fam, c.clientId ? `${c.clientId}.f${c.fam.familyId}` : null);
+  if (!retried && !(await runningTry(c.fam, c.baby.id))) {
+    if (when.given) {
+      const nearby = await listTries(c.fam, c.baby.id, { from: new Date(when.at.getTime() - MAX_SPAN_MS), limit: 50 });
+      const twin = nearby.find((t) => t.ended_at && looksSameTry(t, when.at.getTime(), c.now.getTime(), c.now.getTime()));
+      if (twin) return notDone(`A try from ${clock(twin.started_at, c.tz)} is already logged; nothing saved.`, { duplicate: true, try: { id: `t${twin.id}`, started_at: twin.started_at } });
+    } else {
+      const pause = await pauseFirst(c);
+      if (pause) return pause;
+    }
+  }
   const [timers, feeds] = await Promise.all([
     activeTimers(c.fam, c.baby.id),
     listEntries(c.fam, { babyId: c.baby.id, kinds: ["feed"], from: new Date(when.at.getTime() - 30 * MIN), limit: 50 }),
@@ -241,6 +297,10 @@ export async function outcome(c: QuickCtx): Promise<Response> {
   const bits = [`${OUTCOME_LABEL[o]} ${o === "stayed_asleep" ? "for" : "after"} ${minutesSaid(mins)}.`];
   if (o === "picked_up" && w.sleep?.active) bits.push(`${c.vo.They}${c.vo.verb("'s")} still asleep, so ${c.vo.their} sleep timer keeps running.`);
   else if (w.sleepBefore?.active && w.sleep && !w.sleep.active) bits.push("Sleep timer stopped.");
+  // After a crying wake, and after the retry: the app's own line (soothe, retry once, then pause until the next try).
+  const signals = sleepSignals(await listTries(c.fam, c.baby.id, { from: new Date(c.now.getTime() - 26 * HOUR), limit: 60 }), c.now, c.tz);
+  if (signals.has("retry_done")) bits.push(`${cryingLine(c.vo, "retry_done")}.`);
+  else if (signals.has("after_crying")) bits.push(`${cryingLine(c.vo, "after_crying")}.`);
   return say(bits.join(" "), { try: { id: `t${w.try.id}`, outcome: o, ended_at: w.try.ended_at }, entry: w.sleep ? toClientEntry(w.sleep) : null });
 }
 
@@ -310,9 +370,15 @@ export function handoffTo(shift: Pick<HoldingShift, "holder" | "next_holder">, m
 const has = (id: string, me: string, members: readonly Member[]) => (id === me ? "You have" : `${memberName(id, [...members])} has`);
 
 /**
- * Hand the open holding turn over (today's direct handOff, one
- * transaction): the next turn keeps the planned length. Saying it again
- * within two minutes (or a retry) never hands her back: it says who has her.
+ * "Maple handoff". From the person holding her it's an ask, never a
+ * handoff (the app's shift.ask, with the Handoff now notice to the family's
+ * phones that turned handoff reminders on): nothing changes hands until the
+ * person asked has her. From anyone else it's taking over (shift.accept, on
+ * the turn as it is now), with the next planned handoff, never inside the
+ * next holder's protected window (store handOff), and a sleep in arms that
+ * runs on through it said. Saying it again within two minutes (or a retry)
+ * never hands her back and never sends the notice twice: it says where
+ * things stand.
  */
 export async function handoff(c: QuickCtx, members: Member[]): Promise<Response> {
   const open = await openShift(c.fam, c.baby.id);
@@ -323,19 +389,70 @@ export async function handoff(c: QuickCtx, members: Member[]): Promise<Response>
       return say(`Already handed off: ${has(open.holder, c.me.email, members).replace(/^You have$/, "you have")} ${c.vo.them} now.`, { already_handed_off: true, shift: { id: `h${open.id}` } });
     }
   }
-  const to = handoffTo(open, c.me.email, members);
-  if (!to) return notDone("Who's taking over? Hand off in the app.");
+  return open.holder === c.me.email ? askToTakeOver(c, open, members) : takeOver(c, open, members);
+}
+
+/** Who the holder's "handoff" asks: the person already asked, else the turn's planned next, else the only other adult. */
+export function askWho(shift: Pick<HoldingShift, "holder" | "next_holder" | "asked_to">, members: readonly Member[]): string | null {
+  const asked = shift.asked_to ? members.find((m) => m.email === shift.asked_to && m.role !== "photos") : undefined;
+  if (asked && asked.email !== shift.holder) return asked.email;
+  return handoffTo(shift, shift.holder, members);
+}
+
+/**
+ * The holder's "handoff": asks the partner to take over now. Spoken as the
+ * app's Waking sheet says it: their phone only sounds if handoff reminders
+ * are on, so go wake them, and if sleepy first, the bassinet (on the back).
+ * Undo takes the ask back.
+ */
+async function askToTakeOver(c: QuickCtx, open: HoldingShift, members: Member[]): Promise<Response> {
+  const to = askWho(open, members);
+  if (!to) return notDone("Who should take over? Ask in the app.");
+  const name = memberName(to, members);
+  const wake = `${name}'s phone only sounds if handoff reminders are on, so go wake ${name}. Getting sleepy? Put ${c.vo.them} on ${c.vo.their} back in the bassinet.`;
+  const askedAt = ms(open.asked_at);
+  if (open.asked_to === to && open.updated_by === c.me.email && c.now.getTime() - askedAt <= AGAIN_MS) {
+    return say(`Already asked ${name} at ${clock(open.asked_at!, c.tz)}. ${wake}`, { asked: true, already_asked: true, shift: { id: `h${open.id}`, asked_to: to, asked_at: open.asked_at } });
+  }
   let w;
   try {
-    w = await handOff(c.fam, open.id, { to, by: c.me.email, source: "shortcut", device: null });
+    w = await askHandoff(c.fam, { babyId: c.baby.id, id: open.id, to, by: c.me.email, source: "shortcut", device: null });
+  } catch (err) {
+    if (err instanceof SleepConflict) return notDone("Someone changed the holding turn just now, so nothing was saved.", {}, 409);
+    if (err instanceof SleepInputError) return notDone("Who should take over? Ask in the app.", {}, 400);
+    throw err;
+  }
+  // The family's phones with handoff reminders on hear "Handoff now" (a Shortcut has no phone of its own to leave out).
+  holdingChanged({ familyId: c.fam.familyId, wake: { shiftId: w.shift.id, device: null } });
+  const again = open.asked_to === to && Number.isFinite(askedAt);
+  return say(`Asked ${name} ${again ? "again " : ""}to take over. ${wake}`, { asked: true, shift: { id: `h${w.shift.id}`, asked_to: to, asked_at: w.shift.asked_at } });
+}
+
+/**
+ * Anyone else's "handoff": they have her now (acceptHandoff, the app's I've
+ * got her). The next planned handoff, and why it moved off the next
+ * holder's protected window; a sleep in arms running on through it, so
+ * they stop it if she's awake.
+ */
+async function takeOver(c: QuickCtx, open: HoldingShift, members: Member[]): Promise<Response> {
+  let w;
+  try {
+    w = await acceptHandoff(c.fam, open.id, { by: c.me.email, source: "shortcut", device: null, tz: c.tz });
   } catch (err) {
     if (err instanceof SleepConflict) return notDone("Someone changed the holding turn just now, so nothing was saved.", {}, 409);
     if (err instanceof SleepInputError) return notDone("That handoff doesn't fit, so nothing was saved. Use the app for that one.", {}, 400);
     throw err;
   }
   holdingChanged({ familyId: c.fam.familyId });
-  const next = w.shift.handoff_at ? `, next handoff at ${clock(w.shift.handoff_at, c.tz)}` : "";
-  return say(`${has(to, c.me.email, members)} ${c.vo.them} now${next}.`, { shift: { id: `h${w.shift.id}`, handoff_at: w.shift.handoff_at } });
+  const bits = [`You have ${c.vo.them} now, from ${memberName(open.holder, members)}.`];
+  const why = w.handoffWhy;
+  const whose = why ? (why.member === c.me.email ? "your" : `${memberName(why.member, members)}'s`) : "";
+  if (why?.planned_at) bits.push(`Next handoff at ${clock(why.planned_at, c.tz)}, after ${whose} protected sleep.`);
+  else if (why) bits.push(`No next handoff planned: ${whose} protected sleep runs past 12 hours from now.`);
+  else if (w.shift.handoff_at) bits.push(`Next handoff at ${clock(w.shift.handoff_at, c.tz)}.`);
+  const arms = (await activeTimers(c.fam, c.baby.id)).find((e) => e.kind === "sleep" && (e.data as { place?: string }).place === "arms");
+  if (arms) bits.push(`${c.vo.Their} sleep in arms has been running since ${clock(arms.started_at, c.tz)}; if ${c.vo.they}${c.vo.verb("'s")} awake, say Maple awake.`);
+  return say(bits.join(" "), { shift: { id: `h${w.shift.id}`, handoff_at: w.shift.handoff_at }, ...(why ? { next_handoff_moved: why } : {}) });
 }
 
 // ── checkin ──────────────────────────────────────────────────────────────
@@ -445,6 +562,7 @@ type Act =
   | { kind: "put_down"; at: number; t: BassinetTry }
   | { kind: "outcome"; at: number; t: BassinetTry }
   | { kind: "handoff"; at: number; s: HoldingShift }
+  | { kind: "ask"; at: number; s: HoldingShift }
   | { kind: "checkin"; at: number; c: SleepCheckin }
   | { kind: "entry"; at: number; e: Entry }
   | { kind: "stop"; at: number; e: Entry };
@@ -494,7 +612,7 @@ const changedSince = (what: string) => notDone(`${cap(what)} changed since, so n
 export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
   const p = [c.fam.familyId, c.baby.id, c.me.email];
   const since = `NOW() - INTERVAL '${UNDO_MINUTES} minutes'`;
-  const [madeTry, changedTry, madeShift, changedShift, myCheckin, madeEntry, changedEntry] = await Promise.all([
+  const [madeTry, changedTry, madeShift, changedShift, myCheckin, madeEntry, changedEntry, myAsk] = await Promise.all([
     rows(`SELECT *, ${STAMPS} FROM maple_sleep_tries WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND source = 'shortcut' AND deleted_at IS NULL AND created_at >= ${since} ORDER BY created_at DESC, id DESC LIMIT 1`, p),
     rows(`SELECT *, ${STAMPS}, deleted_at IS NOT NULL AS gone FROM maple_sleep_tries WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND updated_at >= ${since} ORDER BY updated_at DESC, id DESC LIMIT 1`, p),
     rows(`SELECT *, ${STAMPS} FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND source = 'shortcut' AND deleted_at IS NULL AND created_at >= ${since} ORDER BY created_at DESC, id DESC LIMIT 1`, p),
@@ -507,6 +625,12 @@ export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
       p
     ),
     rows(`SELECT *, ${STAMPS}, deleted_at IS NOT NULL AS gone FROM maple_entries WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND updated_at >= ${since} ORDER BY updated_at DESC, id DESC LIMIT 1`, p),
+    // Their ask on the turn still open ("Maple handoff" from the holder, or Wake [partner] in the app), while it's the turn's newest change.
+    rows(
+      `SELECT *, ${STAMPS}, (EXTRACT(EPOCH FROM asked_at) * 1000000)::bigint AS a_us FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND asked_to IS NOT NULL
+         AND asked_at >= ${since} AND ended_at IS NULL AND deleted_at IS NULL ORDER BY asked_at DESC, id DESC LIMIT 1`,
+      p
+    ),
   ]);
 
   // ── what was done, newest first ──
@@ -518,6 +642,8 @@ export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
   if (finished && tB) acts.push({ kind: "outcome", at: us(tB, "u_us"), t: finished });
   const sA = madeShift[0];
   if (sA) acts.push({ kind: "handoff", at: us(sA, "c_us"), s: rowToShift(sA) });
+  const sB = myAsk[0];
+  if (sB && Math.abs(us(sB, "a_us") - us(sB, "u_us")) <= 5_000) acts.push({ kind: "ask", at: us(sB, "a_us"), s: rowToShift(sB) });
   const k = myCheckin[0];
   if (k && k.gone !== true && k.source === "shortcut") acts.push({ kind: "checkin", at: us(k, "u_us"), c: rowToCheckin(k) });
   const eA = madeEntry[0];
@@ -536,8 +662,8 @@ export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
   if (changedShift[0]) {
     const s = changedShift[0];
     const sh = rowToShift(s);
-    // The turn a put down ended is that put down's.
-    const own = act?.kind === "put_down" && sh.ended_how === "bassinet" && near(sh.ended_at, act.t.started_at);
+    // The turn a put down ended is that put down's; an ask is the turn's own change.
+    const own = (act?.kind === "put_down" && sh.ended_how === "bassinet" && near(sh.ended_at, act.t.started_at)) || (act?.kind === "ask" && act.s.id === sh.id);
     changes.push({ at: us(s, "u_us"), words: s.gone === true ? "removing the holding turn" : "the holding turn", own });
   }
   if (k) changes.push({ at: us(k, "u_us"), words: k.gone === true ? "removing your check-in" : "your check-in" });
@@ -568,6 +694,8 @@ export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
         return await undoOutcome(c, act.t);
       case "handoff":
         return await undoHandoff(c, act.s, members);
+      case "ask":
+        return await undoAsk(c, act.s);
       case "checkin":
         return await undoCheckin(c, act.c);
       case "entry":
@@ -629,6 +757,13 @@ async function undoHandoff(c: QuickCtx, s: HoldingShift, members: Member[]): Pro
   await undoHandOff(c.fam, { startedId: s.id, startedUpdatedAt: s.updated_at, endedId: prev.id, endedUpdatedAt: prev.updated_at, by: c.me.email });
   holdingChanged({ familyId: c.fam.familyId });
   return say(`Undone: ${has(prev.holder, c.me.email, members)} ${c.vo.them} again.`, { undone: { kind: "handoff", shift: `h${s.id}`, reopened: `h${prev.id}` } });
+}
+
+/** The ask goes (cancelAsk, the app's Undo): nobody is asked now, and the turn goes on as it was. */
+async function undoAsk(c: QuickCtx, s: HoldingShift): Promise<Response> {
+  await cancelAsk(c.fam, s.id, { by: c.me.email, expectUpdatedAt: s.updated_at });
+  holdingChanged({ familyId: c.fam.familyId });
+  return say("Undone: nobody is asked to take over now.", { undone: { kind: "ask", shift: `h${s.id}` } });
 }
 
 /** A new check-in goes; a changed one has no earlier answer kept to put back, so it stays and says so. */

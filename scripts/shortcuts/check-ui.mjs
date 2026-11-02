@@ -95,6 +95,9 @@ try {
         await row.getByText(action, { exact: true }).first().waitFor();
       }
       await phrases.getByRole("listitem").filter({ hasText: "Maple woke crying" }).getByText("woke_crying", { exact: false }).waitFor();
+      // Maple handoff from whoever holds her only asks; Maple put down after a crying retry says to pause first.
+      await phrases.getByRole("listitem").filter({ hasText: "Maple handoff" }).getByText("Holding her: asks the other adult to take over, and their phone only sounds if handoff reminders are on, so go wake them. Anyone else: you have her now.", { exact: true }).waitFor();
+      await phrases.getByRole("listitem").filter({ hasText: "Maple put down" }).getByText(/says the plan pauses until the next try; say it again to try anyway\.$/).waitFor();
       await page.getByText("Settings → Accessibility → Touch → Back Tap", { exact: false }).waitFor();
       await page.getByText("Settings → Action Button → Shortcut", { exact: false }).waitFor();
       await page.getByText("Automation → New Automation → NFC", { exact: false }).waitFor();

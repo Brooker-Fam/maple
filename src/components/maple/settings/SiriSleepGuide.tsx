@@ -12,15 +12,15 @@ import { Code, Disclosure } from "./parts";
  * key stays the one already pasted there.
  */
 
-/** What to say, the action, and the second Text field (key: value) where there is one. */
-const PHRASES: { say: string; action: string; field?: string; or?: string }[] = [
-  { say: "Maple put down", action: "put_down" },
+/** What to say, the action, the second Text field (key: value) where there is one, and what it does when that isn't plain. */
+const PHRASES: { say: string; action: string; field?: string; or?: string; does?: string }[] = [
+  { say: "Maple put down", action: "put_down", does: "Right after a retry that ended awake, it says the plan pauses until the next try; say it again to try anyway." },
   { say: "Maple stayed asleep", action: "outcome", field: "outcome: stayed_asleep" },
   { say: "Maple woke calm", action: "outcome", field: "outcome: woke_calm" },
   { say: "Maple woke crying", action: "outcome", field: "outcome: woke_crying" },
   { say: "Maple picked up", action: "outcome", field: "outcome: picked_up" },
   { say: "Maple asleep in arms", action: "asleep_in_arms" },
-  { say: "Maple handoff", action: "handoff" },
+  { say: "Maple handoff", action: "handoff", does: "Holding her: asks the other adult to take over, and their phone only sounds if handoff reminders are on, so go wake them. Anyone else: you have her now." },
   { say: "Maple check in", action: "checkin", field: "answer: yes", or: "or partly, no" },
   { say: "Maple undo", action: "undo" },
 ];
@@ -42,6 +42,7 @@ export default function SiriSleepGuide() {
         {PHRASES.map((p) => (
           <li key={p.say} className="py-2 text-sm">
             <span className={cx(tone.body, "block")}>{p.say}</span>
+            {p.does && <span className={cx(tone.muted, "mt-0.5 block text-[13px] leading-snug")}>{p.does}</span>}
             <span className="mt-1 flex flex-wrap items-baseline gap-1">
               <Code>{p.action}</Code>
               {p.field && <Code>{p.field}</Code>}

@@ -112,6 +112,7 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_open ON maple_sleep_shifts (family_id, baby_id) WHERE ended_at IS NULL AND deleted_at IS NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_client ON maple_sleep_shifts (family_id, client_id) WHERE client_id IS NOT NULL`);
   await migrateShiftAsks();
+  await migrateTryPauses();
 
   await query(`CREATE TABLE IF NOT EXISTS maple_sleep_goals (
     id BIGSERIAL PRIMARY KEY,
@@ -188,4 +189,14 @@ async function migrateCheckinExtras(): Promise<void> {
 async function migrateShiftAsks(): Promise<void> {
   await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_to TEXT`);
   await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_at TIMESTAMPTZ`);
+}
+
+/**
+ * When Siri last said "pause until the next try" after this try (a retry
+ * that ended awake), so a put down said again within two minutes goes ahead
+ * (quick/sleep.ts). Nullable, never part of the app's state, and set without
+ * moving updated_at; an older release reads past it.
+ */
+async function migrateTryPauses(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_tries ADD COLUMN IF NOT EXISTS pause_said_at TIMESTAMPTZ`);
 }
