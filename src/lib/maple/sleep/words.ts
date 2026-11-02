@@ -10,6 +10,7 @@ import type { SleepPlace } from "../types";
 import type { Voice } from "../voice";
 import type { CheckinPlace, GoalStatus, GoalTarget, HandoffAnswer, PlanStage, ProtectedAnswer, RosterWindow, ShiftEnding, TargetKind, TryAnchor, TryOutcome, TrySlot, TryTag, UntimedTry } from "./types";
 import { TRY_ANCHORS } from "./types";
+import type { WindowCovers } from "./types";
 
 export type StageInfo = {
   title: string;
@@ -279,3 +280,19 @@ export function targetWords(t: GoalTarget, name: (id: string) => string): string
 
 /** "Sam: 10:00 PM–2:00 AM, Sun–Thu nights". */
 export const windowWords = (w: RosterWindow, name: (id: string) => string) => `${name(w.member)}: ${windowTimes(w)}, ${nightsLabel(w.nights)}`;
+
+// ── how a window's feeds are covered (RosterWindow.covers) ──
+
+/** The form's choices for a window's feeds. */
+export const COVERS_LABEL: Record<WindowCovers, string> = { nurse: "Nursing", bottle: "A bottle", none: "None planned" };
+
+/** What each choice means, under the choices and on the goal card. */
+export const coversHint = (c: WindowCovers, v: Voice): string =>
+  c === "nurse"
+    ? `${v.They} ${v.verb("nurses")}: whoever's on duty brings ${v.them} to nurse, then settles ${v.them}.`
+    : c === "bottle"
+      ? "Whoever's on duty gives a bottle of expressed milk."
+      : "No feed is planned in it.";
+
+/** "feeds: nursing", for a window in a line ("Sam: 10:00 PM–2:00 AM, every night; feeds: a bottle"). */
+export const coversWords = (c: WindowCovers | null | undefined): string => (c === "nurse" ? "feeds: nursing" : c === "bottle" ? "feeds: a bottle" : c === "none" ? "no feed planned" : "");

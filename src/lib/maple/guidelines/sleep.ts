@@ -16,8 +16,9 @@
  * - Copy about the baby takes a Voice (the family's name and pronouns); the
  *   911 line reuses guidelines.ts's emergencySigns word for word.
  *
- * Sources were read on 2026-11-02 (the AAP's HealthyChildren.org pages and
- * the AAP's 2022 policy statement). Recheck them when this file changes.
+ * Sources were read on 2026-11-02 (the AAP's HealthyChildren.org pages, the
+ * AAP's 2022 policy statement and its technical report, and NICHD's Safe to
+ * Sleep breastfeeding handout). Recheck them when this file changes.
  */
 import { emergencySigns } from "../guidelines";
 import type { PlanStage } from "../sleep/types";
@@ -111,6 +112,16 @@ const AAP_FEEDING_SIGNS: GuideSource = {
   label: "AAP: Warning signs of breastfeeding problems",
   url: "https://www.healthychildren.org/English/ages-stages/baby/breastfeeding/Pages/Warning-Signs-of-Breastfeeding-Problems.aspx",
 };
+/** The evidence behind the 2022 policy statement: sitting devices, and a sofa or armchair against an adult bed. */
+const AAP_TECH_REPORT_2022: GuideSource = {
+  label: "AAP technical report: evidence base for the 2022 safe sleep recommendations",
+  url: "https://pubmed.ncbi.nlm.nih.gov/35921639/",
+};
+/** NICHD Safe to Sleep: tiredness during feeds, and asking someone to stay with you. */
+const NICHD_BREASTFEEDING: GuideSource = {
+  label: "NICHD Safe to Sleep: breastfeed your baby to reduce the risk of SIDS (2018)",
+  url: "https://www.nichd.nih.gov/sites/default/files/2018-11/Breastfeed_Baby_SIDS_final.pdf",
+};
 const AAP_DEHYDRATION: GuideSource = {
   label: "AAP: Signs of dehydration in infants and children",
   url: "https://www.healthychildren.org/English/health-issues/injuries-emergencies/Pages/dehydration.aspx",
@@ -126,6 +137,25 @@ const item = (g: Omit<SleepGuide, "reviewed" | "needsReview"> & Partial<Pick<Sle
 });
 
 const fixed = (s: string) => () => s;
+
+/** "If you're getting sleepy": the two things to do (the holding sheet's line, sleepyLine). */
+const sleepyActions = (v: Voice) =>
+  `If you feel yourself dozing while holding ${v.them}, lay ${v.them} on ${v.their} back in the bassinet or hand ${v.them} to someone who's awake. Dozing off with a baby on a couch or armchair is especially dangerous. If you do fall asleep with ${v.them}, move ${v.them} to the bassinet as soon as you wake.`;
+/** The AAP guide's warning about a tired adult's bed, after its "unable to recommend bed sharing under any circumstances". */
+const tiredBedRisk = () =>
+  "Sharing a bed with a baby isn't recommended, and the risk of a sleep-related death is more than 10 times higher when the adult is very tired, has taken medicine that makes it harder to wake, or has had alcohol or drugs.";
+
+/**
+ * Feeding while tired (NICHD's handout, the AAP's guide and its technical
+ * report), sentence by sentence: the safe-feeding-sleepy item is all four,
+ * and the goal cautions quote the one they need (goals.ts goalCautions).
+ */
+export const feedingSleepyWords = (v: Voice) => ({
+  mindful: "Be mindful of how tired you are, and avoid couches and armchairs for feeds if you think you might fall asleep.",
+  someone: `Ask someone to stay with you while you feed ${v.them}, to keep you awake or to lay ${v.them} in the bassinet if you fall asleep.`,
+  bed: `If there's any chance you might fall asleep while ${v.they}${v.verb("'s")} in your bed, first take away pillows, blankets, sheets and anything else that could cover ${v.their} face, head or neck or make ${v.them} too warm, and if you do fall asleep, move ${v.them} back to ${v.their} own sleep space as soon as you wake.`,
+  hazard: "If you might doze off, a cleared adult bed is less hazardous than a sofa or armchair, though still not recommended.",
+});
 
 export const SLEEP_GUIDES: readonly SleepGuide[] = [
   // ── What to try next (the family's plan, by stage and by the recent log) ──
@@ -280,15 +310,25 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
   item({
     id: "safe-sleepy", section: "safe", minDays: 0, maxDays: YEAR, basis: "source",
     title: fixed("If you're getting sleepy"),
-    body: (v) =>
-      `If you feel yourself dozing while holding ${v.them}, lay ${v.them} on ${v.their} back in the bassinet or hand ${v.them} to someone who's awake. Dozing off with a baby on a couch or armchair is especially dangerous. If you do fall asleep with ${v.them}, move ${v.them} to the bassinet as soon as you wake.`,
+    // The holding sheet shows the first part (sleepyLine); the tired adult's bed is the AAP guide's own warning.
+    body: (v) => `${sleepyActions(v)} ${tiredBedRisk()}`,
     sources: [AAP_SAFE_SLEEP],
   }),
   item({
+    id: "safe-feeding-sleepy", section: "safe", minDays: 0, maxDays: YEAR, basis: "source",
+    title: fixed("Feeding when you're tired"),
+    body: (v) => {
+      const w = feedingSleepyWords(v);
+      return `${w.mindful} ${w.someone} ${w.bed} ${w.hazard}`;
+    },
+    sources: [NICHD_BREASTFEEDING, AAP_SAFE_SLEEP, AAP_TECH_REPORT_2022],
+  }),
+  item({
     id: "safe-seats", section: "safe", minDays: 0, maxDays: YEAR, basis: "source",
-    title: fixed("Car seats and swings"),
-    body: (v) => `If ${v.they} ${v.verb("falls")} asleep in a car seat, stroller or swing, move ${v.them} to the bassinet, on ${v.their} back, as soon as you can.`,
-    sources: [AAP_SAFE_SLEEP],
+    title: fixed("Car seats, swings and slings"),
+    body: (v) =>
+      `Car seats, strollers, swings, carriers and slings aren't for routine sleep, especially before 4 months. If ${v.they} ${v.verb("falls")} asleep in one, move ${v.them} to the bassinet, on ${v.their} back, as soon as you can.`,
+    sources: [AAP_SAFE_SLEEP, AAP_TECH_REPORT_2022],
   }),
 
   // ── Call the pediatrician ──
@@ -343,8 +383,16 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
   }),
 ];
 
-/** The safety line under "I'm getting sleepy" (the safe-sleepy item's words). */
-export const sleepyLine = (v: Voice): string => SLEEP_GUIDES.find((g) => g.id === "safe-sleepy")!.body(v);
+/** The safety line under "I'm getting sleepy": the safe-sleepy item's words about what to do (its body adds the tired adult's bed). */
+export const sleepyLine = (v: Voice): string => sleepyActions(v);
+
+/**
+ * The feed card's quiet line during a nursing feed at night (10 PM to 6 AM in
+ * the family's timezone): NICHD's two options, from the safe-feeding-sleepy
+ * item ("ask someone to stay with you … or to place the baby into a safe
+ * sleep area").
+ */
+export const nightFeedLine = (v: Voice): string => `Feeling sleepy? Wake someone to sit with you, or lay ${v.them} on ${v.their} back in the bassinet.`;
 
 /** The transfer steps (the transfer-steps item's). */
 export const transferSteps = (v: Voice): string[] => SLEEP_GUIDES.find((g) => g.id === "transfer-steps")!.steps!(v);

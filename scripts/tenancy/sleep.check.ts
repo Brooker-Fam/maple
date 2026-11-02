@@ -144,13 +144,18 @@ async function main() {
   });
 
   await test("plan: its goal never leaves her to cry or has her asleep on or with an adult, or in a bed, couch, recliner, armchair or swing, through the route and set_sleep_plan", async () => {
-    const said = "The goal: Maple's plans never leave June to cry, or have her sleep on or with an adult, or in a bed, couch, recliner, armchair or swing. Reword it.";
+    // Each refusal says what Maple won't plan and what to try instead (goals.ts unsafeWords).
+    const said: Record<string, string> = {
+      "Co-sleeping safely": `The goal: Maple won't plan June sleeping in an adult bed; if this is a step away from it, try "Move her from our bed to the bassinet".`,
+      "Let her cry it out at bedtime": `The goal: Maple won't plan leaving June to cry; if this is about settling her, try "Soothe her, then try the bassinet once more".`,
+      "June naps in the swing after lunch": `The goal: Maple won't plan sleep in a swing; try "If she falls asleep in the swing, move her to the bassinet".`,
+    };
     const rev = Number((await sql(`SELECT revision FROM maple_sleep_plans WHERE family_id = 1`))[0].revision);
-    for (const goal of ["Co-sleeping safely", "Let her cry it out at bedtime", "June naps in the swing after lunch"]) {
+    for (const [goal, words] of Object.entries(said)) {
       const r = await route(alpha.owner, 1, { action: "plan.update", revision: rev, patch: { goal } });
-      eq([r.status, r.json.error], [400, said], `route: "${goal}"`);
+      eq([r.status, r.json.error], [400, words], `route: "${goal}"`);
       const t = await call("set_sleep_plan", { revision: rev, goal }, alpha);
-      ok(t.isError && t.text.startsWith(said) && /Nothing was saved/.test(t.text), t.text);
+      ok(t.isError && t.text.startsWith(words) && /Nothing was saved/.test(t.text), t.text);
     }
     eq(Number((await sql(`SELECT revision FROM maple_sleep_plans WHERE family_id = 1`))[0].revision), rev, "nothing saved");
     const okGoal = await route(alpha.owner, 1, { action: "plan.update", revision: rev, patch: { goal: "Sleeping in her bassinet beside our bed" } });

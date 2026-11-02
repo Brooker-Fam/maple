@@ -31,6 +31,8 @@ import { SLEEP_PLACES, type Entry, type Member } from "../types";
 import type { Voice } from "../voice";
 import { askState, numberTries, planToday, planTodayWords, progressLines, shiftStatus, sleepAge, sleepGuidance, sleepSignals, snoozeUntil, stageSuggestion, tryDayKey, tryDayLabel, type GuideView, type SleepGuidance } from "./engine";
 import {
+  backToWorkGoal,
+  backToWorkQuestions,
   checkinWords,
   cleanGoalInput,
   coachGuardrails,
@@ -40,14 +42,20 @@ import {
   goalHeadLine,
   goalProgressLines,
   goalRef,
+  goalsByUrgency,
   goalSpan,
   lastNightKey,
   lastNightLine,
   nextStep,
   nightWords,
+  QUICK_FEEDING,
+  QUICK_OFF_DUTY,
+  QUICK_SLEEPS,
   rosterWords,
   seesCheckins,
   targetsWords,
+  windowLine,
+  writesGoals,
   type CoachNotes,
   type GoalFields,
   type GoalProgress,
@@ -107,6 +115,7 @@ import {
   TRY_OUTCOMES,
   TRY_TAGS,
   UNTIMED_TRIES,
+  WINDOW_COVERS,
   type BassinetTry,
   type GoalInput,
   type HoldingShift,
@@ -115,7 +124,7 @@ import {
   type SleepPlan,
   type TryOutcome,
 } from "./types";
-import { dateWords, defaultGoal, GOAL_STATUS_LABEL, HANDOFF_LABEL, OUTCOME_LABEL, PLACE_LABEL, PROTECTED_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, targetWords, windowWords } from "./words";
+import { dateWords, defaultGoal, GOAL_STATUS_LABEL, HANDOFF_LABEL, OUTCOME_LABEL, PLACE_LABEL, PROTECTED_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, targetWords } from "./words";
 
 /**
  * The sleep plan as MCP tools: read the plan and progress, change the plan,
@@ -319,6 +328,9 @@ function goalIdArg(raw: unknown): number {
   return n;
 }
 
+/** The adults' names (owners and members), as the safety rules read them ("while Theo's awake"). */
+const adultNames = (ctx: Ctx) => ctx.members.filter((m) => m.role === "owner" || m.role === "member").map((m) => who(m.email, ctx));
+
 /** The adults who check in (owners and members), the day, and the baby's words and age, a goal write is checked against. */
 const goalCtx = (ctx: Ctx): GoalCtx => ({
   adults: new Set(ctx.members.filter((m) => m.role === "owner" || m.role === "member").map((m) => m.email)),
@@ -340,66 +352,17 @@ function goalJson(g: SleepGoal, ctx: Ctx) {
     target_date: g.target_date,
     targets: g.targets.map((t) => ({ ...t, ...(t.kind === "protected_window" ? { member: who(t.member, ctx) } : {}), words: targetWords(t, (id) => who(id, ctx)) })),
     steps: g.steps.map((s) => ({ id: s.id, title: s.title, week_of: s.week_of, done: !!s.done_at, ...(s.done_at ? { done_by: who(s.done_by, ctx), done_local: whenText(s.done_at, ctx) } : {}) })),
-    roster: g.roster.map((w) => ({ id: w.id, member: who(w.member, ctx), from: w.from, to: w.to, nights: w.nights, words: windowWords(w, (id) => who(id, ctx)) })),
+    roster: g.roster.map((w) => ({ id: w.id, member: who(w.member, ctx), from: w.from, to: w.to, nights: w.nights, ...(w.covers ? { covers: w.covers } : {}), words: windowLine(w, (id) => who(id, ctx)) })),
+    ...templateJson(g, ctx),
     ...(g.last_review_at ? { last_review: dateWords(dayKey(Date.parse(g.last_review_at), ctx.tz), today), review_note: g.review_note } : {}),
     ...(g.closed_at ? { closed: dateWords(dayKey(Date.parse(g.closed_at), ctx.tz), today) } : {}),
     revision: g.revision,
   };
 }
 
-/** Weeks of a goal's progress a tool result carries (the app's goals view has them all). */
-const TOOL_WEEKS = 4;
-
-/** A goal's progress for a model: per target and week (the last TOOL_WEEKS), with the sample sizes. */
-function goalProgressJson(p: GoalProgress, ctx: Ctx) {
-  const shown = new Set(p.weeks.slice(-TOOL_WEEKS).map((w) => w.n));
-  const recent = <T extends { week: number }>(ws: T[]) => ws.filter((w) => shown.has(w.week));
-  const hidden = p.weeksHidden + p.weeks.length - shown.size;
-  return {
-    starts_on: p.startsOn,
-    target_date: p.endsOn,
-    days_left: p.daysLeft,
-    week_now: p.weekNow,
-    weeks_total: p.weeksTotal,
-    weeks: p.weeks.filter((w) => shown.has(w.n)).map((w) => ({ n: w.n, from: w.from, to: w.to, nights_so_far: w.nights })),
-    ...(hidden ? { earlier_weeks_not_shown: hidden } : {}),
-    targets: p.targets.map((t) => {
-      const aim = targetWords(t.target, (id) => who(id, ctx));
-      switch (t.kind) {
-        case "bassinet_nights":
-          return { id: t.id, aim, weeks: recent(t.weeks).map((w) => ({ week: w.week, nights_counted: w.counted, of_nights_with_a_finished_try: w.tried, nights_so_far: w.nights })) };
-        case "bassinet_stretch":
-          return {
-            id: t.id,
-            aim,
-            weeks: recent(t.weeks).map((w) => ({ week: w.week, stretches: w.stretches, longest: w.longestSec == null ? null : formatDuration(w.longestSec), reached_aim: w.atLeast })),
-            longest: t.longest ? { length: formatDuration(t.longest.sec), from_local: whenText(t.longest.start, ctx) } : null,
-          };
-        case "protected_window":
-          return t.weeks
-            ? { id: t.id, aim, weeks: recent(t.weeks).map((w) => ({ week: w.week, yes: w.yes, partly: w.partly, no: w.no, nights_checked_in: w.checkedIn, nights_on_roster: w.planned })) }
-            : { id: t.id, aim, counted_from: "the adults' own check-ins" };
-        case "custom":
-          return { id: t.id, aim, counted: false };
-      }
-    }),
-    steps: { done: p.steps.done, of: p.steps.of, next: p.steps.next ? { id: p.steps.next.id, title: p.steps.next.title, week_of: p.steps.next.week_of } : null },
-    ...(p.checkins ? { checkins: p.checkins.map((c) => ({ who: who(c.member, ctx), nights: c.nights, yes: c.yes, partly: c.partly, no: c.no, last_night: c.lastNight })) } : {}),
-    roster_hints: p.roster
-      .filter((h) => h.nights)
-      .map((h) => ({
-        window: h.windowId,
-        who: who(h.member, ctx),
-        nights: h.nights,
-        feeds: h.feeds,
-        feed_nights: h.feedNights,
-        feeds_they_logged: h.feedsLoggedBy,
-        nights_they_held: h.heldNights,
-        held_by_others: h.cover.map((c) => ({ who: who(c.member, ctx), nights: c.nights })),
-        tries: h.tries,
-      })),
-  };
-}
+/** A "Back to work" goal's template, for a model: who goes back to work and when, and who nurses. */
+const templateJson = (g: SleepGoal, ctx: Ctx) =>
+  g.template ? { template: { kind: g.template.kind, back_to_work: who(g.template.member, ctx), back_on: g.template.date, nurses: g.template.nursing ? who(g.template.nursing, ctx) : null } } : {};
 
 const coachJson = (c: CoachNotes, ctx: Ctx) => ({
   days_left: c.daysLeft,
@@ -464,11 +427,52 @@ function goalInputFrom(a: GoalArgs, ctx: Ctx, mode: "add" | "update"): GoalInput
   return out;
 }
 
+type QuickArgs = {
+  returning: string;
+  return_date: string;
+  feeding: (typeof QUICK_FEEDING)[number];
+  nursing?: string | null;
+  sleeps: (typeof QUICK_SLEEPS)[number];
+  first_half: string;
+  second_half: string;
+  off_duty: (typeof QUICK_OFF_DUTY)[number];
+  split?: string | null;
+};
+
+/**
+ * sleep_goal add's back_to_work: the quick setup's answers (people by name
+ * or "me", "in 4 weeks" dates) as the template's goal (goals.ts
+ * backToWorkGoal) and its read-back notes. A title, a why or a target date
+ * the call also gives replace the template's.
+ */
+function quickGoal(q: QuickArgs, a: Pick<GoalArgs, "title" | "why" | "target_date">, ctx: Ctx): { goal: GoalInput; notes: string[] } {
+  const person = (raw: string | null | undefined, label: string) => personArg(raw, ctx, label) ?? "";
+  const built = backToWorkGoal(
+    {
+      returning: person(q.returning, "who goes back to work"),
+      return_date: targetDateArg(q.return_date, ctx) ?? "",
+      feeding: q.feeding,
+      nursing: q.nursing ? person(q.nursing, "who nurses") : null,
+      sleeps: q.sleeps,
+      first_half: person(q.first_half, "the first half of the night"),
+      second_half: person(q.second_half, "the second half of the night"),
+      off_duty: q.off_duty,
+      split: q.split ?? null,
+      target_date: a.target_date != null ? targetDateArg(a.target_date, ctx) : null,
+    },
+    { v: voiceOf(ctx), name: (id) => who(id, ctx), today: dayKey(ctx.now, ctx.tz), adults: goalCtx(ctx).adults }
+  );
+  return {
+    goal: { ...built.goal, ...(a.title?.trim() ? { title: a.title } : {}), ...(a.why != null ? { why: a.why.trim() ? a.why : null } : {}) },
+    notes: built.notes,
+  };
+}
+
 /** The goal's head line, its progress lines and its coach notes, for sleep_plan and the tool's answers. */
 function goalBlock(g: SleepGoal, p: GoalProgress, ctx: Ctx): { lines: string[]; coach: CoachNotes } {
   const words = goalWords(ctx);
   const coach = coachNotes(g, p, words);
-  return { lines: [goalHeadLine(g, p, words), ...goalProgressLines(g, p, words), ...coach.notes.map((n) => `Coach note: ${n}`)], coach };
+  return { lines: [goalHeadLine(g, p, words), ...goalProgressLines(g, p, words), ...coach.notes.map((n) => `Coach note (${goalRef(g.id)}): ${n}`)], coach };
 }
 
 async function oneProgress(g: SleepGoal, ctx: Ctx): Promise<GoalProgress> {
@@ -537,7 +541,7 @@ function changeWords(cur: SleepGoal, f: GoalFields, ctx: Ctx): string {
   if (f.steps !== undefined) {
     parts.push(listChange("step", cur.steps, f.steps, (s) => `"${s.title}"${s.week_of ? ` (week of ${dateWords(s.week_of, today)})` : ""}`, { done: (s) => !!s.done_at }));
   }
-  if (f.roster !== undefined) parts.push(listChange("window", cur.roster, f.roster, (w) => `"${windowWords(w, name)}"`));
+  if (f.roster !== undefined) parts.push(listChange("window", cur.roster, f.roster, (w) => `"${windowLine(w, name)}"`));
   if (f.status !== undefined && f.status !== cur.status) parts.push(`status ${GOAL_STATUS_LABEL[f.status].toLowerCase()} (was ${GOAL_STATUS_LABEL[cur.status].toLowerCase()})`);
   return parts.join("; ") || "nothing new (it already reads that way)";
 }
@@ -554,13 +558,13 @@ function changedFields(cur: SleepGoal, f: GoalFields): GoalFields {
     ...(f.why !== undefined && f.why !== cur.why ? { why: f.why } : {}),
     targets: fresh(f.targets, cur.targets, (a, b) => JSON.stringify(a) === JSON.stringify(b)),
     steps: fresh(f.steps, cur.steps, (a, b) => a.title === b.title),
-    roster: fresh(f.roster, cur.roster, (a, b) => a.from === b.from && a.to === b.to && a.member === b.member),
+    roster: fresh(f.roster, cur.roster, (a, b) => a.from === b.from && a.to === b.to && a.member === b.member && (a.covers ?? null) === (b.covers ?? null)),
   };
 }
 
 /** What has to be said with a goal as it would be saved (goals.ts goalCautions), as lines: "Say this too: …" in a read-back. */
 const cautionLines = (f: GoalFields, ctx: Ctx, kinds?: readonly string[], head = "Say this too") =>
-  goalCautions(f, { v: voiceOf(ctx), name: (id) => who(id, ctx), ageDays: sleepAge(ctx.baby, ctx.now)?.days ?? null })
+  goalCautions(f, { v: voiceOf(ctx), name: (id) => who(id, ctx), ageDays: sleepAge(ctx.baby, ctx.now)?.days ?? null, adults: adultNames(ctx) })
     .filter((c) => !kinds || kinds.includes(c.kind))
     .map((c) => `${head}: ${c.text}`);
 
@@ -574,7 +578,8 @@ function goalJsonCompact(g: SleepGoal, ctx: Ctx) {
     target_date: g.target_date,
     targets: g.targets.map((t) => ({ ...t, ...(t.kind === "protected_window" ? { member: who(t.member, ctx) } : {}) })),
     steps: g.steps.map((s) => ({ id: s.id, title: s.title, week_of: s.week_of, ...(s.done_at ? { done: true } : {}) })),
-    roster: g.roster.map((w) => ({ id: w.id, member: who(w.member, ctx), from: w.from, to: w.to, nights: w.nights })),
+    roster: g.roster.map((w) => ({ id: w.id, member: who(w.member, ctx), from: w.from, to: w.to, nights: w.nights, ...(w.covers ? { covers: w.covers } : {}) })),
+    ...templateJson(g, ctx),
   };
 }
 
@@ -583,9 +588,29 @@ function safetyLines(guidance: SleepGuidance): { line: string } {
   const keep = ["safe", "call", "emergency"];
   const sections = guidance.sections.filter((s) => keep.includes(s.section));
   const full = new Set(["safe-sleepy", "emergency-911"]);
-  const titles = sections.map((s) => `${s.title}: ${s.items.map((g) => (full.has(g.id) ? guideText(g) : g.title)).join("; ")}`);
+  // An item said in full ends with its own period (the 911 line's "… or is limp."): one period between sections, never two.
+  const titles = sections.map((s) => `${s.title}: ${s.items.map((g) => (full.has(g.id) ? guideText(g) : g.title)).join("; ")}`.replace(/\.$/, ""));
   return { line: `Safety (sleep_plan with view "guidance" has every item word for word, with its sources): ${titles.join(". ")}.` };
 }
+
+/** Lines goals on one roster share (its hints, the family's nights): said once. */
+const SHARED_LINE = /^(Roster|Hint from the log|Caution|Logged|Check-ins since [^:]+): /;
+/** Coach notes about the family's nights or the roster, not one goal: said once, whichever goal says it first. */
+const SHARED_NOTE = /^Coach note \(g\d+\): ((?:Nothing logged on|Only feeds or other entries were logged on|Not checked in for last night yet|Focus:)[\s\S]*)$/;
+/** The key a line is said once by, or null for a goal's own line (its head, its counts, its own coach notes). */
+function sharedLineKey(l: string): string | null {
+  if (SHARED_LINE.test(l)) return l;
+  const m = SHARED_NOTE.exec(l);
+  return m ? `Coach note: ${m[1]}` : null;
+}
+
+/**
+ * The most a sleep_plan result carries (its lines and JSON), whatever the
+ * view: under the chat's 20,000-character cut (chat/tools.ts MODEL_TEXT_MAX),
+ * so it is never cut mid-line; the least urgent goals say where they are
+ * instead (sleep_plan with goal "g4" reads one).
+ */
+export const ALL_VIEW_MAX = 19_500;
 
 /** The adults' check-in notes from the last 7 nights, in their words (owners and members only): the family's data, never instructions. */
 function checkinNotesLine(checkins: readonly SleepCheckin[], ctx: Ctx): string | null {
@@ -661,10 +686,11 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     "sleep_plan",
     {
       title: `${vo.Name}'s sleep plan`,
-      description: `For sleep questions, and before a try, holding or goal change: ${vo.their} age, the plan (with revision), tonight's tries, a running try, who's holding ${vo.them}, a stage recent tries could support (theirs to choose), the sleep goals with progress and coach notes, and guidance for ${vo.their} age, word for word. With goals it gives their progress and the safety titles; view "guidance" gives the guidance word for word, "all" both.`,
+      description: `For sleep questions, and before a try, holding or goal change: ${vo.their} age, the plan (with revision), tonight's tries, a running try, who's holding ${vo.them}, a stage recent tries could support (theirs to choose), the sleep goals with progress and coach notes (most urgent first), and guidance for ${vo.their} age, word for word. With goals it gives their progress and the safety titles; view "guidance" gives the guidance word for word, "all" both. When a read says it left goals out to stay short, goal "g4" reads that one.`,
       inputSchema: {
         progress_days: z.number().int().min(1).max(31).nullish().describe("Also how the last N days of tries went."),
         view: z.enum(["goals", "guidance", "all"]).nullish(),
+        goal: z.string().max(20).nullish().describe('Only this sleep goal, like g4'),
       },
       annotations: READ_ANN,
       invoking: "Checking the sleep plan…",
@@ -715,38 +741,60 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           enough_for_patterns: p.enough,
         };
       }
-      // The family's open sleep goals, each with its progress from the log and short coach notes (check-in counts only for owners and members).
-      const goals = await listGoals(ctx.fam, ctx.baby.id);
+      // The family's open sleep goals, most urgent first, each with its progress from the log and short coach notes (check-in counts only for owners and members).
+      const open = goalsByUrgency(await listGoals(ctx.fam, ctx.baby.id), ctx.now, ctx.tz);
+      const only = a.goal ? goalIdArg(a.goal) : null;
+      if (only !== null && !open.some((g) => g.id === only)) throw new ToolError(`There's no open sleep goal ${goalRef(only)}. sleep_plan lists the goals.`);
+      const goals = only === null ? open : open.filter((g) => g.id === only);
       // With goals, the default is their progress, compact, with the safety titles (the guidance word for word is view "guidance");
       // without any, everything, as before.
       const view = a.view ?? (goals.length ? "goals" : "all");
       const showGoals = goals.length > 0 && view !== "guidance";
       const fullGuidance = view !== "goals" || !goals.length;
-      const goalsOut: Record<string, unknown>[] = [];
+      // Each goal's lines and JSON together, so a long read can say the less urgent ones are a call away rather than be cut mid-line.
+      const blocks: { ref: string; title: string; lines: string[]; json: Record<string, unknown> }[] = [];
+      const after: string[] = [];
       if (showGoals) {
         const gp = await goalProgressFor(ctx.fam, ctx.baby.id, goals, { tz: ctx.tz, now: ctx.now, checkins: seesCheckins(ctx.who.role) });
         // Goals on one roster share its hints and the family's nights: a line said for an earlier goal isn't said again.
         const said = new Set<string>();
-        const once = (l: string) => !/^(Coach note|Roster|Hint from the log|Caution|Logged|Check-ins since [^:]+): /.test(l) || (!said.has(l) && !!said.add(l));
+        const once = (l: string) => {
+          const key = sharedLineKey(l);
+          return !key || (!said.has(key) && !!said.add(key));
+        };
         for (const g of goals) {
-          const pg = gp.get(g.id)!;
-          const b = goalBlock(g, pg, ctx);
-          lines.push(...[...b.lines, ...(g.status === "active" ? cautionLines(g, ctx, ["feeds_first", "long_window"], "Caution") : [])].filter(once));
-          goalsOut.push(view === "all" ? { ...goalJson(g, ctx), progress: goalProgressJson(pg, ctx), coach: coachJson(b.coach, ctx) } : goalJsonCompact(g, ctx));
+          const b = goalBlock(g, gp.get(g.id)!, ctx);
+          // The lines carry each goal's progress and coach notes; the JSON only what a write needs (ids, revisions, step ids).
+          blocks.push({
+            ref: goalRef(g.id),
+            title: g.title,
+            lines: [...b.lines, ...(g.status === "active" ? cautionLines(g, ctx, ["feeds_first", "long_window", "bottle"], "Caution") : [])].filter(once),
+            json: goalJsonCompact(g, ctx),
+          });
         }
         // What the adults wrote the mornings after, for owners and members only: their words, as data.
         if (seesCheckins(ctx.who.role)) {
           const last = lastNightKey(ctx.now, ctx.tz);
           const notes = checkinNotesLine(await listCheckins(ctx.fam, ctx.baby.id, { from: addDays(last, -6), to: last }), ctx);
-          if (notes) lines.push(notes);
+          if (notes) after.push(notes);
         }
-        lines.push(`Coaching: ${coachGuardrails(v).join(" ")}`);
+        after.push(`Coaching: ${coachGuardrails(v).join(" ")}`);
       } else if (goals.length) {
         lines.push(`Sleep goals: ${goals.map((g) => `${goalRef(g.id)} "${g.title}"`).join("; ")}. sleep_plan without view "guidance" has their progress and coach notes.`);
+      } else if (writesGoals(ctx.who.role)) {
+        // A family's first goal: the quick setup's five questions, so the chat's first goal turn can start there.
+        lines.push(`Sleep goals: none yet. If they'd like one and someone is going back to work, sleep_goal's quick setup asks five questions, one at a time: ${backToWorkQuestions(v).join(" ")} Then sleep_goal add with back_to_work reads back a goal, a night roster and three steps, saved on a yes, with no logs needed first.`);
       }
       const safety = fullGuidance ? null : safetyLines(guidance);
-      lines.push(safety ? `${safety.line} ${DISCLAIMER}` : `Guidance for ${v.their} age is in guidance (word for word, with its sources). ${DISCLAIMER}`);
-      return ok(lines.join("\n"), {
+      const tail = safety ? `${safety.line} ${DISCLAIMER}` : `Guidance for ${v.their} age is in guidance (word for word, with its sources). ${DISCLAIMER}`;
+      const textWith = (n: number) => {
+        const left = blocks.slice(n);
+        const more = left.length
+          ? [`To stay under the chat's length, this read leaves out ${plural(left.length, "less urgent goal")}: ${left.map((b) => `${b.ref} "${b.title}"`).join("; ")}. sleep_plan with goal "${left[0].ref}" (and so on) reads each one.`]
+          : [];
+        return [...lines, ...blocks.slice(0, n).flatMap((b) => b.lines), ...more, ...after, tail].join("\n");
+      };
+      const dataWith = (n: number) => ({
         age: age ? { days: age.days, label: age.label, stage: age.band.label } : null,
         plan: plan ? planJson(plan, v) : null,
         today: today && todayWords ? { ...today, label: todayWords.when } : null,
@@ -760,8 +808,12 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           ? { guidance: `sleep_plan {view: "guidance"} has it word for word, with its sources` }
           : { guidance: { now: guidance.now.map(guideJson), sections: guidance.sections.map((s) => ({ section: s.title, items: s.items.map(guideJson) })) } }),
         // After the guidance, so a chat result cut at its length limit never loses the safety items; the lines above carry each goal.
-        ...(goalsOut.length ? { goals: goalsOut, ...(view === "all" ? { coach_guardrails: coachGuardrails(v) } : {}) } : {}),
+        ...(blocks.length ? { goals: blocks.slice(0, n).map((b) => b.json) } : {}),
       });
+      // Every goal, most urgent first, while the read stays under the chat's cut; past it, the least urgent ones say where they are.
+      let shown = blocks.length;
+      while (shown > 1 && textWith(shown).length + JSON.stringify(dataWith(shown)).length + 1 > ALL_VIEW_MAX) shown--;
+      return ok(textWith(shown), dataWith(shown));
     }
   );
 
@@ -1168,7 +1220,20 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     from: z.string().max(5),
     to: z.string().max(5),
     nights: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    covers: z.enum(WINDOW_COVERS).nullish().describe(`How ${vo.their} feeds inside it are covered: nurse (brought to nurse), bottle (expressed milk), none (no feed planned)`),
     id: z.string().max(12).nullish(),
+  });
+  // The quick setup's five answers (goals.ts backToWorkGoal); people by name or "me".
+  const backToWorkShape = z.object({
+    returning: z.string().max(80).describe('Who goes back to work: a name, or "me"'),
+    return_date: z.string().max(20).describe('Their day back: YYYY-MM-DD or "in 4 weeks"'),
+    feeding: z.enum(QUICK_FEEDING),
+    nursing: z.string().max(80).nullish().describe("Who nurses (for nursing or both)"),
+    sleeps: z.enum(QUICK_SLEEPS).describe(`Where ${vo.name} sleeps now`),
+    first_half: z.string().max(80).describe("Who's on duty for the first half of the night"),
+    second_half: z.string().max(80).describe("Who's on duty for the second half"),
+    off_duty: z.enum(QUICK_OFF_DUTY).describe("Where the adult who's off sleeps"),
+    split: z.string().max(5).nullish().describe('Where the night splits, like "02:00" (the night is 10 PM to 6 AM)'),
   });
 
   addSleepTool(
@@ -1176,7 +1241,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     "sleep_goal",
     {
       title: "Sleep goals",
-      description: `Sleep goals, coached: add, update (with its revision), step (mark one done), check_in, review, close (met or dropped). A goal has a target date, measurable targets, weekly steps and, if it helps, a roster of protected sleep windows per adult. Coach this way: ask one question at a time (in Maple chat, with ask_user); use the family's memories for their constraints; propose one goal with its steps, read it back and save it only after a yes (add, update and close need confirmed: true). Each adult checks in the morning after: check_in saves only the signed-in person's own answer (protected yes, partly or no, and an optional note about the night), never hours slept, mood or anyone's health. sleep_plan has each goal's progress, counted from the log, and coach notes: talk it over, then review with a short note. Counts are only what was logged: a night with nothing logged is unknown, so say "not logged" and ask, never "didn't". End a review with one step for this week that they choose, saved as a step. Steps are one-off actions; a habit belongs in a target. No medical advice. Feeding changes (bottles, pumping, formula) stay questions for their pediatrician or lactation consultant. The tool refuses crying it out and sleep on or with an adult; never ${vo.name} sleeping on an adult, or in a bed, couch or armchair with one, as a plan. Hard nights are neutral: plain counts, no blame. Targets: bassinet_nights {per_week, min_minutes}, bassinet_stretch {minutes}, protected_window {member, per_week}, custom {text}.`,
+      description: `Sleep goals, coached: add, update (with its revision), step (mark one done), check_in, review, close (met or dropped). A goal has a target date, measurable targets, weekly steps and, if it helps, a roster of protected sleep windows per adult. Coach this way: ask one question at a time (in Maple chat, with ask_user); use the family's memories for their constraints; propose one goal with its steps, read it back and save it only after a yes (add, update and close need confirmed: true). A family's first goal, when someone is going back to work: ask the quick setup's five questions, one at a time (who goes back to work and on what day; nursing, bottles or both, and who nurses; where ${vo.name} sleeps now; who's on duty for each half of the night, and where the adult who's off sleeps; the target date, two weeks after the day back unless they say), then call add with back_to_work: it builds a goal, a night roster (each window's feeds covered by how ${vo.they} ${vo.verb("is")} fed) and three steps timed from the day back, for one read-back; with no logs needed first. Each adult checks in the morning after: check_in saves only the signed-in person's own answer (protected yes, partly or no, and an optional note about the night), never hours slept, mood or anyone's health. sleep_plan has each goal's progress, counted from the log, and coach notes: talk it over, then review with a short note. Counts are only what was logged: a night with nothing logged is unknown, so say "not logged" and ask, never "didn't". End a review with one step for this week that they choose, saved as a step. Steps are one-off actions; a habit belongs in a target. No medical advice. Feeding changes (bottles, pumping, formula) stay questions for their pediatrician or lactation consultant. The tool refuses crying it out and sleep on or with an adult; never ${vo.name} sleeping on an adult, or in a bed, couch or armchair with one, as a plan. Hard nights are neutral: plain counts, no blame. A refusal says what to try instead: offer that wording. Targets: bassinet_nights {per_week, min_minutes}, bassinet_stretch {minutes}, protected_window {member, per_week}, custom {text}.`,
       inputSchema: {
         action: z.enum(["add", "update", "step", "check_in", "review", "close"]),
         id: z.string().max(20).nullish().describe("The goal, like g3"),
@@ -1188,6 +1253,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         targets: z.array(targetShape).max(6).nullish().describe("The whole list"),
         steps: z.array(stepShape).max(12).nullish().describe("The whole list; week_of is a date in its week"),
         roster: z.array(windowShape).max(6).nullish().describe('Protected sleep windows: from and to like "22:00", nights the evenings it begins on, 0 (Sun) to 6 (Sat)'),
+        back_to_work: backToWorkShape.nullish().describe("add: the quick setup's answers; builds the goal (title, why, target date, targets, steps and roster) for its read-back"),
         status: z.enum(["active", "paused", "met", "dropped"]).nullish().describe("update: active or paused; close: met or dropped"),
         step: z.string().max(12).nullish().describe("step: its id, like s2"),
         done: z.boolean().nullish(),
@@ -1213,15 +1279,21 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       try {
         switch (a.action) {
           case "add": {
-            if (!a.title?.trim()) throw new ToolError("Give the goal a short title in their words (title).");
-            const input = goalInputFrom(a, ctx, "add");
+            const quick = a.back_to_work ? quickGoal(a.back_to_work, a, ctx) : null;
+            if (!quick && !a.title?.trim()) throw new ToolError("Give the goal a short title in their words (title), or pass back_to_work with the quick setup's answers.");
+            const input = quick ? quick.goal : goalInputFrom(a, ctx, "add");
             if (a.confirmed !== true) {
               // Checked now, so what they say yes to is what saves; what it needs said with it comes with the read-back.
               const { fields } = cleanGoalInput(input, { ...gc, current: null, seq: 0 }, "create");
               const cautions = cautionLines(fields, ctx);
+              const again = quick ? "call sleep_goal add again with the same back_to_work answers and confirmed: true (to change something first, change that answer, or the title)" : "call sleep_goal add again with the same goal and confirmed: true";
               return ok(
-                [`Nothing saved yet. Read this back to them: a sleep goal ${draftWords(fields, ctx)}. Only if they say yes, call sleep_goal add again with the same goal and confirmed: true.`, ...cautions].join("\n"),
-                { confirm_needed: true, ...(cautions.length ? { cautions } : {}) }
+                [
+                  `Nothing saved yet. Read this back to them: a sleep goal ${draftWords(fields, ctx)}. Only if they say yes, ${again}.`,
+                  ...(quick?.notes.length ? [`Say this with it: ${quick.notes.join(" ")}`] : []),
+                  ...cautions,
+                ].join("\n"),
+                { confirm_needed: true, ...(cautions.length ? { cautions } : {}), ...(quick?.notes.length ? { notes: quick.notes } : {}) }
               );
             }
             const w = await createGoal(ctx.fam, { babyId: ctx.baby.id, goal: input, ctx: gc, by, source, clientId: ref(a.client_ref, ctx), device: ctx.device });

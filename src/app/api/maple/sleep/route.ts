@@ -140,7 +140,8 @@ function goalVoiceOf(baby: Baby, familyId: number): { v: Voice; ageDays: number 
 /** What a saved goal needs said with it (its cautions), for the app to show. */
 function goalCautionsOf(goal: SleepGoal, members: Member[], baby: Baby, familyId: number): string[] {
   const { v, ageDays } = goalVoiceOf(baby, familyId);
-  return goalCautions(goal, { v, name: (id) => memberName(id, members), ageDays }).map((c) => c.text);
+  const adults = members.filter((m) => m.role === "owner" || m.role === "member").map((m) => memberName(m.email, members));
+  return goalCautions(goal, { v, name: (id) => memberName(id, members), ageDays, adults }).map((c) => c.text);
 }
 
 /** checkin.save's extra answers about the night: only the keys the request has (goals.ts cleanCheckinExtras checks them). */

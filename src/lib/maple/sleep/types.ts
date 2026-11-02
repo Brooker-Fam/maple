@@ -162,7 +162,29 @@ export type GoalStep = { id: string; title: string; week_of: string | null; done
  * midnight; a time before noon belongs to the morning after that evening,
  * as a try day does.
  */
-export type RosterWindow = { id: string; member: string; from: string; to: string; nights: number[] };
+export type RosterWindow = { id: string; member: string; from: string; to: string; nights: number[]; covers?: WindowCovers };
+
+/**
+ * How the baby's feeds inside a protected window are covered, so that adult
+ * can sleep (optional; absent on older windows): "nurse" (she nurses: the
+ * adult on duty brings her to the nursing parent, then settles her, or the
+ * nursing parent is the one on duty), "bottle" (the adult on duty gives a
+ * bottle of expressed milk, or what she usually has), or "none" (no feed is
+ * planned in it). goalCautions words its warnings by it and by her age.
+ */
+export const WINDOW_COVERS = ["nurse", "bottle", "none"] as const;
+export type WindowCovers = (typeof WINDOW_COVERS)[number];
+
+/**
+ * A goal made from a template keeps what the template's notes need later
+ * (absent on older goals, null on goals made by hand): for "back_to_work",
+ * the adult going back to work and the day they go back, and who nurses
+ * (null for a family that gives bottles only). The coach notes read it: a
+ * drowsy-driving note when that adult didn't get their window's sleep, and
+ * more night nursing to expect when the nursing parent is the one going back.
+ */
+export const GOAL_TEMPLATES = ["back_to_work"] as const;
+export type GoalTemplate = { kind: (typeof GOAL_TEMPLATES)[number]; member: string; date: string; nursing: string | null };
 
 export type SleepGoal = {
   id: number;
@@ -176,6 +198,8 @@ export type SleepGoal = {
   targets: GoalTarget[];
   steps: GoalStep[];
   roster: RosterWindow[];
+  /** The template it was made from, with what its notes need (GoalTemplate); null or absent for a goal made by hand. */
+  template?: GoalTemplate | null;
   /** The last review (sleep_goal review, or closing it), with its short note. */
   last_review_at: string | null;
   review_note: string | null;
@@ -312,7 +336,7 @@ export type GoalTargetInput = {
   text?: string | null;
 };
 export type GoalStepInput = { id?: string | null; title: string; week_of?: string | null };
-export type RosterWindowInput = { id?: string | null; member: string; from: string; to: string; nights: number[] };
+export type RosterWindowInput = { id?: string | null; member: string; from: string; to: string; nights: number[]; covers?: WindowCovers | null };
 export type GoalInput = {
   title?: string;
   why?: string | null;
@@ -323,4 +347,6 @@ export type GoalInput = {
   roster?: RosterWindowInput[];
   /** goal.update only: between active and paused (and back from met or dropped). Closing is goal.close. */
   status?: "active" | "paused";
+  /** The template's context (GoalTemplate, people as member ids), or null to clear it. */
+  template?: GoalTemplate | null;
 };

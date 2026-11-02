@@ -13,12 +13,14 @@ import { sealSession, SESSION_COOKIE } from "../../src/lib/maple/auth";
 import { chatLogState, chatTools, forModel, MODEL_TEXT_MAX, registrations } from "../../src/lib/maple/chat/tools";
 import type { ChatToolOutput } from "../../src/lib/maple/chat/types";
 import { FAMILY_ONE_COPY, type Extra } from "../../src/lib/maple/mcp-tools";
-import { lastNightKey } from "../../src/lib/maple/sleep/goals";
+import { backToWorkGoal, lastNightKey } from "../../src/lib/maple/sleep/goals";
+import { ALL_VIEW_MAX } from "../../src/lib/maple/sleep/mcp";
 import { logTry, saveCheckin } from "../../src/lib/maple/sleep/store";
 import type { SleepCheckin, SleepGoal, SleepState } from "../../src/lib/maple/sleep/types";
 import { rev } from "../../src/lib/maple/store";
 import { addDays, dayKey } from "../../src/lib/maple/time";
 import type { Role } from "../../src/lib/maple/types";
+import { makeVoice } from "../../src/lib/maple/voice";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type FamilySeed } from "./harness";
 
 process.env.MCP_SECRET = "made-up-sleep-goals-secret";
@@ -217,10 +219,9 @@ async function main() {
     ok(!/Check-ins|checked in|Not checked in|check-ins on|From the adults/.test(vp.text), `viewer sleep_plan: ${vp.text}`);
     const vpa = await call("sleep_plan", { view: "all" }, alpha, "viewer");
     ok(!/Check-ins|checked in|Not checked in|check-ins on|From the adults/.test(vpa.text), `viewer sleep_plan, view all: ${vpa.text}`);
-    const vg = (vpa.sc.goals as { progress: Record<string, unknown> }[])[0];
-    ok(!("checkins" in vg.progress), "no check-ins in the viewer's goal JSON");
+    ok(!JSON.stringify(vpa.sc).includes('"checkins"'), "no check-ins in the viewer's JSON");
     const mp = await call("sleep_plan", { view: "all" }, alpha, "member");
-    ok(/Check-ins since/.test(mp.text) && "checkins" in (mp.sc.goals as { progress: Record<string, unknown> }[])[0].progress, mp.text);
+    ok(/Check-ins since/.test(mp.text), mp.text);
     const vs = await call("maple_status", {}, alpha, "viewer");
     ok(/Sleep goals: g\d+ "Both of us get a 4-hour stretch"/.test(vs.text) && !/Check-ins for last night/.test(vs.text), vs.text);
     ok(!("checkins_last_night" in (vs.sc.sleep as Record<string, unknown>)), "viewer maple_status JSON");
@@ -361,19 +362,18 @@ async function main() {
     const t0 = new Date(Date.now() - 3 * 24 * HOUR);
     await logTry(1, { babyId: alpha.babyId, start: t0, end: new Date(t0.getTime() + 90 * MIN), outcome: "stayed_asleep", putDownBy: alpha.member, tags: [], note: null, by: alpha.member, source: "web" });
     const r = await call("sleep_plan", { view: "all" }, alpha);
-    const g = (r.sc.goals as { id: string; progress: { targets: { id: string; weeks: { nights_counted: number }[] }[]; weeks: unknown[] }; coach: { review_due: boolean; notes: string[] } }[]).find((x) => x.id === `g${goal!.id}`)!;
-    ok(g, JSON.stringify(r.sc.goals));
-    eq(g.progress.weeks.length, 2, "two weeks begun");
-    eq(g.progress.targets[0].weeks.reduce((n, w) => n + w.nights_counted, 0), 1, "the night with the 90-minute try counts once");
-    eq(g.coach.review_due, true, "eight days without a review");
-    ok(/Coach note: Review due/.test(r.text) && /Coaching: Ask one question at a time/.test(r.text), r.text);
-    ok(Array.isArray(r.sc.coach_guardrails) && (r.sc.coach_guardrails as string[]).some((l) => /lactation consultant/.test(l)), "guardrails");
+    ok((r.sc.goals as { id: string }[]).some((x) => x.id === `g${goal!.id}`), JSON.stringify(r.sc.goals));
+    const view = await route(alpha.member, 1, undefined, "?view=goals");
+    const gv = (view.json.goals as { goal: SleepGoal; progress: { weeks: unknown[]; targets: { weeks: { counted: number }[] }[] }; coach: { reviewDue: boolean } }[]).find((x) => x.goal.id === goal!.id)!;
+    eq(gv.progress.weeks.length, 2, "two weeks begun");
+    eq(gv.progress.targets[0].weeks.reduce((n, w) => n + w.counted, 0), 1, "the night with the 90-minute try counts once");
+    eq(gv.coach.reviewDue, true, "eight days without a review");
+    ok(new RegExp(`Coach note \\(g${goal!.id}\\): Review due`).test(r.text) && /Coaching: Ask one question at a time/.test(r.text), r.text);
+    ok(/^Coaching: .*lactation consultant/m.test(r.text) && !("coach_guardrails" in r.sc), "the guardrails, in the lines once");
     const keys = Object.keys(r.sc);
     ok(keys.indexOf("guidance") >= 0 && keys.indexOf("guidance") < keys.indexOf("goals"), `the safety guidance comes before the goals, so a cut never loses it: ${keys.join(", ")}`);
-    // A goal six weeks in: the tool's JSON carries its last four weeks, and says how many came before.
-    await sql(`UPDATE maple_sleep_goals SET created_at = NOW() - INTERVAL '40 days' WHERE family_id = 1 AND title = 'Sleep in our room, both of us rested'`);
-    const long = ((await call("sleep_plan", { view: "all" }, alpha)).sc.goals as { title: string; progress: { weeks: { n: number }[]; earlier_weeks_not_shown?: number; targets: { weeks?: unknown[] }[] } }[]).find((x) => x.title === "Sleep in our room, both of us rested")!;
-    eq([long.progress.weeks.map((w) => w.n), long.progress.earlier_weeks_not_shown, long.progress.targets[0].weeks?.length], [[3, 4, 5, 6], 2, 4], "the last four of six weeks");
+    // "all" carries each goal compact (ids, revisions, step ids): its lines have the counts and the coach notes.
+    eq(Object.keys((r.sc.goals as Record<string, unknown>[])[0]), ["id", "title", "status", "revision", "target_date", "targets", "steps", "roster"], "compact in all too");
     const goalText = r.text.split("\n").filter((l) => /^(Sleep goal|Aim:|Steps:|Check-ins|Roster:|Hint|Coach note:)/.test(l)).join("\n");
     const judged = goalText.match(/\b(fail(ed|ure)?|streaks?|grades?|scores?|best|worst)\b/i);
     ok(goalText.length > 0 && !judged, `a judging word: ${judged?.[0]}`);
@@ -411,36 +411,46 @@ async function main() {
 
   // ── round 1: safety, cautions, read-backs, a shorter sleep_plan, the morning's answers ──
 
-  const REFUSAL = "Maple's plans never leave June to cry, or have her sleep on or with an adult, or in a bed, couch, recliner, armchair or swing. Reword it.";
+  const CRY = 'Maple won\'t plan leaving June to cry; if this is about settling her, try "Soothe her, then try the bassinet once more".';
+  const ON_ADULT = 'Maple won\'t plan June sleeping on or with an adult; if this is a step away from it, try "Hold her only while I\'m awake, then the bassinet".';
+  const BED = 'Maple won\'t plan June sleeping in an adult bed; if this is a step away from it, try "Move her from our bed to the bassinet".';
+  const SWING = 'Maple won\'t plan sleep in a swing; try "If she falls asleep in the swing, move her to the bassinet".';
   const goalRevision = async () => Number((await sql(`SELECT revision FROM maple_sleep_goals WHERE id = $1`, [goal!.id]))[0].revision);
 
   await test("safety: the tool and the route refuse crying it out and unsafe sleep in every goal text; the allowed phrases save", async () => {
     const before = await count("maple_sleep_goals", "family_id = 1", []);
-    const refused: [Record<string, unknown>, string][] = [
-      [{ title: "Learn to self-settle", steps: [{ title: "Let her cry it out for 10 minutes before picking her up" }] }, "Step 1"],
-      [{ title: "Rest for Blake", steps: [{ title: "Bassinet after the 10 PM feed" }, { title: "Blake naps on the couch with her on his chest after the 6 AM feed" }] }, "Step 2"],
-      [{ title: "Easier nights", targets: [{ kind: "custom", text: "June sleeps in our bed between feeds" }] }, "Target 1"],
-      [{ title: "Ferber by week 6" }, "The goal's title"],
-      [{ title: "More sleep", why: "So June can nap on Avery's chest while I sleep" }, "Why it matters"],
-      [{ title: "Gentle nights", steps: [{ title: "Swing naps in the afternoon" }] }, "Step 1"],
+    const refused: [Record<string, unknown>, string, string][] = [
+      [{ title: "Learn to self-settle", steps: [{ title: "Let her cry it out for 10 minutes before picking her up" }] }, "Step 1", CRY],
+      [{ title: "Rest for Blake", steps: [{ title: "Bassinet after the 10 PM feed" }, { title: "Blake naps on the couch with her on his chest after the 6 AM feed" }] }, "Step 2", ON_ADULT],
+      [{ title: "Easier nights", targets: [{ kind: "custom", text: "June sleeps in our bed between feeds" }] }, "Target 1", BED],
+      [{ title: "Ferber by week 6" }, "The goal's title", CRY],
+      [{ title: "More sleep", why: "So June can nap on Avery's chest while I sleep" }, "Why it matters", ON_ADULT],
+      [{ title: "Gentle nights", steps: [{ title: "Swing naps in the afternoon" }] }, "Step 1", SWING],
+      [{ title: "Longer stretches", steps: [{ title: "Wait 10 minutes before picking her up when she cries" }] }, "Step 1", CRY],
+      [{ title: "Reflux nights", steps: [{ title: "Raise the head of the bassinet with a pillow" }] }, "Step 1", 'Maple won\'t plan raising or tilting her sleep surface; try "Flat on her back in the bassinet" (questions like reflux go to her pediatrician).'],
+      [{ title: "Longer naps", steps: [{ title: "Put her down on her tummy for naps" }] }, "Step 1", 'Maple won\'t plan sleep on her tummy or side; try "On her back for every sleep, and tummy time while she\'s awake".'],
     ];
-    for (const [args, field] of refused) {
+    for (const [args, field, words] of refused) {
       for (const confirmed of [false, true]) {
         const r = await call("sleep_goal", { action: "add", ...args, ...(confirmed ? { confirmed: true } : {}) }, alpha);
-        ok(r.isError && r.text.startsWith(`${field}: ${REFUSAL}`) && /Nothing was saved/.test(r.text), `tool ${confirmed ? "add" : "read-back"}: ${r.text}`);
+        ok(r.isError && r.text.startsWith(`${field}: ${words}`) && /Nothing was saved/.test(r.text), `tool ${confirmed ? "add" : "read-back"}: ${r.text}`);
       }
       const rc = await route(alpha.owner, 1, { action: "goal.create", goal: args });
-      eq([rc.status, rc.json.error], [400, `${field}: ${REFUSAL}`], `route: ${JSON.stringify(args)}`);
+      eq([rc.status, rc.json.error], [400, `${field}: ${words}`], `route: ${JSON.stringify(args)}`);
     }
     const rev = await goalRevision();
     const tu = await call("sleep_goal", { action: "update", id: `g${goal!.id}`, revision: rev, steps: [{ title: "Contact naps after lunch" }] }, alpha);
-    ok(tu.isError && tu.text.startsWith(`Step 1: ${REFUSAL}`), tu.text);
+    ok(tu.isError && tu.text.startsWith(`Step 1: ${ON_ADULT}`), tu.text);
     const ru = await route(alpha.owner, 1, { action: "goal.update", id: goal!.id, revision: rev, patch: { why: "So she can co-sleep with us" } });
-    eq([ru.status, ru.json.error], [400, `Why it matters: ${REFUSAL}`], "route update");
+    eq([ru.status, ru.json.error], [400, `Why it matters: ${BED}`], "route update");
     eq([await count("maple_sleep_goals", "family_id = 1", []), await goalRevision()], [before, rev], "nothing saved");
-    // The review's four, and feeding words, save.
+    // The review's four, and feeding words, save; so do steps away from unsafe sleep, and held sleep while someone's awake, with its caution.
     const t = await call("sleep_goal", { action: "add", title: "Bassinet beside our bed", why: "She cries less after feeds", steps: [{ title: "If she wakes crying, soothe her" }, { title: "Bassinet in our room" }], confirmed: true }, alpha);
     ok(!t.isError && t.sc.created === true, t.text);
+    const away = await call("sleep_goal", { action: "add", title: "Out of our bed", steps: [{ title: "Stop letting her sleep in our bed" }, { title: "No more letting her nap on the couch" }, { title: "Contact naps on me while I'm awake" }, { title: "Rock her to sleep in the armchair, then lay her in the bassinet" }] }, alpha);
+    ok(!away.isError && away.sc.confirm_needed === true, away.text);
+    ok(/Say this too: The step "Contact naps on me while I'm awake" has June asleep on an adult only while they stay awake: say Maple's line with it: "If you feel yourself dozing while holding her, lay her on her back in the bassinet or hand her to someone who's awake\."/.test(away.text), away.text);
+    ok(/Say this too: The step "Rock her to sleep in the armchair, then lay her in the bassinet" has June on a couch or chair before the bassinet: say this with it: "Be mindful of how tired you are/.test(away.text), away.text);
     const r = await route(alpha.owner, 1, { action: "goal.create", goal: { title: "Switch the 2 AM feed to formula", steps: [{ title: "Pump before bed so Blake can give a bottle" }, { title: "Dream feed at 10:30 PM" }, { title: "Wean the 3 AM feed" }, { title: "Supplement after the evening feed" }] } });
     eq(r.status, 200, JSON.stringify(r.json));
     await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1 AND id <> $1`, [goal!.id]);
@@ -455,14 +465,21 @@ async function main() {
       const text = r.text.replace(/[  ]/g, " ");
       ok(r.sc.confirm_needed === true && (r.sc.cautions as string[]).length === 3, r.text);
       ok(text.includes(`Say this too: "a bassinet stretch of 6 hours or more" asks for more than 4 hours in June's first 4 weeks. Maple's guidance for her age: "In the first weeks, long stretches aren't the goal. If June sleeps longer than 4 hours at night, wake her to feed, unless her pediatrician has told you otherwise."`), text);
-      ok(text.includes("Say this too: Blake's window, 7:30 PM–7:30 AM, is longer than 5 hours: someone else covers any feeds in it, and bottles or pumping to make that work go to their pediatrician or lactation consultant first."), text);
+      ok(text.includes("Say this too: Blake's window, 7:30 PM–7:30 AM, is longer than 4 hours with no feed planned in it: in June's first weeks feeds come first, so whoever's on duty can bring her to nurse in it and settle her after (a bottle for a nursing baby waits for their pediatrician's or lactation consultant's yes)."), text);
+      // The same window with her feeds covered by nursing: nothing about it to say (P2-11); with a bottle before 4 weeks, the question first.
+      const nursed = await call("sleep_goal", { ...args, roster: [{ member: "Blake", from: "19:30", to: "07:30", nights: EVERY, covers: "nurse" }] }, alpha);
+      ok(!/Blake's window/.test(nursed.text), nursed.text);
+      const bottled = await call("sleep_goal", { ...args, roster: [{ member: "Blake", from: "19:30", to: "07:30", nights: EVERY, covers: "bottle" }] }, alpha);
+      ok(/Say this too: A bottle in Blake's window \(7:30 PM–7:30 AM\): if June nurses, bottles are a question for their pediatrician or lactation consultant first, usually not before about 4 weeks old/.test(bottled.text.replace(/[  ]/g, " ")), bottled.text);
       ok(text.includes(`Say this too: The step "Switch the 2 AM feed to formula" changes how June is fed: save it only if their pediatrician or lactation consultant agreed`) && !text.includes(`The step "Ask the lactation`), text);
       // Saved through the route, the answer carries them for the app.
       const saved = await route(alpha.owner, 1, { action: "goal.create", goal: { title: "Six hours", targets: [{ kind: "bassinet_stretch", minutes: 360 }] } });
       ok((saved.json.cautions as string[]).some((c) => /June's first 4 weeks/.test(c)), JSON.stringify(saved.json.cautions));
       await sql(`UPDATE maple_babies SET born_at = NOW() - INTERVAL '40 days' WHERE id = $1`, [alpha.babyId]);
       const older = await call("sleep_goal", args, alpha);
-      ok(!/first 4 weeks/.test(older.text) && /longer than 5 hours/.test(older.text), older.text);
+      ok(!/first 4 weeks/.test(older.text) && /longer than 5 hours with no feed planned in it: say who covers a feed then/.test(older.text), older.text);
+      const olderBottle = await call("sleep_goal", { ...args, roster: [{ member: "Blake", from: "19:30", to: "07:30", nights: EVERY, covers: "bottle" }] }, alpha);
+      ok(/A bottle in Blake's window \(7:30 PM–7:30 AM\): if June nurses, plan when the nursing parent pumps around that feed, as their lactation consultant advises\./.test(olderBottle.text.replace(/[  ]/g, " ")), olderBottle.text);
     } finally {
       await sql(`UPDATE maple_babies SET born_at = $2 WHERE id = $1`, [alpha.babyId, born]);
       await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1 AND id <> $1`, [goal!.id]);
@@ -522,13 +539,13 @@ async function main() {
     const tools = chatTools({ email: alpha.member, role: "member" }, { fam: 1, born: true, care: false, copy: FAMILY_ONE_COPY });
     const out = (await tools.sleep_plan.execute!({}, { toolCallId: "made-up-call", messages: [], context: {} })) as ChatToolOutput;
     console.log(`  sleep_plan with 3 goals, as the chat reads it: ${out.text.length} characters (cut at ${MODEL_TEXT_MAX})`);
-    ok(out.ok && out.text.length < 13_000 && forModel(out.text) === out.text, `${out.text.length} characters`);
+    ok(out.ok && out.text.length < 14_000 && forModel(out.text) === out.text, `${out.text.length} characters`);
     const viewer = await call("sleep_plan", {}, alpha, "viewer");
     ok(!/Check-in notes|Made-up: up at 3/.test(viewer.text) && /Last review/.test(viewer.text), viewer.text);
     const guidance = await call("sleep_plan", { view: "guidance" }, alpha, "member");
     ok(typeof guidance.sc.guidance === "object" && !("goals" in guidance.sc) && !/^Aim:/m.test(guidance.text) && /Sleep goals: g\d+ "/.test(guidance.text), guidance.text);
     const all = await call("sleep_plan", { view: "all" }, alpha, "member");
-    ok(typeof all.sc.guidance === "object" && (all.sc.goals as { progress?: unknown }[]).every((g) => g.progress) && "coach_guardrails" in all.sc, Object.keys(all.sc).join(", "));
+    ok(typeof all.sc.guidance === "object" && (all.sc.goals as { id?: unknown }[]).every((g) => g.id) && /^Coaching: /m.test(all.text), Object.keys(all.sc).join(", "));
     // A family without goals: the same read as before, whatever the view.
     const b = await call("sleep_plan", {}, beta);
     const ball = await call("sleep_plan", { view: "all" }, beta);
@@ -555,6 +572,121 @@ async function main() {
     eq(steady(v1.rev), steady(v0.rev), "and the viewer's token didn't move");
     const lines = (await call("sleep_plan", {}, alpha, "member")).text;
     ok(/From the adults' check-ins, (this|last) week: where June spent most of the night, held by someone awake 1 \(1 night answered\); the planned handoff, late 1 \(1 night answered\)/.test(lines), lines);
+  });
+
+  // ── round 2: the "Back to work" quick setup, covered feeds, five goals under the chat's cut ──
+
+  await test("template: the quick setup through the tool reads back a goal, a roster with its feeds covered and three steps from the day back, saves on a yes, and the route saves the app's same goal", async () => {
+    const back = addDays(today, 28);
+    const answers = { returning: "Blake", return_date: back, feeding: "nursing", nursing: "Avery", sleeps: "arms", first_half: "Blake", second_half: "Avery", off_duty: "same_room" };
+    const before = await count("maple_sleep_goals", "family_id = 1", []);
+    const rb = await call("sleep_goal", { action: "add", back_to_work: answers }, alpha);
+    const text = rb.text.replace(/[  ]/g, " ");
+    ok(!rb.isError && rb.sc.confirm_needed === true, rb.text);
+    ok(text.includes(`a sleep goal "Back to work: protected sleep for Blake and Avery"; why: "Blake goes back to work on `), text);
+    ok(text.includes("targets: Blake's protected sleep, 5 nights a week; Avery's protected sleep, 4 nights a week"), text);
+    ok(text.includes("roster: Avery: 10:00 PM–2:00 AM, every night (feeds: nursing); Blake: 2:00 AM–6:00 AM, Sun–Thu nights (feeds: nursing)"), text);
+    ok(/steps: 1\. "Ask the pediatrician or lactation consultant when to start a bottle of expressed milk \(not before about 4 weeks\)" \(week of [^)]+\) 2\. "Rehearse the work-week roster on 2 or 3 nights" \(week of [^)]+\) 3\. "Plan a short first week back \(a Wednesday or Thursday start, if work allows\)" \(week of [^)]+\)/.test(text), text);
+    ok(/Say this with it: .*June sleeps in arms now: holding her is fine while you're awake, and the Plan tab's first stage is one bassinet try a day\. .*one clinician's approach is two sleep spaces/.test(text), text);
+    ok(/same back_to_work answers and confirmed: true/.test(text) && !/Say this too: .*window/.test(text), `nursing covers both windows, so no window caution: ${text}`);
+    eq(await count("maple_sleep_goals", "family_id = 1", []), before, "a read-back saves nothing");
+    // A yes: saved with its template (people by member id), each window's covers, and the steps' weeks back from the day back.
+    const yes = await call("sleep_goal", { action: "add", back_to_work: answers, confirmed: true }, alpha);
+    ok(!yes.isError && yes.sc.created === true, yes.text);
+    const id = Number(String((yes.sc.goal as { id: string }).id).slice(1));
+    const row = (await sql(`SELECT template, roster, steps, target_date FROM maple_sleep_goals WHERE id = $1`, [id]))[0] as { template: unknown; roster: { covers?: string }[]; steps: { week_of: string }[]; target_date: string };
+    const tpl = row.template as { kind: string; member: string; date: string; nursing: string | null };
+    eq([tpl.kind, tpl.member, tpl.date, tpl.nursing], ["back_to_work", alpha.member, back, alpha.owner], "the template, by member id");
+    eq(row.roster.map((w) => w.covers), ["nurse", "nurse"], "each window's feeds");
+    eq(row.steps.map((x) => x.week_of), [addDays(back, -28) < today ? today : addDays(back, -28), addDays(back, -14), addDays(back, -7)], "weeks back from the day back, none before this week");
+    eq(row.target_date, addDays(back, 13), "two weeks after the day back");
+    eq((yes.sc.goal as { template?: unknown }).template, { kind: "back_to_work", back_to_work: "Blake", back_on: back, nurses: "Avery" }, "the tool's JSON names them");
+    // The app's quick setup builds the goal itself (goals.ts backToWorkGoal) and saves it with goal.create: both nursing and bottles.
+    const v = makeVoice({ name: "June", pronoun: "she" });
+    const built = backToWorkGoal(
+      { returning: alpha.member, return_date: back, feeding: "both", nursing: alpha.owner, sleeps: "bassinet", first_half: alpha.member, second_half: alpha.owner, off_duty: "other_room" },
+      { v, name: (m) => (m === alpha.owner ? "Avery" : m === alpha.member ? "Blake" : m), today, adults: new Set([alpha.owner, alpha.member]) }
+    );
+    const rr = await route(alpha.owner, 1, { action: "goal.create", goal: built.goal, client_id: "alpha-quick-setup-1" });
+    eq(rr.status, 200, JSON.stringify(rr.json));
+    const made = goalOf(rr);
+    eq([made.template?.nursing, made.roster.map((w) => w.covers), made.steps[0].title], [alpha.owner, ["bottle", "nurse"], "Ask the lactation consultant when Avery should pump around the night bottle"], "saved as built");
+    ok((rr.json.cautions as string[]).some((c) => /^A bottle in Avery's window \(10:00 PM–2:00 AM\): bottles are a question for their pediatrician or lactation consultant first, usually not before about 4 weeks old/.test(c.replace(/[  ]/g, " "))), JSON.stringify(rr.json.cautions));
+    // What the quick setup can't use, in words, through the tool and the route.
+    const same = await call("sleep_goal", { action: "add", back_to_work: { ...answers, second_half: "Blake" } }, alpha);
+    ok(same.isError && /The two halves of the night need two different adults/.test(same.text), same.text);
+    const past = await call("sleep_goal", { action: "add", back_to_work: { ...answers, return_date: addDays(today, -3) } }, alpha);
+    ok(past.isError && /The day back at work has already passed/.test(past.text), past.text);
+    const stranger = await route(alpha.owner, 1, { action: "goal.create", goal: { ...built.goal, template: { kind: "back_to_work", member: "someone.else@example.test", date: back, nursing: null } } });
+    eq([stranger.status, /isn't an owner or member of this family/.test(String(stranger.json.error))], [400, true], "a template for someone outside the family");
+    const odd = await route(alpha.owner, 1, { action: "goal.create", goal: { title: "Made-up", roster: [{ member: alpha.member, from: "22:00", to: "02:00", nights: EVERY, covers: "formula" }] } });
+    eq([odd.status, odd.json.error], [400, "Window 1: how its feeds are covered must be one of nurse, bottle, none."], "a cover it doesn't know");
+    // An update that changes how a window's feeds are covered reads back the change, and its caution.
+    const cur = (await sql(`SELECT revision, roster FROM maple_sleep_goals WHERE id = $1`, [id]))[0] as { revision: number; roster: { id: string; member: string; from: string; to: string; nights: number[]; covers?: string }[] };
+    const roster = cur.roster.map((w, i) => ({ id: w.id, member: w.member === alpha.owner ? "Avery" : "Blake", from: w.from, to: w.to, nights: w.nights, covers: i === 0 ? "bottle" : w.covers }));
+    const up = await call("sleep_goal", { action: "update", id: `g${id}`, revision: Number(cur.revision), roster }, alpha);
+    ok(up.text.replace(/[  ]/g, " ").includes(`windows: changes window 1 to "Avery: 10:00 PM–2:00 AM, every night (feeds: a bottle)" (was "Avery: 10:00 PM–2:00 AM, every night (feeds: nursing)"); keeps 2`), up.text);
+    ok(/Say this too: A bottle in Avery's window/.test(up.text), up.text);
+    await sql(`DELETE FROM maple_sleep_goals WHERE id = ANY($1::bigint[])`, [[id, made.id]]);
+  });
+
+  await test("sleep_plan with five goals: the most urgent first, each coach note with its goal's ref, and view all under the chat's cut (or saying which goals are a view away)", async () => {
+    const active = await count("maple_sleep_goals", "family_id = 1 AND status = 'active' AND deleted_at IS NULL", []);
+    const made: number[] = [];
+    for (let n = 0; active + n < 5; n++) {
+      const r = await route(alpha.owner, 1, {
+        action: "goal.create",
+        goal: {
+          title: `Made-up goal ${n + 2}: a protected stretch for each of us before work starts again`,
+          why: "Made-up: back to work soon, still nursing, and we both need sleep.",
+          // Two with the same date: each keeps its own "N days to the target date" note (N8).
+          target_date: addDays(today, n < 2 ? 30 : 40 - 5 * n),
+          targets: [
+            { kind: "bassinet_nights", per_week: 3, min_minutes: 90 },
+            { kind: "protected_window", member: alpha.member, per_week: 4 },
+            { kind: "protected_window", member: alpha.owner, per_week: 4 },
+            { kind: "custom", text: "Calmer bedtimes for everyone" },
+          ],
+          steps: Array.from({ length: 8 }, (_, i) => ({ title: `Made-up step ${i + 1}: one bassinet try a night after the first night feed`, week_of: addDays(today, 7 * (i % 4)) })),
+          roster: [
+            { member: alpha.member, from: "21:30", to: "01:30", nights: EVERY, covers: "nurse" },
+            { member: alpha.owner, from: "01:30", to: "06:30", nights: EVERY },
+          ],
+        },
+      });
+      eq(r.status, 200, JSON.stringify(r.json));
+      made.push(goalOf(r).id);
+    }
+    await sql(`UPDATE maple_sleep_goals SET created_at = NOW() - INTERVAL '9 days' WHERE id = ANY($1::bigint[])`, [made]);
+    const tools = chatTools({ email: alpha.member, role: "member" }, { fam: 1, born: true, care: false, copy: FAMILY_ONE_COPY });
+    const read = async (view?: string) => (await tools.sleep_plan.execute!(view ? { view } : {}, { toolCallId: "made-up-call", messages: [], context: {} })) as ChatToolOutput;
+    const compact = await read();
+    const all = await read("all");
+    console.log(`  sleep_plan with five goals, as the chat reads it: ${compact.text.length} characters (goals), ${all.text.length} (all), cut at ${MODEL_TEXT_MAX}`);
+    ok(compact.ok && forModel(compact.text) === compact.text, `goals view cut at ${compact.text.length}`);
+    ok(all.ok && all.text.length <= ALL_VIEW_MAX && forModel(all.text) === all.text, `all view: ${all.text.length}`);
+    const headsOf = (t: string) => [...t.matchAll(/^Sleep goal (g\d+) \(/gm)].map((m) => m[1]);
+    const openGoals = (await sql(`SELECT id, status, target_date FROM maple_sleep_goals WHERE family_id = 1 AND status IN ('active', 'paused') AND deleted_at IS NULL`, [])) as { id: number; status: string; target_date: string | null }[];
+    const heads = headsOf(compact.text);
+    ok(heads.length >= 1 && heads.length <= openGoals.length, `${heads.length} of ${openGoals.length}`);
+    // Most urgent first: the active goal with the nearest target date leads.
+    const byDate = openGoals.filter((g) => g.status === "active").sort((a, b) => (a.target_date ?? "9999").localeCompare(b.target_date ?? "9999")).map((d) => `g${d.id}`);
+    eq(heads[0], byDate[0], "the nearest target date first");
+    for (const ref of heads) ok(new RegExp(`^Coach note \\(${ref}\\): `, "m").test(compact.text), `${ref} has its own coach notes`);
+    // Every goal shown keeps its own "N days to the target date" (two goals' same words aren't dropped as one).
+    const twins = made.slice(0, 2).filter((id) => heads.includes(`g${id}`));
+    ok(twins.every((id) => new RegExp(`^Coach note \\(g${id}\\): 30 days to the target date`, "m").test(compact.text)), compact.text);
+    // A read that couldn't fit every open goal names the rest, and each one reads by itself.
+    for (const t of [compact.text, all.text]) {
+      const shown = headsOf(t);
+      if (shown.length === openGoals.length) continue;
+      ok(/this read leaves out \d+ less urgent goals?: g\d+ ".*"\. sleep_plan with goal "g\d+" \(and so on\) reads each one\./.test(t), t);
+      const left = openGoals.map((g) => `g${g.id}`).find((ref) => !shown.includes(ref))!;
+      const one = (await tools.sleep_plan.execute!({ goal: left }, { toolCallId: "made-up-call", messages: [], context: {} })) as ChatToolOutput;
+      ok(one.ok && headsOf(one.text).join() === left, one.text);
+    }
+    ok(!/\.\.(\s|$)/.test(compact.text) && !/\.\.(\s|$)/.test(all.text), "never two periods in a row");
+    await sql(`DELETE FROM maple_sleep_goals WHERE id = ANY($1::bigint[])`, [made]);
   });
 
   await test("the change token: a family without sleep rows keeps its old shape and value; goals move it for everyone, check-ins only for owners and members", async () => {

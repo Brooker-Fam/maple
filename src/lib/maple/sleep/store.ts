@@ -37,6 +37,8 @@ import {
   TRY_OUTCOMES,
   TRY_TAGS,
   TRY_TIMES_MAX,
+  GOAL_TEMPLATES,
+  type GoalTemplate,
   type BassinetTry,
   type HoldingShift,
   type PlanPatch,
@@ -1229,6 +1231,7 @@ export function rowToGoal(r: Row): SleepGoal {
     targets: list<GoalTarget>(r.targets, (x) => typeof x.id === "string" && (TARGET_KINDS as readonly unknown[]).includes(x.kind)),
     steps: list<GoalStep>(r.steps, (x) => typeof x.id === "string" && typeof x.title === "string"),
     roster: list<RosterWindow>(r.roster, (x) => typeof x.id === "string" && typeof x.member === "string" && Array.isArray(x.nights)),
+    template: goalTemplateOf(r.template),
     last_review_at: isoOrNull(r.last_review_at),
     review_note: textOrNull(r.review_note),
     closed_at: isoOrNull(r.closed_at),
@@ -1239,6 +1242,12 @@ export function rowToGoal(r: Row): SleepGoal {
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
   };
+}
+
+/** A goal's template context as stored (sleep/types.ts GoalTemplate), or null: one this release doesn't know is read past. */
+function goalTemplateOf(v: unknown): GoalTemplate | null {
+  if (!isObj(v) || !(GOAL_TEMPLATES as readonly unknown[]).includes(v.kind) || typeof v.member !== "string" || !isDayKey(v.date)) return null;
+  return { kind: v.kind as GoalTemplate["kind"], member: v.member, date: v.date, nursing: typeof v.nursing === "string" ? v.nursing : null };
 }
 
 /** The people and day a goal write is checked against (goals.ts cleanGoalInput). */
@@ -1311,8 +1320,8 @@ export async function createGoal(
     [, rows] = await tx([
       { sql: `SELECT pg_advisory_xact_lock(${GOAL_LOCK}, $1::int)`, params: [familyId] },
       {
-        sql: `INSERT INTO maple_sleep_goals (family_id, baby_id, title, why, target_date, targets, steps, roster, item_seq, created_by, source, client_id, device)
-              SELECT $1::bigint, $2::integer, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13
+        sql: `INSERT INTO maple_sleep_goals (family_id, baby_id, title, why, target_date, targets, steps, roster, item_seq, created_by, source, client_id, device, template)
+              SELECT $1::bigint, $2::integer, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14::jsonb
               WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $2::integer AND family_id = $1::bigint)
                 AND (SELECT COUNT(*) FROM maple_sleep_goals WHERE family_id = $1::bigint AND baby_id = $2::integer AND status = 'active' AND deleted_at IS NULL) < ${GOALS_ACTIVE_MAX}
                 AND (SELECT COUNT(*) FROM maple_sleep_goals WHERE family_id = $1::bigint AND baby_id = $2::integer AND status IN ('active', 'paused') AND deleted_at IS NULL) < ${GOALS_OPEN_MAX}
@@ -1331,6 +1340,7 @@ export async function createGoal(
           input.source,
           clientId,
           input.device ?? null,
+          fields.template ? JSON.stringify(fields.template) : null,
         ],
       },
     ]);
@@ -1357,6 +1367,7 @@ type GoalChange = {
   targets?: GoalTarget[];
   steps?: GoalStep[];
   roster?: RosterWindow[];
+  template?: GoalTemplate | null;
   status?: GoalStatus;
   seq?: number;
   review?: { note: string | null };
@@ -1395,6 +1406,7 @@ async function mutateGoal(
     if (c.targets !== undefined) set("targets", JSON.stringify(c.targets), "::jsonb");
     if (c.steps !== undefined) set("steps", JSON.stringify(c.steps), "::jsonb");
     if (c.roster !== undefined) set("roster", JSON.stringify(c.roster), "::jsonb");
+    if (c.template !== undefined) set("template", c.template ? JSON.stringify(c.template) : null, "::jsonb");
     if (c.seq !== undefined && c.seq !== row.seq) set("item_seq", c.seq);
     if (c.status !== undefined) set("status", c.status);
     if (c.review) {

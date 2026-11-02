@@ -5,7 +5,7 @@
  * route and the MCP tools on an in-memory Postgres.
  */
 import { emergencySigns } from "../src/lib/maple/guidelines";
-import { SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
+import { feedingSleepyWords, nightFeedLine, SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
 import {
   AGE_BANDS,
   askState,
@@ -38,6 +38,8 @@ import {
 } from "../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../src/lib/maple/sleep/errors";
 import {
+  backToWorkGoal,
+  backToWorkQuestions,
   checkinNights,
   cleanCheckinExtras,
   cleanCheckinNight,
@@ -49,6 +51,8 @@ import {
   goalProgress,
   goalProgressLines,
   goalSpan,
+  goalsByUrgency,
+  goalWeekLabel,
   lastNightKey,
   lastNightLine,
   loggedSpans,
@@ -57,18 +61,26 @@ import {
   nightAnswers,
   nightLog,
   nightPicture,
+  observationWords,
   plannedHandoff,
   refuseUnsafe,
+  rosterHintBody,
+  rosterWords,
   seesCheckins,
+  sleepExemptions,
   stepsByWeek,
+  turnLeftOpen,
   unsafeSleep,
+  unsafeWords,
+  weekEndedLastNight,
   windowMinutes,
   windowOn,
   windowOnNight,
+  type BackToWorkAnswers,
   type GoalData,
   type GoalRules,
 } from "../src/lib/maple/sleep/goals";
-import type { BassinetTry, GoalInput, HoldingShift, SleepCheckin, SleepGoal, SleepPlan, TryOutcome, TryTag } from "../src/lib/maple/sleep/types";
+import type { BassinetTry, GoalInput, HoldingShift, RosterWindow, SleepCheckin, SleepGoal, SleepPlan, TryOutcome, TryTag } from "../src/lib/maple/sleep/types";
 import { CHECKIN_QUESTION, checkinQuestion, cryingLine, downWords, isTrySlot, nightsLabel, shortClock, sleepyChoices, slotLabel, slotShort, STAGE_INFO, targetWords, weekdayOf } from "../src/lib/maple/sleep/words";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Entry, SleepPlace } from "../src/lib/maple/types";
@@ -526,7 +538,7 @@ check("guidance: matched to her age, the stage and the log", () => {
 
 // ── the content's own rules ──────────────────────────────────────────────
 
-const ALLOWED_HOSTS = new Set(["www.healthychildren.org", "pubmed.ncbi.nlm.nih.gov", "publications.aap.org", "www.aap.org", "988lifeline.org"]);
+const ALLOWED_HOSTS = new Set(["www.healthychildren.org", "pubmed.ncbi.nlm.nih.gov", "publications.aap.org", "www.aap.org", "988lifeline.org", "www.nichd.nih.gov"]);
 
 check("content: every item has an age window, a source URL and a last-reviewed date", () => {
   const ids = new Set<string>();
@@ -746,7 +758,7 @@ check("goal weeks: the night the clocks fall back is one night with both its 1:3
   const t2 = tryRow(new Date("2026-11-01T06:45:00Z"), new Date("2026-11-01T07:00:00Z"), "woke_calm");
   const p = goalProgress(g, data({ tries: [t1, t2] }), at(2026, 11, 3, 10), NY);
   const tp = p.targets[0];
-  eq(tp.kind === "bassinet_nights" && tp.weeks[0], { week: 1, counted: 1, tried: 1, nights: 6, fromCheckins: 0, known: 1, unknown: 5 }, "one night, counted once");
+  eq(tp.kind === "bassinet_nights" && tp.weeks[0], { week: 1, counted: 1, tried: 1, nights: 6, fromCheckins: 0, known: 1, unknown: 5, feedsOnly: 0 }, "one night, counted once");
   const len = (w: { from: string; to: string }, night: string, tz = NY) => {
     const [a, b] = windowOn(w, night, tz);
     return (b.getTime() - a.getTime()) / HOUR;
@@ -778,9 +790,10 @@ check("bassinet nights: a night counts once, with a try that stayed asleep the t
   const p = goalProgress(g, data({ tries }), at(2026, 11, 9, 10), NY);
   const tp = p.targets[0];
   // Known: the 4 nights with a try (the running one's too); nothing at all was logged on the other 3.
-  eq(tp.kind === "bassinet_nights" && tp.weeks, [{ week: 1, counted: 2, tried: 3, nights: 7, fromCheckins: 0, known: 4, unknown: 3 }], "two nights of three tried");
+  eq(tp.kind === "bassinet_nights" && tp.weeks, [{ week: 1, counted: 2, tried: 3, nights: 7, fromCheckins: 0, known: 4, unknown: 3, feedsOnly: 0 }], "two nights of three tried");
+  // Monday morning: the try day is still Sunday night's, the last of week 1, while the calendar (and this week's step) is week 2's.
   const line = goalProgressLines(g, p, words(SHE, at(2026, 11, 9, 10))).join(" ");
-  ok(/Aim: 4 nights a week with a bassinet try asleep 1 hour or more\. This week: 2 of the 4 nights aimed for \(tries logged on 3 of 7 nights so far\)\./.test(line), line);
+  ok(/Aim: 4 nights a week with a bassinet try asleep 1 hour or more\. Week 1 \(ended last night\): 2 of the 4 nights aimed for \(tries logged on 3 of 7 nights\)\./.test(line), line);
 });
 
 check("bassinet stretch: the longest each week and how many reached the aim, every stretch counted once", () => {
@@ -824,7 +837,7 @@ check("protected window: counted from that adult's own check-ins, against the ni
   const hidden = goalProgress(g, data({ checkins: null }), now, NY);
   eq([hidden.targets[0].kind === "protected_window" && hidden.targets[0].weeks, hidden.checkins], [null, null], "nothing for a view-only reader");
   const shown = goalProgressLines(g, p, words(SHE, now)).join(" ");
-  ok(/Aim: Sam's protected sleep, 4 nights a week\. This week: yes on 2 of the 4 nights aimed for \(checked in on 4 of 5 roster nights so far; partly 1, not this time 1\)\./.test(shown) && /Check-ins since Mon, Nov 2: Sam 4 nights/.test(shown), shown);
+  ok(/Aim: Sam's protected sleep, 4 nights a week\. Week 1 \(ended last night\): yes on 2 of the 4 nights aimed for \(checked in on 4 of 5 roster nights; partly 1, not this time 1\)\./.test(shown) && /Check-ins since Mon, Nov 2: Sam 4 nights/.test(shown), shown);
   ok(!/\bhold(s|ing)?\b|\bheld\b/.test(shown), `never "hold" for a protected window (that's a holding turn's word): ${shown}`);
   const viewer = goalProgressLines(g, hidden, words(SHE, now)).join(" ");
   ok(!/Check-ins|checked in|partly|not this time/.test(viewer) && /counted from the adults' own check-ins/.test(viewer), viewer);
@@ -1081,16 +1094,16 @@ check("safety: no false positives: the bassinet beside our bed, in our room, soo
 
 check("safety: every goal text refuses with words by its field (title, why, steps, a custom target) and the plan's goal too", () => {
   const rules: GoalRules = { ...RULES, v: WREN };
-  const said = /Maple's plans never leave Wren to cry, or have her sleep on or with an adult, or in a bed, couch, recliner, armchair or swing\. Reword it\.$/;
-  throwsInput(() => cleanGoalInput({ title: "Learn to self-settle", steps: [{ title: "Let her cry it out for 10 minutes before picking her up" }] }, rules, "create"), /^Step 1: Maple's plans never leave Wren to cry/, "a step");
+  const said = /^Target 1: Maple won't plan Wren sleeping in an adult bed; if this is a step away from it, try "Move her from our bed to the bassinet"\.$/;
+  throwsInput(() => cleanGoalInput({ title: "Learn to self-settle", steps: [{ title: "Let her cry it out for 10 minutes before picking her up" }] }, rules, "create"), /^Step 1: Maple won't plan leaving Wren to cry; if this is about settling her, try "Soothe her, then try the bassinet once more"\.$/, "a step");
   throwsInput(() => cleanGoalInput({ title: "Rest for Theo", steps: [{ title: "Bassinet after the 10 PM feed" }, { title: "Theo naps on the couch with her on his chest after the 6 AM feed" }] }, rules, "create"), /^Step 2: /, "the second step");
   throwsInput(() => cleanGoalInput({ title: "Easier nights", targets: [{ kind: "custom", text: "Wren sleeps in our bed between feeds" }] }, rules, "create"), said, "a custom target");
   throwsInput(() => cleanGoalInput({ title: "Easier nights", targets: [{ kind: "custom", text: "Wren sleeps in our bed between feeds" }] }, rules, "create"), /^Target 1: /, "by its field");
   throwsInput(() => cleanGoalInput({ title: "Ferber by week 6" }, rules, "create"), /^The goal's title: /, "the title");
   throwsInput(() => cleanGoalInput({ title: "Sleep", why: "So she can nap on Theo's chest while I sleep" }, rules, "create"), /^Why it matters: /, "the why");
   throwsInput(() => cleanGoalInput({ steps: [{ title: "Contact naps after lunch" }] }, { ...rules, current: goalRow() }, "update"), /^Step 1: /, "an update too");
-  throwsInput(() => refuseUnsafe("Co-sleeping safely", "The goal", { v: WREN }), /^The goal: Maple's plans never leave Wren to cry/, "the plan's goal");
-  throwsInput(() => cleanGoalInput({ title: "Let her cry it out" }, RULES, "create"), /never leave the baby to cry, or have the baby sleep/, "the form, without a voice");
+  throwsInput(() => refuseUnsafe("Co-sleeping safely", "The goal", { v: WREN }), /^The goal: Maple won't plan Wren sleeping in an adult bed/, "the plan's goal");
+  throwsInput(() => cleanGoalInput({ title: "Let her cry it out" }, RULES, "create"), /^The goal's title: Maple won't plan leaving the baby to cry; if this is about settling the baby, try "Soothe the baby, then try the bassinet once more"\.$/, "without a voice");
   // Feeding words save: the read-back asks for the clinician's yes instead.
   ok(cleanGoalInput({ title: "More sleep for Noor", steps: [{ title: "Switch the 2 AM feed to formula" }] }, rules, "create").fields.steps?.length === 1, "a feeding step saves");
   ok(cleanGoalInput({ title: "Sleeping in her bassinet in our room", why: "She only sleeps on us right now" }, rules, "create").fields.why, "a why about now");
@@ -1117,7 +1130,9 @@ check("cautions: feeds come first under 4 weeks (the app's own line, quoted), a 
   const guide = SLEEP_GUIDES.find((g) => g.id === "normal-feeds-first")!.body(WREN);
   ok(young[0].text.includes(`"${guide}"`) && young[0].text.includes(`"${targetWords(f.targets[0], nameOf)}" and "${targetWords(f.targets[1], nameOf)}" ask for more than 4 hours in Wren's first 4 weeks`), young[0].text);
   ok(!young[0].text.includes("1h 30m"), "a target under 4 hours isn't named");
-  ok(/^Sam's window, 7:30 PM–7:30 AM, is longer than 5 hours: someone else covers any feeds in it, and bottles or pumping to make that work go to their pediatrician or lactation consultant first\.$/.test(plain(young[1].text) as string), young[1].text);
+  // In her first weeks a window past 4 hours with nothing said about its feeds: the adult on duty brings her to nurse (P2-11's plainer words).
+  ok(/^Sam's window, 7:30 PM–7:30 AM, is longer than 4 hours with no feed planned in it: in Wren's first weeks feeds come first, so whoever's on duty can bring her to nurse in it and settle her after \(a bottle for a nursing baby waits for their pediatrician's or lactation consultant's yes\)\.$/.test(plain(young[1].text) as string), young[1].text);
+  ok(/^Sam's window, 7:30 PM–7:30 AM, is longer than 5 hours with no feed planned in it: say who covers a feed then \(bringing her to nurse, or a bottle\), and ask their pediatrician or lactation consultant before starting bottles for a nursing baby\.$/.test(plain(goalCautions(f, { v: WREN, name: nameOf, ageDays: 40 })[0].text) as string), "older: who covers it");
   ok(young[2].text.includes(`The step "Switch the 2 AM feed to formula" changes how Wren is fed: save it only if their pediatrician or lactation consultant agreed; otherwise phrase it as "Ask`) && !young[2].text.includes("pumped bottle"), young[2].text);
   eq(goalCautions(f, { v: WREN, name: nameOf, ageDays: 28 }).map((c) => c.kind), ["long_window", "feeding"], "from 4 weeks old, no feeds-first line");
   eq(goalCautions(f, { v: WREN, name: nameOf, ageDays: null }).map((c) => c.kind)[0], "feeds_first", "before she's born, the goal reaches her first weeks");
@@ -1137,9 +1152,11 @@ check("coverage: each night's core is logged, partly logged or not logged; weeks
   const p = goalProgress(g, data({ entries: [...entries, s5], tries: [t5] }), at(2026, 11, 9, 10), NY);
   eq(p.coverage[0], { week: 1, over: 7, logged: 1, partly: 2, none: 4, feedNights: 2, tryNights: 1, checkinNights: 0 }, "week 1");
   const tp = p.targets[0];
-  eq(tp.kind === "bassinet_nights" && [tp.weeks[0].known, tp.weeks[0].unknown], [3, 4], "the target's own sample: 3 nights known, 4 unknown");
+  // For a bassinet aim only Thu says anything about her sleep (a try); Mon and Tue had only feeds and a diaper.
+  eq(tp.kind === "bassinet_nights" && [tp.weeks[0].known, tp.weeks[0].unknown, tp.weeks[0].feedsOnly], [1, 6, 2], "the target's own sample: 1 night known, 6 unknown, 2 of them with only feeds");
   const lines = goalProgressLines(g, p, words(WREN, at(2026, 11, 9, 10))).join("\n");
-  ok(/Logged: this week something on 3 of 7 nights \(2 with a gap of 4 hours or more; feeds on 2, tries on 1, check-ins on 0\)\./.test(lines), lines);
+  ok(/Logged: week 1 \(ended last night\) something on 3 of 7 nights \(2 with a gap of 4 hours or more; feeds on 2, tries on 1, check-ins on 0\)\./.test(lines), lines);
+  ok(/tries logged on 1 of 7 nights; 2 of them with only feeds or other entries logged, no try, sleep or check-in\)/.test(lines), lines);
   ok(!/\bno feeds\b|didn't happen|did not happen/i.test(lines), `never "no feeds" for a night nobody logged: ${lines}`);
   ok(/feeds began inside it on 2 of 7 nights \(3 feeds: 3 nursing logged by Sam\); nothing logged inside it on 4 of them/.test(plain(lines) as string), lines);
   const coach = coachNotes(g, p, words(WREN, at(2026, 11, 9, 10)));
@@ -1162,7 +1179,7 @@ check("untimed tries: a check-in's try counts toward bassinet nights only with n
   // Mon timed; Tue from a check-in (90 minutes); Wed's said 60, under the aim's 90; Thu shorter; Mon's check-in can't add to its timed try.
   eq(tp.kind === "bassinet_nights" && [tp.weeks[0].counted, tp.weeks[0].fromCheckins, tp.weeks[0].tried], [2, 1, 1], "2 nights: 1 timed, 1 from check-ins");
   const line = goalProgressLines(g, p, words(WREN, at(2026, 11, 9, 10))).join(" ");
-  ok(/This week: 2 of the 3 nights aimed for \(1 timed, 1 from check-ins; tries logged on 1 of 7 nights so far\)\./.test(line), line);
+  ok(/Week 1 \(ended last night\): 2 of the 3 nights aimed for \(1 timed, 1 from check-ins; tries logged on 1 of 7 nights\)\./.test(line), line);
   const viewer = goalProgress(g, data({ tries: [timed], checkins: null }), at(2026, 11, 9, 10), NY).targets[0];
   eq(viewer.kind === "bassinet_nights" && [viewer.weeks[0].counted, viewer.weeks[0].fromCheckins], [1, 0], "a viewer counts the log only");
 });
@@ -1178,7 +1195,7 @@ check("check-in answers: each once a night (the first given), tallied by week; t
   const p = goalProgress(g, data({ checkins: cs }), at(2026, 11, 9, 10), NY);
   eq(p.answers?.[0], { week: 1, place: { bassinet: 1, mixed: 1 }, placeNights: 2, handoff: { on_time: 1 }, handoffNights: 1 }, "tallies");
   const lines = goalProgressLines(g, p, words(WREN, at(2026, 11, 9, 10))).join("\n");
-  ok(/From the adults' check-ins, this week: where Wren spent most of the night, bassinet 1, some of each 1 \(2 nights answered\); the planned handoff, on time 1 \(1 night answered\)\./.test(lines), lines);
+  ok(/From the adults' check-ins, week 1 \(ended last night\): where Wren spent most of the night, bassinet 1, some of each 1 \(2 nights answered\); the planned handoff, on time 1 \(1 night answered\)\./.test(lines), lines);
   eq(goalProgress(g, data({ checkins: null }), at(2026, 11, 9, 10), NY).answers, null, "none for a view-only reader");
   eq(cleanCheckinExtras({ place: "bassinet", untimed_try: "long", untimed_min: 90, handoff: null }), { place: "bassinet", untimed_try: "long", handoff: null, untimed_min: 90 }, "checked");
   eq(cleanCheckinExtras(undefined), {}, "none given");
@@ -1277,6 +1294,387 @@ check("last night: the strip from the log, stretches over 90 minutes between two
   const left = nightPicture({ night, entries: [feedRow(at(2026, 11, 4, 22)), running, feed310], tries: [], shifts: [], tz: NY, now });
   eq([left.leftRunning?.sleep.id, left.leftRunning?.next.id], [running.id, feed310.id], "left running, and what came after");
   eq(nightPicture({ night, entries: [running], tries: [], shifts: [], tz: NY, now }).leftRunning, null, "a sleep still running with nothing after it may be real: not asked");
+});
+
+// ── round 2: a wider safety filter, sourced feeding-while-tired guidance, covered feeds, the "Back to work" template ──
+
+/** Coach round 2's unsafe phrasings (safety.md), and more of the same: every one refused. */
+const REFUSED_R2 = [
+  // coach2's
+  "Let her cry it out for 10 minutes",
+  "Try the Ferber method from week 3",
+  "Let her fuss for 5 minutes before going in",
+  "Theo naps on the couch with her on his chest",
+  "Co-sleep after the 3 AM feed",
+  "She sleeps in our bed after the 4 AM feed",
+  "Let her nap in the swing after lunch",
+  "Doze with her in the recliner after the 2 AM feed",
+  "Wren sleeps on Theo for the first stretch",
+  "Nurse her to sleep in our bed, then move her",
+  "Nurse her to sleep in bed and keep her there",
+  "Wait 10 minutes before picking her up when she cries",
+  "Leave her in the crib crying for 5 minutes",
+  "Don't go in until 3 AM, whatever happens",
+  "Graduated extinction, starting at 3 minutes",
+  "The 5-10-15 check-ins method",
+  "Put her to sleep on her tummy so she sleeps longer",
+  "Let her sleep on her side, propped with a rolled towel",
+  "Raise the head of the bassinet with a pillow for reflux",
+  "Use a weighted sleep sack at night",
+  "Let her finish naps in the car seat after drives",
+  "Naps in the bouncer while I shower",
+  "Put a blanket and bumpers in the crib so she settles",
+  "Wren sleeps between us after the last feed",
+  "Sleep with her on the sofa for the early-morning stretch",
+  "Dejarla llorar 10 minutos antes de levantarla",
+  "Colecho después de la toma de las 3",
+  "Que duerma en nuestra cama después de las 4",
+  "La laisser pleurer jusqu'à ce qu'elle s'endorme",
+  "Im Familienbett schlafen lassen",
+  // more of each kind
+  "Wait a few minutes before going in when she wakes",
+  "Never pick her up before 5 minutes",
+  "Ignore her crying until the next feed",
+  "Let her cry herself to sleep",
+  "Timed checks at bedtime",
+  "Sleep training from week 6",
+  "Put her down on her tummy for naps",
+  "Side sleeping so she doesn't spit up",
+  "Lay her face down to sleep after the late feed",
+  "Prop her up to sleep after feeds",
+  "Elevate the crib mattress for her reflux",
+  "A wedge under the bassinet mattress",
+  "Let her nap on the Boppy",
+  "Naps in the DockATot on the couch",
+  "Sleeps in the lounger while we eat dinner",
+  "Nursing pillow naps after lunch",
+  "Contact naps on Theo after the 6 AM feed",
+  "Skin-to-skin naps on my chest every afternoon",
+  "She sleeps with us after the 2 AM feed",
+  "Bed-sharing on the weekends",
+  "Family bed until she sleeps through",
+  "Let her nap in the stroller on walks",
+  "She sleeps in the carrier while I cook",
+  "Sling naps when we're out",
+  "She naps in the car seat in the house",
+  "A stuffed animal in the crib for comfort",
+  "Toys and a lovey in the bassinet at night",
+  "Tuck a blanket over her in the crib",
+  "Weighted swaddle at bedtime",
+  "Dozing with her in the glider for the 4 AM feed",
+  "Theo falls asleep with her on the couch after the 6 AM feed",
+  "Dejarla dormir boca abajo",
+  "Siesta en el sofá con ella",
+  "Dormir sur le ventre",
+  "Im Autositz schlafen lassen",
+  "Elle dort dans notre lit",
+  "Sie schläft im Elternbett",
+  "Duerme en el sofá",
+  // A phone's curly apostrophe
+  "Don’t go in until she’s been crying for 10 minutes",
+];
+
+/** Coach round 2's safe phrasings, the review's, and more: steps away, held sleep while awake, the transfer, the AAP's own words. */
+const ALLOWED_R2 = [
+  // coach2's
+  "Stop letting her sleep in our bed",
+  "Move her from our bed to the bassinet",
+  "Contact naps on me while I'm awake",
+  "Swaddle until she rolls",
+  "Stop letting Wren sleep in our bed after the 4 AM feed",
+  "No more letting her nap on the couch",
+  "Get her out of our bed and into the bassinet",
+  "Fewer contact naps, more bassinet naps",
+  "Transition from co-sleeping to the crib",
+  "Wean her off sleeping on me",
+  "She stops falling asleep on my chest; the bassinet instead",
+  "Theo holds her for her first nap while he's awake",
+  "Hold her on my chest until she's deeply asleep, then the bassinet",
+  "Rock her to sleep in the armchair, then lay her in the bassinet",
+  "Feed her in the recliner, then put her in the bassinet before I get sleepy",
+  "Theo sleeps on the couch so Noor can sleep",
+  "Theo naps in our bed while Noor feeds Wren",
+  "Bassinet right next to our bed",
+  "Don't let her cry for long: pick her up and soothe her",
+  "Respond quickly when she cries",
+  "Use the swing only while she's awake",
+  "Never fall asleep with her on the couch",
+  "Put her down drowsy in the crib",
+  // ux round 2's
+  "No more falling asleep on the couch with her",
+  "Let her fuss for a minute before picking her up",
+  "Pause 1 minute before picking her up",
+  "Move from contact naps to the bassinet",
+  "She naps in the bassinet, not the swing",
+  // the AAP's and NICHD's own words, as steps
+  "If we bring her into our bed to feed or comfort her, place her back in her own sleep space before we go to sleep",
+  "If there is any possibility that you might fall asleep while your baby is in your bed, remove pillows, blankets, sheets and other items that could cover your baby's face, head or neck or lead to overheating. If you do fall asleep, be sure to move your baby back to their own sleep space as soon as you wake up.",
+  "If your baby falls asleep in a car seat, stroller, swing, infant carrier or sling, you should move them to a firm sleep surface on their back as soon as possible.",
+  "Ask someone to stay with you while you're breastfeeding to keep you awake or to place the baby into a safe sleep area if you fall asleep",
+  "If she falls asleep in the car seat, move her to the bassinet",
+  // more
+  "No pillows or blankets in the crib",
+  "Remove the bumpers from the crib",
+  "Skip weighted swaddles",
+  "Swaddle her in a thin blanket, then the bassinet",
+  "Tummy time on a blanket after breakfast",
+  "Tummy time while she's awake",
+  "Car seat for drives only",
+  "Use the nursing pillow for feeds",
+  "Tilt her head back gently to burp her",
+  "Raise questions about reflux with the pediatrician",
+  "Theo sleeps with earplugs in the spare room",
+  "Sleeps in the bassinet next to our bed",
+  "A sleep sack with no weights",
+  "Pacifier at bedtime in the crib",
+  "Nurse her to sleep in our bed, then move her to the bassinet",
+  "Put her in bed by 8 in her crib",
+  "Feed her on the couch, then lay her in the bassinet before I doze",
+  "Évitez de la laisser pleurer",
+  "Pas de cododo",
+  "Ya no duerme en nuestra cama",
+  "Que duerma en la cuna, no en nuestra cama",
+  "Sie schläft nicht mehr im großen Bett",
+  "Don’t let her cry: pick her up and soothe her",
+];
+
+check("safety (round 2): every unsafe phrasing is refused and every safe one passes (coach round 2's 57, the review's, the AAP's own words, and more)", () => {
+  const refused = REFUSED_R2.filter((t) => unsafeSleep(t, { v: WREN, adults: FAMILY_ADULTS }));
+  const passed = ALLOWED_R2.filter((t) => !unsafeSleep(t, { v: WREN, adults: FAMILY_ADULTS }));
+  const whys = ["Right now she only sleeps on me", "She sleeps in our bed most nights right now and we want her in the bassinet", "We co-sleep now and want to stop", "She ends up in our bed by 3 AM"];
+  const whyOk = whys.filter((t) => !unsafeSleep(t, { v: WREN, adults: FAMILY_ADULTS, describing: true }));
+  console.log(`  safety lists: ${refused.length} of ${REFUSED_R2.length} unsafe refused, ${passed.length} of ${ALLOWED_R2.length} safe passed, ${whyOk.length} of ${whys.length} whys passed (plus round 1's ${REFUSED.length} and ${ALLOWED.length})`);
+  for (const t of REFUSED_R2) ok(refused.includes(t), `refused: "${t}"`);
+  for (const t of ALLOWED_R2) ok(passed.includes(t), `passed: "${t}" (matched "${unsafeSleep(t, { v: WREN, adults: FAMILY_ADULTS })?.phrase}")`);
+  eq(whyOk.length, whys.length, "whys");
+});
+
+check("safety: each refusal says what Maple won't plan and a wording to try, which passes the filter itself", () => {
+  const cases: [string, string][] = [
+    ["Let her cry it out", "cry"],
+    ["She naps on my chest", "adult"],
+    ["Co-sleep after the late feed", "bed"],
+    ["She naps on the couch", "couch"],
+    ["Naps in the car seat", "seat"],
+    ["Naps on the nursing pillow", "product"],
+    ["Put her down on her tummy", "position"],
+    ["Bumpers in the crib", "bedding"],
+    ["A weighted sleep sack", "weighted"],
+    ["Raise the head of the crib", "incline"],
+  ];
+  for (const [text, kind] of cases) {
+    const find = unsafeSleep(text, { v: WREN, adults: FAMILY_ADULTS });
+    eq(find?.kind, kind, text);
+    for (const v of [WREN, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      ok(/^Step 1: Maple won't plan /.test(words) && !/never leave|Reword it/.test(words), words);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v: WREN, adults: FAMILY_ADULTS }), `the suggestion passes: ${tryThis}`);
+    }
+  }
+  eq(unsafeWords("Step 2", WREN, unsafeSleep("She naps on the couch", { v: WREN })), `Step 2: Maple won't plan sleep on a couch; if this is a step away from it, try "Bassinet before I get sleepy".`, "the review's own example");
+  eq(unsafeWords("Step 1", WREN, unsafeSleep("Doze in the recliner with her", { v: WREN })), `Step 1: Maple won't plan sleep in a recliner; if this is a step away from it, try "Bassinet before I get sleepy".`, "by the furniture it names");
+});
+
+check("safety: held sleep passes only while an adult says they're awake (never the baby), and the transfer only without an adult dozing; both come with cautions", () => {
+  const o = { v: WREN, adults: FAMILY_ADULTS };
+  eq(sleepExemptions("Contact naps on me while I'm awake", o), { held: true, transfer: [] }, "awake adult");
+  ok(unsafeSleep("Contact naps on me while she's awake", o), "she is the baby: still refused");
+  ok(unsafeSleep("Contact naps on Theo after the 6 AM feed", o), "no one awake: refused");
+  eq(sleepExemptions("Rock her to sleep in the armchair, then lay her in the bassinet", o), { held: false, transfer: ["couch"] }, "the transfer from a chair");
+  eq(sleepExemptions("Nurse her to sleep in our bed, then move her to the bassinet", o), { held: false, transfer: ["bed"] }, "the transfer from a bed");
+  ok(unsafeSleep("Doze with her in the recliner, then the bassinet", o), "an adult dozing is never the transfer");
+  const c = goalCautions(
+    { steps: [{ id: "s1", title: "Contact naps on me while I'm awake", week_of: null, done_at: null, done_by: null }, { id: "s2", title: "Nurse her to sleep in our bed, then move her to the bassinet", week_of: null, done_at: null, done_by: null }] },
+    { v: WREN, name: nameOf, adults: FAMILY_ADULTS }
+  );
+  eq(c.map((x) => x.kind), ["awake", "transfer"], "kinds");
+  ok(c[0].text.includes(`"${sleepyLine(WREN).split(/(?<=\.)\s+/)[0]}"`), c[0].text);
+  ok(c[1].text.includes(`"${feedingSleepyWords(WREN).bed}"`), c[1].text);
+});
+
+check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to stay with you, a cleared bed, a bed less hazardous than a sofa but not recommended), the tired adult's bed, sitting devices, sourced and waiting for review", () => {
+  const byId = (id: string) => SLEEP_GUIDES.find((g) => g.id === id)!;
+  const feeding = byId("safe-feeding-sleepy");
+  const body = feeding.body(WREN);
+  for (const re of [
+    /Be mindful of how tired you are, and avoid couches and armchairs for feeds if you think you might fall asleep\./,
+    /Ask someone to stay with you while you feed her, to keep you awake or to lay her in the bassinet if you fall asleep\./,
+    /remove|take away/,
+    /pillows, blankets, sheets and anything else that could cover her face, head or neck or make her too warm/,
+    /move her back to her own sleep space as soon as you wake/,
+    /less hazardous than a sofa or armchair, though still not recommended/,
+  ]) ok(re.test(body), `${re}: ${body}`);
+  ok(/more than 10 times higher when the adult is very tired, has taken medicine that makes it harder to wake, or has had alcohol or drugs/.test(byId("safe-sleepy").body(WREN)), "quote 6");
+  eq(sleepyLine(WREN), byId("safe-sleepy").body(WREN).split(" Sharing a bed")[0], "the holding sheet keeps the two things to do");
+  ok(/^Car seats, strollers, swings, carriers and slings aren't for routine sleep, especially before 4 months\. If she falls asleep in one, move her to the bassinet, on her back, as soon as you can\.$/.test(byId("safe-seats").body(WREN)), "quote 8 and 9");
+  for (const id of ["safe-feeding-sleepy", "safe-sleepy", "safe-seats"]) {
+    const g = byId(id);
+    eq([g.reviewed, g.needsReview, pendingReview().includes(g)], ["2026-11-02", true, true], `${id}: reviewed and waiting for sign-off`);
+  }
+  eq(feeding.sources.map((x) => x.url), [
+    "https://www.nichd.nih.gov/sites/default/files/2018-11/Breastfeed_Baby_SIDS_final.pdf",
+    "https://www.healthychildren.org/English/ages-stages/baby/sleep/Pages/a-parents-guide-to-safe-sleep.aspx",
+    "https://pubmed.ncbi.nlm.nih.gov/35921639/",
+  ], "exact sources");
+  ok(byId("safe-seats").sources.some((x) => x.url === "https://pubmed.ncbi.nlm.nih.gov/35921639/"), "the technical report for sitting devices");
+  eq(nightFeedLine(WREN), "Feeling sleepy? Wake someone to sit with you, or lay her on her back in the bassinet.", "the feed card's night line");
+  ok(!/\b(she|her|he|him)\b/i.test(nightFeedLine(THEY)), "the night line in the family's words");
+});
+
+check("cautions by how a window's feeds are covered and her age: nursing says nothing, a bottle is a question before 4 weeks and a pumping reminder after, no feed planned only past 4 hours (5 from 4 weeks)", () => {
+  const w = (covers: RosterWindow["covers"] | undefined, from = "22:00", to = "03:00", member = SAM): RosterWindow => ({ id: "w1", member, from, to, nights: EVERY, ...(covers ? { covers } : {}) });
+  const kinds = (roster: RosterWindow[], ageDays: number | null, template?: SleepGoal["template"]) => goalCautions({ roster, template }, { v: WREN, name: nameOf, ageDays }).map((c) => c.kind);
+  eq(kinds([w("nurse")], 20), [], "nursing covers it (the review's P2-11)");
+  eq(kinds([w("nurse", "19:30", "07:30")], 40), [], "even a long one");
+  eq(kinds([w(undefined, "22:00", "02:30")], 20), ["long_window"], "4h 30m, nothing said, in the first weeks");
+  eq(kinds([w(undefined, "22:00", "02:30")], 40), [], "4h 30m from 4 weeks: under 5 hours");
+  eq(kinds([w("none", "22:00", "03:30")], 40), ["long_window"], "5h 30m with no feed planned");
+  const young = goalCautions({ roster: [w("bottle")] }, { v: WREN, name: nameOf, ageDays: 20 })[0].text;
+  ok((plain(young) as string).startsWith("A bottle in Sam's window (10:00 PM–3:00 AM): if Wren nurses, bottles are a question for their pediatrician or lactation consultant first, usually not before about 4 weeks old"), young);
+  const older = goalCautions({ roster: [w("bottle", "22:00", "03:00", ALEX)], template: { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 40 })[0].text;
+  eq(plain(older), "A bottle in Alex's window (10:00 PM–3:00 AM): plan when Alex pumps around that feed, as their lactation consultant advises.", "after 4 weeks, the research's reminder, naming who nurses");
+  eq(kinds([w("bottle")], 20, { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: null }), [], "a baby on bottles only: nothing to say");
+  throwsInput(() => cleanGoalInput({ title: "Nights", roster: [{ member: SAM, from: "22:00", to: "02:00", nights: EVERY, covers: "formula" as "bottle" }] }, RULES, "create"), /^Window 1: how its feeds are covered must be one of nurse, bottle, none\.$/, "a cover it doesn't know");
+  const saved = cleanGoalInput({ title: "Nights", roster: [{ member: SAM, from: "22:00", to: "02:00", nights: EVERY, covers: "nurse" }, { member: ALEX, from: "02:00", to: "06:00", nights: EVERY }] }, RULES, "create").fields.roster!;
+  eq([saved[0].covers, "covers" in saved[1]], ["nurse", false], "kept when said; a window without one stays as before");
+  ok((plain(rosterWords(saved, nameOf)) as string).includes("Sam: 10:00 PM–2:00 AM, every night (feeds: nursing); Alex: 2:00 AM–6:00 AM, every night"), rosterWords(saved, nameOf));
+});
+
+check("template: five answers make a goal, a night roster with its feeds covered and three steps timed from the day back, with notes; what it can't use is said in words", () => {
+  const adults = new Set([SAM, ALEX]);
+  const o = { v: WREN, name: nameOf, today: "2026-11-02", adults };
+  const answers: BackToWorkAnswers = { returning: SAM, return_date: "2026-11-30", feeding: "nursing", nursing: ALEX, sleeps: "bed", first_half: SAM, second_half: ALEX, off_duty: "other_room" };
+  const { goal, notes } = backToWorkGoal(answers, o);
+  eq([goal.title, goal.why, goal.target_date], ["Back to work: protected sleep for Sam and Alex", "Sam goes back to work on Mon, Nov 30.", "2026-12-13"], "title, why, two weeks after the day back");
+  eq(goal.roster, [
+    { member: ALEX, from: "22:00", to: "02:00", nights: EVERY, covers: "nurse" },
+    { member: SAM, from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4], covers: "nurse" },
+  ], "whoever's on first sleeps the second half; the one going back, on work nights");
+  eq(goal.targets, [{ kind: "protected_window", member: SAM, per_week: 5 }, { kind: "protected_window", member: ALEX, per_week: 4 }], "a protected window each");
+  eq(goal.steps!.map((x) => [x.title, x.week_of]), [
+    ["Ask the pediatrician or lactation consultant when to start a bottle of expressed milk (not before about 4 weeks)", "2026-11-02"],
+    ["Rehearse the work-week roster on 2 or 3 nights", "2026-11-16"],
+    ["Plan a short first week back (a Wednesday or Thursday start, if work allows)", "2026-11-23"],
+  ], "weeks −4, −2 and −1");
+  eq(goal.template, { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: ALEX }, "what the coach notes need later");
+  ok(notes[0] === "Sam is back in 28 days, so the first step starts this week." && notes.some((n) => /^Wren sleeps in your bed now: Maple's plans keep her in her own sleep space, the bassinet in your room, close to your bed but not in it\./.test(n)) && notes.some((n) => /whoever's on duty brings her to nurse in the other's window/.test(n)), JSON.stringify(notes));
+  // It checks as any goal does: every word passes the filter, and there's nothing to caution about.
+  const { fields } = cleanGoalInput(goal, { ...RULES, v: WREN }, "create");
+  eq(goalCautions(fields, { v: WREN, name: nameOf, ageDays: 20 }), [], "nursing covers both windows; the bottle step is a question");
+  for (const t of [goal.title!, ...goal.steps!.map((x) => x.title)]) ok(!unsafeSleep(t, { v: WREN }), t);
+  // The nursing parent going back: more night nursing to expect. Both: a bottle in the nursing parent's window, after a question.
+  const back = backToWorkGoal({ ...answers, returning: ALEX, first_half: ALEX, second_half: SAM, feeding: "both" }, o);
+  ok(back.notes.some((n) => /^Once Alex is back at work, some babies nurse more often at night \(sometimes called reverse cycling\)/.test(n)), JSON.stringify(back.notes));
+  eq(back.goal.roster!.map((x) => [nameOf(x.member), x.covers]), [["Sam", "nurse"], ["Alex", "bottle"]], "Alex nurses: a bottle in Alex's window");
+  eq(back.goal.steps![0].title, "Ask the lactation consultant when Alex should pump around the night bottle", "both: the pumping question");
+  const bottles = backToWorkGoal({ ...answers, feeding: "bottles", nursing: null, off_duty: "same_room" }, o);
+  eq([bottles.goal.roster!.map((x) => x.covers), bottles.goal.steps![0].week_of, bottles.goal.template?.nursing], [["bottle", "bottle"], "2026-11-09", null], "bottles: no bottle question");
+  ok(bottles.notes.some((n) => /one clinician's approach is two sleep spaces/.test(n)), JSON.stringify(bottles.notes));
+  // Back in 5 days: every step this week.
+  eq(backToWorkGoal({ ...answers, return_date: "2026-11-07" }, o).goal.steps!.map((x) => x.week_of), ["2026-11-02", "2026-11-02", "2026-11-02"], "never before this week");
+  throwsInput(() => backToWorkGoal({ ...answers, second_half: SAM }, o), /^The two halves of the night need two different adults/, "one adult for both halves");
+  throwsInput(() => backToWorkGoal({ ...answers, return_date: "2026-10-30" }, o), /^The day back at work has already passed/, "a day back already past");
+  throwsInput(() => backToWorkGoal({ ...answers, nursing: null }, o), /^Who nurses needs one of the family's adults\.$/, "who nurses");
+  throwsInput(() => backToWorkGoal({ ...answers, returning: CASEY }, o), /^Who goes back to work: Casey isn't an owner or member of this family\.$/, "someone outside the family");
+  eq(backToWorkQuestions(WREN).length, 5, "five questions");
+});
+
+check("long turns: one handed off as planned is never 'left open'; one an hour past its planned handoff is, and so is one over 4 hours with no plan", () => {
+  const t0 = at(2026, 11, 2, 22);
+  const turn = (hours: number, more: Partial<HoldingShift>) => ({ ...shiftRow(SAM, t0, new Date(t0.getTime() + hours * HOUR)), ...more });
+  const now = at(2026, 11, 3, 9).getTime();
+  eq(turnLeftOpen(turn(4, { handoff_at: iso(t0.getTime() + 4 * HOUR), ended_how: "handoff" }), now), false, "a 4-hour turn handed off on time (coach round 2's N4)");
+  eq(turnLeftOpen(turn(6, { handoff_at: iso(t0.getTime() + 2 * HOUR), ended_how: "handoff" }), now), false, "taken over late: still a handoff");
+  eq(turnLeftOpen(turn(3.5, { handoff_at: iso(t0.getTime() + 3 * HOUR) }), now), false, "ended half an hour past its plan");
+  eq(turnLeftOpen(turn(4.5, { handoff_at: iso(t0.getTime() + 2 * HOUR) }), now), true, "ended 2h 30m past its plan");
+  eq([turnLeftOpen(turn(3, {}), now), turnLeftOpen(turn(4.5, {}), now)], [false, true], "no plan: over 4 hours");
+  const g = goalRow({ roster: [{ id: "w1", member: SAM, from: "21:30", to: "01:30", nights: EVERY }] });
+  const p = goalProgress(g, data({ shifts: [turn(4.5, { handoff_at: iso(t0.getTime() + 2 * HOUR) })] }), at(2026, 11, 5, 9), NY);
+  ok(/a holding turn an hour or more past its planned handoff \(Sam's, from 10:00 PM to 2:30 AM; planned for 12:00 AM\) is left out: it may have been left open/.test(plain(rosterHintBody(p.roster[0], nameOf, WREN, NY)) as string), rosterHintBody(p.roster[0], nameOf, WREN, NY));
+});
+
+check("feeds only: a week with only feeds logged never reads as 'no tries' (the lines and a coach note say whether she tried the bassinet isn't in the log)", () => {
+  const g = goalRow({ targets: [{ id: "a1", kind: "bassinet_nights", per_week: 3, min_minutes: 90 }] });
+  const entries = Array.from({ length: 7 }, (_, d) => [feedRow(at(2026, 11, 2 + d, 22)), feedRow(at(2026, 11, 3 + d, 1, 30)), feedRow(at(2026, 11, 3 + d, 5))]).flat();
+  const now = at(2026, 11, 9, 13);
+  const p = goalProgress(g, data({ entries }), now, NY);
+  const tp = p.targets[0];
+  eq(tp.kind === "bassinet_nights" && [tp.weeks[0].known, tp.weeks[0].unknown, tp.weeks[0].feedsOnly], [0, 7, 7], "seven nights of feeds, none known for a bassinet aim");
+  const lines = goalProgressLines(g, p, words(WREN, now)).join("\n");
+  ok(lines.includes("Last week: 0 of the 3 nights aimed for (tries logged on 0 of 7 nights; 7 of them with only feeds or other entries logged, no try, sleep or check-in)."), lines);
+  const c = coachNotes(g, p, words(WREN, now));
+  ok(c.notes.includes("Only feeds or other entries were logged on 7 of the last 7 nights, with no try, sleep or check-in: whether Wren tried the bassinet then isn't in the log, so ask."), JSON.stringify(c.notes));
+});
+
+check("focus: when her logged night feeds come closer together than the window is long, the step to talk over is a shorter window or someone else giving one feed", () => {
+  const roster = [{ id: "w1", member: SAM, from: "21:30", to: "01:30", nights: EVERY }, { id: "w2", member: ALEX, from: "01:30", to: "06:30", nights: EVERY }];
+  const g = goalRow({ roster });
+  // Sam nurses about every 3h 20m: 10 PM, 1:20 AM, 4:40 AM.
+  const entries = Array.from({ length: 5 }, (_, d) => [feedRow(at(2026, 11, 2 + d, 22), SAM), feedRow(at(2026, 11, 3 + d, 1, 20), SAM), feedRow(at(2026, 11, 3 + d, 4, 40), SAM)]).flat();
+  const now = at(2026, 11, 7, 9);
+  const p = goalProgress(g, data({ entries }), now, NY);
+  eq(p.feedGap, { longestMin: 200, nights: 5 }, "the longest gap between her feeds");
+  const c = coachNotes(g, p, words(WREN, now));
+  ok(c.focus && /Wren's logged night feeds began at most 3h 20m apart \(over 5 nights\), less than the window's 4 hours, so a window that long will likely catch one\. One step to talk over: a shorter window, or Alex giving one feed in it \(a bottle is a question for their lactation consultant\)\.$/.test(plain(c.focus) as string), String(c.focus));
+});
+
+check("week labels: the morning after a week's last night its counts read 'Week 1 (ended last night)' while this week's step is week 2's; from noon, 'This week' is week 2", () => {
+  const g = goalRow({ target_date: "2026-11-30", targets: [{ id: "a1", kind: "bassinet_nights", per_week: 3, min_minutes: 60 }], steps: [{ id: "s2", title: "Run the work-week roster", week_of: "2026-11-09", done_at: null, done_by: null }] });
+  const morning = at(2026, 11, 9, 9, 30);
+  const p = goalProgress(g, data({ tries: [tryRow(at(2026, 11, 3, 22), at(2026, 11, 4, 0), "stayed_asleep")] }), morning, NY);
+  ok(weekEndedLastNight(p) && goalWeekLabel(p.weeks[p.weeks.length - 1], p) === "Week 1 (ended last night)", "the morning after");
+  const lines = goalProgressLines(g, p, words(WREN, morning)).join("\n");
+  ok(lines.includes("Week 1 (ended last night): 1 of the 3 nights aimed for (tries logged on 1 of 7 nights).") && !/This week:/.test(lines), lines);
+  ok(coachNotes(g, p, words(WREN, morning)).notes.includes(`This week's step: "Run the work-week roster" (s2).`), "the step is week 2's");
+  const noon = at(2026, 11, 9, 13);
+  const q = goalProgress(g, data(), noon, NY);
+  eq([weekEndedLastNight(q), q.weeks.map((w) => goalWeekLabel(w, q))], [false, ["Last week", "This week"]], "from noon");
+});
+
+check("urgency: active before paused, the nearest target date first (one already past leads), then a review due, then the newest", () => {
+  const now = at(2026, 11, 20, 9);
+  const g = (id: number, over: Partial<SleepGoal>) => goalRow({ id, ...over });
+  const goals = [
+    g(1, { target_date: "2026-12-20" }),
+    g(2, { target_date: "2026-11-25" }),
+    g(3, { target_date: "2026-11-18" }),
+    g(4, { status: "paused", target_date: "2026-11-21" }),
+    g(5, {}),
+    g(6, { created_at: iso(at(2026, 11, 19, 9)) }),
+  ];
+  eq(goalsByUrgency(goals, now, NY).map((x) => x.id), [3, 2, 1, 5, 6, 4], "past date, nearest, later, review due (no date), newest (no date), paused");
+});
+
+check("check-in patterns: an early observation shows only with 5 nights or more on each side and a clear difference, from check-ins only", () => {
+  const roster = [{ id: "w1", member: SAM, from: "22:00", to: "02:00", nights: EVERY }];
+  const g = goalRow({ roster, targets: [{ id: "a1", kind: "protected_window", member: SAM, per_week: 4 }] });
+  const nights = Array.from({ length: 10 }, (_, i) => `2026-11-${String(2 + i).padStart(2, "0")}`);
+  // Alex gives a feed inside Sam's window on the first five nights; Sam gets the sleep on 4 of those, and on 1 of the other 5.
+  const entries = nights.slice(0, 5).map((n) => ({ ...feedRow(at(2026, 11, Number(n.slice(8)), 23, 30), ALEX), data: { method: "bottle" } }) as Entry);
+  const said: SleepCheckin["protected"][] = ["yes", "yes", "yes", "yes", "partly", "yes", "no", "partly", "no", "no"];
+  const checkins = nights.map((n, i) => checkinRow(SAM, n, said[i]));
+  const now = at(2026, 11, 12, 9);
+  const p = goalProgress(g, data({ entries, checkins }), now, NY);
+  eq(p.observations, [{ member: SAM, factor: "fed_by_other", with: { yes: 4, of: 5 }, without: { yes: 1, of: 5 } }], "fed by someone else");
+  eq(observationWords(p.observations![0], nameOf), "Early observation (10 check-ins): Sam got the window's sleep on 4 of 5 nights when someone else logged a feed inside it, and on 1 of 5 nights without.", "words");
+  ok(goalProgressLines(g, p, words(WREN, now)).includes(observationWords(p.observations![0], nameOf)), "in the lines");
+  eq(goalProgress(g, data({ entries, checkins: checkins.slice(0, 9) }), now, NY).observations, [], "four nights on one side: none yet");
+  eq(goalProgress(g, data({ entries, checkins: null }), now, NY).observations, null, "a view-only reader: none");
+});
+
+check("back to work: a coach note on drowsy driving when the adult back at work didn't get their window's sleep, and on more night nursing when the nursing parent went back", () => {
+  const roster = [{ id: "w1", member: SAM, from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4] }];
+  const g = goalRow({ roster, targets: [{ id: "a1", kind: "protected_window", member: SAM, per_week: 5 }], template: { kind: "back_to_work", member: SAM, date: "2026-11-09", nursing: SAM } });
+  const now = at(2026, 11, 10, 8);
+  const p = goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-09", "partly")] }), now, NY);
+  const notes = coachNotes(g, p, words(WREN, now)).notes;
+  ok(notes.some((n) => /^Sam said "partly" about last night's window and is back at work: mention drowsy driving gently\. If Sam is very sleepy, a ride, transit or a short nap before driving is safer/.test(n)), JSON.stringify(notes));
+  ok(notes.some((n) => /^Sam has been back at work since Mon, Nov 9: some babies nurse more often at night once the nursing parent is back \(sometimes called reverse cycling\)/.test(n)), JSON.stringify(notes));
+  const rested = coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-09", "yes")] }), now, NY), words(WREN, now)).notes;
+  ok(!rested.some((n) => /drowsy/.test(n)), "a yes: nothing about driving");
+  const before = at(2026, 11, 6, 8);
+  ok(!coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-05", "no")] }), before, NY), words(WREN, before)).notes.some((n) => /drowsy|reverse cycling/.test(n)), "before the day back: neither");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);

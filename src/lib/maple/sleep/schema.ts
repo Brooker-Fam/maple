@@ -141,6 +141,7 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_goals_baby ON maple_sleep_goals (family_id, baby_id, created_at DESC) WHERE deleted_at IS NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_goals_updated ON maple_sleep_goals (family_id, baby_id, updated_at DESC)`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_goals_client ON maple_sleep_goals (family_id, client_id) WHERE client_id IS NOT NULL`);
+  await migrateGoalTemplate();
 
   await query(`CREATE TABLE IF NOT EXISTS maple_sleep_checkins (
     id BIGSERIAL PRIMARY KEY,
@@ -188,4 +189,14 @@ async function migrateCheckinExtras(): Promise<void> {
 async function migrateShiftAsks(): Promise<void> {
   await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_to TEXT`);
   await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_at TIMESTAMPTZ`);
+}
+
+/**
+ * The template a goal was made from (sleep/types.ts GoalTemplate: for a
+ * "Back to work" goal, who goes back to work and when, and who nurses), for
+ * the coach notes that need it later. Nullable JSONB checked in code, so an
+ * older release reads past it and a goal made by hand has none.
+ */
+async function migrateGoalTemplate(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_goals ADD COLUMN IF NOT EXISTS template JSONB`);
 }
