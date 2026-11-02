@@ -217,52 +217,89 @@ export function cleanCheckinNight(raw: unknown, now: Date, tz: string): string {
 // The coach's rules made checkable, for every goal text (title, why, steps,
 // a custom target) and the plan's goal, after the AAP's safe-sleep guidance
 // (guidelines/sleep.ts has the sourced words): never leaving the baby to cry,
-// by any name (cry it out, Ferber, controlled crying, timed waiting before
-// going in, "5-10-15"), and never the baby asleep on or with an adult, in an
-// adult bed, on a couch, recliner or armchair, in a sitting device (car seat,
-// stroller, swing, carrier, sling, bouncer), on a product not made for infant
+// by any name (cry it out, Ferber, Weissbluth, controlled crying, timed
+// waiting before going in, with or without the word "wait", "5-10-15"), and
+// never the baby asleep on or with an adult, in an adult bed, on a couch,
+// recliner or armchair, in a sitting device (car seat, stroller, swing,
+// carrier, sling, wrap, bouncer, a MamaRoo), on a product not made for infant
 // sleep (loungers, nests, nursing pillows, inclined sleepers), on the tummy or
-// side, with pillows, blankets, bumpers or other soft things, raised or
-// tilted, or with anything weighted.
+// side, with pillows, blankets, bumpers, rolled towels or other soft things,
+// raised or tilted, or with anything weighted.
 //
-// A backstop, not a guarantee: it matches words, in English and a few common
-// Spanish, French and German phrasings, so a plan worded some other way can
-// get past it. The coach's own rules (sleep_goal's description) and the
-// family's judgment carry the rest.
+// A backstop, not a guarantee: it matches words, in English (a few common
+// typos too) and a few common Spanish, French and German phrasings, so a plan
+// worded some other way can get past it. The coach's own rules (sleep_goal's
+// description) and the family's judgment carry the rest.
 //
 // Each sentence, and each part of it, is read on its own. A phrase after a
 // step-away word anywhere earlier in its part ("stop", "no more", "never
-// again", "move her from", "out of", "instead of") steps away from it, unless
-// a new instruction starts in between ("stop the swaddle and let her …") or a
-// bassinet follows the step-away word ("from the bassinet into our bed"). A
-// place counts only with a sleep word and the baby in its part (a baby's own
-// device is the baby enough), so "the bassinet beside our bed", "Theo sleeps
-// on the couch" and "swing her gently" pass. Held sleep while an adult says
-// they're awake is the app's own holding turn, rocking or feeding her to
-// sleep somewhere and then the bassinet is its transfer, and "if she falls
-// asleep in the car seat, move her to the bassinet" is the AAP's own advice:
-// they pass, the first two with a caution (goalCautions). In "why it
-// matters", how things are now is the reason for the goal, not its plan.
-// Feeding words (formula, bottles, pumping, weaning) are never refused:
-// goalCautions asks for the pediatrician's or lactation consultant's yes.
+// again", "move her from", "out of", "instead of", "wean her off") steps
+// away from it, unless a new instruction starts in between ("stop the
+// swaddle and let her …"), the words in between say how ("wean her off night
+// feeds by letting her cry"), a negation undoes the step away ("don't move
+// her out of our bed", "no need to take her from the couch", "never stop"),
+// or a bassinet follows the step-away word ("from the bassinet into our
+// bed", unless that move is the negated one). Moving it to her own sleep
+// space ("move the car seat naps to the crib") and taking it out ("take the
+// bumpers out of the crib") step away too. A place counts only with a sleep
+// word and the baby in its part, or the sleep in the clause it hangs on
+// ("… once she's asleep", "… when she dozes off"); a baby's own device is the
+// baby enough, and "together", "the family" or "all of us" take the baby
+// along. So "the bassinet beside our bed", "Theo sleeps on the couch",
+// "swing her gently" and "sit in the rocking chair by the bassinet" pass.
+// Held sleep while an adult says they're awake is the app's own holding turn,
+// rocking or feeding her to sleep somewhere and then the bassinet is its
+// transfer, and "if she falls asleep in the car seat, move her to the
+// bassinet" is the AAP's own advice: they pass, the first two with a caution
+// (goalCautions), but never on a couch, chair, recliner or adult bed that the
+// same sentence names (the AAP: never a couch, and dozing off there is
+// especially dangerous), and the transfer never with a nap there ("let her
+// nap on the sofa, then the crib"). Crying while someone holds her ("let her
+// cry in my arms"), fussing "a little", and an overwhelmed adult laying her
+// down safely to step away for a few minutes (the AAP's own advice, and the
+// call-help guidance) aren't leaving her to cry as a plan; a method by name
+// still is. In "why it matters", how things are now, or what happened ("Alex
+// dozed off holding her on the sofa and it scared us"), is the reason for the
+// goal, not its plan, unless the same part plans it ("so she can …", "let
+// her keep …"). Feeding words (formula, bottles, pumping, weaning) are never
+// refused: goalCautions asks for the pediatrician's or lactation
+// consultant's yes.
 
 /** Where a text breaks into sentences. */
 const SENTENCES = /[.;!?\n]+/;
 /** Where a sentence breaks into parts: dashes, and the words that start another part. */
 const PART_BREAK = /\s[-–—]\s|[–—]|\b(?:but|then|while|whereas|after|before|until|unless|once|because|when|whenever|if|so)\b/gi;
-/** A step away from what follows (its last one before a phrase counts). */
+/** A step away from what follows (its last one before a phrase counts). "Wean" only before "off" or "from" ("wean her off contact naps", never "night weaning by letting her cry"). */
 const AWAY_CUE = new RegExp(
-  String.raw`\b(?:no(?:\s+more|\s+longer)?|not|never(?:\s+again)?|nor|don'?t|do\s+not|doesn'?t|does\s+not|won'?t|will\s+not|wouldn'?t|can'?t|cannot|shouldn'?t|without|instead(?:\s+of)?|rather\s+than|other\s+than|stop|stops|stopped|stopping|quit|quits|quitting|end(?!s?\s+up)|ends(?!\s+up)|ending|avoid|avoids|avoiding|fewer|less|out\s+of|away\s+from|(?<!\b(?:nod|nods|nodded|nodding|drift|drifts|drifted|drifting|doze|dozes|dozed|dozing|drop|drops|dropped|dropping)\s)off|from(?!\s+\d)(?!\s+(?:noon|midnight|now|then|today|tonight|tomorrow)\b)|against|remove|removes|removing|take\s+(?:away|out)|taking\s+(?:away|out)|get\s+rid\s+of|ditch\w*|skip|skips|skipping|wean\w*|transition\w*|nunca|jam[áa]s|sin|dejar\s+de|deja\s+de|evitar|en\s+vez\s+de|en\s+lugar\s+de|ya\s+no|ne|pas|jamais|plus\s+de|sans|arret\w*|evit\w*|au\s+lieu\s+d[e']|nicht|nie|niemals|kein\w*|ohne|statt|anstatt|vermeiden|aufh[öo]ren)\b`,
+  String.raw`\b(?:no(?:\s+more|\s+longer)?|not|never(?:\s+again)?|nor|don'?t|do\s+not|doesn'?t|does\s+not|won'?t|will\s+not|wouldn'?t|can'?t|cannot|shouldn'?t|without|instead(?:\s+of)?|rather\s+than|other\s+than|stop|stops|stopped|stopping|quit|quits|quitting|end(?!s?\s+up)|ends(?!\s+up)|ending|avoid|avoids|avoiding|fewer|less|out\s+of|away\s+from|(?<!\b(?:nod|nods|nodded|nodding|drift|drifts|drifted|drifting|doze|dozes|dozed|dozing|drop|drops|dropped|dropping)\s)off|from(?!\s+\d)(?!\s+(?:noon|midnight|now|then|today|tonight|tomorrow)\b)|against|remove|removes|removing|take\s+(?:away|out)|taking\s+(?:away|out)|get\s+rid\s+of|ditch\w*|skip|skips|skipping|wean\w*(?=\s+(?:[\w'-]+\s+){0,2}?(?:off|from)\b)|transition\w*|nunca|jam[áa]s|sin|dejar\s+de|deja\s+de|evitar|en\s+vez\s+de|en\s+lugar\s+de|ya\s+no|ne|pas|jamais|plus\s+de|sans|arret\w*|evit\w*|au\s+lieu\s+d[e']|nicht|nie|niemals|kein\w*|ohne|statt|anstatt|vermeiden|aufh[öo]ren)\b`,
   "gi"
 );
+/** A negation right before a step-away word, or before the move it's in: "don't move her out of", "no need to take her from", "never stop". It undoes the step away. */
+const NEGATED = new RegExp(
+  String.raw`\b(?:don'?t|do\s+not|doesn'?t|does\s+not|never|not|no\s+need\s+to|no\s+reason\s+to|won'?t|will\s+not|wouldn'?t|would\s+not|shouldn'?t|should\s+not|can'?t|cannot|can\s+not|mustn'?t|must\s+not)\s+(?:ever\s+)?(?:(?:need|have|want|bother|try|plan|mean|ready|going|able|planning|trying|wanting)\s+to\s+|to\s+)?(?:(?:move|moving|take|taking|get|getting|transfer\w*|lift\w*|carry\w*|bring\w*|pull\w*|pick\w*|put\w*|switch\w*|remov\w*|wean\w*|shift\w*)\s+(?:[\w'-]+\s+){0,3}?)?$`,
+  "i"
+);
+/** How a step away is made, which it doesn't reach: "… by letting her cry", "… using the Ferber method". */
+const MEANS = /\S\s+(?:by\s+\w+ing|using|via)\b/i;
 /** A new instruction between a step-away word and the phrase: the step away doesn't reach it. */
-const NEW_STEP = String.raw`\b(?:and|or|but|also|plus)\s+(?:let|lets|letting|put|putting|have|has|lay|laying|use|using|try|trying|keep|keeping|make|making|start|starting|give|giving|leave|leaving|place|placing|switch|go|going|just|she|he|they|we|i|you`;
+const NEW_STEP = String.raw`\b(?:and|or|but|also|plus)\s+(?:let|lets|letting|put|putting|have|has|lay|laying|use|using|try|trying|keep|keeping|make|making|start|starting|give|giving|leave|leaving|place|placing|switch|go|going|move|moving|bring|bringing|carry|carrying|just|she|he|they|we|i|you`;
 /** In "why it matters", how things are now ("she only sleeps on me"), which is the reason for the goal, not its plan. */
 const DESCRIBING_BEFORE = /\b(?:only|still|currently|usually|mostly|always|keeps?|ends? up|has been|have been|'s been|is|are|was|were|tends? to)\b/i;
-const DESCRIBING_AFTER = /^\s*(?:now|right now|for now|at the moment|these days|lately|currently|most nights)\b/i;
+/** The same, anywhere earlier in the part ("Sam keeps falling asleep with her on the couch"), without the plain "is". */
+const DESCRIBING_HABIT = /\b(?:only|still|currently|usually|mostly|always|keeps?|ends? up|has been|have been|'s been|tends? to|right now|these days|lately|at the moment)\b/i;
+const DESCRIBING_AFTER = /^\s*(?:now|right now|for now|at the moment|these days|lately|currently|(?:on\s+)?most\s+(?:nights|days|naps|drives|afternoons|mornings|evenings)|(?:is|are|was|were)\s+(?:the\s+|her\s+|his\s+|their\s+)?only\b|(?:is|are|was|were)\s+where\b)/i;
+/** …and how things are now said with the wish to change them ("she sleeps in our bed and we'd like that to stop"). */
+const WISH_TO_CHANGE = /^[^.;]*?\b(?:and|but|so)\s+(?:we|i)(?:'d|\s+would|\s+want|\s+need|\s+hope|\s+are\s+trying|'re\s+trying)\b[^.;]*?\b(?:stop|end|change|move\s+(?:her|him|them)|(?:the|a)\s+(?:bassinet|crib)|(?:her|his|their)\s+own)\b/i;
+/** …and what happened ("Alex dozed off holding her on the sofa and it scared us"), unless the same part plans it ("we want her to keep napping on my chest"). */
+const DESCRIBING_PAST = /\b(?:slept|napped|dozed|snoozed|fell|nodded|drifted|ended|woke|woken|was|were|had|did|got|went|kept|spent|stayed|happened|used\s+to|co-?slept|bed-?shared|started|tried|found|caught|scared|worried|panicked|noticed|reali[sz]ed|yesterday|last\s+(?:night|week|time)|the\s+other\s+(?:night|day)|ago)\b/i;
+const PLANS = /\b(?:will|would|'d|should|shall|'ll|wants?\s+(?:\w+\s+)?(?:to|in|on|with)|like\s+(?:\w+\s+)?to|hop(?:e|es|ing)\s+(?:\w+\s+)?to|going\s+to|gonna|plan\w*)\b/i;
+/** A part that tells someone what to do ("let her keep sleeping in our bed") plans it, even in "why it matters". */
+const IMPERATIVE = /^\s*(?:(?:always|just|only|still|please|and)\s+)?(?:let|lets|keep|have|put|lay|make|use|try|start|leave|give|allow|bring)\b/i;
 
-const SLEEP_WORDS = String.raw`sleep(?!y)\w*|slept|asleep|naps?|napp\w*|doz(?:e|es|ed|ing)|snooz\w*|nod(?:s|ded|ding)?\s+off|drift(?:s|ed|ing)?\s+off|overnight|all\s+night|the\s+night|bedtime|dor(?:m\w*|t|s)|duerm\w*|siesta\w*|sue[ñn]o|noche|dodo|sieste\w*|endor\w*|nuit|schlaf\w*|einschlaf\w*|nickerchen|nacht`;
+const SLEEP_WORDS = String.raw`sle{1,2}p{1,2}(?!y)\w*|slept|asleep|naps?|napp\w*|doz(?:e|es|ed|ing)|snooz\w*|nod(?:s|ded|ding)?\s+off|drift(?:s|ed|ing)?\s+off|overnight|all\s+night|the\s+night|bedtime|dor(?:m\w*|t|s)|duerm\w*|siesta\w*|sue[ñn]o|noche|dodo|sieste\w*|endor\w*|nuit|schlaf\w*|einschlaf\w*|nickerchen|nacht`;
 const SLEEPING = new RegExp(String.raw`\b(?:${SLEEP_WORDS})\b`, "i");
+/** At night, for what lies in her sleep space ("a thin quilt over her at night"); never for a place, where a night feed in the glider is fine. */
+const AT_NIGHT = /\b(?:at\s+night|overnight|tonight|at\s+bedtime|every\s+night|nightly|for\s+the\s+night|through\s+the\s+night)\b/i;
 /** Laid down for a sleep, for the positions ("put her down on her tummy"). */
 const LAID_DOWN = /\b(?:put|puts|putting|lay|lays|laying|laid|place|places|placing)\s+(?:her|him|them|the\s+baby|\p{Lu}\p{L}+)\s+(?:down|to\s+bed)\b/iu;
 /** A baby's own sleep surface: the bassinet, a crib, their own sleep space. */
@@ -272,27 +309,63 @@ const SAFE_SURFACE = new RegExp(String.raw`\b(?:${SAFE_SURFACE_WORDS})\b`, "i");
 const SLEEP_PLACE = /\b(?:mattress|sleep\s+surface|head\s+of\s+(?:the|her|his|their)\s+(?:bed|bassinet|crib|cot|mattress))\b/i;
 /** Moved to the baby's own sleep surface: the transfer, or the AAP's "move them to a firm sleep surface". */
 const TO_SAFE = new RegExp(String.raw`\b(?:lay|lays|laying|laid|put|puts|putting|place|places|placing|move|moves|moving|transfer\w*|then|before)\b[^.;!?]{0,60}?\b(?:${SAFE_SURFACE_WORDS})\b`, "i");
+/** Settling her to sleep somewhere (rocking, feeding, holding, or her falling asleep there), which the transfer moves on from; a nap or a night's sleep there isn't one. */
+const TRANSFER_ACT = /\b(?:rock|feed|fed|nurs|breastfe|hold|held|cuddl|bounc|sooth|settl|shush|sing|sang|walk|sway|pat|comfort|bring|brought|burp)\w*|\bfall(?:s|ing)?\s+asleep\b|\bdrift\w*\s+off\b|\bnod\w*\s+off\b/i;
 /** Baby things that put the baby in a part: a sleep surface, or what she wears to sleep. */
 const BABY_THINGS = new RegExp(String.raw`\b(?:${SAFE_SURFACE_WORDS}|sleep\s*sacks?|swaddl\w*|sleepers?|onesies?)\b`, "i");
-const SLEEP_VERB = String.raw`(?:sleep(?!y)\w*|slept|asleep|naps?|napp\w*|doz\w*)`;
+/** Others sleeping with her: "nap together", "family nap", "all three of us". */
+const BABY_ALONG = /\b(?:together|(?:the\s+|our\s+)?family(?!\s+(?:members?|friends?|room|doctor|days?)\b)|all\s+(?:\w+\s+)?of\s+us(?!\s+adults))\b/i;
+/** …unless the sentence has her with someone else or in her own sleep space ("while Gran has her in the bassinet"). */
+const BABY_ELSEWHERE = new RegExp(
+  String.raw`\b(?:has|have|having|holds?|holding|takes?|taking|watch(?:es|ing)?)\s+(?:her|him|them|the\s+baby)\b|\b(?:she|he|they|her|him|them|the\s+baby)\b[^,.;]{0,30}?\b(?:in|into)\s+(?:(?:the|her|his|their|a)\s+)?(?:${SAFE_SURFACE_WORDS})\b`,
+  "i"
+);
+const SLEEP_VERB = String.raw`(?:sle{1,2}p{1,2}(?!y)\w*|slept|asleep|naps?|napp\w*|doz\w*)`;
 const PEOPLE = "me|us|mom|mum|mommy|mummy|mama|momma|dad|daddy|papa|dada|grandma|grandpa|nana|granny";
-/** "for a minute": a pause before going in, not crying it out. */
-const BRIEF = /^\s*(?:for\s+)?(?:a\s+(?:minute|moment|second|few\s+seconds)|one\s+minute|1\s*(?:minute|min)\b|\d{1,2}\s*(?:seconds?|secs?)|briefly)\b/i;
+/** "for a minute", "a little": a pause before going in, not crying it out. */
+const BRIEF = /^\s*(?:(?:for\s+)?(?:a\s+(?:minute|moment|second|few\s+seconds)|one\s+minute|1\s*(?:minute|min)\b|\d{1,2}\s*(?:seconds?|secs?)|briefly)|a\s+little\b(?!\s+(?:longer|more|bit\s+longer)))\b/i;
 const NUM = String.raw`(?:\d+|a\s+few|a\s+couple(?:\s+of)?|several|two|three|four|five|ten|fifteen|twenty|thirty)`;
+const MINUTES = String.raw`${NUM}(?:\s*(?:-|–|to)\s*\d+)?\s*(?:minutes?|mins?)`;
+/** Minutes past a one-minute pause ("give her 1 minute" is the pause "for a minute" is). */
+const MINUTES_PAST_ONE = String.raw`(?!1\b)${MINUTES}`;
+/** An overwhelmed adult setting her down safely and stepping away, which the AAP (and guidelines/sleep.ts call-help) advises: not leaving her to cry as a plan. */
+const OVERWHELMED = /\b(?:overwhelm\w*|too\s+much|frustrat\w*|angry|losing\s+(?:it|my\s+temper|control)|can'?t\s+(?:cope|handle\s+it|take\s+it)|at\s+(?:my|our)\s+wits'?\s+end|step(?:s|ping)?\s+away|calm\s+down|take\s+a\s+(?:break|breather|breath)|need\w*\s+a\s+break)\b/i;
+/** Staying out while she cries: going (back) in, coming back, crying words, "on her own". */
+const STAYING_OUT = /\b(?:go(?:ing)?\s+(?:back\s+)?in|come\s+(?:back\s+)?in|coming\s+(?:back\s+)?in|rush(?:ing)?\s+in|come\s+back|check(?:ing)?\s+on|before\s+(?:\w+\s+)?pick\w*|on\s+(?:her|his|their)\s+own|by\s+(?:her|him|them)sel(?:f|ves)|self[\s-]?sooth\w*|cr(?:y|ies|ied|ying)|fuss\w*|grizzl\w*|scream\w*|wail\w*)\b/i;
+/** Leaving the room, a shut door, or her crying: what makes "don't come back until 6" about her. */
+const LEFT_TO_CRY = /\b(?:cr(?:y|ies|ying)|fuss\w*|grizzl\w*|scream\w*|wail\w*|leav\w*\s+(?:the\s+room|her|him|them|the\s+baby)|left\s+the\s+room|(?:shut|shuts|shutting|close|closes|closing)\s+(?:the|her|his|their)\s+door)\b/i;
+/** Her crying, or a shut door: what makes "come back in 10 minutes" a wait (leaving the room alone may be a parent's break). */
+const CRYING_OR_DOOR = /\b(?:cr(?:y|ies|ying)|fuss\w*|grizzl\w*|scream\w*|wail\w*|(?:shut|shuts|shutting|close|closes|closing)\s+(?:the|her|his|their)\s+door)\b/i;
+/** Going back to her: what makes "still crying after 10 minutes" a wait. */
+const COMING_BACK = /\b(?:(?:come|comes|coming|go|goes|going)\s+(?:back|in)|check\w*\s+(?:on|back)|pick\w*\s+(?:\w+\s+)?up|respond\w*|leav\w*\s+the\s+room|left\s+the\s+room)\b/i;
+/** Crying while she's being rocked or fed is someone with her ("still crying after 20 minutes of rocking"). */
+const WITH_HER = /^\s+of\s+(?:rock|hold|feed|nurs|sooth|walk|bounc|cuddl|shush|sway|comfort)\w*/i;
+/** "Sit in the rocking chair by the bassinet": the adult's seat beside her sleep space, not where she sleeps. */
+const SITS_BEFORE = /\b(?:sit|sits|sitting|sat|stay|stays|staying|wait|waits|waiting|rest|rests|resting)\s+(?:(?:down|back|nearby)\s+)?(?:in|on)\s+$/i;
+const BY_SAFE = new RegExp(String.raw`^\s+(?:right\s+)?(?:by|beside|next\s+to|near|close\s+to|alongside)\s+(?:(?:the|her|his|their|a)\s+)?(?:${SAFE_SURFACE_WORDS})\b`, "i");
+/** "Move the car seat naps to the crib": moved to her own sleep space. */
+const MOVE_BEFORE = /\b(?:move|moves|moving|moved|shift\w*|switch\w*|swap\w*|chang\w*|transfer\w*)\s+(?:(?:the|her|his|their|our|those|these|all|all\s+the)\s+)?$/i;
+const TO_SAFE_AFTER = new RegExp(String.raw`^[^.;!?]{0,40}?\b(?:to|into|over\s+to|for)\s+(?:(?:the|her|his|their|a|an)\s+)?(?:own\s+)?(?:${SAFE_SURFACE_WORDS})\b`, "i");
+/** "Take the bumpers out of the crib", "keep pillows and blankets out of it": out of her sleep space. */
+const TAKE_BEFORE = /\b(?:take|takes|taking|took|get|gets|getting|got|keep|keeps|keeping|kept|pull\w*|clear\w*|leave)\s+(?:[\w'-]+\s+){0,4}$/i;
+const OUT_AFTER = /^(?:\s+(?!(?:she|he|they|it)\b)[\w'-]+){0,4}?\s+(?:out(?:\s+of\b|\s*$)|away\b)/i;
+/** The clause a place hangs on, which may carry its sleep ("… once she's asleep"): never one that's about her sleep space. */
+const BORROW_LEAD = /^(?:when|whenever|once|if|until|after|while|because|so)$/;
+const WAKES = /\bwak(?:e|es|ing)\b/i;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** What a refusal is about, for its words: crying it out, an adult, a bed, a couch or chair, a sitting device, a product not made for sleep, a position, bedding, weights or a tilt. */
 export type UnsafeKind = "cry" | "adult" | "bed" | "couch" | "seat" | "product" | "position" | "bedding" | "weighted" | "incline";
 
-/** The phrase that made a text unsafe, its kind, and what it names (for the refusal: "a couch", "a car seat"). */
-export type UnsafeFind = { kind: UnsafeKind; phrase: string; what: string | null };
+/** The phrase that made a text unsafe, its kind, and what it names (for the refusal: "a couch", "a car seat"); `awake` when an adult said they're awake, which a couch, chair or adult bed doesn't change. */
+export type UnsafeFind = { kind: UnsafeKind; phrase: string; what: string | null; awake?: true };
 
 type Rule = {
   re: RegExp;
   kind: UnsafeKind;
   /** The part needs a sleep word; "down" also takes "put her down". */
   sleep?: boolean | "down";
-  /** The part needs the baby: "strict" her name, "her" or "the baby"; "loose" a baby's sleep surface or sleep sack too; "sentence" the baby anywhere in the sentence ("side sleeping so she …"). */
+  /** The part needs the baby: "strict" her name, "her" or "the baby" (or "together", "the family", "all of us"); "loose" a baby's sleep surface or sleep sack too; "sentence" the baby anywhere in the sentence ("side sleeping so she …"). */
   baby?: "strict" | "loose" | "sentence";
   /** A bassinet or crib in the part makes it something else ("sleeps next to us in the bassinet"). */
   unlessSafe?: boolean;
@@ -302,15 +375,23 @@ type Rule = {
   transfer?: "bed" | "couch";
   /** A sitting device: "if she falls asleep in it, move her to the bassinet" is the AAP's own advice. */
   seat?: boolean;
-  /** A short pause ("for a minute") is fine. */
+  /** A couch, chair or adult bed: held sleep and the transfer are never fine there. */
+  place?: boolean;
+  /** The sleep word may be in the clause the part hangs on ("… once she's asleep"), for a place. */
+  borrow?: boolean;
+  /** A short pause ("for a minute", "a little") is fine. */
   brief?: boolean;
   /** Read across the whole sentence (timed waiting runs across its parts). */
   sentence?: boolean;
   /** The sentence must also say this (5-10-15 needs its checks or minutes). */
   needs?: RegExp;
+  /** The whole text must also say this ("Don't rush in when she cries; give it 10 minutes"). */
+  needsText?: RegExp;
   /** The sentence saying this makes it something else ("gentle sleep training"). */
   unless?: RegExp;
-  /** The part names her sleep space (a bassinet, a mattress), or has a sleep word and the baby: soft things and tilts are about where she sleeps. */
+  /** The words right after the phrase making it something else ("let her cry in my arms"). */
+  unlessAfter?: RegExp;
+  /** The part names her sleep space (a bassinet, a mattress), or has a sleep word (or "at night") and the baby: soft things and tilts are about where she sleeps. */
   where?: boolean;
   /** The part saying this makes it something else (a swaddle's blanket). */
   unlessPart?: RegExp;
@@ -323,10 +404,13 @@ const article = (noun: string) => `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun
 const SEAT_NAME: [RegExp, string][] = [
   [/car[\s-]?seat|infant\s+seat|silla|si[èe]ge|autositz|babyschale/i, "car seat"],
   [/stroller|pram|buggy|buggies|pushchair|cochecito|poussette|kinderwagen/i, "stroller"],
+  [/mama\s*roo/i, "baby swing"],
+  [/rocker/i, "baby rocker"],
   [/swing|columpio|balancelle|schaukel/i, "swing"],
   [/bouncer|bouncy|transat|wippe/i, "bouncer"],
-  [/sling|wrap|fular|[ée]charpe|tragetuch/i, "sling"],
-  [/carrier|porte|mochila|trage/i, "carrier"],
+  [/\bwraps?\b/i, "wrap"],
+  [/sling|fular|[ée]charpe|tragetuch/i, "sling"],
+  [/carrier|babywear|porte|mochila|trage/i, "carrier"],
   [/jumper|activity|exersaucer/i, "baby seat"],
   [/hamaca|hammock/i, "hammock"],
 ];
@@ -341,14 +425,18 @@ const PRODUCT_NAME: [RegExp, string][] = [
 const productName = (m: RegExpMatchArray) => article(PRODUCT_NAME.find(([re]) => re.test(m[0]))?.[1] ?? "lounger");
 const couchName = (m: RegExpMatchArray) => {
   const n = (m[1] ?? m[0]).toLowerCase();
-  const noun = /sofa|canap|sof[áa]/.test(n) ? "sofa" : /couch|settee|futon|love|daybed|sessel/.test(n) ? "couch" : /recliner/.test(n) ? "recliner" : /glider/.test(n) ? "glider" : /rocking/.test(n) ? "rocking chair" : /arm|fauteuil|sill[óo]n/.test(n) ? "armchair" : "chair";
+  const noun = /sofa|canap|sof[áa]/.test(n) ? "sofa" : /couch|settee|futon|love|daybed|sessel/.test(n) ? "couch" : /reclin/.test(n) ? "recliner" : /glider/.test(n) ? "glider" : /rocking/.test(n) ? "rocking chair" : /arm|fauteuil|sill[óo]n/.test(n) ? "armchair" : "chair";
   return `${noun === "sofa" || noun === "couch" ? "on" : "in"} ${article(noun)}`;
 };
 
 type Voiceish = Pick<Voice, "name" | "named" | "pronoun" | "their">;
 
-function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: Rule[]; baby: RegExp; awake: RegExp; doze: RegExp } {
-  const names = [...new Set((o.adults ?? []).map((n) => n.trim().split(/\s+/)[0]).filter((n) => n && /^[\p{L}'-]{2,}$/u.test(n)))].map(escapeRe);
+/** The adults' first names, as the rules read them ("on Theo's chest"). */
+const adultFirstNames = (adults: readonly string[] | undefined) =>
+  [...new Set((adults ?? []).map((n) => n.trim().split(/\s+/)[0]).filter((n) => n && /^[\p{L}'-]{2,}$/u.test(n)))].map(escapeRe);
+
+function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: Rule[]; baby: RegExp; twoAdults: RegExp; awake: RegExp; doze: RegExp } {
+  const names = adultFirstNames(o.adults);
   const babyName = o.v?.named ? escapeRe(o.v.name) : null;
   const people = [PEOPLE, ...names].join("|");
   const nameOr = names.length ? `|${names.join("|")}` : "";
@@ -357,6 +445,9 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
     "\\s+(?:sleep\\w*|nap\\w*|doz\\w*|lie|lay|rest|stay|be|fall\\w*|drift\\w*|settle\\w*|cry\\w*|fuss\\w*|on|in|into|onto|with|to|for|from|at|by|near|next|beside|against|under|down|up|over|back|there|here|out|off|until|while|when|and|or|between|face)\\b|\\s*$|\\s*[,.;:!?)]";
   const pron = !o.v ? ["she", "he", "him", `her(?=${herObject})`] : o.v.pronoun === "she" ? ["she", `her(?=${herObject})`] : o.v.pronoun === "he" ? ["he", "him"] : ["they", "them"];
   const baby = new RegExp(`\\b(?:${[...pron, "(?:the\\s+)?baby", "newborn", ...(babyName ? [babyName] : [])].join("|")})\\b`, "i");
+  // Two adults named together ("Noor and Theo sleep together in our bed"): "together" is them, not the baby.
+  const grownUp = `(?:i|me|mom|mum|dad|my\\s+(?:partner|wife|husband)${nameOr})`;
+  const twoAdults = new RegExp(`\\b${grownUp}\\s+and\\s+${grownUp}\\b`, "i");
   const someone = `(?:her|him|them|the\\s+baby|baby${babyName ? `|${babyName}` : ""})`;
   // The baby's own tummy or side ("on her tummy"), and anyone else's chest or lap ("on Theo's chest", "on my chest").
   const babyPossessive = `(?:${!o.v ? "her|his|their" : o.v.their}|the\\s+baby'?s${babyName ? `|${babyName}'?s` : ""})`;
@@ -369,46 +460,62 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
     `\\b(?:while|when|as\\s+long\\s+as|only\\s+(?:if|when|while)|if)\\s+(?:${subjects.join("|")})\\s+(?:wide\\s+|fully\\s+|still\\s+)?awake\\b|\\bawake\\s+adult\\b|\\bwhile\\s+awake\\b|\\b(?:i|we|you${nameOr})\\s+(?:stay|stays|staying|keep|keeps|keeping)\\s+awake\\b`,
     "i"
   );
-  // An adult dozing in the part: "Doze with her …", "Theo naps on the couch …", "if I fall asleep …".
+  // An adult dozing in the part: "Doze with her …", "Theo naps on the couch …", "if I fall asleep …", "Theo slept with her …".
   const adultSubjects = ["i", "we", "you", "mom", "mum", "dad", ...(o.v?.pronoun === "she" ? ["he"] : o.v?.pronoun === "he" ? ["she"] : []), ...names];
-  const doze = new RegExp(
-    `^\\s*(?:and\\s+)?(?:doz\\w*|snooz\\w*|nap\\w*|sleep\\w*|fall\\w*\\s+asleep|nod\\w*\\s+off|drift\\w*\\s+off)\\b|\\b(?:${adultSubjects.join("|")})\\s+(?:might\\s+|may\\s+|could\\s+|will\\s+|'ll\\s+)?(?:doz\\w*|snooz\\w*|nap\\w*|sleep\\w*|fall\\w*\\s+asleep|nod\\w*\\s+off|drift\\w*\\s+off)\\b`,
-    "i"
+  const dozing = String.raw`(?:doz\w*|snooz\w*|nap\w*|sle{1,2}p{1,2}\w*|slept|fall\w*\s+asleep|fell\s+asleep|nod\w*\s+off|drift\w*\s+off)`;
+  const doze = new RegExp(`^\\s*(?:and\\s+)?${dozing}\\b|\\b(?:${adultSubjects.join("|")})\\s+(?:might\\s+|may\\s+|could\\s+|will\\s+|'ll\\s+)?${dozing}\\b`, "i");
+  // Crying while someone holds her: "let her cry in my arms", "… while Sam rocks her".
+  const heldCrying = new RegExp(
+    `^\\s+(?:in|into)\\s+(?:my|your|our|his|her|their|[\\p{L}][\\p{L}'-]*'s)\\s+arms\\b|^\\s+while\\s+(?:i|we|you|someone|mom|mum|dad|he|she${nameOr})\\s+(?:hold|rock|cuddl|carr|walk|sooth|comfort|bounc|sway|nurs|feed|wear)\\w*`,
+    "iu"
   );
-  const seatWords = String.raw`car[\s-]?seats?|infant\s+seats?|strollers?|prams?|buggy|buggies|pushchairs?|swings?|bouncers?|bouncy\s+seats?|infant\s+carriers?|baby\s+carriers?|carriers?|slings?|baby\s+wraps?|jumpers?|activity\s+cent(?:er|re)s?|exersaucers?|silla\s+(?:de\s+)?(?:auto|coche|carro)|cochecito|columpio|hamaca|fular|mochila\s+portabeb[ée]s|si[èe]ge[\s-]+auto|porte[\s-]?b[ée]b[ée]|[ée]charpe(?:\s+de\s+portage)?|transat|balancelle|poussette|autositz|babyschale|kinderwagen|babyschaukel|babywippe|wippe|tragetuch`;
+  const seatWords = String.raw`car[\s-]?seats?|infant\s+seats?|strollers?|prams?|buggy|buggies|pushchairs?|swings?(?!\s+(?:her|him|them|the\s+baby|gently|softly)\b)|bouncers?|bouncy\s+seats?|infant\s+carriers?|baby\s+carriers?|carriers?|slings?|baby\s+wraps?|mama\s*roos?|(?:baby|infant|bouncy|vibrating)\s+rockers?|jumpers?|activity\s+cent(?:er|re)s?|exersaucers?|silla\s+(?:de\s+)?(?:auto|coche|carro)|cochecito|columpio|hamaca|fular|mochila\s+portabeb[ée]s|si[èe]ge[\s-]+auto|porte[\s-]?b[ée]b[ée]|[ée]charpe(?:\s+de\s+portage)?|transat|balancelle|poussette|autositz|babyschale|kinderwagen|babyschaukel|babywippe|wippe|tragetuch`;
+  // An adult bed, named after a preposition ("in our bed", "out of our bed", "from the big bed"), so a step away before it is read.
+  const bedOwner = String.raw`(?:the|a|our|my|your|mom'?s|mum'?s|dad'?s|mommy'?s|daddy'?s|parents'?|grandma'?s|grandpa'?s)`;
+  const bedSize = String.raw`(?:own|big|grown[\s-]?up|adult|double|queen|king|(?:queen|king|full)[\s-]?sized?|twin|guest|spare|master)`;
   const rules: Rule[] = [
     // ── Leaving the baby to cry, by any name ──
-    { re: /\bcr(?:y|ies|ied|ying)[\s-]+it[\s-]+out\b/gi, kind: "cry" },
+    { re: /\bcr(?:y|ies|ied|ying|i)[\s-]+it[\s-]+out\b/gi, kind: "cry" },
     { re: /\bcio\b/gi, kind: "cry" },
-    { re: /\bferber\w*/gi, kind: "cry" },
+    { re: /\bferb[aeiou]?r\w*/gi, kind: "cry" },
+    { re: /\bweissbluth\w*/gi, kind: "cry" },
     { re: /\bcontrolled[\s-]+(?:crying|comforting)\b/gi, kind: "cry" },
     { re: /\bextinction\b/gi, kind: "cry" },
     { re: /\bcheck[\s-]+and[\s-]+console\b/gi, kind: "cry" },
     { re: /\b(?:timed|graduated|progressive)[\s-]+(?:checks?|check[\s-]?ins?|intervals?|waits?|waiting|crying|soothing)\b/gi, kind: "cry" },
+    { re: /\binterval[\s-]+(?:sooth\w*|check\w*|method|training|crying|waits?|waiting)\b/gi, kind: "cry" },
     { re: /\bcr(?:y|ies|ying)\s+(?:her|him|them)sel(?:f|ves)\s+to\s+sleep\b/gi, kind: "cry" },
     { re: /\bsleep[\s-]?train\w*/gi, kind: "cry", unless: /\b(?:gentle|no[\s-]?cry|without\s+(?:any\s+)?(?:crying|tears))\b/i },
-    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:cry|cries|crying|scream|screams|screaming|wail|wailing|sob|sobbing)\\b`, "gi"), kind: "cry" },
-    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:fuss|fusses|fussing)\\b`, "gi"), kind: "cry", brief: true },
-    { re: new RegExp(`\\bleav(?:e|es|ing)\\s+${someone}\\b[^,;:]{0,40}?\\b(?:cry|cries|crying|fuss|fussing|scream|screaming|wail|wailing)\\b`, "gi"), kind: "cry" },
+    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:cry|cri|cries|crying|scream|screams|screaming|wail|wailing|sob|sobbing)\\b`, "gi"), kind: "cry", unless: OVERWHELMED, unlessAfter: heldCrying },
+    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:fuss|fusses|fussing|grizzle|grizzles|grizzling|whinge|whinges|whinging)\\b`, "gi"), kind: "cry", brief: true, unless: OVERWHELMED, unlessAfter: heldCrying },
+    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:work|figure|sort|tough)\\s+(?:it|this|things)\\s+out\\b`, "gi"), kind: "cry" },
+    { re: new RegExp(`\\bleav(?:e|es|ing)\\s+${someone}\\b[^,;:]{0,40}?\\b(?:cry|cries|crying|fuss|fussing|grizzl\\w*|scream|screaming|wail|wailing)\\b`, "gi"), kind: "cry", unless: OVERWHELMED },
     { re: new RegExp(`\\bignor(?:e|es|ing)\\s+(?:${someone}(?:'s)?\\s+)?(?:cry|cries|crying|fussing|screaming|wailing)\\b`, "gi"), kind: "cry" },
     // Timed waiting before going in: "Wait 10 minutes before picking her up", "Don't go in until 3 AM".
     {
       re: new RegExp(
-        `\\bwait(?:s|ed|ing)?\\s+(?:for\\s+)?(?:at\\s+least\\s+)?${NUM}(?:\\s*(?:-|–|to)\\s*\\d+)?\\s*(?:minutes?|mins?)\\b[^.;!?]*?\\b(?:before|until|then|when|if|while)\\b[^.;!?]*?\\b(?:go(?:ing)?\\s+in|pick(?:s|ing)?\\b|respond\\w*|comfort\\w*|sooth\\w*|check(?:ing)?\\s+on|cry|cries|crying|fuss\\w*)`,
+        `\\bwait(?:s|ed|ing)?\\s+(?:for\\s+)?(?:at\\s+least\\s+)?${MINUTES}\\b[^.;!?]*?\\b(?:before|until|then|when|if|while)\\b[^.;!?]*?\\b(?:go(?:ing)?\\s+in|pick(?:s|ing)?\\b|respond\\w*|comfort\\w*|sooth\\w*|check(?:ing)?\\s+on|cry|cries|crying|fuss\\w*)`,
         "gi"
       ),
       kind: "cry",
       sentence: true,
+      unless: OVERWHELMED,
     },
-    { re: new RegExp(`\\b(?:don'?t|do\\s+not|never|no)\\s+(?:go(?:ing)?\\s+in|pick(?:ing)?\\s+(?:${someone}\\s+)?up|respond(?:ing)?|comfort(?:ing)?)\\s+(?:to\\s+${someone}\\s+)?(?:until|before|for\\s+${NUM}\\s*(?:minutes?|mins?|hours?))\\b`, "gi"), kind: "cry", sentence: true },
-    { re: /\b\d{1,2}\s*[-–/,]\s*\d{1,2}\s*[-–/,]\s*\d{1,2}\b/g, kind: "cry", sentence: true, needs: /\b(?:check\w*|method|minutes?|mins?|wait\w*|intervals?|cry\w*|go(?:ing)?\s+in)\b/i },
-    { re: /\b(?:dejar(?:la|lo|le)?|d[ée]ja(?:la|lo)|dejamos)\s+llorar\b|\bllorar\s+hasta\b/gi, kind: "cry" },
-    { re: /\blaisser\s+(?:la\s+|le\s+|l')?pleurer\b|\blaiss(?:e|ez|ons)\s+(?:la|le)\s+pleurer\b/gi, kind: "cry" },
-    { re: /\b(?:schreien|weinen)\s+(?:zu\s+)?lassen\b/gi, kind: "cry" },
+    { re: new RegExp(`\\b(?:don'?t|do\\s+not|never|no)\\s+(?:go(?:ing)?\\s+(?:back\\s+)?in|come\\s+back\\s+in|coming\\s+back\\s+in|pick(?:ing)?\\s+(?:${someone}\\s+)?up|respond(?:ing)?|comfort(?:ing)?)\\s+(?:to\\s+${someone}\\s+)?(?:until|till|before|for\\s+${NUM}\\s*(?:minutes?|mins?|hours?))\\b`, "gi"), kind: "cry", sentence: true, unless: OVERWHELMED },
+    // …and without the word "wait": "give her 10 minutes before going in", "self-soothe for 15 minutes", "don't come back until 6" after shutting the door, "come back if she's still crying after 10 minutes".
+    { re: new RegExp(`\\b(?:give|gives|giving|allow|allows|allowing)\\s+(?:${someone}|it|things)\\s+(?:at\\s+least\\s+|another\\s+|a\\s+full\\s+)?${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", needsText: STAYING_OUT, unless: OVERWHELMED },
+    { re: new RegExp(`\\bself[\\s-]?sooth\\w*\\s+(?:for\\s+)?(?:at\\s+least\\s+)?${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry" },
+    { re: /\b(?:don'?t|do\s+not|never|no)\s+(?:come|coming|go|going)\s+back\s+(?:until|till|til|before)\b/gi, kind: "cry", sentence: true, needs: LEFT_TO_CRY, unless: OVERWHELMED },
+    { re: new RegExp(`\\b(?:cr(?:y|ies|ied|ying)|fuss\\w*|scream\\w*|wail\\w*|grizzl\\w*)\\s+(?:for\\s+)?(?:after|past|beyond|longer\\s+than|more\\s+than|at\\s+least)\\s+${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", sentence: true, needs: COMING_BACK, unless: OVERWHELMED, unlessAfter: WITH_HER },
+    { re: new RegExp(`\\b(?:come|comes|coming|go|goes|going|check\\w*)\\s+back(?:\\s+in)?\\s+(?:in|after)\\s+${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", sentence: true, needs: CRYING_OR_DOOR, unless: OVERWHELMED },
+    { re: /\b\d{1,2}\s*[-–/,]\s*\d{1,2}\s*[-–/,]\s*\d{1,2}\b/g, kind: "cry", sentence: true, needs: /\b(?:check\w*|method|methode|metodo|minutes?|mins?|wait\w*|intervals?|cry\w*|go(?:ing)?\s+in)\b/i },
+    { re: /\b(?:dejar(?:la|lo|le)?|d[ée]ja(?:la|lo)|dejamos)\s+llorar\b|\bllorar\s+hasta\b|\b(?:dejar|deja|dejen|dejamos|dejarla|dejarlo|dejarle)\s+que\s+llore\b|\bque\s+llore\b/gi, kind: "cry" },
+    { re: /\blaisser[\s-]+(?:la[\s-]+|le[\s-]+|l')?pleurer\b|\blaiss(?:e|ez|ons)[\s-]+(?:la|le)[\s-]+pleurer\b/gi, kind: "cry" },
+    { re: /\b(?:schreien|weinen)\s+(?:zu\s+)?lassen\b|\blass(?:t|en)?\s+(?:sie|ihn|es|das\s+baby)\s+(?:schreien|weinen)\b/gi, kind: "cry" },
 
     // ── Raised or tilted, and products not made for infant sleep (before soft things: a nursing pillow is a product) ──
     { re: new RegExp(`\\b(?:rais(?:e|es|ed|ing)|elevat\\w*|tilt\\w*|angl(?:e|ed|ing)|inclin\\w*|wedg\\w*|prop(?:s|ped|ping)?\\s+(?:${someone}\\s+)?up)\\b`, "gi"), kind: "incline", where: true },
-    { re: /\b(?:loungers?|baby\s+nests?|sleep\s+nests?|nests?|nursing\s+pillows?|feeding\s+pillows?|boppy|boppies|dock[\s-]?a[\s-]?tots?|sleepyheads?|rock[\s-]?(?:n|'n'|’n’|and)[\s-]?plays?|inclined?\s+sleepers?|sleep\s+positioners?|positioners?|hammocks?|bean\s*bags?)\b/gi, kind: "product", sleep: true, what: productName },
+    { re: /\b(?:loungers?|baby\s+nests?|sleep\s+nests?|nests?|nursing\s+pillows?|feeding\s+pillows?|boppy|boppies|dock[\s-]?a[\s-]?tots?|sleepyheads?|rock[\s-]?(?:n|'n'|’n’|and)[\s-]?plays?|inclined?\s+sleepers?|sleep\s+positioners?|positioners?|hammocks?|bean\s*bags?)\b/gi, kind: "product", sleep: true, borrow: true, what: productName },
 
     // ── On the tummy or side ──
     { re: new RegExp(`\\b(?:on|onto)\\s+${babyPossessive}\\s+(?:tummy|stomach|front|belly|side)\\b(?!\\s+time)`, "gi"), kind: "position", sleep: "down" },
@@ -417,55 +524,68 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
     { re: /\bboca\s+abajo\b|\bde\s+(?:lado|costado)\b|\bsur\s+le\s+(?:ventre|c[ôo]t[ée])\b|\bbauchlage\b|\bseitenlage\b|\bauf\s+(?:dem\s+bauch|der\s+seite)\b/gi, kind: "position", sleep: true },
 
     // ── Sharing an adult bed (before "sleeps with us", so co-sleeping is named as the bed it is) ──
-    { re: /(?<!bedside\s)\bco[\s-]?sleep(?!er\s+(?:bassinet|crib|cot))\w*/gi, kind: "bed" },
+    { re: /(?<!bedside\s)\bco[\s-]?sleep(?!er\s+(?:bassinet|crib|cot))\w*|\bco[\s-]?slept\b/gi, kind: "bed" },
     { re: /\bbed[\s-]?shar\w*/gi, kind: "bed" },
     { re: /\bfamily\s+bed\b|\bcolecho\b|\bcama\s+familiar\b|\bco[\s-]?dodo\b|\bcododo\b|\bfamilienbett\b|\belternbett\b/gi, kind: "bed" },
 
     // ── Asleep on or with an adult ──
     { re: /\bcontact\s+(?:naps?|napping|sleeps?|sleeping)\b/gi, kind: "adult", held: true },
     { re: /\bskin[\s-]to[\s-]skin\s+(?:naps?|napping|sleeps?|sleeping)\b/gi, kind: "adult", held: true },
+    { re: /\bkontakt[\s-]?(?:schlaf\w*|nickerchen)\b/gi, kind: "adult", held: true },
     { re: new RegExp(`\\b${SLEEP_VERB}\\s+(?:only\\s+)?on\\s+(?:${people})\\b`, "gi"), kind: "adult", held: true },
     { re: new RegExp(`\\bon\\s+${possessive}\\s+(?:chest|lap|shoulder)\\b`, "gi"), kind: "adult", sleep: true, held: true },
     { re: new RegExp(`\\bon\\s+${adultPossessive}\\s+(?:tummy|belly|stomach)\\b`, "gi"), kind: "adult", sleep: true, held: true },
+    { re: /\b(?:en|sobre)\s+(?:mi|tu|su|nuestro|el)\s+pecho\b|\bsur\s+(?:moi|nous|toi|lui|papa|maman)\b|\bsur\s+(?:mon|ton|son)\s+(?:torse|ventre)\b|\bsur\s+(?:ma|ta|sa)\s+poitrine\b|\bauf\s+(?:meiner|deiner|seiner|ihrer|unserer|eurer)\s+brust\b|\bauf\s+(?:mir|uns|papa|mama)\b/gi, kind: "adult", sleep: true, held: true },
     { re: new RegExp(`\\b${SLEEP_VERB}\\s+(?:only\\s+)?(?:with|next\\s+to|beside)\\s+(?:${people})\\b`, "gi"), kind: "adult", unlessSafe: true },
     { re: new RegExp(`\\bbetween\\s+(?:us|you|the\\s+two\\s+of\\s+(?:us|you)|mom\\s+and\\s+dad|dad\\s+and\\s+mom${names.length > 1 ? `|(?:${names.join("|")})\\s+and\\s+(?:${names.join("|")})` : ""})\\b`, "gi"), kind: "adult", sleep: true, baby: "strict" },
 
     // ── In an adult bed ──
     { re: new RegExp(`\\bin\\s+bed\\s+with\\s+(?:${people})\\b`, "gi"), kind: "bed", baby: "strict" },
     {
-      re: /\b(?:in|on|into|onto)\s+(?:the|a|our|my|your|mom'?s|mum'?s|dad'?s|mommy'?s|daddy'?s|parents'?|grown[\s-]?up|adult|big|double|queen|king)\s+(?:own\s+|big\s+|grown[\s-]?up\s+|adult\s+)?bed\b/gi,
+      re: new RegExp(String.raw`(?<=\b(?:in|on|into|onto|out\s+of|from|off)\s+)(?:${bedOwner}\s+(?:${bedSize}\s+)?|${bedSize}\s+)bed\b`, "gi"),
       kind: "bed",
       sleep: true,
       baby: "strict",
       transfer: "bed",
+      place: true,
+      borrow: true,
     },
     // "in bed" with nothing before "bed" ("nurse her to sleep in bed and keep her there"), but not "in bed by 8" in her crib.
-    { re: /\bin\s+bed\b(?!\s+by\b)/gi, kind: "bed", sleep: true, baby: "strict", unlessSafe: true, transfer: "bed" },
-    { re: /\ben\s+(?:nuestra|la|mi|tu)\s+cama\b|\bdans\s+(?:notre\s+lit|le\s+grand\s+lit|le\s+lit\s+(?:des\s+parents|parental))\b|\bim\s+(?:gro[ßs]en\s+)?bett\b|\bbei\s+uns\s+im\s+bett\b/gi, kind: "bed", sleep: true },
+    { re: /\bin\s+bed\b(?!\s+by\b)/gi, kind: "bed", sleep: true, baby: "strict", unlessSafe: true, transfer: "bed", place: true, borrow: true },
+    { re: /\ben\s+(?:nuestra|la|mi|tu)\s+cama\b|\bdans\s+(?:notre\s+lit|le\s+grand\s+lit|le\s+lit\s+(?:des\s+parents|parental))\b|\bim\s+(?:gro[ßs]en\s+)?bett\b|\bbei\s+uns\s+im\s+bett\b/gi, kind: "bed", sleep: true, place: true, borrow: true },
 
     // ── On a couch, recliner or armchair ──
     {
-      re: /\b(?:on|onto|in)\s+(?:the|a|our|my|his|her|their|your)\s+(couch|sofa|settee|futon|loveseat|love\s+seat|daybed)\b/gi,
+      re: /(?<=\b(?:on|onto|in|into|out\s+of|from|off)\s+)(?:the|a|our|my|his|her|their|your)\s+(couch|sofa+|settee|futon|loveseat|love\s+seat|daybed)\b/gi,
       kind: "couch",
       sleep: true,
       baby: "strict",
       transfer: "couch",
+      place: true,
+      borrow: true,
       what: couchName,
     },
     {
-      re: /\b(?:in|on|into)\s+(?:the|a|an|our|my|his|her|their|your|mom'?s|dad'?s)\s+(recliner|armchair|arm[\s-]chair|easy\s+chair|glider|rocking\s+chair|rocker|nursing\s+chair|chair)\b/gi,
+      re: /(?<=\b(?:in|on|into|out\s+of|from|off)\s+)(?:the|a|an|our|my|his|her|their|your|mom'?s|dad'?s)\s+(recliner|reclinr|armchair|arm[\s-]chair|easy\s+chair|glider|rocking\s+chair|rocker|nursing\s+chair|chair)\b/gi,
       kind: "couch",
       sleep: true,
       baby: "strict",
       transfer: "couch",
+      place: true,
+      borrow: true,
       what: couchName,
     },
-    { re: /\ben\s+el\s+(sof[áa]|sill[óo]n)\b|\bsur\s+le\s+(canap[ée]|sofa)\b|\bdans\s+le\s+(fauteuil)\b|\bauf\s+(?:dem|der)\s+(sofa|couch)\b|\bim\s+(sessel)\b/gi, kind: "couch", sleep: true, what: couchName },
+    { re: /\ben\s+el\s+(sof[áa]|sill[óo]n)\b|\bsur\s+le\s+(canap[ée]|sofa)\b|\bdans\s+le\s+(fauteuil)\b|\bauf\s+(?:dem|der)\s+(sofa|couch)\b|\bim\s+(sessel)\b/gi, kind: "couch", sleep: true, place: true, borrow: true, what: couchName },
 
     // ── Sitting devices (the baby's own, so no other word for the baby is needed) ──
-    { re: new RegExp(`\\b(?:${seatWords})\\b`, "gi"), kind: "seat", sleep: true, seat: true, what: seatName },
+    { re: new RegExp(`\\b(?:${seatWords})\\b`, "gi"), kind: "seat", sleep: true, seat: true, borrow: true, what: seatName },
+    // Babywearing and a wrap as where she sleeps ("babywearing for every nap", "wrap naps"), not as a way to get about.
+    { re: /\bbaby[\s-]?wear\w*\s+(?:for|during|at|through)\s+(?:(?:every|each|all|her|his|their|the|most|long)\s+)?(?:naps?|sleeps?|bedtime|the\s+night|nights?)\b|\b(?:naps?|sleeps?|sleeping|napping)\s+(?:while\s+)?baby[\s-]?wear\w*/gi, kind: "seat", seat: true, what: seatName },
+    { re: /\bwrap[\s-]+(?:naps?|napping|sleeps?|sleeping)\b|(?<=\b(?:in|inside)\s+(?:the|a|my|her|our|your)\s+)(?:baby\s+)?wrap\b/gi, kind: "seat", sleep: true, seat: true, borrow: true, unlessPart: /\bswaddl\w*/i, what: seatName },
 
     // ── Soft things in the sleep space ──
+    // Rolled towels or blankets to hold her in place are positioners ("a rolled blanket on each side"), but not for tummy time.
+    { re: /\brolled[\s-]+(?:up\s+)?(?:towels?|blankets?|receiving\s+blankets?)\b/gi, kind: "bedding", baby: "loose", unlessPart: /\btummy\s+time\b/i },
     { re: /\bblankets?\b/gi, kind: "bedding", where: true, unlessPart: /\bswaddl\w*/i },
     {
       re: /\b(?:pillows?|bumpers?|bumper\s+pads?|quilts?|duvets?|comforters?|sheepskins?|stuffed\s+(?:animals?|toys?)|soft\s+toys?|plush(?:ies|ie|y)?|toys?|loose\s+(?:bedding|sheets?)|soft\s+bedding|bedding|mattress\s+toppers?|rolled[\s-]+(?:up\s+)?(?:towels?|blankets?)|towels?|lovey|loveys|lovies|cushions?|almohad\w*|mantas?|cobijas?|oreillers?|couvertures?|tour\s+de\s+lit|kissen|decken?|nestchen)\b/gi,
@@ -475,7 +595,7 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
     // ── Anything weighted ──
     { re: /\bweighted\b|\bbeschwert\w*|\blest(?:ée|é)s?\b/gi, kind: "weighted", baby: "loose" },
   ];
-  return { rules, baby, awake, doze };
+  return { rules, baby, twoAdults, awake, doze };
 }
 
 /** A sentence's parts, with where each starts and the word that began it ("if", "then"). */
@@ -495,71 +615,142 @@ function partsOf(sentence: string): { text: string; start: number; lead: string 
 /**
  * Whether the words before a phrase (in its part, after any comma) step away
  * from it: their last step-away word, unless a new instruction starts after
- * it or the bassinet comes after it ("from the bassinet into our bed" steps
- * away from the bassinet, toward the bed).
+ * it, the words after it say how ("by letting her cry"), or a negation
+ * undoes it ("don't move her out of"). A bassinet after it ("from the
+ * bassinet into our bed") steps toward the phrase instead, unless that move
+ * is the negated one ("never move her from the bassinet into our bed").
  */
-function awayFrom(before: string, newStep: RegExp): boolean {
-  let end = -1;
-  for (const m of before.matchAll(AWAY_CUE)) end = (m.index ?? 0) + m[0].length;
-  if (end < 0) return false;
-  const rest = before.slice(end);
-  return !SAFE_SURFACE.test(rest) && !newStep.test(rest);
+function awayFrom(before: string, phrase: string, newStep: RegExp): boolean {
+  let cue: RegExpMatchArray | null = null;
+  for (const m of before.matchAll(AWAY_CUE)) cue = m;
+  if (!cue) return false;
+  const at = cue.index ?? 0;
+  const rest = before.slice(at + cue[0].length);
+  const negated = NEGATED.test(before.slice(0, at));
+  // From the bassinet toward the phrase: away only if the move itself is negated, or stepped away from ("stop taking her out of the bassinet and into our bed").
+  if (SAFE_SURFACE.test(rest)) return negated || awayFrom(before.slice(0, at), phrase, newStep);
+  if (newStep.test(rest) || MEANS.test(rest + phrase)) return false;
+  return !negated;
 }
 
 /** What a scan found: the unsafe phrase, or what made a phrase safe (held while awake, the transfer), for the cautions. */
 type SafetyScan = { find: UnsafeFind | null; held: boolean; transfer: ("bed" | "couch")[] };
+type Part = { text: string; start: number; lead: string };
 
 function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; describing?: boolean }): SafetyScan {
   const out: SafetyScan = { find: null, held: false, transfer: [] };
   if (!text) return out;
-  const { rules, baby, awake, doze } = unsafeRules(o);
-  const names = [...new Set((o.adults ?? []).map((n) => n.trim().split(/\s+/)[0]).filter((n) => n && /^[\p{L}'-]{2,}$/u.test(n)))].map(escapeRe);
+  const { rules, baby, twoAdults, awake, doze } = unsafeRules(o);
+  const names = adultFirstNames(o.adults);
   const newStep = new RegExp(`${NEW_STEP}${names.length ? `|${names.join("|")}` : ""})\\b`, "i");
-  const babyIn = (s: string, how: Rule["baby"]) => baby.test(s) || (how === "loose" && BABY_THINGS.test(s));
+  // "Together", "the family" or "all of us" take the baby along, unless the sentence puts her elsewhere ("while Gran has her") or two adults are the ones together.
+  const babyIn = (s: string, sentence: string, how: Rule["baby"]) => baby.test(s) || (BABY_ALONG.test(s) && !twoAdults.test(s) && !BABY_ELSEWHERE.test(sentence)) || (how === "loose" && BABY_THINGS.test(s));
+  const places = rules.filter((r) => r.place);
   // Read without accents and with straight apostrophes, so "sofá", "côté" and a phone's "Don’t" meet the rules' plain letters.
   const plainText = text.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[‘’ʼ`]/g, "'");
+  const found = (rule: Rule, m: RegExpMatchArray): UnsafeFind => ({ kind: rule.kind, phrase: m[0], what: rule.what?.(m) ?? null });
   for (const sentence of plainText.split(SENTENCES)) {
     if (!sentence.trim()) continue;
     const parts = partsOf(sentence);
-    // A phrase read across the sentence (timed waiting) checks its step-away words in the sentence before it.
-    const check = (rule: Rule, m: RegExpMatchArray, part: { text: string; start: number; lead: string }, at: number): boolean => {
-      if (rule.needs && !rule.needs.test(sentence)) return false;
-      if (rule.unless && rule.unless.test(sentence)) return false;
-      const scope = rule.sentence ? sentence : part.text;
-      if (rule.sleep && !(SLEEPING.test(scope) || (rule.sleep === "down" && LAID_DOWN.test(scope)))) return false;
-      if (rule.baby && !babyIn(rule.baby === "sentence" ? sentence : scope, rule.baby)) return false;
-      if (rule.unlessSafe && SAFE_SURFACE.test(scope)) return false;
-      if (rule.unlessPart && rule.unlessPart.test(scope)) return false;
-      if (rule.where && !(SAFE_SURFACE.test(scope) || SLEEP_PLACE.test(scope) || (SLEEPING.test(scope) && baby.test(scope)))) return false;
+    // A clause the part hangs on that says she's asleep ("… once she's asleep", "until she wakes"), and isn't about her sleep space.
+    const sleepsThere = (p: Part | undefined, lead: string) => !!p && (SLEEPING.test(p.text) || (lead === "until" && WAKES.test(p.text))) && baby.test(p.text) && !SAFE_SURFACE.test(p.text);
+    const borrowed = (i: number) => (BORROW_LEAD.test(parts[i + 1]?.lead ?? "") && sleepsThere(parts[i + 1], parts[i + 1]?.lead ?? "")) || (parts[i]?.lead === "then" && sleepsThere(parts[i - 1], ""));
+    // "Bassinet for naps, swing only while she's awake": every sleep word in the part is in a stretch (between commas) that names her sleep space, not the phrase's.
+    const sleepIsTheBassinets = (text: string, at: number) => {
+      let start = 0;
+      const bits = text.split(",").map((t) => ({ t, start: (start += t.length + 1) - t.length - 1 }));
+      const mine = bits.find((b) => at >= b.start && at <= b.start + b.t.length);
+      const sleepy = bits.filter((b) => b !== mine && SLEEPING.test(b.t));
+      return !!mine && !SLEEPING.test(mine.t) && sleepy.length > 0 && sleepy.every((b) => SAFE_SURFACE.test(b.t));
+    };
+    // "We sleep in our bed, she sleeps in the bassinet": the baby is only in a stretch that names her sleep space.
+    const babyIsTheBassinets = (text: string, at: number) => {
+      let start = 0;
+      const bits = text.split(",").map((t) => ({ t, start: (start += t.length + 1) - t.length - 1 }));
+      const mine = bits.find((b) => at >= b.start && at <= b.start + b.t.length);
+      const hers = bits.filter((b) => b !== mine && baby.test(b.t));
+      return !!mine && !baby.test(mine.t) && hers.length > 0 && hers.every((b) => SAFE_SURFACE.test(b.t));
+    };
+    // Whether the words before a phrase in its part step away from it, or move it out of her sleep space or into it.
+    const steppedAway = (scope: string, at: number, m: RegExpMatchArray): boolean => {
       const before = scope.slice(0, at).split(/[,:(]/).pop()!;
-      if (awayFrom(before, newStep)) return false;
       const after = scope.slice(at + m[0].length);
-      if (o.describing && (DESCRIBING_BEFORE.test(before.trim().split(/\s+/).slice(-3).join(" ")) || DESCRIBING_AFTER.test(after))) return false;
-      if (rule.brief && BRIEF.test(after)) return false;
-      if (rule.held && awake.test(sentence)) {
-        out.held = true;
-        return false;
+      return awayFrom(before, m[0], newStep) || (MOVE_BEFORE.test(before) && TO_SAFE_AFTER.test(after)) || (TAKE_BEFORE.test(before) && OUT_AFTER.test(after));
+    };
+    // A couch, chair or adult bed the sentence names, not stepped away from (other than the one at `skip`), with no new instruction between it and `near`.
+    const placeNamed = (near: number, skip = -1): UnsafeFind | null => {
+      for (const part of parts) {
+        for (const rule of places) {
+          for (const m of part.text.matchAll(rule.re)) {
+            const at = m.index ?? 0;
+            const abs = part.start + at;
+            if (abs === skip || steppedAway(part.text, at, m)) continue;
+            if (SITS_BEFORE.test(part.text.slice(0, at)) && BY_SAFE.test(part.text.slice(at + m[0].length))) continue;
+            if (newStep.test(sentence.slice(Math.min(near, abs), Math.max(near, abs)))) continue;
+            return found(rule, m);
+          }
+        }
       }
-      if (rule.transfer && !doze.test(part.text) && TO_SAFE.test(sentence.slice(part.start + at + m[0].length))) {
+      return null;
+    };
+    // Whether a rule's match in a part (or the sentence, for rules read across it) makes the text unsafe, and what it found.
+    const check = (rule: Rule, m: RegExpMatchArray, part: Part, at: number, i: number): UnsafeFind | null => {
+      if (rule.needs && !rule.needs.test(sentence)) return null;
+      if (rule.needsText && !rule.needsText.test(plainText)) return null;
+      if (rule.unless && rule.unless.test(sentence)) return null;
+      const scope = rule.sentence ? sentence : part.text;
+      const abs = part.start + at;
+      const ownSleep = (SLEEPING.test(scope) || (rule.sleep === "down" && LAID_DOWN.test(scope))) && !(rule.borrow && !rule.sentence && sleepIsTheBassinets(scope, at));
+      const sleeps = ownSleep || (!!rule.borrow && !rule.sentence && borrowed(i));
+      if (rule.sleep && !sleeps) return null;
+      if (rule.baby && !babyIn(rule.baby === "sentence" ? sentence : scope, sentence, rule.baby)) return null;
+      if (rule.place && rule.baby === "strict" && babyIsTheBassinets(scope, at)) return null;
+      if (rule.unlessSafe && SAFE_SURFACE.test(scope)) return null;
+      if (rule.unlessPart && rule.unlessPart.test(scope)) return null;
+      if (rule.where && !(SAFE_SURFACE.test(scope) || SLEEP_PLACE.test(scope) || ((SLEEPING.test(scope) || AT_NIGHT.test(scope)) && baby.test(scope)))) return null;
+      const before = scope.slice(0, at).split(/[,:(]/).pop()!;
+      const after = scope.slice(at + m[0].length);
+      if (steppedAway(scope, at, m)) return null;
+      // Read on through the sentence: "let her cry while Sam holds her" runs into its next part.
+      if (rule.unlessAfter && rule.unlessAfter.test(sentence.slice(abs + m[0].length))) return null;
+      // The adult's seat beside her sleep space: "sit in the rocking chair by the bassinet".
+      if (rule.place && SITS_BEFORE.test(scope.slice(0, at)) && BY_SAFE.test(after)) return null;
+      // A why: how things are now, or what happened, unless the part plans it ("so she can …", "let her keep …", "we want her to …").
+      if (o.describing && part.lead !== "so" && !IMPERATIVE.test(part.text)) {
+        const plans = PLANS.test(part.text);
+        if (DESCRIBING_AFTER.test(after) || WISH_TO_CHANGE.test(sentence.slice(abs + m[0].length)) || (!plans && (DESCRIBING_BEFORE.test(before.trim().split(/\s+/).slice(-5).join(" ")) || DESCRIBING_HABIT.test(before)))) return null;
+        if (!plans && DESCRIBING_PAST.test(part.text)) return null;
+      }
+      if (rule.brief && BRIEF.test(after)) return null;
+      // Held while an adult is awake: the holding turn, but never on a couch, chair or adult bed the sentence names.
+      if (rule.held && awake.test(sentence)) {
+        const there = placeNamed(abs);
+        if (there) return { ...there, awake: true };
+        out.held = true;
+        return null;
+      }
+      // Rocked or fed to sleep here, then the bassinet: the transfer, never with an adult dozing, a nap there, or another couch, chair or bed.
+      if (rule.transfer && !doze.test(part.text) && TRANSFER_ACT.test(part.text) && TO_SAFE.test(sentence.slice(abs + m[0].length)) && !placeNamed(abs, abs)) {
         out.transfer.push(rule.transfer);
-        return false;
+        return null;
       }
       // "If she falls asleep in the car seat, move her to the bassinet": the AAP's own advice for a sitting device.
-      if (rule.seat && /^(?:if|when|whenever|once)$/.test(part.lead) && TO_SAFE.test(sentence.slice(0, part.start + at) + " " + sentence.slice(part.start + at + m[0].length))) return false;
-      return true;
+      if (rule.seat && /^(?:if|when|whenever|once)$/.test(part.lead) && TO_SAFE.test(sentence.slice(0, abs) + " " + sentence.slice(abs + m[0].length))) return null;
+      return found(rule, m);
     };
     for (const rule of rules.filter((r) => r.sentence)) {
       for (const m of sentence.matchAll(rule.re)) {
-        const whole = { text: sentence, start: 0, lead: "" };
-        if (check(rule, m, whole, m.index ?? 0)) return { ...out, find: { kind: rule.kind, phrase: m[0], what: rule.what?.(m) ?? null } };
+        const hit = check(rule, m, { text: sentence, start: 0, lead: "" }, m.index ?? 0, -1);
+        if (hit) return { ...out, find: hit };
       }
     }
-    for (const part of parts) {
+    for (const [i, part] of parts.entries()) {
       if (!part.text.trim()) continue;
       for (const rule of rules) {
         if (rule.sentence) continue;
         for (const m of part.text.matchAll(rule.re)) {
-          if (check(rule, m, part, m.index ?? 0)) return { ...out, find: { kind: rule.kind, phrase: m[0], what: rule.what?.(m) ?? null } };
+          const hit = check(rule, m, part, m.index ?? 0, i);
+          if (hit) return { ...out, find: hit };
         }
       }
     }
@@ -570,9 +761,10 @@ function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; 
 /**
  * Whether a plan's words leave the baby to cry, or have the baby asleep
  * anywhere but on their back in their own bare, flat sleep space (above),
- * and the phrase that does. `v`: the family's voice (the baby's name and
- * pronouns); `adults`: the adults' names; `describing`: the words say why it
- * matters, where "she only sleeps on me now" is the reason, not the plan.
+ * and the phrase that does. A backstop, not a guarantee. `v`: the family's
+ * voice (the baby's name and pronouns); `adults`: the adults' names;
+ * `describing`: the words say why it matters, where "she only sleeps on me
+ * now" or "she slept in the swing yesterday" is the reason, not the plan.
  */
 export function unsafeSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; describing?: boolean } = {}): UnsafeFind | null {
   return scanSleep(text, o).find;
@@ -588,16 +780,22 @@ export function sleepExemptions(text: string, o: { v?: Voiceish; adults?: readon
  * The refusal, by its field, in words that help: what Maple won't plan, and a
  * safe way to say a step away from it ("Step 2: Maple won't plan sleep on a
  * couch; if this is a step away from it, try "Bassinet before I get
- * sleepy"."). The baby is "the baby" where the words have no voice. Every
- * suggestion passes unsafeSleep itself (the check holds it to that).
+ * sleepy"."). Held sleep on a couch, chair or adult bed says that someone
+ * being awake doesn't change it. The baby is "the baby" where the words have
+ * no voice. Every suggestion passes unsafeSleep itself (the check holds it to
+ * that).
  */
-export function unsafeWords(label: string, v?: Pick<Voice, "name" | "them" | "their" | "they" | "verb" | "named">, find?: Pick<UnsafeFind, "kind" | "what"> | null): string {
+export function unsafeWords(label: string, v?: Pick<Voice, "name" | "them" | "their" | "they" | "verb" | "named">, find?: Pick<UnsafeFind, "kind" | "what" | "awake"> | null): string {
   const who = v?.name ?? "the baby";
   const them = v?.them ?? "the baby";
   const their = v ? v.their : "the baby's";
   const they = v?.they ?? "the baby";
   const verb = (s: string) => (v ? v.verb(s) : s);
   const kind = find?.kind ?? "cry";
+  if (find?.awake && (kind === "couch" || kind === "bed")) {
+    const where = kind === "bed" ? `${who} sleeping in an adult bed` : `sleep ${find.what ?? "on a couch"}`;
+    return `${label}: Maple won't plan ${where}, even with someone awake; try "Hold ${them} while I'm awake, then the bassinet".`;
+  }
   const words: Record<UnsafeKind, string> = {
     cry: `Maple won't plan leaving ${who} to cry; if this is about settling ${them}, try "Soothe ${them}, then try the bassinet once more".`,
     adult: `Maple won't plan ${who} sleeping on or with an adult; if this is a step away from it, try "Hold ${them} only while I'm awake, then the bassinet".`,
