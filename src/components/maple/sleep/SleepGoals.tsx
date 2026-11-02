@@ -478,7 +478,9 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
   const sparse = !!cov && (cov.c.logged + cov.c.partly) * 2 < cov.c.over;
   // What the targets and the roster need said with them: feeds first in the first 4 weeks, and a long window's feeds.
   const age = state ? sleepAge(state.baby, now()) : null;
-  const cautions = goal.status === "active" ? goalCautions(goal, { v, name: memberName, ageDays: state?.baby.born_at ? (age?.days ?? null) : null }).filter((c) => c.kind !== "feeding") : [];
+  // The adults' names, as the server's rules read them ("while Theo is awake"), so the card says the same cautions.
+  const adults = (state?.members ?? []).filter((m) => m.role === "owner" || m.role === "member").map((m) => memberName(m.email));
+  const cautions = goal.status === "active" ? goalCautions(goal, { v, name: memberName, ageDays: state?.baby.born_at ? (age?.days ?? null) : null, adults }).filter((c) => c.kind !== "feeding") : [];
   return (
     <section aria-labelledby={`goal-${goal.id}`} className={cx(tone.card, "space-y-5 px-4 py-4")}>
       <header className="space-y-1">
