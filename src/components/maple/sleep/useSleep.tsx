@@ -4,8 +4,9 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, type
 import { tick } from "@/components/atlas/haptics";
 import { ApiError } from "@/lib/maple/client-request";
 import { numberTries, planToday, sleepAge, sleepSignals, stageSuggestion, tryDayKey, tryDayLabel, type PlanToday, type StageSuggestion } from "@/lib/maple/sleep/engine";
-import type { BassinetTry, HoldingShift, PlanPatch, SleepPlan, SleepState, TryOutcome, TryTag } from "@/lib/maple/sleep/types";
-import { OUTCOME_LABEL } from "@/lib/maple/sleep/words";
+import { nightWords, seesCheckins } from "@/lib/maple/sleep/goals";
+import type { BassinetTry, GoalInput, GoalStep, HoldingShift, PlanPatch, ProtectedAnswer, SleepCheckin, SleepGoal, SleepPlan, SleepState, TryOutcome, TryTag } from "@/lib/maple/sleep/types";
+import { OUTCOME_LABEL, PROTECTED_LABEL } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, SleepPlace } from "@/lib/maple/types";
 import { useVoice } from "../familyWords";
@@ -13,23 +14,30 @@ import { useMaple, type ToastAction } from "../useMaple";
 
 /**
  * The sleep plan on a phone: what the shared state says (the plan, a
- * running try, who's holding her), the writes (each answered with the fresh
+ * running try, who's holding her, the sleep goals and, for owners and
+ * members, the adults' check-ins), the writes (each answered with the fresh
  * sleep state, applied at once), and which sleep sheet is open. Every write
  * names the version it was made against, so another phone's change is
  * never overwritten: the answer is a 409 and the sheet shows it as it is.
  *
- * One tap does the common thing (Put down, an outcome, a handoff), and its
- * toast carries the fix (a minute or five earlier) and Undo, which puts back
- * exactly what the server had.
+ * One tap does the common thing (Put down, an outcome, a handoff, a step,
+ * a check-in), and its toast carries the fix (a minute or five earlier) and
+ * Undo, which puts back exactly what the server had.
  */
 
+export type PlanTab = "plan" | "goals" | "guidance" | "progress";
+
 export type SleepSheet =
-  | { kind: "plan"; tab?: "plan" | "guidance" | "progress" }
+  | { kind: "plan"; tab?: PlanTab }
   | { kind: "outcome"; tryId: number; at?: string }
   | { kind: "sleepy" }
   | { kind: "holding"; mode: "start" | "handoff" }
   | { kind: "try"; tryId: number }
-  | { kind: "log" };
+  | { kind: "log" }
+  /** A sleep goal's form: a new one, or `goalId` to change. It goes back to the plan's Goals when it closes. */
+  | { kind: "goal"; goalId?: number }
+  /** "How did last night go?": the signed-in adult's own check-in (last night unless `night`); `back` returns to Goals. */
+  | { kind: "checkin"; night?: string; back?: "goals" };
 
 type Answer = {
   result?: Record<string, unknown>;
@@ -40,14 +48,27 @@ type Answer = {
   created?: boolean;
   error?: string;
   code?: string;
+  /** A 409's record as it is now (a goal, for goal writes). */
+  current?: unknown;
   progress?: unknown;
   lines?: string[];
 };
 
 type Write = { try: BassinetTry; before: BassinetTry | null; sleep: Entry | null; sleepBefore: Entry | null; status: string; link?: string; endedShift?: HoldingShift | null; endedShiftBefore?: HoldingShift | null };
 type ShiftResult = { shift: HoldingShift; before: HoldingShift | null; status: string; ended?: HoldingShift | null; endedBefore?: HoldingShift | null };
+type GoalResult = { goal: SleepGoal; before: SleepGoal | null; status: "created" | "deduped" | "updated" | "unchanged" };
+type CheckinResult = { checkin: SleepCheckin; before: SleepCheckin | null; status: "created" | "updated" | "unchanged" | "deduped" };
+
+/**
+ * A goal form's save: the goal as saved; or, for an edit made from an older
+ * revision (409), the goal as it is now, with nothing saved; or the rules'
+ * words for what to fix (400). Null: it didn't reach the server (the toast
+ * says so).
+ */
+export type GoalSave = { saved: SleepGoal; status: GoalResult["status"] } | { conflict: SleepGoal } | { problem: string } | null;
 
 const EMPTY: SleepState = { plan: null, tries: [], shifts: [], goals: [] };
+const OFFLINE = "Couldn't save that. Check the connection, then try again.";
 
 export type SleepApi = {
   data: SleepState;
@@ -77,6 +98,30 @@ export type SleepApi = {
   laterHandoff: (s: HoldingShift, minutes: number) => Promise<boolean>;
   /** This phone ended or deleted that try (so a sheet open on it closes without "already ended"). */
   endedHere: (tryId: number) => boolean;
+
+  // ── sleep goals and check-ins ──
+  /** Open goals and those closed in the last 60 days, newest first. */
+  goals: SleepGoal[];
+  /** The adults' check-ins for the last 14 nights; null for a view-only guest, who never sees one. */
+  checkins: SleepCheckin[] | null;
+  /** The signed-in person (a member id). */
+  me: string;
+  /** Owners and members: they read every adult's check-in, change goals and save their own check-in. */
+  seesCheckins: boolean;
+  createGoal: (input: GoalInput) => Promise<GoalSave>;
+  /**
+   * Names the goal's revision: a goal changed elsewhere since is a 409, applied here and handed back as `conflict`.
+   * `form`: a refusal comes back as `problem` and a 409 unspoken, for the form to show by the field; otherwise both are toasts.
+   */
+  updateGoal: (goal: SleepGoal, patch: GoalInput, opts?: { form?: boolean; saved?: string }) => Promise<GoalSave>;
+  /** A step done or not (applies to the goal as it is now); Undo toggles it back. */
+  toggleStep: (goal: SleepGoal, step: GoalStep, done: boolean) => Promise<boolean>;
+  /** Close as met or set aside, with an optional note; Undo opens it again as it was. */
+  closeGoal: (goal: SleepGoal, status: "met" | "dropped", note?: string | null) => Promise<boolean>;
+  /** The signed-in adult's own check-in (last night unless `night`); Undo deletes a new one or puts the earlier answer back. */
+  saveCheckin: (answer: ProtectedAnswer, opts?: { night?: string; note?: string | null }) => Promise<SleepCheckin | null>;
+  /** Their own check-in only; Undo saves it again. */
+  deleteCheckin: (c: SleepCheckin) => Promise<boolean>;
 };
 
 const Ctx = createContext<SleepApi | null>(null);
@@ -100,6 +145,7 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
   const data = state?.sleep ?? EMPTY;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const me = state?.me.email ?? "";
+  const adult = !!state && seesCheckins(state.me.role);
   const [sheet, setSheet] = useState<SleepSheet | null>(null);
   const [busy, setBusy] = useState(false);
   const ownEnds = useRef(new Set<number>());
@@ -119,9 +165,9 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
     [data.tries, now, tz]
   );
 
-  /** One write: the answer's sleep state and entries go straight into the shared state; a refusal says why. */
-  const post = useCallback(
-    async (body: Record<string, unknown>, opts: { quiet?: boolean } = {}): Promise<Answer | null> => {
+  /** One write: the answer's sleep state and entries go straight into the shared state, a refusal's too (then it throws). */
+  const send = useCallback(
+    async (body: Record<string, unknown>): Promise<Answer> => {
       const run = async () => {
         setBusy(true);
         try {
@@ -131,21 +177,40 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
         } catch (err) {
           const b = err instanceof ApiError ? (err.body as Answer | null) : null;
           if (b?.sleep) helper?.apply(b.sleep);
-          if (!opts.quiet) {
-            const offline = !(err instanceof ApiError) || err.status >= 500;
-            toast(b?.error ?? (offline ? "Couldn't save that. Check the connection, then try again." : "That didn't save."), {
-              tone: "error",
-              ...(offline ? { actions: [{ label: "Try again", onClick: () => void post(body, opts) }] } : {}),
-            });
-          }
-          return null;
+          throw err;
         } finally {
           setBusy(false);
         }
       };
       return helper ? helper.track(run) : run();
     },
-    [api, helper, toast]
+    [api, helper]
+  );
+
+  /** Why a write didn't save, in a toast (a connection problem offers Try again, which sends the same request). */
+  const refused = useCallback(
+    (err: unknown, retry: () => void) => {
+      const b = err instanceof ApiError ? (err.body as Answer | null) : null;
+      const offline = !(err instanceof ApiError) || err.status >= 500;
+      toast(b?.error ?? (offline ? OFFLINE : "That didn't save."), {
+        tone: "error",
+        ...(offline ? { actions: [{ label: "Try again", onClick: retry }] } : {}),
+      });
+    },
+    [toast]
+  );
+
+  /** One write, saying why in a toast when it's refused (`quiet`: no toast). */
+  const post = useCallback(
+    async (body: Record<string, unknown>, opts: { quiet?: boolean } = {}): Promise<Answer | null> => {
+      try {
+        return await send(body);
+      } catch (err) {
+        if (!opts.quiet) refused(err, () => void post(body, opts));
+        return null;
+      }
+    },
+    [refused, send]
   );
 
   const createPlan = useCallback(
@@ -350,6 +415,137 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
     [now, post, toast, tz]
   );
 
+  // ── sleep goals ──
+
+  /**
+   * A goal write. A stale revision (409) comes back as the goal as it is now
+   * (already applied here); with `form`, the rules' refusals (400) come back
+   * as words for the form to show by the field, and a 409 is the form's to
+   * explain. Otherwise both are toasts.
+   */
+  const goalWrite = useCallback(
+    async (body: Record<string, unknown>, opts: { form?: boolean } = {}): Promise<GoalSave> => {
+      try {
+        const w = (await send(body)).result as GoalResult | undefined;
+        return w ? { saved: w.goal, status: w.status } : null;
+      } catch (err) {
+        const b = err instanceof ApiError ? (err.body as Answer | null) : null;
+        if (err instanceof ApiError && err.status === 409) {
+          const current = (b?.current as SleepGoal | null | undefined) ?? null;
+          if (!opts.form) toast("Someone changed this goal on another phone just now, so that didn't save. It shows as it is now.", { tone: "info" });
+          return current ? { conflict: current } : null;
+        }
+        if (err instanceof ApiError && err.status === 400 && opts.form) return { problem: b?.error ?? "That didn't save." };
+        refused(err, () => void goalWrite(body, opts));
+        return null;
+      }
+    },
+    [refused, send, toast]
+  );
+
+  const createGoal = useCallback(
+    async (input: GoalInput) => {
+      // One client id per save: a retried request (Try again, a lost answer) gets the first save back.
+      const r = await goalWrite({ action: "goal.create", goal: input, client_id: `goal-${crypto.randomUUID()}` }, { form: true });
+      if (r && "saved" in r) toast(`Sleep goal saved: ${r.saved.title}`, { tone: "ok" });
+      return r;
+    },
+    [goalWrite, toast]
+  );
+
+  const updateGoal = useCallback(
+    async (goal: SleepGoal, patch: GoalInput, opts: { form?: boolean; saved?: string } = {}) => {
+      const r = await goalWrite({ action: "goal.update", id: goal.id, revision: goal.revision, patch }, { form: !!opts.form });
+      if (r && "saved" in r) toast(r.status === "unchanged" ? "Nothing changed" : (opts.saved ?? "Sleep goal updated"), { tone: "ok" });
+      return r;
+    },
+    [goalWrite, toast]
+  );
+
+  const toggleStep = useCallback(
+    async (goal: SleepGoal, step: GoalStep, done: boolean) => {
+      tick();
+      // No revision: a step means the same on the goal as it is now, so another phone's edit never turns it away.
+      const r = await post({ action: "goal.step", id: goal.id, step: step.id, done });
+      const w = r?.result as GoalResult | undefined;
+      if (!w) return false;
+      if (w.status === "unchanged") {
+        toast(done ? `Already done: ${step.title}` : `Already not done: ${step.title}`, { tone: "info" });
+        return true;
+      }
+      toast(done ? `Step done: ${step.title}` : `Marked not done: ${step.title}`, {
+        tone: "ok",
+        undo: () => void post({ action: "goal.step", id: goal.id, step: step.id, done: !done }).then((x) => x && toast("Undone", { tone: "info" })),
+      });
+      return true;
+    },
+    [post, toast]
+  );
+
+  const closeGoal = useCallback(
+    async (goal: SleepGoal, status: "met" | "dropped", note?: string | null) => {
+      const r = await post({ action: "goal.close", id: goal.id, status, ...(note ? { note } : {}) });
+      const w = r?.result as GoalResult | undefined;
+      if (!w) return false;
+      if (w.status === "unchanged") {
+        toast(status === "met" ? "That goal is already closed as met." : "That goal is already set aside.", { tone: "info" });
+        return true;
+      }
+      // Undo opens it again as it was (active or paused), from the revision this close made.
+      const was = w.before?.status === "paused" ? "paused" : "active";
+      toast(status === "met" ? `Closed as met: ${goal.title}` : `Set aside: ${goal.title}`, {
+        tone: "ok",
+        undo: () =>
+          void goalWrite({ action: "goal.update", id: w.goal.id, revision: w.goal.revision, patch: { status: was } }).then((x) => x && "saved" in x && toast("Undone: the goal is open again", { tone: "info" })),
+      });
+      return true;
+    },
+    [goalWrite, post, toast]
+  );
+
+  // ── check-ins: always the signed-in adult's own ──
+
+  const saveCheckin = useCallback(
+    async (answer: ProtectedAnswer, opts: { night?: string; note?: string | null } = {}) => {
+      tick();
+      const r = await post({
+        action: "checkin.save",
+        protected: answer,
+        client_id: `checkin-${crypto.randomUUID()}`,
+        ...(opts.night ? { night: opts.night } : {}),
+        // Left out (one tap on Today), the note already there stays.
+        ...(opts.note !== undefined ? { note: opts.note } : {}),
+      });
+      const w = r?.result as CheckinResult | undefined;
+      if (!w) return null;
+      const c = w.checkin;
+      const before = w.before;
+      // Undo deletes a new check-in, or puts back the answer (and note) it replaced.
+      const undo =
+        w.status === "created"
+          ? () => void post({ action: "checkin.delete", id: c.id }).then((x) => x && toast("Undone", { tone: "info" }))
+          : w.status === "updated" && before
+            ? () => void post({ action: "checkin.save", night: before.night, protected: before.protected, note: before.note, client_id: `checkin-${crypto.randomUUID()}` }).then((x) => x && toast("Undone", { tone: "info" }))
+            : undefined;
+      toast(`Checked in for ${nightWords(c.night, now(), tz)}: ${PROTECTED_LABEL[c.protected].toLowerCase()}`, { tone: "ok", ...(undo ? { undo } : {}) });
+      return c;
+    },
+    [now, post, toast, tz]
+  );
+
+  const deleteCheckin = useCallback(
+    async (c: SleepCheckin) => {
+      const r = await post({ action: "checkin.delete", id: c.id });
+      if (!r) return false;
+      toast("Check-in removed", {
+        tone: "info",
+        undo: () => void post({ action: "checkin.save", night: c.night, protected: c.protected, note: c.note, client_id: `checkin-${crypto.randomUUID()}` }),
+      });
+      return true;
+    },
+    [post, toast]
+  );
+
   const value = useMemo<SleepApi>(
     () => ({
       data,
@@ -376,8 +572,48 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
       endShift,
       laterHandoff,
       endedHere,
+      goals: data.goals ?? [],
+      checkins: adult ? (data.checkins ?? []) : null,
+      me,
+      seesCheckins: adult,
+      createGoal,
+      updateGoal,
+      toggleStep,
+      closeGoal,
+      saveCheckin,
+      deleteCheckin,
     }),
-    [busy, createPlan, data, deleteTry, endShift, endedHere, finishTry, fixTry, handOff, laterHandoff, logTry, nth, readOnly, running, sheet, shift, startShift, startTry, suggestion, today, updatePlan]
+    [
+      adult,
+      busy,
+      closeGoal,
+      createGoal,
+      createPlan,
+      data,
+      deleteCheckin,
+      deleteTry,
+      endShift,
+      endedHere,
+      finishTry,
+      fixTry,
+      handOff,
+      laterHandoff,
+      logTry,
+      me,
+      nth,
+      readOnly,
+      running,
+      saveCheckin,
+      sheet,
+      shift,
+      startShift,
+      startTry,
+      suggestion,
+      today,
+      toggleStep,
+      updateGoal,
+      updatePlan,
+    ]
   );
 
   return (

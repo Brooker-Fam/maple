@@ -13,6 +13,8 @@ assert.equal(visibleRevision(hidden), "", "reasoning does not force scroll updat
 assert.equal(chatActivity([message([tool("maple_status")])], busy), "Checking the log…");
 assert.equal(chatActivity([message([tool("maple_status", "output-available", { output: { ok: true, write: false, text: "Synthetic log" } })])], busy), "Finishing your reply…", "read-only output stays visibly busy until the reply finishes");
 assert.equal(chatActivity([message([tool("log_feed")])], busy), "Saving…");
+for (const name of ["bassinet_try", "holding", "set_sleep_plan", "sleep_goal"]) assert.equal(chatActivity([message([tool(name)])], busy), "Saving…", `${name} saves`);
+assert.equal(chatActivity([message([tool("sleep_plan")])], busy), "Checking the log…", "reading the sleep plan saves nothing");
 assert.equal(chatActivity([message([tool("show_chart")])], busy), "Preparing your chart…");
 assert.equal(chatActivity([message([tool("load_tools")])], busy), "Thinking…", "loading more of the chat's tools isn't reading the log");
 assert.equal(chatActivity([message([tool("ask_user")])], { ...busy, busy: false }), null, "a ready question waits for the person without a spinner");

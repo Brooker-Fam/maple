@@ -67,7 +67,7 @@ export default function MapleApp() {
   );
 }
 
-/** The sleep plan's sheets (How did it go?, Getting sleepy?, holding, a try, the plan), over everything. */
+/** The sleep plan's sheets (How did it go?, Getting sleepy?, holding, a try, the plan, a goal's form, a check-in), over everything. */
 const sleepSheets = (api: SleepApi) => <SleepSheetHost api={api} />;
 
 function MapleSession() {

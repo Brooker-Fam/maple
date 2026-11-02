@@ -13,17 +13,20 @@ import { Icon } from "../icons";
 import { ContextNote, Label } from "../sheets/parts";
 import { Button, Chip, cx, Segmented, Sheet, Stepper, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { useSleep, useSleepContext } from "./useSleep";
+import { GoalsPart } from "./SleepGoals";
+import { useSleep, useSleepContext, type PlanTab } from "./useSleep";
 
 /**
  * The sleep plan in one sheet: the plan (her age by her birth date, the
  * stage, the tries a day and when, a stage the recent tries could support,
- * which only the family can take), guidance for her age, stage and recent
- * tries (word for word from guidelines/sleep.ts, each with its source), and
- * progress over the last 7 days, with sample sizes, no scores or streaks.
+ * which only the family can take), the family's sleep goals (SleepGoals.tsx:
+ * targets counted from the log, weekly steps, the night roster and the
+ * adults' check-ins), guidance for her age, stage and recent tries (word for
+ * word from guidelines/sleep.ts, each with its source), and progress over
+ * the last 7 days, with sample sizes, no scores or streaks.
  */
 
-type Tab = "plan" | "guidance" | "progress";
+type Tab = PlanTab;
 
 export default function SleepPlanSheet({ tab: initial = "plan", open = true, onClose }: { tab?: Tab; open?: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>(initial);
@@ -31,17 +34,21 @@ export default function SleepPlanSheet({ tab: initial = "plan", open = true, onC
   return (
     <Sheet open={open} onClose={onClose} title="Sleep plan">
       <div className="space-y-5">
+        {/* Four tabs on one row at 320px: a little less padding in each. */}
         <Segmented<Tab>
           aria-label="Sleep plan"
+          className="[&>button]:px-2"
           value={tab}
           onChange={setTab}
           options={[
             { value: "plan", label: "Plan" },
+            { value: "goals", label: "Goals" },
             { value: "guidance", label: "Guidance" },
             { value: "progress", label: "Progress" },
           ]}
         />
         {tab === "plan" && <PlanPart />}
+        {tab === "goals" && <GoalsPart />}
         {tab === "guidance" && <GuidancePart />}
         {tab === "progress" && (s.plan || s.data.tries.length ? <ProgressPart /> : <p className={cx(tone.muted, "text-[15px]")}>Progress shows here once there are bassinet tries.</p>)}
       </div>
