@@ -29,7 +29,7 @@ import { activeTimers, getEntry, NotFound, StoreUnavailable } from "../store";
 import { formatDuration, formatTime } from "../time";
 import { SLEEP_PLACES, type Entry, type Member } from "../types";
 import type { Voice } from "../voice";
-import { numberTries, planToday, planTodayLine, progressLines, shiftStatus, sleepAge, sleepGuidance, sleepSignals, stageSuggestion, tryDayKey, tryDayLabel, type GuideView } from "./engine";
+import { numberTries, planToday, planTodayLine, progressLines, shiftStatus, sleepAge, sleepGuidance, sleepSignals, snoozeUntil, stageSuggestion, tryDayKey, tryDayLabel, type GuideView } from "./engine";
 import {
   cleanNote,
   cleanPlanPatch,
@@ -377,11 +377,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       if (a.backup != null) raw.fallback = a.backup;
       if (a.sleeps_now != null) raw.sleeps_now = a.sleeps_now;
       if (a.goal != null) raw.goal = a.goal;
-      if (a.not_now) {
-        const key = tryDayKey(ctx.now, ctx.tz);
-        const d = new Date(Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)) + 2));
-        raw.snoozed_until = d.toISOString().slice(0, 10);
-      }
+      if (a.not_now) raw.snoozed_until = snoozeUntil(ctx.now, ctx.tz);
       const current = await getPlan(ctx.fam, ctx.baby.id);
       if (!current) {
         const { plan, created } = await ensurePlan(ctx.fam, ctx.baby.id, ctx.who.id, ctx.who.via, cleanPlanPatch(raw, null));

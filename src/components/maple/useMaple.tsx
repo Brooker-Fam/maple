@@ -52,6 +52,7 @@ import type {
   UpdateEntryInput,
 } from "@/lib/maple/types";
 import type { IconName } from "./icons";
+import type { SleepState } from "@/lib/maple/sleep/types";
 
 /**
  * Client state for Maple's Log: one provider at the top of the app holds the
@@ -245,6 +246,16 @@ export type MapleContextValue = {
     unqueueMood: (entryId: number) => boolean;
     /** A temporary (negative) id for an optimistic care entry; never one Maple's entries use. */
     tempId: () => number;
+  };
+  /**
+   * The sleep plan in the shared state (sleep/useSleep.tsx is built on
+   * these): apply a write's answer at once (its fresh sleep state, the sleep
+   * entries it touched and the ones it removed), and hold polls while a sleep
+   * write is out so an older poll never flickers it back.
+   */
+  sleep: {
+    apply: (next: SleepState | null | undefined, entries?: Entry[], removed?: number[]) => void;
+    track: <T>(fn: () => Promise<T>) => Promise<T>;
   };
 };
 
@@ -1392,6 +1403,25 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     }
   }, [fetchJson]);
 
+  const sleep = useMemo<MapleContextValue["sleep"]>(
+    () => ({
+      apply: (next, entries = [], removed = []) =>
+        setState((s) => {
+          if (!s) return s;
+          const gone = new Set([...removed, ...entries.map((e) => e.id)]);
+          const merged = entries.length || removed.length
+            ? [...entries.filter((e) => !removed.includes(e.id)), ...s.entries.filter((e) => !gone.has(e.id))].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+            : s.entries;
+          const any = !!next && (!!next.plan || next.tries.length > 0 || next.shifts.length > 0);
+          const { sleep: _old, ...rest } = s;
+          void _old;
+          return { ...rest, entries: merged, ...(any ? { sleep: next! } : {}) };
+        }),
+      track: (fn) => withInflight(fn),
+    }),
+    [withInflight]
+  );
+
   const care = useMemo<MapleContextValue["care"]>(
     () => ({
       patch: (fn) => setState((s) => (s?.care ? { ...s, care: fn(s.care) } : s)),
@@ -1478,8 +1508,9 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       member,
       readOnly,
       care,
+      sleep,
     }),
-    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care]
+    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care, sleep]
   );
 
   return <MapleContext.Provider value={value}>{children}</MapleContext.Provider>;

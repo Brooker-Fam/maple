@@ -22,6 +22,8 @@ import { MAPLE_LEAF_PATH } from "./Hero";
 import { Icon, type IconName } from "./icons";
 import { THEME_COLORS, setNightActive, useNightPref } from "./nightLook";
 import { SheetProvider } from "./sheets";
+import { SleepSheetHost } from "./sleep/SleepSheets";
+import { SleepProvider, type SleepApi } from "./sleep/useSleep";
 import { ToastHost, cx, tone } from "./ui";
 import { MapleProvider, useMaple } from "./useMaple";
 import AppAnalytics from "./AppAnalytics";
@@ -65,6 +67,9 @@ export default function MapleApp() {
   );
 }
 
+/** The sleep plan's sheets (How did it go?, Getting sleepy?, holding, a try, the plan), over everything. */
+const sleepSheets = (api: SleepApi) => <SleepSheetHost api={api} />;
+
 function MapleSession() {
   const { state } = useMaple();
   const session = state ? `${state.family?.id ?? 1}:${state.me.email}:${state.me.role}` : "signed-out";
@@ -75,7 +80,9 @@ function MapleSession() {
             <NotificationsProvider>
               <CareNavProvider>
                 <SheetProvider>
-                  <Shell />
+                  <SleepProvider sheets={sleepSheets}>
+                    <Shell />
+                  </SleepProvider>
                 </SheetProvider>
               </CareNavProvider>
             </NotificationsProvider>

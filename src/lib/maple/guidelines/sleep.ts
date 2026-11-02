@@ -90,6 +90,11 @@ const AAP_CRIES: GuideSource = {
   label: "AAP: Responding to your baby's cries",
   url: "https://www.healthychildren.org/English/ages-stages/baby/crying-colic/Pages/Responding-to-Your-Babys-Cries.aspx",
 };
+/** The app's crisis line (guidelines.ts): call or text 988, any time. */
+const LIFELINE_988: GuideSource = {
+  label: "988 Suicide & Crisis Lifeline",
+  url: "https://988lifeline.org/talk-to-someone-now/",
+};
 const AAP_CRYING_CHECKER: GuideSource = {
   label: "AAP symptom checker: crying baby, before 3 months",
   url: "https://www.healthychildren.org/English/tips-tools/symptom-checker/Pages/symptomviewer.aspx?symptom=Crying+Baby+-+Before+3+Months+Old",
@@ -322,10 +327,11 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
   }),
   item({
     id: "call-help", section: "call", minDays: 0, maxDays: YEAR, lift: ["hard_day"], basis: "source",
-    title: (v) => `If someone might hurt ${v.them}`,
+    title: fixed("If it gets to be too much"),
+    // The AAP's words (set the baby down somewhere safe, get help, never shake), then the app's one crisis rule (911, else 988).
     body: (v) =>
-      `If you're afraid you or someone else might shake or hurt ${v.them}, lay ${v.them} on ${v.their} back in the bassinet and call ${v.their} pediatrician now.`,
-    sources: [AAP_CRYING_CHECKER, AAP_CRIES],
+      `If you start to feel you can't handle it, lay ${v.them} on ${v.their} back in the bassinet, step away, and get help from family or a friend. Never shake or hit ${v.them}, however tired or angry you feel. If anyone might hurt ${v.them} or themselves, call 911 if it's an emergency; otherwise call or text 988, any time.`,
+    sources: [AAP_CRIES, LIFELINE_988],
   }),
 
   // ── Emergency: the app's 911 line, word for word ──

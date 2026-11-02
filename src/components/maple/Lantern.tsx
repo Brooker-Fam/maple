@@ -17,6 +17,7 @@ import { useBabyWords } from "./familyWords";
 import { cx } from "./ui";
 import { useHoldTimerToasts, useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
+import { useTryAfterWake } from "./sleep/useSleep";
 
 /**
  * Lantern: a full-screen, nearly black timer for feeds in the dark. A web app
@@ -46,6 +47,7 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
   const w = useBabyWords();
   const now = useNow(1000);
   const actions = useTimerActions();
+  const tryAfterWake = useTryAfterWake();
   const { open } = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   // Follow the live entry (switches from the other phone show up here too).
@@ -436,6 +438,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
               }
               void actions.stop(live);
               onClose();
+              // A bassinet try on this sleep: How did it go? (ending when she woke).
+              if (live.kind === "sleep") tryAfterWake(live.id, serverNow());
             }}
           />
         )}

@@ -10,6 +10,8 @@ import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/ma
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, FeedData, Side, StoolColor, StretchSide } from "@/lib/maple/types";
 import { CareStrip } from "./care/CareLine";
+import { SleepStrip } from "./sleep/SleepStrip";
+import { useTryAfterWake } from "./sleep/useSleep";
 import { fixPreset, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
 import MoreSheet, { logSwitches, usePress } from "./MoreSheet";
@@ -126,6 +128,7 @@ export default function Dock() {
   const w = useBabyWords();
   const { open } = useSheets();
   const actions = useTimerActions();
+  const tryAfterWake = useTryAfterWake();
   const clock = useNow(1000);
   const night = useNightActive();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -378,6 +381,8 @@ export default function Dock() {
         <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none">
           {/* Her strip (her next medicine, 44px) rides on top; Maple's eight tiles stay exactly where they were. */}
           <CareStrip />
+          {/* The sleep plan's strip (a bassinet try, who's holding her), only once the family has a plan. */}
+          <SleepStrip />
           {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Tap to start or log now. Hold a button for earlier.</p>}
           {/* Eight columns, each tile two of them (four abreast), so Left and Right can take three each when Bottles is off. */}
           <div className="grid grid-cols-8 gap-2">
@@ -603,7 +608,10 @@ export default function Dock() {
                 color={TILE.wake}
                 strong
                 disabled={sleepPending}
-                onTap={tap(() => void actions.stop(sleep))}
+                onTap={tap(() => {
+                  void actions.stop(sleep);
+                  tryAfterWake(sleep.id, now());
+                })}
               />
             ) : (
               <Tile

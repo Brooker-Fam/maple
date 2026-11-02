@@ -14,6 +14,7 @@ import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
+import { SleepNow } from "./sleep/SleepCards";
 import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
@@ -36,6 +37,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const nothingYet = state.entries.length === 0;
   const recent = state.entries.filter((e) => !e.active).slice(0, 3);
   const timing = summary.active.length > 0;
+  // A bassinet try or someone holding her awake: shown on every family phone, in Right now.
+  const sleepNow = !!state.sleep && (state.sleep.tries.some((t) => !t.ended_at) || state.sleep.shifts.some((x) => !x.ended_at));
 
   return (
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
@@ -58,7 +61,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {readOnly && <LatestMoment />}
       <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
 
-      {(!nothingYet || timing) && (
+      {(!nothingYet || timing || sleepNow) && (
         <section aria-labelledby="right-now">
           <h2 id="right-now" className="sr-only">
             Right now
@@ -70,6 +73,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
                 <TimerCard key={e.kind} entry={e} />
               ))}
             </AnimatePresence>
+            <SleepNow />
             <StatusCard />
           </div>
         </section>

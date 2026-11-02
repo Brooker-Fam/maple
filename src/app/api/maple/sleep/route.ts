@@ -88,9 +88,10 @@ function outcome(v: unknown): TryOutcome {
   return v as TryOutcome;
 }
 
-async function stateBody(ctx: FamilyCtx, babyId: number, extra: Record<string, unknown>, touched: (Entry | null | undefined)[] = []) {
+/** The answer to every write: what it did, the sleep entries it touched (`entries`) or deleted (`removed`), and the fresh sleep state. */
+async function stateBody(ctx: FamilyCtx, babyId: number, extra: Record<string, unknown>, touched: (Entry | null | undefined)[] = [], removed: (Entry | null | undefined)[] = []) {
   const entries = touched.filter((e): e is Entry => !!e).map(toClientEntry);
-  return json({ ...extra, entries, sleep: await sleepStateFor(ctx, babyId) });
+  return json({ ...extra, entries, removed: removed.filter((e): e is Entry => !!e).map((e) => e.id), sleep: await sleepStateFor(ctx, babyId) });
 }
 
 export const GET = withMember("GET /api/maple/sleep", async (request, _me, ctx) => {
@@ -204,7 +205,7 @@ export const POST = withMember(
         }
         case "try.delete": {
           const r = await deleteTry(ctx, id(body.id), by, { expectUpdatedAt: stamp(body.expect_updated_at) });
-          return stateBody(ctx, baby.id, { result: r }, [r.sleepDeleted]);
+          return stateBody(ctx, baby.id, { result: r }, [], [r.sleepDeleted]);
         }
         case "try.restore": {
           const r = await restoreTry(ctx, id(body.id), by, { sleepId: body.sleep_id == null ? null : id(body.sleep_id, "sleep_id") });

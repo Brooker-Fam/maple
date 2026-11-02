@@ -16,7 +16,9 @@ import { CARE_COLOR, KIND_COLOR, SKIN_COLOR } from "./palette";
 import { useSheets } from "./sheets";
 import { useTimerActions } from "./TimerCard";
 import { Sheet, cx, tone } from "./ui";
-import { babyFirstName } from "./familyWords";
+import { babyFirstName, useVoice } from "./familyWords";
+import { STAGE_INFO } from "@/lib/maple/sleep/words";
+import { useSleepMaybe } from "./sleep/useSleep";
 import { useMaple } from "./useMaple";
 
 /**
@@ -171,6 +173,8 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
   const care = useCare();
   const careNav = useCareNav();
   const actions = useTimerActions();
+  const sleepPlan = useSleepMaybe();
+  const voice = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
   // Pumping off (Family → On Today): no Pump row; anything already pumped still shows in the log.
@@ -324,6 +328,54 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
     },
     onHold: earlier("med", { ...VITAMIN_D_DEFAULT }),
   };
+  // The sleep plan: a bassinet try (hold: one nobody started here), holding her awake, the plan itself.
+  const later = (fn: () => void) => {
+    onClose();
+    window.setTimeout(fn, 120);
+  };
+  const sp = sleepPlan;
+  const sleepItems: Item[] =
+    sp && sp.canWrite && state?.baby.born_at
+      ? [
+          {
+            id: "bassinet",
+            label: sp.running ? "How did the try go?" : "Bassinet try",
+            sub: sp.running
+              ? `In the bassinet since ${formatTimeNear(sp.running.started_at, n, tz)}`
+              : sp.today
+                ? `${sp.today.done} of ${sp.today.planned} ${sp.today.label}`
+                : `Lay ${voice.them} down now`,
+            icon: "bassinet",
+            color: KIND_COLOR.sleep,
+            onTap: () => {
+              const t = sp.running;
+              if (t) return later(() => sp.openSheet({ kind: "outcome", tryId: t.id }));
+              onClose();
+              void sp.startTry();
+            },
+            onHold: () => {
+              noteHeld();
+              later(() => sp.openSheet({ kind: "log" }));
+            },
+          },
+          {
+            id: "holding",
+            label: sp.shift ? "Getting sleepy?" : `Holding ${voice.them}`,
+            sub: sp.shift ? `${memberName(sp.shift.holder)} since ${formatTimeNear(sp.shift.started_at, n, tz)}` : "Awake turns and handoffs",
+            icon: "hold",
+            color: KIND_COLOR.sleep,
+            onTap: () => later(() => sp.openSheet(sp.shift ? { kind: "sleepy" } : { kind: "holding", mode: "start" })),
+          },
+          {
+            id: "sleep-plan",
+            label: "Sleep plan",
+            sub: sp.plan ? `Stage ${sp.plan.stage} · ${STAGE_INFO[sp.plan.stage].title}` : "A gentle move to the bassinet",
+            icon: "moon",
+            color: KIND_COLOR.sleep,
+            onTap: () => later(() => sp.openSheet({ kind: "plan" })),
+          },
+        ]
+      : [];
   const groups: Item[][] = [
     // The daily things.
     [
@@ -356,6 +408,7 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
           ]
         : []),
     ],
+    ...(sleepItems.length ? [sleepItems] : []),
     // Her health.
     [
       {
@@ -438,11 +491,11 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
   ];
   const earlierGroups = groups.map((items) => items.flatMap((it) => it.onHold ? [{
     ...it,
-    label: it.id === "vitd" ? "Vitamin D" : it.id === "tummy" ? "Tummy time" : it.label,
+    label: it.id === "vitd" ? "Vitamin D" : it.id === "tummy" ? "Tummy time" : it.id === "bassinet" ? "Bassinet try" : it.label,
     sub: undefined,
     onTap: it.onHold,
     onHold: undefined,
-  }] : []));
+  }] : [])).filter((items) => items.length > 0);
 
   return (
     <Sheet open={open} onClose={onClose} title={loggingEarlier || earlierDay ? "Log earlier" : "More to log"}>

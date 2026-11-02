@@ -435,6 +435,12 @@ export function stageSuggestion(plan: Pick<SleepPlan, "stage" | "stage_since" | 
   return { from: plan.stage, to: (plan.stage + 1) as PlanStage, tries: recent.length, days, stayed: good, recent: last.length, snoozed: !!plan.snoozed_until && cur <= plan.snoozed_until };
 }
 
+/** "Not now": the suggestion stays hidden through this try day and the next two (the family's own days, noon to noon). */
+export const SNOOZE_DAYS = 3;
+export function snoozeUntil(now: Date, tz: string): string {
+  return addDays(tryDayKey(now, tz), SNOOZE_DAYS - 1);
+}
+
 // ── today against the plan ───────────────────────────────────────────────
 
 export type PlanToday = {

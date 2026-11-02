@@ -451,7 +451,7 @@ check("guidance: matched to her age, the stage and the log", () => {
 
 // ── the content's own rules ──────────────────────────────────────────────
 
-const ALLOWED_HOSTS = new Set(["www.healthychildren.org", "pubmed.ncbi.nlm.nih.gov", "publications.aap.org", "www.aap.org"]);
+const ALLOWED_HOSTS = new Set(["www.healthychildren.org", "pubmed.ncbi.nlm.nih.gov", "publications.aap.org", "www.aap.org", "988lifeline.org"]);
 
 check("content: every item has an age window, a source URL and a last-reviewed date", () => {
   const ids = new Set<string>();
