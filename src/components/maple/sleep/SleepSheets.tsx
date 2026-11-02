@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { sleepyLine, transferSteps } from "@/lib/maple/guidelines/sleep";
 import { askState, nextHandoff } from "@/lib/maple/sleep/engine";
 import { catchUpLines } from "@/lib/maple/sleep/catchup";
+import { feedCover } from "@/lib/maple/sleep/roster";
 import { handoffAroundRoster, windowAt, windowRange, type HandoffWhy } from "@/lib/maple/sleep/handoff";
 import { TRY_NOTE_MAX, TRY_OUTCOMES, TRY_TAGS, type BassinetTry, type HoldingShift, type TryOutcome, type TryTag } from "@/lib/maple/sleep/types";
 import { OUTCOME_LABEL, SLEEP_PLACE_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
@@ -417,7 +418,9 @@ export function CatchUpSheet({ started, ended, why = null, open = true, onClose 
   const v = useVoice();
   const now = useNow(30_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const lines = catchUpLines({ summary, now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why });
+  // How her feeds are covered in the protected window of the one going off duty (the roster's covers).
+  const cover = ended ? feedCover(s.goals, ended.holder, now.getTime(), started.handoff_at ? Date.parse(started.handoff_at) : now.getTime() + 12 * HOUR, tz) : null;
+  const lines = catchUpLines({ summary, now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why, cover, careMember: state?.care?.person.member ?? null });
   const undo = async () => {
     if (ended && (await s.undoTakeOver(started, ended))) onClose();
   };

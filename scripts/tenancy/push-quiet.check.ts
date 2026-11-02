@@ -4,7 +4,9 @@ import { notifyDoseLogged, notifyHandoffNow, notifyNursing } from "../../src/lib
 import { claim, cleanPrefs, liveSubs, markHeld, runPushTick } from "../../src/lib/maple/push";
 import { quietPhones } from "../../src/lib/maple/push-quiet";
 import { handoffFor, scheduleWakeups } from "../../src/lib/maple/push-wake";
-import { quietWindowWords, recapSpan, windowsBetween } from "../../src/lib/maple/sleep/roster";
+import { catchUpLines } from "../../src/lib/maple/sleep/catchup";
+import { feedCover, quietWindowWords, recapSpan, windowsBetween } from "../../src/lib/maple/sleep/roster";
+import { makeVoice } from "../../src/lib/maple/voice";
 import { askHandoff, startShift } from "../../src/lib/maple/sleep/store";
 import type { SleepGoal } from "../../src/lib/maple/sleep/types";
 import { formatTime, localParts } from "../../src/lib/maple/time";
@@ -443,6 +445,7 @@ async function quiet() {
 
 async function roster() {
   const tz = "America/Chicago";
+  const HOUR_MS = 60 * MIN;
   const at = (iso: string) => Date.parse(iso);
   const goal = (windows: { member: string; from: string; to: string; nights?: number[] }[], status: SleepGoal["status"] = "active") => ({
     status,
@@ -474,6 +477,29 @@ async function roster() {
       ]
     );
     eq(windowsBetween(g, "alex@example.test", at("2026-11-03T02:00:00Z"), at("2026-11-04T14:00:00Z"), tz), [], "nobody else's");
+  });
+
+  await test("feedCover and the catch-up's If hungry line: the off-duty adult's window going on now, or next before the handoff, by its covers and who nurses", () => {
+    const ALEX = "alex@example.test";
+    const g = (covers?: string, nursing?: string | null) => [
+      { ...goal([{ member: SAM, from: "22:00", to: "02:00" }]), roster: [{ id: "w1", member: SAM, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6], ...(covers ? { covers: covers as "nurse" } : {}) }], template: nursing === undefined ? null : { kind: "back_to_work" as const, member: SAM, date: "2026-12-01", nursing } },
+    ];
+    const now = at("2026-11-03T05:00:00Z"); // 11 PM in Chicago, inside Sam's window
+    eq(feedCover(g("nurse", SAM), SAM, now, now + 3 * HOUR_MS, tz), { member: SAM, end: at("2026-11-03T08:00:00Z"), covers: "nurse", nursing: SAM });
+    eq(feedCover(g("bottle"), SAM, at("2026-11-03T02:00:00Z"), at("2026-11-03T05:00:00Z"), tz)?.end, at("2026-11-03T08:00:00Z"), "8 PM: the window that begins before the 11 PM handoff");
+    eq(feedCover(g("bottle"), SAM, at("2026-11-03T01:00:00Z"), at("2026-11-03T03:00:00Z"), tz), null, "7 PM, handoff at 9 PM: the window begins after it");
+    eq(feedCover(g("bottle"), ALEX, now, now + 3 * HOUR_MS, tz), null, "nobody else's window");
+    const v = makeVoice({ name: "Wren", pronoun: "she" });
+    const name = (id: string | null | undefined) => (id === SAM ? "Sam" : id === ALEX ? "Alex" : "someone");
+    const line = (covers?: string, nursing?: string | null, care: string | null = null) =>
+      catchUpLines({ summary: null, now: new Date(now), tz, v, me: ALEX, memberName: name, next: null, nextHolder: null, cover: feedCover(g(covers, nursing), SAM, now, now + 3 * HOUR_MS, tz), careMember: care }).find((l) => l.label === "If hungry")?.text ?? null;
+    eq(line("nurse", SAM), "Before 2:00 AM: bring her to Sam to nurse");
+    eq(line("nurse", undefined, SAM), "Before 2:00 AM: bring her to Sam to nurse", "her page's person, off duty, is the one who nurses");
+    eq(line("nurse"), "Before 2:00 AM: nursing, as planned", "nobody named");
+    eq(line("nurse", ALEX), null, "the one taking over nurses: nothing to say");
+    eq(line("bottle"), "Before 2:00 AM: a bottle of expressed milk");
+    eq(line("bottle", null), "Before 2:00 AM: a bottle", "bottles only");
+    eq([line("none"), line(undefined)], [null, null], "no feed planned, or not said: no line, never a word against feeding her");
   });
 
   await test("recapSpan: the window they're in, else the one that ended by now this try day (back-to-back windows as one), else none", () => {

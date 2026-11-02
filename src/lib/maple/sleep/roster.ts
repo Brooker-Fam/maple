@@ -11,13 +11,14 @@ import { addDays } from "../time";
 import { tryDayKey } from "./engine";
 import { windowOn, windowOnNight } from "./goals";
 import type { RosterSpan } from "./handoff";
-import type { RosterWindow, SleepGoal } from "./types";
+import type { RosterWindow, SleepGoal, WindowCovers } from "./types";
 import { nightsLabel, shortClock } from "./words";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
-export type RosterGoals = readonly Pick<SleepGoal, "status" | "roster">[];
+/** The goals as the roster reads them: status and roster, and the template (who nurses) where a goal has one. */
+export type RosterGoals = readonly (Pick<SleepGoal, "status" | "roster"> & { template?: SleepGoal["template"] })[];
 
 /** `member`'s windows on the active goals' rosters (a paused, met or dropped goal's roster protects no one). */
 export function rosterWindowsOf(goals: RosterGoals, member: string): RosterWindow[] {
@@ -34,22 +35,47 @@ export const rosterMembers = (goals: RosterGoals): string[] => [...new Set(goals
  * to noon), so the night before `from` is read too.
  */
 export function windowsBetween(goals: RosterGoals, member: string, from: number, to: number, tz: string): RosterSpan[] {
-  const windows = rosterWindowsOf(goals, member);
-  if (!windows.length || to <= from) return [];
-  const out: RosterSpan[] = [];
+  return spansOf(goals, member, from, to, tz).map(({ start, end }) => ({ member, start, end }));
+}
+
+type Span = RosterSpan & { window: RosterWindow; goal: RosterGoals[number] };
+
+function spansOf(goals: RosterGoals, member: string, from: number, to: number, tz: string): Span[] {
+  const active = goals.filter((g) => g.status === "active");
+  if (to <= from || !active.some((g) => g.roster.some((w) => w.member === member))) return [];
+  const out: Span[] = [];
   const seen = new Set<string>();
   const last = tryDayKey(to, tz);
   let night = addDays(tryDayKey(from, tz), -1);
   for (let i = 0; i < 400 && night <= last; i++, night = addDays(night, 1)) {
-    for (const w of windows) {
-      if (!windowOnNight(w, night)) continue;
-      const [start, end] = windowOn(w, night, tz).map((d) => d.getTime());
-      if (end <= from || start >= to || seen.has(`${start}|${end}`)) continue;
-      seen.add(`${start}|${end}`);
-      out.push({ member, start, end });
+    for (const goal of active) {
+      for (const w of goal.roster) {
+        if (w.member !== member || !windowOnNight(w, night)) continue;
+        const [start, end] = windowOn(w, night, tz).map((d) => d.getTime());
+        if (end <= from || start >= to || seen.has(`${start}|${end}`)) continue;
+        seen.add(`${start}|${end}`);
+        out.push({ member, start, end, window: w, goal });
+      }
     }
   }
   return out.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+/**
+ * How her feeds are covered in `member`'s protected window (the one going on
+ * now, else the next that begins before `until`, the next planned handoff),
+ * for the catch-up of whoever takes over from them: the window's end, its
+ * `covers` (nurse, bottle or none; null when the window doesn't say), and who
+ * nurses when the goal's template names them (Back to work): a member id,
+ * null for a baby on bottles only, or undefined when the goal doesn't say.
+ * Null without such a window.
+ */
+export function feedCover(goals: RosterGoals, member: string, now: number, until: number, tz: string): { member: string; end: number; covers: WindowCovers | null; nursing: string | null | undefined } | null {
+  // The windows that overlap [now, until): the earliest is the one going on now, else the next to begin.
+  const span = spansOf(goals, member, now, Math.max(until, now + MIN), tz)[0];
+  if (!span) return null;
+  const t = span.goal.template;
+  return { member, end: span.end, covers: span.window.covers ?? null, nursing: t ? t.nursing : undefined };
 }
 
 /** Windows that touch or overlap read as one stretch of protected sleep. */
