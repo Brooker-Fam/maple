@@ -11,6 +11,8 @@ import {
   forHer,
   handoffNotice,
   liveSubs,
+  markHeld,
+  quietFor,
   retrySoon,
   runPushTick,
   sendOnce,
@@ -22,6 +24,7 @@ import {
   type PushSub,
   type Voice,
 } from "./push";
+import { holdsNursing } from "./push-quiet";
 import { DOSE_LOOKBACK_MS, anyPhoneOn, dueMoments, ensureSafetyNet, familyDoses, familyMembers, familyPlan, familySent } from "./push-wake";
 import { rowToEntry } from "./store";
 import { formatTime, parseDayKey, dayKey, zonedTimeToUtc } from "./time";
@@ -46,6 +49,15 @@ import type { CarePlan, DoseEntry, Entry, FeedData, Source } from "./types";
  * Both are one family's: the dose or feed is read in the writer's family,
  * and only that family's phones hear about it. A dose or feed id from
  * another family reads as missing and sends nothing.
+ *
+ * Quiet during my protected sleep (push-quiet.ts): a phone whose person is
+ * inside their own window on the night roster, not holding her and not in
+ * Maple in the last 15 minutes, holds "Logged" (her own phone too) and the
+ * nursing timer (unless its person started or changed that feed). Each is
+ * claimed as held, so no retry sends it after the window.
+ *
+ * "Handoff now" (below) goes only to the phones of the person asked, and is
+ * never held.
  */
 
 type Row = Record<string, unknown>;
@@ -180,12 +192,19 @@ export async function notifyDoseLogged(scope: FamilyScope, doseId: number, devic
   const out = { sent: 0, failed: 0 };
   const byMember = new Map<string, PushSub[]>();
   for (const sub of wanted) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
+  // Quiet during my protected sleep: "Logged" waits on a quiet phone (hers too), claimed as held so no retry sends it later.
+  const quiet = wanted.length ? await quietFor(scope, wanted, now) : new Map();
   for (const [email, phones] of byMember) {
     // Viewers never hear about her medicines.
     const v = voiceFor(audience, email, now);
     if (!v) continue;
     for (const phone of phones) {
-      const o = await sendOnce(phone, `log:${dose.id}`, plan ? `med:${plan.id}` : null, loggedNotice(dose, plan, v, phone.prefs.hide_names === true, next), { ttlS: HOUR / 1000 });
+      const ref = plan ? `med:${plan.id}` : null;
+      if (quiet.has(phone.id)) {
+        await markHeld(phone, `log:${dose.id}`, ref);
+        continue;
+      }
+      const o = await sendOnce(phone, `log:${dose.id}`, ref, loggedNotice(dose, plan, v, phone.prefs.hide_names === true, next), { ttlS: HOUR / 1000 });
       if (o === "sent") out.sent++;
       else if (o === "failed") out.failed++;
     }
@@ -249,9 +268,14 @@ export async function notifyNursing(scope: FamilyScope, entryId: number, now = n
   const key = `nurse:${e.id}:${Date.parse(e.updated_at)}${deleted ? ":x" : ""}`;
   const shown = state === "done" || state === "removed" ? await phonesShowing(scope, e.id) : null;
   const out = { sent: 0, failed: 0 };
-  for (const phone of subs) {
-    if (!members.some((m) => m.email === phone.member)) continue;
-    if (shown && !shown.has(phone.id)) continue;
+  const phones = subs.filter((phone) => members.some((m) => m.email === phone.member) && (!shown || shown.has(phone.id)));
+  // Quiet during my protected sleep: a quiet phone holds the feed, unless its person started or changed it.
+  const quiet = phones.length ? await quietFor(scope, phones, now) : new Map();
+  for (const phone of phones) {
+    if (holdsNursing(quiet, phone, e)) {
+      await markHeld(phone, key, `nurse:${e.id}`);
+      continue;
+    }
     const o = await sendOnce(phone, key, `nurse:${e.id}`, n, { ttlS: state === "done" ? HOUR / 1000 : (15 * MIN) / 1000 });
     if (o === "sent") out.sent++;
     else if (o === "failed") out.failed++;
