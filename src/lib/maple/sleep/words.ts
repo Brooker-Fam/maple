@@ -148,6 +148,14 @@ export const downWords = (min: number) => formatMinutes(Math.max(0, Math.round(m
 export const cryingLine = (v: Voice, signal: "after_crying" | "retry_done") =>
   signal === "after_crying" ? `Soothe ${v.them}; try once more when ${v.they}${v.verb("'s")} deeply asleep` : "Pause until the next try";
 
+/**
+ * Right after setup, before any try: what to do at the next try, in the
+ * plan's own words (its try time, the transfer, soothe, retry once, then
+ * pause until the next try). Never crying it out.
+ */
+export const firstTryWords = (v: Voice, slot: TrySlot | null) =>
+  `${slot ? `${slotLabel(slot)}: once` : "Once"} ${v.they}${v.verb("'s")} deeply asleep, lay ${v.them} on ${v.their} back in the bassinet and tap Put down. If ${v.they} ${v.verb("wakes")} crying, soothe ${v.them} and try once more, then pause until the next try.`;
+
 const SLOT_SHORT: Record<TryAnchor, string> = {
   first_night_stretch: "first night stretch",
   night_stretch: "next night stretch",

@@ -2,17 +2,55 @@
 
 import { useRef } from "react";
 import { askState, shiftStatus, sleepSignals } from "@/lib/maple/sleep/engine";
-import { cryingLine, slotShort } from "@/lib/maple/sleep/words";
-import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
+import { cryingLine, downWords, slotShort } from "@/lib/maple/sleep/words";
+import { DEFAULT_TZ, formatDuration, formatTime, formatTimeNear, localParts } from "@/lib/maple/time";
 import { useVoice } from "../familyWords";
 import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
 import { TAP_COOLDOWN_MS } from "../tapCooldown";
 import { cx } from "../ui";
 import { useMaple, useNow } from "../useMaple";
+import { showLastNight, useLastNight, type LastNight } from "./LastNight";
 import { partnerOf, usePeople, useSleepMaybe } from "./useSleep";
 
 type Action = { label: string; onClick: () => void; strong?: boolean };
+
+/** The try day's morning (5 AM to noon, the family's zone): the Last night card's hours on the strip. */
+const isMorning = (now: Date, tz: string) => {
+  const h = localParts(now, tz).hour;
+  return h >= 5 && h < 12;
+};
+
+/**
+ * The Last night card's first question, carried on the strip in the
+ * morning, so a short phone reaches it without scrolling: "Woke at 6:30 AM"
+ * in one tap for a timer left running, else Answer, which brings the card
+ * into view with focus on its first answer.
+ */
+function morningAsk(ln: LastNight, tz: string, name: string): { words: string; sub: string; action: Action } | null {
+  const a = ln.ask;
+  if (!a) return null;
+  const answer: Action = { label: "Answer", onClick: showLastNight, strong: true };
+  switch (a.kind) {
+    case "running":
+      // Two lines at 320px beside its button: the answer names the time something was logged after it.
+      return {
+        words: `Still asleep since ${formatTime(a.sleep.started_at, tz)}?`,
+        sub: "",
+        action: { label: `Woke at ${formatTime(a.next.started_at, tz)}`, onClick: () => void ln.wokeAt(a.sleep, a.next), strong: true },
+      };
+    case "checkin":
+      return { words: a.question, sub: "last night", action: answer };
+    case "gap":
+      return { words: `Nothing logged ${formatTimeNear(a.gap.start, a.gap.end, tz)}–${formatTime(a.gap.end, tz)}`, sub: "last night", action: answer };
+    case "place":
+      return { words: `Where did ${name} spend most of last night?`, sub: "", action: answer };
+    case "untimed":
+      return { words: "Any bassinet try that isn't in the log?", sub: "last night", action: answer };
+    case "handoff":
+      return { words: `Did the ${formatTime(a.at, tz)} handoff happen as planned?`, sub: "", action: answer };
+  }
+}
 
 /**
  * The sleep plan's strip on top of Today's dock, where a thumb lands at 3am,
@@ -20,14 +58,19 @@ type Action = { label: string; onClick: () => void; strong?: boolean };
  * One tap does what the moment needs:
  * - Put down; after a crying wake, Try again with "soothe her; try once more
  *   when she's deeply asleep"; after the retry, "pause until the next try",
- *   with Put down quiet.
- * - How did it go? while she's down.
- * - For the person holding her: I'm getting sleepy (two safe choices), Hand
- *   off to Alex at the planned time, and once Alex was asked, Alex has her
- *   (ten minutes on with nobody taking over: the two choices again).
+ *   with Put down quiet; quiet too once the plan's tries for the day are done.
+ * - How did it go? while she's down, the strong button: its sheet's four
+ *   outcomes sit in thumb reach.
+ * - For the person holding her: I'm getting sleepy (two safe choices), or,
+ *   while she's asleep in their arms, Put her down (I'm getting sleepy is on
+ *   the turn's card then); Hand off to Alex at the planned time, and once
+ *   Alex was asked, Alex has her (ten minutes on with nobody taking over:
+ *   the two choices again).
  * - For everyone else: Take over, or I've got her when they were asked.
+ * - From 5 AM to noon, the Last night card's first question (morningAsk).
  * Tapping the words opens the plan. A tap waits out the dock's cooldown, so
- * a double tap never lands on the button it turned into.
+ * a double tap never lands on the button it turned into. Up to three lines
+ * of words, so nothing is cut at 320px.
  */
 export function SleepStrip() {
   const s = useSleepMaybe();
@@ -35,6 +78,7 @@ export function SleepStrip() {
   const v = useVoice();
   const now = useNow(30_000);
   const people = usePeople();
+  const ln = useLastNight();
   const cool = useRef(Number.NEGATIVE_INFINITY);
   if (!s || !s.canWrite || (!s.plan && !s.running && !s.shift)) return null;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
@@ -44,20 +88,25 @@ export function SleepStrip() {
   let words: string;
   let sub: string;
   let action: Action;
-  let icon: "bassinet" | "hold" = "bassinet";
+  let icon: "bassinet" | "hold" | "moon" = "bassinet";
   let urgent = false;
   const sleep = s.running?.sleep_entry_id ? state?.entries.find((e) => e.id === s.running!.sleep_entry_id) : undefined;
   const woke = !!sleep && !sleep.active && !!sleep.ended_at;
+  const signals = sleepSignals(s.data.tries, now, tz);
+  const morning = !s.running && !sh && !signals.has("after_crying") && !signals.has("retry_done") && ln && isMorning(now, tz) ? morningAsk(ln, tz, v.name) : null;
   if (s.running) {
     words = woke ? `${v.They} woke at ${formatTime(sleep!.ended_at!, tz)}` : "In the bassinet";
     sub = woke ? "the try is still open" : `since ${formatTime(s.running.started_at, tz)} · ${formatDuration(Math.max(0, (now.getTime() - Date.parse(s.running.started_at)) / 1000))}`;
-    action = { label: "How did it go?", onClick: () => s.openSheet({ kind: "outcome", tryId: s.running!.id }), strong: woke };
+    // The strong button while she's down: its sheet's outcomes sit low, in thumb reach (the card's are at the top of the screen).
+    action = { label: "How did it go?", onClick: () => s.openSheet({ kind: "outcome", tryId: s.running!.id }), strong: true };
   } else if (sh) {
     icon = "hold";
     const due = shiftStatus(sh, now).due;
     const ask = askState(sh, now);
     const asked = ask.asked ? memberName(ask.to!) : null;
     const holder = memberName(sh.holder);
+    const asleep = (state?.entries ?? []).find((e) => e.kind === "sleep" && e.active) ?? null;
+    const since = asleep ? `asleep since ${formatTime(asleep.started_at, tz)}` : null;
     if (sh.holder === me) {
       const partner = partnerOf(sh, people, me);
       if (ask.asked && !ask.stale) {
@@ -75,6 +124,12 @@ export function SleepStrip() {
         sub = `planned ${formatTime(sh.handoff_at!, tz)}`;
         action = { label: `Hand off to ${memberName(partner.email)}`, onClick: () => s.openSheet({ kind: "holding", mode: "handoff", to: partner.email }), strong: true };
         urgent = true;
+      } else if (asleep) {
+        // Asleep in their arms: the safe choice in thumb reach is the bassinet (I'm getting sleepy is on the turn's card).
+        words = `Asleep in your arms`;
+        sub = `since ${formatTime(asleep.started_at, tz)} · ${downWords((now.getTime() - Date.parse(asleep.started_at)) / 60_000)}`;
+        action = { label: `Put ${v.them} down`, onClick: () => void s.startTry(), strong: true };
+        urgent = due;
       } else {
         words = due ? "Handoff time" : `You're holding ${v.them}`;
         sub = sh.handoff_at ? `handoff ${formatTime(sh.handoff_at, tz)}` : `since ${formatTime(sh.started_at, tz)}`;
@@ -88,27 +143,29 @@ export function SleepStrip() {
       urgent = true;
     } else {
       words = `${holder} is holding ${v.them}`;
-      sub = ask.asked ? `asked ${asked} to take over` : sh.handoff_at ? `handoff ${formatTime(sh.handoff_at, tz)}` : `since ${formatTime(sh.started_at, tz)}`;
+      sub = ask.asked ? `asked ${asked} to take over` : (since ?? (sh.handoff_at ? `handoff ${formatTime(sh.handoff_at, tz)}` : `since ${formatTime(sh.started_at, tz)}`));
       action = { label: "Take over", onClick: () => s.openSheet({ kind: "holding", mode: "handoff", to: me }) };
     }
+  } else if (signals.has("after_crying")) {
+    // After a crying wake: soothe first; the retry is for when she's deeply asleep again.
+    words = cryingLine(v, "after_crying");
+    sub = "";
+    action = { label: "Try again", onClick: () => void s.startTry(), strong: true };
+  } else if (signals.has("retry_done")) {
+    const t = s.today;
+    words = cryingLine(v, "retry_done");
+    sub = t?.next ? slotShort(t.next) : t ? `${t.done} of ${t.planned} ${t.label}` : "";
+    action = { label: "Put down", onClick: () => void s.startTry() };
+  } else if (morning) {
+    icon = "moon";
+    ({ words, sub, action } = morning);
   } else {
     const t = s.today;
-    const signals = sleepSignals(s.data.tries, now, tz);
     const tally = t ? `${t.done} of ${t.planned} ${t.label}` : "";
-    if (signals.has("after_crying")) {
-      // After a crying wake: soothe first; the retry is for when she's deeply asleep again.
-      words = cryingLine(v, "after_crying");
-      sub = "";
-      action = { label: "Try again", onClick: () => void s.startTry(), strong: true };
-    } else if (signals.has("retry_done")) {
-      words = cryingLine(v, "retry_done");
-      sub = t?.next ? slotShort(t.next) : tally;
-      action = { label: "Put down", onClick: () => void s.startTry() };
-    } else {
-      words = "Bassinet try";
-      sub = t ? `${tally}${t.next ? ` · ${slotShort(t.next)}` : ""}` : "";
-      action = { label: "Put down", onClick: () => void s.startTry(), strong: true };
-    }
+    words = "Bassinet try";
+    sub = t ? `${tally}${t.next ? ` · ${slotShort(t.next)}` : ""}` : "";
+    // Once the plan's tries for the day are done ("1 of 1"), Put down is still there, but quiet.
+    action = { label: "Put down", onClick: () => void s.startTry(), strong: !t || t.done < t.planned };
   }
 
   // A tap that turns this button into another (Put down → How did it go?) waits out the dock's cooldown.
@@ -129,8 +186,8 @@ export function SleepStrip() {
         className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-2xl py-0.5 pl-2 text-left transition active:bg-mp-ink/[0.04]"
       >
         <KindBadge icon={icon} color={KIND_COLOR.sleep} size={28} />
-        {/* Two lines when it needs them, so "0 of 1 tonight" is never cut to "0 of 1 to…" at 320px. */}
-        <span className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-[17px]">
+        {/* Up to three lines when it needs them, so "0 of 1 tonight" or the crying line is never cut at 320px. */}
+        <span className="line-clamp-3 min-w-0 flex-1 text-[13px] leading-[17px]">
           <span className={cx("font-semibold text-mp-ink", urgent && "text-mp-accent-fg")}>{words}</span>
           {sub && <span className="text-mp-ink-2"> · {sub}</span>}
         </span>

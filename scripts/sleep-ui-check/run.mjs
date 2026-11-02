@@ -136,8 +136,12 @@ try {
   let text = await clean(plan, "The plan");
   assert.match(text, /First tries/);
   assert.match(text, /0 of 1 tonight/);
+  // Set up, no try yet: what to do tonight, in the plan's words (never crying it out).
+  const firstTry = plan.locator("[data-first-try]");
+  await firstTry.getByText("What to do tonight", { exact: true }).waitFor();
+  assert.match(await firstTry.innerText(), /The first long night stretch after a feed: once she's deeply asleep, lay her on her back in the bassinet and tap Put down\. If she wakes crying, soothe her and try once more, then pause until the next try\./);
   await shot("plan");
-  console.log("PASS Plan: set up from More at stage 1 (one try a day), age from the birth date");
+  console.log("PASS Plan: set up from More at stage 1 (one try a day), age from the birth date, and what to do tonight");
 
   await plan.getByRole("radio", { name: "Guidance", exact: true }).click();
   await plan.getByRole("heading", { name: "Safe sleep", exact: true }).waitFor();
@@ -274,6 +278,8 @@ try {
   let c = await sam.last();
   assert.deepEqual(c.tags, ["fed"], "A feed that ended 12 minutes ago pre-ticks Recently fed");
   assert.match(await strip.innerText(), /In the bassinet/);
+  // While she's down, How did it go? is the strip's strong button: its sheet's outcomes sit in thumb reach (the card's are at the top).
+  assert.match(await strip.getByRole("button", { name: "How did it go?", exact: true }).locator("span").getAttribute("class"), /bg-mp-accent/, "How did it go? is the strong button");
   await page.getByRole("button", { name: "Laid down 2 minutes earlier, at 2:08 AM", exact: true }).click();
   await toast("Laid down at 2:08 AM").waitFor();
   c = await sam.last();
@@ -316,6 +322,9 @@ try {
   assert.equal(c.action, "try.finish");
   assert.equal(c.outcome, "stayed_asleep");
   assert.match(await strip.innerText(), /1 of 1 tonight/);
+  // The plan's try for tonight is done: Put down is still there, but quiet.
+  assert.doesNotMatch(await strip.getByRole("button", { name: "Put down", exact: true }).locator("span").getAttribute("class"), /bg-mp-accent/, "After 1 of 1, Put down isn't the strong action");
+  await shot("after-1-of-1");
   await toast("Stayed asleep after 47 min").getByRole("button", { name: "Undo", exact: true }).click();
   await toast("Undone: the try is running again").waitFor();
   c = await sam.last();
@@ -349,6 +358,13 @@ try {
   await strip.getByText("Soothe her; try once more when she's deeply asleep").waitFor();
   const tryAgain = strip.getByRole("button", { name: "Try again", exact: true });
   await shot("after-crying");
+  // At 320 the crying line is whole (three lines when it needs them), never "…when she's...".
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.waitForTimeout(200);
+  const cryWords = strip.getByRole("button", { name: /Open the sleep plan/ }).locator("span.line-clamp-3");
+  assert(await cryWords.evaluate((el) => el.scrollHeight <= el.clientHeight + 1), "The crying line isn't cut at 320");
+  await shot("after-crying-320x568");
+  await page.setViewportSize({ width: 390, height: 844 });
   await advance(10);
   await tryAgain.click();
   await toast("try 2 tonight, a retry").waitFor();
@@ -370,15 +386,44 @@ try {
   for (const name of ["Who's holding", "Planned handoff", "Who's next"]) assert.equal(await holding.getByRole("group", { name, exact: true }).count(), 1, `The ${name} chips are one named group`);
   await holding.getByRole("button", { name: "Asleep in arms", exact: true }).click();
   await holding.getByText(/Logs her sleep in arms from now/).waitFor();
+  // The goal saved above has Alex's protected window 2–6 AM: two hours on (5:16 AM) would wake Alex inside it, so its end comes first.
+  const planned = holding.getByRole("group", { name: "Planned handoff" }).getByRole("button", { name: "6:00 AM · after Alex's protected sleep", exact: true });
+  assert.equal(await planned.getAttribute("aria-pressed"), "true", "The window's end, preselected");
+  await holding.getByRole("group", { name: "Planned handoff" }).getByRole("button", { name: /^In 2h · 5:16 AM/ }).click();
+  await holding.locator("[data-handoff-window]").filter({ hasText: "5:16 AM is inside Alex's protected sleep (2:00–6:00 AM) on the roster." }).waitFor();
+  await shot("holding-start-roster");
+  await planned.click();
+  await holding.locator("[data-handoff-window]").waitFor({ state: "detached" });
   await holding.getByRole("button", { name: "Start", exact: true }).click();
   await holding.waitFor({ state: "hidden" });
   c = await sam.last();
-  assert.deepEqual([c.action, c.holder, c.next_holder, c.handoff_at, c.asleep], ["shift.start", "sam@example.test", "alex@example.test", "2026-10-28T09:16:00.000Z", true], "Planned handoff two hours on, asleep in arms");
-  await toast(/Holding her · handoff 5:16 AM · asleep in arms since 3:16 AM/).waitFor();
+  assert.deepEqual([c.action, c.holder, c.next_holder, c.handoff_at, c.asleep], ["shift.start", "sam@example.test", "alex@example.test", "2026-10-28T10:00:00.000Z", true], "Planned for the end of Alex's window, asleep in arms");
+  await toast(/Holding her · handoff 6:00 AM · asleep in arms since 3:16 AM/).waitFor();
   let arms = (await sam.db()).entries.find((e) => e.kind === "sleep" && e.active);
   assert.equal(arms?.data.place, "arms", "A sleep in arms runs");
-  assert.match(await strip.innerText(), /You're holding her/);
-  await strip.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
+  // Asleep in arms: one card (the turn's; her sleep's timer card steps aside), and the strip's action is Put her down, in thumb reach.
+  assert.match(await strip.innerText(), /Asleep in your arms · since 3:16 AM/);
+  const putHerDown = strip.getByRole("button", { name: "Put her down", exact: true });
+  await putHerDown.waitFor();
+  assert.equal(await strip.getByRole("button", { name: "I'm getting sleepy" }).count(), 0, "I'm getting sleepy moves to the card");
+  const armsTurn = page.getByRole("region", { name: "You're holding River" });
+  await armsTurn.getByText(/^Asleep in arms since 3:16 AM · /).waitFor();
+  await page.getByRole("region", { name: "Asleep timer" }).waitFor({ state: "detached" });
+  await armsTurn.getByRole("button", { name: "I'm getting sleepy", exact: true }).waitFor();
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(200);
+  assert(await strip.getByRole("button", { name: /Open the sleep plan/ }).locator("span.line-clamp-3").evaluate((el) => el.scrollHeight <= el.clientHeight + 1), "The strip's words fit at 320");
+  assert((await putHerDown.boundingBox()).x + (await putHerDown.boundingBox()).width <= 320, "Put her down fits at 320");
+  await noHorizontalScroll("Asleep in arms at 320px");
+  await shot("asleep-in-arms-320x568");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await shot("asleep-in-arms");
+  // Her sleep's own times, from the turn's card (its timer card's Edit times).
+  await armsTurn.getByRole("button", { name: "Edit sleep", exact: true }).click();
+  c = await sam.last();
+  assert.deepEqual([c.action, c.args?.[0]?.kind, c.args?.[0]?.entry?.id], ["sheets.open", "sleep", arms.id], "Edit sleep opens her sleep");
+  await armsTurn.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
   const sleepy = page.getByRole("dialog", { name: "Getting sleepy?", exact: true });
   await sleepy.waitFor();
   text = await clean(sleepy, "Getting sleepy");
@@ -436,7 +481,7 @@ try {
   await toast(/^Alex has her now/).getByRole("button", { name: "Undo", exact: true }).click();
   await strip.getByText(/Waking Alex…|You're holding her|Nobody has taken over yet/).first().waitFor();
   assert.equal((await sam.last()).action, "shift.undo_handoff");
-  console.log("PASS Holding: asleep in arms starts a sleep in arms; Wake Alex only asks (Undo takes it back) and keeps the bassinet big; ten minutes on, the two safe choices again; Alex has her records it; then Sam sees Take over, never I'm getting sleepy");
+  console.log("PASS Holding: the planned handoff's default skips the next holder's protected window (picking a time inside it says so); asleep in arms is one card, with Put her down on the strip (it fits at 320) and I'm getting sleepy and Edit sleep on the card; Wake Alex only asks (Undo takes it back) and keeps the bassinet big; ten minutes on, the two safe choices again; Alex has her records it; then Sam sees Take over, never I'm getting sleepy");
 
   // Into the bassinet from the turn: the try sits on her sleep in arms, and the card is that sleep's card.
   await strip.getByRole("button", { name: /I'm getting sleepy|Alex has her/ }).first().waitFor();
@@ -568,11 +613,37 @@ try {
   // ── The morning after: "since last night", not "tonight"; Put her down now; last night's try in one tap ──
   await page.goto("https://sleep.example.test/?goals&morning&lastnight");
   await strip.waitFor();
+  // Last night sits straight after Right now, above the Sleep plan row: at 390 × 844 its question clears the dock as Today opens.
+  const lastCard = page.getByRole("region", { name: "Last night", exact: true });
+  const QUESTION_TOP = "Did you get your 10 PM–2 AM sleep?";
+  await lastCard.waitFor();
+  const rowBox = await sam.row.boundingBox();
+  assert((await lastCard.boundingBox()).y < rowBox.y, "Last night comes before the Sleep plan row");
+  for (const b of await lastCard.getByRole("group", { name: QUESTION_TOP }).getByRole("button").all()) assert(await aboveDock(b), "The check-in's answers clear the dock at 390 × 844, no scrolling");
+  await shot("morning-today");
+  // From 5 AM the strip carries the card's first question; Answer brings the card into view with focus on its first answer.
+  text = await strip.innerText();
+  assert.match(text, /Did you get your 10 PM–2 AM sleep\? · last night/, `The strip carries the card's question: ${text}`);
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(200);
+  const stripWords = strip.getByRole("button", { name: /Open the sleep plan/ }).locator("span.line-clamp-3");
+  assert(await stripWords.evaluate((el) => el.scrollHeight <= el.clientHeight + 1), "The strip's words aren't cut at 320");
+  await shot("morning-strip-question-320x568");
+  await strip.getByRole("button", { name: "Answer", exact: true }).click();
+  await page.waitForFunction(() => document.activeElement?.textContent === "Yes" && !!document.activeElement.closest("[data-last-night]"));
+  await page.waitForTimeout(600);
+  for (const b of await lastCard.getByRole("group", { name: QUESTION_TOP }).getByRole("button").all()) assert(await aboveDock(b), "Answer: the check-in's answers on screen above the dock at 320 × 568");
+  await shot("morning-answer-320x568");
+  await page.setViewportSize({ width: 390, height: 844 });
+  // Not now: the card goes for the night on this phone, and the strip says the plan's count again.
+  await lastCard.getByRole("button", { name: "Not now", exact: true }).click();
+  await lastCard.waitFor({ state: "detached" });
   text = await strip.innerText();
   assert.match(text, /\d of 1 since last night/, `At 7:30 AM the strip says since last night: ${text}`);
   assert.doesNotMatch(text, /tonight/);
-  const stripWords = strip.getByRole("button", { name: /Open the sleep plan/ }).locator("span.line-clamp-2");
   assert(await stripWords.evaluate((el) => el.scrollHeight <= el.clientHeight + 1), "The strip's words aren't cut");
+  await page.evaluate(() => localStorage.clear());
   await sam.dock.getByRole("button", { name: /^More$/ }).click();
   const moreSheet = page.getByRole("dialog", { name: "More to log", exact: true });
   await moreSheet.waitFor();
@@ -583,6 +654,24 @@ try {
   await log.waitFor();
   const fromLog = log.getByRole("group", { name: "From the log" });
   await fromLog.getByRole("button", { name: /^Sleep 2:30 AM to 5:10 AM, in arms/ }).click();
+  // A chip's times fold the time fields into one line, so How it went is in view (at 390 and 320).
+  await log.locator("[data-try-times]").filter({ hasText: "Laid down 2:30, ended 5:10 AM" }).waitFor();
+  assert.equal(await log.getByLabel("Laid down: time").count(), 0, "The time fields fold away");
+  const howItWent = log.getByRole("group", { name: "How it went" });
+  const inView = async (label) => {
+    const b = await howItWent.boundingBox();
+    const vh = page.viewportSize().height;
+    assert(b && b.y >= 0 && b.y + 44 <= vh, `${label}: How it went is in view (${JSON.stringify(b)})`);
+  };
+  await inView("390 × 844");
+  await shot("log-chip-filled");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.waitForTimeout(200);
+  await inView("320 × 568");
+  await noSideScroll(log, "Log an earlier try at 320px");
+  await shot("log-chip-filled-320x568");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await log.getByRole("button", { name: "Change times", exact: true }).click();
   assert.equal(await log.getByLabel("Laid down: time").inputValue(), "02:30");
   assert.equal(await log.getByLabel("Ended: time").inputValue(), "05:10");
   // A clock later than now reads as last night's; a time that can't be, in words, not 2026-11-05.
@@ -617,14 +706,23 @@ try {
   for (let i = 0; i < 3; i++) assert((await height(onCard.nth(i))) >= 44, "The answers are 44px targets");
   await shot("checkin-card");
   await checkin.getByRole("button", { name: "Partly", exact: true }).click();
-  await toast("Checked in for last night: partly").waitFor();
+  // Its receipt and Undo in the card, never a toast over the next question.
+  const receipt = checkin.locator("[data-last-night-receipt]");
+  await receipt.filter({ hasText: "Checked in: partly" }).waitFor();
+  assert.equal(await toast("Checked in for last night").count(), 0, "No toast for the card's own answer");
   wrote = await sam.last();
   assert.deepEqual([wrote.action, wrote.protected, wrote.night, "note" in wrote], ["checkin.save", "partly", "2026-11-04", false], "Last night (it began Wednesday evening); one tap leaves any note as it is");
   assert.match(wrote.client_id, /^checkin-/);
-  // The night's next question takes its place: the stretch with nothing logged between the 1:20 AM wake and the 6:40 AM diaper.
-  await checkin.getByRole("heading", { name: "Nothing logged 1:20–6:40 AM" }).waitFor();
-  await toast("Checked in for last night: partly").getByRole("button", { name: "Undo", exact: true }).click();
+  // The night's next question takes its place: the stretch with nothing logged between the 1:20 AM wake and the 6:40 AM diaper,
+  // named by whose protected window it mostly was, with Not sure first.
+  const gapAsk = checkin.locator("[aria-labelledby='last-night-ask']");
+  await gapAsk.getByRole("heading", { name: "Nothing logged 1:20–6:40 AM" }).waitFor();
+  assert.equal(await gapAsk.getByText("5h 20m · mostly Alex's window", { exact: true }).count(), 1, "Whose window it was");
+  assert.deepEqual(await gapAsk.getByRole("button").allInnerTexts(), ["Not sure", "Up or feeding", "She slept through"], "Not sure first; one stretch, so nothing to skip");
+  await shot("checkin-receipt");
+  await checkin.getByRole("button", { name: "Undo", exact: true }).click();
   await checkin.getByRole("group", { name: QUESTION }).waitFor();
+  await receipt.waitFor({ state: "detached" });
   wrote = await sam.last();
   assert.equal(wrote.action, "checkin.delete", "Undo deletes the check-in it made");
   assert.deepEqual((await page.evaluate(() => window.__sleep.checkins())).filter((x) => x.member === "sam@example.test" && x.night === "2026-11-04"), []);
@@ -670,9 +768,21 @@ try {
   const place = checkin.getByRole("region", { name: "Where did River spend most of last night?" });
   await place.waitFor();
   assert.equal((await sam.calls()).length, n0, "Up or feeding saves nothing");
+  // Every sleep last night has a place in the log (the try's bassinet): prefilled, to confirm, or Something else for all five.
+  assert.equal(await place.getByText("From the log: mostly the bassinet. Right?").count(), 1, "Prefilled from the log");
+  assert.deepEqual(await place.getByRole("button").allInnerTexts(), ["Yes, the bassinet", "Something else"]);
+  await shot("place-prefill");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await checkin.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await page.waitForTimeout(200);
+  for (const name of ["Yes, the bassinet", "Something else"]) assert(await aboveDock(place.getByRole("button", { name, exact: true })), `${name} clears the dock at 320 × 568`);
+  await noHorizontalScroll("The place prefill at 320px");
+  await shot("place-prefill-320x568");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await place.getByRole("button", { name: "Something else", exact: true }).click();
   assert.deepEqual(await place.getByRole("button").allInnerTexts(), ["Bassinet", "Held by someone awake", "Some of each", "Somewhere else", "Not sure"]);
   await place.getByRole("button", { name: "Bassinet", exact: true }).click();
-  await toast("Saved: bassinet").waitFor();
+  await receipt.filter({ hasText: "Saved: bassinet" }).waitFor();
   wrote = await sam.last();
   assert.deepEqual([wrote.action, wrote.protected, wrote.place, wrote.night, "note" in wrote], ["checkin.save", "yes", "bassinet", "2026-11-04", false], "On Sam's own check-in, the answer and note it has kept");
   assert.equal(await checkin.getByText("Any bassinet try that isn't in the log?").count(), 0, "A try is in the log for last night, so it isn't asked");
@@ -856,6 +966,15 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   console.log("PASS 320px: the four tabs share one row; Goals, the form, the check-in sheet and Today's card fit without sideways scroll");
 
+  // ── A timer left running overnight, at 390 × 844: Today opens on its card, which asks Woke at above the dock ──
+  await page.goto("https://sleep.example.test/?goals&morning&sparse");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  const timer390 = page.getByRole("region", { name: "Asleep timer" }).locator("[data-woke-ask]");
+  await timer390.getByText("A feed was logged at 6:30 AM. Did she wake then?").waitFor();
+  for (const name of ["Woke at 6:30 AM", "Still asleep"]) assert(await aboveDock(timer390.getByRole("button", { name, exact: true })), `${name} clears the dock at 390 × 844`);
+  await shot("timer-left-running-390");
+
   // ── Last night on a sparse log: a timer left running, three stretches with nothing logged, Tell Maple, all on a 320 × 568 phone ──
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto("https://sleep.example.test/?goals&morning&sparse");
@@ -876,41 +995,67 @@ try {
   };
   text = await neutral(night, "Last night, a sparse log");
   assert(text.includes("The sleep timer is still running from 4:45 AM") && text.includes("A feed was logged at 6:30 AM."), text);
+  // The timer left running asks on its own card too (Today opens on it), its answers above the dock at 320 × 568 with no scrolling.
+  const timerCard = page.getByRole("region", { name: "Asleep timer" });
+  const timerAsk = timerCard.locator("[data-woke-ask]");
+  await timerAsk.getByText("A feed was logged at 6:30 AM. Did she wake then?").waitFor();
+  for (const name of ["Woke at 6:30 AM", "Still asleep"]) assert(await aboveDock(timerAsk.getByRole("button", { name, exact: true })), `${name} on the timer's card clears the dock at 320 × 568`);
+  // And the strip carries it: one tap from the dock.
+  assert.match(await strip.innerText(), /Still asleep since 4:45 AM\?/);
+  await shot("timer-left-running-320");
   await essentials("A timer left running");
   await shot("last-night-running-320");
-  await night.getByRole("button", { name: "Woke at 6:30 AM", exact: true }).click();
+  await strip.getByRole("button", { name: "Woke at 6:30 AM", exact: true }).click();
   wrote = await sam.last();
   assert.deepEqual([wrote.action, wrote.at], ["stop", "2026-11-05T11:30:00.000Z"], "Stops the sleep when the next thing was logged");
+  await timerCard.waitFor({ state: "detached" });
   await night.getByRole("group", { name: "Did you get your 10 PM–2 AM sleep?" }).waitFor();
   await essentials("The check-in");
   await night.getByRole("button", { name: "Yes", exact: true }).click();
-  await toast("Checked in for last night: yes").waitFor();
+  // The answer's receipt is in the card: no toast sits on the next question's chips at 320.
+  const sparseReceipt = night.locator("[data-last-night-receipt]");
+  await sparseReceipt.filter({ hasText: "Checked in: yes" }).waitFor();
+  assert.equal(await page.locator("[aria-live=polite] > div").count(), 0, "No toast over the next question at 320");
 
-  // Three stretches with nothing logged, between two things that were: one tap each; only "She slept through" saves.
+  // The two longest stretches with nothing logged, between two things that were, each named by whose window it was, Not sure first.
   const gap = night.locator("[aria-labelledby='last-night-ask']");
   await gap.getByRole("heading", { name: "Nothing logged 8:50–11:00 PM" }).waitFor();
-  assert.deepEqual(await gap.getByRole("button").allInnerTexts(), ["She slept through", "Up or feeding", "Not sure"]);
+  assert.equal(await gap.getByText("2h 10m · partly your window", { exact: true }).count(), 1, "Whose window");
+  assert.deepEqual(await gap.getByRole("button").allInnerTexts(), ["Not sure", "Up or feeding", "She slept through", "Skip the rest"]);
   await essentials("A stretch with nothing logged");
   await shot("last-night-gap-320");
   const beforeGaps = (await sam.calls()).length;
-  await gap.getByRole("button", { name: "Up or feeding", exact: true }).click();
-  await gap.getByRole("heading", { name: "Nothing logged 1:20–3:00 AM" }).waitFor();
   await gap.getByRole("button", { name: "Not sure", exact: true }).click();
-  await toast("Left as not logged: that stretch stays out of the counts.").waitFor();
-  assert.equal((await sam.calls()).length, beforeGaps, "Up or feeding and Not sure save nothing");
+  await sparseReceipt.filter({ hasText: "Left as not logged: that stretch stays out of the counts." }).waitFor();
+  assert.equal((await sam.calls()).length, beforeGaps, "Not sure saves nothing");
+  // 1:20–3:00 AM (1h 40m) is the shortest of three: not asked.
   await gap.getByRole("heading", { name: "Nothing logged 3:00–4:45 AM" }).waitFor();
+  assert.equal(await gap.getByText("1h 45m · Alex's window", { exact: true }).count(), 1, "Alex's window");
+  assert.deepEqual(await gap.getByRole("button").allInnerTexts(), ["Not sure", "Up or feeding", "She slept through"], "The last one: nothing to skip");
   await gap.getByRole("button", { name: "She slept through", exact: true }).click();
-  await toast("Logged: asleep 3:00–4:45 AM").waitFor();
+  await sparseReceipt.filter({ hasText: "Logged: asleep 3:00–4:45 AM" }).waitFor();
   wrote = await sam.last();
   assert.deepEqual([wrote.action, wrote.kind, wrote.started_at, wrote.ended_at], ["log", "sleep", "2026-11-05T08:00:00.000Z", "2026-11-05T09:45:00.000Z"], "A sleep for that stretch");
+  assert.equal(await page.locator("[aria-live=polite] > div").count(), 0, "Still no toast");
+  await shot("last-night-receipt-320");
+  // Its Undo: the sleep goes, and the stretch is asked again.
+  await night.getByRole("button", { name: "Undo", exact: true }).click();
+  await gap.getByRole("heading", { name: "Nothing logged 3:00–4:45 AM" }).waitFor();
+  wrote = await sam.last();
+  assert.equal(wrote.action, "remove", "Undo removes the sleep it logged");
+  await gap.getByRole("button", { name: "She slept through", exact: true }).click();
+  await sparseReceipt.filter({ hasText: "Logged: asleep 3:00–4:45 AM" }).waitFor();
 
-  // Somewhere else: the safe-sleep line, in the guidance's own words; then the planned handoff.
-  await night.getByRole("region", { name: "Where did River spend most of last night?" }).getByRole("button", { name: "Somewhere else", exact: true }).click();
-  await toast("Saved: somewhere else").waitFor();
+  // Somewhere else (not every sleep has a place, so nothing is prefilled): the safe-sleep line, in the guidance's own words; then the planned handoff.
+  const where = night.getByRole("region", { name: "Where did River spend most of last night?" });
+  await where.getByRole("button", { name: "Bassinet", exact: true }).waitFor();
+  assert.deepEqual(await where.getByRole("button").allInnerTexts(), ["Bassinet", "Held by someone awake", "Some of each", "Somewhere else", "Not sure"], "No prefill when a sleep has no place");
+  await where.getByRole("button", { name: "Somewhere else", exact: true }).click();
+  await sparseReceipt.filter({ hasText: "Saved: somewhere else" }).waitFor();
   await night.locator("[data-safe-sleep]").waitFor();
   assert.match(await night.locator("[data-safe-sleep]").innerText(), /^Lay her on her back for every nap and at night\. Keep her bassinet in your room, close to your bed but not in it/);
   await night.getByRole("region", { name: "Did the 2:00 AM handoff happen as planned?" }).getByRole("button", { name: "No handoff", exact: true }).click();
-  await toast("Saved: no handoff").waitFor();
+  await sparseReceipt.filter({ hasText: "Saved: no handoff" }).waitFor();
   const samSaid = (await page.evaluate(() => window.__sleep.checkins())).find((x) => x.member === "sam@example.test" && x.night === "2026-11-04");
   assert.deepEqual([samSaid.protected, samSaid.place, samSaid.handoff], ["yes", "elsewhere", "none"]);
   await shot("last-night-safe-sleep-320");
@@ -921,8 +1066,39 @@ try {
   assert.deepEqual([ask.action, ask.prompt], ["ask", "Last night: "]);
   await night.getByRole("button", { name: "Not now", exact: true }).click();
   await night.waitFor({ state: "detached" });
+
+  // Skip the rest: on a fresh phone, the first stretch's Skip the rest answers both, and saves nothing.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await night.waitFor();
+  await night.getByRole("button", { name: "Woke at 6:30 AM", exact: true }).click();
+  await night.getByRole("button", { name: "Yes", exact: true }).click();
+  await gap.getByRole("heading", { name: "Nothing logged 8:50–11:00 PM" }).waitFor();
+  const beforeSkip = (await sam.calls()).length;
+  await gap.getByRole("button", { name: "Skip the rest of the stretches", exact: true }).click();
+  await night.getByRole("region", { name: "Where did River spend most of last night?" }).waitFor();
+  await sparseReceipt.filter({ hasText: "Skipped: those stretches stay out of the counts." }).waitFor();
+  assert.equal((await sam.calls()).length, beforeSkip, "Skip the rest saves nothing");
   await page.setViewportSize({ width: 390, height: 844 });
-  console.log("PASS Last night: a timer left running stops at the next thing logged; stretches over 90 minutes get one tap each (only \"She slept through\" saves); Somewhere else shows the safe-sleep line; Tell Maple seeds the chat; essentials fit above the dock at 320 × 568");
+  console.log("PASS Last night: a timer left running asks on its own card and the strip (one tap stops it at the next thing logged); only the two longest stretches are asked, each naming whose window it was, Not sure first, with Skip the rest; receipts and Undo stay in the card, never a toast over the next question at 320; the place question lists all five when a sleep has no place; Somewhere else shows the safe-sleep line; Tell Maple seeds the chat; essentials fit above the dock at 320 × 568");
+
+  // The night strip in the night look: every bar wears the kind fill (dim amber), never the day's bright lavender and orange.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("https://sleep.example.test/?goals&morning&sparse&night");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await night.waitFor();
+  const bars = night.locator("[data-night-strip] [data-bar]");
+  assert((await bars.count()) >= 4, "The night's bars");
+  const fills = await bars.evaluateAll((els) => els.map((el) => [el.className.includes("mp-kind-fill"), getComputedStyle(el).backgroundColor]));
+  for (const [has, color] of fills) assert(has && color === "rgba(224, 169, 59, 0.45)", `A bar in the night look is the dim amber fill (${color})`);
+  await night.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await shot("last-night-strip-night-320");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await night.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  assert.deepEqual([...new Set(await bars.evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor)))], ["rgba(224, 169, 59, 0.45)"], "The same at 390");
+  await shot("last-night-strip-night-390");
+  console.log("PASS Night look: the Last night strip's bars are the kind fill's dim amber, at 320 and 390");
 
   // ── A view-only guest: goals, steps, the roster and the baby's numbers; never a check-in; nothing that writes ──
   await page.goto("https://sleep.example.test/?goals&morning&role=viewer&night");
@@ -959,7 +1135,9 @@ try {
   assert.match(await A.strip.innerText(), /Sam is holding her/);
   await A.strip.getByRole("button", { name: "Take over", exact: true }).waitFor();
   assert.equal(await alexFrame.getByRole("button", { name: /I'm getting sleepy/ }).count(), 0, "Alex isn't holding her: no I'm getting sleepy");
-  await S.strip.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
+  // She's asleep in Sam's arms: Sam's strip offers Put her down, and I'm getting sleepy is on the turn's card.
+  await S.strip.getByRole("button", { name: "Put her down", exact: true }).waitFor();
+  await samFrame.getByRole("region", { name: "You're holding River" }).getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
   await samFrame.getByRole("dialog", { name: "Getting sleepy?" }).getByRole("button", { name: /^Wake Alex/ }).click();
   const samWaking = samFrame.getByRole("dialog", { name: "Waking Alex…", exact: true });
   await samWaking.waitFor();
@@ -983,8 +1161,9 @@ try {
   await shot("two-phones-taken-over");
   await catchUp.getByRole("button", { name: "Done", exact: true }).click();
   await catchUp.waitFor({ state: "hidden" });
-  // Alex holds her now: Alex's I'm getting sleepy offers to wake Sam, never Alex.
-  await A.strip.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
+  // Alex holds her now (still asleep in arms: the strip's Put her down): Alex's I'm getting sleepy offers to wake Sam, never Alex.
+  await A.strip.getByRole("button", { name: "Put her down", exact: true }).waitFor();
+  await alexFrame.getByRole("region", { name: "You're holding River" }).getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
   const alexSleepy = alexFrame.getByRole("dialog", { name: "Getting sleepy?", exact: true });
   await alexSleepy.waitFor();
   assert.deepEqual((await alexSleepy.getByRole("button").filter({ hasText: /bassinet now|^Wake/ }).allInnerTexts()).map((t) => t.split("\n")[0]), ["Put her in the bassinet now", "Wake Sam"], "The partner is never the person holding her");
@@ -1005,7 +1184,7 @@ try {
   await catchUp2.getByRole("button", { name: "Undo", exact: true }).click();
   await catchUp2.waitFor({ state: "hidden" });
   await page.frame({ name: "sam" }).evaluate(() => window.__sleep.poll());
-  await sam2.getByRole("group", { name: "Sleep plan", exact: true }).getByText("You're holding her").waitFor();
+  await sam2.getByRole("group", { name: "Sleep plan", exact: true }).getByText("Asleep in your arms").waitFor();
   console.log("PASS Take over: from anyone else's phone it's I've got her, with the catch-up and its Undo, which puts the turn back");
 
   // At the planned handoff, the holder's strip offers the handoff itself; the sheet records it as what it is: Alex has her.
@@ -1025,6 +1204,95 @@ try {
   assert.deepEqual([c.action, c.to], ["shift.handoff", "alex@example.test"]);
   await toast(/^Alex has her now/).waitFor();
   console.log("PASS Handoff time: the holder's strip says Hand off to Alex, and the sheet's button says what it records: Alex has her");
+
+  // ── A feed logged after her sleep in arms began: the turn's card asks Woke at; Still asleep lets it be ──
+  await page.goto("https://sleep.example.test/?holding&armsfeed&night");
+  const fedTurn = page.getByRole("region", { name: "You're holding River" });
+  const fedAsk = fedTurn.locator("[data-woke-ask]");
+  await fedAsk.getByText("A feed was logged at 2:00 AM. Did she wake then?").waitFor();
+  assert.equal(await page.getByRole("region", { name: "Asleep timer" }).count(), 0, "One card for the turn and her sleep in arms");
+  await shot("arms-feed-ask-night");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.waitForTimeout(200);
+  await noHorizontalScroll("The turn's card with its question at 320px");
+  await shot("arms-feed-ask-320x568-night");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fedAsk.getByRole("button", { name: "Still asleep", exact: true }).click();
+  await fedAsk.waitFor({ state: "detached" });
+  await page.reload();
+  await fedTurn.waitFor();
+  await page.waitForTimeout(300);
+  assert.equal(await fedTurn.locator("[data-woke-ask]").count(), 0, "Still asleep holds on this phone");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await fedTurn.locator("[data-woke-ask]").getByRole("button", { name: "Woke at 2:00 AM", exact: true }).click();
+  c = await sam.last();
+  assert.deepEqual([c.action, c.id, c.at], ["stop", 91, "2026-10-28T06:00:00.000Z"], "Her sleep in arms stops when the feed began");
+  await fedTurn.getByText(/^Asleep in arms since/).waitFor({ state: "detached" });
+  console.log("PASS Arms and a feed: a feed logged after her sleep in arms began asks Woke at on the turn's card (one card); Still asleep holds on this phone; Woke at stops it then");
+
+  // ── The next handoff and the roster: never inside the next holder's protected window ──
+  await page.goto("https://sleep.example.test/?holding&roster");
+  const rosterTurn = page.getByRole("region", { name: "You're holding River" });
+  await rosterTurn.getByRole("button", { name: "Hand off", exact: true }).click();
+  const handSheet = page.getByRole("dialog", { name: "Hand off", exact: true });
+  await handSheet.waitFor();
+  // Alex takes over now (2:10 AM); the next handoff back to Sam would be 4:10 AM, inside Sam's 2:30–5:30 AM window: its end comes first.
+  const endChip = handSheet.getByRole("group", { name: "Next planned handoff" }).getByRole("button", { name: "5:30 AM · after your protected sleep", exact: true });
+  assert.equal(await endChip.getAttribute("aria-pressed"), "true", "The window's end, preselected");
+  await handSheet.getByRole("group", { name: "Next planned handoff" }).getByRole("button", { name: /^In 2h · 4:10 AM/ }).click();
+  await handSheet.locator("[data-handoff-window]").filter({ hasText: "4:10 AM is inside your protected sleep (2:30–5:30 AM) on the roster." }).waitFor();
+  await shot("handoff-roster-sheet");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.waitForTimeout(200);
+  await noSideScroll(handSheet, "The Hand off sheet at 320px");
+  await shot("handoff-roster-sheet-320x568");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.keyboard.press("Escape");
+  await handSheet.waitFor({ state: "hidden" });
+  // The holder's own "Alex has her" after Wake Alex: the store plans the next one, and the toast says why.
+  await rosterTurn.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
+  await page.getByRole("dialog", { name: "Getting sleepy?" }).getByRole("button", { name: /^Wake Alex/ }).click();
+  await page.getByRole("dialog", { name: "Waking Alex…" }).waitFor();
+  await page.keyboard.press("Escape");
+  await strip.getByRole("button", { name: "Alex has her", exact: true }).click();
+  await toast("Alex has her now · next handoff 5:30 AM, after your protected sleep (2:30–5:30 AM)").waitFor();
+  c = await sam.last();
+  assert.deepEqual([c.action, c.to, "handoff_at" in c], ["shift.handoff", "alex@example.test", false], "The store's default, moved off the window");
+  db = await sam.db();
+  assert.equal(db.shifts.find((x) => !x.ended_at).handoff_at, "2026-10-28T09:30:00.000Z", "5:30 AM");
+  await shot("handoff-roster-toast");
+  // Two phones: Alex's I've got her, and the catch-up says why.
+  await page.setViewportSize({ width: 820, height: 870 });
+  await page.goto("https://sleep.example.test/?phones&holding&roster&night");
+  const samR = page.frameLocator("iframe[name=sam]");
+  const alexR = page.frameLocator("iframe[name=alex]");
+  await samR.getByRole("region", { name: "You're holding River" }).getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
+  await samR.getByRole("dialog", { name: "Getting sleepy?" }).getByRole("button", { name: /^Wake Alex/ }).click();
+  await page.frame({ name: "alex" }).evaluate(() => window.__sleep.poll());
+  await alexR.getByRole("group", { name: "Sleep plan", exact: true }).getByRole("button", { name: "I've got her", exact: true }).click();
+  const rosterCatch = alexR.getByRole("dialog", { name: "You have River", exact: true });
+  await rosterCatch.waitFor();
+  assert.match(await rosterCatch.getByRole("list", { name: "Catch-up" }).innerText(), /Handoff\s+Next planned for 5:30 AM, to Sam, after Sam's protected sleep \(2:30–5:30 AM\)/);
+  await shot("two-phones-roster-catch-up");
+  await page.setViewportSize({ width: 390, height: 844 });
+  console.log("PASS Next handoff: the Hand off sheet's default skips the next holder's protected window (a time inside it says so); the holder's Alex has her and Alex's I've got her plan it for the window's end, and the toast and catch-up say why");
+
+  // ── The morning with a plan set up and no try: what to do next, and why the morning nap ──
+  await page.goto("https://sleep.example.test/?morning");
+  await more("Sleep plan");
+  await plan.waitFor();
+  await plan.getByRole("button", { name: "Set up the plan", exact: true }).click();
+  await plan.getByText("Stage 1 of 4", { exact: true }).waitFor();
+  text = await clean(plan, "The plan in the morning");
+  assert(text.includes("0 of 1 since last night · next: the first morning nap (the backup, since no night try was logged)"), text);
+  await plan.locator("[data-first-try]").getByText("What to do next", { exact: true }).waitFor();
+  assert.match(await plan.locator("[data-first-try]").innerText(), /The first morning nap: once she's deeply asleep, lay her on her back in the bassinet and tap Put down\./);
+  await page.setViewportSize({ width: 320, height: 568 });
+  await noSideScroll(plan, "The plan at 320px");
+  await shot("plan-morning-320x568");
+  await page.setViewportSize({ width: 390, height: 844 });
+  console.log("PASS Plan copy: the backup says why (no night try was logged), and setup says what to do next");
 
   assert.deepEqual(errors, []);
   console.log(`PASS Sleep UI: no runtime errors (${browserName})`);

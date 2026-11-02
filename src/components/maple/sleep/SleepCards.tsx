@@ -4,15 +4,19 @@ import { motion } from "framer-motion";
 import type { ReactNode } from "react";
 import { askState, shiftStatus } from "@/lib/maple/sleep/engine";
 import type { BassinetTry, HoldingShift, TryOutcome } from "@/lib/maple/sleep/types";
-import { OUTCOME_LABEL, SLEEP_PLACE_LABEL, STAGE_INFO, TAG_LABEL, outcomeHint, sleepyChoices } from "@/lib/maple/sleep/words";
+import { downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, STAGE_INFO, TAG_LABEL, outcomeHint, sleepyChoices } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
-import type { SleepPlace } from "@/lib/maple/types";
+import type { Entry, SleepPlace } from "@/lib/maple/types";
 import { useVoice } from "../familyWords";
+import { fixPreset } from "../FeedParts";
 import { Icon, KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
+import { useSheets } from "../sheets";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
-import { partnerOf, usePeople, useSleep, useSleepMaybe } from "./useSleep";
+import { LeftRunningAsk, useLastNight, WokeAsk } from "./LastNight";
+import { useNightValue } from "./SleepCheckin";
+import { partnerOf, usePeople, useSleep, useSleepMaybe, useTryAfterWake } from "./useSleep";
 
 /**
  * The sleep plan on Today, for every family phone: a running bassinet try
@@ -128,11 +132,67 @@ export function TryCard({ t }: { t: BassinetTry }) {
 }
 
 /**
- * Who's holding her awake. The holder gets "I'm getting sleepy" (two safe
- * choices); once they've asked someone, the bassinet stays the big button
- * with "Alex has her" under it, and ten minutes on with nobody taking over,
- * the two safe choices again. The person asked gets "I've got her";
- * everyone else who can log, "Take over".
+ * The running sleep a sleep card already shows, so its own timer card steps
+ * aside (one sleep, one card): the one a running try sits on, else, while
+ * someone holds her, her sleep in arms (the turn's card shows it). Null
+ * outside a SleepProvider.
+ */
+export function useFoldedSleepId(): number | null {
+  const s = useSleepMaybe();
+  const { state } = useMaple();
+  if (!s) return null;
+  if (s.running) return s.running.sleep_entry_id ?? null;
+  if (s.shift) return (state?.entries ?? []).find((e) => e.kind === "sleep" && e.active)?.id ?? null;
+  return null;
+}
+
+/** A feed logged after a running sleep began (more than 5 minutes in): she was likely awake then, so its card asks. */
+export function feedAfter(sleep: Entry, entries: readonly Entry[], now: Date): Entry | null {
+  const from = Date.parse(sleep.started_at) + 5 * 60_000;
+  return (
+    entries
+      .filter((e) => e.kind === "feed" && e.id !== sleep.id && Date.parse(e.started_at) > from && Date.parse(e.started_at) <= now.getTime())
+      .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))[0] ?? null
+  );
+}
+
+/**
+ * "Woke at 1:35 AM?" for the turn's sleep in arms: the Last night card's
+ * timer left running (from 5 AM), else a feed logged after it began. Still
+ * asleep lets it be, on this phone.
+ */
+function ArmsWokeAsk({ sleep }: { sleep: Entry }) {
+  const m = useMaple();
+  const ln = useLastNight();
+  const now = useNow(30_000);
+  const afterWake = useTryAfterWake();
+  const [raw, setRaw] = useNightValue(m.state ? `maple-still-asleep:${m.state.family?.id ?? 1}:${m.state.me.email}` : null);
+  if (!m.state || m.readOnly) return null;
+  if (ln?.ask?.kind === "running" && ln.ask.sleep.id === sleep.id) return <LeftRunningAsk entry={sleep} />;
+  const next = feedAfter(sleep, m.state.entries, now);
+  let still: Record<string, number> = {};
+  try {
+    still = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+  } catch {
+    still = {};
+  }
+  if (!next || still[String(sleep.id)] === next.id) return null;
+  const woke = async () => {
+    const done = await m.timerCall({ action: "stop", id: sleep.id, at: next.started_at, expect_updated_at: sleep.updated_at });
+    if (done) afterWake(sleep.id, new Date(next.started_at));
+  };
+  return <WokeAsk sleep={sleep} next={next} busy={m.timerBusy(sleep.id)} onWoke={() => void woke()} onStill={() => setRaw(JSON.stringify({ ...still, [sleep.id]: next.id }))} />;
+}
+
+/**
+ * Who's holding her awake, and her sleep in arms when she fell asleep there
+ * (its own timer card steps aside: one sleep, one card; Edit sleep opens
+ * it, and a feed logged after it began asks Woke at). The holder gets "I'm
+ * getting sleepy" (two safe choices; the strip's action is Put her down
+ * while she's asleep); once they've asked someone, the bassinet stays the
+ * big button with "Alex has her" under it, and ten minutes on with nobody
+ * taking over, the two safe choices again. The person asked gets "I've got
+ * her"; everyone else who can log, "Take over".
  */
 export function ShiftCard({ sh }: { sh: HoldingShift }) {
   const { state, memberName } = useMaple();
@@ -140,6 +200,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
   const v = useVoice();
   const now = useNow(30_000);
   const people = usePeople();
+  const sheets = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const me = state?.me.email ?? "";
   const st = shiftStatus(sh, now);
@@ -166,7 +227,10 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
       ? `${holderIsMe ? "You've" : `${holder} has`} held ${v.them} since ${formatTime(sh.started_at, tz)}. The planned handoff was ${formatTime(sh.handoff_at!, tz)}.`
       : `${holderIsMe ? "Holding" : `${holder} has held ${v.them}`} since ${formatTime(sh.started_at, tz)}${!st.due && sh.handoff_at && !ask.asked ? ` · handoff ${formatTime(sh.handoff_at, tz)} (in ${formatDuration(Math.max(0, st.minutesLeft ?? 0) * 60)})` : ""}${next && !ask.asked ? ` · then ${next}` : ""}`,
     ask.asked ? `${holderIsMe ? "You" : holder} asked ${ask.to === me ? "you" : asked} at ${formatTime(ask.at!, tz)}${ask.stale ? ` (${ask.minutes} min ago)` : ""}. Nothing has changed hands yet.` : null,
-    sleeping ? `Asleep since ${formatTime(sleeping.started_at, tz)}${(sleeping.data as { place?: SleepPlace }).place === "arms" ? ", in arms" : ""}` : null,
+    // Her sleep in arms is this card's (its timer card steps aside): when it began and how long, as that card's clock says.
+    sleeping
+      ? `Asleep${(sleeping.data as { place?: SleepPlace }).place === "arms" ? " in arms" : ""} since ${formatTime(sleeping.started_at, tz)} · ${downWords(Math.max(0, now.getTime() - Date.parse(sleeping.started_at)) / 60_000)}`
+      : null,
   ].filter((x): x is string => !!x);
 
   return (
@@ -185,6 +249,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
           </span>
         ))}
       </CardHead>
+      {sleeping && s.canWrite && <ArmsWokeAsk sleep={sleeping} />}
       {s.canWrite && (
         <div className="space-y-2">
           {holderIsMe ? (
@@ -213,8 +278,9 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
                   <Button variant="soft" onClick={() => s.openSheet({ kind: "holding", mode: "handoff", ...(partner ? { to: partner.email } : {}) })}>
                     Hand off
                   </Button>
+                  {/* Asleep in arms: laying her down is the try on that sleep (the strip offers it too, in thumb reach). */}
                   <Button variant="soft" onClick={() => void s.startTry()}>
-                    Into the bassinet
+                    {sleeping ? `Put ${v.them} down` : "Into the bassinet"}
                   </Button>
                 </div>
               </>
@@ -237,6 +303,12 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
             {!sleeping && (
               <Button variant="ghost" size="sm" disabled={s.busy} onClick={() => void s.asleepInArms()}>
                 Asleep in arms
+              </Button>
+            )}
+            {/* Her sleep's own times, as its timer card's Edit times opened them. */}
+            {sleeping && sleeping.id > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => sheets.open({ kind: sleeping.kind, entry: sleeping, preset: fixPreset("current") })}>
+                Edit sleep
               </Button>
             )}
             <Button variant="ghost" size="sm" onClick={() => void s.endShift(sh)}>

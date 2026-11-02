@@ -14,9 +14,8 @@ import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
-import { SleepNow, SleepPlanRow } from "./sleep/SleepCards";
-import { LastNightCard } from "./sleep/LastNight";
-import { useTrySleepId } from "./sleep/useSleep";
+import { SleepNow, SleepPlanRow, useFoldedSleepId } from "./sleep/SleepCards";
+import { LastNightCard, LeftRunningAsk } from "./sleep/LastNight";
 import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
@@ -33,8 +32,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const { state, summary, readOnly } = useMaple();
   const { open } = useSheets();
   const now = useNow(30_000);
-  // A bassinet try's card is its sleep's card too: that sleep's timer card steps aside while the try runs.
-  const onTry = useTrySleepId();
+  // One sleep, one card: a bassinet try's card, or a holding turn's (her sleep in arms), is that sleep's card too, so its timer card steps aside.
+  const folded = useFoldedSleepId();
   if (!state || !summary) return null;
 
   const born = !!state.baby.born_at;
@@ -72,9 +71,10 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
           </h2>
           <div className="space-y-3">
             <AnimatePresence initial={false}>
-              {summary.active.filter((e) => e.id !== onTry).map((e) => (
+              {summary.active.filter((e) => e.id !== folded).map((e) => (
                 // Keyed by kind: only one of each runs, and the optimistic copy hands over to the saved one without a remount.
-                <TimerCard key={e.kind} entry={e} />
+                // A sleep timer left running overnight asks "Woke at 6:30 AM?" on its own card (the Last night card's first question).
+                <TimerCard key={e.kind} entry={e} ask={e.kind === "sleep" ? <LeftRunningAsk entry={e} /> : undefined} />
               ))}
             </AnimatePresence>
             <SleepNow />
@@ -82,10 +82,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
           </div>
         </section>
       )}
+      {/* The morning after (sleep plan or goal): last night from the log, its unlogged stretches, and the adult's own check-in,
+          straight after Right now, so its question clears the dock. */}
+      <LastNightCard />
       {/* The sleep plan and goals, for every role that reads the log (view-only guests have no strip or More). */}
       <SleepPlanRow />
-      {/* The morning after (sleep plan or goal): last night from the log, its unlogged stretches, and the adult's own check-in. */}
-      <LastNightCard />
       <WhileYouSlept />
       {nothingYet && born && <FreshPage readOnly={readOnly} />}
 

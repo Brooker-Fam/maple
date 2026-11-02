@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { adminActsAs } from "@/lib/maple/insights";
 import { minutesText, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
@@ -74,7 +74,12 @@ function useSlow(on: boolean, ms: number): boolean {
   return on && slow;
 }
 
-export default function TimerCard({ entry }: { entry: Entry }) {
+/**
+ * `ask`: a question about this timer from elsewhere, right under its header,
+ * where a short phone still shows it above the dock (the sleep plan's
+ * "Woke at 6:30 AM?" for a sleep timer left running overnight).
+ */
+export default function TimerCard({ entry, ask }: { entry: Entry; ask?: ReactNode }) {
   const { state, memberLabel, isNight, readOnly, timerBusy, toasts } = useMaple();
   const w = useBabyWords();
   const { open, current: sheetOpen } = useSheets();
@@ -235,6 +240,8 @@ export default function TimerCard({ entry }: { entry: Entry }) {
           </div>
         )}
       </div>
+
+      {ask && <div className="mt-2 empty:hidden">{ask}</div>}
 
       {past.length > 0 && (
         <>

@@ -108,29 +108,45 @@ export function AnswerButtons({ question, onPick, selected, disabled, row }: { q
   );
 }
 
+/** Every useNightValue on this page hears a change to its key (Today's card and the dock's strip read the same answers). */
+const NIGHT_VALUE_EVENT = "maple-night-value";
+/** With storage blocked, what this page set, until it reloads. */
+const nightValues = new Map<string, string>();
+
 /**
  * A value kept for one night on this phone (in this browser's storage; with
  * storage blocked, until the page reloads), like Not now: undefined until
- * read, so a hidden card never flashes in first.
+ * read, so a hidden card never flashes in first. Every hook on the page with
+ * the same key sees a change at once.
  */
 export function useNightValue(key: string | null): [string | null | undefined, (value: string) => void] {
   const [value, setValue] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     if (!key) return;
-    try {
-      setValue(localStorage.getItem(key));
-    } catch {
-      setValue(null);
-    }
+    const read = () => {
+      try {
+        setValue(localStorage.getItem(key) ?? nightValues.get(key) ?? null);
+      } catch {
+        setValue(nightValues.get(key) ?? null);
+      }
+    };
+    read();
+    const on = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === key) read();
+    };
+    window.addEventListener(NIGHT_VALUE_EVENT, on);
+    return () => window.removeEventListener(NIGHT_VALUE_EVENT, on);
   }, [key]);
   const set = (next: string) => {
     setValue(next);
     if (!key) return;
+    nightValues.set(key, next);
     try {
       localStorage.setItem(key, next);
     } catch {
       // storage blocked: kept until this page reloads
     }
+    window.dispatchEvent(new CustomEvent(NIGHT_VALUE_EVENT, { detail: key }));
   };
   return [value, set];
 }
