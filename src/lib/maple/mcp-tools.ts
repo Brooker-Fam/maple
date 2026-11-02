@@ -1947,11 +1947,15 @@ function countedWhy(fed: NonNullable<Summary["lastFed"]>, vo: Voice): string | n
   return null;
 }
 
+/** Longer than a young baby usually goes between feeds, so a last feed this long ago may only be the last one logged. */
+const STALE_FEED_MIN = 6 * 60;
+
 /**
  * Her last feed as counted (feed.ts nursingRuns: Pauses and Dones under 10 minutes apart are one feed), from the
  * moment "last fed" counts from (lastFedAnchor): "Last feed: nursed at 3:10 AM today (2h 05m ago): L 12m, R 8m,
  * started on the left." After a cluster: "Maple cluster fed 6:02–8:40 PM today (4 feeds, 1h 52m nursing); her last
  * feed began at 8:00 PM, 45m ago." A long back-and-forth feed says it counts from 40 minutes before she finished.
+ * STALE_FEED_MIN or more ago, it's her last logged feed ("Last logged feed: …"): the gap may be in the log.
  */
 function lastFeedLine(s: Summary, ctx: Ctx): string {
   const vo = voiceOf(ctx);
@@ -1963,10 +1967,13 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   const fed = s.lastFed;
   if (!fed) return "No feeds logged yet.";
   const ago = s.minutesSinceFeed != null ? `${formatDuration(s.minutesSinceFeed * 60)} ago` : "";
+  // Long ago, it's the last one logged: the gap may be in the log, not in her feeds.
+  const logged = s.minutesSinceFeed != null && s.minutesSinceFeed >= STALE_FEED_MIN ? "logged " : "";
+  const label = logged ? "Last logged feed" : "Last feed";
   if (fed.kind === "bottle" || !fed.run) {
     const f = fed.entry;
     const milk = f.data.milk ? ` of ${f.data.milk === "breastmilk" ? "breast milk" : f.data.milk}` : "";
-    return `Last feed: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${milk} at ${whenText(f.started_at, ctx)} (${ago}).`;
+    return `${label}: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${milk} at ${whenText(f.started_at, ctx)} (${ago}).`;
   }
   const run = fed.run;
   // "Last fed" counts from 40 minutes before a long back-and-forth (or 3+ part) feed ended, or from when she went on a
@@ -1981,14 +1988,14 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   if (c) {
     const name = ctx.baby.nickname || vo.Name;
     const head = `${name} cluster fed ${spanText(c.start, c.end, ctx.tz)} ${dayWord(new Date(c.start), ctx)} (${plural(c.feeds, "feed")}, ${minutesShort(c.min.total)} nursing)`;
-    return `${head}; ${vo.their} last feed began at ${formatTime(run.start, ctx.tz)}${counted ? ` and ${counted}` : `, ${ago}`}.`;
+    return `${head}; ${vo.their} last ${logged}feed began at ${formatTime(run.start, ctx.tz)}${counted ? ` and ${counted}` : `, ${ago}`}.`;
   }
   const sides = sidesText(run.min);
   const started = run.firstSide ? `started on the ${sideWord(run.firstSide)}${run.backAndForth ? " and went back and forth" : ""}` : run.backAndForth ? "back and forth" : "";
   const how = [sides, started].filter(Boolean);
   const detail = how.length ? `: ${how.join(", ")}` : "";
-  if (counted) return `Last feed: nursed ${spanText(run.start, run.end, ctx.tz)} ${dayWord(new Date(run.start), ctx)}${detail}; ${counted}.`;
-  return `Last feed: nursed at ${whenText(new Date(run.start), ctx)} (${ago})${detail}.`;
+  if (counted) return `${label}: nursed ${spanText(run.start, run.end, ctx.tz)} ${dayWord(new Date(run.start), ctx)}${detail}; ${counted}.`;
+  return `${label}: nursed at ${whenText(new Date(run.start), ctx)} (${ago})${detail}.`;
 }
 
 /**
@@ -2038,14 +2045,30 @@ function lastSleepLine(s: Summary, ctx: Ctx): string | null {
   return `Last sleep: ${formatDuration((end - ts(e)) / 1000)}, ended ${formatDuration((ctx.now.getTime() - end) / 1000)} ago (${whenText(e.ended_at, ctx)}).`;
 }
 
-/** "Today so far: 6 feeds (4 in a cluster), 3 wet, 2 dirty, 4h 10m of sleep logged." Bottles and pumping only when there are some. */
+/**
+ * "Today so far: 6 feeds (4 in a cluster), 3 wet, 2 dirty, 4h 10m of sleep logged." Bottles and pumping only when
+ * there are some; a day with none of them logged says so ("no feeds, diapers or sleep logged"), never "0 feeds".
+ */
 function todayLine(s: Summary): string {
   const tb = s.today;
   const extra = [
     tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
     tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${tb.bottleMl ? `, ${formatVolumeBoth(tb.bottleMl)}` : ""}` : "",
   ].filter(Boolean);
-  return `Today so far: ${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged${tb.pumpSessions ? `, pumping ${pumpSummaryLabel(tb)}` : ""}.`;
+  const counts =
+    !tb.feeds && !tb.wet && !tb.dirty && tb.sleepSec < 60
+      ? "no feeds, diapers or sleep logged"
+      : `${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged`;
+  return `Today so far: ${counts}${tb.pumpSessions ? `, pumping ${pumpSummaryLabel(tb)}` : ""}.`;
+}
+
+/**
+ * "Last 24 hours: 9 feeds, 7 wet, 3 dirty." Counts are only what was logged, so a zero says so ("0 feeds, 6 wet, 2
+ * dirty logged"), and with none of them logged it's "no feeds or diapers logged", never "0 feeds".
+ */
+function last24Words(d: Summary["last24h"]): string {
+  if (!d.feeds && !d.wet && !d.dirty) return "no feeds or diapers logged";
+  return `${plural(d.feeds, "feed")}, ${d.wet} wet, ${d.dirty} dirty${!d.feeds || !d.wet || !d.dirty ? " logged" : ""}`;
 }
 
 /**
@@ -2284,7 +2307,7 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   if (s.age) {
     // The aim only with warnings on (targets is null otherwise).
     const aim = t ? ` (${ctx.baby.settings.birth_time_approx ? "Estimated " : ""}Day ${s.age.dayOfLife} aim: ${t.feeds[0]}–${t.feeds[1]} feeds, ${t.wet}+ wet${t.dirty != null ? `, ${t.dirty}+ dirty` : ""})` : "";
-    lines.push(`Last 24 hours: ${plural(s.last24h.feeds, "feed")}, ${s.last24h.wet} wet, ${s.last24h.dirty} dirty${aim}.`);
+    lines.push(`Last 24 hours: ${last24Words(s.last24h)}${aim}.`);
   }
   Object.assign(json, talliesJson(s));
 
