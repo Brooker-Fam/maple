@@ -37,6 +37,7 @@ import {
   tryWhenLabel,
 } from "../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../src/lib/maple/sleep/errors";
+import { handoffAroundRoster, handoffWhyWords, windowAt } from "../src/lib/maple/sleep/handoff";
 import {
   backToWorkGoal,
   backToWorkQuestions,
@@ -1699,6 +1700,49 @@ check("roster nights: a week with none over yet says when the first one is (toni
   ok(goalProgressLines(g, goalProgress(g, data(), tue, NY), words(WREN, tue)).some((l) => l.endsWith("This week: no check-ins yet; 1 night on the roster so far.")), "one over");
   eq(noCheckinWords({ planned: 0, nextNight: "2026-11-03" }, { ongoing: true, today: "2026-11-02", hasWindow: true }), "the first roster night is tomorrow night", "tomorrow");
   eq(noCheckinWords({ planned: 0, nextNight: null }, { ongoing: false, today: "2026-11-02", hasWindow: true }), "no roster nights that week", "a week that's over");
+});
+
+check("next handoff vs the roster: never inside the next holder's protected window (at its end, or none past 12 hours), only active goals, only their windows", () => {
+  // Coach round 2, n12: Theo sleeps 1:30–6:30 AM every night; Noor took over at 12:24 AM from a 4-hour turn, so the default is 4:24 AM.
+  const THEO = "theo@example.test";
+  const NOOR = "noor@example.test";
+  const every = [0, 1, 2, 3, 4, 5, 6];
+  const goal = (roster: { member: string; from: string; to: string }[], status: "active" | "paused" = "active") => ({ status, roster: roster.map((w, i) => ({ id: `w${i}`, nights: every, ...w })) });
+  const roster = [goal([{ member: NOOR, from: "21:30", to: "01:30" }, { member: THEO, from: "01:30", to: "06:30" }])];
+  const from = at(2026, 10, 15, 0, 24).getTime();
+  const def = at(2026, 10, 15, 4, 24).getTime();
+  const r = handoffAroundRoster({ at: def, from, nextHolder: THEO, goals: roster, tz: NY });
+  eq([iso(r.at!), r.why?.member, r.why?.planned_at, r.why?.default_at, r.why?.starts_at], [iso(at(2026, 10, 15, 6, 30)), THEO, iso(at(2026, 10, 15, 6, 30)), iso(def), iso(at(2026, 10, 15, 1, 30))], "at the end of Theo's window");
+  eq(handoffWhyWords(r.why!, "Theo", NY), "after Theo's protected sleep (1:30–6:30 AM)", "why, in a phone's words");
+  eq(windowAt(roster, THEO, def, NY)?.end, at(2026, 10, 15, 6, 30).getTime(), "the window it fell in");
+  // n8: Noor accepted at 1:30 AM, the default 5:30 AM: the same.
+  eq(iso(handoffAroundRoster({ at: at(2026, 10, 16, 5, 30).getTime(), from: at(2026, 10, 16, 1, 30).getTime(), nextHolder: THEO, goals: roster, tz: NY }).at!), iso(at(2026, 10, 16, 6, 30)), "n8 too");
+  // Outside the window, to someone else's window, a paused goal's, or nobody next: the default stands, with no why.
+  for (const [label, o] of [
+    ["outside it", { at: at(2026, 10, 15, 7, 0).getTime(), nextHolder: THEO, goals: roster }],
+    ["another adult's window", { at: def, nextHolder: NOOR, goals: roster }],
+    ["a paused goal", { at: def, nextHolder: THEO, goals: [goal([{ member: THEO, from: "01:30", to: "06:30" }], "paused")] }],
+    ["nobody next", { at: def, nextHolder: null, goals: roster }],
+  ] as const) {
+    const x = handoffAroundRoster({ from, tz: NY, ...o });
+    eq([x.at, x.why], [o.at, null], label);
+  }
+  // At the window's start it's inside (they'd be woken as their sleep begins); at its end it isn't.
+  eq(handoffAroundRoster({ at: at(2026, 10, 15, 1, 30).getTime(), from, nextHolder: THEO, goals: roster, tz: NY }).why?.member, THEO, "at its start");
+  eq(handoffAroundRoster({ at: at(2026, 10, 15, 6, 30).getTime(), from, nextHolder: THEO, goals: roster, tz: NY }).why, null, "at its end");
+  // Windows back to back count as one: the end of the last.
+  const two = [goal([{ member: THEO, from: "01:30", to: "04:00" }]), goal([{ member: THEO, from: "04:00", to: "07:15" }])];
+  eq(iso(handoffAroundRoster({ at: def, from, nextHolder: THEO, goals: two, tz: NY }).at!), iso(at(2026, 10, 15, 7, 15)), "back to back");
+  // An evening window that crosses midnight, seen from the evening (as a try day: the night it began).
+  const late = [goal([{ member: THEO, from: "22:00", to: "05:00" }])];
+  eq(iso(handoffAroundRoster({ at: at(2026, 10, 14, 23, 30).getTime(), from: at(2026, 10, 14, 21, 30).getTime(), nextHolder: THEO, goals: late, tz: NY }).at!), iso(at(2026, 10, 15, 5, 0)), "across midnight");
+  // A window's end more than 12 hours after the handoff: none planned, and why.
+  const long = [goal([{ member: THEO, from: "13:00", to: "01:00" }])];
+  const none = handoffAroundRoster({ at: at(2026, 10, 14, 13, 30).getTime(), from: at(2026, 10, 14, 12, 50).getTime(), nextHolder: THEO, goals: long, tz: NY });
+  eq([none.at, none.why?.planned_at, handoffWhyWords(none.why!, "your", NY)], [null, null, "none planned: your protected sleep (1:00 PM–1:00 AM) runs past 12 hours from now"], "none past 12 hours");
+  // Across the clocks going back (Sat night Oct 31 into Sun Nov 1, New York): the window ends at 6:30 AM on the clock.
+  const dst = handoffAroundRoster({ at: at(2026, 11, 1, 3, 0).getTime(), from: at(2026, 11, 1, 0, 30).getTime(), nextHolder: THEO, goals: roster, tz: NY });
+  eq(iso(dst.at!), iso(at(2026, 11, 1, 6, 30)), "6:30 AM on the clock, the night the clocks go back");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);

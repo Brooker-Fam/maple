@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
 import { numberTries, progressLines, sleepGuidance, snoozeUntil, tryWhenLabel, type SleepProgress } from "@/lib/maple/sleep/engine";
 import { PLAN_GOAL_MAX, PLAN_STAGES, TRIES_PER_DAY_MAX, TRY_ANCHORS, type PlanPatch, type PlanStage, type SleepPlan, type TrySlot } from "@/lib/maple/sleep/types";
-import { defaultGoal, downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, TIME_OF_DAY } from "@/lib/maple/sleep/words";
+import { defaultGoal, downWords, firstTryWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, TIME_OF_DAY } from "@/lib/maple/sleep/words";
 import { formatDuration, formatTime } from "@/lib/maple/time";
 import { SLEEP_PLACES, type SleepPlace } from "@/lib/maple/types";
 import { useCareNav } from "../care/CareNav";
@@ -97,11 +97,19 @@ function PlanPart() {
         {s.today && (
           <p className={cx(tone.muted, "pt-1 text-[14px]")}>
             {s.today.done} of {s.today.planned} {s.today.label}
-            {s.today.next ? ` · next: ${slotLabel(s.today.next).replace(/^The /, "the ")}${s.today.fallback ? " (the backup)" : ""}` : ""}
+            {s.today.next ? ` · next: ${slotLabel(s.today.next).replace(/^The /, "the ")}${s.today.fallback ? " (the backup, since no night try was logged)" : ""}` : ""}
           </p>
         )}
         <p className={cx(tone.faint, "text-[13px]")}>Goal: {plan.goal ?? defaultGoal(v)}</p>
       </div>
+
+      {/* Set up, no try yet: what to do at the first one (tonight, or the morning nap when it's the backup). */}
+      {s.canWrite && !s.data.tries.length && (
+        <div className={cx(tone.card, "space-y-1 px-4 py-3")} data-first-try>
+          <p className={cx(tone.heading, "text-[15px]")}>{s.today?.label === "tonight" ? "What to do tonight" : "What to do next"}</p>
+          <p className={cx(tone.body, "text-[15px] leading-relaxed")}>{firstTryWords(v, s.today?.next ?? null)}</p>
+        </div>
+      )}
 
       {s.suggestion && !s.suggestion.snoozed && s.canWrite && <Suggestion plan={plan} />}
 

@@ -29,7 +29,7 @@ import { ozToMl } from "@/lib/maple/units";
 import type { Baby, Entry, FeedData, Member } from "@/lib/maple/types";
 import { runningTry } from "@/lib/maple/sleep/store";
 import { captureServerException } from "@/lib/posthog-server";
-import { asleepInArms, badMinutes, checkin, clock, entryByClient, handoff, minutesAgo, outcome, putDown, sleepStatusLine, stopFeedForSleep, undo, type QuickCtx } from "./sleep";
+import { asleepInArms, badMinutes, checkin, clock, entryByClient, handoff, minutesAgo, outcome, putDown, sleepStatusLine, sleptWords, stopFeedForSleep, undo, type QuickCtx } from "./sleep";
 
 export const dynamic = "force-dynamic";
 
@@ -61,8 +61,9 @@ export const dynamic = "force-dynamic";
  * The sleep plan (./sleep.ts) rides it too: put_down { minutes_ago? } lays
  * a bassinet try ("Try 2 tonight, down at 9:42."), outcome { outcome:
  * stayed_asleep | woke_calm | woke_crying | picked_up } finishes the running
- * one, asleep_in_arms starts a sleep in arms, handoff hands the open holding
- * turn over, checkin { answer: yes | partly | no } is the speaker's own
+ * one, asleep_in_arms starts a sleep in arms, handoff from the person
+ * holding her only asks the partner to take over (anyone else saying it has
+ * her now), checkin { answer: yes | partly | no } is the speaker's own
  * check-in for last night, and undo takes back their newest Siri action
  * with the app's own Undo. sleep and wake take minutes_ago too (up to 4
  * hours). "Maple status" adds one sleep line while a try or a turn runs, or
@@ -234,7 +235,8 @@ export async function POST(request: NextRequest) {
           return json({ ok: false, speak: `That's before the sleep timer started at ${clock(target.started_at, tz)}, so nothing was changed.` }, 400);
         }
         entry = await stopTimer(fam, target.id, when.given ? when.at : undefined, me.email);
-        speak = `Stopped. ${describeEntry(entry, { now }).text}.`;
+        // A sleep is said as a sentence ("She slept 25 minutes, in arms."), never the card's "Slept · 0s · in arms".
+        speak = entry.kind === "sleep" ? `Stopped. ${sleptWords(entry, vo)}` : `Stopped. ${describeEntry(entry, { now }).text}.`;
         // A bassinet try on that sleep stays open until someone says how it went (the app opens How did it go? here).
         if (entry.kind === "sleep" && (await runningTry(fam, baby.id))?.sleep_entry_id === entry.id) speak += " The bassinet try is still open: say how it went.";
         break;

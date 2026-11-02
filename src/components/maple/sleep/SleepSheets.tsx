@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { sleepyLine, transferSteps } from "@/lib/maple/guidelines/sleep";
 import { nextSideText } from "@/lib/maple/feed";
 import { askState, nextHandoff } from "@/lib/maple/sleep/engine";
+import { handoffAroundRoster, handoffWhyWords, windowAt, windowRange, type HandoffWhy } from "@/lib/maple/sleep/handoff";
 import { TRY_NOTE_MAX, TRY_OUTCOMES, TRY_TAGS, type BassinetTry, type HoldingShift, type TryOutcome, type TryTag } from "@/lib/maple/sleep/types";
 import { downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime, formatTimeNear } from "@/lib/maple/time";
@@ -289,11 +290,19 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
     : me;
   const [who, setWho] = useState(firstWho);
   const defaultPlan = handing ? Math.round(nextHandoff(sh!, 0) / MIN) : 120;
-  const [plan, setPlan] = useState<number | null>((PLAN_MINUTES as readonly number[]).includes(defaultPlan) ? defaultPlan : 120);
   const [next, setNext] = useState<string | null>(handing ? sh!.holder : (partnerOf(null, people, me)?.email ?? null));
+  // The handoff goes to whoever's next: never planned inside their protected window on the roster (handoff.ts), as the server plans it.
+  const nextFor = handing ? sh!.holder : next;
+  const t0 = now().getTime();
+  const around = handoffAroundRoster({ at: t0 + defaultPlan * MIN, from: t0, nextHolder: nextFor, goals: s.goals, tz });
+  const windowEnd = around.why && around.at != null ? Math.round((around.at - t0) / MIN) : null;
+  const [plan, setPlan] = useState<number | null>(() => (around.why ? windowEnd : (PLAN_MINUTES as readonly number[]).includes(defaultPlan) ? defaultPlan : 120));
   const sleeping = (state?.entries ?? []).find((e) => e.kind === "sleep" && e.active) ?? null;
   const [asleep, setAsleep] = useState(false);
   const at = new Date(now().getTime() + (plan ?? 0) * MIN);
+  // A time picked inside the next person's protected window is theirs to pick; the sheet says so.
+  const inWindow = plan != null && nextFor ? windowAt(s.goals, nextFor, at.getTime(), tz) : null;
+  const nextName = nextFor ? (nextFor === me ? "your" : `${memberName(nextFor)}'s`) : "";
 
   const go = async () => {
     const handoffAt = plan ? at : null;
@@ -332,6 +341,18 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
             ))}
         </ChipGroup>
         <ChipGroup label={handing ? "Next planned handoff" : "Planned handoff"}>
+          {/* The default would wake the next person inside their protected sleep: its end comes first. */}
+          {windowEnd != null && !(PLAN_MINUTES as readonly number[]).includes(windowEnd) && (
+            <Chip selected={plan === windowEnd} onClick={() => setPlan(windowEnd)}>
+              {`${formatTime(t0 + windowEnd * MIN, tz)} · after ${nextName} protected sleep`}
+            </Chip>
+          )}
+          {/* A window's end picked before who's next changed stays shown while it's the choice. */}
+          {plan != null && plan !== windowEnd && !(PLAN_MINUTES as readonly number[]).includes(plan) && (
+            <Chip selected onClick={() => setPlan(plan)}>
+              {formatTime(t0 + plan * MIN, tz)}
+            </Chip>
+          )}
           {PLAN_MINUTES.map((m) => (
             <Chip key={m} selected={plan === m} onClick={() => setPlan(m)}>
               {`In ${planWords(m)} · ${formatTime(now().getTime() + m * MIN, tz)}`}
@@ -341,6 +362,11 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
             No plan
           </Chip>
         </ChipGroup>
+        {inWindow && (
+          <p role="note" data-handoff-window className={cx(tone.muted, "-mt-3 text-[13px] leading-snug")}>
+            {formatTime(at, tz)} is inside {nextName} protected sleep ({windowRange({ starts_at: new Date(inWindow.start).toISOString(), ends_at: new Date(inWindow.end).toISOString() }, tz)}) on the roster.
+          </p>
+        )}
         {!handing && (
           <ChipGroup label="Who's next" optional>
             {people
@@ -385,13 +411,13 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
  * the last feed and the next side, the last diaper, and what's running, with
  * the next planned handoff. Undo puts the turn back with the person who had her.
  */
-export function CatchUpSheet({ started, ended, open = true, onClose }: { started: HoldingShift; ended: HoldingShift | null; open?: boolean; onClose: () => void }) {
+export function CatchUpSheet({ started, ended, why = null, open = true, onClose }: { started: HoldingShift; ended: HoldingShift | null; why?: HandoffWhy | null; open?: boolean; onClose: () => void }) {
   const { state, summary, memberName } = useMaple();
   const s = useSleep();
   const v = useVoice();
   const now = useNow(30_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const lines = catchUpLines({ summary, entries: state?.entries ?? [], now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder });
+  const lines = catchUpLines({ summary, entries: state?.entries ?? [], now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why });
   const undo = async () => {
     if (ended && (await s.undoTakeOver(started, ended))) onClose();
   };
@@ -443,6 +469,8 @@ export function catchUpLines(input: {
   memberName: (email: string | null | undefined) => string;
   next: string | null;
   nextHolder: string | null;
+  /** The next handoff moved off the next holder's protected window (sleep/handoff.ts). */
+  why?: HandoffWhy | null;
 }): CatchUpLine[] {
   const { summary, now, tz, v } = input;
   const out: CatchUpLine[] = [];
@@ -467,10 +495,11 @@ export function catchUpLines(input: {
     ...others,
   ];
   out.push({ label: "Running", text: parts.length ? parts.join(" · ").replace(/^./, (c) => c.toUpperCase()) : nursing ? "The nursing timer" : `Nothing else; ${v.they}${v.verb("'s")} awake by the log` });
+  const why = input.why ? handoffWhyWords(input.why, input.why.member === input.me ? "your" : input.memberName(input.why.member), tz) : null;
   if (input.next) {
     const who = input.nextHolder ? (input.nextHolder === input.me ? "you" : input.memberName(input.nextHolder)) : null;
-    out.push({ label: "Handoff", text: `Next planned for ${formatTime(input.next, tz)}${who ? `, to ${who}` : ""}` });
-  }
+    out.push({ label: "Handoff", text: `Next planned for ${formatTime(input.next, tz)}${who ? `, to ${who}` : ""}${why ? `, ${why}` : ""}` });
+  } else if (why) out.push({ label: "Handoff", text: `${why.charAt(0).toUpperCase()}${why.slice(1)}` });
   return out;
 }
 
@@ -590,10 +619,15 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
     .filter((e) => e.kind === "sleep" && !e.active && !!e.ended_at && !onTry.has(e.id) && t0 - Date.parse(e.started_at) <= 18 * HOUR && Date.parse(e.ended_at) - Date.parse(e.started_at) >= 5 * MIN)
     .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
     .slice(0, 4);
+  // A chip's times fold the two time fields into one line, so How it went is in view (Change times opens them again).
+  const [filled, setFilled] = useState(false);
   const fill = (e: Entry) => {
     setStart(new Date(e.started_at));
     setEnd(new Date(e.ended_at!));
     setTwin(null);
+    setBadStart(false);
+    setBadEnd(false);
+    setFilled(true);
   };
   const bad = badStart || badEnd || end.getTime() <= start.getTime() || end.getTime() > t0 + MIN;
   const save = async (allowDuplicate = false) => {
@@ -649,8 +683,21 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
             <p className={cx(tone.faint, "mt-1.5 text-[13px]")}>One tap fills both times from a sleep already logged.</p>
           </div>
         )}
-        <RecordedTimeField label="Laid down" value={start} onChange={moveStart} tz={tz} max={end} onInvalidChange={setBadStart} lastNight />
-        <RecordedTimeField label="Ended" value={end} onChange={moveEnd} tz={tz} min={start} onInvalidChange={setBadEnd} lastNight />
+        {filled ? (
+          <div className={cx(tone.inset, "flex items-center gap-2 py-1 pr-1 pl-3")} data-try-times>
+            <p className="min-w-0 flex-1 text-[15px] leading-snug text-mp-ink">
+              Laid down {formatTimeNear(start, end, tz)}, ended {formatTime(end, tz)}
+            </p>
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => setFilled(false)}>
+              Change times
+            </Button>
+          </div>
+        ) : (
+          <>
+            <RecordedTimeField label="Laid down" value={start} onChange={moveStart} tz={tz} max={end} onInvalidChange={setBadStart} lastNight />
+            <RecordedTimeField label="Ended" value={end} onChange={moveEnd} tz={tz} min={start} onInvalidChange={setBadEnd} lastNight />
+          </>
+        )}
         <ChipGroup label="How it went">
           {TRY_OUTCOMES.map((o) => (
             <Chip key={o} selected={outcome === o} onClick={() => (setOutcome(o), setTwin(null))}>
@@ -738,6 +785,6 @@ export function SleepSheetHost({ api }: { api: SleepApi }) {
     case "log":
       return <LogTrySheet key={key("l")} open={open} onClose={closeSheet} />;
     case "catchup":
-      return <CatchUpSheet key={key(`cu-${shown.started.id}`)} started={shown.started} ended={shown.ended} open={open} onClose={closeSheet} />;
+      return <CatchUpSheet key={key(`cu-${shown.started.id}`)} started={shown.started} ended={shown.ended} why={shown.why ?? null} open={open} onClose={closeSheet} />;
   }
 }

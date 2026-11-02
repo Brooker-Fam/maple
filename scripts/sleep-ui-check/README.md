@@ -46,6 +46,28 @@ logged), three stretches with nothing logged (only "She slept through" saves),
 the safe-sleep line for Somewhere else, Tell Maple, and the card's essentials
 above the dock at 320 × 568.
 
+Round 2 (the re-test's fixes): the plan says what to do tonight after setup
+(and in the morning why the morning nap is the backup); How did it go? is the
+strip's strong button while she's down, and Put down goes quiet after "1 of 1";
+the crying line is whole at 320px. Asleep in arms (`?holding`) is one card, the
+turn's, with Edit sleep, and the holder's strip says Put her down (it fits at
+320px) while I'm getting sleepy moves to the card; `?holding&armsfeed` adds a
+feed after it began, so that card asks Woke at (Still asleep holds on the
+phone). The morning: Last night sits straight after Right now, its check-in
+clearing the dock at 390 × 844 as Today opens; the strip carries its first
+question from 5 AM (Answer brings the card into view at 320 × 568); a timer
+left running asks Woke at on its own card and on the strip; only the two
+longest stretches are asked, named by whose window they were in, Not sure
+first, with Skip the rest; answers show their receipt and Undo in the card,
+never a toast over the next question; the place question is prefilled from the
+log when every sleep has a place; the night strip wears the night look's
+amber; and Log an earlier try folds its times after a chip so How it went is
+in view. The next handoff and the roster (`?holding&roster`, and with
+`?phones`): the start and Hand off sheets preselect the end of the next
+holder's protected window (a time inside it says so), and the holder's Alex has
+her and Alex's I've got her plan it there, the toast and the catch-up saying
+why.
+
 Two phones (`?phones`): Sam's phone and Alex's side by side in frames that share
 one stand-in route and one clock (each polls for the other's writes): Sam's
 Wake Alex asks, Alex's phone says "Sam asked you to take over" with I've got

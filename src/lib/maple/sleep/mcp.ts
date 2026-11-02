@@ -125,6 +125,7 @@ import {
   type TryOutcome,
 } from "./types";
 import { dateWords, defaultGoal, GOAL_STATUS_LABEL, HANDOFF_LABEL, OUTCOME_LABEL, PLACE_LABEL, PROTECTED_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, targetWords } from "./words";
+import { windowRange, type HandoffWhy } from "./handoff";
 
 /**
  * The sleep plan as MCP tools: read the plan and progress, change the plan,
@@ -285,6 +286,30 @@ function shiftLine(s: HoldingShift, ctx: Ctx): string {
   const next = s.next_holder ? ` to ${who(s.next_holder, ctx)}` : "";
   const ask = askLine(s, ctx);
   return `Holding: ${who(s.holder, ctx)} is holding ${vo.name} awake since ${formatTime(s.started_at, ctx.tz)} (${shiftRef(s.id)})${plan}${s.handoff_at ? next : ""}.${ask ? ` ${ask}` : ""}`;
+}
+
+/**
+ * After a handoff: when the next one is planned, and why it isn't the
+ * default when that would land in the next holder's protected window on
+ * the roster ("6:30 AM, the end of Theo's protected sleep (1:30–6:30 AM on
+ * the roster), not 4:24 AM, so Theo isn't woken inside it").
+ */
+function nextHandoffWords(w: { shift: HoldingShift; handoffWhy?: HandoffWhy | null }, ctx: Ctx): string {
+  const why = w.handoffWhy;
+  if (!why) return w.shift.handoff_at ? `; the next handoff is planned for ${formatTime(w.shift.handoff_at, ctx.tz)}` : "";
+  const name = who(why.member, ctx);
+  const range = `${windowRange(why, ctx.tz)} on the roster`;
+  return why.planned_at
+    ? `; the next handoff is planned for ${formatTime(why.planned_at, ctx.tz)}, the end of ${name}'s protected sleep (${range}), not ${formatTime(why.default_at, ctx.tz)}, so ${name} isn't woken inside it`
+    : `; no next handoff is planned, since ${formatTime(why.default_at, ctx.tz)} is inside ${name}'s protected sleep (${range}), which ends over 12 hours from now`;
+}
+
+/** A sleep in arms running through a handoff: said, so whoever has her now stops it if she's awake. */
+async function armsRunningLine(ctx: Ctx): Promise<string | null> {
+  const sleep = (await activeTimers(ctx.fam, ctx.baby.id)).find((e) => e.kind === "sleep");
+  if (!sleep || (sleep.data as { place?: string }).place !== "arms") return null;
+  const v = voiceOf(ctx);
+  return `${v.Name}'s sleep in arms has been running since ${formatTime(sleep.started_at, ctx.tz)} (#${sleep.id}); if ${v.they}${v.verb("'s")} awake, stop it (stop_timer).`;
 }
 
 function linkLine(w: TryWrite, ctx: Ctx): string | null {
@@ -1144,26 +1169,31 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       if (a.action === "accept") {
         if (!open) throw new ToolError(`Nobody is recorded holding ${v.name} right now. To start holding ${v.them}, use action "start".`);
         const handoff = handoffArg(a, ctx, ctx.now, assumed);
-        const w = await acceptHandoff(ctx.fam, open.id, { by: ctx.who.id, source: ctx.who.via, device: ctx.device, ...(handoff !== undefined ? { handoffAt: handoff } : {}) });
+        const w = await acceptHandoff(ctx.fam, open.id, { by: ctx.who.id, source: ctx.who.via, device: ctx.device, tz: ctx.tz, ...(handoff !== undefined ? { handoffAt: handoff } : {}) });
         holdingChanged({ familyId: ctx.fam.familyId });
+        const arms = await armsRunningLine(ctx);
         return ok(
           [
-            `${who(w.shift.holder, ctx)} has ${v.name} now (${shiftRef(w.shift.id)}, since ${formatTime(w.shift.started_at, ctx.tz)}), taking over from ${who(open.holder, ctx)}${w.shift.handoff_at ? `; the next handoff is planned for ${formatTime(w.shift.handoff_at, ctx.tz)}` : ""}.`,
+            `${who(w.shift.holder, ctx)} has ${v.name} now (${shiftRef(w.shift.id)}, since ${formatTime(w.shift.started_at, ctx.tz)}), taking over from ${who(open.holder, ctx)}${nextHandoffWords(w, ctx)}.`,
+            ...(arms ? [arms] : []),
             "For a catch-up (the last feed and next side, the last diaper, anything running), call maple_status.",
             ...noteLines(assumed),
           ].join("\n"),
-          { handed_off: true, shift: shiftJson(w.shift, ctx), ended: w.ended ? shiftJson(w.ended, ctx) : null, undo: "undo_last" }
+          { handed_off: true, shift: shiftJson(w.shift, ctx), ended: w.ended ? shiftJson(w.ended, ctx) : null, ...(w.handoffWhy ? { next_handoff_moved: w.handoffWhy } : {}), undo: "undo_last" }
         );
       }
       const handoff = handoffArg(a, ctx, when, assumed);
       if (a.action === "hand_off" && open) {
         if (!a.to) throw new ToolError("Say who takes over (to).");
-        const w = await handOff(ctx.fam, open.id, { to: personArg(a.to, ctx, "to")!, at: when, ...(handoff !== undefined ? { handoffAt: handoff } : {}), by: ctx.who.id, source: ctx.who.via, device: ctx.device });
+        const w = await handOff(ctx.fam, open.id, { to: personArg(a.to, ctx, "to")!, at: when, ...(handoff !== undefined ? { handoffAt: handoff } : {}), by: ctx.who.id, source: ctx.who.via, device: ctx.device, tz: ctx.tz });
         holdingChanged({ familyId: ctx.fam.familyId });
+        const arms = await armsRunningLine(ctx);
+        const next = nextHandoffWords(w, ctx).replace(/^; the next handoff is planned for/, ", with the next handoff planned for").replace(/^; no next/, ", with no next");
         const lines = [
-          `Handed off at ${whenText(w.shift.started_at, ctx)}: ${who(w.shift.holder, ctx)} is holding ${v.name} now${w.shift.handoff_at ? `, with the next handoff planned for ${formatTime(w.shift.handoff_at, ctx.tz)}` : ""}. ${who(open.holder, ctx)} held ${v.them} from ${formatTime(open.started_at, ctx.tz)} (${shiftRef(open.id)}).`,
+          `Handed off at ${whenText(w.shift.started_at, ctx)}: ${who(w.shift.holder, ctx)} is holding ${v.name} now${next}. ${who(open.holder, ctx)} held ${v.them} from ${formatTime(open.started_at, ctx.tz)} (${shiftRef(open.id)}).`,
+          ...(arms ? [arms] : []),
         ];
-        return ok([...lines, ...noteLines(assumed)].join("\n"), { handed_off: true, shift: shiftJson(w.shift, ctx), ended: w.ended ? shiftJson(w.ended, ctx) : null });
+        return ok([...lines, ...noteLines(assumed)].join("\n"), { handed_off: true, shift: shiftJson(w.shift, ctx), ended: w.ended ? shiftJson(w.ended, ctx) : null, ...(w.handoffWhy ? { next_handoff_moved: w.handoffWhy } : {}) });
       }
       // A start, or a hand-off with nobody recorded holding her: the new holder's shift starts.
       const holder = a.action === "hand_off" ? personArg(a.to, ctx, "to") : personArg(a.holder, ctx, "holder") ?? ctx.who.id;

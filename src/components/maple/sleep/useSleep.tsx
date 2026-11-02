@@ -5,6 +5,7 @@ import { tick } from "@/components/atlas/haptics";
 import { ApiError } from "@/lib/maple/client-request";
 import { numberTries, planToday, sleepAge, sleepSignals, stageSuggestion, tryDayNowLabel, tryWhenLabel, type PlanToday, type StageSuggestion } from "@/lib/maple/sleep/engine";
 import { nightWords, seesCheckins } from "@/lib/maple/sleep/goals";
+import { handoffWhyWords, type HandoffWhy } from "@/lib/maple/sleep/handoff";
 import type { BassinetTry, CheckinExtras, GoalInput, GoalStep, HoldingShift, PlanPatch, ProtectedAnswer, SleepCheckin, SleepGoal, SleepPlan, SleepState, TryOutcome, TryTag } from "@/lib/maple/sleep/types";
 import { cryingLine, downWords, OUTCOME_LABEL, PROTECTED_LABEL } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatTime, formatTimeNear } from "@/lib/maple/time";
@@ -41,7 +42,7 @@ export type SleepSheet =
   /** "How did last night go?": the signed-in adult's own check-in (last night unless `night`); `back` returns to Goals. */
   | { kind: "checkin"; night?: string; back?: "goals" }
   /** "I've got her": a short catch-up for the person who just took over, with Undo (the turn they took and the one handed over). */
-  | { kind: "catchup"; started: HoldingShift; ended: HoldingShift | null };
+  | { kind: "catchup"; started: HoldingShift; ended: HoldingShift | null; why?: HandoffWhy | null };
 
 type Answer = {
   result?: Record<string, unknown>;
@@ -69,6 +70,8 @@ type ShiftResult = {
   sleep?: Entry | null;
   sleepBefore?: Entry | null;
   madeSleep?: boolean;
+  /** A handoff's next one moved off the next holder's protected window (sleep/handoff.ts). */
+  handoffWhy?: HandoffWhy | null;
 };
 type GoalResult = { goal: SleepGoal; before: SleepGoal | null; status: "created" | "deduped" | "updated" | "unchanged" };
 type CheckinResult = { checkin: SleepCheckin; before: SleepCheckin | null; status: "created" | "updated" | "unchanged" | "deduped" };
@@ -159,7 +162,16 @@ export type SleepApi = {
    * Undo puts back what it had.
    */
   saveCheckinExtras: (night: string, extras: CheckinExtras, said: string) => Promise<SleepCheckin | null>;
+
+  // ── the Last night card's own answers: no toast (at 320px it would sit on the next question); the card shows the receipt ──
+  /** saveCheckin for the card: the words to show and an Undo (null when nothing changed). */
+  answerCheckin: (answer: ProtectedAnswer, night: string) => Promise<CardReceipt | null>;
+  /** saveCheckinExtras for the card. */
+  answerExtras: (night: string, extras: CheckinExtras, said: string) => Promise<CardReceipt | null>;
 };
+
+/** What the Last night card shows after an answer it saved: the words, and its Undo (true once undone). */
+export type CardReceipt = { said: string; undo: (() => Promise<boolean>) | null };
 
 const Ctx = createContext<SleepApi | null>(null);
 
@@ -439,10 +451,10 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
       const ended = w.ended ?? null;
       // Taken over by this phone's person: the catch-up, with its own Undo.
       if (opts.to === me) {
-        setSheet({ kind: "catchup", started: w.shift, ended });
+        setSheet({ kind: "catchup", started: w.shift, ended, why: w.handoffWhy ?? null });
         return w.shift;
       }
-      toast(`${m.memberName(opts.to)} has ${v.them} now${w.shift.handoff_at ? ` · next handoff ${formatTime(w.shift.handoff_at, tz)}` : ""}`, {
+      toast(`${m.memberName(opts.to)} has ${v.them} now${nextHandoffToast(w, me, m.memberName, tz)}`, {
         tone: "ok",
         ...(ended
           ? { undo: () => void post({ action: "shift.undo_handoff", started_id: w.shift.id, started_updated_at: w.shift.updated_at, ended_id: ended.id, ended_updated_at: ended.updated_at }) }
@@ -503,7 +515,7 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
       const r = await post({ action: "shift.accept", id: sh.id });
       const w = r?.result as ShiftResult | undefined;
       if (!w) return null;
-      setSheet({ kind: "catchup", started: w.shift, ended: w.ended ?? null });
+      setSheet({ kind: "catchup", started: w.shift, ended: w.ended ?? null, why: w.handoffWhy ?? null });
       return w.shift;
     },
     [post]
@@ -684,6 +696,7 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
   );
 
   const saveCheckinExtras = useSaveCheckinExtras({ checkins: adult ? (data.checkins ?? []) : null, me, post, toast });
+  const { answerCheckin, answerExtras } = useCardAnswers({ checkins: adult ? (data.checkins ?? []) : null, me, post, now, tz });
 
   const value = useMemo<SleepApi>(
     () => ({
@@ -727,10 +740,14 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
       saveCheckin,
       deleteCheckin,
       saveCheckinExtras,
+      answerCheckin,
+      answerExtras,
     }),
     [
       acceptHandoff,
       adult,
+      answerCheckin,
+      answerExtras,
       askHandoff,
       asleepInArms,
       busy,
@@ -807,6 +824,67 @@ function useSaveCheckinExtras(o: {
     },
     [checkins, me, post, toast]
   );
+}
+
+/**
+ * The Last night card's answers, saved as Today's card always has (the
+ * adult's own check-in, then the night's other answers on it), with no
+ * toast: at 320 × 568 a toast sits on the next question's chips. The card
+ * shows the receipt and its Undo, which puts back what was there (deletes a
+ * new check-in, or puts back the answer or extras it replaced).
+ */
+function useCardAnswers(o: {
+  checkins: SleepCheckin[] | null;
+  me: string;
+  post: (body: Record<string, unknown>, opts?: { quiet?: boolean }) => Promise<Answer | null>;
+  now: () => Date;
+  tz: string;
+}) {
+  const { checkins, me, post, now, tz } = o;
+  const answerCheckin = useCallback(
+    async (answer: ProtectedAnswer, night: string): Promise<CardReceipt | null> => {
+      tick();
+      const r = await post({ action: "checkin.save", protected: answer, night, client_id: `checkin-${crypto.randomUUID()}` });
+      const w = r?.result as CheckinResult | undefined;
+      if (!w) return null;
+      const c = w.checkin;
+      const before = w.before;
+      const undo =
+        w.status === "created"
+          ? async () => !!(await post({ action: "checkin.delete", id: c.id }))
+          : w.status === "updated" && before
+            ? async () => !!(await post({ action: "checkin.save", night: before.night, protected: before.protected, note: before.note, client_id: `checkin-${crypto.randomUUID()}` }))
+            : null;
+      // The card is about last night already; any other night is named.
+      const when = nightWords(c.night, now(), tz);
+      return { said: `Checked in${when === "last night" ? "" : ` for ${when}`}: ${PROTECTED_LABEL[c.protected].toLowerCase()}`, undo };
+    },
+    [now, post, tz]
+  );
+  const answerExtras = useCallback(
+    async (night: string, extras: CheckinExtras, said: string): Promise<CardReceipt | null> => {
+      const mine = checkins?.find((c) => c.member === me && c.night === night) ?? null;
+      if (!mine) return null;
+      tick();
+      const r = await post({ action: "checkin.save", night, protected: mine.protected, client_id: `checkin-${crypto.randomUUID()}`, ...extras });
+      if (!(r?.result as CheckinResult | undefined)) return null;
+      const back = Object.fromEntries(EXTRA_KEYS.filter((k) => k in extras).map((k) => [k, mine[k] ?? null]));
+      return { said, undo: async () => !!(await post({ action: "checkin.save", night, protected: mine.protected, client_id: `checkin-${crypto.randomUUID()}`, ...back })) };
+    },
+    [checkins, me, post]
+  );
+  return { answerCheckin, answerExtras };
+}
+
+/**
+ * A handoff toast's tail: " · next handoff 4:10 AM", or, moved off the
+ * next holder's protected window, " · next handoff 6:30 AM, after Sam's
+ * protected sleep (1:30–6:30 AM)" (or "none planned: …").
+ */
+function nextHandoffToast(w: Pick<ShiftResult, "shift" | "handoffWhy">, me: string, name: (email: string) => string, tz: string): string {
+  const why = w.handoffWhy;
+  if (why) return ` · next handoff ${why.planned_at ? `${formatTime(why.planned_at, tz)}, ` : ""}${handoffWhyWords(why, why.member === me ? "your" : name(why.member), tz)}`;
+  return w.shift.handoff_at ? ` · next handoff ${formatTime(w.shift.handoff_at, tz)}` : "";
 }
 
 /** Today against the plan, in a phone's words: the try day runs noon to noon, so at 7:30 AM it's "since last night", not "tonight". */

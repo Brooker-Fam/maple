@@ -20,7 +20,7 @@ import { lastNightKey } from "../../src/lib/maple/sleep/goals";
 import { getShift, getTry, listTries, openShift, runningTry, startShift } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, RosterWindow, SleepCheckin, SleepGoal } from "../../src/lib/maple/sleep/types";
 import { activeTimers, getEntry, startTimer } from "../../src/lib/maple/store";
-import { addDays, dayKey, formatTime, zonedTimeToUtc } from "../../src/lib/maple/time";
+import { addDays, dayKey, formatTime, localParts, zonedTimeToUtc } from "../../src/lib/maple/time";
 import type { FeedData, Role } from "../../src/lib/maple/types";
 import { done, eq, freshDb, ok, seedFamilies, sha256, sql, test, type FamilySeed } from "./harness";
 
@@ -34,10 +34,20 @@ delete process.env.NEXT_PUBLIC_POSTHOG_KEY;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
-// Notifications are caught here; a hook only queues (holdingChanged's re-arm is checked by count).
-(webpush as unknown as { sendNotification: unknown }).sendNotification = async () => ({ statusCode: 201, body: "", headers: {} });
+// Notifications are caught here; a hook only queues (holdingChanged's re-arm is checked by count, and run where a test needs its notice).
+type Sent = { endpoint: string; title: string; tag: string; body: string };
+const sent: Sent[] = [];
+(webpush as unknown as { sendNotification: unknown }).sendNotification = async (sub: { endpoint: string }, payload: string) => {
+  const p = JSON.parse(payload) as { title: string; tag: string; body: string };
+  sent.push({ endpoint: sub.endpoint, title: p.title, tag: p.tag, body: p.body });
+  return { statusCode: 201, body: "", headers: {} };
+};
 const hooks: (() => Promise<void>)[] = [];
 setLaterRunner((t) => void hooks.push(t));
+/** Run the hooks queued since `from` (holdingChanged's notices), as after() would once the answer is sent. */
+const runHooks = async (from: number) => {
+  for (const h of hooks.slice(from)) await h();
+};
 
 // ── callers ──────────────────────────────────────────────────────────────
 
@@ -244,6 +254,59 @@ async function main() {
     await reset(beta);
   });
 
+  await test("put_down said with a time over a try already logged runs Log an earlier try's twin check: nothing saved; a retry of its own request is still its first answer", async () => {
+    await reset(alpha);
+    await siri(T(alpha).owner, { action: "put_down", minutes_ago: 60 });
+    await siri(T(alpha).owner, { action: "outcome", outcome: "stayed asleep", minutes_ago: 20 });
+    const [first] = await tries(alpha);
+    // Overlapping it (laid down 45 minutes ago, while that try ran until 20 minutes ago): the same try, said twice.
+    const twin = await siri(T(alpha).member, { action: "put_down", minutes_ago: 45 });
+    eq([twin.ok, twin.speak, twin.duplicate], [false, `A try from ${clock(first.started_at as string, alpha.tz)} is already logged; nothing saved.`, true], "said, nothing saved");
+    // Starting within 3 minutes of it counts too.
+    const close = await siri(T(alpha).member, { action: "put_down", minutes_ago: 62 });
+    eq(close.ok, false, "within 3 minutes of its start");
+    eq([(await tries(alpha)).length, (await sleepsOf(alpha)).length], [1, 1], "one try, one sleep");
+    // After it ended, a new one: saved.
+    const later = await siri(T(alpha).member, { action: "put_down", minutes_ago: 10 });
+    ok(later.ok && /^Try 2 [\w ]+, down at \d{1,2}:\d\d\.$/.test(later.speak), later.speak);
+    eq((await tries(alpha)).length, 2, "a new try after the first ended");
+    // A Shortcut retrying its own backdated put down gets its first answer, never "already logged".
+    await reset(alpha);
+    const a = await siri(T(alpha).owner, { action: "put_down", minutes_ago: 30, client_id: "made-up-backdated-1" });
+    const again = await siri(T(alpha).owner, { action: "put_down", minutes_ago: 30, client_id: "made-up-backdated-1" });
+    eq([again.ok, again.speak, again.deduped, (await tries(alpha)).length], [true, a.speak, true, 1], "the retry");
+  });
+
+  await test("crying: the outcome ends with the app's line; after the retry, put_down says the plan pauses until the next try, and said again within two minutes it goes ahead", async () => {
+    await reset(beta);
+    await siri(T(beta).owner, { action: "put_down", minutes_ago: 45 });
+    const c1 = await siri(T(beta).owner, { action: "outcome", outcome: "woke crying", minutes_ago: 25 });
+    eq(c1.speak, "Woke crying after 20 minutes. Sleep timer stopped. Soothe him; try once more when he's deeply asleep.", "soothe, then one retry");
+    const retry = await siri(T(beta).owner, { action: "put_down", minutes_ago: 10 });
+    ok(/, a retry, down at /.test(retry.speak), retry.speak);
+    const c2 = await siri(T(beta).member, { action: "outcome", outcome: "woke_crying" });
+    eq(c2.speak, "Woke crying after 10 minutes. Sleep timer stopped. Pause until the next try.", "after the retry: pause");
+    const third = await siri(T(beta).member, { action: "put_down" });
+    eq([third.ok, third.speak, third.pause], [false, "The plan says pause until the next try. Say it again to try anyway.", true], "the plan's pause first");
+    eq((await tries(beta)).length, 2, "nothing saved");
+    // Said again within two minutes (by anyone): it goes ahead, a retry like the app's soft Put down.
+    const anyway = await siri(T(beta).owner, { action: "put_down" });
+    // (Its number depends on the try day, noon to noon, so it's read from the log.)
+    const newest = (await listTries(2, beta.babyId, { from: new Date(Date.now() - 2 * HOUR) }))[0];
+    eq([anyway.ok, anyway.speak], [true, `${await labelOf(beta, newest)}, down at ${clock(newest.started_at, beta.tz)}.`], "saved");
+    ok(/, a retry, down at /.test(anyway.speak), anyway.speak);
+    eq((await tries(beta)).length, 3, "saved");
+    // The try's own row keeps when Siri said pause; its updated_at (and so Undo and the phones' change token) didn't move for it.
+    const [retryRow] = await sql(`SELECT pause_said_at, updated_at FROM maple_sleep_tries WHERE family_id = 2 ORDER BY started_at DESC OFFSET 1 LIMIT 1`);
+    ok(retryRow.pause_said_at && new Date(retryRow.updated_at as string).getTime() < new Date(retryRow.pause_said_at as string).getTime(), JSON.stringify(retryRow));
+    // Undo takes back that try; the pause holds again, and a pause said over two minutes ago is said again.
+    await siri(T(beta).owner, { action: "undo" });
+    await sql(`UPDATE maple_sleep_tries SET pause_said_at = NOW() - INTERVAL '3 minutes' WHERE family_id = 2 AND pause_said_at IS NOT NULL`);
+    eq((await siri(T(beta).owner, { action: "put_down" })).pause, true, "a pause said 3 minutes ago is said again");
+    eq((await tries(beta)).filter((x) => x.deleted_at == null).length, 2, "nothing saved by it");
+    await reset(beta);
+  });
+
   // ── outcome ────────────────────────────────────────────────────────────
 
   await test("outcome: woke crying ends the try and its sleep then; picked up leaves her asleep in arms", async () => {
@@ -251,7 +314,8 @@ async function main() {
     await siri(T(alpha).owner, { action: "put_down", minutes_ago: 25 });
     const r = await siri(T(alpha).member, { action: "outcome", outcome: "woke crying" });
     const tr = (await getTry(1, Number((await tries(alpha))[0].id)))!;
-    eq([tr.outcome, tr.updated_by, r.speak], ["woke_crying", alpha.member, "Woke crying after 25 minutes. Sleep timer stopped."], "said");
+    // The app's own crying line ends it (cryingLine after_crying), as the outcome's toast and the strip say it.
+    eq([tr.outcome, tr.updated_by, r.speak], ["woke_crying", alpha.member, "Woke crying after 25 minutes. Sleep timer stopped. Soothe her; try once more when she's deeply asleep."], "said");
     const s = (await getEntry(1, tr.sleep_entry_id!))!;
     eq([s.active, near(s.ended_at, Date.parse(tr.ended_at!), 1500)], [false, true], "her sleep ended with it");
     await reset(beta);
@@ -317,27 +381,110 @@ async function main() {
 
   // ── handoff ────────────────────────────────────────────────────────────
 
-  await test("handoff: the holder hands to the other adult, the other adult takes it, the next turn keeps the planned length, and it says who has her", async () => {
+  await test("handoff from the holder only asks: nothing changes hands, the phones with handoff reminders on hear Handoff now, and it says to go wake them", async () => {
+    await reset(alpha);
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"handoff":true}'::jsonb WHERE id = $1`, [alpha.pushSubId]);
+    const start = new Date(Date.now() - 60 * MIN);
+    const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: start, handoffAt: new Date(start.getTime() + 90 * MIN), by: alpha.owner, source: "web" })).shift;
+    const before = hooks.length;
+    sent.length = 0;
+    const r = await siri(T(alpha).owner, { action: "handoff" });
+    eq([r.ok, r.speak], [true, "Asked Blake to take over. Blake's phone only sounds if handoff reminders are on, so go wake Blake. Getting sleepy? Put her on her back in the bassinet."], "said, with the bassinet if sleepy");
+    const open = (await openShift(1, alpha.babyId))!;
+    eq([open.id, open.holder, open.asked_to, open.ended_at], [t.id, alpha.owner, alpha.member, null], "an ask: Avery still holds her");
+    eq((await shifts(alpha)).length, 1, "no second turn");
+    await runHooks(before);
+    const now1 = sent.filter((x) => x.title === "Handoff now");
+    eq(now1.map((x) => x.tag), [`handoff:${t.id}`], "the family's phone with handoff reminders on hears it");
+    ok(sent.every((x) => !/Avery|Blake|Casey|June|Dana/.test(`${x.title} ${x.body}`)), `names no one: ${JSON.stringify(sent)}`);
+    // Said again at once (Back Tap twice, a retry): the ask stands, and no second notice.
+    const b2 = hooks.length;
+    sent.length = 0;
+    const again = await siri(T(alpha).owner, { action: "handoff" });
+    eq([again.speak, again.already_asked], [`Already asked Blake at ${clock(open.asked_at!, alpha.tz)}. Blake's phone only sounds if handoff reminders are on, so go wake Blake. Getting sleepy? Put her on her back in the bassinet.`, true], "said once more, not asked twice");
+    await runHooks(b2);
+    eq(sent.filter((x) => x.title === "Handoff now").length, 0, "no second notice");
+    eq((await openShift(1, alpha.babyId))!.asked_at, open.asked_at, "the ask's time stays");
+    // Three minutes on with nobody there: asking again sounds again.
+    await sql(`UPDATE maple_sleep_shifts SET asked_at = asked_at - INTERVAL '3 minutes', updated_at = updated_at - INTERVAL '3 minutes' WHERE id = $1`, [t.id]);
+    const b3 = hooks.length;
+    const third = await siri(T(alpha).owner, { action: "handoff" });
+    ok(third.speak.startsWith("Asked Blake again to take over."), third.speak);
+    await runHooks(b3);
+    eq(sent.filter((x) => x.title === "Handoff now").length, 1, "asked again: heard again");
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE id = $1`, [alpha.pushSubId]);
+  });
+
+  await test("handoff from anyone else takes the turn as it is now: they have her, with the next handoff as long as the last one; a second tap never hands her back", async () => {
     await reset(alpha);
     const start = new Date(Date.now() - 60 * MIN);
-    await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: start, handoffAt: new Date(start.getTime() + 90 * MIN), by: alpha.owner, source: "web" });
+    const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: start, handoffAt: new Date(start.getTime() + 90 * MIN), by: alpha.owner, source: "web" })).shift;
+    await siri(T(alpha).owner, { action: "handoff" });
     const before = hooks.length;
-    const r = await siri(T(alpha).owner, { action: "handoff" });
+    const take = await siri(T(alpha).member, { action: "handoff" });
     const open = (await openShift(1, alpha.babyId))!;
-    eq([open.holder, open.source, open.created_by, open.next_holder], [alpha.member, "shortcut", alpha.owner, alpha.owner], "Blake has her, Avery is next");
+    eq([open.holder, open.source, open.created_by, open.next_holder, open.asked_to], [alpha.member, "shortcut", alpha.member, alpha.owner, null], "Blake has her, Avery is next");
+    eq([(await getShift(1, t.id))?.ended_how, (await getShift(1, t.id))?.asked_to], ["handoff", alpha.member], "Avery's turn handed over, its ask kept");
     ok(near(open.handoff_at, Date.now() + 90 * MIN), "the next handoff is as long as the last one was planned");
-    eq(r.speak, `Blake has her now, next handoff at ${clock(open.handoff_at!, alpha.tz)}.`, "said");
+    eq(take.speak, `You have her now, from Avery. Next handoff at ${clock(open.handoff_at!, alpha.tz)}.`, "said");
     ok(hooks.length > before, "re-armed");
-    const twice = await siri(T(alpha).owner, { action: "handoff" });
-    eq([twice.speak, (await openShift(1, alpha.babyId))!.holder], ["Already handed off: Blake has her now.", alpha.member], "a second tap never hands her back");
-    // The one holding her now can hand back at once (to the turn's planned next: Avery): it's their handoff, not a repeat.
-    const back = await siri(T(alpha).member, { action: "handoff" });
-    eq([back.speak.startsWith("Avery has her now, next handoff at "), (await openShift(1, alpha.babyId))!.holder], [true, alpha.owner], "back to Avery");
-    // Taking over: the one who says it, when they aren't holding her.
+    const twice = await siri(T(alpha).member, { action: "handoff" });
+    eq([twice.speak, (await openShift(1, alpha.babyId))!.holder], ["Already handed off: you have her now.", alpha.member], "a second tap never hands her back (nor asks Avery)");
+    // Not asked first: whoever says it takes over all the same.
     await reset(alpha);
     await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, by: alpha.owner, source: "web" });
+    const plain = await siri(T(alpha).member, { action: "handoff" });
+    const took = (await openShift(1, alpha.babyId))!;
+    eq([plain.speak, took.holder], [`You have her now, from Avery. Next handoff at ${clock(took.handoff_at!, alpha.tz)}.`, alpha.member], "Blake took her; the next handoff two hours on by default");
+  });
+
+  await test("handoff: taking over never plans the next handoff inside the next holder's protected window on the roster, and says why; a sleep in arms running on is said", async () => {
+    await reset(alpha);
+    // Avery's protected window from an hour to three hours from now, every night, on an active goal set days ago.
+    const local = (t: number) => {
+      const p = localParts(t, alpha.tz);
+      return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+    };
+    const from = Date.now() + 60 * MIN;
+    const to = Date.now() + 180 * MIN;
+    const roster = [{ id: "w1", member: alpha.owner, from: local(from), to: local(to), nights: [0, 1, 2, 3, 4, 5, 6] }];
+    await sql(
+      `INSERT INTO maple_sleep_goals (family_id, baby_id, title, status, roster, item_seq, created_by, created_at, updated_at) VALUES (1, $1, 'Made-up goal', 'active', $2::jsonb, 1, $3, NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days')`,
+      [alpha.babyId, JSON.stringify(roster), alpha.owner]
+    );
+    const start = new Date(Date.now() - 60 * MIN);
+    // A two-hour turn: the default next handoff (two hours from now) falls inside Avery's window.
+    await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: start, handoffAt: new Date(start.getTime() + 120 * MIN), asleep: true, by: alpha.owner, source: "web" });
+    const arms = (await sleepsOf(alpha))[0];
     const take = await siri(T(alpha).member, { action: "handoff" });
-    eq([take.speak.startsWith("You have her now"), (await openShift(1, alpha.babyId))!.holder], [true, alpha.member], "Blake took her");
+    const open = (await openShift(1, alpha.babyId))!;
+    ok(Math.abs(Date.parse(open.handoff_at!) - Math.floor(to / MIN) * MIN) <= MIN, `planned for the window's end, not two hours on (${open.handoff_at})`);
+    eq(
+      take.speak,
+      `You have her now, from Avery. Next handoff at ${clock(open.handoff_at!, alpha.tz)}, after Avery's protected sleep. Her sleep in arms has been running since ${clock(arms.started_at as string, alpha.tz)}; if she's awake, say Maple awake.`,
+      "said why, and the sleep in arms"
+    );
+    const moved = take.next_handoff_moved as { member: string; planned_at: string; default_at: string };
+    eq([moved.member, moved.planned_at, near(moved.default_at, Date.now() + 120 * MIN)], [alpha.owner, open.handoff_at, true], "the reply carries why");
+    eq((await getEntry(1, Number(arms.id)))?.active, true, "a handoff keeps her sleep in arms running");
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+  });
+
+  await test("undo after the holder's handoff takes the ask back (the turn goes on); after taking over, the turn goes back", async () => {
+    await reset(alpha);
+    const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, by: alpha.owner, source: "web" })).shift;
+    await siri(T(alpha).owner, { action: "handoff" });
+    const before = hooks.length;
+    const u = await siri(T(alpha).owner, { action: "undo" });
+    eq([u.ok, u.speak], [true, "Undone: nobody is asked to take over now."], "said");
+    const open = (await openShift(1, alpha.babyId))!;
+    eq([open.id, open.holder, open.asked_to, open.asked_at], [t.id, alpha.owner, null, null], "the turn goes on, nobody asked");
+    ok(hooks.length > before, "the phones hear of it");
+    eq((await siri(T(alpha).owner, { action: "undo" })).ok, false, "one thing per undo");
+    await siri(T(alpha).owner, { action: "handoff" });
+    await siri(T(alpha).member, { action: "handoff" });
+    const back = await siri(T(alpha).member, { action: "undo" });
+    eq([back.speak, (await openShift(1, alpha.babyId))!.holder], ["Undone: Avery has her again.", alpha.owner], "taken over, then undone");
   });
 
   await test("handoff: no turn says so; with more than one other adult and nobody planned next it asks for the app", async () => {
@@ -346,10 +493,11 @@ async function main() {
     await sql(`INSERT INTO maple_members (family_id, email, role, display_name, added_by, accepted_at) VALUES (2, 'third.beta@example.com', 'member', 'Harper', 'self', NOW())`);
     await startShift(2, { babyId: beta.babyId, holder: beta.owner, by: beta.owner, source: "web" });
     const r = await siri(T(beta).owner, { action: "handoff" });
-    eq([r.ok, r.speak, (await openShift(2, beta.babyId))!.holder], [false, "Who's taking over? Hand off in the app.", beta.owner], "unclear, nothing saved");
+    eq([r.ok, r.speak, (await openShift(2, beta.babyId))!.holder, (await openShift(2, beta.babyId))!.asked_to], [false, "Who should take over? Ask in the app.", beta.owner, null], "unclear, nothing saved");
     await sql(`UPDATE maple_sleep_shifts SET next_holder = 'third.beta@example.com' WHERE family_id = 2 AND ended_at IS NULL`);
     const planned = await siri(T(beta).owner, { action: "handoff" });
-    eq([planned.speak.startsWith("Harper has him now"), (await openShift(2, beta.babyId))!.holder], [true, "third.beta@example.com"], "the planned next one");
+    const after = (await openShift(2, beta.babyId))!;
+    eq([planned.speak.startsWith("Asked Harper to take over."), after.holder, after.asked_to], [true, beta.owner, "third.beta@example.com"], "the planned next one is asked; Emery still holds him");
     await sql(`DELETE FROM maple_members WHERE family_id = 2 AND email = 'third.beta@example.com'`);
     await reset(beta);
   });
@@ -391,7 +539,8 @@ async function main() {
     const w = await siri(T(beta).owner, { action: "wake", minutes_ago: 10 });
     const after = (await getEntry(2, e.id))!;
     eq([after.active, near(after.ended_at, Date.now() - 10 * MIN)], [false, true], "ended 10 minutes ago");
-    ok(w.speak.startsWith("Stopped. Slept · 20m"), w.speak);
+    // Said as a sentence, never the card's "Slept · 20m".
+    eq(w.speak, "Stopped. He slept 20 minutes.", "said");
     await reset(beta);
   });
 

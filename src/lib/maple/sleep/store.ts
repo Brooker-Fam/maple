@@ -7,6 +7,7 @@ import type { Voice } from "../voice";
 import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress, tryDayBounds } from "./engine";
 import { SleepInputError } from "./errors";
 import { cleanCheckinExtras, cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, goalProgress, goalSpan, lastNightKey, refuseUnsafe, type GoalProgress, type GoalRules } from "./goals";
+import { handoffAroundRoster, type HandoffWhy } from "./handoff";
 import {
   CHECKIN_NOTE_MAX,
   CHECKIN_PLACES,
@@ -479,7 +480,7 @@ export async function startTry(
 }
 
 /** Possibly the same try someone already logged: starting within 3 minutes, or overlapping. */
-function looksSameTry(t: BassinetTry, start: number, end: number, now: number): boolean {
+export function looksSameTry(t: BassinetTry, start: number, end: number, now: number): boolean {
   const s = Date.parse(t.started_at);
   const e = t.ended_at ? Date.parse(t.ended_at) : now;
   return Math.abs(s - start) <= 3 * 60_000 || (s < end && start < e);
@@ -821,6 +822,8 @@ export type ShiftWrite = {
   sleep?: Entry | null;
   sleepBefore?: Entry | null;
   madeSleep?: boolean;
+  /** A handoff's default next handoff fell in the next holder's protected window, so it moved (handoff.ts). */
+  handoffWhy?: HandoffWhy | null;
 };
 
 /**
@@ -907,6 +910,25 @@ export async function startArmsSleep(
 }
 
 /**
+ * A feed starting at `at` ends a sleep in arms that began before it, then,
+ * as the app's dock ends a running nap when nursing starts and Siri's
+ * nurse_left and nurse_right do: so the sleep in arms on a holding turn never
+ * runs on through a feed and counts it as sleep. Null when no sleep in arms
+ * runs (a nap in the bassinet or somewhere else is left as the caller's rule
+ * says), or another phone stopped it first.
+ */
+export async function endArmsSleepForFeed(fam: FamilyRef, input: { babyId: number; at: Date; by: string }): Promise<{ sleep: Entry; sleepBefore: Entry } | null> {
+  const arms = await runningSleep(fam, input.babyId);
+  if (!arms || (arms.data as { place?: string }).place !== "arms" || Date.parse(arms.started_at) >= input.at.getTime()) return null;
+  try {
+    return { sleep: await stopTimer(fam, arms.id, input.at, input.by, { expectUpdatedAt: arms.updated_at }), sleepBefore: arms };
+  } catch {
+    // Woke up on another phone meanwhile: it stays as they left it.
+    return null;
+  }
+}
+
+/**
  * Undo's other half for a turn's sleep in arms: one its start made goes
  * ("delete", only while it's still running as it was), or one its end
  * stopped runs again ("reopen", only while it's still as the end left it).
@@ -981,12 +1003,38 @@ export async function cancelAsk(fam: FamilyRef, id: number, input: { by: string;
  * (asked or not): a handoff to them. Someone else took her first, or the
  * turn ended: SleepConflict with the turn as it is.
  */
-export async function acceptHandoff(fam: FamilyRef, id: number, input: { by: string; handoffAt?: Date | null; source: Source; device?: string | null }): Promise<ShiftWrite> {
+export async function acceptHandoff(fam: FamilyRef, id: number, input: { by: string; handoffAt?: Date | null; source: Source; device?: string | null; tz?: string }): Promise<ShiftWrite> {
   const cur = await getShift(fam, id);
   if (!cur) throw new NotFound(`Holding shift ${id} not found`);
   if (cur.ended_at) throw new SleepConflict(cur.ended_how === "handoff" ? "Someone else has her already." : "That shift already ended.", "changed", cur);
   if (cur.holder === input.by) throw new SleepInputError("You're the one holding her now.");
-  return handOff(fam, id, { to: input.by, by: input.by, source: input.source, device: input.device, expectUpdatedAt: cur.updated_at, ...(input.handoffAt !== undefined ? { handoffAt: input.handoffAt } : {}) });
+  return handOff(fam, id, { to: input.by, by: input.by, source: input.source, device: input.device, expectUpdatedAt: cur.updated_at, tz: input.tz, ...(input.handoffAt !== undefined ? { handoffAt: input.handoffAt } : {}) });
+}
+
+/** The active goals' rosters, for the next handoff (handoff.ts): only status and roster. */
+async function rosterGoals(fam: FamilyRef, babyId: number): Promise<Pick<SleepGoal, "status" | "roster">[]> {
+  const rows = await q(`SELECT roster FROM maple_sleep_goals WHERE family_id = $1 AND baby_id = $2 AND status = 'active' AND deleted_at IS NULL`, [famId(fam), babyId]);
+  return rows.map((r) => ({ status: "active" as const, roster: list<RosterWindow>(r.roster, (x) => typeof x.id === "string" && typeof x.member === "string" && Array.isArray(x.nights)) }));
+}
+
+/** The family's zone for a roster window: a FamilyCtx carries the baby's; a bare id reads it. */
+async function zoneOf(fam: FamilyRef, babyId: number): Promise<string> {
+  if (typeof fam === "object" && "tz" in fam && typeof fam.tz === "string") return fam.tz;
+  const rows = await q(`SELECT timezone FROM maple_babies WHERE id = $1 AND family_id = $2`, [babyId, famId(fam)]);
+  return typeof rows[0]?.timezone === "string" && rows[0].timezone ? String(rows[0].timezone) : DEFAULT_TZ;
+}
+
+/**
+ * A handoff's default next one (as long as the turn handed over), never
+ * inside the next holder's protected window on an active goal's roster: at
+ * that window's end, or none over 12 hours away (handoff.ts), with why.
+ */
+async function plannedNextHandoff(fam: FamilyRef, cur: HoldingShift & { baby_id: number }, at: Date, tz: string | undefined): Promise<{ at: Date | null; why: HandoffWhy | null }> {
+  const def = nextHandoff(cur, at.getTime());
+  const goals = await rosterGoals(fam, cur.baby_id);
+  if (!goals.some((g) => g.roster.some((w) => w.member === cur.holder))) return { at: new Date(def), why: null };
+  const r = handoffAroundRoster({ at: def, from: at.getTime(), nextHolder: cur.holder, goals, tz: tz ?? (await zoneOf(fam, cur.baby_id)) });
+  return { at: r.at == null ? null : new Date(r.at), why: r.why };
 }
 
 /** End the open shift (if it began by `at`): used when a try starts. */
@@ -1036,13 +1084,16 @@ export async function endShift(fam: FamilyRef, id: number, input: { at?: Date; h
 
 /**
  * Hand her over: the open shift ends and `to`'s starts at the same moment,
- * one transaction, with the next planned handoff as long as the last one
- * (nextHandoff) unless given, and the person handing over as the one after.
+ * one transaction, with the person handing over as the one after. The next
+ * planned handoff is as long as the last one (nextHandoff) unless given,
+ * and never inside that person's protected window on the night roster
+ * (plannedNextHandoff: at its end, or none, with `handoffWhy`). `tz`: the
+ * family's zone (a FamilyCtx carries it).
  */
 export async function handOff(
   fam: FamilyRef,
   id: number,
-  input: { to: string; at?: Date; handoffAt?: Date | null; by: string; source: Source; device?: string | null; expectUpdatedAt?: string }
+  input: { to: string; at?: Date; handoffAt?: Date | null; by: string; source: Source; device?: string | null; expectUpdatedAt?: string; tz?: string }
 ): Promise<ShiftWrite> {
   const now = new Date();
   const cur = await getShift(fam, id);
@@ -1052,7 +1103,8 @@ export async function handOff(
   if (input.to === cur.holder) throw new SleepInputError("That's who is holding her now.");
   const at = pastTime(input.at, now, "When the handoff happened", 4 * 3600_000);
   if (at.getTime() < Date.parse(cur.started_at)) throw new SleepInputError("That's before the shift started.");
-  const handoff = input.handoffAt === undefined ? new Date(nextHandoff(cur, at.getTime())) : handoffTime(input.handoffAt, at);
+  const planned = input.handoffAt === undefined ? await plannedNextHandoff(fam, cur, at, input.tz) : null;
+  const handoff = planned ? planned.at : handoffTime(input.handoffAt, at);
   const familyId = famId(fam);
   const [ended, started] = await tx([
     {
@@ -1073,7 +1125,7 @@ export async function handOff(
     const now2 = (await getShift(fam, id)) ?? cur;
     throw new SleepConflict("Someone changed this shift just now.", "changed", now2);
   }
-  return { shift: rowToShift(started[0]), before: null, status: "handed_off", ended: rowToShift(ended[0]), endedBefore: cur };
+  return { shift: rowToShift(started[0]), before: null, status: "handed_off", ended: rowToShift(ended[0]), endedBefore: cur, ...(planned?.why ? { handoffWhy: planned.why } : {}) };
 }
 
 /** Change the planned handoff (or who's next), only the shift this phone saw. */

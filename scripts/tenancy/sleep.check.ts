@@ -16,11 +16,11 @@ import { dailyStats } from "../../src/lib/maple/insights";
 import { FAMILY_ONE_COPY, logState, type Extra } from "../../src/lib/maple/mcp-tools";
 import { notifyHandoffNow } from "../../src/lib/maple/notify";
 import { runPushTick } from "../../src/lib/maple/push";
-import { askState } from "../../src/lib/maple/sleep/engine";
+import { askState, nextHandoff } from "../../src/lib/maple/sleep/engine";
 import { askHandoff, deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
 import { getEntry, listEntries, startTimer } from "../../src/lib/maple/store";
-import { addDays, dayKey } from "../../src/lib/maple/time";
+import { addDays, dayKey, localParts } from "../../src/lib/maple/time";
 import type { Entry, Role } from "../../src/lib/maple/types";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type FamilySeed } from "./harness";
 
@@ -522,6 +522,84 @@ async function main() {
     const e = await call("holding", { action: "end" }, alpha);
     ok(!e.isError && new RegExp(`sleep in arms \\(#${arms.id}\\) stopped then too`).test(e.text), e.text);
     eq((await getEntry(1, Number(arms.id)))?.active, false, "ended awake: the sleep stopped");
+  });
+
+  await test("next handoff vs the roster: a handoff never plans the next one inside the next holder's protected window (the route, the tool, the store), says why, and an explicit time stands", async () => {
+    await clean(alpha);
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    // Blake's protected window from an hour to three hours from now, every night, on an active goal (as Theo's 1:30–6:30 AM).
+    const hhmm = (t: number) => {
+      const p = localParts(t, alpha.tz);
+      return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+    };
+    const winEnd = Math.floor((Date.now() + 180 * MIN) / MIN) * MIN;
+    const roster = [{ id: "w1", member: alpha.member, from: hhmm(Date.now() + 60 * MIN), to: hhmm(winEnd), nights: [0, 1, 2, 3, 4, 5, 6] }];
+    await sql(
+      `INSERT INTO maple_sleep_goals (family_id, baby_id, title, status, roster, item_seq, created_by, created_at, updated_at) VALUES (1, $1, 'Made-up goal', 'active', $2::jsonb, 1, $3, NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days')`,
+      [alpha.babyId, JSON.stringify(roster), alpha.member]
+    );
+    // Blake's two-hour turn; Avery takes over now (the app's I've got her): the default, two hours on, is inside Blake's window.
+    const t = (await route(alpha.member, 1, { action: "shift.start", handoff_at: new Date(Date.now() + 2 * HOUR).toISOString() })).json.result as { shift: HoldingShift };
+    const acc = await route(alpha.owner, 1, { action: "shift.accept", id: t.shift.id });
+    const w = acc.json.result as { shift: HoldingShift; handoffWhy: { member: string; planned_at: string; default_at: string; ends_at: string } };
+    eq([w.shift.next_holder, Date.parse(w.shift.handoff_at!), w.handoffWhy.member, w.handoffWhy.planned_at], [alpha.member, winEnd, alpha.member, new Date(winEnd).toISOString()], "at the window's end, with why");
+    ok(Math.abs(Date.parse(w.handoffWhy.default_at) - (Date.now() + 2 * HOUR)) < 2 * MIN, "the default it moved from");
+    // The tool: accept says why; hand_off back and forth the same.
+    await route(alpha.owner, 1, { action: "shift.undo_handoff", started_id: w.shift.id, started_updated_at: w.shift.updated_at, ended_id: t.shift.id, ended_updated_at: ((acc.json.result as { ended: HoldingShift }).ended).updated_at });
+    const viaTool = await call("holding", { action: "accept" }, alpha, "owner");
+    ok(!viaTool.isError && /the next handoff is planned for .+, the end of Blake's protected sleep \(.+ on the roster\), not .+, so Blake isn't woken inside it\./.test(viaTool.text), viaTool.text);
+    eq(Date.parse((await openShift(1, alpha.babyId))!.handoff_at!), winEnd, "the tool's accept too");
+    // Without a window for the next holder (or with a paused goal), the default stands.
+    const back = await call("holding", { action: "hand_off", to: "Blake" }, alpha, "owner");
+    ok(!back.isError && !/protected sleep/.test(back.text), back.text);
+    await sql(`UPDATE maple_sleep_goals SET status = 'paused' WHERE family_id = 1`);
+    const blakes = (await openShift(1, alpha.babyId))!;
+    const paused = await handOff(1, blakes.id, { to: alpha.owner, by: alpha.owner, source: "web" });
+    eq([paused.handoffWhy ?? null, Math.abs(Date.parse(paused.shift.handoff_at!) - nextHandoff(blakes, Date.now())) < 2 * MIN], [null, true], "a paused goal's roster doesn't move it");
+    await sql(`UPDATE maple_sleep_goals SET status = 'active' WHERE family_id = 1`);
+    // An explicit time someone picked (the app's chips, handoff_in_minutes) is theirs, even inside the window.
+    const open = (await openShift(1, alpha.babyId))!;
+    const pick = await route(alpha.owner, 1, { action: "shift.handoff", id: open.id, to: alpha.member, handoff_at: new Date(Date.now() + 90 * MIN).toISOString(), expect_updated_at: open.updated_at });
+    const picked = pick.json.result as { shift: HoldingShift; handoffWhy?: unknown };
+    eq([Math.abs(Date.parse(picked.shift.handoff_at!) - (Date.now() + 90 * MIN)) < MIN, picked.handoffWhy ?? null], [true, null], "the picked time stands");
+    // Families apart: beta's handoffs never read alpha's roster.
+    await clean(beta);
+    const bt = (await route(beta.member, 2, { action: "shift.start", handoff_at: new Date(Date.now() + 2 * HOUR).toISOString() })).json.result as { shift: HoldingShift };
+    const bacc = (await route(beta.owner, 2, { action: "shift.accept", id: bt.shift.id })).json.result as { shift: HoldingShift; handoffWhy?: unknown };
+    eq(bacc.handoffWhy ?? null, null, "beta has no roster");
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    await clean(beta);
+  });
+
+  await test("asleep in arms: a feed starting ends it then (start_timer, as the dock and Siri end a nap), so the feed never counts as sleep; a handoff keeps it running and says so; a nap elsewhere is left as before", async () => {
+    await clean(alpha);
+    await sql(`DELETE FROM maple_entries WHERE family_id = 1 AND kind = 'feed' AND active`);
+    // Asleep in Blake's arms since half an hour ago.
+    const s = await call("holding", { action: "start", asleep: true, handoff_in_minutes: 120, minutes_ago: 30 }, alpha);
+    ok(!s.isError, s.text);
+    const arms = (await sleeps(alpha)).find((x) => x.deleted_at == null)!;
+    // Avery takes over: the sleep in arms runs on (the documented rule), and the reply says so, to stop it if she's awake.
+    const acc = await call("holding", { action: "accept" }, alpha, "owner");
+    ok(new RegExp(`June's sleep in arms has been running since .+ \\(#${arms.id}\\); if she's awake, stop it \\(stop_timer\\)\\.`).test(acc.text), acc.text);
+    eq((await getEntry(1, Number(arms.id)))?.active, true, "a handoff keeps it running");
+    // A feed starts: the sleep in arms ends then.
+    const feed = await call("start_timer", { timer: "nursing", side: "left", minutes_ago: 2 }, alpha, "owner");
+    ok(!feed.isError && new RegExp(`June's sleep in arms \\(#${arms.id}, since .+\\) ended at .+, when the feed began`).test(feed.text) && !/Also running: .*[Ss]leep/.test(feed.text), feed.text);
+    const ended = (await getEntry(1, Number(arms.id)))!;
+    const fe = (await listEntries(1, { babyId: alpha.babyId, kinds: ["feed"], includeActive: true })).find((e) => e.active)!;
+    eq([ended.active, ended.ended_at], [false, fe.started_at], "ended when the feed began");
+    // Sleep counts no feed time: the sleep ends where the feed begins.
+    ok(Date.parse(ended.ended_at!) <= Date.parse(fe.started_at), "no overlap");
+    await call("stop_timer", { timer: "nursing" }, alpha, "owner");
+    // A nap that isn't in arms (a sleep timer, a bassinet sleep) is left as start_timer always has: still running, said.
+    await clean(alpha);
+    await startTimer(1, { babyId: alpha.babyId, kind: "sleep", at: new Date(Date.now() - 30 * MIN), createdBy: alpha.owner, source: "web" });
+    const other = await call("start_timer", { timer: "nursing", side: "right" }, alpha, "owner");
+    ok(!other.isError && /Also running: .*[Ss]leep/.test(other.text) && !/sleep in arms/.test(other.text), other.text);
+    eq((await sleeps(alpha)).filter((x) => x.active).length, 1, "still running");
+    await call("stop_timer", { timer: "nursing" }, alpha, "owner");
+    await sql(`DELETE FROM maple_entries WHERE family_id = 1 AND kind = 'feed' AND created_at > NOW() - INTERVAL '5 minutes'`);
+    await clean(alpha);
   });
 
   await test("maple_status and the chat's [App] lines carry a running try and who's holding her; a family without a plan reads as before", async () => {

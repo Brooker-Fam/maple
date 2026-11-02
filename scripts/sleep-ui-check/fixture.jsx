@@ -5,6 +5,7 @@ import { ApiError } from "../../src/lib/maple/client-request";
 import { summarize } from "../../src/lib/maple/insights";
 import { chooseSleepLink, nextHandoff, progressLines, sleepProgress } from "../../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../../src/lib/maple/sleep/errors";
+import { handoffAroundRoster } from "../../src/lib/maple/sleep/handoff";
 import { cleanCheckinExtras, cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, coachNotes, goalProgress, goalProgressLines } from "../../src/lib/maple/sleep/goals";
 import { CHECKIN_NOTE_MAX, GOAL_NOTE_MAX } from "../../src/lib/maple/sleep/types";
 import { STAGE_INFO } from "../../src/lib/maple/sleep/words";
@@ -135,11 +136,11 @@ function makeServer(clock) {
     };
     const handOff = (old, to, handoffAt) => {
       if (old.ended_at) conflict();
-      const span = old.handoff_at ? Date.parse(old.handoff_at) - Date.parse(old.started_at) : 120 * MIN;
       const endedBefore = endShift(old, "handoff");
-      const s = newShift({ holder: to, handoff_at: handoffAt !== undefined ? handoffAt : iso(nextHandoff({ started_at: old.started_at, handoff_at: old.handoff_at }, now())), next_holder: old.holder });
-      void span;
-      return { shift: s, before: null, status: "handed_off", ended: old, endedBefore };
+      // As the store: the default next handoff never lands inside the next holder's protected window on an active goal's roster.
+      const planned = handoffAt !== undefined ? null : handoffAroundRoster({ at: nextHandoff({ started_at: old.started_at, handoff_at: old.handoff_at }, now()), from: now(), nextHolder: old.holder, goals: db.goals, tz: TZ });
+      const s = newShift({ holder: to, handoff_at: planned ? (planned.at == null ? null : iso(planned.at)) : handoffAt, next_holder: old.holder });
+      return { shift: s, before: null, status: "handed_off", ended: old, endedBefore, ...(planned?.why ? { handoffWhy: planned.why } : {}) };
     };
     if (!init.method || init.method === "GET") {
       db.calls.push({ action: "GET", view: url.searchParams.get("view"), who });
@@ -451,6 +452,22 @@ function makeServer(clock) {
     nursing: () => {
       db.entries.push({ id: 43, kind: "feed", started_at: iso(clock() - 20 * MIN), ended_at: null, active: true, data: { method: "breast", first_side: "L", last_side: "L", segments: [{ side: "L", start: iso(clock() - 20 * MIN), end: null }] }, note: null, created_by: ME, updated_at: iso(clock() - 20 * MIN), source: "web", created_at: iso(clock() - 20 * MIN) });
     },
+    /** With ?holding: a bottle logged at 2:00 AM, after her sleep in arms began at 1:40 AM (the turn's card asks Woke at). */
+    armsfeed: () => {
+      db.entries.push({ id: 93, kind: "feed", started_at: iso(BASE - 10 * MIN), ended_at: iso(BASE - 5 * MIN), active: false, data: { method: "bottle", amount_ml: 60 }, note: null, created_by: PARTNER, updated_at: iso(BASE - 5 * MIN), source: "web", created_at: iso(BASE - 5 * MIN) });
+    },
+    /**
+     * With ?holding: an active goal (set days ago) whose roster has Sam's protected window 2:30–5:30 AM. Taken over now (2:10 AM),
+     * the next handoff back to Sam would default to 4:10 AM, inside it, so it's planned for 5:30 AM.
+     */
+    roster: () => {
+      const set = at("2026-10-24", 20, 0);
+      db.goals.push({
+        id: 310, baby_id: 1, title: "A protected stretch each", why: null, target_date: null, status: "active", targets: [], steps: [],
+        roster: [{ id: "w1", member: ME, from: "02:30", to: "05:30", nights: [0, 1, 2, 3, 4, 5, 6] }],
+        last_review_at: null, review_note: null, closed_at: null, revision: 1, created_by: ME, updated_by: ME, source: "web", created_at: iso(set), updated_at: iso(set), client_id: null, item_seq: 1,
+      });
+    },
     /** The morning after: a sleep in arms logged 2:30–5:10 AM that no try sits on yet (Log an earlier try's one-tap times). */
     lastnight: () => {
       db.entries.push({ id: 95, kind: "sleep", started_at: iso(at("2026-11-05", 2, 30)), ended_at: iso(at("2026-11-05", 5, 10)), active: false, data: { place: "arms" }, note: null, created_by: PARTNER, updated_at: iso(at("2026-11-05", 5, 10)), source: "web", created_at: iso(at("2026-11-05", 5, 10)) });
@@ -580,7 +597,7 @@ function makeWorld(query) {
   const listeners = new Set();
   const clock = () => BASE + offset.current;
   const server = makeServer(clock);
-  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing"]) if (query.has(name)) server.seeds[name]();
+  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing", "armsfeed", "roster"]) if (query.has(name)) server.seeds[name]();
   return {
     server,
     clock,
@@ -671,15 +688,23 @@ function Phone({ world }) {
     memberName: nameOf, memberLabel: nameOf, member: (email) => state.members.find((m) => m.email === email) ?? null,
     isNight: () => NIGHT, timerBusy: () => false, toasts, toast, dismissToast,
     dismissTimerToast: () => setToasts((t) => t.filter((x) => x.group !== "timer")), holdTimerToasts: () => {},
-    // useMaple's log: saves the entry and says so, with Undo (the Last night card's "She slept through").
+    // useMaple's log: saves the entry and says so, with Undo, unless `silent` (the Last night card's "She slept through" shows its own receipt).
     log: async (input, opts = {}) => {
       calls.push({ action: "log", ...input, who: SIGNED_IN });
       const saved = server.logEntry(input, SIGNED_IN);
       apply(server.snapshot(SIGNED_IN), [{ ...saved }]);
-      toast(opts.toast ?? "Logged", { tone: "ok", undo: () => calls.push({ action: "log.undo", id: saved.id, who: SIGNED_IN }) });
+      if (!opts.silent) toast(opts.toast ?? "Logged", { tone: "ok", undo: () => calls.push({ action: "log.undo", id: saved.id, who: SIGNED_IN }) });
       return { ...saved };
     },
-    remove: record("remove"), update: async (id, patch) => (calls.push({ action: "update", id, patch }), null),
+    // useMaple's remove: the entry goes (the receipt's Undo of "She slept through"), with its toast.
+    remove: async (id, opts = {}) => {
+      calls.push({ action: "remove", id, who: SIGNED_IN });
+      server.db.entries = server.db.entries.filter((e) => e.id !== id);
+      apply(server.snapshot(SIGNED_IN), [], [id]);
+      toast(opts.toast ?? "Deleted", { tone: "info" });
+      return true;
+    },
+    update: async (id, patch) => (calls.push({ action: "update", id, patch }), null),
     restore: record("restore"), refresh: async () => {}, whoDiscarded: () => null, outbox: [], online: true,
     timerCall: async (b) => {
       calls.push({ action: "timer", ...b });
