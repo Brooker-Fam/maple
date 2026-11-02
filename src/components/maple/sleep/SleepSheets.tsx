@@ -1,55 +1,74 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { sleepyLine, transferSteps } from "@/lib/maple/guidelines/sleep";
-import { nextHandoff } from "@/lib/maple/sleep/engine";
-import { TRY_OUTCOMES, TRY_TAGS, type BassinetTry, type HoldingShift, type TryOutcome, type TryTag } from "@/lib/maple/sleep/types";
-import { OUTCOME_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
-import { DEFAULT_TZ, formatDuration, formatTime, formatTimeNear } from "@/lib/maple/time";
-import type { Member } from "@/lib/maple/types";
+import { nextSideText } from "@/lib/maple/feed";
+import { askState, nextHandoff } from "@/lib/maple/sleep/engine";
+import { TRY_NOTE_MAX, TRY_OUTCOMES, TRY_TAGS, type BassinetTry, type HoldingShift, type TryOutcome, type TryTag } from "@/lib/maple/sleep/types";
+import { downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
+import { DEFAULT_TZ, formatDuration, formatRelative, formatTime, formatTimeNear } from "@/lib/maple/time";
+import type { Entry, SleepPlace } from "@/lib/maple/types";
 import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { RecordedTimeField } from "../TimeField";
-import { ContextNote, Label, NoteField, SheetFooter } from "../sheets/parts";
-import { Button, Chip, cx, Sheet, tone } from "../ui";
+import { ContextNote, Label, MoreDetails, SheetFooter } from "../sheets/parts";
+import { Button, Chip, cx, Sheet, TextArea, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { GoalFormSheet } from "./GoalForm";
 import { OutcomeGrid } from "./SleepCards";
 import { CheckinSheet } from "./SleepCheckin";
 import SleepPlanSheet from "./SleepPlanSheet";
-import { useSleep, type SleepApi, type SleepSheet } from "./useSleep";
+import { partnerOf, usePeople, useSleep, type SleepApi, type SleepSheet } from "./useSleep";
 
 const MIN = 60_000;
+const HOUR = 60 * MIN;
 
-/** People who can hold her or lay her down: everyone in the family but photos-only guests. */
-function usePeople(): Member[] {
-  const { state } = useMaple();
-  return (state?.members ?? []).filter((m) => m.role !== "photos");
-}
-
-/** Who's next by default: the person named for it, else the other parent (an owner or member who isn't holding her). */
-function partnerOf(sh: HoldingShift | null, people: Member[], me: string): Member | null {
-  if (sh?.next_holder) return people.find((p) => p.email === sh.next_holder) ?? null;
-  const holder = sh?.holder ?? me;
-  return people.find((p) => p.email !== holder && (p.role === "owner" || p.role === "member") && p.email !== "admin") ?? null;
+/** A row of chips with its label, as one named group (so a screen reader hears "Tags, group", not just "Swaddled, toggle button"). */
+function ChipGroup({ label, optional, children }: { label: string; optional?: boolean; children: ReactNode }) {
+  return (
+    <div>
+      <Label optional={optional}>{label}</Label>
+      <div role="group" aria-label={label} className="flex flex-wrap gap-2">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 function TagChips({ value, onChange }: { value: TryTag[]; onChange: (v: TryTag[]) => void }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <ChipGroup label="Tags" optional>
       {TRY_TAGS.map((t) => (
         <Chip key={t} selected={value.includes(t)} onClick={() => onChange(value.includes(t) ? value.filter((x) => x !== t) : [...value, t])}>
           {TAG_LABEL[t]}
         </Chip>
       ))}
+    </ChipGroup>
+  );
+}
+
+/** A try's note: labelled for a screen reader, 200 characters (the store's limit). */
+function TryNote({ value, onChange, placeholder, readOnly = false }: { value: string; onChange: (v: string) => void; placeholder: string; readOnly?: boolean }) {
+  return (
+    <div>
+      <Label optional={!readOnly}>Note</Label>
+      {readOnly ? (
+        <p className="text-[15px] leading-relaxed break-words whitespace-pre-wrap text-mp-ink-2">{value || "No note"}</p>
+      ) : (
+        <TextArea ariaLabel="Note" maxLength={TRY_NOTE_MAX} value={value} onChange={onChange} placeholder={placeholder} />
+      )}
     </div>
   );
 }
 
 // ── How did it go? ───────────────────────────────────────────────────────
 
-/** The running try's end: tags, a note and an earlier end are optional; one tap on an outcome saves. */
-export function OutcomeSheet({ t, defaultAt, open = true, onClose }: { t: BassinetTry; defaultAt?: string; open?: boolean; onClose: () => void }) {
+/**
+ * The running try's end: the four outcomes first (one tap saves), and when
+ * it ended, tags and a note under Add details, so a small screen opens on
+ * the answer, not the extras.
+ */
+export function OutcomeSheet({ t, defaultAt, details = false, open = true, onClose }: { t: BassinetTry; defaultAt?: string; details?: boolean; open?: boolean; onClose: () => void }) {
   const { state } = useMaple();
   const s = useSleep();
   const v = useVoice();
@@ -66,31 +85,37 @@ export function OutcomeSheet({ t, defaultAt, open = true, onClose }: { t: Bassin
     const done = await s.finishTry(t, o, { at: wokeAt || ago ? end : undefined, tags, note: note.trim() || null });
     if (done) onClose();
   };
+  // What Add details holds, when it differs from the try as it is: "ended 2:05 AM · swaddled · a note".
+  const summary = [
+    !wokeAt && ago ? `ended ${formatTimeNear(end, now, tz)}` : null,
+    tags.join() !== t.tags.join() && tags.length ? tags.map((x) => TAG_LABEL[x].toLowerCase()).join(", ") : null,
+    (note.trim() || null) !== t.note && note.trim() ? "a note" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <Sheet open={open} onClose={onClose} title="How did it go?" subtitle={`In the bassinet since ${formatTime(t.started_at, tz)} · ${formatDuration((end.getTime() - Date.parse(t.started_at)) / 1000)}${s.nth(t) ? ` · ${s.nth(t)}` : ""}`}>
-      <div className="space-y-5">
-        {wokeAt ? (
+      <div className="space-y-4">
+        {wokeAt && (
           <p className={cx(tone.muted, "text-[15px]")}>
             {v.They} woke at {formatTime(wokeAt, tz)}. The try ends then.
           </p>
-        ) : (
-          <div>
-            <Label>Ended</Label>
-            <div className="flex flex-wrap gap-2">
+        )}
+        <OutcomeGrid disabled={s.busy} onPick={(o) => void pick(o)} />
+        <MoreDetails label="Add details" defaultOpen={details} summary={summary || (wokeAt ? "tags or a note" : "when it ended, tags or a note")}>
+          {!wokeAt && (
+            <ChipGroup label="Ended">
               {choices.map((n) => (
                 <Chip key={n} selected={ago === n} onClick={() => setAgo(n)}>
                   {n === 0 ? "Now" : `${n} min ago · ${formatTimeNear(now.getTime() - n * MIN, now, tz)}`}
                 </Chip>
               ))}
-            </div>
-          </div>
-        )}
-        <div>
-          <Label optional>Tags</Label>
+            </ChipGroup>
+          )}
           <TagChips value={tags} onChange={setTags} />
-        </div>
-        <NoteField value={note} onChange={setNote} placeholder={`About ${v.name}'s sleep, like "stirred at 2:30"`} />
-        <OutcomeGrid disabled={s.busy} onPick={(o) => void pick(o)} />
+          <TryNote value={note} onChange={setNote} placeholder={`About ${v.name}'s sleep, like "stirred at 2:30"`} />
+          <p className={cx(tone.faint, "text-[13px]")}>Then tap how it went, above.</p>
+        </MoreDetails>
       </div>
     </Sheet>
   );
@@ -99,18 +124,34 @@ export function OutcomeSheet({ t, defaultAt, open = true, onClose }: { t: Bassin
 // ── I'm getting sleepy ───────────────────────────────────────────────────
 
 /**
- * Exactly two choices, both safe: lay her on her back in the bassinet now
- * (which ends this turn and starts a try, then shows the transfer steps), or
- * wake the partner and hand her over now. Never "keep holding her".
+ * For the person holding her, and only them. Exactly two choices, both
+ * safe: lay her on her back in the bassinet now (which ends the turn and
+ * starts a try, then shows the transfer steps), or wake the partner.
+ * Waking them is only an ask: the sheet stays on "Waking Alex…" with the
+ * bassinet still the big button, and nothing changes hands until Alex has
+ * her (their "I've got her", or "Alex has her" here). Ten minutes on with
+ * nobody taking over, it offers the two safe choices again. Never "keep
+ * holding her".
  */
 export function SleepySheet({ open = true, onClose }: { open?: boolean; onClose: () => void }) {
   const { state, memberName } = useMaple();
   const s = useSleep();
   const v = useVoice();
+  const now = useNow(15_000);
   const people = usePeople();
   const me = state?.me.email ?? "";
-  const partner = partnerOf(s.shift, people, me);
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  // The turn this sheet opened on: once it's handed over, the sheet says so instead of offering anything.
+  const [opened] = useState(() => (s.shift && s.shift.holder === me ? s.shift.id : null));
+  const turn = opened != null ? (s.data.shifts.find((x) => x.id === opened) ?? null) : null;
+  const mine = s.shift && s.shift.holder === me ? s.shift : null;
+  const ask = mine ? askState(mine, now) : null;
+  const partner = partnerOf(mine, people, me);
   const [step, setStep] = useState<"choose" | "steps" | "who">("choose");
+  const taken = !mine && !!turn?.ended_at && turn.ended_how === "handoff" && !!s.shift;
+  const asked = ask?.asked ? memberName(ask.to!) : null;
+  const waking = step === "choose" && !!ask?.asked && !ask.stale;
+  const stale = step === "choose" && !!ask?.asked && ask.stale;
   const choices = sleepyChoices(v, partner ? memberName(partner.email) : null);
 
   const bassinet = async () => {
@@ -118,53 +159,33 @@ export function SleepySheet({ open = true, onClose }: { open?: boolean; onClose:
     if (t) setStep("steps");
   };
   const wake = async (to: string) => {
-    if (!s.shift) {
-      await s.startShift({ holder: to, handoffAt: null, nextHolder: me });
-      onClose();
-      return;
-    }
-    const done = await s.handOff(s.shift, { to, wake: true });
-    if (done) onClose();
+    if (await s.askHandoff(mine, to)) setStep("choose");
+  };
+  const hasHer = async () => {
+    if (!mine || !ask?.to) return;
+    if (await s.handOff(mine, { to: ask.to })) onClose();
   };
 
+  const big = (id: "bassinet" | "partner", label: string, hint: string, onClick: () => void) => (
+    <button
+      key={id}
+      type="button"
+      disabled={s.busy}
+      onClick={onClick}
+      className="mp-control flex min-h-[72px] w-full items-center gap-3 rounded-2xl bg-mp-accent px-4 text-left text-mp-on-accent transition active:scale-[0.99] disabled:opacity-40"
+    >
+      <Icon name={id === "bassinet" ? "bassinet" : "bell"} size={24} />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[17px] font-semibold">{label}</span>
+        <span className="block text-[13px] opacity-90">{hint}</span>
+      </span>
+    </button>
+  );
+  const title = step === "steps" ? "Into the bassinet" : taken ? "Taken over" : waking ? `Waking ${asked}…` : "Getting sleepy?";
+
   return (
-    <Sheet open={open} onClose={onClose} title={step === "steps" ? "Into the bassinet" : "Getting sleepy?"}>
-      {step === "choose" && (
-        <div className="space-y-3">
-          {choices.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              disabled={s.busy}
-              onClick={() => void (c.id === "bassinet" ? bassinet() : partner ? wake(partner.email) : setStep("who"))}
-              className="mp-control flex min-h-[72px] w-full items-center gap-3 rounded-2xl bg-mp-accent px-4 text-left text-mp-on-accent transition active:scale-[0.99] disabled:opacity-40"
-            >
-              <Icon name={c.id === "bassinet" ? "bassinet" : "bell"} size={24} />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[17px] font-semibold">{c.label}</span>
-                <span className="block text-[13px] opacity-90">{c.hint}</span>
-              </span>
-            </button>
-          ))}
-          <ContextNote icon="moon">{sleepyLine(v)}</ContextNote>
-        </div>
-      )}
-      {step === "who" && (
-        <div className="space-y-3">
-          <p className={cx(tone.muted, "text-[15px]")}>Who&apos;s taking over?</p>
-          <div className="flex flex-wrap gap-2">
-            {people
-              .filter((p) => p.email !== (s.shift?.holder ?? me))
-              .map((p) => (
-                <Chip key={p.email} onClick={() => void wake(p.email)}>
-                  {memberName(p.email)}
-                </Chip>
-              ))}
-          </div>
-          <ContextNote icon="moon">{sleepyLine(v)}</ContextNote>
-        </div>
-      )}
-      {step === "steps" && (
+    <Sheet open={open} onClose={onClose} title={title}>
+      {step === "steps" ? (
         <div className="space-y-4">
           <ol className="list-decimal space-y-2 pl-5 text-[15px] text-mp-ink">
             {transferSteps(v).map((x) => (
@@ -174,6 +195,68 @@ export function SleepySheet({ open = true, onClose }: { open?: boolean; onClose:
           <Button size="lg" className="w-full" onClick={onClose}>
             Done
           </Button>
+        </div>
+      ) : taken ? (
+        <div className="space-y-4">
+          <p role="status" className={cx(tone.body, "text-[17px] font-semibold")}>
+            {memberName(s.shift!.holder)} has {v.them} now, since {formatTime(s.shift!.started_at, tz)}.
+          </p>
+          <Button size="lg" className="w-full" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      ) : !mine ? (
+        <div className="space-y-4">
+          <p role="status" className={cx(tone.muted, "text-[15px]")}>
+            {s.shift ? `${memberName(s.shift.holder)} is holding ${v.them} now.` : `Nobody is recorded holding ${v.them} now.`}
+          </p>
+          <Button size="lg" className="w-full" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      ) : waking ? (
+        <div className="space-y-3">
+          <p role="status" className={cx(tone.body, "text-[15px] leading-relaxed")}>
+            {asked}&apos;s phone only sounds if handoff reminders are on. Go wake {asked}.
+          </p>
+          {big("bassinet", choices[0].label, choices[0].hint, () => void bassinet())}
+          <Button variant="soft" size="lg" className="w-full" disabled={s.busy} onClick={() => void hasHer()}>
+            {asked} has {v.them}
+          </Button>
+          <ContextNote icon="moon">{sleepyLine(v)}</ContextNote>
+        </div>
+      ) : step === "who" ? (
+        <div className="space-y-3">
+          <p className={cx(tone.muted, "text-[15px]")} id="sleepy-who">
+            Who should take over?
+          </p>
+          <div role="group" aria-labelledby="sleepy-who" className="flex flex-wrap gap-2">
+            {people
+              .filter((p) => p.email !== me && p.email !== mine.holder)
+              .map((p) => (
+                <Chip key={p.email} onClick={() => void wake(p.email)}>
+                  {memberName(p.email)}
+                </Chip>
+              ))}
+          </div>
+          <ContextNote icon="moon">{sleepyLine(v)}</ContextNote>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {stale && (
+            <p role="status" className={cx(tone.body, "text-[15px] leading-relaxed")}>
+              Nobody has taken over yet ({ask!.minutes} min since you asked {asked}).
+            </p>
+          )}
+          {choices.map((c) =>
+            big(
+              c.id,
+              c.id === "partner" && stale && ask?.to === partner?.email ? `${c.label} again` : c.label,
+              c.hint,
+              () => void (c.id === "bassinet" ? bassinet() : partner ? wake(partner.email) : setStep("who"))
+            )
+          )}
+          <ContextNote icon="moon">{sleepyLine(v)}</ContextNote>
         </div>
       )}
     </Sheet>
@@ -185,7 +268,13 @@ export function SleepySheet({ open = true, onClose }: { open?: boolean; onClose:
 const PLAN_MINUTES = [60, 90, 120, 180] as const;
 const planWords = (m: number) => (m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m / 60}h`);
 
-export function HoldingSheet({ mode, open = true, onClose }: { mode: "start" | "handoff"; open?: boolean; onClose: () => void }) {
+/**
+ * Start a holding turn (who, the planned handoff, who's next, and whether
+ * she's asleep in arms), or record a handoff: someone has her now. From the
+ * holder's phone that's "Alex has her"; from anyone else's it's taking over
+ * ("I've got her"), which shows the catch-up.
+ */
+export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start" | "handoff"; to?: string; open?: boolean; onClose: () => void }) {
   const { state, memberName, now } = useMaple();
   const s = useSleep();
   const v = useVoice();
@@ -194,66 +283,92 @@ export function HoldingSheet({ mode, open = true, onClose }: { mode: "start" | "
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const sh = s.shift;
   const handing = mode === "handoff" && !!sh;
-  const firstWho = handing ? (partnerOf(sh, people, me)?.email ?? people.find((p) => p.email !== sh!.holder)?.email ?? "") : me;
+  // Taking over from someone else's phone: me; handing over from the holder's: the partner.
+  const firstWho = handing
+    ? (to && to !== sh!.holder ? to : sh!.holder !== me && people.some((p) => p.email === me) ? me : (partnerOf(sh, people, me)?.email ?? people.find((p) => p.email !== sh!.holder)?.email ?? ""))
+    : me;
   const [who, setWho] = useState(firstWho);
   const defaultPlan = handing ? Math.round(nextHandoff(sh!, 0) / MIN) : 120;
   const [plan, setPlan] = useState<number | null>((PLAN_MINUTES as readonly number[]).includes(defaultPlan) ? defaultPlan : 120);
-  const [next, setNext] = useState<string | null>(handing ? sh!.holder : partnerOf(null, people, me)?.email ?? null);
+  const [next, setNext] = useState<string | null>(handing ? sh!.holder : (partnerOf(null, people, me)?.email ?? null));
+  const sleeping = (state?.entries ?? []).find((e) => e.kind === "sleep" && e.active) ?? null;
+  const [asleep, setAsleep] = useState(false);
   const at = new Date(now().getTime() + (plan ?? 0) * MIN);
 
   const go = async () => {
     const handoffAt = plan ? at : null;
-    const done = handing ? await s.handOff(sh!, { to: who, handoffAt }) : await s.startShift({ holder: who, handoffAt, nextHolder: next });
-    if (done) onClose();
+    const done = handing ? await s.handOff(sh!, { to: who, handoffAt }) : await s.startShift({ holder: who, handoffAt, nextHolder: next, asleep: asleep && !sleeping });
+    // Taking over opens the catch-up in this sheet's place; anything else just closes.
+    if (done && !(handing && who === me)) onClose();
   };
+  const name = (email: string) => (email === me ? "Me" : memberName(email));
+  // The handoff is recorded as what it is: someone has her now.
+  const label = handing ? (who === me ? `I've got ${v.them}` : who ? `${memberName(who)} has ${v.them}` : "…") : "Start";
 
   return (
     <Sheet
       open={open}
       onClose={onClose}
-      title={handing ? "Hand off" : `Holding ${v.name}`}
-      subtitle={handing ? `${memberName(sh!.holder)} has held ${v.them} since ${formatTime(sh!.started_at, tz)}` : `Someone staying awake while holding ${v.them}`}
-      footer={<SheetFooter onClose={onClose} onPrimary={() => void go()} label={handing ? `Hand off to ${who ? memberName(who) : "…"}` : "Start"} disabled={!who || s.busy} busy={s.busy} />}
+      title={handing ? (sh!.holder === me ? "Hand off" : "Take over") : `Holding ${v.name}`}
+      subtitle={handing ? `${sh!.holder === me ? "You've" : `${memberName(sh!.holder)} has`} held ${v.them} since ${formatTime(sh!.started_at, tz)}` : `Someone staying awake while holding ${v.them}`}
+      footer={<SheetFooter onClose={onClose} onPrimary={() => void go()} label={label} disabled={!who || s.busy} busy={s.busy} />}
     >
       <div className="space-y-5">
-        <div>
-          <Label>{handing ? "Who's taking over" : "Who's holding"}</Label>
-          <div className="flex flex-wrap gap-2">
-            {people
-              .filter((p) => !handing || p.email !== sh!.holder)
-              .map((p) => (
-                <Chip key={p.email} selected={who === p.email} onClick={() => setWho(p.email)}>
-                  {p.email === me ? "Me" : memberName(p.email)}
-                </Chip>
-              ))}
-          </div>
-        </div>
-        <div>
-          <Label>{handing ? "Next planned handoff" : "Planned handoff"}</Label>
-          <div className="flex flex-wrap gap-2">
-            {PLAN_MINUTES.map((m) => (
-              <Chip key={m} selected={plan === m} onClick={() => setPlan(m)}>
-                {`In ${planWords(m)} · ${formatTime(now().getTime() + m * MIN, tz)}`}
+        <ChipGroup label={handing ? "Who has her now" : "Who's holding"}>
+          {people
+            .filter((p) => !handing || p.email !== sh!.holder)
+            .map((p) => (
+              <Chip
+                key={p.email}
+                selected={who === p.email}
+                onClick={() => {
+                  setWho(p.email);
+                  // Who's next is never the person holding her.
+                  if (!handing && next === p.email) setNext(people.find((x) => x.email !== p.email && (x.role === "owner" || x.role === "member") && x.email !== "admin")?.email ?? null);
+                }}
+              >
+                {name(p.email)}
               </Chip>
             ))}
-            <Chip selected={plan === null} onClick={() => setPlan(null)}>
-              No plan
+        </ChipGroup>
+        <ChipGroup label={handing ? "Next planned handoff" : "Planned handoff"}>
+          {PLAN_MINUTES.map((m) => (
+            <Chip key={m} selected={plan === m} onClick={() => setPlan(m)}>
+              {`In ${planWords(m)} · ${formatTime(now().getTime() + m * MIN, tz)}`}
             </Chip>
-          </div>
-        </div>
+          ))}
+          <Chip selected={plan === null} onClick={() => setPlan(null)}>
+            No plan
+          </Chip>
+        </ChipGroup>
         {!handing && (
-          <div>
-            <Label optional>Who&apos;s next</Label>
-            <div className="flex flex-wrap gap-2">
-              {people
-                .filter((p) => p.email !== who)
-                .map((p) => (
-                  <Chip key={p.email} selected={next === p.email} onClick={() => setNext(next === p.email ? null : p.email)}>
-                    {p.email === me ? "Me" : memberName(p.email)}
-                  </Chip>
-                ))}
-            </div>
-          </div>
+          <ChipGroup label="Who's next" optional>
+            {people
+              .filter((p) => p.email !== who)
+              .map((p) => (
+                <Chip key={p.email} selected={next === p.email} onClick={() => setNext(next === p.email ? null : p.email)}>
+                  {name(p.email)}
+                </Chip>
+              ))}
+          </ChipGroup>
+        )}
+        {!handing &&
+          (sleeping ? (
+            <p className={cx(tone.muted, "text-[14px]")}>
+              Asleep since {formatTime(sleeping.started_at, tz)}
+              {(sleeping.data as { place?: SleepPlace }).place ? ` (${SLEEP_PLACE_LABEL[(sleeping.data as { place: SleepPlace }).place].toLowerCase()})` : ""}. That sleep carries on through this turn.
+            </p>
+          ) : (
+            <ChipGroup label="Already asleep?" optional>
+              <Chip selected={asleep} onClick={() => setAsleep(!asleep)}>
+                Asleep in arms
+              </Chip>
+            </ChipGroup>
+          ))}
+        {!handing && asleep && !sleeping && (
+          <p className={cx(tone.muted, "-mt-2 text-[13px] leading-snug")}>
+            Logs {v.their} sleep in arms from now. It carries on through handoffs; laying {v.them} in the bassinet puts the try on it, and ending the turn with {v.them} awake stops it.
+          </p>
         )}
         <ContextNote>
           Every phone shows who&apos;s holding {v.them}, and phones with handoff reminders on (Notifications) hear at the planned time, though a notice can be late. If you start to feel sleepy before then, lay {v.them} in the bassinet or wake someone.
@@ -261,6 +376,102 @@ export function HoldingSheet({ mode, open = true, onClose }: { mode: "start" | "
       </div>
     </Sheet>
   );
+}
+
+// ── the catch-up, for whoever just took over ─────────────────────────────
+
+/**
+ * "I've got her": what the person taking over needs at 3 AM, from the log:
+ * the last feed and the next side, the last diaper, and what's running, with
+ * the next planned handoff. Undo puts the turn back with the person who had her.
+ */
+export function CatchUpSheet({ started, ended, open = true, onClose }: { started: HoldingShift; ended: HoldingShift | null; open?: boolean; onClose: () => void }) {
+  const { state, summary, memberName } = useMaple();
+  const s = useSleep();
+  const v = useVoice();
+  const now = useNow(30_000);
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const lines = catchUpLines({ summary, entries: state?.entries ?? [], now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder });
+  const undo = async () => {
+    if (ended && (await s.undoTakeOver(started, ended))) onClose();
+  };
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={`You have ${v.name}`}
+      subtitle={ended ? `Taken over from ${memberName(ended.holder)} at ${formatTime(started.started_at, tz)}` : `Since ${formatTime(started.started_at, tz)}`}
+      footer={
+        <div className="flex items-center gap-3">
+          {ended && (
+            <Button variant="ghost" size="lg" disabled={s.busy} onClick={() => void undo()}>
+              Undo
+            </Button>
+          )}
+          <Button size="lg" className="flex-1" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <p className={cx(tone.label)}>Catch-up</p>
+        <ul aria-label="Catch-up" className={cx(tone.card, tone.divide, "overflow-hidden")}>
+          {lines.map((l) => (
+            <li key={l.label} className="flex min-h-[52px] items-start gap-3 px-4 py-2.5">
+              <span className="w-20 shrink-0 pt-px text-[13px] font-medium text-mp-ink-2">{l.label}</span>
+              <span className="min-w-0 flex-1 text-[15px] leading-snug text-mp-ink">{l.text}</span>
+            </li>
+          ))}
+        </ul>
+        <ContextNote icon="moon">{sleepyLine(v)}</ContextNote>
+      </div>
+    </Sheet>
+  );
+}
+
+type CatchUpLine = { label: string; text: string };
+
+/** The catch-up's lines, from the log as this phone has it (summary: feed.ts and insights.ts, as Today's Right now). */
+export function catchUpLines(input: {
+  summary: ReturnType<typeof useMaple>["summary"];
+  entries: readonly Entry[];
+  now: Date;
+  tz: string;
+  v: ReturnType<typeof useVoice>;
+  me: string;
+  memberName: (email: string | null | undefined) => string;
+  next: string | null;
+  nextHolder: string | null;
+}): CatchUpLine[] {
+  const { summary, now, tz, v } = input;
+  const out: CatchUpLine[] = [];
+  const nursing = summary?.active.find((e) => e.kind === "feed") ?? null;
+  const fed = summary?.lastFed ?? null;
+  const side = summary?.next ? `next side ${nextSideText(summary.next)}` : null;
+  if (nursing) out.push({ label: "Feed", text: `Nursing now, since ${formatTime(nursing.started_at, tz)}` });
+  else if (fed) out.push({ label: "Feed", text: `Last fed ${formatTime(fed.at, tz)} (${formatRelative(fed.at, now)})${side ? ` · ${side}` : ""}` });
+  else out.push({ label: "Feed", text: "No feed logged lately" });
+  const diaper = summary?.lastDiaper ?? null;
+  if (diaper) {
+    const d = diaper.data;
+    const what = d.pee && d.poop ? "wet and dirty" : d.poop ? "dirty" : "wet";
+    out.push({ label: "Diaper", text: `Last changed ${formatTime(diaper.started_at, tz)} (${formatRelative(diaper.started_at, now)}) · ${what}` });
+  } else out.push({ label: "Diaper", text: "No diaper logged lately" });
+  const running = (summary?.active ?? []).filter((e) => e.kind !== "feed");
+  const sleep = running.find((e) => e.kind === "sleep");
+  const place = sleep ? (sleep.data as { place?: SleepPlace }).place : undefined;
+  const others = running.filter((e) => e.kind !== "sleep").map((e) => (e.kind === "tummy" ? "tummy time" : e.kind === "pump" ? "pumping" : e.kind));
+  const parts = [
+    ...(sleep ? [`asleep since ${formatTime(sleep.started_at, tz)}${place ? ` (${SLEEP_PLACE_LABEL[place].toLowerCase()})` : ""}, ${downWords((now.getTime() - Date.parse(sleep.started_at)) / MIN)}`] : []),
+    ...others,
+  ];
+  out.push({ label: "Running", text: parts.length ? parts.join(" · ").replace(/^./, (c) => c.toUpperCase()) : nursing ? "The nursing timer" : `Nothing else; ${v.they}${v.verb("'s")} awake by the log` });
+  if (input.next) {
+    const who = input.nextHolder ? (input.nextHolder === input.me ? "you" : input.memberName(input.nextHolder)) : null;
+    out.push({ label: "Handoff", text: `Next planned for ${formatTime(input.next, tz)}${who ? `, to ${who}` : ""}` });
+  }
+  return out;
 }
 
 // ── Edit a try ───────────────────────────────────────────────────────────
@@ -316,32 +527,23 @@ export function TrySheet({ t, open = true, onClose }: { t: BassinetTry; open?: b
         <RecordedTimeField label="Laid down" value={start} onChange={setStart} tz={tz} max={end ?? undefined} onInvalidChange={setBadStart} />
         {end && <RecordedTimeField label="Ended" value={end} onChange={setEnd} tz={tz} min={start} onInvalidChange={setBadEnd} />}
         {t.ended_at && (
-          <div>
-            <Label>How it went</Label>
-            <div className="flex flex-wrap gap-2">
-              {TRY_OUTCOMES.map((o) => (
-                <Chip key={o} selected={outcome === o} onClick={() => setOutcome(o)}>
-                  {OUTCOME_LABEL[o]}
-                </Chip>
-              ))}
-            </div>
-          </div>
-        )}
-        <div>
-          <Label optional>Tags</Label>
-          <TagChips value={tags} onChange={setTags} />
-        </div>
-        <div>
-          <Label>Laid down by</Label>
-          <div className="flex flex-wrap gap-2">
-            {people.map((p) => (
-              <Chip key={p.email} selected={by === p.email} onClick={() => setBy(p.email)}>
-                {memberName(p.email)}
+          <ChipGroup label="How it went">
+            {TRY_OUTCOMES.map((o) => (
+              <Chip key={o} selected={outcome === o} onClick={() => setOutcome(o)}>
+                {OUTCOME_LABEL[o]}
               </Chip>
             ))}
-          </div>
-        </div>
-        <NoteField value={note} onChange={setNote} placeholder={`About ${v.name}'s sleep`} readOnly={readOnly} />
+          </ChipGroup>
+        )}
+        <TagChips value={tags} onChange={setTags} />
+        <ChipGroup label="Laid down by">
+          {people.map((p) => (
+            <Chip key={p.email} selected={by === p.email} onClick={() => setBy(p.email)}>
+              {memberName(p.email)}
+            </Chip>
+          ))}
+        </ChipGroup>
+        <TryNote value={note} onChange={setNote} placeholder={`About ${v.name}'s sleep`} readOnly={readOnly} />
         {t.sleep_entry_id && <ContextNote>This try sits on {v.their} sleep in the log, so that sleep is counted once. Moving the laid-down time moves that sleep&apos;s start too when they matched.</ContextNote>}
       </fieldset>
     </Sheet>
@@ -350,7 +552,12 @@ export function TrySheet({ t, open = true, onClose }: { t: BassinetTry; open?: b
 
 // ── Log an earlier try ───────────────────────────────────────────────────
 
-/** A try nobody tapped Put down for: when she was laid down, when it ended, how it went. */
+/**
+ * A try nobody tapped Put down for, usually last night's, logged the morning
+ * after: one tap on a sleep already in the log fills both times; a clock
+ * still ahead today reads as last night's; a likely twin asks in the footer
+ * (Same one, close / Save anyway) before anything is saved.
+ */
 export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose: () => void }) {
   const { state, memberName, now } = useMaple();
   const s = useSleep();
@@ -376,7 +583,19 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
     setEnd(d);
     setTwin(null);
   }, []);
-  const bad = badStart || badEnd || end.getTime() <= start.getTime() || end.getTime() > now().getTime() + MIN;
+  // Last night's sleeps in the log (the last 18 hours, at least 5 minutes) that no try sits on yet, newest first.
+  const t0 = now().getTime();
+  const onTry = new Set(s.data.tries.map((t) => t.sleep_entry_id).filter((x): x is number => x != null));
+  const logged = (state?.entries ?? [])
+    .filter((e) => e.kind === "sleep" && !e.active && !!e.ended_at && !onTry.has(e.id) && t0 - Date.parse(e.started_at) <= 18 * HOUR && Date.parse(e.ended_at) - Date.parse(e.started_at) >= 5 * MIN)
+    .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+    .slice(0, 4);
+  const fill = (e: Entry) => {
+    setStart(new Date(e.started_at));
+    setEnd(new Date(e.ended_at!));
+    setTwin(null);
+  };
+  const bad = badStart || badEnd || end.getTime() <= start.getTime() || end.getTime() > t0 + MIN;
   const save = async (allowDuplicate = false) => {
     if (!outcome) return;
     const r = await s.logTry({ start, end, outcome, tags, note: note.trim() || null, putDownBy: by, allowDuplicate });
@@ -384,6 +603,7 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
     if ("duplicate" in r) return setTwin(r.duplicate);
     onClose();
   };
+  const twinWords = twin ? `A try from ${formatTime(twin.started_at, tz)}${twin.outcome ? ` (${OUTCOME_LABEL[twin.outcome].toLowerCase()})` : ""} is already logged. Is this the same one? Nothing is saved yet.` : "";
   return (
     <Sheet
       open={open}
@@ -391,42 +611,62 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
       onClose={onClose}
       title="Log an earlier try"
       subtitle="A bassinet try nobody started on the app"
-      footer={<SheetFooter onClose={onClose} onPrimary={() => void save(!!twin)} label={twin ? "Save anyway" : "Save"} disabled={!outcome || bad || s.busy} busy={s.busy} />}
+      footer={
+        twin ? (
+          // The question sits by the buttons it's about, so a second tap on Save can't save a twin unseen.
+          <div>
+            <p role="alert" className="mb-2.5 text-center text-[14px] leading-snug text-mp-ink">
+              {twinWords}
+            </p>
+            <div className="flex gap-3">
+              <Button variant="soft" size="lg" className="flex-1" onClick={onClose}>
+                Same one, close
+              </Button>
+              <Button size="lg" className="flex-1" disabled={s.busy} onClick={() => void save(true)}>
+                Save anyway
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <SheetFooter onClose={onClose} onPrimary={() => void save()} label="Save" disabled={!outcome || bad || s.busy} busy={s.busy} hint={!outcome ? "Choose how it went to save." : undefined} />
+        )
+      }
     >
       <fieldset disabled={s.busy} className="min-w-0 space-y-5">
-        <RecordedTimeField label="Laid down" value={start} onChange={moveStart} tz={tz} max={end} onInvalidChange={setBadStart} />
-        <RecordedTimeField label="Ended" value={end} onChange={moveEnd} tz={tz} min={start} onInvalidChange={setBadEnd} />
-        <div>
-          <Label>How it went</Label>
-          <div className="flex flex-wrap gap-2">
-            {TRY_OUTCOMES.map((o) => (
-              <Chip key={o} selected={outcome === o} onClick={() => (setOutcome(o), setTwin(null))}>
-                {OUTCOME_LABEL[o]}
-              </Chip>
-            ))}
+        {logged.length > 0 && (
+          <div>
+            <ChipGroup label="From the log">
+              {logged.map((e) => {
+                const on = Math.abs(start.getTime() - Date.parse(e.started_at)) < MIN && Math.abs(end.getTime() - Date.parse(e.ended_at!)) < MIN;
+                const place = (e.data as { place?: SleepPlace }).place;
+                return (
+                  <Chip key={e.id} selected={on} onClick={() => fill(e)} aria-label={`Sleep ${formatTime(e.started_at, tz)} to ${formatTime(e.ended_at!, tz)}${place ? `, ${SLEEP_PLACE_LABEL[place].toLowerCase()}` : ""}: use these times`}>
+                    {formatTime(e.started_at, tz)}–{formatTime(e.ended_at!, tz)}
+                  </Chip>
+                );
+              })}
+            </ChipGroup>
+            <p className={cx(tone.faint, "mt-1.5 text-[13px]")}>One tap fills both times from a sleep already logged.</p>
           </div>
-        </div>
-        <div>
-          <Label optional>Tags</Label>
-          <TagChips value={tags} onChange={setTags} />
-        </div>
-        <div>
-          <Label>Laid down by</Label>
-          <div className="flex flex-wrap gap-2">
-            {people.map((p) => (
-              <Chip key={p.email} selected={by === p.email} onClick={() => setBy(p.email)}>
-                {p.email === me ? "Me" : memberName(p.email)}
-              </Chip>
-            ))}
-          </div>
-        </div>
-        <NoteField value={note} onChange={setNote} placeholder={`About ${v.name}'s sleep`} />
-        {twin && (
-          <p role="alert" className={cx(tone.inset, "px-4 py-3 text-[15px] text-mp-ink")}>
-            A try from {formatTime(twin.started_at, tz)}
-            {twin.outcome ? ` (${OUTCOME_LABEL[twin.outcome].toLowerCase()})` : ""} is already logged. If this is a different one, save it anyway; nothing was saved yet.
-          </p>
         )}
+        <RecordedTimeField label="Laid down" value={start} onChange={moveStart} tz={tz} max={end} onInvalidChange={setBadStart} lastNight />
+        <RecordedTimeField label="Ended" value={end} onChange={moveEnd} tz={tz} min={start} onInvalidChange={setBadEnd} lastNight />
+        <ChipGroup label="How it went">
+          {TRY_OUTCOMES.map((o) => (
+            <Chip key={o} selected={outcome === o} onClick={() => (setOutcome(o), setTwin(null))}>
+              {OUTCOME_LABEL[o]}
+            </Chip>
+          ))}
+        </ChipGroup>
+        <TagChips value={tags} onChange={setTags} />
+        <ChipGroup label="Laid down by">
+          {people.map((p) => (
+            <Chip key={p.email} selected={by === p.email} onClick={() => setBy(p.email)}>
+              {p.email === me ? "Me" : memberName(p.email)}
+            </Chip>
+          ))}
+        </ChipGroup>
+        <TryNote value={note} onChange={setNote} placeholder={`About ${v.name}'s sleep`} />
         <ContextNote>It sits on {v.their} sleep in the log at that time, or adds that sleep, so nothing is counted twice.</ContextNote>
       </fieldset>
     </Sheet>
@@ -488,14 +728,16 @@ export function SleepSheetHost({ api }: { api: SleepApi }) {
     case "checkin":
       return <CheckinSheet key={key(`c${shown.night ?? ""}`)} night={shown.night} open={open} onClose={shown.back === "goals" ? toGoals : closeSheet} />;
     case "outcome":
-      return t ? <OutcomeSheet key={key("o")} t={t} defaultAt={shown.at} open={open} onClose={closeSheet} /> : null;
+      return t ? <OutcomeSheet key={key("o")} t={t} defaultAt={shown.at} details={shown.details} open={open} onClose={closeSheet} /> : null;
     case "try":
       return t ? <TrySheet key={key("t")} t={t} open={open} onClose={closeSheet} /> : null;
     case "sleepy":
       return <SleepySheet key={key("s")} open={open} onClose={closeSheet} />;
     case "holding":
-      return <HoldingSheet key={key(`h-${shown.mode}`)} mode={shown.mode} open={open} onClose={closeSheet} />;
+      return <HoldingSheet key={key(`h-${shown.mode}`)} mode={shown.mode} to={shown.to} open={open} onClose={closeSheet} />;
     case "log":
       return <LogTrySheet key={key("l")} open={open} onClose={closeSheet} />;
+    case "catchup":
+      return <CatchUpSheet key={key(`cu-${shown.started.id}`)} started={shown.started} ended={shown.ended} open={open} onClose={closeSheet} />;
   }
 }

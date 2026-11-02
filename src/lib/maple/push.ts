@@ -884,7 +884,8 @@ async function retryWriteNotices(scope: FamilyScope): Promise<{ sent: number; fa
     const what = String(r.key).split("|")[1] ?? "";
     const log = /^log:(\d+)$/.exec(what);
     const nurse = /^nurse:(\d+):/.exec(what);
-    const ask = /^handoffnow:(\d+)$/.exec(what);
+    // handoffnow:<shift>:<ask ms> (a turn's ask); the bare form is from before asks had their own key.
+    const ask = /^handoffnow:(\d+)(?::\d+)?$/.exec(what);
     if (log) doses.add(Number(log[1]));
     else if (nurse) feeds.add(Number(nurse[1]));
     else if (ask) asks.add(Number(ask[1]));

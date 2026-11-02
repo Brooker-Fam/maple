@@ -29,7 +29,7 @@ import { activeTimers, getEntry, NotFound, StoreUnavailable } from "../store";
 import { addDays, dayKey, formatDuration, formatTime } from "../time";
 import { SLEEP_PLACES, type Entry, type Member } from "../types";
 import type { Voice } from "../voice";
-import { numberTries, planToday, planTodayLine, progressLines, shiftStatus, sleepAge, sleepGuidance, sleepSignals, snoozeUntil, stageSuggestion, tryDayKey, tryDayLabel, type GuideView } from "./engine";
+import { askState, numberTries, planToday, planTodayLine, progressLines, shiftStatus, sleepAge, sleepGuidance, sleepSignals, snoozeUntil, stageSuggestion, tryDayKey, tryDayLabel, type GuideView } from "./engine";
 import {
   checkinWords,
   cleanGoalInput,
@@ -52,6 +52,9 @@ import {
   type GoalWords,
 } from "./goals";
 import {
+  acceptHandoff,
+  askHandoff,
+  cancelAsk,
   cleanNote,
   cleanPlanPatch,
   cleanTags,
@@ -218,14 +221,29 @@ function tryJson(t: BassinetTry, ctx: Ctx, nums = numberTries([t], ctx.tz)) {
 
 function shiftJson(s: HoldingShift, ctx: Ctx) {
   const st = shiftStatus(s, ctx.now);
+  const ask = askState(s, ctx.now);
   return {
     id: shiftRef(s.id),
     holder: who(s.holder, ctx),
     since_local: whenText(s.started_at, ctx),
     ...(s.handoff_at ? { handoff_planned_local: whenText(s.handoff_at, ctx), handoff_due: st.due, minutes_to_handoff: st.minutesLeft } : {}),
     ...(s.next_holder ? { next_holder: who(s.next_holder, ctx) } : {}),
+    // Asked, not handed over: the holder still has her until the person asked does.
+    ...(ask.asked ? { asked_to: who(ask.to, ctx), asked_local: whenText(ask.at!, ctx), minutes_since_ask: ask.minutes, nobody_took_over: ask.stale } : {}),
     ...(s.ended_at ? { ended_local: whenText(s.ended_at, ctx), ended_how: s.ended_how } : { open: true }),
   };
+}
+
+/** A turn's open ask in words, with the 10-minute rule: past it, the two safe choices again, never "keep holding". */
+function askLine(s: HoldingShift, ctx: Ctx): string | null {
+  const ask = askState(s, ctx.now);
+  if (!ask.asked) return null;
+  const vo = voiceOf(ctx);
+  const asked = who(ask.to, ctx);
+  const head = `${who(s.holder, ctx)} asked ${asked} to take over at ${formatTime(ask.at!, ctx.tz)} (${plural(ask.minutes, "minute")} ago); nothing has changed hands, so ${who(s.holder, ctx)} is still holding ${vo.them}`;
+  return ask.stale
+    ? `${head}. Nobody has taken over yet: the two safe choices are laying ${vo.them} on ${vo.their} back in the bassinet now (bassinet_try start) or waking ${asked} again (holding ask).`
+    : `${head} until ${asked} has ${vo.them} (holding accept from ${asked}, or hand_off when ${who(s.holder, ctx)} says so).`;
 }
 
 /** "Bassinet try t12 running since 2:10 AM (15 min), laid down by Sam: try 1 tonight." */
@@ -250,7 +268,8 @@ function shiftLine(s: HoldingShift, ctx: Ctx): string {
       : `; planned handoff ${formatTime(s.handoff_at, ctx.tz)} (in ${formatDuration((st.minutesLeft ?? 0) * 60)})`
     : "";
   const next = s.next_holder ? ` to ${who(s.next_holder, ctx)}` : "";
-  return `Holding: ${who(s.holder, ctx)} is holding ${vo.name} awake since ${formatTime(s.started_at, ctx.tz)} (${shiftRef(s.id)})${plan}${s.handoff_at ? next : ""}.`;
+  const ask = askLine(s, ctx);
+  return `Holding: ${who(s.holder, ctx)} is holding ${vo.name} awake since ${formatTime(s.started_at, ctx.tz)} (${shiftRef(s.id)})${plan}${s.handoff_at ? next : ""}.${ask ? ` ${ask}` : ""}`;
 }
 
 function linkLine(w: TryWrite, ctx: Ctx): string | null {
@@ -872,17 +891,18 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     "holding",
     {
       title: `Who's holding ${vo.name}`,
-      description: `Someone holding ${vo.name} while staying awake: start (who, planned handoff, who's next), hand_off (sleepy: true when the holder is getting sleepy; the family's phones are told), end. Into the bassinet is bassinet_try start.`,
+      description: `Someone holding ${vo.name} while staying awake: start (who, planned handoff, who's next; asleep: true when ${vo.they}${vo.verb("'s")} asleep in the holder's arms, which logs that sleep), ask (the holder is getting sleepy and wants \`to\` to take over now: the family's phones are told, and nothing changes hands until that person has ${vo.them}), accept (the person talking has ${vo.them} now), hand_off (\`to\` has ${vo.them} now), end (nobody's holding ${vo.them}; it stops a sleep in arms). Into the bassinet is bassinet_try start.`,
       inputSchema: {
-        action: z.enum(["start", "hand_off", "end"]),
+        action: z.enum(["start", "ask", "accept", "hand_off", "end"]),
         holder: z.string().max(80).nullish().describe('A name, or "me" (default).'),
-        to: z.string().max(80).nullish().describe("hand_off: who takes over"),
+        to: z.string().max(80).nullish().describe("ask: who to wake; hand_off: who has them now"),
         at: local("When it happened (default now)"),
         minutes_ago: ago("when it happened"),
         handoff_at: local("The planned handoff"),
         handoff_in_minutes: z.number().int().min(15).max(720).nullish(),
         next_holder: z.string().max(80).nullish(),
-        sleepy: z.boolean().nullish(),
+        asleep: z.boolean().nullish().describe("start: asleep in the holder's arms now"),
+        sleepy: z.boolean().nullish().describe("hand_off: the holder is getting sleepy (the same as ask)"),
         client_ref: z.string().max(100).nullish(),
       },
       annotations: WRITE_ANN,
@@ -899,17 +919,53 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         if (!open) throw new ToolError(`Nobody is recorded holding ${v.name} right now.`);
         const w = await endShift(ctx.fam, open.id, { at: when, how: "ended", by: ctx.who.id });
         holdingChanged({ familyId: ctx.fam.familyId });
-        return ok(`Ended ${who(w.shift.holder, ctx)}'s holding shift (${shiftRef(w.shift.id)}) at ${whenText(w.shift.ended_at!, ctx)}.`, { ended: true, shift: shiftJson(w.shift, ctx) });
+        const stopped = w.sleep ? ` ${v.Name}'s sleep in arms (#${w.sleep.id}) stopped then too.` : "";
+        return ok(`Ended ${who(w.shift.holder, ctx)}'s holding shift (${shiftRef(w.shift.id)}) at ${whenText(w.shift.ended_at!, ctx)}.${stopped}`, {
+          ended: true,
+          shift: shiftJson(w.shift, ctx),
+          ...(w.sleep ? { sleep_stopped: w.sleep.id } : {}),
+        });
+      }
+      const open = await openShift(ctx.fam, ctx.baby.id);
+      // "Wake [partner]": an ask, never a handoff (hand_off with sleepy: true is the same). Nothing changes hands until they have her.
+      if (a.action === "ask" || (a.action === "hand_off" && a.sleepy)) {
+        if (!a.to) throw new ToolError("Say who to wake (to).");
+        const to = personArg(a.to, ctx, "to")!;
+        const w = await askHandoff(ctx.fam, { babyId: ctx.baby.id, id: open?.id ?? null, to, by: ctx.who.id, source: ctx.who.via, device: ctx.device, clientId: ref(a.client_ref, ctx) });
+        holdingChanged({ familyId: ctx.fam.familyId, wake: { shiftId: w.shift.id, device: ctx.device } });
+        const holder = who(w.shift.holder, ctx);
+        const asked = who(to, ctx);
+        return ok(
+          [
+            `Asked ${asked} to take over at ${formatTime(w.shift.asked_at!, ctx.tz)} (${shiftRef(w.shift.id)}). Nothing has changed hands: ${holder} is still holding ${v.name} until ${asked} has ${v.them} (holding accept from ${asked}, or hand_off when ${holder} says ${asked} has ${v.them}).`,
+            `Phones in the family with handoff reminders on get a notice now; ${asked}'s only sounds if theirs is on, so go and wake ${asked}. If ${holder} gets sleepier before ${asked} comes, lay ${v.them} on ${v.their} back in the bassinet now (bassinet_try start).`,
+            ...noteLines(assumed),
+          ].join("\n"),
+          { asked: true, shift: shiftJson(w.shift, ctx), undo: "undo_last" }
+        );
+      }
+      // "I've got her": the person talking takes over the turn as it is now (asked or not), with a catch-up to read.
+      if (a.action === "accept") {
+        if (!open) throw new ToolError(`Nobody is recorded holding ${v.name} right now. To start holding ${v.them}, use action "start".`);
+        const handoff = handoffArg(a, ctx, ctx.now, assumed);
+        const w = await acceptHandoff(ctx.fam, open.id, { by: ctx.who.id, source: ctx.who.via, device: ctx.device, ...(handoff !== undefined ? { handoffAt: handoff } : {}) });
+        holdingChanged({ familyId: ctx.fam.familyId });
+        return ok(
+          [
+            `${who(w.shift.holder, ctx)} has ${v.name} now (${shiftRef(w.shift.id)}, since ${formatTime(w.shift.started_at, ctx.tz)}), taking over from ${who(open.holder, ctx)}${w.shift.handoff_at ? `; the next handoff is planned for ${formatTime(w.shift.handoff_at, ctx.tz)}` : ""}.`,
+            "For a catch-up (the last feed and next side, the last diaper, anything running), call maple_status.",
+            ...noteLines(assumed),
+          ].join("\n"),
+          { handed_off: true, shift: shiftJson(w.shift, ctx), ended: w.ended ? shiftJson(w.ended, ctx) : null, undo: "undo_last" }
+        );
       }
       const handoff = handoffArg(a, ctx, when, assumed);
-      const open = await openShift(ctx.fam, ctx.baby.id);
       if (a.action === "hand_off" && open) {
         if (!a.to) throw new ToolError("Say who takes over (to).");
         const w = await handOff(ctx.fam, open.id, { to: personArg(a.to, ctx, "to")!, at: when, ...(handoff !== undefined ? { handoffAt: handoff } : {}), by: ctx.who.id, source: ctx.who.via, device: ctx.device });
-        holdingChanged({ familyId: ctx.fam.familyId, ...(a.sleepy ? { wake: { shiftId: w.shift.id, device: ctx.device } } : {}) });
+        holdingChanged({ familyId: ctx.fam.familyId });
         const lines = [
           `Handed off at ${whenText(w.shift.started_at, ctx)}: ${who(w.shift.holder, ctx)} is holding ${v.name} now${w.shift.handoff_at ? `, with the next handoff planned for ${formatTime(w.shift.handoff_at, ctx.tz)}` : ""}. ${who(open.holder, ctx)} held ${v.them} from ${formatTime(open.started_at, ctx.tz)} (${shiftRef(open.id)}).`,
-          ...(a.sleepy ? ["Phones in the family with handoff reminders on get a notice now."] : []),
         ];
         return ok([...lines, ...noteLines(assumed)].join("\n"), { handed_off: true, shift: shiftJson(w.shift, ctx), ended: w.ended ? shiftJson(w.ended, ctx) : null });
       }
@@ -922,22 +978,30 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         at: when,
         handoffAt: handoff ?? null,
         nextHolder: personArg(a.next_holder, ctx, "next_holder"),
+        asleep: a.action === "start" && a.asleep === true,
         by: ctx.who.id,
         source: ctx.who.via,
         clientId: ref(a.client_ref, ctx),
         device: ctx.device,
       });
-      if (w.status === "created") holdingChanged({ familyId: ctx.fam.familyId, ...(a.sleepy ? { wake: { shiftId: w.shift.id, device: ctx.device } } : {}) });
+      if (w.status === "created") holdingChanged({ familyId: ctx.fam.familyId });
       const head =
         w.status === "open"
           ? `${who(w.shift.holder, ctx)} is already holding ${v.name} (since ${whenText(w.shift.started_at, ctx)}, ${shiftRef(w.shift.id)}). To swap, use action "hand_off".`
           : w.status === "deduped"
             ? `Already saved: ${shiftLine(w.shift, ctx)}`
             : `Saved holding shift ${shiftRef(w.shift.id)}: ${shiftLine(w.shift, ctx).replace(/^Holding: /, "").replace(/ \(h\d+\)/, "")}`;
-      return ok([head, ...noteLines(assumed)].join("\n"), {
+      // Asleep in arms: a sleep in the log, carried through handoffs, sat on by a try, stopped by ending the turn awake.
+      const arms = w.sleep
+        ? w.madeSleep
+          ? `${v.Name}'s sleep in arms is logged from ${formatTime(w.sleep.started_at, ctx.tz)} (#${w.sleep.id}): it carries on through handoffs, a bassinet try sits on it, and ending the turn awake stops it. Don't also log this sleep.`
+          : `${v.Name}'s sleep timer was already running (#${w.sleep.id}, since ${formatTime(w.sleep.started_at, ctx.tz)}), so no second sleep was started.`
+        : null;
+      return ok([head, ...(arms ? [arms] : []), ...noteLines(assumed)].join("\n"), {
         started: w.status === "created",
         ...(w.status === "open" ? { already_open: true } : {}),
         shift: shiftJson(w.shift, ctx),
+        ...(w.sleep ? { sleep: w.sleep.id } : {}),
         undo: "undo_last",
       });
     }
@@ -1136,8 +1200,37 @@ const ref = (raw: string | null | undefined, ctx: Ctx) => {
   return r ? clientIdFor(ctx, r) : null;
 };
 
-/** Tries and shifts this member made through an assistant in the last 30 minutes, newest first: undo_last's share. */
-export async function undoableSleep(ctx: Ctx, sources: string[]): Promise<{ kind: "try" | "shift"; id: number; created_at: string; sleepId: number | null; made: boolean } | null> {
+/**
+ * Tries and shifts this member made through an assistant in the last 30
+ * minutes, and an open ask they made ("Wake [partner]"), newest first:
+ * undo_last's share. An ask is taken back (cancelAsk), never its whole turn.
+ */
+export async function undoableSleep(ctx: Ctx, sources: string[]): Promise<{ kind: "try" | "shift" | "ask"; id: number; created_at: string; sleepId: number | null; made: boolean; updatedAt?: string } | null> {
+  const { query } = await import("@/lib/db");
+  const asks = await query(
+    `SELECT id, asked_at, updated_at FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND asked_to IS NOT NULL
+       AND asked_at >= NOW() - INTERVAL '30 minutes' AND ended_at IS NULL AND deleted_at IS NULL ORDER BY asked_at DESC, id DESC LIMIT 1`,
+    [ctx.fam.familyId, ctx.baby.id, ctx.who.id]
+  );
+  if (asks === null) throw new StoreUnavailable();
+  const made = await undoableMade(ctx, sources);
+  const a = asks[0] as Record<string, unknown> | undefined;
+  const aAt = a ? new Date(a.asked_at as string).toISOString() : null;
+  if (a && (!made || aAt! >= made.created_at)) return { kind: "ask", id: Number(a.id), created_at: aAt!, sleepId: null, made: false, updatedAt: new Date(a.updated_at as string).toISOString() };
+  return made;
+}
+
+/** Take back an ask (undo_last): the turn goes on as before, with nobody asked. */
+export async function undoAsk(ctx: Ctx, id: number, updatedAt: string): Promise<CallToolResult> {
+  const w = await cancelAsk(ctx.fam, id, { by: ctx.who.id, expectUpdatedAt: updatedAt });
+  holdingChanged({ familyId: ctx.fam.familyId });
+  return ok(`Took back the ask: nobody is asked to take over now, and ${who(w.shift.holder, ctx)} is still holding ${voiceOf(ctx).name} (${shiftRef(w.shift.id)}).`, {
+    unasked: true,
+    shift: shiftJson(w.shift, ctx),
+  });
+}
+
+async function undoableMade(ctx: Ctx, sources: string[]): Promise<{ kind: "try" | "shift"; id: number; created_at: string; sleepId: number | null; made: boolean } | null> {
   const { query } = await import("@/lib/db");
   const [tries, shifts] = await Promise.all([
     query(

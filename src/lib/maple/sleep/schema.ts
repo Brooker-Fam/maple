@@ -111,6 +111,7 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_shifts_handoff ON maple_sleep_shifts (handoff_at) WHERE ended_at IS NULL AND deleted_at IS NULL AND handoff_at IS NOT NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_open ON maple_sleep_shifts (family_id, baby_id) WHERE ended_at IS NULL AND deleted_at IS NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_client ON maple_sleep_shifts (family_id, client_id) WHERE client_id IS NOT NULL`);
+  await migrateShiftAsks();
 
   await query(`CREATE TABLE IF NOT EXISTS maple_sleep_goals (
     id BIGSERIAL PRIMARY KEY,
@@ -161,4 +162,15 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_checkins_client ON maple_sleep_checkins (family_id, client_id) WHERE client_id IS NOT NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_night ON maple_sleep_checkins (family_id, baby_id, night DESC) WHERE deleted_at IS NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_updated ON maple_sleep_checkins (family_id, baby_id, updated_at DESC)`);
+}
+
+/**
+ * A holding turn's ask ("Wake [partner]"): who the holder asked to take over
+ * and when, both nullable. Nothing changes hands until that person has her,
+ * so an ask is never a handoff. Additive: an older release reads past them
+ * and shows the turn as it was.
+ */
+async function migrateShiftAsks(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_to TEXT`);
+  await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_at TIMESTAMPTZ`);
 }
