@@ -10,6 +10,7 @@ import { Button, cx } from "../ui";
 import { useMaple } from "../useMaple";
 import { CopyButton, DANGER_TEXT, Disclosure, GROUP, Section } from "./parts";
 import SiriManualSetup from "./SiriManualSetup";
+import SiriSleepGuide from "./SiriSleepGuide";
 
 type PersonalToken = { id: number; label: string | null; created_at: string; last_used_at: string | null };
 type FreshKey = { token: string; record: PersonalToken };
@@ -98,6 +99,7 @@ export default function SiriSetup() {
           {!fresh && <p className="mb-2 text-[13px] text-mp-ink-3">Copy the key from the Text action in an existing shortcut, or make a new key below.</p>}
           <div className="divide-y divide-mp-line">{SIRI_SHORTCUTS.slice(1).map((shortcut) => <ShortcutLink key={shortcut.action} shortcut={shortcut} />)}</div>
         </Disclosure>}
+        {!readOnly && <SiriSleepGuide />}
         <Disclosure label="Your Siri keys" summary={tokens ? `${tokens.length}` : undefined} open={keysOpen} onToggle={() => setKeysOpen((value) => !value)}>
           <p className="mb-2 text-[13px] leading-relaxed text-mp-ink-2">A key lets shortcuts access your family as you. Remove one to disconnect every shortcut that uses it.</p>
           {tokens?.length === 0 && <p className="py-2 text-sm text-mp-ink-3">No Siri keys yet.</p>}
@@ -111,7 +113,7 @@ export default function SiriSetup() {
         </Disclosure>
         <SiriManualSetup url={`${origin}/api/maple/quick`} fresh={fresh?.token ?? null} />
       </div>
-      <p className="mt-2 px-1 text-[13px] leading-snug text-mp-ink-3">Siri may ask you to unlock. You can also run a shortcut from the Action Button or Home Screen.</p>
+      <p className="mt-2 px-1 text-[13px] leading-snug text-mp-ink-3">Siri may ask you to unlock. You can also run a shortcut from Back Tap, the Action Button or the Home Screen.</p>
     </Section>
   );
 }
