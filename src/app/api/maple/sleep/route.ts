@@ -36,9 +36,9 @@ import {
   saveCheckin,
   setGoalStep,
   SleepConflict,
-  startArmsSleep,
   SleepInputError,
   sleepStateFor,
+  startArmsSleep,
   startShift,
   startTry,
   undoFinish,
@@ -76,7 +76,9 @@ export const dynamic = "force-dynamic";
  * revision it was made against) answers 409 with the record as it is now
  * (`current`, `code`: changed, finished, running or open); nothing is saved.
  * A check-in is always the signed-in adult's own: nothing in the request
- * can say whose it is.
+ * can say whose it is. A holding turn's "Wake [partner]" is shift.ask,
+ * never a handoff: the handoff is recorded only by shift.accept ("I've got
+ * her", the signed-in person) or the holder's shift.handoff.
  */
 
 type Body = Record<string, unknown>;
