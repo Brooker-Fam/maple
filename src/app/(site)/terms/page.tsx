@@ -33,7 +33,9 @@ export default function Terms() {
         The sleep plan&rsquo;s stages, and its word that recent tries could support the next one, are Maple&rsquo;s own simple
         rules about your logged tries, not medical guidance; you decide whether and when to change the plan. A handoff
         reminder can arrive late or not at all. It doesn&rsquo;t keep anyone awake, and nothing in Maple makes it safe to fall
-        asleep while holding a baby.
+        asleep while holding a baby. A sleep goal&rsquo;s progress and coach notes only count what your family logged and
+        checked in; they aren&rsquo;t medical guidance, and any change to how your baby is fed is one to talk over with your
+        pediatrician or lactation consultant first.
       </p>
       <div className="site-callout">
         <p className="mt-0">

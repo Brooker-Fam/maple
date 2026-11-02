@@ -89,12 +89,20 @@ export default function Privacy() {
         sleep is counted once.
       </p>
       <p>
+        If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,
+        its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults, and the date
+        and short note of its last review. Each adult can check in the morning after with one answer about their own protected
+        window (yes, partly or no) and an optional short note. A check-in never records hours slept, mood or anyone&rsquo;s
+        health, and only the adult it&rsquo;s about can save or delete it. Goals stay, open or closed, until your family&rsquo;s
+        log is deleted.
+      </p>
+      <p>
         Mom&rsquo;s page keeps her food and drinks, any amounts she records, optional food items and portions, nutrient values and food groups,
         whether values were estimated or entered from a label, and any notes about those estimates. It also keeps her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
         her daily check-ins, including the optional PHQ-9 and GAD-7 questionnaires.
       </p>
       <p>
-        Deleting an entry from the baby&rsquo;s log, a bassinet try or a holding turn, or one of mom&rsquo;s food, drink, medicine, dose, temperature or question entries, hides it so
+        Deleting an entry from the baby&rsquo;s log, a bassinet try, a holding turn or a sleep check-in, or one of mom&rsquo;s food, drink, medicine, dose, temperature or question entries, hides it so
         you can restore it; it stays in the database until your family&rsquo;s log is deleted. Deleting one of her check-ins
         removes it for good at once, and so does deleting everything on her page. The separate control to remove imported
         MyChart measurements also removes those entries for good, as described below.
@@ -312,8 +320,9 @@ export default function Privacy() {
       <p>
         An owner chooses each person&rsquo;s access, in Maple&rsquo;s settings, its chat or a connected assistant. Photos-only
         guests see shared moments, photos and captions, along with the baby&rsquo;s display name and age. They cannot read the
-        daily baby log, recovery page or chat. View-only guests can read the baby&rsquo;s log and moments; members can also add
-        and edit them. Separately, the owner chooses what each person sees of the recovery page when it is set up: members see
+        daily baby log, recovery page or chat. View-only guests can read the baby&rsquo;s log and moments, and the family&rsquo;s
+        sleep goals but never the adults&rsquo; sleep check-ins; members can also add and edit them, and see everyone&rsquo;s
+        check-ins. Separately, the owner chooses what each person sees of the recovery page when it is set up: members see
         and add to it unless the owner limits them to reading it or hides it, and view-only guests don&rsquo;t see it unless the
         owner lets them read it. Reading it never includes mom&rsquo;s check-ins. Mom always has her own page. New invitations
         default to photos-only access. Owners see and change everything, the recovery page included, and an owner can make
