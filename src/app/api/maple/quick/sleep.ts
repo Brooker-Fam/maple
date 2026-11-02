@@ -3,10 +3,14 @@ import { json } from "@/lib/maple/api";
 import { carePersonName, careSession } from "@/lib/maple/care-store";
 import type { FamilyCtx } from "@/lib/maple/family";
 import { FeedEditError } from "@/lib/maple/feed";
-import { memberName } from "@/lib/maple/insights";
+import { memberName, summarize } from "@/lib/maple/insights";
 import { holdingChanged } from "@/lib/maple/push-hooks";
+import { familyCarePerson } from "@/lib/maple/push-wake";
+import { catchUpSpoken, minutesSaid } from "@/lib/maple/sleep/catchup";
 import { numberTries, sleepSignals, tryDayKey, tryDayLabel } from "@/lib/maple/sleep/engine";
 import { goalStartKey, lastNightKey, nightWords, seesCheckins, windowOn, windowOnNight } from "@/lib/maple/sleep/goals";
+import { feedCover } from "@/lib/maple/sleep/roster";
+import { activeRosters } from "@/lib/maple/sleep/roster-read";
 import {
   acceptHandoff,
   askHandoff,
@@ -88,15 +92,8 @@ const notDone = (speak: string, extra: Record<string, unknown> = {}, status = 20
 /** "9:42": a clock time to say, in the family's zone, without AM/PM (Siri's lines are short). */
 export const clock = (at: string | number | Date, tz: string) => formatTime(at, tz).replace(/\s*[AP]M$/i, "");
 
-/** "25 minutes", "1 hour 5 minutes". */
-export function minutesSaid(min: number): string {
-  const m = Math.max(0, Math.round(min));
-  if (m < 1) return "under a minute";
-  if (m < 60) return `${m} minute${m === 1 ? "" : "s"}`;
-  const h = Math.floor(m / 60);
-  const r = m % 60;
-  return `${h} hour${h === 1 ? "" : "s"}${r ? ` ${r} minute${r === 1 ? "" : "s"}` : ""}`;
-}
+/** "25 minutes", "1 hour 5 minutes" (sleep/catchup.ts, which says the catch-up and the recap). */
+export { minutesSaid };
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const ms = (v: string | null | undefined) => (v ? Date.parse(v) : NaN);
@@ -375,14 +372,15 @@ const has = (id: string, me: string, members: readonly Member[]) => (id === me ?
  * the person asked that turned handoff reminders on): nothing changes hands until the
  * person asked has her. From anyone else it's taking over (shift.accept, on
  * the turn as it is now), with the next planned handoff, never inside the
- * next holder's protected window (store handOff), and a sleep in arms that
- * runs on through it said. Saying it again within two minutes (or a retry)
- * never hands her back and never sends the notice twice: it says where
- * things stand.
+ * next holder's protected window (store handOff), a sleep in arms that
+ * runs on through it said, and the catch-up. With nobody on a turn, the
+ * speaker's own starts with the ask on it, as the app's does. Saying it
+ * again within two minutes (or a retry) never hands her back and never
+ * sends the notice twice: it says where things stand.
  */
 export async function handoff(c: QuickCtx, members: Member[]): Promise<Response> {
   const open = await openShift(c.fam, c.baby.id);
-  if (!open) return notDone("Nobody is on a holding turn right now.");
+  if (!open) return startAndAsk(c, members);
   if (open.created_by === c.me.email && c.now.getTime() - ms(open.created_at) <= AGAIN_MS) {
     const recent = await listShifts(c.fam, c.baby.id, { from: new Date(c.now.getTime() - HOUR), limit: 10 });
     if (recent.some((s) => s.id !== open.id && s.ended_how === "handoff" && near(s.ended_at, open.started_at))) {
@@ -429,10 +427,39 @@ async function askToTakeOver(c: QuickCtx, open: HoldingShift, members: Member[])
 }
 
 /**
+ * "Maple handoff" with nobody recorded holding her: the speaker is, so, as
+ * the app's ask does (askHandoff with no turn), their own turn starts with
+ * the ask on it, to the only other adult. Nothing changes hands until that
+ * person has her; Undo takes the ask back. With nobody clear to ask (two or
+ * more other adults), it saves nothing and points to the app.
+ */
+async function startAndAsk(c: QuickCtx, members: Member[]): Promise<Response> {
+  const to = askWho({ holder: c.me.email, next_holder: null, asked_to: null }, members);
+  if (!to) return notDone("Nobody is on a holding turn right now. To ask someone to take over, use the app.");
+  let w;
+  try {
+    w = await askHandoff(c.fam, { babyId: c.baby.id, to, by: c.me.email, source: "shortcut", device: null, clientId: c.clientId });
+  } catch (err) {
+    if (err instanceof SleepConflict) return notDone("Someone changed the holding turn just now, so nothing was saved.", {}, 409);
+    if (err instanceof SleepInputError) return notDone("Who should take over? Ask in the app.", {}, 400);
+    throw err;
+  }
+  holdingChanged({ familyId: c.fam.familyId, wake: { shiftId: w.shift.id, device: null } });
+  const name = memberName(to, members);
+  return say(
+    `Started your holding turn and asked ${name} to take over. ${name}'s phone only sounds if handoff reminders are on, so go wake ${name}. Getting sleepy? Put ${c.vo.them} on ${c.vo.their} back in the bassinet.`,
+    { asked: true, started: true, shift: { id: `h${w.shift.id}`, asked_to: to, asked_at: w.shift.asked_at } }
+  );
+}
+
+/**
  * Anyone else's "handoff": they have her now (acceptHandoff, the app's I've
  * got her). The next planned handoff, and why it moved off the next
  * holder's protected window; a sleep in arms running on through it, so
- * they stop it if she's awake.
+ * they stop it if she's awake; then the app's catch-up in a few short
+ * sentences (sleep/catchup.ts catchUpSpoken: the last feed with its side
+ * and the next side, the last diaper, what else is running, and how to feed
+ * her in the protected window of the one going off duty, by the roster).
  */
 async function takeOver(c: QuickCtx, open: HoldingShift, members: Member[]): Promise<Response> {
   let w;
@@ -450,8 +477,18 @@ async function takeOver(c: QuickCtx, open: HoldingShift, members: Member[]): Pro
   if (why?.planned_at) bits.push(`Next handoff at ${clock(why.planned_at, c.tz)}, after ${whose} protected sleep.`);
   else if (why) bits.push(`No next handoff planned: ${whose} protected sleep runs past 12 hours from now.`);
   else if (w.shift.handoff_at) bits.push(`Next handoff at ${clock(w.shift.handoff_at, c.tz)}.`);
-  const arms = (await activeTimers(c.fam, c.baby.id)).find((e) => e.kind === "sleep" && (e.data as { place?: string }).place === "arms");
+  const [entries, roster, care] = await Promise.all([
+    listEntries(c.fam, { babyId: c.baby.id, from: new Date(c.now.getTime() - 72 * HOUR), includeActive: true, limit: 2000 }),
+    activeRosters(c.fam),
+    familyCarePerson(c.fam.familyId),
+  ]);
+  const arms = entries.find((e) => e.active && e.kind === "sleep" && (e.data as { place?: string }).place === "arms");
   if (arms) bits.push(`${c.vo.Their} sleep in arms has been running since ${clock(arms.started_at, c.tz)}; if ${c.vo.they}${c.vo.verb("'s")} awake, say Maple awake.`);
+  // The catch-up, as the app's sheet has it, and the feeding plan in the protected window of the one who handed over.
+  const s = summarize({ entries, baby: c.baby, members, now: c.now, vo: c.vo });
+  const until = w.shift.handoff_at ? ms(w.shift.handoff_at) : c.now.getTime() + 12 * HOUR;
+  const cover = feedCover(roster, open.holder, c.now.getTime(), until, c.tz);
+  bits.push(...catchUpSpoken(s, { now: c.now, tz: c.tz, vo: c.vo, clock: (at) => clock(at, c.tz), armsSaid: !!arms, taker: c.me.email, cover, careMember: care?.member ?? null, name: (id) => memberName(id, members) }));
   return say(bits.join(" "), { shift: { id: `h${w.shift.id}`, handoff_at: w.shift.handoff_at }, ...(why ? { next_handoff_moved: why } : {}) });
 }
 
@@ -533,7 +570,12 @@ export async function sleepStatusLine(o: { fam: FamilyCtx; baby: Baby; me: Membe
         ? `; the handoff was due at ${clock(shift.handoff_at, tz)}`
         : `; handoff at ${clock(shift.handoff_at, tz)}`
       : "";
-    return { line: `${who} been holding ${o.vo.them} since ${clock(shift.started_at, tz)}${plan}.`, trySleepId: null };
+    // The person asked to take over hears that it's them, and how to say they have her.
+    const asked =
+      shift.asked_to === o.me.email && shift.asked_at && shift.holder !== o.me.email
+        ? ` ${memberName(shift.holder, o.members)} asked you to take over at ${clock(shift.asked_at, tz)}; say Maple handoff once you have ${o.vo.them}.`
+        : "";
+    return { line: `${who} been holding ${o.vo.them} since ${clock(shift.started_at, tz)}${plan}.${asked}`, trySleepId: null };
   }
   if (!seesCheckins(o.me.role)) return { line: null, trySleepId: null };
   const goals = (await listGoals(o.fam, o.baby.id)).filter((g) => g.status === "active");
