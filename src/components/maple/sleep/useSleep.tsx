@@ -29,7 +29,8 @@ export type PlanTab = "plan" | "goals" | "guidance" | "progress";
 
 export type SleepSheet =
   | { kind: "plan"; tab?: PlanTab }
-  | { kind: "outcome"; tryId: number; at?: string }
+  /** How did it go? (`details`: opened for tags, a note or an earlier end, so Add details starts open). */
+  | { kind: "outcome"; tryId: number; at?: string; details?: boolean }
   | { kind: "sleepy" }
   /** Start a turn, or record a handoff (`to`: who has her, preselected: the strip's "Hand off to Alex", or "Take over"). */
   | { kind: "holding"; mode: "start" | "handoff"; to?: string }

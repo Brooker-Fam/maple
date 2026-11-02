@@ -111,7 +111,7 @@ export function TryCard({ t }: { t: BassinetTry }) {
           <p className={cx(tone.label, "[@media(max-height:640px)]:sr-only")}>{woke ? "How did the try go?" : "When it ends, how did it go?"}</p>
           <OutcomeGrid disabled={s.busy} onPick={(o) => void s.finishTry(t, o, woke ? { at: new Date(sleep!.ended_at!) } : {})} />
           <div className="flex flex-wrap gap-x-1">
-            <Button variant="ghost" size="sm" onClick={() => s.openSheet({ kind: "outcome", tryId: t.id })}>
+            <Button variant="ghost" size="sm" onClick={() => s.openSheet({ kind: "outcome", tryId: t.id, details: true })}>
               Tags, note or an earlier end
             </Button>
             <Button variant="ghost" size="sm" onClick={() => s.openSheet({ kind: "try", tryId: t.id })}>

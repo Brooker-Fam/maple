@@ -891,7 +891,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     "holding",
     {
       title: `Who's holding ${vo.name}`,
-      description: `Someone holding ${vo.name} while staying awake: start (who, planned handoff, who's next; asleep: true when ${vo.they}${vo.verb("'s")} asleep in their arms, which logs that sleep), ask (the holder is getting sleepy and wants \`to\` to take over now: the family's phones are told, and nothing changes hands until they have ${vo.them}), accept (the person talking has ${vo.them} now), hand_off (\`to\` has ${vo.them} now), end (nobody's holding ${vo.them}; it stops a sleep in arms). Into the bassinet is bassinet_try start.`,
+      description: `Someone holding ${vo.name} while staying awake: start (who, planned handoff, who's next; asleep: true when ${vo.they}${vo.verb("'s")} asleep in the holder's arms, which logs that sleep), ask (the holder is getting sleepy and wants \`to\` to take over now: the family's phones are told, and nothing changes hands until that person has ${vo.them}), accept (the person talking has ${vo.them} now), hand_off (\`to\` has ${vo.them} now), end (nobody's holding ${vo.them}; it stops a sleep in arms). Into the bassinet is bassinet_try start.`,
       inputSchema: {
         action: z.enum(["start", "ask", "accept", "hand_off", "end"]),
         holder: z.string().max(80).nullish().describe('A name, or "me" (default).'),

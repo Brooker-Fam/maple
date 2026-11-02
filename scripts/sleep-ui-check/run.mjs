@@ -284,6 +284,13 @@ try {
   for (let i = 0; i < 4; i++) assert((await height(outcomes.nth(i))) >= 56, "Outcome buttons are big");
   assert.match(await card.innerText(), /try 1 tonight/);
   await shot("try-running");
+  // Asked for tags or a note, How did it go? opens with its details out.
+  await card.getByRole("button", { name: "Tags, note or an earlier end", exact: true }).click();
+  const withDetails = page.getByRole("dialog", { name: "How did it go?", exact: true });
+  await withDetails.getByRole("group", { name: "Ended" }).waitFor();
+  assert.equal(await withDetails.getByRole("button", { name: /^Add details/ }).getAttribute("aria-expanded"), "true");
+  await page.keyboard.press("Escape");
+  await withDetails.waitFor({ state: "hidden" });
   // At 320x568 the four outcomes clear the dock.
   await page.setViewportSize({ width: 320, height: 568 });
   await page.evaluate(() => window.scrollTo(0, 0));

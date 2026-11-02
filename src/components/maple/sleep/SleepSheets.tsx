@@ -68,7 +68,7 @@ function TryNote({ value, onChange, placeholder, readOnly = false }: { value: st
  * it ended, tags and a note under Add details, so a small screen opens on
  * the answer, not the extras.
  */
-export function OutcomeSheet({ t, defaultAt, open = true, onClose }: { t: BassinetTry; defaultAt?: string; open?: boolean; onClose: () => void }) {
+export function OutcomeSheet({ t, defaultAt, details = false, open = true, onClose }: { t: BassinetTry; defaultAt?: string; details?: boolean; open?: boolean; onClose: () => void }) {
   const { state } = useMaple();
   const s = useSleep();
   const v = useVoice();
@@ -102,7 +102,7 @@ export function OutcomeSheet({ t, defaultAt, open = true, onClose }: { t: Bassin
           </p>
         )}
         <OutcomeGrid disabled={s.busy} onPick={(o) => void pick(o)} />
-        <MoreDetails label="Add details" summary={summary || (wokeAt ? "tags or a note" : "when it ended, tags or a note")}>
+        <MoreDetails label="Add details" defaultOpen={details} summary={summary || (wokeAt ? "tags or a note" : "when it ended, tags or a note")}>
           {!wokeAt && (
             <ChipGroup label="Ended">
               {choices.map((n) => (
@@ -318,7 +318,15 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
           {people
             .filter((p) => !handing || p.email !== sh!.holder)
             .map((p) => (
-              <Chip key={p.email} selected={who === p.email} onClick={() => setWho(p.email)}>
+              <Chip
+                key={p.email}
+                selected={who === p.email}
+                onClick={() => {
+                  setWho(p.email);
+                  // Who's next is never the person holding her.
+                  if (!handing && next === p.email) setNext(people.find((x) => x.email !== p.email && (x.role === "owner" || x.role === "member") && x.email !== "admin")?.email ?? null);
+                }}
+              >
                 {name(p.email)}
               </Chip>
             ))}
@@ -720,7 +728,7 @@ export function SleepSheetHost({ api }: { api: SleepApi }) {
     case "checkin":
       return <CheckinSheet key={key(`c${shown.night ?? ""}`)} night={shown.night} open={open} onClose={shown.back === "goals" ? toGoals : closeSheet} />;
     case "outcome":
-      return t ? <OutcomeSheet key={key("o")} t={t} defaultAt={shown.at} open={open} onClose={closeSheet} /> : null;
+      return t ? <OutcomeSheet key={key("o")} t={t} defaultAt={shown.at} details={shown.details} open={open} onClose={closeSheet} /> : null;
     case "try":
       return t ? <TrySheet key={key("t")} t={t} open={open} onClose={closeSheet} /> : null;
     case "sleepy":
