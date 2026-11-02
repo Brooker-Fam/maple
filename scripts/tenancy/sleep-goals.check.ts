@@ -366,6 +366,12 @@ async function main() {
     eq(g.coach.review_due, true, "eight days without a review");
     ok(/Coach note: Review due/.test(r.text) && /Coaching: Ask one question at a time/.test(r.text), r.text);
     ok(Array.isArray(r.sc.coach_guardrails) && (r.sc.coach_guardrails as string[]).some((l) => /lactation consultant/.test(l)), "guardrails");
+    const keys = Object.keys(r.sc);
+    ok(keys.indexOf("guidance") >= 0 && keys.indexOf("guidance") < keys.indexOf("goals"), `the safety guidance comes before the goals, so a cut never loses it: ${keys.join(", ")}`);
+    // A goal six weeks in: the tool's JSON carries its last four weeks, and says how many came before.
+    await sql(`UPDATE maple_sleep_goals SET created_at = NOW() - INTERVAL '40 days' WHERE family_id = 1 AND title = 'Sleep in our room, both of us rested'`);
+    const long = ((await call("sleep_plan", {}, alpha)).sc.goals as { title: string; progress: { weeks: { n: number }[]; earlier_weeks_not_shown?: number; targets: { weeks?: unknown[] }[] } }[]).find((x) => x.title === "Sleep in our room, both of us rested")!;
+    eq([long.progress.weeks.map((w) => w.n), long.progress.earlier_weeks_not_shown, long.progress.targets[0].weeks?.length], [[3, 4, 5, 6], 2, 4], "the last four of six weeks");
     const goalText = r.text.split("\n").filter((l) => /^(Sleep goal|Aim:|Steps:|Check-ins|Roster:|Hint|Coach note:)/.test(l)).join("\n");
     const judged = goalText.match(/\b(fail(ed|ure)?|streaks?|grades?|scores?|best|worst)\b/i);
     ok(goalText.length > 0 && !judged, `a judging word: ${judged?.[0]}`);

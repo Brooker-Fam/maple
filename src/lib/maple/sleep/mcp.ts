@@ -320,31 +320,37 @@ function goalJson(g: SleepGoal, ctx: Ctx) {
   };
 }
 
-/** A goal's progress for a model: per target and week, with the sample sizes. */
+/** Weeks of a goal's progress a tool result carries (the app's goals view has them all). */
+const TOOL_WEEKS = 4;
+
+/** A goal's progress for a model: per target and week (the last TOOL_WEEKS), with the sample sizes. */
 function goalProgressJson(p: GoalProgress, ctx: Ctx) {
+  const shown = new Set(p.weeks.slice(-TOOL_WEEKS).map((w) => w.n));
+  const recent = <T extends { week: number }>(ws: T[]) => ws.filter((w) => shown.has(w.week));
+  const hidden = p.weeksHidden + p.weeks.length - shown.size;
   return {
     starts_on: p.startsOn,
     target_date: p.endsOn,
     days_left: p.daysLeft,
     week_now: p.weekNow,
     weeks_total: p.weeksTotal,
-    weeks: p.weeks.map((w) => ({ n: w.n, from: w.from, to: w.to, nights_so_far: w.nights })),
-    ...(p.weeksHidden ? { earlier_weeks_not_shown: p.weeksHidden } : {}),
+    weeks: p.weeks.filter((w) => shown.has(w.n)).map((w) => ({ n: w.n, from: w.from, to: w.to, nights_so_far: w.nights })),
+    ...(hidden ? { earlier_weeks_not_shown: hidden } : {}),
     targets: p.targets.map((t) => {
       const aim = targetWords(t.target, (id) => who(id, ctx));
       switch (t.kind) {
         case "bassinet_nights":
-          return { id: t.id, aim, weeks: t.weeks.map((w) => ({ week: w.week, nights_counted: w.counted, of_nights_with_a_finished_try: w.tried, nights_so_far: w.nights })) };
+          return { id: t.id, aim, weeks: recent(t.weeks).map((w) => ({ week: w.week, nights_counted: w.counted, of_nights_with_a_finished_try: w.tried, nights_so_far: w.nights })) };
         case "bassinet_stretch":
           return {
             id: t.id,
             aim,
-            weeks: t.weeks.map((w) => ({ week: w.week, stretches: w.stretches, longest: w.longestSec == null ? null : formatDuration(w.longestSec), reached_aim: w.atLeast })),
+            weeks: recent(t.weeks).map((w) => ({ week: w.week, stretches: w.stretches, longest: w.longestSec == null ? null : formatDuration(w.longestSec), reached_aim: w.atLeast })),
             longest: t.longest ? { length: formatDuration(t.longest.sec), from_local: whenText(t.longest.start, ctx) } : null,
           };
         case "protected_window":
           return t.weeks
-            ? { id: t.id, aim, weeks: t.weeks.map((w) => ({ week: w.week, yes: w.yes, partly: w.partly, no: w.no, nights_checked_in: w.checkedIn, nights_on_roster: w.planned })) }
+            ? { id: t.id, aim, weeks: recent(t.weeks).map((w) => ({ week: w.week, yes: w.yes, partly: w.partly, no: w.no, nights_checked_in: w.checkedIn, nights_on_roster: w.planned })) }
             : { id: t.id, aim, counted_from: "the adults' own check-ins" };
         case "custom":
           return { id: t.id, aim, counted: false };
@@ -589,8 +595,9 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         suggestion: suggestion && !suggestion.snoozed ? { to_stage: suggestion.to, tries: suggestion.tries, days: suggestion.days, stayed_30_plus_of_last: `${suggestion.stayed} of ${suggestion.recent}` } : null,
         recent_tries: tries.slice(0, 10).map((t) => tryJson(t, ctx, nums)),
         ...(progress ? { progress } : {}),
-        ...(goalsOut.length ? { goals: goalsOut, coach_guardrails: coachGuardrails(v) } : {}),
         guidance: { now: guidance.now.map(guideJson), sections: guidance.sections.map((s) => ({ section: s.title, items: s.items.map(guideJson) })) },
+        // After the guidance, so a chat result cut at its length limit never loses the safety items; the lines above carry each goal.
+        ...(goalsOut.length ? { goals: goalsOut, coach_guardrails: coachGuardrails(v) } : {}),
       });
     }
   );
