@@ -470,8 +470,8 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                     </div>
                   </div>
                   <div>
-                    <Label>Nights a week it holds</Label>
-                    <Stepper ariaLabel="nights a week the window holds" value={t.per_week} min={1} max={7} onChange={(v) => setTarget(t.key, { per_week: v })} />
+                    <Label>Nights a week they get it</Label>
+                    <Stepper ariaLabel="nights a week they get their window's sleep" value={t.per_week} min={1} max={7} onChange={(v) => setTarget(t.key, { per_week: v })} />
                   </div>
                   <p className={cx(tone.muted, "text-[13px] leading-snug")}>
                     Counted from {t.member === s.me ? "your" : `${memberName(t.member)}'s`} own morning check-ins.
