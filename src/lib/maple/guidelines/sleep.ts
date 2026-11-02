@@ -18,7 +18,10 @@
  *
  * Sources were read on 2026-11-02 (the AAP's HealthyChildren.org pages, the
  * AAP's 2022 policy statement and its technical report, and NICHD's Safe to
- * Sleep breastfeeding handout). Recheck them when this file changes.
+ * Sleep breastfeeding handout; for going back to work, the Office on Women's
+ * Health, Texas HHS's Breastmilk Counts, a 2016 survey of new parents'
+ * driving and CDC NIOSH's drowsy-driving training). Recheck them when this
+ * file changes.
  */
 import { emergencySigns } from "../guidelines";
 import type { PlanStage } from "../sleep/types";
@@ -125,6 +128,26 @@ const NICHD_BREASTFEEDING: GuideSource = {
 const AAP_DEHYDRATION: GuideSource = {
   label: "AAP: Signs of dehydration in infants and children",
   url: "https://www.healthychildren.org/English/health-issues/injuries-emergencies/Pages/dehydration.aspx",
+};
+/** The Office on Women's Health: nursing more at night once the nursing parent is back at work ("reverse-cycling"). */
+const OWH_BACK_TO_WORK: GuideSource = {
+  label: "Office on Women's Health: Breastfeeding and going back to work",
+  url: "https://womenshealth.gov/breastfeeding/breastfeeding-home-work-and-public/breastfeeding-and-going-back-work",
+};
+/** Texas HHS (Breastmilk Counts, by Texas WIC): a bottle at 4 weeks old or two weeks before the return to work or school, whichever is sooner. */
+const TEXAS_BOTTLES: GuideSource = {
+  label: "Texas HHS, Breastmilk Counts (Texas WIC): Bottle feeding your baby",
+  url: "https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/",
+};
+/** A small, early survey of new parents' sleep and driving (72 parents): poor sleep quality and near misses. */
+const NEW_PARENTS_DRIVING: GuideSource = {
+  label: "Malish, Arastu and O'Brien: A preliminary study of new parents, sleep disruption, and driving (Maternal and Child Health Journal, 2016)",
+  url: "https://pubmed.ncbi.nlm.nih.gov/26541593/",
+};
+/** CDC NIOSH: plan how to avoid driving drowsy (a ride from family or a friend, other transportation, a nap first). */
+const NIOSH_DROWSY_DRIVING: GuideSource = {
+  label: "CDC NIOSH: Training for nurses on shift work and long work hours, module 11 (driving)",
+  url: "https://www.cdc.gov/niosh/work-hour-training-for-nurses/longhours/mod11/05.html",
 };
 
 const CHECKED = "2026-11-02";
@@ -397,5 +420,46 @@ export const nightFeedLine = (v: Voice): string => `Feeling sleepy? Wake someone
 /** The transfer steps (the transfer-steps item's). */
 export const transferSteps = (v: Voice): string[] => SLEEP_GUIDES.find((g) => g.id === "transfer-steps")!.steps!(v);
 
-/** Who reviews: every item still waiting for a person's sign-off, for the docs and the check. */
-export const pendingReview = (): readonly SleepGuide[] => SLEEP_GUIDES.filter((g) => g.needsReview);
+/** The ids the Back to work template and its coach notes cite (goals.ts): bottles before the day back, more night nursing after it, and a drowsy drive. */
+export const WORK_BOTTLES = "work-bottles";
+export const WORK_NIGHT_NURSING = "work-night-nursing";
+export const WORK_DROWSY_DRIVING = "work-drowsy-driving";
+
+/**
+ * Going back to work: the sourced words behind what the Back to work
+ * template and its coach notes say. Bottles before the day back follow Texas
+ * HHS (the sooner of about 4 weeks old or two weeks before, and only after
+ * their pediatrician's or lactation consultant's yes, as every feeding
+ * change is here); more night nursing after it is OWH's "reverse-cycling";
+ * the drowsy drive is a small, early survey of new parents, with NIOSH's
+ * plans for not driving drowsy. Sourced, dated and waiting for review like
+ * the rest, but not in the family's guidance list (sleepGuidance reads
+ * SLEEP_GUIDES): goals.ts cites them by id (workGuide).
+ */
+export const WORK_GUIDES: readonly SleepGuide[] = [
+  item({
+    id: WORK_BOTTLES, section: "normal", minDays: 0, maxDays: YEAR, basis: "source",
+    title: fixed("Bottles before going back to work"),
+    body: (v) =>
+      `If ${v.name} nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. Ask ${v.their} pediatrician or lactation consultant first.`,
+    sources: [TEXAS_BOTTLES],
+  }),
+  item({
+    id: WORK_NIGHT_NURSING, section: "normal", minDays: 0, maxDays: YEAR, basis: "source",
+    title: fixed("More night nursing after going back"),
+    body: fixed("When the nursing parent goes back to work, some babies eat less during the day and nurse more often at night, which is called reverse cycling. Others eat well during the day and still nurse more at night, maybe for the closeness."),
+    sources: [OWH_BACK_TO_WORK],
+  }),
+  item({
+    id: WORK_DROWSY_DRIVING, section: "bad_day", minDays: 0, maxDays: YEAR, basis: "source",
+    title: fixed("Driving after a short night"),
+    body: fixed("In one small, early survey of 72 new parents, poor sleep quality went with a sixfold increase in near misses on the road. If you're very sleepy, plan how to avoid driving drowsy: a ride from family or a friend, other transportation, or a nap first."),
+    sources: [NEW_PARENTS_DRIVING, NIOSH_DROWSY_DRIVING],
+  }),
+];
+
+/** One of WORK_GUIDES by its id (WORK_BOTTLES, WORK_NIGHT_NURSING, WORK_DROWSY_DRIVING). */
+export const workGuide = (id: string): SleepGuide | undefined => WORK_GUIDES.find((g) => g.id === id);
+
+/** Who reviews: every item still waiting for a person's sign-off (the guidance list's and going back to work's), for the docs and the check. */
+export const pendingReview = (): readonly SleepGuide[] => [...SLEEP_GUIDES, ...WORK_GUIDES].filter((g) => g.needsReview);

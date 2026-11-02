@@ -6,6 +6,7 @@
  */
 import { emergencySigns } from "../src/lib/maple/guidelines";
 import { feedingSleepyWords, nightFeedLine, SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
+import { WORK_BOTTLES, WORK_DROWSY_DRIVING, WORK_GUIDES, WORK_NIGHT_NURSING, workGuide } from "../src/lib/maple/guidelines/sleep";
 import {
   AGE_BANDS,
   askState,
@@ -646,7 +647,7 @@ check("words: try times are named moments or a local clock time", () => {
 });
 
 check("review: every item is still waiting for a person's sign-off (listed for release)", () => {
-  eq(pendingReview().length, SLEEP_GUIDES.length, "pending");
+  eq(pendingReview().length, SLEEP_GUIDES.length + WORK_GUIDES.length, "pending");
 });
 
 // ── sleep goals: weeks, targets, the roster, check-ins and coaching ──────
@@ -1794,6 +1795,40 @@ check("safety (round 3): the refusals say what they found and stay helpful: held
   const rules: GoalRules = { ...RULES, v: SHE };
   eq(cleanGoalInput({ title: "Safer nights", why: "Alex dozed off holding her on the sofa and it scared us" }, rules, "create").fields.why, "Alex dozed off holding her on the sofa and it scared us", "the near miss saves");
   throwsInput(() => cleanGoalInput({ title: "Safer nights", steps: [{ title: "Hold her on the sofa while she sleeps" }] }, rules, "create"), /^Step 1: Maple won't plan sleep on a sofa;/, "a step that plans it");
+});
+
+check("guidance (round 3): going back to work has sourced words for the coach to cite: bottles at the sooner of about 4 weeks or two weeks before (Texas HHS), more night nursing after (OWH's reverse cycling), a drowsy drive (a small survey and NIOSH), dated and waiting for review, never in the guidance list", () => {
+  // Three more hosts, for these items: the Office on Women's Health, Texas HHS's Breastmilk Counts (Texas WIC) and CDC NIOSH.
+  const hosts = new Set([...ALLOWED_HOSTS, "womenshealth.gov", "breastmilkcounts.com", "www.cdc.gov"]);
+  eq(WORK_GUIDES.map((g) => g.id), [WORK_BOTTLES, WORK_NIGHT_NURSING, WORK_DROWSY_DRIVING], "the exported ids");
+  const ids = new Set(SLEEP_GUIDES.map((g) => g.id));
+  for (const g of WORK_GUIDES) {
+    ok(!ids.has(g.id) && workGuide(g.id) === g, `${g.id}: its own id, found by workGuide`);
+    eq([g.reviewed, g.needsReview, g.basis, pendingReview().includes(g)], ["2026-11-02", true, "source", true], `${g.id}: reviewed and waiting for sign-off`);
+    ok((SLEEP_SECTIONS as readonly string[]).includes(g.section) && g.minDays === 0 && g.maxDays >= 365, `${g.id}: section and ages`);
+    for (const s of g.sources) ok(new URL(s.url).protocol === "https:" && hosts.has(new URL(s.url).host) && s.label.trim().length > 0, `${g.id}: source ${s.url}`);
+  }
+  eq(workGuide(WORK_BOTTLES)!.sources.map((s) => s.url), ["https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/"], "Texas HHS");
+  eq(workGuide(WORK_NIGHT_NURSING)!.sources.map((s) => s.url), ["https://womenshealth.gov/breastfeeding/breastfeeding-home-work-and-public/breastfeeding-and-going-back-work"], "OWH");
+  eq(workGuide(WORK_DROWSY_DRIVING)!.sources.map((s) => s.url), ["https://pubmed.ncbi.nlm.nih.gov/26541593/", "https://www.cdc.gov/niosh/work-hour-training-for-nurses/longhours/mod11/05.html"], "the survey and NIOSH");
+  // The words the sources say, in the family's voice: the sooner of the two, only after their clinician's yes.
+  eq(workGuide(WORK_BOTTLES)!.body(SHE), "If June nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. Ask her pediatrician or lactation consultant first.", "bottles");
+  ok(/^If the baby nurses, .* Ask their pediatrician/.test(workGuide(WORK_BOTTLES)!.body(THEY)) && /Ask his pediatrician/.test(workGuide(WORK_BOTTLES)!.body(HE)), "bottles in each voice");
+  ok(/nurse more often at night, which is called reverse cycling/.test(workGuide(WORK_NIGHT_NURSING)!.body(SHE)), "reverse cycling");
+  ok(/72 new parents, poor sleep quality went with a sixfold increase in near misses/.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)) && /a ride from family or a friend, other transportation, or a nap first/.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)), "near misses, and what to do");
+  for (const v of VOICES) {
+    for (const g of WORK_GUIDES) {
+      const line = `${g.title(v)} ${g.body(v)}`;
+      ok(!/cry[- ]?it[- ]?out|sleep[- ]?train|contact (nap|sleep)|co-?sleep|bed[- ]?shar|\bdoses?\b|\bdiagnos/i.test(line), `${g.id}: nothing the guidance never says: ${line}`);
+      if (v === THEY) ok(!/\b(she|her|hers|he|him|his)\b/i.test(line), `${g.id}: in the family's words: ${line}`);
+    }
+  }
+  // Never in the family's guidance list, at any age, stage or signal.
+  const shown = new Set([0, 13, 40, 120, 300].flatMap((days) => [null, 1, 2, 3, 4].flatMap((stage) => {
+    const g = sleepGuidance(SHE, { days, stage: stage as 1 | 2 | 3 | 4 | null, signals: new Set(["no_tries_yet", "after_crying", "retry_done", "hard_day", "steady", "long_gap", "swaddled"]) });
+    return [...g.now, ...g.sections.flatMap((s) => s.items)].map((x) => x.id);
+  })));
+  ok(WORK_GUIDES.every((g) => !shown.has(g.id)), "not in the guidance list");
 });
 
 check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to stay with you, a cleared bed, a bed less hazardous than a sofa but not recommended), the tired adult's bed, sitting devices, sourced and waiting for review", () => {
