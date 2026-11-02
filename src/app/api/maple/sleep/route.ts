@@ -5,8 +5,8 @@ import { deviceOf } from "@/lib/maple/device";
 import type { FamilyCtx } from "@/lib/maple/family";
 import { memberName } from "@/lib/maple/insights";
 import { holdingChanged } from "@/lib/maple/push-hooks";
-import { progressLines } from "@/lib/maple/sleep/engine";
-import { coachNotes, goalProgressLines, seesCheckins, type GoalWords } from "@/lib/maple/sleep/goals";
+import { progressLines, sleepAge } from "@/lib/maple/sleep/engine";
+import { coachNotes, goalCautions, goalProgressLines, seesCheckins, type GoalWords } from "@/lib/maple/sleep/goals";
 import {
   cleanNote,
   cleanPlanPatch,
@@ -50,7 +50,7 @@ import { SHIFT_ENDINGS, TRY_OUTCOMES, type GoalInput, type ShiftEnding, type Sle
 import { getBaby, NotFound, toClientEntry } from "@/lib/maple/store";
 import { dayKey } from "@/lib/maple/time";
 import { SLEEP_PLACES, type Baby, type Entry, type Member, type SleepPlace } from "@/lib/maple/types";
-import { voiceFor } from "@/lib/maple/voice";
+import { voiceFor, type Voice } from "@/lib/maple/voice";
 
 export const dynamic = "force-dynamic";
 
@@ -116,12 +116,29 @@ async function stateBody(ctx: FamilyCtx, babyId: number, extra: Record<string, u
 }
 
 /** The people and day a goal write is checked against: owners and members are the adults who check in. */
-function goalCtxOf(members: Member[], baby: Baby): GoalCtx {
+function goalCtxOf(members: Member[], baby: Baby, familyId: number): GoalCtx {
   return {
     adults: new Set(members.filter((m) => m.role === "owner" || m.role === "member").map((m) => m.email)),
     name: (id) => memberName(id, members),
     today: dayKey(new Date(), baby.timezone),
+    ...goalVoiceOf(baby, familyId),
   };
+}
+
+/** The baby's words and age for a goal write's refusals and cautions (goals.ts unsafeSleep, goalCautions). */
+function goalVoiceOf(baby: Baby, familyId: number): { v: Voice; ageDays: number | null } {
+  return { v: voiceFor(familyId, baby), ageDays: sleepAge(baby, new Date())?.days ?? null };
+}
+
+/** What a saved goal needs said with it (its cautions), for the app to show. */
+function goalCautionsOf(goal: SleepGoal, members: Member[], baby: Baby, familyId: number): string[] {
+  const { v, ageDays } = goalVoiceOf(baby, familyId);
+  return goalCautions(goal, { v, name: (id) => memberName(id, members), ageDays }).map((c) => c.text);
+}
+
+/** checkin.save's extra answers about the night: only the keys the request has (goals.ts cleanCheckinExtras checks them). */
+function checkinExtrasFrom(body: Body): Record<string, unknown> {
+  return Object.fromEntries((["place", "untimed_try", "untimed_min", "handoff"] as const).filter((k) => body[k] !== undefined).map((k) => [k, body[k]]));
 }
 
 const goalId = (v: unknown) => {
@@ -175,7 +192,7 @@ export const POST = withMember(
       switch (body.action) {
         // ── the plan ──
         case "plan.create": {
-          const init = cleanPlanPatch((body.plan as Body | undefined) ?? {}, null);
+          const init = cleanPlanPatch((body.plan as Body | undefined) ?? {}, null, voiceFor(ctx.familyId, baby));
           const { plan, created } = await ensurePlan(ctx, baby.id, by, src, init);
           return stateBody(ctx, baby.id, { plan, created });
         }
@@ -183,7 +200,7 @@ export const POST = withMember(
           const revision = Number(body.revision);
           if (!Number.isSafeInteger(revision) || revision < 1) throw new BadRequest("revision is required");
           const current = await getPlan(ctx, baby.id);
-          const patch = cleanPlanPatch((body.patch as Body | undefined) ?? {}, current);
+          const patch = cleanPlanPatch((body.patch as Body | undefined) ?? {}, current, voiceFor(ctx.familyId, baby));
           const { plan, before } = await updatePlan(ctx, baby.id, patch, revision, by, src);
           return stateBody(ctx, baby.id, { plan, before });
         }
@@ -347,15 +364,15 @@ export const POST = withMember(
         // ── sleep goals ──
         case "goal.create": {
           if (!body.goal || typeof body.goal !== "object") throw new BadRequest("goal is required");
-          const w = await createGoal(ctx, { babyId: baby.id, goal: body.goal as GoalInput, ctx: goalCtxOf(members, baby), by, source: src, clientId: typeof body.client_id === "string" ? body.client_id : null, device });
-          return stateBody(ctx, baby.id, { result: w });
+          const w = await createGoal(ctx, { babyId: baby.id, goal: body.goal as GoalInput, ctx: goalCtxOf(members, baby, ctx.familyId), by, source: src, clientId: typeof body.client_id === "string" ? body.client_id : null, device });
+          return stateBody(ctx, baby.id, { result: w, cautions: goalCautionsOf(w.goal, members, baby, ctx.familyId) });
         }
         case "goal.update": {
           const revision = Number(body.revision);
           if (!Number.isSafeInteger(revision) || revision < 1) throw new BadRequest("revision is required");
           if (!body.patch || typeof body.patch !== "object") throw new BadRequest("patch is required");
-          const w = await updateGoal(ctx, goalId(body.id), { patch: body.patch as GoalInput, revision, ctx: goalCtxOf(members, baby), by, source: src });
-          return stateBody(ctx, baby.id, { result: w });
+          const w = await updateGoal(ctx, goalId(body.id), { patch: body.patch as GoalInput, revision, ctx: goalCtxOf(members, baby, ctx.familyId), by, source: src });
+          return stateBody(ctx, baby.id, { result: w, cautions: goalCautionsOf(w.goal, members, baby, ctx.familyId) });
         }
         case "goal.step": {
           if (typeof body.step !== "string" || !body.step) throw new BadRequest("step is required");
@@ -380,6 +397,7 @@ export const POST = withMember(
             night: body.night,
             protected: body.protected,
             ...(body.note !== undefined ? { note: body.note } : {}),
+            extras: checkinExtrasFrom(body),
             tz: baby.timezone,
             source: src,
             clientId: typeof body.client_id === "string" ? body.client_id : null,

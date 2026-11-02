@@ -3,11 +3,16 @@ import { query, transaction } from "@/lib/db";
 import { cleanClientId, famId, getEntry, listEntries, NotFound, reopenTimer, restoreEntry, rowToEntry, softDeleteEntry, stopTimer, StoreUnavailable, updateEntry, type FamilyRef } from "../store";
 import { addDays, DEFAULT_TZ, isDayKey } from "../time";
 import { SLEEP_PLACES, type Entry, type EntryOf, type SleepPlace, type Source } from "../types";
-import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress, tryDayBounds, tryDayKey } from "./engine";
+import type { Voice } from "../voice";
+import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress, tryDayBounds } from "./engine";
 import { SleepInputError } from "./errors";
-import { cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, goalProgress, goalSpan, lastNightKey, type GoalProgress, type GoalRules } from "./goals";
+import { cleanCheckinExtras, cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, goalProgress, goalSpan, lastNightKey, refuseUnsafe, type GoalProgress, type GoalRules } from "./goals";
 import {
   CHECKIN_NOTE_MAX,
+  CHECKIN_PLACES,
+  HANDOFF_ANSWERS,
+  UNTIMED_TRIES,
+  type CheckinExtras,
   GOAL_NOTE_MAX,
   GOAL_STATUSES,
   GOALS_ACTIVE_MAX,
@@ -223,8 +228,13 @@ export async function getPlan(fam: FamilyRef, babyId: number): Promise<SleepPlan
   return rows.length ? rowToPlan(rows[0]) : null;
 }
 
-/** A patch checked and filled in: a new stage brings its defaults, unless the same patch sets them. */
-export function cleanPlanPatch(raw: Record<string, unknown>, current: SleepPlan | null): PlanPatch {
+/**
+ * A patch checked and filled in: a new stage brings its defaults, unless the
+ * same patch sets them. The goal's words never leave the baby to cry or have
+ * the baby asleep on or with an adult, or in a bed, couch, recliner,
+ * armchair or swing (goals.ts unsafeSleep; `v` names the baby in the refusal).
+ */
+export function cleanPlanPatch(raw: Record<string, unknown>, current: SleepPlan | null, v?: Voice): PlanPatch {
   const out: PlanPatch = {};
   if ("stage" in raw) {
     if (!(PLAN_STAGES as readonly unknown[]).includes(raw.stage)) throw new SleepInputError("The stage must be 1, 2, 3 or 4.");
@@ -238,6 +248,7 @@ export function cleanPlanPatch(raw: Record<string, unknown>, current: SleepPlan 
     if (raw.goal !== null && typeof raw.goal !== "string") throw new SleepInputError("The goal must be text.");
     const g = typeof raw.goal === "string" ? raw.goal.trim() : "";
     if (g.length > PLAN_GOAL_MAX) throw new SleepInputError(`The goal is too long (${PLAN_GOAL_MAX} characters at most).`);
+    refuseUnsafe(g, "The goal", { v });
     out.goal = g || null;
   }
   if ("tries_per_day" in raw) {
@@ -1072,7 +1083,7 @@ export function rowToGoal(r: Row): SleepGoal {
 }
 
 /** The people and day a goal write is checked against (goals.ts cleanGoalInput). */
-export type GoalCtx = Pick<GoalRules, "adults" | "name" | "today">;
+export type GoalCtx = Pick<GoalRules, "adults" | "name" | "today" | "v" | "ageDays">;
 
 export type GoalWrite = {
   goal: SleepGoal;
@@ -1314,9 +1325,23 @@ export function rowToCheckin(r: Row): SleepCheckin {
     night: String(r.night),
     protected: asAnswer(r.protected),
     note: textOrNull(r.note),
+    ...checkinExtrasOf(r),
     source: asSource(r.source),
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
+  };
+}
+
+/** A row's extra answers (sleep/schema.ts migrateCheckinExtras), only those given; a value this release doesn't know reads as none. */
+function checkinExtrasOf(r: Row): Pick<SleepCheckin, "place" | "untimed_try" | "untimed_min" | "handoff"> {
+  const one = <T extends string>(v: unknown, list: readonly T[]): T | null => ((list as readonly unknown[]).includes(v) ? (v as T) : null);
+  const place = one(r.place, CHECKIN_PLACES);
+  const untimed = one(r.untimed_try, UNTIMED_TRIES);
+  const handoff = one(r.handoff, HANDOFF_ANSWERS);
+  return {
+    ...(place ? { place } : {}),
+    ...(untimed ? { untimed_try: untimed, untimed_min: r.untimed_min == null ? null : Number(r.untimed_min) } : {}),
+    ...(handoff ? { handoff } : {}),
   };
 }
 
@@ -1342,13 +1367,14 @@ export type CheckinWrite = { checkin: SleepCheckin; before: SleepCheckin | null;
  */
 export async function saveCheckin(
   fam: FamilyRef,
-  input: { babyId: number; member: string; night?: unknown; protected: unknown; note?: unknown; tz: string; now?: Date; source: Source; clientId?: string | null; device?: string | null }
+  input: { babyId: number; member: string; night?: unknown; protected: unknown; note?: unknown; extras?: unknown; tz: string; now?: Date; source: Source; clientId?: string | null; device?: string | null }
 ): Promise<CheckinWrite> {
   const familyId = famId(fam);
   const night = cleanCheckinNight(input.night, input.now ?? new Date(), input.tz);
   const answer = cleanProtected(input.protected);
   const keep = input.note === undefined;
   const note = keep ? null : cleanGoalNote(input.note, CHECKIN_NOTE_MAX);
+  const extras = extrasWrite(cleanCheckinExtras(input.extras));
   const clientId = cleanClientId(input.clientId);
   if (clientId) {
     const prior = await q(`SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND client_id = $2`, [familyId, clientId]);
@@ -1358,22 +1384,22 @@ export async function saveCheckin(
     const found = await q(`SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND baby_id = $2 AND member = $3 AND night = $4 AND deleted_at IS NULL`, [familyId, input.babyId, input.member, night]);
     const before = found.length ? rowToCheckin(found[0]) : null;
     if (before) {
-      if (before.protected === answer && (keep || note === before.note)) return { checkin: before, before, status: "unchanged" };
+      if (before.protected === answer && (keep || note === before.note) && extras.same(before)) return { checkin: before, before, status: "unchanged" };
       const rows = await q(
-        `UPDATE maple_sleep_checkins SET protected = $4, note = CASE WHEN $5::boolean THEN note ELSE $6 END, source = $7, device = $8, updated_at = NOW()
+        `UPDATE maple_sleep_checkins SET protected = $4, note = CASE WHEN $5::boolean THEN note ELSE $6 END, source = $7, device = $8, ${extras.sets(9)}, updated_at = NOW()
          WHERE id = $1 AND family_id = $2 AND member = $3 AND deleted_at IS NULL RETURNING *`,
-        [before.id, familyId, input.member, answer, keep, note, input.source, input.device ?? null]
+        [before.id, familyId, input.member, answer, keep, note, input.source, input.device ?? null, ...extras.params]
       );
       if (rows.length) return { checkin: rowToCheckin(rows[0]), before, status: "updated" };
       continue;
     }
     try {
       const rows = await q(
-        `INSERT INTO maple_sleep_checkins (family_id, baby_id, member, night, protected, note, source, client_id, device)
-         SELECT $1::bigint, $2::integer, $3, $4, $5, $6, $7, $8, $9
+        `INSERT INTO maple_sleep_checkins (family_id, baby_id, member, night, protected, note, source, client_id, device, place, untimed_try, untimed_min, handoff)
+         SELECT $1::bigint, $2::integer, $3, $4, $5, $6, $7, $8, $9, $10::text, $11::text, $12::smallint, $13::text
          WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $2::integer AND family_id = $1::bigint)
          RETURNING *`,
-        [familyId, input.babyId, input.member, night, answer, note, input.source, clientId, input.device ?? null]
+        [familyId, input.babyId, input.member, night, answer, note, input.source, clientId, input.device ?? null, ...extras.values]
       );
       if (!rows.length) throw new NotFound("Baby not found");
       return { checkin: rowToCheckin(rows[0]), before: null, status: "created" };
@@ -1388,6 +1414,28 @@ export async function saveCheckin(
     }
   }
   throw new Error("Couldn't save the check-in, please try again");
+}
+
+const EXTRA_COLUMNS = [
+  { key: "place", cast: "text" },
+  { key: "untimed_try", cast: "text" },
+  { key: "untimed_min", cast: "smallint" },
+  { key: "handoff", cast: "text" },
+] as const;
+
+/** How a check-in write's extra answers apply: each one given is set (null clears it); the rest stay as they are. */
+function extrasWrite(x: CheckinExtras) {
+  const given = EXTRA_COLUMNS.map((c) => x[c.key] !== undefined);
+  const values = EXTRA_COLUMNS.map((c) => x[c.key] ?? null);
+  return {
+    /** Already so on `before`: nothing to change. */
+    same: (before: SleepCheckin) => EXTRA_COLUMNS.every((c, i) => !given[i] || (before[c.key] ?? null) === values[i]),
+    /** The SET clauses, numbering their parameters from `from` (a given flag, then its value, for each column). */
+    sets: (from: number) => EXTRA_COLUMNS.map((c, i) => `${c.key} = CASE WHEN $${from + 2 * i}::boolean THEN $${from + 2 * i + 1}::${c.cast} ELSE ${c.key} END`).join(", "),
+    params: EXTRA_COLUMNS.flatMap((_, i) => [given[i], values[i]]),
+    /** For a new check-in: the values, null for those not given. */
+    values,
+  };
 }
 
 /** Delete your own check-in (soft), by its id or its night. Someone else's reads as missing. */
@@ -1420,18 +1468,16 @@ export async function goalProgressFor(fam: FamilyRef, babyId: number, goals: rea
   const last = spans.map((s) => s.lastNight).sort().slice(-1)[0];
   const from = tryDayBounds(first, tz)[0];
   const to = new Date(Math.min(tryDayBounds(last > first ? last : first, tz)[1].getTime(), now.getTime() + 1));
-  const hintFrom = tryDayBounds(addDays(tryDayKey(now, tz), -8), tz)[0];
-  const roster = goals.some((g) => g.roster.length);
-  const stretch = goals.some((g) => g.targets.some((t) => t.kind === "bassinet_stretch"));
   // Last night's check-ins too, for each adult's latest answer, even before a goal set this morning.
   const lastNight = lastNightKey(now, tz);
-  const [tries, sleeps, feeds, shifts, checkins] = await Promise.all([
-    listTries(fam, babyId, { from: new Date(from.getTime() - MAX_SPAN_MS), to, limit: 2000 }),
-    stretch ? listEntries(fam, { babyId, kinds: ["sleep"], from: new Date(from.getTime() - MAX_SPAN_MS), to, includeActive: true, limit: 5000 }) : Promise.resolve([] as Entry[]),
-    roster ? listEntries(fam, { babyId, kinds: ["feed"], from: hintFrom, to, includeActive: true, limit: 2000 }) : Promise.resolve([] as Entry[]),
-    roster ? listShifts(fam, babyId, { from: hintFrom, limit: 500 }) : Promise.resolve([]),
+  // Entries of every kind and the holding turns over the shown nights: what was logged each night (coverage), the stretches and the roster's hints.
+  const since = new Date(from.getTime() - MAX_SPAN_MS);
+  const [tries, entries, shifts, checkins] = await Promise.all([
+    listTries(fam, babyId, { from: since, to, limit: 2000 }),
+    listEntries(fam, { babyId, from: since, to, includeActive: true, limit: 5000 }),
+    listShifts(fam, babyId, { from: since, limit: 500 }),
     opts.checkins ? listCheckins(fam, babyId, { from: first < lastNight ? first : lastNight, to: last > lastNight ? last : lastNight }) : Promise.resolve(null),
   ]);
-  for (const g of goals) out.set(g.id, goalProgress(g, { tries, entries: [...sleeps, ...feeds], shifts, checkins }, now, tz));
+  for (const g of goals) out.set(g.id, goalProgress(g, { tries, entries, shifts, checkins }, now, tz));
   return out;
 }

@@ -87,6 +87,17 @@ check("a prompt record leaves defaults out, in a fixed key order, with who said 
   assert.deepEqual(Object.keys(promptRecord(made("x y"), TODAY, names)), ["id", "revision", "kind", "fact", "from", "saved"]);
 });
 
+check("a memory's day is the family's calendar day: saved at 8:40 PM in Denver it's that day's, not the next UTC one", () => {
+  // 8:40 PM MDT on Wed, Oct 7 is 2:40 AM UTC on Oct 8.
+  const m = made("Theo takes the late feed on work nights.", { stated_at: "2026-10-08T02:40:00.000Z", status: "resolved", ended_at: "2026-10-09T03:10:00.000Z", ended_by: "avery@example.com", ended_via: "chat" });
+  assert.equal(promptRecord(m, TODAY, names, "America/Denver").saved, "2026-10-07");
+  assert.equal(promptRecord(m, TODAY, names).saved, "2026-10-08", "without a zone (an older caller), the UTC date as before");
+  assert.equal(String(recallRecord(m, TODAY, names, "America/Denver").ended).slice(0, 10), "2026-10-08", "when it ended, too");
+  const shown = memoryPromptBlock(ctx([made("Sleeps in the bassinet by our bed.", { kind: "sleep", stated_at: "2026-10-21T03:30:00.000Z" })]), names, { viewer: false });
+  assert(shown.includes('"saved":"2026-10-20"'), `the chat's block reads the family's zone (America/Chicago): ${shown}`);
+  assert(JSON.stringify(memoryStatusJson(ctx([made("a b", { stated_at: "2026-10-21T03:30:00.000Z" })]), names, { viewer: false })).includes('"saved":"2026-10-20"'), "and maple_status's");
+});
+
 check("what keeps the baby safe goes first, and a memory that doesn't fit is skipped whole and counted", () => {
   const records = [
     made("Background one.", { kind: "background" }),

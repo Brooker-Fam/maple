@@ -4,13 +4,13 @@ import { MotionConfig } from "framer-motion";
 import { ApiError } from "../../src/lib/maple/client-request";
 import { progressLines, sleepProgress } from "../../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../../src/lib/maple/sleep/errors";
-import { cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, coachNotes, goalProgress, goalProgressLines } from "../../src/lib/maple/sleep/goals";
+import { cleanCheckinExtras, cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, coachNotes, goalProgress, goalProgressLines } from "../../src/lib/maple/sleep/goals";
 import { CHECKIN_NOTE_MAX, GOAL_NOTE_MAX } from "../../src/lib/maple/sleep/types";
 import { STAGE_INFO } from "../../src/lib/maple/sleep/words";
 import { dayKey, zonedTimeToUtc } from "../../src/lib/maple/time";
 import { makeVoice } from "../../src/lib/maple/voice";
 import { SleepNow } from "../../src/components/maple/sleep/SleepCards";
-import { SleepCheckinCard } from "../../src/components/maple/sleep/SleepCheckin";
+import { LastNightCard } from "../../src/components/maple/sleep/LastNight";
 import { SleepSheetHost } from "../../src/components/maple/sleep/SleepSheets";
 import { SleepStrip } from "../../src/components/maple/sleep/SleepStrip";
 import { SleepProvider, useSleep } from "../../src/components/maple/sleep/useSleep";
@@ -314,14 +314,17 @@ function makeServer(clock) {
         const said = ruled(() => cleanProtected(body.protected));
         const keep = body.note === undefined;
         const note = keep ? null : ruled(() => cleanGoalNote(body.note, CHECKIN_NOTE_MAX));
+        // The night's other answers, as the route takes them: each given one is set (null clears it), the rest stay.
+        const extras = ruled(() => cleanCheckinExtras(Object.fromEntries(["place", "untimed_try", "untimed_min", "handoff"].filter((k) => body[k] !== undefined).map((k) => [k, body[k]]))));
+        const sameExtras = (c) => Object.entries(extras).every(([k, v]) => (c[k] ?? null) === v);
         const found = liveCheckins().find((c) => c.member === SIGNED_IN && c.night === night);
         if (found) {
           const before = checkinOut(found);
-          if (found.protected === said && (keep || note === found.note)) return answer({ result: { checkin: before, before, status: "unchanged" } });
-          Object.assign(stamp(found), { protected: said }, keep ? {} : { note });
+          if (found.protected === said && (keep || note === found.note) && sameExtras(found)) return answer({ result: { checkin: before, before, status: "unchanged" } });
+          Object.assign(stamp(found), { protected: said }, keep ? {} : { note }, extras);
           return answer({ result: { checkin: checkinOut(found), before, status: "updated" } });
         }
-        const c = { id: ++seq, member: SIGNED_IN, night, protected: said, note, source: "web", created_at: iso(now()), updated_at: iso(now()), client_id: body.client_id ?? null };
+        const c = { id: ++seq, member: SIGNED_IN, night, protected: said, note, ...extras, source: "web", created_at: iso(now()), updated_at: iso(now()), client_id: body.client_id ?? null };
         db.checkins.push(c);
         return answer({ result: { checkin: checkinOut(c), before: null, status: "created" } });
       }
@@ -392,6 +395,35 @@ function makeServer(clock) {
       db.checkins.push({ id: ++seq, member, night, protected: said, note, source: "web", created_at: iso(at(nextDay(night), 7)), updated_at: iso(at(nextDay(night), 7)), client_id: null });
     }
   };
+  /**
+   * &lastnight: Wed night as a sparse log: a feed at 8:30 PM, then nothing until the 11 PM try (2h 10m), nothing
+   * 1:20–3:00 AM after it, a diaper at 3, nothing until a sleep timer started at 4:45 AM and left running past a
+   * feed at 6:40 AM. Three stretches to ask about, and a timer to stop.
+   */
+  const seedLastNight = () => {
+    const entry = (kind, start, end, data, by = ME) => {
+      const e = { id: ++seq, kind, started_at: iso(start), ended_at: end == null ? null : iso(end), active: end === undefined, data, note: null, created_by: by, updated_at: iso(end ?? start), source: "web" };
+      if (end === undefined) e.ended_at = null;
+      db.entries.push(e);
+      return e;
+    };
+    entry("feed", at("2026-11-04", 20, 30), at("2026-11-04", 20, 50), { method: "breast", first_side: "L", last_side: "R", segments: [] });
+    entry("diaper", at(nextDay("2026-11-04"), 3, 0), null, { pee: true });
+    entry("sleep", at(nextDay("2026-11-04"), 4, 45), undefined, {});
+    entry("feed", at(nextDay("2026-11-04"), 6, 40), at(nextDay("2026-11-04"), 7, 0), { method: "breast", first_side: "R", last_side: "R", segments: [] }, PARTNER);
+  };
+  /** The app's own log writes (useMaple's log and timerCall), against the same in-memory log. */
+  const logEntry = (input) => {
+    const e = { id: ++seq, kind: input.kind, started_at: input.started_at, ended_at: input.ended_at ?? null, active: false, data: input.data ?? {}, note: input.note ?? null, created_by: SIGNED_IN, updated_at: iso(now()), source: "web" };
+    db.entries.push(e);
+    return { ...e };
+  };
+  const stopTimer = (id, atIso) => {
+    const e = db.entries.find((x) => x.id === id);
+    if (!e || !e.active) return null;
+    Object.assign(stamp(e), { active: false, ended_at: atIso ?? iso(now()) });
+    return { ...e };
+  };
   /** Another phone changes a goal: the server's copy moves on to a new revision, which this phone hasn't seen. */
   const changeGoal = (id, patch) => {
     const g = goalOf(id);
@@ -401,7 +433,7 @@ function makeServer(clock) {
     stamp(g);
     return goalOut(g);
   };
-  return { db, handle, snapshot, seedGoals, changeGoal, stopSleep: () => {
+  return { db, handle, snapshot, seedGoals, seedLastNight, logEntry, stopTimer, changeGoal, stopSleep: () => {
     const live = db.entries.find((e) => e.kind === "sleep" && e.active);
     if (live) Object.assign(stamp(live), { active: false, ended_at: iso(now()) });
     return live ? { ...live } : null;
@@ -441,6 +473,7 @@ function Fixture() {
   const server = useMemo(() => makeServer(clock), [clock]);
   const [state, setState] = useState(() => {
     if (params.has("goals")) server.seedGoals();
+    if (params.has("lastnight")) server.seedLastNight();
     const s = {
       baby: { id: 1, name: "River", nickname: null, sex: "female", born_at: "2026-10-01T14:00:00.000Z", timezone: TZ, settings: {} },
       family: { id: 99 },
@@ -483,7 +516,22 @@ function Fixture() {
     api: (path, init) => server.handle(path, init),
     toast,
     memberName: (email) => nameOf(email),
-    timerCall: async (b) => { server.db.calls.push({ action: "timer", ...b }); },
+    timerCall: async (b) => {
+      server.db.calls.push({ action: "timer", ...b });
+      // A stop on a sleep in the log (the Last night card's "Woke at") stops it, as the timer route would.
+      const stopped = b.action === "stop" ? server.stopTimer(b.id, b.at) : null;
+      if (stopped) apply(server.snapshot(), [stopped]);
+      return stopped ? { entry: stopped } : null;
+    },
+    timerBusy: () => false,
+    // useMaple's log: saves the entry and says so, with Undo (the Last night card's "She slept through").
+    log: async (input, opts = {}) => {
+      server.db.calls.push({ action: "log", ...input });
+      const saved = server.logEntry(input);
+      apply(server.snapshot(), [saved]);
+      toast(opts.toast ?? "Logged", { undo: () => server.db.calls.push({ action: "log.undo", id: saved.id }) });
+      return saved;
+    },
     sleep: { apply, track: (fn) => fn() },
   }), [state, clock, server, toast, apply]);
   const careNav = useMemo(() => ({ openHelp: () => server.db.calls.push({ action: "help" }) }), [server]);
@@ -497,7 +545,8 @@ function Fixture() {
       // Another phone's edit, which this phone only learns of from a write's answer (or the next poll, which never comes here).
       changeGoal: (id, patch) => server.changeGoal(id, patch),
       goal: (id) => server.snapshot().goals.find((g) => g.id === id) ?? null,
-      checkins: () => server.db.checkins.filter((c) => !c.deleted).map((c) => ({ member: c.member, night: c.night, protected: c.protected, note: c.note })),
+      checkins: () => server.db.checkins.filter((c) => !c.deleted).map((c) => ({ member: c.member, night: c.night, protected: c.protected, note: c.note, place: c.place ?? null, untimed_try: c.untimed_try ?? null, handoff: c.handoff ?? null })),
+      entries: () => server.db.entries.map((e) => ({ id: e.id, kind: e.kind, started_at: e.started_at, ended_at: e.ended_at, active: e.active })),
       toasts: () => toasts.map((t) => t.text),
     };
   }, [server, apply, toasts]);
@@ -508,8 +557,8 @@ function Fixture() {
         <main className="mx-auto max-w-lg space-y-3 px-4 pt-4">
           <OpenButtons />
           <SleepNow />
-          {/* Today puts the morning check-in right after Right now. */}
-          <SleepCheckinCard />
+          {/* Today puts the Last night card (with the morning check-in) right after Right now. */}
+          <LastNightCard />
           <SleepStrip />
         </main>
       </SleepProvider>

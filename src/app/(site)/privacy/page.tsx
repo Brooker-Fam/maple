@@ -85,16 +85,25 @@ export default function Privacy() {
         If your family uses the sleep plan, Maple also keeps the plan (its stage, how many bassinet tries a day and when,
         where the baby sleeps now and your goal), each bassinet try (when the baby was laid down and when the try ended, how it
         went, who laid the baby down, optional tags such as recently fed or swaddled, and a short note), and holding turns: who
-        held the baby awake, from when, the planned handoff and who was next. A try sits on the matching sleep entry, so that
-        sleep is counted once.
+        held the baby awake, from when, the planned handoff and who was next. A handoff can be asked for and accepted: Maple
+        records who was asked to take over and when they did. A try sits on the matching sleep entry, so that sleep is
+        counted once.
       </p>
       <p>
         If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,
         its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults, and the date
         and short note of its last review. Each adult can check in the morning after with one answer about their own protected
-        window (yes, partly or no) and an optional short note. A check-in never records hours slept, mood or anyone&rsquo;s
-        health, and only the adult it&rsquo;s about can save or delete it. Goals stay, open or closed, until your family&rsquo;s
-        log is deleted.
+        sleep (yes, partly or no) and an optional short note, and with it up to three one-tap answers about the baby&rsquo;s
+        night: where the baby spent most of it, a bassinet try that isn&rsquo;t in the log (and whether it was longer than the
+        goal&rsquo;s time), and whether a planned handoff happened as planned. A check-in never records hours slept, mood or
+        anyone&rsquo;s health, and only the adult it&rsquo;s about can save or delete it. Goals stay, open or closed, until your
+        family&rsquo;s log is deleted.
+      </p>
+      <p>
+        The morning&rsquo;s Last night card shows the night from what&rsquo;s already logged. If you tap that the baby slept
+        through a stretch with nothing logged, Maple saves a sleep entry for that stretch, like one you log yourself. Answering
+        that the baby was up, that you&rsquo;re not sure, or Not now saves nothing in Maple: that phone&rsquo;s browser remembers
+        it for that night so it doesn&rsquo;t ask again.
       </p>
       <p>
         Mom&rsquo;s page keeps her food and drinks, any amounts she records, optional food items and portions, nutrient values and food groups,

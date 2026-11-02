@@ -187,11 +187,13 @@ try {
   const made = plan.getByRole("region", { name: "Both of us get one long stretch" });
   await made.getByText(/^This week:/).waitFor();
   text = await neutral(made, "A new goal");
-  assert(text.includes("Target date Wed, Nov 25 · 28 days left · week 1 of 5"), text);
+  assert(text.includes("Target date Wed, Nov 25 · 28 days left · week 1 of 4"), text);
   assert(text.includes("3 nights a week with a bassinet try asleep 1 hour or more"), text);
   assert(text.includes("This week: counting starts with the goal's first night"), text);
   assert(text.includes("Sam 10:00 PM–2:00 AM"), text);
-  assert(text.includes("last night: not yet"), "The owner sees check-ins");
+  assert(text.includes("Sam (you)") && text.includes("no check-ins yet"), "The owner sees check-ins");
+  // Set this morning: nobody is asked about the night before it.
+  assert(!text.includes("last night: not yet") && (await made.getByRole("button", { name: "Check in", exact: true }).count()) === 0, "No check-in for a night before the goal");
   console.log("PASS Goal form: says what to fix by the field and sends nothing until it's right; saves the goal, its target, step and window; back on Goals with its card");
   await page.keyboard.press("Escape");
   await plan.waitFor({ state: "hidden" });
@@ -371,14 +373,16 @@ try {
   await shot("viewer-night");
   console.log("PASS Viewer: sees the running try (night look), can't log");
 
-  // ── The morning after a night on the roster: Today asks Sam; one tap saves last night's answer; Undo deletes it ──
+  // ── The morning after a night on the roster: Today's Last night card asks Sam; one tap saves last night's answer; Undo deletes it ──
   await page.goto("https://sleep.example.test/?goals&morning");
-  const checkin = page.getByRole("region", { name: "How did last night go?" });
+  const checkin = page.getByRole("region", { name: "Last night", exact: true });
   await checkin.waitFor();
-  text = await neutral(checkin, "Today's check-in");
-  assert(text.includes("Your protected window, 10:00 PM–2:00 AM"), text);
-  assert(text.includes("Did your protected sleep window hold last night?"), text);
-  const onCard = checkin.getByRole("group", { name: "Did your protected sleep window hold last night?" }).getByRole("button");
+  text = await neutral(checkin, "Today's Last night card");
+  const QUESTION = "Did you get your 10 PM–2 AM sleep?";
+  assert(text.includes(QUESTION) && !/\bhold/i.test(text), `The question names the window and never says "hold": ${text}`);
+  assert(text.includes("Wed, Nov 4 · 1 sleep and 2 feeds logged"), text);
+  assert.equal(await checkin.locator("[data-night-strip]").count(), 1, "The night as a strip from the log");
+  const onCard = checkin.getByRole("group", { name: QUESTION }).getByRole("button");
   assert.deepEqual(await onCard.allInnerTexts(), ["Yes", "Partly", "Not this time"]);
   for (let i = 0; i < 3; i++) assert((await height(onCard.nth(i))) >= 44, "The answers are 44px targets");
   await shot("checkin-card");
@@ -387,19 +391,20 @@ try {
   wrote = await last();
   assert.deepEqual([wrote.action, wrote.protected, wrote.night, "note" in wrote], ["checkin.save", "partly", "2026-11-04", false], "Last night (it began Wednesday evening); one tap leaves any note as it is");
   assert.match(wrote.client_id, /^checkin-/);
-  await checkin.waitFor({ state: "detached" });
+  // The night's next question takes its place: the stretch with nothing logged between the 1:20 AM wake and the 6:50 AM feed.
+  await checkin.getByRole("heading", { name: "Nothing logged 1:20–6:50 AM" }).waitFor();
   await toast("Checked in for last night: partly").getByRole("button", { name: "Undo", exact: true }).click();
-  await checkin.waitFor();
+  await checkin.getByRole("group", { name: QUESTION }).waitFor();
   wrote = await last();
   assert.equal(wrote.action, "checkin.delete", "Undo deletes the check-in it made");
   assert.deepEqual((await page.evaluate(() => window.__sleep.checkins())).filter((x) => x.member === "sam@example.test" && x.night === "2026-11-04"), []);
-  console.log("PASS Check-in card: the morning after, for the adult on the roster; one tap saves last night's answer; Undo deletes it");
+  console.log("PASS Last night card: the morning after, for the adult on the roster, worded without \"hold\"; one tap saves last night's answer; Undo deletes it");
 
   // Not now: hidden for that night on this phone, even after a reload.
-  const hiddenKey = "maple-sleep-checkin-hidden:99:sam@example.test";
+  const hiddenKey = "maple-last-night:99:sam@example.test";
   await checkin.getByRole("button", { name: "Not now", exact: true }).click();
   await checkin.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate((k) => localStorage.getItem(k), hiddenKey), "2026-11-04");
+  assert.deepEqual(JSON.parse(await page.evaluate((k) => localStorage.getItem(k), hiddenKey)), { night: "2026-11-04", hidden: true });
   await page.reload();
   await page.getByRole("button", { name: "Open the sleep plan", exact: true }).waitFor();
   await page.waitForTimeout(300);
@@ -414,9 +419,10 @@ try {
   await sheet.waitFor();
   text = await neutral(sheet, "The check-in sheet");
   assert(text.includes("Last night · Wed, Nov 4 · your window 10:00 PM–2:00 AM"), text);
+  assert(text.includes(QUESTION) && !/\bhold/i.test(text), text);
   assert(text.includes("view-only guests never do"), "It says who sees a check-in");
   await sheet.getByRole("textbox", { name: "Note", exact: true }).fill("Up once, back down quickly");
-  const big = sheet.getByRole("group", { name: "Did your protected sleep window hold last night?" }).getByRole("button");
+  const big = sheet.getByRole("group", { name: QUESTION }).getByRole("button");
   for (let i = 0; i < 3; i++) assert((await height(big.nth(i))) >= 56, "The sheet's answers are big");
   await shot("checkin-sheet");
   await big.filter({ hasText: /^Yes$/ }).click();
@@ -424,8 +430,32 @@ try {
   wrote = await last();
   assert.deepEqual([wrote.action, wrote.protected, wrote.night, wrote.note], ["checkin.save", "yes", "2026-11-04", "Up once, back down quickly"]);
   await toast("Checked in for last night: yes").waitFor();
-  assert.equal(await checkin.count(), 0, "Checked in: the card goes");
   console.log("PASS Check-in sheet: a note, then one tap on a big answer saves both; Not now hides the card for that night on this phone");
+
+  // The stretch with nothing logged: Up or feeding saves nothing; then the night's other questions, one tap each, on Sam's own
+  // check-in: where River spent it, then the 2 AM handoff the roster planned.
+  const n0 = (await calls()).length;
+  await checkin.getByRole("heading", { name: "Nothing logged 1:20–6:50 AM" }).waitFor();
+  await checkin.getByRole("button", { name: "Up or feeding", exact: true }).click();
+  const place = checkin.getByRole("region", { name: "Where did River spend most of last night?" });
+  await place.waitFor();
+  assert.equal((await calls()).length, n0, "Up or feeding saves nothing");
+  await place.waitFor();
+  assert.deepEqual(await place.getByRole("button").allInnerTexts(), ["Bassinet", "Held by someone awake", "Some of each", "Somewhere else", "Not sure"]);
+  await place.getByRole("button", { name: "Bassinet", exact: true }).click();
+  await toast("Saved: bassinet").waitFor();
+  wrote = await last();
+  assert.deepEqual([wrote.action, wrote.protected, wrote.place, wrote.night, "note" in wrote], ["checkin.save", "yes", "bassinet", "2026-11-04", false], "On Sam's own check-in, the answer and note it has kept");
+  assert.equal(await checkin.getByText("Any bassinet try that isn't in the log?").count(), 0, "A try is in the log for last night, so it isn't asked");
+  const handoff = checkin.getByRole("region", { name: "Did the 2:00 AM handoff happen as planned?" });
+  await handoff.waitFor();
+  assert.deepEqual(await handoff.getByRole("button").allInnerTexts(), ["On time", "Early", "Late", "No handoff"]);
+  await handoff.getByRole("button", { name: "Late", exact: true }).click();
+  await toast("Saved: late").waitFor();
+  await checkin.waitFor({ state: "detached" });
+  const mine = (await page.evaluate(() => window.__sleep.checkins())).find((x) => x.member === "sam@example.test" && x.night === "2026-11-04");
+  assert.deepEqual([mine.protected, mine.note, mine.place, mine.handoff], ["yes", "Up once, back down quickly", "bassinet", "late"], "All of it on Sam's check-in");
+  console.log("PASS The night's other questions: where the baby spent it and the planned handoff, one tap each on the adult's own check-in; a try in the log isn't asked about; then the card goes");
 
   // ── The goal card: each target's counts with what they're out of, steps, the roster with hints, each adult's check-ins ──
   await page.getByRole("button", { name: "Open the sleep plan", exact: true }).click();
@@ -438,20 +468,21 @@ try {
     "Back to work on the 30th",
     "Target date Wed, Nov 25 · 20 days left · week 2 of 5",
     "4 nights a week with a bassinet try asleep 1 hour or more",
-    "This week: 2 of 7 nights so far · tried on 4",
-    "Last week: 2 of 7 nights · tried on 3",
+    "This week: 2 of the 4 nights aimed for · 2 of 5 logged nights · 2 not logged",
+    "Last week: 2 of the 4 nights aimed for · 2 of 3 logged nights · 4 not logged",
     "A bassinet stretch of 3 hours or more",
     "This week: longest 3h 00m · 1 of 4 stretches 3 hours or more",
     "Last week: longest 2h 30m · 0 of 3 stretches 3 hours or more",
-    "Sam's protected window holding 5 nights a week",
-    "This week: held 4 of 5 nights checked in (not this time 1) · 7 nights on the roster so far",
+    "Sam's protected sleep, 5 nights a week",
+    "This week: yes on 4 of the 5 nights aimed for · checked in 5 of 7 roster nights so far (not this time 1)",
+    "Logged this week: something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4 · check-ins on 5",
     "Last week: no check-ins · 7 nights on the roster",
     "Calmer bedtimes",
     "Not counted from the log.",
     "1 of 3 done",
     "Done by Alex",
     "Sam 10:00 PM–2:00 AM",
-    "Hint from the log, the last 7 nights it was on: feeds began inside it on 2 nights (2 feeds, 1 logged by Sam); Alex held River during it on 1 night; 3 bassinet tries began inside it.",
+    "Hint from the log, the last 7 nights it was on: feeds began inside it on 2 of 7 nights (2 feeds: 1 nursing logged by Alex, 1 nursing logged by Sam); nothing logged inside it on 2 of them; Alex held River during it on 1 night; 3 bassinet tries began inside it.",
     "Alex 2:00 AM–6:00 AM",
     "since Thu, Oct 22",
     "Sam (you)",
@@ -578,6 +609,75 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   console.log("PASS 320px: the four tabs share one row; Goals, the form, the check-in sheet and Today's card fit without sideways scroll");
 
+  // ── Last night on a sparse log: a timer left running, three stretches with nothing logged, Tell Maple, all on a 320 × 568 phone ──
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("https://sleep.example.test/?goals&morning&lastnight");
+  // A fresh phone: the stretch answered earlier on this one (1:20 AM) is remembered per phone, per night.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  const night = page.getByRole("region", { name: "Last night", exact: true });
+  await night.waitFor();
+  /** The card's essentials on a small phone: its heading, the strip, the question and its answers, and Not now, all on screen at once. */
+  const essentials = async (label) => {
+    await night.scrollIntoViewIfNeeded();
+    const box = await night.boundingBox();
+    assert(box && box.height <= 568 - 16, `${label}: the card fits a 320 × 568 screen (${box?.height}px)`);
+    for (const part of [night.getByRole("heading", { name: "Last night", exact: true }), night.locator("[data-night-strip]"), night.locator("[aria-labelledby='last-night-ask']"), night.getByRole("button", { name: "Not now", exact: true })]) {
+      const b = await part.boundingBox();
+      assert(b && b.y >= 0 && b.y + b.height <= 568, `${label}: on screen at 320 × 568 (${JSON.stringify(b)})`);
+    }
+    await noHorizontalScroll(`${label} at 320px`);
+  };
+  text = await neutral(night, "Last night, a sparse log");
+  assert(text.includes("The sleep timer is still running from 4:45 AM") && text.includes("A feed was logged at 6:40 AM."), text);
+  await essentials("A timer left running");
+  await shot("last-night-running-320");
+  await night.getByRole("button", { name: "Woke at 6:40 AM", exact: true }).click();
+  wrote = await last();
+  assert.deepEqual([wrote.action, wrote.at], ["stop", "2026-11-05T11:40:00.000Z"], "Stops the sleep when the next thing was logged");
+  await night.getByRole("group", { name: "Did you get your 10 PM–2 AM sleep?" }).waitFor();
+  await essentials("The check-in");
+  await night.getByRole("button", { name: "Yes", exact: true }).click();
+  await toast("Checked in for last night: yes").waitFor();
+
+  // Three stretches with nothing logged, between two things that were: one tap each; only "She slept through" saves.
+  const gap = night.locator("[aria-labelledby='last-night-ask']");
+  await gap.getByRole("heading", { name: "Nothing logged 8:50–11:00 PM" }).waitFor();
+  assert.deepEqual(await gap.getByRole("button").allInnerTexts(), ["She slept through", "Up or feeding", "Not sure"]);
+  await essentials("A stretch with nothing logged");
+  await shot("last-night-gap-320");
+  const before = (await calls()).length;
+  await gap.getByRole("button", { name: "Up or feeding", exact: true }).click();
+  await gap.getByRole("heading", { name: "Nothing logged 1:20–3:00 AM" }).waitFor();
+  await gap.getByRole("button", { name: "Not sure", exact: true }).click();
+  await toast("Left as not logged: that stretch stays out of the counts.").waitFor();
+  assert.equal((await calls()).length, before, "Up or feeding and Not sure save nothing");
+  await gap.getByRole("heading", { name: "Nothing logged 3:00–4:45 AM" }).waitFor();
+  await gap.getByRole("button", { name: "She slept through", exact: true }).click();
+  await toast("Logged: asleep 3:00–4:45 AM").waitFor();
+  wrote = await last();
+  assert.deepEqual([wrote.action, wrote.kind, wrote.started_at, wrote.ended_at], ["log", "sleep", new Date(Date.parse("2026-11-05T08:00:00.000Z")).toISOString(), new Date(Date.parse("2026-11-05T09:45:00.000Z")).toISOString()], "A sleep for that stretch");
+
+  // Somewhere else: the safe-sleep line, in the guidance's own words; then the planned handoff.
+  await night.getByRole("region", { name: "Where did River spend most of last night?" }).getByRole("button", { name: "Somewhere else", exact: true }).click();
+  await toast("Saved: somewhere else").waitFor();
+  await night.locator("[data-safe-sleep]").waitFor();
+  assert.match(await night.locator("[data-safe-sleep]").innerText(), /^Lay her on her back for every nap and at night\. Keep her bassinet in your room, close to your bed but not in it/);
+  await night.getByRole("region", { name: "Did the 2:00 AM handoff happen as planned?" }).getByRole("button", { name: "No handoff", exact: true }).click();
+  await toast("Saved: no handoff").waitFor();
+  const sam = (await page.evaluate(() => window.__sleep.checkins())).find((x) => x.member === "sam@example.test" && x.night === "2026-11-04");
+  assert.deepEqual([sam.protected, sam.place, sam.handoff], ["yes", "elsewhere", "none"]);
+  await shot("last-night-safe-sleep-320");
+
+  // Tell Maple: the chat, with "Last night: " typed for them.
+  await night.getByRole("button", { name: "Tell Maple", exact: true }).click();
+  ask = await last();
+  assert.deepEqual([ask.action, ask.prompt], ["ask", "Last night: "]);
+  await night.getByRole("button", { name: "Not now", exact: true }).click();
+  await night.waitFor({ state: "detached" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  console.log("PASS Last night: a timer left running stops at the next thing logged; stretches over 90 minutes get one tap each (only \"She slept through\" saves); Somewhere else shows the safe-sleep line; Tell Maple seeds the chat; essentials fit 320 × 568");
+
   // ── A view-only guest: goals, steps, the roster and the baby's numbers; never a check-in; nothing that writes ──
   await page.goto("https://sleep.example.test/?goals&morning&role=viewer&night");
   await page.getByRole("button", { name: "Open the sleep plan", exact: true }).click();
@@ -587,7 +687,7 @@ try {
   const viewerGoal = plan.getByRole("region", { name: "Both of us get one long stretch" });
   await viewerGoal.getByText(/^This week:/).first().waitFor();
   text = await neutral(plan, "Goals for a view-only guest");
-  for (const line of ["This week: 2 of 7 nights so far · tried on 4", "This week: longest 3h 00m", "White noise on for every try", "Sam 10:00 PM–2:00 AM", "Hint from the log", "Counted from each adult's own morning check-ins."]) {
+  for (const line of ["This week: 2 of the 4 nights aimed for · 2 of 5 logged nights · 2 not logged", "Logged this week: something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4", "This week: longest 3h 00m", "White noise on for every try", "Sam 10:00 PM–2:00 AM", "Hint from the log", "Counted from each adult's own morning check-ins."]) {
     assert(text.includes(line), `A view-only guest sees "${line}"`);
   }
   assert.doesNotMatch(text, /Check-ins|checked in|last night:|\bpartly\b|not this time|held \d/, "Never a check-in, a count of them or an answer");

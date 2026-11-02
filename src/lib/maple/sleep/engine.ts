@@ -480,7 +480,21 @@ export function planToday(plan: Pick<SleepPlan, "tries_per_day" | "try_times" | 
 export function planTodayLine(t: PlanToday): string {
   const head = `${t.done} of ${t.planned} ${t.label}`;
   if (!t.next) return `${head}.`;
-  return `${head}; next: ${slotLabel(t.next).replace(/^The /, "the ")}${t.fallback ? " (the backup, since the night try didn't happen)" : ""}.`;
+  return `${head}; next: ${slotLabel(t.next).replace(/^The /, "the ")}${t.fallback ? FALLBACK_WHY : ""}.`;
+}
+
+/** The morning backup's reason: only what the log says, never that a try didn't happen. */
+const FALLBACK_WHY = " (the backup, since no night try was logged)";
+
+/**
+ * This try day's tries in the tools' words, by the clock: "tonight" from
+ * noon, and before noon (the try day began yesterday) "since noon yesterday
+ * (last night and this morning)", never "tonight" at 9:30 AM. `count`: "0 of
+ * 1; next: the first morning nap (the backup, since no night try was logged)".
+ */
+export function planTodayWords(t: PlanToday, now: Date | number, tz: string): { when: string; count: string } {
+  const next = t.next ? `; next: ${slotLabel(t.next).replace(/^The /, "the ")}${t.fallback ? FALLBACK_WHY : ""}` : "";
+  return { when: localParts(now, tz).hour < 12 ? "since noon yesterday (last night and this morning)" : "tonight", count: `${t.done} of ${t.planned}${next}` };
 }
 
 // ── holding shifts ───────────────────────────────────────────────────────

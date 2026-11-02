@@ -161,4 +161,19 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_checkins_client ON maple_sleep_checkins (family_id, client_id) WHERE client_id IS NOT NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_night ON maple_sleep_checkins (family_id, baby_id, night DESC) WHERE deleted_at IS NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_updated ON maple_sleep_checkins (family_id, baby_id, updated_at DESC)`);
+  await migrateCheckinExtras();
+}
+
+/**
+ * The morning's extra one-tap answers on a check-in (sleep/types.ts
+ * CheckinExtras): where the baby spent most of the night, a bassinet try
+ * the log doesn't have (and the minutes its "long" meant), and whether the
+ * planned handoff happened as planned. Nullable and checked in code, so an
+ * older row has none and an older release reads past them.
+ */
+async function migrateCheckinExtras(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS place TEXT`);
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS untimed_try TEXT`);
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS untimed_min SMALLINT`);
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS handoff TEXT`);
 }

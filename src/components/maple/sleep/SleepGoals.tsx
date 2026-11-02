@@ -1,21 +1,26 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { sleepAge } from "@/lib/maple/sleep/engine";
 import {
+  againstAim,
   goalAdults,
+  goalCautions,
   goalSpan,
+  goalStartKey,
   lastNightKey,
-  nextStep,
+  nextStepNow,
+  rosterHintBody,
   type CoachNotes,
   type GoalProgress,
   type GoalSpan,
   type GoalWeek,
   type NightsWeek,
-  type RosterHint,
   type StretchWeek,
+  type WeekCoverage,
   type WindowWeek,
 } from "@/lib/maple/sleep/goals";
-import { GOAL_NOTE_MAX, GOALS_OPEN_MAX, type BassinetStretchTarget, type GoalStep, type SleepGoal } from "@/lib/maple/sleep/types";
+import { GOAL_NOTE_MAX, GOALS_OPEN_MAX, type BassinetNightsTarget, type BassinetStretchTarget, type GoalStep, type ProtectedWindowTarget, type SleepGoal } from "@/lib/maple/sleep/types";
 import { dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, PROTECTED_LABEL, TARGET_KIND_LABEL, targetWords, windowTimes } from "@/lib/maple/sleep/words";
 import { dayKey, DEFAULT_TZ, formatDuration } from "@/lib/maple/time";
 import { AskChatButton } from "../chat/AskChat";
@@ -155,13 +160,41 @@ function whenWords(p: GoalSpan): string {
   return `${head}${p.weekNow ? ` · ${keep(`week ${p.weekNow} of ${p.weeksTotal}`)}` : ""}`;
 }
 
+/** The week whose coverage the card shows: this week once one of its nights is over, else the one before. */
+function shownCoverage(p: GoalProgress): { c: WeekCoverage; w: GoalWeek } | null {
+  for (const w of [...p.weeks].reverse()) {
+    const c = p.coverage.find((x) => x.week === w.n);
+    if (c && c.over > 0) return { c, w };
+  }
+  return null;
+}
+
+/** "Logged this week: something on 5 of 7 nights (2 partly) · feeds on 4 · tries on 2 · check-ins on 4". */
+function coverageLine(c: WeekCoverage, w: GoalWeek, p: GoalProgress): string {
+  const some = c.logged + c.partly;
+  return [
+    // Never "partly" here: that's a check-in's answer.
+    `Logged ${weekLabel(w, p).toLowerCase()}: something on ${some} of ${plural(c.over, "night")}${c.partly ? ` (${c.partly} with a gap of 4 hours or more)` : ""}`,
+    `feeds on ${c.feedNights}`,
+    `tries on ${c.tryNights}`,
+    ...(c.checkinNights != null ? [`check-ins on ${c.checkinNights}`] : []),
+  ].join(" · ");
+}
+
 function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | null; failed: boolean }) {
   const s = useSleep();
-  const { state, now } = useMaple();
+  const { state, now, memberName } = useMaple();
+  const v = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const span = goalSpan(goal, now(), tz);
   const p = view?.progress ?? null;
   const [closing, setClosing] = useState(false);
+  const cov = p?.coverage ? shownCoverage(p) : null;
+  // Fewer than half the nights logged: the counts are from those few, said first.
+  const sparse = !!cov && (cov.c.logged + cov.c.partly) * 2 < cov.c.over;
+  // What the targets and the roster need said with them: feeds first in the first 4 weeks, and a long window's feeds.
+  const age = state ? sleepAge(state.baby, now()) : null;
+  const cautions = goal.status === "active" ? goalCautions(goal, { v, name: memberName, ageDays: state?.baby.born_at ? (age?.days ?? null) : null }).filter((c) => c.kind !== "feeding") : [];
   return (
     <section aria-labelledby={`goal-${goal.id}`} className={cx(tone.card, "space-y-5 px-4 py-4")}>
       <header className="space-y-1">
@@ -175,6 +208,18 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
         <p className={cx(tone.body, "text-[14px] tabular-nums")}>{whenWords(span)}</p>
       </header>
 
+      {sparse && cov && (
+        <p role="note" data-goal-coverage className={cx(tone.inset, "px-3.5 py-3 text-[14px] leading-snug text-mp-ink")}>
+          Only {cov.c.logged + cov.c.partly} of the {plural(cov.c.over, "night")} {weekLabel(cov.w, p!).toLowerCase()} {cov.c.logged + cov.c.partly === 1 ? "has" : "have"} anything logged, so the counts below come from {cov.c.logged + cov.c.partly === 1 ? "that night" : "those"}. A night with nothing logged isn&apos;t counted either way.
+        </p>
+      )}
+      {cautions.map((c) => (
+        <p key={c.kind + c.text} role="note" className={cx(tone.muted, "flex gap-2 text-[13px] leading-relaxed")}>
+          <Icon name="info" size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
+          <span>{c.text}</span>
+        </p>
+      ))}
+
       <Block title="Targets">
         {goal.targets.length ? (
           <div className="space-y-4">
@@ -184,6 +229,11 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
           </div>
         ) : (
           <p className={cx(tone.muted, "text-[14px]")}>No targets yet.</p>
+        )}
+        {cov && !sparse && (
+          <p data-goal-coverage className="pt-1 text-[13px] leading-snug text-mp-ink-2 tabular-nums">
+            {coverageLine(cov.c, cov.w, p!)}
+          </p>
         )}
       </Block>
 
@@ -266,19 +316,31 @@ function Weeks<T extends { week: number }>({ p, rows, line }: { p: GoalProgress;
   );
 }
 
-const nightsLine = (x: NightsWeek, w: GoalWeek) =>
-  x.nights ? `${x.counted} of ${plural(x.nights, "night")}${w.current ? " so far" : ""} · tried on ${x.tried}` : "counting starts with the goal's first night";
+/**
+ * "2 of the 4 nights aimed for · 2 of 2 logged nights · 5 not logged": the
+ * aim, then what the count is out of, never a night nobody logged; with every
+ * night logged, "· tried on 4 of 7 nights so far".
+ */
+const nightsLine = (t: BassinetNightsTarget) => (x: NightsWeek, w: GoalWeek) => {
+  if (!x.nights) return "counting starts with the goal's first night";
+  const counted = `${againstAim(x.counted, t.per_week)}${x.fromCheckins ? ` (${x.fromCheckins} from check-ins)` : ""}`;
+  if (x.unknown) return `${counted} · ${x.counted} of ${x.known} logged ${x.known === 1 ? "night" : "nights"} · ${x.unknown} not logged`;
+  return `${counted} · tried on ${x.tried} of ${plural(x.nights, "night")}${w.current ? " so far" : ""}`;
+};
 
 const stretchLine = (t: BassinetStretchTarget) => (x: StretchWeek, w: GoalWeek) =>
   x.stretches
     ? `longest ${formatDuration(x.longestSec ?? 0)} · ${x.atLeast} of ${plural(x.stretches, "stretch", "stretches")} ${minutesWords(t.minutes)} or more`
     : `no bassinet stretches logged${w.current ? " yet" : ""}`;
 
-function windowLine(x: WindowWeek, w: GoalWeek): string {
+/** "yes on 4 of the 5 nights aimed for · checked in 5 of 7 roster nights so far (not this time 1)": never "held", which is a holding turn's word. */
+const windowLine = (t: ProtectedWindowTarget) => (x: WindowWeek, w: GoalWeek): string => {
   const other = [x.partly ? `partly ${x.partly}` : "", x.no ? `not this time ${x.no}` : ""].filter(Boolean).join(", ");
-  const roster = `${plural(x.planned, "night")} on the roster${w.current ? " so far" : ""}`;
-  return x.checkedIn ? `held ${x.yes} of ${plural(x.checkedIn, "night")} checked in${other ? ` (${other})` : ""} · ${roster}` : `no check-ins${w.current ? " yet" : ""} · ${roster}`;
-}
+  const soFar = w.current ? " so far" : "";
+  if (!x.checkedIn) return `no check-ins${w.current ? " yet" : ""} · ${plural(x.planned, "night")} on the roster${soFar}`;
+  const of = x.planned ? `checked in ${x.checkedIn} of ${plural(x.planned, "roster night")}${soFar}` : `checked in ${plural(x.checkedIn, "night")}${soFar}`;
+  return `yes on ${againstAim(x.yes, t.per_week)} · ${of}${other ? ` (${other})` : ""}`;
+};
 
 function TargetRow({ goal, id, p, failed }: { goal: SleepGoal; id: string; p: GoalProgress | null; failed: boolean }) {
   const { memberName } = useMaple();
@@ -287,7 +349,7 @@ function TargetRow({ goal, id, p, failed }: { goal: SleepGoal; id: string; p: Go
   let counts: ReactNode = null;
   if (t.kind === "custom") counts = <p className={cx(tone.muted, "text-[13px]")}>Not counted from the log.</p>;
   else if (!p) counts = <p className={cx(tone.faint, "text-[13px]")}>{failed ? "Couldn't load the counts. They'll try again on the next refresh." : "Counting…"}</p>;
-  else if (tp?.kind === "bassinet_nights") counts = <Weeks p={p} rows={tp.weeks} line={nightsLine} />;
+  else if (tp?.kind === "bassinet_nights") counts = <Weeks p={p} rows={tp.weeks} line={nightsLine(tp.target)} />;
   else if (tp?.kind === "bassinet_stretch")
     counts = (
       <>
@@ -296,7 +358,7 @@ function TargetRow({ goal, id, p, failed }: { goal: SleepGoal; id: string; p: Go
       </>
     );
   else if (tp?.kind === "protected_window")
-    counts = tp.weeks ? <Weeks p={p} rows={tp.weeks} line={windowLine} /> : <p className={cx(tone.muted, "text-[13px]")}>Counted from each adult&apos;s own morning check-ins.</p>;
+    counts = tp.weeks ? <Weeks p={p} rows={tp.weeks} line={windowLine(tp.target)} /> : <p className={cx(tone.muted, "text-[13px]")}>Counted from each adult&apos;s own morning check-ins.</p>;
   return (
     <div className="space-y-1" role="group" aria-label={TARGET_KIND_LABEL[t.kind]}>
       <p className="text-[12px] font-medium tracking-[0.01em] text-mp-ink-3">{TARGET_KIND_LABEL[t.kind]}</p>
@@ -311,9 +373,11 @@ function TargetRow({ goal, id, p, failed }: { goal: SleepGoal; id: string; p: Go
 function Steps({ goal }: { goal: SleepGoal }) {
   const s = useSleep();
   const { memberName, state, now } = useMaple();
-  const today = dayKey(now(), state?.baby.timezone ?? DEFAULT_TZ);
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const today = dayKey(now(), tz);
   const done = goal.steps.filter((x) => x.done_at).length;
-  const next = nextStep(goal.steps);
+  // This week's step first (the goal's week today is in), then one still open from earlier.
+  const next = nextStepNow(goal.steps, goalSpan(goal, now(), tz));
   const sub = (st: GoalStep) =>
     [st.week_of ? `Week of ${dateWords(st.week_of, today)}` : "", st.done_at && st.done_by ? `Done by ${st.done_by === s.me ? "you" : memberName(st.done_by)}` : "", !st.done_at && next?.id === st.id ? "Next" : ""]
       .filter(Boolean)
@@ -369,20 +433,10 @@ function Steps({ goal }: { goal: SleepGoal }) {
 
 // ── the roster ───────────────────────────────────────────────────────────
 
-/** A hint from the log inside one window (the last week it was on): never a verdict about anyone. */
-function hintWords(h: RosterHint, name: (id: string) => string, baby: string): string {
-  const parts = [
-    h.feeds ? `feeds began inside it on ${plural(h.feedNights, "night")} (${plural(h.feeds, "feed")}${h.feedsLoggedBy ? `, ${h.feedsLoggedBy} logged by ${name(h.member)}` : ""})` : "no feeds began inside it",
-    ...(h.heldNights ? [`${name(h.member)} held ${baby} during it on ${plural(h.heldNights, "night")}`] : []),
-    ...h.cover.map((c) => `${name(c.member)} held ${baby} during it on ${plural(c.nights, "night")}`),
-    ...(h.tries ? [`${plural(h.tries, "bassinet try", "bassinet tries")} began inside it`] : []),
-  ];
-  return `Hint from the log, the last ${plural(h.nights, "night")} it was on: ${parts.join("; ")}.`;
-}
-
 function Roster({ goal, p }: { goal: SleepGoal; p: GoalProgress | null }) {
-  const { memberName } = useMaple();
+  const { memberName, state } = useMaple();
   const v = useVoice();
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
   return (
     <Block title="Night roster">
       {goal.roster.length ? (
@@ -398,7 +452,8 @@ function Roster({ goal, p }: { goal: SleepGoal; p: GoalProgress | null }) {
                 {h && (
                   <p className="flex gap-1.5 pt-0.5 text-[13px] leading-snug text-mp-ink-2">
                     <Icon name="info" size={15} className="mt-[2px] shrink-0 text-mp-ink-3" />
-                    <span>{hintWords(h, memberName, v.name)}</span>
+                    {/* A hint from the log inside the window (the last week it was on): never a verdict about anyone, and a night with nothing logged is said as that. */}
+                    <span>{`Hint from the log, the last ${plural(h.nights, "night")} it was on: ${rosterHintBody(h, memberName, v, tz)}.`}</span>
                   </p>
                 )}
               </li>
@@ -420,6 +475,8 @@ function Checkins({ goal, p }: { goal: SleepGoal; p: GoalProgress | null }) {
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const t = now();
   const night = lastNightKey(t, tz);
+  // A goal set this morning never asks about the night before it.
+  const owed = goalStartKey(goal, tz) <= night;
   const people = [...new Set([...goalAdults(goal), ...(p?.checkins ?? []).map((c) => c.member)])];
   if (!people.length || !s.checkins) return null;
   const since = p?.weeks[0]?.from ?? null;
@@ -430,13 +487,14 @@ function Checkins({ goal, p }: { goal: SleepGoal; p: GoalProgress | null }) {
           const c = p?.checkins?.find((x) => x.member === m) ?? null;
           const last = s.checkins?.find((x) => x.member === m && x.night === night) ?? null;
           const counts = c ? (c.nights ? `${plural(c.nights, "night")}: ${answers(c)}` : "no check-ins yet") : null;
+          const lastWords = last ? `last night: ${PROTECTED_LABEL[last.protected].toLowerCase()}` : owed ? "last night: not yet" : null;
           return (
             <li key={m} className="flex min-h-[52px] items-center justify-between gap-3 px-3.5 py-2">
               <div className="min-w-0">
                 <p className="text-[15px] leading-snug text-mp-ink">{m === s.me ? `${memberName(m)} (you)` : memberName(m)}</p>
-                <p className="text-[12px] leading-snug text-mp-ink-2">{[counts, `last night: ${last ? PROTECTED_LABEL[last.protected].toLowerCase() : "not yet"}`].filter(Boolean).join(" · ")}</p>
+                <p className="text-[12px] leading-snug text-mp-ink-2">{[counts, lastWords].filter(Boolean).join(" · ")}</p>
               </div>
-              {m === s.me && s.canWrite && (
+              {m === s.me && s.canWrite && (last || owed) && (
                 <Button variant={last ? "ghost" : "primary"} size="sm" className="shrink-0" onClick={() => s.openSheet({ kind: "checkin", back: "goals" })}>
                   {last ? "Change" : "Check in"}
                 </Button>

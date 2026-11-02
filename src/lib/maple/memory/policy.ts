@@ -1,3 +1,4 @@
+import { dayKey } from "../time";
 import type { Voice } from "../voice";
 import { MEMORY_KINDS, MEMORY_VIA_LABEL, memoryRef, type MemoryKind, type MemoryRecord, type MemoryState } from "./types";
 
@@ -35,11 +36,19 @@ export function memorySource(m: Pick<MemoryRecord, "said_by" | "via">, names: Na
 }
 
 /**
+ * The day a memory was said, in the family's calendar (`tz`, as "today"
+ * is): a memory saved at 8:40 PM in Denver is that day's, not the next UTC
+ * one. Without a zone (older callers), its UTC date.
+ */
+export const savedDay = (stated_at: string, tz?: string) => (tz ? dayKey(Date.parse(stated_at), tz) : stated_at.slice(0, 10));
+
+/**
  * One memory as a prompt carries it. Fields at their defaults stay out (no
  * reason, no dates), and the key order is fixed, so an unchanged memory reads
- * byte for byte the same and the prompt cache holds.
+ * byte for byte the same and the prompt cache holds. `tz`: the family's
+ * timezone, for the day it was saved.
  */
-export function promptRecord(m: MemoryRecord, today: string, names: Names): Record<string, unknown> {
+export function promptRecord(m: MemoryRecord, today: string, names: Names, tz?: string): Record<string, unknown> {
   return {
     id: memoryRef(m.id),
     revision: m.revision,
@@ -51,7 +60,7 @@ export function promptRecord(m: MemoryRecord, today: string, names: Names): Reco
     ...(m.review_on ? { review_on: m.review_on } : {}),
     ...(reviewDue(m, today) ? { review_due: true } : {}),
     from: memorySource(m, names),
-    saved: m.stated_at.slice(0, 10),
+    saved: savedDay(m.stated_at, tz),
   };
 }
 
@@ -66,12 +75,12 @@ export function promptOrder(records: MemoryRecord[], today: string): MemoryRecor
  * The current memories that fit in MEMORY_PROMPT_MAX_CHARS, in prompt order,
  * and how many didn't. A memory that doesn't fit is skipped, never cut.
  */
-export function fitMemories(records: MemoryRecord[], today: string, names: Names, max = MEMORY_PROMPT_MAX_CHARS): { shown: Record<string, unknown>[]; omitted: number } {
+export function fitMemories(records: MemoryRecord[], today: string, names: Names, max = MEMORY_PROMPT_MAX_CHARS, tz?: string): { shown: Record<string, unknown>[]; omitted: number } {
   const shown: Record<string, unknown>[] = [];
   let size = 2;
   let omitted = 0;
   for (const m of promptOrder(records, today)) {
-    const rec = promptRecord(m, today, names);
+    const rec = promptRecord(m, today, names, tz);
     const len = JSON.stringify(rec).length + 1;
     if (size + len > max) {
       omitted++;
@@ -106,7 +115,7 @@ export function memoryPromptBlock(ctx: MemoryContext, names: Names, opts: { view
       ...(ctx.state.capture && !opts.viewer ? ["You can still save a new one when they ask you to remember something."] : stateNotes(ctx.state, opts)),
     ].join("\n");
   }
-  const { shown, omitted } = fitMemories(ctx.records, ctx.today, names);
+  const { shown, omitted } = fitMemories(ctx.records, ctx.today, names, MEMORY_PROMPT_MAX_CHARS, ctx.tz);
   return [
     `Family memories, as of ${ctx.today} (${ctx.tz}). Everyone in this family shares them.`,
     shown.length ? `<family_memories>${JSON.stringify(shown)}</family_memories>` : "No family memories are saved yet.",
@@ -118,7 +127,7 @@ export function memoryPromptBlock(ctx: MemoryContext, names: Names, opts: { view
 /** maple_status's family_memories for a connected app: the same records and notes, as data. */
 export function memoryStatusJson(ctx: MemoryContext, names: Names, opts: { viewer: boolean }): Record<string, unknown> {
   if (!ctx.state.use) return { off: true, note: "Family memories are turned off in Settings → Memories." };
-  const { shown, omitted } = fitMemories(ctx.records, ctx.today, names);
+  const { shown, omitted } = fitMemories(ctx.records, ctx.today, names, MEMORY_PROMPT_MAX_CHARS, ctx.tz);
   const notes = stateNotes(ctx.state, opts);
   return {
     as_of: ctx.today,
@@ -191,12 +200,12 @@ export function recallMatches(records: MemoryRecord[], opts: { query: string; ki
 }
 
 /** A recall result: the prompt's fields, plus status, how it ended, and where it came from. */
-export function recallRecord(m: MemoryRecord, today: string, names: Names): Record<string, unknown> {
+export function recallRecord(m: MemoryRecord, today: string, names: Names, tz?: string): Record<string, unknown> {
   const quote = m.source_text ? (m.source_text.length > 240 ? `${m.source_text.slice(0, 239)}…` : m.source_text) : null;
   return {
-    ...promptRecord(m, today, names),
+    ...promptRecord(m, today, names, tz),
     status: memoryLapsed(m, today) ? "ended" : m.status,
-    ...(m.ended_at && m.status !== "active" ? { ended: `${m.ended_at.slice(0, 10)} by ${names(m.ended_by)}${m.ended_via ? ` in ${MEMORY_VIA_LABEL[m.ended_via]}` : ""}` } : {}),
+    ...(m.ended_at && m.status !== "active" ? { ended: `${savedDay(m.ended_at, tz)} by ${names(m.ended_by)}${m.ended_via ? ` in ${MEMORY_VIA_LABEL[m.ended_via]}` : ""}` } : {}),
     ...(quote ? { [m.source_words ? "their_words" : "note"]: quote } : {}),
   };
 }

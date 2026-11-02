@@ -8,7 +8,7 @@
 import { formatTime, parseDayKey } from "../time";
 import type { SleepPlace } from "../types";
 import type { Voice } from "../voice";
-import type { GoalStatus, GoalTarget, PlanStage, ProtectedAnswer, RosterWindow, ShiftEnding, TargetKind, TryAnchor, TryOutcome, TrySlot, TryTag } from "./types";
+import type { CheckinPlace, GoalStatus, GoalTarget, HandoffAnswer, PlanStage, ProtectedAnswer, RosterWindow, ShiftEnding, TargetKind, TryAnchor, TryOutcome, TrySlot, TryTag, UntimedTry } from "./types";
 import { TRY_ANCHORS } from "./types";
 
 export type StageInfo = {
@@ -155,9 +155,37 @@ export const GOAL_STATUS_LABEL: Record<GoalStatus, string> = {
   dropped: "Set aside",
 };
 
-/** The check-in's one question, and its three answers. */
-export const CHECKIN_QUESTION = "Did your protected sleep window hold last night?";
+/**
+ * The check-in's question, and its three answers. Never "hold": a holding
+ * turn is someone holding the baby awake, so the question names the sleep
+ * itself (checkinQuestion has the window's times).
+ */
+export const CHECKIN_QUESTION = "Did you get your protected sleep last night?";
 export const PROTECTED_LABEL: Record<ProtectedAnswer, string> = { yes: "Yes", partly: "Partly", no: "Not this time" };
+
+/** "10 PM", "9:30 PM", "midnight", "noon" for a stored "22:00": short, for a question. */
+export function shortClock(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (m === 0 && h === 0) return "midnight";
+  if (m === 0 && h === 12) return "noon";
+  const hour = h % 12 || 12;
+  return `${hour}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "AM" : "PM"}`;
+}
+
+/** "Did you get your 10 PM–2 AM sleep?" for the adult's windows that night ("… and 4–6 AM …"); CHECKIN_QUESTION without one. */
+export function checkinQuestion(windows: readonly Pick<RosterWindow, "from" | "to">[]): string {
+  const times = [...new Set(windows.map((w) => `${shortClock(w.from)}–${shortClock(w.to)}`))];
+  if (!times.length) return CHECKIN_QUESTION;
+  return `Did you get your ${times.length > 1 ? `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}` : times[0]} sleep?`;
+}
+
+/** The morning's other questions (each once a night, whoever answers first), and their answers. */
+export const placeQuestion = (v: Voice) => `Where did ${v.name} spend most of last night?`;
+export const PLACE_LABEL: Record<CheckinPlace, string> = { bassinet: "Bassinet", held: "Held by someone awake", mixed: "Some of each", elsewhere: "Somewhere else", unsure: "Not sure" };
+export const UNTIMED_QUESTION = "Any bassinet try that isn't in the log?";
+export const untimedLabels = (minutes: number): Record<UntimedTry, string> => ({ no: "No", long: `Yes, ${minutesWords(minutes)} or more`, short: "Yes, shorter" });
+export const handoffQuestion = (at: string | null) => (at ? `Did the ${at} handoff happen as planned?` : "Did the handoff happen as planned?");
+export const HANDOFF_LABEL: Record<HandoffAnswer, string> = { on_time: "On time", early: "Early", late: "Late", none: "No handoff" };
 
 export const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -217,7 +245,8 @@ export function targetWords(t: GoalTarget, name: (id: string) => string): string
     case "bassinet_stretch":
       return `a bassinet stretch of ${minutesWords(t.minutes)} or more`;
     case "protected_window":
-      return `${name(t.member)}'s protected window holding ${t.per_week} ${t.per_week === 1 ? "night" : "nights"} a week`;
+      // Never "holding": that's someone holding the baby awake.
+      return `${name(t.member)}'s protected sleep, ${t.per_week} ${t.per_week === 1 ? "night" : "nights"} a week`;
     case "custom":
       return t.text;
   }

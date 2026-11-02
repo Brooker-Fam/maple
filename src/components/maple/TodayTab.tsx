@@ -15,7 +15,7 @@ import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
 import { SleepNow } from "./sleep/SleepCards";
-import { SleepCheckinCard } from "./sleep/SleepCheckin";
+import { LastNightCard } from "./sleep/LastNight";
 import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
@@ -79,8 +79,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
           </div>
         </section>
       )}
-      {/* The morning after: an adult on a sleep goal's roster says whether their protected window held. */}
-      <SleepCheckinCard />
+      {/* The morning after (sleep plan or goal): last night from the log, its unlogged stretches, and the adult's own check-in. */}
+      <LastNightCard />
       <WhileYouSlept />
       {nothingYet && born && <FreshPage readOnly={readOnly} />}
 

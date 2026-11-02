@@ -5,7 +5,7 @@ import { tick } from "@/components/atlas/haptics";
 import { ApiError } from "@/lib/maple/client-request";
 import { numberTries, planToday, sleepAge, sleepSignals, stageSuggestion, tryDayKey, tryDayLabel, type PlanToday, type StageSuggestion } from "@/lib/maple/sleep/engine";
 import { nightWords, seesCheckins } from "@/lib/maple/sleep/goals";
-import type { BassinetTry, GoalInput, GoalStep, HoldingShift, PlanPatch, ProtectedAnswer, SleepCheckin, SleepGoal, SleepPlan, SleepState, TryOutcome, TryTag } from "@/lib/maple/sleep/types";
+import type { BassinetTry, CheckinExtras, GoalInput, GoalStep, HoldingShift, PlanPatch, ProtectedAnswer, SleepCheckin, SleepGoal, SleepPlan, SleepState, TryOutcome, TryTag } from "@/lib/maple/sleep/types";
 import { OUTCOME_LABEL, PROTECTED_LABEL } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, SleepPlace } from "@/lib/maple/types";
@@ -122,6 +122,13 @@ export type SleepApi = {
   saveCheckin: (answer: ProtectedAnswer, opts?: { night?: string; note?: string | null }) => Promise<SleepCheckin | null>;
   /** Their own check-in only; Undo saves it again. */
   deleteCheckin: (c: SleepCheckin) => Promise<boolean>;
+  /**
+   * The night's other answers (where the baby spent it, a try the log doesn't
+   * have, the planned handoff) on the signed-in adult's own check-in for that
+   * night, which comes first: null without one. `said`: the toast's words.
+   * Undo puts back what it had.
+   */
+  saveCheckinExtras: (night: string, extras: CheckinExtras, said: string) => Promise<SleepCheckin | null>;
 };
 
 const Ctx = createContext<SleepApi | null>(null);
@@ -546,6 +553,8 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
     [post, toast]
   );
 
+  const saveCheckinExtras = useSaveCheckinExtras({ checkins: adult ? (data.checkins ?? []) : null, me, post, toast });
+
   const value = useMemo<SleepApi>(
     () => ({
       data,
@@ -582,9 +591,11 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
       closeGoal,
       saveCheckin,
       deleteCheckin,
+      saveCheckinExtras,
     }),
     [
       adult,
+      saveCheckinExtras,
       busy,
       closeGoal,
       createGoal,
@@ -621,6 +632,40 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
       {children}
       {sheets?.(value)}
     </Ctx.Provider>
+  );
+}
+
+/** The keys an extra answer lives under, so Undo can put each back as it was (null for none). */
+const EXTRA_KEYS = ["place", "untimed_try", "untimed_min", "handoff"] as const;
+
+/**
+ * The night's other answers, saved on this adult's own check-in for it (one
+ * write with the answer it already has), with Undo putting back what those
+ * keys held before.
+ */
+function useSaveCheckinExtras(o: {
+  checkins: SleepCheckin[] | null;
+  me: string;
+  post: (body: Record<string, unknown>, opts?: { quiet?: boolean }) => Promise<Answer | null>;
+  toast: (text: string, opts?: Partial<{ tone: "ok" | "info" | "error"; undo: () => void }>) => number;
+}) {
+  const { checkins, me, post, toast } = o;
+  return useCallback(
+    async (night: string, extras: CheckinExtras, said: string) => {
+      const mine = checkins?.find((c) => c.member === me && c.night === night) ?? null;
+      if (!mine) return null;
+      tick();
+      const r = await post({ action: "checkin.save", night, protected: mine.protected, client_id: `checkin-${crypto.randomUUID()}`, ...extras });
+      const w = r?.result as CheckinResult | undefined;
+      if (!w) return null;
+      const back = Object.fromEntries(EXTRA_KEYS.filter((k) => k in extras).map((k) => [k, mine[k] ?? null]));
+      toast(said, {
+        tone: "ok",
+        undo: () => void post({ action: "checkin.save", night, protected: mine.protected, client_id: `checkin-${crypto.randomUUID()}`, ...back }).then((x) => x && toast("Undone", { tone: "info" })),
+      });
+      return w.checkin;
+    },
+    [checkins, me, post, toast]
   );
 }
 

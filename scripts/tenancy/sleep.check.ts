@@ -142,6 +142,21 @@ async function main() {
     await route(alpha.owner, 1, { action: "plan.update", revision: 2, patch: { stage: 1 } });
   });
 
+  await test("plan: its goal never leaves her to cry or has her asleep on or with an adult, or in a bed, couch, recliner, armchair or swing, through the route and set_sleep_plan", async () => {
+    const said = "The goal: Maple's plans never leave June to cry, or have her sleep on or with an adult, or in a bed, couch, recliner, armchair or swing. Reword it.";
+    const rev = Number((await sql(`SELECT revision FROM maple_sleep_plans WHERE family_id = 1`))[0].revision);
+    for (const goal of ["Co-sleeping safely", "Let her cry it out at bedtime", "June naps in the swing after lunch"]) {
+      const r = await route(alpha.owner, 1, { action: "plan.update", revision: rev, patch: { goal } });
+      eq([r.status, r.json.error], [400, said], `route: "${goal}"`);
+      const t = await call("set_sleep_plan", { revision: rev, goal }, alpha);
+      ok(t.isError && t.text.startsWith(said) && /Nothing was saved/.test(t.text), t.text);
+    }
+    eq(Number((await sql(`SELECT revision FROM maple_sleep_plans WHERE family_id = 1`))[0].revision), rev, "nothing saved");
+    const okGoal = await route(alpha.owner, 1, { action: "plan.update", revision: rev, patch: { goal: "Sleeping in her bassinet beside our bed" } });
+    eq([okGoal.status, (okGoal.json.plan as { goal: string }).goal], [200, "Sleeping in her bassinet beside our bed"], "the bassinet beside their bed saves");
+    await route(alpha.owner, 1, { action: "plan.update", revision: rev + 1, patch: { goal: null } });
+  });
+
   await test("families: another family's plan, tries and shifts read as missing", async () => {
     eq(sleepState(await route(beta.member, 2)).plan, null, "beta has no plan");
     await clean(alpha);

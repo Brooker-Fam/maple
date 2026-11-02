@@ -178,7 +178,7 @@ export type SleepGoal = {
   updated_at: string;
 };
 
-/** Did your protected window hold last night? Nothing else: never hours slept, mood, or anything about anyone's health. */
+/** Did you get your protected sleep last night? Nothing else: never hours slept, mood, or anything about anyone's health. */
 export const PROTECTED_ANSWERS = ["yes", "partly", "no"] as const;
 export type ProtectedAnswer = (typeof PROTECTED_ANSWERS)[number];
 
@@ -194,9 +194,45 @@ export type SleepCheckin = {
   night: string;
   protected: ProtectedAnswer;
   note: string | null;
+  /**
+   * Optional one-tap answers about the baby's night (CheckinExtras), on the
+   * check-in of whoever answered first; absent from older rows, which an
+   * older release reads past.
+   */
+  place?: CheckinPlace | null;
+  untimed_try?: UntimedTry | null;
+  /** The minutes "long" meant when it was asked (the goal's bassinet-nights minutes). */
+  untimed_min?: number | null;
+  handoff?: HandoffAnswer | null;
   source: Source;
   created_at: string;
   updated_at: string;
+};
+
+// ── the morning's extra answers (nullable columns on maple_sleep_checkins) ──
+
+/** "Where did the baby spend most of last night?" Asked once a night: whoever answers first. */
+export const CHECKIN_PLACES = ["bassinet", "held", "mixed", "elsewhere", "unsure"] as const;
+export type CheckinPlace = (typeof CHECKIN_PLACES)[number];
+
+/**
+ * "Any bassinet try that isn't in the log?", asked only for a night with no
+ * try logged: none, one that stayed asleep `untimed_min` or more (it counts
+ * toward bassinet nights, shown apart as "from check-ins"), or a shorter one.
+ */
+export const UNTIMED_TRIES = ["no", "long", "short"] as const;
+export type UntimedTry = (typeof UNTIMED_TRIES)[number];
+
+/** "Did the handoff happen as planned?", asked only for a night with a planned handoff. */
+export const HANDOFF_ANSWERS = ["on_time", "early", "late", "none"] as const;
+export type HandoffAnswer = (typeof HANDOFF_ANSWERS)[number];
+
+/** The extra answers as a write sends them: undefined leaves one as it is, null clears it. */
+export type CheckinExtras = {
+  place?: CheckinPlace | null;
+  untimed_try?: UntimedTry | null;
+  untimed_min?: number | null;
+  handoff?: HandoffAnswer | null;
 };
 
 /** Goal limits, shared by the rules, the store, the route and the tool. */
@@ -221,6 +257,8 @@ export const CHECKIN_NOTE_MAX = 200;
 export const CHECKIN_NIGHTS_BACK = 14;
 /** A goal is due a review once this many days pass since its last one (or since it was set). */
 export const REVIEW_DUE_DAYS = 7;
+/** An untimed try's "long" is at least this many minutes (the goal's bassinet-nights minutes, 15 to 720). */
+export const UNTIMED_MIN_RANGE = [15, 720] as const;
 
 /** MapleState.sleep: what every phone shows. */
 export type SleepState = {
