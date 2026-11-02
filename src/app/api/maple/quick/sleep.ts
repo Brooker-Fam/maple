@@ -645,6 +645,11 @@ async function undoCheckin(c: QuickCtx, k: SleepCheckin): Promise<Response> {
 async function undoEntry(c: QuickCtx, e: Entry): Promise<Response> {
   // Saving leaves updated_by empty: anything there now is a change since.
   if (e.updated_by) return changedSince(`The ${whatOf(e)}`);
+  // A bassinet try laid on this sleep since (anyone's) sits on it: the sleep stays with it.
+  if (e.kind === "sleep") {
+    const onIt = await rows(`SELECT 1 FROM maple_sleep_tries WHERE family_id = $1 AND sleep_entry_id = $2 AND deleted_at IS NULL LIMIT 1`, [c.fam.familyId, e.id]);
+    if (onIt.length) return notDone("A bassinet try sits on that sleep now, so nothing was undone. Fix it in the app.", { undone: null }, 409);
+  }
   await softDeleteEntry(c.fam, e.id, c.me.email);
   let back: Entry | null = null;
   if (e.kind === "sleep" || e.kind === "feed") {

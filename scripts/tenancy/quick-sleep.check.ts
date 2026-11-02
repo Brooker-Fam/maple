@@ -536,6 +536,16 @@ async function main() {
     eq((await siri(T(alpha).member, { action: "undo" })).speak, "There's nothing from Siri in the last 30 minutes to undo.", "nothing");
   });
 
+  await test("undo keeps a sleep Siri started once someone's bassinet try sits on it", async () => {
+    await reset(alpha);
+    await siri(T(alpha).member, { action: "sleep" });
+    await app(alpha.owner, 1, { action: "try.start", client_id: "made-up-app-try-on-siri-sleep" });
+    const t = (await runningTry(1, alpha.babyId))!;
+    const u = await siri(T(alpha).member, { action: "undo" });
+    eq([u.status, u.speak], [409, "A bassinet try sits on that sleep now, so nothing was undone. Fix it in the app."], "said");
+    eq([(await getEntry(1, t.sleep_entry_id!))?.active, t.made_sleep], [true, false], "the sleep stays under the try");
+  });
+
   await test("undo never reaches another family or another person", async () => {
     await reset(alpha);
     await reset(beta);
