@@ -328,7 +328,11 @@ const NUM = String.raw`(?:\d+|a\s+few|a\s+couple(?:\s+of)?|several|two|three|fou
 const MINUTES = String.raw`${NUM}(?:\s*(?:-|–|to)\s*\d+)?\s*(?:minutes?|mins?)`;
 /** Minutes past a one-minute pause ("give her 1 minute" is the pause "for a minute" is). */
 const MINUTES_PAST_ONE = String.raw`(?!1\b)${MINUTES}`;
-/** An overwhelmed adult setting her down safely and stepping away, which the AAP (and guidelines/sleep.ts call-help) advises: not leaving her to cry as a plan. */
+/**
+ * An overwhelmed adult setting her down safely and stepping away: the AAP's own advice for a frustrated caregiver
+ * (HealthyChildren's shaken baby page: a crib with nothing soft in it, then leave the room for about 10 to 15
+ * minutes), and guidelines/sleep.ts call-help's. Not leaving her to cry as a plan; a method by name still is.
+ */
 const OVERWHELMED = /\b(?:overwhelm\w*|too\s+much|frustrat\w*|angry|losing\s+(?:it|my\s+temper|control)|can'?t\s+(?:cope|handle\s+it|take\s+it)|at\s+(?:my|our)\s+wits'?\s+end|step(?:s|ping)?\s+away|calm\s+down|take\s+a\s+(?:break|breather|breath)|need\w*\s+a\s+break)\b/i;
 /** Staying out while she cries: going (back) in, coming back, crying words, "on her own". */
 const STAYING_OUT = /\b(?:go(?:ing)?\s+(?:back\s+)?in|come\s+(?:back\s+)?in|coming\s+(?:back\s+)?in|rush(?:ing)?\s+in|come\s+back|check(?:ing)?\s+on|before\s+(?:\w+\s+)?pick\w*|on\s+(?:her|his|their)\s+own|by\s+(?:her|him|them)sel(?:f|ves)|self[\s-]?sooth\w*|cr(?:y|ies|ied|ying)|fuss\w*|grizzl\w*|scream\w*|wail\w*)\b/i;
