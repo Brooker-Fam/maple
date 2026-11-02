@@ -60,6 +60,20 @@ export function careChanged(opts: { familyId: number; doseId?: number; device?: 
   }, "maple notify care");
 }
 
+/**
+ * A holding shift changed in `familyId` (a start, a handoff, a new planned
+ * time, an end): re-arm that family's wake-ups so the planned handoff's
+ * reminder goes out on time. `wake`: "Wake [partner]" was tapped, so the
+ * family's other phones with handoff reminders on hear of it now (never the
+ * phone `device` that tapped it).
+ */
+export function holdingChanged(opts: { familyId: number; wake?: { shiftId: number; device?: string | null } }): void {
+  later(async () => {
+    const { afterHoldingWrite } = await import("./notify");
+    await afterHoldingWrite(opts.familyId, opts.wake);
+  }, "maple notify holding");
+}
+
 /** A nursing timer changed in `familyId` (start, switch, break, back on, done, discard, a fix): update its lock-screen notice. */
 export function nursingChanged(entryId: number, familyId: number): void {
   later(async () => {

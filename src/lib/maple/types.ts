@@ -10,6 +10,7 @@
 import type { Assessment, MoodTag } from "./guidelines";
 import type { CareFoodItem } from "./care-nutrition-types";
 import type { CareLevel } from "./access";
+import type { SleepState } from "./sleep/types";
 
 export type Side = "L" | "R";
 
@@ -244,6 +245,8 @@ export type MapleState = {
   seen_at: string | null;
   /** Mom's area, filtered by careAccess for this reader; absent when they can't read anything there. */
   care?: CareState;
+  /** The sleep plan, its bassinet tries and holding shifts (sleep/store.ts); absent until the family has any. */
+  sleep?: SleepState;
   /**
    * The family this session acts in: its id (family 1 keeps the Brookers'
    * own words and presets) and who a view-only guest asks to change

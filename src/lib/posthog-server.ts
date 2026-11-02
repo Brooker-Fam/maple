@@ -43,7 +43,7 @@ const API_PATHS = new Set([
   "/api/maple/care/meds", "/api/maple/care/person", "/api/maple/care/entries", "/api/maple/care/entries/restore",
   "/api/maple/auth/callback", "/api/maple/auth/native", "/api/maple/auth/password", "/api/maple/auth/me",
   "/api/maple/auth/join", "/api/maple/auth/email/start", "/api/maple/auth/email/verify",
-  "/api/maple/auth/apple/start", "/api/maple/auth/apple/callback", "/api/maple/signup/start",
+  "/api/maple/auth/apple/start", "/api/maple/auth/apple/callback", "/api/maple/signup/start", "/api/maple/sleep",
 ]);
 const ROUTES = new Set([
   ...API_PATHS,
@@ -52,7 +52,7 @@ const ROUTES = new Set([
   "/api/maple/mcp (copy)", "maple notify", "maple notify logged", "maple notify care", "maple notify nursing",
   "maple push", "maple push family", "maple push test", "maple push send", "maple push member",
   "maple push meds", "maple push retry", "maple push schedule", "maple push tick", "maple push wake",
-  "maple push net", "maple usage alerts",
+  "maple push net", "maple usage alerts", "maple notify holding", "maple notify handoff", "maple push handoff", "maple push handoffs",
 ]);
 const CONTEXT = {
   route: ROUTES,
@@ -62,6 +62,7 @@ const CONTEXT = {
     "log_temperature", "log_vitals", "log_growth", "log_note", "log_medicine", "log_activity", "log_moment",
     "log_many", "get_moments", "delete_entry", "undo_last", "fix_entry", "fix_nursing_time",
     "add_doctor_question", "list_doctor_questions", "mom_status", "fix_mom_entry", "add_mom_medicines",
+    "sleep_plan", "set_sleep_plan", "bassinet_try", "holding",
   ]),
   kind: new Set(["database_unavailable", "server_error", "invite", "welcome", "usage_alert", "email_auth", "other"]),
 };

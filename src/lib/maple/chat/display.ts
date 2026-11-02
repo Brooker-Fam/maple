@@ -1,10 +1,10 @@
 /**
- * Internal entry references (#123, her c123, a memory's m12) stay in the
+ * Internal entry references (#123, her c123, a memory's m12, a bassinet try's t12, a holding shift's h7) stay in the
  * conversation and tool results for follow-up edits and Undo. Only the words
  * shown in the chat are cleaned up, including older replies and the
  * accumulated text of a reply still streaming.
  */
-const ENTRY_ID = String.raw`(?:#\d+\b|\b[cm]\d+\b)`;
+const ENTRY_ID = String.raw`(?:#\d+\b|\b[cmth]\d+\b)`;
 const ENTRY_WORD = String.raw`(?:[Tt]imer|[Ee]ntry)`;
 
 export function chatDisplayText(text: string): string {

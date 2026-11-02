@@ -13,6 +13,7 @@ import {
   familyMembers,
   familyPlans,
   familySent,
+  handoffMoments,
   netMinutes,
   nextWake,
   remindKind,
@@ -20,10 +21,12 @@ import {
   scheduleWakeups,
   schedulerMode,
   type DueMoment,
+  type HandoffMoment,
   type PlanMoments,
   type SchedulerMode,
   type Via,
 } from "./push-wake";
+import { formatTime } from "./time";
 import type { CarePerson, CarePlan, Member, Source } from "./types";
 import { MAPLE_ORIGIN } from "./origin";
 
@@ -85,6 +88,8 @@ export type PushPrefs = {
   muted?: number[];
   /** The running nursing feed on the lock screen (default off). */
   nursing?: boolean;
+  /** Holding shifts: the planned handoff's reminder, and "Wake [partner]" from another phone (default off). */
+  handoff?: boolean;
 };
 
 export type PushSub = {
@@ -193,6 +198,7 @@ export function cleanPrefs(v: unknown): PushPrefs {
   if (typeof o.logged === "boolean") out.logged = o.logged;
   if (typeof o.hide_names === "boolean") out.hide_names = o.hide_names;
   if (typeof o.nursing === "boolean") out.nursing = o.nursing;
+  if (typeof o.handoff === "boolean") out.handoff = o.handoff;
   if (Array.isArray(o.muted)) out.muted = o.muted.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0).slice(0, 100);
   return out;
 }
@@ -331,7 +337,7 @@ export type Notice = {
   url: string;
   /** Shown without a sound or buzz (the nursing timer). */
   silent?: boolean;
-  data: { kind: "ok" | "at" | "logged" | "test" | "hello" | "nurse"; plan?: number; entry?: number; ts?: number };
+  data: { kind: "ok" | "at" | "logged" | "test" | "hello" | "nurse" | "handoff"; plan?: number; entry?: number; shift?: number; ts?: number };
 };
 
 /** The old name of a Notice, for callers that only send words. */
@@ -540,6 +546,23 @@ export const HELLO_NOTICE: Notice = {
   url: "/maple",
   data: { kind: "hello" },
 };
+
+/**
+ * A holding shift's notices. Like every notice, they name no one (phones
+ * aren't people) and say nothing about anyone's health: when the planned
+ * handoff is, or that a handoff was asked for now. One tag per shift, so the
+ * newer replaces the older on the phone.
+ */
+export function handoffNotice(shiftId: number, at: number, tz: string, now: Date, kind: "planned" | "now"): Notice {
+  const base = { tag: `handoff:${shiftId}`, url: "/maple#today", data: { kind: "handoff" as const, shift: shiftId } };
+  if (kind === "now") return { ...base, title: "Handoff now", body: "A handoff was asked for just now. Tap to see who's holding." };
+  const time = formatTime(at, tz);
+  const late = now.getTime() - at > 10 * MIN;
+  return { ...base, title: "Handoff time", body: late ? `The handoff was planned for ${time}. Tap to hand off or plan a later time.` : `Planned for ${time}. Tap to hand off or plan a later time.` };
+}
+
+/** A planned-handoff reminder this late (the clock was down) isn't worth sending. */
+export const HANDOFF_CUTOFF_MS = 30 * MIN;
 
 // ── the tick ──────────────────────────────────────────────────────────
 
@@ -797,6 +820,27 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
     }
   }
 
+  // The planned handoff of an open holding shift, to every phone that turned handoff reminders on.
+  let handoffs: HandoffMoment[] | null = null;
+  if (subs.some((s) => s.prefs.handoff === true)) {
+    try {
+      handoffs = await handoffMoments(scope);
+      for (const m of handoffs) {
+        if (m.at > t || t - m.at >= HANDOFF_CUTOFF_MS || m.at < run.floor) continue;
+        for (const phone of subs) {
+          if (phone.prefs.handoff !== true) continue;
+          try {
+            count(await sendOnce(phone, m.key, `handoff:${m.shiftId}`, handoffNotice(m.shiftId, m.at, scope.tz, now, "planned"), { ttlS: (HANDOFF_CUTOFF_MS - (t - m.at)) / SEC }));
+          } catch (err) {
+            void captureServerException(new Error(errCode(err)), { route: "maple push handoff" });
+          }
+        }
+      }
+    } catch (err) {
+      void captureServerException(new Error(errCode(err)), { route: "maple push handoffs" });
+    }
+  }
+
   // "Logged" and nursing notices aren't worked out from the plans, so one the push service refused gets sent again from here.
   try {
     const again = await retryWriteNotices(scope);
@@ -808,7 +852,7 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
 
   if (run.schedule) {
     try {
-      await scheduleWakeups(scope, now, pre);
+      await scheduleWakeups(scope, now, pre, handoffs);
     } catch (err) {
       void captureServerException(new Error(errCode(err)), { route: "maple push schedule" });
     }
@@ -830,20 +874,23 @@ export async function retrySoon(familyId: number): Promise<void> {
 async function retryWriteNotices(scope: FamilyScope): Promise<{ sent: number; failed: number }> {
   const rows = await q(
     `SELECT key FROM maple_push_sent WHERE state = 'failed' AND attempts < ${MAX_ATTEMPTS} AND sent_at > NOW() - INTERVAL '1 hour'
-       AND (key LIKE 's%|log:%' OR key LIKE 's%|nurse:%') AND ${familySent(1)}`,
+       AND (key LIKE 's%|log:%' OR key LIKE 's%|nurse:%' OR key LIKE 's%|handoffnow:%') AND ${familySent(1)}`,
     [scope.familyId]
   );
   const doses = new Set<number>();
   const feeds = new Set<number>();
+  const asks = new Set<number>();
   for (const r of rows) {
     const what = String(r.key).split("|")[1] ?? "";
     const log = /^log:(\d+)$/.exec(what);
     const nurse = /^nurse:(\d+):/.exec(what);
+    const ask = /^handoffnow:(\d+)$/.exec(what);
     if (log) doses.add(Number(log[1]));
     else if (nurse) feeds.add(Number(nurse[1]));
+    else if (ask) asks.add(Number(ask[1]));
   }
-  if (!doses.size && !feeds.size) return { sent: 0, failed: 0 };
-  const { notifyDoseLogged, notifyNursing } = await import("./notify");
+  if (!doses.size && !feeds.size && !asks.size) return { sent: 0, failed: 0 };
+  const { notifyDoseLogged, notifyHandoffNow, notifyNursing } = await import("./notify");
   const out = { sent: 0, failed: 0 };
   for (const id of doses) {
     const r = await notifyDoseLogged(scope, id, null, new Date(), { retry: false });
@@ -852,6 +899,12 @@ async function retryWriteNotices(scope: FamilyScope): Promise<{ sent: number; fa
   }
   for (const id of feeds) {
     const r = await notifyNursing(scope, id, new Date(), { retry: false });
+    out.sent += r.sent;
+    out.failed += r.failed;
+  }
+  // The phone that asked isn't known any more: the claim per phone already keeps it from getting one.
+  for (const id of asks) {
+    const r = await notifyHandoffNow(scope, id, null, new Date(), { retry: false });
     out.sent += r.sent;
     out.failed += r.failed;
   }

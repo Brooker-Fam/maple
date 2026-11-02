@@ -9,6 +9,7 @@ import {
   audienceOf,
   errCode,
   forHer,
+  handoffNotice,
   liveSubs,
   retrySoon,
   runPushTick,
@@ -265,4 +266,58 @@ async function phonesShowing(scope: FamilyScope, entryId: number): Promise<Set<n
     scope.familyId,
   ]);
   return new Set(rows.map((r) => Number(r.sub_id)));
+}
+
+// ── holding shifts: the handoff ───────────────────────────────────────
+
+/**
+ * After a holding shift changed in `familyId` (sleep/store.ts, from the app
+ * or an assistant): "Handoff now" for "Wake [partner]" (`wake`), then that
+ * family's tick, which sends a planned handoff that's due and re-arms its
+ * wake-ups. Nothing for a family whose phones are all off.
+ */
+export async function afterHoldingWrite(familyId: number, wake?: { shiftId: number; device?: string | null }): Promise<void> {
+  if (!vapidKeys()) return;
+  const now = new Date();
+  const scope = await familyScope(familyId);
+  if (!scope) return;
+  const mine = await q(`SELECT 1 FROM maple_push_subs WHERE family_id = $1 AND NOT needs_resubscribe LIMIT 1`, [scope.familyId]);
+  if (!mine.length) {
+    if (!(await anyPhoneOn())) await ensureSafetyNet(false, now);
+    return;
+  }
+  if (wake) {
+    // Its own try: a hiccup here must not cost the shift its planned reminder.
+    try {
+      await notifyHandoffNow(scope, wake.shiftId, cleanDevice(wake.device), now);
+    } catch (err) {
+      void captureServerException(new Error(errCode(err)), { route: "maple notify handoff" });
+    }
+  }
+  await runPushTick(now, { via: "write", trusted: true, schedule: true, familyId: scope.familyId });
+}
+
+/**
+ * "Handoff now": the shift `shiftId` just began because the person holding
+ * the baby asked for it. Every phone of the family that turned handoff
+ * reminders on hears of it, except the phone that asked (`device`), once
+ * per phone, while the shift is open and under 15 minutes old.
+ */
+export async function notifyHandoffNow(scope: FamilyScope, shiftId: number, device: string | null, now = new Date(), opts: { retry?: boolean } = {}): Promise<Sends> {
+  if (!vapidKeys()) return NONE;
+  const subs = (await liveSubs(scope)).filter((s) => s.prefs.handoff === true && (!device || s.device_id !== device));
+  if (!subs.length) return NONE;
+  const rows = await q(`SELECT id, started_at FROM maple_sleep_shifts WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL`, [shiftId, scope.familyId]);
+  if (!rows.length) return NONE;
+  const started = new Date(rows[0].started_at as string).getTime();
+  if (now.getTime() - started > 15 * MIN) return NONE;
+  const n = handoffNotice(shiftId, started, scope.tz, now, "now");
+  const out = { sent: 0, failed: 0 };
+  for (const phone of subs) {
+    const o = await sendOnce(phone, `handoffnow:${shiftId}`, `handoff:${shiftId}`, n, { ttlS: (15 * MIN) / 1000 });
+    if (o === "sent") out.sent++;
+    else if (o === "failed") out.failed++;
+  }
+  if (out.failed && opts.retry !== false) await retrySoon(scope.familyId);
+  return out;
 }

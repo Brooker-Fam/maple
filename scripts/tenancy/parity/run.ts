@@ -37,7 +37,7 @@ const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
   },
 ];
 
-const OVERLAY = ["src/lib/db.ts", "src/lib/migrate.ts", "src/lib/maple/family-tables.ts", "src/lib/maple/family/schema.ts", "src/lib/maple/auth-schema.ts", "src/lib/maple/memory/schema.ts"];
+const OVERLAY = ["src/lib/db.ts", "src/lib/migrate.ts", "src/lib/maple/family-tables.ts", "src/lib/maple/family/schema.ts", "src/lib/maple/auth-schema.ts", "src/lib/maple/memory/schema.ts", "src/lib/maple/sleep/schema.ts"];
 
 const FIXED_DAY = "2026-10-27";
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/;

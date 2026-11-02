@@ -5,6 +5,7 @@ import { careRev, careSession, careStateFor, viewerFor } from "@/lib/maple/care-
 import { getBaby, lifetimeCounts, listEntries, rev, toClientEntry, touchLastSeen } from "@/lib/maple/store";
 import { familyInfo } from "@/lib/maple/family-info";
 import { pushTickQuietly } from "@/lib/maple/push";
+import { sleepStateFor } from "@/lib/maple/sleep/store";
 import type { MapleState, MapleStateUnchanged } from "@/lib/maple/types";
 import { after } from "next/server";
 
@@ -47,7 +48,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     return json({ unchanged: true, now: now.toISOString(), rev: current } satisfies MapleStateUnchanged);
   }
 
-  const [entries, growth, lifetime, careState] = await Promise.all([
+  const [entries, growth, lifetime, careState, sleep] = await Promise.all([
     listEntries(ctx, {
       babyId: baby.id,
       from: new Date(now.getTime() - WINDOW_HOURS * 3600_000),
@@ -57,6 +58,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     listEntries(ctx, { babyId: baby.id, kinds: ["growth"], ascending: true, limit: 2000 }),
     lifetimeCounts(ctx, baby.id),
     careStateFor(care),
+    sleepStateFor(ctx, baby.id, now),
   ]);
 
   const body: MapleState = {
@@ -70,6 +72,8 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     rev: current,
     seen_at: seenAt,
     ...(careState ? { care: careState } : {}),
+    // Only once there's something: a family that hasn't set up a sleep plan reads as before.
+    ...(sleep.plan || sleep.tries.length || sleep.shifts.length ? { sleep } : {}),
     family: familyInfo(ctx, members),
   };
   return json(body);

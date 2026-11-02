@@ -73,6 +73,9 @@ jobs:
       - name: Family memories
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:maple-memory
+      - name: Sleep plan, bassinet tries and holding shifts
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:maple-sleep
       - name: Install browser check tools
         id: browser_tools
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

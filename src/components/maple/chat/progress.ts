@@ -32,7 +32,7 @@ export function chatActivity(messages: ChatMessage[], state: { busy: boolean; re
     const name = getToolName(pending);
     if (name === "ask_user") return "Preparing a question…";
     if (name === "show_chart") return "Preparing your chart…";
-    if (/^(log_|start_timer$|stop_timer$|record_birth$|add_mom_question$)/.test(name)) return "Saving…";
+    if (/^(log_|start_timer$|stop_timer$|record_birth$|add_mom_question$|bassinet_try$|holding$|set_sleep_plan$)/.test(name)) return "Saving…";
     if (/^(update_|delete_|restore_|fix_|undo_|reopen_|switch_side$|pause_nursing$)/.test(name)) return "Updating the log…";
     return "Checking the log…";
   }

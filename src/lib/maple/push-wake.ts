@@ -181,6 +181,25 @@ export function remindKind(plan: CarePlan): { kind: "ok" | "at" | null; why?: "d
 export type PlanMoments = { plan: CarePlan; doses: DoseEntry[]; moments: DueMoment[] };
 
 /**
+ * A holding shift's planned handoff (sleep/schema.ts): key
+ * handoff:<shift>:<planned ms>, so planning a later time reminds again at
+ * that time, and once per phone for each time.
+ */
+export type HandoffMoment = { key: string; at: number; shiftId: number };
+
+/** One family's open shifts with a planned handoff. */
+export async function handoffMoments(scope: Pick<FamilyScope, "familyId">): Promise<HandoffMoment[]> {
+  const rows = await q(
+    `SELECT id, handoff_at FROM maple_sleep_shifts WHERE family_id = $1 AND ended_at IS NULL AND deleted_at IS NULL AND handoff_at IS NOT NULL ORDER BY handoff_at`,
+    [scope.familyId]
+  );
+  return rows.map((r) => {
+    const at = new Date(r.handoff_at as string).getTime();
+    return { key: `handoff:${Number(r.id)}:${at}`, at, shiftId: Number(r.id) };
+  });
+}
+
+/**
  * One family's active plans (private ones included: a wake only starts a
  * tick, and the tick still applies what each phone may see), their doses of
  * the last three days in one query, and each plan's moments, in the
@@ -342,7 +361,7 @@ export async function anyPhoneOn(): Promise<boolean> {
  * `pre`: moments the caller already worked out for this family (the tick
  * shares its own).
  */
-export async function scheduleWakeups(scope: FamilyScope, now = new Date(), pre?: { plans: PlanMoments[] } | null): Promise<{ mode: SchedulerMode; published: number }> {
+export async function scheduleWakeups(scope: FamilyScope, now = new Date(), pre?: { plans: PlanMoments[] } | null, handoffs?: HandoffMoment[] | null): Promise<{ mode: SchedulerMode; published: number }> {
   if (schedulerMode() !== "qstash") return { mode: "fallback", published: 0 };
   const subs = await q(`SELECT prefs, test_due_at FROM maple_push_subs WHERE family_id = $1 AND NOT needs_resubscribe`, [scope.familyId]);
   await ensureSafetyNet(subs.length > 0 || (await anyPhoneOn()), now);
@@ -353,6 +372,10 @@ export async function scheduleWakeups(scope: FamilyScope, now = new Date(), pre?
   if (wantMeds) {
     const plans = pre?.plans ?? (await collectMoments(scope, now)).plans;
     for (const p of plans) for (const m of p.moments) if (m.at > t) times.push(m.at);
+  }
+  // A planned handoff, while a phone wants its reminder.
+  if (subs.some((s) => (s.prefs as { handoff?: boolean } | null)?.handoff === true)) {
+    for (const m of handoffs ?? (await handoffMoments(scope))) if (m.at > t) times.push(m.at);
   }
   for (const s of subs) if (s.test_due_at) times.push(Math.max(t, new Date(s.test_due_at as string).getTime()));
   const next = [...new Set(times.filter((x) => x - t <= MAX_AHEAD_MS))].sort((a, b) => a - b).slice(0, WAKES_PER_CALL);

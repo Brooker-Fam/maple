@@ -92,16 +92,18 @@ function throws(fn: () => unknown, what: string) {
 
 const ALEX = { email: "alex@example.com", role: "owner" as const };
 const VI = { email: "vi@example.com", role: "viewer" as const };
-const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions", "recall_memories", "list_people"];
+const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions", "recall_memories", "list_people", "sleep_plan"];
+const SLEEP = ["bassinet_try", "holding", "set_sleep_plan", "sleep_plan"];
 const PEOPLE = ["cancel_invite", "change_access", "invite_person", "list_people", "remove_person"];
 const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting"];
 
 // ── the adapter ──────────────────────────────────────────────────────────
 
-check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 for the family's people)", () => {
+check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 for the family's people, 4 for the sleep plan)", () => {
   const { all, mom } = registrations();
-  eq(all.length, 49, "registrations");
-  eq(new Set(all.map((r) => r.name)).size, 49, "distinct names");
+  eq(all.length, 53, "registrations");
+  eq(new Set(all.map((r) => r.name)).size, 53, "distinct names");
+  eq(all.filter((r) => SLEEP.includes(r.name)).map((r) => [r.name, r.ann.readOnlyHint]).sort(), [["bassinet_try", false], ["holding", false], ["set_sleep_plan", false], ["sleep_plan", true]], "sleep tools, one read");
   eq(all.filter((r) => r.name.endsWith("_memory") || r.name === "recall_memories").map((r) => [r.name, r.ann.readOnlyHint]), [["recall_memories", true], ["save_memory", false], ["correct_memory", false], ["resolve_memory", false], ["archive_memory", false]], "memory tools, one read");
   eq(all.map((r) => r.name).filter((n) => PEOPLE.includes(n)).sort(), PEOPLE, "the people tools");
   eq([...mom].sort(), ["add_mom_medicines", "add_mom_question", "fix_mom_entry", "log_mom_drink", "log_mom_food", "log_mom_medicine", "log_mom_temperature", "mom_nutrition", "mom_status", "set_mom_medicine"], "her tools");
@@ -111,7 +113,7 @@ check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 
 check("a member gets the allowed log tools and interactive app cards", () => {
   const names = registrations().all.map((r) => r.name);
   const born = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true }));
-  eq(born.length, 49 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
+  eq(born.length, 53 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
   ok(born.includes("ask_user") && born.includes("show_chart"), "interactive questions and charts");

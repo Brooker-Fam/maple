@@ -176,8 +176,8 @@ function Body() {
                 on
                   ? undefined
                   : showMeds
-                    ? `${Her} medicine times, and the nursing timer if you want it.`
-                    : "The nursing timer on the lock screen, if you want it."
+                    ? `${Her} medicine times, and the nursing timer and handoff reminders if you want them.`
+                    : "The nursing timer on the lock screen and handoff reminders, if you want them."
               }
               checked={on}
               disabled={busy || status === "denied"}
@@ -289,6 +289,13 @@ function Body() {
               checked={prefs.nursing === true}
               disabled={busy}
               onChange={(v) => set({ nursing: v })}
+            />
+            <SwitchRow
+              label="Handoff reminders"
+              note="When someone is holding the baby: at the planned handoff time, and when a handoff is asked for from another phone. They name no one."
+              checked={prefs.handoff === true}
+              disabled={busy}
+              onChange={(v) => set({ handoff: v })}
             />
           </div>
         </section>

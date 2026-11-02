@@ -1357,11 +1357,15 @@ export async function rev(fam: FamilyRef, babyId: number): Promise<string> {
     `SELECT
        (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_entries WHERE family_id = $2 AND baby_id = $1) AS e,
        (SELECT COALESCE(updated_at::text, '') FROM maple_babies WHERE id = $1 AND family_id = $2) AS b,
-       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_members WHERE family_id = $2) AS m`,
+       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_members WHERE family_id = $2) AS m,
+       -- The sleep plan, bassinet tries and holding shifts (sleep/schema.ts): a try or a handoff on one phone shows on the others.
+       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_sleep_tries WHERE family_id = $2 AND baby_id = $1)
+         || ',' || (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_sleep_shifts WHERE family_id = $2 AND baby_id = $1)
+         || ',' || (SELECT COALESCE(MAX(updated_at)::text, '') FROM maple_sleep_plans WHERE family_id = $2 AND baby_id = $1) AS s`,
     [babyId, famId(fam)]
   );
   const r = rows[0] ?? {};
   // The hour too: a full state at least hourly, so the server's older-week diaper count (lifetime.week) never goes
   // stale while nobody logs anything.
-  return `${r.e}|${r.b}|${r.m}|${Math.floor(Date.now() / 3600_000)}`;
+  return `${r.e}|${r.b}|${r.m}|${r.s}|${Math.floor(Date.now() / 3600_000)}`;
 }

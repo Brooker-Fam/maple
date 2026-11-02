@@ -68,6 +68,8 @@ import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./car
 import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
+import { registerSleepTools, sleepStatus, tryRef, undoableSleep } from "./sleep/mcp";
+import { deleteShift, deleteTry, getTry as getSleepTry } from "./sleep/store";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, summarize, type Summary } from "./insights";
 import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
 import { milestoneLabel, milestonesFor, milestoneWordsOf, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
@@ -264,6 +266,8 @@ Who's in the family: list_people says who can reach what (${v.name}'s log, and $
 ${momWords} mean the mom tools below (add_mom_medicines too). "${v.They}" and "${v.them}" mean ${v.name}. When the medicine named is also on ${m}'s list (by its name, an Also called name, or its brand or generic name; mom_status shows her list) and the user didn't say whose dose it was, ask "${v.Name}'s or ${m}'s?" before logging anything. A brand and its generic name are one medicine (acetaminophen and Tylenol, ibuprofen and Motrin or Advil): a dose by either name counts toward the one on her list.
 
 ${v.Their} mom's own medicines and recovery: use mom_status, log_mom_medicine, set_mom_medicine, log_mom_temperature, add_mom_question and fix_mom_entry, never log_medicine (that's ${v.name}'s). Answer "can she take X yet?" only from mom_status, using its line and sentence (for example "Ibuprofen OK after 8:10 AM, by her schedule. Last: 2:10 AM${by}. 1 of 4 tablets in the last 24 hours."). Never say whether a medicine is safe while nursing; suggest her OB, ${v.name}'s pediatrician or a pharmacist. Never fill in a dose, interval, limit or how many to take. If anyone mentions thoughts of harming themselves or someone else, tell them: call 911 if anyone is in immediate danger; otherwise call or text 988, any time. The National Maternal Mental Health Hotline (call or text 1-833-852-6262, 24/7) is there too, but it isn't a crisis line.
+
+Sleep: for sleep questions call sleep_plan and answer from its guidance word for word. Never suggest leaving ${v.them} to cry it out (soothe ${v.them}, try once more, then pause until the next try), and never call sleep on or beside an adult, or in an adult bed, safe or an option. Someone holding ${v.them} who's getting sleepy: the bassinet now, on ${v.their} back, or wake their partner (holding hand_off, sleepy: true), nothing else. A bassinet try logs ${v.their} sleep itself, so never log that sleep too. Change the plan's stage only when they ask. Tries' notes are about ${v.name}'s sleep, never ${m}'s health.
 
 ${m}'s label or discharge papers in a photo: when the user shares one, you may copy her medicines into her list. Copy each value exactly as printed (the name, the dose, how often, the most in 24 hours with its unit) and leave out anything that isn't printed. Read every medicine and number back to the user, and save (add_mom_medicines for several, set_mom_medicine for one) only after they say yes. Never invent, guess, suggest or fill in a number that isn't on the paper. A 24-hour limit needs its unit (tablets, caplets, capsules, doses or mL): with none printed, leave the limit out and say so.
 
@@ -571,7 +575,7 @@ export function startFrom(a: TimeArgs, ctx: Ctx, assumed: string[]): Date | null
   return null;
 }
 
-function endFrom(a: TimeArgs, ctx: Ctx, assumed: string[]): Date | null {
+export function endFrom(a: TimeArgs, ctx: Ctx, assumed: string[]): Date | null {
   if (a.ended_at && a.ended_minutes_ago != null) throw new ToolError("Give either ended_at or ended_minutes_ago, not both.");
   if (a.ended_at) return notFuture(parseTime(a.ended_at, "the end time", ctx, assumed), "The end time", ctx);
   if (a.ended_minutes_ago != null) return new Date(ctx.now.getTime() - a.ended_minutes_ago * MIN);
@@ -1187,7 +1191,7 @@ function itemKey(item: Record<string, unknown>): string {
 }
 
 /** Idempotency key for a client_ref, namespaced per member (the store's id format is strict). */
-function clientIdFor(ctx: Ctx, ref: string): string {
+export function clientIdFor(ctx: Ctx, ref: string): string {
   return `mcp:${createHash("sha256").update(`${ctx.who.id}\n${ref}`).digest("hex").slice(0, 40)}`;
 }
 
@@ -2056,8 +2060,9 @@ export function logStateLines(s: Summary, ctx: Ctx): string[] {
 
 /** logStateLines for the log now, then her next medicine for someone who can read her page (momStatus, so ctx.care holds). */
 export async function logState(ctx: Ctx): Promise<string[]> {
-  const [s, mom] = await Promise.all([snapshot(ctx), momStatus(ctx)]);
+  const [s, mom, sleep] = await Promise.all([snapshot(ctx), momStatus(ctx), sleepStatus(ctx).catch(() => null)]);
   const lines = logStateLines(s, ctx);
+  if (s.born && sleep) lines.push(...sleep.lines);
   if (mom) lines.push(`${mom.name}'s next medicine: ${mom.top}.`);
   return lines;
 }
@@ -2263,6 +2268,13 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   json.last_poop = s.lastPoop ? localWhen(s.lastPoop.started_at, ctx) : null;
   if (s.lastSleep && !s.lastSleep.active && s.lastSleep.ended_at) {
     json.last_sleep = { ended_local: localWhen(s.lastSleep.ended_at, ctx), length: formatDuration((Date.parse(s.lastSleep.ended_at) - ts(s.lastSleep)) / 1000) };
+  }
+
+  // The sleep plan (bassinet tries, who's holding her), only for a family that has any of it.
+  const sleep = s.born ? await sleepStatus(ctx) : null;
+  if (sleep) {
+    lines.push(...sleep.lines);
+    json.sleep = sleep.json;
   }
 
   const t = s.targets;
@@ -2616,6 +2628,15 @@ function gapStats(gaps: number[]): { feed_gap_avg_minutes: number | null; feed_g
 }
 
 // ── nursing timer actions ───────────────────────────────────────────────
+
+/** The running bassinet try that sits on sleep entry `sleepId`, if any (its id). */
+async function runningSleepTry(ctx: Ctx, sleepId: number): Promise<number | null> {
+  const rows = await query(
+    `SELECT id FROM maple_sleep_tries WHERE family_id = $1 AND baby_id = $2 AND sleep_entry_id = $3 AND ended_at IS NULL AND deleted_at IS NULL LIMIT 1`,
+    [ctx.fam.familyId, ctx.baby.id, sleepId]
+  );
+  return rows?.length ? Number((rows[0] as { id: unknown }).id) : null;
+}
 
 /** The nursing timer a feed tool acts on: by id, else the one running. */
 async function runningFeed(id: number | null | undefined, ctx: Ctx, none: string): Promise<FeedEntry> {
@@ -3593,8 +3614,11 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         else ending = ` It ended ${endText}, when it was paused.`;
       }
       const timed = isTimedFeed(stopped) ? partsOf(stopped, ctx) : null;
+      // A bassinet try still open on this sleep: its end is the sleep's now, but how it went is the family's to say.
+      const openTry = stopped.kind === "sleep" ? await runningSleepTry(ctx, stopped.id) : null;
       const lines = [
         `Saved #${stopped.id}: ${phrase(stopped, ctx)}, ${formatTime(stopped.started_at, ctx.tz)}–${formatTime(stopped.ended_at!, ctx.tz)} ${dayWord(new Date(stopped.started_at), ctx)} (stopped by ${ctx.who.name} via ${viaLabel(ctx.who.via)}).${ending}`,
+        ...(openTry ? [`Bassinet try ${tryRef(openTry)} is still open on this sleep: ask how it went, then bassinet_try {action:"finish"} (it ends when the sleep did).`] : []),
         // Breaks and switches are worth spelling out; a one-side feed is already in the line above.
         ...(timed && timed.length > 1 ? [timelineText(stopped as FeedEntry, ctx)] : []),
         ...tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true),
@@ -4622,6 +4646,23 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       if (rows === null || changed === null || mom === null || momChange === null || planChange === null) throw new StoreUnavailable();
       const created = rows.length ? rowToEntry(rows[0] as Record<string, unknown>) : null;
       const edited = changed.length ? rowToEntry(changed[0] as Record<string, unknown>) : null;
+      // Bassinet tries and holding shifts (sleep/mcp.ts): the newest one you made this way, and your newest change to a try.
+      const [sleepMade, tryEditRows] = await Promise.all([
+        undoableSleep(ctx, MCP_SOURCES),
+        query(
+          `SELECT id, updated_at, ended_at, sleep_entry_id FROM maple_sleep_tries WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND deleted_at IS NULL
+             AND updated_at >= NOW() - INTERVAL '30 minutes' ORDER BY updated_at DESC, id DESC LIMIT 1`,
+          [ctx.fam.familyId, ctx.baby.id, ctx.who.id]
+        ),
+      ]);
+      if (tryEditRows === null) throw new StoreUnavailable();
+      const tryEdited = tryEditRows[0] as { id: unknown; updated_at: string | Date; ended_at: unknown; sleep_entry_id: unknown } | undefined;
+      const tryEditAt = tryEdited ? new Date(tryEdited.updated_at).getTime() : 0;
+      const sleepAt = sleepMade ? Date.parse(sleepMade.created_at) : 0;
+      // A sleep a try started (or stopped when it finished) is that try's, not an entry of its own here.
+      const trySleep = (e: Entry | null) => !!e && e.kind === "sleep" && ((!!sleepMade?.made && sleepMade.sleepId === e.id) || (tryEdited != null && Number(tryEdited.sleep_entry_id) === e.id));
+      const createdAt = created && !trySleep(created) ? Date.parse(created.created_at) : 0;
+      const editedAt = edited && !trySleep(edited) ? Date.parse(edited.updated_at) : 0;
       const momRow = mom[0] as { id: string | number; kind: string; created_at: string | Date; name: string | null } | undefined;
       const momAt = momRow ? new Date(momRow.created_at).getTime() : 0;
       // A change to her medicines or one of her entries is newer than anything added: say how to undo that instead.
@@ -4629,7 +4670,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       const plan = planChange[0] as { id: string | number; name: string; updated_at: string | Date; created_at: string | Date; deleted_at: unknown; stopped_at: unknown } | undefined;
       const fixAt = fix ? new Date(fix.updated_at).getTime() : 0;
       const planAt = plan ? new Date(plan.updated_at).getTime() : 0;
-      const latestOther = Math.max(momAt, created ? Date.parse(created.created_at) : 0, edited ? Date.parse(edited.updated_at) : 0);
+      const latestOther = Math.max(momAt, createdAt, editedAt, sleepAt, tryEditAt);
       if (planAt > latestOther && planAt >= fixAt && plan) {
         const added = Math.abs(new Date(plan.created_at).getTime() - planAt) < 2000;
         const how = plan.deleted_at
@@ -4645,7 +4686,46 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         const what = fix.kind === "dose" ? `her ${fix.name ?? "medicine"} dose` : fix.kind === "temp" ? "her temperature reading" : fix.kind === "food" || fix.kind === "drink" ? `her ${fix.name ?? fix.kind}` : "one of her questions";
         throw new ToolError(`Nothing was removed. Your last action was a change to ${what} (c${fix.id}), not a new entry. To change it back use fix_mom_entry with id c${fix.id}; to remove it, action delete.`);
       }
-      if (momRow && momAt > Math.max(created ? Date.parse(created.created_at) : 0, edited ? Date.parse(edited.updated_at) : 0)) {
+      // Your last action was a change to a bassinet try (finishing it, a fix): say how to undo that instead.
+      if (tryEdited && tryEditAt > Math.max(momAt, createdAt, editedAt, sleepAt)) {
+        const ref = tryRef(Number(tryEdited.id));
+        throw new ToolError(
+          `Nothing was removed. Your last action was a change to bassinet try ${ref}, not a new entry. ${tryEdited.ended_at ? `If it was finishing it by mistake, bassinet_try {action:"reopen", id:"${ref}"} runs it again; otherwise fix it with bassinet_try {action:"fix"}.` : 'Fix it with bassinet_try {action:"fix"}.'}`
+        );
+      }
+      // The newest thing you added was a bassinet try or a holding shift: "undo that" takes it back.
+      if (sleepMade && sleepAt >= Math.max(momAt, createdAt, editedAt, tryEditAt)) {
+        if (sleepMade.kind === "try") {
+          const t = await getSleepTry(ctx.fam, sleepMade.id);
+          const r = await deleteTry(ctx.fam, sleepMade.id, ctx.who.id);
+          const ref = tryRef(sleepMade.id);
+          return ok(
+            `Removed bassinet try ${ref}${t ? ` (laid down at ${whenText(t.started_at, ctx)})` : ""}${r.sleepDeleted ? ` and the sleep it started (#${r.sleepDeleted.id})` : ""}. To bring it back, use bassinet_try {action:"restore", id:"${ref}"}.`,
+            { removed: { try: ref, ...(r.sleepDeleted ? { sleep: r.sleepDeleted.id } : {}) }, undo: `bassinet_try {action:"restore", id:"${ref}"}` }
+          );
+        }
+        const shift = await deleteShift(ctx.fam, sleepMade.id, ctx.who.id);
+        // A handoff you made: the shift handed over is open again.
+        const prev = await query(
+          `SELECT id, updated_at FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND ended_how = 'handoff' AND ended_at = $3::timestamptz AND updated_by = $4 AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`,
+          [ctx.fam.familyId, ctx.baby.id, shift.started_at, ctx.who.id]
+        );
+        let reopened = false;
+        if (prev?.length) {
+          const p = prev[0] as { id: unknown };
+          const back = await query(
+            `UPDATE maple_sleep_shifts SET ended_at = NULL, ended_how = NULL, updated_by = $3, updated_at = NOW()
+             WHERE id = $1 AND family_id = $2 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maple_sleep_shifts o WHERE o.family_id = $2 AND o.baby_id = $4 AND o.ended_at IS NULL AND o.deleted_at IS NULL) RETURNING id`,
+            [Number(p.id), ctx.fam.familyId, ctx.who.id, ctx.baby.id]
+          ).catch(() => null);
+          reopened = !!back?.length;
+        }
+        return ok(`Removed holding shift h${shift.id} (${memberName(shift.holder, ctx.members)} from ${whenText(shift.started_at, ctx)})${reopened ? "; the shift it took over from is open again" : ""}.`, {
+          removed: { shift: `h${shift.id}` },
+          ...(reopened ? { reopened: true } : {}),
+        });
+      }
+      if (momRow && momAt > Math.max(createdAt, editedAt)) {
         // Her entry is the newest: "undo that" takes it back, the same as one of Maple's.
         const what = momRow.kind === "dose" ? (momRow.name ?? "a medicine") : momRow.kind === "temp" ? "a temperature" : momRow.kind === "food" || momRow.kind === "drink" ? (momRow.name ?? momRow.kind) : "a question";
         const s = care!;
@@ -4657,7 +4737,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       }
       // If the last thing you did was change an entry, deleting an older one
       // would undo the wrong thing: explain instead.
-      if (edited && (!created || Date.parse(edited.updated_at) > Date.parse(created.created_at))) {
+      if (edited && editedAt && (!createdAt || editedAt > createdAt)) {
         const span = edited.ended_at
           ? `${formatTime(edited.started_at, ctx.tz)}–${formatTime(edited.ended_at, ctx.tz)} ${dayWord(new Date(edited.started_at), ctx)}`
           : whenText(edited.started_at, ctx);
@@ -4697,4 +4777,6 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
   registerMemoryTools(server, copy);
   // Who's in the family and what each person reaches (people-mcp.ts).
   registerPeopleTools(server, copy);
+  // The sleep plan: bassinet tries and holding shifts (sleep/mcp.ts).
+  registerSleepTools(server, copy);
 }

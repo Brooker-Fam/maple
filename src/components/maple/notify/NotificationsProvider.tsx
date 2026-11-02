@@ -386,8 +386,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       try {
         for (const n of await reg.getNotifications()) {
           const tag = n.tag || "";
-          const d = (n.data ?? {}) as { kind?: string; plan?: number; entry?: number; ts?: number; sent?: number };
-          if (!tag.startsWith("med:") && !tag.startsWith("nurse:")) continue;
+          const d = (n.data ?? {}) as { kind?: string; plan?: number; entry?: number; shift?: number; ts?: number; sent?: number };
+          if (!tag.startsWith("med:") && !tag.startsWith("nurse:") && !tag.startsWith("handoff:")) continue;
           if (typeof d.sent === "number" && t - d.sent > 12 * HOUR) {
             n.close();
             continue;
@@ -396,6 +396,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
           if ((d.kind === "ok" || d.kind === "at") && typeof d.plan === "number" && typeof d.sent === "number") {
             const sent = d.sent;
             if (s?.care?.entries.some((e) => e.kind === "dose" && e.med_id === d.plan && Date.parse(e.created_at) > sent)) n.close();
+            continue;
+          }
+          // A handoff reminder once the app shows that shift over (handed off, into the bassinet, or ended).
+          if (d.kind === "handoff" && typeof d.shift === "number") {
+            const sh = s?.sleep?.shifts.find((x) => x.id === d.shift);
+            if (sh?.ended_at) n.close();
             continue;
           }
           // A feed's notice once the app shows that feed finished, from a state at least as new as the notice.
