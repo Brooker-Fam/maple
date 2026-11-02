@@ -18,7 +18,7 @@ import {
   type SleepGoal,
   type TargetKind,
 } from "@/lib/maple/sleep/types";
-import { dateWords, minutesWords, nightsLabel, TARGET_KIND_LABEL, WEEKDAY_SHORT } from "@/lib/maple/sleep/words";
+import { clockLabel, dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, TARGET_KIND_LABEL, WEEKDAY_SHORT, windowTimes } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, daysBetween, DEFAULT_TZ, isDayKey } from "@/lib/maple/time";
 import { Icon } from "../icons";
 import { ContextNote, Label, SheetFooter } from "../sheets/parts";
@@ -148,6 +148,8 @@ function place(message: string): Where {
   };
   if (/^Targets? |^A goal has \d+ targets/.test(message)) return { at: "targets", index: n(/^Target (\d+)/), message };
   if (/^Steps? |^A goal has \d+ steps/.test(message)) return { at: "steps", index: n(/^Step (\d+)/), message };
+  // "Windows 1 and 2 overlap": the later one (the one just added or moved) is the one to fix.
+  if (/^Windows \d+ and \d+ overlap/.test(message)) return { at: "roster", index: n(/^Windows \d+ and (\d+)/), message };
   if (/^Windows? |^The roster/.test(message)) return { at: "roster", index: n(/^Windows? (\d+)/), message };
   if (/^The goal's title/.test(message)) return { at: "title", message };
   if (/^Why it matters/.test(message)) return { at: "why", message };
@@ -176,6 +178,47 @@ function Problem({ children }: { children?: string | null }) {
 }
 
 const BAD = "border-mp-danger! ring-2! ring-mp-danger/25!";
+
+/** What another phone changed (against the version this person started from), for "Alex changed this" by each field. */
+type Elsewhere = { who: string; fields: Set<(typeof FIELDS)[number]>; windows: Map<string, string> };
+
+function changedElsewhere(was: Draft, now: Draft, cur: SleepGoal, who: string): Elsewhere {
+  const a = inputOf(was);
+  const b = inputOf(now);
+  const fields = new Set(FIELDS.filter((k) => !same(a[k], b[k])));
+  // A window it changed or added, by id: its times now, so the mark says what it became.
+  const windows = new Map<string, string>();
+  for (const w of cur.roster) {
+    const before = was.roster.find((x) => x.id === w.id);
+    if (!before || before.from !== w.from || before.to !== w.to || before.member !== w.member || !same([...before.nights].sort(), [...w.nights].sort())) windows.set(w.id, windowTimes(w));
+  }
+  return { who, fields, windows };
+}
+
+function Changed({ children }: { children?: string | null }) {
+  if (!children) return null;
+  return <p className="mt-1.5 text-[13px] font-semibold text-mp-accent-fg">{children}</p>;
+}
+
+/**
+ * A night goes by the evening it begins: "Sun night" runs into Monday
+ * morning, so a window starting after midnight is that next morning's.
+ */
+function nightWords(w: Pick<WindowDraft, "from" | "to" | "nights">): string {
+  const first = [...w.nights].sort((a, b) => a - b)[0];
+  if (first == null || !/^\d{2}:\d{2}$/.test(w.from)) return "A night goes by the evening it begins.";
+  const early = Number(w.from.slice(0, 2)) < 12;
+  return early
+    ? `A night goes by its evening: on ${WEEKDAY_SHORT[first]} night this is ${clockLabel(w.from)} early ${WEEKDAY_SHORT[(first + 1) % 7]}.`
+    : `A night goes by its evening: ${WEEKDAY_SHORT[first]} night starts ${clockLabel(w.from)} ${WEEKDAY_SHORT[first]}.`;
+}
+
+/** "02:00" four hours on from "22:00": a new window's default end. */
+function hoursOn(hhmm: string, hours: number): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const t = (h * 60 + m + hours * 60) % (24 * 60);
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
 
 function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
@@ -220,9 +263,12 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
   const was = useMemo(() => draftOf(base, who), [base, who]);
   const [tried, setTried] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const [changedElsewhere, setChangedElsewhere] = useState(false);
+  const [elsewhere, setElsewhere] = useState<Elsewhere | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Windows this person has set (who, times, nights): an overlap shows on them at once, on a fresh default only after Save.
+  const [touched, setTouched] = useState<ReadonlySet<string>>(() => new Set());
   const body = useRef<HTMLDivElement>(null);
+  const alert = useRef<HTMLParagraphElement>(null);
 
   const editing = !!base;
   const patch = editing ? patchOf(draft, was) : null;
@@ -230,8 +276,13 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
   const dirty = editing ? Object.keys(patch!).length > 0 : !same(createInput(draft), createInput(draftOf(null, who)));
   const rules: GoalRules = { current: base, adults: adultIds, name: memberName, today, seq: 0 };
   const found = check(input, rules, editing ? "update" : "create");
-  // A field still to fill in says so once Save is tapped; anything else shows as soon as it's there.
-  const shown: Where | null = refusal ? place(refusal) : found && (tried || !NEEDED.test(found.message)) ? found : null;
+  // A field still to fill in says so once Save is tapped, and so does an overlap no one has set yet (a window just added);
+  // anything else shows as soon as it's there.
+  const overlapUntouched = (m: string) => {
+    const nums = /^Windows (\d+) and (\d+) overlap/.exec(m);
+    return !!nums && [nums[1], nums[2]].every((n) => !touched.has(draft.roster[Number(n) - 1]?.key ?? ""));
+  };
+  const shown: Where | null = refusal ? place(refusal) : found && (tried || (!NEEDED.test(found.message) && !overlapUntouched(found.message))) ? found : null;
   const at = (where: Where["at"], index?: number) => (shown && shown.at === where && (index === undefined ? shown.index === undefined : shown.index === index) ? shown.message : null);
 
   // A save turned away: bring its words into view.
@@ -239,6 +290,10 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
     if (!attempt) return;
     body.current?.closest("[role=dialog]")?.querySelector("[data-goal-problem]")?.scrollIntoView({ block: "center" });
   }, [attempt]);
+  // Changed on another phone: its notice, at the top of a tall form, comes into view.
+  useEffect(() => {
+    if (elsewhere) alert.current?.scrollIntoView({ block: "start" });
+  }, [elsewhere]);
 
   const edit = (fn: (d: Draft) => Draft) => {
     setDraft(fn);
@@ -246,12 +301,22 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
   };
   const setTarget = (key: string, change: Partial<TargetDraft>) => edit((d) => ({ ...d, targets: d.targets.map((t) => (t.key === key ? { ...t, ...change } : t)) }));
   const setStep = (key: string, change: Partial<StepDraft>) => edit((d) => ({ ...d, steps: d.steps.map((x) => (x.key === key ? { ...x, ...change } : x)) }));
-  const setWindow = (key: string, change: Partial<WindowDraft>) => edit((d) => ({ ...d, roster: d.roster.map((w) => (w.key === key ? { ...w, ...change } : w)) }));
+  const setWindow = (key: string, change: Partial<WindowDraft>) => {
+    setTouched((t) => new Set(t).add(key));
+    edit((d) => ({ ...d, roster: d.roster.map((w) => (w.key === key ? { ...w, ...change } : w)) }));
+  };
 
   const addTarget = (kind: TargetKind) =>
     edit((d) => ({ ...d, targets: [...d.targets, { key: nextKey(), id: null, kind, per_week: kind === "protected_window" ? 5 : 3, min_minutes: 60, minutes: 120, member: who, text: "" }] }));
   const addStep = () => edit((d) => ({ ...d, steps: [...d.steps, { key: nextKey(), id: null, title: "", week_of: "", done: null }] }));
-  const addWindow = () => edit((d) => ({ ...d, roster: [...d.roster, { key: nextKey(), id: null, member: who, from: "22:00", to: "02:00", nights: [...EVERY_NIGHT] }] }));
+  // A new window takes over where the last one ends, for the other adult, on the same nights: 10 PM–2 AM, then 2 AM–6 AM.
+  const addWindow = () =>
+    edit((d) => {
+      const last = d.roster[d.roster.length - 1];
+      const member = last ? (people.find((p) => p.email !== last.member)?.email ?? last.member) : who;
+      const from = last ? last.to : "22:00";
+      return { ...d, roster: [...d.roster, { key: nextKey(), id: null, member, from, to: hoursOn(from, 4), nights: last ? [...last.nights] : [...EVERY_NIGHT] }] };
+    });
 
   const save = async () => {
     setTried(true);
@@ -271,8 +336,11 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
     // Changed on another phone since this opened: theirs now, with this person's changes kept on top, to check and save again.
     setDraft((d) => rebase(d, was, r.conflict, who));
     setBase(r.conflict);
-    setChangedElsewhere(true);
+    setElsewhere(changedElsewhere(was, draftOf(r.conflict, who), r.conflict, r.conflict.updated_by ? memberName(r.conflict.updated_by) : "Someone"));
   };
+  // "Alex changed this": by the field, with what it is now (the field shows this person's change when they made one too).
+  const theirs = (k: (typeof FIELDS)[number], now?: string | null) =>
+    elsewhere?.fields.has(k) ? (patchOf(draft, was)[k] !== undefined ? `${elsewhere.who} changed this too; your change is kept` : `${elsewhere.who} changed this${now ? `: ${now}` : ""}`) : null;
 
   const date = isDayKey(draft.target_date) ? draft.target_date : null;
   const away = date ? daysBetween(today, date) : null;
@@ -290,13 +358,13 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
           onPrimary={() => void save()}
           label={editing ? "Save changes" : "Save the goal"}
           busy={s.busy}
-          hint={tried && shown ? "Check the words in red above." : undefined}
+          hint={elsewhere ? `${elsewhere.who} changed this goal on another phone. Look it over, then save again.` : tried && shown ? "Check the words in red above." : undefined}
         />
       }
     >
       <div ref={body} className="min-w-0 space-y-6">
-        {changedElsewhere && (
-          <p role="alert" className={cx(tone.inset, "px-4 py-3 text-[15px] leading-relaxed text-mp-ink")}>
+        {elsewhere && (
+          <p ref={alert} role="alert" className={cx(tone.inset, "scroll-mt-4 px-4 py-3 text-[15px] leading-relaxed text-mp-ink")}>
             Someone changed this goal on another phone just now, so nothing was saved yet. This shows their version, with your changes kept on top. Look it over, then save again.
           </p>
         )}
@@ -313,11 +381,13 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
               onChange={(e) => edit((d) => ({ ...d, title: e.target.value }))}
             />
             <Problem>{at("title")}</Problem>
+            <Changed>{theirs("title", base ? `“${base.title}”` : null)}</Changed>
           </div>
           <div>
             <Label optional>Why it matters</Label>
             <TextArea ariaLabel="Why it matters" maxLength={GOAL_WHY_MAX} value={draft.why} onChange={(v) => edit((d) => ({ ...d, why: v }))} placeholder="In your words, like “back to work on the 30th”" />
             <Problem>{at("why")}</Problem>
+            <Changed>{theirs("why")}</Changed>
           </div>
           <div>
             <Label optional>Target date</Label>
@@ -342,6 +412,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                   : "A day to look back at it together, if there is one."}
               </p>
             )}
+            <Changed>{theirs("target_date", base?.target_date ? dateWords(base.target_date, today) : "none")}</Changed>
           </div>
           {editing && base!.status !== "met" && base!.status !== "dropped" && (
             <div>
@@ -355,6 +426,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                   { value: "paused", label: "Paused" },
                 ]}
               />
+              <Changed>{theirs("status", base ? GOAL_STATUS_LABEL[base.status] : null)}</Changed>
             </div>
           )}
         </div>
@@ -437,6 +509,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             </div>
           )}
           <Problem>{at("targets")}</Problem>
+          <Changed>{theirs("targets") ? `${elsewhere!.who} changed the targets on another phone` : null}</Changed>
         </Section>
 
         <Section title="Weekly steps" count={draft.steps.length} max={GOAL_STEPS_MAX}>
@@ -470,6 +543,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             </Chip>
           )}
           <Problem>{at("steps")}</Problem>
+          <Changed>{theirs("steps") ? `${elsewhere!.who} changed the steps on another phone` : null}</Changed>
         </Section>
 
         <Section title="Night roster" count={draft.roster.length} max={ROSTER_MAX}>
@@ -484,7 +558,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                 </div>
                 <div>
                   <Label>Who sleeps</Label>
-                  <div className="flex flex-wrap gap-2">
+                  <div role="group" aria-label={`Window ${i + 1}: who sleeps`} className="flex flex-wrap gap-2">
                     {people.map((p) => (
                       <Chip key={p.email} raised selected={w.member === p.email} onClick={() => setWindow(w.key, { member: p.email })}>
                         {label(p.email)}
@@ -503,8 +577,8 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                   </label>
                 </div>
                 <div>
-                  <Label>The evenings it begins on</Label>
-                  <div className="flex flex-wrap gap-1.5">
+                  <Label>Which nights</Label>
+                  <div role="group" aria-label={`Window ${i + 1}: which nights`} className="flex flex-wrap gap-1.5">
                     {WEEKDAY_SHORT.map((day, n) => (
                       <Chip
                         key={day}
@@ -521,8 +595,10 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                     {nightsLabel(w.nights).replace(/^./, (c) => c.toUpperCase())}
                     {len ? ` · ${minutesWords(len)} on the clock` : ""}
                   </p>
+                  <p className={cx(tone.faint, "mt-1 text-[13px] leading-snug")}>{nightWords(w)}</p>
                 </div>
                 <Problem>{at("roster", i)}</Problem>
+                <Changed>{w.id && elsewhere?.windows.has(w.id) ? `${elsewhere.who} changed this: ${elsewhere.windows.get(w.id)}` : null}</Changed>
               </div>
             );
           })}
@@ -532,6 +608,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             </Chip>
           )}
           <Problem>{at("roster")}</Problem>
+          <Changed>{theirs("roster") && !draft.roster.some((w) => w.id && elsewhere?.windows.has(w.id)) ? `${elsewhere!.who} changed the night roster on another phone` : null}</Changed>
         </Section>
 
         <Problem>{at("form")}</Problem>

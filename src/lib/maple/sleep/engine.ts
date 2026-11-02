@@ -19,7 +19,7 @@ import { SLEEP_GUIDES, SLEEP_SECTIONS, sectionTitle, type GuideSource, type Slee
 import { addDays, babyAge, dayKey, daysBetween, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "../time";
 import type { Baby, Entry, EntryOf, SleepPlace } from "../types";
 import type { Voice } from "../voice";
-import { MAX_SPAN_MS, PLAN_STAGES, TRY_OUTCOMES, type BassinetTry, type HoldingShift, type PlanStage, type SleepPlan, type TryOutcome, type TrySlot } from "./types";
+import { ASK_STALE_MS, MAX_SPAN_MS, PLAN_STAGES, TRY_OUTCOMES, type BassinetTry, type HoldingShift, type PlanStage, type SleepPlan, type TryOutcome, type TrySlot } from "./types";
 import { OUTCOME_LABEL, SLEEP_PLACE_LABEL, TIME_OF_DAY, slotLabel, type TimeOfDay } from "./words";
 
 const MIN = 60_000;
@@ -502,6 +502,61 @@ export function nextHandoff(prev: Pick<HoldingShift, "started_at" | "handoff_at"
   const planned = prev.handoff_at ? ms(prev.handoff_at) - ms(prev.started_at) : DEFAULT_SHIFT_MS;
   const span = planned >= 15 * MIN && planned <= MAX_SPAN_MS ? planned : DEFAULT_SHIFT_MS;
   return at + span;
+}
+
+export type AskState = {
+  /** Someone was asked to take over this open turn ("Wake [partner]"), and nobody has yet. */
+  asked: boolean;
+  /** Who was asked (a member id) and when. */
+  to: string | null;
+  at: string | null;
+  /** Whole minutes since the ask. */
+  minutes: number;
+  /**
+   * Nobody took over within ASK_STALE_MS: the holder sees the two safe
+   * choices again (the bassinet now, or wake them again), never "keep holding".
+   */
+  stale: boolean;
+};
+
+/** A turn's ask, as the holder's phone, the other phones and the tools read it. An ended turn has none open. */
+export function askState(s: Pick<HoldingShift, "ended_at" | "asked_to" | "asked_at">, now: Date): AskState {
+  if (s.ended_at || !s.asked_to || !s.asked_at) return { asked: false, to: null, at: null, minutes: 0, stale: false };
+  const since = now.getTime() - ms(s.asked_at);
+  return { asked: true, to: s.asked_to, at: s.asked_at, minutes: Math.max(0, Math.floor(since / MIN)), stale: since >= ASK_STALE_MS };
+}
+
+// ── the try day in a phone's words ───────────────────────────────────────
+//
+// A try day runs noon to noon, so at 7:30 AM it's still the one that began
+// last evening. The tools keep tryDayLabel's plain "tonight"; a phone says
+// what a person would at that hour.
+
+/** From this local hour until noon, the try day's night is over: its morning. */
+const MORNING_HOUR = 5;
+const isMorning = (at: Date | number, tz: string) => {
+  const h = localParts(at, tz).hour;
+  return h >= MORNING_HOUR && h < 12;
+};
+
+/** The current try day: "tonight", or in its morning (5 AM to noon) "since last night". */
+export function tryDayNowLabel(now: Date, tz: string): string {
+  return isMorning(now, tz) ? "since last night" : "tonight";
+}
+
+/**
+ * A try's day, said at `now`: "tonight"; in the morning, "last night" for
+ * the night's tries and "this morning" for the morning's, with the night
+ * before named by its evening ("Tue night"); older ones as tryDayLabel.
+ */
+export function tryWhenLabel(startedAt: string | number, now: Date, tz: string): string {
+  const start = typeof startedAt === "string" ? ms(startedAt) : startedAt;
+  const key = tryDayKey(start, tz);
+  const nowKey = tryDayKey(now, tz);
+  const morning = isMorning(now, tz);
+  if (key === nowKey) return !morning ? "tonight" : isMorning(start, tz) ? "this morning" : "last night";
+  if (morning && daysBetween(key, nowKey) === 1) return `${formatDayLabel(key, addDays(nowKey, 7)).split(",")[0]} night`;
+  return tryDayLabel(key, nowKey);
 }
 
 // ── recent-log signals and guidance ──────────────────────────────────────

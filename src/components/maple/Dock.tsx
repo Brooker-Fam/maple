@@ -18,6 +18,7 @@ import MoreSheet, { logSwitches, usePress } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR } from "./palette";
 import { useSheets } from "./sheets";
+import { TAP_COOLDOWN_MS } from "./tapCooldown";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE, timerNumbers, useTimerActions } from "./TimerCard";
 import { cx } from "./ui";
 import { useBabyWords } from "./familyWords";
@@ -51,12 +52,6 @@ import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMap
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
-/**
- * One cooldown for the whole dock: a tap can swap the tile under the thumb
- * (Sleep ↔ Woke up, Left → Switch to Right), so a double tap must not land on
- * the replacement and do the opposite thing.
- */
-const TAP_COOLDOWN_MS = 800;
 /**
  * After a tap on columns 1 or 2 (start, switch, pause, resume), both wait
  * 1.2 s; column 1 waits 2.5 s after its own tap. That one changes the side

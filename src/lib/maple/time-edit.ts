@@ -1,4 +1,4 @@
-import { dayKey, formatTime, localParts, tzOffsetMinutes, zonedTimeToUtc } from "./time";
+import { addDays, dayKey, formatDayLabel, formatTime, localParts, tzOffsetMinutes, zonedTimeToUtc } from "./time";
 
 export type RecordedTimeResult =
   | { valid: true; date: Date; alternatives: Date[] }
@@ -10,7 +10,7 @@ export function parseRecordedTime(
   clock: string,
   tz: string,
   reference: Date,
-  bounds: { min?: Date; max?: Date } = {}
+  bounds: { min?: Date; max?: Date; now?: Date } = {}
 ): RecordedTimeResult {
   const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
   const t = /^(\d{2}):(\d{2})$/.exec(clock);
@@ -36,7 +36,15 @@ export function parseRecordedTime(
   if (dayKey(reference, tz) === day && Math.floor(reference.getTime() / 60_000) === Math.floor(chosen.getTime() / 60_000)) chosen = reference;
   const firstMinute = bounds.min && new Date(Math.ceil(bounds.min.getTime() / 60_000) * 60_000);
   const lastMinute = bounds.max && new Date(Math.floor(bounds.max.getTime() / 60_000) * 60_000);
-  if (bounds.min && chosen < bounds.min) return { valid: false, date: chosen, alternatives, message: `Choose ${dayKey(firstMinute!, tz)} at ${formatTime(firstMinute!, tz)} or later.` };
-  if (bounds.max && chosen > bounds.max) return { valid: false, date: chosen, alternatives, message: `Choose ${dayKey(lastMinute!, tz)} at ${formatTime(lastMinute!, tz)} or earlier.` };
+  if (bounds.min && chosen < bounds.min) return { valid: false, date: chosen, alternatives, message: `Choose ${humanDay(firstMinute!, tz, bounds.now)} at ${formatTime(firstMinute!, tz)} or later.` };
+  if (bounds.max && chosen > bounds.max) return { valid: false, date: chosen, alternatives, message: `Choose ${humanDay(lastMinute!, tz, bounds.now)} at ${formatTime(lastMinute!, tz)} or earlier.` };
   return { valid: true, date: chosen, alternatives };
+}
+
+/** A bound's day as a person says it: "today", "yesterday" (with `now`), else "Thu, Nov 5", never 2026-11-05. */
+function humanDay(at: Date, tz: string, now?: Date): string {
+  const key = dayKey(at, tz);
+  // Without a clock to say "today" against, a week on keeps it a plain date.
+  const label = formatDayLabel(key, now ? dayKey(now, tz) : addDays(key, 7));
+  return label === "Today" || label === "Yesterday" ? label.toLowerCase() : label;
 }

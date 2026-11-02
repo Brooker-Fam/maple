@@ -8,6 +8,7 @@ import { emergencySigns } from "../src/lib/maple/guidelines";
 import { SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
 import {
   AGE_BANDS,
+  askState,
   chooseSleepLink,
   EARLY_MIN_TRIES,
   endsSleep,
@@ -31,6 +32,8 @@ import {
   tryDayBounds,
   tryDayKey,
   tryDayLabel,
+  tryDayNowLabel,
+  tryWhenLabel,
 } from "../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../src/lib/maple/sleep/errors";
 import {
@@ -54,7 +57,7 @@ import {
   type GoalRules,
 } from "../src/lib/maple/sleep/goals";
 import type { BassinetTry, GoalInput, HoldingShift, SleepCheckin, SleepGoal, SleepPlan, TryOutcome, TryTag } from "../src/lib/maple/sleep/types";
-import { isTrySlot, nightsLabel, sleepyChoices, slotLabel, STAGE_INFO, weekdayOf } from "../src/lib/maple/sleep/words";
+import { cryingLine, downWords, isTrySlot, nightsLabel, sleepyChoices, slotLabel, slotShort, STAGE_INFO, weekdayOf } from "../src/lib/maple/sleep/words";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Entry, SleepPlace } from "../src/lib/maple/types";
 import { makeVoice, type Voice } from "../src/lib/maple/voice";
@@ -435,6 +438,45 @@ check("shifts: due at the planned handoff, and the next one keeps the same lengt
   eq(shiftStatus({ ...s, ended_at: iso(start) }, new Date()).open, false, "ended");
   eq(nextHandoff(s, start.getTime() + 2 * HOUR), start.getTime() + 4 * HOUR, "same length");
   eq(nextHandoff({ started_at: s.started_at, handoff_at: null }, start.getTime()), start.getTime() + 2 * HOUR, "two hours by default");
+});
+
+check("asks: Wake [partner] is an ask with its time; ten minutes on with nobody taking over, it's stale; an ended turn has none open", () => {
+  const start = at(2026, 10, 28, 1);
+  const asked = at(2026, 10, 28, 2, 10);
+  const s = { started_at: iso(start), ended_at: null, asked_to: "alex@example.com", asked_at: iso(asked) };
+  eq(askState({ ...s, asked_to: null, asked_at: null }, asked).asked, false, "nobody asked");
+  eq(askState(s, new Date(asked.getTime() + 9 * MIN)), { asked: true, to: "alex@example.com", at: iso(asked), minutes: 9, stale: false }, "nine minutes: still waking them");
+  eq(askState(s, new Date(asked.getTime() + 10 * MIN)).stale, true, "ten minutes: the two safe choices again");
+  eq(askState({ ...s, ended_at: iso(asked.getTime() + 5 * MIN) }, new Date(asked.getTime() + 20 * MIN)).asked, false, "taken over: no ask open");
+  const older: Parameters<typeof askState>[0] = { ended_at: null };
+  eq(askState(older, asked).asked, false, "a turn from a server older than asks");
+});
+
+check("try day in a phone's words: tonight through the night, since last night in the morning, this morning for a morning try", () => {
+  const night = at(2026, 11, 4, 23);
+  const twoAm = at(2026, 11, 5, 2, 10);
+  const morning = at(2026, 11, 5, 7, 30);
+  eq(tryDayNowLabel(twoAm, NY), "tonight", "2 AM is still tonight");
+  eq(tryDayNowLabel(morning, NY), "since last night", "7:30 AM");
+  eq(tryDayNowLabel(at(2026, 11, 5, 15), NY), "tonight", "the afternoon starts a new try day");
+  eq(tryWhenLabel(iso(night), twoAm, NY), "tonight", "an 11 PM try at 2 AM");
+  eq(tryWhenLabel(iso(night), morning, NY), "last night", "an 11 PM try at 7:30 AM");
+  eq(tryWhenLabel(iso(at(2026, 11, 5, 7)), morning, NY), "this morning", "a 7 AM try at 7:30 AM");
+  eq(tryWhenLabel(iso(at(2026, 11, 3, 23)), morning, NY), "Tue night", "the night before last, by its evening");
+  eq(tryWhenLabel(iso(at(2026, 11, 3, 23)), at(2026, 11, 4, 21), NY), "last night", "in the evening, yesterday's is last night");
+});
+
+check("night words: durations as a phone says them, the crying lines, and short try times", () => {
+  eq([downWords(47), downWords(60), downWords(192)], ["47 min", "1h 00m", "3h 12m"], "never 192 min");
+  for (const v of VOICES) {
+    const soothe = cryingLine(v, "after_crying");
+    ok(/^Soothe /.test(soothe) && /try once more when .+ deeply asleep$/.test(soothe), soothe);
+    ok(!/cry[- ]it[- ]out|leave/i.test(soothe), soothe);
+  }
+  eq(cryingLine(SHE, "after_crying"), "Soothe her; try once more when she's deeply asleep", "her");
+  eq(cryingLine(THEY, "after_crying"), "Soothe them; try once more when they're deeply asleep", "them");
+  eq(cryingLine(SHE, "retry_done"), "Pause until the next try", "after the retry");
+  eq([slotShort("first_morning_nap"), slotShort("first_night_stretch"), plain(slotShort("22:30"))], ["morning nap", "first night stretch", "around 10:30 PM"], "short try times");
 });
 
 // ── signals and guidance ─────────────────────────────────────────────────

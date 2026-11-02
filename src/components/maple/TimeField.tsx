@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useLayoutEffect, useRef, useState } from "react";
-import { dayKey, formatDayLabel, formatTime, localParts } from "@/lib/maple/time";
+import { addDays, dayKey, formatDayLabel, formatTime, localParts } from "@/lib/maple/time";
 import { parseRecordedTime } from "@/lib/maple/time-edit";
 import { cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -11,8 +11,11 @@ function fields(value: Date, tz: string) {
   return { basis: value.getTime(), tz, day: dayKey(value, tz), clock: `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}` };
 }
 
+/** A clock later than now, typed on today's date, reads as yesterday's when that's at most this long ago ("last night"). */
+const LAST_NIGHT_MS = 18 * 3600_000;
+
 /** The same visible date and clock for a dose, a nursing moment, or an earlier log. */
-export function RecordedTimeField({ label, hideLabel, embedded, value, onChange, tz, min, max, onInvalidChange }: {
+export function RecordedTimeField({ label, hideLabel, embedded, value, onChange, tz, min, max, onInvalidChange, lastNight }: {
   label: string;
   /** The enclosing editor already displays the question; keep the accessible name. */
   hideLabel?: boolean;
@@ -24,6 +27,12 @@ export function RecordedTimeField({ label, hideLabel, embedded, value, onChange,
   min?: Date;
   max?: Date;
   onInvalidChange: (invalid: boolean) => void;
+  /**
+   * Logging what already happened, the morning after: a clock later than now
+   * on today's date means last night's (11:30 PM typed at 7:30 AM), never a
+   * time ahead. Only when that's within the last 18 hours.
+   */
+  lastNight?: boolean;
 }) {
   const id = useId();
   const { now: nowFn } = useMaple();
@@ -32,7 +41,7 @@ export function RecordedTimeField({ label, hideLabel, embedded, value, onChange,
   const [draft, setDraft] = useState(() => fields(value, tz));
   if (draft.basis !== value.getTime() || draft.tz !== tz) setDraft(fields(value, tz));
   const ceiling = new Date(Math.min(max?.getTime() ?? Infinity, now.getTime() + 60_000));
-  const result = parseRecordedTime(draft.day, draft.clock, tz, value, { min, max: ceiling });
+  const result = parseRecordedTime(draft.day, draft.clock, tz, value, { min, max: ceiling, now });
   const invalid = !result.valid;
   const report = useRef(onInvalidChange);
   useLayoutEffect(() => { report.current = onInvalidChange; });
@@ -46,8 +55,19 @@ export function RecordedTimeField({ label, hideLabel, embedded, value, onChange,
   useLayoutEffect(() => () => report.current(false), []);
 
   const change = (day: string, clock: string) => {
+    const at = nowFn();
+    const bounds = { min, max: new Date(Math.min(max?.getTime() ?? Infinity, at.getTime() + 60_000)), now: at };
+    let parsed = parseRecordedTime(day, clock, tz, value, bounds);
+    // The morning after: a clock still ahead today is last night's.
+    if (lastNight && !parsed.valid && parsed.date && parsed.date.getTime() > at.getTime() + 60_000 && day === dayKey(at, tz)) {
+      const before = addDays(day, -1);
+      const back = parseRecordedTime(before, clock, tz, value, bounds);
+      if (back.date && at.getTime() - back.date.getTime() <= LAST_NIGHT_MS) {
+        day = before;
+        parsed = back;
+      }
+    }
     setDraft({ ...draft, day, clock });
-    const parsed = parseRecordedTime(day, clock, tz, value, { min, max: new Date(Math.min(max?.getTime() ?? Infinity, nowFn().getTime() + 60_000)) });
     onInvalidChange(!parsed.valid);
     if (parsed.valid) onChange(parsed.date);
   };

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { query, transaction } from "@/lib/db";
-import { cleanClientId, famId, getEntry, listEntries, NotFound, reopenTimer, restoreEntry, rowToEntry, softDeleteEntry, stopTimer, StoreUnavailable, updateEntry, type FamilyRef } from "../store";
+import { activeTimers, cleanClientId, createEntryOnce, famId, getEntry, listEntries, NotFound, reopenTimer, restoreEntry, rowToEntry, softDeleteEntry, stopTimer, StoreUnavailable, updateEntry, type FamilyRef } from "../store";
 import { addDays, DEFAULT_TZ, isDayKey } from "../time";
 import { SLEEP_PLACES, type Entry, type EntryOf, type SleepPlace, type Source } from "../types";
 import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress, tryDayBounds, tryDayKey } from "./engine";
@@ -166,6 +166,8 @@ export function rowToShift(r: Row): HoldingShift {
     next_holder: textOrNull(r.next_holder),
     ended_at: isoOrNull(r.ended_at),
     ended_how: (SHIFT_ENDINGS as readonly unknown[]).includes(r.ended_how) ? (r.ended_how as ShiftEnding) : null,
+    asked_to: textOrNull(r.asked_to),
+    asked_at: isoOrNull(r.asked_at),
     created_by: textOrNull(r.created_by),
     updated_by: textOrNull(r.updated_by),
     source: asSource(r.source),
@@ -792,12 +794,31 @@ function handoffTime(handoffAt: Date | null | undefined, start: Date): Date | nu
   return handoffAt;
 }
 
-export type ShiftWrite = { shift: HoldingShift; before: HoldingShift | null; status: "created" | "open" | "deduped" | "updated" | "ended" | "handed_off"; ended?: HoldingShift | null; endedBefore?: HoldingShift | null };
+export type ShiftWrite = {
+  shift: HoldingShift;
+  before: HoldingShift | null;
+  status: "created" | "open" | "deduped" | "updated" | "ended" | "handed_off" | "asked" | "unasked";
+  ended?: HoldingShift | null;
+  endedBefore?: HoldingShift | null;
+  /**
+   * Her sleep in arms, when this write touched it: the one a start made
+   * (`madeSleep`, so Undo deletes it), or the one ending the turn awake
+   * stopped (`sleepBefore` running, so Undo runs it again).
+   */
+  sleep?: Entry | null;
+  sleepBefore?: Entry | null;
+  madeSleep?: boolean;
+};
 
-/** Start holding her awake. With a shift already open, that one comes back ("open"): changing who holds her is a handoff. */
+/**
+ * Start holding her awake. With a shift already open, that one comes back
+ * ("open"): changing who holds her is a handoff. `asleep`: she's asleep in
+ * the holder's arms, so a sleep in arms starts with the turn (startArmsSleep),
+ * unless a sleep is already running.
+ */
 export async function startShift(
   fam: FamilyRef,
-  input: { babyId: number; holder: string; at?: Date; handoffAt?: Date | null; nextHolder?: string | null; by: string; source: Source; clientId?: string | null; device?: string | null }
+  input: { babyId: number; holder: string; at?: Date; handoffAt?: Date | null; nextHolder?: string | null; asleep?: boolean; by: string; source: Source; clientId?: string | null; device?: string | null }
 ): Promise<ShiftWrite> {
   const now = new Date();
   const at = pastTime(input.at, now, "When the shift started", 4 * 3600_000);
@@ -809,6 +830,7 @@ export async function startShift(
   }
   const open = await openShift(fam, input.babyId);
   if (open) return { shift: open, before: null, status: "open" };
+  let shift: HoldingShift;
   try {
     const rows = await q(
       `INSERT INTO maple_sleep_shifts (family_id, baby_id, holder, started_at, handoff_at, next_holder, created_by, source, client_id, device)
@@ -818,7 +840,7 @@ export async function startShift(
       [famId(fam), input.babyId, input.holder, at.toISOString(), handoff?.toISOString() ?? null, input.nextHolder ?? null, input.by, input.source, clientId, input.device ?? null]
     );
     if (!rows.length) throw new NotFound("Baby not found");
-    return { shift: rowToShift(rows[0]), before: null, status: "created" };
+    shift = rowToShift(rows[0]);
   } catch (err) {
     if (isUnique(err, "uniq_maple_sleep_shifts_open")) {
       const raced = await openShift(fam, input.babyId);
@@ -830,6 +852,128 @@ export async function startShift(
     }
     throw err;
   }
+  if (!input.asleep) return { shift, before: null, status: "created" };
+  // Asleep in arms: her sleep starts with the turn, keyed to it so a retried start never makes a second one.
+  const arms = await startArmsSleep(fam, { babyId: input.babyId, at, by: input.by, source: input.source, device: input.device, clientId: armsClientFor(clientId ?? `shift-${shift.id}`) });
+  return { shift, before: null, status: "created", sleep: arms.sleep, madeSleep: arms.made };
+}
+
+// ── asleep in arms ──────────────────────────────────────────────────────
+
+const ARMS = { place: "arms" as const };
+
+/** The arms sleep's client id from its turn's, so a retried start never makes a second sleep. */
+const armsClientFor = (key: string) => `sha:${createHash("sha256").update(key).digest("hex").slice(0, 40)}`;
+
+const runningSleep = async (fam: FamilyRef, babyId: number) => (await activeTimers(fam, babyId)).find((e) => e.kind === "sleep") ?? null;
+
+/**
+ * "Asleep in arms": a running sleep in arms from `at` (default now), an
+ * ordinary sleep entry. It runs across handoffs, a bassinet try laid down
+ * during it sits on it (chooseSleepLink), and ending the turn awake stops it
+ * (endShift). A sleep already running stays as it is (`made` false); a
+ * retried request with its client id gets the sleep it made.
+ */
+export async function startArmsSleep(
+  fam: FamilyRef,
+  input: { babyId: number; at?: Date; by: string; source: Source; device?: string | null; clientId?: string | null }
+): Promise<{ sleep: Entry; made: boolean }> {
+  const at = pastTime(input.at, new Date(), "When she fell asleep", 4 * 3600_000);
+  const running = await runningSleep(fam, input.babyId);
+  if (running) return { sleep: running, made: false };
+  try {
+    const { entry } = await createEntryOnce(fam, { babyId: input.babyId, kind: "sleep", startedAt: at, active: true, data: ARMS, createdBy: input.by, source: input.source, clientId: input.clientId ?? null, device: input.device ?? null });
+    return { sleep: entry, made: true };
+  } catch (err) {
+    // Another phone started a sleep timer at the same moment: that one stands.
+    if (!isUnique(err, "uniq_maple_entries_running")) throw err;
+    const raced = await runningSleep(fam, input.babyId);
+    if (raced) return { sleep: raced, made: false };
+    throw err;
+  }
+}
+
+/**
+ * Undo's other half for a turn's sleep in arms: one its start made goes
+ * ("delete", only while it's still running as it was), or one its end
+ * stopped runs again ("reopen", only while it's still as the end left it).
+ * Changed since, it stays as it is (null).
+ */
+export async function undoTurnSleep(fam: FamilyRef, input: { id: number; expectUpdatedAt: string; how: "delete" | "reopen"; by: string }): Promise<Entry | null> {
+  const cur = await getEntry(fam, input.id);
+  if (!cur || cur.kind !== "sleep" || !same(input.expectUpdatedAt, cur.updated_at)) return null;
+  try {
+    if (input.how === "delete") return cur.active ? await softDeleteEntry(fam, cur.id, input.by) : null;
+    return cur.active ? null : await reopenTimer(fam, cur.id, input.by, { expectUpdatedAt: cur.updated_at });
+  } catch {
+    // Another sleep timer runs now, or it changed: it stays as it is.
+    return null;
+  }
+}
+
+// ── asking for a handoff ────────────────────────────────────────────────
+
+/**
+ * "Wake [partner]": the holder asks `to` to take over now. Only an ask:
+ * nothing changes hands until they have her (acceptHandoff from their phone,
+ * or handOff when the holder says they have her). It applies to the turn as
+ * it is now (a newer planned time doesn't turn it away), and asking again
+ * moves its time, so the family's phones hear of it again. With nobody
+ * recorded holding her, the asker's own turn starts with the ask on it.
+ */
+export async function askHandoff(
+  fam: FamilyRef,
+  input: { babyId: number; id?: number | null; to: string; by: string; source: Source; device?: string | null; clientId?: string | null }
+): Promise<ShiftWrite> {
+  const open = await openShift(fam, input.babyId);
+  if (!open) {
+    if (input.id != null) {
+      const gone = await getShift(fam, input.id);
+      if (!gone) throw new NotFound(`Holding shift ${input.id} not found`);
+      throw new SleepConflict(gone.ended_how === "handoff" ? "Someone else has her already." : "That shift already ended.", "changed", gone);
+    }
+    if (input.to === input.by) throw new SleepInputError("Ask someone else to take over.");
+    // Nobody recorded holding her: the asker is, so their own turn starts with the ask on it.
+    const started = await startShift(fam, { babyId: input.babyId, holder: input.by, by: input.by, source: input.source, clientId: input.clientId, device: input.device });
+    return askHandoff(fam, { ...input, id: started.shift.id, clientId: null });
+  }
+  if (input.id != null && open.id !== input.id) throw new SleepConflict("Someone else has her already.", "changed", open);
+  if (input.to === open.holder) throw new SleepInputError("That's who is holding her now.");
+  const rows = await q(
+    `UPDATE maple_sleep_shifts SET asked_to = $3, asked_at = NOW(), updated_by = $4, updated_at = NOW()
+     WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL RETURNING *`,
+    [open.id, famId(fam), input.to, input.by]
+  );
+  if (!rows.length) throw new SleepConflict("Someone changed this shift just now.", "changed", (await getShift(fam, open.id)) ?? open);
+  return { shift: rowToShift(rows[0]), before: open, status: "asked" };
+}
+
+/** Undo an ask: the turn goes back to no one asked, only as this phone left it. */
+export async function cancelAsk(fam: FamilyRef, id: number, input: { by: string; expectUpdatedAt: string }): Promise<ShiftWrite> {
+  const cur = await getShift(fam, id);
+  if (!cur) throw new NotFound(`Holding shift ${id} not found`);
+  if (cur.ended_at) throw new SleepConflict(cur.ended_how === "handoff" ? "Someone else has her already." : "That shift already ended.", "changed", cur);
+  if (!same(input.expectUpdatedAt, cur.updated_at)) throw new SleepConflict("Someone changed this shift just now.", "changed", cur);
+  const rows = await q(
+    `UPDATE maple_sleep_shifts SET asked_to = NULL, asked_at = NULL, updated_by = $3, updated_at = NOW()
+     WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL AND ${updatedAtMatches(4)} RETURNING *`,
+    [id, famId(fam), input.by, cur.updated_at]
+  );
+  if (!rows.length) throw new SleepConflict("Someone changed this shift just now.", "changed", (await getShift(fam, id)) ?? cur);
+  return { shift: rowToShift(rows[0]), before: cur, status: "unasked" };
+}
+
+/**
+ * "I've got her": `by` takes over the open turn now, the turn as it is now
+ * (asked or not): a handoff to them. Someone else took her first, or the
+ * turn ended: SleepConflict with the turn as it is.
+ */
+export async function acceptHandoff(fam: FamilyRef, id: number, input: { by: string; handoffAt?: Date | null; source: Source; device?: string | null }): Promise<ShiftWrite> {
+  const cur = await getShift(fam, id);
+  if (!cur) throw new NotFound(`Holding shift ${id} not found`);
+  if (cur.ended_at) throw new SleepConflict(cur.ended_how === "handoff" ? "Someone else has her already." : "That shift already ended.", "changed", cur);
+  if (cur.holder === input.by) throw new SleepInputError("You're the one holding her now.");
+  return handOff(fam, id, { to: input.by, by: input.by, source: input.source, device: input.device, expectUpdatedAt: cur.updated_at, ...(input.handoffAt !== undefined ? { handoffAt: input.handoffAt } : {}) });
 }
 
 /** End the open shift (if it began by `at`): used when a try starts. */
@@ -844,7 +988,11 @@ async function endOpenShift(fam: FamilyRef, babyId: number, at: Date, how: Shift
   return rows.length ? { before: open, after: rowToShift(rows[0]) } : null;
 }
 
-/** End a shift now (or at `at`), only the one this phone saw. */
+/**
+ * End a shift now (or at `at`), only the one this phone saw. Ended awake
+ * ("ended", not into the bassinet or a handoff), a sleep in arms still
+ * running stops then too (`sleep`, with `sleepBefore` for Undo).
+ */
 export async function endShift(fam: FamilyRef, id: number, input: { at?: Date; how?: ShiftEnding; by: string; expectUpdatedAt?: string }): Promise<ShiftWrite> {
   const now = new Date();
   const cur = await getShift(fam, id);
@@ -859,7 +1007,18 @@ export async function endShift(fam: FamilyRef, id: number, input: { at?: Date; h
     [id, famId(fam), at.toISOString(), input.how ?? "ended", input.by, cur.updated_at]
   );
   if (!rows.length) throw new SleepConflict("Someone changed this shift just now.", "changed", (await getShift(fam, id)) ?? cur);
-  return { shift: rowToShift(rows[0]), before: cur, status: "ended" };
+  const shift = rowToShift(rows[0]);
+  if ((input.how ?? "ended") !== "ended") return { shift, before: cur, status: "ended" };
+  // Ended awake (not into the bassinet, not handed over): a sleep in arms still running ended then too.
+  const arms = await runningSleep(fam, cur.baby_id);
+  if (!arms || (arms.data as { place?: string }).place !== "arms" || Date.parse(arms.started_at) > at.getTime()) return { shift, before: cur, status: "ended" };
+  try {
+    const sleep = await stopTimer(fam, arms.id, at, input.by, { expectUpdatedAt: arms.updated_at });
+    return { shift, before: cur, status: "ended", sleep, sleepBefore: arms };
+  } catch {
+    // The sleep changed meanwhile (Woke up on another phone): it stays as they left it.
+    return { shift, before: cur, status: "ended" };
+  }
 }
 
 /**
