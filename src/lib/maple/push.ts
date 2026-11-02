@@ -13,6 +13,7 @@ import {
   familyMembers,
   familyPlans,
   familySent,
+  handoffFor,
   handoffMoments,
   netMinutes,
   nextWake,
@@ -820,15 +821,18 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
     }
   }
 
-  // The planned handoff of an open holding shift, to every phone that turned handoff reminders on.
+  // The planned handoff of an open holding shift, to the holder's and the next holder's phones that turned handoff reminders on.
   let handoffs: HandoffMoment[] | null = null;
   if (subs.some((s) => s.prefs.handoff === true)) {
     try {
       handoffs = await handoffMoments(scope);
+      let members: Member[] | null = null;
       for (const m of handoffs) {
         if (m.at > t || t - m.at >= HANDOFF_CUTOFF_MS || m.at < run.floor) continue;
+        members ??= await familyMembers(scope.familyId);
+        const forWhom = handoffFor(m, members);
         for (const phone of subs) {
-          if (phone.prefs.handoff !== true) continue;
+          if (phone.prefs.handoff !== true || !forWhom.includes(phone.member)) continue;
           try {
             count(await sendOnce(phone, m.key, `handoff:${m.shiftId}`, handoffNotice(m.shiftId, m.at, scope.tz, now, "planned"), { ttlS: (HANDOFF_CUTOFF_MS - (t - m.at)) / SEC }));
           } catch (err) {

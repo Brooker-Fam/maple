@@ -381,9 +381,12 @@ async function main() {
 
   // ── handoff ────────────────────────────────────────────────────────────
 
-  await test("handoff from the holder only asks: nothing changes hands, the phones with handoff reminders on hear Handoff now, and it says to go wake them", async () => {
+  await test("handoff from the holder only asks: nothing changes hands, the asked person's phone with handoff reminders on hears Handoff now (nobody else's), and it says to go wake them", async () => {
     await reset(alpha);
+    // Avery (holding her) and Blake (the one asked) both turned handoff reminders on: only Blake's phone hears the ask.
     await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"handoff":true}'::jsonb WHERE id = $1`, [alpha.pushSubId]);
+    const blakePhone = "https://push.example.test/alpha-blake-quick";
+    await sql(`INSERT INTO maple_push_subs (family_id, member, endpoint, p256dh, auth, prefs, receipt_token) VALUES (1, $1, $2, 'k', 'a', '{"handoff":true}', $3)`, [alpha.member, blakePhone, "e".repeat(32)]);
     const start = new Date(Date.now() - 60 * MIN);
     const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: start, handoffAt: new Date(start.getTime() + 90 * MIN), by: alpha.owner, source: "web" })).shift;
     const before = hooks.length;
@@ -395,7 +398,7 @@ async function main() {
     eq((await shifts(alpha)).length, 1, "no second turn");
     await runHooks(before);
     const now1 = sent.filter((x) => x.title === "Handoff now");
-    eq(now1.map((x) => x.tag), [`handoff:${t.id}`], "the family's phone with handoff reminders on hears it");
+    eq(now1.map((x) => [x.endpoint, x.tag]), [[blakePhone, `handoff:${t.id}`]], "Blake's phone hears it; Avery's, holding her, doesn't");
     ok(sent.every((x) => !/Avery|Blake|Casey|June|Dana/.test(`${x.title} ${x.body}`)), `names no one: ${JSON.stringify(sent)}`);
     // Said again at once (Back Tap twice, a retry): the ask stands, and no second notice.
     const b2 = hooks.length;
@@ -411,8 +414,9 @@ async function main() {
     const third = await siri(T(alpha).owner, { action: "handoff" });
     ok(third.speak.startsWith("Asked Blake again to take over."), third.speak);
     await runHooks(b3);
-    eq(sent.filter((x) => x.title === "Handoff now").length, 1, "asked again: heard again");
+    eq(sent.filter((x) => x.title === "Handoff now").map((x) => x.endpoint), [blakePhone], "asked again: heard again, on Blake's phone");
     await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE id = $1`, [alpha.pushSubId]);
+    await sql(`DELETE FROM maple_push_subs WHERE endpoint = $1`, [blakePhone]);
   });
 
   await test("handoff from anyone else takes the turn as it is now: they have her, with the next handoff as long as the last one; a second tap never hands her back", async () => {

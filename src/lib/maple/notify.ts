@@ -300,17 +300,20 @@ export async function afterHoldingWrite(familyId: number, wake?: { shiftId: numb
 /**
  * "Handoff now": the person holding the baby asked someone to take over
  * ("Wake [partner]", the turn `shiftId`'s ask: sleep/store.ts askHandoff).
- * Every phone of the family that turned handoff reminders on hears of it,
- * except the phone that asked (`device`), once per phone per ask (asking
- * again sounds again), while the turn is open, still asked, and the ask is
- * under 15 minutes old. Nothing has changed hands: the notice names no one.
+ * Only the phones of the person asked that turned handoff reminders on hear
+ * of it (never the phone that asked, `device`), once per phone per ask
+ * (asking again sounds again), while the turn is open, still asked, and the
+ * ask is under 15 minutes old. Nothing has changed hands: the notice names
+ * no one.
  */
 export async function notifyHandoffNow(scope: FamilyScope, shiftId: number, device: string | null, now = new Date(), opts: { retry?: boolean } = {}): Promise<Sends> {
   if (!vapidKeys()) return NONE;
-  const subs = (await liveSubs(scope)).filter((s) => s.prefs.handoff === true && (!device || s.device_id !== device));
-  if (!subs.length) return NONE;
-  const rows = await q(`SELECT id, asked_at FROM maple_sleep_shifts WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL AND asked_to IS NOT NULL`, [shiftId, scope.familyId]);
+  const live = (await liveSubs(scope)).filter((s) => s.prefs.handoff === true && (!device || s.device_id !== device));
+  if (!live.length) return NONE;
+  const rows = await q(`SELECT id, asked_to, asked_at FROM maple_sleep_shifts WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL AND asked_to IS NOT NULL`, [shiftId, scope.familyId]);
   if (!rows.length || rows[0].asked_at == null) return NONE;
+  const subs = live.filter((s) => s.member === String(rows[0].asked_to));
+  if (!subs.length) return NONE;
   const asked = new Date(rows[0].asked_at as string).getTime();
   if (now.getTime() - asked > 15 * MIN) return NONE;
   const n = handoffNotice(shiftId, asked, scope.tz, now, "now");

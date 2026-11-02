@@ -292,7 +292,7 @@ function Body() {
             />
             <SwitchRow
               label="Handoff reminders"
-              note="When someone is holding the baby: at the planned handoff time, and when a handoff is asked for from another phone. They name no one."
+              note={`When you're holding ${w.name} or next to take over: at the planned handoff time, and when you're asked to take over now. They name no one.`}
               checked={prefs.handoff === true}
               disabled={busy}
               onChange={(v) => set({ handoff: v })}

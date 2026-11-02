@@ -371,8 +371,8 @@ const has = (id: string, me: string, members: readonly Member[]) => (id === me ?
 
 /**
  * "Maple handoff". From the person holding her it's an ask, never a
- * handoff (the app's shift.ask, with the Handoff now notice to the family's
- * phones that turned handoff reminders on): nothing changes hands until the
+ * handoff (the app's shift.ask, with the Handoff now notice to the phones of
+ * the person asked that turned handoff reminders on): nothing changes hands until the
  * person asked has her. From anyone else it's taking over (shift.accept, on
  * the turn as it is now), with the next planned handoff, never inside the
  * next holder's protected window (store handOff), and a sleep in arms that
@@ -422,7 +422,7 @@ async function askToTakeOver(c: QuickCtx, open: HoldingShift, members: Member[])
     if (err instanceof SleepInputError) return notDone("Who should take over? Ask in the app.", {}, 400);
     throw err;
   }
-  // The family's phones with handoff reminders on hear "Handoff now" (a Shortcut has no phone of its own to leave out).
+  // The phones of the person asked with handoff reminders on hear "Handoff now" (a Shortcut has no phone of its own to leave out).
   holdingChanged({ familyId: c.fam.familyId, wake: { shiftId: w.shift.id, device: null } });
   const again = open.asked_to === to && Number.isFinite(askedAt);
   return say(`Asked ${name} ${again ? "again " : ""}to take over. ${wake}`, { asked: true, shift: { id: `h${w.shift.id}`, asked_to: to, asked_at: w.shift.asked_at } });
