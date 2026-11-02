@@ -294,6 +294,8 @@ try {
   let c = await sam.last();
   assert.deepEqual(c.tags, ["fed"], "A feed that ended 12 minutes ago pre-ticks Recently fed");
   assert.match(await strip.innerText(), /In the bassinet/);
+  // Just laid down: "since 2:10 AM", never "· 0s" for under a minute.
+  assert.doesNotMatch(await strip.innerText(), /· 0s|· <?\d+s\b|· 0 min/, "No seconds on the strip under a minute");
   // While she's down, How did it go? is the strip's strong button: its sheet's outcomes sit in thumb reach (the card's are at the top).
   assert.match(await strip.getByRole("button", { name: "How did it go?", exact: true }).locator("span").getAttribute("class"), /bg-mp-accent/, "How did it go? is the strong button");
   await page.getByRole("button", { name: "Laid down 2 minutes earlier, at 2:08 AM", exact: true }).click();
