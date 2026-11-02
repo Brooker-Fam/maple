@@ -328,12 +328,14 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
     },
     onHold: earlier("med", { ...VITAMIN_D_DEFAULT }),
   };
-  // The sleep plan: a bassinet try (hold: one nobody started here), holding her awake, the plan itself.
+  // The sleep plan: a bassinet try (hold: one nobody started here), holding her awake, the plan itself, and the family's sleep goals.
   const later = (fn: () => void) => {
     onClose();
     window.setTimeout(fn, 120);
   };
   const sp = sleepPlan;
+  const activeGoals = sp?.goals.filter((g) => g.status === "active").length ?? 0;
+  const pausedGoals = sp?.goals.filter((g) => g.status === "paused").length ?? 0;
   const sleepItems: Item[] =
     sp && sp.canWrite && state?.baby.born_at
       ? [
@@ -373,6 +375,14 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
             icon: "moon",
             color: KIND_COLOR.sleep,
             onTap: () => later(() => sp.openSheet({ kind: "plan" })),
+          },
+          {
+            id: "sleep-goals",
+            label: "Sleep goals",
+            sub: activeGoals || pausedGoals ? [activeGoals ? `${activeGoals} active` : "", pausedGoals ? `${pausedGoals} paused` : ""].filter(Boolean).join(" · ") : "Steps and a night roster",
+            icon: "list-checks",
+            color: KIND_COLOR.sleep,
+            onTap: () => later(() => sp.openSheet({ kind: "plan", tab: "goals" })),
           },
         ]
       : [];

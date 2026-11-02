@@ -529,12 +529,28 @@ export function TimeRange({
   );
 }
 
-export function TextArea({ value, onChange, placeholder, rows = 2 }: { value: string; onChange: (v: string) => void; placeholder?: string; rows?: number }) {
+export function TextArea({
+  value,
+  onChange,
+  placeholder,
+  rows = 2,
+  ariaLabel,
+  maxLength = 2000,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+  /** Its name for a screen reader, when the label above it is only text. */
+  ariaLabel?: string;
+  maxLength?: number;
+}) {
   return (
     <textarea
       value={value}
       rows={rows}
-      maxLength={2000}
+      maxLength={maxLength}
+      aria-label={ariaLabel}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       className={cx(tone.input, "resize-none")}

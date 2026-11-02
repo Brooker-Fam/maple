@@ -13,7 +13,9 @@ import { RecordedTimeField } from "../TimeField";
 import { ContextNote, Label, NoteField, SheetFooter } from "../sheets/parts";
 import { Button, Chip, cx, Sheet, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
+import { GoalFormSheet } from "./GoalForm";
 import { OutcomeGrid } from "./SleepCards";
+import { CheckinSheet } from "./SleepCheckin";
 import SleepPlanSheet from "./SleepPlanSheet";
 import { useSleep, type SleepApi, type SleepSheet } from "./useSleep";
 
@@ -435,9 +437,10 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
 
 /**
  * The open sleep sheet, mounted by SleepProvider (MapleApp). The last one
- * stays mounted while it slides away; each sheet reads its try or shift
- * fresh from the shared state, and one whose try or shift another phone
- * already closed or deleted closes with a word.
+ * stays mounted while it slides away; each sheet reads its try, shift or
+ * goal fresh from the shared state, and one whose try or shift another
+ * phone already closed or deleted closes with a word. A goal's form and a
+ * check-in opened from the plan's Goals go back there when they close.
  */
 export function SleepSheetHost({ api }: { api: SleepApi }) {
   const { toast } = useMaple();
@@ -447,26 +450,43 @@ export function SleepSheetHost({ api }: { api: SleepApi }) {
   const open = !!api.sheet;
   const find = (id: number) => api.data.tries.find((t) => t.id === id) ?? null;
   const t = shown && (shown.kind === "outcome" || shown.kind === "try") ? find(shown.tryId) : null;
-  // Gone while open: finished on another phone (How did it go?), deleted, or the shift handed over elsewhere.
+  const goal = shown?.kind === "goal" && shown.goalId != null ? (api.goals.find((g) => g.id === shown.goalId) ?? null) : null;
+  // Gone while open: finished on another phone (How did it go?), deleted, the shift handed over elsewhere, or a goal no longer there.
   const gone =
     !!shown &&
     ((shown.kind === "outcome" && (!t || !!t.ended_at)) ||
       (shown.kind === "try" && !t) ||
-      (shown.kind === "holding" && shown.mode === "handoff" && !api.shift));
+      (shown.kind === "holding" && shown.mode === "handoff" && !api.shift) ||
+      (shown.kind === "goal" && shown.goalId != null && !goal));
   const closeSheet = api.closeSheet;
+  const openSheet = api.openSheet;
+  const toGoals = useCallback(() => openSheet({ kind: "plan", tab: "goals" }), [openSheet]);
   // This phone's own Save, outcome or Delete closes its sheet itself: only a change from elsewhere says so.
   const quiet = !!shown && "tryId" in shown && api.endedHere(shown.tryId);
   useEffect(() => {
     if (!open || !gone) return;
     closeSheet();
     if (quiet) return;
-    toast(shown?.kind === "holding" ? "That shift already ended." : t?.ended_at ? `That try already ended: ${OUTCOME_LABEL[t.outcome!].toLowerCase()}.` : "That try isn't in the log anymore.", { tone: "info" });
+    toast(
+      shown?.kind === "holding"
+        ? "That shift already ended."
+        : shown?.kind === "goal"
+          ? "That sleep goal isn't there anymore."
+          : t?.ended_at
+            ? `That try already ended: ${OUTCOME_LABEL[t.outcome!].toLowerCase()}.`
+            : "That try isn't in the log anymore.",
+      { tone: "info" }
+    );
   }, [open, gone, quiet, closeSheet, shown?.kind, t?.ended_at, t?.outcome, toast]);
   if (!shown || (gone && open)) return null;
   const key = (x: string) => `${x}-${shown.kind}-${"tryId" in shown ? shown.tryId : ""}`;
   switch (shown.kind) {
     case "plan":
       return <SleepPlanSheet key={key("plan")} tab={shown.tab} open={open} onClose={closeSheet} />;
+    case "goal":
+      return shown.goalId != null && !goal ? null : <GoalFormSheet key={key(`g${shown.goalId ?? "new"}`)} goal={goal} open={open} onClose={toGoals} />;
+    case "checkin":
+      return <CheckinSheet key={key(`c${shown.night ?? ""}`)} night={shown.night} open={open} onClose={shown.back === "goals" ? toGoals : closeSheet} />;
     case "outcome":
       return t ? <OutcomeSheet key={key("o")} t={t} defaultAt={shown.at} open={open} onClose={closeSheet} /> : null;
     case "try":
