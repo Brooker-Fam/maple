@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { sleepyLine, transferSteps } from "@/lib/maple/guidelines/sleep";
-import { nextSideText } from "@/lib/maple/feed";
 import { askState, nextHandoff } from "@/lib/maple/sleep/engine";
-import { handoffAroundRoster, handoffWhyWords, windowAt, windowRange, type HandoffWhy } from "@/lib/maple/sleep/handoff";
+import { catchUpLines } from "@/lib/maple/sleep/catchup";
+import { handoffAroundRoster, windowAt, windowRange, type HandoffWhy } from "@/lib/maple/sleep/handoff";
 import { TRY_NOTE_MAX, TRY_OUTCOMES, TRY_TAGS, type BassinetTry, type HoldingShift, type TryOutcome, type TryTag } from "@/lib/maple/sleep/types";
-import { downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
-import { DEFAULT_TZ, formatDuration, formatRelative, formatTime, formatTimeNear } from "@/lib/maple/time";
+import { OUTCOME_LABEL, SLEEP_PLACE_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
+import { DEFAULT_TZ, formatDuration, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, SleepPlace } from "@/lib/maple/types";
 import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
@@ -417,7 +417,7 @@ export function CatchUpSheet({ started, ended, why = null, open = true, onClose 
   const v = useVoice();
   const now = useNow(30_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const lines = catchUpLines({ summary, entries: state?.entries ?? [], now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why });
+  const lines = catchUpLines({ summary, now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why });
   const undo = async () => {
     if (ended && (await s.undoTakeOver(started, ended))) onClose();
   };
@@ -454,53 +454,6 @@ export function CatchUpSheet({ started, ended, why = null, open = true, onClose 
       </div>
     </Sheet>
   );
-}
-
-type CatchUpLine = { label: string; text: string };
-
-/** The catch-up's lines, from the log as this phone has it (summary: feed.ts and insights.ts, as Today's Right now). */
-export function catchUpLines(input: {
-  summary: ReturnType<typeof useMaple>["summary"];
-  entries: readonly Entry[];
-  now: Date;
-  tz: string;
-  v: ReturnType<typeof useVoice>;
-  me: string;
-  memberName: (email: string | null | undefined) => string;
-  next: string | null;
-  nextHolder: string | null;
-  /** The next handoff moved off the next holder's protected window (sleep/handoff.ts). */
-  why?: HandoffWhy | null;
-}): CatchUpLine[] {
-  const { summary, now, tz, v } = input;
-  const out: CatchUpLine[] = [];
-  const nursing = summary?.active.find((e) => e.kind === "feed") ?? null;
-  const fed = summary?.lastFed ?? null;
-  const side = summary?.next ? `next side ${nextSideText(summary.next)}` : null;
-  if (nursing) out.push({ label: "Feed", text: `Nursing now, since ${formatTime(nursing.started_at, tz)}` });
-  else if (fed) out.push({ label: "Feed", text: `Last fed ${formatTime(fed.at, tz)} (${formatRelative(fed.at, now)})${side ? ` · ${side}` : ""}` });
-  else out.push({ label: "Feed", text: "No feed logged lately" });
-  const diaper = summary?.lastDiaper ?? null;
-  if (diaper) {
-    const d = diaper.data;
-    const what = d.pee && d.poop ? "wet and dirty" : d.poop ? "dirty" : "wet";
-    out.push({ label: "Diaper", text: `Last changed ${formatTime(diaper.started_at, tz)} (${formatRelative(diaper.started_at, now)}) · ${what}` });
-  } else out.push({ label: "Diaper", text: "No diaper logged lately" });
-  const running = (summary?.active ?? []).filter((e) => e.kind !== "feed");
-  const sleep = running.find((e) => e.kind === "sleep");
-  const place = sleep ? (sleep.data as { place?: SleepPlace }).place : undefined;
-  const others = running.filter((e) => e.kind !== "sleep").map((e) => (e.kind === "tummy" ? "tummy time" : e.kind === "pump" ? "pumping" : e.kind));
-  const parts = [
-    ...(sleep ? [`asleep since ${formatTime(sleep.started_at, tz)}${place ? ` (${SLEEP_PLACE_LABEL[place].toLowerCase()})` : ""}, ${downWords((now.getTime() - Date.parse(sleep.started_at)) / MIN)}`] : []),
-    ...others,
-  ];
-  out.push({ label: "Running", text: parts.length ? parts.join(" · ").replace(/^./, (c) => c.toUpperCase()) : nursing ? "The nursing timer" : `Nothing else; ${v.they}${v.verb("'s")} awake by the log` });
-  const why = input.why ? handoffWhyWords(input.why, input.why.member === input.me ? "your" : input.memberName(input.why.member), tz) : null;
-  if (input.next) {
-    const who = input.nextHolder ? (input.nextHolder === input.me ? "you" : input.memberName(input.nextHolder)) : null;
-    out.push({ label: "Handoff", text: `Next planned for ${formatTime(input.next, tz)}${who ? `, to ${who}` : ""}${why ? `, ${why}` : ""}` });
-  } else if (why) out.push({ label: "Handoff", text: `${why.charAt(0).toUpperCase()}${why.slice(1)}` });
-  return out;
 }
 
 // ── Edit a try ───────────────────────────────────────────────────────────
