@@ -16,8 +16,9 @@ import { dailyStats } from "../../src/lib/maple/insights";
 import { FAMILY_ONE_COPY, logState, type Extra } from "../../src/lib/maple/mcp-tools";
 import { notifyHandoffNow } from "../../src/lib/maple/notify";
 import { runPushTick } from "../../src/lib/maple/push";
-import { deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
-import type { BassinetTry, SleepState } from "../../src/lib/maple/sleep/types";
+import { askState } from "../../src/lib/maple/sleep/engine";
+import { askHandoff, deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
+import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
 import { getEntry, listEntries, startTimer } from "../../src/lib/maple/store";
 import { addDays, dayKey } from "../../src/lib/maple/time";
 import type { Entry, Role } from "../../src/lib/maple/types";
@@ -329,6 +330,109 @@ async function main() {
     eq([open?.id, open?.holder], [a.shift.id, alpha.member], "Blake's shift is open again");
   });
 
+  await test("asks: Wake [partner] only asks (every phone sees it); nothing changes hands until the person asked has her; Undo takes an ask back", async () => {
+    await clean(alpha);
+    const turn = (await route(alpha.member, 1, { action: "shift.start", client_id: "alpha-ask-1" })).json.result as { shift: HoldingShift };
+    const a = await route(alpha.member, 1, { action: "shift.ask", id: turn.shift.id, to: alpha.owner });
+    eq(a.status, 200, JSON.stringify(a.json));
+    const asked = a.json.result as { shift: HoldingShift; status: string };
+    eq([asked.status, asked.shift.holder, asked.shift.asked_to, asked.shift.ended_at], ["asked", alpha.member, alpha.owner, null], "an ask, not a handoff");
+    const seen = sleepState(await route(alpha.owner, 1)).shifts.find((x) => !x.ended_at)!;
+    eq([seen.holder, seen.asked_to], [alpha.member, alpha.owner], "Avery's phone sees Blake holding her, Avery asked");
+    eq(sleepState(await route(alpha.viewer, 1)).shifts.find((x) => !x.ended_at)?.asked_to, alpha.owner, "a view-only guest sees it too");
+    const undo = await route(alpha.member, 1, { action: "shift.cancel_ask", id: turn.shift.id, expect_updated_at: asked.shift.updated_at });
+    const unasked = (undo.json.result as { shift: HoldingShift }).shift;
+    eq([undo.status, unasked.asked_to, unasked.ended_at], [200, null, null], "Undo: nobody asked, the turn goes on");
+    await route(alpha.member, 1, { action: "shift.ask", id: turn.shift.id, to: alpha.owner });
+    const took = await route(alpha.owner, 1, { action: "shift.accept", id: turn.shift.id });
+    eq(took.status, 200, JSON.stringify(took.json));
+    const r = took.json.result as { shift: HoldingShift; ended: HoldingShift };
+    eq([r.shift.holder, r.shift.next_holder, r.shift.asked_to, r.ended.ended_how, r.ended.asked_to], [alpha.owner, alpha.member, null, "handoff", alpha.owner], "taken over; the turn handed over keeps its ask");
+    const twice = await route(alpha.member, 1, { action: "shift.accept", id: turn.shift.id });
+    eq([twice.status, twice.json.code], [409, "changed"], "a second I've got her changes nothing");
+    const u = await route(alpha.owner, 1, { action: "shift.undo_handoff", started_id: r.shift.id, started_updated_at: r.shift.updated_at, ended_id: r.ended.id, ended_updated_at: r.ended.updated_at });
+    eq(u.status, 200, JSON.stringify(u.json));
+    const open = (await openShift(1, alpha.babyId))!;
+    eq([open.id, open.holder, open.asked_to], [turn.shift.id, alpha.member, alpha.owner], "Undo: Blake's turn is open again, still asked");
+    const has = await route(alpha.member, 1, { action: "shift.handoff", id: open.id, to: alpha.owner, expect_updated_at: open.updated_at });
+    eq((has.json.result as { shift: HoldingShift }).shift.holder, alpha.owner, "the holder's Avery has her records it");
+  });
+
+  await test("asks: an app from before asks (shift.handoff with wake) only asks now; viewers can't ask or accept; another family's turn reads as missing", async () => {
+    await clean(alpha);
+    const t = (await route(alpha.member, 1, { action: "shift.start" })).json.result as { shift: HoldingShift };
+    const w = await route(alpha.member, 1, { action: "shift.handoff", id: t.shift.id, to: alpha.owner, wake: true, expect_updated_at: t.shift.updated_at });
+    const res = w.json.result as { shift: HoldingShift; status: string };
+    eq([w.status, res.status, res.shift.holder, res.shift.asked_to], [200, "asked", alpha.member, alpha.owner], "asked, not handed over");
+    eq((await route(alpha.viewer, 1, { action: "shift.ask", id: t.shift.id, to: alpha.owner })).status, 403, "viewer ask");
+    eq((await route(alpha.viewer, 1, { action: "shift.accept", id: t.shift.id })).status, 403, "viewer accept");
+    const theirs = await route(beta.member, 2, { action: "shift.accept", id: t.shift.id });
+    const none = await route(beta.member, 2, { action: "shift.accept", id: 999999 });
+    eq([theirs.status, String(theirs.json.error).replace(String(t.shift.id), "N")], [404, String(none.json.error).replace("999999", "N")], "the same words as an id nobody has");
+    eq((await route(alpha.member, 1, { action: "shift.ask", id: t.shift.id, to: alpha.member })).status, 400, "the holder can't be asked to take over");
+  });
+
+  await test("asks: ten minutes on with nobody taking over, the tools give the holder the two safe choices again", async () => {
+    await clean(alpha);
+    const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.member, by: alpha.member, source: "web" })).shift;
+    const a = await askHandoff(1, { babyId: alpha.babyId, id: t.id, to: alpha.owner, by: alpha.member, source: "web" });
+    eq(askState(a.shift, new Date()).stale, false, "fresh");
+    await sql(`UPDATE maple_sleep_shifts SET asked_at = NOW() - INTERVAL '11 minutes' WHERE id = $1`, [t.id]);
+    const later = (await openShift(1, alpha.babyId))!;
+    const st = askState(later, new Date());
+    eq([st.asked, st.stale, st.minutes >= 10], [true, true, true], "stale after ten minutes");
+    const s = await call("maple_status", {}, alpha);
+    ok(/Nobody has taken over yet: the two safe choices are laying her on her back in the bassinet now/.test(s.text) && /waking Avery again/.test(s.text), s.text);
+    ok(!/keep holding/i.test(s.text), "never keep holding");
+    eq(((s.sc.sleep as { holding?: { nobody_took_over?: boolean } }).holding ?? {}).nobody_took_over, true, s.text);
+  });
+
+  await test("asleep in arms: a turn can start a sleep in arms that runs across a handoff; into the bassinet, the try sits on it; the try's wake ends it", async () => {
+    await clean(alpha);
+    const s = await route(alpha.member, 1, { action: "shift.start", asleep: true, client_id: "alpha-arms-1" });
+    const w = s.json.result as { shift: HoldingShift; sleep: Entry; madeSleep: boolean };
+    eq([w.madeSleep, w.sleep.active, (w.sleep.data as { place?: string }).place], [true, true, "arms"], "a running sleep in arms");
+    eq((s.json.entries as Entry[]).map((e) => e.id), [w.sleep.id], "the sleep comes back with the answer");
+    const again = await route(alpha.member, 1, { action: "shift.start", asleep: true, client_id: "alpha-arms-1" });
+    eq((again.json.result as { status: string }).status, "deduped", "a retried start");
+    eq((await sleeps(alpha)).filter((x) => x.deleted_at == null).length, 1, "one sleep");
+    await route(alpha.member, 1, { action: "shift.ask", id: w.shift.id, to: alpha.owner });
+    await route(alpha.owner, 1, { action: "shift.accept", id: w.shift.id });
+    eq((await getEntry(1, w.sleep.id))?.active, true, "still asleep after the handoff");
+    const t = result(await route(alpha.owner, 1, { action: "try.start", client_id: "alpha-arms-try" }));
+    eq([t.link, t.try.sleep_entry_id, t.try.made_sleep], ["running", w.sleep.id, false], "the try sits on her sleep in arms (chooseSleepLink)");
+    ok(t.endedShift, "into the bassinet ends the turn");
+    await route(alpha.owner, 1, { action: "try.finish", id: t.try.id, outcome: "woke_calm" });
+    const after = (await getEntry(1, w.sleep.id))!;
+    eq([after.active, (after.data as { place?: string }).place], [false, "arms"], "woke: the sleep ended with the try, still the arms sleep");
+    eq((await sleeps(alpha)).filter((x) => x.deleted_at == null).length, 1, "sleep counted once");
+  });
+
+  await test("asleep in arms: ending the turn awake stops it and Undo runs both again; undoing a start removes the sleep it made; a running sleep is left as it is", async () => {
+    await clean(alpha);
+    const w = (await route(alpha.member, 1, { action: "shift.start", asleep: true })).json.result as { shift: HoldingShift; sleep: Entry };
+    const e = await route(alpha.member, 1, { action: "shift.end", id: w.shift.id, expect_updated_at: w.shift.updated_at });
+    const ended = e.json.result as { shift: HoldingShift; sleep: Entry; sleepBefore: Entry };
+    eq([ended.sleep?.id, ended.sleep?.active, ended.sleepBefore?.active], [w.sleep.id, false, true], "the sleep stopped with the turn");
+    const back = await route(alpha.member, 1, { action: "shift.reopen", id: w.shift.id, expect_updated_at: ended.shift.updated_at, sleep: { id: ended.sleep.id, expect_updated_at: ended.sleep.updated_at } });
+    eq(back.status, 200, JSON.stringify(back.json));
+    eq([(await openShift(1, alpha.babyId))?.id, (await getEntry(1, w.sleep.id))?.active], [w.shift.id, true], "Undo: both running again");
+    const open = (await openShift(1, alpha.babyId))!;
+    const sl = (await getEntry(1, w.sleep.id))!;
+    const d = await route(alpha.member, 1, { action: "shift.delete", id: open.id, expect_updated_at: open.updated_at, sleep: { id: sl.id, expect_updated_at: sl.updated_at } });
+    eq([d.status, d.json.removed], [200, [sl.id]], JSON.stringify(d.json));
+    eq(await getEntry(1, sl.id), null, "the sleep it made went too");
+    const chip = await route(alpha.member, 1, { action: "shift.asleep", client_id: "alpha-arms-chip" });
+    const made = chip.json.result as { sleep: Entry; made: boolean };
+    eq([made.made, (made.sleep.data as { place?: string }).place], [true, "arms"], "the card's Asleep in arms");
+    const undone = await route(alpha.member, 1, { action: "shift.asleep_undo", sleep: { id: made.sleep.id, expect_updated_at: made.sleep.updated_at } });
+    eq(undone.json.removed, [made.sleep.id], "its Undo");
+    const { entry: timer } = await startTimer(1, { babyId: alpha.babyId, kind: "sleep", at: new Date(Date.now() - 20 * MIN), createdBy: alpha.owner, source: "web" });
+    const w2 = (await route(alpha.member, 1, { action: "shift.start", asleep: true })).json.result as { sleep: Entry; madeSleep: boolean };
+    eq([w2.sleep.id, w2.madeSleep], [timer.id, false], "a sleep timer already running stays the one");
+    eq((await route(alpha.viewer, 1, { action: "shift.asleep" })).status, 403, "viewers can't");
+  });
+
   // ── the MCP tools ──────────────────────────────────────────────────────
 
   await test("MCP: a viewer gets the plan, never a write", async () => {
@@ -376,16 +480,43 @@ async function main() {
     eq((await sleeps(alpha)).filter((x) => x.deleted_at == null).length, 0, "the sleep it made went with it");
   });
 
-  await test("MCP holding: start, hand off with sleepy, end; who's named comes from the family", async () => {
+  await test("MCP holding: start, ask (hand_off with sleepy is an ask too), accept, hand off, end; who's named comes from the family", async () => {
     await clean(alpha);
     const s = await call("holding", { action: "start", handoff_in_minutes: 120, next_holder: "Avery" }, alpha);
     ok(!s.isError && /Blake is holding June awake/.test(s.text), s.text);
-    const h = await call("holding", { action: "hand_off", to: "Avery", sleepy: true }, alpha);
-    ok(!h.isError && /Avery is holding June now/.test(h.text) && /get a notice now/.test(h.text), h.text);
-    const nobody = await call("holding", { action: "hand_off", to: "Zed" }, alpha);
+    const asked = await call("holding", { action: "hand_off", to: "Avery", sleepy: true }, alpha);
+    ok(!asked.isError && /^Asked Avery to take over/.test(asked.text) && /Nothing has changed hands: Blake is still holding June/.test(asked.text) && /get a notice now/.test(asked.text) && /bassinet now/.test(asked.text), asked.text);
+    eq([(await openShift(1, alpha.babyId))?.holder, (await openShift(1, alpha.babyId))?.asked_to], [alpha.member, alpha.owner], "still Blake's turn, Avery asked");
+    const st = await call("maple_status", {}, alpha, "owner");
+    ok(/Blake asked Avery to take over at/.test(st.text) && /until Avery has her/.test(st.text), st.text);
+    const accepted = await call("holding", { action: "accept" }, alpha, "owner");
+    ok(!accepted.isError && /^Avery has June now/.test(accepted.text) && /taking over from Blake/.test(accepted.text) && /maple_status/.test(accepted.text), accepted.text);
+    const mine = await call("holding", { action: "accept" }, alpha, "owner");
+    ok(mine.isError && /You're the one holding her/.test(mine.text), mine.text);
+    const back = await call("holding", { action: "hand_off", to: "Blake" }, alpha, "owner");
+    ok(!back.isError && /Blake is holding June now/.test(back.text), back.text);
+    const nobody = await call("holding", { action: "ask", to: "Zed" }, alpha);
     ok(nobody.isError && /isn't someone in this family/.test(nobody.text), nobody.text);
     const e = await call("holding", { action: "end" }, alpha, "owner");
-    ok(!e.isError && /Ended Avery's holding shift/.test(e.text), e.text);
+    ok(!e.isError && /Ended Blake's holding shift/.test(e.text), e.text);
+    ok(![s, asked, accepted, back, e].some((r) => /keep holding|safe to (sleep|doze)/i.test(r.text)), "nothing suggests staying put or dozing");
+  });
+
+  await test("MCP holding: undo_last after an ask takes back the ask, never the turn; asleep in arms starts and stops with the turn", async () => {
+    await clean(alpha);
+    const s = await call("holding", { action: "start", asleep: true }, alpha);
+    ok(!s.isError && /sleep in arms is logged from/.test(s.text) && /Don't also log this sleep/.test(s.text), s.text);
+    const turn = (await openShift(1, alpha.babyId))!;
+    await call("holding", { action: "ask", to: "Avery" }, alpha);
+    const undo = await call("undo_last", {}, alpha);
+    ok(!undo.isError && /^Took back the ask/.test(undo.text), undo.text);
+    const open = (await openShift(1, alpha.babyId))!;
+    eq([open.id, open.asked_to, open.ended_at], [turn.id, null, null], "the turn goes on, nobody asked");
+    const arms = (await sleeps(alpha)).find((x) => x.deleted_at == null)!;
+    eq([arms.active, (arms.data as { place?: string }).place], [true, "arms"], "her sleep in arms runs");
+    const e = await call("holding", { action: "end" }, alpha);
+    ok(!e.isError && new RegExp(`sleep in arms \\(#${arms.id}\\) stopped then too`).test(e.text), e.text);
+    eq((await getEntry(1, Number(arms.id)))?.active, false, "ended awake: the sleep stopped");
   });
 
   await test("maple_status and the chat's [App] lines carry a running try and who's holding her; a family without a plan reads as before", async () => {
@@ -466,16 +597,29 @@ async function main() {
     eq(sent.filter((x) => x.kind === "handoff").length, 0, "beta has no shift");
   });
 
-  await test("push: Wake [partner] tells the family's other phones now, never the phone that asked", async () => {
-    const open = (await openShift(1, alpha.babyId))!;
-    const h = await handOff(1, open.id, { to: alpha.owner, by: alpha.member, source: "web", device: "made-up-phone-a1" });
-    sent.length = 0;
+  await test("push: an ask (Wake [partner]) tells the family's other phones now, never the phone that asked; once per ask, and asking again sounds again", async () => {
+    await clean(alpha);
+    const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.member, by: alpha.member, source: "web" })).shift;
     const scope = (await familyScope(1))!;
-    await notifyHandoffNow(scope, h.shift.id, "made-up-phone-a1");
-    eq(sent.map((x) => [x.endpoint, x.title]), [["https://push.example.test/alpha-phone-2", "Handoff now"]], "only the other phone");
     sent.length = 0;
-    await notifyHandoffNow(scope, h.shift.id, "made-up-phone-a1");
-    eq(sent.length, 0, "once");
+    await notifyHandoffNow(scope, t.id, "made-up-phone-a1");
+    eq(sent.length, 0, "no ask, no Handoff now");
+    await askHandoff(1, { babyId: alpha.babyId, id: t.id, to: alpha.owner, by: alpha.member, source: "web", device: "made-up-phone-a1" });
+    await notifyHandoffNow(scope, t.id, "made-up-phone-a1");
+    eq(sent.map((x) => [x.endpoint, x.title, x.tag]), [["https://push.example.test/alpha-phone-2", "Handoff now", `handoff:${t.id}`]], "only the other phone");
+    ok(sent.every((x) => !/Avery|Blake|Casey|June|Juniper|Dana/.test(`${x.title} ${x.body}`)), JSON.stringify(sent));
+    sent.length = 0;
+    await notifyHandoffNow(scope, t.id, "made-up-phone-a1");
+    eq(sent.length, 0, "once per ask");
+    await sql(`UPDATE maple_sleep_shifts SET asked_at = asked_at - INTERVAL '11 minutes' WHERE id = $1`, [t.id]);
+    await askHandoff(1, { babyId: alpha.babyId, id: t.id, to: alpha.owner, by: alpha.member, source: "web", device: "made-up-phone-a1" });
+    await notifyHandoffNow(scope, t.id, "made-up-phone-a1");
+    eq(sent.length, 1, "asking again sounds again");
+    sent.length = 0;
+    const open = (await openShift(1, alpha.babyId))!;
+    await handOff(1, open.id, { to: alpha.owner, by: alpha.owner, source: "web" });
+    await notifyHandoffNow(scope, t.id, null);
+    eq(sent.length, 0, "taken over: nothing more");
   });
 
   // ── a direct store edge ────────────────────────────────────────────────

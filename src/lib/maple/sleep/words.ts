@@ -5,7 +5,7 @@
  * that makes a claim about babies lives in ../guidelines/sleep.ts with its
  * source. Copy about the baby takes a Voice (../voice.ts).
  */
-import { formatTime, parseDayKey } from "../time";
+import { formatMinutes, formatTime, parseDayKey } from "../time";
 import type { SleepPlace } from "../types";
 import type { Voice } from "../voice";
 import type { CheckinPlace, GoalStatus, GoalTarget, HandoffAnswer, PlanStage, ProtectedAnswer, RosterWindow, ShiftEnding, TargetKind, TryAnchor, TryOutcome, TrySlot, TryTag, UntimedTry } from "./types";
@@ -132,8 +132,33 @@ export type TimeOfDay = (typeof TIME_OF_DAY)[number]["id"];
 export const sleepyChoices = (v: Voice, partner: string | null) =>
   [
     { id: "bassinet" as const, label: `Put ${v.them} in the bassinet now`, hint: `On ${v.their} back. This ends your turn.` },
-    { id: "partner" as const, label: partner ? `Wake ${partner}` : "Wake your partner", hint: `Hand ${v.them} over now.` },
+    { id: "partner" as const, label: partner ? `Wake ${partner}` : "Wake your partner", hint: `Ask ${partner ?? "them"} to take ${v.them} now.` },
   ] as const;
+
+// ── at night, in a few words ─────────────────────────────────────────────
+
+/** Minutes down as a phone says them: "47 min", "3h 12m" (never "192 min"). */
+export const downWords = (min: number) => formatMinutes(Math.max(0, Math.round(min)) * 60);
+
+/**
+ * The strip's and the outcome toast's line after a crying wake, and after
+ * the retry: the plan's "soothe, retry once, then pause" (guidelines/sleep.ts
+ * crying-soothe and crying-pause) in a few words. Never crying it out.
+ */
+export const cryingLine = (v: Voice, signal: "after_crying" | "retry_done") =>
+  signal === "after_crying" ? `Soothe ${v.them}; try once more when ${v.they}${v.verb("'s")} deeply asleep` : "Pause until the next try";
+
+const SLOT_SHORT: Record<TryAnchor, string> = {
+  first_night_stretch: "first night stretch",
+  night_stretch: "next night stretch",
+  first_morning_nap: "morning nap",
+  any_nap: "next nap",
+};
+
+/** A try time short enough for the strip: "morning nap", "around 10:30 PM". */
+export function slotShort(slot: TrySlot): string {
+  return CLOCK.test(slot) ? slotLabel(slot).replace(/^Around/, "around") : (SLOT_SHORT[slot as TryAnchor] ?? slot);
+}
 
 // ── sleep goals ──────────────────────────────────────────────────────────
 //

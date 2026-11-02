@@ -8,6 +8,9 @@ import { holdingChanged } from "@/lib/maple/push-hooks";
 import { progressLines, sleepAge } from "@/lib/maple/sleep/engine";
 import { coachNotes, goalCautions, goalProgressLines, seesCheckins, type GoalWords } from "@/lib/maple/sleep/goals";
 import {
+  acceptHandoff,
+  askHandoff,
+  cancelAsk,
   cleanNote,
   cleanPlanPatch,
   cleanTags,
@@ -35,10 +38,12 @@ import {
   SleepConflict,
   SleepInputError,
   sleepStateFor,
+  startArmsSleep,
   startShift,
   startTry,
   undoFinish,
   undoHandOff,
+  undoTurnSleep,
   updateGoal,
   updatePlan,
   updateShift,
@@ -71,7 +76,9 @@ export const dynamic = "force-dynamic";
  * revision it was made against) answers 409 with the record as it is now
  * (`current`, `code`: changed, finished, running or open); nothing is saved.
  * A check-in is always the signed-in adult's own: nothing in the request
- * can say whose it is.
+ * can say whose it is. A holding turn's "Wake [partner]" is shift.ask,
+ * never a handoff: the handoff is recorded only by shift.accept ("I've got
+ * her", the signed-in person) or the holder's shift.handoff.
  */
 
 type Body = Record<string, unknown>;
@@ -188,6 +195,18 @@ export const POST = withMember(
     const device = deviceOf(request);
     const by = me.email;
     const src = "web" as const;
+    const askFor = async (shiftId: number | null, to: string) => {
+      const w = await askHandoff(ctx, { babyId: baby.id, id: shiftId, to, by, source: src, device });
+      // The other phones that turned handoff reminders on hear of it now; this one doesn't.
+      holdingChanged({ familyId: ctx.familyId, wake: { shiftId: w.shift.id, device } });
+      return stateBody(ctx, baby.id, { result: w });
+    };
+    /** A turn's sleep in arms for Undo (`{ id, expect_updated_at }`), only while it's as this phone left it. */
+    const turnSleep = async (raw: unknown, how: "delete" | "reopen") => {
+      const t = raw as Body | null | undefined;
+      if (!t || typeof t !== "object") return null;
+      return undoTurnSleep(ctx, { id: id(t.id, "sleep.id"), expectUpdatedAt: stamp(t.expect_updated_at, "sleep.expect_updated_at") ?? "", how, by });
+    };
     try {
       switch (body.action) {
         // ── the plan ──
@@ -291,15 +310,18 @@ export const POST = withMember(
             at: instant(body.at, "at"),
             handoffAt: instant(body.handoff_at, "handoff_at") ?? null,
             nextHolder: personOrNull(body.next_holder, members, "next_holder"),
+            asleep: body.asleep === true,
             by,
             source: src,
             clientId: typeof body.client_id === "string" ? body.client_id : null,
             device,
           });
           if (w.status === "created") holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: w });
+          return stateBody(ctx, baby.id, { result: w }, [w.sleep]);
         }
         case "shift.handoff": {
+          // "Wake [partner]" from an app from before asks: only an ask now, so nothing changes hands until they have her.
+          if (body.wake === true) return await askFor(id(body.id), person(body.to, members, "to"));
           const w = await handOff(ctx, id(body.id), {
             to: person(body.to, members, "to"),
             at: instant(body.at, "at"),
@@ -309,8 +331,7 @@ export const POST = withMember(
             device,
             expectUpdatedAt: stamp(body.expect_updated_at),
           });
-          // "Wake [partner]": the other phones that turned handoffs on hear of it now; this one doesn't.
-          holdingChanged({ familyId: ctx.familyId, ...(body.wake === true ? { wake: { shiftId: w.shift.id, device } } : {}) });
+          holdingChanged({ familyId: ctx.familyId });
           return stateBody(ctx, baby.id, { result: w });
         }
         case "shift.end": {
@@ -318,7 +339,7 @@ export const POST = withMember(
           if (!(SHIFT_ENDINGS as readonly unknown[]).includes(how)) throw new BadRequest(`how must be one of ${SHIFT_ENDINGS.join(", ")}`);
           const w = await endShift(ctx, id(body.id), { at: instant(body.at, "at"), how: how as ShiftEnding, by, expectUpdatedAt: stamp(body.expect_updated_at) });
           holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: w });
+          return stateBody(ctx, baby.id, { result: w }, [w.sleep]);
         }
         case "shift.update": {
           const w = await updateShift(
@@ -337,7 +358,9 @@ export const POST = withMember(
         case "shift.delete": {
           const shift = await deleteShift(ctx, id(body.id), by, { expectUpdatedAt: stamp(body.expect_updated_at) });
           holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: { shift } });
+          // Undo of a start that made her sleep in arms: that sleep goes too, while it's still as the start left it.
+          const gone = await turnSleep(body.sleep, "delete");
+          return stateBody(ctx, baby.id, { result: { shift, sleepDeleted: gone } }, [], [gone]);
         }
         case "shift.restore": {
           const shift = await restoreShift(ctx, id(body.id), by);
@@ -347,7 +370,9 @@ export const POST = withMember(
         case "shift.reopen": {
           const shift = await reopenShift(ctx, id(body.id), { by, expectUpdatedAt: stamp(body.expect_updated_at) ?? "" });
           holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: { shift } });
+          // Undo of an end that stopped her sleep in arms: it runs again, while it's still as the end left it.
+          const sleep = await turnSleep(body.sleep, "reopen");
+          return stateBody(ctx, baby.id, { result: { shift, sleep } }, [sleep]);
         }
         case "shift.undo_handoff": {
           const r = await undoHandOff(ctx, {
@@ -359,6 +384,30 @@ export const POST = withMember(
           });
           holdingChanged({ familyId: ctx.familyId });
           return stateBody(ctx, baby.id, { result: r });
+        }
+        // "Wake [partner]": an ask, never a handoff. Nothing changes hands until they have her (shift.accept, or the
+        // holder's shift.handoff); the family's other phones with handoff reminders on hear of it now.
+        case "shift.ask":
+          return await askFor(body.id == null ? null : id(body.id), person(body.to, members, "to"));
+        case "shift.cancel_ask": {
+          const w = await cancelAsk(ctx, id(body.id), { by, expectUpdatedAt: stamp(body.expect_updated_at) ?? "" });
+          holdingChanged({ familyId: ctx.familyId });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        // "I've got her": the signed-in person takes over the turn as it is now.
+        case "shift.accept": {
+          const w = await acceptHandoff(ctx, id(body.id), { by, source: src, device, ...(body.handoff_at !== undefined ? { handoffAt: instant(body.handoff_at, "handoff_at") ?? null } : {}) });
+          holdingChanged({ familyId: ctx.familyId });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        // "Asleep in arms" during a turn: a running sleep in arms from now (none if a sleep already runs).
+        case "shift.asleep": {
+          const r = await startArmsSleep(ctx, { babyId: baby.id, by, source: src, device, clientId: typeof body.client_id === "string" ? body.client_id : null });
+          return stateBody(ctx, baby.id, { result: r }, [r.sleep]);
+        }
+        case "shift.asleep_undo": {
+          const gone = await turnSleep(body.sleep, "delete");
+          return stateBody(ctx, baby.id, { result: { sleepDeleted: gone } }, [], [gone]);
         }
 
         // ── sleep goals ──

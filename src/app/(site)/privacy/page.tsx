@@ -85,9 +85,10 @@ export default function Privacy() {
         If your family uses the sleep plan, Maple also keeps the plan (its stage, how many bassinet tries a day and when,
         where the baby sleeps now and your goal), each bassinet try (when the baby was laid down and when the try ended, how it
         went, who laid the baby down, optional tags such as recently fed or swaddled, and a short note), and holding turns: who
-        held the baby awake, from when, the planned handoff and who was next. A handoff can be asked for and accepted: Maple
-        records who was asked to take over and when they did. A try sits on the matching sleep entry, so that sleep is
-        counted once.
+        held the baby awake, from when, the planned handoff and who was next. A handoff can be asked for and accepted: the
+        holding turn keeps who was asked to take over and when they were asked, and taking over starts that person&rsquo;s own
+        turn. A sleep in someone&rsquo;s arms is saved as an ordinary sleep entry. A try sits on the matching sleep entry, so
+        that sleep is counted once.
       </p>
       <p>
         If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,

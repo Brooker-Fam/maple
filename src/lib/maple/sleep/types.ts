@@ -102,6 +102,14 @@ export type HoldingShift = {
   next_holder: string | null;
   ended_at: string | null;
   ended_how: ShiftEnding | null;
+  /**
+   * "Wake [partner]": who the holder asked to take over (a member id), and
+   * when. Nothing changes hands until that person has her (accept, or the
+   * holder's "Alex has her"); an ended turn keeps its ask as history. Absent
+   * from a server older than asks.
+   */
+  asked_to?: string | null;
+  asked_at?: string | null;
   created_by: string | null;
   updated_by: string | null;
   source: Source;
@@ -109,6 +117,9 @@ export type HoldingShift = {
   updated_at: string;
   pending?: boolean;
 };
+
+/** An ask nobody took up within this long shows the holder the two safe choices again (never "keep holding"). */
+export const ASK_STALE_MS = 10 * 60_000;
 
 // ── sleep goals and the adults' check-ins ───────────────────────────────
 

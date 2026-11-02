@@ -68,7 +68,7 @@ import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./car
 import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
-import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep } from "./sleep/mcp";
+import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, getTry as getSleepTry } from "./sleep/store";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, summarize, type Summary } from "./insights";
 import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
@@ -267,7 +267,7 @@ ${momWords} mean the mom tools below (add_mom_medicines too). "${v.They}" and "$
 
 ${v.Their} mom's own medicines and recovery: use mom_status, log_mom_medicine, set_mom_medicine, log_mom_temperature, add_mom_question and fix_mom_entry, never log_medicine (that's ${v.name}'s). Answer "can she take X yet?" only from mom_status, using its line and sentence (for example "Ibuprofen OK after 8:10 AM, by her schedule. Last: 2:10 AM${by}. 1 of 4 tablets in the last 24 hours."). Never say whether a medicine is safe while nursing; suggest her OB, ${v.name}'s pediatrician or a pharmacist. Never fill in a dose, interval, limit or how many to take. If anyone mentions thoughts of harming themselves or someone else, tell them: call 911 if anyone is in immediate danger; otherwise call or text 988, any time. The National Maternal Mental Health Hotline (call or text 1-833-852-6262, 24/7) is there too, but it isn't a crisis line.
 
-Sleep: for sleep questions call sleep_plan and answer from its guidance word for word, and goal questions from its counts and coach notes. Never suggest leaving ${v.them} to cry it out (soothe ${v.them}, try once more, then pause until the next try), and never call sleep on an adult, or in a bed, couch or armchair with one, safe or an option. Someone holding ${v.them} who's getting sleepy: the bassinet now, on ${v.their} back, or wake their partner (holding hand_off, sleepy: true), nothing else. A bassinet try logs ${v.their} sleep itself, so never log that sleep too. Change the plan's stage only when they ask. Tries' notes are about ${v.name}'s sleep, never ${m}'s health. Sleep goals: coach as sleep_goal's description says.
+Sleep: for sleep questions call sleep_plan and answer from its guidance word for word, and goal questions from its counts and coach notes. Never suggest leaving ${v.them} to cry it out (soothe ${v.them}, try once more, then pause until the next try), and never call sleep on an adult, or in a bed, couch or armchair with one, safe or an option. Someone holding ${v.them} who's getting sleepy: the bassinet now, on ${v.their} back, or wake their partner (holding ask; nothing changes hands until the partner has ${v.them}), nothing else. A bassinet try logs ${v.their} sleep itself, so never log that sleep too. Change the plan's stage only when they ask. Tries' notes are about ${v.name}'s sleep, never ${m}'s health. Sleep goals: coach as sleep_goal's description says.
 
 ${m}'s label or discharge papers in a photo: when the user shares one, you may copy her medicines into her list. Copy each value exactly as printed (the name, the dose, how often, the most in 24 hours with its unit) and leave out anything that isn't printed. Read every medicine and number back to the user, and save (add_mom_medicines for several, set_mom_medicine for one) only after they say yes. Never invent, guess, suggest or fill in a number that isn't on the paper. A 24-hour limit needs its unit (tablets, caplets, capsules, doses or mL): with none printed, leave the limit out and say so.
 
@@ -4710,6 +4710,8 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
             { removed: { try: ref, ...(r.sleepDeleted ? { sleep: r.sleepDeleted.id } : {}) }, undo: `bassinet_try {action:"restore", id:"${ref}"}` }
           );
         }
+        // "Wake [partner]" you asked: take back the ask, never the whole turn.
+        if (sleepMade.kind === "ask") return undoAsk(ctx, sleepMade.id, sleepMade.updatedAt ?? "");
         const shift = await deleteShift(ctx.fam, sleepMade.id, ctx.who.id);
         // A handoff you made: the shift handed over is open again.
         const prev = await query(

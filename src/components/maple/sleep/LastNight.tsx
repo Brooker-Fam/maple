@@ -39,12 +39,18 @@ type Bar = NightBar;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+const countParts = (c: NightPicture["counts"]) =>
+  [c.sleeps ? plural(c.sleeps, "sleep") : "", c.feeds ? plural(c.feeds, "feed") : "", c.diapers ? plural(c.diapers, "diaper") : "", c.other ? plural(c.other, "other entry", "other entries") : ""].filter(Boolean);
+
 /** "2 sleeps, 3 feeds and 1 diaper logged", "Nothing logged". */
 function loggedWords(c: NightPicture["counts"]): string {
-  const parts = [c.sleeps ? plural(c.sleeps, "sleep") : "", c.feeds ? plural(c.feeds, "feed") : "", c.diapers ? plural(c.diapers, "diaper") : "", c.other ? plural(c.other, "other entry", "other entries") : ""].filter(Boolean);
+  const parts = countParts(c);
   if (!parts.length) return "Nothing logged";
   return `${parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0]} logged`;
 }
+
+/** Under the strip, between its ends: "2 sleeps · 3 feeds · 1 diaper", "Nothing logged". */
+const countsLine = (c: NightPicture["counts"]) => countParts(c).join(" · ") || "Nothing logged";
 
 const BAR_COLOR: Record<Bar["kind"], string> = { ...KIND_COLOR, try: KIND_COLOR.sleep, hold: "#7F8C6A" };
 
@@ -66,9 +72,11 @@ function NightStrip({ pic, tz, ask }: { pic: NightPicture; tz: string; ask: Gap 
         ))}
         {ask && <span aria-hidden className="absolute top-0 bottom-0 rounded-lg border-2 border-dashed border-mp-accent-fg" style={{ left: x(ask.start), width: w(ask.start, ask.end) }} />}
       </div>
-      <div aria-hidden className="mt-1 flex justify-between text-[12px] text-mp-ink-3 tabular-nums">
-        <span>{formatTime(pic.from, tz)}</span>
-        <span>{pic.toNow ? "now" : formatTime(pic.to, tz)}</span>
+      {/* The strip's ends and the night's counts (all in the strip's label for screen readers). */}
+      <div aria-hidden data-night-counts className="mt-1 flex justify-between gap-2 text-[12px] text-mp-ink-3 tabular-nums">
+        <span className="shrink-0">{formatTime(pic.from, tz)}</span>
+        <span className="min-w-0 truncate">{countsLine(pic.counts)}</span>
+        <span className="shrink-0">{pic.toNow ? "now" : formatTime(pic.to, tz)}</span>
       </div>
     </div>
   );
@@ -240,16 +248,18 @@ export function LastNightCard() {
       data-last-night
       className={cx(tone.card, "space-y-3 px-4 py-3.5")}
     >
+      {/* Not now sits by the title, so the card's question, its answers and a way out fit above the dock on a 320 × 568 phone. */}
       <div className="flex items-center gap-3">
         <KindBadge icon="moon" color={KIND_COLOR.sleep} size={36} />
         <div className="min-w-0 flex-1">
           <h3 id="last-night" className={cx(tone.heading, "text-[17px] leading-tight")}>
             Last night
           </h3>
-          <p className={cx(tone.muted, "truncate text-[13px] leading-snug")}>
-            {dateWords(night, dayKey(now, tz))} · {loggedWords(pic.counts)}
-          </p>
+          <p className={cx(tone.muted, "truncate text-[13px] leading-snug")}>{dateWords(night, dayKey(now, tz))}</p>
         </div>
+        <Button variant="ghost" size="sm" className="-mr-2 shrink-0" onClick={() => save({ ...memo, hidden: true })}>
+          Not now
+        </Button>
       </div>
       <NightStrip pic={pic} tz={tz} ask={body && !pic.leftRunning && !due ? gap : null} />
       {body}
@@ -267,9 +277,6 @@ export function LastNightCard() {
             Add a note
           </Button>
         )}
-        <Button variant="ghost" size="sm" onClick={() => save({ ...memo, hidden: true })}>
-          Not now
-        </Button>
       </div>
     </motion.section>
   );

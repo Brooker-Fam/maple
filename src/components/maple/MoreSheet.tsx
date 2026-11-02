@@ -328,7 +328,8 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
     },
     onHold: earlier("med", { ...VITAMIN_D_DEFAULT }),
   };
-  // The sleep plan: a bassinet try (hold: one nobody started here), holding her awake, the plan itself, and the family's sleep goals.
+  // The sleep plan: putting her down now (never a way to log last night's), an earlier try, holding her awake, the plan itself,
+  // and the family's sleep goals.
   const later = (fn: () => void) => {
     onClose();
     window.setTimeout(fn, 120);
@@ -336,17 +337,22 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
   const sp = sleepPlan;
   const activeGoals = sp?.goals.filter((g) => g.status === "active").length ?? 0;
   const pausedGoals = sp?.goals.filter((g) => g.status === "paused").length ?? 0;
+  const me = state?.me.email ?? "";
+  // The holder gets the two safe choices; anyone else takes over (or says "I've got her" when they were asked).
+  const holding = sp?.shift ?? null;
+  const holdingMine = !!holding && holding.holder === me;
+  const askedMe = !!holding && !holdingMine && !!holding.asked_to && holding.asked_to === me;
   const sleepItems: Item[] =
     sp && sp.canWrite && state?.baby.born_at
       ? [
           {
             id: "bassinet",
-            label: sp.running ? "How did the try go?" : "Bassinet try",
+            label: sp.running ? "How did the try go?" : `Put ${voice.them} down now`,
             sub: sp.running
               ? `In the bassinet since ${formatTimeNear(sp.running.started_at, n, tz)}`
               : sp.today
-                ? `${sp.today.done} of ${sp.today.planned} ${sp.today.label}`
-                : `Lay ${voice.them} down now`,
+                ? `A bassinet try · ${sp.today.done} of ${sp.today.planned} ${sp.today.label}`
+                : "A bassinet try, starting now",
             icon: "bassinet",
             color: KIND_COLOR.sleep,
             onTap: () => {
@@ -361,12 +367,27 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
             },
           },
           {
+            id: "log-try",
+            label: "Log an earlier try",
+            sub: "Like last night's",
+            icon: "clock-3",
+            color: KIND_COLOR.sleep,
+            onTap: () => later(() => sp.openSheet({ kind: "log" })),
+          },
+          {
             id: "holding",
-            label: sp.shift ? "Getting sleepy?" : `Holding ${voice.them}`,
-            sub: sp.shift ? `${memberName(sp.shift.holder)} since ${formatTimeNear(sp.shift.started_at, n, tz)}` : "Awake turns and handoffs",
+            label: holdingMine ? "Getting sleepy?" : askedMe ? `I've got ${voice.them}` : holding ? "Take over" : `Holding ${voice.them}`,
+            sub: holding ? `${holdingMine ? "You" : memberName(holding.holder)} since ${formatTimeNear(holding.started_at, n, tz)}` : "Awake turns and handoffs",
             icon: "hold",
             color: KIND_COLOR.sleep,
-            onTap: () => later(() => sp.openSheet(sp.shift ? { kind: "sleepy" } : { kind: "holding", mode: "start" })),
+            onTap: () => {
+              if (askedMe && holding) {
+                onClose();
+                void sp.acceptHandoff(holding);
+                return;
+              }
+              later(() => sp.openSheet(holdingMine ? { kind: "sleepy" } : holding ? { kind: "holding", mode: "handoff", to: me } : { kind: "holding", mode: "start" }));
+            },
           },
           {
             id: "sleep-plan",
