@@ -2,32 +2,50 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { sleepAge } from "@/lib/maple/sleep/engine";
+import { SleepInputError } from "@/lib/maple/sleep/errors";
 import {
   againstAim,
+  BACK_TO_WORK_AFTER_DAYS,
+  backToWorkGoal,
+  backToWorkQuestions,
+  cleanGoalInput,
   goalAdults,
   goalCautions,
+  goalsByUrgency,
   goalSpan,
   goalStartKey,
+  goalWeekLabel,
   lastNightKey,
   nextStepNow,
+  noCheckinWords,
+  observationWords,
+  QUICK_FEEDING,
+  QUICK_NIGHT,
+  QUICK_OFF_DUTY,
+  QUICK_SLEEPS,
   rosterHintBody,
+  weekOngoing,
   type CoachNotes,
+  type GoalFields,
   type GoalProgress,
   type GoalSpan,
   type GoalWeek,
   type NightsWeek,
+  type QuickFeeding,
+  type QuickOffDuty,
+  type QuickSleeps,
   type StretchWeek,
   type WeekCoverage,
   type WindowWeek,
 } from "@/lib/maple/sleep/goals";
-import { GOAL_NOTE_MAX, GOALS_OPEN_MAX, type BassinetNightsTarget, type BassinetStretchTarget, type GoalStep, type ProtectedWindowTarget, type SleepGoal } from "@/lib/maple/sleep/types";
-import { dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, PROTECTED_LABEL, TARGET_KIND_LABEL, targetWords, windowTimes } from "@/lib/maple/sleep/words";
-import { dayKey, DEFAULT_TZ, formatDuration } from "@/lib/maple/time";
+import { GOAL_AHEAD_DAYS, GOAL_NOTE_MAX, GOALS_OPEN_MAX, type BassinetNightsTarget, type BassinetStretchTarget, type GoalInput, type GoalStep, type ProtectedWindowTarget, type SleepGoal } from "@/lib/maple/sleep/types";
+import { coversHint, dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, PROTECTED_LABEL, shortClock, TARGET_KIND_LABEL, targetWords, windowTimes } from "@/lib/maple/sleep/words";
+import { addDays, dayKey, DEFAULT_TZ, formatDuration, isDayKey } from "@/lib/maple/time";
 import { AskChatButton } from "../chat/AskChat";
 import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Label } from "../sheets/parts";
-import { Button, cx, TextArea, tone } from "../ui";
+import { Button, Chip, cx, TextArea, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { useSleep } from "./useSleep";
 
@@ -43,7 +61,8 @@ import { useSleep } from "./useSleep";
  * Neutral words throughout: a count and its sample, never a score, a
  * streak, a grade or a "best"; a hard night is just counted. View-only
  * guests see the goals, steps, roster and the baby's numbers, never a
- * check-in, and nothing that writes.
+ * check-in, and nothing that writes. With no goal yet, a family with two
+ * adults can plan for going back to work in five questions (QuickSetup).
  */
 
 type GoalView = { goal: SleepGoal; progress: GoalProgress; coach: CoachNotes; lines: string[] };
@@ -92,8 +111,9 @@ function useGoalsView(wanted: boolean): { views: GoalView[] | null; failed: bool
 
 export function GoalsPart() {
   const s = useSleep();
-  // Active first, then paused; each newest first, as the state has them.
-  const open = [...s.goals.filter((g) => g.status === "active"), ...s.goals.filter((g) => g.status === "paused")];
+  const { state, now } = useMaple();
+  // Most urgent first: active, then paused; the nearest target date, then a review due, then the newest (as the coach reads them).
+  const open = goalsByUrgency(s.goals.filter(isOpen), now(), state?.baby.timezone ?? DEFAULT_TZ);
   const closed = s.goals.filter((g) => !isOpen(g));
   const { views, failed } = useGoalsView(open.length > 0);
   return (
@@ -122,6 +142,8 @@ export function GoalsPart() {
 function NoGoals() {
   const s = useSleep();
   const v = useVoice();
+  const people = useQuickPeople();
+  const [quick, setQuick] = useState(false);
   return (
     <div className="space-y-3">
       <div className={cx(tone.inset, "space-y-2 px-4 py-3.5")}>
@@ -137,6 +159,19 @@ function NoGoals() {
           </div>
         )}
       </div>
+      {/* Two adults who log: the night splits between them, so the quick setup has someone for each half. */}
+      {s.canWrite && people.length >= 2 &&
+        (quick ? (
+          <QuickSetup onClose={() => setQuick(false)} />
+        ) : (
+          <div className={cx(tone.inset, "space-y-2 px-4 py-3.5")}>
+            <p className={cx(tone.heading, "text-[16px]")}>Going back to work?</p>
+            <p className={cx(tone.body, "text-[15px] leading-relaxed")}>Five quick questions, then one plan to read over: a protected stretch of sleep for each of you, who&apos;s on for each half of the night, and three steps timed from the day back.</p>
+            <Button variant="soft" className="w-full" onClick={() => setQuick(true)}>
+              Plan for going back to work
+            </Button>
+          </div>
+        ))}
       {s.canWrite ? (
         <Button variant="soft" className="w-full" onClick={() => s.openSheet({ kind: "goal" })}>
           <Icon name="plus" size={18} /> Set one yourself
@@ -147,6 +182,255 @@ function NoGoals() {
     </div>
   );
 }
+
+// ── the "Back to work" quick setup: five questions, one goal to read back ──
+
+type QuickAnswers = {
+  returning: string | null;
+  return_date: string;
+  feeding: QuickFeeding | null;
+  nursing: string | null;
+  sleeps: QuickSleeps | null;
+  first_half: string | null;
+  second_half: string | null;
+  off_duty: QuickOffDuty | null;
+  target_date: string;
+};
+
+const FEEDING_LABEL: Record<QuickFeeding, string> = { nursing: "Nursing", bottles: "Bottles", both: "Both" };
+const SLEEPS_LABEL: Record<QuickSleeps, string> = { bassinet: "Bassinet", crib: "Crib", arms: "In arms", bed: "Our bed", mixed: "A mix" };
+const OFF_DUTY_LABEL: Record<QuickOffDuty, string> = { other_room: "Another room", same_room: "The same room" };
+
+/** The adults who can each take half a night (owners and members, never the shared admin login), the signed-in one first. */
+function useQuickPeople() {
+  const { state } = useMaple();
+  const s = useSleep();
+  return useMemo(() => {
+    const list = (state?.members ?? []).filter((m) => (m.role === "owner" || m.role === "member") && m.email !== "admin");
+    return [...list.filter((m) => m.email === s.me), ...list.filter((m) => m.email !== s.me)];
+  }, [s.me, state?.members]);
+}
+
+function Choices<T extends string>({ label, options, value, onPick }: { label: string; options: { value: T; label: string }[]; value: T | null; onPick: (v: T) => void }) {
+  return (
+    <div role="group" aria-label={label} className="flex flex-wrap gap-2">
+      {options.map((o) => (
+        <Chip key={o.value} raised selected={value === o.value} onClick={() => onPick(o.value)}>
+          {o.label}
+        </Chip>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Five questions, one at a time, as Postpartum Support International's plan
+ * asks them: who goes back to work and when; nursing, bottles or both (and
+ * who nurses); where the baby sleeps now; who's on duty for each half of the
+ * night and where the adult who's off sleeps; the target date. Then one
+ * read-back (goals.ts backToWorkGoal): a goal, a night roster with each
+ * window's feeds covered, and three steps timed from the day back, saved on
+ * Save the goal with no logs needed first. Nothing is kept until then.
+ */
+function QuickSetup({ onClose }: { onClose: () => void }) {
+  const s = useSleep();
+  const { state, memberName, now } = useMaple();
+  const v = useVoice();
+  const people = useQuickPeople();
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const today = dayKey(now(), tz);
+  const adults = useMemo(() => new Set(people.map((p) => p.email)), [people]);
+  const label = (id: string) => (id === s.me ? "Me" : memberName(id));
+  const [step, setStep] = useState(0);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [a, setA] = useState<QuickAnswers>({ returning: null, return_date: "", feeding: null, nursing: null, sleeps: null, first_half: null, second_half: null, off_duty: null, target_date: "" });
+  const set = (patch: Partial<QuickAnswers>) => {
+    setA((x) => ({ ...x, ...patch }));
+    setProblem(null);
+  };
+  const other = (id: string | null) => people.find((p) => p.email !== id)?.email ?? null;
+  const asked = [
+    a.returning && isDayKey(a.return_date),
+    a.feeding && (a.feeding === "bottles" || a.nursing),
+    a.sleeps,
+    a.first_half && a.second_half && a.first_half !== a.second_half && a.off_duty,
+    isDayKey(a.target_date),
+  ];
+  const questions = backToWorkQuestions(v);
+  const next = () => {
+    // Defaults for what comes next: the one going back is on first, so they sleep the second half; two weeks after the day back.
+    if (step === 0 && !a.first_half) set({ first_half: a.returning, second_half: other(a.returning) });
+    if (step === 0 && !a.target_date && isDayKey(a.return_date)) set({ target_date: addDays(a.return_date, BACK_TO_WORK_AFTER_DAYS) });
+    setStep((n) => n + 1);
+  };
+  let built: { goal: GoalInput; notes: string[] } | null = null;
+  let fields: GoalFields | null = null;
+  let error: string | null = null;
+  if (step === 5) {
+    try {
+      built = backToWorkGoal(
+        { returning: a.returning!, return_date: a.return_date, feeding: a.feeding!, nursing: a.nursing, sleeps: a.sleeps!, first_half: a.first_half!, second_half: a.second_half!, off_duty: a.off_duty!, target_date: a.target_date || null },
+        { v, name: memberName, today, adults }
+      );
+      fields = cleanGoalInput(built.goal, { current: null, adults, name: memberName, today, seq: 0, v }, "create").fields;
+    } catch (err) {
+      if (!(err instanceof SleepInputError)) throw err;
+      error = err.message;
+    }
+  }
+  const age = state ? sleepAge(state.baby, now()) : null;
+  const cautions = fields ? goalCautions(fields, { v, name: memberName, ageDays: state?.baby.born_at ? (age?.days ?? null) : null, adults: people.map((p) => memberName(p.email)) }) : [];
+  const save = async () => {
+    if (!built) return;
+    const r = await s.createGoal(built.goal);
+    if (!r) return;
+    if ("saved" in r) return onClose();
+    if ("problem" in r) setProblem(r.problem);
+  };
+  const half = (n: 1 | 2) => `${n === 1 ? "First" : "Second"} half, ${shortClock(n === 1 ? QUICK_NIGHT.from : QUICK_NIGHT.split)}–${shortClock(n === 1 ? QUICK_NIGHT.split : QUICK_NIGHT.to)}`;
+  return (
+    <section aria-label="Plan for going back to work" className={cx(tone.inset, "space-y-4 px-4 py-4")}>
+      {step < 5 ? (
+        <>
+          <div className="space-y-1">
+            <p className={cx(tone.faint, "text-[12px] font-medium tabular-nums")}>Question {step + 1} of 5</p>
+            <p className={cx(tone.heading, "text-[16px] leading-snug")}>{questions[step]}</p>
+          </div>
+          {step === 0 && (
+            <div className="space-y-3">
+              <Choices label="Who goes back to work" options={people.map((p) => ({ value: p.email, label: label(p.email) }))} value={a.returning} onPick={(x) => set({ returning: x })} />
+              <label className="block">
+                <span className={cx(tone.label, "mb-1.5 block")}>The day back</span>
+                <input type="date" aria-label="The day back at work" value={a.return_date} min={today} max={addDays(today, GOAL_AHEAD_DAYS)} onChange={(e) => set({ return_date: e.target.value })} className={tone.input} />
+              </label>
+            </div>
+          )}
+          {step === 1 && (
+            <div className="space-y-3">
+              <Choices label={`How ${v.name} is fed`} options={QUICK_FEEDING.map((x) => ({ value: x, label: FEEDING_LABEL[x] }))} value={a.feeding} onPick={(x) => set({ feeding: x, ...(x === "bottles" ? { nursing: null } : {}) })} />
+              {a.feeding && a.feeding !== "bottles" && (
+                <div>
+                  <Label>Who nurses</Label>
+                  <Choices label="Who nurses" options={people.map((p) => ({ value: p.email, label: label(p.email) }))} value={a.nursing} onPick={(x) => set({ nursing: x })} />
+                </div>
+              )}
+            </div>
+          )}
+          {step === 2 && <Choices label={`Where ${v.name} sleeps now`} options={QUICK_SLEEPS.map((x) => ({ value: x, label: SLEEPS_LABEL[x] }))} value={a.sleeps} onPick={(x) => set({ sleeps: x })} />}
+          {step === 3 && (
+            <div className="space-y-3">
+              {([1, 2] as const).map((n) => (
+                <div key={n}>
+                  <Label>{half(n)}</Label>
+                  <Choices
+                    label={`On duty for the ${n === 1 ? "first" : "second"} half`}
+                    options={people.map((p) => ({ value: p.email, label: label(p.email) }))}
+                    value={n === 1 ? a.first_half : a.second_half}
+                    onPick={(x) => set(n === 1 ? { first_half: x, ...(a.second_half === x ? { second_half: other(x) } : {}) } : { second_half: x, ...(a.first_half === x ? { first_half: other(x) } : {}) })}
+                  />
+                </div>
+              ))}
+              <p className={cx(tone.muted, "text-[13px] leading-snug")}>Whoever&apos;s on duty for one half sleeps the other, as a protected window.</p>
+              <div>
+                <Label>Where the adult who&apos;s off sleeps</Label>
+                <Choices label="Where the adult who's off sleeps" options={QUICK_OFF_DUTY.map((x) => ({ value: x, label: OFF_DUTY_LABEL[x] }))} value={a.off_duty} onPick={(x) => set({ off_duty: x })} />
+              </div>
+            </div>
+          )}
+          {step === 4 && (
+            <label className="block">
+              <span className={cx(tone.label, "mb-1.5 block")}>Target date</span>
+              <input type="date" aria-label="Target date" value={a.target_date} min={today} max={addDays(today, GOAL_AHEAD_DAYS)} onChange={(e) => set({ target_date: e.target.value })} className={tone.input} />
+              {isDayKey(a.target_date) && <span className={cx(tone.muted, "mt-1.5 block text-[13px]")}>{dateWords(a.target_date, today)}</span>}
+            </label>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button disabled={!asked[step]} onClick={next}>
+              {step === 4 ? "See the plan" : "Next"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => (step ? setStep((n) => n - 1) : onClose())}>
+              {step ? "Back" : "Not now"}
+            </Button>
+          </div>
+        </>
+      ) : (
+        <QuickReadBack built={built} fields={fields} error={error ?? problem} notes={built?.notes ?? []} cautions={cautions.map((c) => c.text)} onSave={() => void save()} onBack={() => setStep(4)} busy={s.busy} today={today} />
+      )}
+    </section>
+  );
+}
+
+function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, busy, today }: { built: { goal: GoalInput } | null; fields: GoalFields | null; error: string | null; notes: string[]; cautions: string[]; onSave: () => void; onBack: () => void; busy: boolean; today: string }) {
+  const { memberName } = useMaple();
+  const v = useVoice();
+  return (
+    <div className="space-y-4" aria-label="The plan, to read over">
+      <div className="space-y-1">
+        <p className={cx(tone.faint, "text-[12px] font-medium")}>Here&apos;s the plan. Nothing is saved until you save it.</p>
+        {fields?.title && <p className={cx(tone.heading, "text-[17px] leading-snug break-words")}>{fields.title}</p>}
+        {fields?.why && <p className={cx(tone.muted, "text-[14px] leading-snug")}>{fields.why}</p>}
+        {fields?.target_date && <p className={cx(tone.body, "text-[14px]")}>Target date {dateWords(fields.target_date, today)}</p>}
+      </div>
+      {fields && (
+        <>
+          <Block title="Targets">
+            <ul className="space-y-1 text-[15px] leading-snug text-mp-ink">
+              {(fields.targets ?? []).map((t) => (
+                <li key={t.id}>{capital(targetWords(t, memberName))}</li>
+              ))}
+            </ul>
+          </Block>
+          <Block title="Night roster">
+            <ul className="space-y-2">
+              {(fields.roster ?? []).map((w) => (
+                <li key={w.id} className="space-y-0.5">
+                  <p className="text-[15px] leading-snug text-mp-ink">
+                    <span className="font-semibold">{memberName(w.member)}</span> <span className="whitespace-nowrap tabular-nums">{windowTimes(w)}</span>
+                  </p>
+                  <p className="text-[13px] text-mp-ink-2">
+                    {capital(nightsLabel(w.nights))}
+                    {w.covers ? ` · ${coversHint(w.covers, v)}` : ""}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </Block>
+          <Block title="Weekly steps">
+            <ol className="space-y-1.5">
+              {(fields.steps ?? []).map((st) => (
+                <li key={st.id} className="text-[15px] leading-snug text-mp-ink">
+                  {st.title}
+                  {st.week_of && <span className="block text-[12px] text-mp-ink-2">Week of {dateWords(st.week_of, today)}</span>}
+                </li>
+              ))}
+            </ol>
+          </Block>
+        </>
+      )}
+      {[...notes, ...cautions].map((n) => (
+        <p key={n} role="note" className={cx(tone.muted, "flex gap-2 text-[13px] leading-relaxed")}>
+          <Icon name="info" size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
+          <span>{n}</span>
+        </p>
+      ))}
+      {error && (
+        <p role="alert" data-goal-problem className="text-[13px] font-semibold text-mp-danger">
+          {error}
+        </p>
+      )}
+      <p className={cx(tone.faint, "text-[12px] leading-relaxed")}>You can change any of it after saving, with Edit.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button disabled={!built || !fields || busy} onClick={onSave}>
+          Save the goal
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onBack}>
+          Back
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 
 /** No break inside "Thu, Nov 26", "21 days left" or "week 2 of 5" on a narrow phone. */
 const keep = (s: string) => s.replace(/ /g, "\u00a0");
@@ -279,28 +563,24 @@ function Block({ title, aside, children }: { title: string; aside?: ReactNode; c
 
 // ── targets ──────────────────────────────────────────────────────────────
 
-/** "This week", "Last week", "Week 2". */
-function weekLabel(w: GoalWeek, p: GoalProgress): string {
-  if (w.current) return "This week";
-  if (p.weekNow && w.n === p.weekNow - 1) return "Last week";
-  return `Week ${w.n}`;
-}
+/** "This week", "Last week", "Week 2", or on a review morning "Week 1 (ended last night)" (goals.ts goalWeekLabel). */
+const weekLabel = (w: GoalWeek, p: GoalProgress): string => goalWeekLabel(w, p);
 
 /** The newest week in full, then up to three earlier ones compact, the rest a tap away. Every line says what it's out of. */
-function Weeks<T extends { week: number }>({ p, rows, line }: { p: GoalProgress; rows: readonly T[]; line: (x: T, w: GoalWeek) => string }) {
+function Weeks<T extends { week: number }>({ p, rows, line }: { p: GoalProgress; rows: readonly T[]; line: (x: T, w: GoalWeek, p: GoalProgress) => string }) {
   const weeks = [...p.weeks].reverse().filter((w) => rows.some((x) => x.week === w.n));
   const [latest, ...earlier] = weeks;
   if (!latest) return null;
   const row = (w: GoalWeek) => rows.find((x) => x.week === w.n)!;
   const item = (w: GoalWeek) => (
     <li key={w.n}>
-      {weekLabel(w, p)}: {line(row(w), w)}
+      {weekLabel(w, p)}: {line(row(w), w, p)}
     </li>
   );
   return (
     <div className="space-y-1">
       <p className="text-[15px] leading-snug text-mp-ink tabular-nums">
-        <span className="font-semibold">{weekLabel(latest, p)}:</span> {line(row(latest), latest)}
+        <span className="font-semibold">{weekLabel(latest, p)}:</span> {line(row(latest), latest, p)}
       </p>
       {earlier.length > 0 && <ul className="space-y-0.5 text-[13px] leading-snug text-mp-ink-2 tabular-nums">{earlier.slice(0, 3).map(item)}</ul>}
       {earlier.length > 3 && (
@@ -321,23 +601,24 @@ function Weeks<T extends { week: number }>({ p, rows, line }: { p: GoalProgress;
  * aim, then what the count is out of, never a night nobody logged; with every
  * night logged, "· tried on 4 of 7 nights so far".
  */
-const nightsLine = (t: BassinetNightsTarget) => (x: NightsWeek, w: GoalWeek) => {
+const nightsLine = (t: BassinetNightsTarget) => (x: NightsWeek, w: GoalWeek, p: GoalProgress) => {
   if (!x.nights) return "counting starts with the goal's first night";
   const counted = `${againstAim(x.counted, t.per_week)}${x.fromCheckins ? ` (${x.fromCheckins} from check-ins)` : ""}`;
-  if (x.unknown) return `${counted} · ${x.counted} of ${x.known} logged ${x.known === 1 ? "night" : "nights"} · ${x.unknown} not logged`;
-  return `${counted} · tried on ${x.tried} of ${plural(x.nights, "night")}${w.current ? " so far" : ""}`;
+  // A night with only feeds logged says nothing about the bassinet: it's among the nights not logged, and said so.
+  if (x.unknown) return `${counted} · ${x.counted} of ${x.known} logged ${x.known === 1 ? "night" : "nights"} · ${x.unknown} not logged${x.feedsOnly ? ` (${x.feedsOnly} with only feeds or other entries)` : ""}`;
+  return `${counted} · tried on ${x.tried} of ${plural(x.nights, "night")}${weekOngoing(w, p) ? " so far" : ""}`;
 };
 
-const stretchLine = (t: BassinetStretchTarget) => (x: StretchWeek, w: GoalWeek) =>
+const stretchLine = (t: BassinetStretchTarget) => (x: StretchWeek, w: GoalWeek, p: GoalProgress) =>
   x.stretches
     ? `longest ${formatDuration(x.longestSec ?? 0)} · ${x.atLeast} of ${plural(x.stretches, "stretch", "stretches")} ${minutesWords(t.minutes)} or more`
-    : `no bassinet stretches logged${w.current ? " yet" : ""}`;
+    : `no bassinet stretches logged${weekOngoing(w, p) ? " yet" : ""}`;
 
 /** "yes on 4 of the 5 nights aimed for · checked in 5 of 7 roster nights so far (not this time 1)": never "held", which is a holding turn's word. */
-const windowLine = (t: ProtectedWindowTarget) => (x: WindowWeek, w: GoalWeek): string => {
+const windowLine = (t: ProtectedWindowTarget, hasWindow: boolean) => (x: WindowWeek, w: GoalWeek, p: GoalProgress): string => {
   const other = [x.partly ? `partly ${x.partly}` : "", x.no ? `not this time ${x.no}` : ""].filter(Boolean).join(", ");
-  const soFar = w.current ? " so far" : "";
-  if (!x.checkedIn) return `no check-ins${w.current ? " yet" : ""} · ${plural(x.planned, "night")} on the roster${soFar}`;
+  const soFar = weekOngoing(w, p) ? " so far" : "";
+  if (!x.checkedIn) return `no check-ins${weekOngoing(w, p) ? " yet" : ""} · ${noCheckinWords(x, { ongoing: weekOngoing(w, p), today: p.today, hasWindow: hasWindow })}`;
   const of = x.planned ? `checked in ${x.checkedIn} of ${plural(x.planned, "roster night")}${soFar}` : `checked in ${plural(x.checkedIn, "night")}${soFar}`;
   return `yes on ${againstAim(x.yes, t.per_week)} · ${of}${other ? ` (${other})` : ""}`;
 };
@@ -358,7 +639,7 @@ function TargetRow({ goal, id, p, failed }: { goal: SleepGoal; id: string; p: Go
       </>
     );
   else if (tp?.kind === "protected_window")
-    counts = tp.weeks ? <Weeks p={p} rows={tp.weeks} line={windowLine(tp.target)} /> : <p className={cx(tone.muted, "text-[13px]")}>Counted from each adult&apos;s own morning check-ins.</p>;
+    counts = tp.weeks ? <Weeks p={p} rows={tp.weeks} line={windowLine(tp.target, goal.roster.some((r) => r.member === tp.target.member))} /> : <p className={cx(tone.muted, "text-[13px]")}>Counted from each adult&apos;s own morning check-ins.</p>;
   return (
     <div className="space-y-1" role="group" aria-label={TARGET_KIND_LABEL[t.kind]}>
       <p className="text-[12px] font-medium tracking-[0.01em] text-mp-ink-3">{TARGET_KIND_LABEL[t.kind]}</p>
@@ -449,6 +730,7 @@ function Roster({ goal, p }: { goal: SleepGoal; p: GoalProgress | null }) {
                   <span className="font-semibold">{memberName(w.member)}</span> <span className="whitespace-nowrap tabular-nums">{windowTimes(w)}</span>
                 </p>
                 <p className="text-[13px] text-mp-ink-2">{capital(nightsLabel(w.nights))}</p>
+                {w.covers && <p className="text-[13px] leading-snug text-mp-ink-2">{coversHint(w.covers, v)}</p>}
                 {h && (
                   <p className="flex gap-1.5 pt-0.5 text-[13px] leading-snug text-mp-ink-2">
                     <Icon name="info" size={15} className="mt-[2px] shrink-0 text-mp-ink-3" />
@@ -503,6 +785,13 @@ function Checkins({ goal, p }: { goal: SleepGoal; p: GoalProgress | null }) {
           );
         })}
       </ul>
+      {/* Only with 5 or more nights on each side (goals.ts CHECKIN_PATTERN_NIGHTS): counts, never a verdict. */}
+      {(p?.observations ?? []).map((o) => (
+        <p key={`${o.member}-${o.factor}`} className="flex gap-1.5 pt-1 text-[13px] leading-snug text-mp-ink-2">
+          <Icon name="info" size={15} className="mt-[2px] shrink-0 text-mp-ink-3" />
+          <span>{observationWords(o, memberName)}</span>
+        </p>
+      ))}
     </Block>
   );
 }

@@ -61,6 +61,7 @@ import {
   nightAnswers,
   nightLog,
   nightPicture,
+  noCheckinWords,
   observationWords,
   plannedHandoff,
   refuseUnsafe,
@@ -829,7 +830,7 @@ check("protected window: counted from that adult's own check-ins, against the ni
   const p = goalProgress(g, data({ checkins }), now, NY);
   const tp = p.targets[0];
   // Mon to Sun: the Sun–Thu window is on 5 of the 7 nights.
-  eq(tp.kind === "protected_window" && tp.weeks, [{ week: 1, yes: 2, partly: 1, no: 1, checkedIn: 4, planned: 5 }], "Sam's week");
+  eq(tp.kind === "protected_window" && tp.weeks, [{ week: 1, yes: 2, partly: 1, no: 1, checkedIn: 4, planned: 5, nextNight: null }], "Sam's week");
   eq(p.checkins, [
     { member: SAM, nights: 4, yes: 2, partly: 1, no: 1, lastNight: "yes" },
     { member: ALEX, nights: 1, yes: 1, partly: 0, no: 0, lastNight: null },
@@ -1675,6 +1676,29 @@ check("back to work: a coach note on drowsy driving when the adult back at work 
   ok(!rested.some((n) => /drowsy/.test(n)), "a yes: nothing about driving");
   const before = at(2026, 11, 6, 8);
   ok(!coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-05", "no")] }), before, NY), words(WREN, before)).notes.some((n) => /drowsy|reverse cycling/.test(n)), "before the day back: neither");
+});
+
+check("roster nights: a week with none over yet says when the first one is (tonight, tomorrow night or its weekday), never '0 nights on the roster so far'", () => {
+  const target = { id: "a1", kind: "protected_window" as const, member: SAM, per_week: 4 };
+  // Set Monday at 9 AM; read at 10 AM, before any night of it is over.
+  const now = at(2026, 11, 2, 10);
+  const line = (nights: number[] | null) => {
+    const g = goalRow({ targets: [target], roster: nights ? [{ id: "w1", member: SAM, from: "22:00", to: "02:00", nights }] : [] });
+    return goalProgressLines(g, goalProgress(g, data(), now, NY), words(WREN, now)).find((l) => l.startsWith("Aim: Sam's"))!;
+  };
+  eq(line([0, 1, 2, 3, 4]), "Aim: Sam's protected sleep, 4 nights a week. This week: no check-ins yet; the first roster night is tonight.", "Mon is on the roster");
+  // Nights are the evenings they begin on, 0 (Sun) to 6 (Sat): Nov 2 is a Monday.
+  eq(line([3, 4]), "Aim: Sam's protected sleep, 4 nights a week. This week: no check-ins yet; the first roster night is Wed night.", "Wed and Thu");
+  eq(line([3, 4]).includes("0 nights"), false, "never 0 nights");
+  ok(line([2]).endsWith("is tomorrow night.") && line([1, 2]).endsWith("is tonight.") && line([4]).endsWith("is Thu night."), "by the night");
+  eq(line([3]).replace("Wed night", "x"), line([4]).replace("Thu night", "x"), "the same words otherwise");
+  eq(line(null), "Aim: Sam's protected sleep, 4 nights a week. This week: no check-ins yet; no window on the roster yet.", "no window at all");
+  // The next morning: Monday night is over, so it's counted as a roster night, as before.
+  const g = goalRow({ targets: [target], roster: [{ id: "w1", member: SAM, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4] }] });
+  const tue = at(2026, 11, 3, 10);
+  ok(goalProgressLines(g, goalProgress(g, data(), tue, NY), words(WREN, tue)).some((l) => l.endsWith("This week: no check-ins yet; 1 night on the roster so far.")), "one over");
+  eq(noCheckinWords({ planned: 0, nextNight: "2026-11-03" }, { ongoing: true, today: "2026-11-02", hasWindow: true }), "the first roster night is tomorrow night", "tomorrow");
+  eq(noCheckinWords({ planned: 0, nextNight: null }, { ongoing: false, today: "2026-11-02", hasWindow: true }), "no roster nights that week", "a week that's over");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);

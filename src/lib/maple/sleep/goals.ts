@@ -64,7 +64,7 @@ import {
   type SleepGoal,
   type UntimedTry,
 } from "./types";
-import { coversWords, dateWords, GOAL_STATUS_LABEL, HANDOFF_LABEL, minutesWords, nightsLabel, PLACE_LABEL, PROTECTED_LABEL, targetWords, weekdayOf, windowTimes, windowWords } from "./words";
+import { coversWords, dateWords, GOAL_STATUS_LABEL, HANDOFF_LABEL, minutesWords, nightsLabel, PLACE_LABEL, PROTECTED_LABEL, targetWords, WEEKDAY_SHORT, weekdayOf, windowTimes, windowWords } from "./words";
 
 const MIN = 60_000;
 const DAY_MIN = 24 * 60;
@@ -1392,7 +1392,25 @@ export type WindowWeek = {
   checkedIn: number;
   /** Nights their window was on the roster that are over (so could be checked in). */
   planned: number;
+  /** This week, with none of those over yet: the next night their window is on (tonight or later, within the goal), else null. */
+  nextNight: string | null;
 };
+
+/** "tonight", "tomorrow night", "Fri night": a night still to come, by the family's calendar day. */
+const comingNight = (night: string, today: string) => (night === today ? "tonight" : night === addDays(today, 1) ? "tomorrow night" : `${WEEKDAY_SHORT[weekdayOf(night)]} night`);
+
+/**
+ * A protected window's week with no check-in yet, in words: its roster nights
+ * so far, or, before the first one is over, when it is ("the first roster
+ * night is tonight"), never "0 nights on the roster so far". `today`: the
+ * family's calendar day; `hasWindow`: the adult has a window on the roster.
+ */
+export function noCheckinWords(x: Pick<WindowWeek, "planned" | "nextNight">, o: { ongoing: boolean; today: string; hasWindow: boolean }): string {
+  if (x.planned) return `${plural(x.planned, "night")} on the roster${o.ongoing ? " so far" : ""}`;
+  if (!o.ongoing) return "no roster nights that week";
+  if (x.nextNight) return `the first roster night is ${comingNight(x.nextNight, o.today)}`;
+  return o.hasWindow ? "no more roster nights before the target date" : "no window on the roster yet";
+}
 
 export type TargetProgress =
   | { id: string; kind: "bassinet_nights"; target: BassinetNightsTarget; weeks: NightsWeek[] }
@@ -1674,7 +1692,15 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
             const nights = new Set(nightsIn(w, checkedTo));
             const here = theirs.filter((c) => nights.has(c.night));
             const count = (a: ProtectedAnswer) => here.filter((c) => c.protected === a).length;
-            return { week: w.n, yes: count("yes"), partly: count("partly"), no: count("no"), checkedIn: here.length, planned: [...nights].filter((k) => windows.some((x) => windowOnNight(x, k))).length };
+            const planned = [...nights].filter((k) => windows.some((x) => windowOnNight(x, k))).length;
+            // None over yet this week: the next night the window is on, from tonight, within the goal.
+            let nextNight: string | null = null;
+            for (let i = 1; !planned && w.current && !nextNight && i <= 7; i++) {
+              const k = addDays(checkedTo, i);
+              if (span.endsOn && k > span.endsOn) break;
+              if (windows.some((x) => windowOnNight(x, k))) nextNight = k;
+            }
+            return { week: w.n, yes: count("yes"), partly: count("partly"), no: count("no"), checkedIn: here.length, planned, nextNight };
           }),
         };
       }
@@ -2018,7 +2044,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
             const other = answers({ yes: 0, partly: x.partly, no: x.no });
             const soFar = weekOngoing(w, p) ? " so far" : "";
             const of = x.planned ? `checked in on ${x.checkedIn} of ${plural(x.planned, "roster night")}${soFar}` : `checked in on ${plural(x.checkedIn, "night")}${soFar}`;
-            return x.checkedIn ? `${label(w)}: yes on ${againstAim(x.yes, tp.target.per_week)} (${of}${other ? `; ${other}` : ""}).` : `${label(w)}: no check-ins yet; ${plural(x.planned, "night")} on the roster${soFar}.`;
+            return x.checkedIn ? `${label(w)}: yes on ${againstAim(x.yes, tp.target.per_week)} (${of}${other ? `; ${other}` : ""}).` : `${label(w)}: no check-ins yet; ${noCheckinWords(x, { ongoing: weekOngoing(w, p), today: p.today, hasWindow: goal.roster.some((r) => r.member === tp.target.member) })}.`;
           })
         );
         break;

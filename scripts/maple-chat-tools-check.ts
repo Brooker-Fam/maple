@@ -232,6 +232,36 @@ check("parents' own words about the nights load the sleep tools; plain logging a
   ok(!predictGroups({ said: "who's on tonight" }).includes("people") || predictGroups({ said: "who's on tonight" }).includes("sleep"), "who's on tonight is about the nights too");
 });
 
+/**
+ * Coach round 2's 15 phrases from families with no plan or goal yet (so no
+ * [App] lines to lean on): held naps on someone, waiting before going in,
+ * sleep gear, whose turn it is, being worn out. Each loads the sleep tools by
+ * its words alone; a feed's "swap sides" doesn't.
+ */
+const SLEEP_TALK_NO_PLAN = [
+  "is it ok that she naps on my chest while I watch TV",
+  "she fights the bassinet every time",
+  "can we do turns tonight? I'm wrecked",
+  "my husband goes back to work monday, how do we handle nights",
+  "she screams the second her back touches the mattress",
+  "how long should I wait before going in when she cries",
+  "is the snoo worth it",
+  "she sleeps better in the car seat, can she stay in it",
+  "can I put her down on her tummy if I'm watching",
+  "I fell asleep with her on the couch last night",
+  "whose turn is it to get up",
+  "I'm taking the 2am feed so he can sleep",
+  "remind me to swap with Theo at 1:30",
+  "did we hit our goal this week",
+  "white noise all night ok",
+];
+
+check("before any plan or goal, a family's own words about held naps, waiting to go in, sleep gear and whose turn it is load the sleep tools; swapping sides in a feed doesn't", () => {
+  eq(SLEEP_TALK_NO_PLAN.length, 15, "coach round 2's 15");
+  for (const said of SLEEP_TALK_NO_PLAN) ok(predictGroups({ said }).includes("sleep"), `loads sleep: "${said}"`);
+  for (const said of [...NOT_SLEEP, "swap sides", "swap to the right", "she's swapping breasts a lot", "swap breasts after 10 minutes", ...PLAIN]) ok(!predictGroups({ said }).includes("sleep"), `no sleep: "${said}"`);
+});
+
 check("her name or her medicine sends her page's tools, only when the chat may see it", () => {
   const hers = groupNames("mom");
   const stateLine = "Robin's next medicine: Examplex OK after 9:10 AM.";

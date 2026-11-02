@@ -4,9 +4,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { adminActsAs } from "@/lib/maple/insights";
 import { minutesText, staleFeed } from "@/lib/maple/feed";
-import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
+import { nightFeedLine } from "@/lib/maple/guidelines/sleep";
+import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
 import type { Entry, FeedData, Side, TimerKind } from "@/lib/maple/types";
-import { useBabyWords } from "./familyWords";
+import { useBabyWords, useVoice } from "./familyWords";
 import { fixPreset, KIND_TITLE, LiveBlock, PartRows, SIDE_NAME, timerNumbers, useCompact, useStillGoing, type FixExpand, type FixTarget, type TimerNumbers } from "./FeedParts";
 import { Icon, KindBadge, type IconName } from "./icons";
 import Lantern from "./Lantern";
@@ -33,7 +34,10 @@ import { useTimerActions } from "./useTimerActions";
  * and Woke up live in the dock (tummy time and pumping keep a Done here,
  * since the dock has no tile for them). A timer left running past a sensible
  * length turns into a "Still nursing?" prompt, so a forgotten tap doesn't
- * become a nine-hour feed in the log.
+ * become a nine-hour feed in the log. During a nursing feed between 10 PM
+ * and 6 AM (the family's timezone) it says quietly what to do if the
+ * parent gets sleepy (guidelines/sleep.ts nightFeedLine, NICHD's two
+ * options); no notice, nothing sent.
  */
 
 export { SIDE_COLOR, SIDE_NAME, timerNumbers };
@@ -77,6 +81,7 @@ function useSlow(on: boolean, ms: number): boolean {
 export default function TimerCard({ entry }: { entry: Entry }) {
   const { state, memberLabel, isNight, readOnly, timerBusy, toasts } = useMaple();
   const w = useBabyWords();
+  const v = useVoice();
   const { open, current: sheetOpen } = useSheets();
   const now = useNow(1000);
   const actions = useTimerActions();
@@ -156,6 +161,9 @@ export default function TimerCard({ entry }: { entry: Entry }) {
   const past = isFeed ? n.parts.slice(0, -1) : [];
   const title = isFeed ? (n.paused ? "Nursing · paused" : "Nursing") : KIND_TITLE[kind];
   const canLantern = kind === "feed" || kind === "sleep";
+  // A nursing feed at night, 10 PM to 6 AM where the family lives: someone to sit with you, or the bassinet.
+  const hour = localParts(now, tz).hour;
+  const nightFeed = isFeed && !n.paused && controls && (hour >= 22 || hour < 6);
   const ownDone = kind === "tummy" || kind === "pump";
 
   const fixButton = (
@@ -278,6 +286,11 @@ export default function TimerCard({ entry }: { entry: Entry }) {
           {isFeed && n.paused && controls && (
             <p className={cx("text-[13px] text-mp-ink-2", compact ? "leading-[15px]" : "mt-1 leading-snug")}>
               {n.both ? `When ${w.he} latches, tap Back on in the dock below.` : `When ${w.he} latches, tap ${w.his} side in the dock below.`}
+            </p>
+          )}
+          {nightFeed && (
+            <p data-night-feed className={cx("text-[13px] text-mp-ink-2", compact ? "leading-[15px]" : "mt-1 leading-snug")}>
+              {nightFeedLine(v)}
             </p>
           )}
           {/*

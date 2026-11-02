@@ -13,13 +13,16 @@ import {
   GOAL_WHY_MAX,
   ROSTER_MAX,
   TARGET_KINDS,
+  WINDOW_COVERS,
   type GoalInput,
   type GoalTargetInput,
   type SleepGoal,
   type TargetKind,
+  type WindowCovers,
 } from "@/lib/maple/sleep/types";
-import { clockLabel, dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, TARGET_KIND_LABEL, WEEKDAY_SHORT, windowTimes } from "@/lib/maple/sleep/words";
+import { clockLabel, COVERS_LABEL, coversHint, dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, TARGET_KIND_LABEL, WEEKDAY_SHORT, windowTimes } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, daysBetween, DEFAULT_TZ, isDayKey } from "@/lib/maple/time";
+import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { ContextNote, Label, SheetFooter } from "../sheets/parts";
 import { Chip, cx, Segmented, Sheet, Stepper, TextArea, tone } from "../ui";
@@ -31,19 +34,22 @@ import { useSleep } from "./useSleep";
  * chat: a title, why it matters, a target date, targets by kind, weekly
  * steps and a night roster of protected windows. It checks itself with the
  * same rules the server uses (goals.ts cleanGoalInput) and says what to fix
- * by the field. An edit sends only what changed, with the goal's revision;
+ * by the field (a plan Maple won't make says so on Save, never while it's
+ * being typed, with a wording to try). An edit sends only what changed, with the goal's revision;
  * a goal changed on another phone meanwhile comes back as it is now, with
  * this person's changes kept on top, to look over and save again.
  */
 
 type TargetDraft = { key: string; id: string | null; kind: TargetKind; per_week: number | null; min_minutes: number | null; minutes: number | null; member: string; text: string };
 type StepDraft = { key: string; id: string | null; title: string; week_of: string; done: string | null };
-type WindowDraft = { key: string; id: string | null; member: string; from: string; to: string; nights: number[] };
+type WindowDraft = { key: string; id: string | null; member: string; from: string; to: string; nights: number[]; covers: WindowCovers | null };
 type Draft = { title: string; why: string; target_date: string; status: "active" | "paused"; targets: TargetDraft[]; steps: StepDraft[]; roster: WindowDraft[] };
 
 const FIELDS = ["title", "why", "target_date", "status", "targets", "steps", "roster"] as const;
 const EVERY_NIGHT = [0, 1, 2, 3, 4, 5, 6];
 const NEEDED = /is needed\.$/;
+/** A plan Maple won't make (goals.ts unsafeWords): said on Save, not while the words are being typed. */
+const UNSAFE = /: Maple won't plan /;
 
 let keys = 0;
 const nextKey = () => `k${++keys}`;
@@ -68,7 +74,7 @@ function draftOf(g: SleepGoal | null, who: string): Draft {
       text: t.kind === "custom" ? t.text : "",
     })),
     steps: g.steps.map((s) => ({ key: nextKey(), id: s.id, title: s.title, week_of: s.week_of ?? "", done: s.done_at })),
-    roster: g.roster.map((w) => ({ key: nextKey(), id: w.id, member: w.member, from: w.from, to: w.to, nights: [...w.nights] })),
+    roster: g.roster.map((w) => ({ key: nextKey(), id: w.id, member: w.member, from: w.from, to: w.to, nights: [...w.nights], covers: w.covers ?? null })),
   };
 }
 
@@ -95,7 +101,7 @@ function inputOf(d: Draft): Required<Pick<GoalInput, (typeof FIELDS)[number]>> {
     status: d.status,
     targets: d.targets.map(targetInput),
     steps: d.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), title: words(s.title), week_of: s.week_of || null })),
-    roster: d.roster.map((w) => ({ ...(w.id ? { id: w.id } : {}), member: w.member, from: w.from, to: w.to, nights: [...new Set(w.nights)].sort((a, b) => a - b) })),
+    roster: d.roster.map((w) => ({ ...(w.id ? { id: w.id } : {}), member: w.member, from: w.from, to: w.to, nights: [...new Set(w.nights)].sort((a, b) => a - b), ...(w.covers ? { covers: w.covers } : {}) })),
   };
 }
 
@@ -190,7 +196,7 @@ function changedElsewhere(was: Draft, now: Draft, cur: SleepGoal, who: string): 
   const windows = new Map<string, string>();
   for (const w of cur.roster) {
     const before = was.roster.find((x) => x.id === w.id);
-    if (!before || before.from !== w.from || before.to !== w.to || before.member !== w.member || !same([...before.nights].sort(), [...w.nights].sort())) windows.set(w.id, windowTimes(w));
+    if (!before || before.from !== w.from || before.to !== w.to || before.member !== w.member || before.covers !== (w.covers ?? null) || !same([...before.nights].sort(), [...w.nights].sort())) windows.set(w.id, windowTimes(w));
   }
   return { who, fields, windows };
 }
@@ -245,6 +251,7 @@ function Section({ title, count, max, children }: { title: string; count: number
 export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal | null; open?: boolean; onClose: () => void }) {
   const { state, memberName, now } = useMaple();
   const s = useSleep();
+  const v = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const today = dayKey(now(), tz);
   const members = useMemo(() => state?.members ?? [], [state?.members]);
@@ -263,6 +270,8 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
   const was = useMemo(() => draftOf(base, who), [base, who]);
   const [tried, setTried] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // A plan Maple won't make, as Save found it: shown until the next edit, then again on the next Save.
+  const [onSave, setOnSave] = useState<string | null>(null);
   const [elsewhere, setElsewhere] = useState<Elsewhere | null>(null);
   const [attempt, setAttempt] = useState(0);
   // Windows this person has set (who, times, nights): an overlap shows on them at once, on a fresh default only after Save.
@@ -274,7 +283,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
   const patch = editing ? patchOf(draft, was) : null;
   const input = patch ?? createInput(draft);
   const dirty = editing ? Object.keys(patch!).length > 0 : !same(createInput(draft), createInput(draftOf(null, who)));
-  const rules: GoalRules = { current: base, adults: adultIds, name: memberName, today, seq: 0 };
+  const rules: GoalRules = { current: base, adults: adultIds, name: memberName, today, seq: 0, v };
   const found = check(input, rules, editing ? "update" : "create");
   // A field still to fill in says so once Save is tapped, and so does an overlap no one has set yet (a window just added);
   // anything else shows as soon as it's there.
@@ -282,7 +291,8 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
     const nums = /^Windows (\d+) and (\d+) overlap/.exec(m);
     return !!nums && [nums[1], nums[2]].every((n) => !touched.has(draft.roster[Number(n) - 1]?.key ?? ""));
   };
-  const shown: Where | null = refusal ? place(refusal) : found && (tried || (!NEEDED.test(found.message) && !overlapUntouched(found.message))) ? found : null;
+  const shownNow = (f: Where) => (UNSAFE.test(f.message) ? onSave === f.message : tried || (!NEEDED.test(f.message) && !overlapUntouched(f.message)));
+  const shown: Where | null = refusal ? place(refusal) : found && shownNow(found) ? found : null;
   const at = (where: Where["at"], index?: number) => (shown && shown.at === where && (index === undefined ? shown.index === undefined : shown.index === index) ? shown.message : null);
 
   // A save turned away: bring its words into view.
@@ -298,6 +308,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
   const edit = (fn: (d: Draft) => Draft) => {
     setDraft(fn);
     setRefusal(null);
+    setOnSave(null);
   };
   const setTarget = (key: string, change: Partial<TargetDraft>) => edit((d) => ({ ...d, targets: d.targets.map((t) => (t.key === key ? { ...t, ...change } : t)) }));
   const setStep = (key: string, change: Partial<StepDraft>) => edit((d) => ({ ...d, steps: d.steps.map((x) => (x.key === key ? { ...x, ...change } : x)) }));
@@ -315,12 +326,13 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
       const last = d.roster[d.roster.length - 1];
       const member = last ? (people.find((p) => p.email !== last.member)?.email ?? last.member) : who;
       const from = last ? last.to : "22:00";
-      return { ...d, roster: [...d.roster, { key: nextKey(), id: null, member, from, to: hoursOn(from, 4), nights: last ? [...last.nights] : [...EVERY_NIGHT] }] };
+      return { ...d, roster: [...d.roster, { key: nextKey(), id: null, member, from, to: hoursOn(from, 4), nights: last ? [...last.nights] : [...EVERY_NIGHT], covers: null }] };
     });
 
   const save = async () => {
     setTried(true);
     if (found) {
+      if (UNSAFE.test(found.message)) setOnSave(found.message);
       setAttempt((n) => n + 1);
       return;
     }
@@ -519,7 +531,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             <div key={st.key} className={cx(tone.inset, "space-y-2 px-3.5 py-3")} role="group" aria-label={`Step ${i + 1}`}>
               <div className="flex items-start gap-2">
                 <input
-                  className={cx(tone.input, "min-w-0 flex-1", problem && /words/.test(problem) && BAD)}
+                  className={cx(tone.input, "min-w-0 flex-1", problem && (/words/.test(problem) || UNSAFE.test(problem)) && BAD)}
                   aria-label={`Step ${i + 1}`}
                   value={st.title}
                   maxLength={GOAL_STEP_TITLE_MAX}
@@ -596,6 +608,17 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                     {len ? ` · ${minutesWords(len)} on the clock` : ""}
                   </p>
                   <p className={cx(tone.faint, "mt-1 text-[13px] leading-snug")}>{nightWords(w)}</p>
+                </div>
+                <div>
+                  <Label optional>Feeds in this window</Label>
+                  <div role="group" aria-label={`Window ${i + 1}: feeds in it`} className="flex flex-wrap gap-2">
+                    {WINDOW_COVERS.map((c) => (
+                      <Chip key={c} raised selected={w.covers === c} onClick={() => setWindow(w.key, { covers: w.covers === c ? null : c })}>
+                        {COVERS_LABEL[c]}
+                      </Chip>
+                    ))}
+                  </div>
+                  <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>{w.covers ? coversHint(w.covers, v) : `How ${v.name}'s feeds are covered while ${w.member === s.me ? "you sleep" : `${memberName(w.member)} sleeps`}, if one falls in it.`}</p>
                 </div>
                 <Problem>{at("roster", i)}</Problem>
                 <Changed>{w.id && elsewhere?.windows.has(w.id) ? `${elsewhere.who} changed this: ${elsewhere.windows.get(w.id)}` : null}</Changed>

@@ -117,6 +117,8 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(only|won'?t|doesn'?t) (sleeps?|naps?|settles?)\b|\b(sleeps?|naps?|slept|sleeping|napping) (only )?(on|with) (me|us|him|her|dad|mom)\b/i,
     /\b(our|my|the) bed\b|co-?sleep\w*|bed-?shar\w*|\bswing\b|recliner|couch|sofa|armchair|let (her|him|them) cry|\bcio\b/i,
     /\b(exhausted|sleep[- ]deprived|so tired|(need|get) (some )?sleep|(rough|hard|long|bad) night|night was (rough|hard|long|bad)|up all night|(my|his|her) window)\b/i,
+    // Before a plan or goal exists: held naps on someone, waiting before going in, sleep gear, whose turn it is, and being worn out.
+    /\bon (my|his|her|your|our) (chest|lap|shoulder)\b|going in when|wait\w* before (going in|picking)|swaddl\w*|sleep ?sack|snoo|white noise|mattress|whose turn|turns tonight|tag[- ]team|\bswap\b(?! (sides?|breasts?|to the (left|right)))|wrecked|so (he|she|i|we) can (sleep|rest)/i,
   ],
   log_more: [
     /\b(pump\w*|expressed|expressing|haakaa|let-?down|freezer stash|milk stash)\b/i,

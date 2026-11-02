@@ -199,7 +199,20 @@ try {
   await form.getByText("Wed, Nov 25, 28 days from today", { exact: true }).waitFor();
   await form.getByRole("button", { name: "Add a target: Bassinet nights", exact: true }).click();
   await form.getByRole("button", { name: "Add a step", exact: true }).click();
-  await form.getByRole("textbox", { name: "Step 1", exact: true }).fill("Bassinet after the late feed");
+  // A plan Maple won't make: nothing shows while it's typed; Save says what to try instead, by the step, and sends nothing.
+  const step1 = form.getByRole("textbox", { name: "Step 1", exact: true });
+  await step1.fill("Let her nap in the swing after lunch");
+  await page.waitForTimeout(200);
+  assert.equal(await form.locator("[data-goal-problem]").count(), 0, "No refusal while it's being typed");
+  sent = (await sam.calls()).length;
+  await form.getByRole("button", { name: "Save the goal", exact: true }).click();
+  const refusal = form.getByRole("group", { name: "Step 1", exact: true }).getByText(`Step 1: Maple won't plan sleep in a swing; try "If she falls asleep in the swing, move her to the bassinet".`, { exact: true });
+  await refusal.waitFor();
+  assert.equal((await sam.calls()).length, sent, "A refusal sends nothing");
+  assert.doesNotMatch(await form.innerText(), /never leave|Reword it/, "Help, not a lecture");
+  await shot("goal-form-refusal");
+  await step1.fill("Bassinet after the late feed");
+  await refusal.waitFor({ state: "detached" });
   await form.getByRole("button", { name: "Add a window", exact: true }).click();
   // A window under 30 minutes: the rules' words show by the window at once, and Save sends nothing.
   await form.getByLabel("Window 1 to", { exact: true }).fill("22:15");
@@ -209,6 +222,9 @@ try {
   assert.equal((await sam.calls()).length, sent, "Still nothing sent");
   await form.getByLabel("Window 1 to", { exact: true }).fill("02:00");
   await form.getByText(/^Window 1: /).waitFor({ state: "detached" });
+  // How her feeds in that window are covered: one tap, with what it means.
+  await form.getByRole("group", { name: "Window 1: feeds in it" }).getByRole("button", { name: "Nursing", exact: true }).click();
+  await form.getByText("She nurses: whoever's on duty brings her to nurse, then settles her.", { exact: true }).waitFor();
   // A second window: the other adult, from where the first ends, on its nights, and no overlap flagged before anyone sets it.
   await form.getByRole("button", { name: "Add a window", exact: true }).click();
   const w2 = form.getByRole("group", { name: "Window 2", exact: true });
@@ -239,7 +255,7 @@ try {
     targets: [{ kind: "bassinet_nights", per_week: 3, min_minutes: 60 }],
     steps: [{ title: "Bassinet after the late feed", week_of: null }],
     roster: [
-      { member: "sam@example.test", from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] },
+      { member: "sam@example.test", from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6], covers: "nurse" },
       { member: "alex@example.test", from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4, 5, 6] },
     ],
   });
@@ -255,7 +271,7 @@ try {
   assert(text.includes("Sam (you)") && text.includes("no check-ins yet"), "The owner sees check-ins");
   // Set in the night: nobody is asked about the night before it.
   assert(!text.includes("last night: not yet") && (await made.getByRole("button", { name: "Check in", exact: true }).count()) === 0, "No check-in for a night before the goal");
-  console.log("PASS Goal form: says what to fix by the field; a new window defaults to the other adult from where the last one ends, with no early overlap error; saves the goal");
+  console.log("PASS Goal form: says what to fix by the field (a plan Maple won't make only on Save, with a wording to try); a window's feeds; a new window defaults to the other adult from where the last one ends, with no early overlap error; saves the goal");
   await page.keyboard.press("Escape");
   await plan.waitFor({ state: "hidden" });
 
@@ -691,21 +707,24 @@ try {
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
   const goalCard = plan.getByRole("region", { name: "Both of us get one long stretch" });
-  await goalCard.getByText(/^This week:/).first().waitFor();
+  // Thursday morning, the goal's week 2 ended last night (its 14th night) while week 3's step is already the next one: the counts
+  // name their week ("Week 2 (ended last night)"), so "this week" never means two weeks at once (coach round 2's N7).
+  await goalCard.getByText(/^Week 2 \(ended last night\):/).first().waitFor();
   text = await neutral(goalCard, "The goal card");
+  assert(!/This week:|Last week:|so far/.test(text), `On the morning after, no "this week" or "so far" for a week that's over\n---\n${text}`);
   for (const line of [
     "Back to work on the 30th",
     "Target date Wed, Nov 25 · 20 days left · week 2 of 5",
     "4 nights a week with a bassinet try asleep 1 hour or more",
-    "This week: 2 of the 4 nights aimed for · 2 of 5 logged nights · 2 not logged",
-    "Last week: 2 of the 4 nights aimed for · 2 of 3 logged nights · 4 not logged",
+    "Week 2 (ended last night): 2 of the 4 nights aimed for · 2 of 5 logged nights · 2 not logged",
+    "Week 1: 2 of the 4 nights aimed for · 2 of 3 logged nights · 4 not logged",
     "A bassinet stretch of 3 hours or more",
-    "This week: longest 3h 00m · 1 of 4 stretches 3 hours or more",
-    "Last week: longest 2h 30m · 0 of 3 stretches 3 hours or more",
+    "Week 2 (ended last night): longest 3h 00m · 1 of 4 stretches 3 hours or more",
+    "Week 1: longest 2h 30m · 0 of 3 stretches 3 hours or more",
     "Sam's protected sleep, 5 nights a week",
-    "This week: yes on 4 of the 5 nights aimed for · checked in 5 of 7 roster nights so far (not this time 1)",
-    "Logged this week: something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4 · check-ins on 5",
-    "Last week: no check-ins · 7 nights on the roster",
+    "Week 2 (ended last night): yes on 4 of the 5 nights aimed for · checked in 5 of 7 roster nights (not this time 1)",
+    "Logged week 2 (ended last night): something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4 · check-ins on 5",
+    "Week 1: no check-ins · 7 nights on the roster",
     "Calmer bedtimes",
     "Not counted from the log.",
     "1 of 3 done",
@@ -931,9 +950,10 @@ try {
   assert.equal(await checkin.count(), 0, "No check-in card for a view-only guest");
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
   const viewerGoal = plan.getByRole("region", { name: "Both of us get one long stretch" });
-  await viewerGoal.getByText(/^This week:/).first().waitFor();
+  await viewerGoal.getByText(/^Week 2 \(ended last night\):/).first().waitFor();
   text = await neutral(plan, "Goals for a view-only guest");
-  for (const line of ["This week: 2 of the 4 nights aimed for · 2 of 5 logged nights · 2 not logged", "Logged this week: something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4", "This week: longest 3h 00m", "White noise on for every try", "Sam 10:00 PM–2:00 AM", "Hint from the log", "Counted from each adult's own morning check-ins."]) {
+  // Without the adults' check-ins, Sunday night (a holding turn, no try or sleep) says nothing about the bassinet: one more night not logged.
+  for (const line of ["Week 2 (ended last night): 2 of the 4 nights aimed for · 2 of 4 logged nights · 3 not logged (1 with only feeds or other entries)", "Logged week 2 (ended last night): something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4", "Week 2 (ended last night): longest 3h 00m", "White noise on for every try", "Sam 10:00 PM–2:00 AM", "Hint from the log", "Counted from each adult's own morning check-ins."]) {
     assert(text.includes(line), `A view-only guest sees "${line}"`);
   }
   assert.doesNotMatch(text, /Check-ins|checked in|last night:|\bpartly\b|not this time|held \d/, "Never a check-in, a count of them or an answer");
@@ -1025,6 +1045,96 @@ try {
   assert.deepEqual([c.action, c.to], ["shift.handoff", "alex@example.test"]);
   await toast(/^Alex has her now/).waitFor();
   console.log("PASS Handoff time: the holder's strip says Hand off to Alex, and the sheet's button says what it records: Alex has her");
+
+  // ── Plan for going back to work: five questions, one read-back, saved only on Save the goal, no logs needed ──
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("https://sleep.example.test/");
+  await sam.dock.waitFor();
+  await more("Sleep goals");
+  await plan.waitFor();
+  await plan.getByRole("button", { name: "Plan for going back to work", exact: true }).click();
+  const quick = plan.getByRole("region", { name: "Plan for going back to work" });
+  await quick.getByText("Question 1 of 5", { exact: true }).waitFor();
+  const next = quick.getByRole("button", { name: "Next", exact: true });
+  assert.equal(await next.isDisabled(), true, "Next waits for an answer");
+  await quick.getByRole("group", { name: "Who goes back to work" }).getByRole("button", { name: "Alex", exact: true }).click();
+  await quick.getByLabel("The day back at work", { exact: true }).fill("2026-11-30");
+  await next.click();
+  await quick.getByText("Question 2 of 5", { exact: true }).waitFor();
+  await quick.getByRole("group", { name: "How River is fed" }).getByRole("button", { name: "Nursing", exact: true }).click();
+  assert.equal(await next.isDisabled(), true, "Nursing asks who nurses");
+  await quick.getByRole("group", { name: "Who nurses" }).getByRole("button", { name: "Me", exact: true }).click();
+  await next.click();
+  await quick.getByRole("group", { name: "Where River sleeps now" }).getByRole("button", { name: "In arms", exact: true }).click();
+  await next.click();
+  // Alex goes back: Alex is on first (and sleeps the second half), Sam second, by default.
+  assert.equal(await quick.getByRole("group", { name: "On duty for the first half" }).getByRole("button", { name: "Alex", exact: true }).getAttribute("aria-pressed"), "true", "the one going back is on first");
+  assert.equal(await quick.getByRole("group", { name: "On duty for the second half" }).getByRole("button", { name: "Me", exact: true }).getAttribute("aria-pressed"), "true", "the other adult second");
+  await quick.getByRole("group", { name: "Where the adult who's off sleeps" }).getByRole("button", { name: "Another room", exact: true }).click();
+  await next.click();
+  assert.equal(await quick.getByLabel("Target date", { exact: true }).inputValue(), "2026-12-13", "two weeks after the day back, by default");
+  await noSideScroll(plan, "The quick setup at 390px");
+  sent = (await sam.calls()).length;
+  await quick.getByRole("button", { name: "See the plan", exact: true }).click();
+  await quick.getByText("Here's the plan. Nothing is saved until you save it.", { exact: true }).waitFor();
+  text = await neutral(quick, "The quick setup's read-back");
+  for (const line of [
+    "Back to work: protected sleep for Alex and Sam",
+    "Alex goes back to work on Mon, Nov 30.",
+    "Target date Sun, Dec 13",
+    "Alex's protected sleep, 5 nights a week",
+    "Sam's protected sleep, 4 nights a week",
+    "Sam 10:00 PM–2:00 AM",
+    "Alex 2:00 AM–6:00 AM",
+    "Sun–Thu nights",
+    "She nurses: whoever's on duty brings her to nurse, then settles her.",
+    "Ask the pediatrician or lactation consultant when to start a bottle of expressed milk (not before about 4 weeks)",
+    "Week of Mon, Nov 2",
+    "Rehearse the work-week roster on 2 or 3 nights",
+    "Plan a short first week back (a Wednesday or Thursday start, if work allows)",
+    "River sleeps in arms now: holding her is fine while you're awake, and the Plan tab's first stage is one bassinet try a day.",
+    "The adult who's off sleeps in another room: whoever's on duty brings her to nurse in the other's window.",
+  ]) assert(text.includes(line), `The read-back shows "${line}"\n---\n${text}`);
+  assert.equal((await sam.calls()).length, sent, "Reading it over sends nothing");
+  await shot("quick-setup-readback");
+  await quick.getByRole("button", { name: "Save the goal", exact: true }).click();
+  await raised("Sleep goal saved: Back to work: protected sleep for Alex and Sam");
+  await plan.getByRole("region", { name: "Back to work: protected sleep for Alex and Sam" }).waitFor();
+  wrote = await sam.last();
+  assert.equal(wrote.action, "goal.create");
+  assert.deepEqual(wrote.goal.template, { kind: "back_to_work", member: "alex@example.test", date: "2026-11-30", nursing: "sam@example.test" }, "who goes back and when, and who nurses");
+  assert.deepEqual(wrote.goal.roster.map((w) => [w.member, w.from, w.to, w.nights.length, w.covers]), [["sam@example.test", "22:00", "02:00", 7, "nurse"], ["alex@example.test", "02:00", "06:00", 5, "nurse"]], "a window each, Alex's on work nights");
+  assert.deepEqual(wrote.goal.steps.map((x) => x.week_of), ["2026-11-02", "2026-11-16", "2026-11-23"], "three steps timed from the day back");
+  // At 320px it fits without sideways scroll.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("https://sleep.example.test/");
+  await more("Sleep goals");
+  await plan.getByRole("button", { name: "Plan for going back to work", exact: true }).click();
+  await quick.getByText("Question 1 of 5", { exact: true }).waitFor();
+  await noSideScroll(plan, "The quick setup at 320px");
+  console.log("PASS Quick setup: five questions one at a time (who goes back and when, feeding and who nurses, where she sleeps, the night's halves, the target date), one read-back with a roster and three steps from the day back, saved only on Save the goal; 320px fits");
+
+  // ── A nursing feed at night: the feed card's quiet line with NICHD's two options; none by day, none for a view-only guest ──
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("https://sleep.example.test/?nursing&night");
+  const feedCard = page.getByRole("region", { name: "Nursing timer", exact: true });
+  await feedCard.waitFor();
+  const nightLine = feedCard.getByText("Feeling sleepy? Wake someone to sit with you, or lay her on her back in the bassinet.", { exact: true });
+  await nightLine.waitFor();
+  await shot("night-feed-line");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("https://sleep.example.test/?nursing&night");
+  await nightLine.waitFor();
+  assert(await aboveDock(nightLine), "The night line clears the dock at 320 × 568");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("https://sleep.example.test/?nursing&morning");
+  await feedCard.waitFor();
+  assert.equal(await feedCard.locator("[data-night-feed]").count(), 0, "Not by day (7:30 AM)");
+  await page.goto("https://sleep.example.test/?nursing&role=viewer&night");
+  await feedCard.waitFor();
+  assert.equal(await feedCard.locator("[data-night-feed]").count(), 0, "Not for a view-only guest");
+  console.log("PASS Night feed: while she nurses between 10 PM and 6 AM, the feed card says wake someone to sit with you, or the bassinet (clear of the dock at 320 × 568); nothing by day or for a view-only guest");
+
 
   assert.deepEqual(errors, []);
   console.log(`PASS Sleep UI: no runtime errors (${browserName})`);

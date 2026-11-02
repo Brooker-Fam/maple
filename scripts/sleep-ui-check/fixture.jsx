@@ -22,7 +22,7 @@ import { FixtureContext } from "./mocks";
 // ?morning 7:30 AM on Thu, Nov 5 (after the clocks went back), the morning after a night on a sleep goal's roster.
 // Each page is one phone showing the real Today tab (Right now, the dock with its sleep strip, More, the toasts and every
 // sleep sheet). ?as=alex signs in as Alex, ?role=viewer as Pat. ?sparse (with ?goals&morning) makes Wed night a sparse log
-// for Today's Last night card. ?phones puts Sam's phone and Alex's side by side in two
+// for Today's Last night card. ?nursing has a nursing feed running for the feed card's night line. ?phones puts Sam's phone and Alex's side by side in two
 // frames that share one stand-in route and one clock, so one phone's write reaches the other at its next poll.
 const ME = "sam@example.test";
 const PARTNER = "alex@example.test";
@@ -358,7 +358,7 @@ function makeServer(clock) {
         const { fields, seq: itemSeq } = ruled(() => cleanGoalInput(body.goal, goalRules(null, 0), "create"));
         const g = {
           id: ++seq, baby_id: 1, title: fields.title, why: fields.why ?? null, target_date: fields.target_date ?? null, status: "active",
-          targets: fields.targets ?? [], steps: fields.steps ?? [], roster: fields.roster ?? [], last_review_at: null, review_note: null, closed_at: null,
+          targets: fields.targets ?? [], steps: fields.steps ?? [], roster: fields.roster ?? [], template: fields.template ?? null, last_review_at: null, review_note: null, closed_at: null,
           revision: 1, created_by: who, updated_by: who, source: "web", created_at: iso(now()), updated_at: iso(now()), client_id: body.client_id ?? null, item_seq: itemSeq,
         };
         db.goals.push(g);
@@ -446,6 +446,10 @@ function makeServer(clock) {
       planAt();
       db.shifts.push({ id: 90, holder: ME, started_at: iso(BASE - 40 * MIN), handoff_at: iso(BASE + 80 * MIN), next_holder: PARTNER, ended_at: null, ended_how: null, asked_to: null, asked_at: null, created_by: ME, updated_by: ME, source: "web", created_at: iso(BASE - 40 * MIN), updated_at: iso(BASE - 40 * MIN) });
       db.entries.push({ id: 91, kind: "sleep", started_at: iso(BASE - 30 * MIN), ended_at: null, active: true, data: { place: "arms" }, note: null, created_by: ME, updated_at: iso(BASE - 30 * MIN), source: "web", created_at: iso(BASE - 30 * MIN) });
+    },
+    /** A nursing feed running on the left since 20 minutes ago (2:10 AM by default: the feed card's night line). */
+    nursing: () => {
+      db.entries.push({ id: 43, kind: "feed", started_at: iso(clock() - 20 * MIN), ended_at: null, active: true, data: { method: "breast", first_side: "L", last_side: "L", segments: [{ side: "L", start: iso(clock() - 20 * MIN), end: null }] }, note: null, created_by: ME, updated_at: iso(clock() - 20 * MIN), source: "web", created_at: iso(clock() - 20 * MIN) });
     },
     /** The morning after: a sleep in arms logged 2:30–5:10 AM that no try sits on yet (Log an earlier try's one-tap times). */
     lastnight: () => {
@@ -576,7 +580,7 @@ function makeWorld(query) {
   const listeners = new Set();
   const clock = () => BASE + offset.current;
   const server = makeServer(clock);
-  for (const name of ["running", "holding", "goals", "lastnight", "sparse"]) if (query.has(name)) server.seeds[name]();
+  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing"]) if (query.has(name)) server.seeds[name]();
   return {
     server,
     clock,
