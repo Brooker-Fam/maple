@@ -11,8 +11,8 @@
  * Rules for this file (scripts/maple-sleep-check.ts holds them):
  * - Nothing here diagnoses, suggests a medicine or a dose, or presents the
  *   app as medical advice; every worrying sign says who to call.
- * - Never crying it out, and never sleep on or beside an adult presented as
- *   safe or as an option.
+ * - Never crying it out, and never sleep on an adult, or in a bed, couch or
+ *   armchair with one, presented as safe or as an option.
  * - Copy about the baby takes a Voice (the family's name and pronouns); the
  *   911 line reuses guidelines.ts's emergencySigns word for word.
  *

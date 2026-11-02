@@ -807,7 +807,7 @@ export const coachGuardrails = (v: Voice): string[] => [
   "Use the family's memories for their constraints (work dates, feeding, who's home), and the log for what happened.",
   "No medical advice: questions about health go to their pediatrician.",
   "Feeding changes (bottles, pumping, formula) only as options to raise with their pediatrician or lactation consultant.",
-  `Never crying it out, and never ${v.name} sleeping on or beside an adult as a plan.`,
+  `Never crying it out, and never ${v.name} sleeping on an adult, or in a bed, couch or armchair with one, as a plan.`,
   "Hard nights are part of it: give the counts plainly, with no blame, scores or streaks.",
 ];
 

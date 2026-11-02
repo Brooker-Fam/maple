@@ -541,7 +541,7 @@ function allText(v: Voice): string[] {
   return out;
 }
 
-check("content: never crying it out, never sleep on or beside an adult as safe, no doses, no diagnosis", () => {
+check("content: never crying it out, never sleep on an adult or sharing their bed, couch or armchair as safe, no doses, no diagnosis", () => {
   const banned: [string, RegExp][] = [
     ["crying it out", /cry[- ]?it[- ]?out|\blet (her|him|them|the baby) cry\b|sleep[- ]?train|\bferber|\bextinction\b|controlled crying/i],
     ["sleep with an adult as an option", /\b(safe|okay|ok|fine) to (sleep|nap|doze)\b|contact (nap|sleep)|co-?sleep|bed[- ]?shar|sleep (on|with) (you|your|an adult|a parent)/i],
@@ -914,7 +914,7 @@ check("goal words: neutral in every line and voice, names from the family, and t
     }
   }
   const rules = coachGuardrails(SHE).join(" ");
-  for (const re of [/one question at a time/, /ask_user/, /only after they say yes/, /memories/, /No medical advice/, /pediatrician or lactation consultant/, /Never crying it out/, /never June sleeping on or beside an adult/, /no blame/]) ok(re.test(rules), `guardrails: ${re}`);
+  for (const re of [/one question at a time/, /ask_user/, /only after they say yes/, /memories/, /No medical advice/, /pediatrician or lactation consultant/, /Never crying it out/, /never June sleeping on an adult, or in a bed, couch or armchair with one/, /no blame/]) ok(re.test(rules), `guardrails: ${re}`);
   ok(!/\b(sleep train|cry it out|co-?sleep|bed[- ]?shar)/i.test(rules.replace(/Never crying it out/, "")), "nothing that suggests them");
   ok(coachGuardrails(THEY).every((l) => !/\b(she|her|he|him|his)\b/i.test(l)), "they voice");
 });
