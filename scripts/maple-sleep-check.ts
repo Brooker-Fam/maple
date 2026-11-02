@@ -32,8 +32,29 @@ import {
   tryDayKey,
   tryDayLabel,
 } from "../src/lib/maple/sleep/engine";
-import type { BassinetTry, SleepPlan, TryOutcome, TryTag } from "../src/lib/maple/sleep/types";
-import { isTrySlot, sleepyChoices, slotLabel, STAGE_INFO } from "../src/lib/maple/sleep/words";
+import { SleepInputError } from "../src/lib/maple/sleep/errors";
+import {
+  checkinNights,
+  cleanCheckinNight,
+  cleanGoalInput,
+  coachGuardrails,
+  coachNotes,
+  goalHeadLine,
+  goalProgress,
+  goalProgressLines,
+  goalSpan,
+  lastNightKey,
+  lastNightLine,
+  nextStep,
+  seesCheckins,
+  windowMinutes,
+  windowOn,
+  windowOnNight,
+  type GoalData,
+  type GoalRules,
+} from "../src/lib/maple/sleep/goals";
+import type { BassinetTry, GoalInput, HoldingShift, SleepCheckin, SleepGoal, SleepPlan, TryOutcome, TryTag } from "../src/lib/maple/sleep/types";
+import { isTrySlot, nightsLabel, sleepyChoices, slotLabel, STAGE_INFO, weekdayOf } from "../src/lib/maple/sleep/words";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Entry, SleepPlace } from "../src/lib/maple/types";
 import { makeVoice, type Voice } from "../src/lib/maple/voice";
@@ -558,6 +579,351 @@ check("words: try times are named moments or a local clock time", () => {
 
 check("review: every item is still waiting for a person's sign-off (listed for release)", () => {
   eq(pendingReview().length, SLEEP_GUIDES.length, "pending");
+});
+
+// ── sleep goals: weeks, targets, the roster, check-ins and coaching ──────
+
+const SAM = "sam@example.test";
+const ALEX = "alex@example.test";
+const CASEY = "casey@example.test";
+const NAMES: Record<string, string> = { [SAM]: "Sam", [ALEX]: "Alex", [CASEY]: "Casey" };
+const nameOf = (id: string) => NAMES[id] ?? id;
+const RULES: GoalRules = { current: null, adults: new Set([SAM, ALEX]), name: nameOf, today: "2026-11-02", seq: 0 };
+const EVERY = [0, 1, 2, 3, 4, 5, 6];
+
+function goalRow(over: Partial<SleepGoal> = {}): SleepGoal {
+  return {
+    id: 3,
+    baby_id: 1,
+    title: "Both of us get a 4-hour stretch",
+    why: null,
+    target_date: null,
+    status: "active",
+    targets: [],
+    steps: [],
+    roster: [],
+    last_review_at: null,
+    review_note: null,
+    closed_at: null,
+    revision: 1,
+    created_by: SAM,
+    updated_by: null,
+    source: "chat",
+    // A Monday, 9 AM in New York: the goal's first night is that evening's.
+    created_at: iso(at(2026, 11, 2, 9)),
+    updated_at: iso(at(2026, 11, 2, 9)),
+    ...over,
+  };
+}
+const checkinRow = (member: string, night: string, answer: SleepCheckin["protected"], more: Partial<SleepCheckin> & { deleted_at?: string } = {}): SleepCheckin => ({
+  id: nextId++,
+  member,
+  night,
+  protected: answer,
+  note: null,
+  source: "web",
+  created_at: iso(at(2026, 11, 9, 8)),
+  updated_at: iso(at(2026, 11, 9, 8)),
+  ...more,
+});
+const feedRow = (start: Date, by = SAM): Entry =>
+  ({ id: nextId++, kind: "feed", started_at: iso(start), ended_at: iso(start.getTime() + 20 * MIN), active: false, data: { method: "breast" }, note: null, created_by: by, updated_by: null, source: "web", created_at: iso(start), updated_at: iso(start) }) as Entry;
+const shiftRow = (holder: string, start: Date, end: Date): HoldingShift => ({
+  id: nextId++,
+  holder,
+  started_at: iso(start),
+  handoff_at: null,
+  next_holder: null,
+  ended_at: iso(end),
+  ended_how: "ended",
+  created_by: holder,
+  updated_by: null,
+  source: "web",
+  created_at: iso(start),
+  updated_at: iso(end),
+});
+const data = (over: Partial<GoalData> = {}): GoalData => ({ tries: [], entries: [], shifts: [], checkins: [], ...over });
+const words = (v: Voice, now: Date, tz = NY) => ({ v, name: nameOf, tz, now });
+function throwsInput(fn: () => unknown, re: RegExp, what: string) {
+  try {
+    fn();
+  } catch (e) {
+    ok(e instanceof SleepInputError, `${what}: threw ${e instanceof Error ? e.constructor.name : typeof e}, not SleepInputError`);
+    ok(re.test((e as Error).message), `${what}: "${(e as Error).message}"`);
+    return;
+  }
+  throw new Error(`${what}: didn't throw`);
+}
+
+check("goal weeks: 7 nights at a time from the night it was set, through its target date, with days left by the family's calendar", () => {
+  const g = goalRow({ target_date: "2026-11-30" });
+  const s = goalSpan(g, at(2026, 11, 10, 21), NY);
+  eq([s.startsOn, s.endsOn, s.daysLeft, s.weekNow, s.weeksTotal, s.weeksHidden], ["2026-11-02", "2026-11-30", 20, 2, 5, 0], "span");
+  eq(s.weeks, [
+    { n: 1, from: "2026-11-02", to: "2026-11-08", nights: 7, current: false },
+    { n: 2, from: "2026-11-09", to: "2026-11-15", nights: 2, current: true },
+  ], "weeks");
+  const just = goalSpan(g, at(2026, 11, 2, 9, 30), NY);
+  eq([just.weekNow, just.weeks], [1, [{ n: 1, from: "2026-11-02", to: "2026-11-08", nights: 0, current: true }]], "set this morning: week 1, its first night still ahead");
+  const lastDay = goalSpan(g, at(2026, 12, 1, 10), NY);
+  eq([lastDay.weekNow, lastDay.weeks.at(-1)], [5, { n: 5, from: "2026-11-30", to: "2026-11-30", nights: 1, current: true }], "the target date's night is the last, a short week");
+  const after = goalSpan(g, at(2026, 12, 2, 21), NY);
+  eq([after.weekNow, after.daysLeft, after.weeks.length, after.lastNight], [null, -2, 5, "2026-11-30"], "past the target date: nothing after it counts");
+  ok(/Target date Mon, Nov 30 \(20 days left\); week 2 of 5\./.test(goalHeadLine(g, s, { tz: NY })), goalHeadLine(g, s, { tz: NY }));
+});
+
+check("goal weeks: without a target date the last 4; a closed goal stops at the night it closed", () => {
+  const s = goalSpan(goalRow({ created_at: iso(at(2026, 9, 20, 9)) }), at(2026, 11, 10, 21), NY);
+  eq([s.weeks.map((w) => w.n), s.weeksHidden, s.weeksTotal, s.daysLeft, s.weekNow], [[5, 6, 7, 8], 4, null, null, 8], "the last four");
+  const closed = goalSpan(goalRow({ status: "met", closed_at: iso(at(2026, 11, 5, 20)) }), at(2026, 11, 10, 21), NY);
+  eq([closed.weekNow, closed.weeks, closed.lastNight], [null, [{ n: 1, from: "2026-11-02", to: "2026-11-08", nights: 4, current: false }], "2026-11-05"], "closed on the 5th");
+  ok(/\(Met on Thu, Nov 5\)/.test(goalHeadLine(goalRow({ status: "met", closed_at: iso(at(2026, 11, 5, 20)) }), closed, { tz: NY })), "met, with the day");
+});
+
+check("goal weeks: the night the clocks fall back is one night with both its 1:30s, and a window's real length follows the clock", () => {
+  const g = goalRow({ created_at: iso(at(2026, 10, 28, 12)), targets: [{ id: "a1", kind: "bassinet_nights", per_week: 3, min_minutes: 60 }] });
+  // Laid down at the first 1:30 AM (EDT), still asleep at the second (EST): an hour, on the night of Oct 31.
+  const t1 = tryRow(new Date("2026-11-01T05:30:00Z"), new Date("2026-11-01T06:30:00Z"), "stayed_asleep");
+  const t2 = tryRow(new Date("2026-11-01T06:45:00Z"), new Date("2026-11-01T07:00:00Z"), "woke_calm");
+  const p = goalProgress(g, data({ tries: [t1, t2] }), at(2026, 11, 3, 10), NY);
+  const tp = p.targets[0];
+  eq(tp.kind === "bassinet_nights" && tp.weeks[0], { week: 1, counted: 1, tried: 1, nights: 6 }, "one night, counted once");
+  const len = (w: { from: string; to: string }, night: string, tz = NY) => {
+    const [a, b] = windowOn(w, night, tz);
+    return (b.getTime() - a.getTime()) / HOUR;
+  };
+  eq([len({ from: "22:00", to: "06:00" }, "2026-10-31"), len({ from: "22:00", to: "06:00" }, "2027-03-13"), len({ from: "22:00", to: "06:00" }, "2026-11-07")], [9, 7, 8], "fall back, spring forward, an ordinary night");
+  eq(len({ from: "22:00", to: "06:00" }, "2026-10-31", "Asia/Kolkata"), 8, "a zone with no clock change");
+  eq(iso(windowOn({ from: "04:00", to: "07:00" }, "2026-11-02", NY)[0]), iso(at(2026, 11, 3, 4)), "a time before noon is the next morning's");
+  eq(iso(windowOn({ from: "22:00", to: "02:00" }, "2026-11-02", NY)[1]), iso(at(2026, 11, 3, 2)), "across midnight");
+});
+
+check("goal weeks: the same moment set is a different first night in another zone", () => {
+  const g = goalRow({ created_at: "2026-11-02T03:00:00.000Z" });
+  eq([goalSpan(g, new Date("2026-11-05T12:00:00Z"), "America/Los_Angeles").startsOn, goalSpan(g, new Date("2026-11-05T12:00:00Z"), "Asia/Kolkata").startsOn], ["2026-11-01", "2026-11-02"], "8 PM in Los Angeles, 8:30 AM in Kolkata");
+  // 10:30 AM in Kolkata belongs to the night before it, as a try day does.
+  eq(lastNightKey(new Date("2026-11-05T05:00:00Z"), "Asia/Kolkata"), "2026-11-04", "last night there");
+});
+
+check("bassinet nights: a night counts once, with a try that stayed asleep the target's minutes; running, deleted and short ones don't", () => {
+  const g = goalRow({ targets: [{ id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 }] });
+  const tries = [
+    tryRow(at(2026, 11, 2, 22), at(2026, 11, 2, 23, 15), "stayed_asleep"),
+    tryRow(at(2026, 11, 3, 22), at(2026, 11, 3, 22, 50), "stayed_asleep"),
+    tryRow(at(2026, 11, 4, 23), at(2026, 11, 4, 23, 5), "woke_crying"),
+    tryRow(at(2026, 11, 4, 23, 30), at(2026, 11, 5, 1), "stayed_asleep"),
+    tryRow(at(2026, 11, 5, 2), at(2026, 11, 5, 3, 30), "picked_up"),
+    { ...tryRow(at(2026, 11, 6, 22), at(2026, 11, 6, 23, 30), "stayed_asleep"), deleted_at: iso(at(2026, 11, 7, 9)) } as BassinetTry,
+    tryRow(at(2026, 11, 8, 22), null, null),
+  ];
+  const p = goalProgress(g, data({ tries }), at(2026, 11, 9, 10), NY);
+  const tp = p.targets[0];
+  eq(tp.kind === "bassinet_nights" && tp.weeks, [{ week: 1, counted: 2, tried: 3, nights: 7 }], "two nights of three tried");
+  const line = goalProgressLines(g, p, words(SHE, at(2026, 11, 9, 10))).join(" ");
+  ok(/Aim: 4 nights a week with a bassinet try asleep 1 hour or more\. This week: 2 nights \(finished tries on 3 of 7 nights so far\)\./.test(line), line);
+});
+
+check("bassinet stretch: the longest each week and how many reached the aim, every stretch counted once", () => {
+  const g = goalRow({ targets: [{ id: "a1", kind: "bassinet_stretch", minutes: 180 }] });
+  const s1 = sleepRow(at(2026, 11, 3, 22), at(2026, 11, 4, 1, 30), "bassinet");
+  const s2 = sleepRow(at(2026, 11, 5, 21), at(2026, 11, 6, 2), "arms");
+  const t2 = tryRow(at(2026, 11, 5, 22), at(2026, 11, 6, 0), "picked_up", { sleep_entry_id: s2.id });
+  const s3 = sleepRow(at(2026, 11, 10, 20), at(2026, 11, 10, 21), "bassinet");
+  const p = goalProgress(g, data({ tries: [t2], entries: [s1, s2, s3] }), at(2026, 11, 11, 10), NY);
+  const tp = p.targets[0];
+  ok(tp.kind === "bassinet_stretch", "kind");
+  if (tp.kind !== "bassinet_stretch") return;
+  eq(tp.weeks, [{ week: 1, stretches: 2, longestSec: 3.5 * 3600, atLeast: 1 }, { week: 2, stretches: 1, longestSec: 3600, atLeast: 0 }], "weeks");
+  eq(tp.longest?.sec, 3.5 * 3600, "longest");
+  const line = goalProgressLines(g, p, words(SHE, at(2026, 11, 11, 10))).join(" ");
+  ok(/This week: longest 1h 00m; 0 of 1 stretch were 3 hours or more\. Last week: longest 3h 30m; 1 of 2 stretches was 3 hours or more\./.test(line), line);
+});
+
+check("protected window: counted from that adult's own check-ins, against the nights on the roster; a reader who can't see check-ins gets none", () => {
+  const g = goalRow({
+    roster: [{ id: "w2", member: SAM, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4] }],
+    targets: [{ id: "a1", kind: "protected_window", member: SAM, per_week: 4 }],
+  });
+  const checkins = [
+    checkinRow(SAM, "2026-11-02", "yes"),
+    checkinRow(SAM, "2026-11-03", "partly"),
+    checkinRow(SAM, "2026-11-04", "no"),
+    checkinRow(SAM, "2026-11-05", "yes", { deleted_at: iso(at(2026, 11, 6, 8)) }),
+    checkinRow(SAM, "2026-11-08", "yes"),
+    checkinRow(ALEX, "2026-11-02", "yes"),
+  ];
+  const now = at(2026, 11, 9, 10);
+  const p = goalProgress(g, data({ checkins }), now, NY);
+  const tp = p.targets[0];
+  // Mon to Sun: the Sun–Thu window is on 5 of the 7 nights.
+  eq(tp.kind === "protected_window" && tp.weeks, [{ week: 1, yes: 2, partly: 1, no: 1, checkedIn: 4, planned: 5 }], "Sam's week");
+  eq(p.checkins, [
+    { member: SAM, nights: 4, yes: 2, partly: 1, no: 1, lastNight: "yes" },
+    { member: ALEX, nights: 1, yes: 1, partly: 0, no: 0, lastNight: null },
+  ], "per adult");
+  const hidden = goalProgress(g, data({ checkins: null }), now, NY);
+  eq([hidden.targets[0].kind === "protected_window" && hidden.targets[0].weeks, hidden.checkins], [null, null], "nothing for a view-only reader");
+  const shown = goalProgressLines(g, p, words(SHE, now)).join(" ");
+  ok(/This week: held on 2 of 4 nights checked in \(partly 1, not this time 1\); 5 nights on the roster so far\./.test(shown) && /Check-ins since Mon, Nov 2: Sam 4 nights/.test(shown), shown);
+  const viewer = goalProgressLines(g, hidden, words(SHE, now)).join(" ");
+  ok(!/Check-ins|checked in|partly|not this time/.test(viewer) && /counted from the adults' own check-ins/.test(viewer), viewer);
+});
+
+check("roster hints: a window across midnight reads the feeds, holding turns and tries inside it, as hints", () => {
+  const g = goalRow({
+    roster: [
+      { id: "w1", member: SAM, from: "22:00", to: "02:00", nights: EVERY },
+      { id: "w2", member: ALEX, from: "04:00", to: "07:00", nights: EVERY },
+    ],
+  });
+  const entries = [
+    feedRow(at(2026, 11, 2, 21, 59)),
+    feedRow(at(2026, 11, 2, 23, 30), SAM),
+    feedRow(at(2026, 11, 3, 1, 59), ALEX),
+    feedRow(at(2026, 11, 3, 2, 0), ALEX),
+    feedRow(at(2026, 11, 3, 5, 0), ALEX),
+    feedRow(at(2026, 11, 3, 23, 0), SAM),
+  ];
+  const shifts = [shiftRow(ALEX, at(2026, 11, 2, 22, 30), at(2026, 11, 2, 23, 30)), shiftRow(SAM, at(2026, 11, 3, 22), at(2026, 11, 3, 22, 20)), shiftRow(SAM, at(2026, 11, 3, 5, 30), at(2026, 11, 3, 6))];
+  const tries = [tryRow(at(2026, 11, 3, 0, 15), at(2026, 11, 3, 1), "stayed_asleep")];
+  // Tonight's windows haven't happened yet, so the hints read the two nights before.
+  const now = at(2026, 11, 4, 12, 30);
+  const p = goalProgress(g, data({ entries, shifts, tries }), now, NY);
+  eq(p.roster, [
+    { windowId: "w1", member: SAM, nights: 2, feeds: 3, feedNights: 2, feedsLoggedBy: 2, heldNights: 1, cover: [{ member: ALEX, nights: 1 }], tries: 1 },
+    { windowId: "w2", member: ALEX, nights: 2, feeds: 1, feedNights: 1, feedsLoggedBy: 1, heldNights: 0, cover: [{ member: SAM, nights: 1 }], tries: 0 },
+  ], "hints");
+  const text = goalProgressLines(g, p, words(SHE, now)).join("\n");
+  ok(/Hint from the log, Sam's window 10:00 PM–2:00 AM \(the last 2 nights it was on\): feeds began inside it on 2 nights \(3 feeds, 2 logged by Sam\); Sam held June during it on 1 night; Alex held June during it on 1 night; 1 bassinet try began inside it\./.test(plain(text) as string), text);
+  eq(goalProgress(g, data({ entries, shifts, tries }), at(2026, 11, 2, 23), NY).roster.map((h) => h.nights), [0, 0], "nothing before a window is over");
+});
+
+check("check-ins: last night by the family's calendar; a night still going, or too long ago, is refused", () => {
+  const morning = at(2026, 11, 10, 8);
+  eq([cleanCheckinNight(undefined, morning, NY), cleanCheckinNight("2026-11-03", morning, NY), cleanCheckinNight("2026-10-27", morning, NY)], ["2026-11-09", "2026-11-03", "2026-10-27"], "the last 14 nights");
+  eq(checkinNights(morning, NY), { first: "2026-10-27", last: "2026-11-09" }, "the range");
+  throwsInput(() => cleanCheckinNight("2026-11-10", morning, NY), /isn't over yet/, "tonight");
+  throwsInput(() => cleanCheckinNight("2026-10-26", morning, NY), /too long ago/, "15 nights back");
+  throwsInput(() => cleanCheckinNight("2026-02-30", morning, NY), /a date like/, "not a day");
+  eq([lastNightKey(at(2026, 11, 10, 23), NY), lastNightKey(at(2026, 11, 11, 7), NY)], ["2026-11-09", "2026-11-10"], "evening and the next morning");
+  const line = lastNightLine([SAM, ALEX], [checkinRow(SAM, "2026-11-09", "partly"), checkinRow(ALEX, "2026-11-08", "yes")], morning, NY, nameOf);
+  eq(line, "Sam partly; not yet: Alex", "last night's");
+});
+
+check("coach notes: days left, a review once 7 days pass, the next undone step by its week, and who hasn't checked in", () => {
+  const steps = [
+    { id: "s1", title: "Alex takes the first night feed", week_of: "2026-11-09", done_at: null, done_by: null },
+    { id: "s2", title: "Practice the transfer", week_of: "2026-11-02", done_at: iso(at(2026, 11, 3, 9)), done_by: SAM },
+    { id: "s3", title: "White noise in the room", week_of: null, done_at: null, done_by: null },
+    { id: "s4", title: "Bassinet after the 10 PM feed", week_of: "2026-11-02", done_at: null, done_by: null },
+  ];
+  const roster = [{ id: "w5", member: SAM, from: "22:00", to: "02:00", nights: EVERY }, { id: "w6", member: ALEX, from: "02:00", to: "06:00", nights: EVERY }];
+  const g = goalRow({ target_date: "2026-11-30", steps, roster });
+  eq(nextStep(steps)?.id, "s4", "this week's undone step first");
+  const at6 = at(2026, 11, 8, 21);
+  const c6 = coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-07", "yes")] }), at6, NY), words(SHE, at6));
+  eq([c6.reviewDue, c6.daysSinceReview, c6.daysLeft, c6.nextStep?.id, c6.notCheckedIn], [false, 6, 22, "s4", [ALEX]], "six days in");
+  ok(c6.notes.includes("22 days to the target date (Mon, Nov 30).") && c6.notes.includes("Not checked in for last night yet: Alex.") && c6.notes.some((n) => /^Next step: "Bassinet after the 10 PM feed" \(week of Mon, Nov 2\)\.$/.test(n)), JSON.stringify(c6.notes));
+  const at7 = at(2026, 11, 9, 21);
+  eq(coachNotes(g, goalProgress(g, data(), at7, NY), words(SHE, at7)).reviewDue, true, "seven days: due");
+  eq(coachNotes({ ...g, last_review_at: iso(at(2026, 11, 8, 20)) }, goalProgress(g, data(), at7, NY), words(SHE, at7)).reviewDue, false, "reviewed yesterday");
+  const paused = coachNotes({ ...g, status: "paused" }, goalProgress({ ...g, status: "paused" }, data(), at7, NY), words(SHE, at7));
+  ok(!paused.reviewDue && /^Paused/.test(paused.notes[0]), JSON.stringify(paused.notes));
+  const viewer = coachNotes(g, goalProgress(g, data({ checkins: null }), at6, NY), words(SHE, at6));
+  ok(viewer.notCheckedIn === null && !viewer.notes.some((n) => /checked in/.test(n)), "a view-only reader hears nothing about check-ins");
+  const late = at(2026, 12, 2, 21);
+  ok(coachNotes(g, goalProgress(g, data(), late, NY), words(SHE, late)).notes.some((n) => /^The target date \(Mon, Nov 30\) was 2 days ago: ask whether to close it as met, set a new date, or keep going\.$/.test(n)), "past its date");
+});
+
+check("goal input: titles, dates, targets, steps and windows are checked, in words a person can act on", () => {
+  const base: GoalInput = { title: "Both of us get a 4-hour stretch" };
+  throwsInput(() => cleanGoalInput({}, RULES, "create"), /title is needed/, "no title");
+  throwsInput(() => cleanGoalInput({ title: "x".repeat(121) }, RULES, "create"), /too long \(120/, "a long title");
+  throwsInput(() => cleanGoalInput({ ...base, why: "x".repeat(301) }, RULES, "create"), /too long \(300/, "a long why");
+  throwsInput(() => cleanGoalInput({ ...base, target_date: "2026-11-01" }, RULES, "create"), /already passed/, "a past date");
+  throwsInput(() => cleanGoalInput({ ...base, target_date: "2027-11-05" }, RULES, "create"), /up to a year/, "too far");
+  throwsInput(() => cleanGoalInput({ ...base, target_date: "2026-02-30" }, RULES, "create"), /a date like/, "not a day");
+  eq(cleanGoalInput({ ...base, target_date: "2026-11-30" }, RULES, "create").fields.target_date, "2026-11-30", "a date ahead");
+  eq(cleanGoalInput({ target_date: "2026-10-30" }, { ...RULES, current: { ...goalRow(), target_date: "2026-10-30" } }, "update").fields.target_date, "2026-10-30", "the date it has stays once passed");
+  const seven = Array.from({ length: 7 }, () => ({ kind: "custom" as const, text: "made-up" }));
+  throwsInput(() => cleanGoalInput({ ...base, targets: seven }, RULES, "create"), /6 targets at most/, "seven targets");
+  throwsInput(() => cleanGoalInput({ ...base, targets: [{ kind: "bassinet_nights", per_week: 8 }] }, RULES, "create"), /from 1 to 7/, "8 nights a week");
+  throwsInput(() => cleanGoalInput({ ...base, targets: [{ kind: "nap_score" as never }] }, RULES, "create"), /needs a kind/, "an unknown kind");
+  throwsInput(() => cleanGoalInput({ ...base, targets: [{ kind: "protected_window", member: CASEY, per_week: 3 }] }, RULES, "create"), /isn't an owner or member/, "a view-only guest's window");
+  throwsInput(() => cleanGoalInput({ ...base, targets: [{ kind: "bassinet_stretch", minutes: 10 }] }, RULES, "create"), /from 15 to 720/, "a 10-minute stretch");
+  eq(cleanGoalInput({ ...base, targets: [{ kind: "bassinet_nights", per_week: 4 }] }, RULES, "create").fields.targets, [{ id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 }], "an hour unless they say");
+  throwsInput(() => cleanGoalInput({ ...base, steps: Array.from({ length: 13 }, (_, i) => ({ title: `Step ${i}` })) }, RULES, "create"), /12 steps at most/, "13 steps");
+  throwsInput(() => cleanGoalInput({ ...base, steps: [{ title: "x", week_of: "2026-13-01" }] }, RULES, "create"), /a date like/, "a bad week");
+  const win = (over: Partial<{ member: string; from: string; to: string; nights: number[] }> = {}) => ({ member: SAM, from: "22:00", to: "02:00", nights: EVERY, ...over });
+  throwsInput(() => cleanGoalInput({ ...base, roster: [win({ from: "9:00" })] }, RULES, "create"), /local times like 22:00/, "a time without its zero");
+  throwsInput(() => cleanGoalInput({ ...base, roster: [win({ to: "22:20" })] }, RULES, "create"), /30 minutes to 12 hours/, "20 minutes");
+  throwsInput(() => cleanGoalInput({ ...base, roster: [win({ from: "18:00", to: "07:00" })] }, RULES, "create"), /30 minutes to 12 hours/, "13 hours");
+  throwsInput(() => cleanGoalInput({ ...base, roster: [win({ nights: [7] })] }, RULES, "create"), /0 \(Sunday\) to 6/, "no eighth evening");
+  throwsInput(() => cleanGoalInput({ ...base, roster: [win({ nights: [] })] }, RULES, "create"), /0 \(Sunday\) to 6/, "no evenings");
+  throwsInput(() => cleanGoalInput({ ...base, roster: Array.from({ length: 7 }, (_, i) => win({ nights: [i % 7], from: "12:00", to: "13:00" })) }, RULES, "create"), /6 windows at most/, "seven windows");
+  throwsInput(() => cleanGoalInput({ ...base, roster: [win(), win({ from: "01:00", to: "03:00", nights: [1] })] }, RULES, "create"), /overlap for Sam/, "Sam twice at 1 AM on Monday nights");
+  ok(cleanGoalInput({ ...base, roster: [win(), win({ member: ALEX, from: "01:00", to: "05:00" })] }, RULES, "create").fields.roster?.length === 2, "two adults may overlap");
+  ok(cleanGoalInput({ ...base, roster: [win({ nights: [1] }), win({ from: "01:00", to: "03:00", nights: [2] })] }, RULES, "create").fields.roster?.length === 2, "the same adult on different nights");
+  throwsInput(() => cleanGoalInput({ ...base, status: "paused" }, RULES, "create"), /starts active/, "a new goal paused");
+  throwsInput(() => cleanGoalInput({ status: "met" as never }, { ...RULES, current: goalRow() }, "update"), /its own step/, "closing through update");
+});
+
+check("goal input: items keep their ids (a step keeps whether it's done), new ones get new ids, and none is reused", () => {
+  const made = cleanGoalInput(
+    { title: "Made-up goal", targets: [{ kind: "bassinet_nights", per_week: 4, min_minutes: 45 }, { kind: "custom", text: "Calm bedtimes" }], steps: [{ title: "First" }, { title: "Second", week_of: "2026-11-09" }], roster: [{ member: ALEX, from: "02:00", to: "06:00", nights: EVERY }] },
+    RULES,
+    "create"
+  );
+  eq([made.fields.targets?.map((t) => t.id), made.fields.steps?.map((s) => s.id), made.fields.roster?.map((w) => w.id), made.seq], [["a1", "a2"], ["s3", "s4"], ["w5"], 5], "ids across the lists");
+  const current = goalRow({ targets: made.fields.targets!, roster: made.fields.roster!, steps: made.fields.steps!.map((s) => (s.id === "s4" ? { ...s, done_at: iso(at(2026, 11, 9, 9)), done_by: ALEX } : s)) });
+  const next = cleanGoalInput({ steps: [{ id: "s4", title: "Second, reworded" }, { title: "Third" }] }, { ...RULES, current, seq: made.seq }, "update");
+  eq(next.fields.steps?.map((s) => [s.id, s.title, !!s.done_at, s.done_by]), [["s4", "Second, reworded", true, ALEX], ["s6", "Third", false, null]], "kept and new");
+  eq(next.seq, 6, "the counter moves on");
+  // s3 was dropped: a new step never takes its id.
+  ok(!next.fields.steps?.some((s) => s.id === "s3"), "s3 isn't reused");
+  throwsInput(() => cleanGoalInput({ steps: [{ id: "s99", title: "x" }] }, { ...RULES, current, seq: 6 }, "update"), /no step s99/, "an id the goal doesn't have");
+  throwsInput(() => cleanGoalInput({ steps: [{ id: "s4", title: "x" }, { id: "s4", title: "y" }] }, { ...RULES, current, seq: 6 }, "update"), /in the list twice/, "the same id twice");
+});
+
+check("goal words: neutral in every line and voice, names from the family, and the coach's guardrails", () => {
+  const g = goalRow({
+    target_date: "2026-11-30",
+    why: "Back to work in four weeks",
+    targets: [
+      { id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 },
+      { id: "a2", kind: "bassinet_stretch", minutes: 180 },
+      { id: "a3", kind: "protected_window", member: SAM, per_week: 5 },
+      { id: "a4", kind: "custom", text: "Calm bedtimes" },
+    ],
+    steps: [{ id: "s5", title: "Bassinet after the 10 PM feed", week_of: "2026-11-02", done_at: null, done_by: null }],
+    roster: [{ id: "w6", member: SAM, from: "22:00", to: "02:00", nights: EVERY }],
+  });
+  const now = at(2026, 11, 10, 21);
+  const rows = [
+    tryRow(at(2026, 11, 3, 22), at(2026, 11, 3, 22, 4), "woke_crying"),
+    tryRow(at(2026, 11, 4, 22), at(2026, 11, 4, 22, 10), "woke_crying"),
+    tryRow(at(2026, 11, 9, 22), at(2026, 11, 9, 22, 30), "picked_up"),
+  ];
+  const BAD = /\b(fail|failed|failing|failure|streaks?|grades?|scores?|best|worst|success(ful)?|perfect|missed|behind|bad|poor)\b/i;
+  for (const v of VOICES) {
+    for (const checkins of [[checkinRow(SAM, "2026-11-09", "no")], null]) {
+      const p = goalProgress(g, data({ tries: rows, checkins, entries: [feedRow(at(2026, 11, 9, 23))], shifts: [shiftRow(ALEX, at(2026, 11, 9, 23), at(2026, 11, 9, 23, 30))] }), now, NY);
+      const text = [goalHeadLine(g, p, { tz: NY }), ...goalProgressLines(g, p, words(v, now)), ...coachNotes(g, p, words(v, now)).notes];
+      for (const line of text) ok(!BAD.test(line), `a judging word: "${line}"`);
+      if (v === THEY) for (const line of text) ok(!/\b(she|her|hers|herself|he|him|his|himself)\b/i.test(line), `they voice: "${line}"`);
+    }
+  }
+  const rules = coachGuardrails(SHE).join(" ");
+  for (const re of [/one question at a time/, /ask_user/, /only after they say yes/, /memories/, /No medical advice/, /pediatrician or lactation consultant/, /Never crying it out/, /never June sleeping on or beside an adult/, /no blame/]) ok(re.test(rules), `guardrails: ${re}`);
+  ok(!/\b(sleep train|cry it out|co-?sleep|bed[- ]?shar)/i.test(rules.replace(/Never crying it out/, "")), "nothing that suggests them");
+  ok(coachGuardrails(THEY).every((l) => !/\b(she|her|he|him|his)\b/i.test(l)), "they voice");
+});
+
+check("goal words: the evenings a window is on, and who reads check-ins", () => {
+  eq([nightsLabel(EVERY), nightsLabel([0, 1, 2, 3, 4]), nightsLabel([5, 6, 0]), nightsLabel([1, 3, 5]), nightsLabel([6]), nightsLabel([2, 4])], ["every night", "Sun–Thu nights", "Fri–Sun nights", "Mon, Wed and Fri nights", "Sat nights", "Tue and Thu nights"], "labels");
+  eq([weekdayOf("2026-11-01"), weekdayOf("2026-11-07"), windowOnNight({ nights: [0] }, "2026-11-01"), windowOnNight({ nights: [1] }, "2026-11-01")], [0, 6, true, false], "weekdays");
+  eq([windowMinutes("22:00", "02:00"), windowMinutes("02:00", "22:00"), windowMinutes("22:00", "22:00")], [240, 1200, 0], "lengths on the clock");
+  eq((["owner", "member", "viewer", "photos"] as const).map(seesCheckins), [true, true, false, false], "owners and members only");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);

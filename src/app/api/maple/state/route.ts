@@ -5,6 +5,7 @@ import { careRev, careSession, careStateFor, viewerFor } from "@/lib/maple/care-
 import { getBaby, lifetimeCounts, listEntries, rev, toClientEntry, touchLastSeen } from "@/lib/maple/store";
 import { familyInfo } from "@/lib/maple/family-info";
 import { pushTickQuietly } from "@/lib/maple/push";
+import { seesCheckins } from "@/lib/maple/sleep/goals";
 import { sleepStateFor } from "@/lib/maple/sleep/store";
 import type { MapleState, MapleStateUnchanged } from "@/lib/maple/types";
 import { after } from "next/server";
@@ -42,7 +43,9 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
   }
   const [baby, seenAt, members] = await Promise.all([getBaby(ctx), touchLastSeen(ctx, me.email), listMembers(ctx)]);
   const care = await careSession(viewerFor(me, baby, members), { familyId: ctx.familyId, members, baby });
-  const [base, cRev] = await Promise.all([rev(ctx, baby.id), careRev(care)]);
+  // The adults' sleep check-ins reach owners and members only, so they're in no one else's token either.
+  const checkins = seesCheckins(me.role);
+  const [base, cRev] = await Promise.all([rev(ctx, baby.id, { checkins }), careRev(care)]);
   const current = cRev === null ? base : `${base}|c:${cRev}`;
   if (new URL(request.url).searchParams.get("rev") === current) {
     return json({ unchanged: true, now: now.toISOString(), rev: current } satisfies MapleStateUnchanged);
@@ -58,7 +61,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     listEntries(ctx, { babyId: baby.id, kinds: ["growth"], ascending: true, limit: 2000 }),
     lifetimeCounts(ctx, baby.id),
     careStateFor(care),
-    sleepStateFor(ctx, baby.id, now),
+    sleepStateFor(ctx, baby.id, now, { checkins, tz: baby.timezone }),
   ]);
 
   const body: MapleState = {
@@ -73,7 +76,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     seen_at: seenAt,
     ...(careState ? { care: careState } : {}),
     // Only once there's something: a family that hasn't set up a sleep plan reads as before.
-    ...(sleep.plan || sleep.tries.length || sleep.shifts.length ? { sleep } : {}),
+    ...(sleep.plan || sleep.tries.length || sleep.shifts.length || sleep.goals.length || sleep.checkins?.length ? { sleep } : {}),
     family: familyInfo(ctx, members),
   };
   return json(body);

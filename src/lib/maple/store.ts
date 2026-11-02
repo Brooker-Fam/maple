@@ -1352,7 +1352,12 @@ export async function memberForPersonalToken(token: string): Promise<FamilyMembe
 
 // ── change token for cheap polling ────────────────────────────────────
 
-export async function rev(fam: FamilyRef, babyId: number): Promise<string> {
+/**
+ * `checkins`: the reader may see the adults' sleep check-ins (an owner or a
+ * member). For anyone else they're left out of the token too, so a check-in
+ * never moves a view-only guest's state.
+ */
+export async function rev(fam: FamilyRef, babyId: number, opts: { checkins?: boolean } = {}): Promise<string> {
   const rows = await q(
     `SELECT
        (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_entries WHERE family_id = $2 AND baby_id = $1) AS e,
@@ -1361,13 +1366,17 @@ export async function rev(fam: FamilyRef, babyId: number): Promise<string> {
        -- The sleep plan, bassinet tries and holding shifts (sleep/schema.ts): a try or a handoff on one phone shows on the others.
        (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_sleep_tries WHERE family_id = $2 AND baby_id = $1)
          || ',' || (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_sleep_shifts WHERE family_id = $2 AND baby_id = $1)
-         || ',' || (SELECT COALESCE(MAX(updated_at)::text, '') FROM maple_sleep_plans WHERE family_id = $2 AND baby_id = $1) AS s`,
+         || ',' || (SELECT COALESCE(MAX(updated_at)::text, '') FROM maple_sleep_plans WHERE family_id = $2 AND baby_id = $1) AS s,
+       -- Sleep goals, and the adults' check-ins (only for a reader who may see them).
+       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_sleep_goals WHERE family_id = $2 AND baby_id = $1) AS g,
+       ${opts.checkins ? `(SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_sleep_checkins WHERE family_id = $2 AND baby_id = $1)` : "NULL::text"} AS k`,
     [babyId, famId(fam)]
   );
   const r = rows[0] ?? {};
   // Sleep only once the family has any (deleted rows still count, so it never drops out again): a family that never
-  // used the sleep plan keeps the token it had before it existed.
-  const sleep = r.s && r.s !== "/0,/0," ? `|${r.s}` : "";
+  // used the sleep plan keeps the token it had before it existed. Goals and check-ins add their part the same way.
+  const parts = [r.s && r.s !== "/0,/0," ? String(r.s) : "", r.g && r.g !== "/0" ? `g${r.g}` : "", r.k && r.k !== "/0" ? `k${r.k}` : ""].filter(Boolean);
+  const sleep = parts.length ? `|${parts.join(",")}` : "";
   // The hour too: a full state at least hourly, so the server's older-week diaper count (lifetime.week) never goes
   // stale while nobody logs anything.
   return `${r.e}|${r.b}|${r.m}${sleep}|${Math.floor(Date.now() / 3600_000)}`;

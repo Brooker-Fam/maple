@@ -1,10 +1,26 @@
 import { createHash, randomUUID } from "node:crypto";
 import { query, transaction } from "@/lib/db";
 import { cleanClientId, famId, getEntry, listEntries, NotFound, reopenTimer, restoreEntry, rowToEntry, softDeleteEntry, stopTimer, StoreUnavailable, updateEntry, type FamilyRef } from "../store";
-import { isDayKey } from "../time";
+import { addDays, DEFAULT_TZ, isDayKey } from "../time";
 import { SLEEP_PLACES, type Entry, type EntryOf, type SleepPlace, type Source } from "../types";
-import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress } from "./engine";
+import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress, tryDayBounds, tryDayKey } from "./engine";
+import { SleepInputError } from "./errors";
+import { cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, goalProgress, goalSpan, lastNightKey, type GoalProgress, type GoalRules } from "./goals";
 import {
+  CHECKIN_NOTE_MAX,
+  GOAL_NOTE_MAX,
+  GOAL_STATUSES,
+  GOALS_ACTIVE_MAX,
+  GOALS_OPEN_MAX,
+  PROTECTED_ANSWERS,
+  TARGET_KINDS,
+  type GoalInput,
+  type GoalStatus,
+  type GoalStep,
+  type GoalTarget,
+  type ProtectedAnswer,
+  type RosterWindow,
+  type SleepCheckin,
   HANDOFF_AHEAD_MS,
   LOOKBACK_MS,
   MAX_SPAN_MS,
@@ -21,6 +37,7 @@ import {
   type PlanPatch,
   type PlanStage,
   type ShiftEnding,
+  type SleepGoal,
   type SleepPlan,
   type SleepState,
   type TryOutcome,
@@ -66,13 +83,7 @@ const iso = (v: unknown): string => new Date(v as string | Date).toISOString();
 const isoOrNull = (v: unknown): string | null => (v == null ? null : iso(v));
 const textOrNull = (v: unknown): string | null => (v == null ? null : String(v));
 
-/** A write that couldn't be made, in words a person can act on (400). */
-export class SleepInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SleepInputError";
-  }
-}
+export { SleepInputError };
 
 /**
  * Lost a race or found it changed (409). "changed": someone edited it since
@@ -83,7 +94,7 @@ export class SleepConflict extends Error {
   constructor(
     message: string,
     readonly reason: "changed" | "finished" | "running" | "open",
-    readonly current: BassinetTry | HoldingShift | SleepPlan | null
+    readonly current: BassinetTry | HoldingShift | SleepPlan | SleepGoal | null
   ) {
     super(message);
     this.name = "SleepConflict";
@@ -985,15 +996,28 @@ export async function reopenShift(fam: FamilyRef, id: number, input: { by: strin
 
 const STATE_TRIES_MS = 8 * 24 * 3600_000;
 const STATE_SHIFTS_MS = 2 * 24 * 3600_000;
+/** The state carries goals closed this recently, and check-ins for this many nights. */
+const STATE_GOALS_CLOSED_DAYS = 60;
+const STATE_CHECKIN_NIGHTS = 14;
 
-/** The plan, the last 8 days of tries (and the running one), and the last 2 days of shifts (and the open one). */
-export async function sleepStateFor(fam: FamilyRef, babyId: number, now = new Date()): Promise<SleepState> {
-  const [plan, tries, shifts] = await Promise.all([
+/**
+ * The plan, the last 8 days of tries (and the running one), the last 2 days
+ * of shifts (and the open one), the goals, and, only with `checkins` (an
+ * owner or member reading: goals.ts seesCheckins), the adults' check-ins for
+ * the last 14 nights. Without it there's no `checkins` key at all.
+ */
+export async function sleepStateFor(fam: FamilyRef, babyId: number, now = new Date(), opts: { checkins?: boolean; tz?: string } = {}): Promise<SleepState> {
+  // The last 14 nights by the family's own calendar (a FamilyCtx carries the baby's timezone).
+  const tz = opts.tz ?? (typeof fam === "object" && "tz" in fam && typeof fam.tz === "string" ? fam.tz : DEFAULT_TZ);
+  const since = addDays(lastNightKey(now, tz), -(STATE_CHECKIN_NIGHTS - 1));
+  const [plan, tries, shifts, goals, checkins] = await Promise.all([
     getPlan(fam, babyId),
     listTries(fam, babyId, { from: new Date(now.getTime() - STATE_TRIES_MS), limit: 400 }),
     listShifts(fam, babyId, { from: new Date(now.getTime() - STATE_SHIFTS_MS), limit: 100 }),
+    listGoals(fam, babyId, { closedDays: STATE_GOALS_CLOSED_DAYS }),
+    opts.checkins ? listCheckins(fam, babyId, { from: since }) : Promise.resolve(null),
   ]);
-  return { plan, tries, shifts };
+  return { plan, tries, shifts, goals, ...(checkins ? { checkins } : {}) };
 }
 
 /** The progress view over the last `days` try days, from the log (tries plus the sleep entries they sit on). */
@@ -1004,4 +1028,410 @@ export async function progressFor(fam: FamilyRef, babyId: number, tz: string, no
     listEntries(fam, { babyId, kinds: ["sleep"], from: w.from, to: w.to, includeActive: true, limit: 2000 }),
   ]);
   return sleepProgress({ tries, entries, now, tz, days });
+}
+
+// ── sleep goals ──────────────────────────────────────────────────────────
+//
+// Every statement names the family (and a goal's baby), so another family's
+// goal reads exactly like one that isn't there. Writes name the revision
+// they were made from (a stale one is SleepConflict "changed" with the goal
+// as it is); a step, a review or a close without one applies to the goal as
+// it is now, retried if another phone wrote in between. Creating a goal, or
+// making one active again, holds the family's goal lock so two phones can't
+// pass the active cap together.
+
+/** pg_advisory_xact_lock(GOAL_LOCK, family): one goal write at a time per family where a cap is checked. */
+const GOAL_LOCK = 72620311;
+
+const asGoalStatus = (v: unknown): GoalStatus => ((GOAL_STATUSES as readonly unknown[]).includes(v) ? (v as GoalStatus) : "active");
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const list = <T>(v: unknown, keep: (x: Record<string, unknown>) => boolean): T[] => (Array.isArray(v) ? (v.filter((x) => isObj(x) && keep(x)) as T[]) : []);
+
+export function rowToGoal(r: Row): SleepGoal {
+  return {
+    id: Number(r.id),
+    baby_id: Number(r.baby_id),
+    title: String(r.title ?? ""),
+    why: textOrNull(r.why),
+    target_date: isDayKey(r.target_date) ? r.target_date : null,
+    status: asGoalStatus(r.status),
+    // A kind this release doesn't know (from a newer one) is read past.
+    targets: list<GoalTarget>(r.targets, (x) => typeof x.id === "string" && (TARGET_KINDS as readonly unknown[]).includes(x.kind)),
+    steps: list<GoalStep>(r.steps, (x) => typeof x.id === "string" && typeof x.title === "string"),
+    roster: list<RosterWindow>(r.roster, (x) => typeof x.id === "string" && typeof x.member === "string" && Array.isArray(x.nights)),
+    last_review_at: isoOrNull(r.last_review_at),
+    review_note: textOrNull(r.review_note),
+    closed_at: isoOrNull(r.closed_at),
+    revision: Number(r.revision),
+    created_by: textOrNull(r.created_by),
+    updated_by: textOrNull(r.updated_by),
+    source: asSource(r.source),
+    created_at: iso(r.created_at),
+    updated_at: iso(r.updated_at),
+  };
+}
+
+/** The people and day a goal write is checked against (goals.ts cleanGoalInput). */
+export type GoalCtx = Pick<GoalRules, "adults" | "name" | "today">;
+
+export type GoalWrite = {
+  goal: SleepGoal;
+  /** The goal before this write (null for a new one), for Undo. */
+  before: SleepGoal | null;
+  status: "created" | "deduped" | "updated" | "unchanged";
+};
+
+async function goalRow(fam: FamilyRef, id: number, opts: { includeDeleted?: boolean } = {}): Promise<{ goal: SleepGoal; seq: number; deleted: boolean } | null> {
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const rows = await q(`SELECT * FROM maple_sleep_goals WHERE id = $1 AND family_id = $2 ${opts.includeDeleted ? "" : "AND deleted_at IS NULL"}`, [id, famId(fam)]);
+  return rows.length ? { goal: rowToGoal(rows[0]), seq: Number(rows[0].item_seq) || 0, deleted: rows[0].deleted_at != null } : null;
+}
+
+export async function getGoal(fam: FamilyRef, id: number): Promise<SleepGoal | null> {
+  return (await goalRow(fam, id))?.goal ?? null;
+}
+
+/** Open goals (active or paused), with those closed in the last `closedDays` (none by default), newest first. */
+export async function listGoals(fam: FamilyRef, babyId: number, opts: { closedDays?: number; limit?: number } = {}): Promise<SleepGoal[]> {
+  const rows = await q(
+    `SELECT * FROM maple_sleep_goals
+     WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL
+       AND (status IN ('active', 'paused') OR ($3::int > 0 AND closed_at >= NOW() - $3::int * INTERVAL '1 day'))
+     ORDER BY created_at DESC, id DESC LIMIT $4`,
+    [famId(fam), babyId, Math.max(0, Math.floor(opts.closedDays ?? 0)), Math.min(Math.max(opts.limit ?? 30, 1), 100)]
+  );
+  return rows.map(rowToGoal);
+}
+
+const goalCapWords = async (fam: FamilyRef, babyId: number) => {
+  const [r] = await q(
+    `SELECT COUNT(*) FILTER (WHERE status = 'active')::int AS active, COUNT(*) FILTER (WHERE status IN ('active', 'paused'))::int AS open
+     FROM maple_sleep_goals WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL`,
+    [famId(fam), babyId]
+  );
+  return Number(r?.active) >= GOALS_ACTIVE_MAX
+    ? `There are ${GOALS_ACTIVE_MAX} active sleep goals already, the most at once. Close or pause one first.`
+    : `There are ${GOALS_OPEN_MAX} open sleep goals already (paused ones count). Close one first.`;
+};
+
+/**
+ * A new goal, active. A retried request with its client id gets its first
+ * save back ("deduped"), and so does the same person saving a goal with the
+ * same title again within two minutes (a model retrying after a timeout).
+ */
+export async function createGoal(
+  fam: FamilyRef,
+  input: { babyId: number; goal: GoalInput; ctx: GoalCtx; by: string; source: Source; clientId?: string | null; device?: string | null }
+): Promise<GoalWrite> {
+  const familyId = famId(fam);
+  const clientId = cleanClientId(input.clientId);
+  if (clientId) {
+    const prior = await q(`SELECT * FROM maple_sleep_goals WHERE family_id = $1 AND client_id = $2`, [familyId, clientId]);
+    if (prior.length) return { goal: rowToGoal(prior[0]), before: null, status: "deduped" };
+  }
+  const { fields, seq } = cleanGoalInput(input.goal, { ...input.ctx, current: null, seq: 0 }, "create");
+  const again = await q(
+    `SELECT * FROM maple_sleep_goals WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND deleted_at IS NULL
+       AND created_at >= NOW() - INTERVAL '2 minutes' AND lower(title) = lower($4) ORDER BY id DESC LIMIT 1`,
+    [familyId, input.babyId, input.by, fields.title]
+  );
+  if (again.length) return { goal: rowToGoal(again[0]), before: null, status: "deduped" };
+  let rows: Row[];
+  try {
+    [, rows] = await tx([
+      { sql: `SELECT pg_advisory_xact_lock(${GOAL_LOCK}, $1::int)`, params: [familyId] },
+      {
+        sql: `INSERT INTO maple_sleep_goals (family_id, baby_id, title, why, target_date, targets, steps, roster, item_seq, created_by, source, client_id, device)
+              SELECT $1::bigint, $2::integer, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13
+              WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $2::integer AND family_id = $1::bigint)
+                AND (SELECT COUNT(*) FROM maple_sleep_goals WHERE family_id = $1::bigint AND baby_id = $2::integer AND status = 'active' AND deleted_at IS NULL) < ${GOALS_ACTIVE_MAX}
+                AND (SELECT COUNT(*) FROM maple_sleep_goals WHERE family_id = $1::bigint AND baby_id = $2::integer AND status IN ('active', 'paused') AND deleted_at IS NULL) < ${GOALS_OPEN_MAX}
+              RETURNING *`,
+        params: [
+          familyId,
+          input.babyId,
+          fields.title,
+          fields.why ?? null,
+          fields.target_date ?? null,
+          JSON.stringify(fields.targets ?? []),
+          JSON.stringify(fields.steps ?? []),
+          JSON.stringify(fields.roster ?? []),
+          seq,
+          input.by,
+          input.source,
+          clientId,
+          input.device ?? null,
+        ],
+      },
+    ]);
+  } catch (err) {
+    if (isUnique(err, "uniq_maple_sleep_goals_client") && clientId) {
+      const prior = await q(`SELECT * FROM maple_sleep_goals WHERE family_id = $1 AND client_id = $2`, [familyId, clientId]);
+      if (prior.length) return { goal: rowToGoal(prior[0]), before: null, status: "deduped" };
+    }
+    throw err;
+  }
+  if (!rows.length) {
+    const baby = await q(`SELECT 1 FROM maple_babies WHERE id = $1 AND family_id = $2`, [input.babyId, familyId]);
+    if (!baby.length) throw new NotFound("Baby not found");
+    throw new SleepInputError(await goalCapWords(fam, input.babyId));
+  }
+  return { goal: rowToGoal(rows[0]), before: null, status: "created" };
+}
+
+/** What one goal write changes: its fields, and the review and close stamps ("now" or cleared). */
+type GoalChange = {
+  title?: string;
+  why?: string | null;
+  target_date?: string | null;
+  targets?: GoalTarget[];
+  steps?: GoalStep[];
+  roster?: RosterWindow[];
+  status?: GoalStatus;
+  seq?: number;
+  review?: { note: string | null };
+  closed?: "now" | null;
+};
+
+/**
+ * Read the goal, work out the change on it as it is, and write it only if
+ * it's still at that revision. With `revision`, a goal that moved on is
+ * SleepConflict "changed"; without, the change is worked out again on the
+ * newer goal (a step, a review or a close means the same either way).
+ */
+async function mutateGoal(
+  fam: FamilyRef,
+  id: number,
+  opts: { revision?: number; by: string; source: Source },
+  change: (cur: SleepGoal, seq: number) => GoalChange | null
+): Promise<GoalWrite> {
+  const familyId = famId(fam);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const row = await goalRow(fam, id);
+    if (!row) throw new NotFound(`Sleep goal ${id} not found`);
+    const cur = row.goal;
+    if (opts.revision !== undefined && cur.revision !== opts.revision) throw new SleepConflict("Someone changed this sleep goal just now.", "changed", cur);
+    const c = change(cur, row.seq);
+    if (!c) return { goal: cur, before: cur, status: "unchanged" };
+    const params: unknown[] = [id, familyId, cur.revision, opts.by, opts.source];
+    const sets: string[] = [];
+    const set = (col: string, v: unknown, cast = "") => {
+      params.push(v);
+      sets.push(`${col} = $${params.length}${cast}`);
+    };
+    if (c.title !== undefined) set("title", c.title);
+    if (c.why !== undefined) set("why", c.why);
+    if (c.target_date !== undefined) set("target_date", c.target_date);
+    if (c.targets !== undefined) set("targets", JSON.stringify(c.targets), "::jsonb");
+    if (c.steps !== undefined) set("steps", JSON.stringify(c.steps), "::jsonb");
+    if (c.roster !== undefined) set("roster", JSON.stringify(c.roster), "::jsonb");
+    if (c.seq !== undefined && c.seq !== row.seq) set("item_seq", c.seq);
+    if (c.status !== undefined) set("status", c.status);
+    if (c.review) {
+      sets.push("last_review_at = NOW()");
+      set("review_note", c.review.note);
+    }
+    if (c.closed === "now") sets.push("closed_at = NOW()");
+    else if (c.closed === null) sets.push("closed_at = NULL");
+    if (!sets.length) return { goal: cur, before: cur, status: "unchanged" };
+    // Making a goal active, or opening a closed one, is checked against the caps under the family's goal lock.
+    const activates = c.status === "active" && cur.status !== "active";
+    const opens = c.status !== undefined && (c.status === "active" || c.status === "paused") && (cur.status === "met" || cur.status === "dropped");
+    const caps = [
+      activates ? `(SELECT COUNT(*) FROM maple_sleep_goals o WHERE o.family_id = $2 AND o.baby_id = maple_sleep_goals.baby_id AND o.status = 'active' AND o.deleted_at IS NULL AND o.id <> $1) < ${GOALS_ACTIVE_MAX}` : "",
+      opens ? `(SELECT COUNT(*) FROM maple_sleep_goals o WHERE o.family_id = $2 AND o.baby_id = maple_sleep_goals.baby_id AND o.status IN ('active', 'paused') AND o.deleted_at IS NULL AND o.id <> $1) < ${GOALS_OPEN_MAX}` : "",
+    ].filter(Boolean);
+    const update = `UPDATE maple_sleep_goals SET ${sets.join(", ")}, revision = revision + 1, updated_by = $4, source = $5, updated_at = NOW()
+       WHERE id = $1 AND family_id = $2 AND deleted_at IS NULL AND revision = $3${caps.map((x) => ` AND ${x}`).join("")} RETURNING *`;
+    const rows = caps.length ? (await tx([{ sql: `SELECT pg_advisory_xact_lock(${GOAL_LOCK}, $1::int)`, params: [familyId] }, { sql: update, params }]))[1] : await q(update, params);
+    if (rows.length) return { goal: rowToGoal(rows[0]), before: cur, status: "updated" };
+    const now = await goalRow(fam, id);
+    if (!now) throw new NotFound(`Sleep goal ${id} not found`);
+    // Still at the revision it read: the cap turned it away, not another phone.
+    if (now.goal.revision === cur.revision && caps.length) throw new SleepInputError(await goalCapWords(fam, cur.baby_id));
+    if (opts.revision !== undefined) throw new SleepConflict("Someone changed this sleep goal just now.", "changed", now.goal);
+  }
+  throw new SleepConflict("Someone changed this sleep goal just now.", "changed", await getGoal(fam, id));
+}
+
+/**
+ * Change a goal (title, why, target date, targets, steps, roster, active or
+ * paused), only if it's still at `revision`. A list replaces the whole list;
+ * items that name an existing id keep it. Moving back from met or dropped
+ * opens it again.
+ */
+export async function updateGoal(fam: FamilyRef, id: number, input: { patch: GoalInput; revision: number; ctx: GoalCtx; by: string; source: Source }): Promise<GoalWrite> {
+  return mutateGoal(fam, id, { revision: input.revision, by: input.by, source: input.source }, (cur, seq) => {
+    const { fields, seq: nextSeq } = cleanGoalInput(input.patch, { ...input.ctx, current: cur, seq }, "update");
+    if (!Object.keys(fields).length) return null;
+    const reopening = fields.status !== undefined && (cur.status === "met" || cur.status === "dropped");
+    return { ...fields, seq: nextSeq, ...(reopening ? { closed: null } : {}) };
+  });
+}
+
+/** Mark a step done (by `by`, now) or not done. Already that way: "unchanged". */
+export async function setGoalStep(fam: FamilyRef, id: number, input: { step: string; done: boolean; by: string; source: Source; revision?: number }): Promise<GoalWrite> {
+  return mutateGoal(fam, id, input, (cur) => {
+    const s = cur.steps.find((x) => x.id === input.step);
+    if (!s) throw new SleepInputError(`This goal has no step ${input.step}. Its steps are ${cur.steps.map((x) => x.id).join(", ") || "none yet"}.`);
+    if (!!s.done_at === input.done) return null;
+    const now = new Date().toISOString();
+    return { steps: cur.steps.map((x) => (x.id === input.step ? { ...x, done_at: input.done ? now : null, done_by: input.done ? input.by : null } : x)) };
+  });
+}
+
+/** A review: stamps last_review_at now, with the short note (or none). */
+export async function reviewGoal(fam: FamilyRef, id: number, input: { note: unknown; by: string; source: Source; revision?: number }): Promise<GoalWrite> {
+  const note = cleanGoalNote(input.note, GOAL_NOTE_MAX);
+  return mutateGoal(fam, id, input, () => ({ review: { note } }));
+}
+
+/** Close a goal as met or dropped; a note given is its last review. Closed already the same way: "unchanged". */
+export async function closeGoal(fam: FamilyRef, id: number, input: { status: "met" | "dropped"; note?: unknown; by: string; source: Source; revision?: number }): Promise<GoalWrite> {
+  if (input.status !== "met" && input.status !== "dropped") throw new SleepInputError("A goal closes as met or dropped.");
+  const note = input.note === undefined ? undefined : cleanGoalNote(input.note, GOAL_NOTE_MAX);
+  return mutateGoal(fam, id, input, (cur) => {
+    if (cur.status === input.status) return null;
+    return { status: input.status, closed: "now", ...(note !== undefined && note !== null ? { review: { note } } : {}) };
+  });
+}
+
+/** Soft-delete a goal (nothing in the app or the tools offers it yet; a family's log deletion removes them for good). */
+export async function deleteGoal(fam: FamilyRef, id: number, by: string): Promise<SleepGoal> {
+  const rows = await q(`UPDATE maple_sleep_goals SET deleted_at = NOW(), updated_by = $3, updated_at = NOW() WHERE id = $1 AND family_id = $2 AND deleted_at IS NULL RETURNING *`, [id, famId(fam), by]);
+  if (!rows.length) throw new NotFound(`Sleep goal ${id} not found`);
+  return rowToGoal(rows[0]);
+}
+
+// ── check-ins ────────────────────────────────────────────────────────────
+
+const asAnswer = (v: unknown): ProtectedAnswer => ((PROTECTED_ANSWERS as readonly unknown[]).includes(v) ? (v as ProtectedAnswer) : "no");
+
+export function rowToCheckin(r: Row): SleepCheckin {
+  return {
+    id: Number(r.id),
+    member: String(r.member),
+    night: String(r.night),
+    protected: asAnswer(r.protected),
+    note: textOrNull(r.note),
+    source: asSource(r.source),
+    created_at: iso(r.created_at),
+    updated_at: iso(r.updated_at),
+  };
+}
+
+/** Check-ins for nights in [from, to] (YYYY-MM-DD), newest night first; one adult's with `member`. */
+export async function listCheckins(fam: FamilyRef, babyId: number, opts: { from: string; to?: string; member?: string }): Promise<SleepCheckin[]> {
+  const rows = await q(
+    `SELECT * FROM maple_sleep_checkins
+     WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL AND night >= $3 AND ($4::text IS NULL OR night <= $4::text) AND ($5::text IS NULL OR member = $5::text)
+     ORDER BY night DESC, member, id DESC LIMIT 1000`,
+    [famId(fam), babyId, opts.from, opts.to ?? null, opts.member ?? null]
+  );
+  return rows.map(rowToCheckin);
+}
+
+export type CheckinWrite = { checkin: SleepCheckin; before: SleepCheckin | null; status: "created" | "updated" | "unchanged" | "deduped" };
+
+/**
+ * An adult's check-in for one night, saved for themselves only (`member` is
+ * the signed-in adult; the callers never take it from the request). One per
+ * adult per night: saving again changes that one. A retried request with its
+ * client id gets its first save back. `note` undefined keeps the one there;
+ * null clears it.
+ */
+export async function saveCheckin(
+  fam: FamilyRef,
+  input: { babyId: number; member: string; night?: unknown; protected: unknown; note?: unknown; tz: string; now?: Date; source: Source; clientId?: string | null; device?: string | null }
+): Promise<CheckinWrite> {
+  const familyId = famId(fam);
+  const night = cleanCheckinNight(input.night, input.now ?? new Date(), input.tz);
+  const answer = cleanProtected(input.protected);
+  const keep = input.note === undefined;
+  const note = keep ? null : cleanGoalNote(input.note, CHECKIN_NOTE_MAX);
+  const clientId = cleanClientId(input.clientId);
+  if (clientId) {
+    const prior = await q(`SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND client_id = $2`, [familyId, clientId]);
+    if (prior.length) return { checkin: rowToCheckin(prior[0]), before: null, status: "deduped" };
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const found = await q(`SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND baby_id = $2 AND member = $3 AND night = $4 AND deleted_at IS NULL`, [familyId, input.babyId, input.member, night]);
+    const before = found.length ? rowToCheckin(found[0]) : null;
+    if (before) {
+      if (before.protected === answer && (keep || note === before.note)) return { checkin: before, before, status: "unchanged" };
+      const rows = await q(
+        `UPDATE maple_sleep_checkins SET protected = $4, note = CASE WHEN $5::boolean THEN note ELSE $6 END, source = $7, device = $8, updated_at = NOW()
+         WHERE id = $1 AND family_id = $2 AND member = $3 AND deleted_at IS NULL RETURNING *`,
+        [before.id, familyId, input.member, answer, keep, note, input.source, input.device ?? null]
+      );
+      if (rows.length) return { checkin: rowToCheckin(rows[0]), before, status: "updated" };
+      continue;
+    }
+    try {
+      const rows = await q(
+        `INSERT INTO maple_sleep_checkins (family_id, baby_id, member, night, protected, note, source, client_id, device)
+         SELECT $1::bigint, $2::integer, $3, $4, $5, $6, $7, $8, $9
+         WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $2::integer AND family_id = $1::bigint)
+         RETURNING *`,
+        [familyId, input.babyId, input.member, night, answer, note, input.source, clientId, input.device ?? null]
+      );
+      if (!rows.length) throw new NotFound("Baby not found");
+      return { checkin: rowToCheckin(rows[0]), before: null, status: "created" };
+    } catch (err) {
+      // Their other phone saved this night at the same moment: change that one instead.
+      if (isUnique(err, "uniq_maple_sleep_checkins_night")) continue;
+      if (isUnique(err, "uniq_maple_sleep_checkins_client") && clientId) {
+        const prior = await q(`SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND client_id = $2`, [familyId, clientId]);
+        if (prior.length) return { checkin: rowToCheckin(prior[0]), before: null, status: "deduped" };
+      }
+      throw err;
+    }
+  }
+  throw new Error("Couldn't save the check-in, please try again");
+}
+
+/** Delete your own check-in (soft), by its id or its night. Someone else's reads as missing. */
+export async function deleteCheckin(fam: FamilyRef, input: { babyId: number; member: string; id?: number | null; night?: string | null }): Promise<SleepCheckin> {
+  if (input.id == null && !isDayKey(input.night)) throw new SleepInputError("Say which check-in: its id or its night.");
+  const rows = await q(
+    `UPDATE maple_sleep_checkins SET deleted_at = NOW(), updated_at = NOW()
+     WHERE family_id = $1 AND baby_id = $2 AND member = $3 AND deleted_at IS NULL AND (($4::bigint IS NOT NULL AND id = $4::bigint) OR ($4::bigint IS NULL AND night = $5::text))
+     RETURNING *`,
+    [famId(fam), input.babyId, input.member, input.id ?? null, input.night ?? null]
+  );
+  if (!rows.length) throw new NotFound("Check-in not found");
+  return rowToCheckin(rows[0]);
+}
+
+// ── a goal's progress, from the log ──────────────────────────────────────
+
+/**
+ * Each goal's progress (goals.ts goalProgress) from one read of the log over
+ * all of their shown nights: tries, the sleeps they sit on, feeds and holding
+ * turns for the roster hints, and check-ins only with `checkins` (an owner or
+ * member reading); without, every check-in count comes back null.
+ */
+export async function goalProgressFor(fam: FamilyRef, babyId: number, goals: readonly SleepGoal[], opts: { tz: string; now: Date; checkins: boolean }): Promise<Map<number, GoalProgress>> {
+  const out = new Map<number, GoalProgress>();
+  if (!goals.length) return out;
+  const { tz, now } = opts;
+  const spans = goals.map((g) => goalSpan(g, now, tz));
+  const first = spans.map((s) => s.weeks[0]?.from ?? s.startsOn).sort()[0];
+  const last = spans.map((s) => s.lastNight).sort().slice(-1)[0];
+  const from = tryDayBounds(first, tz)[0];
+  const to = new Date(Math.min(tryDayBounds(last > first ? last : first, tz)[1].getTime(), now.getTime() + 1));
+  const hintFrom = tryDayBounds(addDays(tryDayKey(now, tz), -8), tz)[0];
+  const roster = goals.some((g) => g.roster.length);
+  const stretch = goals.some((g) => g.targets.some((t) => t.kind === "bassinet_stretch"));
+  // Last night's check-ins too, for each adult's latest answer, even before a goal set this morning.
+  const lastNight = lastNightKey(now, tz);
+  const [tries, sleeps, feeds, shifts, checkins] = await Promise.all([
+    listTries(fam, babyId, { from: new Date(from.getTime() - MAX_SPAN_MS), to, limit: 2000 }),
+    stretch ? listEntries(fam, { babyId, kinds: ["sleep"], from: new Date(from.getTime() - MAX_SPAN_MS), to, includeActive: true, limit: 5000 }) : Promise.resolve([] as Entry[]),
+    roster ? listEntries(fam, { babyId, kinds: ["feed"], from: hintFrom, to, includeActive: true, limit: 2000 }) : Promise.resolve([] as Entry[]),
+    roster ? listShifts(fam, babyId, { from: hintFrom, limit: 500 }) : Promise.resolve([]),
+    opts.checkins ? listCheckins(fam, babyId, { from: first < lastNight ? first : lastNight, to: last > lastNight ? last : lastNight }) : Promise.resolve(null),
+  ]);
+  for (const g of goals) out.set(g.id, goalProgress(g, { tries, entries: [...sleeps, ...feeds], shifts, checkins }, now, tz));
+  return out;
 }
