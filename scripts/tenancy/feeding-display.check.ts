@@ -51,7 +51,7 @@ function dock(settings: Record<string, unknown>, active: boolean) {
     useState: (value: unknown) => [value === null ? {} : value, noop], useRef: (value: unknown) => ({ current: value }), useEffect: noop, useHoldTimerToasts: noop,
     useCooldowns: () => [{}, noop], useStillGoing: () => ({}), timerNumbers: () => ({ parts: [{}], side: "L", paused: false }), isTracked: () => true,
     logSwitches: switches, createPortal: (children: Element) => children, other: () => "R", SIDE_NAME: { L: "Left", R: "Right" }, SIDE_COLOR: {}, SWITCH_STYLE: { R: {} }, TILE: {},
-    Tile: "Tile", CareStrip: "CareStrip", MoreSheet: "MoreSheet", AnimatePresence: "AnimatePresence", motion: { div: "div", button: "button" }, Icon: "Icon", cx: (...x: unknown[]) => x.join(" "),
+    Tile: "Tile", CareStrip: "CareStrip", SleepStrip: "SleepStrip", useTryAfterWake: () => noop, MoreSheet: "MoreSheet", AnimatePresence: "AnimatePresence", motion: { div: "div", button: "button" }, Icon: "Icon", cx: (...x: unknown[]) => x.join(" "),
   });
   return elements(render()).filter((node) => node.type === "Tile");
 }
