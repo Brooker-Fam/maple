@@ -64,7 +64,8 @@ export const dynamic = "force-dynamic";
  * stayed_asleep | woke_calm | woke_crying | picked_up } finishes the running
  * one, asleep_in_arms starts a sleep in arms, handoff from the person
  * holding her only asks the partner to take over (anyone else saying it has
- * her now), checkin { answer: yes | partly | no } is the speaker's own
+ * her now, with the catch-up; with nobody on a turn, the speaker's own
+ * starts with the ask on it), checkin { answer: yes | partly | no } is the speaker's own
  * check-in for last night, and undo takes back their newest Siri action
  * with the app's own Undo. sleep and wake take minutes_ago too (up to 4
  * hours). "Maple status" adds one sleep line while a try or a turn runs
