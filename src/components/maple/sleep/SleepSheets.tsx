@@ -221,6 +221,8 @@ export function SleepySheet({ open = true, onClose }: { open?: boolean; onClose:
           <p role="status" className={cx(tone.body, "text-[15px] leading-relaxed")}>
             {asked}&apos;s phone only sounds if handoff reminders are on. Go wake {asked}.
           </p>
+          {/* A second call within 3 minutes rings through a Focus that allows repeated calls (Notifications › Phone settings that help). */}
+          <p className={cx(tone.muted, "-mt-1 text-[13px] leading-snug")}>In another room? Call {asked} twice.</p>
           {big("bassinet", choices[0].label, choices[0].hint, () => void bassinet())}
           <Button variant="soft" size="lg" className="w-full" disabled={s.busy} onClick={() => void hasHer()}>
             {asked} has {v.them}

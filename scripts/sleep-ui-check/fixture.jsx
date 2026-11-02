@@ -464,7 +464,9 @@ function makeServer(clock) {
       const set = at("2026-10-24", 20, 0);
       db.goals.push({
         id: 310, baby_id: 1, title: "A protected stretch each", why: null, target_date: null, status: "active", targets: [], steps: [],
-        roster: [{ id: "w1", member: ME, from: "02:30", to: "05:30", nights: [0, 1, 2, 3, 4, 5, 6] }],
+        // Sam nurses (the template says so), so feeds in Sam's window are Sam's to give: the catch-up says to bring her to Sam.
+        roster: [{ id: "w1", member: ME, from: "02:30", to: "05:30", nights: [0, 1, 2, 3, 4, 5, 6], covers: "nurse" }],
+        template: { kind: "back_to_work", member: PARTNER, date: "2026-11-30", nursing: ME },
         last_review_at: null, review_note: null, closed_at: null, revision: 1, created_by: ME, updated_by: ME, source: "web", created_at: iso(set), updated_at: iso(set), client_id: null, item_seq: 1,
       });
     },
