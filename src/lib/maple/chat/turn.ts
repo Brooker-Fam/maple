@@ -17,6 +17,7 @@ import { costMicro, stepTokens, type ModelPrice, type StepTokens } from "./price
 import { dashFilter } from "./dashes";
 import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints, withMemoryLines } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
+import { definitionTokens, notLoadedOutput, TOOL_ORDER, toolDisclosure } from "./tool-groups";
 import { CHAT_FAILED, CHAT_OFF, type ChatData, type ChatMessage } from "./types";
 import { inputTokens, modelWindow } from "./window";
 import { SEARCH_FINISH, withoutSpend, type SearchSpend, type WebSearchOutput } from "./web-search";
@@ -99,6 +100,7 @@ export async function chatTurn(opts: {
   model: LanguageModel;
   modelKey: string;
   price: ModelPrice;
+  /** Every tool this person may have (chatTools); each step sends the core and the groups it needs (tool-groups.ts). */
   tools: ToolSet;
   viewer: boolean;
   /** Her page is open to this chat (chatCareOpen); `tools` must match. */
@@ -119,7 +121,7 @@ export async function chatTurn(opts: {
   memories?: { block: string; forgotten: ReadonlySet<string> } | null;
   deps: TurnDeps;
 }): Promise<Response> {
-  const { tools, messages, responseId, deps } = opts;
+  const { messages, responseId, deps } = opts;
   const stepsDone = opts.stepsDone ?? 0;
   // Continuations share one budget. A pending question must never buy another model step at the boundary.
   if (opts.questionContinuation && stepsDone >= CHAT_MAX_STEPS) {
@@ -132,7 +134,12 @@ export async function chatTurn(opts: {
   const hasImages = window.some((message) => message.parts.some((part) => part.type === "file"));
   const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, ...(opts.page ? { page: opts.page } : {}), model: opts.modelKey, copy: opts.copy, images: hasImages });
   const breakpoints = usesCacheBreakpoints(opts.modelKey);
-  const prefixChars = JSON.stringify([instructions, Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
+  const maxSteps = Math.max(1, CHAT_MAX_STEPS - stepsDone);
+  // The person's tools plus load_tools: all of them for history, execution and the stream; each step sends its selection.
+  const disclosure = toolDisclosure(opts.tools, { window, vo: opts.copy.v, lastStep: maxSteps - 1 });
+  const { tools } = disclosure;
+  const instructionTokens = roughTokens(JSON.stringify(instructions).length);
+  const prefixTokens = (names: readonly string[]) => instructionTokens + definitionTokens(disclosure.sizes, names);
 
   const record = (step: number, tokens: StepTokens, finishReason: string | null, generationId: string | null) => {
     const cost = costMicro(opts.modelKey, opts.price, tokens);
@@ -163,18 +170,24 @@ export async function chatTurn(opts: {
       convertDataPart: (p) => (p.type === "data-context" ? { type: "text", text: contextText(p.data as ChatData["context"]) } : undefined),
     }),
     tools,
+    // Core first, then the groups, always in this order, so the part of the prefix that didn't change stays cached.
+    toolOrder: [...TOOL_ORDER],
     toolApproval: TOOL_APPROVAL,
-    stopWhen: [isStepCount(Math.max(1, CHAT_MAX_STEPS - stepsDone)), promptTooLong],
+    // Never repairs: notes a call to a tool the step didn't send, so the next step has it.
+    repairToolCall: disclosure.repair,
+    stopWhen: [isStepCount(maxSteps), promptTooLong],
     maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
     reasoning: "low",
     timeout: CHAT_TIMEOUT,
     providerOptions: chatProviderOptions(opts.price.providers),
     prepareStep: ({ steps, stepNumber, messages: stepMessages }) => {
-      inFlight = { step: stepNumber, prompt: Math.max(lastPrompt(steps), roughTokens(prefixChars) + inputTokens(stepMessages)) };
-      return {
-        ...(breakpoints ? { messages: markTailForCache(stepMessages) } : {}),
-        ...(stepsDone + stepNumber >= CHAT_MAX_STEPS - 1 ? { activeTools: Object.keys(tools).filter((name) => name !== "ask_user") } : {}),
-      };
+      const selected = disclosure.select(stepNumber, steps).active;
+      // The last step answers: no question that would need another.
+      const active = stepNumber >= maxSteps - 1 ? selected.filter((name) => name !== "ask_user") : selected;
+      const explained = disclosure.explain(stepMessages);
+      inFlight = { step: stepNumber, prompt: Math.max(lastPrompt(steps), prefixTokens(active) + inputTokens(explained)) };
+      const sent = breakpoints ? markTailForCache(explained) : explained;
+      return { activeTools: active, ...(sent !== stepMessages ? { messages: sent } : {}) };
     },
     onStepEnd: async (step) => {
       inFlight = null;
@@ -233,6 +246,19 @@ export async function chatTurn(opts: {
           const rest = dashes.get(value.id)?.end();
           if (rest) writer.write({ type: "text-delta", id: value.id, delta: rest });
           dashes.delete(value.id);
+        }
+        // A call to a tool its step didn't send ran nothing, and the next step can make it again: no error card for it.
+        if (value.type === "tool-input-error" || value.type === "tool-output-error") {
+          const missed = disclosure.missOf(value.toolCallId);
+          if (missed) {
+            const input = value.type === "tool-input-error" && value.input && typeof value.input === "object" ? value.input : {};
+            writer.write(
+              value.type === "tool-input-error"
+                ? { type: "tool-input-available", toolCallId: value.toolCallId, toolName: missed, input }
+                : { type: "tool-output-available", toolCallId: value.toolCallId, output: notLoadedOutput(missed) }
+            );
+            continue;
+          }
         }
         // A search's spend is for the budgets alone: the phone and the saved chat never get it.
         if (value.type === "tool-output-available") {

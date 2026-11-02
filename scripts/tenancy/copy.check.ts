@@ -8,6 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as guidelines from "../../src/lib/maple/guidelines";
 import { MAPLE_INSTRUCTIONS, mapleInstructions, registerMapleTools, toolCopy, FAMILY_ONE_COPY, type Extra, type ToolCopy } from "../../src/lib/maple/mcp-tools";
 import { chatTools } from "../../src/lib/maple/chat/tools";
+import { LOAD_TOOLS, toolDisclosure } from "../../src/lib/maple/chat/tool-groups";
 import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, contextLine, systemBlocks } from "../../src/lib/maple/chat/prompt";
 import { FAMILY_ONE_VOICE, makeVoice, voiceFor, type Voice } from "../../src/lib/maple/voice";
 import { summarize } from "../../src/lib/maple/insights";
@@ -103,6 +104,8 @@ function staticCopy(): Record<string, string> {
   Object.assign(out, toolText(recordTools(registerMapleTools), "tool"));
   const chat = chatTools({ email: "avery.alpha@example.com", role: "owner" }, { fam: 1, born: true, care: true, copy: FAMILY_ONE_COPY });
   for (const [name, t] of Object.entries(chat)) out[`chat.${name}`] = String((t as { description?: string }).description);
+  // The turn adds load_tools, in the family's words (tool-groups.ts).
+  out[`chat.${LOAD_TOOLS}`] = String(toolDisclosure(chat, { window: [], vo: FAMILY_ONE_COPY.v, lastStep: 5 }).tools[LOAD_TOOLS].description);
   out["CHAT_ADDENDUM"] = CHAT_ADDENDUM;
   out["CHAT_ADDENDUM_VIEWER"] = CHAT_ADDENDUM_VIEWER;
   out["CHAT_ADDENDUM_CARE_CLOSED"] = CHAT_ADDENDUM_CARE_CLOSED;
@@ -232,6 +235,8 @@ function allToolText(copy: ToolCopy): Record<string, string> {
     systemBlocks({ viewer: k === "viewer", care: k === "care", model: "zai/glm-5.3-flash", copy }).map((b, i) => [`chat.${k}.${i}`, String(b.content)] as const)
   );
   for (const [k, text] of blocks) out[k] = text;
+  const chat = chatTools({ email: "avery.alpha@example.com", role: "owner" }, { fam: 2, born: true, care: true, copy });
+  out[`chat.${LOAD_TOOLS}`] = String(toolDisclosure(chat, { window: [], vo: copy.v, lastStep: 5 }).tools[LOAD_TOOLS].description);
   return out;
 }
 

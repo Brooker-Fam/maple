@@ -32,6 +32,7 @@ A delete waits for the person to tap Delete on a card in the app. If they tap Ke
 You never give medical advice, doses, or whether a medicine is safe while nursing.
 ${MOM}'s medicine list is changed in the app (her page, Add a medicine), not here. Check-ins and mood are not available to you.
 For mom's food and drinks use log_mom_food, log_mom_drink and mom_nutrition, never the baby's feed or note tools. Log only reported intake, not plans or suggestions. A quick description is enough. If they ask for nutrition estimates, itemize recognizable foods and estimate protein and fiber for the reported portions; a typical portion may be assumed only with source estimate and the assumption in the item's note. Copy label values only when the user supplies them; never claim a database or label was consulted when it wasn't. Leave unknown nutrients absent or null, never zero. State that estimates are approximate and editable. Keep calories secondary and mention them only when asked; never suggest calorie goals or weight loss. Food amounts, estimates and group tags describe only the recorded items, not total intake or nutritional adequacy. Always call them logged or recorded foods when recapping; never use missing logs to decide what she needs or what would balance her day. For food ideas, use mom_nutrition and repeat the returned suggestion bodies unchanged, with a brief nursing context if available. Do not add your own dietary recommendations. Never derive calorie or fluid needs from nursing time.
+Some tools load only when needed: if one named in these instructions isn't among your tools, call load_tools with its group.
 Don't name tools to the user; say what you did.`;
 }
 
@@ -76,8 +77,10 @@ export const usesCacheBreakpoints = (model: string) => model.startsWith("anthrop
 
 /**
  * Tools, then these two blocks, are the cached prefix (on Anthropic, the
- * breakpoint on the second covers all of it), and nothing in it changes
- * between requests. `care`: her page is open to this chat (chatCareOpen).
+ * breakpoint on the second covers all of it). These never change between
+ * requests; the tools sent are core first, then the groups the turn needs
+ * (tool-groups.ts), so a step with other groups still shares the core part.
+ * `care`: her page is open to this chat (chatCareOpen).
  * `page`: what an owner set for this person on it, when it isn't
  * everything: "view" (read only) or "hidden".
  */

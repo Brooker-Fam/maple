@@ -14,6 +14,7 @@ assert.equal(chatActivity([message([tool("maple_status")])], busy), "Checking th
 assert.equal(chatActivity([message([tool("maple_status", "output-available", { output: { ok: true, write: false, text: "Synthetic log" } })])], busy), "Finishing your reply…", "read-only output stays visibly busy until the reply finishes");
 assert.equal(chatActivity([message([tool("log_feed")])], busy), "Saving…");
 assert.equal(chatActivity([message([tool("show_chart")])], busy), "Preparing your chart…");
+assert.equal(chatActivity([message([tool("load_tools")])], busy), "Thinking…", "loading more of the chat's tools isn't reading the log");
 assert.equal(chatActivity([message([tool("ask_user")])], { ...busy, busy: false }), null, "a ready question waits for the person without a spinner");
 assert.equal(chatActivity([], { ...busy, recovering: true }), "Finishing your previous reply…");
 assert.equal(chatActivity([], { ...busy, recovering: true, recoveryPaused: true }), "Waiting to reconnect…");

@@ -42,7 +42,8 @@ import { OWNER_TOOLS, PEOPLE_CHANGE_TOOLS } from "../src/lib/maple/people-mcp";
 import { CHAT_MAX_CHARS, CHAT_TERMS_NEEDED, type ChatConsent, type ChatMessage, type ChatToolOutput } from "../src/lib/maple/chat/types";
 import { momSameMedicine } from "../src/lib/maple/care-mcp";
 import { chatCareOpen, consentCurrent, CONSENT_VERSION, isCarePerson } from "../src/lib/maple/consent";
-import { careOpen, FAMILY_ONE_COPY, logStateLines, mapleInstructions, MAPLE_INSTRUCTIONS, voiceOf, type Ctx } from "../src/lib/maple/mcp-tools";
+import { careOpen, FAMILY_ONE_COPY, logStateLines, mapleInstructions, MAPLE_INSTRUCTIONS, toolCopy, voiceOf, type Ctx } from "../src/lib/maple/mcp-tools";
+import { definitionTokens, TOOL_CEILING, TOOL_GROUPS, toolDisclosure } from "../src/lib/maple/chat/tool-groups";
 import { summarize } from "../src/lib/maple/insights";
 import { CRISIS_REPLY } from "../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
@@ -697,15 +698,31 @@ check("the window: a long chat sends only its recent end, in whole exchanges, th
   eq(modelWindow([]), [], "nothing");
 });
 
-check("the window leaves room under the step cap for the cached prefix, a full message and a whole tool result", () => {
-  const tools = chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true, device: null });
-  const prefixChars = JSON.stringify([systemBlocks({ viewer: false, care: true, model: GLM, copy: FAMILY_ONE_COPY }), Object.entries(tools).map(([name, t]) => [name, t.description, (t.inputSchema as { jsonSchema?: unknown }).jsonSchema])]).length;
-  const prefix = Math.ceil(prefixChars / 3);
+check("the window leaves room under the step cap for the instructions, the tools at their ceiling, a full message and a whole tool result", () => {
+  // The longest instructions any chat gets, here and in a family whose names are as long as the instructions carry (30 letters).
+  const long = toolCopy(2, { name: "X".repeat(30), nickname: null, sex: "female" }, "Y".repeat(30), "America/New_York");
+  const variants = [{ viewer: false, care: true }, { viewer: false, care: true, page: "view" }, { viewer: false, care: true, page: "hidden" }, { viewer: false, care: false }, { viewer: true, care: false }] as const;
+  const instructions = Math.max(...[FAMILY_ONE_COPY, long].flatMap((copy) => variants.map((v) => Math.ceil(JSON.stringify(systemBlocks({ ...v, model: GLM, copy })).length / 3))));
+  // A first step sends core and the groups it needs, never past TOOL_CEILING with nothing used yet (scripts/maple-chat-tools-check.ts); core always fits.
+  const search = { model: {} as never, modelKey: GLM, price: priceFor(GLM)!, names: { baby: [], mom: [], people: [] } };
+  const sizesFor = (copy: typeof FAMILY_ONE_COPY, born: boolean) => toolDisclosure(chatTools(ALEX, { fam: 2, copy, born, care: true, device: null, search }), { window: [], vo: copy.v, lastStep: 5 }).sizes;
+  for (const copy of [FAMILY_ONE_COPY, long]) {
+    for (const born of [true, false]) {
+      const sizes = sizesFor(copy, born);
+      const core = definitionTokens(sizes, TOOL_GROUPS.core.filter((n) => n in sizes));
+      ok(core <= TOOL_CEILING - 5_500, `core ${core} leaves room under the ceiling for her page's group`);
+    }
+  }
   // The family's memories at the most a prompt carries (MEMORY_PROMPT_MAX_CHARS) ride on the newest message.
   const memories = "m".repeat(MEMORY_PROMPT_MAX_CHARS + 600);
   const newest = messageTokens(withMemoryLines([userMessage("msg_u", "x".repeat(CHAT_MAX_CHARS), LINE, Array.from({ length: 12 }, () => "A made-up line of the log as it stands now, as long as most."))], memories)[0]);
-  const first = prefix + WINDOW_TOKENS + newest;
-  ok(first + Math.ceil(MODEL_TEXT_MAX / 3) <= STEP_PROMPT_LIMIT, `prefix ${prefix} + window ${WINDOW_TOKENS} + message ${newest} + a cut result is over ${STEP_PROMPT_LIMIT}`);
+  const result = Math.ceil(MODEL_TEXT_MAX / 3);
+  const first = instructions + TOOL_CEILING + WINDOW_TOKENS + newest;
+  const worst = first + result;
+  ok(worst <= STEP_PROMPT_LIMIT, `instructions ${instructions} + tools ${TOOL_CEILING} + window ${WINDOW_TOKENS} + message ${newest} + a cut result ${result} = ${worst}, over ${STEP_PROMPT_LIMIT}`);
+  const all = sizesFor(FAMILY_ONE_COPY, true);
+  const every = definitionTokens(all, Object.keys(all));
+  console.log(`  worst case: instructions ${instructions} + tools ${TOOL_CEILING} + window ${WINDOW_TOKENS} + message ${newest} + a cut result ${result} = ${worst} of ${STEP_PROMPT_LIMIT}, ${STEP_PROMPT_LIMIT - worst} to spare (every tool at once would be ${every}, not ${TOOL_CEILING})`);
   const cost = costMicro(GLM, priceFor(GLM)!, { prompt: first, fresh: first, cacheRead: 0, cacheWrite: 0, output: 1500, reasoning: 0 }).micro;
   ok(cost * BigInt(50) <= DAILY_BUDGET_DEFAULT, `a first step with nothing cached costs ${dollars(cost)}, over a fiftieth of the day's budget`);
 });
@@ -1261,18 +1278,22 @@ async function postChecks() {
           asked.push(opts.care);
           return chatTools(member, { ...opts, fam: 1, device: null });
         },
-      })(say("made-up question"), member);
+      })(say("Can mom take ibuprofen yet?"), member);
       eq(r.status, 200, "answered");
       const call = h.model.doStreamCalls[0];
       const system = call.prompt.filter((m) => m.role === "system").map((m) => m.content).join("\n");
-      return { asked, hers: (call.tools ?? []).map((t) => t.name).filter((n) => mom.has(n)), closed: system.includes(CHAT_ADDENDUM_CARE_CLOSED) };
+      // load_tools offers only the groups this person has tools in.
+      const load = (call.tools ?? []).find((t) => t.name === "load_tools") as { inputSchema?: { properties?: { groups?: { items?: { enum?: string[] } } } } } | undefined;
+      const offered = load?.inputSchema?.properties?.groups?.items?.enum ?? [];
+      return { asked, hers: (call.tools ?? []).map((t) => t.name).filter((n) => mom.has(n)), closed: system.includes(CHAT_ADDENDUM_CARE_CLOSED), offersHers: offered.includes("mom") };
     };
+    // The message is about her, so her group goes whenever this person has it (tool-groups.ts).
     const closed = await sent({ terms: true, care: false, self: false });
-    eq([closed.asked, closed.hers, closed.closed], [[false], [], true], "without chat_care: none of hers, and the prompt says so");
+    eq([closed.asked, closed.hers, closed.closed, closed.offersHers], [[false], [], true, false], "without chat_care: none of hers, nor offered, and the prompt says so");
     const open = await sent({ terms: true, care: true, self: false });
-    eq([open.asked, open.hers.length, open.closed], [[true], 8, false], "with chat_care: hers are in");
+    eq([open.asked, open.hers.length, open.closed, open.offersHers], [[true], 8, false, true], "with chat_care: hers are in");
     const viewer = await sent({ terms: true, care: true, self: false }, { ...ALEX_MEMBER, email: VI.email, role: "viewer" });
-    eq([viewer.asked, viewer.hers], [[false], []], "a viewer: never");
+    eq([viewer.asked, viewer.hers, viewer.offersHers], [[false], [], false], "a viewer: never");
   });
 
   await checkAsync("a chat that ever ran with her page open never goes back to the model once she's closed it", async () => {
