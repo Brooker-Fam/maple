@@ -27,7 +27,9 @@ import { formatTime } from "@/lib/maple/time";
 import { voiceFor } from "@/lib/maple/voice";
 import { ozToMl } from "@/lib/maple/units";
 import type { Baby, Entry, FeedData, Member } from "@/lib/maple/types";
+import { runningTry } from "@/lib/maple/sleep/store";
 import { captureServerException } from "@/lib/posthog-server";
+import { asleepInArms, badMinutes, checkin, clock, entryByClient, handoff, minutesAgo, outcome, putDown, sleepStatusLine, stopFeedForSleep, undo, type QuickCtx } from "./sleep";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +57,17 @@ export const dynamic = "force-dynamic";
  * next_ok_at and next_ok_in_minutes, so a Shortcut can Start Timer (which
  * rings through Silent) in one action. "Maple status" adds her medicines,
  * capped at two, for anyone who can read them.
+ *
+ * The sleep plan (./sleep.ts) rides it too: put_down { minutes_ago? } lays
+ * a bassinet try ("Try 2 tonight, down at 9:42."), outcome { outcome:
+ * stayed_asleep | woke_calm | woke_crying | picked_up } finishes the running
+ * one, asleep_in_arms starts a sleep in arms, handoff hands the open holding
+ * turn over, checkin { answer: yes | partly | no } is the speaker's own
+ * check-in for last night, and undo takes back their newest Siri action
+ * with the app's own Undo. sleep and wake take minutes_ago too (up to 4
+ * hours). "Maple status" adds one sleep line while a try or a turn runs, or
+ * while the speaker's check-in is due. Retries carry client_id; a second
+ * tap on a try, an outcome or a handoff answers with what's there.
  */
 
 const ACTIONS = [
@@ -73,6 +86,12 @@ const ACTIONS = [
   "status",
   "mom_status",
   "mom_dose",
+  "put_down",
+  "outcome",
+  "asleep_in_arms",
+  "handoff",
+  "checkin",
+  "undo",
 ] as const;
 type Action = (typeof ACTIONS)[number];
 
@@ -88,7 +107,7 @@ export async function POST(request: NextRequest) {
     const me = fam ? await memberFor(fam, fam.member) : null;
     if (!fam || !me) return json({ error: "Unknown or revoked token", speak: "That shortcut isn't connected to Maple's log anymore." }, 401);
 
-    const body = (await request.json().catch(() => ({}))) as { action?: unknown; amount_oz?: unknown; client_id?: unknown } & MomBody;
+    const body = (await request.json().catch(() => ({}))) as { action?: unknown; amount_oz?: unknown; client_id?: unknown; outcome?: unknown; answer?: unknown; protected?: unknown } & MomBody;
     const action = body.action as Action;
     if (!ACTIONS.includes(action)) {
       return json({ error: `action must be one of ${ACTIONS.join(", ")}`, speak: "I didn't catch what to log." }, 400);
@@ -106,6 +125,22 @@ export async function POST(request: NextRequest) {
     const now = new Date();
     const base = { babyId: baby.id, createdBy: me.email, source: "shortcut" as const };
     const clientId = typeof body.client_id === "string" ? `shortcut:${body.client_id}` : null;
+    // The sleep plan's actions (./sleep.ts): each reads what it needs and answers itself. Awaited, so a failure is spoken below.
+    const qc: QuickCtx = { fam, me, baby, vo, tz, now, clientId, body };
+    switch (action) {
+      case "put_down":
+        return await putDown(qc);
+      case "outcome":
+        return await outcome(qc);
+      case "asleep_in_arms":
+        return await asleepInArms(qc);
+      case "checkin":
+        return await checkin(qc);
+      case "handoff":
+        return await handoff(qc, await listMembers(fam));
+      case "undo":
+        return await undo(qc, await listMembers(fam));
+    }
     const running = await activeTimers(fam, baby.id);
     const runningFeed = running.find((e) => e.kind === "feed");
     const runningSleep = running.find((e) => e.kind === "sleep");
@@ -192,16 +227,36 @@ export async function POST(request: NextRequest) {
           speak = action === "wake" ? "No sleep timer is running." : "No timer is running.";
           break;
         }
-        // No time: "now" under the stop rule (a paused feed ends at its pause).
-        entry = await stopTimer(fam, target.id, undefined, me.email);
+        // wake takes minutes_ago ("she woke 5 minutes ago"); otherwise "now" under the stop rule (a paused feed ends at its pause).
+        const when = action === "wake" ? minutesAgo(body.minutes_ago, now) : { at: now, given: false };
+        if (!when) return badMinutes(body.minutes_ago);
+        if (when.given && when.at.getTime() < Date.parse(target.started_at)) {
+          return json({ ok: false, speak: `That's before the sleep timer started at ${clock(target.started_at, tz)}, so nothing was changed.` }, 400);
+        }
+        entry = await stopTimer(fam, target.id, when.given ? when.at : undefined, me.email);
         speak = `Stopped. ${describeEntry(entry, { now }).text}.`;
+        // A bassinet try on that sleep stays open until someone says how it went (the app opens How did it go? here).
+        if (entry.kind === "sleep" && (await runningTry(fam, baby.id))?.sleep_entry_id === entry.id) speak += " The bassinet try is still open: say how it went.";
         break;
       }
       case "sleep": {
-        if (runningFeed) await stopTimer(fam, runningFeed.id, undefined, me.email);
-        ({ entry } = await startTimer(fam, { ...base, kind: "sleep", at: now, clientId }));
+        const when = minutesAgo(body.minutes_ago, now);
+        if (!when) return badMinutes(body.minutes_ago);
         const dreams = vo.named ? `Sweet dreams, ${vo.name}.` : "Sweet dreams.";
-        speak = runningFeed ? `Feed stopped and sleep timer started. ${dreams}` : `Sleep timer started. ${dreams}`;
+        const at = (e: Entry) => (when.given ? ` at ${clock(e.started_at, tz)}` : "");
+        // A retry of this request gets its first answer, not "already running".
+        const prior = await entryByClient(fam, clientId);
+        if (prior?.kind === "sleep") {
+          entry = prior;
+          speak = `Sleep timer started${at(prior)}. ${dreams}`;
+          break;
+        }
+        // Fell asleep feeding: the feed ends when she fell asleep (a time given), else now.
+        if (runningFeed) await stopFeedForSleep(fam, runningFeed, when, me.email);
+        const r = await startTimer(fam, { ...base, kind: "sleep", at: when.at, clientId: prior ? null : clientId });
+        entry = r.entry;
+        if (r.alreadyRunning) speak = `${runningFeed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(r.entry.started_at, tz)}.`;
+        else speak = runningFeed ? `Feed stopped and sleep timer started${at(r.entry)}. ${dreams}` : `Sleep timer started${at(r.entry)}. ${dreams}`;
         break;
       }
       case "vitamin_d": {
@@ -242,8 +297,12 @@ export async function POST(request: NextRequest) {
           // The cluster line after a cluster, else when she last ate and the side to start on (insights' lastFed and next).
           bits.push(lastFedSpeak(s, name, tz, vo));
         }
+        // The sleep plan's one line: a try running, else who's holding her, else this adult's check-in when it's due.
+        const sleep = await sleepStatusLine({ fam, baby, me, members, vo, name, now });
+        if (sleep.line) bits.push(sleep.line);
         bits.push(`${s.last24h.wet} wet and ${s.last24h.dirty} dirty diapers in the last 24 hours.`);
-        const others = s.active.filter((e) => e.kind !== "feed");
+        // The try's line already says she's asleep.
+        const others = s.active.filter((e) => e.kind !== "feed" && e.id !== sleep.trySleepId);
         if (others.length) bits.push(`A ${others.map((e) => (e.kind === "tummy" ? "tummy time" : e.kind)).join(" and ")} timer is running.`);
         if (s.vitaminD) bits.push("Vitamin D is done today.");
         const urgent = s.alerts.find((a) => a.tier === "emergency" || a.tier === "now" || a.tier === "today");
