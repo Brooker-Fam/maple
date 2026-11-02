@@ -69,7 +69,7 @@ import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
-import { deleteShift, deleteTry, getTry as getSleepTry } from "./sleep/store";
+import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, summarize, type Summary } from "./insights";
 import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
 import { milestoneLabel, milestonesFor, milestoneWordsOf, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
@@ -3449,6 +3449,8 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         side = s.nextSide ?? "L";
         suggested = !!s.nextSide;
       }
+      // A feed starting ends a sleep in arms then (a holding turn's), as the app's dock and Siri end a nap when nursing starts.
+      const armsEnded = kind === "feed" && !live ? await endArmsSleepForFeed(ctx.fam, { babyId: ctx.baby.id, at, by: ctx.who.id }) : null;
       const { entry, alreadyRunning } = await startTimer(ctx.fam, {
         babyId: ctx.baby.id,
         kind,
@@ -3473,6 +3475,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started.`
           : `Saved #${entry.id}: ${label} timer started${sideText} at ${whenText(entry.started_at, ctx)} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : ""}`,
         ...(goingBoth && !alreadyRunning ? [BOTH_NOTE] : []),
+        ...(armsEnded ? [`${vo.Name}'s sleep in arms (#${armsEnded.sleep.id}, since ${formatTime(armsEnded.sleep.started_at, ctx.tz)}) ended at ${formatTime(armsEnded.sleep.ended_at!, ctx.tz)}, when the feed began (if ${vo.they} ${vo.verb("is")} still asleep in arms, reopen_timer with id ${armsEnded.sleep.id} runs it again).`] : []),
       ];
       const others = (await activeTimers(ctx.fam, ctx.baby.id)).filter((x) => x.id !== entry.id);
       for (const o of others) lines.push(`Also running: ${timerLine(o, ctx)}`);
