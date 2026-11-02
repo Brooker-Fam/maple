@@ -19,7 +19,7 @@
     "check:maple-native": "tsx scripts/maple-native-check.ts",
     "check:maple-chat": "tsx scripts/maple-chat-check.ts && tsx scripts/maple-chat-questions-check.ts && tsx scripts/maple-chat-charts-check.ts && tsx scripts/maple-chat-progress-check.ts && tsx scripts/maple-chat-queue-check.ts && tsx scripts/maple-chat-receipts-check.ts && tsx scripts/maple-chat-navigation-check.ts && tsx scripts/maple-chat-images-check.ts && tsx scripts/chat-images-ui/queue-check.ts",
     "check:maple-memory": "tsx scripts/maple-memory-check.ts && tsx scripts/tenancy/run.ts memories",
-    "check:maple-sleep": "tsx scripts/maple-sleep-check.ts && tsx scripts/tenancy/run.ts sleep",
+    "check:maple-sleep": "tsx scripts/maple-sleep-check.ts && tsx scripts/tenancy/run.ts sleep sleep-goals",
     "check:maple-chat-ui": "node scripts/chat-ui-check/run.mjs && node scripts/chat-settings-ui-check/run.mjs && node scripts/chat-search-ui/run.mjs && node scripts/chat-entrypoints-ui/run.mjs && node scripts/chat-images-ui/run.mjs",
     "check:site": "tsx scripts/site-check.ts",
     "check:email": "tsx scripts/email-check.ts",

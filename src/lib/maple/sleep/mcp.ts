@@ -26,39 +26,87 @@ import {
 } from "../mcp-tools";
 import { holdingChanged } from "../push-hooks";
 import { activeTimers, getEntry, NotFound, StoreUnavailable } from "../store";
-import { formatDuration, formatTime } from "../time";
+import { addDays, dayKey, formatDuration, formatTime } from "../time";
 import { SLEEP_PLACES, type Entry, type Member } from "../types";
 import type { Voice } from "../voice";
 import { numberTries, planToday, planTodayLine, progressLines, shiftStatus, sleepAge, sleepGuidance, sleepSignals, snoozeUntil, stageSuggestion, tryDayKey, tryDayLabel, type GuideView } from "./engine";
 import {
+  checkinWords,
+  cleanGoalInput,
+  coachGuardrails,
+  coachNotes,
+  goalAdults,
+  goalHeadLine,
+  goalProgressLines,
+  goalRef,
+  goalSpan,
+  lastNightKey,
+  lastNightLine,
+  nextStep,
+  rosterWords,
+  seesCheckins,
+  targetsWords,
+  type CoachNotes,
+  type GoalFields,
+  type GoalProgress,
+  type GoalWords,
+} from "./goals";
+import {
   cleanNote,
   cleanPlanPatch,
   cleanTags,
+  closeGoal,
+  createGoal,
+  deleteCheckin,
   deleteTry,
   endShift,
   ensurePlan,
   finishTry,
+  getGoal,
   getPlan,
   getTry,
+  goalProgressFor,
   handOff,
+  listCheckins,
+  listGoals,
   listTries,
   logTry,
   openShift,
   progressFor,
   restoreTry,
+  reviewGoal,
+  rowToCheckin,
+  rowToGoal,
   runningTry,
+  saveCheckin,
+  setGoalStep,
   SleepConflict,
   SleepInputError,
   startShift,
   startTry,
   undoFinish,
+  updateGoal,
   updatePlan,
   updateTry,
+  type GoalCtx,
   type TryPatch,
   type TryWrite,
 } from "./store";
-import { PLAN_STAGES, TRY_OUTCOMES, TRY_TAGS, type BassinetTry, type HoldingShift, type SleepPlan, type TryOutcome } from "./types";
-import { defaultGoal, OUTCOME_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL } from "./words";
+import {
+  GOAL_NOTE_MAX,
+  PLAN_STAGES,
+  PROTECTED_ANSWERS,
+  TARGET_KINDS,
+  TRY_OUTCOMES,
+  TRY_TAGS,
+  type BassinetTry,
+  type GoalInput,
+  type HoldingShift,
+  type SleepGoal,
+  type SleepPlan,
+  type TryOutcome,
+} from "./types";
+import { dateWords, defaultGoal, GOAL_STATUS_LABEL, OUTCOME_LABEL, PROTECTED_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, targetWords, windowWords } from "./words";
 
 /**
  * The sleep plan as MCP tools: read the plan and progress, change the plan,
@@ -235,16 +283,186 @@ function planLine(p: SleepPlan, v: Voice): string {
 const guideText = (g: GuideView) => `${g.title}: ${g.body}${g.steps ? ` ${g.steps.map((s, i) => `${i + 1}. ${s}`).join(" ")}` : ""}`;
 const guideJson = (g: GuideView) => ({ title: g.title, body: g.body, ...(g.steps ? { steps: g.steps } : {}), source: g.sources[0]?.url });
 
+// ── sleep goals: words and JSON ──────────────────────────────────────────
+
+/** A goal's id from "g3", "#3", "3" or 3. */
+function goalIdArg(raw: unknown): number {
+  const s = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim().replace(/^#/, "") : "";
+  const m = /^[gG]?([1-9]\d{0,15})$/.exec(s);
+  const n = m ? Number(m[1]) : NaN;
+  if (!Number.isSafeInteger(n)) throw new ToolError("That isn't a sleep goal id (like g3). sleep_plan lists the goals.");
+  return n;
+}
+
+/** The adults who check in (owners and members), and the day, a goal write is checked against. */
+const goalCtx = (ctx: Ctx): GoalCtx => ({
+  adults: new Set(ctx.members.filter((m) => m.role === "owner" || m.role === "member").map((m) => m.email)),
+  name: (id) => who(id, ctx),
+  today: dayKey(ctx.now, ctx.tz),
+});
+
+const goalWords = (ctx: Ctx): GoalWords => ({ v: voiceOf(ctx), name: (id) => who(id, ctx), tz: ctx.tz, now: ctx.now });
+
+function goalJson(g: SleepGoal, ctx: Ctx) {
+  const today = dayKey(ctx.now, ctx.tz);
+  return {
+    id: goalRef(g.id),
+    title: g.title,
+    ...(g.why ? { why: g.why } : {}),
+    status: g.status,
+    target_date: g.target_date,
+    targets: g.targets.map((t) => ({ ...t, ...(t.kind === "protected_window" ? { member: who(t.member, ctx) } : {}), words: targetWords(t, (id) => who(id, ctx)) })),
+    steps: g.steps.map((s) => ({ id: s.id, title: s.title, week_of: s.week_of, done: !!s.done_at, ...(s.done_at ? { done_by: who(s.done_by, ctx), done_local: whenText(s.done_at, ctx) } : {}) })),
+    roster: g.roster.map((w) => ({ id: w.id, member: who(w.member, ctx), from: w.from, to: w.to, nights: w.nights, words: windowWords(w, (id) => who(id, ctx)) })),
+    ...(g.last_review_at ? { last_review: dateWords(dayKey(Date.parse(g.last_review_at), ctx.tz), today), review_note: g.review_note } : {}),
+    ...(g.closed_at ? { closed: dateWords(dayKey(Date.parse(g.closed_at), ctx.tz), today) } : {}),
+    revision: g.revision,
+  };
+}
+
+/** A goal's progress for a model: per target and week, with the sample sizes. */
+function goalProgressJson(p: GoalProgress, ctx: Ctx) {
+  return {
+    starts_on: p.startsOn,
+    target_date: p.endsOn,
+    days_left: p.daysLeft,
+    week_now: p.weekNow,
+    weeks_total: p.weeksTotal,
+    weeks: p.weeks.map((w) => ({ n: w.n, from: w.from, to: w.to, nights_so_far: w.nights })),
+    ...(p.weeksHidden ? { earlier_weeks_not_shown: p.weeksHidden } : {}),
+    targets: p.targets.map((t) => {
+      const aim = targetWords(t.target, (id) => who(id, ctx));
+      switch (t.kind) {
+        case "bassinet_nights":
+          return { id: t.id, aim, weeks: t.weeks.map((w) => ({ week: w.week, nights_counted: w.counted, of_nights_with_a_finished_try: w.tried, nights_so_far: w.nights })) };
+        case "bassinet_stretch":
+          return {
+            id: t.id,
+            aim,
+            weeks: t.weeks.map((w) => ({ week: w.week, stretches: w.stretches, longest: w.longestSec == null ? null : formatDuration(w.longestSec), reached_aim: w.atLeast })),
+            longest: t.longest ? { length: formatDuration(t.longest.sec), from_local: whenText(t.longest.start, ctx) } : null,
+          };
+        case "protected_window":
+          return t.weeks
+            ? { id: t.id, aim, weeks: t.weeks.map((w) => ({ week: w.week, yes: w.yes, partly: w.partly, no: w.no, nights_checked_in: w.checkedIn, nights_on_roster: w.planned })) }
+            : { id: t.id, aim, counted_from: "the adults' own check-ins" };
+        case "custom":
+          return { id: t.id, aim, counted: false };
+      }
+    }),
+    steps: { done: p.steps.done, of: p.steps.of, next: p.steps.next ? { id: p.steps.next.id, title: p.steps.next.title, week_of: p.steps.next.week_of } : null },
+    ...(p.checkins ? { checkins: p.checkins.map((c) => ({ who: who(c.member, ctx), nights: c.nights, yes: c.yes, partly: c.partly, no: c.no, last_night: c.lastNight })) } : {}),
+    roster_hints: p.roster
+      .filter((h) => h.nights)
+      .map((h) => ({
+        window: h.windowId,
+        who: who(h.member, ctx),
+        nights: h.nights,
+        feeds: h.feeds,
+        feed_nights: h.feedNights,
+        feeds_they_logged: h.feedsLoggedBy,
+        nights_they_held: h.heldNights,
+        held_by_others: h.cover.map((c) => ({ who: who(c.member, ctx), nights: c.nights })),
+        tries: h.tries,
+      })),
+  };
+}
+
+const coachJson = (c: CoachNotes, ctx: Ctx) => ({
+  days_left: c.daysLeft,
+  review_due: c.reviewDue,
+  days_since_review: c.daysSinceReview,
+  next_step: c.nextStep ? { id: c.nextStep.id, title: c.nextStep.title, week_of: c.nextStep.week_of } : null,
+  ...(c.notCheckedIn ? { not_checked_in_for_last_night: c.notCheckedIn.map((m) => who(m, ctx)) } : {}),
+  notes: c.notes,
+});
+
+/** A goal as it would be saved, read back in words: what the person says yes to. */
+function draftWords(f: GoalFields, ctx: Ctx): string {
+  const today = dayKey(ctx.now, ctx.tz);
+  const name = (id: string) => who(id, ctx);
+  const parts: string[] = [];
+  if (f.title !== undefined) parts.push(`"${f.title}"`);
+  if (f.why !== undefined) parts.push(f.why ? `why: "${f.why}"` : "no why");
+  if (f.target_date !== undefined) parts.push(f.target_date ? `target date ${dateWords(f.target_date, today)}` : "no target date");
+  if (f.targets !== undefined) parts.push(f.targets.length ? `targets: ${targetsWords(f.targets, name)}` : "no targets");
+  if (f.steps !== undefined) parts.push(f.steps.length ? `steps: ${f.steps.map((s, i) => `${i + 1}. "${s.title}"${s.week_of ? ` (week of ${dateWords(s.week_of, today)})` : ""}`).join(" ")}` : "no steps");
+  if (f.roster !== undefined) parts.push(f.roster.length ? `roster: ${rosterWords(f.roster, name)}` : "no roster");
+  if (f.status !== undefined) parts.push(`status ${GOAL_STATUS_LABEL[f.status].toLowerCase()}`);
+  return parts.join("; ");
+}
+
+/** The tool's people (names or "me"), and its "in 4 weeks" dates, as a GoalInput with member ids. */
+type GoalArgs = {
+  title?: string | null;
+  why?: string | null;
+  target_date?: string | null;
+  targets?: { kind: (typeof TARGET_KINDS)[number]; per_week?: number | null; min_minutes?: number | null; minutes?: number | null; member?: string | null; text?: string | null; id?: string | null }[] | null;
+  steps?: { title: string; week_of?: string | null; id?: string | null }[] | null;
+  roster?: { member: string; from: string; to: string; nights: number[]; id?: string | null }[] | null;
+  status?: "active" | "paused" | "met" | "dropped" | null;
+};
+
+function targetDateArg(raw: string, ctx: Ctx): string | null {
+  const s = raw.trim().toLowerCase();
+  if (s === "none" || s === "no date") return null;
+  const m = /^in\s+(\d{1,3})\s+(day|week)s?$/.exec(s);
+  if (m) return addDays(dayKey(ctx.now, ctx.tz), Number(m[1]) * (m[2] === "week" ? 7 : 1));
+  return raw.trim();
+}
+
+function goalInputFrom(a: GoalArgs, ctx: Ctx, mode: "add" | "update"): GoalInput {
+  const out: GoalInput = {};
+  if (a.title != null) out.title = a.title;
+  if (a.why != null) out.why = a.why.trim() ? a.why : null;
+  if (a.target_date != null) out.target_date = targetDateArg(a.target_date, ctx);
+  if (a.targets != null)
+    out.targets = a.targets.map((t, i) => ({
+      ...t,
+      member: t.kind === "protected_window" ? (personArg(t.member ?? null, ctx, `target ${i + 1}'s member`) ?? ctx.who.id) : null,
+    }));
+  if (a.steps != null) out.steps = a.steps.map((s) => ({ ...s }));
+  if (a.roster != null) out.roster = a.roster.map((w, i) => ({ ...w, member: personArg(w.member, ctx, `window ${i + 1}'s member`) ?? ctx.who.id }));
+  if (a.status != null) {
+    if (mode === "add") throw new ToolError("A new goal starts active; leave status out.");
+    if (a.status === "met" || a.status === "dropped") throw new ToolError(`To close a goal as ${a.status}, use action "close" (with confirmed: true after they say yes).`);
+    out.status = a.status;
+  }
+  return out;
+}
+
+/** The goal's head line, its progress lines and its coach notes, for sleep_plan and the tool's answers. */
+function goalBlock(g: SleepGoal, p: GoalProgress, ctx: Ctx): { lines: string[]; coach: CoachNotes } {
+  const words = goalWords(ctx);
+  const coach = coachNotes(g, p, words);
+  return { lines: [goalHeadLine(g, p, words), ...goalProgressLines(g, p, words), ...coach.notes.map((n) => `Coach note: ${n}`)], coach };
+}
+
+async function oneProgress(g: SleepGoal, ctx: Ctx): Promise<GoalProgress> {
+  const m = await goalProgressFor(ctx.fam, ctx.baby.id, [g], { tz: ctx.tz, now: ctx.now, checkins: seesCheckins(ctx.who.role) });
+  return m.get(g.id)!;
+}
+
+/** A goal changed since the model read it: say so, with the goal as it is now. */
+function goalConflictText(err: SleepConflict, ctx: Ctx): string {
+  const g = err.current as SleepGoal | null;
+  if (!g || !("targets" in g)) return `${err.message} Nothing was saved. Call sleep_plan to see it as it is now, then try again.`;
+  const span = goalSpan(g, ctx.now, ctx.tz);
+  return `Someone changed sleep goal ${goalRef(g.id)} since you read it (revision ${g.revision} now). Nothing was saved. It reads: ${goalHeadLine(g, span, goalWords(ctx))} Check it's still what they want, then try again with revision ${g.revision}.`;
+}
+
 // ── the lines other tools add (maple_status, the chat's [App] lines) ─────
 
 /**
  * The sleep plan as maple_status and the chat read it: a running try, who's
- * holding her, and today's tries against the plan. Nothing when the family
- * has none of it.
+ * holding her, today's tries against the plan, the active sleep goals and,
+ * for owners and members only, last night's check-ins from the goals'
+ * adults. Nothing when the family has none of it.
  */
 export async function sleepStatus(ctx: Ctx): Promise<{ lines: string[]; json: Record<string, unknown> } | null> {
-  const [plan, running, shift] = await Promise.all([getPlan(ctx.fam, ctx.baby.id), runningTry(ctx.fam, ctx.baby.id), openShift(ctx.fam, ctx.baby.id)]);
-  if (!plan && !running && !shift) return null;
+  const [plan, running, shift, goals] = await Promise.all([getPlan(ctx.fam, ctx.baby.id), runningTry(ctx.fam, ctx.baby.id), openShift(ctx.fam, ctx.baby.id), listGoals(ctx.fam, ctx.baby.id)]);
+  const active = goals.filter((g) => g.status === "active");
+  if (!plan && !running && !shift && !active.length) return null;
   const tries = plan || running ? await listTries(ctx.fam, ctx.baby.id, { from: new Date(ctx.now.getTime() - 2 * 24 * 3600_000), limit: 100 }) : [];
   const nums = numberTries(tries, ctx.tz);
   const lines: string[] = [];
@@ -261,6 +479,22 @@ export async function sleepStatus(ctx: Ctx): Promise<{ lines: string[]; json: Re
     const today = planToday(plan, tries, ctx.now, ctx.tz);
     lines.push(`Sleep plan: stage ${plan.stage} (${STAGE_INFO[plan.stage].title}); bassinet tries ${planTodayLine(today)}`);
     json.plan = { stage: plan.stage, today: `${today.done} of ${today.planned}`, next: today.next ? slotLabel(today.next) : null, more: "sleep_plan" };
+  }
+  if (active.length) {
+    const left = (g: SleepGoal) => {
+      const d = goalSpan(g, ctx.now, ctx.tz).daysLeft;
+      return d == null ? "" : d > 1 ? `, ${d} days left` : d === 1 ? ", the target date is tomorrow" : d === 0 ? ", the target date is today" : ", past its target date";
+    };
+    lines.push(`Sleep goals: ${active.map((g) => `${goalRef(g.id)} "${g.title}"${left(g)}`).join("; ")}. sleep_plan has their progress and coach notes.`);
+    json.goals = active.map((g) => ({ id: goalRef(g.id), title: g.title, days_left: goalSpan(g, ctx.now, ctx.tz).daysLeft, more: "sleep_plan" }));
+    // Last night's check-ins, only for someone who may read them (owners and members).
+    const adults = [...new Set(active.flatMap(goalAdults))];
+    if (adults.length && seesCheckins(ctx.who.role)) {
+      const last = lastNightKey(ctx.now, ctx.tz);
+      const checkins = await listCheckins(ctx.fam, ctx.baby.id, { from: last, to: last });
+      lines.push(`Check-ins for last night: ${lastNightLine(adults, checkins, ctx.now, ctx.tz, (id) => who(id, ctx))}.`);
+      json.checkins_last_night = adults.map((m) => ({ who: who(m, ctx), answer: checkins.find((c) => c.member === m)?.protected ?? null }));
+    }
   }
   return { lines, json };
 }
@@ -283,7 +517,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     "sleep_plan",
     {
       title: `${vo.Name}'s sleep plan`,
-      description: `For sleep questions, and before a try or holding change: ${vo.their} age, the plan (with revision), tonight's tries, a running try, who's holding ${vo.them}, a stage recent tries could support (theirs to choose), and guidance for ${vo.their} age, word for word.`,
+      description: `For sleep questions, and before a try, holding or goal change: ${vo.their} age, the plan (with revision), tonight's tries, a running try, who's holding ${vo.them}, a stage recent tries could support (theirs to choose), the sleep goals with progress and coach notes, and guidance for ${vo.their} age, word for word.`,
       inputSchema: { progress_days: z.number().int().min(1).max(31).nullish().describe("Also how the last N days of tries went.") },
       annotations: READ_ANN,
       invoking: "Checking the sleep plan…",
@@ -332,6 +566,19 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           enough_for_patterns: p.enough,
         };
       }
+      // The family's open sleep goals, each with its progress from the log and short coach notes (check-in counts only for owners and members).
+      const goals = await listGoals(ctx.fam, ctx.baby.id);
+      const goalsOut: Record<string, unknown>[] = [];
+      if (goals.length) {
+        const gp = await goalProgressFor(ctx.fam, ctx.baby.id, goals, { tz: ctx.tz, now: ctx.now, checkins: seesCheckins(ctx.who.role) });
+        for (const g of goals) {
+          const pg = gp.get(g.id)!;
+          const b = goalBlock(g, pg, ctx);
+          lines.push(...b.lines);
+          goalsOut.push({ ...goalJson(g, ctx), progress: goalProgressJson(pg, ctx), coach: coachJson(b.coach, ctx) });
+        }
+        lines.push(`Coaching: ${coachGuardrails(v).join(" ")}`);
+      }
       lines.push(`Guidance for ${v.their} age is in guidance (word for word, with its sources). ${DISCLAIMER}`);
       return ok(lines.join("\n"), {
         age: age ? { days: age.days, label: age.label, stage: age.band.label } : null,
@@ -342,6 +589,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         suggestion: suggestion && !suggestion.snoozed ? { to_stage: suggestion.to, tries: suggestion.tries, days: suggestion.days, stayed_30_plus_of_last: `${suggestion.stayed} of ${suggestion.recent}` } : null,
         recent_tries: tries.slice(0, 10).map((t) => tryJson(t, ctx, nums)),
         ...(progress ? { progress } : {}),
+        ...(goalsOut.length ? { goals: goalsOut, coach_guardrails: coachGuardrails(v) } : {}),
         guidance: { now: guidance.now.map(guideJson), sections: guidance.sections.map((s) => ({ section: s.title, items: s.items.map(guideJson) })) },
       });
     }
@@ -687,6 +935,193 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       });
     }
   );
+
+  // ── sleep goals, coached ──
+
+  const targetShape = z.object({
+    kind: z.enum(TARGET_KINDS),
+    per_week: z.number().int().min(1).max(7).nullish(),
+    min_minutes: z.number().int().min(15).max(720).nullish(),
+    minutes: z.number().int().min(15).max(720).nullish(),
+    member: z.string().max(80).nullish(),
+    text: z.string().max(120).nullish(),
+    id: z.string().max(12).nullish(),
+  });
+  const stepShape = z.object({ title: z.string().max(120), week_of: z.string().max(10).nullish(), id: z.string().max(12).nullish() });
+  const windowShape = z.object({
+    member: z.string().max(80),
+    from: z.string().max(5),
+    to: z.string().max(5),
+    nights: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    id: z.string().max(12).nullish(),
+  });
+
+  addSleepTool(
+    server,
+    "sleep_goal",
+    {
+      title: "Sleep goals",
+      description: `Sleep goals, coached: add, update (with its revision), step (mark one done), check_in, review, close (met or dropped). A goal has a target date, measurable targets, weekly steps and, if it helps, a roster of protected sleep windows per adult. Coach this way: ask one question at a time (in Maple chat, with ask_user); use the family's memories for their constraints; propose one goal with its steps, read it back and save it only after a yes (add, update and close need confirmed: true). Each adult checks in the morning after: check_in saves only the signed-in person's own answer (protected yes, partly or no, and an optional note about the night), never hours slept, mood or anyone's health. sleep_plan has each goal's progress, counted from the log, and coach notes: talk it over, then review with a short note. No medical advice. Feeding changes (bottles, pumping, formula) only as options to raise with their pediatrician or lactation consultant. Never crying it out, and never ${vo.name} sleeping on or beside an adult as a plan. Hard nights are neutral: plain counts, no blame. Targets: bassinet_nights {per_week, min_minutes}, bassinet_stretch {minutes}, protected_window {member, per_week}, custom {text}.`,
+      inputSchema: {
+        action: z.enum(["add", "update", "step", "check_in", "review", "close"]),
+        id: z.string().max(20).nullish().describe("The goal, like g3"),
+        revision: z.number().int().positive().nullish().describe("update: the goal's revision from sleep_plan"),
+        confirmed: z.boolean().nullish().describe("add, update, close: true only once you read it back and they said yes"),
+        title: z.string().max(120).nullish(),
+        why: z.string().max(300).nullish(),
+        target_date: z.string().max(20).nullish().describe('YYYY-MM-DD, "in 4 weeks", or "none"'),
+        targets: z.array(targetShape).max(6).nullish().describe("The whole list"),
+        steps: z.array(stepShape).max(12).nullish().describe("The whole list; week_of is a date in its week"),
+        roster: z.array(windowShape).max(6).nullish().describe('Protected sleep windows: from and to like "22:00", nights the evenings it begins on, 0 (Sun) to 6 (Sat)'),
+        status: z.enum(["active", "paused", "met", "dropped"]).nullish().describe("update: active or paused; close: met or dropped"),
+        step: z.string().max(12).nullish().describe("step: its id, like s2"),
+        done: z.boolean().nullish(),
+        protected: z.enum(PROTECTED_ANSWERS).nullish().describe("check_in: did their window hold"),
+        night: z.string().max(20).nullish().describe("check_in: YYYY-MM-DD, the evening it began (default last night)"),
+        note: z.string().max(GOAL_NOTE_MAX).nullish().describe("check_in (200 at most): about the night only; review and close: a short note"),
+        client_ref: z.string().max(100).nullish(),
+      },
+      annotations: WRITE_ANN,
+      invoking: "Working on the sleep goal…",
+      invoked: "Sleep goal saved",
+      write: true,
+    },
+    async (a, ctx) => {
+      const gc = goalCtx(ctx);
+      const by = ctx.who.id;
+      const source = ctx.who.via;
+      const name = (id: string) => who(id, ctx);
+      try {
+        switch (a.action) {
+          case "add": {
+            if (!a.title?.trim()) throw new ToolError("Give the goal a short title in their words (title).");
+            const input = goalInputFrom(a, ctx, "add");
+            if (a.confirmed !== true) {
+              // Checked now, so what they say yes to is what saves.
+              const { fields } = cleanGoalInput(input, { ...gc, current: null, seq: 0 }, "create");
+              return ok(`Nothing saved yet. Read this back to them: a sleep goal ${draftWords(fields, ctx)}. Only if they say yes, call sleep_goal add again with the same goal and confirmed: true.`, { confirm_needed: true });
+            }
+            const w = await createGoal(ctx.fam, { babyId: ctx.baby.id, goal: input, ctx: gc, by, source, clientId: ref(a.client_ref, ctx), device: ctx.device });
+            const p = await oneProgress(w.goal, ctx);
+            const coach = coachNotes(w.goal, p, goalWords(ctx));
+            const lonely = w.goal.targets.flatMap((t) => (t.kind === "protected_window" && !w.goal.roster.some((x) => x.member === t.member) ? [name(t.member)] : []));
+            const lines = [
+              w.status === "deduped" ? `Already saved sleep goal ${goalRef(w.goal.id)} ("${w.goal.title}"), so it wasn't added twice.` : `Saved sleep goal ${goalRef(w.goal.id)}: "${w.goal.title}" (set by ${ctx.who.name}).`,
+              goalHeadLine(w.goal, p, goalWords(ctx)),
+              ...(lonely.length ? [`No window on the roster yet for ${lonely.join(", ")}: their check-ins still count, and the roster can be added with update.`] : []),
+              ...coach.notes.map((n) => `Coach note: ${n}`),
+            ];
+            return ok(lines.join("\n"), {
+              created: w.status === "created",
+              ...(w.status === "deduped" ? { deduped: true } : {}),
+              goal: goalJson(w.goal, ctx),
+              coach: coachJson(coach, ctx),
+              undo: `sleep_goal {action:"close", id:"${goalRef(w.goal.id)}", status:"dropped", confirmed:true}, after they say yes`,
+            });
+          }
+          case "update": {
+            const id = goalIdArg(a.id);
+            const cur = await getGoal(ctx.fam, id);
+            if (!cur || cur.baby_id !== ctx.baby.id) throw new ToolError(`There's no sleep goal ${goalRef(id)}. sleep_plan lists the goals.`);
+            const input = goalInputFrom(a, ctx, "update");
+            if (!Object.keys(input).length) throw new ToolError("Nothing to change: give a title, why, target_date, targets, steps, roster or status (active or paused).");
+            if (a.revision == null) throw new ToolError(`Pass the goal's revision (${cur.revision} now, from sleep_plan) so a change made meanwhile isn't overwritten.`);
+            if (a.revision !== cur.revision) throw new SleepConflict("Someone changed this sleep goal just now.", "changed", cur);
+            if (a.confirmed !== true) {
+              const { fields } = cleanGoalInput(input, { ...gc, current: cur, seq: 0 }, "update");
+              return ok(
+                `Nothing changed yet. Read this back to them: sleep goal ${goalRef(id)} ("${cur.title}") changes to ${draftWords(fields, ctx)}. Only if they say yes, call sleep_goal update again with confirmed: true and revision ${cur.revision}.`,
+                { confirm_needed: true, revision: cur.revision }
+              );
+            }
+            const w = await updateGoal(ctx.fam, id, { patch: input, revision: a.revision, ctx: gc, by, source });
+            const p = await oneProgress(w.goal, ctx);
+            const b = goalBlock(w.goal, p, ctx);
+            return ok([`Updated sleep goal ${goalRef(id)} (revision ${w.goal.revision} now).`, ...b.lines].join("\n"), { updated: w.status === "updated", goal: goalJson(w.goal, ctx), coach: coachJson(b.coach, ctx), was: w.before ? goalJson(w.before, ctx) : null });
+          }
+          case "step": {
+            const id = goalIdArg(a.id);
+            if (!a.step?.trim()) throw new ToolError("Say which step (step, like s2); sleep_plan lists them.");
+            const w = await setGoalStep(ctx.fam, id, { step: a.step.trim(), done: a.done !== false, by, source });
+            const s = w.goal.steps.find((x) => x.id === a.step!.trim())!;
+            const done = w.goal.steps.filter((x) => x.done_at).length;
+            const next = nextStep(w.goal.steps);
+            const head =
+              w.status === "unchanged"
+                ? `Step ${s.id} ("${s.title}") was already ${s.done_at ? `done (${who(s.done_by, ctx)}, ${whenText(s.done_at, ctx)})` : "not done"}. Nothing changed.`
+                : s.done_at
+                  ? `Marked step ${s.id} done on sleep goal ${goalRef(id)}: "${s.title}".`
+                  : `Step ${s.id} on sleep goal ${goalRef(id)} isn't done anymore: "${s.title}".`;
+            return ok([head, `Steps: ${done} of ${w.goal.steps.length} done${next ? `; next: "${next.title}" (${next.id})` : ""}.`].join("\n"), {
+              updated: w.status === "updated",
+              step: { id: s.id, title: s.title, done: !!s.done_at },
+              goal: goalJson(w.goal, ctx),
+              undo: `sleep_goal {action:"step", id:"${goalRef(id)}", step:"${s.id}", done:${!s.done_at}}`,
+            });
+          }
+          case "check_in": {
+            if (!a.protected) throw new ToolError("Say whether their protected sleep window held: protected yes, partly or no.");
+            const raw = a.night?.trim() ?? "";
+            const night = !raw || /^(last night|last_night|yesterday)$/i.test(raw) ? undefined : raw;
+            const w = await saveCheckin(ctx.fam, {
+              babyId: ctx.baby.id,
+              member: by,
+              night,
+              protected: a.protected,
+              ...(a.note != null ? { note: a.note } : {}),
+              tz: ctx.tz,
+              now: ctx.now,
+              source,
+              clientId: ref(a.client_ref, ctx),
+              device: ctx.device,
+            });
+            const said = checkinWords(w.checkin, ctx.now, ctx.tz);
+            const head =
+              w.status === "created"
+                ? `Saved your check-in for ${said}.`
+                : w.status === "updated"
+                  ? `Changed your check-in for ${said} (it was ${PROTECTED_LABEL[w.before!.protected].toLowerCase()}).`
+                  : w.status === "deduped"
+                    ? `Already saved your check-in for ${said}, so it wasn't added twice.`
+                    : `Your check-in for ${said} already says that. Nothing changed.`;
+            return ok([head, "Owners and members of the family see check-ins; view-only guests don't."].join("\n"), {
+              saved: w.status === "created" || w.status === "updated",
+              checkin: { night: w.checkin.night, protected: w.checkin.protected, ...(w.checkin.note ? { note: w.checkin.note } : {}) },
+              undo:
+                w.status === "created"
+                  ? "undo_last"
+                  : w.status === "updated"
+                    ? `sleep_goal {action:"check_in", night:"${w.checkin.night}", protected:"${w.before!.protected}"}`
+                    : null,
+            });
+          }
+          case "review": {
+            const id = goalIdArg(a.id);
+            const w = await reviewGoal(ctx.fam, id, { note: a.note ?? null, by, source, ...(a.revision != null ? { revision: a.revision } : {}) });
+            return ok(`Reviewed sleep goal ${goalRef(id)} ("${w.goal.title}")${w.goal.review_note ? ` with the note "${w.goal.review_note}"` : ""}. The next review is due in a week.`, { reviewed: true, goal: goalJson(w.goal, ctx) });
+          }
+          case "close": {
+            const id = goalIdArg(a.id);
+            if (a.status !== "met" && a.status !== "dropped") throw new ToolError('Say how it closes: status "met" or "dropped".');
+            const cur = await getGoal(ctx.fam, id);
+            if (!cur || cur.baby_id !== ctx.baby.id) throw new ToolError(`There's no sleep goal ${goalRef(id)}. sleep_plan lists the goals.`);
+            const how = a.status === "met" ? "as met" : "as dropped (set aside)";
+            if (a.confirmed !== true) {
+              return ok(`Nothing changed yet. Read this back to them: close sleep goal ${goalRef(id)} ("${cur.title}") ${how}${a.note?.trim() ? `, with the note "${a.note.trim()}"` : ""}. Only if they say yes, call sleep_goal close again with confirmed: true.`, { confirm_needed: true });
+            }
+            const w = await closeGoal(ctx.fam, id, { status: a.status, ...(a.note != null ? { note: a.note } : {}), by, source, ...(a.revision != null ? { revision: a.revision } : {}) });
+            const head = w.status === "unchanged" ? `Sleep goal ${goalRef(id)} is already closed ${how}. Nothing changed.` : `Closed sleep goal ${goalRef(id)} ("${w.goal.title}") ${how}.`;
+            return ok(`${head} To open it again: sleep_goal update with status active (revision ${w.goal.revision}).`, { closed: w.status === "updated", goal: goalJson(w.goal, ctx) });
+          }
+        }
+      } catch (err) {
+        if (err instanceof SleepConflict) throw new ToolError(goalConflictText(err, ctx));
+        // Another family's goal reads exactly like one nobody has.
+        if (err instanceof NotFound && /^Sleep goal \d+ not found$/.test(err.message)) throw new ToolError(`There's no sleep goal ${goalRef(Number(err.message.split(" ")[2]))}. sleep_plan lists the goals.`);
+        throw err;
+      }
+    }
+  );
 }
 
 const ref = (raw: string | null | undefined, ctx: Ctx) => {
@@ -717,4 +1152,79 @@ export async function undoableSleep(ctx: Ctx, sources: string[]): Promise<{ kind
   if (t && (!sAt || tAt! >= sAt)) return { kind: "try", id: Number(t.id), created_at: tAt!, sleepId: t.sleep_entry_id == null ? null : Number(t.sleep_entry_id), made: t.made_sleep === true };
   if (s) return { kind: "shift", id: Number(s.id), created_at: sAt!, sleepId: null, made: false };
   return null;
+}
+
+const near = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && Math.abs(Date.parse(a) - Date.parse(b)) < 2000;
+
+/**
+ * undo_last's share of sleep goals and check-ins: this member's newest goal
+ * write (one they saved through an assistant, or any change they made) and
+ * check-in saved through an assistant, in the last 30 minutes, with when it
+ * happened and what undo_last does about it. A check-in just saved is taken
+ * back; anything else is explained, since a goal is the family's plan and a
+ * changed check-in has no earlier answer kept to put back.
+ */
+export async function undoableGoalWrite(ctx: Ctx, sources: string[]): Promise<{ at: number; run: () => Promise<CallToolResult> } | null> {
+  const { query } = await import("@/lib/db");
+  const [goals, checkins] = await Promise.all([
+    query(
+      `SELECT * FROM maple_sleep_goals WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL
+         AND ((created_by = $3 AND source = ANY($4::text[]) AND created_at >= NOW() - INTERVAL '30 minutes') OR (updated_by = $3 AND updated_at >= NOW() - INTERVAL '30 minutes'))
+       ORDER BY updated_at DESC, id DESC LIMIT 5`,
+      [ctx.fam.familyId, ctx.baby.id, ctx.who.id, sources]
+    ),
+    query(
+      `SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND baby_id = $2 AND member = $3 AND source = ANY($4::text[]) AND deleted_at IS NULL
+         AND updated_at >= NOW() - INTERVAL '30 minutes' ORDER BY updated_at DESC, id DESC LIMIT 1`,
+      [ctx.fam.familyId, ctx.baby.id, ctx.who.id, sources]
+    ),
+  ]);
+  if (goals === null || checkins === null) throw new StoreUnavailable();
+  // When this member last acted on each goal: their change, else their saving it.
+  const mine = goals.map((r) => rowToGoal(r as Record<string, unknown>)).map((g) => ({ g, at: Date.parse(g.updated_by === ctx.who.id ? g.updated_at : g.created_at) }));
+  mine.sort((x, y) => y.at - x.at);
+  const goal = mine[0] ?? null;
+  const c = checkins[0] ? rowToCheckin(checkins[0] as Record<string, unknown>) : null;
+  const cAt = c ? Date.parse(c.updated_at) : 0;
+  if (c && (!goal || cAt >= goal.at)) {
+    return {
+      at: cAt,
+      run: async () => {
+        const said = checkinWords(c, ctx.now, ctx.tz);
+        if (!near(c.created_at, c.updated_at)) {
+          throw new ToolError(`Nothing was removed. Your last action changed your check-in for ${said}. To change it back, sleep_goal {action:"check_in", night:"${c.night}", protected:…} with the earlier answer.`);
+        }
+        await deleteCheckin(ctx.fam, { babyId: ctx.baby.id, member: ctx.who.id, id: c.id });
+        return ok(`Removed your check-in for ${said}. To save it again, sleep_goal {action:"check_in", night:"${c.night}", protected:"${c.protected}"}.`, {
+          removed: { checkin: c.night },
+          undo: `sleep_goal {action:"check_in", night:"${c.night}", protected:"${c.protected}"}`,
+        });
+      },
+    };
+  }
+  if (!goal) return null;
+  const g = goal.g;
+  const r = goalRef(g.id);
+  return {
+    at: goal.at,
+    run: async () => {
+      const t = `sleep goal ${r} ("${g.title}")`;
+      if (g.updated_by !== ctx.who.id) {
+        throw new ToolError(
+          `Nothing was removed. Your last action was saving ${t}. A goal stays until the family closes it: if they want it gone, sleep_goal {action:"close", id:"${r}", status:"dropped", confirmed:true} after they say yes; to change it, sleep_goal update with revision ${g.revision}.`
+        );
+      }
+      if ((g.status === "met" || g.status === "dropped") && near(g.closed_at, g.updated_at)) {
+        throw new ToolError(`Nothing was removed. Your last action closed ${t} as ${g.status}. To open it again, sleep_goal {action:"update", id:"${r}", revision:${g.revision}, status:"active", confirmed:true} after they say yes.`);
+      }
+      // The step this change marked: the one they marked done most recently, if that was this change.
+      const step = g.steps
+        .filter((s) => s.done_by === ctx.who.id && s.done_at)
+        .sort((a, b) => Date.parse(b.done_at!) - Date.parse(a.done_at!))
+        .find((s, i) => i === 0 && near(s.done_at, g.updated_at));
+      if (step) throw new ToolError(`Nothing was removed. Your last action marked step ${step.id} ("${step.title}") of ${t} done. To take that back, sleep_goal {action:"step", id:"${r}", step:"${step.id}", done:false}.`);
+      if (near(g.last_review_at, g.updated_at)) throw new ToolError(`Nothing was removed. Your last action was a review of ${t}. A review only records its note; review again to replace it.`);
+      throw new ToolError(`Nothing was removed. Your last action was a change to ${t}, now at revision ${g.revision}. sleep_plan shows it as it is now; sleep_goal update with revision ${g.revision} changes it back after they say yes.`);
+    },
+  };
 }

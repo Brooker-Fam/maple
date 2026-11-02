@@ -3,24 +3,35 @@ import { listMembers } from "@/lib/maple/auth";
 import { BadRequest, json, readJson, withMember } from "@/lib/maple/api";
 import { deviceOf } from "@/lib/maple/device";
 import type { FamilyCtx } from "@/lib/maple/family";
+import { memberName } from "@/lib/maple/insights";
 import { holdingChanged } from "@/lib/maple/push-hooks";
 import { progressLines } from "@/lib/maple/sleep/engine";
+import { coachNotes, goalProgressLines, seesCheckins, type GoalWords } from "@/lib/maple/sleep/goals";
 import {
   cleanNote,
   cleanPlanPatch,
   cleanTags,
+  closeGoal,
+  createGoal,
+  deleteCheckin,
   deleteShift,
   deleteTry,
   endShift,
   ensurePlan,
   finishTry,
+  getGoal,
   getPlan,
+  goalProgressFor,
   handOff,
+  listGoals,
   logTry,
   progressFor,
   reopenShift,
   restoreShift,
   restoreTry,
+  reviewGoal,
+  saveCheckin,
+  setGoalStep,
   SleepConflict,
   SleepInputError,
   sleepStateFor,
@@ -28,29 +39,39 @@ import {
   startTry,
   undoFinish,
   undoHandOff,
+  updateGoal,
   updatePlan,
   updateShift,
   updateTry,
+  type GoalCtx,
   type TryPatch,
 } from "@/lib/maple/sleep/store";
-import { SHIFT_ENDINGS, TRY_OUTCOMES, type ShiftEnding, type TryOutcome } from "@/lib/maple/sleep/types";
+import { SHIFT_ENDINGS, TRY_OUTCOMES, type GoalInput, type ShiftEnding, type SleepGoal, type TryOutcome } from "@/lib/maple/sleep/types";
 import { getBaby, NotFound, toClientEntry } from "@/lib/maple/store";
-import { SLEEP_PLACES, type Entry, type Member, type SleepPlace } from "@/lib/maple/types";
+import { dayKey } from "@/lib/maple/time";
+import { SLEEP_PLACES, type Baby, type Entry, type Member, type SleepPlace } from "@/lib/maple/types";
+import { voiceFor } from "@/lib/maple/voice";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The sleep plan, bassinet tries and holding shifts (sleep/store.ts).
+ * The sleep plan, bassinet tries, holding shifts, sleep goals and the
+ * adults' check-ins (sleep/store.ts).
  *
- * GET (anyone in the family but photos-only guests): the plan, tries and
- * shifts as the state carries them; `?view=progress&days=7` adds the
- * progress view, worked out from the log on the server.
+ * GET (anyone in the family but photos-only guests): the plan, tries,
+ * shifts and goals as the state carries them, and the check-ins for owners
+ * and members only; `?view=progress&days=7` adds the progress view, worked
+ * out from the log on the server, and `?view=goals` (`&id=3` for one goal,
+ * any status) adds each open goal with its progress, coach notes and lines
+ * (a view-only guest's carry no check-in counts).
  *
  * POST { action, … } (owners and members): every write answers with the
  * fresh sleep state and the sleep entry it touched (`entries`), so the
  * phone shows both at once. A stale write (it names the updated_at or
  * revision it was made against) answers 409 with the record as it is now
  * (`current`, `code`: changed, finished, running or open); nothing is saved.
+ * A check-in is always the signed-in adult's own: nothing in the request
+ * can say whose it is.
  */
 
 type Body = Record<string, unknown>;
@@ -88,23 +109,56 @@ function outcome(v: unknown): TryOutcome {
   return v as TryOutcome;
 }
 
-/** The answer to every write: what it did, the sleep entries it touched (`entries`) or deleted (`removed`), and the fresh sleep state. */
+/** The answer to every write: what it did, the sleep entries it touched (`entries`) or deleted (`removed`), and the fresh sleep state. Writers are owners and members, who see check-ins. */
 async function stateBody(ctx: FamilyCtx, babyId: number, extra: Record<string, unknown>, touched: (Entry | null | undefined)[] = [], removed: (Entry | null | undefined)[] = []) {
   const entries = touched.filter((e): e is Entry => !!e).map(toClientEntry);
-  return json({ ...extra, entries, removed: removed.filter((e): e is Entry => !!e).map((e) => e.id), sleep: await sleepStateFor(ctx, babyId) });
+  return json({ ...extra, entries, removed: removed.filter((e): e is Entry => !!e).map((e) => e.id), sleep: await sleepStateFor(ctx, babyId, new Date(), { checkins: true }) });
 }
 
-export const GET = withMember("GET /api/maple/sleep", async (request, _me, ctx) => {
+/** The people and day a goal write is checked against: owners and members are the adults who check in. */
+function goalCtxOf(members: Member[], baby: Baby): GoalCtx {
+  return {
+    adults: new Set(members.filter((m) => m.role === "owner" || m.role === "member").map((m) => m.email)),
+    name: (id) => memberName(id, members),
+    today: dayKey(new Date(), baby.timezone),
+  };
+}
+
+const goalId = (v: unknown) => {
+  const n = typeof v === "string" ? Number(v.replace(/^g/i, "")) : v;
+  return id(n, "id");
+};
+
+const optionalRevision = (v: unknown): number | undefined => {
+  if (v === undefined || v === null) return undefined;
+  const n = Number(v);
+  if (!Number.isSafeInteger(n) || n < 1) throw new BadRequest("revision must be a whole number");
+  return n;
+};
+
+export const GET = withMember("GET /api/maple/sleep", async (request, me, ctx) => {
   const baby = await getBaby(ctx);
   const sp = new URL(request.url).searchParams;
-  const body: Record<string, unknown> = { sleep: await sleepStateFor(ctx, baby.id) };
+  const checkins = seesCheckins(me.role);
+  const now = new Date();
+  const body: Record<string, unknown> = { sleep: await sleepStateFor(ctx, baby.id, now, { checkins, tz: baby.timezone }) };
   if (sp.get("view") === "progress") {
     const raw = Number(sp.get("days") ?? 7);
     const days = Number.isInteger(raw) && raw >= 1 && raw <= 31 ? raw : 7;
-    const now = new Date();
     const progress = await progressFor(ctx, baby.id, baby.timezone, now, days);
     body.progress = progress;
     body.lines = progressLines(progress, baby.timezone, now);
+  }
+  if (sp.get("view") === "goals") {
+    const one = sp.get("id");
+    const goals = one ? [await getGoal(ctx, goalId(one))].filter((g): g is SleepGoal => g !== null && g.baby_id === baby.id) : await listGoals(ctx, baby.id);
+    const members = await listMembers(ctx);
+    const words: GoalWords = { v: voiceFor(ctx.familyId, baby), name: (m) => memberName(m, members), tz: baby.timezone, now };
+    const progress = await goalProgressFor(ctx, baby.id, goals, { tz: baby.timezone, now, checkins });
+    body.goals = goals.map((goal) => {
+      const p = progress.get(goal.id)!;
+      return { goal, progress: p, coach: coachNotes(goal, p, words), lines: goalProgressLines(goal, p, words) };
+    });
   }
   return json(body);
 });
@@ -289,13 +343,61 @@ export const POST = withMember(
           holdingChanged({ familyId: ctx.familyId });
           return stateBody(ctx, baby.id, { result: r });
         }
+
+        // ── sleep goals ──
+        case "goal.create": {
+          if (!body.goal || typeof body.goal !== "object") throw new BadRequest("goal is required");
+          const w = await createGoal(ctx, { babyId: baby.id, goal: body.goal as GoalInput, ctx: goalCtxOf(members, baby), by, source: src, clientId: typeof body.client_id === "string" ? body.client_id : null, device });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        case "goal.update": {
+          const revision = Number(body.revision);
+          if (!Number.isSafeInteger(revision) || revision < 1) throw new BadRequest("revision is required");
+          if (!body.patch || typeof body.patch !== "object") throw new BadRequest("patch is required");
+          const w = await updateGoal(ctx, goalId(body.id), { patch: body.patch as GoalInput, revision, ctx: goalCtxOf(members, baby), by, source: src });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        case "goal.step": {
+          if (typeof body.step !== "string" || !body.step) throw new BadRequest("step is required");
+          const w = await setGoalStep(ctx, goalId(body.id), { step: body.step, done: body.done !== false, by, source: src, revision: optionalRevision(body.revision) });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        case "goal.review": {
+          const w = await reviewGoal(ctx, goalId(body.id), { note: body.note ?? null, by, source: src, revision: optionalRevision(body.revision) });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        case "goal.close": {
+          if (body.status !== "met" && body.status !== "dropped") throw new BadRequest("status must be met or dropped");
+          const w = await closeGoal(ctx, goalId(body.id), { status: body.status, ...(body.note !== undefined ? { note: body.note } : {}), by, source: src, revision: optionalRevision(body.revision) });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+
+        // ── check-ins: the signed-in adult's own ──
+        case "checkin.save": {
+          const w = await saveCheckin(ctx, {
+            babyId: baby.id,
+            member: by,
+            night: body.night,
+            protected: body.protected,
+            ...(body.note !== undefined ? { note: body.note } : {}),
+            tz: baby.timezone,
+            source: src,
+            clientId: typeof body.client_id === "string" ? body.client_id : null,
+            device,
+          });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        case "checkin.delete": {
+          const checkin = await deleteCheckin(ctx, { babyId: baby.id, member: by, id: body.id == null ? null : id(body.id), night: typeof body.night === "string" ? body.night : null });
+          return stateBody(ctx, baby.id, { result: { checkin } });
+        }
         default:
           throw new BadRequest("Unknown sleep action.");
       }
     } catch (err) {
       if (err instanceof SleepInputError) return json({ error: err.message }, 400);
-      if (err instanceof SleepConflict) return json({ error: err.message, code: err.reason, current: err.current, sleep: await sleepStateFor(ctx, baby.id) }, 409);
-      if (err instanceof NotFound) return json({ error: err.message || "Not found", sleep: await sleepStateFor(ctx, baby.id) }, 404);
+      if (err instanceof SleepConflict) return json({ error: err.message, code: err.reason, current: err.current, sleep: await sleepStateFor(ctx, baby.id, new Date(), { checkins: true }) }, 409);
+      if (err instanceof NotFound) return json({ error: err.message || "Not found", sleep: await sleepStateFor(ctx, baby.id, new Date(), { checkins: true }) }, 404);
       throw err;
     }
   },

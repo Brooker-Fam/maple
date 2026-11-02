@@ -93,17 +93,19 @@ function throws(fn: () => unknown, what: string) {
 const ALEX = { email: "alex@example.com", role: "owner" as const };
 const VI = { email: "vi@example.com", role: "viewer" as const };
 const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions", "recall_memories", "list_people", "sleep_plan"];
-const SLEEP = ["bassinet_try", "holding", "set_sleep_plan", "sleep_plan"];
+const SLEEP = ["bassinet_try", "holding", "set_sleep_plan", "sleep_goal", "sleep_plan"];
 const PEOPLE = ["cancel_invite", "change_access", "invite_person", "list_people", "remove_person"];
 const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting"];
 
 // ── the adapter ──────────────────────────────────────────────────────────
 
-check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 for the family's people, 4 for the sleep plan)", () => {
+check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 for the family's people, 5 for the sleep plan and its goals)", () => {
   const { all, mom } = registrations();
-  eq(all.length, 53, "registrations");
-  eq(new Set(all.map((r) => r.name)).size, 53, "distinct names");
-  eq(all.filter((r) => SLEEP.includes(r.name)).map((r) => [r.name, r.ann.readOnlyHint]).sort(), [["bassinet_try", false], ["holding", false], ["set_sleep_plan", false], ["sleep_plan", true]], "sleep tools, one read");
+  eq(all.length, 54, "registrations");
+  eq(new Set(all.map((r) => r.name)).size, 54, "distinct names");
+  eq(all.filter((r) => SLEEP.includes(r.name)).map((r) => [r.name, r.ann.readOnlyHint]).sort(), [["bassinet_try", false], ["holding", false], ["set_sleep_plan", false], ["sleep_goal", false], ["sleep_plan", true]], "sleep tools, one read");
+  const goal = all.find((r) => r.name === "sleep_goal")!;
+  ok("confirmed" in goal.shape && /confirmed: true/.test(goal.description) && /ask_user/.test(goal.description), "sleep_goal: a model's yes after a read-back, one question at a time");
   eq(all.filter((r) => r.name.endsWith("_memory") || r.name === "recall_memories").map((r) => [r.name, r.ann.readOnlyHint]), [["recall_memories", true], ["save_memory", false], ["correct_memory", false], ["resolve_memory", false], ["archive_memory", false]], "memory tools, one read");
   eq(all.map((r) => r.name).filter((n) => PEOPLE.includes(n)).sort(), PEOPLE, "the people tools");
   eq([...mom].sort(), ["add_mom_medicines", "add_mom_question", "fix_mom_entry", "log_mom_drink", "log_mom_food", "log_mom_medicine", "log_mom_temperature", "mom_nutrition", "mom_status", "set_mom_medicine"], "her tools");
@@ -113,7 +115,7 @@ check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 
 check("a member gets the allowed log tools and interactive app cards", () => {
   const names = registrations().all.map((r) => r.name);
   const born = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true }));
-  eq(born.length, 53 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
+  eq(born.length, 54 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
   ok(born.includes("ask_user") && born.includes("show_chart"), "interactive questions and charts");
@@ -264,6 +266,7 @@ check("chat display hides old receipt, timer and care references while keeping t
   eq(chatDisplayText("Updated #244: bath. Deleted c245: Robin's question. Restored c245: question. Already saved c246: Examplex at 9:15 AM."), "Updated: bath. Deleted: Robin's question. Restored: question. Already saved: Examplex at 9:15 AM.", "other write results");
   eq(chatDisplayText("#247 was already deleted. Entry #248 is a feed. Nothing changed on #249. That #250 was stopped."), "This entry was already deleted. Entry is a feed. Nothing changed on this entry. That entry was stopped.", "standalone references");
   eq(chatDisplayText("The feed (started at 4:20 AM; timer #251) goes on. Use delete_entry id 252 or fix_mom_entry id c253."), "The feed (started at 4:20 AM) goes on. Use delete_entry this entry or fix_mom_entry this entry.", "trailing asides and explicit tool IDs");
+  eq(chatDisplayText("Saved g12: the sleep goal (g12, 28 days left) is set."), "Saved: the sleep goal (28 days left) is set.", "a sleep goal's ref");
 });
 
 check("chat display preserves health values, times, counts, names and paragraph breaks", () => {

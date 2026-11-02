@@ -1,9 +1,10 @@
 /**
  * The sleep plan's shapes: the family's plan for moving from held sleep to
  * the bassinet in their room, bassinet tries, and holding shifts (who is
- * holding the baby awake). Isomorphic, like ../types.ts: no node or browser
- * APIs. Nothing here is about the care person: her page's things never
- * belong in a plan, a try or a shift.
+ * holding the baby awake), and the family's sleep goals with each adult's
+ * morning check-in. Isomorphic, like ../types.ts: no node or browser APIs.
+ * Nothing here is about the care person: her page's things never belong in
+ * a plan, a try, a shift, a goal or a check-in.
  */
 import type { SleepPlace, Source } from "../types";
 
@@ -109,6 +110,118 @@ export type HoldingShift = {
   pending?: boolean;
 };
 
+// ── sleep goals and the adults' check-ins ───────────────────────────────
+
+/**
+ * A goal is active or paused while the family works on it, and met or
+ * dropped once they close it (update can open it again). Only active goals
+ * count toward GOALS_ACTIVE_MAX.
+ */
+export const GOAL_STATUSES = ["active", "paused", "met", "dropped"] as const;
+export type GoalStatus = (typeof GOAL_STATUSES)[number];
+export const OPEN_GOAL_STATUSES: readonly GoalStatus[] = ["active", "paused"];
+export const CLOSED_GOAL_STATUSES: readonly GoalStatus[] = ["met", "dropped"];
+
+/**
+ * What a goal measures, each counted from the log (goals.ts goalProgress):
+ * - bassinet_nights: nights a week with a bassinet try that stayed asleep at
+ *   least min_minutes (outcome stayed_asleep, laid down to the end).
+ * - bassinet_stretch: the longest bassinet stretch, against `minutes`.
+ * - protected_window: nights a week an adult's protected window held, from
+ *   that adult's own check-ins (never shown to view-only guests).
+ * - custom: the family's words; Maple doesn't count it.
+ */
+export const TARGET_KINDS = ["bassinet_nights", "bassinet_stretch", "protected_window", "custom"] as const;
+export type TargetKind = (typeof TARGET_KINDS)[number];
+
+export type BassinetNightsTarget = { id: string; kind: "bassinet_nights"; per_week: number; min_minutes: number };
+export type BassinetStretchTarget = { id: string; kind: "bassinet_stretch"; minutes: number };
+/** `member`: the adult (a member id) whose window it is. */
+export type ProtectedWindowTarget = { id: string; kind: "protected_window"; member: string; per_week: number };
+export type CustomTarget = { id: string; kind: "custom"; text: string };
+export type GoalTarget = BassinetNightsTarget | BassinetStretchTarget | ProtectedWindowTarget | CustomTarget;
+
+/** A weekly step: `week_of` is a date in the week it's planned for (the family's calendar), or null for "any time". */
+export type GoalStep = { id: string; title: string; week_of: string | null; done_at: string | null; done_by: string | null };
+
+/**
+ * A protected sleep window on the night roster: `member` (a member id)
+ * sleeps from `from` to `to` (local "HH:MM"), on the nights that begin on
+ * the evenings in `nights` (0 = Sunday … 6 = Saturday). It may cross
+ * midnight; a time before noon belongs to the morning after that evening,
+ * as a try day does.
+ */
+export type RosterWindow = { id: string; member: string; from: string; to: string; nights: number[] };
+
+export type SleepGoal = {
+  id: number;
+  baby_id: number;
+  title: string;
+  /** Why it matters to them, in their words. */
+  why: string | null;
+  /** YYYY-MM-DD in the family's calendar, or none. */
+  target_date: string | null;
+  status: GoalStatus;
+  targets: GoalTarget[];
+  steps: GoalStep[];
+  roster: RosterWindow[];
+  /** The last review (sleep_goal review, or closing it), with its short note. */
+  last_review_at: string | null;
+  review_note: string | null;
+  /** When it was closed as met or dropped; null while it's open. */
+  closed_at: string | null;
+  revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  source: Source;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Did your protected window hold last night? Nothing else: never hours slept, mood, or anything about anyone's health. */
+export const PROTECTED_ANSWERS = ["yes", "partly", "no"] as const;
+export type ProtectedAnswer = (typeof PROTECTED_ANSWERS)[number];
+
+/**
+ * One adult's check-in for one night (`night`: the try day key, the date of
+ * the evening it began), saved only by that adult for themselves. Owners and
+ * members read every adult's; view-only guests never see them.
+ */
+export type SleepCheckin = {
+  id: number;
+  /** The adult it's about, who saved it (a member id). */
+  member: string;
+  night: string;
+  protected: ProtectedAnswer;
+  note: string | null;
+  source: Source;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Goal limits, shared by the rules, the store, the route and the tool. */
+export const GOAL_TITLE_MAX = 120;
+export const GOAL_WHY_MAX = 300;
+export const GOAL_NOTE_MAX = 300;
+/** Active goals per baby, and open ones (active or paused). */
+export const GOALS_ACTIVE_MAX = 5;
+export const GOALS_OPEN_MAX = 10;
+export const GOAL_TARGETS_MAX = 6;
+export const GOAL_STEPS_MAX = 12;
+export const GOAL_STEP_TITLE_MAX = 120;
+export const GOAL_CUSTOM_MAX = 120;
+export const ROSTER_MAX = 6;
+/** A target date at most this many days ahead. */
+export const GOAL_AHEAD_DAYS = 366;
+/** A protected window's length on the clock. */
+export const WINDOW_MIN_MINUTES = 30;
+export const WINDOW_MAX_MINUTES = 12 * 60;
+export const CHECKIN_NOTE_MAX = 200;
+/** A check-in can be for one of this many most recent nights. */
+export const CHECKIN_NIGHTS_BACK = 14;
+/** A goal is due a review once this many days pass since its last one (or since it was set). */
+export const REVIEW_DUE_DAYS = 7;
+
 /** MapleState.sleep: what every phone shows. */
 export type SleepState = {
   plan: SleepPlan | null;
@@ -116,6 +229,10 @@ export type SleepState = {
   tries: BassinetTry[];
   /** The open shift and the last 2 days' shifts, newest first. */
   shifts: HoldingShift[];
+  /** Open goals and those closed in the last 60 days, newest first (sleep/goal-store.ts). */
+  goals: SleepGoal[];
+  /** The adults' check-ins for the last 14 nights, newest night first: owners and members only, absent for a view-only guest. */
+  checkins?: SleepCheckin[];
 };
 
 /** A plan as an edit sends it: any subset, with the revision it was made from. */
@@ -127,4 +244,34 @@ export type PlanPatch = {
   try_times?: TrySlot[];
   fallback?: TrySlot | null;
   snoozed_until?: string | null;
+};
+
+/**
+ * A goal as goal.create and goal.update send it (POST /api/maple/sleep), and
+ * what sleep_goal builds from a model's arguments once names are resolved:
+ * people are member ids. On update every field is optional; a list given
+ * replaces the whole list, and an item that names an existing `id` keeps it
+ * (a step keeps whether it's done). New items get new ids.
+ */
+export type GoalTargetInput = {
+  id?: string | null;
+  kind: TargetKind;
+  per_week?: number | null;
+  min_minutes?: number | null;
+  minutes?: number | null;
+  member?: string | null;
+  text?: string | null;
+};
+export type GoalStepInput = { id?: string | null; title: string; week_of?: string | null };
+export type RosterWindowInput = { id?: string | null; member: string; from: string; to: string; nights: number[] };
+export type GoalInput = {
+  title?: string;
+  why?: string | null;
+  /** YYYY-MM-DD, or null for none. */
+  target_date?: string | null;
+  targets?: GoalTargetInput[];
+  steps?: GoalStepInput[];
+  roster?: RosterWindowInput[];
+  /** goal.update only: between active and paused (and back from met or dropped). Closing is goal.close. */
+  status?: "active" | "paused";
 };

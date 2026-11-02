@@ -5,10 +5,10 @@
  * that makes a claim about babies lives in ../guidelines/sleep.ts with its
  * source. Copy about the baby takes a Voice (../voice.ts).
  */
-import { formatTime } from "../time";
+import { formatTime, parseDayKey } from "../time";
 import type { SleepPlace } from "../types";
 import type { Voice } from "../voice";
-import type { PlanStage, ShiftEnding, TryAnchor, TryOutcome, TrySlot, TryTag } from "./types";
+import type { GoalStatus, GoalTarget, PlanStage, ProtectedAnswer, RosterWindow, ShiftEnding, TargetKind, TryAnchor, TryOutcome, TrySlot, TryTag } from "./types";
 import { TRY_ANCHORS } from "./types";
 
 export type StageInfo = {
@@ -134,3 +134,94 @@ export const sleepyChoices = (v: Voice, partner: string | null) =>
     { id: "bassinet" as const, label: `Put ${v.them} in the bassinet now`, hint: `On ${v.their} back. This ends your turn.` },
     { id: "partner" as const, label: partner ? `Wake ${partner}` : "Wake your partner", hint: `Hand ${v.them} over now.` },
   ] as const;
+
+// ── sleep goals ──────────────────────────────────────────────────────────
+//
+// Neutral words only: counts with their sample sizes, never a score, a
+// streak, a grade, "failed" or a "best time" (scripts/maple-sleep-check.ts
+// holds that for every line goals.ts writes).
+
+export const TARGET_KIND_LABEL: Record<TargetKind, string> = {
+  bassinet_nights: "Bassinet nights",
+  bassinet_stretch: "Longest bassinet stretch",
+  protected_window: "Protected sleep window",
+  custom: "Another aim",
+};
+
+export const GOAL_STATUS_LABEL: Record<GoalStatus, string> = {
+  active: "Active",
+  paused: "Paused",
+  met: "Met",
+  dropped: "Set aside",
+};
+
+/** The check-in's one question, and its three answers. */
+export const CHECKIN_QUESTION = "Did your protected sleep window hold last night?";
+export const PROTECTED_LABEL: Record<ProtectedAnswer, string> = { yes: "Yes", partly: "Partly", no: "Not this time" };
+
+export const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** The weekday of a night (0 = Sunday), named by the date of the evening it begins. */
+export function weekdayOf(key: string): number {
+  const { year, month, day } = parseDayKey(key);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+/** "Mon, Nov 30" ("Mon, Nov 30, 2027" outside today's year): a calendar date, never "Today". */
+export function dateWords(key: string, todayKey: string): string {
+  const { year, month, day } = parseDayKey(key);
+  return `${WEEKDAY_SHORT[weekdayOf(key)]}, ${MONTH_SHORT[month - 1]} ${day}${todayKey.slice(0, 4) === key.slice(0, 4) ? "" : `, ${year}`}`;
+}
+
+/** "10:00 PM" for a stored "22:00". */
+export function clockLabel(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  // Any date works for a wall-clock label; UTC keeps it from shifting.
+  return formatTime(new Date(Date.UTC(2000, 0, 1, h, m)), "UTC");
+}
+
+/** "10:00 PM–2:00 AM". */
+export const windowTimes = (w: Pick<RosterWindow, "from" | "to">) => `${clockLabel(w.from)}–${clockLabel(w.to)}`;
+
+/** "every night", "Sun–Thu nights", "Fri–Sun nights", "Mon, Wed and Fri nights": the evenings a window begins on. */
+export function nightsLabel(nights: readonly number[]): string {
+  const set = [...new Set(nights)].filter((n) => Number.isInteger(n) && n >= 0 && n <= 6).sort((a, b) => a - b);
+  if (set.length === 7) return "every night";
+  if (!set.length) return "no nights";
+  // A run of 3 or more evenings in a row, possibly through Saturday into Sunday, reads as a range.
+  const gaps = set.map((n, i) => ((set[(i + 1) % set.length] - n + 7) % 7) || 7);
+  const breaks = gaps.filter((g) => g > 1).length;
+  if (set.length >= 3 && breaks === 1) {
+    const at = gaps.findIndex((g) => g > 1);
+    const first = set[(at + 1) % set.length];
+    const last = set[at];
+    return `${WEEKDAY_SHORT[first]}–${WEEKDAY_SHORT[last]} nights`;
+  }
+  const names = set.map((n) => WEEKDAY_SHORT[n]);
+  return `${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0]} nights`;
+}
+
+/** "45 minutes", "3 hours", "1h 30m". */
+export function minutesWords(min: number): string {
+  if (min < 60) return `${min} minutes`;
+  if (min % 60 === 0) return `${min / 60} ${min === 60 ? "hour" : "hours"}`;
+  return `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m`;
+}
+
+/** A target in a few words: "4 nights a week with a bassinet try asleep 1 hour or more". `name`: a member id's name. */
+export function targetWords(t: GoalTarget, name: (id: string) => string): string {
+  switch (t.kind) {
+    case "bassinet_nights":
+      return `${t.per_week} ${t.per_week === 1 ? "night" : "nights"} a week with a bassinet try asleep ${minutesWords(t.min_minutes)} or more`;
+    case "bassinet_stretch":
+      return `a bassinet stretch of ${minutesWords(t.minutes)} or more`;
+    case "protected_window":
+      return `${name(t.member)}'s protected window holding ${t.per_week} ${t.per_week === 1 ? "night" : "nights"} a week`;
+    case "custom":
+      return t.text;
+  }
+}
+
+/** "Sam: 10:00 PM–2:00 AM, Sun–Thu nights". */
+export const windowWords = (w: RosterWindow, name: (id: string) => string) => `${name(w.member)}: ${windowTimes(w)}, ${nightsLabel(w.nights)}`;

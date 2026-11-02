@@ -47,7 +47,7 @@ type Answer = {
 type Write = { try: BassinetTry; before: BassinetTry | null; sleep: Entry | null; sleepBefore: Entry | null; status: string; link?: string; endedShift?: HoldingShift | null; endedShiftBefore?: HoldingShift | null };
 type ShiftResult = { shift: HoldingShift; before: HoldingShift | null; status: string; ended?: HoldingShift | null; endedBefore?: HoldingShift | null };
 
-const EMPTY: SleepState = { plan: null, tries: [], shifts: [] };
+const EMPTY: SleepState = { plan: null, tries: [], shifts: [], goals: [] };
 
 export type SleepApi = {
   data: SleepState;

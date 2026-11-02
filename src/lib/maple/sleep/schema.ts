@@ -21,6 +21,18 @@ import { query } from "@/lib/db";
  * maple_sleep_shifts: who is holding the baby awake (an adult staying awake
  * while holding her), since when, and the planned handoff. One open shift
  * per baby.
+ *
+ * maple_sleep_goals: the family's sleep goals (sleep/goal-store.ts), one row
+ * each, with its targets, weekly steps and night roster as JSONB checked in
+ * code (goals.ts cleanGoalInput), so a new kind never needs a non-additive
+ * migration. `item_seq` numbers the items so an id is never reused, and
+ * `revision` moves with every change (an edit names the one it was made
+ * from). Soft deletes; `client_id` for retries.
+ *
+ * maple_sleep_checkins: each adult's answer for one night (`night`: the try
+ * day key) about their own protected window: yes, partly or no and a short
+ * note, never hours slept, mood or health. One per adult per night while
+ * not deleted; only that adult writes theirs.
  */
 export async function migrateSleep(): Promise<void> {
   await query(`CREATE TABLE IF NOT EXISTS maple_sleep_plans (
@@ -99,4 +111,54 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_shifts_handoff ON maple_sleep_shifts (handoff_at) WHERE ended_at IS NULL AND deleted_at IS NULL AND handoff_at IS NOT NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_open ON maple_sleep_shifts (family_id, baby_id) WHERE ended_at IS NULL AND deleted_at IS NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_client ON maple_sleep_shifts (family_id, client_id) WHERE client_id IS NOT NULL`);
+
+  await query(`CREATE TABLE IF NOT EXISTS maple_sleep_goals (
+    id BIGSERIAL PRIMARY KEY,
+    family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
+    baby_id INTEGER NOT NULL REFERENCES maple_babies(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    why TEXT,
+    target_date TEXT CHECK (target_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'),
+    status TEXT NOT NULL DEFAULT 'active',
+    targets JSONB NOT NULL DEFAULT '[]'::jsonb,
+    steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+    roster JSONB NOT NULL DEFAULT '[]'::jsonb,
+    item_seq INTEGER NOT NULL DEFAULT 0,
+    last_review_at TIMESTAMPTZ,
+    review_note TEXT,
+    closed_at TIMESTAMPTZ,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT,
+    updated_by TEXT,
+    source TEXT NOT NULL DEFAULT 'web',
+    client_id TEXT,
+    device TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+  )`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_goals_baby ON maple_sleep_goals (family_id, baby_id, created_at DESC) WHERE deleted_at IS NULL`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_goals_updated ON maple_sleep_goals (family_id, baby_id, updated_at DESC)`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_goals_client ON maple_sleep_goals (family_id, client_id) WHERE client_id IS NOT NULL`);
+
+  await query(`CREATE TABLE IF NOT EXISTS maple_sleep_checkins (
+    id BIGSERIAL PRIMARY KEY,
+    family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
+    baby_id INTEGER NOT NULL REFERENCES maple_babies(id) ON DELETE CASCADE,
+    member TEXT NOT NULL,
+    night TEXT NOT NULL CHECK (night ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'),
+    protected TEXT NOT NULL,
+    note TEXT,
+    source TEXT NOT NULL DEFAULT 'web',
+    client_id TEXT,
+    device TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+  )`);
+  // One per adult per night, even when two of their phones save at once.
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_checkins_night ON maple_sleep_checkins (family_id, baby_id, member, night) WHERE deleted_at IS NULL`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_checkins_client ON maple_sleep_checkins (family_id, client_id) WHERE client_id IS NOT NULL`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_night ON maple_sleep_checkins (family_id, baby_id, night DESC) WHERE deleted_at IS NULL`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_updated ON maple_sleep_checkins (family_id, baby_id, updated_at DESC)`);
 }
