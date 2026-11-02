@@ -1412,7 +1412,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           const merged = entries.length || removed.length
             ? [...entries.filter((e) => !removed.includes(e.id)), ...s.entries.filter((e) => !gone.has(e.id))].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
             : s.entries;
-          const any = !!next && (!!next.plan || next.tries.length > 0 || next.shifts.length > 0);
+          // As the state route decides: a plan, a try, a shift, a goal or a check-in (a goal-only family keeps its goals).
+          const any = !!next && (!!next.plan || next.tries.length > 0 || next.shifts.length > 0 || !!next.goals?.length || !!next.checkins?.length);
           const { sleep: _old, ...rest } = s;
           void _old;
           return { ...rest, entries: merged, ...(any ? { sleep: next! } : {}) };
