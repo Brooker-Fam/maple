@@ -659,21 +659,14 @@ function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; 
     // A clause the part hangs on that says she's asleep ("… once she's asleep", "until she wakes"), and isn't about her sleep space.
     const sleepsThere = (p: Part | undefined, lead: string) => !!p && (SLEEPING.test(p.text) || (lead === "until" && WAKES.test(p.text))) && baby.test(p.text) && !SAFE_SURFACE.test(p.text);
     const borrowed = (i: number) => (BORROW_LEAD.test(parts[i + 1]?.lead ?? "") && sleepsThere(parts[i + 1], parts[i + 1]?.lead ?? "")) || (parts[i]?.lead === "then" && sleepsThere(parts[i - 1], ""));
-    // "Bassinet for naps, swing only while she's awake": every sleep word in the part is in a stretch (between commas) that names her sleep space, not the phrase's.
-    const sleepIsTheBassinets = (text: string, at: number) => {
+    // What a part says (`what`: its sleep word, or the baby) only in other stretches between commas, each naming her sleep space:
+    // "bassinet for naps, swing only while she's awake", "we sleep in our bed, she sleeps in the bassinet".
+    const onlyByTheBassinet = (text: string, at: number, what: RegExp) => {
       let start = 0;
       const bits = text.split(",").map((t) => ({ t, start: (start += t.length + 1) - t.length - 1 }));
       const mine = bits.find((b) => at >= b.start && at <= b.start + b.t.length);
-      const sleepy = bits.filter((b) => b !== mine && SLEEPING.test(b.t));
-      return !!mine && !SLEEPING.test(mine.t) && sleepy.length > 0 && sleepy.every((b) => SAFE_SURFACE.test(b.t));
-    };
-    // "We sleep in our bed, she sleeps in the bassinet": the baby is only in a stretch that names her sleep space.
-    const babyIsTheBassinets = (text: string, at: number) => {
-      let start = 0;
-      const bits = text.split(",").map((t) => ({ t, start: (start += t.length + 1) - t.length - 1 }));
-      const mine = bits.find((b) => at >= b.start && at <= b.start + b.t.length);
-      const hers = bits.filter((b) => b !== mine && baby.test(b.t));
-      return !!mine && !baby.test(mine.t) && hers.length > 0 && hers.every((b) => SAFE_SURFACE.test(b.t));
+      const others = bits.filter((b) => b !== mine && what.test(b.t));
+      return !!mine && !what.test(mine.t) && others.length > 0 && others.every((b) => SAFE_SURFACE.test(b.t));
     };
     // Whether the words before a phrase in its part step away from it, or move it out of her sleep space or into it.
     const steppedAway = (scope: string, at: number, m: RegExpMatchArray): boolean => {
@@ -704,11 +697,11 @@ function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; 
       if (rule.unless && rule.unless.test(sentence)) return null;
       const scope = rule.sentence ? sentence : part.text;
       const abs = part.start + at;
-      const ownSleep = (SLEEPING.test(scope) || (rule.sleep === "down" && LAID_DOWN.test(scope))) && !(rule.borrow && !rule.sentence && sleepIsTheBassinets(scope, at));
+      const ownSleep = (SLEEPING.test(scope) || (rule.sleep === "down" && LAID_DOWN.test(scope))) && !(rule.borrow && !rule.sentence && onlyByTheBassinet(scope, at, SLEEPING));
       const sleeps = ownSleep || (!!rule.borrow && !rule.sentence && borrowed(i));
       if (rule.sleep && !sleeps) return null;
       if (rule.baby && !babyIn(rule.baby === "sentence" ? sentence : scope, sentence, rule.baby)) return null;
-      if (rule.place && rule.baby === "strict" && babyIsTheBassinets(scope, at)) return null;
+      if (rule.place && rule.baby === "strict" && onlyByTheBassinet(scope, at, baby)) return null;
       if (rule.unlessSafe && SAFE_SURFACE.test(scope)) return null;
       if (rule.unlessPart && rule.unlessPart.test(scope)) return null;
       if (rule.where && !(SAFE_SURFACE.test(scope) || SLEEP_PLACE.test(scope) || ((SLEEPING.test(scope) || AT_NIGHT.test(scope)) && baby.test(scope)))) return null;
