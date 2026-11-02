@@ -31,10 +31,14 @@ headers, 44px targets, named notes and chip groups, and 320px layouts without
 horizontal scroll.
 
 Sleep goals (`?goals&morning` seeds one, the morning after a night on its
-roster): the empty Goals tab and its two ways in (the chat, seeded with words
-that load its sleep tools, and the form), the form's inline checks, a second
-window's defaults and the goal it sends, the goal card's counts with what each
-is out of, a step and its Undo, Today's Last night card (the check-in, worded
+roster): the empty Goals tab and its ways in (the chat, seeded with words
+that load its sleep tools, the form, and Plan for going back to work: five
+questions one at a time, one read-back with a roster and three steps from the
+day back, saved only on Save the goal, at 390px and 320px), the form's inline
+checks (a plan Maple won't make only on Save, with a wording to try, and nothing
+sent), a window's feeds, a second window's defaults and the goal it sends, the
+goal card's counts with what each is out of (on the morning after a week ends,
+"Week 2 (ended last night)", never "this week" or "so far"), a step and its Undo, Today's Last night card (the check-in, worded
 by the adult's own window and never "hold", with one tap, Undo, Not now and a
 note; then the night's other questions, one tap each on that check-in), an edit
 that sends only what changed with the revision, a 409 that scrolls into view,
@@ -44,7 +48,9 @@ a view-only guest who sees no check-in and nothing that writes. With `?sparse`,
 Wed night is a sparse log: a sleep timer left running (Woke at the next thing
 logged), three stretches with nothing logged (only "She slept through" saves),
 the safe-sleep line for Somewhere else, Tell Maple, and the card's essentials
-above the dock at 320 × 568.
+above the dock at 320 × 568. With `?nursing`, a nursing feed is running: at night
+its card says wake someone to sit with you, or the bassinet (clear of the dock at
+320 × 568), and by day, or for a view-only guest, it doesn't.
 
 Round 2 (the re-test's fixes): the plan says what to do tonight after setup
 (and in the morning why the morning nap is the backup); How did it go? is the

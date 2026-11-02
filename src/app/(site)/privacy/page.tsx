@@ -84,7 +84,8 @@ export default function Privacy() {
       <p>
         If your family uses the sleep plan, Maple also keeps the plan (its stage, how many bassinet tries a day and when,
         where the baby sleeps now and your goal), each bassinet try (when the baby was laid down and when the try ended, how it
-        went, who laid the baby down, optional tags such as recently fed or swaddled, and a short note), and holding turns: who
+        went, who laid the baby down, optional tags such as recently fed or swaddled, a short note and, when Siri suggested
+        pausing before another try, when it did), and holding turns: who
         held the baby awake, from when, the planned handoff and who was next. A handoff can be asked for and accepted: the
         holding turn keeps who was asked to take over and when they were asked, and taking over starts that person&rsquo;s own
         turn. A sleep in someone&rsquo;s arms is saved as an ordinary sleep entry. A try sits on the matching sleep entry, so
@@ -92,8 +93,10 @@ export default function Privacy() {
       </p>
       <p>
         If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,
-        its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults, and the date
-        and short note of its last review. Each adult can check in the morning after with one answer about their own protected
+        its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults (and, if you
+        say, how the baby&rsquo;s feeds are covered during each: nursing, a bottle of expressed milk, or none planned), and the
+        date and short note of its last review. A goal set up for going back to work also keeps who goes back to work and on
+        what day, and who nurses, so its notes fit; the setup&rsquo;s other answers aren&rsquo;t kept beyond the goal itself. Each adult can check in the morning after with one answer about their own protected
         sleep (yes, partly or no) and an optional short note, and with it up to three one-tap answers about the baby&rsquo;s
         night: where the baby spent most of it, a bassinet try that isn&rsquo;t in the log (and whether it was longer than the
         goal&rsquo;s time), and whether a planned handoff happened as planned. A check-in never records hours slept, mood or
