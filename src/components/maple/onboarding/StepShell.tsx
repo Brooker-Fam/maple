@@ -33,7 +33,7 @@ export const WHY: Record<StepId, string> = {
   invites: "Each person gets a one-time link that works for 7 days. You send it yourself.",
   care: "Medicines, temperature and questions for the OB, kept apart from the baby's log.",
   pediatrician: "For the Help sheet and the call buttons beside warnings.",
-  notifications: "Medicine reminders for the recovery page and an optional feeding timer on the lock screen. Nothing else notifies.",
+  notifications: "Medicine reminders for the recovery page, an optional feeding timer on the lock screen, and optional handoff reminders for the sleep plan. Nothing else notifies.",
 };
 
 export function StepShell({

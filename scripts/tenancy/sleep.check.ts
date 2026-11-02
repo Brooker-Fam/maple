@@ -420,7 +420,10 @@ async function main() {
     const after = await state(alpha.member, 1);
     ok(after.rev !== before.rev, "the rev moved");
     eq((after.sleep as SleepState).tries.filter((t) => !t.ended_at).length, 1, "the running try is on every phone");
-    ok(!("sleep" in (await state(beta.member, 2))), "a family with nothing reads as before");
+    const beta2 = await state(beta.member, 2);
+    ok(!("sleep" in beta2), "a family with nothing reads as before");
+    // The sleep segment is the only part of the token with commas: none for a family without any sleep rows.
+    ok(String(before.rev).includes(",") && !String(beta2.rev).includes(","), `beta's rev keeps its old shape: ${beta2.rev}`);
   });
 
   // ── the handoff reminder ───────────────────────────────────────────────

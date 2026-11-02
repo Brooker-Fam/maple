@@ -296,7 +296,7 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
     id: "call-fever", section: "call", minDays: 0, maxDays: 89, basis: "source",
     title: fixed("Fever under 3 months"),
     body: (v) =>
-      `Call ${v.their} pediatrician right away for a temperature of 100.4°F (38.0°C) or higher, even if ${v.they} ${v.verb("seems")} fine. Don't give fever medicine before ${v.they}${v.verb("'s")} seen.`,
+      `Call ${v.their} pediatrician right away for a temperature of 100.4°F (38.0°C) or higher, even if ${v.they} ${v.verb("seems")} fine. Don't give fever medicine unless the pediatrician tells you to.`,
     sources: [AAP_FEVER, AAP_CRYING_CHECKER],
   }),
   item({

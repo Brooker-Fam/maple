@@ -29,6 +29,12 @@ export default function Terms() {
         general and don&rsquo;t account for your baby&rsquo;s health. Your pediatrician&rsquo;s and your own clinician&rsquo;s
         advice always comes first, and nothing in Maple is a reason to wait before calling them.
       </p>
+      <p>
+        The sleep plan&rsquo;s stages, and its word that recent tries could support the next one, are Maple&rsquo;s own simple
+        rules about your logged tries, not medical guidance; you decide whether and when to change the plan. A handoff
+        reminder can arrive late or not at all. It doesn&rsquo;t keep anyone awake, and nothing in Maple makes it safe to fall
+        asleep while holding a baby.
+      </p>
       <div className="site-callout">
         <p className="mt-0">
           <strong>If you think your baby or you need help now, call one of these numbers instead of using Maple.</strong>

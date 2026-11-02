@@ -1365,7 +1365,10 @@ export async function rev(fam: FamilyRef, babyId: number): Promise<string> {
     [babyId, famId(fam)]
   );
   const r = rows[0] ?? {};
+  // Sleep only once the family has any (deleted rows still count, so it never drops out again): a family that never
+  // used the sleep plan keeps the token it had before it existed.
+  const sleep = r.s && r.s !== "/0,/0," ? `|${r.s}` : "";
   // The hour too: a full state at least hourly, so the server's older-week diaper count (lifetime.week) never goes
   // stale while nobody logs anything.
-  return `${r.e}|${r.b}|${r.m}|${r.s}|${Math.floor(Date.now() / 3600_000)}`;
+  return `${r.e}|${r.b}|${r.m}${sleep}|${Math.floor(Date.now() / 3600_000)}`;
 }

@@ -253,7 +253,9 @@ export function HoldingSheet({ mode, open = true, onClose }: { mode: "start" | "
             </div>
           </div>
         )}
-        <ContextNote>Phones that turned on handoff reminders in Notifications hear at the planned time. Every phone shows who&apos;s holding {v.them}.</ContextNote>
+        <ContextNote>
+          Every phone shows who&apos;s holding {v.them}, and phones with handoff reminders on (Notifications) hear at the planned time, though a notice can be late. If you start to feel sleepy before then, lay {v.them} in the bassinet or wake someone.
+        </ContextNote>
       </div>
     </Sheet>
   );

@@ -122,7 +122,7 @@ const FAQS: Faq[] = [
     q: "Will it send me notifications?",
     a: [
       [
-        "Only if you turn them on, phone by phone. Once they’re on, a phone gets notices about mom’s medicines when one is OK again by her schedule, at her set times, and when a dose is logged on another phone. The nursing timer on the lock screen is a separate switch, off until you turn it on. Nothing else notifies, and no notice ever gives a dose amount. On an iPhone they work from the Home Screen app, on iOS 16.4 or later.",
+        "Only if you turn them on, phone by phone. Once they’re on, a phone gets notices about mom’s medicines when one is OK again by her schedule, at her set times, and when a dose is logged on another phone. The nursing timer on the lock screen is a separate switch, off until you turn it on, and so are handoff reminders for the sleep plan’s holding turns. Nothing else notifies, and no notice ever gives a dose amount. On an iPhone they work from the Home Screen app, on iOS 16.4 or later.",
       ],
     ],
   },

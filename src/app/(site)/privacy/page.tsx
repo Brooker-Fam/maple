@@ -82,12 +82,19 @@ export default function Privacy() {
         phone that did it. Chat also uses that id to keep a phone-preference card attached to the phone where it was requested.
       </p>
       <p>
+        If your family uses the sleep plan, Maple also keeps the plan (its stage, how many bassinet tries a day and when,
+        where the baby sleeps now and your goal), each bassinet try (when the baby was laid down and when the try ended, how it
+        went, who laid the baby down, optional tags such as recently fed or swaddled, and a short note), and holding turns: who
+        held the baby awake, from when, the planned handoff and who was next. A try sits on the matching sleep entry, so that
+        sleep is counted once.
+      </p>
+      <p>
         Mom&rsquo;s page keeps her food and drinks, any amounts she records, optional food items and portions, nutrient values and food groups,
         whether values were estimated or entered from a label, and any notes about those estimates. It also keeps her own medicines and their schedule, the doses she took, her temperature, questions for her OB and
         her daily check-ins, including the optional PHQ-9 and GAD-7 questionnaires.
       </p>
       <p>
-        Deleting an entry from the baby&rsquo;s log, or one of mom&rsquo;s food, drink, medicine, dose, temperature or question entries, hides it so
+        Deleting an entry from the baby&rsquo;s log, a bassinet try or a holding turn, or one of mom&rsquo;s food, drink, medicine, dose, temperature or question entries, hides it so
         you can restore it; it stays in the database until your family&rsquo;s log is deleted. Deleting one of her check-ins
         removes it for good at once, and so does deleting everything on her page. The separate control to remove imported
         MyChart measurements also removes those entries for good, as described below.
@@ -362,7 +369,9 @@ export default function Privacy() {
         Notifications are off until you turn them on, phone by phone. They go through your browser&rsquo;s push service (Apple,
         Google or Mozilla), encrypted so that service can&rsquo;t read them. Maple can send notices about mom&rsquo;s medicines
         (when one is OK again, her set times, and &ldquo;Logged&rdquo; when a dose is saved on another phone) and, if you turn it
-        on, the nursing timer on the lock screen. By default a medicine notice names the medicine and says when it was last
+        on, the nursing timer on the lock screen. If you turn on handoff reminders, a phone also hears at a holding turn&rsquo;s
+        planned handoff and when someone asks for a handoff now; these name no one and say nothing about the baby&rsquo;s sleep.
+        By default a medicine notice names the medicine and says when it was last
         taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a dose amount. Signing
         out turns them off on that phone.
       </p>
