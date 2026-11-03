@@ -2525,5 +2525,89 @@ check("safety (P0 #2): an overwhelmed adult's one-off break passes, never a rout
   }
 });
 
+/** Safety P0 #3: medicine or supplements for her sleep, or at her sleep times (the review's probes and more): every one refused. */
+const MED_REFUSED = [
+  // the review's
+  "Give her melatonin at bedtime",
+  "A little Benadryl so she sleeps through",
+  "Gripe water before every nap",
+  "Tylenol before bed",
+  "Give her Tylenol at bedtime so she sleeps",
+  "Give her gripe water before bed",
+  // more of each kind
+  "Diphenhydramine before the long stretch",
+  "An antihistamine at night to help her sleep",
+  "Zyrtec at bedtime",
+  "Use Benadryl if she won't settle",
+  "Benadryl on the flight so she naps",
+  "Motrin before her nap",
+  "Ibuprofen so she sleeps through the night",
+  "Acetaminophen at bedtime while she's teething",
+  "Give June Tylenol before bed",
+  "Chamomile tea in her bottle at night",
+  "Sleep drops before bed",
+  "Melatonin gummies for naps",
+  "Homeopathic drops at bedtime",
+  "Herbal tea so she settles at bedtime",
+  "Gas drops before bed",
+  "Teething gel before naps",
+  "Infant cough syrup at night so she sleeps",
+  "A drop of whiskey on her gums at bedtime",
+  "A little medicine to help her sleep",
+  "Give her something to help her sleep",
+  "Ask her pediatrician, then give her melatonin at bedtime",
+];
+/** …and what passes: a question for her pediatrician, a step away, an adult's own medicine, medicine that isn't for sleep. */
+const MED_ALLOWED = [
+  "Ask her pediatrician about melatonin",
+  "Ask her pediatrician whether Tylenol before bed is okay while she's teething",
+  "Ask the pediatrician if we can give her Benadryl at bedtime",
+  "Check with the pharmacist about gripe water before naps",
+  "No melatonin, just a dark room and white noise",
+  "Never give her Benadryl to make her sleep",
+  "Stop the gripe water before naps",
+  "Vitamin D drops after the morning feed",
+  "Vitamin D drops at bedtime",
+  "Saline drops before feeds for her stuffy nose",
+  "Gas drops after feeds",
+  "Tylenol after her shots, as her pediatrician said",
+  "Motrin for teething during the day, never before naps",
+  "Lavender bath before bed",
+  "Chamomile bath wash at bedtime",
+  "Sam takes melatonin, so Alex does the first half of the night",
+  "I take ibuprofen before bed, so Sam does the 2 AM feed",
+  "Mom takes Benadryl for allergies, so Dad does nights",
+];
+
+check("safety (P0 #3): medicine or supplements for her sleep, or at her sleep times, are refused as her pediatrician's call; an 'Ask her pediatrician about …' step passes, and so does each refusal's suggestion, in each voice", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  const refused = MED_REFUSED.filter((t) => unsafeSleep(t, o)?.kind === "medicine");
+  const passed = MED_ALLOWED.filter((t) => !unsafeSleep(t, o));
+  console.log(`  medicine lists: ${refused.length} of ${MED_REFUSED.length} unsafe refused, ${passed.length} of ${MED_ALLOWED.length} safe passed`);
+  for (const t of MED_REFUSED) ok(refused.includes(t), `refused as medicine: "${t}" (${unsafeSleep(t, o)?.kind ?? "passed"})`);
+  for (const t of MED_ALLOWED) ok(passed.includes(t), `passed: "${t}" (matched "${unsafeSleep(t, o)?.phrase}")`);
+  ok(unsafeSleep("Give him melatonin at bedtime", { v: HE, adults: R3_ADULTS })?.kind === "medicine" && unsafeSleep("Give them melatonin at bedtime", { v: THEY, adults: R3_ADULTS })?.kind === "medicine", "his and their words");
+  ok(unsafeSleep("Tylenol before bed")?.kind === "medicine", "without a voice (the form)");
+  // What happened, in why it matters, is the reason for the goal.
+  for (const why of ["She had Tylenol after her shots and slept for 6 hours", "We tried melatonin last month and stopped"]) ok(!unsafeSleep(why, { ...o, describing: true }), `a why: ${why}`);
+  // The coordinator's words, in the family's voice, with the question to take to their pediatrician.
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Give her melatonin at bedtime", o)), `Step 1: Maple won't plan medicine or supplements for sleep; that's her pediatrician's call. To raise it with them, try "Ask her pediatrician about melatonin".`, "she");
+  eq(unsafeWords("Step 2", THEY, unsafeSleep("Tylenol before bed", { v: THEY })), `Step 2: Maple won't plan medicine or supplements for sleep; that's their pediatrician's call. To raise it with them, try "Ask their pediatrician about Tylenol".`, "they");
+  eq(unsafeWords("Step 1", undefined, unsafeSleep("A little medicine to help her sleep", o)), `Step 1: Maple won't plan medicine or supplements for sleep; that's the baby's pediatrician's call. To raise it with them, try "Ask the baby's pediatrician about medicine for sleep".`, "without a voice");
+  for (const text of MED_REFUSED) {
+    const find = unsafeSleep(text, o)!;
+    for (const v of [...VOICES, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis, { adults: R3_ADULTS }), `the suggestion passes: ${words}`);
+      ok(!/\b\d+(\.\d+)?\s?(mg|ml|mL|teaspoons?|tsp)\b|\bdoses?\b/i.test(words), `never a dose: ${words}`);
+    }
+  }
+  // Every goal text refuses it, by its field; the plan's goal too.
+  throwsInput(() => cleanGoalInput({ title: "Longer nights", steps: [{ title: "A little Benadryl so she sleeps through" }] }, { ...RULES, v: SHE }, "create"), /^Step 1: Maple won't plan medicine or supplements for sleep; that's her pediatrician's call\./, "a step");
+  throwsInput(() => refuseUnsafe("Melatonin so she sleeps", "The goal", { v: SHE }), /^The goal: Maple won't plan medicine or supplements for sleep;/, "the plan's goal");
+  ok(cleanGoalInput({ title: "Longer nights", steps: [{ title: "Ask her pediatrician about melatonin" }] }, { ...RULES, v: SHE }, "create").fields.steps?.length === 1, "the question saves");
+});
+
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

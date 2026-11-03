@@ -269,7 +269,11 @@ export function cleanCheckinNight(raw: unknown, now: Date, tz: string): string {
 // carrier, sling, wrap, bouncer, a MamaRoo), on a product not made for infant
 // sleep (loungers, nests, nursing pillows, inclined sleepers), on the tummy or
 // side, with pillows, blankets, bumpers, rolled towels or other soft things,
-// raised or tilted, or with anything weighted.
+// raised or tilted, or with anything weighted; and never medicine or
+// supplements for her sleep or at her sleep times (Benadryl and other
+// antihistamines, melatonin, gripe water, chamomile, sleep drops, Tylenol or
+// Motrin "before bed"): that's her pediatrician's call, so "Ask her
+// pediatrician about …" passes, and so does an adult's own medicine.
 //
 // A backstop, not a guarantee: it matches words, in English (a few common
 // typos too) and a few common Spanish, French and German phrasings, so a plan
@@ -433,8 +437,30 @@ const BORROW_LEAD = /^(?:when|whenever|once|if|until|after|while|because|so)$/;
 const WAKES = /\bwak(?:e|es|ing)\b/i;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** What a refusal is about, for its words: crying it out, an adult, a bed, a couch or chair, a sitting device, a product not made for sleep, a position, bedding, weights or a tilt. */
-export type UnsafeKind = "cry" | "adult" | "bed" | "couch" | "seat" | "product" | "position" | "bedding" | "weighted" | "incline";
+/** What a refusal is about, for its words: crying it out, an adult, a bed, a couch or chair, a sitting device, a product not made for sleep, a position, bedding, weights, a tilt or medicine. */
+export type UnsafeKind = "cry" | "adult" | "bed" | "couch" | "seat" | "product" | "position" | "bedding" | "weighted" | "incline" | "medicine";
+
+// ── medicine and supplements for sleep (refused: that's her pediatrician's call) ──
+/**
+ * Medicines and supplements given for sleep, or that a sleep plan never holds for a baby, named: antihistamines
+ * (Benadryl, diphenhydramine and the rest), melatonin and other sleep supplements, gripe water, chamomile, herbal
+ * and homeopathic remedies, sleep drops and sedatives, teething gels and tablets, cough and cold medicines (the FDA:
+ * none for children under 2), and alcohol on her gums.
+ */
+const SLEEP_AIDS = String.raw`benadryl|diphenhydramine|anti-?histamines?|hydroxyzine|atarax|chlorphen(?:ir)?amine|piriton|doxylamine|unisom|promethazine|phenergan|cetirizine|zyrtec|loratadine|claritin|dimenhydrinate|dramamine|trimeprazine|vallergan|allergy\s+(?:medicines?|meds|syrup)|melatonin|valerian|magnesium|(?:cha|ca)momile(?!\s*(?:-\s*\w+\s+)?(?:baths?|wash|lotion|soap|shampoo|bubbles?|scent\w*|cream|balm|oil))|cbd|cannabidiol|gripe\s*water|sleep(?:y|ing)?(?:\s*time)?\s+(?:drops?|aids?|pills?|tablets?|medicines?|meds|supplements?|gumm(?:y|ies)|syrup|tea)|sedatives?|sedat(?:e|ing)|tranquili[sz]\w*|herbal\s+(?:teas?|drops?|remed(?:y|ies)|supplements?|tinctures?)|homo?eopathic\w*|hyland'?s|teething\s+(?:tablets?|gels?|drops?)|orajel|anbesol|benzocaine|cough\s+(?:syrup|medicines?|meds|drops|suppressants?)|cold\s+(?:medicines?|meds|remed(?:y|ies))|nyquil|dimetapp|robitussin|vapou?r\s*rub|vaporub|(?:whiske?y|brandy|rum|bourbon|vodka|liquor|alcohol)\s+on\s+(?:(?:her|his|their|the\s+baby'?s)\s+)?gums|(?:drop|dab|sip|splash)\s+of\s+(?:whiske?y|brandy|rum|bourbon|vodka|liquor|alcohol|wine|beer)`;
+/** Pain and fever relievers, gas and colic drops: refused when given at a sleep time or so she sleeps ("Tylenol before bed"). */
+const RELIEVERS = String.raw`tylenol|acetaminophen|paracetamol|calpol|panadol|tempra|motrin|advil|ibuprofen|nurofen|aspirin|pain\s*(?:relievers?|killers?|medicines?|meds)|fever\s+(?:reducers?|medicines?|meds)|gas\s+drops|simethicone|mylicon|colic\s+drops|infacol|colief|probiotic(?:s|\s+drops)?`;
+/** A sleep, or a time she sleeps: "before bed", "at bedtime", "for naps", "at night". */
+const SLEEP_TIME = new RegExp(String.raw`\b(?:${SLEEP_WORDS})\b|\b(?:before|at|for|around|near)\s+(?:bed|bedtime|naps?|nap\s*time|night\w*|sleep\w*|lights[\s-]out)\b|\b(?:at\s+night|tonight|overnight|nightly|every\s+(?:night|evening)|in\s+the\s+evenings?)\b`, "i");
+/** For sleep: "to help her sleep", "so she sleeps through", "to make him drowsy", "to knock her out". */
+const SLEEP_PURPOSE = /\b(?:to\s+(?:help\s+(?:\w+\s+)?)?(?:sleep|settle|nap|doze|drift\s+off|stay\s+asleep|calm\s+(?:\w+\s+)?down)|for\s+(?:(?:better|longer|more)\s+)?(?:sleep|naps?|bedtime|the\s+night)|so\s+(?:that\s+)?(?:she|he|they|it|[\p{L}]+)\s+(?:will\s+|can\s+|'ll\s+)?(?:sleeps?|naps?|settles?|stays?\s+asleep|dozes?|is\s+drowsy|gets?\s+sleepy)|to\s+make\s+(?:\w+\s+)?(?:sleepy|drowsy|sleep)|knock\s+(?:\w+\s+)?out)\b/iu;
+/** A sentence that asks their clinician: "Ask her pediatrician about melatonin" (not one that then plans it: "…, then give it at bedtime"). */
+const MED_ASK = /^\s*(?:(?:please|first)\s*,?\s+)?(?:ask|check\s+with|talk\s+(?:to|with)|call|phone|find\s+out|see\s+if|bring\s+(?:it\s+)?up|raise|consult|question\s+for)\b(?![^.;!?]*\b(?:then|afterwards|after\s+that)\b)/i;
+/** "…, never for sleep", "not before naps": words saying a thing isn't for sleep, which never make it about sleep. */
+const NOT_FOR_SLEEP = /\b(?:never|not|no)\s+(?:(?:for|during|at|in|before|while)\s+)?(?:(?:her|his|their|the|any|a)\s+)?(?:sle{1,2}p{1,2}\w*|asleep|naps?|napping|nap\s*time|bedtime|the\s+night|nights?|overnight|bed)\b/gi;
+const unsaid = (s: string) => s.replace(NOT_FOR_SLEEP, " ");
+/** What the refusal names ("melatonin", "Tylenol"), as the family wrote it; alcohol as "alcohol". */
+const medName = (m: RegExpMatchArray) => (/whisk|brandy|\brum\b|bourbon|vodka|liquor|alcohol|wine|beer/i.test(m[0]) ? "alcohol" : m[0].replace(/\s+/g, " ").trim());
 
 /**
  * The phrase that made a text unsafe, its kind, and what it names (for the refusal: "a couch", "a car seat"); `awake`
@@ -474,6 +500,8 @@ type Rule = {
   unless?: RegExp;
   /** Crying words an overwhelmed adult's one-off break may carry (oneOffBreak): only that passes. */
   breakOk?: boolean;
+  /** The sentence must say this outside its "never for sleep" words (a medicine "before bed", "so she sleeps"). */
+  needsSleep?: RegExp;
   /** The words right after the phrase making it something else ("let her cry in my arms"). */
   unlessAfter?: RegExp;
   /** The part names her sleep space (a bassinet, a mattress), or has a sleep word (or "at night") and the baby: soft things and tilts are about where she sleeps. */
@@ -558,6 +586,10 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
   // An adult bed, named after a preposition ("in our bed", "out of our bed", "from the big bed"), so a step away before it is read.
   const bedOwner = String.raw`(?:the|a|our|my|your|mom'?s|mum'?s|dad'?s|mommy'?s|daddy'?s|parents'?|grandma'?s|grandpa'?s)`;
   const bedSize = String.raw`(?:own|big|grown[\s-]?up|adult|double|queen|king|(?:queen|king|full)[\s-]?sized?|twin|guest|spare|master)`;
+  // A medicine that isn't hers to plan: a question for her clinician ("Ask her pediatrician about melatonin"), or an adult's own ("Sam takes melatonin", "my own").
+  const otherAdult = o.v?.pronoun === "she" ? "|he" : o.v?.pronoun === "he" ? "|she" : "";
+  const adultTakes = `\\b(?:i|we|mom|mum|dad|my\\s+(?:partner|wife|husband)${otherAdult}${nameOr})\\s+(?:(?:might|may|will|'ll|should|can|could|often|usually|sometimes|also)\\s+)?(?:take|takes|taking|took)\\b(?!\\s+${someone}\\b)|\\b(?:my|our)\\s+own\\b`;
+  const notHerMedicine = new RegExp(`${MED_ASK.source}|${adultTakes}`, "i");
   const rules: Rule[] = [
     // ── Leaving the baby to cry, by any name ──
     { re: /\bcr(?:y|ies|ied|ying|i)[\s-]+it[\s-]+out\b/gi, kind: "cry" },
@@ -607,6 +639,11 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
     { re: /\b(?:dejar(?:la|lo|le)?|d[ée]ja(?:la|lo)|dejamos)\s+llorar\b|\bllorar\s+hasta\b|\b(?:dejar|deja|dejen|dejamos|dejarla|dejarlo|dejarle)\s+que\s+llore\b|\bque\s+llore\b/gi, kind: "cry" },
     { re: /\blaisser[\s-]+(?:la[\s-]+|le[\s-]+|l')?pleurer\b|\blaiss(?:e|ez|ons)[\s-]+(?:la|le)[\s-]+pleurer\b/gi, kind: "cry" },
     { re: /\b(?:schreien|weinen)\s+(?:zu\s+)?lassen\b|\blass(?:t|en)?\s+(?:sie|ihn|es|das\s+baby)\s+(?:schreien|weinen)\b/gi, kind: "cry" },
+
+    // ── Medicine and supplements for sleep: her pediatrician's call ("Ask her pediatrician about …" passes, and so does an adult's own) ──
+    { re: new RegExp(`\\b(?:${SLEEP_AIDS})\\b`, "gi"), kind: "medicine", unless: notHerMedicine, what: medName },
+    { re: new RegExp(`\\b(?:${RELIEVERS})\\b`, "gi"), kind: "medicine", needsSleep: SLEEP_TIME, unless: notHerMedicine, what: medName },
+    { re: new RegExp(`\\b(?:medicines?|medications?|meds|drugs?|drops|syrups?|tinctures?|pills?|tablets?|remed(?:y|ies))\\b|\\bgiv\\w*\\s+${someone}\\s+(?:something|anything)\\b`, "gi"), kind: "medicine", needsSleep: SLEEP_PURPOSE, unless: notHerMedicine, what: () => "medicine for sleep" },
 
     // ── Raised or tilted, and products not made for infant sleep (before soft things: a nursing pillow is a product) ──
     { re: new RegExp(`\\b(?:rais(?:e|es|ed|ing)|elevat\\w*|tilt\\w*|angl(?:e|ed|ing)|inclin\\w*|wedg\\w*|prop(?:s|ped|ping)?\\s+(?:${someone}\\s+)?up)\\b`, "gi"), kind: "incline", where: true },
@@ -784,6 +821,7 @@ function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; 
     // Whether a rule's match in a part (or the sentence, for rules read across it) makes the text unsafe, and what it found.
     const check = (rule: Rule, m: RegExpMatchArray, part: Part, at: number, i: number): UnsafeFind | null => {
       if (rule.needs && !rule.needs.test(sentence)) return null;
+      if (rule.needsSleep && !rule.needsSleep.test(unsaid(sentence))) return null;
       if (rule.needsText && !rule.needsText.test(plainText)) return null;
       if (rule.unless && rule.unless.test(sentence)) return null;
       // An overwhelmed adult's one-off break, read across the whole text: its routine, an "until" or a longer time anywhere undoes it.
@@ -849,9 +887,10 @@ function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; 
 }
 
 /**
- * Whether a plan's words leave the baby to cry, or have the baby asleep
- * anywhere but on their back in their own bare, flat sleep space (above),
- * and the phrase that does. A backstop, not a guarantee. `v`: the family's
+ * Whether a plan's words leave the baby to cry, have the baby asleep
+ * anywhere but on their back in their own bare, flat sleep space, or give
+ * them medicine or supplements for sleep (above), and the phrase that does.
+ * A backstop, not a guarantee. `v`: the family's
  * voice (the baby's name and pronouns); `adults`: the adults' names;
  * `describing`: the words say why it matters, where "she only sleeps on me
  * now" or "she slept in the swing yesterday" is the reason, not the plan.
@@ -900,6 +939,8 @@ export function unsafeWords(label: string, v?: Pick<Voice, "name" | "them" | "th
     bedding: `Maple won't plan pillows, blankets, bumpers or other soft things in ${their} sleep space; try "A bare bassinet with just a fitted sheet".`,
     weighted: `Maple won't plan anything weighted for ${their} sleep; try "A sleep sack with no weights".`,
     incline: `Maple won't plan raising or tilting ${their} sleep surface; try "Flat on ${their} back in the bassinet" (questions like reflux go to ${their} pediatrician).`,
+    // Never a dose or a product: the question for their pediatrician, in the family's words.
+    medicine: `Maple won't plan medicine or supplements for sleep; that's ${their} pediatrician's call. To raise it with them, try "Ask ${their} pediatrician about ${find?.what ?? "medicine for sleep"}".`,
   };
   return `${label}: ${words[kind]}`;
 }
