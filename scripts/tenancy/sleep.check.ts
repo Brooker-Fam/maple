@@ -17,6 +17,8 @@ import { FAMILY_ONE_COPY, logState, type Extra } from "../../src/lib/maple/mcp-t
 import { notifyHandoffNow } from "../../src/lib/maple/notify";
 import { runPushTick } from "../../src/lib/maple/push";
 import { askState, chooseSleepLink, nextHandoff } from "../../src/lib/maple/sleep/engine";
+import { windowAt } from "../../src/lib/maple/sleep/handoff";
+import { activeRosters } from "../../src/lib/maple/sleep/roster-read";
 import { askHandoff, deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
 import { createEntryOnce, getEntry, listEntries, startTimer, stopTimer } from "../../src/lib/maple/store";
@@ -623,6 +625,50 @@ async function main() {
     eq(bacc.handoffWhy ?? null, null, "beta has no roster");
     await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
     await clean(beta);
+  });
+
+  await test("next handoff vs a Back to work roster that hasn't started: before its roster_from night the window protects no one yet, so the default stands (I've got her, the holder's handoff, the tool), never moved or left unplanned; once on, it moves", async () => {
+    await clean(alpha);
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    const hhmm = (t: number) => {
+      const p = localParts(t, alpha.tz);
+      return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+    };
+    const today = dayKey(Date.now(), alpha.tz);
+    // Blake's 12-hour window from an hour from now, every night; the roster starts in two weeks (its rehearsal), the day back in four.
+    const g = await route(alpha.owner, 1, {
+      action: "goal.create",
+      goal: {
+        title: "Back to work: protected sleep for Blake",
+        target_date: addDays(today, 42),
+        roster: [{ member: alpha.member, from: hhmm(Date.now() + HOUR), to: hhmm(Date.now() + 13 * HOUR), nights: [0, 1, 2, 3, 4, 5, 6], covers: "bottle" }],
+        template: { kind: "back_to_work", member: alpha.member, date: addDays(today, 28), nursing: null, roster_from: addDays(today, 14), feeding: "bottles" },
+      },
+    });
+    eq(g.status, 200, JSON.stringify(g.json).slice(0, 300));
+    eq(windowAt(await activeRosters({ familyId: 1, babyId: alpha.babyId }), alpha.member, Date.now() + 2 * HOUR, alpha.tz), null, "quiet hours, the catch-up and Siri: not on yet");
+    const twoHours = (s: HoldingShift) => !!s.handoff_at && Math.abs(Date.parse(s.handoff_at) - (Date.now() + 2 * HOUR)) < 2 * MIN;
+    // Blake's two-hour turn; Avery takes over with I've got her: the next handoff, back to Blake, is the default two hours on.
+    const t = (await route(alpha.member, 1, { action: "shift.start", at: new Date(Date.now() - 5 * MIN).toISOString(), handoff_at: new Date(Date.now() - 5 * MIN + 2 * HOUR).toISOString() })).json.result as { shift: HoldingShift };
+    const acc = await route(alpha.owner, 1, { action: "shift.accept", id: t.shift.id });
+    const w = acc.json.result as { shift: HoldingShift; handoffWhy?: unknown };
+    eq([acc.status, twoHours(w.shift), w.handoffWhy ?? null], [200, true, null], `I've got her: ${JSON.stringify(w.shift)}`);
+    // Back to Blake, then Blake hands over (the store's handOff, as Siri and the tool use it): the same.
+    await handOff(1, w.shift.id, { to: alpha.member, by: alpha.owner, source: "web", tz: alpha.tz });
+    const blakes = (await openShift(1, alpha.babyId))!;
+    const h = await handOff(1, blakes.id, { to: alpha.owner, by: alpha.member, source: "web", tz: alpha.tz });
+    eq([twoHours(h.shift), h.handoffWhy ?? null], [true, null], `the holder's handoff: ${JSON.stringify(h.shift)}`);
+    await handOff(1, h.shift.id, { to: alpha.member, by: alpha.owner, source: "web", tz: alpha.tz });
+    const viaTool = await call("holding", { action: "accept" }, alpha, "owner");
+    ok(!viaTool.isError && !/protected sleep|none planned/i.test(viaTool.text), viaTool.text);
+    ok(twoHours((await openShift(1, alpha.babyId))!), "the tool's accept too");
+    // Once the roster has started, the same window moves it (here past 12 hours away: none planned, with why).
+    await sql(`UPDATE maple_sleep_goals SET template = jsonb_set(template, '{roster_from}', to_jsonb($1::text)) WHERE family_id = 1`, [addDays(today, -1)]);
+    await handOff(1, (await openShift(1, alpha.babyId))!.id, { to: alpha.member, by: alpha.owner, source: "web", tz: alpha.tz });
+    const on = await handOff(1, (await openShift(1, alpha.babyId))!.id, { to: alpha.owner, by: alpha.member, source: "web", tz: alpha.tz });
+    eq([on.shift.handoff_at, (on.handoffWhy as { member?: string } | undefined)?.member], [null, alpha.member], "on from roster_from: Blake's window counts");
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    await clean(alpha);
   });
 
   await test("asleep in arms: a feed starting ends it then (start_timer, as the dock and Siri end a nap), so the feed never counts as sleep; a handoff keeps it running and says so; a nap elsewhere is left as before", async () => {

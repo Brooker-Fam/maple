@@ -8,6 +8,7 @@ import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, S
 import { SleepInputError } from "./errors";
 import { cleanCheckinExtras, cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, goalProgress, goalSpan, lastNightKey, refuseUnsafe, type GoalProgress, type GoalRules } from "./goals";
 import { handoffAroundRoster, type HandoffWhy } from "./handoff";
+import { activeRosters } from "./roster-read";
 import {
   CHECKIN_NOTE_MAX,
   CHECKIN_PLACES,
@@ -1020,12 +1021,6 @@ export async function acceptHandoff(fam: FamilyRef, id: number, input: { by: str
   return handOff(fam, id, { to: input.by, by: input.by, source: input.source, device: input.device, expectUpdatedAt: cur.updated_at, tz: input.tz, ...(input.handoffAt !== undefined ? { handoffAt: input.handoffAt } : {}) });
 }
 
-/** The active goals' rosters, for the next handoff (handoff.ts): only status and roster. */
-async function rosterGoals(fam: FamilyRef, babyId: number): Promise<Pick<SleepGoal, "status" | "roster">[]> {
-  const rows = await q(`SELECT roster FROM maple_sleep_goals WHERE family_id = $1 AND baby_id = $2 AND status = 'active' AND deleted_at IS NULL`, [famId(fam), babyId]);
-  return rows.map((r) => ({ status: "active" as const, roster: list<RosterWindow>(r.roster, (x) => typeof x.id === "string" && typeof x.member === "string" && Array.isArray(x.nights)) }));
-}
-
 /** The family's zone for a roster window: a FamilyCtx carries the baby's; a bare id reads it. */
 async function zoneOf(fam: FamilyRef, babyId: number): Promise<string> {
   if (typeof fam === "object" && "tz" in fam && typeof fam.tz === "string") return fam.tz;
@@ -1036,11 +1031,14 @@ async function zoneOf(fam: FamilyRef, babyId: number): Promise<string> {
 /**
  * A handoff's default next one (as long as the turn handed over), never
  * inside the next holder's protected window on an active goal's roster: at
- * that window's end, or none over 12 hours away (handoff.ts), with why.
+ * that window's end, or none over 12 hours away (handoff.ts), with why. The
+ * roster is read as quiet hours, the catch-up and Siri read it
+ * (roster-read.ts): a Back to work roster's windows are on only from its
+ * `roster_from` night, so one that hasn't started never moves a handoff.
  */
 async function plannedNextHandoff(fam: FamilyRef, cur: HoldingShift & { baby_id: number }, at: Date, tz: string | undefined): Promise<{ at: Date | null; why: HandoffWhy | null }> {
   const def = nextHandoff(cur, at.getTime());
-  const goals = await rosterGoals(fam, cur.baby_id);
+  const goals = await activeRosters({ familyId: famId(fam), babyId: cur.baby_id });
   if (!goals.some((g) => g.roster.some((w) => w.member === cur.holder))) return { at: new Date(def), why: null };
   const r = handoffAroundRoster({ at: def, from: at.getTime(), nextHolder: cur.holder, goals, tz: tz ?? (await zoneOf(fam, cur.baby_id)) });
   return { at: r.at == null ? null : new Date(r.at), why: r.why };
