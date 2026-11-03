@@ -52,7 +52,7 @@ const WAKES_PER_CALL = 3;
 const MAX_AHEAD_MS = 7 * DAY;
 /** Doses this far back are enough for every gap, limit and slot. */
 export const DOSE_LOOKBACK_MS = 3 * DAY;
-/** A reminder more than this late isn't sent (push.ts CUTOFF_MS): a held one goes at its window's end only inside it. */
+/** A reminder more than this late isn't sent (push.ts CUTOFF_MS); one a quiet phone held counts it from its window's end. */
 export const REMINDER_CUTOFF_MS = 3 * 60 * MIN;
 
 async function q(sql: string, params: unknown[] = []): Promise<Row[]> {
@@ -373,7 +373,8 @@ export async function anyPhoneOn(): Promise<boolean> {
  * Publish one family's wakes for its next few moments not already
  * published: her medicines' moments (only while one of its phones wants
  * medicine notices), the end of a protected window that holds one of them
- * on a quiet phone (push-quiet.ts: the held reminder goes then), and its
+ * on a quiet phone (push-quiet.ts: the held reminder goes then), whether a
+ * tick already held it there (push.ts markWaiting) or it will, and its
  * pending tests ("Send a test in 1 minute"), within QStash's 7 days. Also
  * keeps the shared safety net in step. Called from writes and from
  * scheduled ticks, never from an open app's polls. `pre`: moments the
@@ -391,16 +392,22 @@ export async function scheduleWakeups(scope: FamilyScope, now = new Date(), pre?
   if (wantMeds) {
     const plans = pre?.plans ?? (await collectMoments(scope, now)).plans;
     for (const p of plans) for (const m of p.moments) if (m.at > t) times.push(m.at);
-    // A protected window's end, when one of her reminders falls inside it on a phone that keeps quiet then.
+    // A protected window's end, when one of her reminders falls inside it (or just before it) on a phone that keeps quiet then.
     const quiet = subs.filter((s) => prefsOf(s).meds !== false && prefsOf(s).quiet_window !== false).map((s) => String(s.member));
     const moments = plans.flatMap((p) => p.moments.map((m) => m.at));
     if (quiet.length && moments.length) {
-      const ends = await quietWindowEnds(scope, quiet, moments, now, t + MAX_AHEAD_MS, REMINDER_CUTOFF_MS).catch((err) => {
+      const ends = await quietWindowEnds(scope, quiet, moments, now, t + MAX_AHEAD_MS).catch((err) => {
         void captureServerException(new Error(String((err as { code?: unknown })?.code ?? (err instanceof Error ? err.name : "error"))), { route: "maple push quiet wake" });
         return [] as number[];
       });
       times.push(...ends);
     }
+    // And the end of the window each reminder a quiet phone holds now waits for (push.ts markWaiting).
+    const held = await q(`SELECT DISTINCT sent_at FROM maple_push_sent WHERE key LIKE 's%|wait:%' AND ${familySent(1)} AND sent_at > $2::timestamptz`, [scope.familyId, now.toISOString()]).catch((err) => {
+      void captureServerException(new Error(String((err as { code?: unknown })?.code ?? (err instanceof Error ? err.name : "error"))), { route: "maple push quiet wake" });
+      return [] as Row[];
+    });
+    for (const r of held) times.push(new Date(r.sent_at as string).getTime());
   }
   // A planned handoff, while a phone wants its reminder.
   if (subs.some((s) => prefsOf(s).handoff === true)) {

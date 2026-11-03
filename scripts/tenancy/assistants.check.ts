@@ -427,10 +427,11 @@ async function siriChecks(shape: Shape, seed: Seed) {
     ok(sa.includes("in the bassinet") && !sb.includes("in the bassinet"), `each family hears its own try: ${sa} | ${sb}`);
     eq(String((await quick(beta.token, { action: "undo" })).speak), "Undone: your check-in for last night is gone.", "beta's undo takes back beta's newest");
     eq((await sql(`SELECT ended_at IS NULL AS running, deleted_at IS NULL AS kept FROM maple_sleep_tries WHERE family_id = 1 AND client_id LIKE $1`, [mine]))[0], { running: true, kept: true }, "alpha's try untouched");
-    // Leave both families as the other checks expect them.
+    // Leave both families as the other checks expect them (no Siri action kept for Undo on rows that are gone).
     await sql(`DELETE FROM maple_sleep_tries WHERE client_id LIKE $1`, [mine]);
     await sql(`DELETE FROM maple_sleep_checkins WHERE member = $1`, [beta.owner]);
     await sql(`DELETE FROM maple_entries WHERE kind = 'sleep' AND source = 'shortcut'`);
+    await sql(`UPDATE maple_tokens SET last_act = NULL`);
   });
 }
 

@@ -10,18 +10,21 @@
 import { NextRequest } from "next/server";
 import webpush from "web-push";
 import { POST as QUICK } from "../../src/app/api/maple/quick/route";
-import { checkinDueNight } from "../../src/app/api/maple/quick/sleep";
+import { armsLine, checkinDueNight, pauseLine, sleptWords } from "../../src/app/api/maple/quick/sleep";
 import { POST as SLEEP_POST } from "../../src/app/api/maple/sleep/route";
 import { checkinDue } from "../../src/components/maple/sleep/SleepCheckin";
 import { sealSession, SESSION_COOKIE } from "../../src/lib/maple/auth";
 import { setLaterRunner } from "../../src/lib/maple/push-hooks";
+import { catchUpLines, catchUpSpoken, moveWords, recapWords } from "../../src/lib/maple/sleep/catchup";
 import { numberTries, tryDayKey, tryDayLabel } from "../../src/lib/maple/sleep/engine";
 import { lastNightKey } from "../../src/lib/maple/sleep/goals";
 import { getShift, getTry, listTries, openShift, runningTry, startShift } from "../../src/lib/maple/sleep/store";
-import type { BassinetTry, RosterWindow, SleepCheckin, SleepGoal } from "../../src/lib/maple/sleep/types";
-import { activeTimers, getEntry, startTimer } from "../../src/lib/maple/store";
+import type { BassinetTry, HoldingShift, RosterWindow, SleepCheckin, SleepGoal } from "../../src/lib/maple/sleep/types";
+import { downWords } from "../../src/lib/maple/sleep/words";
+import { activeTimers, getEntry, startTimer, stopTimer, updateEntry } from "../../src/lib/maple/store";
 import { addDays, dayKey, formatTime, localParts, zonedTimeToUtc } from "../../src/lib/maple/time";
-import type { FeedData, Role } from "../../src/lib/maple/types";
+import type { Entry, FeedData, Role } from "../../src/lib/maple/types";
+import { makeVoice } from "../../src/lib/maple/voice";
 import { done, eq, freshDb, ok, seedFamilies, sha256, sql, test, type FamilySeed } from "./harness";
 
 process.env.MCP_SECRET = "made-up-quick-sleep-secret";
@@ -80,11 +83,12 @@ async function addToken(familyId: number, email: string, tag: string): Promise<s
   return token;
 }
 
-/** Each case starts from a family with nothing but its seed: no tries, turns, check-ins, goals or new entries. */
+/** Each case starts from a family with nothing but its seed: no tries, turns, check-ins, goals or new entries, and no Siri action kept for Undo. */
 async function reset(f: FamilySeed) {
   for (const t of ["maple_sleep_tries", "maple_sleep_shifts", "maple_sleep_checkins", "maple_sleep_goals", "maple_sleep_plans"]) await sql(`DELETE FROM ${t} WHERE family_id = $1`, [f.familyId]);
   await sql(`DELETE FROM maple_entries WHERE family_id = $1 AND id <> ALL($2::bigint[])`, [f.familyId, [f.entries.diaper, f.entries.feed, f.entries.moment]]);
   await sql(`DELETE FROM maple_care_entries WHERE family_id = $1 AND source = 'shortcut'`, [f.familyId]);
+  await sql(`UPDATE maple_tokens SET last_act = NULL WHERE family_id = $1`, [f.familyId]);
 }
 
 const clock = (at: string | number | Date, tz: string) => formatTime(at, tz).replace(/\s*[AP]M$/i, "");
@@ -266,9 +270,11 @@ async function main() {
     const close = await siri(T(alpha).member, { action: "put_down", minutes_ago: 62 });
     eq(close.ok, false, "within 3 minutes of its start");
     eq([(await tries(alpha)).length, (await sleepsOf(alpha)).length], [1, 1], "one try, one sleep");
-    // After it ended, a new one: saved.
+    // After it ended, a new one: saved. (Its number depends on the try day, noon to noon: just after noon it's the first of a new one.)
     const later = await siri(T(alpha).member, { action: "put_down", minutes_ago: 10 });
-    ok(later.ok && /^Try 2 [\w ]+, down at \d{1,2}:\d\d\.$/.test(later.speak), later.speak);
+    const newest = (await listTries(1, alpha.babyId, { from: new Date(Date.now() - 2 * HOUR) }))[0];
+    eq([later.ok, later.speak], [true, `${await labelOf(alpha, newest)}, down at ${clock(newest.started_at, alpha.tz)}.`], "a new try, numbered from the log");
+    ok(/^Try [12] [\w ]+, down at \d{1,2}:\d\d\.$/.test(later.speak), later.speak);
     eq((await tries(alpha)).length, 2, "a new try after the first ended");
     // A Shortcut retrying its own backdated put down gets its first answer, never "already logged".
     await reset(alpha);
@@ -287,7 +293,12 @@ async function main() {
     const c2 = await siri(T(beta).member, { action: "outcome", outcome: "woke_crying" });
     eq(c2.speak, "Woke crying after 10 minutes. Sleep timer stopped. Pause until the next try.", "after the retry: pause");
     const third = await siri(T(beta).member, { action: "put_down" });
-    eq([third.ok, third.speak, third.pause], [false, "The plan says pause until the next try. Say it again to try anyway.", true], "the plan's pause first");
+    // Holding him through the pause is for an adult who's awake: sleepy, the bassinet comes first (in the family's words).
+    eq(
+      [third.ok, third.speak, third.pause],
+      [false, "The plan says pause until the next try, unless you're getting sleepy: then lay him on his back in the bassinet. Say it again to try anyway.", true],
+      "the plan's pause first"
+    );
     eq((await tries(beta)).length, 2, "nothing saved");
     // Said again within two minutes (by anyone): it goes ahead, a retry like the app's soft Put down.
     const anyway = await siri(T(beta).owner, { action: "put_down" });
@@ -357,7 +368,7 @@ async function main() {
     const r = await siri(T(alpha).member, { action: "asleep_in_arms", client_id: "made-up-arms-1" });
     const [s] = await sleepsOf(alpha);
     eq([s.active, (s.data as { place?: string }).place, s.source, s.created_by], [true, "arms", "shortcut", alpha.member], "in arms");
-    eq(r.speak, `Sleep timer started at ${clock(s.started_at as string, alpha.tz)}, in arms.`, "said, with no sweet dreams");
+    eq(r.speak, `Sleep timer started at ${clock(s.started_at as string, alpha.tz)}, in arms. Getting sleepy? Put her on her back in the bassinet.`, "said, with no sweet dreams, and the bassinet if sleepy");
     const again = await siri(T(alpha).member, { action: "asleep_in_arms", client_id: "made-up-arms-1" });
     eq([again.speak, again.deduped, (await sleepsOf(alpha)).length], [r.speak, true, 1], "the retry");
     const other = await siri(T(alpha).owner, { action: "asleep_in_arms" });
@@ -368,7 +379,11 @@ async function main() {
     const fe = (await getEntry(1, feed.id))!;
     const [s2] = await sleepsOf(alpha);
     eq([fe.active, near(fe.ended_at, Date.now() - 5 * MIN), near((await getEntry(1, Number(s2.id)))!.started_at, Date.now() - 5 * MIN)], [false, true, true], "the feed ended when she fell asleep");
-    ok(f.speak.startsWith("Feed stopped and sleep timer started at "), f.speak);
+    ok(f.speak.startsWith("Feed stopped and sleep timer started at ") && f.speak.endsWith(", in arms. Getting sleepy? Put her on her back in the bassinet."), f.speak);
+    // Beta's words: his name and pronouns.
+    await reset(beta);
+    ok((await siri(T(beta).owner, { action: "asleep_in_arms" })).speak.endsWith("Getting sleepy? Put him on his back in the bassinet."), "beta's pronouns");
+    await reset(beta);
   });
 
   await test("asleep_in_arms: while a try runs she's in the bassinet, so it points to picked up and saves nothing", async () => {
@@ -787,6 +802,81 @@ async function main() {
     eq((await sql(`SELECT deleted_at FROM maple_entries WHERE family_id = 1 AND kind = 'diaper' AND source = 'shortcut'`))[0].deleted_at, null, "the member's diaper stays");
   });
 
+  // Undo acts on the speaker's newest Siri action as Siri kept it (quick/acts.ts), never on a change read off the log.
+  await test("undo never reaches past a newer change by anyone to its action's row: a feed Siri stopped and someone fixed since stays, and the older sleep stop is never taken back", async () => {
+    await reset(alpha);
+    const sleep = await runningSleep(alpha, alpha.member, 60);
+    ok((await siri(T(alpha).owner, { action: "wake" })).speak.startsWith("Stopped."), "Maple awake");
+    const feed = await runningFeed(alpha, alpha.member, 8);
+    ok((await siri(T(alpha).owner, { action: "stop" })).speak.startsWith("Stopped."), "Maple stop: the feed");
+    // Blake fixes that feed in the app.
+    const f = (await getEntry(1, feed.id))!;
+    await updateEntry(1, feed.id, { note: "made-up fix on the other phone" }, alpha.member, { expectUpdatedAt: f.updated_at });
+    const u = await siri(T(alpha).owner, { action: "undo" });
+    eq([u.status, u.ok, u.speak], [409, false, "The nursing timer changed since, so nothing was undone. Fix it in the app."], "said, nothing undone");
+    eq([(await getEntry(1, sleep.id))?.active, (await activeTimers(1, alpha.babyId)).length], [false, 0], "the sleep stays stopped, and nothing runs");
+  });
+
+  await test("undo never takes an app edit for a Siri stop: a finished nap, tummy time or pumping edited in the app never runs again", async () => {
+    for (const kind of ["sleep", "tummy", "pump"] as const) {
+      await reset(alpha);
+      const start = new Date(Date.now() - 20 * HOUR);
+      const [row] = await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, active, data, created_by, source) VALUES (1, $1, $2, $3, $4, FALSE, '{}', $5, 'web') RETURNING id, updated_at`, [
+        alpha.babyId,
+        kind,
+        start,
+        new Date(start.getTime() + HOUR),
+        alpha.owner,
+      ]);
+      // Yesterday's, edited now in the app (its note) by the one who then says Maple undo.
+      await updateEntry(1, Number(row.id), { note: "made-up note" }, alpha.owner, { expectUpdatedAt: new Date(row.updated_at as string).toISOString() });
+      const u = await siri(T(alpha).owner, { action: "undo" });
+      eq([u.ok, (await getEntry(1, Number(row.id)))?.active], [false, false], `${kind}: still finished (${u.speak})`);
+    }
+    // With an older Siri action kept (a diaper), the edit is a newer change of theirs: said, and nothing is undone.
+    await reset(alpha);
+    await siri(T(alpha).owner, { action: "pee" });
+    const start = new Date(Date.now() - 20 * HOUR);
+    const [nap] = await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, active, data, created_by, source) VALUES (1, $1, 'sleep', $2, $3, FALSE, '{"place":"crib"}', $4, 'web') RETURNING id, updated_at`, [
+      alpha.babyId,
+      start,
+      new Date(start.getTime() + HOUR),
+      alpha.owner,
+    ]);
+    await updateEntry(1, Number(nap.id), { note: "nap in the crib" }, alpha.owner, { expectUpdatedAt: new Date(nap.updated_at as string).toISOString() });
+    const u = await siri(T(alpha).owner, { action: "undo" });
+    eq([u.ok, u.speak], [false, "Your newest change was to the sleep timer, so nothing was undone. Fix it in the app."], "the newer change is said");
+    eq((await getEntry(1, Number(nap.id)))?.active, false, "the nap stays finished");
+    eq((await sql(`SELECT deleted_at FROM maple_entries WHERE family_id = 1 AND kind = 'diaper' AND source = 'shortcut'`))[0].deleted_at, null, "and the diaper stays");
+  });
+
+  await test("undo never takes back a timer stopped in the app; a stop Siri made with a time said (woke 10 minutes ago) it does", async () => {
+    await reset(alpha);
+    const inApp = await runningSleep(alpha, alpha.owner, 40);
+    await stopTimer(1, inApp.id, undefined, alpha.owner);
+    const u = await siri(T(alpha).owner, { action: "undo" });
+    eq([u.ok, (await getEntry(1, inApp.id))?.active], [false, false], `the app's Done stays (${u.speak})`);
+    await reset(alpha);
+    const bySiri = await runningSleep(alpha, alpha.owner, 40);
+    await siri(T(alpha).owner, { action: "wake", minutes_ago: 10 });
+    const u2 = await siri(T(alpha).owner, { action: "undo" });
+    eq([u2.speak, (await getEntry(1, bySiri.id))?.active], ["Undone: the sleep timer is running again.", true], "Siri's own stop");
+  });
+
+  await test("undo is the speaker's whichever of their Siri keys said it; the action kept names rows, never what's in them", async () => {
+    await reset(beta);
+    const pee = await siri(T(beta).owner, { action: "pee" });
+    const [kept] = await sql(`SELECT last_act FROM maple_tokens WHERE family_id = 2 AND member = $1 AND revoked_at IS NULL`, [beta.owner]);
+    const act = kept.last_act as { kind: string; rows: { t: string; id: number; u: string }[] };
+    eq([act.kind, act.rows.map((r) => [r.t, r.id])], ["entry", [["entry", (pee.entry as { id: number }).id]]], "the diaper's row, as it left it");
+    ok(!/pee|poop|wet|diaper/i.test(JSON.stringify(act)), JSON.stringify(act));
+    const second = await addToken(2, beta.owner, "betaOwnerSecondKey");
+    const u = await siri(second, { action: "undo" });
+    eq(u.speak, `Undone: the wet diaper at ${clock((pee.entry as { started_at: string }).started_at, beta.tz)} is gone.`, "taken back with their other key");
+    eq((await siri(T(beta).owner, { action: "undo" })).ok, false, "and with the first, nothing more");
+    await reset(beta);
+  });
+
   // ── "Maple status" ─────────────────────────────────────────────────────
 
   await test("status: one sleep line for a running try (never 'a sleep timer is running' too), else who's holding her; none without sleep rows", async () => {
@@ -979,6 +1069,75 @@ async function main() {
     // And it does say due somewhere, and not due somewhere.
     const due = checkinDueNight({ goals: [goalOf({ id: 4, created: "2026-10-01T12:00:00Z", target: "x@example.com" })], checkins: [], me: "x@example.com", role: "member", now: new Date("2026-11-04T15:00:00Z"), tz: "America/Chicago" });
     eq(due, "2026-11-03", "due at 9 AM in Chicago");
+  });
+
+  // ── the safety lines, in every voice ────────────────────────────────
+
+  await test("the safety lines say what to do in the family's own words: she, he, they, and no name or sex on file", () => {
+    const tz = "America/Chicago";
+    const at = "2026-11-03T07:45:00.000Z"; // 1:45 AM in Chicago
+    const now = new Date("2026-11-03T08:10:00.000Z");
+    const sleep = (place: string | null, active: boolean): Entry =>
+      ({ id: 1, kind: "sleep", started_at: at, ended_at: active ? null : now.toISOString(), active, data: place ? { place } : {}, note: null, created_by: null, updated_by: null, source: "web", created_at: at, updated_at: at }) as Entry;
+    const voices = [
+      { v: makeVoice({ name: "Wren", pronoun: "she" }), they: "she", them: "her", their: "her", falls: "falls", is: "She's", been: "she's been" },
+      { v: makeVoice({ name: "Ro", pronoun: "he" }), they: "he", them: "him", their: "his", falls: "falls", is: "He's", been: "he's been" },
+      { v: makeVoice({ name: "Sky", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall", is: "They're", been: "they've been" },
+      { v: makeVoice({ name: "the baby", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall", is: "They're", been: "they've been" },
+    ];
+    const Cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+    for (const x of voices) {
+      const who = `${x.v.name} (${x.v.pronoun})`;
+      // Safety #5 and #19: the plan's pause, and a sleep in arms.
+      eq(pauseLine(x.v), `The plan says pause until the next try, unless you're getting sleepy: then lay ${x.them} on ${x.their} back in the bassinet. Say it again to try anyway.`, `${who}: the pause`);
+      eq(armsLine({ started_at: at }, tz, false, x.v), `Sleep timer started at 1:45, in arms. Getting sleepy? Put ${x.them} on ${x.their} back in the bassinet.`, `${who}: in arms`);
+      eq(armsLine({ started_at: at }, tz, true, x.v).startsWith("Feed stopped and sleep timer started at 1:45, in arms. Getting sleepy?"), true, `${who}: in arms after a feed`);
+      // A stopped sleep somewhere that isn't her own sleep space: what to do next time.
+      for (const [place, words] of [["car", "in the car seat"], ["stroller", "in the stroller"], ["carrier", "in the carrier"]]) {
+        eq(sleptWords(sleep(place, false), x.v), `${Cap(x.they)} slept 25 minutes, ${words}. Next time ${x.they} ${x.falls} asleep in one, move ${x.them} to the bassinet, on ${x.their} back, as soon as you can.`, `${who}: slept, ${place}`);
+      }
+      eq(sleptWords(sleep("bed", false), x.v), `${Cap(x.they)} slept 25 minutes, in a grown-up bed. Next time, move ${x.them} to ${x.their} own sleep space as soon as you can.`, `${who}: slept, bed`);
+      for (const place of ["bassinet", "crib", "arms", null]) {
+        ok(!/Next time/.test(sleptWords(sleep(place, false), x.v)), `${who}: nothing more after ${place ?? "no place"}`);
+        eq(moveWords((place ?? undefined) as never, x.v), null, `${who}: no move from ${place ?? "no place"}`);
+      }
+      // Safety #17: a sleep still running there, in the take-over catch-up, spoken (Siri) and on the sheet (the app).
+      const summary = (place: string) => ({ active: [sleep(place, true)], lastFed: null, next: null, lastDiaper: null });
+      const spoken = (place: string) => catchUpSpoken(summary(place), { now, tz, vo: x.v, clock: (t) => clock(t, tz) });
+      const sheet = (place: string) => catchUpLines({ summary: summary(place), now, tz, v: x.v, me: "made-up@example.com", memberName: () => "Sam", next: null, nextHolder: null }).find((l) => l.label === "Running")?.text;
+      const toBassinet = `Move ${x.them} to the bassinet, on ${x.their} back, as soon as you can.`;
+      const toOwn = `Move ${x.them} to ${x.their} own sleep space, on ${x.their} back, as soon as you can.`;
+      eq(spoken("car").slice(-2), ["Asleep since 1:45, in the car seat.", toBassinet], `${who}: spoken, car seat`);
+      eq(spoken("stroller").slice(-2), ["Asleep since 1:45, in the stroller.", toBassinet], `${who}: spoken, stroller`);
+      eq(spoken("carrier").slice(-2), ["Asleep since 1:45, in the carrier.", toBassinet], `${who}: spoken, carrier`);
+      eq(spoken("bed").slice(-2), ["Asleep since 1:45, in a grown-up bed.", toOwn], `${who}: spoken, bed`);
+      eq(spoken("bassinet").at(-1), "Asleep since 1:45, in the bassinet.", `${who}: spoken, bassinet: nothing more`);
+      eq(sheet("car"), `Asleep since 1:45 AM (car seat), ${downWords(25)}. ${toBassinet}`, `${who}: the sheet, car seat`);
+      eq(sheet("bed"), `Asleep since 1:45 AM (grown-up bed), ${downWords(25)}. ${toOwn}`, `${who}: the sheet, bed`);
+      eq(sheet("arms"), `Asleep since 1:45 AM (in arms), ${downWords(25)}`, `${who}: the sheet, in arms: nothing more`);
+      // And in "what did I miss?" (recapWords): the same next step after what's going on now, with the holding turn too; nothing
+      // more from her own sleep space or in arms, or while a try is running.
+      const recap = (place: string, more: { shift?: boolean; tryNow?: boolean } = {}) =>
+        recapWords({
+          since: Date.parse("2026-11-03T07:00:00.000Z"),
+          head: "Since 1 AM",
+          entries: [sleep(place, true)],
+          tries: more.tryNow ? [{ id: 1, started_at: at, ended_at: null, outcome: null, sleep_entry_id: 1 } as BassinetTry] : [],
+          shift: more.shift ? ({ id: 1, holder: "made-up@example.com", started_at: "2026-11-03T07:30:00.000Z", ended_at: null } as HoldingShift) : null,
+          now,
+          tz,
+          vo: x.v,
+          me: "made-up@example.com",
+          name: () => "Sam",
+        });
+      for (const [place, words] of [["car", "in the car seat"], ["stroller", "in the stroller"], ["carrier", "in the carrier"]]) {
+        eq(recap(place), `Since 1 AM, nothing was logged. ${x.is} asleep now, since 1:45 AM, ${words}. ${toBassinet}`, `${who}: recap, ${place}`);
+      }
+      eq(recap("bed"), `Since 1 AM, nothing was logged. ${x.is} asleep now, since 1:45 AM, in a grown-up bed. ${toOwn}`, `${who}: recap, bed`);
+      eq(recap("car", { shift: true }), `Since 1 AM, nothing was logged. You've been holding ${x.them} since 1:30 AM; ${x.been} asleep since 1:45 AM. ${toBassinet}`, `${who}: recap, holding turn, car seat`);
+      for (const place of ["bassinet", "crib", "arms"]) ok(!/Move /.test(recap(place)), `${who}: recap, ${place}: nothing more (${recap(place)})`);
+      eq(recap("car", { tryNow: true }), `Since 1 AM, nothing was logged. ${x.is} in the bassinet now, since 1:45 AM.`, `${who}: recap, a try running: nothing more`);
+    }
   });
 
   done("quick-sleep.check.ts");

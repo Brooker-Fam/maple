@@ -24,17 +24,25 @@ import { activeRosters } from "./sleep/roster-read";
  *     Someone awake and using Maple hears everything as usual.
  *
  * What a quiet phone holds (push.ts and notify.ts ask): the nursing timer,
- * unless its person started or changed that feed; "Logged"; and her
- * medicines' reminders (OK again, set times), except on her own phone,
- * which always gets her own. A handoff is never held: it only ever goes to
- * the people it's about (the holder and the next holder, or the person
- * asked). A held reminder stays unclaimed, so it goes once the phone isn't
- * quiet (the window's end, which push-wake.ts wakes for) while it's still
- * due and inside its 3-hour cutoff; a held "Logged" or nursing update is
+ * unless its person started or changed that feed, and her medicines'
+ * reminders (OK again, set times), except on her own phone, which always
+ * gets her own. A handoff is never held: it only ever goes to the people
+ * it's about (the holder and the next holder, or the person asked). A
+ * "Logged" is held only when it has nothing of that medicine to update on
+ * the phone (notify.ts): one that replaces the reminder this dose answers,
+ * or an earlier "Logged" whose "OK after" is out of date now, always goes,
+ * since held, that older notice would read as a dose not taken; and her own
+ * phone never holds one. A held reminder stays unclaimed, so it goes once the
+ * phone isn't quiet (the window's end, which push-wake.ts wakes for) while
+ * it's still due, however long the window ran (push.ts counts its 3-hour
+ * cutoff from the window's end); a held "Logged" or nursing update is
  * claimed as held, so a retry never sends it later.
  *
- * Nothing new is stored about anyone: the window comes from the roster, and
- * "awake" from rows Maple already keeps.
+ * What it keeps: a small note per phone for each notice it held, in
+ * maple_push_sent with the rest of the send log (a reminder's `wait:` row
+ * with its window's end, a "Logged" or nursing update's `held` claim),
+ * deleted after 3 days. The window comes from the roster, and "awake" from
+ * rows Maple already keeps.
  */
 
 const MIN = 60_000;
@@ -102,22 +110,31 @@ export const holdsNursing = (quiet: QuietPhones, sub: Pick<QuietSub, "id" | "mem
   quiet.has(sub.id) && sub.member !== feed.created_by && sub.member !== feed.updated_by;
 
 /**
+ * A reminder due this soon before a window opens can still be held in it:
+ * its wake comes a few seconds after the moment, and a send the push
+ * service refused is tried again a minute or so later.
+ */
+export const HOLD_LEAD_MS = 10 * MIN;
+
+/**
  * The ends of the protected windows that would hold one of her reminders on
  * a quiet phone, for push-wake.ts to wake at: a window (of an adult in
  * `members`, whose phone wants her reminders and keeps quiet on) with a
- * reminder moment inside it that is still inside its cutoff when the window
- * ends, so the held reminder goes out then. Ends in (now, until].
+ * reminder moment inside it, or due up to HOLD_LEAD_MS before it opens, so
+ * the held reminder goes out when it ends, however long it ran. Ends in
+ * (now, until]. A reminder a tick has already held is woken for from its
+ * own note too (push.ts markWaiting).
  */
-export async function quietWindowEnds(scope: Scope, members: readonly string[], moments: readonly number[], now: Date, until: number, cutoffMs: number): Promise<number[]> {
+export async function quietWindowEnds(scope: Scope, members: readonly string[], moments: readonly number[], now: Date, until: number): Promise<number[]> {
   if (!members.length || !moments.length || scope.babyId == null) return [];
   const roster = await activeRosters(scope);
   if (!roster.length) return [];
   const t = now.getTime();
   const ends = new Set<number>();
   for (const member of new Set(members)) {
-    for (const w of windowsBetween(roster, member, t - cutoffMs, until, scope.tz)) {
+    for (const w of windowsBetween(roster, member, t, until, scope.tz)) {
       if (w.end <= t || w.end > until) continue;
-      if (moments.some((m) => m >= w.start && m < w.end && w.end - m < cutoffMs)) ends.add(w.end);
+      if (moments.some((m) => m >= w.start - HOLD_LEAD_MS && m < w.end)) ends.add(w.end);
     }
   }
   return [...ends].sort((a, b) => a - b);

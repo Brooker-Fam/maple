@@ -29,6 +29,7 @@ import { ozToMl } from "@/lib/maple/units";
 import type { Baby, Entry, FeedData, Member } from "@/lib/maple/types";
 import { runningTry } from "@/lib/maple/sleep/store";
 import { captureServerException } from "@/lib/posthog-server";
+import { changedBy, rememberAct, wrote } from "./acts";
 import { recap } from "./recap";
 import { asleepInArms, badMinutes, checkin, clock, entryByClient, handoff, minutesAgo, outcome, putDown, sleepStatusLine, sleptWords, stopFeedForSleep, undo, type QuickCtx } from "./sleep";
 
@@ -164,7 +165,9 @@ export async function POST(request: NextRequest) {
       case "poop":
       case "both": {
         const data = { pee: action !== "poop", poop: action !== "pee" };
-        ({ entry } = await createEntryOnce(fam, { ...base, kind: "diaper", startedAt: now, data, clientId }));
+        const r = await createEntryOnce(fam, { ...base, kind: "diaper", startedAt: now, data, clientId });
+        entry = r.entry;
+        if (!r.deduped) await rememberAct(qc, "entry", [wrote("entry", r.entry)]);
         speak = `Logged a ${action === "both" ? "wet and dirty" : action === "pee" ? "wet" : "dirty"} diaper at ${at}.`;
         break;
       }
@@ -183,10 +186,16 @@ export async function POST(request: NextRequest) {
               : `A feed from ${formatTime(runningFeed.started_at, tz)} is still running. Stop that one first, then start the new feed.`;
           break;
         }
-        if (runningSleep) await stopTimer(fam, runningSleep.id, undefined, me.email);
+        const sleepStopped = changedBy(runningSleep ? await stopTimer(fam, runningSleep.id, undefined, me.email) : null, runningSleep, me.email);
         // Going back and forth until now: this side is tracking sides again.
         const wasBoth = !!d && openSegment(d.segments)?.side === "B";
-        ({ entry } = await startTimer(fam, { ...base, kind: "feed", side: s, at: now, clientId }));
+        const r = await startTimer(fam, { ...base, kind: "feed", side: s, at: now, clientId });
+        entry = r.entry;
+        // A new feed (Undo takes it back, with the sleep it stopped); a side switch on the one running (no voice Undo).
+        const switched = r.alreadyRunning ? changedBy(r.entry, runningFeed, me.email) : null;
+        if (!r.alreadyRunning) await rememberAct(qc, "entry", [wrote("entry", r.entry), sleepStopped]);
+        else if (switched) await rememberAct(qc, "other", [switched, sleepStopped]);
+        else if (sleepStopped) await rememberAct(qc, "stop", [sleepStopped]);
         speak = wasBoth ? `Tracking sides again: ${vo.they}${vo.verb("'s")} on the ${side(s)}.` : `Nursing timer running on the ${side(s)}.`;
         break;
       }
@@ -202,7 +211,10 @@ export async function POST(request: NextRequest) {
           break;
         }
         const to = d.last_side === "L" ? "R" : "L";
-        entry = (await switchSide(fam, runningFeed.id, to, undefined, me.email)).entry;
+        const r = await switchSide(fam, runningFeed.id, to, undefined, me.email);
+        entry = r.entry;
+        const sw = changedBy(r.entry, runningFeed, me.email);
+        if (sw) await rememberAct(qc, "other", [sw]);
         speak = `Switched to the ${side(to)}.`;
         break;
       }
@@ -225,6 +237,8 @@ export async function POST(request: NextRequest) {
         const paused = !openSegment(d.segments);
         const r = await switchSide(fam, runningFeed.id, "B", undefined, me.email);
         entry = r.entry;
+        const sw = changedBy(r.entry, runningFeed, me.email);
+        if (sw) await rememberAct(qc, "other", [sw]);
         const open = openSegment((r.entry.data as FeedData).segments);
         if (r.noop) speak = `${vo.They}${vo.verb("'s")} already going back and forth.`;
         else if (paused) speak = r.merged ? "Back on, still going back and forth." : "Back on, going back and forth.";
@@ -245,6 +259,8 @@ export async function POST(request: NextRequest) {
           return json({ ok: false, speak: `That's before the sleep timer started at ${clock(target.started_at, tz)}, so nothing was changed.` }, 400);
         }
         entry = await stopTimer(fam, target.id, when.given ? when.at : undefined, me.email);
+        const stopped = changedBy(entry, target, me.email);
+        if (stopped) await rememberAct(qc, "stop", [stopped]);
         // A sleep is said as a sentence ("She slept 25 minutes, in arms."), never the card's "Slept · 0s · in arms".
         speak = entry.kind === "sleep" ? `Stopped. ${sleptWords(entry, vo)}` : `Stopped. ${describeEntry(entry, { now }).text}.`;
         // A bassinet try on that sleep stays open until someone says how it went (the app opens How did it go? here).
@@ -264,22 +280,28 @@ export async function POST(request: NextRequest) {
           break;
         }
         // Fell asleep feeding: the feed ends when she fell asleep (a time given), else now.
-        if (runningFeed) await stopFeedForSleep(fam, runningFeed, when, me.email);
+        const feedStopped = changedBy(runningFeed ? await stopFeedForSleep(fam, runningFeed, when, me.email) : null, runningFeed, me.email);
         const r = await startTimer(fam, { ...base, kind: "sleep", at: when.at, clientId: prior ? null : clientId });
         entry = r.entry;
+        if (!r.alreadyRunning) await rememberAct(qc, "entry", [wrote("entry", r.entry), feedStopped]);
+        else if (feedStopped) await rememberAct(qc, "stop", [feedStopped]);
         if (r.alreadyRunning) speak = `${runningFeed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(r.entry.started_at, tz)}.`;
         else speak = runningFeed ? `Feed stopped and sleep timer started${at(r.entry)}. ${dreams}` : `Sleep timer started${at(r.entry)}. ${dreams}`;
         break;
       }
       case "vitamin_d": {
-        ({ entry } = await createEntryOnce(fam, { ...base, kind: "med", startedAt: now, data: VITAMIN_D_DEFAULT, clientId }));
+        const r = await createEntryOnce(fam, { ...base, kind: "med", startedAt: now, data: VITAMIN_D_DEFAULT, clientId });
+        entry = r.entry;
+        if (!r.deduped) await rememberAct(qc, "entry", [wrote("entry", r.entry)]);
         speak = `Vitamin D logged at ${at}.`;
         break;
       }
       case "bottle": {
         const oz = Number(body.amount_oz);
         const data = Number.isFinite(oz) && oz > 0 && oz <= 12 ? { method: "bottle", amount_ml: Math.round(ozToMl(oz)) } : { method: "bottle" };
-        ({ entry } = await createEntryOnce(fam, { ...base, kind: "feed", startedAt: now, data, clientId }));
+        const r = await createEntryOnce(fam, { ...base, kind: "feed", startedAt: now, data, clientId });
+        entry = r.entry;
+        if (!r.deduped) await rememberAct(qc, "entry", [wrote("entry", r.entry)]);
         speak = `Logged a ${"amount_ml" in data ? `${oz} ounce ` : ""}bottle at ${at}.`;
         break;
       }

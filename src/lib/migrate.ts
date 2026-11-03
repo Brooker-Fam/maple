@@ -149,6 +149,9 @@ export async function migrate() {
       revoked_at TIMESTAMPTZ
     )
   `;
+  // The member's newest Siri action and the rows it wrote, as it left them (quick/acts.ts): all "Maple undo" may take back.
+  // Nullable, and older code never reads it.
+  await addColumn("maple_tokens", "last_act", "JSONB");
 
   // FOR MOM: the person who gave birth, her medicines, temperature, questions and
   // check-ins. Separate from maple_entries on purpose: nothing here is about

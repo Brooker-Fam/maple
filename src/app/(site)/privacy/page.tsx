@@ -385,7 +385,9 @@ export default function Privacy() {
       <h3>Siri</h3>
       <p>
         A Siri shortcut uses a personal key you make in Maple and sends short actions such as &ldquo;pee&rdquo; or
-        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. Remove the key in Maple (avatar &rarr; Settings &rarr;
+        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. So that &ldquo;Maple undo&rdquo; takes back
+        only your own newest Siri action, Maple keeps a note with your key of which entries that action saved or changed (never
+        what&rsquo;s in them); your next Siri action replaces it. Remove the key in Maple (avatar &rarr; Settings &rarr;
         Siri &amp; assistants &rarr; Your Siri keys) to stop it.
       </p>
 
@@ -397,13 +399,16 @@ export default function Privacy() {
         on, the nursing timer on the lock screen. If you turn on handoff reminders, a phone hears a holding turn&rsquo;s planned
         handoff when its person is holding the baby or is next to take over, and &ldquo;Handoff now&rdquo; when its person is the
         one asked; these name no one and say nothing about the baby&rsquo;s sleep. If you&rsquo;re on a sleep goal&rsquo;s night
-        roster, your phone stays quiet in your own protected window unless you turn that off: Maple holds the nursing timer and
-        medicine notices there (a handoff to you still comes through, and mom&rsquo;s own reminders still reach her own phone),
-        and sends a medicine reminder that&rsquo;s still due when the window ends. To tell whether you&rsquo;re up, it checks
-        whether you&rsquo;re holding the baby or have opened or logged anything in Maple in the last 15 minutes, from what it
-        already keeps; nothing new is stored. By default a medicine notice names the medicine and says when it was last
-        taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a dose amount. Signing
-        out turns them off on that phone.
+        roster, your phone stays quiet in your own protected window unless you turn that off. A medicine reminder due in it
+        waits: Maple sends it once when the window ends (or sooner, if you&rsquo;re up and using Maple), if it&rsquo;s still
+        due, however long the window is. &ldquo;Logged&rdquo; comes through only when it updates a medicine notice already on
+        your phone; any other &ldquo;Logged&rdquo;, and nursing timer updates, in the window are never sent later. A handoff to
+        you still comes through, and mom&rsquo;s own reminders and &ldquo;Logged&rdquo; notices are never held on her own
+        phone. To tell whether you&rsquo;re up, it checks whether you&rsquo;re holding the baby or have opened or logged
+        anything in Maple in the last 15 minutes, from what it already keeps. For each notice it holds, it keeps a small note
+        for that phone (which notice, and when), deleted after 3 days. By default a medicine notice names the medicine and
+        says when it was last taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a
+        dose amount. Signing out turns them off on that phone.
       </p>
 
       <h2>Children</h2>

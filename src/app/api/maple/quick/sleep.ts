@@ -18,6 +18,8 @@ import {
   deleteCheckin,
   deleteTry,
   finishTry,
+  getShift,
+  getTry,
   listCheckins,
   listGoals,
   listShifts,
@@ -26,8 +28,6 @@ import {
   openShift,
   reopenShift,
   rowToCheckin,
-  rowToShift,
-  rowToTry,
   runningTry,
   saveCheckin,
   SleepConflict,
@@ -42,6 +42,7 @@ import { activeTimers, Conflict, createEntryOnce, getEntry, listEntries, NotFoun
 import { dayKey, formatTime, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Baby, Entry, FeedData, Member, Role } from "@/lib/maple/types";
 import type { Voice } from "@/lib/maple/voice";
+import { changedBy, lastAct, rememberAct, sameWrite, wrote, type SiriAct, type Wrote } from "./acts";
 
 /**
  * The sleep plan by Siri (POST /api/maple/quick): put_down, outcome,
@@ -60,6 +61,7 @@ import type { Voice } from "@/lib/maple/voice";
  * undoHandOff, deleteCheckin, a soft delete with the timer it stopped, and
  * reopening a stopped timer), only while nobody has changed it since, and
  * never past a newer change of theirs: then it says so and changes nothing.
+ * Every Siri write keeps what it wrote for it (./acts.ts rememberAct).
  */
 
 const MIN = 60_000;
@@ -102,12 +104,30 @@ const near = (a: string | null | undefined, b: string | null | undefined, within
 /** Where a sleep was, as Siri says it after "slept 25 minutes": "in arms", "in the bassinet". */
 const SLEPT_IN: Record<string, string> = { arms: "in arms", bassinet: "in the bassinet", crib: "in the crib", carrier: "in the carrier", stroller: "in the stroller", car: "in the car seat", bed: "in a grown-up bed" };
 
-/** A stopped sleep, spoken: "She slept 1 hour 5 minutes, in arms." ("under a minute" for a short one), never the card's "Slept · 0s · in arms". */
+/** After a sleep somewhere that isn't her own sleep space, the safety guidance's next time, in the family's voice. */
+const toBassinet = (vo: Voice) => `Next time ${vo.they} ${vo.verb("falls")} asleep in one, move ${vo.them} to the bassinet, on ${vo.their} back, as soon as you can.`;
+const NEXT_TIME: Record<string, (vo: Voice) => string> = {
+  car: toBassinet,
+  stroller: toBassinet,
+  carrier: toBassinet,
+  bed: (vo) => `Next time, move ${vo.them} to ${vo.their} own sleep space as soon as you can.`,
+};
+
+/**
+ * A stopped sleep, spoken: "She slept 1 hour 5 minutes, in arms." ("under a minute" for a short one), never the card's
+ * "Slept · 0s · in arms"; after a car seat, stroller, carrier or grown-up bed, what to do next time.
+ */
 export function sleptWords(e: Entry, vo: Voice): string {
   const min = e.ended_at ? (ms(e.ended_at) - ms(e.started_at)) / MIN : 0;
-  const place = SLEPT_IN[(e.data as { place?: string }).place ?? ""];
-  return `${vo.They} slept ${minutesSaid(min)}${place ? `, ${place}` : ""}.`;
+  const where = (e.data as { place?: string }).place ?? "";
+  const place = SLEPT_IN[where];
+  const next = NEXT_TIME[where];
+  return `${vo.They} slept ${minutesSaid(min)}${place ? `, ${place}` : ""}.${next ? ` ${next(vo)}` : ""}`;
 }
+
+/** The plan's pause after a retry, as Siri says it: holding her through it is for an adult who's awake, so sleepy, the bassinet comes first. */
+export const pauseLine = (vo: Pick<Voice, "them" | "their">) =>
+  `The plan says pause until the next try, unless you're getting sleepy: then lay ${vo.them} on ${vo.their} back in the bassinet. Say it again to try anyway.`;
 
 /**
  * When it happened: minutes_ago left out, blank or 0 is now; up to
@@ -201,7 +221,7 @@ async function pauseFirst(c: QuickCtx): Promise<Response | null> {
   const said = rows[0]?.pause_said_at ? new Date(rows[0].pause_said_at as string).getTime() : NaN;
   if (Number.isFinite(said) && c.now.getTime() - said <= AGAIN_MS) return null;
   if ((await query(`UPDATE maple_sleep_tries SET pause_said_at = NOW() WHERE id = $1 AND family_id = $2`, [retry.id, c.fam.familyId])) === null) throw new StoreUnavailable();
-  return notDone("The plan says pause until the next try. Say it again to try anyway.", { pause: true, try: { id: `t${retry.id}` } });
+  return notDone(pauseLine(c.vo), { pause: true, try: { id: `t${retry.id}` } });
 }
 
 /**
@@ -245,6 +265,7 @@ export async function putDown(c: QuickCtx): Promise<Response> {
     if (err instanceof SleepInputError) return notDone("That time doesn't fit, so nothing was saved. Use the app for that one.", {}, 400);
     throw err;
   }
+  if (w.status === "created") await rememberAct(c, "put_down", [wrote("try", w.try), w.link === "create" && wrote("entry", w.sleep), wrote("shift", w.endedShift)]);
   if (w.endedShift) holdingChanged({ familyId: c.fam.familyId });
   const label = await tryLabel(c, w.try);
   const tryOut = { id: `t${w.try.id}`, started_at: w.try.started_at };
@@ -290,6 +311,8 @@ export async function outcome(c: QuickCtx): Promise<Response> {
     throw err;
   }
   if (w.status === "already_finished") return say(endedLine(w.try, c.tz), { already_finished: true, try: { id: `t${w.try.id}` } });
+  // The sleep goes with it when the finish stopped it (or put it in arms).
+  await rememberAct(c, "outcome", [wrote("try", w.try), !!w.sleep && !!w.sleepBefore && !sameWrite(w.sleep.updated_at, w.sleepBefore.updated_at) && wrote("entry", w.sleep)]);
   const mins = (ms(w.try.ended_at) - ms(w.try.started_at)) / MIN;
   const bits = [`${OUTCOME_LABEL[o]} ${o === "stayed_asleep" ? "for" : "after"} ${minutesSaid(mins)}.`];
   if (o === "picked_up" && w.sleep?.active) bits.push(`${c.vo.They}${c.vo.verb("'s")} still asleep, so ${c.vo.their} sleep timer keeps running.`);
@@ -329,22 +352,31 @@ export async function asleepInArms(c: QuickCtx): Promise<Response> {
   if (!when) return badMinutes(c.body.minutes_ago);
   // A retry gets its first answer; a client id another kind of entry already has saves this one without it.
   const prior = await entryByClient(c.fam, c.clientId);
-  if (prior?.kind === "sleep") return say(armsLine(prior, c.tz, false), { deduped: true, entry: toClientEntry(prior) });
+  if (prior?.kind === "sleep") return say(armsLine(prior, c.tz, false, c.vo), { deduped: true, entry: toClientEntry(prior) });
   const clientId = prior ? null : c.clientId;
   const [timers, tryNow] = await Promise.all([activeTimers(c.fam, c.baby.id), runningTry(c.fam, c.baby.id)]);
   if (tryNow) {
     return notDone(`A bassinet try is running, since ${clock(tryNow.started_at, c.tz)}. If you picked ${c.vo.them} up still asleep, say picked up.`, { try: { id: `t${tryNow.id}` } });
   }
   const feed = timers.find((e) => e.kind === "feed");
-  if (feed) await stopFeedForSleep(c.fam, feed, when, c.me.email);
+  const feedStopped = changedBy(feed ? await stopFeedForSleep(c.fam, feed, when, c.me.email) : null, feed, c.me.email);
   const already = timers.find((e) => e.kind === "sleep");
-  if (already) return say(`${feed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(already.started_at, c.tz)}.`, { already_running: true, entry: toClientEntry(already) });
+  if (already) {
+    if (feedStopped) await rememberAct(c, "stop", [feedStopped]);
+    return say(`${feed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(already.started_at, c.tz)}.`, { already_running: true, entry: toClientEntry(already) });
+  }
   const r = await startSleepInArms(c, when.at, clientId);
-  if (r.running) return say(`${feed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(r.entry.started_at, c.tz)}.`, { already_running: true, entry: toClientEntry(r.entry) });
-  return say(armsLine(r.entry, c.tz, !!feed), { entry: toClientEntry(r.entry) });
+  if (r.running) {
+    if (feedStopped) await rememberAct(c, "stop", [feedStopped]);
+    return say(`${feed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(r.entry.started_at, c.tz)}.`, { already_running: true, entry: toClientEntry(r.entry) });
+  }
+  await rememberAct(c, "entry", [wrote("entry", r.entry), feedStopped]);
+  return say(armsLine(r.entry, c.tz, !!feed, c.vo), { entry: toClientEntry(r.entry) });
 }
 
-const armsLine = (e: Entry, tz: string, feedStopped: boolean) => `${feedStopped ? "Feed stopped and sleep" : "Sleep"} timer started at ${clock(e.started_at, tz)}, in arms.`;
+/** "Sleep timer started at 9:42, in arms. Getting sleepy? Put her on her back in the bassinet." (never anything that sounds like the one holding her may doze too). */
+export const armsLine = (e: Pick<Entry, "started_at">, tz: string, feedStopped: boolean, vo: Pick<Voice, "them" | "their">) =>
+  `${feedStopped ? "Feed stopped and sleep" : "Sleep"} timer started at ${clock(e.started_at, tz)}, in arms. Getting sleepy? Put ${vo.them} on ${vo.their} back in the bassinet.`;
 
 // ── handoff ──────────────────────────────────────────────────────────────
 
@@ -420,6 +452,7 @@ async function askToTakeOver(c: QuickCtx, open: HoldingShift, members: Member[])
     if (err instanceof SleepInputError) return notDone("Who should take over? Ask in the app.", {}, 400);
     throw err;
   }
+  await rememberAct(c, "ask", [wrote("shift", w.shift)]);
   // The phones of the person asked with handoff reminders on hear "Handoff now" (a Shortcut has no phone of its own to leave out).
   holdingChanged({ familyId: c.fam.familyId, wake: { shiftId: w.shift.id, device: null } });
   const again = open.asked_to === to && Number.isFinite(askedAt);
@@ -444,6 +477,7 @@ async function startAndAsk(c: QuickCtx, members: Member[]): Promise<Response> {
     if (err instanceof SleepInputError) return notDone("Who should take over? Ask in the app.", {}, 400);
     throw err;
   }
+  await rememberAct(c, "ask", [wrote("shift", w.shift)]);
   holdingChanged({ familyId: c.fam.familyId, wake: { shiftId: w.shift.id, device: null } });
   const name = memberName(to, members);
   return say(
@@ -470,6 +504,7 @@ async function takeOver(c: QuickCtx, open: HoldingShift, members: Member[]): Pro
     if (err instanceof SleepInputError) return notDone("That handoff doesn't fit, so nothing was saved. Use the app for that one.", {}, 400);
     throw err;
   }
+  await rememberAct(c, "handoff", [wrote("shift", w.shift), wrote("shift", w.ended)]);
   holdingChanged({ familyId: c.fam.familyId });
   const bits = [`You have ${c.vo.them} now, from ${memberName(open.holder, members)}.`];
   const why = w.handoffWhy;
@@ -502,6 +537,7 @@ export async function checkin(c: QuickCtx): Promise<Response> {
   if (!a) return notDone(`${CHECKIN_QUESTION} Yes, partly or not this time?`, { choices: ANSWER_CHOICES });
   if (!seesCheckins(c.me.role)) return notDone("Check-ins are for the adults who log.", {}, 403);
   const w = await saveCheckin(c.fam, { babyId: c.baby.id, member: c.me.email, protected: a, tz: c.tz, now: c.now, source: "shortcut", clientId: c.clientId, device: null });
+  if (w.status === "created" || w.status === "updated") await rememberAct(c, "checkin", [wrote("checkin", w.checkin)]);
   const night = nightWords(w.checkin.night, c.now, c.tz);
   const said = PROTECTED_LABEL[w.checkin.protected].toLowerCase();
   const speak =
@@ -592,22 +628,13 @@ type Row = Record<string, unknown>;
 /** µs since the epoch, from the row's own column (two writes in one millisecond still order). */
 const us = (r: Row, col: string) => Number(r[col]);
 const STAMPS = `(EXTRACT(EPOCH FROM created_at) * 1000000)::bigint AS c_us, (EXTRACT(EPOCH FROM updated_at) * 1000000)::bigint AS u_us`;
+const iso = (v: unknown) => (v == null ? null : new Date(v as string).toISOString());
 
 async function rows(sql: string, params: unknown[]): Promise<Row[]> {
   const r = await query(sql, params);
   if (r === null) throw new StoreUnavailable();
   return r as Row[];
 }
-
-/** What undo can take back, newest wins. */
-type Act =
-  | { kind: "put_down"; at: number; t: BassinetTry }
-  | { kind: "outcome"; at: number; t: BassinetTry }
-  | { kind: "handoff"; at: number; s: HoldingShift }
-  | { kind: "ask"; at: number; s: HoldingShift }
-  | { kind: "checkin"; at: number; c: SleepCheckin }
-  | { kind: "entry"; at: number; e: Entry }
-  | { kind: "stop"; at: number; e: Entry };
 
 /** The words for a log entry Siri makes or stops. */
 function whatOf(e: Entry): string {
@@ -629,91 +656,72 @@ function whatOf(e: Entry): string {
   }
 }
 
-/**
- * A timer whose newest change (by the speaker) was its stop. A feed keeps
- * the moment Done was tapped (stopped_at), so a fix made after it isn't
- * one; a sleep, tummy time or pumping keeps no such mark, so a stopped one
- * counts as stopped.
- */
-const isStop = (e: Entry) =>
-  !e.active && !!e.ended_at && ["feed", "sleep", "tummy", "pump"].includes(e.kind) && (e.kind !== "feed" || near((e.data as { stopped_at?: string }).stopped_at, e.updated_at, 2000));
-
 const changedSince = (what: string) => notDone(`${cap(what)} changed since, so nothing was undone. Fix it in the app.`, { undone: null }, 409);
+
+/** The `n`th row of table `t` the act wrote, as it left it. */
+const wroteOf = (act: SiriAct, t: Wrote["t"], n = 0): Wrote | null => act.rows.filter((w) => w.t === t)[n] ?? null;
+
+/** A log entry as it is now, deleted or not (`gone`), or null. */
+async function entryNow(c: QuickCtx, id: number): Promise<{ e: Entry; gone: boolean } | null> {
+  const r = await rows(`SELECT *, deleted_at IS NOT NULL AS gone FROM maple_entries WHERE id = $1 AND family_id = $2`, [id, c.fam.familyId]);
+  return r[0] ? { e: rowToEntry(r[0]), gone: r[0].gone === true } : null;
+}
+
+/** It's done: say so, and keep the Undo as the speaker's newest Siri action (at the time of what it took back, so its own changes read as newer). */
+async function undone(c: QuickCtx, act: SiriAct, speak: string, extra: Record<string, unknown>): Promise<Response> {
+  await rememberAct(c, "undo", [], act.at);
+  return say(speak, extra);
+}
 
 /**
  * "Maple undo": takes back the speaker's newest Siri action in the last 30
- * minutes, as the app's Undo would: a put down (the try, the sleep it
- * started, and the holding turn it ended comes back), an outcome (the try
- * runs again, with the sleep timer it stopped), a handoff, a new check-in,
- * something Siri logged (a timer it stopped as it started comes back), or a
- * timer they stopped (it runs again). Only while nobody has changed it
- * since, and never past a newer change of theirs (an undo included, so
+ * minutes, as the app's Undo would. That action is the one Siri kept
+ * (acts.ts, with every row it wrote as it left them), never one read off the
+ * log, so a change in the app is never taken for Siri's, and nothing older
+ * is reached past it: a put down (the try, the sleep it started, and the
+ * holding turn it ended comes back), an outcome (the try runs again, with
+ * the sleep timer it stopped), a handoff, an ask, a new check-in, something
+ * Siri logged (a timer it stopped as it started comes back), or a timer Siri
+ * stopped (it runs again). Only while the rows it takes back are as that
+ * action left them (anyone's change since, an edit of a finished nap
+ * included, says so and changes nothing), and never past a newer change of
+ * theirs from any channel (something else they changed, or logged with
+ * Siri, a medicine they logged with Siri on her page, an undo included, so
  * saying it twice takes back one thing): then it says what, and nothing is
  * undone. Her page is never touched here.
  */
 export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
+  const kept = await lastAct(c);
+  const act = kept && c.now.getTime() - kept.at <= UNDO_MINUTES * MIN ? kept : null;
   const p = [c.fam.familyId, c.baby.id, c.me.email];
   const since = `NOW() - INTERVAL '${UNDO_MINUTES} minutes'`;
-  const [madeTry, changedTry, madeShift, changedShift, myCheckin, madeEntry, changedEntry, myAsk] = await Promise.all([
-    rows(`SELECT *, ${STAMPS} FROM maple_sleep_tries WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND source = 'shortcut' AND deleted_at IS NULL AND created_at >= ${since} ORDER BY created_at DESC, id DESC LIMIT 1`, p),
-    rows(`SELECT *, ${STAMPS}, deleted_at IS NOT NULL AS gone FROM maple_sleep_tries WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND updated_at >= ${since} ORDER BY updated_at DESC, id DESC LIMIT 1`, p),
-    rows(`SELECT *, ${STAMPS} FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND source = 'shortcut' AND deleted_at IS NULL AND created_at >= ${since} ORDER BY created_at DESC, id DESC LIMIT 1`, p),
-    rows(`SELECT *, ${STAMPS}, deleted_at IS NOT NULL AS gone FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND updated_at >= ${since} ORDER BY updated_at DESC, id DESC LIMIT 1`, p),
-    rows(`SELECT *, ${STAMPS}, deleted_at IS NOT NULL AS gone FROM maple_sleep_checkins WHERE family_id = $1 AND baby_id = $2 AND member = $3 AND updated_at >= ${since} ORDER BY updated_at DESC, id DESC LIMIT 1`, p),
+  const newest = (table: string, who: string, at: "created_at" | "updated_at", more = "") =>
+    rows(`SELECT *, ${STAMPS}, deleted_at IS NOT NULL AS gone FROM ${table} WHERE family_id = $1 AND baby_id = $2 AND ${who} = $3 AND ${at} >= ${since} ${more} ORDER BY ${at} DESC, id DESC LIMIT 1`, p);
+  const [changedTry, madeTry, changedShift, madeShift, myCheckin, changedEntry, madeEntry] = await Promise.all([
+    newest("maple_sleep_tries", "updated_by", "updated_at"),
+    newest("maple_sleep_tries", "created_by", "created_at", "AND source = 'shortcut'"),
+    newest("maple_sleep_shifts", "updated_by", "updated_at"),
+    newest("maple_sleep_shifts", "created_by", "created_at", "AND source = 'shortcut'"),
+    newest("maple_sleep_checkins", "member", "updated_at"),
+    newest("maple_entries", "updated_by", "updated_at"),
     // A sleep a put down made (its client id starts tsl:) is that try's, not an entry of its own.
-    rows(
-      `SELECT *, ${STAMPS} FROM maple_entries WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND source = 'shortcut' AND deleted_at IS NULL AND created_at >= ${since}
-         AND (client_id IS NULL OR client_id NOT LIKE 'tsl:%') ORDER BY created_at DESC, id DESC LIMIT 1`,
-      p
-    ),
-    rows(`SELECT *, ${STAMPS}, deleted_at IS NOT NULL AS gone FROM maple_entries WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND updated_at >= ${since} ORDER BY updated_at DESC, id DESC LIMIT 1`, p),
-    // Their ask on the turn still open ("Maple handoff" from the holder, or Wake [partner] in the app), while it's the turn's newest change.
-    rows(
-      `SELECT *, ${STAMPS}, (EXTRACT(EPOCH FROM asked_at) * 1000000)::bigint AS a_us FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND asked_to IS NOT NULL
-         AND asked_at >= ${since} AND ended_at IS NULL AND deleted_at IS NULL ORDER BY asked_at DESC, id DESC LIMIT 1`,
-      p
-    ),
+    newest("maple_entries", "created_by", "created_at", "AND source = 'shortcut' AND (client_id IS NULL OR client_id NOT LIKE 'tsl:%')"),
   ]);
 
-  // ── what was done, newest first ──
-  const acts: Act[] = [];
-  const tA = madeTry[0];
-  if (tA) acts.push({ kind: "put_down", at: us(tA, "c_us"), t: rowToTry(tA) });
-  const tB = changedTry[0];
-  const finished = tB && tB.gone !== true && tB.ended_at != null && tB.outcome != null ? rowToTry(tB) : null;
-  if (finished && tB) acts.push({ kind: "outcome", at: us(tB, "u_us"), t: finished });
-  const sA = madeShift[0];
-  if (sA) acts.push({ kind: "handoff", at: us(sA, "c_us"), s: rowToShift(sA) });
-  const sB = myAsk[0];
-  if (sB && Math.abs(us(sB, "a_us") - us(sB, "u_us")) <= 5_000) acts.push({ kind: "ask", at: us(sB, "a_us"), s: rowToShift(sB) });
-  const k = myCheckin[0];
-  if (k && k.gone !== true && k.source === "shortcut") acts.push({ kind: "checkin", at: us(k, "u_us"), c: rowToCheckin(k) });
-  const eA = madeEntry[0];
-  if (eA) acts.push({ kind: "entry", at: us(eA, "c_us"), e: rowToEntry(eA) });
-  const eB = changedEntry[0];
-  const stopped = eB && eB.gone !== true ? rowToEntry(eB) : null;
-  // The sleep a finish stopped is the finish's, not a stop of its own.
-  const finishOwn = (e: Entry) => !!finished && finished.sleep_entry_id === e.id && ms(e.updated_at) - ms(finished.updated_at) <= 2000 && ms(e.updated_at) >= ms(finished.updated_at) - 50;
-  if (stopped && eB && isStop(stopped) && !finishOwn(stopped)) acts.push({ kind: "stop", at: us(eB, "u_us"), e: stopped });
-  acts.sort((a, b) => b.at - a.at);
-  const act = acts[0] ?? null;
-
-  // ── a newer change of theirs: say it, undo nothing ──
-  const changes: { at: number; words: string; own?: boolean }[] = [];
-  if (tB) changes.push({ at: us(tB, "u_us"), words: tB.gone === true ? "removing the bassinet try" : "the bassinet try" });
-  if (changedShift[0]) {
-    const s = changedShift[0];
-    const sh = rowToShift(s);
-    // The turn a put down ended is that put down's; an ask is the turn's own change.
-    const own = (act?.kind === "put_down" && sh.ended_how === "bassinet" && near(sh.ended_at, act.t.started_at)) || (act?.kind === "ask" && act.s.id === sh.id);
-    changes.push({ at: us(s, "u_us"), words: s.gone === true ? "removing the holding turn" : "the holding turn", own });
-  }
-  if (k) changes.push({ at: us(k, "u_us"), words: k.gone === true ? "removing your check-in" : "your check-in" });
-  if (eB) {
-    const e = rowToEntry(eB);
-    const own = act?.kind === "outcome" && finishOwn(e);
-    changes.push({ at: us(eB, "u_us"), words: eB.gone === true ? `removing the ${whatOf(e)}` : `the ${whatOf(e)}`, own });
-  }
+  // ── a newer change of theirs than that action (not one of its own writes, as it left them): say it, undo nothing ──
+  const own = (t: Wrote["t"], r: Row) => !!act?.rows.some((w) => w.t === t && w.id === Number(r.id) && sameWrite(w.u, iso(r.updated_at)));
+  const changes: { at: number; words: string }[] = [];
+  const add = (t: Wrote["t"], r: Row | undefined, col: "c_us" | "u_us", words: (gone: boolean) => string) => {
+    if (r && !own(t, r)) changes.push({ at: us(r, col), words: words(r.gone === true) });
+  };
+  add("try", changedTry[0], "u_us", (gone) => (gone ? "removing the bassinet try" : "the bassinet try"));
+  add("try", madeTry[0], "c_us", () => "the bassinet try");
+  add("shift", changedShift[0], "u_us", (gone) => (gone ? "removing the holding turn" : "the holding turn"));
+  add("shift", madeShift[0], "c_us", () => "the holding turn");
+  add("checkin", myCheckin[0], "u_us", (gone) => (gone ? "removing your check-in" : "your check-in"));
+  const entryWords = (r: Row) => whatOf(rowToEntry(r));
+  add("entry", changedEntry[0], "u_us", (gone) => `${gone ? "removing " : ""}the ${entryWords(changedEntry[0])}`);
+  add("entry", madeEntry[0], "c_us", () => `the ${entryWords(madeEntry[0])}`);
   // Her page: a medicine logged with Siri is the newest thing they did, so nothing of Maple's is taken back for it.
   const care = await careSession({ id: c.me.email, role: c.me.role, viaAdmin: false, channel: "siri" }, { familyId: c.fam.familyId, members, baby: c.baby }).catch(() => null);
   if (care?.person && care.access.write) {
@@ -724,26 +732,35 @@ export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
     );
     if (mom[0]) changes.push({ at: us(mom[0], "c_us"), words: `${care.access.self ? "your" : `${carePersonName(care.person, members)}'s`} medicines` });
   }
-  const newer = changes.filter((x) => !x.own && x.at > (act?.at ?? 0)).sort((a, b) => b.at - a.at)[0];
+  // After the act's own millisecond (its time is the rows' updated_at, to the ms).
+  const after = act ? act.at * 1000 + 999 : 0;
+  const newer = changes.filter((x) => x.at > after).sort((a, b) => b.at - a.at)[0];
   if (newer) return notDone(`Your newest change was ${newer.words.startsWith("removing") ? "" : "to "}${newer.words}, so nothing was undone. Fix it in the app.`, { undone: null });
   if (!act) return notDone(`There's nothing from Siri in the last ${UNDO_MINUTES} minutes to undo.`, { undone: null });
+  if (act.kind === "undo") return notDone("Your newest Siri action was an undo, so nothing more was undone.", { undone: null });
+  if (act.kind === "other") {
+    // A change with no voice Undo (a side switch, going back and forth).
+    const w = wroteOf(act, "entry");
+    const now = w ? await entryNow(c, w.id) : null;
+    return notDone(`Your newest change was to the ${now ? whatOf(now.e) : "log"}, so nothing was undone. Fix it in the app.`, { undone: null });
+  }
 
   try {
     switch (act.kind) {
       case "put_down":
-        return await undoPutDown(c, act.t);
+        return await undoPutDown(c, act);
       case "outcome":
-        return await undoOutcome(c, act.t);
+        return await undoOutcome(c, act);
       case "handoff":
-        return await undoHandoff(c, act.s, members);
+        return await undoHandoff(c, act, members);
       case "ask":
-        return await undoAsk(c, act.s);
+        return await undoAsk(c, act);
       case "checkin":
-        return await undoCheckin(c, act.c);
+        return await undoCheckin(c, act);
       case "entry":
-        return await undoEntry(c, act.e);
+        return await undoEntry(c, act);
       case "stop":
-        return await undoStop(c, act.e);
+        return await undoStop(c, act);
     }
   } catch (err) {
     // Lost a race with another phone: what's there now stays.
@@ -756,16 +773,17 @@ export async function undo(c: QuickCtx, members: Member[]): Promise<Response> {
   }
 }
 
-/** The put down goes: the try, the sleep it made (while it's as the try left it), and the holding turn it ended comes back. */
-async function undoPutDown(c: QuickCtx, t: BassinetTry): Promise<Response> {
-  if (!near(t.updated_at, t.created_at, 5) || t.ended_at) return changedSince("That bassinet try");
+/** The put down goes: the try, the sleep it made (while it's as the try left it), and the holding turn it ended comes back, each only as it was left. */
+async function undoPutDown(c: QuickCtx, act: SiriAct): Promise<Response> {
+  const w = wroteOf(act, "try");
+  const t = w ? await getTry(c.fam, w.id) : null;
+  if (!w || !t || !sameWrite(t.updated_at, w.u) || t.ended_at) return changedSince("That bassinet try");
   const r = await deleteTry(c.fam, t.id, c.me.email, { expectUpdatedAt: t.updated_at });
-  // The turn this put down ended (endOpenShift, right after the try was saved), only as it left it.
-  const ended = (await listShifts(c.fam, c.baby.id, { from: new Date(ms(t.started_at) - HOUR), limit: 20 })).find(
-    (s) => s.ended_how === "bassinet" && near(s.ended_at, t.started_at) && s.updated_by === c.me.email && near(s.updated_at, t.created_at, 2000)
-  );
+  // The turn this put down ended, only as it left it.
+  const ws = wroteOf(act, "shift");
+  const ended = ws ? await getShift(c.fam, ws.id) : null;
   let back = false;
-  if (ended) {
+  if (ws && ended && ended.ended_how === "bassinet" && sameWrite(ended.updated_at, ws.u)) {
     back = await reopenShift(c.fam, ended.id, { by: c.me.email, expectUpdatedAt: ended.updated_at }).then(
       () => true,
       () => false
@@ -774,54 +792,71 @@ async function undoPutDown(c: QuickCtx, t: BassinetTry): Promise<Response> {
   }
   const bits = [`Undone: the bassinet try from ${clock(t.started_at, c.tz)} is gone${r.sleepDeleted ? ", with the sleep it started" : ""}.`];
   if (back) bits.push("The holding turn is back on.");
-  return say(bits.join(" "), { undone: { kind: "put_down", try: `t${t.id}`, ...(r.sleepDeleted ? { sleep: r.sleepDeleted.id } : {}), ...(back ? { shift_reopened: true } : {}) } });
+  return undone(c, act, bits.join(" "), { undone: { kind: "put_down", try: `t${t.id}`, ...(r.sleepDeleted ? { sleep: r.sleepDeleted.id } : {}), ...(back ? { shift_reopened: true } : {}) } });
 }
 
-/** The outcome goes: the try runs again, and the sleep the finish stopped (or put in arms) goes back as it was. */
-async function undoOutcome(c: QuickCtx, t: BassinetTry): Promise<Response> {
-  const s = t.sleep_entry_id ? await getEntry(c.fam, t.sleep_entry_id) : null;
+/** The outcome goes: the try runs again, and the sleep the finish stopped (or put in arms) goes back as it was, only as the finish left it. */
+async function undoOutcome(c: QuickCtx, act: SiriAct): Promise<Response> {
+  const w = wroteOf(act, "try");
+  const t = w ? await getTry(c.fam, w.id) : null;
+  if (!w || !t || !sameWrite(t.updated_at, w.u) || !t.ended_at || !t.outcome) return changedSince("That bassinet try");
+  const ws = wroteOf(act, "entry");
+  const s = ws && t.sleep_entry_id === ws.id ? await getEntry(c.fam, ws.id) : null;
   let sleep: { id: number; expectUpdatedAt: string; wasActive: boolean; place?: "bassinet" } | null = null;
-  const byFinish = !!s && s.updated_by === c.me.email && ms(s.updated_at) - ms(t.updated_at) <= 2000 && ms(s.updated_at) >= ms(t.updated_at) - 50;
-  if (s && byFinish && t.outcome !== "picked_up" && !s.active && near(s.ended_at, t.ended_at)) sleep = { id: s.id, expectUpdatedAt: s.updated_at, wasActive: true };
-  else if (s && byFinish && t.outcome === "picked_up" && t.made_sleep && s.active && (s.data as { place?: string }).place === "arms") sleep = { id: s.id, expectUpdatedAt: s.updated_at, wasActive: false, place: "bassinet" };
-  const w = await undoFinish(c.fam, t.id, { expectUpdatedAt: t.updated_at, sleep, by: c.me.email });
-  const timerBack = !!sleep?.wasActive && !!w.sleep?.active;
-  return say(`Undone: the bassinet try is running again${timerBack ? ", and so is the sleep timer" : ""}.`, { undone: { kind: "outcome", try: `t${t.id}`, ...(timerBack ? { sleep_reopened: true } : {}) } });
+  if (ws && s && sameWrite(s.updated_at, ws.u)) {
+    if (t.outcome !== "picked_up" && !s.active && near(s.ended_at, t.ended_at)) sleep = { id: s.id, expectUpdatedAt: s.updated_at, wasActive: true };
+    else if (t.outcome === "picked_up" && t.made_sleep && s.active && (s.data as { place?: string }).place === "arms") sleep = { id: s.id, expectUpdatedAt: s.updated_at, wasActive: false, place: "bassinet" };
+  }
+  const r = await undoFinish(c.fam, t.id, { expectUpdatedAt: t.updated_at, sleep, by: c.me.email });
+  const timerBack = !!sleep?.wasActive && !!r.sleep?.active;
+  return undone(c, act, `Undone: the bassinet try is running again${timerBack ? ", and so is the sleep timer" : ""}.`, {
+    undone: { kind: "outcome", try: `t${t.id}`, ...(timerBack ? { sleep_reopened: true } : {}) },
+  });
 }
 
 /** The handoff goes: the new turn is removed and the one handed over is open again (undoHandOff), each only as Siri left it. */
-async function undoHandoff(c: QuickCtx, s: HoldingShift, members: Member[]): Promise<Response> {
-  if (s.ended_at || !near(s.updated_at, s.created_at, 5)) return changedSince("The holding turn");
-  const prev = (await listShifts(c.fam, c.baby.id, { from: new Date(ms(s.started_at) - 13 * HOUR), limit: 50 })).find(
-    (x) => x.id !== s.id && x.ended_how === "handoff" && near(x.ended_at, s.started_at) && x.updated_by === c.me.email
-  );
-  if (!prev || !near(prev.updated_at, s.created_at, 5)) return changedSince("The holding turn");
+async function undoHandoff(c: QuickCtx, act: SiriAct, members: Member[]): Promise<Response> {
+  const wNew = wroteOf(act, "shift", 0);
+  const wOld = wroteOf(act, "shift", 1);
+  const [s, prev] = await Promise.all([wNew ? getShift(c.fam, wNew.id) : null, wOld ? getShift(c.fam, wOld.id) : null]);
+  if (!wNew || !s || !sameWrite(s.updated_at, wNew.u) || s.ended_at) return changedSince("The holding turn");
+  if (!wOld || !prev || !sameWrite(prev.updated_at, wOld.u) || prev.ended_how !== "handoff") return changedSince("The holding turn");
   await undoHandOff(c.fam, { startedId: s.id, startedUpdatedAt: s.updated_at, endedId: prev.id, endedUpdatedAt: prev.updated_at, by: c.me.email });
   holdingChanged({ familyId: c.fam.familyId });
-  return say(`Undone: ${has(prev.holder, c.me.email, members)} ${c.vo.them} again.`, { undone: { kind: "handoff", shift: `h${s.id}`, reopened: `h${prev.id}` } });
+  return undone(c, act, `Undone: ${has(prev.holder, c.me.email, members)} ${c.vo.them} again.`, { undone: { kind: "handoff", shift: `h${s.id}`, reopened: `h${prev.id}` } });
 }
 
 /** The ask goes (cancelAsk, the app's Undo): nobody is asked now, and the turn goes on as it was. */
-async function undoAsk(c: QuickCtx, s: HoldingShift): Promise<Response> {
+async function undoAsk(c: QuickCtx, act: SiriAct): Promise<Response> {
+  const w = wroteOf(act, "shift");
+  const s = w ? await getShift(c.fam, w.id) : null;
+  if (!w || !s || !sameWrite(s.updated_at, w.u) || s.ended_at || !s.asked_to) return changedSince("The holding turn");
   await cancelAsk(c.fam, s.id, { by: c.me.email, expectUpdatedAt: s.updated_at });
   holdingChanged({ familyId: c.fam.familyId });
-  return say("Undone: nobody is asked to take over now.", { undone: { kind: "ask", shift: `h${s.id}` } });
+  return undone(c, act, "Undone: nobody is asked to take over now.", { undone: { kind: "ask", shift: `h${s.id}` } });
 }
 
 /** A new check-in goes; a changed one has no earlier answer kept to put back, so it stays and says so. */
-async function undoCheckin(c: QuickCtx, k: SleepCheckin): Promise<Response> {
+async function undoCheckin(c: QuickCtx, act: SiriAct): Promise<Response> {
+  const w = wroteOf(act, "checkin");
+  const found = w ? await rows(`SELECT * FROM maple_sleep_checkins WHERE id = $1 AND family_id = $2 AND member = $3 AND deleted_at IS NULL`, [w.id, c.fam.familyId, c.me.email]) : [];
+  const k = found[0] ? rowToCheckin(found[0]) : null;
+  if (!w || !k || !sameWrite(k.updated_at, w.u)) return changedSince("Your check-in");
   const night = nightWords(k.night, c.now, c.tz);
   if (!near(k.created_at, k.updated_at, 5)) {
     return notDone(`Your check-in for ${night} was a change, so it stays ${PROTECTED_LABEL[k.protected].toLowerCase()}. Check in again to change it.`, { undone: null });
   }
   await deleteCheckin(c.fam, { babyId: c.baby.id, member: c.me.email, id: k.id });
-  return say(`Undone: your check-in for ${night} is gone.`, { undone: { kind: "checkin", night: k.night } });
+  return undone(c, act, `Undone: your check-in for ${night} is gone.`, { undone: { kind: "checkin", night: k.night } });
 }
 
-/** Something Siri logged goes (a soft delete, like the app's Undo), and a timer it stopped as it started runs again. */
-async function undoEntry(c: QuickCtx, e: Entry): Promise<Response> {
-  // Saving leaves updated_by empty: anything there now is a change since.
-  if (e.updated_by) return changedSince(`The ${whatOf(e)}`);
+/** Something Siri logged goes (a soft delete, like the app's Undo), and a timer it stopped as it started runs again, only as it left it. */
+async function undoEntry(c: QuickCtx, act: SiriAct): Promise<Response> {
+  const w = act.rows[0]?.t === "entry" ? act.rows[0] : null;
+  const now = w ? await entryNow(c, w.id) : null;
+  if (!w || !now) return changedSince("That");
+  const e = now.e;
+  if (now.gone || !sameWrite(e.updated_at, w.u)) return changedSince(`The ${whatOf(e)}`);
   // A bassinet try laid on this sleep since (anyone's) sits on it: the sleep stays with it.
   if (e.kind === "sleep") {
     const onIt = await rows(`SELECT 1 FROM maple_sleep_tries WHERE family_id = $1 AND sleep_entry_id = $2 AND deleted_at IS NULL LIMIT 1`, [c.fam.familyId, e.id]);
@@ -829,24 +864,23 @@ async function undoEntry(c: QuickCtx, e: Entry): Promise<Response> {
   }
   await softDeleteEntry(c.fam, e.id, c.me.email);
   let back: Entry | null = null;
-  if (e.kind === "sleep" || e.kind === "feed") {
-    const stopped = await rows(
-      `SELECT * FROM maple_entries WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND deleted_at IS NULL AND NOT active AND kind IN ('feed', 'sleep') AND kind <> $4
-         AND updated_at BETWEEN $5::timestamptz - INTERVAL '3 seconds' AND $5::timestamptz + INTERVAL '50 milliseconds'
-       ORDER BY updated_at DESC, id DESC LIMIT 1`,
-      [c.fam.familyId, c.baby.id, c.me.email, e.kind, e.created_at]
-    );
-    const s = stopped[0] ? rowToEntry(stopped[0]) : null;
-    if (s && isStop(s)) back = await reopenTimer(c.fam, s.id, c.me.email, { expectUpdatedAt: s.updated_at }).catch(() => null);
+  const ws = act.rows.slice(1).find((x) => x.t === "entry");
+  const stopped = ws ? await entryNow(c, ws.id) : null;
+  if (ws && stopped && !stopped.gone && !stopped.e.active && sameWrite(stopped.e.updated_at, ws.u)) {
+    back = await reopenTimer(c.fam, stopped.e.id, c.me.email, { expectUpdatedAt: stopped.e.updated_at }).catch(() => null);
   }
-  const when = e.kind === "sleep" || (e.kind === "feed" && e.data.method !== "bottle") ? "from" : "at";
-  return say(`Undone: the ${whatOf(e)} ${when} ${clock(e.started_at, c.tz)} is gone${back ? `, and the ${whatOf(back)} is running again` : ""}.`, {
+  const when = e.kind === "sleep" || (e.kind === "feed" && (e.data as FeedData).method !== "bottle") ? "from" : "at";
+  return undone(c, act, `Undone: the ${whatOf(e)} ${when} ${clock(e.started_at, c.tz)} is gone${back ? `, and the ${whatOf(back)} is running again` : ""}.`, {
     undone: { kind: "entry", id: e.id, ...(back ? { reopened: back.id } : {}) },
   });
 }
 
-/** A timer they stopped runs again (the app's Done Undo), only as they left it. */
-async function undoStop(c: QuickCtx, e: Entry): Promise<Response> {
-  const r = await reopenTimer(c.fam, e.id, c.me.email, { expectUpdatedAt: e.updated_at });
-  return say(`Undone: the ${whatOf(r)} is running again.`, { undone: { kind: "stop", id: r.id }, entry: toClientEntry(r) });
+/** A timer Siri stopped runs again (the app's Done Undo), only as Siri left it. */
+async function undoStop(c: QuickCtx, act: SiriAct): Promise<Response> {
+  const w = wroteOf(act, "entry");
+  const now = w ? await entryNow(c, w.id) : null;
+  if (!w || !now) return changedSince("That");
+  if (now.gone || now.e.active || !sameWrite(now.e.updated_at, w.u)) return changedSince(`The ${whatOf(now.e)}`);
+  const r = await reopenTimer(c.fam, now.e.id, c.me.email, { expectUpdatedAt: now.e.updated_at });
+  return undone(c, act, `Undone: the ${whatOf(r)} is running again.`, { undone: { kind: "stop", id: r.id }, entry: toClientEntry(r) });
 }

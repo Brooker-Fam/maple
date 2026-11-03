@@ -302,6 +302,20 @@ async function main() {
   await call("tokens.admin", tokens.GET as H, "GET", "/api/maple/tokens", { session: lastSession ?? "none" });
   await call("state.final", state, "GET", "/api/maple/state", { as: OWNER });
 
+  // A third phone on default settings (Logged on another phone on, every dose off). Six hours on her medicine is OK again and the
+  // tick reminds it; a minute later a dose closes that with "Logged"; another dose two hours on, with no reminder since, updates that
+  // Logged (new: the code before families sent it only after a reminder, so that phone kept the first one's "OK after").
+  await call("push.sub.owner2.default", push.POST as H, "POST", "/api/maple/push", { as: OWNER2, body: { subscription: phone("c"), prefs: { meds: true }, device: "Phone C" }, headers: { "X-Maple-Device": "dev-c-0123456789abcdef" } });
+  const offset = (min: number) => ((globalThis as { __clockOffset?: number }).__clockOffset = min * 60_000);
+  const doseNow = (client: string) => ({ as: OWNER, body: { kind: "dose", med_id: 10000001, at: new Date().toISOString(), data: {}, client_id: client }, headers: { "X-Maple-Device": "dev-a-0123456789abcdef" } });
+  offset(6 * 60 + 2);
+  await call("push.tick.ok.default", tick.POST as H, "POST", "/api/maple/push/tick?via=daily", { headers: { authorization: "Bearer parity-made-up-cron" } });
+  offset(6 * 60 + 3);
+  await call("care.dose.closes", careEntries.POST as H, "POST", "/api/maple/care/entries", doseNow("parity-dose-2"));
+  offset(8 * 60 + 3);
+  await call("care.dose.updates", careEntries.POST as H, "POST", "/api/maple/care/entries", doseNow("parity-dose-3"));
+  offset(0);
+
   const tables = (await sql(`SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname LIKE 'maple_%' ORDER BY 1`)).map((r) => String(r.relname));
   const db: Record<string, unknown> = {};
   for (const t of tables) db[t] = await sql(`SELECT * FROM ${t} ORDER BY 1`);

@@ -272,38 +272,47 @@ async function quiet() {
     eq([got(w, w.alpha.member, "ok").length, got(w, w.alpha.owner, "ok").length], [1, 0], "Blake (holding her) hears it; Avery (asleep) doesn't");
   });
 
-  await test("window's end: a reminder held in the window goes once when it ends, while still due; one past its cutoff, or logged meanwhile, doesn't", async () => {
-    const end = minuteOf(Date.now()) - MIN;
-    // Avery's window: five hours, ending a minute ago. Her medicine came due 40 minutes before it ended.
-    const w = await quietWorld(-41, { roster: false });
-    await w.window(w.alpha.owner, end - 5 * 60 * MIN, end);
-    // OK again six hours after the dose quietWorld logged (about 40 minutes before the window ended, to the second).
-    const [dosed] = await sql(`SELECT at FROM maple_care_entries WHERE id = 10000031`);
-    const okAt = new Date(dosed.at as string | Date).getTime() + 360 * MIN;
-    await runPushTick(new Date(okAt + 5 * MIN), { via: "wake", trusted: true, familyId: 1 });
-    eq(got(w, w.alpha.owner).length, 0, "held in the window");
-    ok(got(w, w.alpha.member, "ok").length === 1, "Blake (no window) heard it at once");
-    sent.length = 0;
-    await runPushTick(new Date(end + 30_000), { via: "wake", trusted: true, familyId: 1 });
-    const late = got(w, w.alpha.owner, "ok");
-    // In the notice's own words for that moment (care.ts careTime: "11:50 PM yesterday" once the window ends after midnight).
-    eq(late.map((s) => s.title), [`Ibuprofen has been OK for Dana since ${careTime(okAt, new Date(end + 30_000), w.alpha.tz)}`], "once at the window's end, in the usual words");
-    ok(!/missed|take it|dose/i.test(`${late[0].title} ${late[0].body}`), `never a missed dose: ${late[0].body}`);
-    sent.length = 0;
-    await runPushTick(new Date(end + 2 * MIN), { via: "wake", trusted: true, familyId: 1 });
-    eq(got(w, w.alpha.owner).length, 0, "and only once");
+  /** When the made-up dose (10000031) makes her every-6-hours medicine OK again. */
+  const okAtOf = async () => Date.parse(String((await sql(`SELECT at FROM maple_care_entries WHERE id = 10000031`))[0].at)) + 360 * MIN;
+  const doseAtOf = async () => Date.parse(String((await sql(`SELECT at FROM maple_care_entries WHERE id = 10000031`))[0].at));
 
-    // Due three hours and ten minutes before the window ended: past its cutoff then, so it never goes.
-    const w2 = await quietWorld(-(3 * 60 + 11), { roster: false });
-    await w2.window(w2.alpha.owner, end - 5 * 60 * MIN, end);
-    await runPushTick(new Date(end - (3 * 60 + 5) * MIN), { via: "wake", trusted: true, familyId: 1 });
-    eq(got(w2, w2.alpha.owner).length, 0, "held");
-    await runPushTick(new Date(end + 30_000), { via: "wake", trusted: true, familyId: 1 });
-    eq(got(w2, w2.alpha.owner).length, 0, "past its cutoff at the window's end");
+  await test("window's end: a reminder held in the window goes once when it ends, while still due, however long the window ran, in its usual words; one logged meanwhile doesn't", async () => {
+    const end = minuteOf(Date.now()) - MIN;
+    // Avery's window ends a minute ago. Her medicine came due inside it: 40 minutes before its end, then past the usual
+    // 3-hour cutoff by its end (3 hours 10 minutes before), then near the start of a 12-hour window (the longest there is).
+    const cases = [
+      { label: "due 40 minutes before a 5-hour window's end", okIn: -41, hours: 5 },
+      { label: "due 3 hours 10 minutes before a 5-hour window's end", okIn: -(3 * 60 + 11), hours: 5 },
+      { label: "due 11 hours 50 minutes before a 12-hour window's end", okIn: -(11 * 60 + 51), hours: 12 },
+    ];
+    for (const c of cases) {
+      const w = await quietWorld(c.okIn, { roster: false });
+      await w.window(w.alpha.owner, end - c.hours * 60 * MIN, end);
+      const okAt = await okAtOf();
+      await runPushTick(new Date(okAt + 5 * MIN), { via: "wake", trusted: true, familyId: 1 });
+      eq(got(w, w.alpha.owner).length, 0, `${c.label}: held in the window`);
+      eq(got(w, w.alpha.member, "ok").length, 1, `${c.label}: Blake (no window) heard it at once`);
+      eq((await sql(`SELECT state FROM maple_push_sent WHERE key LIKE $1`, [`s${w.phones.avery}|wait:%`])).map((r) => r.state), ["held"], `${c.label}: noted for Avery's phone`);
+      sent.length = 0;
+      const at = new Date(end + 30_000);
+      await runPushTick(at, { via: "wake", trusted: true, familyId: 1 });
+      const late = got(w, w.alpha.owner, "ok");
+      // The words for a reminder that's late, with the day when it's another one: never a time without its day.
+      eq(
+        late.map((s) => [s.title, s.body]),
+        [[`Ibuprofen has been OK for Dana since ${careTime(okAt, at, w.alpha.tz)}`, `By her schedule. Last taken ${careTime(await doseAtOf(), at, w.alpha.tz)}.`]],
+        `${c.label}: once at the window's end, in the usual words`
+      );
+      ok(!/missed|take it|dose/i.test(`${late[0].title} ${late[0].body}`), `never a missed dose: ${late[0].body}`);
+      sent.length = 0;
+      await runPushTick(new Date(end + 2 * MIN), { via: "wake", trusted: true, familyId: 1 });
+      eq(got(w, w.alpha.owner).length, 0, `${c.label}: and only once`);
+    }
 
     // Logged in the window: nothing is due at its end.
     const w3 = await quietWorld(-41, { roster: false });
     await w3.window(w3.alpha.owner, end - 5 * 60 * MIN, end);
+    const okAt = await okAtOf();
     await runPushTick(new Date(okAt + 5 * MIN), { via: "wake", trusted: true, familyId: 1 });
     await dose(okAt + 10 * MIN, 10000032);
     sent.length = 0;
@@ -311,7 +320,41 @@ async function quiet() {
     eq(got(w3, w3.alpha.owner, "ok").length, 0, "taken since: no reminder at the window's end");
   });
 
-  await test("window's end: the wake-ups include the end of a window that holds one of her reminders on a quiet phone; not when none falls inside it, past the cutoff, or with the switch off", async () => {
+  await test("window's end: a reminder the clock missed by over 3 hours (never held) doesn't go, nor one whose window ended over 3 hours before the next tick", async () => {
+    const end = minuteOf(Date.now()) - MIN;
+    // No tick ran in Avery's window (the clock was down): due 3 hours 10 minutes before it ended, it's past its cutoff.
+    const w = await quietWorld(-(3 * 60 + 11), { roster: false });
+    await w.window(w.alpha.owner, end - 5 * 60 * MIN, end);
+    await runPushTick(new Date(end + 30_000), { via: "wake", trusted: true, familyId: 1 });
+    eq(got(w, w.alpha.owner).length, 0, "never held: the usual cutoff");
+    // Held in the window, then no tick for over 3 hours after it ended.
+    const w2 = await quietWorld(-(4 * 60 + 41), { roster: false });
+    await w2.window(w2.alpha.owner, end - 5 * 60 * MIN - 3 * 60 * MIN, end - 3 * 60 * MIN - MIN);
+    const okAt = await okAtOf();
+    await runPushTick(new Date(okAt + 5 * MIN), { via: "wake", trusted: true, familyId: 1 });
+    sent.length = 0;
+    await runPushTick(new Date(end + 30_000), { via: "wake", trusted: true, familyId: 1 });
+    eq(got(w2, w2.alpha.owner).length, 0, "3 hours after its window's end, it doesn't go");
+  });
+
+  await test("window's end: in windows back to back it waits for the last one's end, then goes once", async () => {
+    const end = minuteOf(Date.now()) - MIN;
+    const w = await quietWorld(-(4 * 60 + 51), { roster: false });
+    // Avery: 5 to 2 hours ago, then 2 hours ago to a minute ago.
+    await w.window(w.alpha.owner, end - 5 * 60 * MIN, end - 2 * 60 * MIN);
+    await w.window(w.alpha.owner, end - 2 * 60 * MIN, end);
+    const okAt = await okAtOf();
+    await runPushTick(new Date(okAt + 5 * MIN), { via: "wake", trusted: true, familyId: 1 });
+    await runPushTick(new Date(end - 2 * 60 * MIN + 30_000), { via: "wake", trusted: true, familyId: 1 });
+    eq(got(w, w.alpha.owner).length, 0, "held through the first window's end: the next one begins");
+    const [row] = await sql(`SELECT sent_at FROM maple_push_sent WHERE key LIKE $1`, [`s${w.phones.avery}|wait:%`]);
+    eq(new Date(row.sent_at as string).getTime(), end, "it waits for the second window's end");
+    await runPushTick(new Date(end + 30_000), { via: "wake", trusted: true, familyId: 1 });
+    await runPushTick(new Date(end + 2 * MIN), { via: "wake", trusted: true, familyId: 1 });
+    eq(got(w, w.alpha.owner, "ok").length, 1, "once, at the end of the second");
+  });
+
+  await test("window's end: the wake-ups include the end of a window that holds one of her reminders on a quiet phone, however long it is; not when none falls inside it or just before it, or with the switch off", async () => {
     const published: number[] = [];
     const realFetch = globalThis.fetch;
     process.env.QSTASH_TOKEN = "made-up-qstash-token";
@@ -324,8 +367,9 @@ async function quiet() {
       const wakeFor = (t: number) => Math.ceil(t / 1000) + 10;
       const cases: { label: string; from: number; to: number; quietOff?: boolean; wake: boolean }[] = [
         { label: "her reminder at +2h inside Avery's +1h to +4h window", from: now + 60 * MIN, to: now + 4 * 60 * MIN, wake: true },
-        { label: "the reminder comes before the window", from: now + 150 * MIN, to: now + 4 * 60 * MIN, wake: false },
-        { label: "the window ends over 3 hours after the reminder", from: now + 60 * MIN, to: now + 6 * 60 * MIN, wake: false },
+        { label: "the reminder comes half an hour before the window", from: now + 150 * MIN, to: now + 4 * 60 * MIN, wake: false },
+        { label: "the reminder comes a few minutes before the window (its wake may land inside it)", from: now + 125 * MIN, to: now + 4 * 60 * MIN, wake: true },
+        { label: "the window ends over 3 hours after the reminder", from: now + 60 * MIN, to: now + 6 * 60 * MIN, wake: true },
         { label: "every phone turned quiet off", from: now + 60 * MIN, to: now + 4 * 60 * MIN, quietOff: true, wake: false },
       ];
       for (const c of cases) {
@@ -337,24 +381,216 @@ async function quiet() {
         ok(published.some((at) => Math.abs(at * 1000 - (now + 120 * MIN)) < 2 * MIN), `${c.label}: the reminder's own wake (${published})`);
         eq(published.includes(wakeFor(c.to)), c.wake, `${c.label}: a wake at the window's end`);
       }
+
+      // Due 5 seconds before Avery's window opens: its own wake runs the tick inside the window, which holds it, and that
+      // tick publishes a wake for the window's end (from its note, whatever the prediction said).
+      const start = now + 30 * MIN;
+      const end = start + 60 * MIN;
+      const w = await quietWorld(120, { roster: false });
+      await sql(`UPDATE maple_care_entries SET at = $1 WHERE id = 10000031`, [new Date(start - 5_000 - 360 * MIN).toISOString()]);
+      await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
+      await w.window(w.alpha.owner, start, end);
+      published.length = 0;
+      const wakeAt = Math.ceil((start - 5_000) / 1000) * 1000 + 10_000;
+      await runPushTick(new Date(wakeAt), { via: "wake", trusted: true, schedule: true, familyId: 1 });
+      eq(got(w, w.alpha.owner).length, 0, "held: the tick ran inside Avery's window");
+      eq(published.includes(wakeFor(end)), true, `a wake for the window's end (${published})`);
     } finally {
       delete process.env.QSTASH_TOKEN;
       globalThis.fetch = realFetch;
     }
   });
 
-  await test("Logged: held on every quiet phone (hers too), claimed as held so a retry never sends it later; a phone not quiet hears it", async () => {
+  // Each phone's notices for the medicine (one tag, so the newest is what its lock screen shows). A "Logged" held on a phone that showed
+  // the reminder it answers left that reminder there all night, reading as a dose not taken: a "Logged" that updates what a phone shows
+  // always goes, and one with nothing of the medicine to update is held, never sent later.
+  const medNotices = (w: Quiet, who: string) => got(w, who).filter((s) => s.tag === `med:${PLAN}`);
+
+  await test("Logged on a quiet phone with nothing of the medicine to update (every dose, nothing shown) is held, claimed as held so no retry sends it later; her own phone always hears it", async () => {
     const w = await quietWorld(-60);
-    await sql(`UPDATE maple_push_subs SET prefs = prefs || '{"quiet_window":false}'::jsonb WHERE id = $1`, [w.phones.blake]);
+    eq(await quietNow(w), [w.phones.avery, w.phones.blake, w.phones.dana].sort((x, y) => x - y), "Avery's, Blake's and Dana's phones are quiet");
+    // Every phone asked for every dose, and none was sent anything of this medicine (no tick ran).
     await dose(Date.now() - MIN, 10000040);
     await notifyDoseLogged(w.a, 10000040, null);
-    eq(got(w, w.alpha.member, "logged").length, 1, "Blake (quiet off) hears it");
-    eq([got(w, w.alpha.owner).length, got(w, DANA).length, got(w, w.alpha.viewer).length], [0, 0, 0], "Avery's and Dana's are held; Casey never hears her medicines");
-    eq(await heldRows("log:10000040"), [`s${w.phones.avery}|log:10000040`, `s${w.phones.dana}|log:10000040`].sort());
-    // After the window, a retry of that dose's Logged (retryWriteNotices) finds the held claims and sends nothing.
+    eq([got(w, w.alpha.owner, "logged").length, got(w, w.alpha.member, "logged").length, got(w, DANA, "logged").length], [0, 0, 1], "Avery's and Blake's are held; hers always hears it");
+    eq(got(w, w.alpha.viewer).length, 0, "Casey never hears her medicines");
+    eq(await heldRows("log:10000040"), [`s${w.phones.avery}|log:10000040`, `s${w.phones.blake}|log:10000040`].sort(), "held, per phone");
+    // After the window, a retry of that dose's Logged (retryWriteNotices) finds the held claims and sends nothing; hers went once.
     sent.length = 0;
     await notifyDoseLogged(w.a, 10000040, null, new Date(Date.now() + 3 * 60 * MIN));
     eq(sent.length, 0, "never later");
+  });
+
+  await test("Logged: a reminded quiet phone hears it in the window; a quiet every-dose phone with nothing of it showing (its reminder was held) is held", async () => {
+    const now = minuteOf(Date.now());
+    // OK again 2 minutes ago. Avery: reminders only, a window from 2 minutes on. Blake: every dose too, already in a window, so its reminder waits.
+    const w = await quietWorld(-2, { roster: false });
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"logged":true}'::jsonb WHERE id = $1`, [w.phones.blake]);
+    await w.window(w.alpha.owner, now + 2 * MIN, now + 4 * 60 * MIN);
+    await w.window(w.alpha.member, now - 60 * MIN, now + 4 * 60 * MIN);
+    await runPushTick(new Date(), { via: "wake", trusted: true, familyId: 1 });
+    eq([medNotices(w, w.alpha.owner).map((s) => s.kind), medNotices(w, w.alpha.member).length], [["ok"], 0], "Avery heard OK again before the window; Blake's waits");
+    await dose(now + 5 * MIN, 10000035);
+    eq((await quietNow(w, new Date(now + 5 * MIN))).filter((id) => id === w.phones.avery || id === w.phones.blake).length, 2, "both quiet then");
+    await notifyDoseLogged(w.a, 10000035, null, new Date(now + 5 * MIN));
+    eq(medNotices(w, w.alpha.owner).map((s) => s.kind), ["ok", "logged"], "Avery's OK again is replaced");
+    eq(medNotices(w, w.alpha.member).length, 0, "Blake's phone shows nothing of it: held");
+    eq(await heldRows("log:10000035"), [`s${w.phones.blake}|log:10000035`], "only Blake's");
+  });
+
+  await test("Logged: a quiet every-dose phone showing an earlier Logged of the medicine (its OK after out of date now) hears the new one", async () => {
+    const now = minuteOf(Date.now());
+    const w = await quietWorld(120, { roster: false });
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"logged":true}'::jsonb WHERE id = $1`, [w.phones.blake]);
+    // A dose half an hour ago, while Blake was up: Blake's phone shows its Logged ("OK after …").
+    await dose(now - 30 * MIN, 10000036);
+    await notifyDoseLogged(w.a, 10000036, null);
+    eq(medNotices(w, w.alpha.member).map((s) => s.kind), ["logged"], "the earlier Logged");
+    // Then Blake's window, and another dose inside it.
+    await w.window(w.alpha.member, now - 10 * MIN, now + 3 * 60 * MIN);
+    await dose(now + MIN, 10000038);
+    eq((await quietNow(w, new Date(now + MIN))).includes(w.phones.blake), true, "Blake's phone is quiet then");
+    await notifyDoseLogged(w.a, 10000038, null, new Date(now + MIN));
+    eq(medNotices(w, w.alpha.member).map((s) => s.kind), ["logged", "logged"], "the new one replaces it");
+    eq(await heldRows("log:10000038"), [], "not held");
+    eq(medNotices(w, w.alpha.owner).length, 0, "Avery (no reminder, no every dose) hears neither");
+  });
+
+  await test("a held reminder whose dose is logged in the window never goes at its end: no OK since after a dose, and no held Logged either", async () => {
+    const end = minuteOf(Date.now()) - MIN;
+    // Due 3 hours 10 minutes before Avery's 5-hour window ended (past the usual cutoff by then), held, noted. Avery asked for every dose too.
+    const w = await quietWorld(-(3 * 60 + 11), { roster: false });
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"logged":true}'::jsonb WHERE id = $1`, [w.phones.avery]);
+    await w.window(w.alpha.owner, end - 5 * 60 * MIN, end);
+    const okAt = await okAtOf();
+    await runPushTick(new Date(okAt + 5 * MIN), { via: "wake", trusted: true, familyId: 1 });
+    eq(got(w, w.alpha.owner).length, 0, "held in the window");
+    eq((await sql(`SELECT state FROM maple_push_sent WHERE key LIKE $1`, [`s${w.phones.avery}|wait:%`])).map((r) => r.state), ["held"], "noted for Avery's phone");
+    // Dana takes it an hour on, inside the window, and it's logged: Avery's phone shows nothing of it, so its Logged is held too.
+    await dose(okAt + 65 * MIN, 10000037);
+    await notifyDoseLogged(w.a, 10000037, null, new Date(okAt + 65 * MIN));
+    eq(await heldRows("log:10000037"), [`s${w.phones.avery}|log:10000037`], "Avery's Logged is held");
+    eq([got(w, w.alpha.member, "logged").length, got(w, DANA, "logged").length], [1, 1], "the phones that showed OK again hear it");
+    sent.length = 0;
+    for (const at of [end + 30_000, end + 30 * MIN, end + 2 * 60 * MIN]) await runPushTick(new Date(at), { via: "wake", trusted: true, familyId: 1 });
+    await notifyDoseLogged(w.a, 10000037, null, new Date(end + 30 * MIN));
+    eq(got(w, w.alpha.owner).length, 0, "nothing reaches Avery's phone after the window: the reminder it held was answered");
+  });
+
+  /** A dose of her medicine at `at`, saved then (so the reminders it answers are the ones sent before it). */
+  const doseSaved = async (at: number, id: number) => {
+    await dose(at, id);
+    await sql(`UPDATE maple_care_entries SET created_at = $2, updated_at = $2 WHERE id = $1`, [id, new Date(at).toISOString()]);
+  };
+  /** OK again 2 minutes ago, every phone on default settings (reminders and Logged on another phone on, every dose off), no windows; each phone's device id is `made-up-<its id>`. The tick sends OK again; Avery gives it 5 minutes on and logs it on her phone. */
+  const firstDoseByAvery = async (id: number) => {
+    const w = await quietWorld(-2, { roster: false });
+    const t0 = Date.now();
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb, device_id = 'made-up-' || id WHERE family_id = 1`);
+    await runPushTick(new Date(t0), { via: "wake", trusted: true, familyId: 1 });
+    await doseSaved(t0 + 5 * MIN, id);
+    await notifyDoseLogged(w.a, id, `made-up-${w.phones.avery}`, new Date(t0 + 5 * MIN));
+    eq(
+      [medNotices(w, w.alpha.owner).map((s) => s.kind), medNotices(w, w.alpha.member).map((s) => s.kind), medNotices(w, DANA).map((s) => s.kind)],
+      [["ok"], ["ok", "logged"], ["ok", "logged"]],
+      "the Logged replaced OK again on Blake's and Dana's phones, never on the phone that logged it"
+    );
+    return { w, t0 };
+  };
+
+  await test("Logged: a phone on default settings showing an earlier Logged hears the next dose with no reminder since, so its OK after is never left stale; never the phone that logged it", async () => {
+    const { w, t0 } = await firstDoseByAvery(10000041);
+    // Two hours on, with no reminder since (it isn't OK again yet), Dana takes another and logs it on her own phone.
+    const at = t0 + 2 * 60 * MIN;
+    await doseSaved(at, 10000042);
+    await notifyDoseLogged(w.a, 10000042, `made-up-${w.phones.dana}`, new Date(at));
+    const blake = medNotices(w, w.alpha.member);
+    eq(blake.map((s) => s.kind), ["ok", "logged", "logged"], "Blake's earlier Logged is replaced");
+    ok(blake[2].body.includes(`OK after ${careTime(at + 360 * MIN, new Date(at), w.alpha.tz)}`), `the new OK after: ${blake[2].body}`);
+    eq([medNotices(w, DANA).length, medNotices(w, w.alpha.owner).length, got(w, w.alpha.viewer).length], [2, 1, 0], "not Dana's (it logged it), not Avery's (nothing of it shown since), never Casey's");
+    eq(await heldRows("log:10000042"), [], "nothing held");
+  });
+
+  await test("Logged: a phone on default settings showing an earlier Logged hears the next dose inside its protected window too, since it updates what's on screen", async () => {
+    const { w, t0 } = await firstDoseByAvery(10000045);
+    // Blake's window opens an hour on; the next dose, logged with Siri, comes inside it.
+    await w.window(w.alpha.member, t0 + 60 * MIN, t0 + 4 * 60 * MIN);
+    const at = t0 + 2 * 60 * MIN;
+    await doseSaved(at, 10000046);
+    eq((await quietNow(w, new Date(at))).includes(w.phones.blake), true, "Blake's phone is quiet then");
+    await notifyDoseLogged(w.a, 10000046, null, new Date(at));
+    eq([medNotices(w, w.alpha.member).map((s) => s.kind), medNotices(w, DANA).map((s) => s.kind)], [["ok", "logged", "logged"], ["ok", "logged", "logged"]], "Blake's (quiet) and Dana's");
+    eq(await heldRows("log:10000046"), [], "not held");
+  });
+
+  await test("Logged: a phone showing an earlier Logged hears nothing of the next dose with that medicine muted, or Logged on another phone off", async () => {
+    const { w, t0 } = await firstDoseByAvery(10000043);
+    await sql(`UPDATE maple_push_subs SET prefs = $2::jsonb WHERE id = $1`, [w.phones.blake, JSON.stringify({ meds: true, muted: [PLAN] })]);
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"closing":false}'::jsonb WHERE id = $1`, [w.phones.dana]);
+    sent.length = 0;
+    const at = t0 + 2 * 60 * MIN;
+    await doseSaved(at, 10000044);
+    await notifyDoseLogged(w.a, 10000044, `made-up-${w.phones.avery}`, new Date(at));
+    eq(sent.length, 0, "Blake muted it; Dana turned Logged on another phone off; Avery logged it");
+  });
+
+  await test("Logged after OK again reached a phone just before its window: it reaches that phone inside the window, so OK again is replaced", async () => {
+    const now = minuteOf(Date.now());
+    // Every 6 hours, last dose 6 h 2 min ago: OK again 2 minutes ago. Avery's window starts 2 minutes from now and lasts 4 hours.
+    const w = await quietWorld(-2, { roster: false });
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
+    await w.window(w.alpha.owner, now + 2 * MIN, now + 4 * 60 * MIN);
+    await runPushTick(new Date(), { via: "wake", trusted: true, familyId: 1 });
+    eq(medNotices(w, w.alpha.owner).map((s) => [s.kind, s.title]), [["ok", "Ibuprofen is OK again for Dana"]], "before the window: OK again");
+    // Inside the window, before the dose: the reminder it already showed has nothing to wait for, so nothing is noted.
+    await runPushTick(new Date(now + 4 * MIN), { via: "wake", trusted: true, familyId: 1 });
+    eq(await sql(`SELECT key FROM maple_push_sent WHERE key LIKE $1`, [`s${w.phones.avery}|wait:%`]), [], "no note for a reminder already shown");
+    // Dana takes it 5 minutes on, inside Avery's window, and someone logs it.
+    await dose(now + 5 * MIN, 10000032);
+    eq((await quietNow(w, new Date(now + 5 * MIN))).includes(w.phones.avery), true, "Avery's phone is quiet then");
+    await notifyDoseLogged(w.a, 10000032, null, new Date(now + 5 * MIN));
+    for (const at of [now + 4 * 60 * MIN + 30_000, now + 4 * 60 * MIN + 30 * MIN, now + 5 * 60 * MIN]) await runPushTick(new Date(at), { via: "net", trusted: true, familyId: 1 });
+    eq(medNotices(w, w.alpha.owner).map((s) => s.kind), ["ok", "logged"], "Logged replaced it, and nothing came after the window");
+    eq(await heldRows("log:10000032"), [], "not held: it answers the reminder the phone shows");
+  });
+
+  await test("Logged after a set time reached a phone just before its window: it reaches that phone inside the window, so the set time is replaced", async () => {
+    const now = minuteOf(Date.now());
+    const w = await quietWorld(-40, { roster: false });
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
+    // A set time 3 minutes ago (set times are local clocks), with no dose of it in the last days: one that a dose could count for
+    // (an hour or more early, depending on the time of day) wouldn't remind at all.
+    await sql(`UPDATE maple_care_entries SET deleted_at = NOW() - INTERVAL '3 days' WHERE id = 10000031`);
+    await sql(`UPDATE maple_care_meds SET schedule = $2::jsonb WHERE id = $1`, [PLAN, JSON.stringify({ type: "times", times: [local(now - 3 * MIN, w.alpha.tz)] })]);
+    await w.window(w.alpha.owner, now + 2 * MIN, now + 4 * 60 * MIN);
+    await runPushTick(new Date(), { via: "wake", trusted: true, familyId: 1 });
+    eq(medNotices(w, w.alpha.owner).map((s) => [s.kind, s.body]), [["at", "One of Dana's set times. Tap to log it once she's taken it."]], "before the window: the set time");
+    await dose(now + 10 * MIN, 10000033);
+    await notifyDoseLogged(w.a, 10000033, null, new Date(now + 10 * MIN));
+    for (const at of [now + 4 * 60 * MIN + 30_000, now + 5 * 60 * MIN]) await runPushTick(new Date(at), { via: "net", trusted: true, familyId: 1 });
+    eq(medNotices(w, w.alpha.owner).map((s) => s.kind), ["at", "logged"], "Logged replaced it");
+  });
+
+  await test("her own phone: her OK again comes through in her window, and the Logged that answers it does too (nothing about her medicines is held on it)", async () => {
+    const now = minuteOf(Date.now());
+    const w = await quietWorld(-2, { roster: false });
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
+    // Dana's own protected window: from an hour ago to three hours on.
+    await w.window(DANA, now - 60 * MIN, now + 3 * 60 * MIN);
+    await runPushTick(new Date(), { via: "wake", trusted: true, familyId: 1 });
+    eq(medNotices(w, DANA).map((s) => s.title), ["Ibuprofen is OK again"], "her own reminder, in her own words");
+    // Avery gives it to her and logs it on Avery's phone (Dana half-asleep, not in Maple).
+    await sql(`UPDATE maple_push_subs SET device_id = 'made-up-avery-phone' WHERE id = $1`, [w.phones.avery]);
+    await dose(now + 10 * MIN, 10000034);
+    eq((await quietNow(w, new Date(now + 10 * MIN))).includes(w.phones.dana), true, "Dana's phone is quiet then");
+    await notifyDoseLogged(w.a, 10000034, "made-up-avery-phone", new Date(now + 10 * MIN));
+    for (const at of [now + 3 * 60 * MIN + 30_000, now + 4 * 60 * MIN]) await runPushTick(new Date(at), { via: "net", trusted: true, familyId: 1 });
+    eq(medNotices(w, DANA).map((s) => s.kind), ["ok", "logged"], "the Logged replaced her OK again");
+    ok(/^Ibuprofen logged · /.test(medNotices(w, DANA)[1].title), medNotices(w, DANA)[1].title);
+    eq(medNotices(w, w.alpha.owner).filter((s) => s.kind === "logged").length, 0, "never the phone that logged it");
   });
 
   await test("nursing timer: held on a quiet phone, unless its person started or changed the feed; held updates never count as showing", async () => {
@@ -415,9 +651,9 @@ async function quiet() {
   await test("a held claim is never claimed again", async () => {
     const w = await quietWorld();
     const sub = (await subsOf()).find((s) => s.id === w.phones.avery)!;
-    await markHeld(sub, "log:made-up-1", null);
-    eq(await claim(sub, "log:made-up-1", null), null, "taken");
-    ok(await claim(sub, "log:made-up-2", null), "another key claims as before");
+    await markHeld(sub, "nurse:made-up-1:1", null);
+    eq(await claim(sub, "nurse:made-up-1:1", null), null, "taken");
+    ok(await claim(sub, "nurse:made-up-1:2", null), "another key claims as before");
   });
 
   await test("families apart: someone in two families is quiet only by each family's own roster", async () => {

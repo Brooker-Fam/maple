@@ -128,7 +128,8 @@ try {
     const quiet = page.getByRole("switch", { name: /^Quiet during my protected sleep \(10\sPM–⁠?2\sAM\)$/ });
     await quiet.waitFor();
     assert.equal(await quiet.getAttribute("aria-checked"), "true", "Unset is on");
-    await page.getByText("Only a handoff to you comes through; nursing and medicine notices wait.", { exact: true }).waitFor();
+    // No medicines on this phone (no care page here): only what happens to nursing updates and a handoff, and the note kept.
+    await page.getByText("Nursing updates in it never come later; a handoff to you still comes through. Maple keeps a note of what it held for 3 days.", { exact: true }).waitFor();
     if (extraShots) {
       for (const [width, height] of [[390, 844], [320, 568]]) {
         await page.setViewportSize({ width, height });
@@ -158,6 +159,26 @@ try {
       }
     }
   }, "/?roster");
+  // What waits and what never comes later, as each phone reads it: a partner's (her reminders wait for the window's end) and
+  // her own (nothing about her medicines is held on it).
+  await scenario("quiet-window-note-partner", async page => {
+    await page.getByRole("switch", { name: /^Quiet during my protected sleep/ }).waitFor();
+    await page.getByText("Medicine reminders wait until it ends, if still due. “Logged” comes only to update a medicine notice already on this phone, and nursing updates never come later. A handoff to you still comes through. Maple keeps a note of what it held for 3 days.", { exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Dana's medicines" }).waitFor();
+    if (extraShots) {
+      for (const [width, height] of [[390, 844], [320, 568]]) {
+        await page.setViewportSize({ width, height });
+        await page.waitForTimeout(150);
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `No sideways scroll at ${width}px`);
+        await page.screenshot({ path: path.join(extraShots, `notifications-quiet-partner-${width}x${height}.png`) });
+      }
+    }
+  }, "/?roster&care=partner");
+  await scenario("quiet-window-note-self", async page => {
+    await page.getByRole("switch", { name: /^Quiet during my protected sleep/ }).waitFor();
+    await page.getByText("Nursing updates in it never come later. Your own medicine reminders, “Logged” and a handoff to you still come through. Maple keeps a note of what it held for 3 days.", { exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Your medicines" }).waitFor();
+  }, "/?roster&care=self");
   await scenario("quiet-window-hidden-off-roster", async page => {
     await page.getByRole("switch", { name: "Nursing timer on the lock screen", exact: true }).waitFor();
     assert.equal(await page.getByRole("switch", { name: /^Quiet during my protected sleep/ }).count(), 0, "Not on a roster: no switch");

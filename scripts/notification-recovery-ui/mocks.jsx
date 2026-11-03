@@ -3,6 +3,9 @@ const roster = new URLSearchParams(location.search).has("roster")
   ? { sleep: { plan: null, tries: [], shifts: [], goals: [{ id: 1, status: "active", roster: [{ id: "w1", member: "sam@example.test", from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] }] }] } }
   : {};
 const state = { baby: { name: "River", sex: "female", timezone: "UTC", settings: {} }, family: { id: 99 }, me: { email: "sam@example.test", role: "owner" }, entries: [], ...roster };
+// ?care=partner: Sam sees the care person's medicines (made-up "Dana"); ?care=self: Sam is the care person. Otherwise no care page.
+const careMode = new URLSearchParams(location.search).get("care");
+const care = careMode === "partner" || careMode === "self" ? { self: careMode === "self", name: "Dana", rows: [], finished: [] } : null;
 const fixture = window.notificationFixture = {
   deleted: false, unsubscribed: false, prefs: { nursing: true },
   mark: { member: "sam@example.test", endpoint: "https://push.example.test/synthetic" },
@@ -21,7 +24,7 @@ const api = async (url, options = {}) => {
     const save = () => { fixture.prefs = prefs; return { sub: { prefs } }; };
     return fixture.holdSave ? new Promise(resolve => fixture.saves.push(() => resolve(save()))) : save();
   }
-  const result = { publicKey: "synthetic", sub: fixture.deleted ? null : { prefs: { ...fixture.prefs } }, health, reminders: null };
+  const result = { publicKey: "synthetic", sub: fixture.deleted ? null : { prefs: { ...fixture.prefs } }, health, reminders: care ? [] : null };
   return fixture.holdRead ? new Promise(resolve => fixture.reads.push(() => resolve(result))) : result;
 };
 const now = () => new Date("2026-10-28T12:00:00Z");
@@ -30,7 +33,7 @@ const refresh = async () => {};
 export const useMaple = () => ({ state, status: "ready", api, toast, refresh, now, units: "us", readOnly: false });
 export const useNow = now;
 export const useHoldTimerToasts = () => {};
-export const useCare = () => null;
+export const useCare = () => care;
 export class ApiError extends Error {}
 export const supported = () => true;
 export const permission = () => "granted";

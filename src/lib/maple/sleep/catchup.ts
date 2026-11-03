@@ -76,13 +76,30 @@ const diaperKind = (d: EntryOf<"diaper">) => (d.data.pee && d.data.poop ? "wet a
 
 const placeOf = (e: Entry) => (e.data as { place?: SleepPlace }).place;
 
-/** The running timers other than a feed, in a few words each ("asleep since 1:45 AM (in arms), 25m", "tummy time"). */
-function runningParts(active: readonly Entry[], now: Date, tz: string): string[] {
+/**
+ * A sleep still running somewhere that isn't her own sleep space, the next
+ * step in the safety guidance's words: from a car seat, stroller or carrier,
+ * "Move her to the bassinet, on her back, as soon as you can."; from a
+ * grown-up bed, "Move her to her own sleep space, on her back, as soon as you
+ * can.". Null anywhere else.
+ */
+export function moveWords(place: SleepPlace | undefined, vo: Pick<Voice, "them" | "their">): string | null {
+  if (place === "car" || place === "stroller" || place === "carrier") return `Move ${vo.them} to the bassinet, on ${vo.their} back, as soon as you can.`;
+  if (place === "bed") return `Move ${vo.them} to ${vo.their} own sleep space, on ${vo.their} back, as soon as you can.`;
+  return null;
+}
+
+/** The running timers other than a feed, in a few words each ("asleep since 1:45 AM (in arms), 25m", "tummy time"), with moveWords after a sleep that needs it. */
+function runningParts(active: readonly Entry[], now: Date, tz: string, v: Voice): string[] {
   const running = active.filter((e) => e.kind !== "feed");
   const sleep = running.find((e) => e.kind === "sleep");
   const place = sleep ? placeOf(sleep) : undefined;
+  const move = moveWords(place, v);
   const others = running.filter((e) => e.kind !== "sleep").map((e) => (e.kind === "tummy" ? "tummy time" : e.kind === "pump" ? "pumping" : e.kind));
-  return [...(sleep ? [`asleep since ${formatTime(sleep.started_at, tz)}${place ? ` (${SLEEP_PLACE_LABEL[place].toLowerCase()})` : ""}, ${downWords((now.getTime() - ms(sleep.started_at)) / MIN)}`] : []), ...others];
+  return [
+    ...(sleep ? [`asleep since ${formatTime(sleep.started_at, tz)}${place ? ` (${SLEEP_PLACE_LABEL[place].toLowerCase()})` : ""}, ${downWords((now.getTime() - ms(sleep.started_at)) / MIN)}${move ? `. ${move}` : ""}`] : []),
+    ...others,
+  ];
 }
 
 /**
@@ -116,7 +133,7 @@ export function catchUpLines(input: {
   const diaper = summary?.lastDiaper ?? null;
   if (diaper) out.push({ label: "Diaper", text: `Last changed ${formatTime(diaper.started_at, tz)} (${formatRelative(diaper.started_at, now)}) · ${diaperKind(diaper)}` });
   else out.push({ label: "Diaper", text: "No diaper logged lately" });
-  const parts = runningParts(summary?.active ?? [], now, tz);
+  const parts = runningParts(summary?.active ?? [], now, tz, v);
   out.push({ label: "Running", text: parts.length ? parts.join(" · ").replace(/^./, (c) => c.toUpperCase()) : nursing ? "The nursing timer" : `Nothing else; ${v.they}${v.verb("'s")} awake by the log` });
   const plan = feedPlan(input.cover ?? null, { vo: v, taker: input.me, careMember: input.careMember, name: (id) => input.memberName(id) });
   if (plan && input.cover) out.push({ label: "If hungry", text: `Before ${formatTime(input.cover.end, tz)}: ${plan}` });
@@ -161,7 +178,8 @@ const SLEEP_IN: Partial<Record<SleepPlace, string>> = { arms: "in arms", bassine
  * Siri's take-over catch-up, a few short sentences: the last feed with its
  * time and side and the next side ("Last fed at 1:10, starting on the left;
  * right is next."), the last diaper ("Wet diaper at 12:40."), what's running
- * ("Asleep since 1:45, in the bassinet."), and, when the off-duty adult's
+ * ("Asleep since 1:45, in the bassinet."; from a car seat, stroller, carrier
+ * or grown-up bed, moveWords after it), and, when the off-duty adult's
  * window plans one, how to feed her in it ("If she's hungry before 5:30:
  * bring her to Sam to nurse."). `clock` says a time the way the rest of the
  * reply does. `armsSaid`: the reply already says her sleep in arms runs on,
@@ -192,6 +210,9 @@ export function catchUpSpoken(
     else if (e.kind === "pump") bits.push(`pumping since ${t(e.started_at)}`);
   }
   if (bits.length) out.push(`${cap(bits.join("; "))}.`);
+  // Asleep in a car seat, stroller, carrier or grown-up bed: the next step ("Move her to the bassinet, on her back, as soon as you can.").
+  const move = sleep ? moveWords(placeOf(sleep), vo) : null;
+  if (move) out.push(move);
   const plan = o.cover && o.taker && o.name ? feedPlan(o.cover, { vo, taker: o.taker, careMember: o.careMember, name: o.name }) : null;
   if (plan && o.cover) out.push(`If ${vo.they}${vo.verb("'s")} hungry before ${t(o.cover.end)}: ${plan}.`);
   return out;
@@ -238,7 +259,9 @@ function diapersSaid(diapers: readonly EntryOf<"diaper">[]): string | null {
  * last at 1:10 AM on the left; 1 wet diaper; a bassinet try that stayed
  * asleep 1 hour 50 minutes."), what's going on now (a try, a feed, a
  * holding turn, a sleep or another timer), and the next side when no feed
- * is running. Feeds are counted as Today counts them (feed.ts nursingRuns:
+ * is running. A sleep still running in a car seat, stroller, carrier or
+ * grown-up bed adds moveWords after what's going on now, the one sentence
+ * past three. Feeds are counted as Today counts them (feed.ts nursingRuns:
  * a stop and a start under 10 minutes apart are one feed), a bottle each;
  * a feed still running is said as going on now, not counted. `entries`:
  * the log from a little before `since` (so a feed that began then reads as
@@ -303,6 +326,9 @@ export function recapWords(o: {
     const other = running.find((e) => e.kind === "tummy" || e.kind === "pump");
     if (other) out.push(`${other.kind === "tummy" ? "Tummy time" : "Pumping"} is running, since ${t(other.started_at)}.`);
   }
+  // Asleep in a car seat, stroller, carrier or grown-up bed (said with the turn or on its own): the take-over catch-up's next step.
+  const move = !tryNow && !feed && sleep ? moveWords(placeOf(sleep), vo) : null;
+  if (move) out.push(move);
   // The next side, as Today has it, when no feed is running.
   const next = feed ? null : nextSideFor(runs, now);
   if (next) out.push(`Start on the ${SIDE_SAID[next.side]} next${next.fuller ? ", or whichever side feels fuller" : ""}.`);
