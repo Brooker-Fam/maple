@@ -30,7 +30,8 @@ const ERROR_CLASSES = new Set([
 ]);
 const ERROR_CODES = new Set(["400", "401", "403", "404", "409", "422", "429", "500", "502", "503", "504",
   "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "23502", "23503", "23505", "23514", "40001", "53300", "57P01"]);
-const ERROR_LABELS = new Set(["care_error", "sync_request_failed", "sync_diagnostics_failed", "chat_image_request_failed"]);
+// Fixed labels a route reports by name; chat_timeout and chat_no_answer: a chat model call ran out of time, or came back with nothing to show (chat/turn.ts).
+const ERROR_LABELS = new Set(["care_error", "sync_request_failed", "sync_diagnostics_failed", "chat_image_request_failed", "chat_timeout", "chat_no_answer"]);
 const API_PATHS = new Set([
   "/oauth/authorize", "/oauth/token",
   "/api/waitlist", "/api/maple/analytics/event", "/api/maple/analytics/open", "/api/maple/state",

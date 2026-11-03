@@ -323,6 +323,9 @@ async function main() {
     eq(scrubError(new SyntaxError("Unexpected token in synthetic-parent@example.test")).message, "SyntaxError");
     eq(scrubError(new Error("care_error")).message, "care_error");
     eq(scrubError(scrubError(new Error("care_error"))).message, "care_error");
+    // The chat's reports arrive already scrubbed to their name (chat/post.ts scrub), and keep it.
+    for (const label of ["chat_timeout", "chat_no_answer"]) eq(scrubError(new Error(label)).message, label);
+    eq(scrubError(new Error("chat_timeout synthetic-private-token")).message, "Error");
     for (const input of [
       "synthetic-parent@example.test", new Error("synthetic-private-token"), new Error("care_error_synthetic-private-token"),
       Object.assign(new Error("synthetic-private-token"), { name: "synthetic-private-token", code: "synthetic-private-token" }),

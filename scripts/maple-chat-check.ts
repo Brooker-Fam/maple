@@ -35,7 +35,7 @@ import { costMicro, dollars, priceFor, PRICES, stepTokens } from "../src/lib/map
 import { answerPost, BUSY, CARE_CLOSED, familyNames, scrub, STALE, type ChatStore, type PostDeps } from "../src/lib/maple/chat/post";
 import { CHAT_ADDENDUM, CHAT_ADDENDUM_CARE_CLOSED, CHAT_ADDENDUM_VIEWER, chatAddendumCareHidden, chatAddendumCareView, contextLine, contextText, markTailForCache, stateLines, systemBlocks, withMemoryLines } from "../src/lib/maple/chat/prompt";
 import { dashFilter, withoutDashes } from "../src/lib/maple/chat/dashes";
-import { chatDisplayText, receiptText } from "../src/lib/maple/chat/display";
+import { chatDisplayText, outputShows, receiptText } from "../src/lib/maple/chat/display";
 import type { LockedThread, UsageRow } from "../src/lib/maple/chat/store";
 import { allowed, chatCareLevel, chatTools, EXCLUDED_TOOLS, forModel, MODEL_TEXT_MAX, registrations, TOOL_APPROVAL, toOutput } from "../src/lib/maple/chat/tools";
 import { OWNER_TOOLS, PEOPLE_CHANGE_TOOLS } from "../src/lib/maple/people-mcp";
@@ -47,7 +47,7 @@ import { definitionTokens, TOOL_CEILING, TOOL_GROUPS, toolDisclosure } from "../
 import { summarize } from "../src/lib/maple/insights";
 import { CRISIS_REPLY } from "../src/lib/maple/guidelines";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
-import { CHAT_CUT, CHAT_FAILED, CHAT_OFF, chatTurn, friendlyError } from "../src/lib/maple/chat/turn";
+import { CHAT_CUT, CHAT_FAILED, CHAT_NO_ANSWER, CHAT_OFF, chatTurn, friendlyError, retryableError, stoppedLine } from "../src/lib/maple/chat/turn";
 import { StoreUnavailable } from "../src/lib/maple/store";
 import type { Baby, Entry, Member } from "../src/lib/maple/types";
 import { jsonSchema, tool, type ToolSet } from "ai";
@@ -765,13 +765,36 @@ const textChunks = (t: string): Chunk[] => [
   { type: "text-end", id: "t1" },
 ];
 
-/** A model that answers each call with the next script in `steps` (an Error is thrown instead), and the tools' calls counted. */
-function harness(steps: (Chunk[] | Error)[], modelKey = GLM) {
+/** A provider that sends `chunks` and then nothing more, until the call's own time limit aborts it. */
+function stalled(chunks: Chunk[], signal: AbortSignal | undefined) {
+  return new ReadableStream({
+    start(c) {
+      for (const x of [{ type: "stream-start", warnings: [] }, ...chunks]) c.enqueue(x);
+      const stop = () => c.error(signal?.reason ?? new DOMException("made-up stall", "AbortError"));
+      if (signal?.aborted) stop();
+      else signal?.addEventListener("abort", stop, { once: true });
+    },
+  });
+}
+
+type Script = Chunk[] | Error | { stall: Chunk[] };
+type Limits = NonNullable<Parameters<typeof chatTurn>[0]["limits"]>;
+/** Fast enough for a check: a stalled step gives up after 150ms, and a second try needs 100ms left. */
+const QUICK: Limits = { timeout: { totalMs: 3_000, stepMs: 150, toolMs: 1_000 }, retryMinMs: 100 };
+
+/**
+ * A model that answers each call with the next script in `steps` (an Error is
+ * thrown instead; `stall` sends its chunks and then hangs until the step's
+ * time limit), and the tools' calls counted. log_feed is a write;
+ * maple_status a read; delete_entry waits for a tap.
+ */
+function harness(steps: Script[], modelKey = GLM, opts: { limits?: Limits; hang?: string; slowRecord?: number } = {}) {
   let call = 0;
   const model = new MockLanguageModelV4({
-    doStream: async () => {
+    doStream: async ({ abortSignal }) => {
       const script = steps[call++] ?? [...textChunks("…"), finishPart("stop")];
       if (script instanceof Error) throw script;
+      if (!Array.isArray(script)) return { stream: stalled(script.stall, abortSignal) as never };
       return { stream: simulateReadableStream({ chunks: [{ type: "stream-start", warnings: [] }, ...script] as never[] }) };
     },
   });
@@ -780,36 +803,51 @@ function harness(steps: (Chunk[] | Error)[], modelKey = GLM) {
     tool({
       description: `stand-in ${name}`,
       inputSchema: jsonSchema<Record<string, unknown>>({ type: "object", properties: { id: { type: "number" } } }),
-      execute: async (): Promise<ChatToolOutput> => {
+      execute: async (_input, { abortSignal }): Promise<ChatToolOutput> => {
         ran.push(name);
+        // `hang`: this tool starts and never answers, until its step's time limit stops it.
+        if (opts.hang === name) await new Promise((_, reject) => abortSignal?.addEventListener("abort", () => reject(abortSignal.reason), { once: true }));
+        if (name === "log_feed") return { ok: true, write: true, text: "Saved #40: made-up feed, right side 7m.", saved: [{ id: 40, line: "Saved #40: made-up feed, right side 7m." }] };
         return { ok: true, write: name !== "maple_status", text: `Deleted #12: made-up bath at 3:10 AM today.`, deleted: 12 };
       },
     });
-  const tools: ToolSet = { delete_entry: stub("delete_entry"), maple_status: stub("maple_status") };
+  const tools: ToolSet = { delete_entry: stub("delete_entry"), maple_status: stub("maple_status"), log_feed: stub("log_feed") };
   const saved: ChatMessage[] = [];
   const usage: bigint[] = [];
   const rows: { step: number; costMicro: bigint; finishReason: string | null; tokens: { prompt: number } }[] = [];
   const waits: Promise<unknown>[] = [];
   let released = 0;
   const reported: unknown[] = [];
+  const events: string[] = [];
   const deps = {
     save: async (m: ChatMessage) => void saved.push(structuredClone(m)),
     record: async (u: (typeof rows)[number]) => {
       usage.push(u.costMicro);
       rows.push(u);
+      if (opts.slowRecord) await new Promise((r) => setTimeout(r, opts.slowRecord));
     },
     release: async () => void released++,
     report: (e: unknown) => void reported.push(e),
     waitUntil: (p: Promise<unknown>) => void waits.push(p),
+    lifecycle: (event: string) => void events.push(event),
   };
-  const run = (messages: ChatMessage[], responseId: string, crisis = false) =>
-    chatTurn({ model, modelKey, price: priceFor(modelKey)!, tools, viewer: false, care: true, copy: FAMILY_ONE_COPY, messages, responseId, crisis, deps });
+  const run = (messages: ChatMessage[], responseId: string, crisis = false, stepsDone?: number) =>
+    chatTurn({ model, modelKey, price: priceFor(modelKey)!, tools, viewer: false, care: true, copy: FAMILY_ONE_COPY, messages, responseId, crisis, ...(stepsDone != null ? { stepsDone } : {}), ...(opts.limits ? { limits: opts.limits } : {}), deps });
   const settle = async () => {
     await Promise.all(waits);
     await new Promise((r) => setTimeout(r, 20));
   };
-  return { model, tools, run, settle, saved, usage, rows, ran, reported, released: () => released };
+  return { model, tools, run, settle, saved, usage, rows, ran, reported, events, released: () => released };
 }
+
+const textOfSaved = (m: ChatMessage) => m.parts.flatMap((p) => (p.type === "text" ? [p.text] : []));
+const reportedNames = (h: ReturnType<typeof harness>) => h.reported.map((e) => (e as Error).name);
+const gatewayOf = (call: { providerOptions?: Record<string, unknown> }) => call.providerOptions?.gateway as Record<string, unknown> | undefined;
+const REASONING: Chunk[] = [
+  { type: "reasoning-start", id: "r1" },
+  { type: "reasoning-delta", id: "r1", delta: "made-up thinking about which side came first" },
+  { type: "reasoning-end", id: "r1" },
+];
 
 const ask = (text: string): ChatMessage => userMessage("msg_u1", text, "Now: 3:10 AM EDT on Monday, Oct 26 (America/New_York). June is 6 days old (Day 7). Signed in: Alex (owner).");
 
@@ -950,11 +988,11 @@ async function turnChecks() {
     eq(words, [CHAT_CUT], "the reply says it stopped");
   });
 
-  await checkAsync("a step that never finished still counts against the budget; a refused request doesn't", async () => {
+  await checkAsync("a step that never finished still counts against the budget, and so does its second try; a refused request doesn't", async () => {
     const h = harness([[{ type: "tool-call", toolCallId: "call_1", toolName: "maple_status", input: "{}" }, finishPart("tool-calls")], new Error("made-up stream failure")]);
     await (await h.run([ask("made-up question")], "msg_r9")).text();
     await h.settle();
-    eq(h.rows.map((r) => [r.step, r.finishReason]), [[0, "tool-calls"], [1, "unfinished"]], "rows");
+    eq(h.rows.map((r) => [r.step, r.finishReason]), [[0, "tool-calls"], [1, "unfinished"], [2, "stop"]], "rows: each call its own");
     const est = h.rows[1];
     ok(est.tokens.prompt >= 23_000 && est.costMicro > BigInt(0), "the unfinished step is priced from at least the last prompt");
     const refused = harness([Object.assign(new Error("made-up"), { statusCode: 403 })]);
@@ -1008,6 +1046,145 @@ async function turnChecks() {
     ok(body.includes(CHAT_OFF), "the phone sees the friendly line");
     ok(!body.includes("made-up prompt text"), "never the error's own words");
     ok(reported.length > 0, "reported");
+  });
+
+  check("which failures are asked again, and what the reply says when one isn't", () => {
+    eq([new Error("made-up"), { statusCode: 500 }, { statusCode: 408 }, { name: "AI_RetryError", lastError: { statusCode: 503 } }].map(retryableError), [true, true, true, true], "a dropped stream, a timeout, the provider's own failure");
+    eq([400, 401, 403, 429].map((statusCode) => retryableError({ statusCode })), [false, false, false, false], "never a bad request, a refusal or a limit");
+    eq([stoppedLine(null, false), stoppedLine(null, true), stoppedLine({ statusCode: 403 }, false), stoppedLine({ statusCode: 429 }, true)], [CHAT_NO_ANSWER, CHAT_FAILED, CHAT_OFF, LIMIT_MESSAGE], "the lines");
+    eq(
+      [undefined, { ok: true, write: false, text: "a read" }, { ok: true, write: true, text: "Saved #1" }, { ok: false, write: false, text: "failed" }, { ok: true, write: false, text: "a chart", chart: {} }].map(outputShows),
+      [false, false, true, true, true],
+      "what the tab shows for a result"
+    );
+  });
+
+  await checkAsync("a first call that stalls is asked again, on the fastest of the same providers, and only the answer reaches the phone", async () => {
+    const h = harness([{ stall: REASONING }, [...textChunks("Logged the right side, 2:10 to 2:25 AM."), finishPart("stop")]], GLM, { limits: QUICK });
+    const body = await (await h.run([ask("Log a right side feed from 2:10 AM until 2:25 AM")], "msg_s1")).text();
+    await h.settle();
+    eq(h.model.doStreamCalls.length, 2, "asked twice");
+    const [first, second] = h.model.doStreamCalls.map(gatewayOf);
+    eq([first?.sort, second?.sort], [undefined, "tps"], "the second try goes to the fastest provider");
+    eq([second?.only, second?.zeroDataRetention, second?.disallowPromptTraining], [[...PRICES[GLM].providers], true, true], "of the same ZDR, no-training providers");
+    const m = h.saved[0];
+    eq(textOfSaved(m), ["Logged the right side, 2:10 to 2:25 AM."], "only the answer is saved");
+    eq([m.parts.filter((p) => p.type === "reasoning").length, m.parts.filter((p) => p.type === "step-start").length], [0, 1], "nothing of the try that stalled");
+    ok(!body.includes("made-up thinking"), "the phone never saw the stalled try");
+    ok(body.includes('"finishReason":"stop"'), "and the answer ends as one that finished");
+    eq(h.rows.map((r) => [r.step, r.finishReason]), [[0, "unfinished"], [1, "stop"]], "both calls counted");
+    eq(reportedNames(h), ["chat_timeout"], "the timeout is reported by name");
+    eq(h.events, ["chat_started", "chat_completed"], "a completed turn");
+    eq(h.released(), 1, "released once");
+  });
+
+  await checkAsync("a call that comes back with nothing to show is asked again once; nothing twice, and the reply says nothing was saved", async () => {
+    const empty = [...REASONING, finishPart("stop")];
+    const h = harness([empty, empty, [...textChunks("never asked"), finishPart("stop")]]);
+    const body = await (await h.run([ask("made-up question")], "msg_s2")).text();
+    await h.settle();
+    eq(h.model.doStreamCalls.length, 2, "one second try, no third");
+    const m = h.saved[0];
+    eq(textOfSaved(m), [CHAT_NO_ANSWER], "the reply says so");
+    eq(m.parts.filter((p) => p.type === "reasoning" || p.type === "step-start").length, 0, "neither empty try is kept");
+    ok(body.includes('"finishReason":"error"'), "the phone reads it as an answer that didn't finish");
+    eq(reportedNames(h), ["chat_no_answer", "chat_no_answer"], "both reported");
+    eq(h.events, ["chat_started", "chat_failed"], "a failed turn");
+    const length = harness([[...REASONING, finishPart("length")], [...textChunks("Here you go."), finishPart("stop")]]);
+    await (await length.run([ask("made-up question")], "msg_s3")).text();
+    await length.settle();
+    eq(textOfSaved(length.saved[0]), ["Here you go."], "thinking that ran out of room is asked again too");
+  });
+
+  await checkAsync("a step whose write started and never answered isn't asked again, and the reply says to check Today", async () => {
+    const h = harness([[{ type: "tool-call", toolCallId: "call_w", toolName: "log_feed", input: "{}" }, finishPart("tool-calls")], [...textChunks("never asked"), finishPart("stop")]], GLM, { limits: QUICK, hang: "log_feed" });
+    await (await h.run([ask("Log a right side feed from 2:10 AM until 2:25 AM")], "msg_s4")).text();
+    await h.settle();
+    eq(h.model.doStreamCalls.length, 1, "not asked again");
+    eq(h.ran, ["log_feed"], "the write started once");
+    const m = h.saved[0];
+    ok(m.parts.some((p) => p.type === "tool-log_feed"), "its call stays in the reply");
+    eq(textOfSaved(m).at(-1), CHAT_FAILED, "check Today before trying again");
+  });
+
+  await checkAsync("a call that stalls after naming a write, before it ran, is asked again and the write runs once", async () => {
+    const call = { type: "tool-call", toolCallId: "call_w1", toolName: "log_feed", input: "{}" };
+    const h = harness([{ stall: [call] }, [{ ...call, toolCallId: "call_w2" }, finishPart("tool-calls")], [...textChunks("Logged the right side."), finishPart("stop")]], GLM, { limits: QUICK });
+    await (await h.run([ask("Log a right side feed from 2:10 AM until 2:25 AM")], "msg_s10")).text();
+    await h.settle();
+    eq(h.ran, ["log_feed"], "it ran once, on the second try");
+    const m = h.saved[0];
+    const calls = m.parts.filter((p) => p.type === "tool-log_feed") as unknown as { toolCallId: string; state: string }[];
+    eq(calls.map((p) => [p.toolCallId, p.state]), [["call_w2", "output-available"]], "only the call that ran is in the reply");
+    eq(textOfSaved(m), ["Logged the right side."], "and its answer");
+  });
+
+  await checkAsync("a step that stalls after a read is asked again from there, with the read's result, and the read runs once", async () => {
+    const h = harness(
+      [[{ type: "tool-call", toolCallId: "call_r", toolName: "maple_status", input: "{}" }, finishPart("tool-calls")], { stall: REASONING }, [...textChunks("She last fed at 2:10 AM."), finishPart("stop")]],
+      GLM,
+      { limits: QUICK }
+    );
+    await (await h.run([ask("When did she last eat?")], "msg_s5")).text();
+    await h.settle();
+    eq(h.model.doStreamCalls.length, 3, "the stalled step is asked again");
+    eq(h.ran, ["maple_status"], "the read ran once");
+    ok(h.model.doStreamCalls[2].prompt.some((m) => m.role === "tool" && JSON.stringify(m.content).includes("call_r")), "the second try reads the first step's result");
+    const m = h.saved[0];
+    eq(textOfSaved(m), ["She last fed at 2:10 AM."], "the answer");
+    eq(m.parts.filter((p) => p.type === "step-start").length, 2, "the read's step and the answer's, not the stalled one");
+    eq(h.rows.map((r) => [r.step, r.finishReason]), [[0, "tool-calls"], [1, "unfinished"], [2, "stop"]], "rows");
+  });
+
+  await checkAsync("an answer that finished just before the turn's limit stays as it is, with no line after it", async () => {
+    const h = harness([[...textChunks("Logged the right side."), finishPart("stop")]], GLM, { limits: { timeout: { totalMs: 100, stepMs: 100, toolMs: 100 }, retryMinMs: 10 }, slowRecord: 300 });
+    const body = await (await h.run([ask("made-up question")], "msg_s11")).text();
+    await h.settle();
+    eq(textOfSaved(h.saved[0]), ["Logged the right side."], "no stopped line");
+    ok(!body.includes('"finishReason":"error"'), "it ends as an answer that finished");
+    eq([h.model.doStreamCalls.length, reportedNames(h)], [1, []], "not asked again, nothing reported");
+  });
+
+  await checkAsync("with too little of the turn left for a second try, a stalled call says nothing was saved", async () => {
+    const h = harness([{ stall: REASONING }, [...textChunks("never asked"), finishPart("stop")]], GLM, { limits: { timeout: { totalMs: 400, stepMs: 300, toolMs: 100 }, retryMinMs: 250 } });
+    await (await h.run([ask("made-up question")], "msg_s6")).text();
+    await h.settle();
+    eq(h.model.doStreamCalls.length, 1, "not asked again");
+    eq(textOfSaved(h.saved[0]), [CHAT_NO_ANSWER], "the reply says so");
+  });
+
+  await checkAsync("a tapped delete runs once even when the model then stalls, and the reply says to check Today", async () => {
+    const h = harness(
+      [[{ type: "tool-call", toolCallId: "call_1", toolName: "delete_entry", input: JSON.stringify({ id: 12 }) }, finishPart("tool-calls")], { stall: REASONING }, [...textChunks("never asked"), finishPart("stop")]],
+      GLM,
+      { limits: QUICK }
+    );
+    const first = ask("Delete the bath I just logged");
+    await (await h.run([first], "msg_s7")).text();
+    await h.settle();
+    const asked = h.saved[0];
+    const part = asked.parts.find((p) => p.type === "tool-delete_entry") as unknown as { approval: { id: string } };
+    const merged = mergeApprovals(asked, { id: asked.id, parts: [{ type: "tool-delete_entry", toolCallId: "call_1", approval: { id: part.approval.id, approved: true } }] })!;
+    await (await h.run([first, merged], merged.id, false, stepsTaken(merged))).text();
+    await h.settle();
+    eq(h.ran, ["delete_entry"], "deleted once");
+    eq(h.model.doStreamCalls.length, 2, "the report that stalled isn't asked again");
+    eq(textOfSaved(h.saved[1]).at(-1), CHAT_FAILED, "check Today");
+  });
+
+  await checkAsync("a provider failure before anything ran is asked again; a refusal or a limit isn't, and the reply says which", async () => {
+    const h = harness([Object.assign(new Error("made-up upstream failure"), { statusCode: 503 }), [...textChunks("Saved it."), finishPart("stop")]]);
+    const body = await (await h.run([ask("made-up question")], "msg_s8")).text();
+    await h.settle();
+    eq([h.model.doStreamCalls.length, gatewayOf(h.model.doStreamCalls[1])?.sort], [2, "tps"], "asked again");
+    eq(textOfSaved(h.saved[0]), ["Saved it."], "the answer");
+    ok(!body.includes(CHAT_FAILED) && !body.includes('"type":"error"'), "no failure on the phone");
+    for (const [status, line] of [[403, CHAT_OFF], [429, LIMIT_MESSAGE]] as const) {
+      const refused = harness([Object.assign(new Error("made-up"), { statusCode: status }), [...textChunks("never asked"), finishPart("stop")]]);
+      await (await refused.run([ask("made-up question")], `msg_s9_${status}`)).text();
+      await refused.settle();
+      eq([refused.model.doStreamCalls.length, textOfSaved(refused.saved[0])], [1, [line]], `${status}: said, not asked again`);
+    }
   });
 }
 

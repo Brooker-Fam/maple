@@ -15,6 +15,8 @@ export const CHAT_MAX_CHARS = 2000;
 
 export const CHAT_OFF = "The chat isn't available right now. Logging works as usual.";
 export const CHAT_FAILED = "Something went wrong, so the answer stopped. Check Today before trying again, so nothing is logged twice.";
+/** A reply that stopped (or came back empty), even after a second try, before any tool ran: the Chat tab offers Send again under it. */
+export const CHAT_NO_ANSWER = "That answer didn't finish, and nothing was saved, so it's safe to send again.";
 
 /** useChat's id for a thread: made on the phone, checked on the server. */
 export const THREAD_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;

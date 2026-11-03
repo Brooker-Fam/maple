@@ -18,7 +18,7 @@ import { CareNote, TermsCard } from "./ChatTerms";
 import { NEAR_BOTTOM, TAB_BAR, usePageHold, useVisibleArea } from "./page";
 import { useChatThread } from "./useChatThread";
 import { chatActivity, visibleRevision } from "./progress";
-import type { QueuedMessage } from "./queue";
+import { safeToSendAgain, type QueuedMessage } from "./queue";
 
 /**
  * Chat: this member's one conversation with Maple, a tab like the others.
@@ -124,6 +124,9 @@ export default function ChatTab({ active }: { active: boolean }) {
   const activity = t.loadingHistory ? (t.ready ? "Updating your conversation…" : null) : chatActivity(t.messages, t);
   const suggestions = readOnly ? ["How did the night go?", `When did ${w.he} last eat?`] : ["How did the night go?", "Which side next?", "Log a wet diaper"];
   const items = [...t.earlier, ...t.messages.map((message) => ({ thread: t.threadId ?? "", message }))];
+  // A reply that says nothing was saved offers its message again, once nothing else is on its way.
+  const asked = items.at(-2)?.message;
+  const again = !t.busy && !t.queue.length && !needsTerms && items.length - 1 >= t.earlier.length && asked?.role === "user" && safeToSendAgain(tail) ? asked : null;
 
   return (
     <section
@@ -216,6 +219,13 @@ export default function ChatTab({ active }: { active: boolean }) {
             <Fragment key={message.id}>
               {i > 0 && items[i - 1].thread !== thread && <hr aria-hidden className="mx-8 border-mp-line" />}
               <MessageView threadId={thread} message={message} last={i === items.length - 1 && i >= t.earlier.length} busy={t.busy} onApprove={t.approve} onAnswerQuestion={t.answerQuestion} onAsk={send} />
+              {again && i === items.length - 1 && (
+                <div className="-mt-1 pr-10">
+                  <Button size="sm" variant="soft" disabled={!online} onClick={() => { pinned.current = true; setShowLatest(false); t.sendAgain(again); }}>
+                    Send again
+                  </Button>
+                </div>
+              )}
             </Fragment>
           ))}
           <div role="status" aria-live="polite" aria-atomic="true" className={!activity ? "sr-only" : undefined}>
