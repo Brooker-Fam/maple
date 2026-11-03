@@ -1,13 +1,12 @@
 "use client";
 
-import { useRef } from "react";
 import { askState, shiftStatus, sleepSignals } from "@/lib/maple/sleep/engine";
 import { cryingLine, downWords, slotShort } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatDuration, formatTime, formatTimeNear, localParts } from "@/lib/maple/time";
 import { useVoice } from "../familyWords";
 import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
-import { TAP_COOLDOWN_MS } from "../tapCooldown";
+import { useTapGuard } from "../tapCooldown";
 import { cx } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { showLastNight, useLastNight, type LastNight } from "./LastNight";
@@ -74,9 +73,10 @@ function morningAsk(ln: LastNight, tz: string, name: string): { words: string; s
  *   the two choices again).
  * - For everyone else: Take over, or I've got her when they were asked.
  * - From 5 AM to noon, the Last night card's first question (morningAsk).
- * Tapping the words opens the plan. A tap waits out the dock's cooldown, so
- * a double tap never lands on the button it turned into. Up to three lines
- * of words, so nothing is cut at 320px.
+ * Tapping the words opens the plan. The button waits out the shared tap
+ * cooldown (tapCooldown.ts), so a double tap never lands on the button it
+ * turned into, nor a tap on one that just changed with another phone's write
+ * or the clock. Up to three lines of words, so nothing is cut at 320px.
  */
 export function SleepStrip() {
   const s = useSleepMaybe();
@@ -85,7 +85,6 @@ export function SleepStrip() {
   const now = useNow(30_000);
   const people = usePeople();
   const ln = useLastNight();
-  const cool = useRef(Number.NEGATIVE_INFINITY);
   if (!s || !s.canWrite || (!s.plan && !s.running && !s.shift)) return null;
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const me = state?.me.email ?? "";
@@ -174,14 +173,6 @@ export function SleepStrip() {
     action = { label: "Put down", onClick: () => void s.startTry(), strong: !t || t.done < t.planned };
   }
 
-  // A tap that turns this button into another (Put down → How did it go?) waits out the dock's cooldown.
-  const tap = () => {
-    const t = performance.now();
-    if (t - cool.current < TAP_COOLDOWN_MS) return;
-    cool.current = t;
-    action.onClick();
-  };
-
   return (
     // A ring, not a border, so the words' button is the strip's full 44px.
     <div role="group" aria-label="Sleep plan" className="-mt-0.5 mb-1.5 flex min-h-11 items-stretch gap-1 rounded-2xl bg-mp-surface pr-1 shadow-[0_1px_2px_rgb(28_38_25/0.06)] ring-1 ring-(--mp-edge)">
@@ -198,17 +189,27 @@ export function SleepStrip() {
           {sub && <span className="text-mp-ink-2"> · {sub}</span>}
         </span>
       </button>
-      {/* A 44px target around a 36px pill, as her strip's Took it. */}
-      <button type="button" disabled={s.busy} onClick={tap} className="flex min-h-[44px] max-w-[52%] shrink-0 items-center disabled:opacity-40">
-        <span
-          className={cx(
-            "inline-flex min-h-[36px] items-center rounded-[10px] px-3.5 text-left text-sm leading-tight font-semibold active:scale-[0.97]",
-            action.strong ? "bg-mp-accent text-mp-on-accent" : "bg-mp-sunken text-mp-ink"
-          )}
-        >
-          {action.label}
-        </span>
-      </button>
+      <StripButton action={action} disabled={s.busy} />
     </div>
+  );
+}
+
+/**
+ * The strip's one action: a 44px target around a 36px pill, as her strip's Took it. A new label is a new button under the
+ * thumb (Put down → How did it go?), so it arms again.
+ */
+function StripButton({ action, disabled }: { action: Action; disabled: boolean }) {
+  const guard = useTapGuard(action.label);
+  return (
+    <button type="button" disabled={disabled} onClick={guard.tap(action.onClick)} className="flex min-h-[44px] max-w-[52%] shrink-0 items-center disabled:opacity-40">
+      <span
+        className={cx(
+          "inline-flex min-h-[36px] items-center rounded-[10px] px-3.5 text-left text-sm leading-tight font-semibold active:scale-[0.97]",
+          action.strong ? "bg-mp-accent text-mp-on-accent" : "bg-mp-sunken text-mp-ink"
+        )}
+      >
+        {action.label}
+      </span>
+    </button>
   );
 }

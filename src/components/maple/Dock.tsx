@@ -18,7 +18,7 @@ import MoreSheet, { logSwitches, usePress } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR } from "./palette";
 import { useSheets } from "./sheets";
-import { TAP_COOLDOWN_MS } from "./tapCooldown";
+import { dockTapped, doubleTap, noteTap, useTapGuard, type TapGuard } from "./tapCooldown";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE, timerNumbers, useTimerActions } from "./TimerCard";
 import { cx } from "./ui";
 import { useBabyWords } from "./familyWords";
@@ -130,8 +130,9 @@ export default function Dock() {
   const [done, setDone] = useState<Record<string, boolean>>({});
   const ref = useRef<HTMLDivElement>(null);
   const [host, setHost] = useState<HTMLElement | null>(null);
-  const lastTap = useRef(-Infinity);
   const [cooling, cool] = useCooldowns();
+  // Sleep and Woke up share a place: one that turned into the other with no tap here (another phone's timer) waits a moment.
+  const sleepTile = useTapGuard(summary?.active.some((e) => e.kind === "sleep") ? "wake" : "sleep");
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const feed = summary?.active.find((e) => e.kind === "feed") ?? null;
   const feedN = feed ? timerNumbers(feed, clock) : null;
@@ -195,12 +196,16 @@ export default function Dock() {
     return true;
   };
 
-  /** Wrap a tap so taps within the dock-wide cooldown are ignored. Any tap closes the timer toast. */
-  const tap = (fn: () => void) => () => {
+  /**
+   * Wrap a tap so it does nothing within the dock-wide cooldown (tapCooldown.ts), as a double tap's second half landing
+   * here from a tap just above (the strip, a sheet's button as it closes), or while `guard`'s tile only just changed. Any
+   * tap closes the timer toast.
+   */
+  const tap = (fn: () => void, guard?: TapGuard) => () => {
     // A monotonic local clock: the server-synced now() can jump on each poll.
     const t = performance.now();
-    if (t - lastTap.current < TAP_COOLDOWN_MS) return;
-    lastTap.current = t;
+    if (dockTapped(t) || doubleTap(t) || guard?.fresh(t)) return;
+    noteTap(t, { dock: true });
     actions.dismissToast();
     fn();
   };
@@ -606,7 +611,7 @@ export default function Dock() {
                 onTap={tap(() => {
                   void actions.stop(sleep);
                   tryAfterWake(sleep.id, now());
-                })}
+                }, sleepTile)}
               />
             ) : (
               <Tile
@@ -622,7 +627,7 @@ export default function Dock() {
                   if (!flash("sleep")) return;
                   toTop();
                   void actions.startTimer("sleep");
-                })}
+                }, sleepTile)}
                 onHold={hold(() => open({ kind: "sleep", preset: { started_at: earlierAt() } }))}
               />
             )}
