@@ -60,8 +60,9 @@ import { MAPLE_ORIGIN } from "./origin";
  * keeps her own). A held reminder stays unclaimed, noted for that phone
  * with its window's end (`wait:`, markWaiting), and goes once when the
  * phone isn't quiet any more (the window's end, which a wake is published
- * for), if it's still due, however long the window ran. Handoffs and
- * "Logged" are never held.
+ * for), if it's still due, however long the window ran. Handoffs are never
+ * held, nor a "Logged" that updates a notice of that medicine the phone
+ * shows (notify.ts); one with nothing to update is.
  *
  * Nothing is queued: each tick works out what's due from the plans and
  * doses as they are, so a dose deleted or moved never leaves a stale
@@ -111,8 +112,8 @@ export type PushPrefs = {
   /**
    * Quiet during my protected sleep (default on; it only matters while this
    * phone's person is inside their own window on an active goal's night
-   * roster): the nursing timer and her medicines' reminders are held
-   * (push-quiet.ts).
+   * roster): the nursing timer, her medicines' reminders and a "Logged" with
+   * nothing to update on it are held (push-quiet.ts).
    */
   quiet_window?: boolean;
 };
@@ -465,9 +466,10 @@ export async function claim(sub: Pick<PushSub, "id" | "family_id">, key: string,
 
 /**
  * A notice this phone held (Quiet during my protected sleep, push-quiet.ts):
- * a nursing update. Claimed as 'held', which claim() never takes again, so a
- * retry never sends it after the window; it never counts as sent (nothing
- * that reads what a phone got sees it).
+ * a nursing update, or a "Logged" with nothing of that medicine to update on
+ * it. Claimed as 'held', which claim() never takes again, so a retry never
+ * sends it after the window; it never counts as sent (nothing that reads
+ * what a phone got sees it).
  */
 export async function markHeld(sub: Pick<PushSub, "id" | "family_id">, key: string, ref: string | null): Promise<void> {
   await q(`INSERT INTO maple_push_sent (key, sent_at, state, attempts, sub_id, ref, family_id) VALUES ($1, NOW(), 'held', 0, $2, $3, $4) ON CONFLICT (key) DO NOTHING`, [

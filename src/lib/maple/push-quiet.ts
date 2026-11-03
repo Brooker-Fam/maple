@@ -27,20 +27,22 @@ import { activeRosters } from "./sleep/roster-read";
  * unless its person started or changed that feed, and her medicines'
  * reminders (OK again, set times), except on her own phone, which always
  * gets her own. A handoff is never held: it only ever goes to the people
- * it's about (the holder and the next holder, or the person asked). Nor is
- * "Logged": it replaces the reminder (or the last "Logged") on the lock
- * screen, and held, that older notice would read as a dose not taken. A
- * held reminder stays unclaimed, so it goes once the phone isn't quiet (the
- * window's end, which push-wake.ts wakes for) while it's still due, however
- * long the window ran (push.ts counts its 3-hour cutoff from the window's
- * end); a held nursing update is claimed as held, so a retry never sends it
- * later.
+ * it's about (the holder and the next holder, or the person asked). A
+ * "Logged" is held only when it has nothing of that medicine to update on
+ * the phone (notify.ts): one that replaces the reminder this dose answers,
+ * or an earlier "Logged" whose "OK after" is out of date now, always goes,
+ * since held, that older notice would read as a dose not taken; and her own
+ * phone never holds one. A held reminder stays unclaimed, so it goes once the
+ * phone isn't quiet (the window's end, which push-wake.ts wakes for) while
+ * it's still due, however long the window ran (push.ts counts its 3-hour
+ * cutoff from the window's end); a held "Logged" or nursing update is
+ * claimed as held, so a retry never sends it later.
  *
  * What it keeps: a small note per phone for each notice it held, in
  * maple_push_sent with the rest of the send log (a reminder's `wait:` row
- * with its window's end, a nursing update's `held` claim), deleted after 3
- * days. The window comes from the roster, and "awake" from rows Maple
- * already keeps.
+ * with its window's end, a "Logged" or nursing update's `held` claim),
+ * deleted after 3 days. The window comes from the roster, and "awake" from
+ * rows Maple already keeps.
  */
 
 const MIN = 60_000;

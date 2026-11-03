@@ -53,11 +53,14 @@ import type { CarePlan, DoseEntry, Entry, FeedData, Source } from "./types";
  * Quiet during my protected sleep (push-quiet.ts): a phone whose person is
  * inside their own window on the night roster, not holding her and not in
  * Maple in the last 15 minutes, holds the nursing timer (unless its person
- * started or changed that feed), claimed as held, so no retry sends it after
- * the window. "Logged" is never held, on any phone: it replaces the reminder
- * the phone was sent (or the last "Logged", with its "OK after"), and held,
- * that older notice would stay on the lock screen reading as a dose not
- * taken.
+ * started or changed that feed) and a "Logged" with nothing of that medicine
+ * to update on its lock screen (an "every dose" phone that shows none of
+ * it), each claimed as held, so no retry sends it after the window. A
+ * "Logged" that updates something the phone shows (the reminder this dose
+ * answers, or an earlier "Logged" of it from the last 12 hours, whose "OK
+ * after" is out of date now) always goes: held, that older notice would stay
+ * on the lock screen reading as a dose not taken. Her own phone never holds
+ * one.
  *
  * "Handoff now" (below) goes only to the phones of the person asked, and is
  * never held.
@@ -160,6 +163,8 @@ export async function notifyDoseLogged(scope: FamilyScope, doseId: number, devic
   let plan: CarePlan | null = null;
   let next: AfterDose = {};
   const reminded = new Set<number>();
+  // Phones showing an earlier "Logged" of this medicine, sent in the last 12 hours: its "OK after" (or next set time) is out of date now.
+  const shown = new Set<number>();
   const audience = await audienceOf(scope);
   const tz = scope.tz;
   if (dose.med_id != null) plan = await familyPlan(scope.familyId, dose.med_id);
@@ -174,6 +179,12 @@ export async function notifyDoseLogged(scope: FamilyScope, doseId: number, devic
       [`med:${plan.id}`, new Date(since).toISOString(), scope.familyId]
     );
     for (const r of got) reminded.add(Number(r.sub_id));
+    const prior = await q(
+      `SELECT DISTINCT sub_id FROM maple_push_sent WHERE ref = $1 AND state = 'sent' AND sent_at >= $2::timestamptz AND sub_id IS NOT NULL
+         AND key LIKE '%|log:%' AND key NOT LIKE $4 AND ${familySent(3)}`,
+      [`med:${plan.id}`, new Date(now.getTime() - LOGGED_WINDOW_MS).toISOString(), scope.familyId, `%|log:${dose.id}`]
+    );
+    for (const r of prior) shown.add(Number(r.sub_id));
     const st = planStatus(plan, doses, now, tz);
     const s = plan.schedule;
     if ((s.type === "every" || s.type === "as_needed") && st.nextOkAt && Date.parse(st.nextOkAt) > now.getTime() && !dose.data.skipped) next.okAt = st.nextOkAt;
@@ -195,13 +206,19 @@ export async function notifyDoseLogged(scope: FamilyScope, doseId: number, devic
   const out = { sent: 0, failed: 0 };
   const byMember = new Map<string, PushSub[]>();
   for (const sub of wanted) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
-  // Never held, quiet phone or not (see above): the lock screen always shows the newest dose.
+  // Quiet during my protected sleep (see above): read only when a "Logged" is going to some phone.
+  const quiet = wanted.length ? await quietFor(scope, wanted, now) : new Map();
   for (const [email, phones] of byMember) {
     // Viewers never hear about her medicines.
     const v = voiceFor(audience, email, now);
     if (!v) continue;
     for (const phone of phones) {
       const ref = plan ? `med:${plan.id}` : null;
+      // A quiet phone (never hers) holds a "Logged" with nothing to update; one that updates what the phone shows always goes.
+      if (!v.self && quiet.has(phone.id) && !reminded.has(phone.id) && !shown.has(phone.id)) {
+        await markHeld(phone, `log:${dose.id}`, ref);
+        continue;
+      }
       const o = await sendOnce(phone, `log:${dose.id}`, ref, loggedNotice(dose, plan, v, phone.prefs.hide_names === true, next), { ttlS: HOUR / 1000 });
       if (o === "sent") out.sent++;
       else if (o === "failed") out.failed++;
