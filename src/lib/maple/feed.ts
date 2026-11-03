@@ -1676,7 +1676,7 @@ export function nextSideText(n: NextSide): string {
  * The usual gap between feeds over the last 24 hours (median, start to
  * start, in minutes), once there's a day of data and 4+ feeds; gaps between
  * feeds of the same cluster are skipped, so an evening of clustering doesn't
- * make "usually every ~45m".
+ * make "Feeds lately: about every 45m".
  */
 export function typicalFeedGapMin(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): number | null {
   const nowMs = now.getTime();
