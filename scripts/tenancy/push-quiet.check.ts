@@ -442,7 +442,9 @@ async function quiet() {
     const now = minuteOf(Date.now());
     const w = await quietWorld(-40, { roster: false });
     await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE family_id = 1`);
-    // A set time 3 minutes ago (set times are local clocks).
+    // A set time 3 minutes ago (set times are local clocks), with no dose of it in the last days: one that a dose could count for
+    // (an hour or more early, depending on the time of day) wouldn't remind at all.
+    await sql(`UPDATE maple_care_entries SET deleted_at = NOW() - INTERVAL '3 days' WHERE id = 10000031`);
     await sql(`UPDATE maple_care_meds SET schedule = $2::jsonb WHERE id = $1`, [PLAN, JSON.stringify({ type: "times", times: [local(now - 3 * MIN, w.alpha.tz)] })]);
     await w.window(w.alpha.owner, now + 2 * MIN, now + 4 * 60 * MIN);
     await runPushTick(new Date(), { via: "wake", trusted: true, familyId: 1 });
