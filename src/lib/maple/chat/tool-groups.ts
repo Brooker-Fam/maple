@@ -119,6 +119,16 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(exhausted|sleep[- ]deprived|so tired|(need|get) (some )?sleep|(rough|hard|long|bad) night|night was (rough|hard|long|bad)|up all night|(my|his|her) window)\b/i,
     // Before a plan or goal exists: held naps on someone, waiting before going in, sleep gear, whose turn it is, and being worn out.
     /\bon (my|his|her|your|our) (chest|lap|shoulder)\b|going in when|wait\w* before (going in|picking)|swaddl\w*|sleep ?sack|snoo|white noise|mattress|whose turn|turns tonight|tag[- ]team|\bswap\b(?! (sides?|breasts?|to the (left|right)))|wrecked|so (he|she|i|we) can (sleep|rest)/i,
+    // Worn out, and dozing with her (sleep_plan has the sourced words for a sleepy adult and a drowsy drive).
+    /\b(nodd(ed|ing) off|doz(ed|ing) off|(fell|falling) asleep (with|feeding|holding|driving|while)|keep (my|our) eyes open|running on (fumes|empty)|zombies?|haven'?t slept|need (a|some) (nap|rest|sleep)|get some (rest|sleep)|another night like)\b/i,
+    // Night wakings in plain words.
+    /\b(up|awake) (every (hour|\d+)|all night|for the day|since (midnight|\d))|\bawake from \d|\bwon'?t go (back )?down\b|\bfalls? asleep (nursing|feeding|on|while)\b/i,
+    // Going back to work, in other words.
+    /\b(start(ing)? back|first (week|day|night|shift) back|back (at|to) (the office|my job|the job)|go(ing)? back to (my|the) (job|office)|paid leave|leave (runs out|is over|ends|ending)|daycare|day care|childcare|child care|nanny)\b/i,
+    // Splitting the night by the clock or a feed.
+    /\b(do|does|doing|take|takes|taking|cover|covers|covering) (the )?\d{1,2}(:\d{2})? ?(am|pm)\b|\b(take|takes|has|have) (her|him|them|the baby) (from )?\d{1,2}(:\d{2})? ?(am|pm)? ?(to|till|until) \d{1,2}\b|\b(has|have) (her|him|them|the baby) (till|until) \d{1,2}\b|\bwho (does|takes|gets up|covers)\b/i,
+    // Sleep places and gear parents ask about.
+    /\b(stroller|pram|car ?seat|dock[\s-]?a[\s-]?tot|boppy|lounger|snuggle ?me|bouncer|mama ?roo|baby ?carrier|sling|pacifier|binky|dummy)\b/i,
   ],
   log_more: [
     /\b(pump\w*|expressed|expressing|haakaa|let-?down|freezer stash|milk stash)\b/i,

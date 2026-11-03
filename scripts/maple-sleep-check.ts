@@ -6,6 +6,7 @@
  */
 import { emergencySigns } from "../src/lib/maple/guidelines";
 import { feedingSleepyWords, nightFeedLine, SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
+import { WORK_BOTTLES, WORK_DROWSY_DRIVING, WORK_GUIDES, WORK_NIGHT_NURSING, workGuide } from "../src/lib/maple/guidelines/sleep";
 import {
   AGE_BANDS,
   askState,
@@ -669,7 +670,7 @@ check("words: try times are named moments or a local clock time", () => {
 });
 
 check("review: every item is still waiting for a person's sign-off (listed for release)", () => {
-  eq(pendingReview().length, SLEEP_GUIDES.length, "pending");
+  eq(pendingReview().length, SLEEP_GUIDES.length + WORK_GUIDES.length, "pending");
 });
 
 // ── sleep goals: weeks, targets, the roster, check-ins and coaching ──────
@@ -1536,6 +1537,341 @@ check("safety: held sleep passes only while an adult says they're awake (never t
   eq(c.map((x) => x.kind), ["awake", "transfer"], "kinds");
   ok(c[0].text.includes(`"${sleepyLine(WREN).split(/(?<=\.)\s+/)[0]}"`), c[0].text);
   ok(c[1].text.includes(`"${feedingSleepyWords(WREN).bed}"`), c[1].text);
+});
+
+// ── round 3: the filter's logic holes closed, coach round 3's phrasings and this round's own ──
+
+/** Coach round 3's family: June, with Sam and Alex. */
+const R3_ADULTS = ["Sam", "Alex"];
+/** Coach round 3's unsafe phrasings (safety3.md): every one refused. */
+const R3_REFUSED = [
+  // euphemisms
+  "Contact naps on the couch while I watch TV",
+  "Contact naps on the couch while I'm awake",
+  "Contact naps while I'm wide awake on the couch",
+  "Dozing in the recliner with her on my chest",
+  "Let her snooze on my chest in the glider after the 3am feed",
+  "Nap together on the sofa after lunch",
+  "She can finish the night on Dad's chest",
+  "Family nap in the big bed on Sundays",
+  "All three of us sleep in the king bed after the 4 AM feed",
+  "Snuggle her to sleep in our bed and leave her there",
+  "Babywearing for every nap",
+  "Wrap naps on long walks",
+  "Overnight in the MamaRoo next to our bed",
+  "Let her sleep in the Snuggle Me lounger between us",
+  "Never wake her if she falls asleep on my chest",
+  "Let her nap in the swing but turn it off once she's out",
+  "Car seat naps are ok if we're home",
+  "A rolled blanket on each side to keep her from rolling",
+  "A thin quilt over her at night",
+  // negations that still plan it
+  "Don't move her out of our bed once she's asleep",
+  "No need to move her from the couch once she's asleep",
+  "It's fine not to take her out of the swing when she dozes off",
+  "Stop putting her in the bassinet and let her sleep in our bed",
+  "Instead of the bassinet, she sleeps in our bed",
+  // crying it out by other names
+  "Let her self-soothe for 15 minutes before we go in",
+  "Give her 10 minutes to settle on her own before going in",
+  "Shut the door at 8 and don't come back until 6",
+  "Let her work it out at night instead of rushing in",
+  "Don't rush in when she cries; give it 10 minutes",
+  "Leave the room and only come back if she's still crying after 10 minutes",
+  "Try the Weissbluth method",
+  "Interval soothing at bedtime",
+  "Gentle sleep training: wait 10 minutes before going in",
+  "Let her fuss it out",
+  "Let her grizzle for a bit before we go in",
+  "Night weaning by letting her cry",
+  // typos
+  "let her cri it out",
+  "Ferbr method at bedtime",
+  "We co-slept last night, do it again tonight",
+  "she slepps in our bed after the last feed",
+  "nap on the sofaa with her",
+  "Let her sleep in the reclinr with me",
+  // other languages
+  "Dejar que llore hasta que se duerma",
+  "Que llore un rato antes de cargarla",
+  "Siesta en mi pecho después de comer",
+  "Elle fait la sieste sur moi",
+  "Méthode 5-10-15 le soir",
+  "Sie schläft auf meiner Brust",
+  "Kontaktschlaf auf dem Sofa",
+  "Let her dormir en nuestra cama",
+  "Colecho los fines de semana",
+  "Dormir avec bébé dans notre lit",
+];
+/** Coach round 3's safe phrasings: gentle ways to settle her, and plans that keep her safe. */
+const R3_ALLOWED = [
+  "Pick up, put down until she settles in the bassinet",
+  "Shush-pat in the bassinet until she's asleep",
+  "Sit beside the bassinet and sing until she's asleep, without leaving her to cry",
+  "Sit in the rocking chair by the bassinet and shush her to sleep",
+  "Rest a hand on her tummy in the bassinet until she drifts off",
+  "Keep a hand on her chest in the crib while she falls asleep",
+  "Let her cry in my arms while I rock her",
+  "Let her fuss a little while I change her diaper",
+  "Stay with her and hum, never leaving her to cry",
+  "If she cries, pick her up right away and soothe her",
+  "Fading: a little less rocking each night before the crib",
+  "Put her down drowsy but awake, and pick her up if she cries",
+  "Swaddle arms-in until she shows signs of rolling",
+  "White noise and a pacifier in the bassinet",
+  "Feed her in the glider, burp, then lay her down in the bassinet",
+  "Contact naps only when Alex is awake and watching her",
+  "Never let her sleep on the couch",
+  "She should not sleep in the swing",
+  "No contact naps on the sofa",
+  "Not in our bed anymore, bassinet only",
+  "Don't fall asleep with her in the recliner",
+  "We won't do cry it out",
+  "No CIO, ever",
+  "Avoid letting her doze in the car seat at home",
+  "Move the car seat naps to the crib",
+  "Stop the car seat naps at home",
+  "If she dozes off in the stroller, lay her in the crib when we get home",
+  "Daytime naps in the bassinet by the couch",
+  "Alex naps on the couch while Sam has her in the bassinet",
+  "Sam sleeps in the guest bed on Alex's nights",
+  "Tummy time on the floor after every nap",
+  "No blankets, just a sleep sack",
+  "Take the bumpers out of the crib",
+  "Pump before bed so Alex can do the 2 AM bottle",
+  "Don't wait 10 minutes before going in",
+  "Room-share in our room until 6 months, bassinet within arm's reach",
+  "Sleep in the Snoo bassinet",
+  "Pack 'n Play in our room for naps",
+  "Que duerma en su moisés junto a nuestra cama",
+  "Nie mehr im Elternbett schlafen",
+];
+/** Coach round 3's whys: how things are now, or what happened, is the reason. */
+const R3_WHYS = [
+  "We fell asleep on the couch with her twice this week",
+  "She slept in the swing for 3 hours yesterday",
+  "She ended up in our bed at 3 AM most nights",
+  "I keep waking up with her on my chest in the recliner",
+  "Alex dozed off holding her on the sofa and it scared us",
+  "Right now the only place she naps is the car seat",
+];
+/**
+ * This round's own: held sleep on a couch, chair or adult bed; a nap there
+ * "then the bassinet"; a step away undone by how it's done or by a negation;
+ * crying it out without the word "wait"; beds, devices and bedding; and the
+ * edges these rules met (an overwhelmed parent's break, "together" while
+ * someone else has her, a why that plans it).
+ */
+const OWN_REFUSED = [
+  "Contact naps in our bed while I'm awake",
+  "Let her sleep on my chest in the recliner as long as I stay awake",
+  "Contact naps on the couch while Sam is awake, then the bassinet",
+  "Contact naps in the armchair while I'm wide awake",
+  "Contact naps on Dad on the sofa while he's awake",
+  "Let her nap on the sofa, then move her to the crib",
+  "Wean her off night feeds by letting her cry",
+  "Stop the 3 AM feed using the Ferber method",
+  "Night weaning by leaving her to cry",
+  "Don't stop co-sleeping yet",
+  "Never take her out of the car seat once she's asleep",
+  "We won't move her from our bed after she falls asleep",
+  "Leave her in the swing when she falls asleep",
+  "Sit with her on the sofa while she sleeps",
+  "Give her 5 minutes to cry before going in",
+  "Give her 10 minutes before going in",
+  "Leave the room and come back in 10 minutes if she's still crying",
+  "Close the door and don't go back in until morning",
+  "Don't come back in until she stops crying",
+  "Let her figure it out on her own at bedtime",
+  "Self-soothe for 10 minutes before we pick her up",
+  "Elle dort sur papa après la tétée",
+  "Laisse-la pleurer dix minutes",
+  "Lass sie schreien, bis sie einschläft",
+  "Sleep together in the guest bed on Sundays",
+  "Let June sleep in the king-size bed after the 5 AM feed",
+  "Rolled towels under the sheet to keep her on her back",
+  "A quilt on top of her at night",
+  "Naps in the baby rocker after lunch",
+  "Feed her in the glider until she falls asleep",
+  "Keep her in the car seat if she falls asleep on the drive",
+  "Hold her on the sofa while she sleeps",
+  "Don't take her out of the swing until she wakes",
+  "Keep her on the couch with me until she wakes up",
+  "Put her down, leave the room and don't come back until 6",
+  "Cuddle together on the couch until she's asleep",
+  "Nap together on the sofa, then the bassinet",
+  "Nurse her to sleep in our bed or on the couch, then the bassinet",
+  "Don't wean her off contact naps yet",
+  "Let her cry it out when I'm frustrated",
+];
+const OWN_ALLOWED = [
+  "Hold her while I'm awake, then the bassinet",
+  "Rock her on the couch until she's drowsy, then lay her in the bassinet",
+  "Sit in the glider next to the crib while she falls asleep in it",
+  "Never move her from the bassinet into our bed to sleep",
+  "Stop taking her out of the bassinet and into our bed to sleep",
+  "Don't let her sleep in the car seat once we're home",
+  "If she falls asleep in the stroller, move her to the crib when we get home",
+  "Let her cry in Sam's arms while he walks her",
+  "Let her cry while Sam holds her",
+  "Let her fuss a little before I pick her up",
+  "Give her 1 minute before going in",
+  "Give her 10 minutes of tummy time after the feed",
+  "Give it 15 minutes after the feed before laying her down",
+  "If she's still crying after 20 minutes of rocking, hand her to Sam",
+  "Sam goes to the guest room at 10 and doesn't come back until 6",
+  "Sam, go to the guest room at 10 and don't come back until 6",
+  "Leave the room for a shower and come back in 10 minutes",
+  "When it's too much, put her in the crib, leave the room and come back in 10 minutes",
+  "If she cries and it's too much, lay her in the bassinet, leave the room and come back in 10 minutes",
+  "If I'm overwhelmed, lay her in the bassinet and step away for a few minutes",
+  "Alex sleeps in our bed with earplugs while Sam has her in the bassinet",
+  "We sleep in our bed, she sleeps in the bassinet",
+  "We nap together on the couch while Gran has her in the bassinet",
+  "Sam and Alex nap together on the couch while Gran has her",
+  "Move the swing naps to the bassinet",
+  "Keep pillows and blankets out of the crib",
+  "Take the toys out of the bassinet before naps",
+  "No contact naps in the recliner",
+  "Instead of contact naps on the couch, the bassinet",
+  "Contact naps while I'm awake, never on the couch",
+  "Hold her in my arms in the glider until she's asleep, then lay her in the crib",
+  "Burp her on my shoulder, then lay her in the bassinet",
+  "Bassinet for naps, swing only while she's awake",
+  "Swing her gently until she falls asleep, then lay her in the bassinet",
+  "Babywearing for walks, bassinet for naps",
+  "Elle dort dans son berceau, pas sur moi",
+  "Wean off the swing for naps",
+  "Night weaning, once the pediatrician says it's okay",
+];
+const OWN_WHYS = [
+  "We napped on the couch together once and it scared us",
+  "She slept in the car seat all afternoon yesterday",
+  "Theo nodded off with her on the sofa last week",
+  "Last night she ended up asleep on Alex's chest in the recliner",
+  "I fell asleep feeding her in the recliner last week",
+  "Sam keeps falling asleep with her on the couch",
+  "The swing is the only place she naps",
+  "She only naps on me on the couch",
+  "She sleeps in our bed and we'd like that to stop",
+];
+/** Whys that plan it: still refused. */
+const OWN_WHYS_REFUSED = ["So she can keep napping on the couch with me", "We want her to keep napping on my chest like she did yesterday", "Always let her sleep on my chest"];
+
+check("safety (round 3): the three logic holes are closed: no held or transfer pass on a couch, chair, recliner or adult bed the sentence names; 'wean' steps away only before off or from; a negation before the verb undoes the step away", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  // Held while awake is the holding turn, but never on a couch, chair or adult bed (the AAP: never a couch; dozing there is especially dangerous).
+  for (const [text, kind, what] of [
+    ["Contact naps on the couch while I'm awake", "couch", "on a couch"],
+    ["Contact naps while I'm wide awake on the couch", "couch", "on a couch"],
+    ["Contact naps in the armchair while I'm wide awake", "couch", "in an armchair"],
+    ["Contact naps in our bed while I'm awake", "bed", null],
+  ] as const) {
+    const find = unsafeSleep(text, o);
+    eq([find?.kind, find?.what, find?.awake], [kind, what, true], text);
+    eq(sleepExemptions(text, o), { held: false, transfer: [] }, `no exemption: ${text}`);
+  }
+  eq(sleepExemptions("Contact naps on me while I'm awake", o), { held: true, transfer: [] }, "held while awake, nowhere unsafe: still the holding turn");
+  eq(sleepExemptions("Contact naps while I'm awake, never on the couch", o), { held: true, transfer: [] }, "a couch it steps away from doesn't count");
+  // The transfer: settling her somewhere, then the bassinet; never a nap there, held sleep there, or another couch or bed with it.
+  eq(sleepExemptions("Rock her to sleep in the armchair, then lay her in the bassinet", o), { held: false, transfer: ["couch"] }, "the transfer still passes");
+  for (const text of ["Let her nap on the sofa, then move her to the crib", "Contact naps on the couch while Sam is awake, then the bassinet", "Nurse her to sleep in our bed or on the couch, then the bassinet"]) ok(unsafeSleep(text, o), `no transfer: ${text}`);
+  // "Wean" is a step away only before "off" or "from".
+  eq(unsafeSleep("Night weaning by letting her cry", o)?.kind, "cry", "night weaning by letting her cry");
+  ok(!unsafeSleep("Wean her off contact naps", o) && !unsafeSleep("Wean off the swing for naps", o), "weaning off them still steps away");
+  ok(unsafeSleep("Wean her off night feeds by letting her cry", o), "how a step away is made isn't stepped away from");
+  // A negation before the verb undoes the step away.
+  eq(unsafeSleep("Don't move her out of our bed once she's asleep", o)?.kind, "bed", "don't move her out of our bed");
+  eq(unsafeSleep("No need to move her from the couch once she's asleep", o)?.kind, "couch", "no need to move her from the couch");
+  eq(unsafeSleep("It's fine not to take her out of the swing when she dozes off", o)?.kind, "seat", "fine not to take her out of the swing");
+  eq(unsafeSleep("Don't stop co-sleeping yet", o)?.kind, "bed", "don't stop co-sleeping");
+  ok(!unsafeSleep("Never move her from the bassinet into our bed to sleep", o), "never moving her from the bassinet into our bed steps away from the bed");
+  ok(!unsafeSleep("Don't let her sleep in our bed", o) && !unsafeSleep("Stop letting her sleep in our bed", o), "the step-away words themselves still step away");
+});
+
+check("safety (round 3): coach round 3's 98 phrasings and this round's own, each as wanted; every refusal's suggestion passes the filter in each voice and without one", () => {
+  eq([R3_REFUSED.length, R3_ALLOWED.length, R3_WHYS.length], [52, 40, 6], "coach round 3's 98");
+  const o = { v: SHE, adults: R3_ADULTS };
+  const why = { ...o, describing: true };
+  const refused = [...R3_REFUSED, ...OWN_REFUSED].filter((t) => unsafeSleep(t, o));
+  const passed = [...R3_ALLOWED, ...OWN_ALLOWED].filter((t) => !unsafeSleep(t, o));
+  const whys = [...R3_WHYS, ...OWN_WHYS].filter((t) => !unsafeSleep(t, why));
+  const plans = OWN_WHYS_REFUSED.filter((t) => unsafeSleep(t, why));
+  console.log(
+    `  round 3 lists: coach's ${R3_REFUSED.filter((t) => refused.includes(t)).length} of ${R3_REFUSED.length} unsafe refused, ${R3_ALLOWED.filter((t) => passed.includes(t)).length + R3_WHYS.filter((t) => whys.includes(t)).length} of ${R3_ALLOWED.length + R3_WHYS.length} safe passed; this round's ${OWN_REFUSED.filter((t) => refused.includes(t)).length + plans.length} of ${OWN_REFUSED.length + OWN_WHYS_REFUSED.length} unsafe refused, ${OWN_ALLOWED.filter((t) => passed.includes(t)).length + OWN_WHYS.filter((t) => whys.includes(t)).length} of ${OWN_ALLOWED.length + OWN_WHYS.length} safe passed`
+  );
+  for (const t of [...R3_REFUSED, ...OWN_REFUSED]) ok(refused.includes(t), `refused: "${t}"`);
+  for (const t of [...R3_ALLOWED, ...OWN_ALLOWED]) ok(passed.includes(t), `passed: "${t}" (matched "${unsafeSleep(t, o)?.phrase}")`);
+  for (const t of [...R3_WHYS, ...OWN_WHYS]) ok(whys.includes(t), `a why: "${t}" (matched "${unsafeSleep(t, why)?.phrase}")`);
+  for (const t of OWN_WHYS_REFUSED) ok(plans.includes(t), `a why that plans it: "${t}"`);
+  // None of these is already in round 1's or round 2's lists.
+  const earlier = new Set([...REFUSED, ...ALLOWED, ...REFUSED_R2, ...ALLOWED_R2]);
+  eq([...R3_REFUSED, ...R3_ALLOWED, ...R3_WHYS, ...OWN_REFUSED, ...OWN_ALLOWED, ...OWN_WHYS, ...OWN_WHYS_REFUSED].filter((t) => earlier.has(t)), [], "all new");
+  // Every refusal's wording to try passes the filter, in each family's words and without a voice (the form).
+  for (const text of [...R3_REFUSED, ...OWN_REFUSED]) {
+    const find = unsafeSleep(text, o)!;
+    for (const v of [...VOICES, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis, { adults: R3_ADULTS }), `the suggestion passes: ${words}`);
+      ok(/^Step 1: Maple won't plan /.test(words) && !/never leave|Reword it|dangerous/i.test(words), `helpful, not a lecture: ${words}`);
+    }
+  }
+});
+
+check("safety (round 3): the refusals say what they found and stay helpful: held sleep on a couch or bed says someone awake doesn't change it, in the family's words; a near miss in why it matters saves without a refusal", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Contact naps on the couch while I'm awake", o)), `Step 1: Maple won't plan sleep on a couch, even with someone awake; try "Hold her while I'm awake, then the bassinet".`, "held on a couch");
+  eq(unsafeWords("Step 2", SHE, unsafeSleep("Contact naps in our bed while I'm awake", o)), `Step 2: Maple won't plan June sleeping in an adult bed, even with someone awake; try "Hold her while I'm awake, then the bassinet".`, "held in an adult bed");
+  eq(unsafeWords("Step 1", undefined, unsafeSleep("Contact naps in our bed while I'm awake", o)), `Step 1: Maple won't plan the baby sleeping in an adult bed, even with someone awake; try "Hold the baby while I'm awake, then the bassinet".`, "without a voice");
+  eq(unsafeWords("Step 1", HE, unsafeSleep("Contact naps on the sofa while I'm awake", { v: HE, adults: R3_ADULTS })), `Step 1: Maple won't plan sleep on a sofa, even with someone awake; try "Hold him while I'm awake, then the bassinet".`, "his family's words");
+  for (const [text, what] of [
+    ["Babywearing for every nap", "a carrier"],
+    ["Wrap naps on long walks", "a wrap"],
+    ["Overnight in the MamaRoo next to our bed", "a baby swing"],
+    ["Naps in the baby rocker after lunch", "a baby rocker"],
+    ["Let her sleep in the reclinr with me", "in a recliner"],
+    ["nap on the sofaa with her", "on a sofa"],
+  ] as const) eq(unsafeSleep(text, o)?.what, what, text);
+  eq(unsafeSleep("A rolled blanket on each side to keep her from rolling", o)?.kind, "bedding", "a rolled blanket is soft bedding in her sleep space");
+  // The why's near miss saves as the reason for the goal; the same words as a step are still refused.
+  const rules: GoalRules = { ...RULES, v: SHE };
+  eq(cleanGoalInput({ title: "Safer nights", why: "Alex dozed off holding her on the sofa and it scared us" }, rules, "create").fields.why, "Alex dozed off holding her on the sofa and it scared us", "the near miss saves");
+  throwsInput(() => cleanGoalInput({ title: "Safer nights", steps: [{ title: "Hold her on the sofa while she sleeps" }] }, rules, "create"), /^Step 1: Maple won't plan sleep on a sofa;/, "a step that plans it");
+});
+
+check("guidance (round 3): going back to work has sourced words for the coach to cite: bottles at the sooner of about 4 weeks or two weeks before (Texas HHS), more night nursing after (OWH's reverse cycling), a drowsy drive (a small survey and NIOSH), dated and waiting for review, never in the guidance list", () => {
+  // Three more hosts, for these items: the Office on Women's Health, Texas HHS's Breastmilk Counts (Texas WIC) and CDC NIOSH.
+  const hosts = new Set([...ALLOWED_HOSTS, "womenshealth.gov", "breastmilkcounts.com", "www.cdc.gov"]);
+  eq(WORK_GUIDES.map((g) => g.id), [WORK_BOTTLES, WORK_NIGHT_NURSING, WORK_DROWSY_DRIVING], "the exported ids");
+  const ids = new Set(SLEEP_GUIDES.map((g) => g.id));
+  for (const g of WORK_GUIDES) {
+    ok(!ids.has(g.id) && workGuide(g.id) === g, `${g.id}: its own id, found by workGuide`);
+    eq([g.reviewed, g.needsReview, g.basis, pendingReview().includes(g)], ["2026-11-02", true, "source", true], `${g.id}: reviewed and waiting for sign-off`);
+    ok((SLEEP_SECTIONS as readonly string[]).includes(g.section) && g.minDays === 0 && g.maxDays >= 365, `${g.id}: section and ages`);
+    for (const s of g.sources) ok(new URL(s.url).protocol === "https:" && hosts.has(new URL(s.url).host) && s.label.trim().length > 0, `${g.id}: source ${s.url}`);
+  }
+  eq(workGuide(WORK_BOTTLES)!.sources.map((s) => s.url), ["https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/"], "Texas HHS");
+  eq(workGuide(WORK_NIGHT_NURSING)!.sources.map((s) => s.url), ["https://womenshealth.gov/breastfeeding/breastfeeding-home-work-and-public/breastfeeding-and-going-back-work"], "OWH");
+  eq(workGuide(WORK_DROWSY_DRIVING)!.sources.map((s) => s.url), ["https://pubmed.ncbi.nlm.nih.gov/26541593/", "https://www.cdc.gov/niosh/work-hour-training-for-nurses/longhours/mod11/05.html"], "the survey and NIOSH");
+  // The words the sources say, in the family's voice: the sooner of the two, only after their clinician's yes.
+  eq(workGuide(WORK_BOTTLES)!.body(SHE), "If June nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. Ask her pediatrician or lactation consultant first.", "bottles");
+  ok(/^If the baby nurses, .* Ask their pediatrician/.test(workGuide(WORK_BOTTLES)!.body(THEY)) && /Ask his pediatrician/.test(workGuide(WORK_BOTTLES)!.body(HE)), "bottles in each voice");
+  ok(/nurse more often at night, which is called reverse cycling/.test(workGuide(WORK_NIGHT_NURSING)!.body(SHE)), "reverse cycling");
+  ok(/72 new parents, poor sleep quality went with a sixfold increase in near misses/.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)) && /a ride from family or a friend, other transportation, or a nap first/.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)), "near misses, and what to do");
+  for (const v of VOICES) {
+    for (const g of WORK_GUIDES) {
+      const line = `${g.title(v)} ${g.body(v)}`;
+      ok(!/cry[- ]?it[- ]?out|sleep[- ]?train|contact (nap|sleep)|co-?sleep|bed[- ]?shar|\bdoses?\b|\bdiagnos/i.test(line), `${g.id}: nothing the guidance never says: ${line}`);
+      if (v === THEY) ok(!/\b(she|her|hers|he|him|his)\b/i.test(line), `${g.id}: in the family's words: ${line}`);
+    }
+  }
+  // Never in the family's guidance list, at any age, stage or signal.
+  const shown = new Set([0, 13, 40, 120, 300].flatMap((days) => [null, 1, 2, 3, 4].flatMap((stage) => {
+    const g = sleepGuidance(SHE, { days, stage: stage as 1 | 2 | 3 | 4 | null, signals: new Set(["no_tries_yet", "after_crying", "retry_done", "hard_day", "steady", "long_gap", "swaddled"]) });
+    return [...g.now, ...g.sections.flatMap((s) => s.items)].map((x) => x.id);
+  })));
+  ok(WORK_GUIDES.every((g) => !shown.has(g.id)), "not in the guidance list");
 });
 
 check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to stay with you, a cleared bed, a bed less hazardous than a sofa but not recommended), the tired adult's bed, sitting devices, sourced and waiting for review", () => {
