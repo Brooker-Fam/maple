@@ -44,8 +44,9 @@ import { MAPLE_ORIGIN } from "./origin";
  *     dose or skip has filled (dueMoments in push-wake.ts), to every phone
  *     signed in as a family member (viewers get nothing of hers);
  *   - "Logged" (notify.ts): a dose or skip was saved, to the phones that got
- *     that medicine's reminder since its previous dose, plus phones that
- *     asked for every dose, never the phone that logged it;
+ *     that medicine's reminder since its previous dose or one of its
+ *     "Logged" in the last 12 hours, plus phones that asked for every dose,
+ *     never the phone that logged it;
  *   - the nursing timer on the lock screen (notify.ts), opt-in per phone;
  *   - a holding turn's handoff, opt-in per phone: the planned handoff to the
  *     holder's and the next holder's phones (handoffFor in push-wake.ts),
@@ -97,7 +98,7 @@ export type PushPrefs = {
   ok?: boolean;
   /** Set-time reminders (default on). */
   at?: boolean;
-  /** "Logged" after a reminder this phone got: the loop closing (default on). */
+  /** "Logged" after a reminder this phone got, or after an earlier "Logged" whose "OK after" it puts out of date: the loop closing (default on). */
   closing?: boolean;
   /** Every dose of hers logged elsewhere, even with no reminder pending (default off). */
   logged?: boolean;

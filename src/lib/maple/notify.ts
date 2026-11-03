@@ -36,10 +36,13 @@ import type { CarePlan, DoseEntry, Entry, FeedData, Source } from "./types";
  * "Logged" closes the loop on a medicine reminder. A dose or skip of hers,
  * saved from the app, Siri or Claude, goes to every phone that was sent
  * that medicine's OK-again or set-time reminder since its previous dose
- * (up to 12 hours), plus phones that asked for every dose, never to the
- * phone that logged it (its X-Maple-Device id). It shares the medicine's tag,
- * so it replaces the reminder on the lock screen. No one is named: it says
- * "On another phone", "From Siri" or "From Claude".
+ * (up to 12 hours) or one of its "Logged" in the last 12 hours (whose "OK
+ * after" this dose puts out of date), unless "Logged on another phone" is
+ * off there, plus phones that asked for every dose, never to the phone
+ * that logged it (its X-Maple-Device id) or one that muted that medicine.
+ * It shares the medicine's tag, so it replaces the reminder, or the last
+ * "Logged", on the lock screen. No one is named: it says "On another
+ * phone", "From Siri" or "From Claude".
  *
  * The nursing timer on the lock screen (per phone, off by default): every
  * phone that turned it on, the one that started the feed included, gets the
@@ -197,9 +200,11 @@ export async function notifyDoseLogged(scope: FamilyScope, doseId: number, devic
     }
   }
 
+  // The phones it's for: one with the reminder this dose answers, or an earlier "Logged" whose "OK after" it puts out of date (so a
+  // lock screen never keeps a stale one), unless "Logged on another phone" is off there; and one that asked for every dose.
   const wanted = subs.filter(
     (sub) =>
-      ((reminded.has(sub.id) && sub.prefs.closing !== false) || sub.prefs.logged === true) &&
+      (((reminded.has(sub.id) || shown.has(sub.id)) && sub.prefs.closing !== false) || sub.prefs.logged === true) &&
       !(from && sub.device_id === from) &&
       !(plan && sub.prefs.muted?.includes(plan.id))
   );

@@ -254,7 +254,7 @@ function Body() {
                 )}
                 <SwitchRow
                   label="Logged on another phone"
-                  note="After a reminder here, once it's logged somewhere else"
+                  note="After a reminder or a “Logged” here, once it's logged somewhere else"
                   checked={prefs.closing !== false}
                   disabled={busy}
                   onChange={(v) => set({ closing: v })}

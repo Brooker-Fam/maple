@@ -480,6 +480,63 @@ async function quiet() {
     eq(got(w, w.alpha.owner).length, 0, "nothing reaches Avery's phone after the window: the reminder it held was answered");
   });
 
+  /** A dose of her medicine at `at`, saved then (so the reminders it answers are the ones sent before it). */
+  const doseSaved = async (at: number, id: number) => {
+    await dose(at, id);
+    await sql(`UPDATE maple_care_entries SET created_at = $2, updated_at = $2 WHERE id = $1`, [id, new Date(at).toISOString()]);
+  };
+  /** OK again 2 minutes ago, every phone on default settings (reminders and Logged on another phone on, every dose off), no windows; each phone's device id is `made-up-<its id>`. The tick sends OK again; Avery gives it 5 minutes on and logs it on her phone. */
+  const firstDoseByAvery = async (id: number) => {
+    const w = await quietWorld(-2, { roster: false });
+    const t0 = Date.now();
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb, device_id = 'made-up-' || id WHERE family_id = 1`);
+    await runPushTick(new Date(t0), { via: "wake", trusted: true, familyId: 1 });
+    await doseSaved(t0 + 5 * MIN, id);
+    await notifyDoseLogged(w.a, id, `made-up-${w.phones.avery}`, new Date(t0 + 5 * MIN));
+    eq(
+      [medNotices(w, w.alpha.owner).map((s) => s.kind), medNotices(w, w.alpha.member).map((s) => s.kind), medNotices(w, DANA).map((s) => s.kind)],
+      [["ok"], ["ok", "logged"], ["ok", "logged"]],
+      "the Logged replaced OK again on Blake's and Dana's phones, never on the phone that logged it"
+    );
+    return { w, t0 };
+  };
+
+  await test("Logged: a phone on default settings showing an earlier Logged hears the next dose with no reminder since, so its OK after is never left stale; never the phone that logged it", async () => {
+    const { w, t0 } = await firstDoseByAvery(10000041);
+    // Two hours on, with no reminder since (it isn't OK again yet), Dana takes another and logs it on her own phone.
+    const at = t0 + 2 * 60 * MIN;
+    await doseSaved(at, 10000042);
+    await notifyDoseLogged(w.a, 10000042, `made-up-${w.phones.dana}`, new Date(at));
+    const blake = medNotices(w, w.alpha.member);
+    eq(blake.map((s) => s.kind), ["ok", "logged", "logged"], "Blake's earlier Logged is replaced");
+    ok(blake[2].body.includes(`OK after ${careTime(at + 360 * MIN, new Date(at), w.alpha.tz)}`), `the new OK after: ${blake[2].body}`);
+    eq([medNotices(w, DANA).length, medNotices(w, w.alpha.owner).length, got(w, w.alpha.viewer).length], [2, 1, 0], "not Dana's (it logged it), not Avery's (nothing of it shown since), never Casey's");
+    eq(await heldRows("log:10000042"), [], "nothing held");
+  });
+
+  await test("Logged: a phone on default settings showing an earlier Logged hears the next dose inside its protected window too, since it updates what's on screen", async () => {
+    const { w, t0 } = await firstDoseByAvery(10000045);
+    // Blake's window opens an hour on; the next dose, logged with Siri, comes inside it.
+    await w.window(w.alpha.member, t0 + 60 * MIN, t0 + 4 * 60 * MIN);
+    const at = t0 + 2 * 60 * MIN;
+    await doseSaved(at, 10000046);
+    eq((await quietNow(w, new Date(at))).includes(w.phones.blake), true, "Blake's phone is quiet then");
+    await notifyDoseLogged(w.a, 10000046, null, new Date(at));
+    eq([medNotices(w, w.alpha.member).map((s) => s.kind), medNotices(w, DANA).map((s) => s.kind)], [["ok", "logged", "logged"], ["ok", "logged", "logged"]], "Blake's (quiet) and Dana's");
+    eq(await heldRows("log:10000046"), [], "not held");
+  });
+
+  await test("Logged: a phone showing an earlier Logged hears nothing of the next dose with that medicine muted, or Logged on another phone off", async () => {
+    const { w, t0 } = await firstDoseByAvery(10000043);
+    await sql(`UPDATE maple_push_subs SET prefs = $2::jsonb WHERE id = $1`, [w.phones.blake, JSON.stringify({ meds: true, muted: [PLAN] })]);
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"closing":false}'::jsonb WHERE id = $1`, [w.phones.dana]);
+    sent.length = 0;
+    const at = t0 + 2 * 60 * MIN;
+    await doseSaved(at, 10000044);
+    await notifyDoseLogged(w.a, 10000044, `made-up-${w.phones.avery}`, new Date(at));
+    eq(sent.length, 0, "Blake muted it; Dana turned Logged on another phone off; Avery logged it");
+  });
+
   await test("Logged after OK again reached a phone just before its window: it reaches that phone inside the window, so OK again is replaced", async () => {
     const now = minuteOf(Date.now());
     // Every 6 hours, last dose 6 h 2 min ago: OK again 2 minutes ago. Avery's window starts 2 minutes from now and lasts 4 hours.
