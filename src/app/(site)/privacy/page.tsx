@@ -96,7 +96,10 @@ export default function Privacy() {
         its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults (and, if you
         say, how the baby&rsquo;s feeds are covered during each: nursing, a bottle of expressed milk, or none planned), and the
         date and short note of its last review. A goal set up for going back to work also keeps who goes back to work and on
-        what day, and who nurses, so its notes fit; the setup&rsquo;s other answers aren&rsquo;t kept beyond the goal itself. Each adult can check in the morning after with one answer about their own protected
+        what day, who nurses, how the baby is fed and the night its roster starts, so its notes fit; the setup&rsquo;s other
+        answers aren&rsquo;t kept beyond the goal itself. If you pick a goal back up after some quiet nights, or ease off for a
+        while, the goal keeps that date: the night counting starts again, or the night easing off ends. The card that offers
+        this shows once per quiet stretch, and that phone&rsquo;s browser remembers it was shown. Each adult can check in the morning after with one answer about their own protected
         sleep (yes, partly or no) and an optional short note, and with it up to three one-tap answers about the baby&rsquo;s
         night: where the baby spent most of it, a bassinet try that isn&rsquo;t in the log (and whether it was longer than the
         goal&rsquo;s time), and whether a planned handoff happened as planned. A check-in never records hours slept, mood or
