@@ -118,7 +118,8 @@ function NextSide({ next }: { next: NextSideInfo }) {
  * The "Right now" card. While she nurses, the timer card above it already has
  * the side, the start and the running clock, so the feed block steps aside
  * and this card keeps only what the timer doesn't say. Her mom's medicines
- * aren't here: they're on the strip on top of the dock (care/CareLine).
+ * aren't here: her next one is a row in Up next, right under this card
+ * (UpNext.tsx, care/CareLine).
  */
 export default function StatusCard() {
   const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
@@ -146,7 +147,7 @@ export default function StatusCard() {
   const lastSleepEnd = summary.lastSleep && !summary.lastSleep.active ? summary.lastSleep.ended_at : null;
   const hasAnything = state.entries.length > 0;
 
-  // Nothing of Maple's logged yet (her mom's medicines ride on the dock's strip).
+  // Nothing of Maple's logged yet (her mom's medicines are in Up next, below).
   if (!hasAnything) return null;
 
   // The big answer: how long since she last ate.
@@ -172,7 +173,7 @@ export default function StatusCard() {
 
   const next = !nursing ? summary.next : null;
   // A sleep (or tummy or pump) timer above this card on a short phone: the Last fed block keeps its answer and the next
-  // side but folds its details, so the Since tiles still clear the dock (and her strip on it) at 375x667.
+  // side but folds its details, so the Since tiles still clear the dock at 375x667.
   const fold = summary.active.length > 0;
 
   const logVitD = () => {
@@ -300,8 +301,8 @@ export default function StatusCard() {
         </div>
         {/*
           While she nurses the "Last fed" line (which carries this) steps aside, so it rides under the tiles as one slim
-          line, in the tiles' own bottom padding: at 375x667 with a feed of several parts it still clears the dock (and
-          her strip on it) without pushing the tiles down.
+          line, in the tiles' own bottom padding: at 375x667 with a feed of several parts it still clears the dock
+          without pushing the tiles down.
         */}
         {nursing && gap != null && (
           <p className="-mt-1.5 flex items-center gap-1.5 px-4 pb-2.5 text-[12px] leading-4 text-mp-ink-2">

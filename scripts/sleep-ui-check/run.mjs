@@ -47,7 +47,10 @@ const calls = () => page.evaluate(() => window.__sleep.calls().filter((c) => c.a
 const actions = async () => (await calls()).map((c) => c.action);
 const last = async () => (await calls()).at(-1);
 const advance = (minutes) => page.evaluate((m) => window.__sleep.advance(m), minutes);
-const strip = page.getByRole("group", { name: "Sleep plan", exact: true });
+// The plan's row: in Up next while she's awake, on her sleep's card while she's asleep and nobody has laid her down.
+const planRow = page.getByRole("group", { name: "Sleep plan", exact: true });
+const upNext = page.getByRole("region", { name: "Up next", exact: true });
+const asleepCard = page.getByRole("region", { name: "Asleep timer", exact: true });
 const plan = page.getByRole("dialog", { name: "Sleep plan", exact: true });
 const toast = (text) => page.locator("[data-toast]").filter({ hasText: text });
 const height = async (locator) => (await locator.boundingBox())?.height ?? 0;
@@ -89,7 +92,7 @@ try {
   await page.goto("https://sleep.example.test/");
   await page.getByRole("button", { name: "Open the sleep plan", exact: true }).click();
   await plan.waitFor();
-  assert.equal(await strip.count(), 0, "No strip before there's a plan, a try or a shift");
+  assert.equal(await planRow.count(), 0, "No plan row before there's a plan, a try or a shift");
   assert.match(await plan.innerText(), /River is .+ old/);
   await plan.getByRole("button", { name: "Set up the plan", exact: true }).click();
   await plan.getByText("Stage 1 of 4", { exact: true }).waitFor();
@@ -197,16 +200,20 @@ try {
   await plan.waitFor({ state: "hidden" });
 
   // ── Put down: one tap; the fed tag; earlier ──
-  await strip.waitFor();
-  assert.match(await strip.innerText(), /Bassinet try/);
-  const putDown = strip.getByRole("button", { name: "Put down", exact: true });
+  await planRow.waitFor();
+  assert.match(await planRow.innerText(), /Bassinet try/);
+  assert.equal(await upNext.getByRole("group", { name: "Sleep plan", exact: true }).count(), 1, "Awake, the plan's row is in Up next, not on the dock");
+  const putDown = planRow.getByRole("button", { name: "Put down", exact: true });
   assert((await height(putDown)) >= 44, "Put down is a 44px target");
   await putDown.click();
   await toast("In the bassinet at 2:10 AM").waitFor();
   let c = await last();
   assert.equal(c.action, "try.start");
   assert.deepEqual(c.tags, ["fed"], "A feed that ended 12 minutes ago pre-ticks Recently fed");
-  assert.match(await strip.innerText(), /In the bassinet/);
+  // One place for her sleep: the try sits at the bottom of the sleep's card, and the plan's row steps aside.
+  await asleepCard.getByRole("region", { name: "In the bassinet", exact: true }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "In the bassinet", exact: true }).count(), 1, "The try is drawn once, on her sleep's card");
+  assert.equal(await planRow.count(), 0, "The plan's row steps aside while a try runs");
   await page.getByRole("button", { name: "Laid down 2 minutes earlier, at 2:08 AM", exact: true }).click();
   await toast("Laid down at 2:08 AM").waitFor();
   c = await last();
@@ -228,20 +235,27 @@ try {
   c = await last();
   assert.equal(c.action, "try.finish");
   assert.equal(c.outcome, "stayed_asleep");
-  assert.match(await strip.innerText(), /1 of 1 tonight/);
+  assert.match(await upNext.innerText(), /1 of 1 tonight/, "Back in Up next, counted");
+  assert.equal(await asleepCard.count(), 0, "The finish stopped her sleep");
   await toast("Stayed asleep after 47 min").getByRole("button", { name: "Undo", exact: true }).click();
   await toast("Undone: the try is running again").waitFor();
   c = await last();
   assert.equal(c.action, "try.undo_finish");
   assert.equal(c.sleep?.was_active, true, "Undo restarts the sleep the finish stopped");
-  assert.match(await strip.innerText(), /In the bassinet/);
+  await asleepCard.getByRole("region", { name: "In the bassinet", exact: true }).waitFor();
+  assert.equal(await planRow.count(), 0);
   console.log("PASS Outcome: one tap finishes the try and its sleep; Undo puts both back");
 
   // ── Woke up elsewhere: the try asks, ending when she woke ──
   await advance(5);
   assert(await page.evaluate(() => window.__sleep.stopSleep()));
-  await strip.getByText("She woke at 3:00 AM").waitFor();
-  await strip.getByRole("button", { name: "How did it go?", exact: true }).click();
+  // Her sleep's card is gone, so the open try is a card of its own, asking, with the four outcomes (each ends it then).
+  const woke = page.getByRole("region", { name: "She woke at 3:00 AM", exact: true });
+  await woke.waitFor();
+  assert.equal(await asleepCard.count(), 0);
+  assert.equal(await planRow.count(), 0, "No Put down while a try is still open");
+  assert.equal(await woke.getByRole("group", { name: "How did it go?" }).getByRole("button").count(), 4);
+  await woke.getByRole("button", { name: "Tags, note or an earlier end", exact: true }).click();
   const outcome = page.getByRole("dialog", { name: "How did it go?", exact: true });
   await outcome.waitFor();
   assert.match(await outcome.innerText(), /She woke at 3:00 AM\. The try ends then\./);
@@ -269,8 +283,12 @@ try {
   assert.equal(c.holder, "sam@example.test");
   assert.equal(c.next_holder, "alex@example.test");
   assert.equal(c.handoff_at, "2026-10-28T09:00:00.000Z", "Planned handoff two hours on");
-  assert.match(await strip.innerText(), /You're holding her/);
-  await strip.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
+  // The holding card is the one place for it (it was also a strip on the dock): "I'm getting sleepy" first.
+  const mine = page.getByRole("region", { name: "You're holding River", exact: true });
+  await mine.waitFor();
+  assert.equal(await planRow.count(), 0, "The plan's row steps aside while someone holds her");
+  assert.equal(await page.getByRole("button", { name: "I'm getting sleepy", exact: true }).count(), 1, "One I'm getting sleepy on the screen");
+  await mine.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
   const sleepy = page.getByRole("dialog", { name: "Getting sleepy?", exact: true });
   await sleepy.waitFor();
   text = await clean(sleepy, "Getting sleepy");
@@ -289,7 +307,7 @@ try {
   await toast("Alex is holding her now").waitFor();
   console.log("PASS Getting sleepy: two big choices only; waking the partner hands her over now");
 
-  await strip.getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
+  await page.getByRole("region", { name: "Alex is holding River", exact: true }).getByRole("button", { name: "I'm getting sleepy", exact: true }).click();
   await sleepy.waitFor();
   await sleepy.getByRole("button", { name: /^Put her in the bassinet now/ }).click();
   await page.getByRole("dialog", { name: "Into the bassinet", exact: true }).waitFor();
@@ -361,11 +379,11 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   console.log("PASS Progress: counts with sample sizes, no score or best time; 320px layouts fit");
 
-  // ── A view-only guest: the card, no buttons, no strip ──
+  // ── A view-only guest: the try, no buttons, no plan row ──
   await page.goto("https://sleep.example.test/?running&role=viewer&night");
   const viewerCard = page.getByRole("region", { name: "In the bassinet" });
   await viewerCard.waitFor();
-  assert.equal(await strip.count(), 0, "No strip for a view-only guest");
+  assert.equal(await planRow.count(), 0, "No plan row for a view-only guest");
   assert.equal(await viewerCard.getByRole("button").count(), 0, "No outcome buttons for a view-only guest");
   assert.match(await viewerCard.innerText(), /Swaddled/);
   await shot("viewer-night");

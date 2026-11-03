@@ -19,7 +19,7 @@ import WarningSignsSheet from "./WarningSigns";
 import { useCare } from "./useCare";
 
 /**
- * One place to open mom's page and sheets from anywhere (Today's strip, the
+ * One place to open mom's page and sheets from anywhere (Today's Up next, the
  * Lantern, More, Family, her own tab, a reminder's link): her tab, Support,
  * warning signs, the plan picker, the Dose sheet and her temperature; plus
  * the two shared sheets, Help and For the doctor. CareNavProvider is mounted

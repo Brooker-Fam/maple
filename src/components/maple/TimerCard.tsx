@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { adminActsAs } from "@/lib/maple/insights";
 import { minutesText, staleFeed } from "@/lib/maple/feed";
 import { DEFAULT_TZ, formatDuration, formatTime } from "@/lib/maple/time";
@@ -74,7 +74,8 @@ function useSlow(on: boolean, ms: number): boolean {
   return on && slow;
 }
 
-export default function TimerCard({ entry }: { entry: Entry }) {
+/** `children`: what belongs to this timer and sits at the bottom of its card (her sleep's bassinet try, SleepTimerExtra). */
+export default function TimerCard({ entry, children }: { entry: Entry; children?: ReactNode }) {
   const { state, memberLabel, isNight, readOnly, timerBusy, toasts } = useMaple();
   const w = useBabyWords();
   const { open, current: sheetOpen } = useSheets();
@@ -314,6 +315,7 @@ export default function TimerCard({ entry }: { entry: Entry }) {
         </>
       )}
 
+      {children}
       {lantern && controls && <Lantern entry={entry} onClose={() => setLantern(false)} dim={isNight()} />}
       {clusterInfo.sheet}
     </motion.section>

@@ -193,7 +193,7 @@ export function LoggedSlot({ held, care, className }: { held: CareHeld; care: Us
   const recordedAt = entry?.at ?? held.at;
   const at = careTime(recordedAt, now(), tz);
   // Keep the day on the second line so an overnight correction leaves room
-  // for the medicine's name in Today's strip. careTime preserves DST zones.
+  // for the medicine's name in Today's row. careTime preserves DST zones.
   const clock = careTime(recordedAt, new Date(recordedAt), tz);
   const day = at.slice(clock.length).trim();
   const dayLabel = day ? day[0].toUpperCase() + day.slice(1) : "";
@@ -213,9 +213,9 @@ export function tookItLabel(care: UseCare, plan: CarePlan, label = "Took it"): s
 }
 
 /**
- * One medicine's Took it, with the safety rules (the strip, the picker, her
+ * One medicine's Took it, with the safety rules (Today's row, the picker, her
  * tab): quiet while it isn't OK yet, "Logged 6:56 AM" for a minute after a
- * save on this phone, and in the strip nothing at all for a tap inside the
+ * save on this phone, and on Today's row nothing at all for a tap inside the
  * cooldown after any care save. `fixed`: a list whose rows keep their order
  * (her tab, the picker), where a tap on another medicine just after is meant.
  * `onAsk` opens the Dose sheet with the reason (a likely duplicate);

@@ -1,7 +1,9 @@
 # Sleep plan browser checks
 
-`node scripts/sleep-ui-check/run.mjs` runs the real sleep provider, strip, try
-and holding cards, Today's check-in card and every sleep sheet (How did it go?,
+`node scripts/sleep-ui-check/run.mjs` runs the real sleep provider, the plan's
+row (Today's Up next card, or her sleep's timer card while she's asleep), the
+try (on that timer card, or a card of its own once her sleep stopped) and the
+holding card, Today's check-in card and every sleep sheet (How did it go?,
 Getting sleepy?, holding, a try's edit, an earlier try, the plan with its Goals,
 Guidance and Progress, a goal's form, How did last night go?) against synthetic
 app state and an in-memory stand-in for `/api/maple/sleep`, whose goal and
@@ -11,7 +13,8 @@ account, database, chat or API is used (the chat's opener only records the
 seeded message), and the family, baby and people are made up.
 
 Checks cover setting up the plan, one-tap Put down (the "fed" tag after a
-recent feed, earlier-time chips), outcomes with Undo, a try whose sleep was
+recent feed, earlier-time chips), each sleep state drawn once (the try on her
+sleep's card, the row stepping aside), outcomes with Undo, a try whose sleep was
 stopped elsewhere (Woke up), the two-choice "I'm getting sleepy" sheet and the
 partner handoff, the transfer steps, logging an earlier try with the duplicate
 question, guidance sources and the emergency call link, progress with sample

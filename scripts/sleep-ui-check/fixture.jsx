@@ -9,10 +9,10 @@ import { CHECKIN_NOTE_MAX, GOAL_NOTE_MAX } from "../../src/lib/maple/sleep/types
 import { STAGE_INFO } from "../../src/lib/maple/sleep/words";
 import { dayKey, zonedTimeToUtc } from "../../src/lib/maple/time";
 import { makeVoice } from "../../src/lib/maple/voice";
-import { SleepNow } from "../../src/components/maple/sleep/SleepCards";
+import { SleepNow, SleepTimerExtra } from "../../src/components/maple/sleep/SleepCards";
 import { SleepCheckinCard } from "../../src/components/maple/sleep/SleepCheckin";
+import { SleepRow } from "../../src/components/maple/sleep/SleepRow";
 import { SleepSheetHost } from "../../src/components/maple/sleep/SleepSheets";
-import { SleepStrip } from "../../src/components/maple/sleep/SleepStrip";
 import { SleepProvider, useSleep } from "../../src/components/maple/sleep/useSleep";
 import { FixtureContext } from "./mocks";
 
@@ -418,6 +418,31 @@ function OpenButtons() {
   );
 }
 
+/**
+ * Today's sleep parts in Today's order: each running sleep as a stand-in timer card carrying SleepTimerExtra (the
+ * try she's on, or Put down), the Right now cards that aren't on one (SleepNow), the morning check-in, and the plan's
+ * row in an Up next card.
+ */
+function TodayParts({ entries }) {
+  const sleeping = entries.filter((e) => e.kind === "sleep" && e.active);
+  return (
+    <>
+      {sleeping.map((e) => (
+        <section key={e.id} aria-label="Asleep timer" className="rounded-[20px] border border-(--mp-edge) bg-mp-surface p-4">
+          <p className="text-[15px] font-semibold text-mp-ink">Asleep</p>
+          <SleepTimerExtra entry={e} />
+        </section>
+      ))}
+      <SleepNow attached={sleeping.map((e) => e.id)} />
+      {/* Today puts the morning check-in right after Right now. */}
+      <SleepCheckinCard />
+      <div aria-label="Up next" role="region" className="overflow-hidden rounded-[20px] border border-(--mp-edge) bg-mp-surface empty:hidden">
+        <SleepRow />
+      </div>
+    </>
+  );
+}
+
 function Toasts({ toasts }) {
   return (
     <div data-maple-toasts className="space-y-1 p-2">
@@ -507,10 +532,7 @@ function Fixture() {
       <SleepProvider sheets={(api) => <SleepSheetHost api={api} />}>
         <main className="mx-auto max-w-lg space-y-3 px-4 pt-4">
           <OpenButtons />
-          <SleepNow />
-          {/* Today puts the morning check-in right after Right now. */}
-          <SleepCheckinCard />
-          <SleepStrip />
+          <TodayParts entries={state.entries} />
         </main>
       </SleepProvider>
     </FixtureContext.Provider>

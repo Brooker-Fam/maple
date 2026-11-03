@@ -14,11 +14,12 @@ import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
-import { SleepNow } from "./sleep/SleepCards";
+import { SleepNow, SleepTimerExtra } from "./sleep/SleepCards";
 import { SleepCheckinCard } from "./sleep/SleepCheckin";
 import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
+import UpNext from "./UpNext";
 import Waiting from "./Waiting";
 import WhileYouSlept from "./WhileYouSlept";
 import { useSheets } from "./sheets";
@@ -40,6 +41,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const timing = summary.active.length > 0;
   // A bassinet try or someone holding her awake: shown on every family phone, in Right now.
   const sleepNow = !!state.sleep && (state.sleep.tries.some((t) => !t.ended_at) || state.sleep.shifts.some((x) => !x.ended_at));
+  // Her sleep's timer card carries the try she's on, so the try isn't a second card beside it.
+  const sleeping = summary.active.filter((e) => e.kind === "sleep").map((e) => e.id);
 
   return (
     <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
@@ -62,7 +65,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {readOnly && <LatestMoment />}
       <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
 
-      {(!nothingYet || timing || sleepNow) && (
+      {/*
+        Right now, each thing once: running timers (her sleep's card carries a bassinet try), a holding turn or a try
+        whose sleep stopped, Maple's status, then Up next (her next medicine, the sleep plan's next step).
+      */}
+      {!nothingYet || timing || sleepNow ? (
         <section aria-labelledby="right-now">
           <h2 id="right-now" className="sr-only">
             Right now
@@ -71,13 +78,18 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
             <AnimatePresence initial={false}>
               {summary.active.map((e) => (
                 // Keyed by kind: only one of each runs, and the optimistic copy hands over to the saved one without a remount.
-                <TimerCard key={e.kind} entry={e} />
+                <TimerCard key={e.kind} entry={e}>
+                  {e.kind === "sleep" && <SleepTimerExtra entry={e} />}
+                </TimerCard>
               ))}
             </AnimatePresence>
-            <SleepNow />
+            <SleepNow attached={sleeping} />
             <StatusCard />
+            <UpNext />
           </div>
         </section>
+      ) : (
+        <UpNext />
       )}
       {/* The morning after: an adult on a sleep goal's roster says whether their protected window held. */}
       <SleepCheckinCard />
@@ -131,7 +143,8 @@ function LoggedToday({ onDetails }: { onDetails: () => void }) {
   return (
     <section aria-labelledby="logged-today" className={cx(tone.card, "mp-day-summary px-4 py-3")}>
       <div className="flex flex-wrap items-center justify-between gap-x-2">
-        <h2 id="logged-today" className={cx(tone.display, "text-[25px] leading-tight")}>Logged today</h2>
+        {/* A section heading like Recently logged's: the display serif is for her name only. */}
+        <h2 id="logged-today" className={cx(tone.heading, "text-[17px] leading-tight")}>Logged today</h2>
         <button type="button" onClick={onDetails} className="mp-explore-today -my-1 -mr-1 inline-flex min-h-[44px] items-center gap-1 px-1 text-[13px] font-semibold text-mp-accent-fg">
           <Icon name="clock-3" size={16} /> Explore patterns <Icon name="chevron-right" size={15} />
         </button>
