@@ -138,14 +138,18 @@ export type SleepLink = { kind: "running"; entry: SleepEntry } | { kind: "overla
 
 /**
  * Which sleep entry a try between `start` and `end` (null: she's still down)
- * belongs to: the running sleep timer, else the logged sleep it overlaps
- * most (nearest start on a tie), else none (the try makes one).
+ * belongs to. A running try sits only on the sleep timer running now, else
+ * none (the try makes one): a sleep that already ended isn't the one she's
+ * in, even when a put-down dated earlier (or another phone's Woke up landing
+ * first) falls inside it. A try that already happened sits on the running
+ * sleep timer, else the logged sleep it overlaps most (nearest start on a
+ * tie), else none.
  */
 export function chooseSleepLink(start: number, end: number | null, entries: readonly Entry[], now: number): SleepLink {
   const sleeps = entries.filter(isSleep);
   const until = end ?? now;
   const running = sleeps.find((e) => e.active && ms(e.started_at) <= until + 1000);
-  if (running && end == null) return { kind: "running", entry: running };
+  if (end == null) return running ? { kind: "running", entry: running } : { kind: "create" };
   let best: { e: SleepEntry; overlap: number; gap: number } | null = null;
   for (const e of sleeps) {
     const s = ms(e.started_at);

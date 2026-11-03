@@ -16,10 +16,10 @@ import { dailyStats } from "../../src/lib/maple/insights";
 import { FAMILY_ONE_COPY, logState, type Extra } from "../../src/lib/maple/mcp-tools";
 import { notifyHandoffNow } from "../../src/lib/maple/notify";
 import { runPushTick } from "../../src/lib/maple/push";
-import { askState, nextHandoff } from "../../src/lib/maple/sleep/engine";
+import { askState, chooseSleepLink, nextHandoff } from "../../src/lib/maple/sleep/engine";
 import { askHandoff, deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
-import { getEntry, listEntries, startTimer } from "../../src/lib/maple/store";
+import { createEntryOnce, getEntry, listEntries, startTimer, stopTimer } from "../../src/lib/maple/store";
 import { addDays, dayKey, localParts } from "../../src/lib/maple/time";
 import type { Entry, Role } from "../../src/lib/maple/types";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type FamilySeed } from "./harness";
@@ -303,6 +303,60 @@ async function main() {
     const d = await call("bassinet_try", { ...base, minutes_ago: 230, duration_minutes: 20, outcome: "woke_calm", allow_duplicate: true }, alpha, "owner");
     eq(d.sc.created, true, d.text);
     eq((await sql(`SELECT COUNT(*)::int AS n FROM maple_sleep_tries WHERE family_id = 1 AND deleted_at IS NULL`))[0].n, 2, "two saved");
+  });
+
+  await test("link: a put-down dated inside a sleep that already ended (try.start's at, the tool's minutes_ago, another phone's Woke up landing first) makes its own bassinet sleep, and How did it go? ends it now", async () => {
+    await clean(alpha);
+    // A sleep logged as ending 10 minutes ago, then a put-down dated 20 minutes ago.
+    const loggedSleep = async () =>
+      (await createEntryOnce(1, { babyId: alpha.babyId, kind: "sleep", startedAt: new Date(Date.now() - 60 * MIN), endedAt: new Date(Date.now() - 10 * MIN), data: { place: "arms" }, createdBy: alpha.owner, source: "web" })).entry;
+    const logged = await loggedSleep();
+    const r = await route(alpha.member, 1, { action: "try.start", at: new Date(Date.now() - 20 * MIN).toISOString(), client_id: "alpha-try-ended-sleep-1" });
+    const w = result(r);
+    const made = (await getEntry(1, w.try.sleep_entry_id!))!;
+    eq([w.link, w.try.made_sleep, made.id === logged.id, made.active, (made.data as { place?: string }).place], ["create", true, false, true, "bassinet"], "its own running bassinet sleep");
+    const f = result(await route(alpha.member, 1, { action: "try.finish", id: w.try.id, outcome: "stayed_asleep", expect_updated_at: w.try.updated_at }));
+    ok(Math.abs(Date.parse(f.try.ended_at!) - Date.now()) < MIN, `she stayed asleep until it was finished, now: ${f.try.ended_at}`);
+    const after = (await getEntry(1, w.try.sleep_entry_id!))!;
+    eq([after.active, Math.abs(Date.parse(after.ended_at!) - Date.parse(f.try.ended_at!)) <= 1500], [false, true], "its sleep stopped with it");
+    eq((await getEntry(1, logged.id))?.ended_at, logged.ended_at, "the logged sleep stays as it was");
+    // The tool, as Claude and the chat call it.
+    await clean(alpha);
+    await loggedSleep();
+    const s = await call("bassinet_try", { action: "start", minutes_ago: 20 }, alpha);
+    ok(!s.isError && (s.sc.sleep_entry as { linked?: string } | undefined)?.linked === "create", s.text);
+    const fin = await call("bassinet_try", { action: "finish", outcome: "stayed_asleep" }, alpha);
+    ok(!fin.isError && !/after 10 min down/.test(fin.text), fin.text);
+    // Another phone's Woke up lands first; this phone's put-down, tapped a moment before it, comes after.
+    await clean(alpha);
+    const { entry: arms } = await startTimer(1, { babyId: alpha.babyId, kind: "sleep", at: new Date(Date.now() - 30 * MIN), createdBy: alpha.owner, source: "web" });
+    const woke = await stopTimer(1, arms.id, undefined, alpha.owner);
+    const late = await startTry(1, { babyId: alpha.babyId, at: new Date(Date.parse(woke.ended_at!) - 2000), putDownBy: alpha.member, tags: [], note: null, by: alpha.member, source: "web" });
+    eq([late.link, late.try.sleep_entry_id === arms.id, late.try.made_sleep], ["create", false, true], "never the sleep that ended");
+    // The rule itself: a try still running sits only on the sleep timer running now.
+    const ended = { ...woke, started_at: new Date(Date.now() - HOUR).toISOString() } as Entry;
+    eq(chooseSleepLink(Date.now() - 20 * MIN, null, [ended], Date.now()).kind, "create", "running try, ended sleep");
+    eq(chooseSleepLink(Date.now() - 20 * MIN, Date.now() - 5 * MIN, [ended], Date.now()).kind, "overlap", "a try that already happened still sits on the sleep it overlaps");
+  });
+
+  await test("finish: How did it go? with no time ends when her sleep stopped after the try began (Woke up on another phone); a sleep that had already ended when an older release laid the try on it is never the end", async () => {
+    await clean(alpha);
+    const w = await startTry(1, { babyId: alpha.babyId, at: new Date(Date.now() - 20 * MIN), putDownBy: alpha.member, tags: [], note: null, by: alpha.member, source: "web" });
+    const woke = await stopTimer(1, w.try.sleep_entry_id!, new Date(Date.now() - 5 * MIN), alpha.owner);
+    const f = await finishTry(1, w.try.id, { outcome: "woke_calm", by: alpha.member });
+    eq(f.try.ended_at, woke.ended_at, "when she woke");
+    // An older release laid this one on the sleep it overlapped, though that sleep had already ended.
+    await clean(alpha);
+    const { entry: logged } = await createEntryOnce(1, { babyId: alpha.babyId, kind: "sleep", startedAt: new Date(Date.now() - 60 * MIN), endedAt: new Date(Date.now() - 10 * MIN), data: { place: "arms" }, createdBy: alpha.owner, source: "web" });
+    const [row] = await sql(`INSERT INTO maple_sleep_tries (family_id, baby_id, started_at, put_down_by, created_by, sleep_entry_id, made_sleep) VALUES (1, $1, $2, $3, $3, $4, FALSE) RETURNING id`, [
+      alpha.babyId,
+      new Date(Date.now() - 20 * MIN).toISOString(),
+      alpha.member,
+      logged.id,
+    ]);
+    const old = await finishTry(1, Number(row.id), { outcome: "stayed_asleep", by: alpha.member });
+    ok(Math.abs(Date.parse(old.try.ended_at!) - Date.now()) < MIN, `now, not that sleep's end: ${old.try.ended_at}`);
+    eq((await getEntry(1, logged.id))?.ended_at, logged.ended_at, "and that sleep stays as it was");
   });
 
   // ── holding shifts ─────────────────────────────────────────────────────

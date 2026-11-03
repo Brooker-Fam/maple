@@ -62,9 +62,11 @@ import { isTrySlot, STAGE_INFO } from "./words";
  *
  * A try sits on one sleep entry in maple_entries, and the sleep entry is the
  * only thing sleep totals read, so a try never counts as sleep twice:
- * - Starting a try links the running sleep timer, else the logged sleep it
- *   overlaps; with neither, it makes a running bassinet sleep in the same
- *   transaction (made_sleep), so the log and the try can't disagree.
+ * - Starting a try links the running sleep timer; with none, it makes a
+ *   running bassinet sleep in the same transaction (made_sleep), so the log
+ *   and the try can't disagree. A sleep that already ended is never the one
+ *   a running try sits on. Logging a try that already happened links the
+ *   logged sleep it overlaps, else makes a finished bassinet sleep.
  * - Finishing it with a wake ends a running linked sleep then; picked up
  *   still asleep, the sleep runs on (in arms, for a sleep the try made).
  * - Moving a try's times moves the linked sleep's start or end only where it
@@ -404,10 +406,11 @@ const SLEEP_NOW = JSON.stringify({ place: "bassinet" });
 
 /**
  * Lay her down: a running try, sitting on the running sleep timer if there
- * is one, else a logged sleep it overlaps, else a running bassinet sleep it
- * makes in the same transaction. Two phones at once get the same try
- * (status "running"); a retried request with its client id gets its first
- * save back ("deduped"). The open holding shift ends at the same moment.
+ * is one, else on a running bassinet sleep it makes in the same transaction
+ * (never on a sleep that already ended, even one a put-down dated earlier
+ * falls inside: engine.ts chooseSleepLink). Two phones at once get the same
+ * try (status "running"); a retried request with its client id gets its
+ * first save back ("deduped"). The open holding shift ends at the same moment.
  */
 export async function startTry(
   fam: FamilyRef,
@@ -581,8 +584,12 @@ export async function finishTry(
   if (before.ended_at) return { try: before, before, sleep: null, sleepBefore: null, status: "already_finished" };
   if (input.expectUpdatedAt !== undefined && !same(input.expectUpdatedAt, before.updated_at)) throw new SleepConflict("Someone changed this try just now.", "changed", before);
   const sleepBefore = before.sleep_entry_id ? await getEntry(fam, before.sleep_entry_id) : null;
-  // A sleep timer stopped meanwhile (Woke up on the dock, Siri) is when she came out, unless a time was given.
-  const defaultEnd = sleepBefore && !sleepBefore.active && sleepBefore.ended_at && Date.parse(sleepBefore.ended_at) >= Date.parse(before.started_at) ? new Date(sleepBefore.ended_at) : now;
+  // A sleep timer stopped meanwhile (Woke up on the dock, Siri, another phone) is when she came out, unless a time was
+  // given: only one that stopped after the try began (changed since), never a sleep that had already ended when an
+  // older release laid the try on it.
+  const stoppedSince =
+    !!sleepBefore && !sleepBefore.active && !!sleepBefore.ended_at && Date.parse(sleepBefore.ended_at) >= Date.parse(before.started_at) && Date.parse(sleepBefore.updated_at) > Date.parse(before.created_at);
+  const defaultEnd = stoppedSince && sleepBefore.ended_at ? new Date(sleepBefore.ended_at) : now;
   const end = pastTime(input.at ?? defaultEnd, now, "When the try ended");
   const start = new Date(before.started_at);
   if (end.getTime() < start.getTime()) throw new SleepInputError("That's before she was laid down.");
