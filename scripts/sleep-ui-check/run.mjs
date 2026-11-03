@@ -294,6 +294,8 @@ try {
   let c = await sam.last();
   assert.deepEqual(c.tags, ["fed"], "A feed that ended 12 minutes ago pre-ticks Recently fed");
   assert.match(await strip.innerText(), /In the bassinet/);
+  // Just laid down: "since 2:10 AM", never "· 0s" for under a minute.
+  assert.doesNotMatch(await strip.innerText(), /· 0s|· <?\d+s\b|· 0 min/, "No seconds on the strip under a minute");
   // While she's down, How did it go? is the strip's strong button: its sheet's outcomes sit in thumb reach (the card's are at the top).
   assert.match(await strip.getByRole("button", { name: "How did it go?", exact: true }).locator("span").getAttribute("class"), /bg-mp-accent/, "How did it go? is the strong button");
   await page.getByRole("button", { name: "Laid down 2 minutes earlier, at 2:08 AM", exact: true }).click();
@@ -456,6 +458,7 @@ try {
   assert.deepEqual((await sam.since(sent)).map((x) => [x.action, x.to]), [["shift.ask", "alex@example.test"]], "Waking Alex asks; it doesn't hand her over");
   text = await clean(waking, "Waking Alex");
   assert(text.includes("Alex's phone only sounds if handoff reminders are on. Go wake Alex."), text);
+  assert(text.includes("In another room? Call Alex twice."), `the quiet hint, with the asked person's name: ${text}`);
   const bassinetNow = waking.getByRole("button", { name: /^Put her in the bassinet now/ });
   assert((await height(bassinetNow)) >= 64, "The bassinet stays the big button");
   assert.equal(await waking.getByRole("button", { name: "Alex has her", exact: true }).count(), 1);
@@ -1633,6 +1636,8 @@ try {
   const rosterCatch = alexR.getByRole("dialog", { name: "You have River", exact: true });
   await rosterCatch.waitFor();
   assert.match(await rosterCatch.getByRole("list", { name: "Catch-up" }).innerText(), /Handoff\s+Next planned for 5:30 AM, to Sam, after Sam's protected sleep \(2:30–5:30 AM\)/);
+  // How to feed her in Sam's window, by the roster's covers: the partner's first question.
+  assert.match(await rosterCatch.getByRole("list", { name: "Catch-up" }).innerText(), /If hungry\s+Before 5:30 AM: bring her to Sam to nurse/);
   await shot("two-phones-roster-catch-up");
   await page.setViewportSize({ width: 390, height: 844 });
   console.log("PASS Next handoff: the Hand off sheet's default skips the next holder's protected window (a time inside it says so); the holder's Alex has her and Alex's I've got her plan it for the window's end, and the toast and catch-up say why");

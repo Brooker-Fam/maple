@@ -115,7 +115,7 @@ export type SleepApi = {
   handOff: (s: HoldingShift, opts: { to: string; handoffAt?: Date | null }) => Promise<HoldingShift | null>;
   endShift: (s: HoldingShift) => Promise<boolean>;
   laterHandoff: (s: HoldingShift, minutes: number) => Promise<boolean>;
-  /** "Wake [partner]": asks `to` to take over (the family's phones with handoff reminders on hear of it). Never a handoff; Undo takes it back. */
+  /** "Wake [partner]": asks `to` to take over (their phones with handoff reminders on hear of it). Never a handoff; Undo takes it back. */
   askHandoff: (s: HoldingShift | null, to: string) => Promise<HoldingShift | null>;
   /** "I've got her": the signed-in person takes over the turn as it is now, then sees the catch-up. */
   acceptHandoff: (s: HoldingShift) => Promise<HoldingShift | null>;

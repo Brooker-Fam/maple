@@ -201,7 +201,7 @@ export const POST = withMember(
     const src = "web" as const;
     const askFor = async (shiftId: number | null, to: string) => {
       const w = await askHandoff(ctx, { babyId: baby.id, id: shiftId, to, by, source: src, device });
-      // The other phones that turned handoff reminders on hear of it now; this one doesn't.
+      // The phones of the person asked that turned handoff reminders on hear of it now; this one doesn't.
       holdingChanged({ familyId: ctx.familyId, wake: { shiftId: w.shift.id, device } });
       return stateBody(ctx, baby.id, { result: w });
     };
@@ -390,7 +390,7 @@ export const POST = withMember(
           return stateBody(ctx, baby.id, { result: r });
         }
         // "Wake [partner]": an ask, never a handoff. Nothing changes hands until they have her (shift.accept, or the
-        // holder's shift.handoff); the family's other phones with handoff reminders on hear of it now.
+        // holder's shift.handoff); the phones of the person asked with handoff reminders on hear of it now.
         case "shift.ask":
           return await askFor(body.id == null ? null : id(body.id), person(body.to, members, "to"));
         case "shift.cancel_ask": {

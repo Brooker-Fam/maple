@@ -381,9 +381,12 @@ async function main() {
 
   // ── handoff ────────────────────────────────────────────────────────────
 
-  await test("handoff from the holder only asks: nothing changes hands, the phones with handoff reminders on hear Handoff now, and it says to go wake them", async () => {
+  await test("handoff from the holder only asks: nothing changes hands, the asked person's phone with handoff reminders on hears Handoff now (nobody else's), and it says to go wake them", async () => {
     await reset(alpha);
+    // Avery (holding her) and Blake (the one asked) both turned handoff reminders on: only Blake's phone hears the ask.
     await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"handoff":true}'::jsonb WHERE id = $1`, [alpha.pushSubId]);
+    const blakePhone = "https://push.example.test/alpha-blake-quick";
+    await sql(`INSERT INTO maple_push_subs (family_id, member, endpoint, p256dh, auth, prefs, receipt_token) VALUES (1, $1, $2, 'k', 'a', '{"handoff":true}', $3)`, [alpha.member, blakePhone, "e".repeat(32)]);
     const start = new Date(Date.now() - 60 * MIN);
     const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: start, handoffAt: new Date(start.getTime() + 90 * MIN), by: alpha.owner, source: "web" })).shift;
     const before = hooks.length;
@@ -395,7 +398,7 @@ async function main() {
     eq((await shifts(alpha)).length, 1, "no second turn");
     await runHooks(before);
     const now1 = sent.filter((x) => x.title === "Handoff now");
-    eq(now1.map((x) => x.tag), [`handoff:${t.id}`], "the family's phone with handoff reminders on hears it");
+    eq(now1.map((x) => [x.endpoint, x.tag]), [[blakePhone, `handoff:${t.id}`]], "Blake's phone hears it; Avery's, holding her, doesn't");
     ok(sent.every((x) => !/Avery|Blake|Casey|June|Dana/.test(`${x.title} ${x.body}`)), `names no one: ${JSON.stringify(sent)}`);
     // Said again at once (Back Tap twice, a retry): the ask stands, and no second notice.
     const b2 = hooks.length;
@@ -411,12 +414,18 @@ async function main() {
     const third = await siri(T(alpha).owner, { action: "handoff" });
     ok(third.speak.startsWith("Asked Blake again to take over."), third.speak);
     await runHooks(b3);
-    eq(sent.filter((x) => x.title === "Handoff now").length, 1, "asked again: heard again");
+    eq(sent.filter((x) => x.title === "Handoff now").map((x) => x.endpoint), [blakePhone], "asked again: heard again, on Blake's phone");
     await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE id = $1`, [alpha.pushSubId]);
+    await sql(`DELETE FROM maple_push_subs WHERE endpoint = $1`, [blakePhone]);
   });
 
-  await test("handoff from anyone else takes the turn as it is now: they have her, with the next handoff as long as the last one; a second tap never hands her back", async () => {
+  await test("handoff from anyone else takes the turn as it is now: they have her, with the next handoff as long as the last one and the catch-up; a second tap never hands her back", async () => {
     await reset(alpha);
+    // A feed on the left that ended 40 minutes ago, and a wet diaper 20 minutes ago.
+    const feedId = await finishedFeed(alpha, 40, alpha.owner);
+    const fedAt = (await getEntry(1, feedId))!.started_at;
+    const diaperAt = new Date(Date.now() - 20 * MIN).toISOString();
+    await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, data, created_by) VALUES (1, $1, 'diaper', $2, '{"pee":true}', $3)`, [alpha.babyId, diaperAt, alpha.owner]);
     const start = new Date(Date.now() - 60 * MIN);
     const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: start, handoffAt: new Date(start.getTime() + 90 * MIN), by: alpha.owner, source: "web" })).shift;
     await siri(T(alpha).owner, { action: "handoff" });
@@ -426,16 +435,66 @@ async function main() {
     eq([open.holder, open.source, open.created_by, open.next_holder, open.asked_to], [alpha.member, "shortcut", alpha.member, alpha.owner, null], "Blake has her, Avery is next");
     eq([(await getShift(1, t.id))?.ended_how, (await getShift(1, t.id))?.asked_to], ["handoff", alpha.member], "Avery's turn handed over, its ask kept");
     ok(near(open.handoff_at, Date.now() + 90 * MIN), "the next handoff is as long as the last one was planned");
-    eq(take.speak, `You have her now, from Avery. Next handoff at ${clock(open.handoff_at!, alpha.tz)}.`, "said");
+    eq(
+      take.speak,
+      `You have her now, from Avery. Next handoff at ${clock(open.handoff_at!, alpha.tz)}. Last fed at ${clock(fedAt, alpha.tz)} on the left; right is next. Wet diaper at ${clock(diaperAt, alpha.tz)}.`,
+      "said, with the catch-up: the last feed, its side and the next side, and the last diaper"
+    );
     ok(hooks.length > before, "re-armed");
     const twice = await siri(T(alpha).member, { action: "handoff" });
     eq([twice.speak, (await openShift(1, alpha.babyId))!.holder], ["Already handed off: you have her now.", alpha.member], "a second tap never hands her back (nor asks Avery)");
-    // Not asked first: whoever says it takes over all the same.
+    // Not asked first: whoever says it takes over all the same; with nothing logged lately, the catch-up says so.
     await reset(alpha);
     await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, by: alpha.owner, source: "web" });
     const plain = await siri(T(alpha).member, { action: "handoff" });
     const took = (await openShift(1, alpha.babyId))!;
-    eq([plain.speak, took.holder], [`You have her now, from Avery. Next handoff at ${clock(took.handoff_at!, alpha.tz)}.`, alpha.member], "Blake took her; the next handoff two hours on by default");
+    eq(
+      [plain.speak, took.holder],
+      [`You have her now, from Avery. Next handoff at ${clock(took.handoff_at!, alpha.tz)}. No feed logged lately. No diaper logged lately.`, alpha.member],
+      "Blake took her; the next handoff two hours on by default"
+    );
+  });
+
+  await test("handoff: the catch-up says what's running and how to feed her in the off-duty adult's window, by the roster's covers, in the family's words", async () => {
+    const local = (f: FamilySeed, t: number) => {
+      const p = localParts(t, f.tz);
+      return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+    };
+    const cases: { f: FamilySeed; covers?: string; template?: { nursing: string | null }; care?: boolean; want: (end: string) => string | null }[] = [
+      { f: alpha, covers: "bottle", want: (end) => `If she's hungry before ${end}: a bottle of expressed milk.` },
+      { f: alpha, covers: "nurse", template: { nursing: alpha.owner }, want: (end) => `If she's hungry before ${end}: bring her to Avery to nurse.` },
+      { f: alpha, covers: "nurse", template: { nursing: alpha.member }, want: () => null },
+      { f: alpha, covers: "nurse", want: (end) => `If she's hungry before ${end}: nursing, as planned.` },
+      { f: alpha, covers: "bottle", template: { nursing: null }, want: (end) => `If she's hungry before ${end}: a bottle.` },
+      { f: alpha, covers: "none", want: () => null },
+      { f: alpha, want: () => null },
+      { f: beta, covers: "nurse", template: { nursing: beta.owner }, want: (end) => `If he's hungry before ${end}: bring him to Emery to nurse.` },
+    ];
+    for (const c of cases) {
+      const { f } = c;
+      await reset(f);
+      // The holder's protected window from an hour to three hours from now; a nap timer runs in the bassinet.
+      const from = Date.now() + 60 * MIN;
+      const to = Date.now() + 180 * MIN;
+      const roster = [{ id: "w1", member: f.owner, from: local(f, from), to: local(f, to), nights: [0, 1, 2, 3, 4, 5, 6], ...(c.covers ? { covers: c.covers } : {}) }];
+      const template = c.template ? { kind: "back_to_work", member: f.owner, date: "2026-12-01", nursing: c.template.nursing } : null;
+      await sql(
+        `INSERT INTO maple_sleep_goals (family_id, baby_id, title, status, roster, template, item_seq, created_by, created_at, updated_at) VALUES ($1, $2, 'Made-up goal', 'active', $3::jsonb, $4::jsonb, 1, $5, NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days')`,
+        [f.familyId, f.babyId, JSON.stringify(roster), template ? JSON.stringify(template) : null, f.owner]
+      );
+      const nap = (await startTimer(f.familyId, { babyId: f.babyId, kind: "sleep", at: new Date(Date.now() - 25 * MIN), createdBy: f.owner, source: "web" })).entry;
+      await sql(`UPDATE maple_entries SET data = '{"place":"bassinet"}' WHERE id = $1`, [nap.id]);
+      const start = new Date(Date.now() - 60 * MIN);
+      await startShift(f.familyId, { babyId: f.babyId, holder: f.owner, at: start, handoffAt: new Date(start.getTime() + 120 * MIN), by: f.owner, source: "web" });
+      const take = await siri(T(f).member, { action: "handoff" });
+      const open = (await openShift(f.familyId, f.babyId))!;
+      ok(take.speak.includes(`Asleep since ${clock(nap.started_at, f.tz)}, in the bassinet.`), `${f.name} ${c.covers}: what's running (${take.speak})`);
+      const want = c.want(clock(open.handoff_at!, f.tz));
+      if (want) ok(take.speak.endsWith(want), `${f.name} ${c.covers} ${JSON.stringify(c.template)}: ${take.speak}`);
+      else ok(!/hungry/.test(take.speak), `${f.name} ${c.covers} ${JSON.stringify(c.template)}: no feeding line (${take.speak})`);
+      await sql(`DELETE FROM maple_sleep_goals WHERE family_id = $1`, [f.familyId]);
+      await reset(f);
+    }
   });
 
   await test("handoff: taking over never plans the next handoff inside the next holder's protected window on the roster, and says why; a sleep in arms running on is said", async () => {
@@ -461,8 +520,8 @@ async function main() {
     ok(Math.abs(Date.parse(open.handoff_at!) - Math.floor(to / MIN) * MIN) <= MIN, `planned for the window's end, not two hours on (${open.handoff_at})`);
     eq(
       take.speak,
-      `You have her now, from Avery. Next handoff at ${clock(open.handoff_at!, alpha.tz)}, after Avery's protected sleep. Her sleep in arms has been running since ${clock(arms.started_at as string, alpha.tz)}; if she's awake, say Maple awake.`,
-      "said why, and the sleep in arms"
+      `You have her now, from Avery. Next handoff at ${clock(open.handoff_at!, alpha.tz)}, after Avery's protected sleep. Her sleep in arms has been running since ${clock(arms.started_at as string, alpha.tz)}; if she's awake, say Maple awake. No feed logged lately. No diaper logged lately.`,
+      "said why, and the sleep in arms (once: the catch-up doesn't say it again)"
     );
     const moved = take.next_handoff_moved as { member: string; planned_at: string; default_at: string };
     eq([moved.member, moved.planned_at, near(moved.default_at, Date.now() + 120 * MIN)], [alpha.owner, open.handoff_at, true], "the reply carries why");
@@ -487,10 +546,31 @@ async function main() {
     eq([back.speak, (await openShift(1, alpha.babyId))!.holder], ["Undone: Avery has her again.", alpha.owner], "taken over, then undone");
   });
 
-  await test("handoff: no turn says so; with more than one other adult and nobody planned next it asks for the app", async () => {
+  await test("handoff with no turn starts the speaker's own with the ask on it, as the app does (Handoff now to the person asked, Undo takes the ask back); with more than one other adult and nobody planned next it asks for the app", async () => {
     await reset(beta);
-    eq((await siri(T(beta).owner, { action: "handoff" })).speak, "Nobody is on a holding turn right now.", "no turn");
+    const finleyPhone = "https://push.example.test/beta-finley-quick";
+    await sql(`UPDATE maple_push_subs SET prefs = '{"handoff":true}'::jsonb WHERE id = $1`, [beta.pushSubId]);
+    await sql(`INSERT INTO maple_push_subs (family_id, member, endpoint, p256dh, auth, prefs, receipt_token) VALUES (2, $1, $2, 'k', 'a', '{"handoff":true}', $3)`, [beta.member, finleyPhone, "7".repeat(32)]);
+    const b0 = hooks.length;
+    sent.length = 0;
+    const r0 = await siri(T(beta).owner, { action: "handoff" });
+    eq(
+      [r0.ok, r0.speak],
+      [true, "Started your holding turn and asked Finley to take over. Finley's phone only sounds if handoff reminders are on, so go wake Finley. Getting sleepy? Put him on his back in the bassinet."],
+      "no turn: Emery's own starts, with the ask on it"
+    );
+    const mine = (await openShift(2, beta.babyId))!;
+    eq([mine.holder, mine.asked_to, mine.source], [beta.owner, beta.member, "shortcut"], "Emery holds him; Finley is asked");
+    await runHooks(b0);
+    eq(sent.filter((x) => x.title === "Handoff now").map((x) => x.endpoint), [finleyPhone], "Finley's phone hears it, never Emery's");
+    eq((await siri(T(beta).owner, { action: "handoff" })).already_asked, true, "said again at once: already asked");
+    eq((await siri(T(beta).owner, { action: "undo" })).speak, "Undone: nobody is asked to take over now.", "Undo takes the ask back");
+    await sql(`DELETE FROM maple_push_subs WHERE endpoint = $1`, [finleyPhone]);
+    await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true}'::jsonb WHERE id = $1`, [beta.pushSubId]);
+    await reset(beta);
     await sql(`INSERT INTO maple_members (family_id, email, role, display_name, added_by, accepted_at) VALUES (2, 'third.beta@example.com', 'member', 'Harper', 'self', NOW())`);
+    const none = await siri(T(beta).owner, { action: "handoff" });
+    eq([none.ok, none.speak, (await shifts(beta)).length], [false, "Nobody is on a holding turn right now. To ask someone to take over, use the app.", 0], "two other adults, no turn: nobody is guessed, nothing saved");
     await startShift(2, { babyId: beta.babyId, holder: beta.owner, by: beta.owner, source: "web" });
     const r = await siri(T(beta).owner, { action: "handoff" });
     eq([r.ok, r.speak, (await openShift(2, beta.babyId))!.holder, (await openShift(2, beta.babyId))!.asked_to], [false, "Who should take over? Ask in the app.", beta.owner, null], "unclear, nothing saved");
@@ -728,6 +808,119 @@ async function main() {
     ok(mine.speak.includes(`You've been holding him since ${clock(sh.started_at, beta.tz)}`), mine.speak);
     const fam1 = await siri(T(alpha).owner, { action: "status" });
     ok(!fam1.speak.includes("holding"), "alpha hears nothing of beta's turn");
+    await reset(beta);
+  });
+
+  await test("status: the person asked to take over hears it's them, and how to say they have her; nobody else does; with no diapers logged it says so, never 0 wet and 0 dirty", async () => {
+    await reset(alpha);
+    const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: new Date(Date.now() - 50 * MIN), by: alpha.owner, source: "web" })).shift;
+    await siri(T(alpha).owner, { action: "handoff" });
+    const asked = (await openShift(1, alpha.babyId))!;
+    const blake = await siri(T(alpha).member, { action: "status" });
+    ok(blake.speak.includes(`Avery has been holding her since ${clock(t.started_at, alpha.tz)}. Avery asked you to take over at ${clock(asked.asked_at!, alpha.tz)}; say Maple handoff once you have her.`), blake.speak);
+    for (const who of ["owner", "viewer"] as const) ok(!(await siri(T(alpha)[who], { action: "status" })).speak.includes("asked you"), `not the ${who}`);
+    ok(blake.speak.includes("No diapers logged in the last 24 hours."), `no diapers logged: ${blake.speak}`);
+    ok(!/0 wet and 0 dirty/.test(blake.speak), blake.speak);
+    await siri(T(alpha).member, { action: "pee" });
+    ok((await siri(T(alpha).member, { action: "status" })).speak.includes("1 wet and 0 dirty diapers in the last 24 hours."), "a diaper logged: the counts");
+    // Beta says him.
+    await reset(beta);
+    await startShift(2, { babyId: beta.babyId, holder: beta.owner, by: beta.owner, source: "web" });
+    await siri(T(beta).owner, { action: "handoff" });
+    ok((await siri(T(beta).member, { action: "status" })).speak.includes("asked you to take over at") && (await siri(T(beta).member, { action: "status" })).speak.includes("once you have him."), "beta's words");
+    await reset(beta);
+  });
+
+  await test("recap: since the speaker's protected window began, in it or just out of it; counts as Today does, says what's going on now and the next side, in at most three sentences", async () => {
+    await reset(alpha);
+    const local = (t: number) => {
+      const p = localParts(t, alpha.tz);
+      return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+    };
+    // Blake's window began three hours ago and runs another hour.
+    const from = Math.floor((Date.now() - 3 * HOUR) / MIN) * MIN;
+    const roster = [{ id: "w1", member: alpha.member, from: local(from), to: local(Date.now() + HOUR), nights: [0, 1, 2, 3, 4, 5, 6] }];
+    await sql(`INSERT INTO maple_sleep_goals (family_id, baby_id, title, status, roster, item_seq, created_by, created_at, updated_at) VALUES (1, $1, 'Made-up goal', 'active', $2::jsonb, 1, $3, NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days')`, [
+      alpha.babyId,
+      JSON.stringify(roster),
+      alpha.owner,
+    ]);
+    // Before the window: a feed (not counted). In it: two feeds on the left (one stopped and restarted under 10 minutes later counts once), a wet diaper, a try that stayed asleep 1 hour 50 minutes.
+    await finishedFeed(alpha, 4 * 60, alpha.owner);
+    await finishedFeed(alpha, 150, alpha.owner);
+    const lastFeed = await finishedFeed(alpha, 75, alpha.owner);
+    await finishedFeed(alpha, 55, alpha.owner);
+    await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, data, created_by) VALUES (1, $1, 'diaper', NOW() - INTERVAL '100 minutes', '{"pee":true}', $2)`, [alpha.babyId, alpha.owner]);
+    const tryStart = new Date(Date.now() - 170 * MIN);
+    await sql(`INSERT INTO maple_sleep_tries (family_id, baby_id, started_at, ended_at, outcome, created_by) VALUES (1, $1, $2, $3, 'stayed_asleep', $4)`, [alpha.babyId, tryStart, new Date(tryStart.getTime() + 110 * MIN), alpha.owner]);
+    const seenBefore = (await sql(`SELECT last_seen_at FROM maple_members WHERE family_id = 1 AND email = $1`, [alpha.member]))[0].last_seen_at;
+    const r = await siri(T(alpha).member, { action: "recap" });
+    const sinceWords = formatTime(from, alpha.tz).replace(/:00(?=\s[AP]M)/, "");
+    eq(r.basis, "protected_window", JSON.stringify(r));
+    eq(
+      r.speak,
+      `Since ${sinceWords}: 2 feeds, the last at ${formatTime((await getEntry(1, lastFeed))!.started_at, alpha.tz)} on the left; 1 wet diaper; a bassinet try that stayed asleep 1 hour 50 minutes. Start on the right next.`,
+      "counted from the window's start (the feed before it isn't counted; one stopped and started again under 10 minutes later is one feed)"
+    );
+    ok((r.speak.match(/[.!?](\s|$)/g) ?? []).length <= 3, "at most three sentences");
+    eq((await sql(`SELECT last_seen_at FROM maple_members WHERE family_id = 1 AND email = $1`, [alpha.member]))[0].last_seen_at, seenBefore, "never moves last_seen_at");
+    eq((await tries(alpha)).length, 1, "read only: nothing saved");
+    // Going on now: a nursing feed (said, not counted), and Avery holding her otherwise.
+    const feed = await runningFeed(alpha, alpha.owner, 5);
+    const now1 = await siri(T(alpha).member, { action: "recap" });
+    ok(now1.speak.includes(`She's nursing now, on the left, since ${formatTime(feed.started_at, alpha.tz)}.`) && !now1.speak.includes("Start on the"), now1.speak);
+    await sql(`DELETE FROM maple_entries WHERE id = $1`, [feed.id]);
+    const turn = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, at: new Date(Date.now() - 20 * MIN), by: alpha.owner, source: "web" })).shift;
+    ok((await siri(T(alpha).member, { action: "recap" })).speak.includes(`Avery has been holding her since ${formatTime(turn.started_at, alpha.tz)}.`), "the holding turn");
+    // The viewer (no window) hears it from their last visit; a photos-only guest gets nothing.
+    await sql(`UPDATE maple_members SET last_seen_at = NOW() - INTERVAL '30 minutes' WHERE family_id = 1 AND email = $1`, [alpha.viewer]);
+    const v = await siri(T(alpha).viewer, { action: "recap" });
+    eq([v.status, v.basis], [200, "last_visit"], JSON.stringify(v));
+    ok(v.speak.startsWith("Since ") && Math.abs(Date.parse(String(v.since)) - (Date.now() - 30 * MIN)) < 2 * MIN, `${v.speak} (${v.since})`);
+    eq((await siri(T(alpha).photos, { action: "recap" })).status, 401, "photos-only");
+    ok(!/Ibuprofen|Dana|medicine/.test(`${r.speak} ${v.speak}`), "nothing of her page");
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+  });
+
+  await test("recap: just out of the window counts from its start; with none, from the last visit (24 hours at most), else the last 8 hours; nothing logged says so; beta's words and zone", async () => {
+    await reset(alpha);
+    const local = (t: number, tz: string) => {
+      const p = localParts(t, tz);
+      return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+    };
+    // Avery's window ended ten minutes ago; it began two hours before that.
+    const from = Math.floor((Date.now() - 130 * MIN) / MIN) * MIN;
+    const to = Math.floor((Date.now() - 10 * MIN) / MIN) * MIN;
+    const roster = [{ id: "w1", member: alpha.owner, from: local(from, alpha.tz), to: local(to, alpha.tz), nights: [0, 1, 2, 3, 4, 5, 6] }];
+    await sql(`INSERT INTO maple_sleep_goals (family_id, baby_id, title, status, roster, item_seq, created_by, created_at, updated_at) VALUES (1, $1, 'Made-up goal', 'active', $2::jsonb, 1, $3, NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days')`, [
+      alpha.babyId,
+      JSON.stringify(roster),
+      alpha.owner,
+    ]);
+    const out = await siri(T(alpha).owner, { action: "recap" });
+    // (Unless the window crossed noon, which ends a try day.)
+    if (tryDayKey(from, alpha.tz) === tryDayKey(Date.now(), alpha.tz)) {
+      eq([out.basis, out.speak], ["last_window", `Since ${formatTime(from, alpha.tz).replace(/:00(?=\s[AP]M)/, "")}, nothing was logged.`], "just out of it, nothing logged");
+    }
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    // No window: the last visit, read and left as it was.
+    await sql(`UPDATE maple_members SET last_seen_at = NOW() - INTERVAL '2 hours' WHERE family_id = 1 AND email = $1`, [alpha.owner]);
+    await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, data, created_by) VALUES (1, $1, 'diaper', NOW() - INTERVAL '30 minutes', '{"pee":true,"poop":true}', $2)`, [alpha.babyId, alpha.member]);
+    const visit = await siri(T(alpha).owner, { action: "recap" });
+    eq(visit.basis, "last_visit");
+    ok(/^Since \d{1,2}(:\d{2})? [AP]M: no feeds logged; 1 wet and dirty diaper\.$/.test(visit.speak), visit.speak);
+    // A visit two days ago: the last 24 hours. None on record: the last 8 hours.
+    await sql(`UPDATE maple_members SET last_seen_at = NOW() - INTERVAL '2 days' WHERE family_id = 1 AND email = $1`, [alpha.owner]);
+    eq((await siri(T(alpha).owner, { action: "recap" })).speak, "In the last 24 hours: no feeds logged; 1 wet and dirty diaper.");
+    await sql(`UPDATE maple_members SET last_seen_at = NULL WHERE family_id = 1 AND email = $1`, [alpha.owner]);
+    eq((await siri(T(alpha).owner, { action: "recap" })).basis, "last_8_hours");
+    // Beta: his name and pronouns, its own zone, nothing of alpha's.
+    await reset(beta);
+    await sql(`UPDATE maple_members SET last_seen_at = NULL WHERE family_id = 2`);
+    await finishedFeed(beta, 30, beta.owner);
+    const b = await siri(T(beta).member, { action: "recap" });
+    ok(/^In the last 8 hours: 1 feed, the last at \d{1,2}:\d{2}\s[AP]M on the left\. Start on the right next\.$/.test(b.speak), b.speak);
+    ok(!/wet and dirty/.test(b.speak), "alpha's diaper isn't beta's");
     await reset(beta);
   });
 

@@ -13,9 +13,11 @@ import {
   familyMembers,
   familyPlans,
   familySent,
+  handoffFor,
   handoffMoments,
   netMinutes,
   nextWake,
+  REMINDER_CUTOFF_MS,
   remindKind,
   scheduleWake,
   scheduleWakeups,
@@ -26,6 +28,7 @@ import {
   type SchedulerMode,
   type Via,
 } from "./push-wake";
+import { quietPhones, type QuietPhones } from "./push-quiet";
 import { formatTime } from "./time";
 import type { CarePerson, CarePlan, Member, Source } from "./types";
 import { MAPLE_ORIGIN } from "./origin";
@@ -44,8 +47,19 @@ import { MAPLE_ORIGIN } from "./origin";
  *     that medicine's reminder since its previous dose, plus phones that
  *     asked for every dose, never the phone that logged it;
  *   - the nursing timer on the lock screen (notify.ts), opt-in per phone;
+ *   - a holding turn's handoff, opt-in per phone: the planned handoff to the
+ *     holder's and the next holder's phones (handoffFor in push-wake.ts),
+ *     and "Handoff now" (notify.ts) to the phones of the person asked;
  *   - "Send a test in 1 minute", through the same scheduled path.
  * Never a dose, never "take it now": the times are her own plan's.
+ *
+ * Quiet during my protected sleep (push-quiet.ts, per phone, on unless
+ * turned off): while a phone's person is inside their own window on the
+ * night roster, not holding her and not in Maple in the last 15 minutes,
+ * it holds the nursing timer, "Logged" and her medicines' reminders (her
+ * own phone keeps her own). A held reminder stays unclaimed and goes once
+ * when the phone isn't quiet any more (the window's end) if it's still due
+ * and inside the 3-hour cutoff. Handoffs are never held.
  *
  * Nothing is queued: each tick works out what's due from the plans and
  * doses as they are, so a dose deleted or moved never leaves a stale
@@ -90,6 +104,12 @@ export type PushPrefs = {
   nursing?: boolean;
   /** Holding shifts: the planned handoff's reminder, and "Wake [partner]" from another phone (default off). */
   handoff?: boolean;
+  /**
+   * Quiet during my protected sleep (default on; it only matters while this
+   * phone's person is inside their own window on an active goal's night
+   * roster): nursing and medicine notices wait (push-quiet.ts).
+   */
+  quiet_window?: boolean;
 };
 
 export type PushSub = {
@@ -120,8 +140,8 @@ type Row = Record<string, unknown>;
 const SEC = 1000;
 const MIN = 60 * SEC;
 const HOUR = 60 * MIN;
-/** A reminder more than this late (the clock was down) isn't sent. */
-export const CUTOFF_MS = 3 * HOUR;
+/** A reminder more than this late (the clock was down, or a quiet phone held it) isn't sent: push-wake.ts's REMINDER_CUTOFF_MS. */
+export const CUTOFF_MS = REMINDER_CUTOFF_MS;
 /** Past this, a reminder says how long it has been OK ("has been OK since 8:00 AM"). */
 const LATE_MS = 10 * MIN;
 /** A gap between ticks this long is kept for the health line. */
@@ -199,6 +219,7 @@ export function cleanPrefs(v: unknown): PushPrefs {
   if (typeof o.hide_names === "boolean") out.hide_names = o.hide_names;
   if (typeof o.nursing === "boolean") out.nursing = o.nursing;
   if (typeof o.handoff === "boolean") out.handoff = o.handoff;
+  if (typeof o.quiet_window === "boolean") out.quiet_window = o.quiet_window;
   if (Array.isArray(o.muted)) out.muted = o.muted.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0).slice(0, 100);
   return out;
 }
@@ -432,6 +453,21 @@ export async function claim(sub: Pick<PushSub, "id" | "family_id">, key: string,
     [k, sub.id, ref, sub.family_id]
   );
   return rows.length ? k : null;
+}
+
+/**
+ * A notice this phone held (Quiet during my protected sleep, push-quiet.ts):
+ * its "Logged" or a nursing update. Claimed as 'held', which claim() never
+ * takes again, so a retry never sends it after the window; it never counts
+ * as sent (nothing that reads what a phone got sees it).
+ */
+export async function markHeld(sub: Pick<PushSub, "id" | "family_id">, key: string, ref: string | null): Promise<void> {
+  await q(`INSERT INTO maple_push_sent (key, sent_at, state, attempts, sub_id, ref, family_id) VALUES ($1, NOW(), 'held', 0, $2, $3, $4) ON CONFLICT (key) DO NOTHING`, [
+    `s${sub.id}|${key}`,
+    sub.id,
+    ref,
+    sub.family_id,
+  ]);
 }
 
 /** Record how a claimed send went: sent (or the phone is gone) stays claimed; a failure can be claimed again. */
@@ -776,6 +812,8 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
       const audience = await audienceOf(scope, person);
       const byMember = new Map<string, PushSub[]>();
       for (const sub of subs) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
+      // The phones quiet for their person's protected sleep, read once and only when a reminder is due to go.
+      let quiet: Promise<QuietPhones> | null = null;
       for (const [email, phones] of byMember) {
         try {
           const v = voiceFor(audience, email, now);
@@ -787,6 +825,9 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
               for (const phone of phones) {
                 const pr = phone.prefs;
                 if (pr.meds === false || pr[m.kind] === false || pr.muted?.includes(plan.id)) continue;
+                // Her own phone always gets her own; a quiet phone holds anyone else's, unclaimed, so it goes once
+                // the phone isn't quiet (the window's end) while it's still due.
+                if (!v.self && (await (quiet ??= quietFor(scope, subs, now))).has(phone.id)) continue;
                 try {
                   count(await sendOnce(phone, m.key, `med:${plan.id}`, medNotice(m, plan, v, phone.prefs), { ttlS: (CUTOFF_MS - (t - m.at)) / SEC }));
                 } catch (err) {
@@ -820,15 +861,18 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
     }
   }
 
-  // The planned handoff of an open holding shift, to every phone that turned handoff reminders on.
+  // The planned handoff of an open holding shift, to the holder's and the next holder's phones that turned handoff reminders on.
   let handoffs: HandoffMoment[] | null = null;
   if (subs.some((s) => s.prefs.handoff === true)) {
     try {
       handoffs = await handoffMoments(scope);
+      let members: Member[] | null = null;
       for (const m of handoffs) {
         if (m.at > t || t - m.at >= HANDOFF_CUTOFF_MS || m.at < run.floor) continue;
+        members ??= await familyMembers(scope.familyId);
+        const forWhom = handoffFor(m, members);
         for (const phone of subs) {
-          if (phone.prefs.handoff !== true) continue;
+          if (phone.prefs.handoff !== true || !forWhom.includes(phone.member)) continue;
           try {
             count(await sendOnce(phone, m.key, `handoff:${m.shiftId}`, handoffNotice(m.shiftId, m.at, scope.tz, now, "planned"), { ttlS: (HANDOFF_CUTOFF_MS - (t - m.at)) / SEC }));
           } catch (err) {
@@ -863,6 +907,18 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
   // Let go of this family's phones stopped for a month.
   await q(`DELETE FROM maple_push_subs WHERE family_id = $1 AND needs_resubscribe AND updated_at < NOW() - INTERVAL '30 days'`, [scope.familyId]);
   return { sent, failed };
+}
+
+/**
+ * The family's quiet phones now (push-quiet.ts), never an error: if they
+ * can't be read, nothing is held (the notices go out as they did before
+ * there was a quiet window), and only an error code is reported.
+ */
+export function quietFor(scope: FamilyScope, subs: readonly PushSub[], now: Date): Promise<QuietPhones> {
+  return quietPhones(scope, subs, now).catch((err) => {
+    void captureServerException(new Error(errCode(err)), { route: "maple push quiet" });
+    return new Map() as QuietPhones;
+  });
 }
 
 /** Publish a retry wake for the family a minute from now (QStash only; otherwise the next tick of any kind retries). */
