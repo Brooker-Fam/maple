@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import { careTime } from "../../src/lib/maple/care";
 import { familyScope, type FamilyScope } from "../../src/lib/maple/family";
 import { notifyDoseLogged, notifyHandoffNow, notifyNursing } from "../../src/lib/maple/notify";
 import { claim, cleanPrefs, liveSubs, markHeld, runPushTick } from "../../src/lib/maple/push";
@@ -9,7 +10,7 @@ import { feedCover, quietWindowWords, recapSpan, windowsBetween } from "../../sr
 import { makeVoice } from "../../src/lib/maple/voice";
 import { askHandoff, startShift } from "../../src/lib/maple/sleep/store";
 import type { SleepGoal } from "../../src/lib/maple/sleep/types";
-import { formatTime, localParts } from "../../src/lib/maple/time";
+import { localParts } from "../../src/lib/maple/time";
 import type { Member } from "../../src/lib/maple/types";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type Seed } from "./harness";
 
@@ -276,14 +277,17 @@ async function quiet() {
     // Avery's window: five hours, ending a minute ago. Her medicine came due 40 minutes before it ended.
     const w = await quietWorld(-41, { roster: false });
     await w.window(w.alpha.owner, end - 5 * 60 * MIN, end);
-    const okAt = end - 40 * MIN;
+    // OK again six hours after the dose quietWorld logged (about 40 minutes before the window ended, to the second).
+    const [dosed] = await sql(`SELECT at FROM maple_care_entries WHERE id = 10000031`);
+    const okAt = new Date(dosed.at as string | Date).getTime() + 360 * MIN;
     await runPushTick(new Date(okAt + 5 * MIN), { via: "wake", trusted: true, familyId: 1 });
     eq(got(w, w.alpha.owner).length, 0, "held in the window");
     ok(got(w, w.alpha.member, "ok").length === 1, "Blake (no window) heard it at once");
     sent.length = 0;
     await runPushTick(new Date(end + 30_000), { via: "wake", trusted: true, familyId: 1 });
     const late = got(w, w.alpha.owner, "ok");
-    eq(late.map((s) => s.title), [`Ibuprofen has been OK for Dana since ${formatTime(okAt, w.alpha.tz)}`], "once at the window's end, in the usual words");
+    // In the notice's own words for that moment (care.ts careTime: "11:50 PM yesterday" once the window ends after midnight).
+    eq(late.map((s) => s.title), [`Ibuprofen has been OK for Dana since ${careTime(okAt, new Date(end + 30_000), w.alpha.tz)}`], "once at the window's end, in the usual words");
     ok(!/missed|take it|dose/i.test(`${late[0].title} ${late[0].body}`), `never a missed dose: ${late[0].body}`);
     sent.length = 0;
     await runPushTick(new Date(end + 2 * MIN), { via: "wake", trusted: true, familyId: 1 });

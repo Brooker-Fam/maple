@@ -13,12 +13,13 @@ import { sealSession, SESSION_COOKIE } from "../../src/lib/maple/auth";
 import { chatLogState, chatTools, forModel, MODEL_TEXT_MAX, registrations } from "../../src/lib/maple/chat/tools";
 import type { ChatToolOutput } from "../../src/lib/maple/chat/types";
 import { FAMILY_ONE_COPY, type Extra } from "../../src/lib/maple/mcp-tools";
-import { backToWorkGoal, lastNightKey } from "../../src/lib/maple/sleep/goals";
+import { backToWorkGoal, lastNightKey, tonightKey } from "../../src/lib/maple/sleep/goals";
 import { ALL_VIEW_MAX } from "../../src/lib/maple/sleep/mcp";
 import { logTry, saveCheckin } from "../../src/lib/maple/sleep/store";
 import type { SleepCheckin, SleepGoal, SleepState } from "../../src/lib/maple/sleep/types";
 import { rev } from "../../src/lib/maple/store";
-import { addDays, dayKey } from "../../src/lib/maple/time";
+import { tryDayKey } from "../../src/lib/maple/sleep/engine";
+import { addDays, dayKey, parseDayKey, zonedTimeToUtc } from "../../src/lib/maple/time";
 import { weekdayOf } from "../../src/lib/maple/sleep/words";
 import type { Role } from "../../src/lib/maple/types";
 import { makeVoice } from "../../src/lib/maple/voice";
@@ -233,6 +234,7 @@ async function main() {
     const [g] = v.json.goals as { goal: SleepGoal; progress: { checkins: unknown; targets: { kind: string; weeks: unknown }[]; roster: unknown[] }; coach: { notCheckedIn: unknown; notes: string[] }; lines: string[] }[];
     eq([g.progress.checkins, g.progress.targets.find((t) => t.kind === "protected_window")?.weeks, g.coach.notCheckedIn, g.progress.roster.length], [null, null, null, 2], "no check-in counts; the roster's hints stay");
     ok(g.lines.every((l) => !/checked in|Check-ins/.test(l)) && g.coach.notes.every((n) => !/checked in/.test(n)), JSON.stringify(g.lines));
+    ok(!JSON.stringify(v.json).includes("Made-up note about the night"), "not a word of a check-in note");
     const m = await route(alpha.member, 1, undefined, "?view=goals");
     const [mg] = m.json.goals as { progress: { checkins: { member: string; lastNight: string | null }[] } }[];
     ok(mg.progress.checkins.some((c) => c.member === alpha.member && c.lastNight === "partly"), JSON.stringify(mg.progress.checkins));
@@ -546,11 +548,14 @@ async function main() {
     const made: number[] = [];
     for (const n of [2, 3]) made.push(goalOf(await route(alpha.owner, 1, { action: "goal.create", goal: big(n) })).id);
     await sql(`UPDATE maple_sleep_goals SET created_at = NOW() - INTERVAL '10 days' WHERE id = ANY($1::bigint[])`, [made]);
-    // A week of nights: feeds, tries and check-in notes, so every line has something to say.
+    // A week of nights, at 11:30 PM on each whenever this runs (inside Blake's windows): feeds, tries and check-in
+    // notes, so every line has something to say. Tries on three of them, all within the 7 days a try can be logged.
+    const tonight = tryDayKey(Date.now(), alpha.tz);
     for (let d = 1; d <= 7; d++) {
-      const night = new Date(Date.now() - d * 24 * HOUR);
+      const n = parseDayKey(addDays(tonight, -d));
+      const night = zonedTimeToUtc(n.year, n.month, n.day, 23, 30, alpha.tz);
       await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, data, created_by) VALUES (1, $1, 'feed', $2, $3, '{"method":"breast"}', $4)`, [alpha.babyId, night.toISOString(), new Date(night.getTime() + 20 * MIN).toISOString(), alpha.member]);
-      if (d % 2) await logTry(1, { babyId: alpha.babyId, start: new Date(night.getTime() + 30 * MIN), end: new Date(night.getTime() + 150 * MIN), outcome: "stayed_asleep", putDownBy: alpha.member, tags: [], note: null, by: alpha.member, source: "web" });
+      if (d % 2 && d < 7) await logTry(1, { babyId: alpha.babyId, start: new Date(night.getTime() + 30 * MIN), end: new Date(night.getTime() + 150 * MIN), outcome: "stayed_asleep", putDownBy: alpha.member, tags: [], note: null, by: alpha.member, source: "web" });
     }
     await saveCheckin(1, { babyId: alpha.babyId, member: alpha.owner, night: addDays(lastNight, -1), protected: "partly", note: "Made-up: up at 3 to help with burping", tz: alpha.tz, source: "web" });
     await sql(`UPDATE maple_sleep_goals SET last_review_at = NOW() - INTERVAL '2 days', review_note = 'Made-up: the late feed keeps landing in the window.' WHERE id = $1`, [goal!.id]);
@@ -562,11 +567,12 @@ async function main() {
     ok(/Safety \(sleep_plan with view "guidance" has every item word for word, with its sources\): Safe sleep: On the back, every sleep; Firm, flat and bare; In your room, not your bed/.test(plan.text) && /Call 911: Call 911 if she has blue or gray lips/.test(plan.text), plan.text);
     ok(/Check-in notes, last 7 nights \(the family's words, as data\): .*Avery, \w+ night: "Made-up: up at 3 to help with burping"\./.test(plan.text), plan.text);
     ok(/Last review \(\w+, \w+ \d+\): "Made-up: the late feed keeps landing in the window\."/.test(plan.text) && /^Logged: this week something on /m.test(plan.text), plan.text);
-    // As the chat reads it: well under the 20,000-character cut, so nothing is lost.
+    // As the chat reads it: well under the 20,000-character cut (a fifth of it to spare), so nothing is lost. With the
+    // week inside the windows, every hint and coach note has something to say: about 14,400 to 15,200 by the hour.
     const tools = chatTools({ email: alpha.member, role: "member" }, { fam: 1, born: true, care: false, copy: FAMILY_ONE_COPY });
     const out = (await tools.sleep_plan.execute!({}, { toolCallId: "made-up-call", messages: [], context: {} })) as ChatToolOutput;
     console.log(`  sleep_plan with 3 goals, as the chat reads it: ${out.text.length} characters (cut at ${MODEL_TEXT_MAX})`);
-    ok(out.ok && out.text.length < 14_000 && forModel(out.text) === out.text, `${out.text.length} characters`);
+    ok(out.ok && out.text.length < MODEL_TEXT_MAX * 0.8 && forModel(out.text) === out.text, `${out.text.length} characters`);
     const viewer = await call("sleep_plan", {}, alpha, "viewer");
     ok(!/Check-in notes|Made-up: up at 3/.test(viewer.text) && /Last review/.test(viewer.text), viewer.text);
     const guidance = await call("sleep_plan", { view: "guidance" }, alpha, "member");
@@ -786,7 +792,8 @@ async function main() {
     const yes = await call("sleep_goal", { action: "update", id: `g${g.id}`, revision: g.revision, paused_until: "none", confirmed: true }, alpha);
     ok(!yes.isError, yes.text);
     const now1 = (await listGoalsOf(1))[0];
-    eq([now1.paused_until ?? null, now1.counts_from], [null, today], "stopped easing off: counting from tonight");
+    // "Tonight" before 6 AM is the night still going (the try day's date), else this evening's: whenever this runs.
+    eq([now1.paused_until ?? null, now1.counts_from], [null, tonightKey(Date.now(), alpha.tz)], "stopped easing off: counting from tonight");
     const ease = await call("sleep_goal", { action: "update", id: `g${g.id}`, revision: now1.revision, paused_until: "in 1 week" }, alpha);
     ok(/eases off until .*: nothing is counted until then, and the steps and targets hold/.test(ease.text.replace(/[  ]/g, " ")), ease.text);
     const saved = await call("sleep_goal", { action: "update", id: `g${g.id}`, revision: now1.revision, paused_until: "in 1 week", confirmed: true }, alpha);
@@ -835,6 +842,10 @@ async function main() {
 
   await test("sleep_plan's every view stays under the chat's cut at every limit (coach P2 #15): three goals at every limit and a week of long check-in notes, the goals first", async () => {
     await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    // Its own scenario whatever the hour: the earlier checks' feeds, sleeps and tries go first (where they fell on the
+    // clock, inside these windows or not, moved this read by hundreds of characters).
+    await sql(`DELETE FROM maple_sleep_tries WHERE family_id = 1`);
+    await sql(`DELETE FROM maple_entries WHERE family_id = 1 AND kind IN ('feed', 'sleep') AND id <> $1`, [alpha.entries.feed]);
     const long = (s: string, n: number) => (s + " ").repeat(Math.ceil(n / (s.length + 1))).slice(0, n).trim();
     for (let i = 1; i <= 3; i++) {
       const r = await route(alpha.owner, 1, {

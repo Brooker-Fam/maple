@@ -19,7 +19,7 @@ import { runPushTick } from "../../src/lib/maple/push";
 import { askState, chooseSleepLink, nextHandoff } from "../../src/lib/maple/sleep/engine";
 import { windowAt } from "../../src/lib/maple/sleep/handoff";
 import { activeRosters } from "../../src/lib/maple/sleep/roster-read";
-import { askHandoff, deleteTry, endShift, finishTry, getTry, handOff, listShifts, logTry, openShift, saveCheckin, startShift, startTry, undoFinish, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
+import { askHandoff, deleteTry, endShift, finishTry, getTry, handOff, listShifts, logTry, openShift, saveCheckin, sleepStateFor, startShift, startTry, undoFinish, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
 import { createEntryOnce, getEntry, listEntries, startTimer, stopTimer } from "../../src/lib/maple/store";
 import { addDays, dayKey, localParts } from "../../src/lib/maple/time";
@@ -199,6 +199,64 @@ async function main() {
     eq(fix.text.replace(String(t.id), "N"), none.text.replace("999999", "N"), "the same words as an id nobody has");
     eq(sleepState(await route(beta.owner, 2)).tries, [], "nothing of alpha's in beta's state");
     eq((await getTry(2, t.id)), null, "the store too");
+  });
+
+  await test("families: every action that takes an id, sent with Beta's ids from Alpha's session, finds nothing or does nothing; Beta's rows stay byte for byte", async () => {
+    await clean(alpha);
+    await clean(beta);
+    const bfam = { familyId: beta.familyId, babyId: beta.babyId, tz: beta.tz };
+    const bt = await startTry(bfam, { babyId: beta.babyId, putDownBy: beta.owner, tags: [], note: null, by: beta.owner, source: "web", clientId: "beta-try-probe-1" });
+    const bs = await startShift(2, { babyId: beta.babyId, holder: beta.owner, by: beta.owner, source: "web" });
+    const bg = (await route(beta.owner, 2, { action: "goal.create", goal: { title: "Made-up beta goal" } })).json.result as { goal: { id: number; revision: number } };
+    const live = await saveCheckin(bfam, { babyId: beta.babyId, member: beta.member, protected: "yes", tz: beta.tz, source: "web" });
+    const gone = await saveCheckin(bfam, { babyId: beta.babyId, member: beta.member, night: addDays(live.checkin.night, -1), protected: "partly", tz: beta.tz, source: "web" });
+    await sql(`UPDATE maple_sleep_checkins SET deleted_at = NOW() WHERE id = $1`, [gone.checkin.id]);
+    const snapshot = async () =>
+      JSON.stringify(
+        await Promise.all([
+          sql(`SELECT * FROM maple_sleep_tries WHERE family_id = 2 ORDER BY id`),
+          sql(`SELECT * FROM maple_sleep_shifts WHERE family_id = 2 ORDER BY id`),
+          sql(`SELECT * FROM maple_sleep_goals WHERE family_id = 2 ORDER BY id`),
+          sql(`SELECT * FROM maple_sleep_checkins WHERE family_id = 2 ORDER BY id`),
+          sql(`SELECT id, active, ended_at, deleted_at, data, updated_at FROM maple_entries WHERE family_id = 2 ORDER BY id`),
+        ])
+      );
+    const before = await snapshot();
+    const sleep = bt.sleep!;
+    const s = { id: sleep.id, expect_updated_at: sleep.updated_at };
+    const probes: Record<string, unknown>[] = [
+      { action: "try.finish", id: bt.try.id, outcome: "woke_calm" },
+      { action: "try.update", id: bt.try.id, note: "made-up" },
+      { action: "try.delete", id: bt.try.id },
+      { action: "try.restore", id: bt.try.id, sleep_id: sleep.id },
+      { action: "try.undo_finish", id: bt.try.id, expect_updated_at: bt.try.updated_at, sleep: { ...s, was_active: true } },
+      { action: "shift.handoff", id: bs.shift.id, to: alpha.member },
+      { action: "shift.end", id: bs.shift.id },
+      { action: "shift.update", id: bs.shift.id, next_holder: null },
+      { action: "shift.delete", id: bs.shift.id, sleep: s },
+      { action: "shift.reopen", id: bs.shift.id, expect_updated_at: bs.shift.updated_at, sleep: s },
+      { action: "shift.accept", id: bs.shift.id },
+      { action: "shift.ask", id: bs.shift.id, to: alpha.member },
+      { action: "shift.cancel_ask", id: bs.shift.id, expect_updated_at: bs.shift.updated_at },
+      { action: "shift.undo_handoff", started_id: bs.shift.id, started_updated_at: bs.shift.updated_at, ended_id: bs.shift.id, ended_updated_at: bs.shift.updated_at },
+      { action: "goal.update", id: bg.goal.id, revision: bg.goal.revision, patch: { title: "Changed" } },
+      { action: "goal.step", id: bg.goal.id, step: "s1", done: true },
+      { action: "goal.review", id: bg.goal.id, note: "made-up" },
+      { action: "goal.close", id: bg.goal.id, status: "dropped" },
+      { action: "checkin.delete", id: live.checkin.id },
+      { action: "checkin.restore", id: gone.checkin.id },
+    ];
+    const statuses: string[] = [];
+    for (const p of probes) statuses.push(`${p.action} ${(await route(alpha.owner, 1, p)).status}`);
+    eq(statuses, probes.map((p) => `${p.action} 404`), "each one finds nothing");
+    // Undo of an asleep-in-arms start with Beta's sleep: nothing to undo here.
+    const undo = await route(alpha.owner, 1, { action: "shift.asleep_undo", sleep: s });
+    eq([undo.status, (undo.json.result as { sleepDeleted: unknown }).sleepDeleted], [200, null], "asleep_undo does nothing");
+    eq((await route(alpha.owner, 1, undefined, `?view=goals&id=${bg.goal.id}`)).json.goals, [], "Beta's goal by id");
+    eq(await snapshot(), before, "Beta's rows unchanged");
+    eq(await sql(`SELECT id FROM maple_sleep_shifts WHERE family_id = 1`), [], "and no turn of Alpha's started");
+    for (const t of ["maple_sleep_tries", "maple_sleep_shifts", "maple_sleep_goals", "maple_sleep_checkins"]) await sql(`DELETE FROM ${t} WHERE family_id = 2`);
+    await clean(beta);
   });
 
   // ── tries and the sleep they sit on ────────────────────────────────────
@@ -853,9 +911,23 @@ async function main() {
     const got = await listShifts(1, alpha.babyId, { from: new Date(Date.now() - 2 * 24 * HOUR), limit: 100 });
     const stmt = seen.stop().find((s) => /FROM maple_sleep_shifts/.test(s.sql))!;
     eq(got.map((s) => s.id), [open.id, recent.id], "the open turn and the one that ended an hour ago, nothing older");
-    const plan = (await sql(`EXPLAIN (ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF) ${stmt.sql}`, stmt.params)).map((r) => String(r["QUERY PLAN"])).join("\n");
+    const explain = async (x: { sql: string; params: unknown[] }) => (await sql(`EXPLAIN (ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF) ${x.sql}`, x.params)).map((r) => String(r["QUERY PLAN"])).join("\n");
+    const plan = await explain(stmt);
     ok(/idx_maple_sleep_shifts_ended/.test(plan) && !/Rows Removed by Filter: \d{3,}/.test(plan), plan);
     await sql(`DELETE FROM maple_sleep_shifts WHERE family_id = 1`);
+    // The tries the state reads (the last 8 days, and the running one) the same way, over 3,000 older ones.
+    await sql(
+      `INSERT INTO maple_sleep_tries (family_id, baby_id, started_at, ended_at, outcome, created_by)
+       SELECT 1, $1, NOW() - INTERVAL '30 days' - (g || ' hours')::interval, NOW() - INTERVAL '30 days' - (g || ' hours')::interval + INTERVAL '20 minutes', 'woke_calm', $2 FROM generate_series(1, 3000) g`,
+      [alpha.babyId, alpha.owner]
+    );
+    await sql(`ANALYZE maple_sleep_tries`);
+    const seenTries = await captureQueries();
+    eq((await sleepStateFor(1, alpha.babyId, new Date(), { tz: alpha.tz })).tries, [], "none of them in the state");
+    const tries = seenTries.stop().find((x) => /FROM maple_sleep_tries/.test(x.sql))!;
+    const triesPlan = await explain(tries);
+    ok(/idx_maple_sleep_tries_time/.test(triesPlan) && !/Rows Removed by Filter: \d{3,}/.test(triesPlan), triesPlan);
+    await sql(`DELETE FROM maple_sleep_tries WHERE family_id = 1`);
   });
 
   await test("load: a full state reads the sleep tables only when the reader's token has a sleep part (a family with none reads as before); ?view=goals and ?view=progress answer with their view alone", async () => {
