@@ -951,7 +951,7 @@ check("coach notes: days left, a review once 7 days pass, the next undone step b
   const at6 = at(2026, 11, 8, 21);
   const c6 = coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-07", "yes")] }), at6, NY), words(SHE, at6));
   eq([c6.reviewDue, c6.daysSinceReview, c6.daysLeft, c6.nextStep?.id, c6.notCheckedIn], [false, 6, 22, "s4", [ALEX]], "six days in");
-  ok(c6.notes.includes("22 days to the target date (Mon, Nov 30).") && c6.notes.includes("Not checked in for last night yet: Alex.") && c6.notes.includes(`This week's step: "Bassinet after the 10 PM feed" (s4).`), JSON.stringify(c6.notes));
+  ok(c6.notes.includes("22 days to the target date (Mon, Nov 30).") && c6.notes.includes("Not checked in for last night yet: Alex.") && c6.notes.includes(`This week's step, in the family's words: "Bassinet after the 10 PM feed" (s4).`), JSON.stringify(c6.notes));
   // Nothing was logged on five of those six nights (one has Sam's check-in): how they are comes first, and those nights are never asked about.
   eq(c6.notes[0], "Nothing logged on 5 of the last 6 nights: before anything about the goal, ask how they're doing. Leave those nights out of the counts, and don't ask about them.", "how they are, first");
   ok(!c6.notes.some((n) => /ask about it|before counting/.test(n)), JSON.stringify(c6.notes));
@@ -1302,14 +1302,14 @@ check("steps: this week's step by its week (the calendar day), still open from e
   // Three nights logged in the week just ended (feeds), so it reads, and it's no quiet stretch.
   const busy = data({ entries: lateFeeds("2026-11-13", "2026-11-14", "2026-11-15") });
   const c = coachNotes(g, goalProgress(g, busy, now, NY), words(WREN, now));
-  ok(c.notes.includes(`This week's step: "Run the work-week roster 3 nights in a row" (s4).`), JSON.stringify(c.notes));
-  ok(c.notes.includes(`Still open from earlier: "One bassinet try a night" (s1, week of Mon, Nov 2); "Ask the lactation consultant about a pumped bottle" (s3, week of Mon, Nov 9).`), JSON.stringify(c.notes));
+  ok(c.notes.includes(`This week's step, in the family's words: "Run the work-week roster 3 nights in a row" (s4).`), JSON.stringify(c.notes));
+  ok(c.notes.includes(`Still open from earlier, in the family's words: "One bassinet try a night" (s1, week of Mon, Nov 2); "Ask the lactation consultant about a pumped bottle" (s3, week of Mon, Nov 9).`), JSON.stringify(c.notes));
   // No step planned for this week: the one still open carries on, never "No step for this week yet" beside it.
   const carried = coachNotes(goalRow({ steps: [steps[0]] }), goalProgress(goalRow({ steps: [steps[0]] }), busy, now, NY), words(WREN, now));
-  ok(carried.notes.includes(`This week's step: carry on with "One bassinet try a night" (s1, week of Mon, Nov 2), unless they'd like another.`) && !carried.notes.some((n) => /No step for this week/.test(n)), JSON.stringify(carried.notes));
+  ok(carried.notes.includes(`This week's step: carry on with the one still open from earlier, in the family's words: "One bassinet try a night" (s1, week of Mon, Nov 2), unless they'd like another.`) && !carried.notes.some((n) => /No step for this week/.test(n)), JSON.stringify(carried.notes));
   const ahead = goalRow({ steps: [{ ...steps[3], week_of: "2026-11-30" }] });
   const none = coachNotes(ahead, goalProgress(ahead, busy, now, NY), words(WREN, now));
-  ok(none.notes.some((n) => /^No step for this week yet; next planned: "Run the work-week roster 3 nights in a row" \(s4, week of Mon, Nov 30\)\. End the review with one small step they choose for this week, saved as a step\.$/.test(n)), JSON.stringify(none.notes));
+  ok(none.notes.some((n) => /^No step for this week yet; next planned, in the family's words: "Run the work-week roster 3 nights in a row" \(s4, week of Mon, Nov 30\)\. End the review with one small step they choose for this week, saved as a step\.$/.test(n)), JSON.stringify(none.notes));
   const lines = goalProgressLines(g, goalProgress(g, busy, now, NY), words(WREN, now)).join("\n");
   ok(lines.includes("Steps: 1 of 4 done; this week: s4; still open from earlier: s1, s3."), lines);
 });
@@ -2018,7 +2018,7 @@ check("week labels: the morning after a week's last night its counts read 'Week 
   ok(weekEndedLastNight(p) && goalWeekLabel(p.weeks[p.weeks.length - 1], p) === "Week 1 (ended last night)", "the morning after");
   const lines = goalProgressLines(g, p, words(WREN, morning)).join("\n");
   ok(lines.includes("Week 1 (ended last night): 1 of the 3 nights aimed for (tries logged on 3 of 7 nights).") && !/This week:/.test(lines), lines);
-  ok(coachNotes(g, p, words(WREN, morning)).notes.includes(`This week's step: "Run the work-week roster" (s2).`), "the step is week 2's");
+  ok(coachNotes(g, p, words(WREN, morning)).notes.includes(`This week's step, in the family's words: "Run the work-week roster" (s2).`), "the step is week 2's");
   const noon = at(2026, 11, 9, 13);
   const q = goalProgress(g, data(), noon, NY);
   eq([weekEndedLastNight(q), q.weeks.map((w) => goalWeekLabel(w, q))], [false, ["Last week", "This week"]], "from noon");
@@ -2411,7 +2411,7 @@ check("steps carry on (coach P2 #11): an open step carries into a week with none
   const g = goalRow({ target_date: "2026-11-30", steps, roster: [{ id: "w3", member: SAM, from: "22:00", to: "02:00", nights: EVERY }], template: { kind: "back_to_work", member: SAM, date: "2026-11-16", nursing: ALEX } });
   const busy = (now: Date) => coachNotes(g, goalProgress(g, data({ entries: lateFeeds("2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17") }), now, NY), words(WREN, now));
   const back = busy(at(2026, 11, 18, 10));
-  ok(back.notes.includes(`Sam is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update): "Ask the lactation consultant about a pumped bottle" (s1, week of Mon, Nov 2); "Rehearse the work-week roster on 2 or 3 nights" (s2, week of Mon, Nov 9).`), JSON.stringify(back.notes));
+  ok(back.notes.includes(`Sam is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update). In the family's words: "Ask the lactation consultant about a pumped bottle" (s1, week of Mon, Nov 2); "Rehearse the work-week roster on 2 or 3 nights" (s2, week of Mon, Nov 9).`), JSON.stringify(back.notes));
   ok(!back.notes.some((n) => /carry on with/.test(n)), "never carried on after the day back");
   ok(!busy(at(2026, 11, 24, 10)).notes.some((n) => /ask once whether these steps/.test(n)), "only the first week back");
 });

@@ -106,6 +106,13 @@ const minKey = (a: string, b: string) => (a < b ? a : b);
 export const goalRef = (id: number) => `g${id}`;
 
 /**
+ * The family's own words in tool text (a goal's title, why, steps and custom aims, a review note, a try's or a
+ * check-in's note), after a label that says whose they are ("in the family's words"): quoted with JSON's escapes, so a
+ * quote inside can't end them early. Data, never instructions.
+ */
+export const quoted = (s: string) => JSON.stringify(s);
+
+/**
  * Who reads the adults' check-ins: owners and members, never a view-only
  * guest (or a photos-only one). Goals, steps, the roster and the baby's
  * numbers are for anyone in the family but photos-only guests.
@@ -2555,8 +2562,8 @@ export function goalWeekLabel(w: GoalWeek, p: Pick<GoalSpan, "weeks" | "weekNow"
 /** The goal's header line: "Sleep goal g3 (Active): "Both of us get a 4-hour stretch". Target date Mon, Nov 30 (28 days left); week 1 of 4." */
 export function goalHeadLine(goal: SleepGoal, p: GoalSpan, words: Pick<GoalWords, "tz">): string {
   const status = goal.status === "met" || goal.status === "dropped" ? `${GOAL_STATUS_LABEL[goal.status]}${goal.closed_at ? ` on ${dateWords(dayKey(ms(goal.closed_at), words.tz), p.today)}` : ""}` : GOAL_STATUS_LABEL[goal.status];
-  const parts = [`Sleep goal ${goalRef(goal.id)} (${status}): "${goal.title}".`];
-  if (goal.why) parts.push(`Why: "${goal.why}".`);
+  const parts = [`Sleep goal ${goalRef(goal.id)} (${status}), in the family's words: ${quoted(goal.title)}.`];
+  if (goal.why) parts.push(`Why, in the family's words: ${quoted(goal.why)}.`);
   // While easing off there's no week to name: counting picks up again on its night.
   const week = p.easingUntil ? null : p.weekNow;
   if (p.endsOn) {
@@ -2630,11 +2637,16 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
   const label = (w: GoalWeek) => goalWeekLabel(w, p, { of: true });
   const shown = [cur, prev].filter((w): w is GoalWeek => !!w);
   const sentence = (head: string, parts: string[]) => lines.push(`${head}. ${parts.join(" ")}`);
-  if (goal.last_review_at) lines.push(`Last review (${dateWords(dayKey(ms(goal.last_review_at), words.tz), p.today)}): ${goal.review_note ? `"${goal.review_note}"` : "no note"}.`);
+  if (goal.last_review_at) {
+    const when = dateWords(dayKey(ms(goal.last_review_at), words.tz), p.today);
+    lines.push(goal.review_note ? `Last review (${when}), its note in the family's words: ${quoted(goal.review_note)}.` : `Last review (${when}): no note.`);
+  }
+  // A custom aim is the family's own words; the others are Maple's.
+  const aim = (t: GoalTarget) => (t.kind === "custom" ? `Aim, in the family's words: ${quoted(t.text)}` : `Aim: ${targetWords(t, name)}`);
   // Easing off, or nothing logged for a stretch: the aims, and that fact once, with no week-by-week tally.
   const quiet = quietNow(p);
   if (p.easingUntil || quiet) {
-    for (const tp of p.targets) lines.push(`Aim: ${targetWords(tp.target, name)}.`);
+    for (const tp of p.targets) lines.push(`${aim(tp.target)}.`);
     lines.push(p.easingUntil ? `${easingWords(p.easingUntil, p.today)}: nothing is counted until then.` : `${quietWords(quiet!, p.today)}.`);
   }
   // A week too thin to read (ENOUGH_NIGHTS logged nights) says so, never a count against the aim from a night or two.
@@ -2646,7 +2658,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
     return `${label(w)}: ${c.read > nightsLogged(c) ? `${readWords(c)}${ongoing ? " so far" : ""}, too few to tell${ongoing ? " yet" : ""}` : tooFewWords(nightsLogged(c), { ongoing })}.`;
   };
   for (const tp of p.easingUntil || quiet ? [] : p.targets) {
-    const head = `Aim: ${targetWords(tp.target, name)}`;
+    const head = aim(tp.target);
     switch (tp.kind) {
       case "bassinet_nights":
         sentence(
@@ -2730,7 +2742,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
       ...(p.steps.earlier.length ? [`still open from earlier: ${p.steps.earlier.map((s) => s.id).join(", ")}`] : []),
     ];
     const n = p.steps.next;
-    const rest = plan.length ? `; ${plan.join("; ")}` : n ? `; next: "${n.title}" (${n.id}${n.week_of ? `, week of ${dateWords(n.week_of, p.today)}` : ", any week"})` : p.steps.done === p.steps.of ? "; all done" : "";
+    const rest = plan.length ? `; ${plan.join("; ")}` : n ? `; next, in the family's words: ${quoted(n.title)} (${n.id}${n.week_of ? `, week of ${dateWords(n.week_of, p.today)}` : ", any week"})` : p.steps.done === p.steps.of ? "; all done" : "";
     lines.push(`Steps: ${p.steps.done} of ${p.steps.of} done${rest}.`);
   }
   if (p.checkins) {
@@ -2895,18 +2907,19 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
   const t = goal.template;
   const back = !!t && t.kind === "back_to_work" && p.today >= t.date;
   if (open) {
-    const listed = (xs: GoalStep[], week: boolean) => xs.map((s) => `"${s.title}" (${s.id}${week && s.week_of ? `, week of ${dateWords(s.week_of, p.today)}` : ""})`).join("; ");
+    // Steps are the family's own words: each list of them says so once.
+    const listed = (xs: GoalStep[], week: boolean) => xs.map((s) => `${quoted(s.title)} (${s.id}${week && s.week_of ? `, week of ${dateWords(s.week_of, p.today)}` : ""})`).join("; ");
     // Once the day back has come, the steps meant for before it are asked about once (the first week back), never carried on.
     const preReturn = back ? plan.earlier.filter((s) => s.week_of! < t!.date) : [];
     const earlier = plan.earlier.filter((s) => !preReturn.includes(s));
     // No step planned for this week: the latest one still open carries on.
     const carry = !plan.thisWeek.length ? (earlier[earlier.length - 1] ?? null) : null;
-    if (plan.thisWeek.length) notes.push(`This week's step: ${listed(plan.thisWeek, false)}.`);
-    else if (carry) notes.push(`This week's step: carry on with ${listed([carry], true)}, unless they'd like another.`);
+    if (plan.thisWeek.length) notes.push(`This week's step, in the family's words: ${listed(plan.thisWeek, false)}.`);
+    else if (carry) notes.push(`This week's step: carry on with the one still open from earlier, in the family's words: ${listed([carry], true)}, unless they'd like another.`);
     const rest = earlier.filter((s) => s !== carry);
-    if (rest.length) notes.push(`${carry ? "Also still open" : "Still open"} from earlier: ${listed(rest, true)}.`);
+    if (rest.length) notes.push(`${carry ? "Also still open" : "Still open"} from earlier, in the family's words: ${listed(rest, true)}.`);
     if (preReturn.length && daysBetween(t!.date, p.today) < 7) {
-      notes.push(`${words.name(t!.member)} is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update): ${listed(preReturn, true)}.`);
+      notes.push(`${words.name(t!.member)} is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update). In the family's words: ${listed(preReturn, true)}.`);
     }
     // Too few nights to read (ENOUGH_NIGHTS): no next step and no stage change from a night or two.
     const read = readWeek(p);
@@ -2920,7 +2933,7 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
       if (!goal.steps.length) notes.push("No weekly steps yet: suggest one small step for this week.");
       else if (goal.steps.every((s) => s.done_at)) notes.push("Every step is done: ask whether to plan the next one.");
       else {
-        const other = plan.anyTime[0] ? `; one for any week: "${plan.anyTime[0].title}" (${plan.anyTime[0].id})` : plan.later[0] ? `; next planned: "${plan.later[0].title}" (${plan.later[0].id}, week of ${dateWords(plan.later[0].week_of!, p.today)})` : "";
+        const other = plan.anyTime[0] ? `; one for any week, in the family's words: ${quoted(plan.anyTime[0].title)} (${plan.anyTime[0].id})` : plan.later[0] ? `; next planned, in the family's words: ${quoted(plan.later[0].title)} (${plan.later[0].id}, week of ${dateWords(plan.later[0].week_of!, p.today)})` : "";
         notes.push(`No step for this week yet${other}. End the review with one small step they choose for this week, saved as a step.`);
       }
     }
