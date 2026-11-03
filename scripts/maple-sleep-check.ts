@@ -2554,5 +2554,25 @@ check("last night (coach review P1 #4): a week's last night isn't 'ended last ni
   eq([reviewWeek(g, goalSpan(g, small, NY), small, NY), reviewWeek(g, goalSpan(g, morning, NY), morning, NY)?.n], [null, 1], "the look-back: from the morning");
 });
 
+check("target date (coach review P2 #9): a Back to work goal's target date can't come before its roster starts, so it always has nights to count", () => {
+  const o = { v: WREN, name: nameOf, today: "2026-11-03", adults: new Set([SAM, ALEX]) };
+  // Back Tue, Dec 8: the roster starts with its rehearsal on Tue, Nov 24.
+  const base: BackToWorkAnswers = { returning: SAM, return_date: "2026-12-08", feeding: "nursing", nursing: SAM, sleeps: "bassinet", first_half: ALEX, second_half: SAM, off_duty: "other_room" };
+  const rules = { ...RULES, today: "2026-11-03", v: WREN };
+  const early = backToWorkGoal({ ...base, target_date: "2026-11-20" }, o);
+  eq(early.goal.template?.roster_from, "2026-11-24", "the roster's start");
+  throwsInput(() => cleanGoalInput(early.goal, rules, "create"), /^The target date, Fri, Nov 20, is before the roster starts on Tue, Nov 24 \(its rehearsal, two weeks before the day back\), so no night would count\. Pick that day or a later one\.$/, "a target date before it (it saved with 0 weeks)");
+  eq(cleanGoalInput(backToWorkGoal({ ...base, target_date: "2026-11-24" }, o).goal, rules, "create").fields.target_date, "2026-11-24", "the day it starts is fine");
+  const { fields } = cleanGoalInput(backToWorkGoal(base, o).goal, rules, "create");
+  const g = goalRow({ ...fields, steps: fields.steps!, roster: fields.roster!, targets: fields.targets!, template: fields.template ?? null, target_date: fields.target_date ?? null });
+  eq(goalSpan(g, at(2026, 11, 25, 10), NY).weeksTotal, 4, "by default, two weeks after the day back: four weeks counted");
+  // Moving it, or the roster's start, the wrong way on an update is refused the same way.
+  const cur = { ...rules, current: g };
+  throwsInput(() => cleanGoalInput({ target_date: "2026-11-22" }, cur, "update"), /is before the roster starts on Tue, Nov 24/, "an update's target date");
+  throwsInput(() => cleanGoalInput({ template: { ...g.template!, roster_from: "2026-12-08" }, target_date: "2026-12-01" }, cur, "update"), /^The target date, Tue, Dec 1, is before the roster starts on Tue, Dec 8/, "a later roster start");
+  // Without a template it's as before: any date from today.
+  eq(cleanGoalInput({ title: "Rest", target_date: "2026-11-04" }, rules, "create").fields.target_date, "2026-11-04", "a goal made by hand");
+});
+
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

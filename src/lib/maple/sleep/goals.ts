@@ -1200,6 +1200,14 @@ export function cleanGoalInput(raw: GoalInput, rules: GoalRules, mode: "create" 
   }
 
   if (raw.template !== undefined) out.template = cleanTemplate(raw.template, rules);
+  // A "Back to work" goal counts from its roster's start (its rehearsal): a target date before it would leave no night to count.
+  if (out.target_date !== undefined || out.template !== undefined) {
+    const end = out.target_date !== undefined ? out.target_date : (rules.current?.target_date ?? null);
+    const from = (out.template !== undefined ? out.template : rules.current?.template)?.roster_from ?? null;
+    if (end && from && end < from) {
+      throw new SleepInputError(`The target date, ${dateWords(end, rules.today)}, is before the roster starts on ${dateWords(from, rules.today)} (its rehearsal, two weeks before the day back), so no night would count. Pick that day or a later one.`);
+    }
+  }
 
   // Picking up again and easing off: the family's own clean restart, on a goal that's already going.
   for (const k of ["counts_from", "paused_until"] as const) {
