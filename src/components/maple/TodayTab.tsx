@@ -16,6 +16,7 @@ import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
 import { SleepNow, SleepPlanRow, useFoldedSleepId } from "./sleep/SleepCards";
 import { LastNightCard, LeftRunningAsk } from "./sleep/LastNight";
+import { GoalReturnToday } from "./sleep/SleepReturn";
 import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
@@ -82,12 +83,15 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
           </div>
         </section>
       )}
+      {/* While you slept, one line, above the morning's card: the partner who slept sees it without scrolling past the card. */}
+      <WhileYouSlept />
+      {/* Back after a quiet stretch on a goal: one card, once, with a clean restart to choose. */}
+      <GoalReturnToday />
       {/* The morning after (sleep plan or goal): last night from the log, its unlogged stretches, and the adult's own check-in,
           straight after Right now, so its question clears the dock. */}
       <LastNightCard />
       {/* The sleep plan and goals, for every role that reads the log (view-only guests have no strip or More). */}
       <SleepPlanRow />
-      <WhileYouSlept />
       {nothingYet && born && <FreshPage readOnly={readOnly} />}
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />

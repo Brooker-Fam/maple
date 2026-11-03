@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
-import { numberTries, progressLines, sleepGuidance, snoozeUntil, tryWhenLabel, type SleepProgress } from "@/lib/maple/sleep/engine";
+import { fromCheckinWords, numberTries, progressLines, sleepGuidance, snoozeUntil, tryWhenLabel, type SleepProgress } from "@/lib/maple/sleep/engine";
 import { PLAN_GOAL_MAX, PLAN_STAGES, TRIES_PER_DAY_MAX, TRY_ANCHORS, type PlanPatch, type PlanStage, type SleepPlan, type TrySlot } from "@/lib/maple/sleep/types";
 import { defaultGoal, downWords, firstTryWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, TIME_OF_DAY } from "@/lib/maple/sleep/words";
 import { formatDuration, formatTime } from "@/lib/maple/time";
@@ -14,6 +14,7 @@ import { ContextNote, Label } from "../sheets/parts";
 import { Button, Chip, cx, Segmented, Sheet, Stepper, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { GoalsPart } from "./SleepGoals";
+import { GoalReturnPlan } from "./SleepReturn";
 import { useSleep, useSleepContext, type PlanTab } from "./useSleep";
 
 /**
@@ -34,6 +35,8 @@ export default function SleepPlanSheet({ tab: initial = "plan", open = true, onC
   return (
     <Sheet open={open} onClose={onClose} title="Sleep plan">
       <div className="space-y-5">
+        {/* Back after a quiet stretch on a goal, when the plan is opened before Today shows it: one card, once. */}
+        <GoalReturnPlan />
         {/* Four tabs on one row at 320px: a little less padding in each. */}
         <Segmented<Tab>
           aria-label="Sleep plan"
@@ -97,6 +100,7 @@ function PlanPart() {
         {s.today && (
           <p className={cx(tone.muted, "pt-1 text-[14px]")}>
             {s.today.done} of {s.today.planned} {s.today.label}
+            {fromCheckinWords(s.today)}
             {s.today.next ? ` · next: ${slotLabel(s.today.next).replace(/^The /, "the ")}${s.today.fallback ? " (the backup, since no night try was logged)" : ""}` : ""}
           </p>
         )}
