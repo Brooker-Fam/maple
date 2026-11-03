@@ -692,10 +692,8 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
     async (c: SleepCheckin) => {
       const r = await post({ action: "checkin.delete", id: c.id });
       if (!r) return false;
-      toast("Check-in removed", {
-        tone: "info",
-        undo: () => void post({ action: "checkin.save", night: c.night, protected: c.protected, note: c.note, client_id: `checkin-${crypto.randomUUID()}` }),
-      });
+      // Undo brings that one back exactly as it was: the answer, the note and the night's other answers.
+      toast("Check-in removed", { tone: "info", undo: () => void post({ action: "checkin.restore", id: c.id }) });
       return true;
     },
     [post, toast]

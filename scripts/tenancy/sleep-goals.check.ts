@@ -187,6 +187,30 @@ async function main() {
     eq((await route(beta.member, 2, { action: "checkin.delete", id: Number(mine.id) })).status, 404, "another family");
   });
 
+  await test("check-ins: Remove my check-in's Undo (checkin.restore) brings that one back exactly as it was, the night's other answers with it; only your own; a newer one for that night stays", async () => {
+    const night = addDays(lastNight, -3);
+    const save = await route(alpha.member, 1, { action: "checkin.save", night, protected: "partly", note: "Made-up note", place: "bassinet", untimed_try: "long", untimed_min: 90, handoff: "late", client_id: "alpha-checkin-restore-1" });
+    eq(save.status, 200, JSON.stringify(save.json).slice(0, 300));
+    const c = checkinOf(save);
+    eq((await route(alpha.member, 1, { action: "checkin.delete", id: c.id })).status, 200, "removed");
+    eq((await route(alpha.owner, 1, { action: "checkin.restore", id: c.id })).status, 404, "someone else's reads as missing");
+    eq((await route(beta.member, 2, { action: "checkin.restore", id: c.id })).status, 404, "another family's too");
+    eq((await route(alpha.viewer, 1, { action: "checkin.restore", id: c.id })).status, 403, "a view-only guest writes nothing");
+    const undo = await route(alpha.member, 1, { action: "checkin.restore", id: c.id });
+    eq(undo.status, 200, JSON.stringify(undo.json).slice(0, 300));
+    const pick = (x: SleepCheckin) => [x.id, x.night, x.protected, x.note, x.place ?? null, x.untimed_try ?? null, x.untimed_min ?? null, x.handoff ?? null, x.created_at];
+    eq(pick(checkinOf(undo)), pick(c), "exactly as it was");
+    ok(sleepState(undo).checkins?.some((x) => x.id === c.id && x.place === "bassinet"), "in the state again");
+    eq((await route(alpha.member, 1, { action: "checkin.restore", id: c.id })).status, 404, "Undo twice: it isn't removed");
+    // Removed, then a new one saved for that night: the old one's Undo leaves the newer one as it is.
+    await route(alpha.member, 1, { action: "checkin.delete", id: c.id });
+    const newer = checkinOf(await route(alpha.member, 1, { action: "checkin.save", night, protected: "yes" }));
+    const late = await route(alpha.member, 1, { action: "checkin.restore", id: c.id });
+    eq([late.status, late.json.code], [409, "changed"], "a newer one since");
+    eq((sleepState(late).checkins ?? []).filter((x) => x.member === alpha.member && x.night === night).map((x) => [x.id, x.protected]), [[newer.id, "yes"]], "the newer one stays");
+    await route(alpha.member, 1, { action: "checkin.delete", id: newer.id });
+  });
+
   // ── visibility everywhere ──────────────────────────────────────────────
 
   await test("visibility: the state carries check-ins for owners and members only, and a check-in never moves a view-only guest's token", async () => {

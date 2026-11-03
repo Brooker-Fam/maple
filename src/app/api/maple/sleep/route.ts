@@ -30,6 +30,7 @@ import {
   logTry,
   progressFor,
   reopenShift,
+  restoreCheckin,
   restoreShift,
   restoreTry,
   reviewGoal,
@@ -462,6 +463,11 @@ export const POST = withMember(
         }
         case "checkin.delete": {
           const checkin = await deleteCheckin(ctx, { babyId: baby.id, member: by, id: body.id == null ? null : id(body.id), night: typeof body.night === "string" ? body.night : null });
+          return stateBody(ctx, baby.id, { result: { checkin } });
+        }
+        // The Undo of Remove my check-in: that one back exactly as it was, every answer with it.
+        case "checkin.restore": {
+          const checkin = await restoreCheckin(ctx, { babyId: baby.id, member: by, id: id(body.id) });
           return stateBody(ctx, baby.id, { result: { checkin } });
         }
         default:

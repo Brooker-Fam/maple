@@ -1742,6 +1742,28 @@ export async function deleteCheckin(fam: FamilyRef, input: { babyId: number; mem
   return rowToCheckin(rows[0]);
 }
 
+/**
+ * The Undo of a removed check-in: your own comes back exactly as it was (its
+ * answer, note and the night's other answers), by its id. Someone else's, or
+ * one that isn't removed, reads as missing; with a newer one of yours saved
+ * for that night since, SleepConflict "changed", and the newer one stays.
+ */
+export async function restoreCheckin(fam: FamilyRef, input: { babyId: number; member: string; id: number }): Promise<SleepCheckin> {
+  let rows: Row[];
+  try {
+    rows = await q(
+      `UPDATE maple_sleep_checkins SET deleted_at = NULL, updated_at = NOW()
+       WHERE id = $1 AND family_id = $2 AND baby_id = $3 AND member = $4 AND deleted_at IS NOT NULL RETURNING *`,
+      [input.id, famId(fam), input.babyId, input.member]
+    );
+  } catch (err) {
+    if (isUnique(err, "uniq_maple_sleep_checkins_night")) throw new SleepConflict("You've checked in for that night again since, so that one stays.", "changed", null);
+    throw err;
+  }
+  if (!rows.length) throw new NotFound("Check-in not found");
+  return rowToCheckin(rows[0]);
+}
+
 // ── a goal's progress, from the log ──────────────────────────────────────
 
 /**
