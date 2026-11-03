@@ -1014,7 +1014,7 @@ async function main() {
       }
     }
     // What passes: the baby's medicine, and when the adults sleep.
-    const fine = await yes({ action: "add", title: "Made-up: rest for both", steps: [{ title: "Ask the pediatrician about June's reflux medicine" }, { title: "Mom sleeps from 10 PM to 2 AM while Blake has June" }] }, alpha, "owner");
+    const fine = await yes({ action: "add", title: "Made-up: rest for both", steps: [{ title: "Ask the pediatrician about June's reflux medicine" }, { title: "Mom sleeps from 10 PM to 2 AM while Blake has June" }, { title: "Mom gives June her reflux medicine at the 10 PM feed" }, { title: "Keep the room temperature at 68 so Mom sleeps" }] }, alpha, "owner");
     ok(!fine.isError && fine.sc.created === true, fine.text);
     const id = String((fine.sc.goal as { id: string }).id);
     // An update's new step, and a review's note, the same.

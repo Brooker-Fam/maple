@@ -755,8 +755,14 @@ const rereadWhy = (a: { confirmed?: boolean | null; read_back?: string | null },
 
 /** Words only the one who gave birth has, about her own recovery. */
 const HERS_ALONE = /\b(?:c-?sections?|cesareans?|caesareans?|lochia|mastitis|post-?partum|episiotom\w*|perine\w*)\b/i;
-/** Health words that are hers when the sentence names her (her name, mom, mum, mama, wife; I, me or my from her own account). */
-const HER_HEALTH = /\b(?:meds?|medicines?|medications?|pills?|tablets?|doses?|painkillers?|pain|prescriptions?|incisions?|stitch(?:es)?|bleeding|fever|temperatures?|blood\s+pressure|depress\w*|anxiety|anxious|therap(?:y|ist)|ob|ob-?gyn|obgyn|midwife)\b/i;
+/**
+ * Her own health, as it's said about her: her (`HER`, filled in per family) and a health word right after, as hers
+ * ("Mom's meds", "Dana's stitches", "my incision" from her own account) or what she takes or has ("Mom takes her pain
+ * meds", "Dana has a fever"). Never "Mom gives June her reflux medicine": the baby's medicines are the log's.
+ */
+const HEALTH = String.raw`(?:meds?|medicines?|medications?|pills?|tablets?|painkillers?|pain(?:\s+(?:meds?|relief|medicine))?|prescriptions?|incisions?|stitch(?:es)?|scar|bleeding|fever|blood\s+pressure|depress\w*|anxiety|therap(?:y|ist)|ob|ob-?gyn|obgyn|midwife|recovery)`;
+const herHealth = (her: string) =>
+  new RegExp(String.raw`\b(?:${her})(?:'s)?\s+(?:own\s+|post-?partum\s+|\w+\s+)?${HEALTH}\b|\b(?:${her})\s+(?:takes?|took|taking|needs?|needed|has|had|is\s+on|gets?|got)\s+(?:her\s+|a\s+|some\s+|the\s+)?(?:\w+\s+)?${HEALTH}\b`, "i");
 const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
@@ -783,11 +789,11 @@ async function refuseHerPage(texts: readonly { label: string; text: string | nul
     }
   }
   const herWords = [...new Set([v.hasMom ? v.mom : null, herName].filter((n): n is string => !!n && !/\bmom$/i.test(n)))];
-  const her = new RegExp(String.raw`\b(?:mom|moms|mom's|mum|mum's|mama|momma|mommy|mummy|wife|wife's${herWords.map((n) => `|${escapeRe(n.toLowerCase())}(?:'s)?`).join("")}${self ? "|i|i'm|me|my|myself" : ""})\b`, "i");
+  const her = herHealth(["mom", "mum", "mama", "momma", "mommy", "mummy", "wife", "my\\s+wife", ...herWords.map((n) => escapeRe(n.toLowerCase())), ...(self ? ["i", "my", "i'm"] : [])].join("|"));
   for (const { label, text } of said) {
     const plain = normName(text);
     const named = names.some((n) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRe(n)}(?![\\p{L}\\p{N}])`, "u").test(plain));
-    const health = HERS_ALONE.test(text) || text.split(/[.;!?\n]+/).some((part) => her.test(part) && HER_HEALTH.test(part));
+    const health = HERS_ALONE.test(text) || her.test(text);
     if (named || health) throw new SleepInputError(`${label}: everyone in the family reads goals, view-only guests too, so ${herName}'s own medicines, health and recovery stay off them. Leave that part out`);
   }
 }
