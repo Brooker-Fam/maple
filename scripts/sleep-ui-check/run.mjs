@@ -75,6 +75,8 @@ const { strip, plan, toast } = sam;
  */
 const raised = (text, on = page) =>
   on.waitForFunction((t) => window.__sleep.toasts().some((x) => x.includes(t)), text, { timeout: 5000 });
+/** Taps on Today's page are no longer held (tapShield holds them for the cooldown after a tap that moved the page). */
+const settled = (on = page) => on.locator("[data-today-page]:not([data-taps-held])").waitFor();
 /** A toast's button (ToastHost draws a toast raised while a sheet is open inside that sheet). */
 const tapToast = (text, name) => toast(text).getByRole("button", { name, exact: true }).click();
 const advance = (minutes, on = page) => on.evaluate((m) => window.__sleep.advance(m), minutes);
@@ -189,6 +191,7 @@ try {
   console.log("PASS Goals, none yet: Set a goal with Maple seeds the chat with a sleep goal message; Set one yourself is there too");
 
   // Back in through Today's Sleep plan row (there's a plan now).
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
@@ -519,6 +522,8 @@ try {
 
   // Into the bassinet from the turn: the try sits on her sleep in arms, and the card is that sleep's card.
   await strip.getByRole("button", { name: /I'm getting sleepy|Alex has her/ }).first().waitFor();
+  // Undo put the first turn back: its card took the second's place, so the page's taps wait out the cooldown first.
+  await settled();
   await page.getByRole("region", { name: /Waking Alex…|Nobody has taken over yet|You're holding River/ }).getByRole("button", { name: /Put her in the bassinet now|Into the bassinet/ }).first().click();
   await toast(/^In the bassinet at/).waitFor();
   c = await sam.last();
@@ -531,6 +536,9 @@ try {
   await armsCard.getByText(/Asleep since 3:16 AM \(in arms first\)/).waitFor();
   // One sleep, one card: the sleep in arms's own timer card steps aside (once its exit has run).
   await page.getByRole("region", { name: "Asleep timer" }).waitFor({ state: "detached" });
+  // The try's card took the turn card's place, an outcome under the thumb: the page's taps wait out the cooldown first.
+  assert.equal(await page.locator("[data-today-page][data-taps-held]").count(), 1, "Into the bassinet from the turn card holds the page's taps");
+  await settled();
   await armsCard.getByRole("button", { name: /^Stayed asleep/ }).click();
   await toast(/^Stayed asleep after/).waitFor();
   console.log("PASS Asleep in arms: into the bassinet links the try to it, and the try's card is that sleep's only card");
@@ -556,6 +564,7 @@ try {
   console.log("PASS Earlier try: More has it as a row; a likely twin asks in the footer (Same one, close / Save anyway)");
 
   // ── Correct a try's time from the plan's recent tries ──
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("button", { name: /^Woke crying · 52 min/ }).click();
@@ -573,6 +582,7 @@ try {
   console.log("PASS Edit: a finished try's laid-down time moves by the nudges and saves only that");
 
   // ── Progress after a few tries: sample sizes ──
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Progress", exact: true }).click();
@@ -632,6 +642,7 @@ try {
   assert.equal(await plan.getByRole("button", { name: "Change the plan" }).count(), 0, "Nothing to change");
   await page.keyboard.press("Escape");
   await plan.waitFor({ state: "hidden" });
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
@@ -673,6 +684,8 @@ try {
   // Not now: the card goes for the night on this phone; with no question left, the strip steps aside and Up next's row says the plan's count.
   await lastCard.getByRole("button", { name: "Not now", exact: true }).click();
   await lastCard.waitFor({ state: "detached" });
+  // (The card going holds the page's taps for the cooldown, below.)
+  await settled();
   await strip.waitFor({ state: "detached" });
   text = await sam.nextRow.innerText();
   assert.match(text, /\d of 1 since last night/, `At 7:30 AM Up next says since last night: ${text}`);
@@ -733,6 +746,23 @@ try {
   for (const b of await vitdAnswers.all()) assert(await aboveDock(b), "With vitamin D logged early, the check-in's answers still clear the dock at 390 × 844");
   assert.doesNotMatch(await page.getByRole("region", { name: "Right now", exact: true }).innerText(), /vitamin d/i, "Right now has no vitamin D row");
   console.log("PASS Morning with vitamin D given at 6:30 AM: no row for it in Right now; the check-in's answers still clear the dock at 390 × 844");
+
+  // Not now, tapped twice: the card goes at once and Up next slides up into its place (her Took it, the plan's Put down),
+  // so for the tap cooldown a tap on the page does nothing: the second tap can't log a dose or lay her down.
+  await page.goto("https://sleep.example.test/?goals&morning&lastnight");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await lastCard.waitFor();
+  const beforeNotNow = (await sam.calls()).length;
+  await lastCard.getByRole("button", { name: "Not now", exact: true }).click();
+  await sam.nextRow.getByRole("button", { name: "Put down", exact: true }).click();
+  await page.waitForTimeout(300);
+  assert.deepEqual((await sam.since(beforeNotNow)).map((c) => c.action), [], "A tap right after Not now, on what slid up under it, does nothing");
+  assert.equal(await page.getByRole("dialog").count(), 0, "…and opens nothing");
+  await settled();
+  // (Not now is kept on this phone for that night: clear it for the next case.)
+  await page.evaluate(() => localStorage.clear());
+  console.log("PASS Not now: the card goes and Up next slides up, and for the cooldown a tap there lays nobody down and logs nothing");
 
   // ── The morning after a night on the roster: Today's Last night card asks Sam; one tap saves last night's answer; Undo deletes it ──
   await page.goto("https://sleep.example.test/?goals&morning");
@@ -842,6 +872,7 @@ try {
   console.log("PASS The night's other questions: where the baby spent it and the planned handoff, one tap each on the adult's own check-in; a try in the log isn't asked about; then the card goes");
 
   // ── The goal card: each target's counts with what they're out of, steps, the roster with hints, each adult's check-ins ──
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
@@ -959,6 +990,7 @@ try {
   assert.deepEqual([ask.action, ask.prompt], ["ask", "Let's review our sleep goal: A long stretch for each of us"]);
 
   // Close: set aside with a note; it moves to Closed recently; Undo opens it again.
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
@@ -1109,7 +1141,9 @@ try {
   assert.deepEqual([samSaid.protected, samSaid.place, samSaid.handoff], ["yes", "elsewhere", "none"]);
   await shot("last-night-safe-sleep-320");
 
-  // Tell Maple: the chat, with "Last night: " typed for them.
+  // Tell Maple: the chat, with "Last night: " typed for them. (The last answer took the strip off the dock, so the page's
+  // taps wait out the cooldown first.)
+  await settled();
   await night.getByRole("button", { name: "Tell Maple", exact: true }).click();
   ask = await sam.last();
   assert.deepEqual([ask.action, ask.prompt], ["ask", "Last night: "]);
@@ -1151,6 +1185,7 @@ try {
 
   // ── A view-only guest: goals, steps, the roster and the baby's numbers; never a check-in; nothing that writes ──
   await page.goto("https://sleep.example.test/?goals&morning&role=viewer&night");
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   assert.equal(await checkin.count(), 0, "No check-in card for a view-only guest");
@@ -1196,6 +1231,7 @@ try {
   await page.goto("https://sleep.example.test/?mornings&morning");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
@@ -1242,7 +1278,9 @@ try {
   wrote = await sam.last();
   assert.deepEqual([wrote.action, wrote.revision, wrote.back], ["goal.review", 3, { at: null, note: null }], "Undo puts back the review before it");
   await look.getByRole("heading", { name: "Week 1 look-back", exact: true }).waitFor();
-  // Next step with no step planned after this one: the chat, seeded with the look-back.
+  // Next step with no step planned after this one: the chat, seeded with the look-back. (The card went and came back, so the
+  // page's taps wait out the cooldown first.)
+  await settled();
   await look.getByRole("button", { name: "Next step: ask Maple", exact: true }).click();
   ask = await sam.last();
   assert.deepEqual([ask.action, ask.prompt], ["ask", "Week 1 look-back: what's a good next step?"]);
@@ -1308,6 +1346,7 @@ try {
   server = await page.evaluate(() => window.__sleep.goal(301));
   assert.deepEqual([server.paused_until, server.target_date, server.status], ["2026-11-12", "2026-12-02", "active"], "Easing off never pauses or closes the goal");
   // The goal card while easing off: the aims, when counting picks up again, and no tally; its menu picks it up from tonight.
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
@@ -1455,6 +1494,7 @@ try {
   await sam.dock.waitFor();
   await page.waitForTimeout(500);
   assert.equal(await back.count(), 0, "Once per stretch on this phone");
+  await settled(page);
   await sam.row.click();
   await plan.waitFor();
   assert.equal(await plan.locator("[data-goal-return]").count(), 0, "Nor in the plan");

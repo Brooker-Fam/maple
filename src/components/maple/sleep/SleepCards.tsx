@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { askState, shiftStatus } from "@/lib/maple/sleep/engine";
 import type { BassinetTry, HoldingShift, TryOutcome } from "@/lib/maple/sleep/types";
 import { downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, STAGE_INFO, TAG_LABEL, outcomeHint, sleepyChoices } from "@/lib/maple/sleep/words";
@@ -13,7 +13,7 @@ import { Icon, KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
 import { useSheets } from "../sheets";
 import { TAP_COOLDOWN_MS } from "../tapCooldown";
-import { holdTodayTaps } from "../tapShield";
+import { holdTodayTaps, holdTodayTapsWhenItMoves, todayPageMoved } from "../tapShield";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { LeftRunningAsk, useLastNight, WokeAsk } from "./LastNight";
@@ -97,8 +97,17 @@ export function TryCard({ t }: { t: BassinetTry }) {
   const earlier = sleep && !woke && Date.parse(t.started_at) - Date.parse(sleep.started_at) > 90_000 ? sleep : null;
   const place = earlier ? (earlier.data as { place?: SleepPlace }).place : undefined;
   const title = woke ? `${v.They} woke at ${formatTime(sleep!.ended_at!, tz)}` : "In the bassinet";
+  // Coming in for a Put down tapped on the page (Up next, the holding card): it moved the page under the thumb, so taps on
+  // the page wait out the cooldown from now (the server's answer can be slow), and focus comes here, since the button
+  // tapped is gone.
+  // Going (an outcome, a finish from another phone), it moves the page below it up under the thumb: taps wait then too.
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (todayPageMoved()) section.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    return () => holdTodayTaps();
+  }, []);
   return (
-    <motion.section layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} aria-label={title} className={cx(tone.card, "space-y-3 px-4 py-3.5 [@media(max-height:640px)]:space-y-2 [@media(max-height:640px)]:py-3")}>
+    <motion.section ref={section} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} aria-label={title} className={cx(tone.card, "space-y-3 px-4 py-3.5 [@media(max-height:640px)]:space-y-2 [@media(max-height:640px)]:py-3")}>
       <CardHead icon="bassinet" title={title}>
         <span className={cx(tone.muted, "block text-[14px] leading-snug [@media(max-height:640px)]:text-[13px]")}>
           Since {formatTime(t.started_at, tz)} · {formatDuration(down)}
@@ -215,6 +224,15 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
   const partner = holderIsMe ? partnerOf(sh, people, me) : null;
   const sleeping = (state?.entries ?? []).find((e) => e.kind === "sleep" && e.active) ?? null;
   const choices = sleepyChoices(v, partner ? memberName(partner.email) : null);
+  // The turn ending (End, a handoff on another phone) moves the page below this card up under the thumb: taps wait.
+  useEffect(() => () => holdTodayTaps(), []);
+  // Into the bassinet swaps this card for the try's in its place, an outcome under the thumb: taps on the page wait out the
+  // cooldown, now and again when the try card comes in with the server's answer.
+  const bassinet = () => {
+    holdTodayTaps();
+    holdTodayTapsWhenItMoves();
+    void s.startTry();
+  };
   const title =
     holderIsMe && ask.asked
       ? ask.stale
@@ -259,7 +277,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
             ask.asked ? (
               <>
                 {/* Asked, not handed over: the bassinet stays the big, safe choice; past ten minutes, waking them again is the other. */}
-                <Button className="w-full" size="lg" disabled={s.busy} onClick={() => void s.startTry()}>
+                <Button className="w-full" size="lg" disabled={s.busy} onClick={bassinet}>
                   <Icon name="bassinet" size={18} /> {choices[0].label}
                 </Button>
                 {ask.stale ? (
@@ -282,7 +300,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
                     Hand off
                   </Button>
                   {/* Asleep in arms: laying her down is the try on that sleep (the strip offers it too, in thumb reach). */}
-                  <Button variant="soft" onClick={() => void s.startTry()}>
+                  <Button variant="soft" onClick={bassinet}>
                     {sleeping ? `Put ${v.them} down` : "Into the bassinet"}
                   </Button>
                 </div>
@@ -370,6 +388,7 @@ export function SleepPlanRow() {
     if (!idle || t - cool.current < TAP_COOLDOWN_MS) return;
     cool.current = t;
     holdTodayTaps();
+    holdTodayTapsWhenItMoves();
     idle.action.onClick();
   };
   return (

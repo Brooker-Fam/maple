@@ -7,6 +7,7 @@ import { EASE_OFF_DAYS, type SleepGoal } from "@/lib/maple/sleep/types";
 import { easingWords, nightsRange } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import { KindBadge } from "../icons";
+import { holdTodayTaps } from "../tapShield";
 import { KIND_COLOR } from "../palette";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
@@ -160,7 +161,11 @@ export function GoalReturnCard({ r }: { r: Shown }) {
       return !!u && "saved" in u;
     });
   };
-  const dismiss = () => setShown(null);
+  // The card goes and the page slides up under the thumb (Up next's Took it and Put down): taps on the page wait.
+  const dismiss = () => {
+    holdTodayTaps();
+    setShown(null);
+  };
   const undo = receipt?.undo;
   return (
     <section aria-labelledby="goal-return" data-goal-return className={cx(tone.card, "space-y-3 px-4 py-3.5")}>

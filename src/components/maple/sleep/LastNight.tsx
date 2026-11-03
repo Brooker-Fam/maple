@@ -462,6 +462,14 @@ export function LastNightCard() {
     m.toast(receipt.said, { tone: "ok", group: "last-night", ...(undo ? { undo: () => void undo().then((x) => x && m.toast("Undone", { tone: "info", group: "last-night" })) } : {}) });
     setKept(null);
   }, [done, receipt, m]);
+  // The card going (Not now, its last answer, folding into Up next's row) moves Up next up under the thumb, her Took it
+  // where an answer was: taps on the page wait out the cooldown, so a double tap's second half lands on nothing.
+  const showing = !!s && !!ln && !!state && !done && !rowed;
+  const wasShowing = useRef(showing);
+  useEffect(() => {
+    if (wasShowing.current && !showing) holdTodayTaps();
+    wasShowing.current = showing;
+  }, [showing]);
   // (Rendering nothing keeps this card's state: a receipt arriving just after the last answer still reaches its toast.)
   if (!s || !ln || !state || done || rowed) return null;
   const { night, pic } = ln;
@@ -619,7 +627,16 @@ export function LastNightCard() {
             <p className={cx(tone.muted, "truncate text-[13px] leading-snug")}>{dateWords(night, dayKey(now, tz))}</p>
           )}
         </div>
-        <Button variant="ghost" size="sm" className="-mr-2 shrink-0" onClick={() => ln.save({ ...ln.memo, hidden: true })}>
+        {/* The card goes at once and Up next slides up into its place (her Took it under the thumb): taps on the page wait. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-mr-2 shrink-0"
+          onClick={() => {
+            holdTodayTaps();
+            ln.save({ ...ln.memo, hidden: true });
+          }}
+        >
           Not now
         </Button>
       </div>

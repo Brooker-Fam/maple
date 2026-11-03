@@ -9,6 +9,7 @@ import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
 import { useAppNav } from "./AppNav";
 import { photoUrl } from "./EntryRow";
+import { holdTodayTaps } from "./tapShield";
 import { SIDE_NAME } from "./TimerCard";
 import { Icon } from "./icons";
 import { Avatar, Button, cx, tone } from "./ui";
@@ -151,6 +152,8 @@ export default function WhileYouSlept() {
     </>
   );
   const gotIt = () => {
+    // The card goes and the page slides up under the thumb (Up next's Took it and Put down): taps on the page wait.
+    holdTodayTaps();
     setDismissed(seenAt);
     try {
       localStorage.setItem(KEY, seenAt);

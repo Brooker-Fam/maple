@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { askState, shiftStatus, sleepSignals } from "@/lib/maple/sleep/engine";
 import { cryingLine, downWords, slotShort } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatDuration, formatTime, formatTimeNear, localParts } from "@/lib/maple/time";
@@ -8,6 +8,7 @@ import { useVoice } from "../familyWords";
 import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
 import { TAP_COOLDOWN_MS } from "../tapCooldown";
+import { holdTodayTaps } from "../tapShield";
 import { cx } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { showLastNight, useLastNight, type LastNight } from "./LastNight";
@@ -93,6 +94,15 @@ export function SleepStrip() {
   const s = useSleepMaybe();
   const m = useSleepMoment();
   const cool = useRef(Number.NEGATIVE_INFINITY);
+  const shown = !!s && !!m && !m.idle;
+  // A tap on the strip that ends its moment (Woke at, the last answer) takes the strip away and the dock gets shorter: the
+  // page that was under it is under the thumb now, so taps on the page wait out the cooldown. Only after a tap here (the
+  // morning's question ending at noon moves nothing under a thumb).
+  const was = useRef(shown);
+  useEffect(() => {
+    if (was.current && !shown && performance.now() - cool.current < 2 * TAP_COOLDOWN_MS) holdTodayTaps();
+    was.current = shown;
+  }, [shown]);
   // The everyday Put down is Up next's (SleepPlanRow): the strip is only for a moment.
   if (!s || !m || m.idle) return null;
   const { words, sub, action, icon, urgent } = m;
