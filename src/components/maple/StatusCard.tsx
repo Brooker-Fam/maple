@@ -3,14 +3,12 @@
 import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
-import { tick } from "@/components/atlas/haptics";
-import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
-import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
+import type { DayStats, Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Side, StretchSide } from "@/lib/maple/types";
-import { Icon, KindBadge, type IconName } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
@@ -21,9 +19,10 @@ import { useMaple, useNow } from "./useMaple";
 
 /**
  * "Right now": the 3am answers (when she last ate and which side is next, the
- * last wet and dirty diaper, how long she's been awake, vitamin D) plus "The
- * day so far" tallies and the diaper brigade. Descriptive only: nothing here
- * says "due" or "should".
+ * last wet and dirty diaper, how long she's been awake) plus "The day so far"
+ * tallies and the diaper brigade. Vitamin D lives in More's first row (and the
+ * evening reminder, with warnings on), not here. Descriptive only: nothing
+ * here says "due" or "should".
  */
 
 const ts = (e: { started_at: string }) => Date.parse(e.started_at);
@@ -121,10 +120,13 @@ function NextSide({ next }: { next: NextSideInfo }) {
  * the side, the start and the running clock, so the feed block steps aside
  * and this card keeps only what the timer doesn't say. Her mom's medicines
  * aren't here: her next one is a row in Up next, right under this card
- * (UpNext.tsx, care/CareLine).
+ * (UpNext.tsx, care/CareLine). Nor is vitamin D, a once-a-day chore: More's
+ * first row says whether and when it was given and opens that dose
+ * (MoreSheet's `vitaminD`), and with warnings on the evening reminder has
+ * Log Vitamin D (AlertCard).
  */
 export default function StatusCard() {
-  const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
+  const { state, summary, readOnly, units } = useMaple();
   const vo = useVoice();
   const { open } = useSheets();
   const now = useNow(20_000);
@@ -178,25 +180,6 @@ export default function StatusCard() {
   // A sleep (or tummy or pump) timer above this card on a short phone: the Last fed block keeps its answer and the next
   // side but folds its details, so the Since tiles still clear the dock at 375x667.
   const fold = summary.active.length > 0;
-
-  const logVitD = () => {
-    tick();
-    void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops logged" });
-  };
-
-  // Drops not given yet is a daytime thing; at 3am it's just clutter (More → Vitamin D still works).
-  const showVitD = summary.born && (summary.vitaminD || (!isNight() && alertsOn(state.baby)));
-  const vitD = summary.vitaminD;
-  // Never "Admin": the name only when it's someone else we can name.
-  const vitDBy = vitD ? (vitD.by === state.me.email ? "you" : memberLabel(vitD.by)) : null;
-  const vitDText = (
-    <span className="min-w-0 flex-1">
-      <span className="block text-[15px] font-medium text-mp-ink">Vitamin D</span>
-      <span className="block text-[13px] text-mp-ink-2">
-        {vitD ? `Given ${formatTime(vitD.givenAt, tz)}${vitDBy ? ` · ${vitDBy}` : ""}` : "Not yet today"}
-      </span>
-    </span>
-  );
 
   return (
     <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
@@ -316,20 +299,6 @@ export default function StatusCard() {
           </p>
         )}
       </div>
-
-      {showVitD &&
-        (vitD || readOnly ? (
-          <div className="flex items-center gap-3 px-4 py-3">
-            <KindBadge icon="sun" color={KIND_COLOR.med} size={32} />
-            {vitDText}
-          </div>
-        ) : (
-          <button type="button" onClick={logVitD} aria-label="Vitamin D not given yet today. Log it now" className={cx(tone.row, "py-3")}>
-            <KindBadge icon="sun" color={KIND_COLOR.med} size={32} />
-            {vitDText}
-            <span className="inline-flex min-h-[36px] shrink-0 items-center rounded-[10px] bg-mp-sunken px-3.5 text-sm font-semibold text-mp-ink">Log</span>
-          </button>
-        ))}
       {clusterInfo.sheet}
     </div>
   );

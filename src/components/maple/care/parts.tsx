@@ -143,7 +143,7 @@ export function NavRow({
 /**
  * The trailing "Took it": a 36px pill inside a 44px target. Filled accent
  * when it's OK by her schedule (or there's no gap to keep); `quiet` while
- * it isn't yet, the sunken pill of vitamin D's "Log" on Today, so the state
+ * it isn't yet (a sunken pill, not the accent fill), so the state
  * shows without reading. Quiet still saves at once (an early dose gets its
  * note). `busy` holds it while the tap is out. `aria-label` names the
  * medicine ("Took it: Brittany's Ibuprofen").

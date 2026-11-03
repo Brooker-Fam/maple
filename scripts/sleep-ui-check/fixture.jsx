@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MotionConfig } from "framer-motion";
 import { ApiError } from "../../src/lib/maple/client-request";
+import { VITAMIN_D_DEFAULT } from "../../src/lib/maple/guidelines";
 import { summarize } from "../../src/lib/maple/insights";
 import { chooseSleepLink, nextHandoff, progressLines, sleepProgress } from "../../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../../src/lib/maple/sleep/errors";
@@ -25,6 +26,7 @@ import { FixtureContext } from "./mocks";
 // sleep sheet). ?as=alex signs in as Alex, ?role=viewer as Pat. ?sparse (with ?goals&morning) makes Wed night a sparse log
 // for Today's Last night card; ?review (with ?goals) leaves the goal unreviewed, so its week 2 look-back is due. With
 // ?morning, ?mornings is a family who answers only in the morning, and ?quiet a goal with nothing logged for nine nights.
+// ?vitd (with ?morning) has vitamin D given at 6:30 AM, which mustn't push the Last night card's answers under the dock.
 // ?nursing has a nursing feed running for the feed card's night line. ?phones puts Sam's phone and Alex's side by side in two
 // frames that share one stand-in route and one clock, so one phone's write reaches the other at its next poll.
 const ME = "sam@example.test";
@@ -486,6 +488,11 @@ function makeServer(clock) {
     lastnight: () => {
       db.entries.push({ id: 95, kind: "sleep", started_at: iso(at("2026-11-05", 2, 30)), ended_at: iso(at("2026-11-05", 5, 10)), active: false, data: { place: "arms" }, note: null, created_by: PARTNER, updated_at: iso(at("2026-11-05", 5, 10)), source: "web", created_at: iso(at("2026-11-05", 5, 10)) });
     },
+    /** With ?morning: vitamin D given at 6:30 AM, before anyone has answered the Last night card. */
+    vitd: () => {
+      const given = at("2026-11-05", 6, 30);
+      db.entries.push({ id: ++seq, kind: "med", started_at: iso(given), ended_at: null, active: false, data: { ...VITAMIN_D_DEFAULT }, note: null, created_by: PARTNER, updated_at: iso(given), source: "web", created_at: iso(given) });
+    },
     /**
      * A goal set a fortnight ago with all four kinds of target, three steps, a night roster for Sam and Alex, tries on most
      * nights (some long, some short), feeds and a holding turn inside Sam's window, and check-ins from both, except Sam's
@@ -676,7 +683,7 @@ function makeWorld(query) {
   const listeners = new Set();
   const clock = () => BASE + offset.current;
   const server = makeServer(clock);
-  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing", "armsfeed", "roster", "mornings", "quiet"]) if (query.has(name)) server.seeds[name]();
+  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing", "armsfeed", "roster", "mornings", "quiet", "vitd"]) if (query.has(name)) server.seeds[name]();
   return {
     server,
     clock,

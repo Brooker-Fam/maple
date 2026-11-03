@@ -726,6 +726,14 @@ try {
   assert.deepEqual([c.action, c.started_at, c.ended_at, c.allow_duplicate], ["try.log", "2026-11-05T04:30:00.000Z", "2026-11-05T06:20:00.000Z", false], "Same one: nothing saved");
   console.log("PASS Morning: the strip says since last night (not cut at 2 lines), More says Put her down now and has Log an earlier try; last night's sleep fills both times; a later clock reads as last night; errors say today");
 
+  // Vitamin D given at 6:30 AM lives in More's first row, not Right now, so the check-in's answers still clear the dock.
+  await page.goto("https://sleep.example.test/?goals&morning&lastnight&vitd");
+  const vitdAnswers = lastCard.getByRole("group", { name: QUESTION_TOP }).getByRole("button");
+  await vitdAnswers.first().waitFor();
+  for (const b of await vitdAnswers.all()) assert(await aboveDock(b), "With vitamin D logged early, the check-in's answers still clear the dock at 390 × 844");
+  assert.doesNotMatch(await page.getByRole("region", { name: "Right now", exact: true }).innerText(), /vitamin d/i, "Right now has no vitamin D row");
+  console.log("PASS Morning with vitamin D given at 6:30 AM: no row for it in Right now; the check-in's answers still clear the dock at 390 × 844");
+
   // ── The morning after a night on the roster: Today's Last night card asks Sam; one tap saves last night's answer; Undo deletes it ──
   await page.goto("https://sleep.example.test/?goals&morning");
   const checkin = page.getByRole("region", { name: "Last night", exact: true });
