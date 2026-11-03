@@ -477,7 +477,7 @@ async function main() {
     ok(!t.isError && t.sc.created === true, t.text);
     const away = await call("sleep_goal", { action: "add", title: "Out of our bed", steps: [{ title: "Stop letting her sleep in our bed" }, { title: "No more letting her nap on the couch" }, { title: "Contact naps on me while I'm awake" }, { title: "Rock her to sleep in the armchair, then lay her in the bassinet" }] }, alpha);
     ok(!away.isError && away.sc.confirm_needed === true, away.text);
-    ok(/Say this too: The step "Contact naps on me while I'm awake" has June asleep on an adult only while they stay awake: say Maple's line with it: "If you feel yourself dozing while holding her, lay her on her back in the bassinet or hand her to someone who's awake\."/.test(away.text), away.text);
+    ok(/Say this too: The step "Contact naps on me while I'm awake" has June asleep on an adult only while they stay awake: say Maple's line with it: "If you start to feel sleepy while holding her, lay her on her back in the bassinet or hand her to someone who's awake\."/.test(away.text), away.text);
     ok(/Say this too: The step "Rock her to sleep in the armchair, then lay her in the bassinet" has June on a couch or chair before the bassinet: say this with it: "Be mindful of how tired you are/.test(away.text), away.text);
     const r = await route(alpha.owner, 1, { action: "goal.create", goal: { title: "Switch the 2 AM feed to formula", steps: [{ title: "Pump before bed so Blake can give a bottle" }, { title: "Dream feed at 10:30 PM" }, { title: "Wean the 3 AM feed" }, { title: "Supplement after the evening feed" }] } });
     eq(r.status, 200, JSON.stringify(r.json));
@@ -499,7 +499,7 @@ async function main() {
       ok(!/Blake's window/.test(nursed.text), nursed.text);
       const bottled = await call("sleep_goal", { ...args, roster: [{ member: "Blake", from: "19:30", to: "07:30", nights: EVERY, covers: "bottle" }] }, alpha);
       // Texas HHS's sooner-of rule in WORK_BOTTLES's words, with its source (the coach re-test's #4).
-      ok(/Say this too: A bottle in Blake's window \(7:30 PM–7:30 AM\): If June nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner\. .* \(source: Texas HHS, Breastmilk Counts \(Texas WIC\): Bottle feeding your baby, https:\/\/breastmilkcounts\.com\/breastfeeding-basics\/bottle-feeding-your-baby\/\)/.test(bottled.text.replace(/[  ]/g, " ")), bottled.text);
+      ok(/Say this too: A bottle in Blake's window \(7:30 PM–7:30 AM\): If June nurses, a bottle of expressed milk usually waits until about 4 weeks old\. .* \(source: Office on Women's Health: Breastfeeding and going back to work, https:\/\/womenshealth\.gov\/breastfeeding\/breastfeeding-home-work-and-public\/breastfeeding-and-going-back-work\)/.test(bottled.text.replace(/[  ]/g, " ")), bottled.text);
       ok(text.includes(`Say this too: The step "Switch the 2 AM feed to formula" changes how June is fed: save it only if their pediatrician or lactation consultant agreed`) && !text.includes(`The step "Ask the lactation`), text);
       // Saved through the route, the answer carries them for the app.
       const saved = await route(alpha.owner, 1, { action: "goal.create", goal: { title: "Six hours", targets: [{ kind: "bassinet_stretch", minutes: 360 }] } });
@@ -621,7 +621,7 @@ async function main() {
     ok(text.includes("roster: Avery: 10:00 PM–2:00 AM, every night (feeds: nursing); Blake: 2:00 AM–6:00 AM, Sun–Thu nights (feeds: nursing)"), text);
     // Nursing only: the night feeds' step, never a bottle (the coach re-test's P2 #13); the short week by the day back's weekday.
     ok(/steps: 1\. "Plan the night feeds: whoever's on duty brings her to Avery to nurse, then settles her" \(week of [^)]+\) 2\. "Rehearse the work-week roster on 2 or 3 nights" \(week of [^)]+\) 3\. "Plan a short first week back \((a Wednesday or Thursday start, if work allows|it starts on a (Wednesday|Thursday))\)" \(week of [^)]+\)/.test(text), text);
-    ok(/Say this with it: .*June sleeps in arms now: holding her is fine while you're awake, and the Plan tab's first stage is one bassinet try a day\. .*one clinician's approach is two sleep spaces/.test(text), text);
+    ok(/Say this with it: .*June sleeps in arms now: holding her is fine while you're awake\. If you might fall asleep, lay her on her back in the bassinet\. The Plan tab's first stage is one bassinet try a day\. .*The adult who's off sleeps in the same room\. Night feeds: /.test(text), text);
     ok(/same back_to_work answers and confirmed: true/.test(text) && !/Say this too: .*window/.test(text), `nursing covers both windows, so no window caution: ${text}`);
     eq(await count("maple_sleep_goals", "family_id = 1", []), before, "a read-back saves nothing");
     // A yes: saved with its template (people by member id), each window's covers, and the steps' weeks back from the day back.
@@ -646,7 +646,7 @@ async function main() {
     eq(rr.status, 200, JSON.stringify(rr.json));
     const made = goalOf(rr);
     eq([made.template?.nursing, made.roster.map((w) => w.covers), made.steps[0].title], [alpha.owner, ["bottle", "nurse"], "Ask the lactation consultant when Avery should pump around the night bottle"], "saved as built");
-    ok((rr.json.cautions as string[]).some((c) => /^A bottle in Avery's window \(10:00 PM–2:00 AM\): (If June nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner|plan when Avery pumps around that feed)/.test(c.replace(/[  ]/g, " "))), JSON.stringify(rr.json.cautions));
+    ok((rr.json.cautions as string[]).some((c) => /^A bottle in Avery's window \(10:00 PM–2:00 AM\): (If June nurses, a bottle of expressed milk usually waits until about 4 weeks old|plan when Avery pumps around that feed)/.test(c.replace(/[  ]/g, " "))), JSON.stringify(rr.json.cautions));
     // What the quick setup can't use, in words, through the tool and the route.
     const same = await call("sleep_goal", { action: "add", back_to_work: { ...answers, second_half: "Blake" } }, alpha);
     ok(same.isError && /The two halves of the night need two different adults/.test(same.text), same.text);

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
+import { mightFallAsleep, sleepsNowNote } from "@/lib/maple/guidelines/sleep";
 import { fromCheckinWords, numberTries, progressLines, sleepGuidance, snoozeUntil, tryWhenLabel, type SleepProgress } from "@/lib/maple/sleep/engine";
 import { PLAN_GOAL_MAX, PLAN_STAGES, TRIES_PER_DAY_MAX, TRY_ANCHORS, type PlanPatch, type PlanStage, type SleepPlan, type TrySlot } from "@/lib/maple/sleep/types";
 import { defaultGoal, downWords, firstTryWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, TIME_OF_DAY } from "@/lib/maple/sleep/words";
@@ -75,7 +76,7 @@ function PlanPart() {
         <div className={cx(tone.inset, "space-y-2 px-4 py-3.5")}>
           <p className={cx(tone.heading, "text-[16px]")}>A gentle plan for the bassinet</p>
           <p className={cx(tone.body, "text-[15px] leading-relaxed")}>
-            Start with {STAGE_INFO[1].goal.charAt(0).toLowerCase() + STAGE_INFO[1].goal.slice(1)}. Holding {v.them} the rest of the time is fine while you&apos;re awake. You choose when to move to the next stage; Maple only says when recent tries could support it.
+            Start with {STAGE_INFO[1].goal.charAt(0).toLowerCase() + STAGE_INFO[1].goal.slice(1)}. Holding {v.them} the rest of the time is fine while you&apos;re awake. {mightFallAsleep(v)} You choose when to move to the next stage; Maple only says when recent tries could support it.
           </p>
         </div>
         {s.canWrite ? (
@@ -314,6 +315,12 @@ function PlanEditor({ plan }: { plan: SleepPlan }) {
             </Chip>
           ))}
         </div>
+        {/* A car seat, stroller, carrier, grown-up bed or arms: the guidance's own words about moving her, said with the choice. */}
+        {sleepsNowNote(v, where) && (
+          <p role="note" data-sleeps-now className={cx(tone.muted, "mt-2 text-[13px] leading-snug")}>
+            {sleepsNowNote(v, where)}
+          </p>
+        )}
         {mark("where")}
       </div>
       <div>

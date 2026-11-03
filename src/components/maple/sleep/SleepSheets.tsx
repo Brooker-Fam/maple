@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { sleepyLine, transferSteps } from "@/lib/maple/guidelines/sleep";
+import { sleepyBassinetLine, sleepyLine } from "@/lib/maple/guidelines/sleep";
 import { askState, nextHandoff } from "@/lib/maple/sleep/engine";
 import { catchUpLines } from "@/lib/maple/sleep/catchup";
 import { feedCover } from "@/lib/maple/sleep/roster";
@@ -128,7 +128,9 @@ export function OutcomeSheet({ t, defaultAt, details = false, open = true, onClo
 /**
  * For the person holding her, and only them. Exactly two choices, both
  * safe: lay her on her back in the bassinet now (which ends the turn and
- * starts a try, then shows the transfer steps), or wake the partner.
+ * starts a try, then says one thing: lay her on her back in the bassinet
+ * now, even if she's awake; never the transfer steps, which hold her until
+ * she's deeply asleep), or wake the partner.
  * Waking them is only an ask: the sheet stays on "Waking Alex…" with the
  * bassinet still the big button, and nothing changes hands until Alex has
  * her (their "I've got her", or "Alex has her" here). Ten minutes on with
@@ -189,11 +191,10 @@ export function SleepySheet({ open = true, onClose }: { open?: boolean; onClose:
     <Sheet open={open} onClose={onClose} title={title}>
       {step === "steps" ? (
         <div className="space-y-4">
-          <ol className="list-decimal space-y-2 pl-5 text-[15px] text-mp-ink">
-            {transferSteps(v).map((x) => (
-              <li key={x}>{x}</li>
-            ))}
-          </ol>
+          {/* A sleepy adult gets the one safe thing to do now, never the transfer steps ("Hold her until she's deeply asleep"). */}
+          <p role="status" data-sleepy-bassinet className={cx(tone.body, "text-[17px] leading-relaxed font-semibold")}>
+            {sleepyBassinetLine(v)}
+          </p>
           <Button size="lg" className="w-full" onClick={onClose}>
             Done
           </Button>
@@ -400,7 +401,7 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
           </p>
         )}
         <ContextNote>
-          Every phone shows who&apos;s holding {v.them}. At the planned time, the holder&apos;s and the next person&apos;s phones hear it if their handoff reminders are on (Notifications), though a notice can be late. If you start to feel sleepy before then, lay {v.them} in the bassinet or wake someone.
+          Every phone shows who&apos;s holding {v.them}. At the planned time, the holder&apos;s and the next person&apos;s phones hear it if their handoff reminders are on (Notifications), though a notice can be late. If you start to feel sleepy before then, lay {v.them} on {v.their} back in the bassinet or wake someone.
         </ContextNote>
       </div>
     </Sheet>

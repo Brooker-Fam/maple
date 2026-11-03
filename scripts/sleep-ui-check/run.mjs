@@ -1524,7 +1524,7 @@ try {
     "Week of Mon, Nov 2",
     "Rehearse the work-week roster on 2 or 3 nights",
     "Plan a short first week back (a Wednesday or Thursday start, if work allows)",
-    "River sleeps in arms now: holding her is fine while you're awake, and the Plan tab's first stage is one bassinet try a day.",
+    "River sleeps in arms now: holding her is fine while you're awake. If you might fall asleep, lay her on her back in the bassinet. The Plan tab's first stage is one bassinet try a day.",
     "The adult who's off sleeps in another room. Night feeds: in Sam's window, Alex brings her to Sam to nurse, then settles her; in Alex's window, Sam nurses her.",
   ]) assert(text.includes(line), `The read-back shows "${line}"\n---\n${text}`);
   assert.equal((await sam.calls()).length, sent, "Reading it over sends nothing");

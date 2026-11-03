@@ -10,9 +10,12 @@
  *
  * Rules for this file (scripts/maple-sleep-check.ts holds them):
  * - Nothing here diagnoses, suggests a medicine or a dose, or presents the
- *   app as medical advice; every worrying sign says who to call.
- * - Never crying it out, and never sleep on an adult, or in a bed, couch or
- *   armchair with one, presented as safe or as an option.
+ *   app as medical advice; every worrying sign says who to call, as urgently
+ *   as its source does.
+ * - Never crying it out, and never sleep on an adult, in an adult bed, on a
+ *   couch, armchair or recliner, or in a swing, car seat or other sitting
+ *   device, presented as safe or as an option. Held sleep is fine only while
+ *   the adult is awake, and always says what to do if they might fall asleep.
  * - Copy about the baby takes a Voice (the family's name and pronouns); the
  *   911 line reuses guidelines.ts's emergencySigns word for word.
  *
@@ -20,8 +23,10 @@
  * AAP's 2022 policy statement and its technical report, and NICHD's Safe to
  * Sleep breastfeeding handout; for going back to work, the Office on Women's
  * Health, Texas HHS's Breastmilk Counts, a 2016 survey of new parents'
- * driving and CDC NIOSH's drowsy-driving training). Recheck them when this
- * file changes.
+ * driving and CDC NIOSH's drowsy-driving training), and again on 2026-11-03
+ * for the health and safety review's changes (with HealthyChildren's shaken
+ * baby and sleep apnea pages, and the 988 Lifeline's help page). Recheck them
+ * when this file changes.
  */
 import { emergencySigns } from "../guidelines";
 import type { PlanStage } from "../sleep/types";
@@ -97,7 +102,17 @@ const AAP_CRIES: GuideSource = {
 /** The app's crisis line (guidelines.ts): call or text 988, any time. */
 const LIFELINE_988: GuideSource = {
   label: "988 Suicide & Crisis Lifeline",
-  url: "https://988lifeline.org/talk-to-someone-now/",
+  url: "https://988lifeline.org/get-help/",
+};
+/** The AAP's advice for a frustrated caregiver: a safe place, about 10 to 15 minutes out of the room, then check on the baby. */
+const AAP_SHAKEN: GuideSource = {
+  label: "AAP: Shaken baby syndrome, protect your infant from abusive head trauma",
+  url: "https://www.healthychildren.org/English/safety-prevention/at-home/Pages/Abusive-Head-Trauma-Shaken-Baby-Syndrome.aspx",
+};
+/** The AAP's 911 signs for breathing in sleep: a breath that stops for more than 20 seconds, a pale, bluish or grayish color. */
+const AAP_APNEA: GuideSource = {
+  label: "AAP: Sleep apnea in children, detection and treatment",
+  url: "https://www.healthychildren.org/English/ages-stages/baby/sleep/Pages/Sleep-Apnea-Detection.aspx",
 };
 const AAP_CRYING_CHECKER: GuideSource = {
   label: "AAP symptom checker: crying baby, before 3 months",
@@ -115,7 +130,7 @@ const AAP_FEEDING_SIGNS: GuideSource = {
   label: "AAP: Warning signs of breastfeeding problems",
   url: "https://www.healthychildren.org/English/ages-stages/baby/breastfeeding/Pages/Warning-Signs-of-Breastfeeding-Problems.aspx",
 };
-/** The evidence behind the 2022 policy statement: sitting devices, and a sofa or armchair against an adult bed. */
+/** The evidence behind the 2022 policy statement: sitting devices, a sofa or armchair against an adult bed, and sleep "in the arms of an awake or alert individual". */
 const AAP_TECH_REPORT_2022: GuideSource = {
   label: "AAP technical report: evidence base for the 2022 safe sleep recommendations",
   url: "https://pubmed.ncbi.nlm.nih.gov/35921639/",
@@ -129,12 +144,12 @@ const AAP_DEHYDRATION: GuideSource = {
   label: "AAP: Signs of dehydration in infants and children",
   url: "https://www.healthychildren.org/English/health-issues/injuries-emergencies/Pages/dehydration.aspx",
 };
-/** The Office on Women's Health: nursing more at night once the nursing parent is back at work ("reverse-cycling"). */
+/** The Office on Women's Health: "Wait at least a month after birth before introducing a bottle", and nursing more at night once the nursing parent is back at work ("reverse-cycling"). */
 const OWH_BACK_TO_WORK: GuideSource = {
   label: "Office on Women's Health: Breastfeeding and going back to work",
   url: "https://womenshealth.gov/breastfeeding/breastfeeding-home-work-and-public/breastfeeding-and-going-back-work",
 };
-/** Texas HHS (Breastmilk Counts, by Texas WIC): a bottle at 4 weeks old or two weeks before the return to work or school, whichever is sooner. */
+/** Texas HHS (Breastmilk Counts, by Texas WIC): "focus on exclusively breastfeeding for the first 3-4 weeks", and a bottle at 4 weeks old or two weeks before the return to work or school. */
 const TEXAS_BOTTLES: GuideSource = {
   label: "Texas HHS, Breastmilk Counts (Texas WIC): Bottle feeding your baby",
   url: "https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/",
@@ -144,13 +159,15 @@ const NEW_PARENTS_DRIVING: GuideSource = {
   label: "Malish, Arastu and O'Brien: A preliminary study of new parents, sleep disruption, and driving (Maternal and Child Health Journal, 2016)",
   url: "https://pubmed.ncbi.nlm.nih.gov/26541593/",
 };
-/** CDC NIOSH: plan how to avoid driving drowsy (a ride from family or a friend, other transportation, a nap first). */
+/** CDC NIOSH: plan how to avoid driving drowsy (a ride from family or a friend, other transportation); a short nap "still might not keep you awake enough to drive safely". */
 const NIOSH_DROWSY_DRIVING: GuideSource = {
   label: "CDC NIOSH: Training for nurses on shift work and long work hours, module 11 (driving)",
   url: "https://www.cdc.gov/niosh/work-hour-training-for-nurses/longhours/mod11/05.html",
 };
 
 const CHECKED = "2026-11-02";
+/** The health and safety review's changes, each checked against its sources again (still waiting for sign-off). */
+const RECHECKED = "2026-11-03";
 const YEAR = 365;
 
 const item = (g: Omit<SleepGuide, "reviewed" | "needsReview"> & Partial<Pick<SleepGuide, "reviewed" | "needsReview">>): SleepGuide => ({
@@ -161,23 +178,43 @@ const item = (g: Omit<SleepGuide, "reviewed" | "needsReview"> & Partial<Pick<Sle
 
 const fixed = (s: string) => () => s;
 
-/** "If you're getting sleepy": the two things to do (the holding sheet's line, sleepyLine). */
+/**
+ * "If you're getting sleepy": the two things to do (the holding sheet's line, sleepyLine), as soon as sleep might come
+ * (NICHD: "if you think you might fall asleep"), never once it has.
+ */
 const sleepyActions = (v: Voice) =>
-  `If you feel yourself dozing while holding ${v.them}, lay ${v.them} on ${v.their} back in the bassinet or hand ${v.them} to someone who's awake. Dozing off with a baby on a couch or armchair is especially dangerous. If you do fall asleep with ${v.them}, move ${v.them} to the bassinet as soon as you wake.`;
-/** The AAP guide's warning about a tired adult's bed, after its "unable to recommend bed sharing under any circumstances". */
+  `If you start to feel sleepy while holding ${v.them}, lay ${v.them} on ${v.their} back in the bassinet or hand ${v.them} to someone who's awake. Dozing off with a baby on a couch or armchair is especially dangerous. If you do fall asleep with ${v.them}, move ${v.them} to the bassinet as soon as you wake.`;
+/** The AAP guide's own words on bed sharing: it recommends that parents "avoid bed sharing with their baby under any circumstances". */
+const NO_BED_SHARING = "The AAP recommends against bed sharing under any circumstances.";
+/** …and its warning about a tired adult's bed. */
 const tiredBedRisk = () =>
-  "Sharing a bed with a baby isn't recommended, and the risk of a sleep-related death is more than 10 times higher when the adult is very tired, has taken medicine that makes it harder to wake, or has had alcohol or drugs.";
+  `${NO_BED_SHARING.replace(/\.$/, "")}, and the risk of a sleep-related death is more than 10 times higher when the adult is very tired, has taken medicine that makes it harder to wake, or has had alcohol or drugs.`;
+
+/**
+ * Held sleep is fine only in the arms of an awake adult (the AAP's technical report: "in the arms of an awake or
+ * alert individual"; "when the parent needs to sleep …, the infant should be placed supine in a bassinet"), and
+ * always comes with what to do if they might fall asleep.
+ */
+export const mightFallAsleep = (v: Voice): string => `If you might fall asleep, lay ${v.them} on ${v.their} back in the bassinet.`;
+/** What held sleep while an adult is awake cites (a goal's "awake" caution). */
+export const HELD_SLEEP_SOURCE: GuideSource = AAP_TECH_REPORT_2022;
 
 /**
  * Feeding while tired (NICHD's handout, the AAP's guide and its technical
- * report), sentence by sentence: the safe-feeding-sleepy item is all four,
- * and the goal cautions quote the one they need (goals.ts goalCautions).
+ * report): the safe-feeding-sleepy item is all three, and the goal cautions
+ * quote the one they need (goals.ts goalCautions). The adult bed's words are
+ * one passage that begins with the AAP's "against bed sharing under any
+ * circumstances" and keeps the guide's steps in order (back to her own sleep
+ * space before you sleep; a cleared bed if you might fall asleep first; back
+ * as soon as you wake). The technical report's comparison with a sofa or
+ * armchair ("relatively less hazardous (but still not recommended)") is left
+ * out: the AAP's guide for parents no longer makes it, and on its own it can
+ * read as permission; the couch and armchair warning is NICHD's, above.
  */
 export const feedingSleepyWords = (v: Voice) => ({
   mindful: "Be mindful of how tired you are, and avoid couches and armchairs for feeds if you think you might fall asleep.",
   someone: `Ask someone to stay with you while you feed ${v.them}, to keep you awake or to lay ${v.them} in the bassinet if you fall asleep.`,
-  bed: `If there's any chance you might fall asleep while ${v.they}${v.verb("'s")} in your bed, first take away pillows, blankets, sheets and anything else that could cover ${v.their} face, head or neck or make ${v.them} too warm, and if you do fall asleep, move ${v.them} back to ${v.their} own sleep space as soon as you wake.`,
-  hazard: "If you might doze off, a cleared adult bed is less hazardous than a sofa or armchair, though still not recommended.",
+  bed: `${NO_BED_SHARING} If you bring ${v.them} into your bed to feed, put ${v.them} back in ${v.their} own sleep space before you sleep. If you might fall asleep first, take away pillows, blankets, sheets and anything else that could cover ${v.their} face, head or neck or make ${v.them} too warm. If you do fall asleep, move ${v.them} back as soon as you wake.`,
 });
 
 export const SLEEP_GUIDES: readonly SleepGuide[] = [
@@ -201,16 +238,16 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
     sources: [AAP_SAFE_SLEEP],
   }),
   item({
-    id: "next-stage-3", section: "next", minDays: 0, maxDays: YEAR, stages: [3], basis: "plan",
+    id: "next-stage-3", section: "next", minDays: 0, maxDays: YEAR, stages: [3], basis: "plan", reviewed: RECHECKED,
     title: fixed("Every long night stretch"),
-    body: fixed("Start each long stretch after a night feed in the bassinet. Naps can stay in arms while you're awake."),
-    sources: [AAP_SAFE_SLEEP],
+    body: (v) => `Start each long stretch after a night feed in the bassinet. Naps can stay in arms while you're awake. ${mightFallAsleep(v)}`,
+    sources: [AAP_SAFE_SLEEP, AAP_TECH_REPORT_2022],
   }),
   item({
-    id: "next-stage-4", section: "next", minDays: 0, maxDays: YEAR, stages: [4], basis: "plan",
+    id: "next-stage-4", section: "next", minDays: 0, maxDays: YEAR, stages: [4], basis: "plan", reviewed: RECHECKED,
     title: fixed("Bassinet first"),
-    body: (v) => `Start night sleep and naps at home in the bassinet. Holding ${v.them} while you're awake is still fine any time.`,
-    sources: [AAP_SAFE_SLEEP],
+    body: (v) => `Start night sleep and naps at home in the bassinet. Holding ${v.them} while you're awake is still fine any time. ${mightFallAsleep(v)}`,
+    sources: [AAP_SAFE_SLEEP, AAP_TECH_REPORT_2022],
   }),
   item({
     id: "next-steady", section: "next", minDays: 0, maxDays: YEAR, when: ["steady"], basis: "plan",
@@ -318,31 +355,31 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
     sources: [AAP_SAFE_SLEEP, AAP_POLICY_2022],
   }),
   item({
-    id: "safe-swaddle", section: "safe", minDays: 0, maxDays: YEAR, lift: ["swaddled"], basis: "source",
+    id: "safe-swaddle", section: "safe", minDays: 0, maxDays: YEAR, lift: ["swaddled"], basis: "source", reviewed: RECHECKED,
     title: fixed("Swaddling"),
     body: (v) =>
-      `If you swaddle, always lay ${v.them} on ${v.their} back, keep it loose enough for ${v.their} hips to move, and don't let ${v.them} get too warm. Stop swaddling as soon as ${v.they} ${v.verb("shows")} any signs of trying to roll; some babies start around 2 months. Skip weighted swaddles and weighted blankets.`,
+      `If you swaddle, always lay ${v.them} on ${v.their} back, keep it loose enough for ${v.their} hips to move, and don't let ${v.them} get too warm. Stop swaddling as soon as ${v.they} ${v.verb("shows")} any signs of trying to roll; some babies start as early as 2 months. Skip weighted swaddles and weighted blankets.`,
     sources: [AAP_SWADDLING],
   }),
   item({
-    id: "safe-warm", section: "safe", minDays: 0, maxDays: YEAR, basis: "source",
+    id: "safe-warm", section: "safe", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("Not too warm"),
-    body: (v) => `Dress ${v.them} in about one more layer than you'd wear yourself, and skip the hat indoors.`,
+    body: (v) => `Dress ${v.them} in only one layer more than you're wearing, and skip the hat indoors.`,
     sources: [AAP_SAFE_SLEEP],
   }),
   item({
-    id: "safe-sleepy", section: "safe", minDays: 0, maxDays: YEAR, basis: "source",
+    id: "safe-sleepy", section: "safe", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("If you're getting sleepy"),
     // The holding sheet shows the first part (sleepyLine); the tired adult's bed is the AAP guide's own warning.
     body: (v) => `${sleepyActions(v)} ${tiredBedRisk()}`,
-    sources: [AAP_SAFE_SLEEP],
+    sources: [AAP_SAFE_SLEEP, NICHD_BREASTFEEDING],
   }),
   item({
-    id: "safe-feeding-sleepy", section: "safe", minDays: 0, maxDays: YEAR, basis: "source",
+    id: "safe-feeding-sleepy", section: "safe", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("Feeding when you're tired"),
     body: (v) => {
       const w = feedingSleepyWords(v);
-      return `${w.mindful} ${w.someone} ${w.bed} ${w.hazard}`;
+      return `${w.mindful} ${w.someone} ${w.bed}`;
     },
     sources: [NICHD_BREASTFEEDING, AAP_SAFE_SLEEP, AAP_TECH_REPORT_2022],
   }),
@@ -363,23 +400,25 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
     sources: [AAP_FEVER, AAP_CRYING_CHECKER],
   }),
   item({
-    id: "call-breathing", section: "call", minDays: 0, maxDays: YEAR, basis: "source",
+    // The AAP's checker: under a year, any trouble breathing is "Go to ER Now"; breathing much faster than normal is "Seek Care Now".
+    id: "call-breathing", section: "call", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("Breathing"),
-    body: (v) => `Call ${v.their} pediatrician now if ${v.they}${v.verb("'s")} breathing much faster than usual or seems to have any trouble breathing.`,
+    body: (v) => `Go to the ER now for any trouble breathing; call ${v.their} pediatrician now if ${v.they}${v.verb("'s")} breathing much faster than usual.`,
     sources: [AAP_BREATHING],
   }),
   item({
-    id: "call-crying", section: "call", minDays: 0, maxDays: 89, basis: "source",
+    id: "call-crying", section: "call", minDays: 0, maxDays: 89, basis: "source", reviewed: RECHECKED,
     title: fixed("Crying that won't settle"),
     body: (v) =>
-      `Call ${v.their} pediatrician now if ${v.they} ${v.verb("has")} cried nonstop for more than 2 hours and nothing calms ${v.them}, if ${v.they} ${v.verb("cries")} when touched, moved or held, or if ${v.they}${v.verb("'s")} under a month old and looks or acts unusual in any way.`,
+      `Call ${v.their} pediatrician now if ${v.they} ${v.verb("has")} cried nonstop for more than 2 hours and nothing calms ${v.them}, if ${v.they} ${v.verb("cries")} when touched, moved or held, or if ${v.they}${v.verb("'s")} under a month old and ${v.verb("looks")} or ${v.verb("acts")} unusual in any way.`,
     sources: [AAP_CRYING_CHECKER],
   }),
   item({
-    id: "call-feeding", section: "call", minDays: 0, maxDays: YEAR, basis: "source",
+    // The AAP's checker lists "drinks very little for more than 8 hours" under Seek Care Now.
+    id: "call-feeding", section: "call", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("Feeding and wet diapers"),
     body: (v) =>
-      `Call ${v.their} pediatrician if ${v.they} won't feed, or ${v.verb("feeds")} very little, for more than 8 hours, or ${v.verb("has")} fewer wet diapers than usual. For a baby, fewer than 6 wet diapers a day can be a sign of dehydration.`,
+      `Call ${v.their} pediatrician now if ${v.they} won't feed, or ${v.verb("feeds")} very little, for more than 8 hours, or ${v.verb("has")} fewer wet diapers than usual. For a baby, fewer than 6 wet diapers a day can be a sign of dehydration.`,
     sources: [AAP_CRYING_CHECKER, AAP_DEHYDRATION],
   }),
   item({
@@ -389,25 +428,34 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
     sources: [AAP_FEEDING_SIGNS],
   }),
   item({
-    id: "call-help", section: "call", minDays: 0, maxDays: YEAR, lift: ["hard_day"], basis: "source",
+    id: "call-help", section: "call", minDays: 0, maxDays: YEAR, lift: ["hard_day"], basis: "source", reviewed: RECHECKED,
     title: fixed("If it gets to be too much"),
-    // The AAP's words (set the baby down somewhere safe, get help, never shake), then the app's one crisis rule (911, else 988).
+    // The AAP's words (a safe place, about 10 to 15 minutes out of the room, get help, check on the baby, never shake), then the app's one crisis rule (911, else 988).
     body: (v) =>
-      `If you start to feel you can't handle it, lay ${v.them} on ${v.their} back in the bassinet, step away, and get help from family or a friend. Never shake or hit ${v.them}, however tired or angry you feel. If anyone might hurt ${v.them} or themselves, call 911 if it's an emergency; otherwise call or text 988, any time.`,
-    sources: [AAP_CRIES, LIFELINE_988],
+      `Lay ${v.them} on ${v.their} back in the bassinet, step away for about 10 to 15 minutes and get help from family or a friend, then check on ${v.them}. Never shake or hit ${v.them}, however tired or angry you feel. If anyone might hurt ${v.them} or themselves, call 911 if anyone is in immediate danger; otherwise call or text 988, any time.`,
+    sources: [AAP_CRIES, AAP_SHAKEN, LIFELINE_988],
   }),
 
   // ── Emergency: the app's 911 line, word for word ──
   item({
-    id: "emergency-911", section: "emergency", minDays: 0, maxDays: YEAR, basis: "source",
+    // The 20 seconds is the AAP's sleep apnea page's ("Your child's breath stops for more than 20 seconds").
+    id: "emergency-911", section: "emergency", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("Call 911"),
     body: (v) => emergencySigns(v),
-    sources: [AAP_BREATHING, AAP_CRYING_CHECKER],
+    sources: [AAP_BREATHING, AAP_CRYING_CHECKER, AAP_APNEA],
   }),
 ];
 
 /** The safety line under "I'm getting sleepy": the safe-sleepy item's words about what to do (its body adds the tired adult's bed). */
 export const sleepyLine = (v: Voice): string => sleepyActions(v);
+
+/**
+ * After "I'm getting sleepy" → the bassinet: this one line, never the
+ * transfer steps (they hold her until she's deeply asleep, which is no step
+ * for a sleepy adult). NICHD: "Be mindful of how tired you are", and "place
+ * the baby into a safe sleep area"; the AAP: on the back, every sleep.
+ */
+export const sleepyBassinetLine = (v: Voice): string => `Lay ${v.them} on ${v.their} back in the bassinet now, even if ${v.they}${v.verb("'s")} awake.`;
 
 /**
  * The feed card's quiet line during a nursing feed at night (10 PM to 6 AM in
@@ -420,6 +468,19 @@ export const nightFeedLine = (v: Voice): string => `Feeling sleepy? Wake someone
 /** The transfer steps (the transfer-steps item's). */
 export const transferSteps = (v: Voice): string[] => SLEEP_GUIDES.find((g) => g.id === "transfer-steps")!.steps!(v);
 
+/**
+ * The plan editor's note under "Where she mostly sleeps now", in the sourced items' words: a car seat, stroller or
+ * carrier gets safe-seats' (not for routine sleep; move her to the bassinet, on her back, as soon as you can), a
+ * grown-up bed the AAP's on bed sharing with safe-room's, and arms the held-sleep line; her own sleep space, nothing.
+ */
+export function sleepsNowNote(v: Voice, place: string | null | undefined): string | null {
+  const body = (id: string) => SLEEP_GUIDES.find((g) => g.id === id)!.body(v);
+  if (place === "car" || place === "stroller" || place === "carrier") return body("safe-seats");
+  if (place === "bed") return `${NO_BED_SHARING} ${body("safe-room")}`;
+  if (place === "arms") return `Holding ${v.them} is fine while you're awake. ${mightFallAsleep(v)}`;
+  return null;
+}
+
 /** The ids the Back to work template and its coach notes cite (goals.ts): bottles before the day back, more night nursing after it, and a drowsy drive. */
 export const WORK_BOTTLES = "work-bottles";
 export const WORK_NIGHT_NURSING = "work-night-nursing";
@@ -427,22 +488,25 @@ export const WORK_DROWSY_DRIVING = "work-drowsy-driving";
 
 /**
  * Going back to work: the sourced words behind what the Back to work
- * template and its coach notes say. Bottles before the day back follow Texas
- * HHS (the sooner of about 4 weeks old or two weeks before, and only after
- * their pediatrician's or lactation consultant's yes, as every feeding
- * change is here); more night nursing after it is OWH's "reverse-cycling";
+ * template and its coach notes say. A bottle for a nursing baby waits until
+ * about 4 weeks old, never earlier (OWH: "Wait at least a month after birth
+ * before introducing a bottle"; Texas HHS: "focus on exclusively
+ * breastfeeding for the first 3-4 weeks"); a day back sooner than that is a
+ * question for their pediatrician or lactation consultant, as every feeding
+ * change is here. More night nursing after it is OWH's "reverse-cycling";
  * the drowsy drive is a small, early survey of new parents, with NIOSH's
- * plans for not driving drowsy. Sourced, dated and waiting for review like
- * the rest, but not in the family's guidance list (sleepGuidance reads
- * SLEEP_GUIDES): goals.ts cites them by id (workGuide).
+ * plans for not driving drowsy (and its warning that a short nap may not be
+ * enough). Sourced, dated and waiting for review like the rest, but not in
+ * the family's guidance list (sleepGuidance reads SLEEP_GUIDES): goals.ts
+ * cites them by id (workGuide).
  */
 export const WORK_GUIDES: readonly SleepGuide[] = [
   item({
-    id: WORK_BOTTLES, section: "normal", minDays: 0, maxDays: YEAR, basis: "source",
+    id: WORK_BOTTLES, section: "normal", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("Bottles before going back to work"),
     body: (v) =>
-      `If ${v.name} nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. Ask ${v.their} pediatrician or lactation consultant first.`,
-    sources: [TEXAS_BOTTLES],
+      `If ${v.name} nurses, a bottle of expressed milk usually waits until about 4 weeks old. If the nursing parent goes back to work or school before then, ask ${v.their} pediatrician or lactation consultant first.`,
+    sources: [OWH_BACK_TO_WORK, TEXAS_BOTTLES],
   }),
   item({
     id: WORK_NIGHT_NURSING, section: "normal", minDays: 0, maxDays: YEAR, basis: "source",
@@ -451,9 +515,9 @@ export const WORK_GUIDES: readonly SleepGuide[] = [
     sources: [OWH_BACK_TO_WORK],
   }),
   item({
-    id: WORK_DROWSY_DRIVING, section: "bad_day", minDays: 0, maxDays: YEAR, basis: "source",
+    id: WORK_DROWSY_DRIVING, section: "bad_day", minDays: 0, maxDays: YEAR, basis: "source", reviewed: RECHECKED,
     title: fixed("Driving after a short night"),
-    body: fixed("In one small, early survey of 72 new parents, poor sleep quality went with a sixfold increase in near misses on the road. If you're very sleepy, plan how to avoid driving drowsy: a ride from family or a friend, other transportation, or a nap first."),
+    body: fixed("In one small, early survey of 72 new parents, poor sleep quality went with a sixfold increase in near misses on the road. If you're very sleepy, plan how to avoid driving drowsy: a ride from family or a friend, or other transportation. A short nap first may still not keep you awake enough to drive safely."),
     sources: [NEW_PARENTS_DRIVING, NIOSH_DROWSY_DRIVING],
   }),
 ];
@@ -461,5 +525,10 @@ export const WORK_GUIDES: readonly SleepGuide[] = [
 /** One of WORK_GUIDES by its id (WORK_BOTTLES, WORK_NIGHT_NURSING, WORK_DROWSY_DRIVING). */
 export const workGuide = (id: string): SleepGuide | undefined => WORK_GUIDES.find((g) => g.id === id);
 
-/** Who reviews: every item still waiting for a person's sign-off (the guidance list's and going back to work's), for the docs and the check. */
-export const pendingReview = (): readonly SleepGuide[] => [...SLEEP_GUIDES, ...WORK_GUIDES].filter((g) => g.needsReview);
+/**
+ * Who reviews: every item still waiting for a person's sign-off (the guidance list's and going back to work's), for
+ * the docs and the check, the most recently rechecked first: the health and safety review's changes (reviewed
+ * 2026-11-03) lead, each still needsReview until a person signs off.
+ */
+export const pendingReview = (): readonly SleepGuide[] =>
+  [...SLEEP_GUIDES, ...WORK_GUIDES].filter((g) => g.needsReview).sort((a, b) => b.reviewed.localeCompare(a.reviewed));

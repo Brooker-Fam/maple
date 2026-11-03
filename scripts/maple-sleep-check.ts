@@ -4,8 +4,9 @@
  * The second half (scripts/tenancy/sleep.check.ts) runs the store, the
  * route and the MCP tools on an in-memory Postgres.
  */
+import { readFileSync } from "node:fs";
 import { emergencySigns } from "../src/lib/maple/guidelines";
-import { feedingSleepyWords, nightFeedLine, SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
+import { feedingSleepyWords, nightFeedLine, SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepsNowNote, sleepyBassinetLine, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
 import { WORK_BOTTLES, WORK_DROWSY_DRIVING, WORK_GUIDES, WORK_NIGHT_NURSING, workGuide } from "../src/lib/maple/guidelines/sleep";
 import {
   AGE_BANDS,
@@ -109,7 +110,8 @@ import {
 } from "../src/lib/maple/sleep/goals";
 import type { BassinetTry, GoalInput, HoldingShift, RosterWindow, SleepCheckin, SleepGoal, SleepPlan, TryOutcome, TryTag } from "../src/lib/maple/sleep/types";
 import { CHECKIN_QUESTION, checkinQuestion, cryingLine, downWords, isTrySlot, nightsLabel, shortClock, sleepyChoices, slotLabel, slotShort, STAGE_INFO, targetWords, weekdayOf } from "../src/lib/maple/sleep/words";
-import { zonedTimeToUtc } from "../src/lib/maple/time";
+import { addDays as addDaysOf, zonedTimeToUtc } from "../src/lib/maple/time";
+import { dateWords as dateWordsOf } from "../src/lib/maple/sleep/words";
 import type { Entry, SleepPlace } from "../src/lib/maple/types";
 import { makeVoice, type Voice } from "../src/lib/maple/voice";
 
@@ -637,7 +639,7 @@ function allText(v: Voice): string[] {
 check("content: never crying it out, never sleep on an adult or sharing their bed, couch or armchair as safe, no doses, no diagnosis", () => {
   const banned: [string, RegExp][] = [
     ["crying it out", /cry[- ]?it[- ]?out|\blet (her|him|them|the baby) cry\b|sleep[- ]?train|\bferber|\bextinction\b|controlled crying/i],
-    ["sleep with an adult as an option", /\b(safe|okay|ok|fine) to (sleep|nap|doze)\b|contact (nap|sleep)|co-?sleep|bed[- ]?shar|sleep (on|with) (you|your|an adult|a parent)/i],
+    ["sleep with an adult as an option", /\b(safe|okay|ok|fine) to (sleep|nap|doze)\b|contact (nap|sleep)|co-?sleep|(?<!recommends against )bed[- ]?shar|sleep (on|with) (you|your|an adult|a parent)/i],
     ["a dose", /\bdoses?\b|\b\d+(\.\d+)?\s?(mg|ml|mL|teaspoons?|tsp)\b/i],
     ["a diagnosis", /\bdiagnos|\bit'?s (probably|likely) (reflux|colic|an infection)/i],
   ];
@@ -1040,7 +1042,7 @@ check("goal words: neutral in every line and voice, names from the family, and t
     }
   }
   const rules = coachGuardrails(SHE).join(" ");
-  for (const re of [/one question at a time/, /ask_user/, /only after they say yes/, /memories/, /No medical advice/, /pediatrician or lactation consultant/, /Never crying it out/, /never June sleeping on an adult, or in a bed, couch or armchair with one/, /no blame/]) ok(re.test(rules), `guardrails: ${re}`);
+  for (const re of [/one question at a time/, /ask_user/, /only after they say yes/, /memories/, /No medical advice/, /pediatrician or lactation consultant/, /Never crying it out/, /or June asleep on an adult, in an adult bed, on a couch, armchair or recliner, or in a swing, car seat or other sitting device, as a plan/, /Never crying it out, medicine or supplements for sleep/, /no blame/]) ok(re.test(rules), `guardrails: ${re}`);
   ok(!/\b(sleep train|cry it out|co-?sleep|bed[- ]?shar)/i.test(rules.replace(/Never crying it out/, "")), "nothing that suggests them");
   ok(coachGuardrails(THEY).every((l) => !/\b(she|her|he|him|his)\b/i.test(l)), "they voice");
 });
@@ -1724,7 +1726,8 @@ const OWN_ALLOWED = [
   "Sam, go to the guest room at 10 and don't come back until 6",
   "Leave the room for a shower and come back in 10 minutes",
   "When it's too much, put her in the crib, leave the room and come back in 10 minutes",
-  "If she cries and it's too much, lay her in the bassinet, leave the room and come back in 10 minutes",
+  // Round 4 (the safety review's P0 #2): the one-off break lays her on her back; without it, this is in BREAK_REFUSED.
+  "If she cries and it's too much, lay her on her back in the bassinet, leave the room and come back in 10 minutes",
   "If I'm overwhelmed, lay her in the bassinet and step away for a few minutes",
   "Alex sleeps in our bed with earplugs while Sam has her in the bassinet",
   "We sleep in our bed, she sleeps in the bassinet",
@@ -1848,18 +1851,19 @@ check("guidance (round 3): going back to work has sourced words for the coach to
   const ids = new Set(SLEEP_GUIDES.map((g) => g.id));
   for (const g of WORK_GUIDES) {
     ok(!ids.has(g.id) && workGuide(g.id) === g, `${g.id}: its own id, found by workGuide`);
-    eq([g.reviewed, g.needsReview, g.basis, pendingReview().includes(g)], ["2026-11-02", true, "source", true], `${g.id}: reviewed and waiting for sign-off`);
+    // Round 4: the bottle and drowsy-drive items were changed after the safety review and checked again on 2026-11-03.
+    eq([g.reviewed, g.needsReview, g.basis, pendingReview().includes(g)], [g.id === WORK_NIGHT_NURSING ? "2026-11-02" : "2026-11-03", true, "source", true], `${g.id}: reviewed and waiting for sign-off`);
     ok((SLEEP_SECTIONS as readonly string[]).includes(g.section) && g.minDays === 0 && g.maxDays >= 365, `${g.id}: section and ages`);
     for (const s of g.sources) ok(new URL(s.url).protocol === "https:" && hosts.has(new URL(s.url).host) && s.label.trim().length > 0, `${g.id}: source ${s.url}`);
   }
-  eq(workGuide(WORK_BOTTLES)!.sources.map((s) => s.url), ["https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/"], "Texas HHS");
+  eq(workGuide(WORK_BOTTLES)!.sources.map((s) => s.url), ["https://womenshealth.gov/breastfeeding/breastfeeding-home-work-and-public/breastfeeding-and-going-back-work", "https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/"], "OWH, then Texas HHS");
   eq(workGuide(WORK_NIGHT_NURSING)!.sources.map((s) => s.url), ["https://womenshealth.gov/breastfeeding/breastfeeding-home-work-and-public/breastfeeding-and-going-back-work"], "OWH");
   eq(workGuide(WORK_DROWSY_DRIVING)!.sources.map((s) => s.url), ["https://pubmed.ncbi.nlm.nih.gov/26541593/", "https://www.cdc.gov/niosh/work-hour-training-for-nurses/longhours/mod11/05.html"], "the survey and NIOSH");
   // The words the sources say, in the family's voice: the sooner of the two, only after their clinician's yes.
-  eq(workGuide(WORK_BOTTLES)!.body(SHE), "If June nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. Ask her pediatrician or lactation consultant first.", "bottles");
-  ok(/^If the baby nurses, .* Ask their pediatrician/.test(workGuide(WORK_BOTTLES)!.body(THEY)) && /Ask his pediatrician/.test(workGuide(WORK_BOTTLES)!.body(HE)), "bottles in each voice");
+  eq(workGuide(WORK_BOTTLES)!.body(SHE), "If June nurses, a bottle of expressed milk usually waits until about 4 weeks old. If the nursing parent goes back to work or school before then, ask her pediatrician or lactation consultant first.", "bottles: never before about 4 weeks old (round 4)");
+  ok(/^If the baby nurses, .* ask their pediatrician/.test(workGuide(WORK_BOTTLES)!.body(THEY)) && /ask his pediatrician/.test(workGuide(WORK_BOTTLES)!.body(HE)), "bottles in each voice");
   ok(/nurse more often at night, which is called reverse cycling/.test(workGuide(WORK_NIGHT_NURSING)!.body(SHE)), "reverse cycling");
-  ok(/72 new parents, poor sleep quality went with a sixfold increase in near misses/.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)) && /a ride from family or a friend, other transportation, or a nap first/.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)), "near misses, and what to do");
+  ok(/72 new parents, poor sleep quality went with a sixfold increase in near misses/.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)) && /a ride from family or a friend, or other transportation\. A short nap first may still not keep you awake enough to drive safely\./.test(workGuide(WORK_DROWSY_DRIVING)!.body(SHE)), "near misses, and what to do");
   for (const v of VOICES) {
     for (const g of WORK_GUIDES) {
       const line = `${g.title(v)} ${g.body(v)}`;
@@ -1875,7 +1879,7 @@ check("guidance (round 3): going back to work has sourced words for the coach to
   ok(WORK_GUIDES.every((g) => !shown.has(g.id)), "not in the guidance list");
 });
 
-check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to stay with you, a cleared bed, a bed less hazardous than a sofa but not recommended), the tired adult's bed, sitting devices, sourced and waiting for review", () => {
+check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to stay with you, against bed sharing, a cleared bed, back as soon as you wake), the tired adult's bed, sitting devices, sourced and waiting for review", () => {
   const byId = (id: string) => SLEEP_GUIDES.find((g) => g.id === id)!;
   const feeding = byId("safe-feeding-sleepy");
   const body = feeding.body(WREN);
@@ -1884,15 +1888,16 @@ check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to st
     /Ask someone to stay with you while you feed her, to keep you awake or to lay her in the bassinet if you fall asleep\./,
     /remove|take away/,
     /pillows, blankets, sheets and anything else that could cover her face, head or neck or make her too warm/,
-    /move her back to her own sleep space as soon as you wake/,
-    /less hazardous than a sofa or armchair, though still not recommended/,
+    /If you do fall asleep, move her back as soon as you wake\./,
+    /The AAP recommends against bed sharing under any circumstances\. If you bring her into your bed to feed, put her back in her own sleep space before you sleep\./,
   ]) ok(re.test(body), `${re}: ${body}`);
-  ok(/more than 10 times higher when the adult is very tired, has taken medicine that makes it harder to wake, or has had alcohol or drugs/.test(byId("safe-sleepy").body(WREN)), "quote 6");
-  eq(sleepyLine(WREN), byId("safe-sleepy").body(WREN).split(" Sharing a bed")[0], "the holding sheet keeps the two things to do");
+  ok(/The AAP recommends against bed sharing under any circumstances, and the risk of a sleep-related death is more than 10 times higher when the adult is very tired, has taken medicine that makes it harder to wake, or has had alcohol or drugs/.test(byId("safe-sleepy").body(WREN)), "quote 6");
+  eq(sleepyLine(WREN), byId("safe-sleepy").body(WREN).split(" The AAP recommends")[0], "the holding sheet keeps the two things to do");
   ok(/^Car seats, strollers, swings, carriers and slings aren't for routine sleep, especially before 4 months\. If she falls asleep in one, move her to the bassinet, on her back, as soon as you can\.$/.test(byId("safe-seats").body(WREN)), "quote 8 and 9");
   for (const id of ["safe-feeding-sleepy", "safe-sleepy", "safe-seats"]) {
     const g = byId(id);
-    eq([g.reviewed, g.needsReview, pendingReview().includes(g)], ["2026-11-02", true, true], `${id}: reviewed and waiting for sign-off`);
+    // Round 4: the first two were changed after the safety review and checked again on 2026-11-03.
+    eq([g.reviewed, g.needsReview, pendingReview().includes(g)], [id === "safe-seats" ? "2026-11-02" : "2026-11-03", true, true], `${id}: reviewed and waiting for sign-off`);
   }
   eq(feeding.sources.map((x) => x.url), [
     "https://www.nichd.nih.gov/sites/default/files/2018-11/Breastfeed_Baby_SIDS_final.pdf",
@@ -1913,7 +1918,7 @@ check("cautions by how a window's feeds are covered and her age: nursing says no
   eq(kinds([w(undefined, "22:00", "02:30")], 40), [], "4h 30m from 4 weeks: under 5 hours");
   eq(kinds([w("none", "22:00", "03:30")], 40), ["long_window"], "5h 30m with no feed planned");
   const young = goalCautions({ roster: [w("bottle")] }, { v: WREN, name: nameOf, ageDays: 20 })[0].text;
-  eq(plain(young), "A bottle in Sam's window (10:00 PM–3:00 AM): If Wren nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. Ask her pediatrician or lactation consultant first. Until then, whoever's on duty can bring her to nurse and settle her after.", "WORK_BOTTLES's words, undated without a day");
+  eq(plain(young), "A bottle in Sam's window (10:00 PM–3:00 AM): If Wren nurses, a bottle of expressed milk usually waits until about 4 weeks old. If the nursing parent goes back to work or school before then, ask her pediatrician or lactation consultant first. Until then, whoever's on duty can bring her to nurse and settle her after.", "WORK_BOTTLES's words, undated without a day");
   const older = goalCautions({ roster: [w("bottle", "22:00", "03:00", ALEX)], template: { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 40 })[0].text;
   eq(plain(older), "A bottle in Alex's window (10:00 PM–3:00 AM): plan when Alex pumps around that feed, as their lactation consultant advises.", "after 4 weeks, the research's reminder, naming who nurses");
   eq(kinds([w("bottle")], 20, { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: null }), [], "a baby on bottles only: nothing to say");
@@ -1954,7 +1959,8 @@ check("template: five answers make a goal, a night roster with its feeds covered
   eq(back.goal.steps![0].title, "Ask the lactation consultant when Alex should pump around the night bottle", "both: the pumping question");
   const bottles = backToWorkGoal({ ...answers, feeding: "bottles", nursing: null, off_duty: "same_room" }, o);
   eq([bottles.goal.roster!.map((x) => x.covers), bottles.goal.steps![0].week_of, bottles.goal.template?.nursing], [["bottle", "bottle"], "2026-11-09", null], "bottles: no bottle question");
-  ok(bottles.notes.some((n) => /one clinician's approach is two sleep spaces/.test(n)), JSON.stringify(bottles.notes));
+  // Round 4: no unsourced "one clinician's approach" (the safety review's P1 #9).
+  ok(bottles.notes.some((n) => n.startsWith("The adult who's off sleeps in the same room. Night feeds: ")) && !bottles.notes.some((n) => /clinician's approach|two sleep spaces/.test(n)), JSON.stringify(bottles.notes));
   // Back in 5 days: every step this week.
   eq(backToWorkGoal({ ...answers, return_date: "2026-11-07" }, o).goal.steps!.map((x) => x.week_of), ["2026-11-02", "2026-11-02", "2026-11-02"], "never before this week");
   throwsInput(() => backToWorkGoal({ ...answers, second_half: SAM }, o), /^The two halves of the night need two different adults/, "one adult for both halves");
@@ -2063,7 +2069,7 @@ check("back to work: a coach note on drowsy driving when the adult back at work 
   // In WORK_DROWSY_DRIVING's and WORK_NIGHT_NURSING's words, each cited by id with its sources.
   ok(
     notes.includes(
-      `Sam said "partly" about last night's window and is back at work: mention drowsy driving gently, in Maple's sourced words (work-drowsy-driving: Malish, Arastu and O'Brien: A preliminary study of new parents, sleep disruption, and driving (Maternal and Child Health Journal, 2016); CDC NIOSH: Training for nurses on shift work and long work hours, module 11 (driving)): "In one small, early survey of 72 new parents, poor sleep quality went with a sixfold increase in near misses on the road. If you're very sleepy, plan how to avoid driving drowsy: a ride from family or a friend, other transportation, or a nap first."`
+      `Sam said "partly" about last night's window and is back at work: mention drowsy driving gently, in Maple's sourced words (work-drowsy-driving: Malish, Arastu and O'Brien: A preliminary study of new parents, sleep disruption, and driving (Maternal and Child Health Journal, 2016); CDC NIOSH: Training for nurses on shift work and long work hours, module 11 (driving)): "In one small, early survey of 72 new parents, poor sleep quality went with a sixfold increase in near misses on the road. If you're very sleepy, plan how to avoid driving drowsy: a ride from family or a friend, or other transportation. A short nap first may still not keep you awake enough to drive safely."`
     ),
     JSON.stringify(notes)
   );
@@ -2073,7 +2079,7 @@ check("back to work: a coach note on drowsy driving when the adult back at work 
     ),
     JSON.stringify(notes)
   );
-  eq(citeWork(WORK_BOTTLES), "(work-bottles: Texas HHS, Breastmilk Counts (Texas WIC): Bottle feeding your baby)", "a citation names the item and its sources");
+  eq(citeWork(WORK_BOTTLES), "(work-bottles: Office on Women's Health: Breastfeeding and going back to work; Texas HHS, Breastmilk Counts (Texas WIC): Bottle feeding your baby)", "a citation names the item and its sources (round 4: OWH first)");
   const rested = coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-09", "yes")] }), now, NY), words(WREN, now)).notes;
   ok(!rested.some((n) => /drowsy/.test(n)), "a yes: nothing about driving");
   const before = at(2026, 11, 6, 8);
@@ -2335,7 +2341,7 @@ check("back to work timing (coach P1 #3): a step with no time left is left out, 
   eq(cleanGoalInput({ title: "Back", template: { kind: "back_to_work", member: SAM, date: "2026-10-25", nursing: null } }, { ...RULES, v: WREN }, "create").fields.template?.date, "2026-10-25", "a day back last week is kept");
 });
 
-check("feeds wording (coach P1 #4, P2 #13): each window's feeds from how they're covered; a bottle before 4 weeks by Texas HHS's sooner-of rule, dated, with its source; never 'bring her to nurse' for bottles only", () => {
+check("feeds wording (coach P1 #4, P2 #13): each window's feeds from how they're covered; a bottle never before about 4 weeks old (OWH, Texas HHS), dated, with its source; never 'bring her to nurse' for bottles only", () => {
   const o = { v: WREN, name: nameOf, today: "2026-11-02", adults: new Set([SAM, ALEX]) };
   const both = backToWorkGoal({ returning: ALEX, return_date: "2026-11-30", feeding: "both", nursing: ALEX, sleeps: "bassinet", first_half: ALEX, second_half: SAM, off_duty: "other_room" }, o);
   ok(both.notes.includes("The adult who's off sleeps in another room. Night feeds: in Sam's window, Alex nurses her; in Alex's window, Sam gives her a bottle of expressed milk."), JSON.stringify(both.notes));
@@ -2343,14 +2349,14 @@ check("feeds wording (coach P1 #4, P2 #13): each window's feeds from how they're
   const bottles = backToWorkGoal({ returning: SAM, return_date: "2026-11-30", feeding: "bottles", nursing: null, sleeps: "crib", first_half: SAM, second_half: ALEX, off_duty: "same_room" }, o);
   ok(bottles.notes.some((n) => n.endsWith("Night feeds: in Alex's window, Sam gives her a bottle; in Sam's window, Alex gives her a bottle.")) && !bottles.notes.some((n) => /to nurse/.test(n)), JSON.stringify(bottles.notes));
   const w = (covers: RosterWindow["covers"] | undefined, to = "02:00"): RosterWindow => ({ id: "w1", member: SAM, from: "21:00", to, nights: EVERY, ...(covers ? { covers } : {}) });
-  // Ten days old, the nursing parent back in 18 days: two weeks before that day back comes before 4 weeks old.
+  // Ten days old, the nursing parent back in 18 days: the bottle still waits until about 4 weeks old (round 4: OWH's "at least a month"), and a day back sooner is a question for their clinicians.
   const soon = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: ALEX, date: "2026-11-20", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
-  eq(plain(soon.text), "A bottle in Sam's window (9:00 PM–2:00 AM): If Wren nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. For this plan, that's Fri, Nov 6. Ask her pediatrician or lactation consultant first. Until then, whoever's on duty can bring her to nurse and settle her after.", "WORK_BOTTLES's words, dated by the sooner of the two");
+  eq(plain(soon.text), "A bottle in Sam's window (9:00 PM–2:00 AM): If Wren nurses, a bottle of expressed milk usually waits until about 4 weeks old. For this plan, that's Fri, Nov 20. If the nursing parent goes back to work or school before then, ask her pediatrician or lactation consultant first. Until then, whoever's on duty can bring her to nurse and settle her after.", "WORK_BOTTLES's words, dated by 4 weeks old");
   eq([soon.source, soon.guide], [BOTTLE_SOURCE, WORK_BOTTLES], "its source, and the item it cites");
   eq(BOTTLE_SOURCE, { title: workGuide(WORK_BOTTLES)!.sources[0].label, url: workGuide(WORK_BOTTLES)!.sources[0].url }, "the item's own source");
-  ok(BOTTLE_SOURCE.url.startsWith("https://breastmilkcounts.com/"), "Texas HHS's Breastmilk Counts");
+  ok(BOTTLE_SOURCE.url.startsWith("https://womenshealth.gov/"), "the Office on Women's Health (round 4)");
   const now = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: ALEX, date: "2026-11-10", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
-  ok(plain(now.text)!.toString().includes("For this plan, that's now."), now.text);
+  ok(plain(now.text)!.toString().includes("For this plan, that's Fri, Nov 20.") && !/that's now/.test(now.text), now.text);
   // The other adult going back: the nursing parent stays home, so only 4 weeks old dates it.
   const other = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: SAM, date: "2026-11-10", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
   ok(plain(other.text)!.toString().includes("For this plan, that's Fri, Nov 20."), other.text);
@@ -2437,6 +2443,386 @@ check("a Back to work roster starts on its own night (roster_from): before it no
   eq([windowAt([g], SAM, at(2026, 11, 16, 1).getTime(), NY), windowAt([g], SAM, at(2026, 11, 17, 1).getTime(), NY)?.start], [null, at(2026, 11, 16, 22).getTime()], "after midnight, by the night it began");
   const older = goalRow({ roster, template: { kind: "back_to_work", member: ALEX, date: "2026-11-30", nursing: SAM } });
   ok(windowAt([older], SAM, before, NY) != null && windowsBetween([older], SAM, before - HOUR, before + HOUR, NY).length === 1, "without roster_from, as before");
+});
+
+// ── round 4: the health and safety review (2026-11-03) ───────────────────
+
+check("sleepy (safety P0 #1): I'm getting sleepy, then the bassinet, says one thing in the family's words, never the transfer steps", () => {
+  eq(sleepyBassinetLine(SHE), "Lay her on her back in the bassinet now, even if she's awake.", "she");
+  eq(sleepyBassinetLine(HE), "Lay him on his back in the bassinet now, even if he's awake.", "he");
+  eq(sleepyBassinetLine(THEY), "Lay them on their back in the bassinet now, even if they're awake.", "they");
+  const sheet = readFileSync("src/components/maple/sleep/SleepSheets.tsx", "utf8");
+  const sleepy = sheet.slice(sheet.indexOf("export function SleepySheet"), sheet.indexOf("export function HoldingSheet"));
+  ok(sleepy.length > 0 && sleepy.includes("sleepyBassinetLine(v)") && !/transferSteps\s*\(/.test(sleepy) && !/import[^;]*\btransferSteps\b/.test(sheet), "the sleepy sheet shows the one line, never the steps");
+  ok(transferSteps(SHE).some((x) => /until she's deeply asleep/.test(x)), "the transfer steps stay as they are everywhere else");
+});
+
+/** Safety P0 #2: crying it out worded as a break (the review's probes and more): every one refused. */
+const BREAK_REFUSED = [
+  // the review's
+  "Let her cry while I take a break",
+  "Every night at 2 AM, let her cry for 20 minutes so I can take a break",
+  "When I need a break, let her cry for 30 minutes",
+  "Let her cry until she falls asleep, so I can calm down",
+  "Wait 15 minutes before going in when she cries, so I can calm down",
+  "Don't go in until 3 AM, I need a break",
+  "Leave her crying in the bassinet if it's too much",
+  "If I feel angry, leave her in the bassinet crying and leave the room until morning",
+  "When frustrated, put her in the crib and shut the door for an hour",
+  "Take a break: let her cry for an hour in the bassinet every night",
+  "Step away for an hour and let her cry",
+  "When it's too much, let her scream in the bassinet",
+  "Let her cry for 15 minutes when I'm frustrated",
+  "If I'm losing it, let her cry in the crib and go for a walk",
+  // a one-off break that isn't one: too long, a routine, an "until", a clock time, no sleep space or back, no check
+  "If I'm overwhelmed, lay her on her back in the bassinet and let her cry for 20 minutes, then check on her",
+  "If I need a break, let her cry for 10 to 20 minutes in the bassinet on her back, then check on her",
+  "Every night when it's too much, lay her on her back in the crib, let her cry for 10 minutes, then check on her",
+  "Whenever I'm overwhelmed, lay her on her back in the bassinet, let her cry for 10 minutes, then check on her",
+  "If I'm frustrated, lay her on her back in the bassinet and let her cry until I calm down, then check on her",
+  "If it's too much at 3 AM, lay her on her back in the crib, let her cry for 10 minutes and check on her",
+  "If I'm overwhelmed, let her cry for 10 minutes, then check on her",
+  "If I'm overwhelmed, lay her on her back in the bassinet and let her cry for 10 minutes",
+  "If she cries and it's too much, lay her in the bassinet, leave the room and come back in 10 minutes",
+  "When I'm angry, shut the door and leave her crying for half an hour",
+  "If I can't cope, leave the room for an hour while she cries in the crib",
+  "If it's too much, close the door and don't come back until she's asleep",
+  "When it's too much, step away for the rest of the night and let her cry",
+];
+/** …and the AAP's one-off break, in the family's words: every one passes. */
+const BREAK_ALLOWED = [
+  "If I'm overwhelmed, lay her on her back in the bassinet and step away for a few minutes",
+  "If I'm overwhelmed, lay her on her back in the bassinet, let her cry for 10 minutes, then check on her",
+  "If it's too much, lay her on her back in the crib, leave the room for 10 to 15 minutes and let her cry, then check on her",
+  "When I'm frustrated, put her on her back in the crib, step away for 5 minutes and let her fuss, then come back",
+  "If I'm losing it, lay her on her back in her crib, take a breather for a couple of minutes and go back in",
+  "Lay her down and leave the room for 10 to 15 minutes when frustrated",
+  "When it's too much, put her in the crib, leave the room and come back in 10 minutes",
+  "Hand her to Alex and step away for an hour when it's too much",
+  "When it's too much, Alex takes her and I go for a walk for an hour",
+];
+
+check("safety (P0 #2): an overwhelmed adult's one-off break passes, never a routine, an 'until' or a longer time; the refusal offers the break, which passes in each voice", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  const refused = BREAK_REFUSED.filter((t) => unsafeSleep(t, o));
+  const passed = BREAK_ALLOWED.filter((t) => !unsafeSleep(t, o));
+  console.log(`  break lists: ${refused.length} of ${BREAK_REFUSED.length} unsafe refused, ${passed.length} of ${BREAK_ALLOWED.length} safe passed`);
+  for (const t of BREAK_REFUSED) ok(refused.includes(t), `refused: "${t}"`);
+  for (const t of BREAK_ALLOWED) ok(passed.includes(t), `passed: "${t}" (matched "${unsafeSleep(t, o)?.phrase}")`);
+  // In his and their families' words too.
+  ok(!unsafeSleep("If I'm overwhelmed, lay him on his back in the bassinet, let him cry for 10 minutes, then check on him", { v: HE, adults: R3_ADULTS }), "his words");
+  ok(!unsafeSleep("If I'm overwhelmed, lay them on their back in the bassinet, let them cry for 10 minutes, then check on them", { v: THEY, adults: R3_ADULTS }), "their words");
+  ok(unsafeSleep("If I'm overwhelmed, lay them on their back in the bassinet, let them cry for an hour, then check on them", { v: THEY, adults: R3_ADULTS }), "their words, an hour");
+  // What happened, in why it matters, is the reason for the goal.
+  ok(!unsafeSleep("Last week I let her cry for an hour because I was overwhelmed, and it scared us", { ...o, describing: true }), "a why");
+  // The refusal offers the break (its suggestion passes in each voice and without one); a method by name too.
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Let her cry while I take a break", o)), `Step 1: Maple won't plan leaving June to cry; for a break when it's too much, try "If I'm overwhelmed, lay her on her back in the bassinet and step away for a few minutes".`, "the break");
+  eq(unsafeWords("Step 1", undefined, unsafeSleep("Let her cry it out when it's too much", o)), `Step 1: Maple won't plan leaving the baby to cry; for a break when it's too much, try "If I'm overwhelmed, lay the baby on their back in the bassinet and step away for a few minutes".`, "without a voice");
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Let her cry it out", o)), `Step 1: Maple won't plan leaving June to cry; if this is about settling her, try "Soothe her, then try the bassinet once more".`, "no break asked for: soothe and retry");
+  for (const text of BREAK_REFUSED) {
+    const find = unsafeSleep(text, o)!;
+    for (const v of [...VOICES, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis, { adults: R3_ADULTS }), `the suggestion passes: ${words}`);
+    }
+  }
+});
+
+/** Safety P0 #3: medicine or supplements for her sleep, or at her sleep times (the review's probes and more): every one refused. */
+const MED_REFUSED = [
+  // the review's
+  "Give her melatonin at bedtime",
+  "A little Benadryl so she sleeps through",
+  "Gripe water before every nap",
+  "Tylenol before bed",
+  "Give her Tylenol at bedtime so she sleeps",
+  "Give her gripe water before bed",
+  // more of each kind
+  "Diphenhydramine before the long stretch",
+  "An antihistamine at night to help her sleep",
+  "Zyrtec at bedtime",
+  "Use Benadryl if she won't settle",
+  "Benadryl on the flight so she naps",
+  "Motrin before her nap",
+  "Ibuprofen so she sleeps through the night",
+  "Acetaminophen at bedtime while she's teething",
+  "Give June Tylenol before bed",
+  "Chamomile tea in her bottle at night",
+  "Sleep drops before bed",
+  "Melatonin gummies for naps",
+  "Homeopathic drops at bedtime",
+  "Herbal tea so she settles at bedtime",
+  "Gas drops before bed",
+  "Teething gel before naps",
+  "Infant cough syrup at night so she sleeps",
+  "A drop of whiskey on her gums at bedtime",
+  "A little medicine to help her sleep",
+  "Give her something to help her sleep",
+  "Ask her pediatrician, then give her melatonin at bedtime",
+];
+/** …and what passes: a question for her pediatrician, a step away, an adult's own medicine, medicine that isn't for sleep. */
+const MED_ALLOWED = [
+  "Ask her pediatrician about melatonin",
+  "Ask her pediatrician whether Tylenol before bed is okay while she's teething",
+  "Ask the pediatrician if we can give her Benadryl at bedtime",
+  "Check with the pharmacist about gripe water before naps",
+  "No melatonin, just a dark room and white noise",
+  "Never give her Benadryl to make her sleep",
+  "Stop the gripe water before naps",
+  "Vitamin D drops after the morning feed",
+  "Vitamin D drops at bedtime",
+  "Saline drops before feeds for her stuffy nose",
+  "Gas drops after feeds",
+  "Tylenol after her shots, as her pediatrician said",
+  "Motrin for teething during the day, never before naps",
+  "Lavender bath before bed",
+  "Chamomile bath wash at bedtime",
+  "Sam takes melatonin, so Alex does the first half of the night",
+  "I take ibuprofen before bed, so Sam does the 2 AM feed",
+  "Mom takes Benadryl for allergies, so Dad does nights",
+];
+
+check("safety (P0 #3): medicine or supplements for her sleep, or at her sleep times, are refused as her pediatrician's call; an 'Ask her pediatrician about …' step passes, and so does each refusal's suggestion, in each voice", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  const refused = MED_REFUSED.filter((t) => unsafeSleep(t, o)?.kind === "medicine");
+  const passed = MED_ALLOWED.filter((t) => !unsafeSleep(t, o));
+  console.log(`  medicine lists: ${refused.length} of ${MED_REFUSED.length} unsafe refused, ${passed.length} of ${MED_ALLOWED.length} safe passed`);
+  for (const t of MED_REFUSED) ok(refused.includes(t), `refused as medicine: "${t}" (${unsafeSleep(t, o)?.kind ?? "passed"})`);
+  for (const t of MED_ALLOWED) ok(passed.includes(t), `passed: "${t}" (matched "${unsafeSleep(t, o)?.phrase}")`);
+  ok(unsafeSleep("Give him melatonin at bedtime", { v: HE, adults: R3_ADULTS })?.kind === "medicine" && unsafeSleep("Give them melatonin at bedtime", { v: THEY, adults: R3_ADULTS })?.kind === "medicine", "his and their words");
+  ok(unsafeSleep("Tylenol before bed")?.kind === "medicine", "without a voice (the form)");
+  // What happened, in why it matters, is the reason for the goal.
+  for (const why of ["She had Tylenol after her shots and slept for 6 hours", "We tried melatonin last month and stopped"]) ok(!unsafeSleep(why, { ...o, describing: true }), `a why: ${why}`);
+  // The coordinator's words, in the family's voice, with the question to take to their pediatrician.
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Give her melatonin at bedtime", o)), `Step 1: Maple won't plan medicine or supplements for sleep; that's her pediatrician's call. To raise it with them, try "Ask her pediatrician about melatonin".`, "she");
+  eq(unsafeWords("Step 2", THEY, unsafeSleep("Tylenol before bed", { v: THEY })), `Step 2: Maple won't plan medicine or supplements for sleep; that's their pediatrician's call. To raise it with them, try "Ask their pediatrician about Tylenol".`, "they");
+  eq(unsafeWords("Step 1", undefined, unsafeSleep("A little medicine to help her sleep", o)), `Step 1: Maple won't plan medicine or supplements for sleep; that's the baby's pediatrician's call. To raise it with them, try "Ask the baby's pediatrician about medicine for sleep".`, "without a voice");
+  for (const text of MED_REFUSED) {
+    const find = unsafeSleep(text, o)!;
+    for (const v of [...VOICES, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis, { adults: R3_ADULTS }), `the suggestion passes: ${words}`);
+      ok(!/\b\d+(\.\d+)?\s?(mg|ml|mL|teaspoons?|tsp)\b|\bdoses?\b/i.test(words), `never a dose: ${words}`);
+    }
+  }
+  // Every goal text refuses it, by its field; the plan's goal too.
+  throwsInput(() => cleanGoalInput({ title: "Longer nights", steps: [{ title: "A little Benadryl so she sleeps through" }] }, { ...RULES, v: SHE }, "create"), /^Step 1: Maple won't plan medicine or supplements for sleep; that's her pediatrician's call\./, "a step");
+  throwsInput(() => refuseUnsafe("Melatonin so she sleeps", "The goal", { v: SHE }), /^The goal: Maple won't plan medicine or supplements for sleep;/, "the plan's goal");
+  ok(cleanGoalInput({ title: "Longer nights", steps: [{ title: "Ask her pediatrician about melatonin" }] }, { ...RULES, v: SHE }, "create").fields.steps?.length === 1, "the question saves");
+});
+
+/** The items the safety review changed (rechecked 2026-11-03, still waiting for sign-off). */
+const RECHECKED_IDS = ["next-stage-3", "next-stage-4", "safe-swaddle", "safe-warm", "safe-sleepy", "safe-feeding-sleepy", "call-breathing", "call-crying", "call-feeding", "call-help", "emergency-911", WORK_BOTTLES, WORK_DROWSY_DRIVING];
+
+check("guidance (safety P1 #4, #6–#8, P2 #12–#16, #21, #22): faithful to its sources, as urgent as they are, in the family's words, each change rechecked on 2026-11-03 and waiting for sign-off", () => {
+  const byId = (id: string) => [...SLEEP_GUIDES, ...WORK_GUIDES].find((g) => g.id === id)!;
+  const url = (id: string) => byId(id).sources.map((s) => s.url);
+  // #4: the adult bed's words begin with the AAP's own, keep the guide's steps in order, and the comparison is an accident's, never said alone.
+  const bed = feedingSleepyWords(SHE).bed;
+  eq(bed, "The AAP recommends against bed sharing under any circumstances. If you bring her into your bed to feed, put her back in her own sleep space before you sleep. If you might fall asleep first, take away pillows, blankets, sheets and anything else that could cover her face, head or neck or make her too warm. If you do fall asleep, move her back as soon as you wake.", "the bed passage");
+  // The technical report's comparison with a sofa or armchair is left out: the AAP's guide for parents no longer makes it, and alone it can read as permission.
+  ok(![...SLEEP_GUIDES, ...WORK_GUIDES].some((g) => /less hazardous|less dangerous/.test(g.body(SHE))), "no comparison anywhere");
+  eq(Object.keys(feedingSleepyWords(SHE)), ["mindful", "someone", "bed"], "no comparison to quote on its own");
+  ok(byId("safe-feeding-sleepy").body(SHE).endsWith(bed) && !/If you might doze off|a cleared adult bed is less hazardous/.test(byId("safe-feeding-sleepy").body(SHE)), "the item says the passage, and never the old sentence");
+  const bedCaution = goalCautions({ steps: [{ id: "s1", title: "Nurse her to sleep in our bed, then move her to the bassinet", week_of: null, done_at: null, done_by: null }] }, { v: SHE, name: nameOf, adults: R3_ADULTS }).find((c) => c.kind === "transfer")!;
+  ok(bedCaution.text.endsWith(`say this with it: "${bed}"`) && bedCaution.source?.url === "https://www.healthychildren.org/English/ages-stages/baby/sleep/Pages/a-parents-guide-to-safe-sleep.aspx", bedCaution.text);
+  // #12: the tired adult's bed in the guide's own words.
+  ok(byId("safe-sleepy").body(SHE).includes("The AAP recommends against bed sharing under any circumstances, and the risk of a sleep-related death is more than 10 times higher") && !/isn't recommended/.test(byId("safe-sleepy").body(SHE)), "safe-sleepy");
+  // #6: as urgent as the sources (any trouble breathing under a year: the ER now; drinking very little for 8 hours: now).
+  eq(byId("call-breathing").body(SHE), "Go to the ER now for any trouble breathing; call her pediatrician now if she's breathing much faster than usual.", "breathing");
+  ok(byId("call-feeding").body(SHE).startsWith("Call her pediatrician now if she won't feed, or feeds very little, for more than 8 hours"), "feeding");
+  // #21: the family's words, with agreeing verbs.
+  eq(byId("call-breathing").body(THEY), "Go to the ER now for any trouble breathing; call their pediatrician now if they're breathing much faster than usual.", "breathing, they");
+  ok(byId("call-crying").body(THEY).endsWith("or if they're under a month old and look or act unusual in any way."), byId("call-crying").body(THEY));
+  for (const v of VOICES) for (const g of [...SLEEP_GUIDES, ...WORK_GUIDES]) ok(!/\bthey (is|has|was|seems|wakes|shows|falls|cries|feeds|sleeps|looks|acts)\b|\bthey's\b/i.test(g.body(v)), `${g.id}: agreement in ${v.pronoun}`);
+  // #7: a bottle never before about 4 weeks old (OWH, Texas HHS); a day back sooner is a question first, and never "that's now".
+  eq(byId(WORK_BOTTLES).body(SHE), "If June nurses, a bottle of expressed milk usually waits until about 4 weeks old. If the nursing parent goes back to work or school before then, ask her pediatrician or lactation consultant first.", "bottles");
+  eq(url(WORK_BOTTLES)[0], "https://womenshealth.gov/breastfeeding/breastfeeding-home-work-and-public/breastfeeding-and-going-back-work", "OWH first");
+  const w = { id: "w1", member: SAM, from: "22:00", to: "02:00", nights: EVERY, covers: "bottle" as const };
+  for (const [ageDays, back] of [[3, "2026-11-05"], [10, "2026-11-20"], [27, "2026-11-04"]] as const) {
+    const c = goalCautions({ roster: [w], template: { kind: "back_to_work", member: ALEX, date: back, nursing: ALEX } }, { v: SHE, name: nameOf, ageDays, today: "2026-11-03" })[0];
+    ok(c.kind === "bottle" && !/that's now|whichever is sooner/.test(c.text) && c.text.includes(`For this plan, that's ${dateWordsOf(addDaysOf("2026-11-03", 28 - ageDays), "2026-11-03")}.`), c.text);
+  }
+  // #8: held sleep only while awake, with what to do if you might fall asleep, citing the technical report; the sleepy line as soon as sleep might come.
+  for (const id of ["next-stage-3", "next-stage-4"]) ok(byId(id).body(SHE).endsWith("If you might fall asleep, lay her on her back in the bassinet.") && url(id).includes("https://pubmed.ncbi.nlm.nih.gov/35921639/"), id);
+  ok(sleepyLine(SHE).startsWith("If you start to feel sleepy while holding her, lay her on her back in the bassinet or hand her to someone who's awake.") && !/feel yourself dozing/.test(sleepyLine(SHE)), sleepyLine(SHE));
+  const awake = goalCautions({ steps: [{ id: "s1", title: "Contact naps on me while I'm awake", week_of: null, done_at: null, done_by: null }] }, { v: SHE, name: nameOf, adults: R3_ADULTS })[0];
+  eq([awake.kind, awake.source?.url, awake.guide], ["awake", "https://pubmed.ncbi.nlm.nih.gov/35921639/", "safe-sleepy"], "the awake caution's source");
+  // #9: no unsourced "two sleep spaces", and the arms note says what to do if you might fall asleep.
+  const arms = backToWorkGoal({ returning: SAM, return_date: "2026-11-30", feeding: "nursing", nursing: ALEX, sleeps: "arms", first_half: SAM, second_half: ALEX, off_duty: "same_room" }, { v: SHE, name: nameOf, today: "2026-11-03", adults: new Set([SAM, ALEX]) }).notes;
+  ok(arms.includes("June sleeps in arms now: holding her is fine while you're awake. If you might fall asleep, lay her on her back in the bassinet. The Plan tab's first stage is one bassinet try a day.") && !arms.some((n) => /clinician's approach|two sleep spaces/.test(n)), JSON.stringify(arms));
+  // #13, #14, #15, #16, #22.
+  ok(byId("safe-warm").body(SHE) === "Dress her in only one layer more than you're wearing, and skip the hat indoors." && /as early as 2 months/.test(byId("safe-swaddle").body(SHE)), "layers and rolling");
+  eq(byId("call-help").body(SHE), "Lay her on her back in the bassinet, step away for about 10 to 15 minutes and get help from family or a friend, then check on her. Never shake or hit her, however tired or angry you feel. If anyone might hurt her or themselves, call 911 if anyone is in immediate danger; otherwise call or text 988, any time.", "call-help");
+  ok(url("call-help").includes("https://www.healthychildren.org/English/safety-prevention/at-home/Pages/Abusive-Head-Trauma-Shaken-Baby-Syndrome.aspx") && url("call-help").includes("https://988lifeline.org/get-help/"), "the shaken baby page, and 988's help page");
+  ok(url("emergency-911").includes("https://www.healthychildren.org/English/ages-stages/baby/sleep/Pages/Sleep-Apnea-Detection.aspx"), "the 20 seconds' source");
+  ok(byId(WORK_DROWSY_DRIVING).body(SHE).endsWith("a ride from family or a friend, or other transportation. A short nap first may still not keep you awake enough to drive safely."), "NIOSH's nap caveat");
+  ok(![...SLEEP_GUIDES, ...WORK_GUIDES].some((g) => g.sources.some((s) => s.url.includes("talk-to-someone-now"))), "988's current URL");
+  // Each change rechecked on 2026-11-03 and still waiting for a person's sign-off, listed first; nothing else re-dated.
+  for (const id of RECHECKED_IDS) eq([byId(id).reviewed, byId(id).needsReview, pendingReview().includes(byId(id))], ["2026-11-03", true, true], `${id}: rechecked and waiting for sign-off`);
+  eq(pendingReview().slice(0, RECHECKED_IDS.length).map((g) => g.id).sort(), [...RECHECKED_IDS].sort(), "the review's changes lead the sign-off list");
+  ok([...SLEEP_GUIDES, ...WORK_GUIDES].filter((g) => !RECHECKED_IDS.includes(g.id)).every((g) => g.reviewed === "2026-11-02"), "nothing else re-dated");
+});
+
+check("guidance (safety P2 #17, #19, P1 #8 in the app): the plan editor's place note, the holding sheet's line on her back, the plan's held-sleep line, and the quick setup's cautions with their sources", () => {
+  for (const v of VOICES) {
+    eq(sleepsNowNote(v, "car"), SLEEP_GUIDES.find((g) => g.id === "safe-seats")!.body(v), `a car seat: safe-seats' words (${v.pronoun})`);
+    ok(sleepsNowNote(v, "stroller") === sleepsNowNote(v, "car") && sleepsNowNote(v, "carrier") === sleepsNowNote(v, "car"), "a stroller or carrier, the same");
+    eq(sleepsNowNote(v, "bed"), `The AAP recommends against bed sharing under any circumstances. ${SLEEP_GUIDES.find((g) => g.id === "safe-room")!.body(v)}`, "a grown-up bed");
+    ok(/^Holding (her|him|them) is fine while you're awake\. If you might fall asleep, lay (her|him|them) on (her|his|their) back in the bassinet\.$/.test(sleepsNowNote(v, "arms")!), "arms");
+    eq([sleepsNowNote(v, "bassinet"), sleepsNowNote(v, "crib"), sleepsNowNote(v, null)], [null, null, null], "her own sleep space: nothing");
+    if (v === THEY) for (const p of ["car", "bed", "arms"]) ok(!/\b(she|her|he|him|his)\b/i.test(sleepsNowNote(v, p)!), `${p}: their words`);
+  }
+  const plan = readFileSync("src/components/maple/sleep/SleepPlanSheet.tsx", "utf8");
+  ok(/sleepsNowNote\(v, where\)/.test(plan) && /fine while you&apos;re awake\. \{mightFallAsleep\(v\)\}/.test(plan), "the plan sheet says them");
+  const sheets = readFileSync("src/components/maple/sleep/SleepSheets.tsx", "utf8");
+  ok(sheets.includes("If you start to feel sleepy before then, lay {v.them} on {v.their} back in the bassinet or wake someone."), "the holding sheet: on her back");
+  const goals = readFileSync("src/components/maple/sleep/SleepGoals.tsx", "utf8");
+  ok(goals.includes("cautions={cautions} onSave=") && /cautions: GoalCaution\[\]/.test(goals) && (goals.match(/<CautionNote /g) ?? []).length === 2, "the quick setup's read-back shows each caution with its source, as the goal card does");
+});
+
+/** Safety P1 #10 and this round's: swaddling once she's rolling, or so tight she can't move (the AAP's swaddling page). */
+const SWADDLE_REFUSED = [
+  "Keep swaddling after she starts rolling",
+  "Swaddle her arms in even though she's rolling",
+  "Keep the swaddle on even once she rolls",
+  "Still swaddle her at night now that she rolls over",
+  "She rolls now, but keep swaddling for naps",
+  "When she starts rolling, swaddle her arms out",
+  "Swaddle her tight so she can't move",
+  "Swaddle her as tight as possible so she stays asleep",
+];
+const SWADDLE_ALLOWED = [
+  "Swaddle her until she rolls",
+  "Stop swaddling once she rolls",
+  "Once she rolls, a sleep sack instead of the swaddle",
+  "Since she's rolling now, stop swaddling",
+  "She's rolling, so no more swaddle",
+  "Now that she rolls over, stop the swaddle",
+  "Swaddle her snugly with room for her hips",
+  "Swaddle her for naps; she isn't rolling yet",
+  "Once she starts rolling, switch from the swaddle to a sleep sack",
+];
+/** Coach review #6 (t10): common unsafe phrasings that got through, and this round's more of each. */
+const COACH_MISSES = [
+  "If she cries, wait 10 minutes",
+  "It's okay if she cries for 10 minutes",
+  "She can cry for 10 minutes",
+  "Don't respond to her cries at night",
+  "Don't go to her when she cries",
+  "Leave the room even if she cries",
+  "Put her down awake and walk out, even if she cries",
+  "Let her self-settle for 20 minutes",
+  "Hold off on going in for 10 minutes",
+  "Let her spend the night in our bed",
+  "Let her finish the night in our bed",
+  "Keep her in our bed for the rest of the night",
+  "Bring her into bed with us at 4am",
+  "Let her nap in the Snuggle Me",
+  "Naps in the Snuggle Me",
+  "Put her in the DockATot at night",
+  "Put her in the Dock-a-Tot overnight",
+  "Prop the bassinet up for reflux",
+  "Leave her in the swing after she falls asleep",
+  // more of each
+  "If she fusses, wait 5 minutes",
+  "When she cries at night, wait 10 minutes",
+  "Hold off 10 minutes before going in when she cries",
+  "She can cry for 15 minutes before we go in",
+  "It's fine if she cries for 20 minutes",
+  "Don't go in to her when she cries at night",
+  "Stop comforting her when she wakes at night",
+  "Don't pick her up or soothe her when she cries",
+  "Don't check on her when she cries after midnight",
+  "Shut the door and leave even if she screams",
+  "Let her self-settle for 15 minutes before picking her up",
+  "Teach her to self-soothe by walking out",
+  "Let her protest cry before the bassinet",
+  "Bring her into our bed after the 3am feed",
+  "She sleeps the rest of the night with us",
+  "Use the DockATot in the crib",
+  "Put her in the lounger at night",
+  "Use a positioner in the bassinet",
+  "Prop the head of the crib up a little",
+  "Naps in the Ergo",
+];
+/** Coach review #5 (t10, t11): plainly safe steps that were refused, and this round's more of each. */
+const COACH_FALSE_REFUSALS = [
+  "No blankets, pillows or bumpers in the crib, ever",
+  "Use a nursing pillow for feeds, never for sleep",
+  "Swing only while she's awake, never for naps",
+  "Car seat only in the car, never for naps at home",
+  "A stroller walk to help her fall asleep, then the crib",
+  "Walk her to sleep in the carrier, then lay her in the bassinet",
+  "Bassinet only: no swing, car seat or couch naps",
+  // more of each
+  "Without pillows, blankets or bumpers in the bassinet",
+  "Nursing pillow for feeds at night, then the bassinet",
+  "No DockATot in the crib",
+  "Take the Snuggle Me out of the crib",
+  "Snuggle Me for supervised play on the floor, never for sleep",
+  "Walk her in the stroller until she's asleep, then move her to the crib",
+  "Ergo for walks, bassinet for naps",
+  "Bring her into our bed to nurse, then back to the bassinet",
+  "Bring her into our bed in the morning for cuddles",
+  "If she cries, pick her up right away",
+  "When she cries, wait a minute, then go in",
+  "If she wakes, wait 2 minutes to see if she's hungry",
+  "She can cry in my arms while I rock her",
+  "It's fine if she cries a little while I change her",
+  "Don't respond to every cry with a feed; soothe her first",
+  "Never stop responding to her cries",
+  "Don't pick her up when she cries, pat and shush her in the crib instead",
+  "Don't pick her up at every stir; just a hand on her chest",
+  "Don't rush to her when she stirs; give her a moment to resettle",
+  "Sam can leave the room even if she cries, because Alex is holding her",
+  "Give her a minute to self-settle in the bassinet",
+  "Hold off on the pacifier for 10 minutes after feeds",
+];
+
+check("safety (P1 #10, coach review #5 and #6): swaddling once she's rolling is refused; the coach review's misses are refused and its false refusals pass; every refusal's suggestion passes in each voice and without one", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  const lists: [string, string[], boolean][] = [
+    ["swaddling refused", SWADDLE_REFUSED, true],
+    ["swaddling done safely", SWADDLE_ALLOWED, false],
+    ["the coach review's misses", COACH_MISSES, true],
+    ["the coach review's false refusals", COACH_FALSE_REFUSALS, false],
+  ];
+  for (const [label, xs, refuse] of lists) {
+    const right = xs.filter((t) => !!unsafeSleep(t, o) === refuse);
+    console.log(`  ${label}: ${right.length} of ${xs.length} as wanted`);
+    for (const t of xs) ok(right.includes(t), `${refuse ? "refused" : "passed"}: "${t}" (${unsafeSleep(t, o)?.phrase ?? "passed"})`);
+  }
+  eq(SWADDLE_REFUSED.map((t) => unsafeSleep(t, o)?.kind), SWADDLE_REFUSED.map(() => "swaddle"), "swaddling, by its kind");
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Keep swaddling after she starts rolling", o)), `Step 1: Maple won't plan swaddling once she shows signs of trying to roll; try "Stop swaddling once she shows any signs of trying to roll".`, "past rolling");
+  eq(unsafeWords("Step 1", THEY, unsafeSleep("Swaddle them tight so they can't move", { v: THEY })), `Step 1: Maple won't plan a swaddle so tight they can't move; try "Swaddle them loose enough that their hips can move".`, "too tight, their words");
+  // His family's words: "he" is the baby there.
+  ok(unsafeSleep("He can cry for 15 minutes before we go in", { v: HE, adults: R3_ADULTS }) && unsafeSleep("Keep swaddling him after he starts rolling", { v: HE, adults: R3_ADULTS })?.kind === "swaddle", "his words");
+  // A step away from a sitting device's transfer passes with the AAP's words for it, and its source.
+  const c = goalCautions({ steps: [{ id: "s1", title: "Walk her to sleep in the carrier, then lay her in the bassinet", week_of: null, done_at: null, done_by: null }] }, { v: SHE, name: nameOf, adults: R3_ADULTS });
+  ok(c.length === 1 && c[0].kind === "transfer" && c[0].text.endsWith(`say this with it: "${SLEEP_GUIDES.find((g) => g.id === "safe-seats")!.body(SHE)}"`) && c[0].guide === "safe-seats" && !!c[0].source, JSON.stringify(c));
+  eq(goalCautions({ steps: [{ id: "s1", title: "If she falls asleep in the car seat, move her to the bassinet", week_of: null, done_at: null, done_by: null }] }, { v: SHE, name: nameOf, adults: R3_ADULTS }), [], "the AAP's own words need nothing said");
+  // Every refusal's wording to try passes the filter, in each family's words and without a voice (the form).
+  for (const text of [...SWADDLE_REFUSED, ...COACH_MISSES]) {
+    const find = unsafeSleep(text, o)!;
+    for (const v of [...VOICES, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis, { adults: R3_ADULTS }), `the suggestion passes: ${words}`);
+    }
+  }
+  // Every refusal kind's suggestion passes in each voice, whatever found it.
+  const kinds: [string, string][] = [["cry", "Let her cry it out"], ["adult", "She naps on my chest"], ["bed", "Co-sleep after the late feed"], ["couch", "She naps on the couch"], ["seat", "Naps in the car seat"], ["product", "Naps on the nursing pillow"], ["position", "Put her down on her tummy"], ["bedding", "Bumpers in the crib"], ["weighted", "A weighted sleep sack"], ["incline", "Raise the head of the crib"], ["medicine", "Melatonin at bedtime"], ["swaddle", "Keep swaddling after she starts rolling"]];
+  for (const [kind, text] of kinds) {
+    const find = unsafeSleep(text, o);
+    eq(find?.kind, kind, text);
+    for (const v of [...VOICES, undefined]) {
+      const tryThis = /try "([^"]+)"/.exec(unsafeWords("Step 1", v, find))?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis), `${kind} in ${v?.pronoun ?? "no"} voice: ${tryThis}`);
+    }
+  }
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);
