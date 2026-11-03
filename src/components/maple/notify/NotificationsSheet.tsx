@@ -19,7 +19,8 @@ import { healthLines, medicineNote, testView, type PushPrefs } from "./words";
  * Screen first, off in Settings, Stopped), the switch, and for an adult on
  * a sleep goal's night roster "Quiet during my protected sleep (10 PM–2 AM)"
  * (prefs.quiet_window, on unless turned off: Maple's server holds this
- * phone's nursing and medicine notices in their window, push-quiet.ts), her
+ * phone's nursing updates and her medicine reminders in their window,
+ * push-quiet.ts, and quietNote says what comes later and what doesn't), her
  * medicines (each kind of notice, names hidden, each medicine, honest rows
  * for the ones that can't notify), Maple's nursing timer on the lock screen
  * and handoff reminders, "Check it works" (the server's clock, the last
@@ -32,6 +33,19 @@ import { healthLines, medicineNote, testView, type PushPrefs } from "./words";
 
 const TEST_POLL_MS = 5000;
 const TEST_WINDOW_MS = 3 * 60_000;
+
+/**
+ * What Quiet during my protected sleep does on this phone (push-quiet.ts):
+ * her reminders wait for the window's end (never on her own phone), nursing
+ * updates in it are dropped, a handoff and "Logged" come through, and the
+ * server's note of what it held goes after 3 days.
+ */
+function quietNote(meds: boolean, self: boolean): string {
+  const kept = "Maple keeps a note of what it held for 3 days.";
+  if (!meds) return `Nursing updates in it never come later; a handoff to you still comes through. ${kept}`;
+  if (self) return `Nursing updates in it never come later. Your own medicine reminders, “Logged” and a handoff to you still come through. ${kept}`;
+  return `Medicine reminders wait until it ends, if still due; nursing updates in it never come later. A handoff to you and “Logged” still come through. ${kept}`;
+}
 
 export default function NotificationsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   // The body (and its clocks and reads) runs only while the sheet is up.
@@ -195,7 +209,7 @@ function Body() {
             {on && quietWords && (
               <SwitchRow
                 label={`Quiet during my protected sleep (${quietWords})`}
-                note="A handoff to you and “Logged” still come through; nursing updates and medicine reminders wait."
+                note={quietNote(showMeds, care?.self === true)}
                 checked={prefs.quiet_window !== false}
                 disabled={busy}
                 onChange={(v) => set({ quiet_window: v })}

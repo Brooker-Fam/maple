@@ -57,16 +57,20 @@ import { MAPLE_ORIGIN } from "./origin";
  * turned off): while a phone's person is inside their own window on the
  * night roster, not holding her and not in Maple in the last 15 minutes,
  * it holds the nursing timer and her medicines' reminders (her own phone
- * keeps her own). A held reminder stays unclaimed and goes once when the
- * phone isn't quiet any more (the window's end) if it's still due and
- * inside the 3-hour cutoff. Handoffs and "Logged" are never held.
+ * keeps her own). A held reminder stays unclaimed, noted for that phone
+ * with its window's end (`wait:`, markWaiting), and goes once when the
+ * phone isn't quiet any more (the window's end, which a wake is published
+ * for), if it's still due, however long the window ran. Handoffs and
+ * "Logged" are never held.
  *
  * Nothing is queued: each tick works out what's due from the plans and
  * doses as they are, so a dose deleted or moved never leaves a stale
  * reminder. Every send is claimed once per phone (maple_push_sent, key
  * `s<sub>|<what>`); a send the push service refuses for now (429, 5xx, a
  * timeout) gives its claim back for up to 3 tries. A reminder more than 3
- * hours late isn't sent; past 10 minutes late it says how long it has been.
+ * hours late isn't sent, unless a quiet phone held it (then it goes up to
+ * 3 hours after its window's end); past 10 minutes late it says how long
+ * it has been.
  *
  * Every notice about a medicine shares the tag med:<planId>, and the service
  * worker closes the older one before showing the newer (iOS ignores tag
@@ -141,7 +145,10 @@ type Row = Record<string, unknown>;
 const SEC = 1000;
 const MIN = 60 * SEC;
 const HOUR = 60 * MIN;
-/** A reminder more than this late (the clock was down, or a quiet phone held it) isn't sent: push-wake.ts's REMINDER_CUTOFF_MS. */
+/**
+ * A reminder more than this late (the clock was down) isn't sent: push-wake.ts's REMINDER_CUTOFF_MS. One a quiet phone
+ * held is counted from its window's end instead (markWaiting), so it goes then whatever the window's length.
+ */
 export const CUTOFF_MS = REMINDER_CUTOFF_MS;
 /** Past this, a reminder says how long it has been OK ("has been OK since 8:00 AM"). */
 const LATE_MS = 10 * MIN;
@@ -469,6 +476,40 @@ export async function markHeld(sub: Pick<PushSub, "id" | "family_id">, key: stri
     ref,
     sub.family_id,
   ]);
+}
+
+/**
+ * One of her reminders a quiet phone holds (push-quiet.ts): the moment
+ * `momentKey` waits for this phone until `until`, the end of the protected
+ * window it's in. Not a claim (the reminder itself stays unclaimed, so it
+ * goes once the phone isn't quiet): a note, key `s<sub>|wait:<moment>`, that
+ * lets the tick send it past the 3-hour cutoff, counted from the window's
+ * end, and scheduleWakeups wake then. Held again in a window that follows
+ * on, it waits until that one ends. One this phone was already sent (before
+ * the window, or while its person was up) has nothing to wait for and gets
+ * no note. Deleted with the rest of the log after 3 days.
+ */
+export async function markWaiting(sub: Pick<PushSub, "id" | "family_id">, momentKey: string, ref: string | null, until: number): Promise<void> {
+  await q(
+    `INSERT INTO maple_push_sent (key, sent_at, state, attempts, sub_id, ref, family_id)
+     SELECT $1, $2::timestamptz, 'held', 0, $3::bigint, $4, $5::bigint WHERE NOT EXISTS (SELECT 1 FROM maple_push_sent WHERE key = $6 AND state = 'sent')
+     ON CONFLICT (key) DO UPDATE SET sent_at = EXCLUDED.sent_at WHERE maple_push_sent.sent_at < EXCLUDED.sent_at`,
+    [`s${sub.id}|wait:${momentKey}`, new Date(until).toISOString(), sub.id, ref, sub.family_id, `s${sub.id}|${momentKey}`]
+  );
+}
+
+/** The family's held reminders whose window ended less than 3 hours before `t` (or hasn't yet): "<sub>|<moment key>" → the window's end. */
+async function waitingReminders(familyId: number, t: number): Promise<Map<string, number>> {
+  const rows = await q(`SELECT key, sent_at FROM maple_push_sent WHERE key LIKE 's%|wait:%' AND ${familySent(1)} AND sent_at > $2::timestamptz`, [
+    familyId,
+    new Date(t - CUTOFF_MS).toISOString(),
+  ]);
+  const out = new Map<string, number>();
+  for (const r of rows) {
+    const m = /^s(\d+)\|wait:(.+)$/.exec(String(r.key));
+    if (m) out.set(`${m[1]}|${m[2]}`, new Date(r.sent_at as string).getTime());
+  }
+  return out;
 }
 
 /** Record how a claimed send went: sent (or the phone is gone) stays claimed; a failure can be claimed again. */
@@ -815,6 +856,8 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
       for (const sub of subs) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
       // The phones quiet for their person's protected sleep, read once and only when a reminder is due to go.
       let quiet: Promise<QuietPhones> | null = null;
+      // The reminders quiet phones held, each with its window's end (markWaiting), read once.
+      const waits = plans.some((p) => p.moments.some((m) => m.at <= t && t - m.at >= CUTOFF_MS)) ? await waitingReminders(scope.familyId, t) : new Map<string, number>();
       for (const [email, phones] of byMember) {
         try {
           const v = voiceFor(audience, email, now);
@@ -822,15 +865,24 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
           for (const { plan, moments } of plans) {
             if (!planActive(plan, now, scope.tz)) continue;
             for (const m of moments) {
-              if (m.at > t || t - m.at >= CUTOFF_MS || m.at < run.floor) continue;
+              if (m.at > t || m.at < run.floor) continue;
+              const late = t - m.at >= CUTOFF_MS;
               for (const phone of phones) {
                 const pr = phone.prefs;
                 if (pr.meds === false || pr[m.kind] === false || pr.muted?.includes(plan.id)) continue;
-                // Her own phone always gets her own; a quiet phone holds anyone else's, unclaimed, so it goes once
-                // the phone isn't quiet (the window's end) while it's still due.
-                if (!v.self && (await (quiet ??= quietFor(scope, subs, now))).has(phone.id)) continue;
+                // Past the cutoff, only a reminder a quiet phone held still goes, within 3 hours of its window's end.
+                const until = waits.get(`${phone.id}|${m.key}`);
+                if (late && until === undefined) continue;
+                // Her own phone always gets her own; a quiet phone holds anyone else's, unclaimed, noted with the
+                // window's end, so it goes once the phone isn't quiet, while it's still due.
+                const span = v.self ? undefined : (await (quiet ??= quietFor(scope, subs, now))).get(phone.id);
                 try {
-                  count(await sendOnce(phone, m.key, `med:${plan.id}`, medNotice(m, plan, v, phone.prefs), { ttlS: (CUTOFF_MS - (t - m.at)) / SEC }));
+                  if (span) {
+                    await markWaiting(phone, m.key, `med:${plan.id}`, span.end);
+                    continue;
+                  }
+                  const left = Math.min(CUTOFF_MS, CUTOFF_MS - (t - (late ? until! : m.at)));
+                  count(await sendOnce(phone, m.key, `med:${plan.id}`, medNotice(m, plan, v, phone.prefs), { ttlS: left / SEC }));
                 } catch (err) {
                   void captureServerException(new Error(errCode(err)), { route: "maple push send" });
                 }

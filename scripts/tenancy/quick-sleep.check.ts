@@ -266,9 +266,11 @@ async function main() {
     const close = await siri(T(alpha).member, { action: "put_down", minutes_ago: 62 });
     eq(close.ok, false, "within 3 minutes of its start");
     eq([(await tries(alpha)).length, (await sleepsOf(alpha)).length], [1, 1], "one try, one sleep");
-    // After it ended, a new one: saved.
+    // After it ended, a new one: saved. (Its number depends on the try day, noon to noon: just after noon it's the first of a new one.)
     const later = await siri(T(alpha).member, { action: "put_down", minutes_ago: 10 });
-    ok(later.ok && /^Try 2 [\w ]+, down at \d{1,2}:\d\d\.$/.test(later.speak), later.speak);
+    const newest = (await listTries(1, alpha.babyId, { from: new Date(Date.now() - 2 * HOUR) }))[0];
+    eq([later.ok, later.speak], [true, `${await labelOf(alpha, newest)}, down at ${clock(newest.started_at, alpha.tz)}.`], "a new try, numbered from the log");
+    ok(/^Try [12] [\w ]+, down at \d{1,2}:\d\d\.$/.test(later.speak), later.speak);
     eq((await tries(alpha)).length, 2, "a new try after the first ended");
     // A Shortcut retrying its own backdated put down gets its first answer, never "already logged".
     await reset(alpha);
