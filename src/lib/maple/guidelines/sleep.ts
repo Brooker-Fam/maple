@@ -206,13 +206,15 @@ export const HELD_SLEEP_SOURCE: GuideSource = AAP_TECH_REPORT_2022;
  * one passage that begins with the AAP's "against bed sharing under any
  * circumstances" and keeps the guide's steps in order (back to her own sleep
  * space before you sleep; a cleared bed if you might fall asleep first; back
- * as soon as you wake), so its comparison with a sofa, an accident's, is
- * never said alone.
+ * as soon as you wake). The technical report's comparison with a sofa or
+ * armchair ("relatively less hazardous (but still not recommended)") is left
+ * out: the AAP's guide for parents no longer makes it, and on its own it can
+ * read as permission; the couch and armchair warning is NICHD's, above.
  */
 export const feedingSleepyWords = (v: Voice) => ({
   mindful: "Be mindful of how tired you are, and avoid couches and armchairs for feeds if you think you might fall asleep.",
   someone: `Ask someone to stay with you while you feed ${v.them}, to keep you awake or to lay ${v.them} in the bassinet if you fall asleep.`,
-  bed: `${NO_BED_SHARING} If you bring ${v.them} into your bed to feed, put ${v.them} back in ${v.their} own sleep space before you sleep. If you might fall asleep first, take away pillows, blankets, sheets and anything else that could cover ${v.their} face, head or neck or make ${v.them} too warm. Falling asleep there by accident is relatively less hazardous than on a sofa or armchair, but still not recommended. If you do fall asleep, move ${v.them} back as soon as you wake.`,
+  bed: `${NO_BED_SHARING} If you bring ${v.them} into your bed to feed, put ${v.them} back in ${v.their} own sleep space before you sleep. If you might fall asleep first, take away pillows, blankets, sheets and anything else that could cover ${v.their} face, head or neck or make ${v.them} too warm. If you do fall asleep, move ${v.them} back as soon as you wake.`,
 });
 
 export const SLEEP_GUIDES: readonly SleepGuide[] = [

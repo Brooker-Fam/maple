@@ -1879,7 +1879,7 @@ check("guidance (round 3): going back to work has sourced words for the coach to
   ok(WORK_GUIDES.every((g) => !shown.has(g.id)), "not in the guidance list");
 });
 
-check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to stay with you, a cleared bed, a bed less hazardous than a sofa but not recommended), the tired adult's bed, sitting devices, sourced and waiting for review", () => {
+check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to stay with you, against bed sharing, a cleared bed, back as soon as you wake), the tired adult's bed, sitting devices, sourced and waiting for review", () => {
   const byId = (id: string) => SLEEP_GUIDES.find((g) => g.id === id)!;
   const feeding = byId("safe-feeding-sleepy");
   const body = feeding.body(WREN);
@@ -1890,7 +1890,6 @@ check("guidance: feeding when tired (NICHD and the AAP: tiredness, someone to st
     /pillows, blankets, sheets and anything else that could cover her face, head or neck or make her too warm/,
     /If you do fall asleep, move her back as soon as you wake\./,
     /The AAP recommends against bed sharing under any circumstances\. If you bring her into your bed to feed, put her back in her own sleep space before you sleep\./,
-    /Falling asleep there by accident is relatively less hazardous than on a sofa or armchair, but still not recommended\./,
   ]) ok(re.test(body), `${re}: ${body}`);
   ok(/The AAP recommends against bed sharing under any circumstances, and the risk of a sleep-related death is more than 10 times higher when the adult is very tired, has taken medicine that makes it harder to wake, or has had alcohol or drugs/.test(byId("safe-sleepy").body(WREN)), "quote 6");
   eq(sleepyLine(WREN), byId("safe-sleepy").body(WREN).split(" The AAP recommends")[0], "the holding sheet keeps the two things to do");
@@ -2622,7 +2621,9 @@ check("guidance (safety P1 #4, #6–#8, P2 #12–#16, #21, #22): faithful to its
   const url = (id: string) => byId(id).sources.map((s) => s.url);
   // #4: the adult bed's words begin with the AAP's own, keep the guide's steps in order, and the comparison is an accident's, never said alone.
   const bed = feedingSleepyWords(SHE).bed;
-  eq(bed, "The AAP recommends against bed sharing under any circumstances. If you bring her into your bed to feed, put her back in her own sleep space before you sleep. If you might fall asleep first, take away pillows, blankets, sheets and anything else that could cover her face, head or neck or make her too warm. Falling asleep there by accident is relatively less hazardous than on a sofa or armchair, but still not recommended. If you do fall asleep, move her back as soon as you wake.", "the bed passage");
+  eq(bed, "The AAP recommends against bed sharing under any circumstances. If you bring her into your bed to feed, put her back in her own sleep space before you sleep. If you might fall asleep first, take away pillows, blankets, sheets and anything else that could cover her face, head or neck or make her too warm. If you do fall asleep, move her back as soon as you wake.", "the bed passage");
+  // The technical report's comparison with a sofa or armchair is left out: the AAP's guide for parents no longer makes it, and alone it can read as permission.
+  ok(![...SLEEP_GUIDES, ...WORK_GUIDES].some((g) => /less hazardous|less dangerous/.test(g.body(SHE))), "no comparison anywhere");
   eq(Object.keys(feedingSleepyWords(SHE)), ["mindful", "someone", "bed"], "no comparison to quote on its own");
   ok(byId("safe-feeding-sleepy").body(SHE).endsWith(bed) && !/If you might doze off|a cleared adult bed is less hazardous/.test(byId("safe-feeding-sleepy").body(SHE)), "the item says the passage, and never the old sentence");
   const bedCaution = goalCautions({ steps: [{ id: "s1", title: "Nurse her to sleep in our bed, then move her to the bassinet", week_of: null, done_at: null, done_by: null }] }, { v: SHE, name: nameOf, adults: R3_ADULTS }).find((c) => c.kind === "transfer")!;
