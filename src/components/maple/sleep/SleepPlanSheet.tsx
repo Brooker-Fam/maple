@@ -31,9 +31,12 @@ type Tab = PlanTab;
 
 export default function SleepPlanSheet({ tab: initial = "plan", open = true, onClose }: { tab?: Tab; open?: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>(initial);
+  // The plan editor's changes, not saved yet: closing asks first, and the Plan tab stays (hidden) behind another tab, so a
+  // look at the guidance doesn't lose them.
+  const [editing, setEditing] = useState(false);
   const s = useSleep();
   return (
-    <Sheet open={open} onClose={onClose} title="Sleep plan">
+    <Sheet open={open} dirty={editing} onClose={onClose} title="Sleep plan">
       <div className="space-y-5">
         {/* Back after a quiet stretch on a goal, when the plan is opened before Today shows it: one card, once. */}
         <GoalReturnPlan />
@@ -50,7 +53,11 @@ export default function SleepPlanSheet({ tab: initial = "plan", open = true, onC
             { value: "progress", label: "Progress" },
           ]}
         />
-        {tab === "plan" && <PlanPart />}
+        {(tab === "plan" || editing) && (
+          <div hidden={tab !== "plan"}>
+            <PlanPart onDirty={setEditing} />
+          </div>
+        )}
         {tab === "goals" && <GoalsPart />}
         {tab === "guidance" && <GuidancePart />}
         {tab === "progress" && (s.plan || s.data.tries.length ? <ProgressPart /> : <p className={cx(tone.muted, "text-[15px]")}>Progress shows here once there are bassinet tries.</p>)}
@@ -61,7 +68,7 @@ export default function SleepPlanSheet({ tab: initial = "plan", open = true, onC
 
 // ── the plan ─────────────────────────────────────────────────────────────
 
-function PlanPart() {
+function PlanPart({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   const s = useSleep();
   const v = useVoice();
   const { age, tz, now: clock } = useSleepContext();
@@ -104,7 +111,8 @@ function PlanPart() {
             {s.today.next ? ` · next: ${slotLabel(s.today.next).replace(/^The /, "the ")}${s.today.fallback ? " (the backup, since no night try was logged)" : ""}` : ""}
           </p>
         )}
-        <p className={cx(tone.faint, "text-[13px]")}>Goal: {plan.goal ?? defaultGoal(v)}</p>
+        {/* ink-2 on this sunken well: ink-3 reads under 4.5:1 there. */}
+        <p className={cx(tone.muted, "text-[13px]")}>Goal: {plan.goal ?? defaultGoal(v)}</p>
       </div>
 
       {/* Set up, no try yet: what to do at the first one (tonight, or the morning nap when it's the backup). */}
@@ -118,7 +126,7 @@ function PlanPart() {
       {s.suggestion && !s.suggestion.snoozed && s.canWrite && <Suggestion plan={plan} />}
 
       {/* Not keyed by revision: a poll or a 409 bringing another phone's change rebases the draft instead of closing it. */}
-      {s.canWrite && <PlanEditor plan={plan} />}
+      {s.canWrite && <PlanEditor plan={plan} onDirty={onDirty} />}
 
       {s.canWrite && !s.shift && (
         <Button variant="soft" className="w-full" onClick={() => s.openSheet({ kind: "holding", mode: "start" })}>
@@ -201,7 +209,7 @@ function rebasePlan(draft: PlanDraft, was: PlanDraft, cur: PlanDraft): PlanDraft
   return out;
 }
 
-function PlanEditor({ plan }: { plan: SleepPlan }) {
+function PlanEditor({ plan, onDirty }: { plan: SleepPlan; onDirty: (dirty: boolean) => void }) {
   const s = useSleep();
   const v = useVoice();
   const { memberName } = useMaple();
@@ -233,6 +241,12 @@ function PlanEditor({ plan }: { plan: SleepPlan }) {
   if (where !== base.sleeps_now) patch.sleeps_now = where;
   if ((goal.trim() || null) !== base.goal) patch.goal = goal.trim() || null;
   const dirty = Object.keys(patch).length > 0;
+  // The sheet asks before closing over these changes.
+  const unsaved = open && dirty;
+  useEffect(() => {
+    onDirty(unsaved);
+  }, [onDirty, unsaved]);
+  useEffect(() => () => onDirty(false), [onDirty]);
   const who = memberName(base.updated_by);
   const mark = (k: PlanField) => (elsewhere?.fields.includes(k) ? <p className="mt-1.5 text-[13px] font-semibold text-mp-accent-fg">{who} changed this on another phone</p> : null);
   const close = () => {
@@ -240,14 +254,15 @@ function PlanEditor({ plan }: { plan: SleepPlan }) {
     setElsewhere(null);
     setDraft(planDraft(base));
   };
+  const saved = () => {
+    setOpen(false);
+    setElsewhere(null);
+  };
   const save = async () => {
-    const r = await s.savePlan(base, patch);
+    // Saved after the refusal toast's Try again too: the editor closes then.
+    const r = await s.savePlan(base, patch, { done: saved });
     if (!r) return;
-    if ("saved" in r) {
-      setOpen(false);
-      setElsewhere(null);
-      return;
-    }
+    if ("saved" in r) return saved();
     // Turned away: the newer plan is applied already (and rebased onto above); say so, and wait for another Save.
     setElsewhere((e) => ({ fields: e?.fields ?? [], refused: true }));
   };
