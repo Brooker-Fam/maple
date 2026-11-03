@@ -177,7 +177,9 @@ export default function Dock() {
   const sleepPending = !!sleep && sleep.id < 0;
   const next = summary.nextSide;
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
-  const showHint = (!entries.length || !summary.age || summary.age.dayOfLife <= 3) && !summary.active.length;
+  // The first days (or an empty log): the tap hint while no timer runs, and "Start timer" under the side and Sleep tiles. After that the family knows which tiles start timers.
+  const firstDays = !entries.length || !summary.age || summary.age.dayOfLife <= 3;
+  const showHint = firstDays && !summary.active.length;
   const { nursing: nursingOn, bottles } = logSwitches(state.baby);
   // The part she's on (or came off) goes back and forth; the side the paused tiles count from is the last one tracked.
   const both = !!feedN?.both;
@@ -539,7 +541,7 @@ export default function Dock() {
                     key={s}
                     id={s}
                     label={SIDE_NAME[s]}
-                    sub={next === s ? "Next side" : "Start timer"}
+                    sub={next === s ? "Next side" : firstDays ? "Start timer" : undefined}
                     aria={`Start nursing timer on ${SIDE_NAME[s]}`}
                     letter={s}
                     color={SIDE_COLOR[s]}
@@ -614,9 +616,10 @@ export default function Dock() {
               <Tile
                 id="sleep"
                 label="Sleep"
-                sub="Start timer"
+                sub={firstDays ? "Start timer" : undefined}
                 aria="Start sleep timer"
-                inline
+                // Without its subline it stacks like Pee, Poop and Both (the moon over "Sleep").
+                inline={firstDays}
                 icon="moon"
                 color={TILE.sleep}
                 done={done.sleep}
@@ -693,7 +696,7 @@ function Tile({
   disabled?: boolean;
   /** The accessible name, when the label alone doesn't say it ("Switch to Right", "Pause the feed"). */
   aria?: string;
-  /** Icon and label on one line, over the subline (Done and Bottle when they have one), so every tile with a subline fits the same height. */
+  /** Icon and label on one line, over the subline (Done, Bottle and Sleep when they have one), so every tile with a subline fits the same height. */
   inline?: boolean;
   /** A bigger side letter that never hides (the paused sides, whose columns follow the feed rather than Left/Right). */
   bigLetter?: boolean;
