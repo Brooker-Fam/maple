@@ -20,9 +20,9 @@ import { sealSession, SESSION_COOKIE } from "../../src/lib/maple/auth";
 import { chatLogState, chatTools, forModel, MODEL_TEXT_MAX, registrations } from "../../src/lib/maple/chat/tools";
 import type { ChatToolOutput } from "../../src/lib/maple/chat/types";
 import { FAMILY_ONE_COPY, type Extra } from "../../src/lib/maple/mcp-tools";
-import { backToWorkGoal, checkinMorning, lastNightKey, tonightKey } from "../../src/lib/maple/sleep/goals";
+import { backToWorkGoal, checkinMorning, goalsByUrgency, lastNightKey, tonightKey } from "../../src/lib/maple/sleep/goals";
 import { ALL_VIEW_MAX } from "../../src/lib/maple/sleep/mcp";
-import { TRY_NOTE_MAX } from "../../src/lib/maple/sleep/types";
+import { GOAL_NOTE_MAX, GOALS_ACTIVE_MAX, GOALS_OPEN_MAX, PLAN_GOAL_MAX, TRY_NOTE_MAX } from "../../src/lib/maple/sleep/types";
 import { logTry, saveCheckin } from "../../src/lib/maple/sleep/store";
 import type { SleepCheckin, SleepGoal, SleepState } from "../../src/lib/maple/sleep/types";
 import { rev } from "../../src/lib/maple/store";
@@ -711,7 +711,7 @@ async function main() {
     for (const t of [compact.text, all.text]) {
       const shown = headsOf(t);
       if (shown.length === openGoals.length) continue;
-      ok(/this read leaves out \d+ less urgent goals?: g\d+ ".*" \(titles in the family's words\)\. sleep_plan with goal "g\d+" \(and so on\) reads each one\./.test(t), t);
+      ok(/this read leaves out \d+ less urgent goals?, g\d+ ".*" \(titles in the family's words\)[.;].* To read them: sleep_plan with goal "g\d+" \(and so on\) for each goal left out[.;]/.test(t), t);
       const left = openGoals.map((g) => `g${g.id}`).find((ref) => !shown.includes(ref))!;
       const one = (await tools.sleep_plan.execute!({ goal: left }, { toolCallId: "made-up-call", messages: [], context: {} })) as ChatToolOutput;
       ok(one.ok && headsOf(one.text).join() === left, one.text);
@@ -832,38 +832,86 @@ async function main() {
     ok(/Avery/.test(line) && !/Blake/.test(line), `Blake's window was off last night: ${line}`);
   });
 
-  await test("sleep_plan's every view stays under the chat's cut at every limit (coach P2 #15, coach review P1 #2): three goals at every limit, a week of long check-in notes, ten tries and a running one with notes at their limit, an open turn with an ask; safety first, the goals first in the JSON", async () => {
-    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
-    const long = (s: string, n: number) => (s + " ").repeat(Math.ceil(n / (s.length + 1))).slice(0, n).trim();
-    for (let i = 1; i <= 3; i++) {
-      const r = await route(alpha.owner, 1, {
-        action: "goal.create",
-        goal: {
-          title: long(`Made-up goal ${i}: more rest for both of us and a calmer bedtime`, 120),
-          why: long("Made-up: Blake is back at work and Avery is home with June all day, and both of us want a steadier night", 300),
-          target_date: addDays(today, 28),
-          targets: [
-            { kind: "bassinet_nights", per_week: 3, min_minutes: 90 },
-            { kind: "bassinet_stretch", minutes: 150 },
-            { kind: "protected_window", member: alpha.owner, per_week: 4 },
-            { kind: "protected_window", member: alpha.member, per_week: 4 },
-            { kind: "custom", text: long("Lights low and quiet voices at every night feed", 120) },
-            { kind: "custom", text: long("We talk for five minutes each evening about the plan", 120) },
-          ],
-          steps: Array.from({ length: 12 }, (_, j) => ({ title: long(`Step ${j + 1}: a small change to the bedtime routine that we agree on together`, 120), week_of: addDays(today, 7 * (j % 4)) })),
-          roster: [
-            { member: alpha.owner, from: "21:00", to: "23:00", nights: [0, 1, 2, 3, 4] },
-            { member: alpha.member, from: "23:00", to: "01:00", nights: [0, 1, 2, 3, 4] },
-            { member: alpha.owner, from: "01:00", to: "03:00", nights: [5, 6] },
-            { member: alpha.member, from: "03:00", to: "05:00", nights: [5, 6] },
-            { member: alpha.owner, from: "05:00", to: "07:00", nights: [0, 1, 2] },
-            { member: alpha.member, from: "07:00", to: "09:00", nights: [3, 4] },
-          ],
-        },
-      });
+  /** A goal with every field at its limit (types.ts): the longest goal there can be. */
+  const long = (s: string, n: number) => (s + " ").repeat(Math.ceil(n / (s.length + 1))).slice(0, n).trim();
+  const bigGoal = (i: number) => ({
+    title: long(`Made-up goal ${i}: more rest for both of us and a calmer bedtime`, 120),
+    why: long("Made-up: Blake is back at work and Avery is home with June all day, and both of us want a steadier night", 300),
+    target_date: addDays(today, 28),
+    targets: [
+      { kind: "bassinet_nights", per_week: 3, min_minutes: 90 },
+      { kind: "bassinet_stretch", minutes: 150 },
+      { kind: "protected_window", member: alpha.owner, per_week: 4 },
+      { kind: "protected_window", member: alpha.member, per_week: 4 },
+      { kind: "custom", text: long("Lights low and quiet voices at every night feed", 120) },
+      { kind: "custom", text: long("We talk for five minutes each evening about the plan", 120) },
+    ],
+    steps: Array.from({ length: 12 }, (_, j) => ({ title: long(`Step ${j + 1}: a small change to the bedtime routine that we agree on together`, 120), week_of: addDays(today, 7 * (j % 4)) })),
+    roster: [
+      { member: alpha.owner, from: "21:00", to: "23:00", nights: [0, 1, 2, 3, 4] },
+      { member: alpha.member, from: "23:00", to: "01:00", nights: [0, 1, 2, 3, 4] },
+      { member: alpha.owner, from: "01:00", to: "03:00", nights: [5, 6] },
+      { member: alpha.member, from: "03:00", to: "05:00", nights: [5, 6] },
+      { member: alpha.owner, from: "05:00", to: "07:00", nights: [0, 1, 2] },
+      { member: alpha.member, from: "07:00", to: "09:00", nights: [3, 4] },
+    ],
+  });
+  const addBigGoals = async (from: number, to: number) => {
+    for (let i = from; i <= to; i++) {
+      const r = await route(alpha.owner, 1, { action: "goal.create", goal: bigGoal(i) });
       eq(r.status, 200, JSON.stringify(r.json));
     }
-    await sql(`UPDATE maple_sleep_goals SET created_at = NOW() - INTERVAL '9 days' WHERE family_id = 1`);
+    await sql(`UPDATE maple_sleep_goals SET created_at = NOW() - INTERVAL '9 days', last_review_at = NOW() - INTERVAL '2 days', review_note = $1 WHERE family_id = 1`, [long("Made-up: the late feed keeps landing in the window and we want to try moving it a little earlier", GOAL_NOTE_MAX)]);
+  };
+  const LEFT_OUT = "To stay under the chat's length, this read leaves out ";
+  const ARGS_EVERY_VIEW: Record<string, unknown>[] = [{}, { view: "goals" }, { view: "guidance" }, { view: "all" }, { progress_days: 31 }, { view: "guidance", progress_days: 31 }, { view: "all", progress_days: 31 }];
+  /** A sleep_plan read as the chat gives it to the model, and its JSON. */
+  const readPlan = async (role: Who, args: Record<string, unknown>) => {
+    const tools = chatTools({ email: alpha[role], role }, { fam: 1, born: true, care: false, copy: FAMILY_ONE_COPY });
+    const out = (await tools.sleep_plan.execute!(args, { toolCallId: "made-up-call", messages: [], context: {} })) as ChatToolOutput;
+    const lines = out.text.split("\n");
+    return { out, lines, data: JSON.parse(lines[lines.length - 1]) as Record<string, unknown>, left: lines.find((l) => l.startsWith(LEFT_OUT)) ?? "" };
+  };
+  /** Under the cap, never cut, the safety line second (the 911 line and a sleepy adult's word for word), and never a try note whole. */
+  const fits = (r: Awaited<ReturnType<typeof readPlan>>, label: string, note: string) => {
+    ok(r.out.ok && r.out.text.length <= ALL_VIEW_MAX && forModel(r.out.text) === r.out.text, `${label}: ${r.out.text.length} characters`);
+    ok(/^Safety \((every item word for word, with its sources, is in guidance below|sleep_plan with view "guidance" has every item word for word, with its sources)\): Safe sleep: .*If you feel yourself dozing.*Call 911: Call 911 if/.test(r.lines[1]), `${label}: ${r.lines[1]}`);
+    ok(!r.out.text.includes(note), `${label}: a whole try note`);
+  };
+  /**
+   * Every part a read left out is named, and nothing it carries is named as left out: each open goal it doesn't show (by
+   * ref, the first five, then a count), the guidance word for word, the progress asked for, the check-in notes, the
+   * roster's hints, the tries past three, the tries' notes. `has` is what the family has to say (every part, at every limit).
+   */
+  const namesWhatsLeft = (r: Awaited<ReturnType<typeof readPlan>>, label: string, x: { args: Record<string, unknown>; open: string[]; role: Who; tries: number }) => {
+    const view = (x.args.view as string | undefined) ?? "goals";
+    const shown = ((r.data.goals ?? []) as { id: string }[]).map((g) => g.id);
+    const wanted = view === "guidance" ? [] : x.args.goal ? [String(x.args.goal)] : x.open;
+    const missing = wanted.filter((ref) => !shown.includes(ref));
+    eq(shown, wanted.slice(0, shown.length), `${label}: the most urgent goals, in order`);
+    for (const ref of missing.slice(0, 5)) ok(r.left.includes(`${ref} "`), `${label}: ${ref} isn't named: ${r.left}`);
+    ok(missing.length > 5 === r.left.includes(`${missing.length - 5} more (view "guidance" lists every goal)`), `${label}: the count past five: ${r.left}`);
+    ok(!missing.length || / To read them: sleep_plan with goal "g\d+" \(and so on\) for each goal left out[;.]/.test(r.left), `${label}: where the goals are: ${r.left}`);
+    const guidance = r.data.guidance as string | { more?: string; sections: unknown[] };
+    if (view !== "goals") {
+      eq(typeof guidance === "string", r.left.includes("the guidance word for word (the safety line above has its safety titles and the 911 line)"), `${label}: the guidance word for word`);
+      eq(typeof guidance !== "string" && !!guidance.more, r.left.includes("the guidance beyond safety, word for word"), `${label}: the guidance beyond safety`);
+    }
+    if (x.args.progress_days) eq(!r.data.progress, r.left.includes(`how the last ${x.args.progress_days} days of tries went`), `${label}: the progress`);
+    const notesCould = view !== "guidance" && x.role !== "viewer";
+    eq(notesCould && !r.lines.some((l) => l.startsWith("Check-in notes, last 7 nights")), r.left.includes("the check-in notes"), `${label}: the check-in notes`);
+    eq(shown.length > 0 && !r.lines.some((l) => l.startsWith("Hint from the log, ")), r.left.includes("the roster's hints from the log"), `${label}: the hints`);
+    const tries = (r.data.recent_tries as { note?: string }[]) ?? [];
+    eq(tries.length < Math.min(x.tries, view === "goals" ? 3 : 10), r.left.includes("all but the newest 3 tries"), `${label}: the tries past three`);
+    eq(!tries.some((t) => t.note) && !(r.data.running_try as { note?: string } | null)?.note, r.left.includes("the tries' notes"), `${label}: the tries' notes`);
+  };
+  const openRefs = async () => goalsByUrgency((await listGoalsOf(1)).filter((g) => g.status === "active" || g.status === "paused"), new Date(), alpha.tz).map((g) => `g${g.id}`);
+
+  await test("sleep_plan fits under ALL_VIEW_MAX by construction at every limit (coach P2 #15, coach review P1 #2): three goals, a plan, a week of check-in notes, ten tries and a running one with notes, all at their limits, feeds in every roster window and an open ask; safety first, every part left out named, at any hour", async () => {
+    // The cap leaves room under the chat's cut, so other wording can never reach it.
+    ok(ALL_VIEW_MAX <= MODEL_TEXT_MAX - 1_000, `${ALL_VIEW_MAX}`);
+    await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    await addBigGoals(1, 3);
     for (let d = 0; d < 7; d++) {
       for (const [who, said] of [[alpha.owner, "partly"], [alpha.member, "yes"]] as const) {
         await saveCheckin(1, { babyId: alpha.babyId, member: who, night: addDays(lastNight, -d), protected: said, note: long("Made-up: up at 2 for a feed and again at 4; the bottle went fine but she took a long time to settle afterwards", 200), tz: alpha.tz, source: "web" });
@@ -888,30 +936,69 @@ async function main() {
     const running = await call("bassinet_try", { action: "start", note, tags: ["fed", "swaddled", "white_noise"] }, alpha);
     ok(!running.isError, running.text);
     await call("holding", { action: "ask", to: "Avery" }, alpha);
-    const full = (t: string) => /^Safety \(every item word for word, with its sources, is in guidance below\): Safe sleep: .*Call 911: Call 911 if/.test(t.split("\n")[1]);
-    const compact = (t: string) => /^Safety \(sleep_plan with view "guidance" has every item word for word, with its sources\): Safe sleep: .*Call 911: Call 911 if/.test(t.split("\n")[1]);
+    // A plan with every field at its limit.
+    const plan = await call("set_sleep_plan", { stage: 2, tries_per_day: 8, try_times: ["first_night_stretch", "night_stretch", "first_morning_nap", "any_nap", "22:30", "03:30"], backup: "any_nap", sleeps_now: "arms", goal: long("Made-up: June starts the first stretch of the night in the bassinet and stays there a little longer each week", PLAN_GOAL_MAX) }, alpha);
+    ok(!plan.isError, plan.text);
+    const open = await openRefs();
+    const tries = Number((await sql(`SELECT COUNT(*)::int AS n FROM maple_sleep_tries WHERE family_id = 1 AND deleted_at IS NULL`, []))[0].n);
     for (const role of ["owner", "member", "viewer"] as const) {
-      const tools = chatTools({ email: alpha[role], role }, { fam: 1, born: true, care: false, copy: FAMILY_ONE_COPY });
-      for (const args of [{}, { view: "goals" }, { view: "guidance" }, { view: "all" }, { progress_days: 31 }, { view: "guidance", progress_days: 31 }, { view: "all", progress_days: 31 }, { goal: `g${(await listGoalsOf(1))[0].id}`, view: "all", progress_days: 31 }]) {
-        const out = (await tools.sleep_plan.execute!(args, { toolCallId: "made-up-call", messages: [], context: {} })) as ChatToolOutput;
-        ok(out.ok && out.text.length <= ALL_VIEW_MAX && forModel(out.text) === out.text, `${role} ${JSON.stringify(args)}: ${out.text.length} characters`);
-        // The safety line right after her age, in every view, the 911 line and a sleepy adult's word for word.
-        ok(args.view === "guidance" || args.view === "all" ? full(out.text) : compact(out.text), `${role} ${JSON.stringify(args)}: ${out.text.split("\n")[1]}`);
-        ok(/If you feel yourself dozing/.test(out.text.split("\n")[1]), "the sleepy adult's item, word for word");
-        // Try notes are short in a read (TRY_NOTE_READ), never the whole 200.
-        ok(!out.text.includes(note), `${role} ${JSON.stringify(args)}: a whole try note`);
-        if (args.view === "all") console.log(`  sleep_plan ${JSON.stringify(args)} at every limit, as the ${role} reads it: ${out.text.length} of ${MODEL_TEXT_MAX}`);
+      for (const args of [...ARGS_EVERY_VIEW, { goal: open[open.length - 1], view: "all", progress_days: 31 }]) {
+        const label = `${role} ${JSON.stringify(args)}`;
+        const r = await readPlan(role, args);
+        fits(r, label, note);
+        namesWhatsLeft(r, label, { args, open, role, tries });
+        // The safety line says where the guidance word for word is: in this read's JSON, or a view away.
+        eq(r.lines[1].startsWith("Safety (every item word for word"), typeof r.data.guidance !== "string", `${label}: ${r.lines[1].slice(0, 80)}`);
+        if (args.view === "all") console.log(`  sleep_plan ${JSON.stringify(args)} at every limit, as the ${role} reads it: ${r.out.text.length} of ${MODEL_TEXT_MAX} (cap ${ALL_VIEW_MAX})`);
       }
     }
+    // The JSON: the family's words' legend, then the goals, and the guidance's safety sections first.
     const raw = await call("sleep_plan", { view: "all" }, alpha, "owner");
     eq(Object.keys(raw.sc).filter((k) => k !== "summary")[0], "family_words", "the family's words' legend first, after the summary");
     eq(Object.keys(raw.sc).filter((k) => k !== "summary" && k !== "family_words")[0], "goals", "then the goals");
-    // Its guidance word for word: the emergency, when-to-call and safe-sleep sections first.
     eq((raw.sc.guidance as { sections: { section: string }[] }).sections.slice(0, 3).map((x) => x.section).sort(), ["Call the pediatrician", "Emergency", "Safe sleep"].sort(), "safety first in the JSON too");
+    // Whenever it's read: the clock moved through a whole day, the running try and the ask getting older, the nights moving on.
+    const base = Date.now();
+    let most = 0;
+    for (const hours of [1, 4, 7, 10, 13, 16, 19, 22]) {
+      await atClock(new Date(base + hours * HOUR), async () => {
+        for (const role of ["owner", "viewer"] as const) {
+          for (const args of [{}, { view: "all", progress_days: 31 }, { view: "guidance", progress_days: 31 }]) {
+            const r = await readPlan(role, args);
+            fits(r, `${hours}h on, ${role} ${JSON.stringify(args)}`, note);
+            most = Math.max(most, r.out.text.length);
+          }
+        }
+      });
+    }
+    console.log(`  sleep_plan at every limit through a day: at most ${most} characters (cap ${ALL_VIEW_MAX}, cut ${MODEL_TEXT_MAX})`);
+  });
+
+  await test("sleep_plan fits with every open goal there can be at its limit (ten, five of them paused): the most urgent shown, the first five left out named and the rest counted, and view guidance lists every one", async () => {
+    await addBigGoals(4, GOALS_ACTIVE_MAX);
+    await sql(`UPDATE maple_sleep_goals SET status = 'paused' WHERE family_id = 1 AND status = 'active'`);
+    await addBigGoals(GOALS_ACTIVE_MAX + 1, GOALS_OPEN_MAX);
+    const open = await openRefs();
+    eq(open.length, GOALS_OPEN_MAX, "ten open goals");
+    const note = long("Made-up: swaddled, white noise on, she startled at the transfer and settled again with a hand on her chest for a while", TRY_NOTE_MAX);
+    const tries = Number((await sql(`SELECT COUNT(*)::int AS n FROM maple_sleep_tries WHERE family_id = 1 AND deleted_at IS NULL`, []))[0].n);
+    for (const role of ["owner", "member", "viewer"] as const) {
+      for (const args of [{}, { view: "all", progress_days: 31 }, { view: "guidance", progress_days: 31 }]) {
+        const label = `${role} ${JSON.stringify(args)}`;
+        const r = await readPlan(role, args);
+        fits(r, label, note);
+        namesWhatsLeft(r, label, { args, open, role, tries });
+        if (args.view === "guidance") {
+          const titles = r.lines.find((l) => l.startsWith("Sleep goals: ")) ?? "";
+          ok(open.every((ref) => titles.includes(`${ref} "`)), `${label}: ${titles}`);
+        }
+      }
+    }
     await call("holding", { action: "end" }, alpha);
     await sql(`DELETE FROM maple_sleep_tries WHERE family_id = 1`);
     await sql(`DELETE FROM maple_entries WHERE family_id = 1 AND active = TRUE`);
     await sql(`DELETE FROM maple_sleep_goals WHERE family_id = 1`);
+    await sql(`DELETE FROM maple_sleep_plans WHERE family_id = 1`);
   });
 
   // ── round 4 (the coach review): read-backs, the family's words, her page ──
