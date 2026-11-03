@@ -1042,7 +1042,7 @@ check("goal words: neutral in every line and voice, names from the family, and t
     }
   }
   const rules = coachGuardrails(SHE).join(" ");
-  for (const re of [/one question at a time/, /ask_user/, /only after they say yes/, /memories/, /No medical advice/, /pediatrician or lactation consultant/, /Never crying it out/, /never June sleeping on an adult, or in a bed, couch or armchair with one/, /no blame/]) ok(re.test(rules), `guardrails: ${re}`);
+  for (const re of [/one question at a time/, /ask_user/, /only after they say yes/, /memories/, /No medical advice/, /pediatrician or lactation consultant/, /Never crying it out/, /or June asleep on an adult, in an adult bed, on a couch, armchair or recliner, or in a swing, car seat or other sitting device, as a plan/, /Never crying it out, medicine or supplements for sleep/, /no blame/]) ok(re.test(rules), `guardrails: ${re}`);
   ok(!/\b(sleep train|cry it out|co-?sleep|bed[- ]?shar)/i.test(rules.replace(/Never crying it out/, "")), "nothing that suggests them");
   ok(coachGuardrails(THEY).every((l) => !/\b(she|her|he|him|his)\b/i.test(l)), "they voice");
 });

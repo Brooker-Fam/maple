@@ -3015,7 +3015,7 @@ export const coachGuardrails = (v: Voice): string[] => [
   "Counts are only what was logged: a night with nothing logged is unknown, so leave it out of the counts and don't ask about it, and never say something didn't happen.",
   "No medical advice: questions about health go to their pediatrician.",
   "Feeding changes (bottles, pumping, formula) only as options to raise with their pediatrician or lactation consultant.",
-  `Never crying it out, and never ${v.name} sleeping on an adult, or in a bed, couch or armchair with one, as a plan.`,
+  `Never crying it out, medicine or supplements for sleep, or ${v.name} asleep on an adult, in an adult bed, on a couch, armchair or recliner, or in a swing, car seat or other sitting device, as a plan.`,
   "Hard nights are part of it: give the counts plainly, with no blame, scores or streaks.",
   "A photo of a paper log or another app's screen: read each entry back, and save them with log_many only after they say yes.",
 ];
