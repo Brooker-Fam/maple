@@ -10,18 +10,21 @@
 import { NextRequest } from "next/server";
 import webpush from "web-push";
 import { POST as QUICK } from "../../src/app/api/maple/quick/route";
-import { checkinDueNight } from "../../src/app/api/maple/quick/sleep";
+import { armsLine, checkinDueNight, pauseLine, sleptWords } from "../../src/app/api/maple/quick/sleep";
 import { POST as SLEEP_POST } from "../../src/app/api/maple/sleep/route";
 import { checkinDue } from "../../src/components/maple/sleep/SleepCheckin";
 import { sealSession, SESSION_COOKIE } from "../../src/lib/maple/auth";
 import { setLaterRunner } from "../../src/lib/maple/push-hooks";
+import { catchUpLines, catchUpSpoken, moveWords } from "../../src/lib/maple/sleep/catchup";
 import { numberTries, tryDayKey, tryDayLabel } from "../../src/lib/maple/sleep/engine";
 import { lastNightKey } from "../../src/lib/maple/sleep/goals";
 import { getShift, getTry, listTries, openShift, runningTry, startShift } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, RosterWindow, SleepCheckin, SleepGoal } from "../../src/lib/maple/sleep/types";
+import { downWords } from "../../src/lib/maple/sleep/words";
 import { activeTimers, getEntry, startTimer, stopTimer, updateEntry } from "../../src/lib/maple/store";
 import { addDays, dayKey, formatTime, localParts, zonedTimeToUtc } from "../../src/lib/maple/time";
-import type { FeedData, Role } from "../../src/lib/maple/types";
+import type { Entry, FeedData, Role } from "../../src/lib/maple/types";
+import { makeVoice } from "../../src/lib/maple/voice";
 import { done, eq, freshDb, ok, seedFamilies, sha256, sql, test, type FamilySeed } from "./harness";
 
 process.env.MCP_SECRET = "made-up-quick-sleep-secret";
@@ -365,7 +368,7 @@ async function main() {
     const r = await siri(T(alpha).member, { action: "asleep_in_arms", client_id: "made-up-arms-1" });
     const [s] = await sleepsOf(alpha);
     eq([s.active, (s.data as { place?: string }).place, s.source, s.created_by], [true, "arms", "shortcut", alpha.member], "in arms");
-    eq(r.speak, `Sleep timer started at ${clock(s.started_at as string, alpha.tz)}, in arms. If you start to feel sleepy, lay her on her back in the bassinet.`, "said, with no sweet dreams, and the bassinet if sleepy");
+    eq(r.speak, `Sleep timer started at ${clock(s.started_at as string, alpha.tz)}, in arms. Getting sleepy? Put her on her back in the bassinet.`, "said, with no sweet dreams, and the bassinet if sleepy");
     const again = await siri(T(alpha).member, { action: "asleep_in_arms", client_id: "made-up-arms-1" });
     eq([again.speak, again.deduped, (await sleepsOf(alpha)).length], [r.speak, true, 1], "the retry");
     const other = await siri(T(alpha).owner, { action: "asleep_in_arms" });
@@ -376,10 +379,10 @@ async function main() {
     const fe = (await getEntry(1, feed.id))!;
     const [s2] = await sleepsOf(alpha);
     eq([fe.active, near(fe.ended_at, Date.now() - 5 * MIN), near((await getEntry(1, Number(s2.id)))!.started_at, Date.now() - 5 * MIN)], [false, true, true], "the feed ended when she fell asleep");
-    ok(f.speak.startsWith("Feed stopped and sleep timer started at ") && f.speak.endsWith(", in arms. If you start to feel sleepy, lay her on her back in the bassinet."), f.speak);
+    ok(f.speak.startsWith("Feed stopped and sleep timer started at ") && f.speak.endsWith(", in arms. Getting sleepy? Put her on her back in the bassinet."), f.speak);
     // Beta's words: his name and pronouns.
     await reset(beta);
-    ok((await siri(T(beta).owner, { action: "asleep_in_arms" })).speak.endsWith("If you start to feel sleepy, lay him on his back in the bassinet."), "beta's pronouns");
+    ok((await siri(T(beta).owner, { action: "asleep_in_arms" })).speak.endsWith("Getting sleepy? Put him on his back in the bassinet."), "beta's pronouns");
     await reset(beta);
   });
 
@@ -1066,6 +1069,53 @@ async function main() {
     // And it does say due somewhere, and not due somewhere.
     const due = checkinDueNight({ goals: [goalOf({ id: 4, created: "2026-10-01T12:00:00Z", target: "x@example.com" })], checkins: [], me: "x@example.com", role: "member", now: new Date("2026-11-04T15:00:00Z"), tz: "America/Chicago" });
     eq(due, "2026-11-03", "due at 9 AM in Chicago");
+  });
+
+  // ── the safety lines, in every voice ────────────────────────────────
+
+  await test("the safety lines say what to do in the family's own words: she, he, they, and no name or sex on file", () => {
+    const tz = "America/Chicago";
+    const at = "2026-11-03T07:45:00.000Z"; // 1:45 AM in Chicago
+    const now = new Date("2026-11-03T08:10:00.000Z");
+    const sleep = (place: string | null, active: boolean): Entry =>
+      ({ id: 1, kind: "sleep", started_at: at, ended_at: active ? null : now.toISOString(), active, data: place ? { place } : {}, note: null, created_by: null, updated_by: null, source: "web", created_at: at, updated_at: at }) as Entry;
+    const voices = [
+      { v: makeVoice({ name: "Wren", pronoun: "she" }), they: "she", them: "her", their: "her", falls: "falls" },
+      { v: makeVoice({ name: "Ro", pronoun: "he" }), they: "he", them: "him", their: "his", falls: "falls" },
+      { v: makeVoice({ name: "Sky", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall" },
+      { v: makeVoice({ name: "the baby", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall" },
+    ];
+    const Cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+    for (const x of voices) {
+      const who = `${x.v.name} (${x.v.pronoun})`;
+      // Safety #5 and #19: the plan's pause, and a sleep in arms.
+      eq(pauseLine(x.v), `The plan says pause until the next try, unless you're getting sleepy: then lay ${x.them} on ${x.their} back in the bassinet. Say it again to try anyway.`, `${who}: the pause`);
+      eq(armsLine({ started_at: at }, tz, false, x.v), `Sleep timer started at 1:45, in arms. Getting sleepy? Put ${x.them} on ${x.their} back in the bassinet.`, `${who}: in arms`);
+      eq(armsLine({ started_at: at }, tz, true, x.v).startsWith("Feed stopped and sleep timer started at 1:45, in arms. Getting sleepy?"), true, `${who}: in arms after a feed`);
+      // A stopped sleep somewhere that isn't her own sleep space: what to do next time.
+      for (const [place, words] of [["car", "in the car seat"], ["stroller", "in the stroller"], ["carrier", "in the carrier"]]) {
+        eq(sleptWords(sleep(place, false), x.v), `${Cap(x.they)} slept 25 minutes, ${words}. Next time ${x.they} ${x.falls} asleep in one, move ${x.them} to the bassinet, on ${x.their} back, as soon as you can.`, `${who}: slept, ${place}`);
+      }
+      eq(sleptWords(sleep("bed", false), x.v), `${Cap(x.they)} slept 25 minutes, in a grown-up bed. Next time, move ${x.them} to ${x.their} own sleep space as soon as you can.`, `${who}: slept, bed`);
+      for (const place of ["bassinet", "crib", "arms", null]) {
+        ok(!/Next time/.test(sleptWords(sleep(place, false), x.v)), `${who}: nothing more after ${place ?? "no place"}`);
+        eq(moveWords((place ?? undefined) as never, x.v), null, `${who}: no move from ${place ?? "no place"}`);
+      }
+      // Safety #17: a sleep still running there, in the take-over catch-up, spoken (Siri) and on the sheet (the app).
+      const summary = (place: string) => ({ active: [sleep(place, true)], lastFed: null, next: null, lastDiaper: null });
+      const spoken = (place: string) => catchUpSpoken(summary(place), { now, tz, vo: x.v, clock: (t) => clock(t, tz) });
+      const sheet = (place: string) => catchUpLines({ summary: summary(place), now, tz, v: x.v, me: "made-up@example.com", memberName: () => "Sam", next: null, nextHolder: null }).find((l) => l.label === "Running")?.text;
+      const toBassinet = `Move ${x.them} to the bassinet, on ${x.their} back, as soon as you can.`;
+      const toOwn = `Move ${x.them} to ${x.their} own sleep space, on ${x.their} back, as soon as you can.`;
+      eq(spoken("car").slice(-2), ["Asleep since 1:45, in the car seat.", toBassinet], `${who}: spoken, car seat`);
+      eq(spoken("stroller").slice(-2), ["Asleep since 1:45, in the stroller.", toBassinet], `${who}: spoken, stroller`);
+      eq(spoken("carrier").slice(-2), ["Asleep since 1:45, in the carrier.", toBassinet], `${who}: spoken, carrier`);
+      eq(spoken("bed").slice(-2), ["Asleep since 1:45, in a grown-up bed.", toOwn], `${who}: spoken, bed`);
+      eq(spoken("bassinet").at(-1), "Asleep since 1:45, in the bassinet.", `${who}: spoken, bassinet: nothing more`);
+      eq(sheet("car"), `Asleep since 1:45 AM (car seat), ${downWords(25)}. ${toBassinet}`, `${who}: the sheet, car seat`);
+      eq(sheet("bed"), `Asleep since 1:45 AM (grown-up bed), ${downWords(25)}. ${toOwn}`, `${who}: the sheet, bed`);
+      eq(sheet("arms"), `Asleep since 1:45 AM (in arms), ${downWords(25)}`, `${who}: the sheet, in arms: nothing more`);
+    }
   });
 
   done("quick-sleep.check.ts");

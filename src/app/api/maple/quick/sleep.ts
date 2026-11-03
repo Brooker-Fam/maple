@@ -104,12 +104,30 @@ const near = (a: string | null | undefined, b: string | null | undefined, within
 /** Where a sleep was, as Siri says it after "slept 25 minutes": "in arms", "in the bassinet". */
 const SLEPT_IN: Record<string, string> = { arms: "in arms", bassinet: "in the bassinet", crib: "in the crib", carrier: "in the carrier", stroller: "in the stroller", car: "in the car seat", bed: "in a grown-up bed" };
 
-/** A stopped sleep, spoken: "She slept 1 hour 5 minutes, in arms." ("under a minute" for a short one), never the card's "Slept · 0s · in arms". */
+/** After a sleep somewhere that isn't her own sleep space, the safety guidance's next time, in the family's voice. */
+const toBassinet = (vo: Voice) => `Next time ${vo.they} ${vo.verb("falls")} asleep in one, move ${vo.them} to the bassinet, on ${vo.their} back, as soon as you can.`;
+const NEXT_TIME: Record<string, (vo: Voice) => string> = {
+  car: toBassinet,
+  stroller: toBassinet,
+  carrier: toBassinet,
+  bed: (vo) => `Next time, move ${vo.them} to ${vo.their} own sleep space as soon as you can.`,
+};
+
+/**
+ * A stopped sleep, spoken: "She slept 1 hour 5 minutes, in arms." ("under a minute" for a short one), never the card's
+ * "Slept · 0s · in arms"; after a car seat, stroller, carrier or grown-up bed, what to do next time.
+ */
 export function sleptWords(e: Entry, vo: Voice): string {
   const min = e.ended_at ? (ms(e.ended_at) - ms(e.started_at)) / MIN : 0;
-  const place = SLEPT_IN[(e.data as { place?: string }).place ?? ""];
-  return `${vo.They} slept ${minutesSaid(min)}${place ? `, ${place}` : ""}.`;
+  const where = (e.data as { place?: string }).place ?? "";
+  const place = SLEPT_IN[where];
+  const next = NEXT_TIME[where];
+  return `${vo.They} slept ${minutesSaid(min)}${place ? `, ${place}` : ""}.${next ? ` ${next(vo)}` : ""}`;
 }
+
+/** The plan's pause after a retry, as Siri says it: holding her through it is for an adult who's awake, so sleepy, the bassinet comes first. */
+export const pauseLine = (vo: Pick<Voice, "them" | "their">) =>
+  `The plan says pause until the next try, unless you're getting sleepy: then lay ${vo.them} on ${vo.their} back in the bassinet. Say it again to try anyway.`;
 
 /**
  * When it happened: minutes_ago left out, blank or 0 is now; up to
@@ -203,11 +221,7 @@ async function pauseFirst(c: QuickCtx): Promise<Response | null> {
   const said = rows[0]?.pause_said_at ? new Date(rows[0].pause_said_at as string).getTime() : NaN;
   if (Number.isFinite(said) && c.now.getTime() - said <= AGAIN_MS) return null;
   if ((await query(`UPDATE maple_sleep_tries SET pause_said_at = NOW() WHERE id = $1 AND family_id = $2`, [retry.id, c.fam.familyId])) === null) throw new StoreUnavailable();
-  // Holding her through the pause is for an adult who's awake: sleepy, the bassinet comes first.
-  return notDone(`The plan says pause until the next try, unless you're getting sleepy: then lay ${c.vo.them} on ${c.vo.their} back in the bassinet. Say it again to try anyway.`, {
-    pause: true,
-    try: { id: `t${retry.id}` },
-  });
+  return notDone(pauseLine(c.vo), { pause: true, try: { id: `t${retry.id}` } });
 }
 
 /**
@@ -360,9 +374,9 @@ export async function asleepInArms(c: QuickCtx): Promise<Response> {
   return say(armsLine(r.entry, c.tz, !!feed, c.vo), { entry: toClientEntry(r.entry) });
 }
 
-/** "Sleep timer started at 9:42, in arms.", and what to do if the one holding her gets sleepy (never anything that sounds like they may doze too). */
-const armsLine = (e: Entry, tz: string, feedStopped: boolean, vo: Voice) =>
-  `${feedStopped ? "Feed stopped and sleep" : "Sleep"} timer started at ${clock(e.started_at, tz)}, in arms. If you start to feel sleepy, lay ${vo.them} on ${vo.their} back in the bassinet.`;
+/** "Sleep timer started at 9:42, in arms. Getting sleepy? Put her on her back in the bassinet." (never anything that sounds like the one holding her may doze too). */
+export const armsLine = (e: Pick<Entry, "started_at">, tz: string, feedStopped: boolean, vo: Pick<Voice, "them" | "their">) =>
+  `${feedStopped ? "Feed stopped and sleep" : "Sleep"} timer started at ${clock(e.started_at, tz)}, in arms. Getting sleepy? Put ${vo.them} on ${vo.their} back in the bassinet.`;
 
 // ── handoff ──────────────────────────────────────────────────────────────
 
