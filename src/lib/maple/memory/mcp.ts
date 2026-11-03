@@ -127,7 +127,7 @@ function changeResult(summary: string, change: { status: "saved" | "supported" |
       fact: change.memory.fact,
       ...(change.previous ? { previous_fact: change.previous.fact } : {}),
     },
-    memory: recallRecord(change.memory, t, namesOf(ctx)),
+    memory: recallRecord(change.memory, t, namesOf(ctx), ctx.tz),
   });
 }
 
@@ -189,10 +189,10 @@ export function registerMemoryTools(server: McpServer, copy: ToolCopy = FAMILY_O
           versions.push(prev);
           p = prev.predecessor_id;
         }
-        const full = { ...recallRecord(m, t, names), ...(m.source_text ? { [m.source_words ? "their_words" : "note"]: m.source_text } : {}) };
+        const full = { ...recallRecord(m, t, names, ctx.tz), ...(m.source_text ? { [m.source_words ? "their_words" : "note"]: m.source_text } : {}) };
         return ok(`${memoryRef(m.id)}: ${quoted(m)}${versions.length ? ` (${versions.length} earlier ${versions.length === 1 ? "version" : "versions"})` : ""}.`, {
           memories: [full],
-          ...(versions.length ? { earlier_versions: versions.map((v) => recallRecord(v, t, names)) } : {}),
+          ...(versions.length ? { earlier_versions: versions.map((v) => recallRecord(v, t, names, ctx.tz)) } : {}),
           total: 1,
         });
       }
@@ -202,7 +202,7 @@ export function registerMemoryTools(server: McpServer, copy: ToolCopy = FAMILY_O
       const summary = matches.length
         ? `${total} ${total === 1 ? "memory" : "memories"} ${what}${total > matches.length ? `, showing the best ${matches.length}` : ""}.`.replace(/ \./, ".").replace(/ ,/, ",")
         : `No ${a.include_history ? "" : "current "}memories ${what || "saved"}.`.replace(/\s+/g, " ").replace(/ \./, ".");
-      return ok(summary, { memories: matches.map((m) => recallRecord(m, t, names)), total, ...(total > matches.length ? { hint: "Narrow the words or the kind for the rest." } : {}) });
+      return ok(summary, { memories: matches.map((m) => recallRecord(m, t, names, ctx.tz)), total, ...(total > matches.length ? { hint: "Narrow the words or the kind for the rest." } : {}) });
     }
   );
 

@@ -112,6 +112,23 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(holding|hold (her|him|them|the baby)|held (her|him|them)|hand ?off|handoff|hand (her|him|them) (off|over)|take over|taking over|my turn|your turn|shifts?|partner)\b/i,
     /\b(put|putting|lay|laid|laying) (her|him|them|the baby) down\b/i,
     /\b(stage|goal|goals|back to work)\b/i,
+    // How parents talk about the nights: shifts and protected sleep, held sleep, unsafe places they ask about, and being worn out.
+    /\b(protected (sleep|window|time|stretch)|roster|split (the )?nights?|night (shifts?|duty|plan|schedule)|who'?s (up|on)|(first|second|late|early) shift|on track|dream ?feed|back at work|return(ing)? to work|(maternity|paternity|parental) leave|leave ends)\b/i,
+    /\b(only|won'?t|doesn'?t) (sleeps?|naps?|settles?)\b|\b(sleeps?|naps?|slept|sleeping|napping) (only )?(on|with) (me|us|him|her|dad|mom)\b/i,
+    /\b(our|my|the) bed\b|co-?sleep\w*|bed-?shar\w*|\bswing\b|recliner|couch|sofa|armchair|let (her|him|them) cry|\bcio\b/i,
+    /\b(exhausted|sleep[- ]deprived|so tired|(need|get) (some )?sleep|(rough|hard|long|bad) night|night was (rough|hard|long|bad)|up all night|(my|his|her) window)\b/i,
+    // Before a plan or goal exists: held naps on someone, waiting before going in, sleep gear, whose turn it is, and being worn out.
+    /\bon (my|his|her|your|our) (chest|lap|shoulder)\b|going in when|wait\w* before (going in|picking)|swaddl\w*|sleep ?sack|snoo|white noise|mattress|whose turn|turns tonight|tag[- ]team|\bswap\b(?! (sides?|breasts?|to the (left|right)))|wrecked|so (he|she|i|we) can (sleep|rest)/i,
+    // Worn out, and dozing with her (sleep_plan has the sourced words for a sleepy adult and a drowsy drive).
+    /\b(nodd(ed|ing) off|doz(ed|ing) off|(fell|falling) asleep (with|feeding|holding|driving|while)|keep (my|our) eyes open|running on (fumes|empty)|zombies?|haven'?t slept|need (a|some) (nap|rest|sleep)|get some (rest|sleep)|another night like)\b/i,
+    // Night wakings in plain words.
+    /\b(up|awake) (every (hour|\d+)|all night|for the day|since (midnight|\d))|\bawake from \d|\bwon'?t go (back )?down\b|\bfalls? asleep (nursing|feeding|on|while)\b/i,
+    // Going back to work, in other words.
+    /\b(start(ing)? back|first (week|day|night|shift) back|back (at|to) (the office|my job|the job)|go(ing)? back to (my|the) (job|office)|paid leave|leave (runs out|is over|ends|ending)|daycare|day care|childcare|child care|nanny)\b/i,
+    // Splitting the night by the clock or a feed.
+    /\b(do|does|doing|take|takes|taking|cover|covers|covering) (the )?\d{1,2}(:\d{2})? ?(am|pm)\b|\b(take|takes|has|have) (her|him|them|the baby) (from )?\d{1,2}(:\d{2})? ?(am|pm)? ?(to|till|until) \d{1,2}\b|\b(has|have) (her|him|them|the baby) (till|until) \d{1,2}\b|\bwho (does|takes|gets up|covers)\b/i,
+    // Sleep places and gear parents ask about.
+    /\b(stroller|pram|car ?seat|dock[\s-]?a[\s-]?tot|boppy|lounger|snuggle ?me|bouncer|mama ?roo|baby ?carrier|sling|pacifier|binky|dummy)\b/i,
   ],
   log_more: [
     /\b(pump\w*|expressed|expressing|haakaa|let-?down|freezer stash|milk stash)\b/i,
@@ -141,8 +158,14 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
 const SLEEP_WORD = /\b(sleep\w*|slept|asleep|naps?|napping|bedtime|nights?)\b/i;
 const QUESTION = /\?|\b(how|why|what|should|tips?|advice|help|enough|longer|better|normal)\b/i;
 
-/** [App] state lines that mean the sleep plan is running now (sleep/mcp.ts sleepStatus): a try in the bassinet, or someone holding her. */
-const SLEEP_STATE = /^(Bassinet try \S+ running\b|Holding: )/;
+/**
+ * [App] state lines that mean the family uses the sleep plan (sleep/mcp.ts
+ * sleepStatus): a try in the bassinet, someone holding her, a plan, an active
+ * sleep goal or last night's check-ins. A family with a plan or a goal gets
+ * the sleep tools on every message, so "yes, mine held" or a check-in answer
+ * never costs a load_tools step (the group is small next to the ceiling).
+ */
+const SLEEP_STATE = /^(Bassinet try \S+ running\b|Holding: |Sleep plan: |Sleep goals: |Check-ins for last night: )/;
 
 /** Her next medicine's [App] line names it (logState in mcp-tools.ts), so a message naming it is about her page. */
 const NEXT_MEDICINE = /next medicine: (.+)$/;
@@ -317,7 +340,7 @@ function groupWords(vo: Voice): Record<ToolGroup, string> {
   return {
     mom: `${vo.mom}'s page: her medicines and doses, temperature, food and drinks, questions for her OB`,
     health: `${vo.name}'s growth, medicine, vitals and temperature, doctor questions`,
-    sleep: "the sleep plan, bassinet tries, holding turns",
+    sleep: "the sleep plan, bassinet tries, holding turns, sleep goals and check-ins",
     log_more: "pumping, notes, tummy time and baths, moments",
     app: "finding entries, charts, settings, opening a screen, web search",
     people: "who's in the family, invites and access",

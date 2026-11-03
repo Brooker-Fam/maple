@@ -4,6 +4,7 @@ import { captureServerException } from "@/lib/posthog-server";
 import { planStatus } from "./care";
 import { rowToCareEntry, rowToPlan } from "./care-store";
 import { FAMILY_ONE, type FamilyScope } from "./family";
+import { quietWindowEnds } from "./push-quiet";
 import { addDays, dayKey, parseDayKey, zonedTimeToUtc } from "./time";
 import type { CarePerson, CarePlan, CareSettings, DoseEntry, Member } from "./types";
 import { MEMBER_COLS, rowToMember } from "./auth";
@@ -51,6 +52,8 @@ const WAKES_PER_CALL = 3;
 const MAX_AHEAD_MS = 7 * DAY;
 /** Doses this far back are enough for every gap, limit and slot. */
 export const DOSE_LOOKBACK_MS = 3 * DAY;
+/** A reminder more than this late isn't sent (push.ts CUTOFF_MS): a held one goes at its window's end only inside it. */
+export const REMINDER_CUTOFF_MS = 3 * 60 * MIN;
 
 async function q(sql: string, params: unknown[] = []): Promise<Row[]> {
   const rows = await query(sql, params);
@@ -183,20 +186,34 @@ export type PlanMoments = { plan: CarePlan; doses: DoseEntry[]; moments: DueMome
 /**
  * A holding shift's planned handoff (sleep/schema.ts): key
  * handoff:<shift>:<planned ms>, so planning a later time reminds again at
- * that time, and once per phone for each time.
+ * that time, and once per phone for each time. `holder` and `next` (the
+ * turn's planned next person, if any) are who it's for (handoffFor).
  */
-export type HandoffMoment = { key: string; at: number; shiftId: number };
+export type HandoffMoment = { key: string; at: number; shiftId: number; holder: string; next: string | null };
 
 /** One family's open shifts with a planned handoff. */
 export async function handoffMoments(scope: Pick<FamilyScope, "familyId">): Promise<HandoffMoment[]> {
   const rows = await q(
-    `SELECT id, handoff_at FROM maple_sleep_shifts WHERE family_id = $1 AND ended_at IS NULL AND deleted_at IS NULL AND handoff_at IS NOT NULL ORDER BY handoff_at`,
+    `SELECT id, handoff_at, holder, next_holder FROM maple_sleep_shifts WHERE family_id = $1 AND ended_at IS NULL AND deleted_at IS NULL AND handoff_at IS NOT NULL ORDER BY handoff_at`,
     [scope.familyId]
   );
   return rows.map((r) => {
     const at = new Date(r.handoff_at as string).getTime();
-    return { key: `handoff:${Number(r.id)}:${at}`, at, shiftId: Number(r.id) };
+    return { key: `handoff:${Number(r.id)}:${at}`, at, shiftId: Number(r.id), holder: String(r.holder), next: r.next_holder == null ? null : String(r.next_holder) };
   });
+}
+
+/**
+ * Who a planned handoff is for: the person holding her and the next holder
+ * (the turn's planned next person, else the only other adult, an owner or
+ * member, as Siri's and the app's handoff pick them). Nobody else's phone
+ * hears it, so it never wakes an adult it isn't about.
+ */
+export function handoffFor(shift: Pick<HandoffMoment, "holder" | "next">, members: readonly Member[]): string[] {
+  const planned = shift.next ? members.find((m) => m.email === shift.next && m.role !== "photos" && m.email !== shift.holder) : undefined;
+  if (planned) return [shift.holder, planned.email];
+  const others = members.filter((m) => (m.role === "owner" || m.role === "member") && m.email !== "admin" && m.email !== shift.holder);
+  return others.length === 1 ? [shift.holder, others[0].email] : [shift.holder];
 }
 
 /**
@@ -355,26 +372,38 @@ export async function anyPhoneOn(): Promise<boolean> {
 /**
  * Publish one family's wakes for its next few moments not already
  * published: her medicines' moments (only while one of its phones wants
- * medicine notices) and its pending tests ("Send a test in 1 minute"),
- * within QStash's 7 days. Also keeps the shared safety net in step. Called
- * from writes and from scheduled ticks, never from an open app's polls.
- * `pre`: moments the caller already worked out for this family (the tick
- * shares its own).
+ * medicine notices), the end of a protected window that holds one of them
+ * on a quiet phone (push-quiet.ts: the held reminder goes then), and its
+ * pending tests ("Send a test in 1 minute"), within QStash's 7 days. Also
+ * keeps the shared safety net in step. Called from writes and from
+ * scheduled ticks, never from an open app's polls. `pre`: moments the
+ * caller already worked out for this family (the tick shares its own).
  */
 export async function scheduleWakeups(scope: FamilyScope, now = new Date(), pre?: { plans: PlanMoments[] } | null, handoffs?: HandoffMoment[] | null): Promise<{ mode: SchedulerMode; published: number }> {
   if (schedulerMode() !== "qstash") return { mode: "fallback", published: 0 };
-  const subs = await q(`SELECT prefs, test_due_at FROM maple_push_subs WHERE family_id = $1 AND NOT needs_resubscribe`, [scope.familyId]);
+  const subs = await q(`SELECT member, prefs, test_due_at FROM maple_push_subs WHERE family_id = $1 AND NOT needs_resubscribe`, [scope.familyId]);
   await ensureSafetyNet(subs.length > 0 || (await anyPhoneOn()), now);
   if (!subs.length) return { mode: "qstash", published: 0 };
   const t = now.getTime();
   const times: number[] = [];
-  const wantMeds = subs.some((s) => (s.prefs as { meds?: boolean } | null)?.meds !== false);
+  const prefsOf = (s: Row) => (s.prefs ?? {}) as { meds?: boolean; handoff?: boolean; quiet_window?: boolean };
+  const wantMeds = subs.some((s) => prefsOf(s).meds !== false);
   if (wantMeds) {
     const plans = pre?.plans ?? (await collectMoments(scope, now)).plans;
     for (const p of plans) for (const m of p.moments) if (m.at > t) times.push(m.at);
+    // A protected window's end, when one of her reminders falls inside it on a phone that keeps quiet then.
+    const quiet = subs.filter((s) => prefsOf(s).meds !== false && prefsOf(s).quiet_window !== false).map((s) => String(s.member));
+    const moments = plans.flatMap((p) => p.moments.map((m) => m.at));
+    if (quiet.length && moments.length) {
+      const ends = await quietWindowEnds(scope, quiet, moments, now, t + MAX_AHEAD_MS, REMINDER_CUTOFF_MS).catch((err) => {
+        void captureServerException(new Error(String((err as { code?: unknown })?.code ?? (err instanceof Error ? err.name : "error"))), { route: "maple push quiet wake" });
+        return [] as number[];
+      });
+      times.push(...ends);
+    }
   }
   // A planned handoff, while a phone wants its reminder.
-  if (subs.some((s) => (s.prefs as { handoff?: boolean } | null)?.handoff === true)) {
+  if (subs.some((s) => prefsOf(s).handoff === true)) {
     for (const m of handoffs ?? (await handoffMoments(scope))) if (m.at > t) times.push(m.at);
   }
   for (const s of subs) if (s.test_due_at) times.push(Math.max(t, new Date(s.test_due_at as string).getTime()));

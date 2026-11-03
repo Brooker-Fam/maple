@@ -5,11 +5,12 @@
  * that makes a claim about babies lives in ../guidelines/sleep.ts with its
  * source. Copy about the baby takes a Voice (../voice.ts).
  */
-import { formatTime, parseDayKey } from "../time";
+import { formatMinutes, formatTime, parseDayKey } from "../time";
 import type { SleepPlace } from "../types";
 import type { Voice } from "../voice";
-import type { GoalStatus, GoalTarget, PlanStage, ProtectedAnswer, RosterWindow, ShiftEnding, TargetKind, TryAnchor, TryOutcome, TrySlot, TryTag } from "./types";
+import type { CheckinPlace, GoalStatus, GoalTarget, HandoffAnswer, PlanStage, ProtectedAnswer, RosterWindow, ShiftEnding, TargetKind, TryAnchor, TryOutcome, TrySlot, TryTag, UntimedTry } from "./types";
 import { TRY_ANCHORS } from "./types";
+import type { WindowCovers } from "./types";
 
 export type StageInfo = {
   title: string;
@@ -132,8 +133,41 @@ export type TimeOfDay = (typeof TIME_OF_DAY)[number]["id"];
 export const sleepyChoices = (v: Voice, partner: string | null) =>
   [
     { id: "bassinet" as const, label: `Put ${v.them} in the bassinet now`, hint: `On ${v.their} back. This ends your turn.` },
-    { id: "partner" as const, label: partner ? `Wake ${partner}` : "Wake your partner", hint: `Hand ${v.them} over now.` },
+    { id: "partner" as const, label: partner ? `Wake ${partner}` : "Wake your partner", hint: `Ask ${partner ?? "them"} to take ${v.them} now.` },
   ] as const;
+
+// ── at night, in a few words ─────────────────────────────────────────────
+
+/** Minutes down as a phone says them: "47 min", "3h 12m" (never "192 min"). */
+export const downWords = (min: number) => formatMinutes(Math.max(0, Math.round(min)) * 60);
+
+/**
+ * The strip's and the outcome toast's line after a crying wake, and after
+ * the retry: the plan's "soothe, retry once, then pause" (guidelines/sleep.ts
+ * crying-soothe and crying-pause) in a few words. Never crying it out.
+ */
+export const cryingLine = (v: Voice, signal: "after_crying" | "retry_done") =>
+  signal === "after_crying" ? `Soothe ${v.them}; try once more when ${v.they}${v.verb("'s")} deeply asleep` : "Pause until the next try";
+
+/**
+ * Right after setup, before any try: what to do at the next try, in the
+ * plan's own words (its try time, the transfer, soothe, retry once, then
+ * pause until the next try). Never crying it out.
+ */
+export const firstTryWords = (v: Voice, slot: TrySlot | null) =>
+  `${slot ? `${slotLabel(slot)}: once` : "Once"} ${v.they}${v.verb("'s")} deeply asleep, lay ${v.them} on ${v.their} back in the bassinet and tap Put down. If ${v.they} ${v.verb("wakes")} crying, soothe ${v.them} and try once more, then pause until the next try.`;
+
+const SLOT_SHORT: Record<TryAnchor, string> = {
+  first_night_stretch: "first night stretch",
+  night_stretch: "next night stretch",
+  first_morning_nap: "morning nap",
+  any_nap: "next nap",
+};
+
+/** A try time short enough for the strip: "morning nap", "around 10:30 PM". */
+export function slotShort(slot: TrySlot): string {
+  return CLOCK.test(slot) ? slotLabel(slot).replace(/^Around/, "around") : (SLOT_SHORT[slot as TryAnchor] ?? slot);
+}
 
 // ── sleep goals ──────────────────────────────────────────────────────────
 //
@@ -155,9 +189,37 @@ export const GOAL_STATUS_LABEL: Record<GoalStatus, string> = {
   dropped: "Set aside",
 };
 
-/** The check-in's one question, and its three answers. */
-export const CHECKIN_QUESTION = "Did your protected sleep window hold last night?";
+/**
+ * The check-in's question, and its three answers. Never "hold": a holding
+ * turn is someone holding the baby awake, so the question names the sleep
+ * itself (checkinQuestion has the window's times).
+ */
+export const CHECKIN_QUESTION = "Did you get your protected sleep last night?";
 export const PROTECTED_LABEL: Record<ProtectedAnswer, string> = { yes: "Yes", partly: "Partly", no: "Not this time" };
+
+/** "10 PM", "9:30 PM", "midnight", "noon" for a stored "22:00": short, for a question. */
+export function shortClock(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (m === 0 && h === 0) return "midnight";
+  if (m === 0 && h === 12) return "noon";
+  const hour = h % 12 || 12;
+  return `${hour}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "AM" : "PM"}`;
+}
+
+/** "Did you get your 10 PM–2 AM sleep?" for the adult's windows that night ("… and 4–6 AM …"); CHECKIN_QUESTION without one. */
+export function checkinQuestion(windows: readonly Pick<RosterWindow, "from" | "to">[]): string {
+  const times = [...new Set(windows.map((w) => `${shortClock(w.from)}–${shortClock(w.to)}`))];
+  if (!times.length) return CHECKIN_QUESTION;
+  return `Did you get your ${times.length > 1 ? `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}` : times[0]} sleep?`;
+}
+
+/** The morning's other questions (each once a night, whoever answers first), and their answers. */
+export const placeQuestion = (v: Voice) => `Where did ${v.name} spend most of last night?`;
+export const PLACE_LABEL: Record<CheckinPlace, string> = { bassinet: "Bassinet", held: "Held by someone awake", mixed: "Some of each", elsewhere: "Somewhere else", unsure: "Not sure" };
+export const UNTIMED_QUESTION = "Any bassinet try that isn't in the log?";
+export const untimedLabels = (minutes: number): Record<UntimedTry, string> => ({ no: "No", long: `Yes, ${minutesWords(minutes)} or more`, short: "Yes, shorter" });
+export const handoffQuestion = (at: string | null) => (at ? `Did the ${at} handoff happen as planned?` : "Did the handoff happen as planned?");
+export const HANDOFF_LABEL: Record<HandoffAnswer, string> = { on_time: "On time", early: "Early", late: "Late", none: "No handoff" };
 
 export const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -173,6 +235,35 @@ export function dateWords(key: string, todayKey: string): string {
   const { year, month, day } = parseDayKey(key);
   return `${WEEKDAY_SHORT[weekdayOf(key)]}, ${MONTH_SHORT[month - 1]} ${day}${todayKey.slice(0, 4) === key.slice(0, 4) ? "" : `, ${year}`}`;
 }
+
+/** "Oct 20–27", "Oct 28–Nov 3" ("Dec 28, 2026–Jan 3, 2027" across years, or outside today's): a run of nights by their evenings. */
+export function nightsRange(from: string, to: string, todayKey: string): string {
+  const a = parseDayKey(from);
+  const b = parseDayKey(to);
+  const start = `${MONTH_SHORT[a.month - 1]} ${a.day}`;
+  const end = a.month === b.month && a.year === b.year ? `${b.day}` : `${MONTH_SHORT[b.month - 1]} ${b.day}`;
+  if (a.year !== b.year) return `${start}, ${a.year}–${end}, ${b.year}`;
+  const year = String(a.year) === todayKey.slice(0, 4) ? "" : `, ${a.year}`;
+  return from === to ? `${start}${year}` : `${start}–${end}${year}`;
+}
+
+// ── light logging, quiet stretches and easing off (goals.ts ENOUGH_NIGHTS, QUIET_NIGHTS) ──
+
+/** Said in the Goals tab and in sleep_goal's description: logging some nights is plenty. */
+export const ENOUGH_NIGHTS_LINE = "Three logged nights a week is enough; on the other nights, the morning check-in is plenty.";
+
+/**
+ * A target's line when its week has too few nights to read: "2 nights logged, too few to tell yet" (a week still going
+ * says "so far"; one that's over, "too few to tell"). Never a verdict about the nights nobody logged.
+ */
+export function tooFewWords(n: number, o: { ongoing: boolean; what?: "night" | "check-in" }): string {
+  const what = o.what ?? "night";
+  const count = n === 0 ? `no ${what}s` : `${n} ${n === 1 ? what : `${what}s`}`;
+  return `${count}${what === "night" ? " logged" : ""}${o.ongoing ? " so far" : ""}, too few to tell${o.ongoing ? " yet" : ""}`;
+}
+
+/** "Easing off until Tue, Nov 11": the night counting picks up again, never "paused" or "missed". */
+export const easingWords = (until: string, todayKey: string) => `Easing off until ${dateWords(until, todayKey)}`;
 
 /** "10:00 PM" for a stored "22:00". */
 export function clockLabel(hhmm: string): string {
@@ -217,7 +308,8 @@ export function targetWords(t: GoalTarget, name: (id: string) => string): string
     case "bassinet_stretch":
       return `a bassinet stretch of ${minutesWords(t.minutes)} or more`;
     case "protected_window":
-      return `${name(t.member)}'s protected window holding ${t.per_week} ${t.per_week === 1 ? "night" : "nights"} a week`;
+      // Never "holding": that's someone holding the baby awake.
+      return `${name(t.member)}'s protected sleep, ${t.per_week} ${t.per_week === 1 ? "night" : "nights"} a week`;
     case "custom":
       return t.text;
   }
@@ -225,3 +317,19 @@ export function targetWords(t: GoalTarget, name: (id: string) => string): string
 
 /** "Sam: 10:00 PM–2:00 AM, Sun–Thu nights". */
 export const windowWords = (w: RosterWindow, name: (id: string) => string) => `${name(w.member)}: ${windowTimes(w)}, ${nightsLabel(w.nights)}`;
+
+// ── how a window's feeds are covered (RosterWindow.covers) ──
+
+/** The form's choices for a window's feeds. */
+export const COVERS_LABEL: Record<WindowCovers, string> = { nurse: "Nursing", bottle: "A bottle", none: "None planned" };
+
+/** What each choice means, under the choices and on the goal card. */
+export const coversHint = (c: WindowCovers, v: Voice): string =>
+  c === "nurse"
+    ? `${v.They} ${v.verb("nurses")}: whoever's on duty brings ${v.them} to nurse, then settles ${v.them}.`
+    : c === "bottle"
+      ? "Whoever's on duty gives a bottle of expressed milk."
+      : "No feed is planned in it.";
+
+/** "feeds: nursing", for a window in a line ("Sam: 10:00 PM–2:00 AM, every night; feeds: a bottle"). */
+export const coversWords = (c: WindowCovers | null | undefined): string => (c === "nurse" ? "feeds: nursing" : c === "bottle" ? "feeds: a bottle" : c === "none" ? "no feed planned" : "");

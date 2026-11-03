@@ -13,13 +13,16 @@ import {
   GOAL_WHY_MAX,
   ROSTER_MAX,
   TARGET_KINDS,
+  WINDOW_COVERS,
   type GoalInput,
   type GoalTargetInput,
   type SleepGoal,
   type TargetKind,
+  type WindowCovers,
 } from "@/lib/maple/sleep/types";
-import { dateWords, minutesWords, nightsLabel, TARGET_KIND_LABEL, WEEKDAY_SHORT } from "@/lib/maple/sleep/words";
+import { clockLabel, COVERS_LABEL, coversHint, dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, TARGET_KIND_LABEL, WEEKDAY_SHORT, windowTimes } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, daysBetween, DEFAULT_TZ, isDayKey } from "@/lib/maple/time";
+import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { ContextNote, Label, SheetFooter } from "../sheets/parts";
 import { Chip, cx, Segmented, Sheet, Stepper, TextArea, tone } from "../ui";
@@ -31,19 +34,22 @@ import { useSleep } from "./useSleep";
  * chat: a title, why it matters, a target date, targets by kind, weekly
  * steps and a night roster of protected windows. It checks itself with the
  * same rules the server uses (goals.ts cleanGoalInput) and says what to fix
- * by the field. An edit sends only what changed, with the goal's revision;
+ * by the field (a plan Maple won't make says so on Save, never while it's
+ * being typed, with a wording to try). An edit sends only what changed, with the goal's revision;
  * a goal changed on another phone meanwhile comes back as it is now, with
  * this person's changes kept on top, to look over and save again.
  */
 
 type TargetDraft = { key: string; id: string | null; kind: TargetKind; per_week: number | null; min_minutes: number | null; minutes: number | null; member: string; text: string };
 type StepDraft = { key: string; id: string | null; title: string; week_of: string; done: string | null };
-type WindowDraft = { key: string; id: string | null; member: string; from: string; to: string; nights: number[] };
+type WindowDraft = { key: string; id: string | null; member: string; from: string; to: string; nights: number[]; covers: WindowCovers | null };
 type Draft = { title: string; why: string; target_date: string; status: "active" | "paused"; targets: TargetDraft[]; steps: StepDraft[]; roster: WindowDraft[] };
 
 const FIELDS = ["title", "why", "target_date", "status", "targets", "steps", "roster"] as const;
 const EVERY_NIGHT = [0, 1, 2, 3, 4, 5, 6];
 const NEEDED = /is needed\.$/;
+/** A plan Maple won't make (goals.ts unsafeWords): said on Save, not while the words are being typed. */
+const UNSAFE = /: Maple won't plan /;
 
 let keys = 0;
 const nextKey = () => `k${++keys}`;
@@ -68,7 +74,7 @@ function draftOf(g: SleepGoal | null, who: string): Draft {
       text: t.kind === "custom" ? t.text : "",
     })),
     steps: g.steps.map((s) => ({ key: nextKey(), id: s.id, title: s.title, week_of: s.week_of ?? "", done: s.done_at })),
-    roster: g.roster.map((w) => ({ key: nextKey(), id: w.id, member: w.member, from: w.from, to: w.to, nights: [...w.nights] })),
+    roster: g.roster.map((w) => ({ key: nextKey(), id: w.id, member: w.member, from: w.from, to: w.to, nights: [...w.nights], covers: w.covers ?? null })),
   };
 }
 
@@ -95,7 +101,7 @@ function inputOf(d: Draft): Required<Pick<GoalInput, (typeof FIELDS)[number]>> {
     status: d.status,
     targets: d.targets.map(targetInput),
     steps: d.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), title: words(s.title), week_of: s.week_of || null })),
-    roster: d.roster.map((w) => ({ ...(w.id ? { id: w.id } : {}), member: w.member, from: w.from, to: w.to, nights: [...new Set(w.nights)].sort((a, b) => a - b) })),
+    roster: d.roster.map((w) => ({ ...(w.id ? { id: w.id } : {}), member: w.member, from: w.from, to: w.to, nights: [...new Set(w.nights)].sort((a, b) => a - b), ...(w.covers ? { covers: w.covers } : {}) })),
   };
 }
 
@@ -148,6 +154,8 @@ function place(message: string): Where {
   };
   if (/^Targets? |^A goal has \d+ targets/.test(message)) return { at: "targets", index: n(/^Target (\d+)/), message };
   if (/^Steps? |^A goal has \d+ steps/.test(message)) return { at: "steps", index: n(/^Step (\d+)/), message };
+  // "Windows 1 and 2 overlap": the later one (the one just added or moved) is the one to fix.
+  if (/^Windows \d+ and \d+ overlap/.test(message)) return { at: "roster", index: n(/^Windows \d+ and (\d+)/), message };
   if (/^Windows? |^The roster/.test(message)) return { at: "roster", index: n(/^Windows? (\d+)/), message };
   if (/^The goal's title/.test(message)) return { at: "title", message };
   if (/^Why it matters/.test(message)) return { at: "why", message };
@@ -177,6 +185,47 @@ function Problem({ children }: { children?: string | null }) {
 
 const BAD = "border-mp-danger! ring-2! ring-mp-danger/25!";
 
+/** What another phone changed (against the version this person started from), for "Alex changed this" by each field. */
+type Elsewhere = { who: string; fields: Set<(typeof FIELDS)[number]>; windows: Map<string, string> };
+
+function changedElsewhere(was: Draft, now: Draft, cur: SleepGoal, who: string): Elsewhere {
+  const a = inputOf(was);
+  const b = inputOf(now);
+  const fields = new Set(FIELDS.filter((k) => !same(a[k], b[k])));
+  // A window it changed or added, by id: its times now, so the mark says what it became.
+  const windows = new Map<string, string>();
+  for (const w of cur.roster) {
+    const before = was.roster.find((x) => x.id === w.id);
+    if (!before || before.from !== w.from || before.to !== w.to || before.member !== w.member || before.covers !== (w.covers ?? null) || !same([...before.nights].sort(), [...w.nights].sort())) windows.set(w.id, windowTimes(w));
+  }
+  return { who, fields, windows };
+}
+
+function Changed({ children }: { children?: string | null }) {
+  if (!children) return null;
+  return <p className="mt-1.5 text-[13px] font-semibold text-mp-accent-fg">{children}</p>;
+}
+
+/**
+ * A night goes by the evening it begins: "Sun night" runs into Monday
+ * morning, so a window starting after midnight is that next morning's.
+ */
+function nightWords(w: Pick<WindowDraft, "from" | "to" | "nights">): string {
+  const first = [...w.nights].sort((a, b) => a - b)[0];
+  if (first == null || !/^\d{2}:\d{2}$/.test(w.from)) return "A night goes by the evening it begins.";
+  const early = Number(w.from.slice(0, 2)) < 12;
+  return early
+    ? `A night goes by its evening: on ${WEEKDAY_SHORT[first]} night this is ${clockLabel(w.from)} early ${WEEKDAY_SHORT[(first + 1) % 7]}.`
+    : `A night goes by its evening: ${WEEKDAY_SHORT[first]} night starts ${clockLabel(w.from)} ${WEEKDAY_SHORT[first]}.`;
+}
+
+/** "02:00" four hours on from "22:00": a new window's default end. */
+function hoursOn(hhmm: string, hours: number): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const t = (h * 60 + m + hours * 60) % (24 * 60);
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
 function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button type="button" aria-label={label} onClick={onClick} className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mp-ink-3 active:bg-mp-ink/5">
@@ -202,6 +251,7 @@ function Section({ title, count, max, children }: { title: string; count: number
 export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal | null; open?: boolean; onClose: () => void }) {
   const { state, memberName, now } = useMaple();
   const s = useSleep();
+  const v = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const today = dayKey(now(), tz);
   const members = useMemo(() => state?.members ?? [], [state?.members]);
@@ -220,18 +270,29 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
   const was = useMemo(() => draftOf(base, who), [base, who]);
   const [tried, setTried] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const [changedElsewhere, setChangedElsewhere] = useState(false);
+  // A plan Maple won't make, as Save found it: shown until the next edit, then again on the next Save.
+  const [onSave, setOnSave] = useState<string | null>(null);
+  const [elsewhere, setElsewhere] = useState<Elsewhere | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Windows this person has set (who, times, nights): an overlap shows on them at once, on a fresh default only after Save.
+  const [touched, setTouched] = useState<ReadonlySet<string>>(() => new Set());
   const body = useRef<HTMLDivElement>(null);
+  const alert = useRef<HTMLParagraphElement>(null);
 
   const editing = !!base;
   const patch = editing ? patchOf(draft, was) : null;
   const input = patch ?? createInput(draft);
   const dirty = editing ? Object.keys(patch!).length > 0 : !same(createInput(draft), createInput(draftOf(null, who)));
-  const rules: GoalRules = { current: base, adults: adultIds, name: memberName, today, seq: 0 };
+  const rules: GoalRules = { current: base, adults: adultIds, name: memberName, today, seq: 0, v };
   const found = check(input, rules, editing ? "update" : "create");
-  // A field still to fill in says so once Save is tapped; anything else shows as soon as it's there.
-  const shown: Where | null = refusal ? place(refusal) : found && (tried || !NEEDED.test(found.message)) ? found : null;
+  // A field still to fill in says so once Save is tapped, and so does an overlap no one has set yet (a window just added);
+  // anything else shows as soon as it's there.
+  const overlapUntouched = (m: string) => {
+    const nums = /^Windows (\d+) and (\d+) overlap/.exec(m);
+    return !!nums && [nums[1], nums[2]].every((n) => !touched.has(draft.roster[Number(n) - 1]?.key ?? ""));
+  };
+  const shownNow = (f: Where) => (UNSAFE.test(f.message) ? onSave === f.message : tried || (!NEEDED.test(f.message) && !overlapUntouched(f.message)));
+  const shown: Where | null = refusal ? place(refusal) : found && shownNow(found) ? found : null;
   const at = (where: Where["at"], index?: number) => (shown && shown.at === where && (index === undefined ? shown.index === undefined : shown.index === index) ? shown.message : null);
 
   // A save turned away: bring its words into view.
@@ -239,23 +300,39 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
     if (!attempt) return;
     body.current?.closest("[role=dialog]")?.querySelector("[data-goal-problem]")?.scrollIntoView({ block: "center" });
   }, [attempt]);
+  // Changed on another phone: its notice, at the top of a tall form, comes into view.
+  useEffect(() => {
+    if (elsewhere) alert.current?.scrollIntoView({ block: "start" });
+  }, [elsewhere]);
 
   const edit = (fn: (d: Draft) => Draft) => {
     setDraft(fn);
     setRefusal(null);
+    setOnSave(null);
   };
   const setTarget = (key: string, change: Partial<TargetDraft>) => edit((d) => ({ ...d, targets: d.targets.map((t) => (t.key === key ? { ...t, ...change } : t)) }));
   const setStep = (key: string, change: Partial<StepDraft>) => edit((d) => ({ ...d, steps: d.steps.map((x) => (x.key === key ? { ...x, ...change } : x)) }));
-  const setWindow = (key: string, change: Partial<WindowDraft>) => edit((d) => ({ ...d, roster: d.roster.map((w) => (w.key === key ? { ...w, ...change } : w)) }));
+  const setWindow = (key: string, change: Partial<WindowDraft>) => {
+    setTouched((t) => new Set(t).add(key));
+    edit((d) => ({ ...d, roster: d.roster.map((w) => (w.key === key ? { ...w, ...change } : w)) }));
+  };
 
   const addTarget = (kind: TargetKind) =>
     edit((d) => ({ ...d, targets: [...d.targets, { key: nextKey(), id: null, kind, per_week: kind === "protected_window" ? 5 : 3, min_minutes: 60, minutes: 120, member: who, text: "" }] }));
   const addStep = () => edit((d) => ({ ...d, steps: [...d.steps, { key: nextKey(), id: null, title: "", week_of: "", done: null }] }));
-  const addWindow = () => edit((d) => ({ ...d, roster: [...d.roster, { key: nextKey(), id: null, member: who, from: "22:00", to: "02:00", nights: [...EVERY_NIGHT] }] }));
+  // A new window takes over where the last one ends, for the other adult, on the same nights: 10 PM–2 AM, then 2 AM–6 AM.
+  const addWindow = () =>
+    edit((d) => {
+      const last = d.roster[d.roster.length - 1];
+      const member = last ? (people.find((p) => p.email !== last.member)?.email ?? last.member) : who;
+      const from = last ? last.to : "22:00";
+      return { ...d, roster: [...d.roster, { key: nextKey(), id: null, member, from, to: hoursOn(from, 4), nights: last ? [...last.nights] : [...EVERY_NIGHT], covers: null }] };
+    });
 
   const save = async () => {
     setTried(true);
     if (found) {
+      if (UNSAFE.test(found.message)) setOnSave(found.message);
       setAttempt((n) => n + 1);
       return;
     }
@@ -271,8 +348,11 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
     // Changed on another phone since this opened: theirs now, with this person's changes kept on top, to check and save again.
     setDraft((d) => rebase(d, was, r.conflict, who));
     setBase(r.conflict);
-    setChangedElsewhere(true);
+    setElsewhere(changedElsewhere(was, draftOf(r.conflict, who), r.conflict, r.conflict.updated_by ? memberName(r.conflict.updated_by) : "Someone"));
   };
+  // "Alex changed this": by the field, with what it is now (the field shows this person's change when they made one too).
+  const theirs = (k: (typeof FIELDS)[number], now?: string | null) =>
+    elsewhere?.fields.has(k) ? (patchOf(draft, was)[k] !== undefined ? `${elsewhere.who} changed this too; your change is kept` : `${elsewhere.who} changed this${now ? `: ${now}` : ""}`) : null;
 
   const date = isDayKey(draft.target_date) ? draft.target_date : null;
   const away = date ? daysBetween(today, date) : null;
@@ -290,13 +370,13 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
           onPrimary={() => void save()}
           label={editing ? "Save changes" : "Save the goal"}
           busy={s.busy}
-          hint={tried && shown ? "Check the words in red above." : undefined}
+          hint={elsewhere ? `${elsewhere.who} changed this goal on another phone. Look it over, then save again.` : tried && shown ? "Check the words in red above." : undefined}
         />
       }
     >
       <div ref={body} className="min-w-0 space-y-6">
-        {changedElsewhere && (
-          <p role="alert" className={cx(tone.inset, "px-4 py-3 text-[15px] leading-relaxed text-mp-ink")}>
+        {elsewhere && (
+          <p ref={alert} role="alert" className={cx(tone.inset, "scroll-mt-4 px-4 py-3 text-[15px] leading-relaxed text-mp-ink")}>
             Someone changed this goal on another phone just now, so nothing was saved yet. This shows their version, with your changes kept on top. Look it over, then save again.
           </p>
         )}
@@ -313,11 +393,13 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
               onChange={(e) => edit((d) => ({ ...d, title: e.target.value }))}
             />
             <Problem>{at("title")}</Problem>
+            <Changed>{theirs("title", base ? `“${base.title}”` : null)}</Changed>
           </div>
           <div>
             <Label optional>Why it matters</Label>
             <TextArea ariaLabel="Why it matters" maxLength={GOAL_WHY_MAX} value={draft.why} onChange={(v) => edit((d) => ({ ...d, why: v }))} placeholder="In your words, like “back to work on the 30th”" />
             <Problem>{at("why")}</Problem>
+            <Changed>{theirs("why")}</Changed>
           </div>
           <div>
             <Label optional>Target date</Label>
@@ -342,6 +424,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                   : "A day to look back at it together, if there is one."}
               </p>
             )}
+            <Changed>{theirs("target_date", base?.target_date ? dateWords(base.target_date, today) : "none")}</Changed>
           </div>
           {editing && base!.status !== "met" && base!.status !== "dropped" && (
             <div>
@@ -355,6 +438,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                   { value: "paused", label: "Paused" },
                 ]}
               />
+              <Changed>{theirs("status", base ? GOAL_STATUS_LABEL[base.status] : null)}</Changed>
             </div>
           )}
         </div>
@@ -398,8 +482,8 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                     </div>
                   </div>
                   <div>
-                    <Label>Nights a week it holds</Label>
-                    <Stepper ariaLabel="nights a week the window holds" value={t.per_week} min={1} max={7} onChange={(v) => setTarget(t.key, { per_week: v })} />
+                    <Label>Nights a week they get it</Label>
+                    <Stepper ariaLabel="nights a week they get their window's sleep" value={t.per_week} min={1} max={7} onChange={(v) => setTarget(t.key, { per_week: v })} />
                   </div>
                   <p className={cx(tone.muted, "text-[13px] leading-snug")}>
                     Counted from {t.member === s.me ? "your" : `${memberName(t.member)}'s`} own morning check-ins.
@@ -437,6 +521,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             </div>
           )}
           <Problem>{at("targets")}</Problem>
+          <Changed>{theirs("targets") ? `${elsewhere!.who} changed the targets on another phone` : null}</Changed>
         </Section>
 
         <Section title="Weekly steps" count={draft.steps.length} max={GOAL_STEPS_MAX}>
@@ -446,7 +531,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             <div key={st.key} className={cx(tone.inset, "space-y-2 px-3.5 py-3")} role="group" aria-label={`Step ${i + 1}`}>
               <div className="flex items-start gap-2">
                 <input
-                  className={cx(tone.input, "min-w-0 flex-1", problem && /words/.test(problem) && BAD)}
+                  className={cx(tone.input, "min-w-0 flex-1", problem && (/words/.test(problem) || UNSAFE.test(problem)) && BAD)}
                   aria-label={`Step ${i + 1}`}
                   value={st.title}
                   maxLength={GOAL_STEP_TITLE_MAX}
@@ -470,6 +555,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             </Chip>
           )}
           <Problem>{at("steps")}</Problem>
+          <Changed>{theirs("steps") ? `${elsewhere!.who} changed the steps on another phone` : null}</Changed>
         </Section>
 
         <Section title="Night roster" count={draft.roster.length} max={ROSTER_MAX}>
@@ -484,7 +570,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                 </div>
                 <div>
                   <Label>Who sleeps</Label>
-                  <div className="flex flex-wrap gap-2">
+                  <div role="group" aria-label={`Window ${i + 1}: who sleeps`} className="flex flex-wrap gap-2">
                     {people.map((p) => (
                       <Chip key={p.email} raised selected={w.member === p.email} onClick={() => setWindow(w.key, { member: p.email })}>
                         {label(p.email)}
@@ -503,8 +589,8 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                   </label>
                 </div>
                 <div>
-                  <Label>The evenings it begins on</Label>
-                  <div className="flex flex-wrap gap-1.5">
+                  <Label>Which nights</Label>
+                  <div role="group" aria-label={`Window ${i + 1}: which nights`} className="flex flex-wrap gap-1.5">
                     {WEEKDAY_SHORT.map((day, n) => (
                       <Chip
                         key={day}
@@ -521,8 +607,21 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                     {nightsLabel(w.nights).replace(/^./, (c) => c.toUpperCase())}
                     {len ? ` · ${minutesWords(len)} on the clock` : ""}
                   </p>
+                  <p className={cx(tone.faint, "mt-1 text-[13px] leading-snug")}>{nightWords(w)}</p>
+                </div>
+                <div>
+                  <Label optional>Feeds in this window</Label>
+                  <div role="group" aria-label={`Window ${i + 1}: feeds in it`} className="flex flex-wrap gap-2">
+                    {WINDOW_COVERS.map((c) => (
+                      <Chip key={c} raised selected={w.covers === c} onClick={() => setWindow(w.key, { covers: w.covers === c ? null : c })}>
+                        {COVERS_LABEL[c]}
+                      </Chip>
+                    ))}
+                  </div>
+                  <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>{w.covers ? coversHint(w.covers, v) : `How ${v.name}'s feeds are covered while ${w.member === s.me ? "you sleep" : `${memberName(w.member)} sleeps`}, if one falls in it.`}</p>
                 </div>
                 <Problem>{at("roster", i)}</Problem>
+                <Changed>{w.id && elsewhere?.windows.has(w.id) ? `${elsewhere.who} changed this: ${elsewhere.windows.get(w.id)}` : null}</Changed>
               </div>
             );
           })}
@@ -532,6 +631,7 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
             </Chip>
           )}
           <Problem>{at("roster")}</Problem>
+          <Changed>{theirs("roster") && !draft.roster.some((w) => w.id && elsewhere?.windows.has(w.id)) ? `${elsewhere!.who} changed the night roster on another phone` : null}</Changed>
         </Section>
 
         <Problem>{at("form")}</Problem>

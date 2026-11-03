@@ -9,6 +9,7 @@ import { isTracked, other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, FeedData, Side, StoolColor, StretchSide } from "@/lib/maple/types";
+import { SleepStrip } from "./sleep/SleepStrip";
 import { useTryAfterWake } from "./sleep/useSleep";
 import { fixPreset, useStillGoing } from "./FeedParts";
 import { Icon, type IconName } from "./icons";
@@ -16,6 +17,7 @@ import MoreSheet, { logSwitches, usePress } from "./MoreSheet";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR } from "./palette";
 import { useSheets } from "./sheets";
+import { TAP_COOLDOWN_MS } from "./tapCooldown";
 import { SIDE_COLOR, SIDE_NAME, SWITCH_STYLE, timerNumbers, useTimerActions } from "./TimerCard";
 import { cx } from "./ui";
 import { useBabyWords } from "./familyWords";
@@ -23,10 +25,12 @@ import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMap
 
 /**
  * The logging dock on Today: two rows of big buttons fixed just above the tab
- * bar, where a thumb lands at 3am. Only the baby's own logging lives here, so
- * it never grows: her next medicine and the sleep plan's next step sit in
- * Today's Up next card (UpNext.tsx), and a running try or a holding turn in
- * Right now. One tap does the common thing right away
+ * bar, where a thumb lands at 3am. The baby's own logging lives here: her
+ * next medicine and the sleep plan's everyday Put down sit in Today's Up next
+ * card (UpNext.tsx), so the dock is only these eight buttons, plus the sleep
+ * plan's strip on top while something is going on (a try, a turn, after a
+ * crying wake, the morning's question; sleep/SleepStrip). One tap does the
+ * common thing right away
  * (start the timer, log the diaper now); holding a button opens the full form
  * for one from earlier. The top row turns into the feed's controls while she
  * nurses, and they are the only ones on screen: Switch and Pause while she's
@@ -52,12 +56,6 @@ import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMap
  */
 
 const DUP_WINDOW_MS = 3 * 60_000;
-/**
- * One cooldown for the whole dock: a tap can swap the tile under the thumb
- * (Sleep ↔ Woke up, Left → Switch to Right), so a double tap must not land on
- * the replacement and do the opposite thing.
- */
-const TAP_COOLDOWN_MS = 800;
 /**
  * After a tap on columns 1 or 2 (start, switch, pause, resume), both wait
  * 1.2 s; column 1 waits 2.5 s after its own tap. That one changes the side
@@ -380,6 +378,8 @@ export default function Dock() {
       >
         {/* Opaque at night: through the blur, the page's amber text ghosted under the tiles. */}
         <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none">
+          {/* The sleep plan's strip, only for a moment (a try, a turn, after a crying wake, the morning's question). */}
+          <SleepStrip />
           {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Tap to start or log now. Hold a button for earlier.</p>}
           {/* Eight columns, each tile two of them (four abreast), so Left and Right can take three each when Bottles is off. */}
           <div className="grid grid-cols-8 gap-2">

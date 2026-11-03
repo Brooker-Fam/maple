@@ -2,38 +2,48 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MotionConfig } from "framer-motion";
 import { ApiError } from "../../src/lib/maple/client-request";
-import { progressLines, sleepProgress } from "../../src/lib/maple/sleep/engine";
+import { summarize } from "../../src/lib/maple/insights";
+import { chooseSleepLink, nextHandoff, progressLines, sleepProgress } from "../../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../../src/lib/maple/sleep/errors";
-import { cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, coachNotes, goalProgress, goalProgressLines } from "../../src/lib/maple/sleep/goals";
+import { handoffAroundRoster } from "../../src/lib/maple/sleep/handoff";
+import { cleanCheckinExtras, cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, coachNotes, goalProgress, goalProgressLines } from "../../src/lib/maple/sleep/goals";
 import { CHECKIN_NOTE_MAX, GOAL_NOTE_MAX } from "../../src/lib/maple/sleep/types";
 import { STAGE_INFO } from "../../src/lib/maple/sleep/words";
-import { dayKey, zonedTimeToUtc } from "../../src/lib/maple/time";
+import { dayKey, formatDuration, zonedTimeToUtc } from "../../src/lib/maple/time";
 import { makeVoice } from "../../src/lib/maple/voice";
-import { SleepNow, SleepTimerExtra } from "../../src/components/maple/sleep/SleepCards";
-import { SleepCheckinCard } from "../../src/components/maple/sleep/SleepCheckin";
-import { SleepRow } from "../../src/components/maple/sleep/SleepRow";
+import { Icon } from "../../src/components/maple/icons";
+import { setNightActive } from "../../src/components/maple/nightLook";
 import { SleepSheetHost } from "../../src/components/maple/sleep/SleepSheets";
-import { SleepProvider, useSleep } from "../../src/components/maple/sleep/useSleep";
+import { SleepProvider } from "../../src/components/maple/sleep/useSleep";
+import TodayTab from "../../src/components/maple/TodayTab";
+import { ToastHost } from "../../src/components/maple/ui";
 import { FixtureContext } from "./mocks";
 
-// A made-up family: Sam (owner, this phone) and Alex (member), Pat (view-only), and a baby called River. 2:10 AM in New York,
-// or with ?morning 7:30 AM on Thu, Nov 5 (after the clocks went back), the morning after a night on a sleep goal's roster.
+// A made-up family: Sam (owner), Alex (member), Pat (view-only), and a baby called River. 2:10 AM in New York, or with
+// ?morning 7:30 AM on Thu, Nov 5 (after the clocks went back), the morning after a night on a sleep goal's roster.
+// Each page is one phone showing the real Today tab (Right now, the dock with its sleep strip, More, the toasts and every
+// sleep sheet). ?as=alex signs in as Alex, ?role=viewer as Pat. ?sparse (with ?goals&morning) makes Wed night a sparse log
+// for Today's Last night card; ?review (with ?goals) leaves the goal unreviewed, so its week 2 look-back is due. With
+// ?morning, ?mornings is a family who answers only in the morning, and ?quiet a goal with nothing logged for nine nights.
+// ?nursing has a nursing feed running for the feed card's night line. ?phones puts Sam's phone and Alex's side by side in two
+// frames that share one stand-in route and one clock, so one phone's write reaches the other at its next poll.
 const ME = "sam@example.test";
 const PARTNER = "alex@example.test";
 const VIEWER = "pat@example.test";
 const NAMES = { [ME]: "Sam", [PARTNER]: "Alex", [VIEWER]: "Pat" };
+const ROLES = { [ME]: "owner", [PARTNER]: "member", [VIEWER]: "viewer" };
 const TZ = "America/New_York";
 const params = new URLSearchParams(location.search);
 const BASE = params.has("morning") ? Date.parse("2026-11-05T12:30:00.000Z") : Date.parse("2026-10-28T06:10:00.000Z");
-const role = params.get("role") ?? "owner";
-const SIGNED_IN = role === "viewer" ? VIEWER : ME;
-// Owners and members read the adults' check-ins; a view-only guest never gets one (no key in the state, none in the goals view).
-const SEES_CHECKINS = role === "owner" || role === "member";
+const role = params.get("role") ?? (params.get("as") === "alex" ? "member" : "owner");
+const SIGNED_IN = role === "viewer" ? VIEWER : params.get("as") === "alex" ? PARTNER : ME;
 const ADULTS = new Set([ME, PARTNER]);
+const NIGHT = params.has("night");
 const nameOf = (email) => NAMES[email] ?? email;
 const iso = (ms) => new Date(ms).toISOString();
 const MIN = 60_000;
 const newest = (a, b) => Date.parse(b.started_at) - Date.parse(a.started_at) || b.id - a.id;
+const vo = makeVoice({ name: "River", pronoun: "she" });
 /** A local wall time in New York: at("2026-11-04", 23, 0). */
 const at = (key, h, m = 0) => {
   const [y, mo, d] = key.split("-").map(Number);
@@ -50,72 +60,100 @@ const ruled = (fn) => {
   }
 };
 
-/** The sleep route, in memory: the same answers (result, entries, removed, sleep) for the actions the app sends. */
+/**
+ * The sleep route, in memory: the same answers (result, entries, removed, sleep) for the actions the app sends, for
+ * whichever phone asks (`who`: its signed-in person). Owners and members get the adults' check-ins; a view-only guest never.
+ */
 function makeServer(clock) {
   let seq = 500;
   const feed = {
     id: 41, kind: "feed", started_at: iso(BASE - 40 * MIN), ended_at: iso(BASE - 12 * MIN), active: false,
-    data: { method: "breast", first_side: "L", last_side: "R", segments: [] }, note: null, created_by: ME, updated_at: iso(BASE - 12 * MIN), source: "web",
+    data: { method: "breast", first_side: "L", last_side: "R", segments: [] }, note: null, created_by: ME, updated_at: iso(BASE - 12 * MIN), source: "web", created_at: iso(BASE - 40 * MIN),
   };
-  const db = { plan: null, tries: [], shifts: [], entries: [feed], goals: [], checkins: [], calls: [] };
+  const diaper = { id: 42, kind: "diaper", started_at: iso(BASE - 50 * MIN), ended_at: null, active: false, data: { pee: true, poop: false }, note: null, created_by: PARTNER, updated_at: iso(BASE - 50 * MIN), source: "web", created_at: iso(BASE - 50 * MIN) };
+  const db = { plan: null, tries: [], shifts: [], entries: [feed, diaper], goals: [], checkins: [], calls: [] };
   const now = () => clock();
   const stamp = (x) => ((x.updated_at = iso(now() + ++seq)), x);
   const goalOut = ({ client_id: _c, item_seq: _s, ...g }) => ({ ...g, targets: g.targets.map((t) => ({ ...t })), steps: g.steps.map((s) => ({ ...s })), roster: g.roster.map((w) => ({ ...w, nights: [...w.nights] })) });
   const checkinOut = ({ client_id: _c, deleted: _d, ...c }) => ({ ...c });
   const liveCheckins = () => db.checkins.filter((c) => !c.deleted);
-  const snapshot = () => ({
+  const sees = (who) => ROLES[who] === "owner" || ROLES[who] === "member";
+  const snapshot = (who) => ({
     plan: db.plan && { ...db.plan },
     tries: db.tries.map((t) => ({ ...t, tags: [...t.tags] })).sort(newest),
     shifts: db.shifts.map((s) => ({ ...s })).sort(newest),
     goals: db.goals.map(goalOut).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id),
-    ...(SEES_CHECKINS ? { checkins: liveCheckins().map(checkinOut).sort((a, b) => b.night.localeCompare(a.night) || a.member.localeCompare(b.member)) } : {}),
+    ...(sees(who) ? { checkins: liveCheckins().map(checkinOut).sort((a, b) => b.night.localeCompare(a.night) || a.member.localeCompare(b.member)) } : {}),
   });
-  const goalOf = (id) => db.goals.find((g) => g.id === Number(id)) ?? (() => { throw new ApiError("gone", 404, { error: "Sleep goal not found", sleep: snapshot() }); })();
   const goalRules = (current, itemSeq) => ({ current, seq: itemSeq, adults: ADULTS, name: nameOf, today: dayKey(now(), TZ) });
-  const bump = (g) => {
-    g.revision += 1;
-    g.updated_by = SIGNED_IN;
-    return stamp(g);
-  };
-  const answer = (extra, touched = [], removed = []) => ({ ...extra, entries: touched.filter(Boolean).map((e) => ({ ...e })), removed: removed.filter(Boolean).map((e) => e.id), sleep: snapshot() });
-  const conflict = () => {
-    throw new ApiError("conflict", 409, { error: "That changed on another phone. Here it is now.", code: "changed", sleep: snapshot() });
-  };
-  const tryOf = (id) => db.tries.find((t) => t.id === id) ?? (() => { throw new ApiError("gone", 404, { error: "That try isn't in the log anymore.", sleep: snapshot() }); })();
-  const shiftOf = (id) => db.shifts.find((s) => s.id === id);
   const sleepOf = (id) => db.entries.find((e) => e.id === id) ?? null;
-  const check = (x, expect) => {
-    if (expect && x.updated_at !== expect) conflict();
-  };
-  const newSleep = (start, end) => {
-    const e = { id: ++seq, kind: "sleep", started_at: iso(start), ended_at: end == null ? null : iso(end), active: end == null, data: { place: "bassinet" }, note: null, created_by: ME, updated_at: iso(now()), source: "web" };
+  const runningSleep = () => db.entries.find((e) => e.kind === "sleep" && e.active) ?? null;
+  const newSleep = (start, end, place, by) => {
+    const e = { id: ++seq, kind: "sleep", started_at: iso(start), ended_at: end == null ? null : iso(end), active: end == null, data: { place }, note: null, created_by: by, updated_at: iso(now()), source: "web", created_at: iso(now()) };
     db.entries.push(e);
     return e;
   };
-  const newTry = (fields) => {
-    const t = { id: ++seq, ended_at: null, outcome: null, put_down_by: ME, tags: [], note: null, sleep_entry_id: null, made_sleep: false, created_by: ME, updated_by: ME, source: "web", created_at: iso(now()), updated_at: iso(now()), ...fields };
-    db.tries.push(t);
-    return t;
+  const stopEntry = (id, end = now()) => {
+    const e = sleepOf(id);
+    if (!e || !e.active) return null;
+    Object.assign(stamp(e), { active: false, ended_at: iso(end) });
+    return e;
   };
-  const endShift = (s, how, at = now()) => {
-    const before = { ...s };
-    s.ended_at = iso(at);
-    s.ended_how = how;
-    stamp(s);
-    return before;
-  };
-  const handle = async (path, init = {}) => {
+  const handle = async (who, path, init = {}) => {
     const url = new URL(path, location.origin);
+    if (!url.pathname.startsWith("/api/maple/sleep")) {
+      db.calls.push({ action: "OTHER", path, who });
+      return { entries: [] };
+    }
+    const answer = (extra, touched = [], removed = []) => ({ ...extra, entries: touched.filter(Boolean).map((e) => ({ ...e })), removed: removed.filter(Boolean).map((e) => e.id), sleep: snapshot(who) });
+    const conflict = () => {
+      throw new ApiError("conflict", 409, { error: "That changed on another phone. Here it is now.", code: "changed", sleep: snapshot(who) });
+    };
+    const check = (x, expect) => {
+      if (expect && x.updated_at !== expect) conflict();
+    };
+    const tryOf = (id) => db.tries.find((t) => t.id === id) ?? (() => { throw new ApiError("gone", 404, { error: "That try isn't in the log anymore.", sleep: snapshot(who) }); })();
+    const shiftOf = (id) => db.shifts.find((s) => s.id === id) ?? (() => { throw new ApiError("gone", 404, { error: "Holding shift not found", sleep: snapshot(who) }); })();
+    const openShift = () => db.shifts.find((s) => !s.ended_at) ?? null;
+    const goalOf = (id) => db.goals.find((g) => g.id === Number(id)) ?? (() => { throw new ApiError("gone", 404, { error: "Sleep goal not found", sleep: snapshot(who) }); })();
+    const bump = (g) => {
+      g.revision += 1;
+      g.updated_by = who;
+      return stamp(g);
+    };
+    const newTry = (fields) => {
+      const t = { id: ++seq, ended_at: null, outcome: null, put_down_by: who, tags: [], note: null, sleep_entry_id: null, made_sleep: false, created_by: who, updated_by: who, source: "web", created_at: iso(now()), updated_at: iso(now()), ...fields };
+      db.tries.push(t);
+      return t;
+    };
+    const newShift = (fields) => {
+      const s = { id: ++seq, holder: who, started_at: iso(now()), handoff_at: null, next_holder: null, ended_at: null, ended_how: null, asked_to: null, asked_at: null, created_by: who, updated_by: who, source: "web", created_at: iso(now()), updated_at: iso(now()), ...fields };
+      db.shifts.push(s);
+      return s;
+    };
+    const endShift = (s, how, end = now()) => {
+      const before = { ...s };
+      Object.assign(stamp(s), { ended_at: iso(end), ended_how: how, updated_by: who });
+      return before;
+    };
+    const handOff = (old, to, handoffAt) => {
+      if (old.ended_at) conflict();
+      const endedBefore = endShift(old, "handoff");
+      // As the store: the default next handoff never lands inside the next holder's protected window on an active goal's roster.
+      const planned = handoffAt !== undefined ? null : handoffAroundRoster({ at: nextHandoff({ started_at: old.started_at, handoff_at: old.handoff_at }, now()), from: now(), nextHolder: old.holder, goals: db.goals, tz: TZ });
+      const s = newShift({ holder: to, handoff_at: planned ? (planned.at == null ? null : iso(planned.at)) : handoffAt, next_holder: old.holder });
+      return { shift: s, before: null, status: "handed_off", ended: old, endedBefore, ...(planned?.why ? { handoffWhy: planned.why } : {}) };
+    };
     if (!init.method || init.method === "GET") {
-      db.calls.push({ action: "GET", view: url.searchParams.get("view") });
+      db.calls.push({ action: "GET", view: url.searchParams.get("view"), who });
       if (url.searchParams.get("view") === "goals") {
         // As the route: each open goal with its progress from the real rules, check-ins only for owners and members.
         const t = new Date(now());
-        const words = { v: makeVoice({ name: "River", pronoun: "she" }), name: nameOf, tz: TZ, now: t };
-        const data = { tries: db.tries, entries: db.entries, shifts: db.shifts, checkins: SEES_CHECKINS ? liveCheckins() : null };
+        const words = { v: vo, name: nameOf, tz: TZ, now: t };
+        const data = { tries: db.tries, entries: db.entries, shifts: db.shifts, checkins: sees(who) ? liveCheckins() : null };
         const open = db.goals.filter((g) => g.status === "active" || g.status === "paused").map(goalOut);
         return {
-          sleep: snapshot(),
+          sleep: snapshot(who),
           goals: open.map((goal) => {
             const progress = goalProgress(goal, data, t, TZ);
             return { goal, progress, coach: coachNotes(goal, progress, words), lines: goalProgressLines(goal, progress, words) };
@@ -123,39 +161,42 @@ function makeServer(clock) {
         };
       }
       const progress = sleepProgress({ tries: db.tries, entries: db.entries, now: new Date(now()), tz: TZ, days: Number(url.searchParams.get("days") ?? 7) });
-      return { sleep: snapshot(), progress, lines: progressLines(progress, TZ, new Date(now())) };
+      return { sleep: snapshot(who), progress, lines: progressLines(progress, TZ, new Date(now())) };
     }
+    if (ROLES[who] === "viewer") throw new ApiError("forbidden", 403, { error: "View only." });
     const body = JSON.parse(init.body);
-    db.calls.push(body);
+    db.calls.push({ ...body, who });
     switch (body.action) {
       case "plan.create": {
         if (db.plan) return answer({ plan: db.plan, created: false });
         db.plan = {
           baby_id: 1, stage: 1, stage_since: iso(now()), sleeps_now: null, goal: null, ...STAGE_INFO[1].defaults, snoozed_until: null,
-          revision: 1, created_by: ME, updated_by: ME, source: "web", created_at: iso(now()), updated_at: iso(now()), ...(body.plan ?? {}),
+          revision: 1, created_by: who, updated_by: who, source: "web", created_at: iso(now()), updated_at: iso(now()), ...(body.plan ?? {}),
         };
         return answer({ plan: db.plan, created: true });
       }
       case "plan.update": {
-        if (!db.plan || body.revision !== db.plan.revision) conflict();
+        if (!db.plan || body.revision !== db.plan.revision) throw new ApiError("conflict", 409, { error: "Someone changed the sleep plan just now.", code: "changed", current: db.plan && { ...db.plan }, sleep: snapshot(who) });
         const before = { ...db.plan };
         const patch = body.patch ?? {};
         if (patch.stage && patch.stage !== db.plan.stage) Object.assign(db.plan, STAGE_INFO[patch.stage].defaults, { stage_since: iso(now()) });
-        Object.assign(db.plan, patch, { revision: db.plan.revision + 1 });
+        Object.assign(db.plan, patch, { revision: db.plan.revision + 1, updated_by: who });
         stamp(db.plan);
         return answer({ plan: db.plan, before });
       }
       case "try.start": {
         const running = db.tries.find((t) => !t.ended_at);
         if (running) return answer({ result: { try: running, before: null, sleep: sleepOf(running.sleep_entry_id), sleepBefore: null, status: "running" } });
-        const at = body.at ? Date.parse(body.at) : now();
-        const live = db.entries.find((e) => e.kind === "sleep" && e.active);
+        const start = body.at ? Date.parse(body.at) : now();
+        // As the store: the running sleep (her sleep in arms, a sleep timer) if there is one, else a bassinet sleep it makes.
+        const link = chooseSleepLink(start, null, db.entries.filter((e) => e.kind === "sleep"), now());
+        const live = link.kind === "create" ? null : sleepOf(link.entry.id);
         const sleepBefore = live ? { ...live } : null;
-        const sleep = live ?? newSleep(at, null);
-        const t = newTry({ started_at: iso(at), tags: body.tags ?? [], sleep_entry_id: sleep.id, made_sleep: !live });
-        const open = db.shifts.find((s) => !s.ended_at);
-        const endedShiftBefore = open ? endShift(open, "bassinet", at) : null;
-        return answer({ result: { try: t, before: null, sleep, sleepBefore, status: "created", link: live ? "running" : "create", endedShift: open ?? null, endedShiftBefore } }, [sleep]);
+        const sleep = live ?? newSleep(start, null, "bassinet", who);
+        const t = newTry({ started_at: iso(start), tags: body.tags ?? [], sleep_entry_id: sleep.id, made_sleep: !live });
+        const open = openShift();
+        const endedShiftBefore = open ? endShift(open, "bassinet", start) : null;
+        return answer({ result: { try: t, before: null, sleep, sleepBefore, status: "created", link: live ? link.kind : "create", endedShift: open ?? null, endedShiftBefore } }, [sleep]);
       }
       case "try.finish": {
         const t = tryOf(body.id);
@@ -201,7 +242,7 @@ function makeServer(clock) {
       }
       case "try.restore": {
         const gone = db.deleted;
-        if (!gone || gone.try.id !== body.id) throw new ApiError("gone", 404, { error: "Nothing to restore.", sleep: snapshot() });
+        if (!gone || gone.try.id !== body.id) throw new ApiError("gone", 404, { error: "Nothing to restore.", sleep: snapshot(who) });
         db.tries.push(gone.try);
         if (gone.sleep) db.entries.push(gone.sleep);
         return answer({ result: { try: gone.try, sleep: gone.sleep } }, [gone.sleep]);
@@ -209,32 +250,80 @@ function makeServer(clock) {
       case "try.log": {
         const start = Date.parse(body.started_at);
         const end = Date.parse(body.ended_at);
-        const twin = db.tries.find((t) => Math.abs(Date.parse(t.started_at) - start) <= 10 * MIN);
+        const twin = db.tries.find((t) => Math.abs(Date.parse(t.started_at) - start) <= 10 * MIN || (Date.parse(t.started_at) < end && start < Date.parse(t.ended_at ?? iso(now()))));
         if (twin && !body.allow_duplicate) return answer({ result: { try: twin, before: null, sleep: null, sleepBefore: null, status: "duplicate" } });
-        const sleep = newSleep(start, end);
-        const t = newTry({ started_at: iso(start), ended_at: iso(end), outcome: body.outcome, tags: body.tags ?? [], note: body.note ?? null, put_down_by: body.put_down_by ?? null, sleep_entry_id: sleep.id, made_sleep: true });
-        return answer({ result: { try: t, before: null, sleep, sleepBefore: null, status: "created", link: "create" } }, [sleep]);
+        const link = chooseSleepLink(start, end, db.entries.filter((e) => e.kind === "sleep"), now());
+        const sleep = link.kind === "create" ? newSleep(start, end, "bassinet", who) : sleepOf(link.entry.id);
+        const t = newTry({ started_at: iso(start), ended_at: iso(end), outcome: body.outcome, tags: body.tags ?? [], note: body.note ?? null, put_down_by: body.put_down_by ?? null, sleep_entry_id: sleep.id, made_sleep: link.kind === "create" });
+        return answer({ result: { try: t, before: null, sleep, sleepBefore: null, status: "created", link: link.kind } }, [sleep]);
       }
+
+      // ── holding turns: asks, takeovers and her sleep in arms ──
       case "shift.start": {
-        const open = db.shifts.find((s) => !s.ended_at);
+        const open = openShift();
         if (open) return answer({ result: { shift: open, before: null, status: "open" } });
-        const s = { id: ++seq, holder: body.holder, started_at: iso(now()), handoff_at: body.handoff_at ?? null, next_holder: body.next_holder ?? null, ended_at: null, ended_how: null, created_by: ME, updated_by: ME, source: "web", created_at: iso(now()), updated_at: iso(now()) };
-        db.shifts.push(s);
-        return answer({ result: { shift: s, before: null, status: "created" } });
+        const s = newShift({ holder: body.holder ?? who, handoff_at: body.handoff_at ?? null, next_holder: body.next_holder ?? null });
+        let sleep = null;
+        let madeSleep = false;
+        if (body.asleep) {
+          sleep = runningSleep();
+          if (!sleep) {
+            sleep = newSleep(now(), null, "arms", who);
+            madeSleep = true;
+          }
+        }
+        return answer({ result: { shift: s, before: null, status: "created", sleep, madeSleep } }, [sleep]);
       }
       case "shift.handoff": {
         const old = shiftOf(body.id);
         check(old, body.expect_updated_at);
-        const span = old.handoff_at ? Date.parse(old.handoff_at) - Date.parse(old.started_at) : 120 * MIN;
-        const endedBefore = endShift(old, "handoff");
-        const s = { id: ++seq, holder: body.to, started_at: iso(now()), handoff_at: body.handoff_at !== undefined ? body.handoff_at : iso(now() + span), next_holder: old.holder, ended_at: null, ended_how: null, created_by: ME, updated_by: ME, source: "web", created_at: iso(now()), updated_at: iso(now()) };
-        db.shifts.push(s);
-        return answer({ result: { shift: s, before: null, status: "created", ended: old, endedBefore } });
+        return answer({ result: handOff(old, body.to, body.handoff_at) });
+      }
+      case "shift.ask": {
+        const open = openShift();
+        if (!open || (body.id != null && open.id !== body.id)) conflict();
+        if (body.to === open.holder) throw new ApiError("bad", 400, { error: "That's who is holding her now." });
+        const before = { ...open };
+        Object.assign(stamp(open), { asked_to: body.to, asked_at: iso(now()), updated_by: who });
+        return answer({ result: { shift: open, before, status: "asked" } });
+      }
+      case "shift.cancel_ask": {
+        const s = shiftOf(body.id);
+        if (s.ended_at) conflict();
+        check(s, body.expect_updated_at);
+        const before = { ...s };
+        Object.assign(stamp(s), { asked_to: null, asked_at: null });
+        return answer({ result: { shift: s, before, status: "unasked" } });
+      }
+      case "shift.accept": {
+        const old = shiftOf(body.id);
+        if (old.ended_at) conflict();
+        if (old.holder === who) throw new ApiError("bad", 400, { error: "You're the one holding her now." });
+        return answer({ result: handOff(old, who, body.handoff_at) });
+      }
+      case "shift.asleep": {
+        const live = runningSleep();
+        if (live) return answer({ result: { sleep: live, made: false } }, [live]);
+        const sleep = newSleep(now(), null, "arms", who);
+        return answer({ result: { sleep, made: true } }, [sleep]);
+      }
+      case "shift.asleep_undo": {
+        const e = sleepOf(body.sleep?.id);
+        if (!e || e.updated_at !== body.sleep.expect_updated_at) return answer({ result: { sleepDeleted: null } });
+        db.entries = db.entries.filter((x) => x.id !== e.id);
+        return answer({ result: { sleepDeleted: e } }, [], [e]);
       }
       case "shift.end": {
         const s = shiftOf(body.id);
         check(s, body.expect_updated_at);
         const before = endShift(s, "ended");
+        // Ended awake: her sleep in arms stops then too.
+        const arms = runningSleep();
+        if (arms && arms.data.place === "arms") {
+          const sleepBefore = { ...arms };
+          const sleep = stopEntry(arms.id, Date.parse(s.ended_at));
+          return answer({ result: { shift: s, before, status: "ended", sleep, sleepBefore } }, [sleep]);
+        }
         return answer({ result: { shift: s, before, status: "ended" } });
       }
       case "shift.update": {
@@ -247,12 +336,16 @@ function makeServer(clock) {
       case "shift.reopen": {
         const s = shiftOf(body.id);
         Object.assign(stamp(s), { ended_at: null, ended_how: null });
-        return answer({ result: { shift: s } });
+        const sleep = body.sleep ? sleepOf(body.sleep.id) : null;
+        if (sleep && !sleep.active && sleep.updated_at === body.sleep.expect_updated_at) Object.assign(stamp(sleep), { active: true, ended_at: null });
+        return answer({ result: { shift: s, sleep } }, [sleep]);
       }
       case "shift.delete": {
         const s = shiftOf(body.id);
         db.shifts = db.shifts.filter((x) => x.id !== s.id);
-        return answer({ result: { shift: s } });
+        const made = body.sleep ? sleepOf(body.sleep.id) : null;
+        if (made && made.active && made.updated_at === body.sleep.expect_updated_at) db.entries = db.entries.filter((e) => e.id !== made.id);
+        return answer({ result: { shift: s, sleepDeleted: made } }, [], [made]);
       }
       case "shift.undo_handoff": {
         db.shifts = db.shifts.filter((x) => x.id !== body.started_id);
@@ -268,15 +361,15 @@ function makeServer(clock) {
         const { fields, seq: itemSeq } = ruled(() => cleanGoalInput(body.goal, goalRules(null, 0), "create"));
         const g = {
           id: ++seq, baby_id: 1, title: fields.title, why: fields.why ?? null, target_date: fields.target_date ?? null, status: "active",
-          targets: fields.targets ?? [], steps: fields.steps ?? [], roster: fields.roster ?? [], last_review_at: null, review_note: null, closed_at: null,
-          revision: 1, created_by: SIGNED_IN, updated_by: SIGNED_IN, source: "web", created_at: iso(now()), updated_at: iso(now()), client_id: body.client_id ?? null, item_seq: itemSeq,
+          targets: fields.targets ?? [], steps: fields.steps ?? [], roster: fields.roster ?? [], template: fields.template ?? null, last_review_at: null, review_note: null, closed_at: null,
+          revision: 1, created_by: who, updated_by: who, source: "web", created_at: iso(now()), updated_at: iso(now()), client_id: body.client_id ?? null, item_seq: itemSeq,
         };
         db.goals.push(g);
         return answer({ result: { goal: goalOut(g), before: null, status: "created" } });
       }
       case "goal.update": {
         const g = goalOf(body.id);
-        if (body.revision !== g.revision) throw new ApiError("conflict", 409, { error: "Someone changed this sleep goal just now.", code: "changed", current: goalOut(g), sleep: snapshot() });
+        if (body.revision !== g.revision) throw new ApiError("conflict", 409, { error: "Someone changed this sleep goal just now.", code: "changed", current: goalOut(g), sleep: snapshot(who) });
         const before = goalOut(g);
         const { fields, seq: itemSeq } = ruled(() => cleanGoalInput(body.patch, goalRules(before, g.item_seq), "update"));
         if (!Object.keys(fields).length) return answer({ result: { goal: before, before, status: "unchanged" } });
@@ -292,7 +385,17 @@ function makeServer(clock) {
         const done = body.done !== false;
         const before = goalOut(g);
         if (!!st.done_at === done) return answer({ result: { goal: before, before, status: "unchanged" } });
-        g.steps = g.steps.map((x) => (x.id === st.id ? { ...x, done_at: done ? iso(now()) : null, done_by: done ? SIGNED_IN : null } : x));
+        g.steps = g.steps.map((x) => (x.id === st.id ? { ...x, done_at: done ? iso(now()) : null, done_by: done ? who : null } : x));
+        bump(g);
+        return answer({ result: { goal: goalOut(g), before, status: "updated" } });
+      }
+      // The look-back's Keep it and Next step record a review on the revision; its Undo (`back`) puts the one before back.
+      case "goal.review": {
+        const g = goalOf(body.id);
+        if (body.revision !== undefined && body.revision !== g.revision) throw new ApiError("conflict", 409, { error: "Someone changed this sleep goal just now.", code: "changed", current: goalOut(g), sleep: snapshot(who) });
+        const before = goalOut(g);
+        if (body.back) Object.assign(g, { last_review_at: body.back.at ?? null, review_note: body.back.note ?? null });
+        else Object.assign(g, { last_review_at: iso(now()), review_note: body.note == null ? null : ruled(() => cleanGoalNote(body.note, GOAL_NOTE_MAX)) });
         bump(g);
         return answer({ result: { goal: goalOut(g), before, status: "updated" } });
       }
@@ -314,20 +417,23 @@ function makeServer(clock) {
         const said = ruled(() => cleanProtected(body.protected));
         const keep = body.note === undefined;
         const note = keep ? null : ruled(() => cleanGoalNote(body.note, CHECKIN_NOTE_MAX));
-        const found = liveCheckins().find((c) => c.member === SIGNED_IN && c.night === night);
+        // The night's other answers, as the route takes them: each given one is set (null clears it), the rest stay.
+        const extras = ruled(() => cleanCheckinExtras(Object.fromEntries(["place", "untimed_try", "untimed_min", "handoff"].filter((k) => body[k] !== undefined).map((k) => [k, body[k]]))));
+        const sameExtras = (c) => Object.entries(extras).every(([k, v]) => (c[k] ?? null) === v);
+        const found = liveCheckins().find((c) => c.member === who && c.night === night);
         if (found) {
           const before = checkinOut(found);
-          if (found.protected === said && (keep || note === found.note)) return answer({ result: { checkin: before, before, status: "unchanged" } });
-          Object.assign(stamp(found), { protected: said }, keep ? {} : { note });
+          if (found.protected === said && (keep || note === found.note) && sameExtras(found)) return answer({ result: { checkin: before, before, status: "unchanged" } });
+          Object.assign(stamp(found), { protected: said }, keep ? {} : { note }, extras);
           return answer({ result: { checkin: checkinOut(found), before, status: "updated" } });
         }
-        const c = { id: ++seq, member: SIGNED_IN, night, protected: said, note, source: "web", created_at: iso(now()), updated_at: iso(now()), client_id: body.client_id ?? null };
+        const c = { id: ++seq, member: who, night, protected: said, note, ...extras, source: "web", created_at: iso(now()), updated_at: iso(now()), client_id: body.client_id ?? null };
         db.checkins.push(c);
         return answer({ result: { checkin: checkinOut(c), before: null, status: "created" } });
       }
       case "checkin.delete": {
-        const c = liveCheckins().find((x) => x.member === SIGNED_IN && (body.id != null ? x.id === body.id : x.night === body.night));
-        if (!c) throw new ApiError("gone", 404, { error: "Check-in not found", sleep: snapshot() });
+        const c = liveCheckins().find((x) => x.member === who && (body.id != null ? x.id === body.id : x.night === body.night));
+        if (!c) throw new ApiError("gone", 404, { error: "Check-in not found", sleep: snapshot(who) });
         c.deleted = true;
         return answer({ result: { checkin: checkinOut(c) } });
       }
@@ -335,208 +441,446 @@ function makeServer(clock) {
         throw new ApiError("unknown", 400, { error: `Unknown action ${body.action}` });
     }
   };
-  /**
-   * ?goals: a goal set a fortnight ago with all four kinds of target, three steps, a night roster for Sam and Alex,
-   * tries on most nights (some long, some short), feeds and a holding turn inside Sam's window, and check-ins from
-   * both, except Sam's for last night (Wed, Nov 4), so Today asks Sam this morning.
-   */
-  const seedGoals = () => {
-    const created = at("2026-10-22", 20, 0);
-    db.goals.push({
-      id: 301, baby_id: 1, title: "Both of us get one long stretch", why: "Back to work on the 30th", target_date: "2026-11-25", status: "active",
-      targets: [
-        { id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 },
-        { id: "a2", kind: "bassinet_stretch", minutes: 180 },
-        { id: "a3", kind: "protected_window", member: ME, per_week: 5 },
-        { id: "a4", kind: "custom", text: "Calmer bedtimes" },
-      ],
-      steps: [
-        { id: "s5", title: "Bassinet after the 10 PM feed", week_of: "2026-10-22", done_at: iso(at("2026-10-24", 9)), done_by: PARTNER },
-        { id: "s6", title: "White noise on for every try", week_of: "2026-10-29", done_at: null, done_by: null },
-        { id: "s7", title: "Dim lights for night feeds", week_of: "2026-11-05", done_at: null, done_by: null },
-      ],
-      roster: [
-        { id: "w8", member: ME, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] },
-        { id: "w9", member: PARTNER, from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4, 5, 6] },
-      ],
-      last_review_at: null, review_note: null, closed_at: null, revision: 4, created_by: ME, updated_by: PARTNER, source: "web",
-      created_at: iso(created), updated_at: iso(at("2026-10-24", 9)), client_id: null, item_seq: 9,
-    });
-    // Tries, each on a bassinet sleep: [night, start hour, start minute, minutes, outcome].
-    const tries = [
-      ["2026-10-23", 22, 30, 100, "stayed_asleep"],
-      ["2026-10-25", 22, 0, 20, "woke_crying"],
-      ["2026-10-27", 23, 0, 150, "stayed_asleep"],
-      ["2026-10-30", 22, 15, 50, "stayed_asleep"],
-      ["2026-11-01", 21, 45, 180, "stayed_asleep"],
-      ["2026-11-03", 22, 30, 30, "picked_up"],
-      ["2026-11-04", 23, 0, 140, "stayed_asleep"],
-    ];
-    for (const [night, h, m, mins, outcome] of tries) {
-      const start = at(night, h, m);
-      const end = start + mins * MIN;
-      const sleep = { id: ++seq, kind: "sleep", started_at: iso(start), ended_at: iso(end), active: false, data: { place: "bassinet" }, note: null, created_by: ME, updated_at: iso(end), source: "web" };
+
+  // ── seeds, by name in the query ──
+  const planAt = (stage = 1) => {
+    db.plan = { baby_id: 1, stage, stage_since: iso(BASE - 3 * 86_400_000), sleeps_now: "arms", goal: null, ...STAGE_INFO[stage].defaults, snoozed_until: null, revision: 3, created_by: ME, updated_by: ME, source: "web", created_at: iso(BASE - 3 * 86_400_000), updated_at: iso(BASE - 86_400_000) };
+  };
+  const seeds = {
+    /** A try running on a bassinet sleep since 1:50 AM (swaddled). */
+    running: () => {
+      planAt();
+      const sleep = { id: 77, kind: "sleep", started_at: iso(BASE - 20 * MIN), ended_at: null, active: true, data: { place: "bassinet" }, note: null, created_by: ME, updated_at: iso(BASE - 20 * MIN), source: "web", created_at: iso(BASE - 20 * MIN) };
       db.entries.push(sleep);
-      db.tries.push({ id: ++seq, started_at: iso(start), ended_at: iso(end), outcome, put_down_by: ME, tags: [], note: null, sleep_entry_id: sleep.id, made_sleep: true, created_by: ME, updated_by: ME, source: "web", created_at: iso(start), updated_at: iso(end) });
-    }
-    // Feeds inside Sam's window (22:00–02:00): one Sam logged, one Alex did; Alex held River during it one night.
-    for (const [startAt, by] of [[at("2026-11-03", 23, 30), ME], [at(nextDay("2026-11-04"), 0, 30), PARTNER]]) {
-      db.entries.push({ id: ++seq, kind: "feed", started_at: iso(startAt), ended_at: iso(startAt + 20 * MIN), active: false, data: { method: "breast", first_side: "L", last_side: "L", segments: [] }, note: null, created_by: by, updated_at: iso(startAt + 20 * MIN), source: "web" });
-    }
-    db.shifts.push({ id: ++seq, holder: PARTNER, started_at: iso(at("2026-11-02", 23, 0)), handoff_at: null, next_holder: null, ended_at: iso(at("2026-11-02", 23, 40)), ended_how: "ended", created_by: PARTNER, updated_by: PARTNER, source: "web", created_at: iso(at("2026-11-02", 23, 0)), updated_at: iso(at("2026-11-02", 23, 40)) });
-    // Check-ins: Sam's (not last night's yet) and Alex's.
-    for (const [member, night, said, note] of [
-      [ME, "2026-10-30", "yes", null], [ME, "2026-11-01", "no", "Up twice, both short"], [ME, "2026-11-02", "yes", null], [ME, "2026-11-03", "yes", null],
-      [PARTNER, "2026-11-02", "yes", null], [PARTNER, "2026-11-03", "partly", null], [PARTNER, "2026-11-04", "yes", null],
-    ]) {
-      db.checkins.push({ id: ++seq, member, night, protected: said, note, source: "web", created_at: iso(at(nextDay(night), 7)), updated_at: iso(at(nextDay(night), 7)), client_id: null });
-    }
+      db.tries.push({ id: 78, started_at: sleep.started_at, ended_at: null, outcome: null, put_down_by: ME, tags: ["swaddled"], note: null, sleep_entry_id: 77, made_sleep: true, created_by: ME, updated_by: ME, source: "web", created_at: sleep.started_at, updated_at: sleep.started_at });
+    },
+    /** Sam holding River since 1:30 AM, asleep in arms since 1:40 AM, handoff planned at 3:30 AM, then Alex. */
+    holding: () => {
+      planAt();
+      db.shifts.push({ id: 90, holder: ME, started_at: iso(BASE - 40 * MIN), handoff_at: iso(BASE + 80 * MIN), next_holder: PARTNER, ended_at: null, ended_how: null, asked_to: null, asked_at: null, created_by: ME, updated_by: ME, source: "web", created_at: iso(BASE - 40 * MIN), updated_at: iso(BASE - 40 * MIN) });
+      db.entries.push({ id: 91, kind: "sleep", started_at: iso(BASE - 30 * MIN), ended_at: null, active: true, data: { place: "arms" }, note: null, created_by: ME, updated_at: iso(BASE - 30 * MIN), source: "web", created_at: iso(BASE - 30 * MIN) });
+    },
+    /** A nursing feed running on the left since 20 minutes ago (2:10 AM by default: the feed card's night line). */
+    nursing: () => {
+      db.entries.push({ id: 43, kind: "feed", started_at: iso(clock() - 20 * MIN), ended_at: null, active: true, data: { method: "breast", first_side: "L", last_side: "L", segments: [{ side: "L", start: iso(clock() - 20 * MIN), end: null }] }, note: null, created_by: ME, updated_at: iso(clock() - 20 * MIN), source: "web", created_at: iso(clock() - 20 * MIN) });
+    },
+    /** With ?holding: a bottle logged at 2:00 AM, after her sleep in arms began at 1:40 AM (the turn's card asks Woke at). */
+    armsfeed: () => {
+      db.entries.push({ id: 93, kind: "feed", started_at: iso(BASE - 10 * MIN), ended_at: iso(BASE - 5 * MIN), active: false, data: { method: "bottle", amount_ml: 60 }, note: null, created_by: PARTNER, updated_at: iso(BASE - 5 * MIN), source: "web", created_at: iso(BASE - 5 * MIN) });
+    },
+    /**
+     * With ?holding: an active goal (set days ago) whose roster has Sam's protected window 2:30–5:30 AM. Taken over now (2:10 AM),
+     * the next handoff back to Sam would default to 4:10 AM, inside it, so it's planned for 5:30 AM.
+     */
+    roster: () => {
+      const set = at("2026-10-24", 20, 0);
+      db.goals.push({
+        id: 310, baby_id: 1, title: "A protected stretch each", why: null, target_date: null, status: "active", targets: [], steps: [],
+        // Sam nurses (the template says so), so feeds in Sam's window are Sam's to give: the catch-up says to bring her to Sam.
+        roster: [{ id: "w1", member: ME, from: "02:30", to: "05:30", nights: [0, 1, 2, 3, 4, 5, 6], covers: "nurse" }],
+        template: { kind: "back_to_work", member: PARTNER, date: "2026-11-30", nursing: ME },
+        last_review_at: null, review_note: null, closed_at: null, revision: 1, created_by: ME, updated_by: ME, source: "web", created_at: iso(set), updated_at: iso(set), client_id: null, item_seq: 1,
+      });
+    },
+    /** The morning after: a sleep in arms logged 2:30–5:10 AM that no try sits on yet (Log an earlier try's one-tap times). */
+    lastnight: () => {
+      db.entries.push({ id: 95, kind: "sleep", started_at: iso(at("2026-11-05", 2, 30)), ended_at: iso(at("2026-11-05", 5, 10)), active: false, data: { place: "arms" }, note: null, created_by: PARTNER, updated_at: iso(at("2026-11-05", 5, 10)), source: "web", created_at: iso(at("2026-11-05", 5, 10)) });
+    },
+    /**
+     * A goal set a fortnight ago with all four kinds of target, three steps, a night roster for Sam and Alex, tries on most
+     * nights (some long, some short), feeds and a holding turn inside Sam's window, and check-ins from both, except Sam's
+     * for last night (Wed, Nov 4), so Today asks Sam this morning.
+     */
+    goals: () => {
+      const created = at("2026-10-22", 20, 0);
+      db.goals.push({
+        id: 301, baby_id: 1, title: "Both of us get one long stretch", why: "Back to work on the 30th", target_date: "2026-11-25", status: "active",
+        targets: [
+          { id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 },
+          { id: "a2", kind: "bassinet_stretch", minutes: 180 },
+          { id: "a3", kind: "protected_window", member: ME, per_week: 5 },
+          { id: "a4", kind: "custom", text: "Calmer bedtimes" },
+        ],
+        steps: [
+          { id: "s5", title: "Bassinet after the 10 PM feed", week_of: "2026-10-22", done_at: iso(at("2026-10-24", 9)), done_by: PARTNER },
+          { id: "s6", title: "White noise on for every try", week_of: "2026-10-29", done_at: null, done_by: null },
+          { id: "s7", title: "Dim lights for night feeds", week_of: "2026-11-05", done_at: null, done_by: null },
+        ],
+        roster: [
+          { id: "w8", member: ME, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] },
+          { id: "w9", member: PARTNER, from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4, 5, 6] },
+        ],
+        // Looked back on last Friday, so no look-back is due this Thursday; with ?review, never, so week 2's is.
+        last_review_at: params.has("review") ? null : iso(at("2026-10-30", 9)), review_note: null, closed_at: null, revision: 4, created_by: ME, updated_by: PARTNER, source: "web",
+        created_at: iso(created), updated_at: iso(at("2026-10-24", 9)), client_id: null, item_seq: 9,
+      });
+      // Tries, each on a bassinet sleep: [night, start hour, start minute, minutes, outcome].
+      const tries = [
+        ["2026-10-23", 22, 30, 100, "stayed_asleep"],
+        ["2026-10-25", 22, 0, 20, "woke_crying"],
+        ["2026-10-27", 23, 0, 150, "stayed_asleep"],
+        ["2026-10-30", 22, 15, 50, "stayed_asleep"],
+        ["2026-11-01", 21, 45, 180, "stayed_asleep"],
+        ["2026-11-03", 22, 30, 30, "picked_up"],
+        ["2026-11-04", 23, 0, 140, "stayed_asleep"],
+      ];
+      for (const [night, h, m, mins, outcome] of tries) {
+        const start = at(night, h, m);
+        const end = start + mins * MIN;
+        const sleep = { id: ++seq, kind: "sleep", started_at: iso(start), ended_at: iso(end), active: false, data: { place: "bassinet" }, note: null, created_by: ME, updated_at: iso(end), source: "web", created_at: iso(end) };
+        db.entries.push(sleep);
+        db.tries.push({ id: ++seq, started_at: iso(start), ended_at: iso(end), outcome, put_down_by: ME, tags: [], note: null, sleep_entry_id: sleep.id, made_sleep: true, created_by: ME, updated_by: ME, source: "web", created_at: iso(start), updated_at: iso(end) });
+      }
+      // Feeds inside Sam's window (22:00–02:00): one Sam logged, one Alex did; Alex held River during it one night.
+      for (const [startAt, by] of [[at("2026-11-03", 23, 30), ME], [at(nextDay("2026-11-04"), 0, 30), PARTNER]]) {
+        db.entries.push({ id: ++seq, kind: "feed", started_at: iso(startAt), ended_at: iso(startAt + 20 * MIN), active: false, data: { method: "breast", first_side: "L", last_side: "L", segments: [] }, note: null, created_by: by, updated_at: iso(startAt + 20 * MIN), source: "web", created_at: iso(startAt) });
+      }
+      db.shifts.push({ id: ++seq, holder: PARTNER, started_at: iso(at("2026-11-02", 23, 0)), handoff_at: null, next_holder: null, ended_at: iso(at("2026-11-02", 23, 40)), ended_how: "ended", asked_to: null, asked_at: null, created_by: PARTNER, updated_by: PARTNER, source: "web", created_at: iso(at("2026-11-02", 23, 0)), updated_at: iso(at("2026-11-02", 23, 40)) });
+      // Check-ins: Sam's (not last night's yet) and Alex's.
+      for (const [member, night, said, note] of [
+        [ME, "2026-10-30", "yes", null], [ME, "2026-11-01", "no", "Up twice, both short"], [ME, "2026-11-02", "yes", null], [ME, "2026-11-03", "yes", null],
+        [PARTNER, "2026-11-02", "yes", null], [PARTNER, "2026-11-03", "partly", null], [PARTNER, "2026-11-04", "yes", null],
+      ]) {
+        db.checkins.push({ id: ++seq, member, night, protected: said, note, source: "web", created_at: iso(at(nextDay(night), 7)), updated_at: iso(at(nextDay(night), 7)), client_id: null });
+      }
+      planAt();
+    },
+    /**
+     * With ?goals&morning, Wed night as a sparse log for the Last night card: a feed at 8:30 PM, then nothing until the
+     * 11 PM try (2h 10m), nothing 1:20–3:00 AM after it, a diaper at 3, nothing until a sleep timer started at 4:45 AM and
+     * left running past a feed at 6:30 AM. Three stretches to ask about, and a timer to stop.
+     */
+    sparse: () => {
+      const entry = (kind, start, end, data, by = ME) => {
+        const e = { id: ++seq, kind, started_at: iso(start), ended_at: end == null ? null : iso(end), active: end === undefined, data, note: null, created_by: by, updated_at: iso(end ?? start), source: "web", created_at: iso(start) };
+        db.entries.push(e);
+        return e;
+      };
+      const wed = "2026-11-04";
+      entry("feed", at(wed, 20, 30), at(wed, 20, 50), { method: "breast", first_side: "L", last_side: "R", segments: [] });
+      entry("diaper", at(nextDay(wed), 3, 0), null, { pee: true, poop: false });
+      entry("sleep", at(nextDay(wed), 4, 45), undefined, {});
+      entry("feed", at(nextDay(wed), 6, 30), at(nextDay(wed), 6, 45), { method: "breast", first_side: "R", last_side: "R", segments: [] }, PARTNER);
+    },
+    /**
+     * With ?morning: a family who answers only in the morning. A goal set last Thursday (Oct 29), nothing logged at night
+     * all week, and every morning's check-ins: Sam's say where River slept and any try that isn't in the log; Alex's,
+     * last night's too (Sam hasn't checked in for it yet). Week 1 ended last night, so its look-back is due.
+     */
+    mornings: () => {
+      db.entries.length = 0;
+      const set = at("2026-10-29", 20, 0);
+      db.goals.push({
+        id: 330, baby_id: 1, title: "Bassinet nights, and sleep for both of us", why: null, target_date: "2026-11-26", status: "active",
+        targets: [
+          { id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 },
+          { id: "a2", kind: "protected_window", member: ME, per_week: 5 },
+        ],
+        steps: [{ id: "s1", title: "Bassinet for the first stretch after the 10 PM feed", week_of: "2026-10-29", done_at: null, done_by: null }],
+        roster: [
+          { id: "w1", member: ME, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] },
+          { id: "w2", member: PARTNER, from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4, 5, 6] },
+        ],
+        last_review_at: null, review_note: null, closed_at: null, revision: 2, created_by: ME, updated_by: ME, source: "web", created_at: iso(set), updated_at: iso(set), client_id: null, item_seq: 4,
+      });
+      const checkin = (member, night, said, extras = {}) =>
+        db.checkins.push({ id: ++seq, member, night, protected: said, note: null, place: null, untimed_try: null, untimed_min: null, handoff: null, ...extras, source: "web", created_at: iso(at(nextDay(night), 7)), updated_at: iso(at(nextDay(night), 7)), client_id: null });
+      // [night, Sam's answer, where River slept, any try not in the log]: three long enough, two short, one none.
+      for (const [night, said, place, untimed] of [
+        ["2026-10-29", "yes", "bassinet", "long"],
+        ["2026-10-30", "partly", "mixed", "short"],
+        ["2026-10-31", "yes", "bassinet", "long"],
+        ["2026-11-01", "no", "held", "no"],
+        ["2026-11-02", "yes", "bassinet", "long"],
+        ["2026-11-03", "yes", "mixed", "short"],
+      ]) {
+        checkin(ME, night, said, { place, untimed_try: untimed, untimed_min: untimed === "no" ? null : 60, handoff: "on_time" });
+        checkin(PARTNER, night, "yes");
+      }
+      checkin(PARTNER, "2026-11-04", "yes", { place: "mixed", untimed_try: "short", untimed_min: 60, handoff: "on_time" });
+    },
+    /**
+     * With ?morning: "Bassinet by Dec 1", set Oct 15 and logged most nights at first, then nothing from Tue, Oct 27 through
+     * last night (nine nights, and no check-ins): a quiet stretch, still going.
+     */
+    quiet: () => {
+      db.entries.length = 0;
+      const set = at("2026-10-15", 20, 0);
+      db.goals.push({
+        id: 320, baby_id: 1, title: "Bassinet by Dec 1", why: null, target_date: "2026-12-01", status: "active",
+        targets: [{ id: "a1", kind: "bassinet_nights", per_week: 3, min_minutes: 60 }],
+        steps: [
+          { id: "s1", title: "Bassinet after the 10 PM feed", week_of: "2026-10-15", done_at: iso(at("2026-10-17", 9)), done_by: ME },
+          { id: "s2", title: "White noise on for every try", week_of: "2026-10-22", done_at: null, done_by: null },
+        ],
+        roster: [],
+        last_review_at: iso(at("2026-10-22", 9)), review_note: null, closed_at: null, revision: 3, created_by: ME, updated_by: ME, source: "web", created_at: iso(set), updated_at: iso(at("2026-10-22", 9)), client_id: null, item_seq: 3,
+      });
+      for (let night = "2026-10-15"; night <= "2026-10-26"; night = nextDay(night)) {
+        const feed = at(night, 21, 40);
+        db.entries.push({ id: ++seq, kind: "feed", started_at: iso(feed), ended_at: iso(feed + 20 * MIN), active: false, data: { method: "breast", first_side: "L", last_side: "R", segments: [] }, note: null, created_by: ME, updated_at: iso(feed + 20 * MIN), source: "web", created_at: iso(feed) });
+        const down = at(night, 22, 15);
+        const up = at(nextDay(night), 1, 30);
+        db.entries.push({ id: ++seq, kind: "sleep", started_at: iso(down), ended_at: iso(up), active: false, data: { place: "bassinet" }, note: null, created_by: ME, updated_at: iso(up), source: "web", created_at: iso(up) });
+        const feed2 = at(nextDay(night), 1, 40);
+        db.entries.push({ id: ++seq, kind: "feed", started_at: iso(feed2), ended_at: iso(feed2 + 20 * MIN), active: false, data: { method: "breast", first_side: "R", last_side: "R", segments: [] }, note: null, created_by: PARTNER, updated_at: iso(feed2 + 20 * MIN), source: "web", created_at: iso(feed2) });
+      }
+    },
+  };
+  /** The app's own log write (useMaple's log), against the same in-memory log. */
+  const logEntry = (input, by) => {
+    const e = { id: ++seq, kind: input.kind, started_at: input.started_at, ended_at: input.ended_at ?? null, active: false, data: input.data ?? {}, note: input.note ?? null, created_by: by, updated_at: iso(now()), source: "web", created_at: iso(now()) };
+    db.entries.push(e);
+    return e;
   };
   /** Another phone changes a goal: the server's copy moves on to a new revision, which this phone hasn't seen. */
   const changeGoal = (id, patch) => {
-    const g = goalOf(id);
+    const g = db.goals.find((x) => x.id === id);
     Object.assign(g, patch);
     g.revision += 1;
     g.updated_by = PARTNER;
     stamp(g);
     return goalOut(g);
   };
-  return { db, handle, snapshot, seedGoals, changeGoal, stopSleep: () => {
-    const live = db.entries.find((e) => e.kind === "sleep" && e.active);
-    if (live) Object.assign(stamp(live), { active: false, ended_at: iso(now()) });
-    return live ? { ...live } : null;
+  /** Another phone changes the plan. */
+  const changePlan = (patch) => {
+    Object.assign(db.plan, patch, { revision: db.plan.revision + 1, updated_by: PARTNER });
+    stamp(db.plan);
+    return { ...db.plan };
+  };
+  /** The dock's sleep timer: Sleep starts one (no place), Woke up stops it. */
+  const startTimer = (kind, by) => {
+    if (kind !== "sleep" || runningSleep()) return runningSleep();
+    const e = { id: ++seq, kind: "sleep", started_at: iso(now()), ended_at: null, active: true, data: {}, note: null, created_by: by, updated_at: iso(now()), source: "web", created_at: iso(now()) };
+    db.entries.push(e);
+    return e;
+  };
+  return { db, handle, snapshot, seeds, changeGoal, changePlan, startTimer, stopEntry, logEntry, stopSleep: () => {
+    const live = runningSleep();
+    return live ? { ...stopEntry(live.id) } : null;
   } };
 }
 
-function OpenButtons() {
-  const s = useSleep();
-  return (
-    <div className="flex flex-wrap gap-2 p-4">
-      <button type="button" onClick={() => s.openSheet({ kind: "plan" })}>Open the sleep plan</button>
-      <button type="button" onClick={() => s.openSheet({ kind: "log" })}>Log an earlier try</button>
-    </div>
-  );
+/** The shared route and clock of ?phones (the parent page), or this page's own. */
+function shared() {
+  try {
+    if (window.parent !== window && window.parent.__shared) return window.parent.__shared;
+  } catch {
+    // Not ours to read: this page stands alone.
+  }
+  return null;
 }
 
-/**
- * Today's sleep parts in Today's order: each running sleep as a stand-in timer card carrying SleepTimerExtra (the
- * try she's on, or Put down), the Right now cards that aren't on one (SleepNow), the morning check-in, and the plan's
- * row in an Up next card.
- */
-function TodayParts({ entries }) {
-  const sleeping = entries.filter((e) => e.kind === "sleep" && e.active);
+function makeWorld(query) {
+  const offset = { current: 0 };
+  const listeners = new Set();
+  const clock = () => BASE + offset.current;
+  const server = makeServer(clock);
+  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing", "armsfeed", "roster", "mornings", "quiet"]) if (query.has(name)) server.seeds[name]();
+  return {
+    server,
+    clock,
+    listen: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
+    advance: (minutes) => {
+      offset.current += minutes * MIN;
+      for (const fn of listeners) fn();
+    },
+  };
+}
+
+function TabBar() {
+  const tabs = [
+    { id: "today", label: "Today", icon: "house" },
+    { id: "history", label: "History", icon: "history" },
+    { id: "moments", label: "Moments", icon: "image" },
+    { id: "chat", label: "Chat", icon: "message-square" },
+  ];
   return (
-    <>
-      {sleeping.map((e) => (
-        <section key={e.id} aria-label="Asleep timer" className="rounded-[20px] border border-(--mp-edge) bg-mp-surface p-4">
-          <p className="text-[15px] font-semibold text-mp-ink">Asleep</p>
-          <SleepTimerExtra entry={e} />
-        </section>
-      ))}
-      <SleepNow attached={sleeping.map((e) => e.id)} />
-      {/* Today puts the morning check-in right after Right now. */}
-      <SleepCheckinCard />
-      <div aria-label="Up next" role="region" className="overflow-hidden rounded-[20px] border border-(--mp-edge) bg-mp-surface empty:hidden">
-        <SleepRow />
+    <nav aria-label="Maple's Log" className="fixed inset-x-0 bottom-0 z-[70] border-t border-mp-line bg-mp-bg pb-[env(safe-area-inset-bottom)]">
+      <div className="mx-auto flex max-w-lg">
+        {tabs.map((t) => (
+          <button key={t.id} type="button" aria-current={t.id === "today" ? "page" : undefined} className={`flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 text-[12px] font-medium ${t.id === "today" ? "text-mp-accent-fg" : "text-mp-ink-3"}`}>
+            <Icon name={t.icon} size={24} />
+            <span className="max-w-full truncate">{t.label}</span>
+          </button>
+        ))}
       </div>
-    </>
+    </nav>
   );
 }
 
-function Toasts({ toasts }) {
-  return (
-    <div data-maple-toasts className="space-y-1 p-2">
-      {toasts.map((t) => (
-        <div key={t.id} role="status" data-toast className="rounded-xl bg-mp-surface p-2 text-sm">
-          <span data-toast-text>{t.text}</span>
-          {(t.actions ?? []).map((a) => (
-            <button key={a.label} type="button" aria-label={a.ariaLabel ?? a.label} onClick={a.onClick}>{a.label}</button>
-          ))}
-          {t.undo && <button type="button" onClick={t.undo}>Undo</button>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Fixture() {
-  const offset = useRef(0);
+function Phone({ world }) {
+  const { server, clock } = world;
   const [tickN, setTick] = useState(0);
-  const clock = useCallback(() => BASE + offset.current, []);
-  const server = useMemo(() => makeServer(clock), [clock]);
+  const [toasts, setToasts] = useState([]);
+  // Minutes passing: the clock moves, and toasts that would have timed out on a phone are gone.
+  useEffect(() => world.listen(() => (setTick((n) => n + 1), setToasts([]))), [world]);
+  const handle = useCallback((path, init) => server.handle(SIGNED_IN, path, init), [server]);
   const [state, setState] = useState(() => {
-    if (params.has("goals")) server.seedGoals();
-    const s = {
+    const snap = server.snapshot(SIGNED_IN);
+    const any = !!snap.plan || snap.tries.length || snap.shifts.length || snap.goals.length || snap.checkins?.length;
+    return {
+      now: iso(clock()), rev: "r0", growth: [], lifetime: null, care: null,
       baby: { id: 1, name: "River", nickname: null, sex: "female", born_at: "2026-10-01T14:00:00.000Z", timezone: TZ, settings: {} },
-      family: { id: 99 },
+      family: { id: 99, ask: "an owner" },
       me: { email: SIGNED_IN, role },
       members: [
-        { email: ME, name: "Sam", role: "owner" },
-        { email: PARTNER, name: "Alex", role: "member" },
-        { email: VIEWER, name: "Pat", role: "viewer" },
+        { email: ME, name: "Sam", display_name: "Sam", role: "owner", color: "#674b7b" },
+        { email: PARTNER, name: "Alex", display_name: "Alex", role: "member", color: "#3b6e8f" },
+        { email: VIEWER, name: "Pat", display_name: "Pat", role: "viewer", color: "#8f6a3b" },
       ],
-      entries: [...server.db.entries].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at)),
-      ...(params.has("goals") ? { sleep: server.snapshot() } : {}),
+      entries: [...server.db.entries].map((e) => ({ ...e })).sort(newest),
+      ...(any ? { sleep: snap } : {}),
     };
-    if (params.has("running")) {
-      const sleep = { id: 77, kind: "sleep", started_at: iso(BASE - 20 * MIN), ended_at: null, active: true, data: { place: "bassinet" }, note: null, created_by: ME, updated_at: iso(BASE - 20 * MIN), source: "web" };
-      server.db.entries.push(sleep);
-      server.db.tries.push({ id: 78, started_at: sleep.started_at, ended_at: null, outcome: null, put_down_by: ME, tags: ["swaddled"], note: null, sleep_entry_id: 77, made_sleep: true, created_by: ME, updated_by: ME, source: "web", created_at: sleep.started_at, updated_at: sleep.started_at });
-      server.db.plan = { baby_id: 1, stage: 1, stage_since: iso(BASE - 3 * 86_400_000), sleeps_now: "arms", goal: null, ...STAGE_INFO[1].defaults, snoozed_until: null, revision: 3, created_by: ME, updated_by: ME, source: "web", created_at: iso(BASE - 3 * 86_400_000), updated_at: iso(BASE - 86_400_000) };
-      s.entries = [sleep, ...s.entries];
-      s.sleep = { plan: server.db.plan, tries: [...server.db.tries], shifts: [] };
-    }
-    return s;
   });
-  const [toasts, setToasts] = useState([]);
-  const seq = useRef(0);
-  const toast = useCallback((text, opts = {}) => setToasts((t) => [...t.slice(-2), { id: ++seq.current, text, ...opts }]), []);
+  const revN = useRef(0);
+  const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+  const toast = useCallback((text, opts = {}) => {
+    const id = ++revN.current + Math.random();
+    // Toasts stay up until dismissed or replaced: the check reads and taps them at its own pace.
+    setToasts((t) => [...t.filter((x) => !opts.group || x.group !== opts.group).slice(-2), { id, text, tone: opts.tone ?? "ok", ...opts }]);
+    return id;
+  }, []);
   const apply = useCallback((next, entries = [], removed = []) => setState((s) => {
     const gone = new Set([...removed, ...entries.map((e) => e.id)]);
-    const merged = [...entries.filter((e) => !removed.includes(e.id)), ...s.entries.filter((e) => !gone.has(e.id))].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+    const merged = [...entries.filter((e) => !removed.includes(e.id)), ...s.entries.filter((e) => !gone.has(e.id))].sort(newest);
     // As useMaple's apply: a goal or a check-in keeps the sleep state too.
     const any = !!next && (!!next.plan || next.tries.length > 0 || next.shifts.length > 0 || !!next.goals?.length || !!next.checkins?.length);
-    const { sleep: _old, ...rest } = s;
-    void _old;
-    return { ...rest, entries: merged, ...(any ? { sleep: next } : {}) };
+    const { sleep: old, ...rest } = s;
+    return { ...rest, rev: `r${++revN.current}`, entries: merged, ...(any ? { sleep: next } : next ? {} : old ? { sleep: old } : {}) };
   }), []);
   const now = useMemo(() => new Date(clock()), [clock, tickN]); // eslint-disable-line react-hooks/exhaustive-deps
+  const summary = useMemo(() => summarize({ entries: state.entries, baby: state.baby, members: state.members, now: new Date(clock()), vo }), [state, clock, tickN]); // eslint-disable-line react-hooks/exhaustive-deps
+  const calls = server.db.calls;
+  // What an opener was asked (a click's event, or anything else that won't copy, is left out).
+  const plain = (a) => {
+    try {
+      return typeof a === "function" ? null : JSON.parse(JSON.stringify(a));
+    } catch {
+      return null;
+    }
+  };
+  const record = (what) => (...args) => (calls.push({ action: what, who: SIGNED_IN, args: args.map(plain) }), undefined);
   const maple = useMemo(() => ({
-    state,
-    now: () => new Date(clock()),
-    readOnly: role === "viewer" || role === "photos",
-    api: (path, init) => server.handle(path, init),
-    toast,
-    memberName: (email) => nameOf(email),
-    timerCall: async (b) => { server.db.calls.push({ action: "timer", ...b }); },
+    state, summary, now: () => new Date(clock()), readOnly: role === "viewer" || role === "photos", units: "us", seenAt: null,
+    api: handle,
+    memberName: nameOf, memberLabel: nameOf, member: (email) => state.members.find((m) => m.email === email) ?? null,
+    isNight: () => NIGHT, timerBusy: () => false, toasts, toast, dismissToast,
+    dismissTimerToast: () => setToasts((t) => t.filter((x) => x.group !== "timer")), holdTimerToasts: () => {},
+    // useMaple's log: saves the entry and says so, with Undo, unless `silent` (the Last night card's "She slept through" shows its own receipt).
+    log: async (input, opts = {}) => {
+      calls.push({ action: "log", ...input, who: SIGNED_IN });
+      const saved = server.logEntry(input, SIGNED_IN);
+      apply(server.snapshot(SIGNED_IN), [{ ...saved }]);
+      if (!opts.silent) toast(opts.toast ?? "Logged", { tone: "ok", undo: () => calls.push({ action: "log.undo", id: saved.id, who: SIGNED_IN }) });
+      return { ...saved };
+    },
+    // useMaple's remove: the entry goes (the receipt's Undo of "She slept through"), with its toast.
+    remove: async (id, opts = {}) => {
+      calls.push({ action: "remove", id, who: SIGNED_IN });
+      server.db.entries = server.db.entries.filter((e) => e.id !== id);
+      apply(server.snapshot(SIGNED_IN), [], [id]);
+      toast(opts.toast ?? "Deleted", { tone: "info" });
+      return true;
+    },
+    update: async (id, patch) => (calls.push({ action: "update", id, patch }), null),
+    restore: record("restore"), refresh: async () => {}, whoDiscarded: () => null, outbox: [], online: true,
+    timerCall: async (b) => {
+      calls.push({ action: "timer", ...b });
+      // A stop on an entry in the log (the Last night card's "Woke at") stops it then, as the timer route would.
+      const stopped = b.action === "stop" ? server.stopEntry(b.id, b.at ? Date.parse(b.at) : undefined) : null;
+      if (stopped) apply(server.snapshot(SIGNED_IN), [{ ...stopped }]);
+      return stopped ? { entry: { ...stopped } } : null;
+    },
     sleep: { apply, track: (fn) => fn() },
-  }), [state, clock, server, toast, apply]);
-  const careNav = useMemo(() => ({ openHelp: () => server.db.calls.push({ action: "help" }) }), [server]);
-  // The chat's opener: records the seeded message, as the Chat tab would get it in its composer.
-  const chatNav = useMemo(() => ({ ask: ({ prompt, label }) => (server.db.calls.push({ action: "ask", prompt, label }), true) }), [server]);
+  }), [state, summary, clock, handle, toasts, toast, dismissToast, apply]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The dock's timers: Sleep starts a sleep timer, Woke up stops it (the try on it then asks how it went).
+  const actions = useMemo(() => {
+    const known = {
+      running: (kind) => state.entries.find((e) => e.active && e.kind === kind) ?? null,
+      startTimer: async (kind) => {
+        calls.push({ action: "timer.start", kind, who: SIGNED_IN });
+        const e = server.startTimer(kind, SIGNED_IN);
+        if (e) apply(server.snapshot(SIGNED_IN), [{ ...e }]);
+        return e;
+      },
+      stop: async (e, when) => {
+        calls.push({ action: "timer.stop", id: e.id, who: SIGNED_IN });
+        const x = server.stopEntry(e.id, when ? when.getTime() : undefined);
+        if (x) {
+          apply(server.snapshot(SIGNED_IN), [{ ...x }]);
+          toast(`Slept ${formatDuration((Date.parse(x.ended_at) - Date.parse(x.started_at)) / 1000)}`, { tone: "ok", group: "timer" });
+        }
+        return x;
+      },
+      busy: () => false, memberName: nameOf, dismissToast: () => {}, holdToasts: () => {},
+    };
+    return new Proxy(known, { get: (t, k) => (k in t ? t[k] : typeof k === "string" ? record(`timer.${k}`) : undefined) });
+  }, [state, server, apply, toast]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ctx = useMemo(() => ({
+    maple, now,
+    careNav: new Proxy({}, { get: (_, k) => (typeof k === "string" ? record(`care.${k}`) : undefined) }),
+    // The chat's opener: records the seeded message, as the Chat tab would get it in its composer.
+    chatNav: { ask: ({ prompt, label }) => (calls.push({ action: "ask", prompt, label, who: SIGNED_IN }), true) },
+    sheets: { open: record("sheets.open"), close: record("sheets.close"), current: null },
+    actions,
+    appNav: { go: record("nav.go"), tab: "today" },
+  }), [maple, now, actions]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     window.__sleep = {
       calls: () => server.db.calls.map((c) => ({ ...c })),
-      advance: (minutes) => { offset.current += minutes * MIN; setTick((n) => n + 1); },
-      stopSleep: () => { const e = server.stopSleep(); if (e) apply(server.snapshot(), [e]); return !!e; },
-      // Another phone's edit, which this phone only learns of from a write's answer (or the next poll, which never comes here).
+      advance: (minutes) => world.advance(minutes),
+      /** This phone's next poll: it learns what the other phones wrote. */
+      poll: () => apply(server.snapshot(SIGNED_IN), server.db.entries.map((e) => ({ ...e }))),
+      stopSleep: () => {
+        const e = server.stopSleep();
+        if (e) apply(server.snapshot(SIGNED_IN), [e]);
+        return !!e;
+      },
+      // Another phone's edit, which this phone only learns of from a write's answer (or the next poll).
       changeGoal: (id, patch) => server.changeGoal(id, patch),
-      goal: (id) => server.snapshot().goals.find((g) => g.id === id) ?? null,
-      checkins: () => server.db.checkins.filter((c) => !c.deleted).map((c) => ({ member: c.member, night: c.night, protected: c.protected, note: c.note })),
+      changePlan: (patch) => server.changePlan(patch),
+      goal: (id) => server.snapshot(SIGNED_IN).goals.find((g) => g.id === id) ?? null,
+      db: () => JSON.parse(JSON.stringify({ plan: server.db.plan, tries: server.db.tries, shifts: server.db.shifts, entries: server.db.entries })),
+      checkins: () => server.db.checkins.filter((c) => !c.deleted).map((c) => ({ member: c.member, night: c.night, protected: c.protected, note: c.note, place: c.place ?? null, untimed_try: c.untimed_try ?? null, handoff: c.handoff ?? null })),
       toasts: () => toasts.map((t) => t.text),
     };
-  }, [server, apply, toasts]);
+  }, [server, world, apply, toasts]);
   return (
-    <FixtureContext.Provider value={{ maple, now, careNav, chatNav }}>
-      <Toasts toasts={toasts} />
+    <FixtureContext.Provider value={ctx}>
       <SleepProvider sheets={(api) => <SleepSheetHost api={api} />}>
-        <main className="mx-auto max-w-lg space-y-3 px-4 pt-4">
-          <OpenButtons />
-          <TodayParts entries={state.entries} />
-        </main>
+        <div className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
+          <TodayTab onNavigate={record("today.navigate")} />
+          <TabBar />
+          <ToastHost />
+        </div>
       </SleepProvider>
     </FixtureContext.Provider>
   );
 }
 
-createRoot(document.getElementById("root")).render(<MotionConfig reducedMotion="user"><Fixture /></MotionConfig>);
+/** ?phones: Sam's phone and Alex's, side by side, sharing one route and one clock. */
+function Phones() {
+  const night = NIGHT ? "&night" : "";
+  const rest = [...params.entries()].filter(([k]) => k !== "phones" && k !== "night").map(([k, v]) => `&${k}${v ? `=${v}` : ""}`).join("");
+  return (
+    <div className="flex gap-4 p-2">
+      <iframe title="Sam's phone" name="sam" src={`/?phone${rest}${night}`} style={{ width: 390, height: 844, border: 0 }} />
+      <iframe title="Alex's phone" name="alex" src={`/?phone&as=alex${rest}${night}`} style={{ width: 390, height: 844, border: 0 }} />
+    </div>
+  );
+}
+
+if (NIGHT) setNightActive(true);
+const root = createRoot(document.getElementById("root"));
+if (params.has("phones")) {
+  window.__shared = makeWorld(params);
+  root.render(<Phones />);
+} else {
+  const world = shared() ?? makeWorld(params);
+  root.render(
+    <MotionConfig reducedMotion="user">
+      <Phone world={world} />
+    </MotionConfig>
+  );
+}

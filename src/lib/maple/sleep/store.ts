@@ -1,13 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import { query, transaction } from "@/lib/db";
-import { cleanClientId, famId, getEntry, listEntries, NotFound, reopenTimer, restoreEntry, rowToEntry, softDeleteEntry, stopTimer, StoreUnavailable, updateEntry, type FamilyRef } from "../store";
+import { activeTimers, cleanClientId, createEntryOnce, famId, getEntry, listEntries, NotFound, reopenTimer, restoreEntry, rowToEntry, softDeleteEntry, stopTimer, StoreUnavailable, updateEntry, type FamilyRef } from "../store";
 import { addDays, DEFAULT_TZ, isDayKey } from "../time";
 import { SLEEP_PLACES, type Entry, type EntryOf, type SleepPlace, type Source } from "../types";
-import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress, tryDayBounds, tryDayKey } from "./engine";
+import type { Voice } from "../voice";
+import { chooseSleepLink, endsSleep, followSleep, nextHandoff, progressWindow, SAME_MS, sleepProgress, tryDayBounds } from "./engine";
 import { SleepInputError } from "./errors";
-import { cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, goalProgress, goalSpan, lastNightKey, type GoalProgress, type GoalRules } from "./goals";
+import { cleanCheckinExtras, cleanCheckinNight, cleanGoalInput, cleanGoalNote, cleanProtected, goalProgress, goalSpan, lastNightKey, refuseUnsafe, type GoalProgress, type GoalRules } from "./goals";
+import { handoffAroundRoster, type HandoffWhy } from "./handoff";
 import {
   CHECKIN_NOTE_MAX,
+  CHECKIN_PLACES,
+  HANDOFF_ANSWERS,
+  UNTIMED_TRIES,
+  type CheckinExtras,
   GOAL_NOTE_MAX,
   GOAL_STATUSES,
   GOALS_ACTIVE_MAX,
@@ -32,6 +38,10 @@ import {
   TRY_OUTCOMES,
   TRY_TAGS,
   TRY_TIMES_MAX,
+  GOAL_FEEDING,
+  GOAL_TEMPLATES,
+  type GoalFeeding,
+  type GoalTemplate,
   type BassinetTry,
   type HoldingShift,
   type PlanPatch,
@@ -166,6 +176,8 @@ export function rowToShift(r: Row): HoldingShift {
     next_holder: textOrNull(r.next_holder),
     ended_at: isoOrNull(r.ended_at),
     ended_how: (SHIFT_ENDINGS as readonly unknown[]).includes(r.ended_how) ? (r.ended_how as ShiftEnding) : null,
+    asked_to: textOrNull(r.asked_to),
+    asked_at: isoOrNull(r.asked_at),
     created_by: textOrNull(r.created_by),
     updated_by: textOrNull(r.updated_by),
     source: asSource(r.source),
@@ -223,8 +235,13 @@ export async function getPlan(fam: FamilyRef, babyId: number): Promise<SleepPlan
   return rows.length ? rowToPlan(rows[0]) : null;
 }
 
-/** A patch checked and filled in: a new stage brings its defaults, unless the same patch sets them. */
-export function cleanPlanPatch(raw: Record<string, unknown>, current: SleepPlan | null): PlanPatch {
+/**
+ * A patch checked and filled in: a new stage brings its defaults, unless the
+ * same patch sets them. The goal's words never leave the baby to cry or have
+ * the baby asleep on or with an adult, or in a bed, couch, recliner,
+ * armchair or swing (goals.ts unsafeSleep; `v` names the baby in the refusal).
+ */
+export function cleanPlanPatch(raw: Record<string, unknown>, current: SleepPlan | null, v?: Voice): PlanPatch {
   const out: PlanPatch = {};
   if ("stage" in raw) {
     if (!(PLAN_STAGES as readonly unknown[]).includes(raw.stage)) throw new SleepInputError("The stage must be 1, 2, 3 or 4.");
@@ -238,6 +255,7 @@ export function cleanPlanPatch(raw: Record<string, unknown>, current: SleepPlan 
     if (raw.goal !== null && typeof raw.goal !== "string") throw new SleepInputError("The goal must be text.");
     const g = typeof raw.goal === "string" ? raw.goal.trim() : "";
     if (g.length > PLAN_GOAL_MAX) throw new SleepInputError(`The goal is too long (${PLAN_GOAL_MAX} characters at most).`);
+    refuseUnsafe(g, "The goal", { v });
     out.goal = g || null;
   }
   if ("tries_per_day" in raw) {
@@ -464,7 +482,7 @@ export async function startTry(
 }
 
 /** Possibly the same try someone already logged: starting within 3 minutes, or overlapping. */
-function looksSameTry(t: BassinetTry, start: number, end: number, now: number): boolean {
+export function looksSameTry(t: BassinetTry, start: number, end: number, now: number): boolean {
   const s = Date.parse(t.started_at);
   const e = t.ended_at ? Date.parse(t.ended_at) : now;
   return Math.abs(s - start) <= 3 * 60_000 || (s < end && start < e);
@@ -792,12 +810,33 @@ function handoffTime(handoffAt: Date | null | undefined, start: Date): Date | nu
   return handoffAt;
 }
 
-export type ShiftWrite = { shift: HoldingShift; before: HoldingShift | null; status: "created" | "open" | "deduped" | "updated" | "ended" | "handed_off"; ended?: HoldingShift | null; endedBefore?: HoldingShift | null };
+export type ShiftWrite = {
+  shift: HoldingShift;
+  before: HoldingShift | null;
+  status: "created" | "open" | "deduped" | "updated" | "ended" | "handed_off" | "asked" | "unasked";
+  ended?: HoldingShift | null;
+  endedBefore?: HoldingShift | null;
+  /**
+   * Her sleep in arms, when this write touched it: the one a start made
+   * (`madeSleep`, so Undo deletes it), or the one ending the turn awake
+   * stopped (`sleepBefore` running, so Undo runs it again).
+   */
+  sleep?: Entry | null;
+  sleepBefore?: Entry | null;
+  madeSleep?: boolean;
+  /** A handoff's default next handoff fell in the next holder's protected window, so it moved (handoff.ts). */
+  handoffWhy?: HandoffWhy | null;
+};
 
-/** Start holding her awake. With a shift already open, that one comes back ("open"): changing who holds her is a handoff. */
+/**
+ * Start holding her awake. With a shift already open, that one comes back
+ * ("open"): changing who holds her is a handoff. `asleep`: she's asleep in
+ * the holder's arms, so a sleep in arms starts with the turn (startArmsSleep),
+ * unless a sleep is already running.
+ */
 export async function startShift(
   fam: FamilyRef,
-  input: { babyId: number; holder: string; at?: Date; handoffAt?: Date | null; nextHolder?: string | null; by: string; source: Source; clientId?: string | null; device?: string | null }
+  input: { babyId: number; holder: string; at?: Date; handoffAt?: Date | null; nextHolder?: string | null; asleep?: boolean; by: string; source: Source; clientId?: string | null; device?: string | null }
 ): Promise<ShiftWrite> {
   const now = new Date();
   const at = pastTime(input.at, now, "When the shift started", 4 * 3600_000);
@@ -809,6 +848,7 @@ export async function startShift(
   }
   const open = await openShift(fam, input.babyId);
   if (open) return { shift: open, before: null, status: "open" };
+  let shift: HoldingShift;
   try {
     const rows = await q(
       `INSERT INTO maple_sleep_shifts (family_id, baby_id, holder, started_at, handoff_at, next_holder, created_by, source, client_id, device)
@@ -818,7 +858,7 @@ export async function startShift(
       [famId(fam), input.babyId, input.holder, at.toISOString(), handoff?.toISOString() ?? null, input.nextHolder ?? null, input.by, input.source, clientId, input.device ?? null]
     );
     if (!rows.length) throw new NotFound("Baby not found");
-    return { shift: rowToShift(rows[0]), before: null, status: "created" };
+    shift = rowToShift(rows[0]);
   } catch (err) {
     if (isUnique(err, "uniq_maple_sleep_shifts_open")) {
       const raced = await openShift(fam, input.babyId);
@@ -830,6 +870,173 @@ export async function startShift(
     }
     throw err;
   }
+  if (!input.asleep) return { shift, before: null, status: "created" };
+  // Asleep in arms: her sleep starts with the turn, keyed to it so a retried start never makes a second one.
+  const arms = await startArmsSleep(fam, { babyId: input.babyId, at, by: input.by, source: input.source, device: input.device, clientId: armsClientFor(clientId ?? `shift-${shift.id}`) });
+  return { shift, before: null, status: "created", sleep: arms.sleep, madeSleep: arms.made };
+}
+
+// ── asleep in arms ──────────────────────────────────────────────────────
+
+const ARMS = { place: "arms" as const };
+
+/** The arms sleep's client id from its turn's, so a retried start never makes a second sleep. */
+const armsClientFor = (key: string) => `sha:${createHash("sha256").update(key).digest("hex").slice(0, 40)}`;
+
+const runningSleep = async (fam: FamilyRef, babyId: number) => (await activeTimers(fam, babyId)).find((e) => e.kind === "sleep") ?? null;
+
+/**
+ * "Asleep in arms": a running sleep in arms from `at` (default now), an
+ * ordinary sleep entry. It runs across handoffs, a bassinet try laid down
+ * during it sits on it (chooseSleepLink), and ending the turn awake stops it
+ * (endShift). A sleep already running stays as it is (`made` false); a
+ * retried request with its client id gets the sleep it made.
+ */
+export async function startArmsSleep(
+  fam: FamilyRef,
+  input: { babyId: number; at?: Date; by: string; source: Source; device?: string | null; clientId?: string | null }
+): Promise<{ sleep: Entry; made: boolean }> {
+  const at = pastTime(input.at, new Date(), "When she fell asleep", 4 * 3600_000);
+  const running = await runningSleep(fam, input.babyId);
+  if (running) return { sleep: running, made: false };
+  try {
+    const { entry } = await createEntryOnce(fam, { babyId: input.babyId, kind: "sleep", startedAt: at, active: true, data: ARMS, createdBy: input.by, source: input.source, clientId: input.clientId ?? null, device: input.device ?? null });
+    return { sleep: entry, made: true };
+  } catch (err) {
+    // Another phone started a sleep timer at the same moment: that one stands.
+    if (!isUnique(err, "uniq_maple_entries_running")) throw err;
+    const raced = await runningSleep(fam, input.babyId);
+    if (raced) return { sleep: raced, made: false };
+    throw err;
+  }
+}
+
+/**
+ * A feed starting at `at` ends a sleep in arms that began before it, then,
+ * as the app's dock ends a running nap when nursing starts and Siri's
+ * nurse_left and nurse_right do: so the sleep in arms on a holding turn never
+ * runs on through a feed and counts it as sleep. Null when no sleep in arms
+ * runs (a nap in the bassinet or somewhere else is left as the caller's rule
+ * says), or another phone stopped it first.
+ */
+export async function endArmsSleepForFeed(fam: FamilyRef, input: { babyId: number; at: Date; by: string }): Promise<{ sleep: Entry; sleepBefore: Entry } | null> {
+  const arms = await runningSleep(fam, input.babyId);
+  if (!arms || (arms.data as { place?: string }).place !== "arms" || Date.parse(arms.started_at) >= input.at.getTime()) return null;
+  try {
+    return { sleep: await stopTimer(fam, arms.id, input.at, input.by, { expectUpdatedAt: arms.updated_at }), sleepBefore: arms };
+  } catch {
+    // Woke up on another phone meanwhile: it stays as they left it.
+    return null;
+  }
+}
+
+/**
+ * Undo's other half for a turn's sleep in arms: one its start made goes
+ * ("delete", only while it's still running as it was), or one its end
+ * stopped runs again ("reopen", only while it's still as the end left it).
+ * Changed since, it stays as it is (null).
+ */
+export async function undoTurnSleep(fam: FamilyRef, input: { id: number; expectUpdatedAt: string; how: "delete" | "reopen"; by: string }): Promise<Entry | null> {
+  const cur = await getEntry(fam, input.id);
+  if (!cur || cur.kind !== "sleep" || !same(input.expectUpdatedAt, cur.updated_at)) return null;
+  try {
+    if (input.how === "delete") return cur.active ? await softDeleteEntry(fam, cur.id, input.by) : null;
+    return cur.active ? null : await reopenTimer(fam, cur.id, input.by, { expectUpdatedAt: cur.updated_at });
+  } catch {
+    // Another sleep timer runs now, or it changed: it stays as it is.
+    return null;
+  }
+}
+
+// ── asking for a handoff ────────────────────────────────────────────────
+
+/**
+ * "Wake [partner]": the holder asks `to` to take over now. Only an ask:
+ * nothing changes hands until they have her (acceptHandoff from their phone,
+ * or handOff when the holder says they have her). It applies to the turn as
+ * it is now (a newer planned time doesn't turn it away), and asking again
+ * moves its time, so the family's phones hear of it again. With nobody
+ * recorded holding her, the asker's own turn starts with the ask on it.
+ */
+export async function askHandoff(
+  fam: FamilyRef,
+  input: { babyId: number; id?: number | null; to: string; by: string; source: Source; device?: string | null; clientId?: string | null }
+): Promise<ShiftWrite> {
+  const open = await openShift(fam, input.babyId);
+  if (!open) {
+    if (input.id != null) {
+      const gone = await getShift(fam, input.id);
+      if (!gone) throw new NotFound(`Holding shift ${input.id} not found`);
+      throw new SleepConflict(gone.ended_how === "handoff" ? "Someone else has her already." : "That shift already ended.", "changed", gone);
+    }
+    if (input.to === input.by) throw new SleepInputError("Ask someone else to take over.");
+    // Nobody recorded holding her: the asker is, so their own turn starts with the ask on it.
+    const started = await startShift(fam, { babyId: input.babyId, holder: input.by, by: input.by, source: input.source, clientId: input.clientId, device: input.device });
+    return askHandoff(fam, { ...input, id: started.shift.id, clientId: null });
+  }
+  if (input.id != null && open.id !== input.id) throw new SleepConflict("Someone else has her already.", "changed", open);
+  if (input.to === open.holder) throw new SleepInputError("That's who is holding her now.");
+  const rows = await q(
+    `UPDATE maple_sleep_shifts SET asked_to = $3, asked_at = NOW(), updated_by = $4, updated_at = NOW()
+     WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL RETURNING *`,
+    [open.id, famId(fam), input.to, input.by]
+  );
+  if (!rows.length) throw new SleepConflict("Someone changed this shift just now.", "changed", (await getShift(fam, open.id)) ?? open);
+  return { shift: rowToShift(rows[0]), before: open, status: "asked" };
+}
+
+/** Undo an ask: the turn goes back to no one asked, only as this phone left it. */
+export async function cancelAsk(fam: FamilyRef, id: number, input: { by: string; expectUpdatedAt: string }): Promise<ShiftWrite> {
+  const cur = await getShift(fam, id);
+  if (!cur) throw new NotFound(`Holding shift ${id} not found`);
+  if (cur.ended_at) throw new SleepConflict(cur.ended_how === "handoff" ? "Someone else has her already." : "That shift already ended.", "changed", cur);
+  if (!same(input.expectUpdatedAt, cur.updated_at)) throw new SleepConflict("Someone changed this shift just now.", "changed", cur);
+  const rows = await q(
+    `UPDATE maple_sleep_shifts SET asked_to = NULL, asked_at = NULL, updated_by = $3, updated_at = NOW()
+     WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL AND ${updatedAtMatches(4)} RETURNING *`,
+    [id, famId(fam), input.by, cur.updated_at]
+  );
+  if (!rows.length) throw new SleepConflict("Someone changed this shift just now.", "changed", (await getShift(fam, id)) ?? cur);
+  return { shift: rowToShift(rows[0]), before: cur, status: "unasked" };
+}
+
+/**
+ * "I've got her": `by` takes over the open turn now, the turn as it is now
+ * (asked or not): a handoff to them. Someone else took her first, or the
+ * turn ended: SleepConflict with the turn as it is.
+ */
+export async function acceptHandoff(fam: FamilyRef, id: number, input: { by: string; handoffAt?: Date | null; source: Source; device?: string | null; tz?: string }): Promise<ShiftWrite> {
+  const cur = await getShift(fam, id);
+  if (!cur) throw new NotFound(`Holding shift ${id} not found`);
+  if (cur.ended_at) throw new SleepConflict(cur.ended_how === "handoff" ? "Someone else has her already." : "That shift already ended.", "changed", cur);
+  if (cur.holder === input.by) throw new SleepInputError("You're the one holding her now.");
+  return handOff(fam, id, { to: input.by, by: input.by, source: input.source, device: input.device, expectUpdatedAt: cur.updated_at, tz: input.tz, ...(input.handoffAt !== undefined ? { handoffAt: input.handoffAt } : {}) });
+}
+
+/** The active goals' rosters, for the next handoff (handoff.ts): only status and roster. */
+async function rosterGoals(fam: FamilyRef, babyId: number): Promise<Pick<SleepGoal, "status" | "roster">[]> {
+  const rows = await q(`SELECT roster FROM maple_sleep_goals WHERE family_id = $1 AND baby_id = $2 AND status = 'active' AND deleted_at IS NULL`, [famId(fam), babyId]);
+  return rows.map((r) => ({ status: "active" as const, roster: list<RosterWindow>(r.roster, (x) => typeof x.id === "string" && typeof x.member === "string" && Array.isArray(x.nights)) }));
+}
+
+/** The family's zone for a roster window: a FamilyCtx carries the baby's; a bare id reads it. */
+async function zoneOf(fam: FamilyRef, babyId: number): Promise<string> {
+  if (typeof fam === "object" && "tz" in fam && typeof fam.tz === "string") return fam.tz;
+  const rows = await q(`SELECT timezone FROM maple_babies WHERE id = $1 AND family_id = $2`, [babyId, famId(fam)]);
+  return typeof rows[0]?.timezone === "string" && rows[0].timezone ? String(rows[0].timezone) : DEFAULT_TZ;
+}
+
+/**
+ * A handoff's default next one (as long as the turn handed over), never
+ * inside the next holder's protected window on an active goal's roster: at
+ * that window's end, or none over 12 hours away (handoff.ts), with why.
+ */
+async function plannedNextHandoff(fam: FamilyRef, cur: HoldingShift & { baby_id: number }, at: Date, tz: string | undefined): Promise<{ at: Date | null; why: HandoffWhy | null }> {
+  const def = nextHandoff(cur, at.getTime());
+  const goals = await rosterGoals(fam, cur.baby_id);
+  if (!goals.some((g) => g.roster.some((w) => w.member === cur.holder))) return { at: new Date(def), why: null };
+  const r = handoffAroundRoster({ at: def, from: at.getTime(), nextHolder: cur.holder, goals, tz: tz ?? (await zoneOf(fam, cur.baby_id)) });
+  return { at: r.at == null ? null : new Date(r.at), why: r.why };
 }
 
 /** End the open shift (if it began by `at`): used when a try starts. */
@@ -844,7 +1051,11 @@ async function endOpenShift(fam: FamilyRef, babyId: number, at: Date, how: Shift
   return rows.length ? { before: open, after: rowToShift(rows[0]) } : null;
 }
 
-/** End a shift now (or at `at`), only the one this phone saw. */
+/**
+ * End a shift now (or at `at`), only the one this phone saw. Ended awake
+ * ("ended", not into the bassinet or a handoff), a sleep in arms still
+ * running stops then too (`sleep`, with `sleepBefore` for Undo).
+ */
 export async function endShift(fam: FamilyRef, id: number, input: { at?: Date; how?: ShiftEnding; by: string; expectUpdatedAt?: string }): Promise<ShiftWrite> {
   const now = new Date();
   const cur = await getShift(fam, id);
@@ -859,18 +1070,32 @@ export async function endShift(fam: FamilyRef, id: number, input: { at?: Date; h
     [id, famId(fam), at.toISOString(), input.how ?? "ended", input.by, cur.updated_at]
   );
   if (!rows.length) throw new SleepConflict("Someone changed this shift just now.", "changed", (await getShift(fam, id)) ?? cur);
-  return { shift: rowToShift(rows[0]), before: cur, status: "ended" };
+  const shift = rowToShift(rows[0]);
+  if ((input.how ?? "ended") !== "ended") return { shift, before: cur, status: "ended" };
+  // Ended awake (not into the bassinet, not handed over): a sleep in arms still running ended then too.
+  const arms = await runningSleep(fam, cur.baby_id);
+  if (!arms || (arms.data as { place?: string }).place !== "arms" || Date.parse(arms.started_at) > at.getTime()) return { shift, before: cur, status: "ended" };
+  try {
+    const sleep = await stopTimer(fam, arms.id, at, input.by, { expectUpdatedAt: arms.updated_at });
+    return { shift, before: cur, status: "ended", sleep, sleepBefore: arms };
+  } catch {
+    // The sleep changed meanwhile (Woke up on another phone): it stays as they left it.
+    return { shift, before: cur, status: "ended" };
+  }
 }
 
 /**
  * Hand her over: the open shift ends and `to`'s starts at the same moment,
- * one transaction, with the next planned handoff as long as the last one
- * (nextHandoff) unless given, and the person handing over as the one after.
+ * one transaction, with the person handing over as the one after. The next
+ * planned handoff is as long as the last one (nextHandoff) unless given,
+ * and never inside that person's protected window on the night roster
+ * (plannedNextHandoff: at its end, or none, with `handoffWhy`). `tz`: the
+ * family's zone (a FamilyCtx carries it).
  */
 export async function handOff(
   fam: FamilyRef,
   id: number,
-  input: { to: string; at?: Date; handoffAt?: Date | null; by: string; source: Source; device?: string | null; expectUpdatedAt?: string }
+  input: { to: string; at?: Date; handoffAt?: Date | null; by: string; source: Source; device?: string | null; expectUpdatedAt?: string; tz?: string }
 ): Promise<ShiftWrite> {
   const now = new Date();
   const cur = await getShift(fam, id);
@@ -880,7 +1105,8 @@ export async function handOff(
   if (input.to === cur.holder) throw new SleepInputError("That's who is holding her now.");
   const at = pastTime(input.at, now, "When the handoff happened", 4 * 3600_000);
   if (at.getTime() < Date.parse(cur.started_at)) throw new SleepInputError("That's before the shift started.");
-  const handoff = input.handoffAt === undefined ? new Date(nextHandoff(cur, at.getTime())) : handoffTime(input.handoffAt, at);
+  const planned = input.handoffAt === undefined ? await plannedNextHandoff(fam, cur, at, input.tz) : null;
+  const handoff = planned ? planned.at : handoffTime(input.handoffAt, at);
   const familyId = famId(fam);
   const [ended, started] = await tx([
     {
@@ -901,7 +1127,7 @@ export async function handOff(
     const now2 = (await getShift(fam, id)) ?? cur;
     throw new SleepConflict("Someone changed this shift just now.", "changed", now2);
   }
-  return { shift: rowToShift(started[0]), before: null, status: "handed_off", ended: rowToShift(ended[0]), endedBefore: cur };
+  return { shift: rowToShift(started[0]), before: null, status: "handed_off", ended: rowToShift(ended[0]), endedBefore: cur, ...(planned?.why ? { handoffWhy: planned.why } : {}) };
 }
 
 /** Change the planned handoff (or who's next), only the shift this phone saw. */
@@ -1059,6 +1285,9 @@ export function rowToGoal(r: Row): SleepGoal {
     targets: list<GoalTarget>(r.targets, (x) => typeof x.id === "string" && (TARGET_KINDS as readonly unknown[]).includes(x.kind)),
     steps: list<GoalStep>(r.steps, (x) => typeof x.id === "string" && typeof x.title === "string"),
     roster: list<RosterWindow>(r.roster, (x) => typeof x.id === "string" && typeof x.member === "string" && Array.isArray(x.nights)),
+    template: goalTemplateOf(r.template),
+    counts_from: isDayKey(r.counts_from) ? r.counts_from : null,
+    paused_until: isDayKey(r.paused_until) ? r.paused_until : null,
     last_review_at: isoOrNull(r.last_review_at),
     review_note: textOrNull(r.review_note),
     closed_at: isoOrNull(r.closed_at),
@@ -1071,8 +1300,22 @@ export function rowToGoal(r: Row): SleepGoal {
   };
 }
 
+/** A goal's template context as stored (sleep/types.ts GoalTemplate), or null: one this release doesn't know is read past. */
+function goalTemplateOf(v: unknown): GoalTemplate | null {
+  if (!isObj(v) || !(GOAL_TEMPLATES as readonly unknown[]).includes(v.kind) || typeof v.member !== "string" || !isDayKey(v.date)) return null;
+  return {
+    kind: v.kind as GoalTemplate["kind"],
+    member: v.member,
+    date: v.date,
+    nursing: typeof v.nursing === "string" ? v.nursing : null,
+    // Added later: an older goal has neither, and counts from the night it was set.
+    ...(isDayKey(v.roster_from) ? { roster_from: v.roster_from } : {}),
+    ...((GOAL_FEEDING as readonly unknown[]).includes(v.feeding) ? { feeding: v.feeding as GoalFeeding } : {}),
+  };
+}
+
 /** The people and day a goal write is checked against (goals.ts cleanGoalInput). */
-export type GoalCtx = Pick<GoalRules, "adults" | "name" | "today">;
+export type GoalCtx = Pick<GoalRules, "adults" | "name" | "today" | "v" | "ageDays">;
 
 export type GoalWrite = {
   goal: SleepGoal;
@@ -1141,8 +1384,8 @@ export async function createGoal(
     [, rows] = await tx([
       { sql: `SELECT pg_advisory_xact_lock(${GOAL_LOCK}, $1::int)`, params: [familyId] },
       {
-        sql: `INSERT INTO maple_sleep_goals (family_id, baby_id, title, why, target_date, targets, steps, roster, item_seq, created_by, source, client_id, device)
-              SELECT $1::bigint, $2::integer, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13
+        sql: `INSERT INTO maple_sleep_goals (family_id, baby_id, title, why, target_date, targets, steps, roster, item_seq, created_by, source, client_id, device, template)
+              SELECT $1::bigint, $2::integer, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14::jsonb
               WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $2::integer AND family_id = $1::bigint)
                 AND (SELECT COUNT(*) FROM maple_sleep_goals WHERE family_id = $1::bigint AND baby_id = $2::integer AND status = 'active' AND deleted_at IS NULL) < ${GOALS_ACTIVE_MAX}
                 AND (SELECT COUNT(*) FROM maple_sleep_goals WHERE family_id = $1::bigint AND baby_id = $2::integer AND status IN ('active', 'paused') AND deleted_at IS NULL) < ${GOALS_OPEN_MAX}
@@ -1161,6 +1404,7 @@ export async function createGoal(
           input.source,
           clientId,
           input.device ?? null,
+          fields.template ? JSON.stringify(fields.template) : null,
         ],
       },
     ]);
@@ -1187,9 +1431,14 @@ type GoalChange = {
   targets?: GoalTarget[];
   steps?: GoalStep[];
   roster?: RosterWindow[];
+  template?: GoalTemplate | null;
+  counts_from?: string | null;
+  paused_until?: string | null;
   status?: GoalStatus;
   seq?: number;
   review?: { note: string | null };
+  /** Undo of a review: the stamp and note it replaced, put back as they were. */
+  reviewBack?: { at: string | null; note: string | null };
   closed?: "now" | null;
 };
 
@@ -1225,11 +1474,17 @@ async function mutateGoal(
     if (c.targets !== undefined) set("targets", JSON.stringify(c.targets), "::jsonb");
     if (c.steps !== undefined) set("steps", JSON.stringify(c.steps), "::jsonb");
     if (c.roster !== undefined) set("roster", JSON.stringify(c.roster), "::jsonb");
+    if (c.template !== undefined) set("template", c.template ? JSON.stringify(c.template) : null, "::jsonb");
+    if (c.counts_from !== undefined) set("counts_from", c.counts_from);
+    if (c.paused_until !== undefined) set("paused_until", c.paused_until);
     if (c.seq !== undefined && c.seq !== row.seq) set("item_seq", c.seq);
     if (c.status !== undefined) set("status", c.status);
     if (c.review) {
       sets.push("last_review_at = NOW()");
       set("review_note", c.review.note);
+    } else if (c.reviewBack) {
+      set("last_review_at", c.reviewBack.at, "::timestamptz");
+      set("review_note", c.reviewBack.note);
     }
     if (c.closed === "now") sets.push("closed_at = NOW()");
     else if (c.closed === null) sets.push("closed_at = NULL");
@@ -1280,8 +1535,18 @@ export async function setGoalStep(fam: FamilyRef, id: number, input: { step: str
   });
 }
 
-/** A review: stamps last_review_at now, with the short note (or none). */
-export async function reviewGoal(fam: FamilyRef, id: number, input: { note: unknown; by: string; source: Source; revision?: number }): Promise<GoalWrite> {
+/**
+ * A review: stamps last_review_at now, with the short note (or none). `back` is its Undo (the look-back's Keep it and
+ * Next step): the stamp and note it replaced, put back only on the revision the review made.
+ */
+export async function reviewGoal(fam: FamilyRef, id: number, input: { note: unknown; by: string; source: Source; revision?: number; back?: { at: unknown; note: unknown } }): Promise<GoalWrite> {
+  if (input.back) {
+    const at = input.back.at;
+    if (at !== null && (typeof at !== "string" || Number.isNaN(Date.parse(at)) || Date.parse(at) > Date.now() + 60_000)) throw new SleepInputError("The review to put back needs the time it was, or none.");
+    if (input.revision === undefined) throw new SleepInputError("Putting a review back needs the goal's revision.");
+    const back = { at: at === null ? null : new Date(at).toISOString(), note: cleanGoalNote(input.back.note, GOAL_NOTE_MAX) };
+    return mutateGoal(fam, id, input, () => ({ reviewBack: back }));
+  }
   const note = cleanGoalNote(input.note, GOAL_NOTE_MAX);
   return mutateGoal(fam, id, input, () => ({ review: { note } }));
 }
@@ -1314,9 +1579,23 @@ export function rowToCheckin(r: Row): SleepCheckin {
     night: String(r.night),
     protected: asAnswer(r.protected),
     note: textOrNull(r.note),
+    ...checkinExtrasOf(r),
     source: asSource(r.source),
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
+  };
+}
+
+/** A row's extra answers (sleep/schema.ts migrateCheckinExtras), only those given; a value this release doesn't know reads as none. */
+function checkinExtrasOf(r: Row): Pick<SleepCheckin, "place" | "untimed_try" | "untimed_min" | "handoff"> {
+  const one = <T extends string>(v: unknown, list: readonly T[]): T | null => ((list as readonly unknown[]).includes(v) ? (v as T) : null);
+  const place = one(r.place, CHECKIN_PLACES);
+  const untimed = one(r.untimed_try, UNTIMED_TRIES);
+  const handoff = one(r.handoff, HANDOFF_ANSWERS);
+  return {
+    ...(place ? { place } : {}),
+    ...(untimed ? { untimed_try: untimed, untimed_min: r.untimed_min == null ? null : Number(r.untimed_min) } : {}),
+    ...(handoff ? { handoff } : {}),
   };
 }
 
@@ -1342,13 +1621,14 @@ export type CheckinWrite = { checkin: SleepCheckin; before: SleepCheckin | null;
  */
 export async function saveCheckin(
   fam: FamilyRef,
-  input: { babyId: number; member: string; night?: unknown; protected: unknown; note?: unknown; tz: string; now?: Date; source: Source; clientId?: string | null; device?: string | null }
+  input: { babyId: number; member: string; night?: unknown; protected: unknown; note?: unknown; extras?: unknown; tz: string; now?: Date; source: Source; clientId?: string | null; device?: string | null }
 ): Promise<CheckinWrite> {
   const familyId = famId(fam);
   const night = cleanCheckinNight(input.night, input.now ?? new Date(), input.tz);
   const answer = cleanProtected(input.protected);
   const keep = input.note === undefined;
   const note = keep ? null : cleanGoalNote(input.note, CHECKIN_NOTE_MAX);
+  const extras = extrasWrite(cleanCheckinExtras(input.extras));
   const clientId = cleanClientId(input.clientId);
   if (clientId) {
     const prior = await q(`SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND client_id = $2`, [familyId, clientId]);
@@ -1358,22 +1638,22 @@ export async function saveCheckin(
     const found = await q(`SELECT * FROM maple_sleep_checkins WHERE family_id = $1 AND baby_id = $2 AND member = $3 AND night = $4 AND deleted_at IS NULL`, [familyId, input.babyId, input.member, night]);
     const before = found.length ? rowToCheckin(found[0]) : null;
     if (before) {
-      if (before.protected === answer && (keep || note === before.note)) return { checkin: before, before, status: "unchanged" };
+      if (before.protected === answer && (keep || note === before.note) && extras.same(before)) return { checkin: before, before, status: "unchanged" };
       const rows = await q(
-        `UPDATE maple_sleep_checkins SET protected = $4, note = CASE WHEN $5::boolean THEN note ELSE $6 END, source = $7, device = $8, updated_at = NOW()
+        `UPDATE maple_sleep_checkins SET protected = $4, note = CASE WHEN $5::boolean THEN note ELSE $6 END, source = $7, device = $8, ${extras.sets(9)}, updated_at = NOW()
          WHERE id = $1 AND family_id = $2 AND member = $3 AND deleted_at IS NULL RETURNING *`,
-        [before.id, familyId, input.member, answer, keep, note, input.source, input.device ?? null]
+        [before.id, familyId, input.member, answer, keep, note, input.source, input.device ?? null, ...extras.params]
       );
       if (rows.length) return { checkin: rowToCheckin(rows[0]), before, status: "updated" };
       continue;
     }
     try {
       const rows = await q(
-        `INSERT INTO maple_sleep_checkins (family_id, baby_id, member, night, protected, note, source, client_id, device)
-         SELECT $1::bigint, $2::integer, $3, $4, $5, $6, $7, $8, $9
+        `INSERT INTO maple_sleep_checkins (family_id, baby_id, member, night, protected, note, source, client_id, device, place, untimed_try, untimed_min, handoff)
+         SELECT $1::bigint, $2::integer, $3, $4, $5, $6, $7, $8, $9, $10::text, $11::text, $12::smallint, $13::text
          WHERE EXISTS (SELECT 1 FROM maple_babies WHERE id = $2::integer AND family_id = $1::bigint)
          RETURNING *`,
-        [familyId, input.babyId, input.member, night, answer, note, input.source, clientId, input.device ?? null]
+        [familyId, input.babyId, input.member, night, answer, note, input.source, clientId, input.device ?? null, ...extras.values]
       );
       if (!rows.length) throw new NotFound("Baby not found");
       return { checkin: rowToCheckin(rows[0]), before: null, status: "created" };
@@ -1388,6 +1668,28 @@ export async function saveCheckin(
     }
   }
   throw new Error("Couldn't save the check-in, please try again");
+}
+
+const EXTRA_COLUMNS = [
+  { key: "place", cast: "text" },
+  { key: "untimed_try", cast: "text" },
+  { key: "untimed_min", cast: "smallint" },
+  { key: "handoff", cast: "text" },
+] as const;
+
+/** How a check-in write's extra answers apply: each one given is set (null clears it); the rest stay as they are. */
+function extrasWrite(x: CheckinExtras) {
+  const given = EXTRA_COLUMNS.map((c) => x[c.key] !== undefined);
+  const values = EXTRA_COLUMNS.map((c) => x[c.key] ?? null);
+  return {
+    /** Already so on `before`: nothing to change. */
+    same: (before: SleepCheckin) => EXTRA_COLUMNS.every((c, i) => !given[i] || (before[c.key] ?? null) === values[i]),
+    /** The SET clauses, numbering their parameters from `from` (a given flag, then its value, for each column). */
+    sets: (from: number) => EXTRA_COLUMNS.map((c, i) => `${c.key} = CASE WHEN $${from + 2 * i}::boolean THEN $${from + 2 * i + 1}::${c.cast} ELSE ${c.key} END`).join(", "),
+    params: EXTRA_COLUMNS.flatMap((_, i) => [given[i], values[i]]),
+    /** For a new check-in: the values, null for those not given. */
+    values,
+  };
 }
 
 /** Delete your own check-in (soft), by its id or its night. Someone else's reads as missing. */
@@ -1420,18 +1722,16 @@ export async function goalProgressFor(fam: FamilyRef, babyId: number, goals: rea
   const last = spans.map((s) => s.lastNight).sort().slice(-1)[0];
   const from = tryDayBounds(first, tz)[0];
   const to = new Date(Math.min(tryDayBounds(last > first ? last : first, tz)[1].getTime(), now.getTime() + 1));
-  const hintFrom = tryDayBounds(addDays(tryDayKey(now, tz), -8), tz)[0];
-  const roster = goals.some((g) => g.roster.length);
-  const stretch = goals.some((g) => g.targets.some((t) => t.kind === "bassinet_stretch"));
   // Last night's check-ins too, for each adult's latest answer, even before a goal set this morning.
   const lastNight = lastNightKey(now, tz);
-  const [tries, sleeps, feeds, shifts, checkins] = await Promise.all([
-    listTries(fam, babyId, { from: new Date(from.getTime() - MAX_SPAN_MS), to, limit: 2000 }),
-    stretch ? listEntries(fam, { babyId, kinds: ["sleep"], from: new Date(from.getTime() - MAX_SPAN_MS), to, includeActive: true, limit: 5000 }) : Promise.resolve([] as Entry[]),
-    roster ? listEntries(fam, { babyId, kinds: ["feed"], from: hintFrom, to, includeActive: true, limit: 2000 }) : Promise.resolve([] as Entry[]),
-    roster ? listShifts(fam, babyId, { from: hintFrom, limit: 500 }) : Promise.resolve([]),
+  // Entries of every kind and the holding turns over the shown nights: what was logged each night (coverage), the stretches and the roster's hints.
+  const since = new Date(from.getTime() - MAX_SPAN_MS);
+  const [tries, entries, shifts, checkins] = await Promise.all([
+    listTries(fam, babyId, { from: since, to, limit: 2000 }),
+    listEntries(fam, { babyId, from: since, to, includeActive: true, limit: 5000 }),
+    listShifts(fam, babyId, { from: since, limit: 500 }),
     opts.checkins ? listCheckins(fam, babyId, { from: first < lastNight ? first : lastNight, to: last > lastNight ? last : lastNight }) : Promise.resolve(null),
   ]);
-  for (const g of goals) out.set(g.id, goalProgress(g, { tries, entries: [...sleeps, ...feeds], shifts, checkins }, now, tz));
+  for (const g of goals) out.set(g.id, goalProgress(g, { tries, entries, shifts, checkins }, now, tz));
   return out;
 }

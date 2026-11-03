@@ -19,7 +19,7 @@ import { SLEEP_GUIDES, SLEEP_SECTIONS, sectionTitle, type GuideSource, type Slee
 import { addDays, babyAge, dayKey, daysBetween, DEFAULT_TZ, formatDayLabel, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "../time";
 import type { Baby, Entry, EntryOf, SleepPlace } from "../types";
 import type { Voice } from "../voice";
-import { MAX_SPAN_MS, PLAN_STAGES, TRY_OUTCOMES, type BassinetTry, type HoldingShift, type PlanStage, type SleepPlan, type TryOutcome, type TrySlot } from "./types";
+import { ASK_STALE_MS, MAX_SPAN_MS, PLAN_STAGES, TRY_OUTCOMES, type BassinetTry, type HoldingShift, type PlanStage, type SleepPlan, type TryOutcome, type TrySlot } from "./types";
 import { OUTCOME_LABEL, SLEEP_PLACE_LABEL, TIME_OF_DAY, slotLabel, type TimeOfDay } from "./words";
 
 const MIN = 60_000;
@@ -403,16 +403,19 @@ export function progressLines(p: SleepProgress, tz: string, now: Date): string[]
 /**
  * When recent tries support moving on (Maple's own rule of thumb, not
  * medical guidance): at least 5 finished tries at this stage on 4 or more
- * try days of the last 7, and 3 or more of the last 5 stayed asleep 30
- * minutes or longer.
+ * try days of the last 7, 3 or more of them nights that are over (logged
+ * nights, as a goal week needs: goals.ts ENOUGH_NIGHTS), and 3 or more of
+ * the last 5 stayed asleep 30 minutes or longer.
  */
-export const SUGGEST = { minTries: 5, minDays: 4, lookbackDays: 7, recent: 5, recentStayed: 3, stayedMinutes: 30 } as const;
+export const SUGGEST = { minTries: 5, minDays: 4, minNights: 3, lookbackDays: 7, recent: 5, recentStayed: 3, stayedMinutes: 30 } as const;
 
 export type StageSuggestion = {
   from: PlanStage;
   to: PlanStage;
   tries: number;
   days: number;
+  /** Of those try days, the ones whose night is over (its 6 AM has passed): logged nights. */
+  nights: number;
   /** Of the last `recent` tries, how many stayed asleep 30 minutes or longer. */
   stayed: number;
   recent: number;
@@ -428,11 +431,17 @@ export function stageSuggestion(plan: Pick<SleepPlan, "stage" | "stage_since" | 
   const recent = live(tries)
     .filter((t) => t.ended_at && t.outcome && ms(t.started_at) >= since && ms(t.started_at) <= now.getTime())
     .sort(byStart);
-  const days = new Set(recent.map((t) => nums.get(t.id)?.day ?? tryDayKey(ms(t.started_at), tz))).size;
+  const dayKeys = [...new Set(recent.map((t) => nums.get(t.id)?.day ?? tryDayKey(ms(t.started_at), tz)))];
+  const days = dayKeys.length;
+  // A try day's night is over at 6 AM the next morning (the end of a goal night's core): only then is it a logged night.
+  const nights = dayKeys.filter((k) => {
+    const d = parseDayKey(addDays(k, 1));
+    return zonedTimeToUtc(d.year, d.month, d.day, 6, 0, tz).getTime() <= now.getTime();
+  }).length;
   const last = recent.slice(-SUGGEST.recent);
   const good = last.filter((t) => t.outcome === "stayed_asleep" && ms(t.ended_at!) - ms(t.started_at) >= SUGGEST.stayedMinutes * MIN).length;
-  if (recent.length < SUGGEST.minTries || days < SUGGEST.minDays || good < SUGGEST.recentStayed) return null;
-  return { from: plan.stage, to: (plan.stage + 1) as PlanStage, tries: recent.length, days, stayed: good, recent: last.length, snoozed: !!plan.snoozed_until && cur <= plan.snoozed_until };
+  if (recent.length < SUGGEST.minTries || days < SUGGEST.minDays || nights < SUGGEST.minNights || good < SUGGEST.recentStayed) return null;
+  return { from: plan.stage, to: (plan.stage + 1) as PlanStage, tries: recent.length, days, nights, stayed: good, recent: last.length, snoozed: !!plan.snoozed_until && cur <= plan.snoozed_until };
 }
 
 /** "Not now": the suggestion stays hidden through this try day and the next two (the family's own days, noon to noon). */
@@ -454,11 +463,19 @@ export type PlanToday = {
   next: TrySlot | null;
   /** The planned try didn't happen and it's morning: the fallback is next. */
   fallback: boolean;
+  /** Of `done`, a try an adult's morning check-in said happened, with none in the log that night: shown apart. */
+  fromCheckins: number;
 };
 
-export function planToday(plan: Pick<SleepPlan, "tries_per_day" | "try_times" | "fallback">, tries: readonly BassinetTry[], now: Date, tz: string): PlanToday {
+/**
+ * This try day against the plan. `fromCheckins`: a bassinet try for this try day's night that an adult's check-in
+ * said happened (an untimed try, goals.ts nightAnswers), counted only when no try is in the log, and shown apart.
+ */
+export function planToday(plan: Pick<SleepPlan, "tries_per_day" | "try_times" | "fallback">, tries: readonly BassinetTry[], now: Date, tz: string, opts: { fromCheckins?: number } = {}): PlanToday {
   const key = tryDayKey(now, tz);
-  const done = plannedTriesOn(tries, key, tz);
+  const logged = plannedTriesOn(tries, key, tz);
+  const fromCheckins = logged ? 0 : Math.min(1, Math.max(0, opts.fromCheckins ?? 0));
+  const done = logged + fromCheckins;
   const planned = Math.max(1, plan.tries_per_day);
   const hour = localParts(now, tz).hour;
   const morning = hour >= 6 && hour < 12;
@@ -473,14 +490,32 @@ export function planToday(plan: Pick<SleepPlan, "tries_per_day" | "try_times" | 
       fallback = true;
     }
   }
-  return { key, label: tryDayLabel(key, key), done, planned, next, fallback };
+  return { key, label: tryDayLabel(key, key), done, planned, next, fallback, fromCheckins };
 }
+
+/** " (from a check-in)": a try counted from an adult's morning answer, said apart. */
+export const fromCheckinWords = (t: Pick<PlanToday, "fromCheckins">) => (t.fromCheckins ? " (from a check-in)" : "");
 
 /** "0 of 1 tonight · next: the first long night stretch after a feed". */
 export function planTodayLine(t: PlanToday): string {
-  const head = `${t.done} of ${t.planned} ${t.label}`;
+  const head = `${t.done} of ${t.planned} ${t.label}${fromCheckinWords(t)}`;
   if (!t.next) return `${head}.`;
-  return `${head}; next: ${slotLabel(t.next).replace(/^The /, "the ")}${t.fallback ? " (the backup, since the night try didn't happen)" : ""}.`;
+  return `${head}; next: ${slotLabel(t.next).replace(/^The /, "the ")}${t.fallback ? FALLBACK_WHY : ""}.`;
+}
+
+/** The morning backup's reason: only what the log says, never that a try didn't happen. */
+const FALLBACK_WHY = " (the backup, since no night try was logged)";
+
+/**
+ * This try day's tries in the tools' words, by the clock: "tonight" through
+ * the night, and in its morning (5 AM to noon, as tryDayNowLabel) "since
+ * noon yesterday (last night and this morning)", never "tonight" at 9:30 AM.
+ * `count`: "0 of 1; next: the first morning nap (the backup, since no night
+ * try was logged)".
+ */
+export function planTodayWords(t: PlanToday, now: Date | number, tz: string): { when: string; count: string } {
+  const next = t.next ? `; next: ${slotLabel(t.next).replace(/^The /, "the ")}${t.fallback ? FALLBACK_WHY : ""}` : "";
+  return { when: isMorning(now, tz) ? "since noon yesterday (last night and this morning)" : "tonight", count: `${t.done} of ${t.planned}${fromCheckinWords(t)}${next}` };
 }
 
 // ── holding shifts ───────────────────────────────────────────────────────
@@ -502,6 +537,61 @@ export function nextHandoff(prev: Pick<HoldingShift, "started_at" | "handoff_at"
   const planned = prev.handoff_at ? ms(prev.handoff_at) - ms(prev.started_at) : DEFAULT_SHIFT_MS;
   const span = planned >= 15 * MIN && planned <= MAX_SPAN_MS ? planned : DEFAULT_SHIFT_MS;
   return at + span;
+}
+
+export type AskState = {
+  /** Someone was asked to take over this open turn ("Wake [partner]"), and nobody has yet. */
+  asked: boolean;
+  /** Who was asked (a member id) and when. */
+  to: string | null;
+  at: string | null;
+  /** Whole minutes since the ask. */
+  minutes: number;
+  /**
+   * Nobody took over within ASK_STALE_MS: the holder sees the two safe
+   * choices again (the bassinet now, or wake them again), never "keep holding".
+   */
+  stale: boolean;
+};
+
+/** A turn's ask, as the holder's phone, the other phones and the tools read it. An ended turn has none open. */
+export function askState(s: Pick<HoldingShift, "ended_at" | "asked_to" | "asked_at">, now: Date): AskState {
+  if (s.ended_at || !s.asked_to || !s.asked_at) return { asked: false, to: null, at: null, minutes: 0, stale: false };
+  const since = now.getTime() - ms(s.asked_at);
+  return { asked: true, to: s.asked_to, at: s.asked_at, minutes: Math.max(0, Math.floor(since / MIN)), stale: since >= ASK_STALE_MS };
+}
+
+// ── the try day in a phone's words ───────────────────────────────────────
+//
+// A try day runs noon to noon, so at 7:30 AM it's still the one that began
+// last evening. The tools say this try day's tries with planTodayWords; a
+// phone says what a person would at that hour.
+
+/** From this local hour until noon, the try day's night is over: its morning. */
+const MORNING_HOUR = 5;
+const isMorning = (at: Date | number, tz: string) => {
+  const h = localParts(at, tz).hour;
+  return h >= MORNING_HOUR && h < 12;
+};
+
+/** The current try day: "tonight", or in its morning (5 AM to noon) "since last night". */
+export function tryDayNowLabel(now: Date, tz: string): string {
+  return isMorning(now, tz) ? "since last night" : "tonight";
+}
+
+/**
+ * A try's day, said at `now`: "tonight"; in the morning, "last night" for
+ * the night's tries and "this morning" for the morning's, with the night
+ * before named by its evening ("Tue night"); older ones as tryDayLabel.
+ */
+export function tryWhenLabel(startedAt: string | number, now: Date, tz: string): string {
+  const start = typeof startedAt === "string" ? ms(startedAt) : startedAt;
+  const key = tryDayKey(start, tz);
+  const nowKey = tryDayKey(now, tz);
+  const morning = isMorning(now, tz);
+  if (key === nowKey) return !morning ? "tonight" : isMorning(start, tz) ? "this morning" : "last night";
+  if (morning && daysBetween(key, nowKey) === 1) return `${formatDayLabel(key, addDays(nowKey, 7)).split(",")[0]} night`;
+  return tryDayLabel(key, nowKey);
 }
 
 // ── recent-log signals and guidance ──────────────────────────────────────

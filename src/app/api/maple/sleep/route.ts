@@ -5,9 +5,12 @@ import { deviceOf } from "@/lib/maple/device";
 import type { FamilyCtx } from "@/lib/maple/family";
 import { memberName } from "@/lib/maple/insights";
 import { holdingChanged } from "@/lib/maple/push-hooks";
-import { progressLines } from "@/lib/maple/sleep/engine";
-import { coachNotes, goalProgressLines, seesCheckins, type GoalWords } from "@/lib/maple/sleep/goals";
+import { progressLines, sleepAge } from "@/lib/maple/sleep/engine";
+import { coachNotes, goalCautions, goalProgressLines, seesCheckins, type GoalWords } from "@/lib/maple/sleep/goals";
 import {
+  acceptHandoff,
+  askHandoff,
+  cancelAsk,
   cleanNote,
   cleanPlanPatch,
   cleanTags,
@@ -35,10 +38,12 @@ import {
   SleepConflict,
   SleepInputError,
   sleepStateFor,
+  startArmsSleep,
   startShift,
   startTry,
   undoFinish,
   undoHandOff,
+  undoTurnSleep,
   updateGoal,
   updatePlan,
   updateShift,
@@ -50,7 +55,7 @@ import { SHIFT_ENDINGS, TRY_OUTCOMES, type GoalInput, type ShiftEnding, type Sle
 import { getBaby, NotFound, toClientEntry } from "@/lib/maple/store";
 import { dayKey } from "@/lib/maple/time";
 import { SLEEP_PLACES, type Baby, type Entry, type Member, type SleepPlace } from "@/lib/maple/types";
-import { voiceFor } from "@/lib/maple/voice";
+import { voiceFor, type Voice } from "@/lib/maple/voice";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +76,12 @@ export const dynamic = "force-dynamic";
  * revision it was made against) answers 409 with the record as it is now
  * (`current`, `code`: changed, finished, running or open); nothing is saved.
  * A check-in is always the signed-in adult's own: nothing in the request
- * can say whose it is.
+ * can say whose it is. A goal's clean restart is goal.update with its
+ * revision: `counts_from` (Pick up from tonight), `paused_until` (Ease off a
+ * week) and `target_date`; Set it aside is goal.close as dropped, which
+ * goal.update with status active opens again. A holding turn's "Wake [partner]" is shift.ask,
+ * never a handoff: the handoff is recorded only by shift.accept ("I've got
+ * her", the signed-in person) or the holder's shift.handoff.
  */
 
 type Body = Record<string, unknown>;
@@ -116,12 +126,30 @@ async function stateBody(ctx: FamilyCtx, babyId: number, extra: Record<string, u
 }
 
 /** The people and day a goal write is checked against: owners and members are the adults who check in. */
-function goalCtxOf(members: Member[], baby: Baby): GoalCtx {
+function goalCtxOf(members: Member[], baby: Baby, familyId: number): GoalCtx {
   return {
     adults: new Set(members.filter((m) => m.role === "owner" || m.role === "member").map((m) => m.email)),
     name: (id) => memberName(id, members),
     today: dayKey(new Date(), baby.timezone),
+    ...goalVoiceOf(baby, familyId),
   };
+}
+
+/** The baby's words and age for a goal write's refusals and cautions (goals.ts unsafeSleep, goalCautions). */
+function goalVoiceOf(baby: Baby, familyId: number): { v: Voice; ageDays: number | null } {
+  return { v: voiceFor(familyId, baby), ageDays: sleepAge(baby, new Date())?.days ?? null };
+}
+
+/** What a saved goal needs said with it (its cautions), for the app to show. */
+function goalCautionsOf(goal: SleepGoal, members: Member[], baby: Baby, familyId: number): string[] {
+  const { v, ageDays } = goalVoiceOf(baby, familyId);
+  const adults = members.filter((m) => m.role === "owner" || m.role === "member").map((m) => memberName(m.email, members));
+  return goalCautions(goal, { v, name: (id) => memberName(id, members), ageDays, adults, today: dayKey(new Date(), baby.timezone) }).map((c) => (c.source ? `${c.text} (source: ${c.source.title}, ${c.source.url})` : c.text));
+}
+
+/** checkin.save's extra answers about the night: only the keys the request has (goals.ts cleanCheckinExtras checks them). */
+function checkinExtrasFrom(body: Body): Record<string, unknown> {
+  return Object.fromEntries((["place", "untimed_try", "untimed_min", "handoff"] as const).filter((k) => body[k] !== undefined).map((k) => [k, body[k]]));
 }
 
 const goalId = (v: unknown) => {
@@ -171,11 +199,23 @@ export const POST = withMember(
     const device = deviceOf(request);
     const by = me.email;
     const src = "web" as const;
+    const askFor = async (shiftId: number | null, to: string) => {
+      const w = await askHandoff(ctx, { babyId: baby.id, id: shiftId, to, by, source: src, device });
+      // The phones of the person asked that turned handoff reminders on hear of it now; this one doesn't.
+      holdingChanged({ familyId: ctx.familyId, wake: { shiftId: w.shift.id, device } });
+      return stateBody(ctx, baby.id, { result: w });
+    };
+    /** A turn's sleep in arms for Undo (`{ id, expect_updated_at }`), only while it's as this phone left it. */
+    const turnSleep = async (raw: unknown, how: "delete" | "reopen") => {
+      const t = raw as Body | null | undefined;
+      if (!t || typeof t !== "object") return null;
+      return undoTurnSleep(ctx, { id: id(t.id, "sleep.id"), expectUpdatedAt: stamp(t.expect_updated_at, "sleep.expect_updated_at") ?? "", how, by });
+    };
     try {
       switch (body.action) {
         // ── the plan ──
         case "plan.create": {
-          const init = cleanPlanPatch((body.plan as Body | undefined) ?? {}, null);
+          const init = cleanPlanPatch((body.plan as Body | undefined) ?? {}, null, voiceFor(ctx.familyId, baby));
           const { plan, created } = await ensurePlan(ctx, baby.id, by, src, init);
           return stateBody(ctx, baby.id, { plan, created });
         }
@@ -183,7 +223,7 @@ export const POST = withMember(
           const revision = Number(body.revision);
           if (!Number.isSafeInteger(revision) || revision < 1) throw new BadRequest("revision is required");
           const current = await getPlan(ctx, baby.id);
-          const patch = cleanPlanPatch((body.patch as Body | undefined) ?? {}, current);
+          const patch = cleanPlanPatch((body.patch as Body | undefined) ?? {}, current, voiceFor(ctx.familyId, baby));
           const { plan, before } = await updatePlan(ctx, baby.id, patch, revision, by, src);
           return stateBody(ctx, baby.id, { plan, before });
         }
@@ -274,15 +314,18 @@ export const POST = withMember(
             at: instant(body.at, "at"),
             handoffAt: instant(body.handoff_at, "handoff_at") ?? null,
             nextHolder: personOrNull(body.next_holder, members, "next_holder"),
+            asleep: body.asleep === true,
             by,
             source: src,
             clientId: typeof body.client_id === "string" ? body.client_id : null,
             device,
           });
           if (w.status === "created") holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: w });
+          return stateBody(ctx, baby.id, { result: w }, [w.sleep]);
         }
         case "shift.handoff": {
+          // "Wake [partner]" from an app from before asks: only an ask now, so nothing changes hands until they have her.
+          if (body.wake === true) return await askFor(id(body.id), person(body.to, members, "to"));
           const w = await handOff(ctx, id(body.id), {
             to: person(body.to, members, "to"),
             at: instant(body.at, "at"),
@@ -292,8 +335,7 @@ export const POST = withMember(
             device,
             expectUpdatedAt: stamp(body.expect_updated_at),
           });
-          // "Wake [partner]": the other phones that turned handoffs on hear of it now; this one doesn't.
-          holdingChanged({ familyId: ctx.familyId, ...(body.wake === true ? { wake: { shiftId: w.shift.id, device } } : {}) });
+          holdingChanged({ familyId: ctx.familyId });
           return stateBody(ctx, baby.id, { result: w });
         }
         case "shift.end": {
@@ -301,7 +343,7 @@ export const POST = withMember(
           if (!(SHIFT_ENDINGS as readonly unknown[]).includes(how)) throw new BadRequest(`how must be one of ${SHIFT_ENDINGS.join(", ")}`);
           const w = await endShift(ctx, id(body.id), { at: instant(body.at, "at"), how: how as ShiftEnding, by, expectUpdatedAt: stamp(body.expect_updated_at) });
           holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: w });
+          return stateBody(ctx, baby.id, { result: w }, [w.sleep]);
         }
         case "shift.update": {
           const w = await updateShift(
@@ -320,7 +362,9 @@ export const POST = withMember(
         case "shift.delete": {
           const shift = await deleteShift(ctx, id(body.id), by, { expectUpdatedAt: stamp(body.expect_updated_at) });
           holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: { shift } });
+          // Undo of a start that made her sleep in arms: that sleep goes too, while it's still as the start left it.
+          const gone = await turnSleep(body.sleep, "delete");
+          return stateBody(ctx, baby.id, { result: { shift, sleepDeleted: gone } }, [], [gone]);
         }
         case "shift.restore": {
           const shift = await restoreShift(ctx, id(body.id), by);
@@ -330,7 +374,9 @@ export const POST = withMember(
         case "shift.reopen": {
           const shift = await reopenShift(ctx, id(body.id), { by, expectUpdatedAt: stamp(body.expect_updated_at) ?? "" });
           holdingChanged({ familyId: ctx.familyId });
-          return stateBody(ctx, baby.id, { result: { shift } });
+          // Undo of an end that stopped her sleep in arms: it runs again, while it's still as the end left it.
+          const sleep = await turnSleep(body.sleep, "reopen");
+          return stateBody(ctx, baby.id, { result: { shift, sleep } }, [sleep]);
         }
         case "shift.undo_handoff": {
           const r = await undoHandOff(ctx, {
@@ -343,19 +389,43 @@ export const POST = withMember(
           holdingChanged({ familyId: ctx.familyId });
           return stateBody(ctx, baby.id, { result: r });
         }
+        // "Wake [partner]": an ask, never a handoff. Nothing changes hands until they have her (shift.accept, or the
+        // holder's shift.handoff); the phones of the person asked with handoff reminders on hear of it now.
+        case "shift.ask":
+          return await askFor(body.id == null ? null : id(body.id), person(body.to, members, "to"));
+        case "shift.cancel_ask": {
+          const w = await cancelAsk(ctx, id(body.id), { by, expectUpdatedAt: stamp(body.expect_updated_at) ?? "" });
+          holdingChanged({ familyId: ctx.familyId });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        // "I've got her": the signed-in person takes over the turn as it is now.
+        case "shift.accept": {
+          const w = await acceptHandoff(ctx, id(body.id), { by, source: src, device, ...(body.handoff_at !== undefined ? { handoffAt: instant(body.handoff_at, "handoff_at") ?? null } : {}) });
+          holdingChanged({ familyId: ctx.familyId });
+          return stateBody(ctx, baby.id, { result: w });
+        }
+        // "Asleep in arms" during a turn: a running sleep in arms from now (none if a sleep already runs).
+        case "shift.asleep": {
+          const r = await startArmsSleep(ctx, { babyId: baby.id, by, source: src, device, clientId: typeof body.client_id === "string" ? body.client_id : null });
+          return stateBody(ctx, baby.id, { result: r }, [r.sleep]);
+        }
+        case "shift.asleep_undo": {
+          const gone = await turnSleep(body.sleep, "delete");
+          return stateBody(ctx, baby.id, { result: { sleepDeleted: gone } }, [], [gone]);
+        }
 
         // ── sleep goals ──
         case "goal.create": {
           if (!body.goal || typeof body.goal !== "object") throw new BadRequest("goal is required");
-          const w = await createGoal(ctx, { babyId: baby.id, goal: body.goal as GoalInput, ctx: goalCtxOf(members, baby), by, source: src, clientId: typeof body.client_id === "string" ? body.client_id : null, device });
-          return stateBody(ctx, baby.id, { result: w });
+          const w = await createGoal(ctx, { babyId: baby.id, goal: body.goal as GoalInput, ctx: goalCtxOf(members, baby, ctx.familyId), by, source: src, clientId: typeof body.client_id === "string" ? body.client_id : null, device });
+          return stateBody(ctx, baby.id, { result: w, cautions: goalCautionsOf(w.goal, members, baby, ctx.familyId) });
         }
         case "goal.update": {
           const revision = Number(body.revision);
           if (!Number.isSafeInteger(revision) || revision < 1) throw new BadRequest("revision is required");
           if (!body.patch || typeof body.patch !== "object") throw new BadRequest("patch is required");
-          const w = await updateGoal(ctx, goalId(body.id), { patch: body.patch as GoalInput, revision, ctx: goalCtxOf(members, baby), by, source: src });
-          return stateBody(ctx, baby.id, { result: w });
+          const w = await updateGoal(ctx, goalId(body.id), { patch: body.patch as GoalInput, revision, ctx: goalCtxOf(members, baby, ctx.familyId), by, source: src });
+          return stateBody(ctx, baby.id, { result: w, cautions: goalCautionsOf(w.goal, members, baby, ctx.familyId) });
         }
         case "goal.step": {
           if (typeof body.step !== "string" || !body.step) throw new BadRequest("step is required");
@@ -363,7 +433,9 @@ export const POST = withMember(
           return stateBody(ctx, baby.id, { result: w });
         }
         case "goal.review": {
-          const w = await reviewGoal(ctx, goalId(body.id), { note: body.note ?? null, by, source: src, revision: optionalRevision(body.revision) });
+          // `back`: the look-back's Undo, the review stamp and note it replaced, on the revision that review made.
+          const back = body.back && typeof body.back === "object" ? (body.back as Body) : null;
+          const w = await reviewGoal(ctx, goalId(body.id), { note: body.note ?? null, by, source: src, revision: optionalRevision(body.revision), ...(back ? { back: { at: back.at ?? null, note: back.note ?? null } } : {}) });
           return stateBody(ctx, baby.id, { result: w });
         }
         case "goal.close": {
@@ -380,6 +452,7 @@ export const POST = withMember(
             night: body.night,
             protected: body.protected,
             ...(body.note !== undefined ? { note: body.note } : {}),
+            extras: checkinExtrasFrom(body),
             tz: baby.timezone,
             source: src,
             clientId: typeof body.client_id === "string" ? body.client_id : null,

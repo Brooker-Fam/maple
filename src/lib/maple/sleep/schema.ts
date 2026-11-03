@@ -111,6 +111,8 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_shifts_handoff ON maple_sleep_shifts (handoff_at) WHERE ended_at IS NULL AND deleted_at IS NULL AND handoff_at IS NOT NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_open ON maple_sleep_shifts (family_id, baby_id) WHERE ended_at IS NULL AND deleted_at IS NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_client ON maple_sleep_shifts (family_id, client_id) WHERE client_id IS NOT NULL`);
+  await migrateShiftAsks();
+  await migrateTryPauses();
 
   await query(`CREATE TABLE IF NOT EXISTS maple_sleep_goals (
     id BIGSERIAL PRIMARY KEY,
@@ -140,6 +142,7 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_goals_baby ON maple_sleep_goals (family_id, baby_id, created_at DESC) WHERE deleted_at IS NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_goals_updated ON maple_sleep_goals (family_id, baby_id, updated_at DESC)`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_goals_client ON maple_sleep_goals (family_id, client_id) WHERE client_id IS NOT NULL`);
+  await migrateGoalTemplate();
 
   await query(`CREATE TABLE IF NOT EXISTS maple_sleep_checkins (
     id BIGSERIAL PRIMARY KEY,
@@ -161,4 +164,61 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_checkins_client ON maple_sleep_checkins (family_id, client_id) WHERE client_id IS NOT NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_night ON maple_sleep_checkins (family_id, baby_id, night DESC) WHERE deleted_at IS NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_checkins_updated ON maple_sleep_checkins (family_id, baby_id, updated_at DESC)`);
+  await migrateCheckinExtras();
+}
+
+/**
+ * The morning's extra one-tap answers on a check-in (sleep/types.ts
+ * CheckinExtras): where the baby spent most of the night, a bassinet try
+ * the log doesn't have (and the minutes its "long" meant), and whether the
+ * planned handoff happened as planned. Nullable and checked in code, so an
+ * older row has none and an older release reads past them.
+ */
+async function migrateCheckinExtras(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS place TEXT`);
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS untimed_try TEXT`);
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS untimed_min SMALLINT`);
+  await query(`ALTER TABLE maple_sleep_checkins ADD COLUMN IF NOT EXISTS handoff TEXT`);
+}
+
+/**
+ * A holding turn's ask ("Wake [partner]"): who the holder asked to take over
+ * and when, both nullable. Nothing changes hands until that person has her,
+ * so an ask is never a handoff. Additive: an older release reads past them
+ * and shows the turn as it was.
+ */
+async function migrateShiftAsks(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_to TEXT`);
+  await query(`ALTER TABLE maple_sleep_shifts ADD COLUMN IF NOT EXISTS asked_at TIMESTAMPTZ`);
+}
+
+/**
+ * The template a goal was made from (sleep/types.ts GoalTemplate: for a
+ * "Back to work" goal, who goes back to work and when, and who nurses), for
+ * the coach notes that need it later. Nullable JSONB checked in code, so an
+ * older release reads past it and a goal made by hand has none.
+ */
+async function migrateGoalTemplate(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_goals ADD COLUMN IF NOT EXISTS template JSONB`);
+  await migrateGoalRestarts();
+}
+
+/**
+ * The family's own clean restart of a goal (sleep/types.ts SleepGoal): `counts_from`, the night it was picked up again
+ * after a quiet stretch, and `paused_until`, the night it counts again after easing off. Both nullable dates, so an
+ * older release reads past them and counts the goal from the night it was set, as before.
+ */
+async function migrateGoalRestarts(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_goals ADD COLUMN IF NOT EXISTS counts_from TEXT CHECK (counts_from ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')`);
+  await query(`ALTER TABLE maple_sleep_goals ADD COLUMN IF NOT EXISTS paused_until TEXT CHECK (paused_until ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')`);
+}
+
+/**
+ * When Siri last said "pause until the next try" after this try (a retry
+ * that ended awake), so a put down said again within two minutes goes ahead
+ * (quick/sleep.ts). Nullable, never part of the app's state, and set without
+ * moving updated_at; an older release reads past it.
+ */
+async function migrateTryPauses(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_tries ADD COLUMN IF NOT EXISTS pause_said_at TIMESTAMPTZ`);
 }

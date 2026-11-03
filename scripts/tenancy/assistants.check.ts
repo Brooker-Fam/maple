@@ -409,6 +409,46 @@ async function siriChecks(shape: Shape, seed: Seed) {
     await sql(`INSERT INTO maple_tokens (family_id, member, token_hash, label) VALUES (1, $1, $2, 'Made-up')`, [beta.owner, createHash("sha256").update(token).digest("hex")]);
     eq((await quick(token, { action: "status" })).status, 401);
   });
+
+  await test(`${shape}: Siri's sleep-plan actions save, read and undo in the token's own family only`, async () => {
+    const ref = `made-up-${shape}-put-down`;
+    const [b, a] = [await quick(beta.token, { action: "put_down", client_id: ref }), await quick(alpha.token, { action: "put_down", client_id: ref })];
+    eq([b.status, a.status], [200, 200]);
+    const mine = `shortcut:${ref}.f%`;
+    const tries = await sql(`SELECT family_id, baby_id, source FROM maple_sleep_tries WHERE client_id LIKE $1 ORDER BY family_id`, [mine]);
+    eq(tries.map((r) => [String(r.family_id), Number(r.baby_id), r.source]), [["1", alpha.babyId, "shortcut"], ["2", beta.babyId, "shortcut"]], "one try in each family, on its own baby");
+    eq((await sql(`SELECT COUNT(*)::int AS n FROM maple_entries WHERE kind = 'sleep' AND source = 'shortcut' AND active`))[0].n, 2, "each made its own family's sleep (the same client_id doesn't collide)");
+    eq((await quick(beta.token, { action: "outcome", outcome: "woke_calm" })).status, 200);
+    eq((await sql(`SELECT family_id, ended_at IS NULL AS running FROM maple_sleep_tries WHERE client_id LIKE $1 ORDER BY family_id`, [mine])).map((r) => r.running), [true, false], "beta's outcome ended beta's try only");
+    eq((await quick(beta.token, { action: "checkin", answer: "yes" })).status, 200);
+    eq((await sql(`SELECT family_id::text AS f FROM maple_sleep_checkins WHERE member = $1`, [beta.owner])).map((r) => r.f), ["2"], "the check-in is beta's");
+    const sa = String((await quick(alpha.token, { action: "status" })).speak);
+    const sb = String((await quick(beta.token, { action: "status" })).speak);
+    ok(sa.includes("in the bassinet") && !sb.includes("in the bassinet"), `each family hears its own try: ${sa} | ${sb}`);
+    eq(String((await quick(beta.token, { action: "undo" })).speak), "Undone: your check-in for last night is gone.", "beta's undo takes back beta's newest");
+    eq((await sql(`SELECT ended_at IS NULL AS running, deleted_at IS NULL AS kept FROM maple_sleep_tries WHERE family_id = 1 AND client_id LIKE $1`, [mine]))[0], { running: true, kept: true }, "alpha's try untouched");
+    // Leave both families as the other checks expect them.
+    await sql(`DELETE FROM maple_sleep_tries WHERE client_id LIKE $1`, [mine]);
+    await sql(`DELETE FROM maple_sleep_checkins WHERE member = $1`, [beta.owner]);
+    await sql(`DELETE FROM maple_entries WHERE kind = 'sleep' AND source = 'shortcut'`);
+  });
+}
+
+/** Final shape only: the same person's Siri key in each family acts in that family alone, undo included. */
+async function siriBothFamilies(seed: Seed) {
+  const { alpha } = seed;
+  await test("final: someone in both families puts down and undoes with each family's key, never the other's", async () => {
+    const token2 = "maple_madeUpBothFamiliesSiri0123456789";
+    await sql(`INSERT INTO maple_tokens (family_id, member, token_hash, label) VALUES (2, $1, $2, 'Made-up')`, [alpha.owner, createHash("sha256").update(token2).digest("hex")]);
+    eq((await quick(token2, { action: "put_down" })).status, 200);
+    const [t2] = await sql(`SELECT id, family_id::text AS f, created_by FROM maple_sleep_tries WHERE created_by = $1`, [alpha.owner]);
+    eq([t2.f, t2.created_by], ["2", alpha.owner], "in family 2");
+    const one = String((await quick(alpha.token, { action: "undo" })).speak);
+    ok(!one.includes("bassinet"), `family 1's key never reaches family 2's try: ${one}`);
+    eq((await sql(`SELECT deleted_at IS NULL AS kept FROM maple_sleep_tries WHERE id = $1`, [t2.id]))[0].kept, true, "still there");
+    ok(String((await quick(token2, { action: "undo" })).speak).startsWith("Undone: the bassinet try"), "family 2's key undoes it");
+    eq((await sql(`SELECT deleted_at IS NOT NULL AS gone FROM maple_sleep_tries WHERE id = $1`, [t2.id]))[0].gone, true, "gone");
+  });
 }
 
 async function tokensRouteChecks(shape: Shape, seed: Seed) {
@@ -521,6 +561,7 @@ async function main() {
       await mcpToolsBothFamilies(seed);
       await oauthBothFamilies(seed);
       await bothFamiliesRouteChecks(seed);
+      await siriBothFamilies(seed);
     }
   }
 }

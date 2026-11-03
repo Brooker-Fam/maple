@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DISCLAIMER } from "@/lib/maple/guidelines";
-import { numberTries, progressLines, sleepGuidance, snoozeUntil, tryDayKey, tryDayLabel, type SleepProgress } from "@/lib/maple/sleep/engine";
+import { fromCheckinWords, numberTries, progressLines, sleepGuidance, snoozeUntil, tryWhenLabel, type SleepProgress } from "@/lib/maple/sleep/engine";
 import { PLAN_GOAL_MAX, PLAN_STAGES, TRIES_PER_DAY_MAX, TRY_ANCHORS, type PlanPatch, type PlanStage, type SleepPlan, type TrySlot } from "@/lib/maple/sleep/types";
-import { defaultGoal, OUTCOME_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, TIME_OF_DAY } from "@/lib/maple/sleep/words";
+import { defaultGoal, downWords, firstTryWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, TIME_OF_DAY } from "@/lib/maple/sleep/words";
 import { formatDuration, formatTime } from "@/lib/maple/time";
 import { SLEEP_PLACES, type SleepPlace } from "@/lib/maple/types";
 import { useCareNav } from "../care/CareNav";
@@ -14,6 +14,7 @@ import { ContextNote, Label } from "../sheets/parts";
 import { Button, Chip, cx, Segmented, Sheet, Stepper, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { GoalsPart } from "./SleepGoals";
+import { GoalReturnPlan } from "./SleepReturn";
 import { useSleep, useSleepContext, type PlanTab } from "./useSleep";
 
 /**
@@ -34,6 +35,8 @@ export default function SleepPlanSheet({ tab: initial = "plan", open = true, onC
   return (
     <Sheet open={open} onClose={onClose} title="Sleep plan">
       <div className="space-y-5">
+        {/* Back after a quiet stretch on a goal, when the plan is opened before Today shows it: one card, once. */}
+        <GoalReturnPlan />
         {/* Four tabs on one row at 320px: a little less padding in each. */}
         <Segmented<Tab>
           aria-label="Sleep plan"
@@ -87,7 +90,6 @@ function PlanPart() {
   }
 
   const nums = numberTries(s.data.tries, tz);
-  const nowKey = tryDayKey(clock, tz);
   return (
     <div className="space-y-5">
       {age && <p className={cx(tone.muted, "text-[15px]")}>{v.Name} is {age.label} old, by {v.their} birth date.</p>}
@@ -98,15 +100,25 @@ function PlanPart() {
         {s.today && (
           <p className={cx(tone.muted, "pt-1 text-[14px]")}>
             {s.today.done} of {s.today.planned} {s.today.label}
-            {s.today.next ? ` · next: ${slotLabel(s.today.next).replace(/^The /, "the ")}${s.today.fallback ? " (the backup)" : ""}` : ""}
+            {fromCheckinWords(s.today)}
+            {s.today.next ? ` · next: ${slotLabel(s.today.next).replace(/^The /, "the ")}${s.today.fallback ? " (the backup, since no night try was logged)" : ""}` : ""}
           </p>
         )}
         <p className={cx(tone.faint, "text-[13px]")}>Goal: {plan.goal ?? defaultGoal(v)}</p>
       </div>
 
+      {/* Set up, no try yet: what to do at the first one (tonight, or the morning nap when it's the backup). */}
+      {s.canWrite && !s.data.tries.length && (
+        <div className={cx(tone.card, "space-y-1 px-4 py-3")} data-first-try>
+          <p className={cx(tone.heading, "text-[15px]")}>{s.today?.label === "tonight" ? "What to do tonight" : "What to do next"}</p>
+          <p className={cx(tone.body, "text-[15px] leading-relaxed")}>{firstTryWords(v, s.today?.next ?? null)}</p>
+        </div>
+      )}
+
       {s.suggestion && !s.suggestion.snoozed && s.canWrite && <Suggestion plan={plan} />}
 
-      {s.canWrite && <PlanEditor key={plan.revision} plan={plan} />}
+      {/* Not keyed by revision: a poll or a 409 bringing another phone's change rebases the draft instead of closing it. */}
+      {s.canWrite && <PlanEditor plan={plan} />}
 
       {s.canWrite && !s.shift && (
         <Button variant="soft" className="w-full" onClick={() => s.openSheet({ kind: "holding", mode: "start" })}>
@@ -125,10 +137,10 @@ function PlanPart() {
                   <span className="min-w-0 flex-1">
                     <span className="block text-[15px] text-mp-ink">
                       {t.outcome ? OUTCOME_LABEL[t.outcome] : "In the bassinet now"}
-                      {t.ended_at ? ` · ${Math.round((Date.parse(t.ended_at) - Date.parse(t.started_at)) / 60_000)} min` : ""}
+                      {t.ended_at ? ` · ${downWords((Date.parse(t.ended_at) - Date.parse(t.started_at)) / 60_000)}` : ""}
                     </span>
                     <span className={cx(tone.muted, "block text-[13px]")}>
-                      {n ? `${tryDayLabel(n.day, nowKey).replace(/^./, (c) => c.toUpperCase())} · try ${n.n}${n.retry ? ", a retry" : ""} · ` : ""}
+                      {n ? `${tryWhenLabel(t.started_at, clock, tz).replace(/^./, (c) => c.toUpperCase())} · try ${n.n}${n.retry ? ", a retry" : ""} · ` : ""}
                       {formatTime(t.started_at, tz)}
                       {t.put_down_by ? ` · ${memberName(t.put_down_by)}` : ""}
                       {t.tags.length ? ` · ${t.tags.map((x) => TAG_LABEL[x].toLowerCase()).join(", ")}` : ""}
@@ -171,24 +183,74 @@ function Suggestion({ plan }: { plan: SleepPlan }) {
   );
 }
 
+type PlanDraft = { stage: PlanStage; tries: number; times: TrySlot[]; backup: TrySlot | null; where: SleepPlace | null; goal: string };
+const PLAN_FIELDS = ["stage", "tries", "times", "backup", "where", "goal"] as const;
+type PlanField = (typeof PLAN_FIELDS)[number];
+
+const planDraft = (p: SleepPlan): PlanDraft => ({ stage: p.stage, tries: p.tries_per_day, times: p.try_times, backup: p.fallback, where: p.sleeps_now, goal: p.goal ?? "" });
+const sameField = (a: PlanDraft, b: PlanDraft, k: PlanField) => (k === "times" ? a.times.join() === b.times.join() : k === "goal" ? a.goal.trim() === b.goal.trim() : a[k] === b[k]);
+
+/**
+ * The plan as it is now, with this person's changes (against the plan they
+ * started from) kept on top: another phone's change, from a poll or a 409,
+ * never closes the editor or loses what they set.
+ */
+function rebasePlan(draft: PlanDraft, was: PlanDraft, cur: PlanDraft): PlanDraft {
+  const out = { ...cur };
+  for (const k of PLAN_FIELDS) if (!sameField(draft, was, k)) (out as Record<PlanField, unknown>)[k] = draft[k];
+  return out;
+}
+
 function PlanEditor({ plan }: { plan: SleepPlan }) {
   const s = useSleep();
   const v = useVoice();
-  const [stage, setStage] = useState<PlanStage>(plan.stage);
-  const [tries, setTries] = useState(plan.tries_per_day);
-  const [times, setTimes] = useState<TrySlot[]>(plan.try_times);
-  const [backup, setBackup] = useState<TrySlot | null>(plan.fallback);
-  const [where, setWhere] = useState<SleepPlace | null>(plan.sleeps_now);
-  const [goal, setGoal] = useState(plan.goal ?? "");
+  const { memberName } = useMaple();
   const [open, setOpen] = useState(false);
+  // The plan this draft was made from, and the draft.
+  const [base, setBase] = useState(plan);
+  const [draft, setDraft] = useState<PlanDraft>(() => planDraft(plan));
+  // Another phone's change while this was open: which fields it moved, and whether a Save was turned away (409).
+  const [elsewhere, setElsewhere] = useState<{ fields: PlanField[]; refused: boolean } | null>(null);
+  const alert = useRef<HTMLParagraphElement>(null);
+  if (plan.revision !== base.revision) {
+    // A newer plan (a poll, or a 409's answer): rebase onto it, keeping this person's changes.
+    const was = planDraft(base);
+    const cur = planDraft(plan);
+    setDraft((d) => rebasePlan(d, was, cur));
+    setBase(plan);
+    if (open) setElsewhere((e) => ({ fields: PLAN_FIELDS.filter((k) => !sameField(was, cur, k)), refused: e?.refused ?? false }));
+  }
+  useEffect(() => {
+    if (elsewhere) alert.current?.scrollIntoView({ block: "center" });
+  }, [elsewhere]);
+  const set = (change: Partial<PlanDraft>) => setDraft((d) => ({ ...d, ...change }));
+  const { stage, tries, times, backup, where, goal } = draft;
   const patch: PlanPatch = {};
-  if (stage !== plan.stage) patch.stage = stage;
-  if (tries !== plan.tries_per_day) patch.tries_per_day = tries;
-  if (times.join() !== plan.try_times.join()) patch.try_times = times;
-  if (backup !== plan.fallback) patch.fallback = backup;
-  if (where !== plan.sleeps_now) patch.sleeps_now = where;
-  if ((goal.trim() || null) !== plan.goal) patch.goal = goal.trim() || null;
+  if (stage !== base.stage) patch.stage = stage;
+  if (tries !== base.tries_per_day) patch.tries_per_day = tries;
+  if (times.join() !== base.try_times.join()) patch.try_times = times;
+  if (backup !== base.fallback) patch.fallback = backup;
+  if (where !== base.sleeps_now) patch.sleeps_now = where;
+  if ((goal.trim() || null) !== base.goal) patch.goal = goal.trim() || null;
   const dirty = Object.keys(patch).length > 0;
+  const who = memberName(base.updated_by);
+  const mark = (k: PlanField) => (elsewhere?.fields.includes(k) ? <p className="mt-1.5 text-[13px] font-semibold text-mp-accent-fg">{who} changed this on another phone</p> : null);
+  const close = () => {
+    setOpen(false);
+    setElsewhere(null);
+    setDraft(planDraft(base));
+  };
+  const save = async () => {
+    const r = await s.savePlan(base, patch);
+    if (!r) return;
+    if ("saved" in r) {
+      setOpen(false);
+      setElsewhere(null);
+      return;
+    }
+    // Turned away: the newer plan is applied already (and rebased onto above); say so, and wait for another Save.
+    setElsewhere((e) => ({ fields: e?.fields ?? [], refused: true }));
+  };
 
   if (!open) {
     return (
@@ -199,60 +261,71 @@ function PlanEditor({ plan }: { plan: SleepPlan }) {
   }
   return (
     <div className={cx(tone.card, "space-y-5 px-4 py-4")}>
+      {elsewhere && (
+        <p ref={alert} role="alert" className={cx(tone.inset, "px-4 py-3 text-[15px] leading-relaxed text-mp-ink")}>
+          {who} changed the plan on another phone just now{elsewhere.refused ? ", so nothing was saved yet" : ""}. This shows their version, with your changes kept on top. Look it over, then save again.
+        </p>
+      )}
       <div>
         <Label>Stage</Label>
-        <div className="flex flex-wrap gap-2">
+        <div role="group" aria-label="Stage" className="flex flex-wrap gap-2">
           {PLAN_STAGES.map((n) => (
-            <Chip key={n} selected={stage === n} onClick={() => setStage(n)}>
+            <Chip key={n} selected={stage === n} onClick={() => set({ stage: n })}>
               {n} · {STAGE_INFO[n].title}
             </Chip>
           ))}
         </div>
-        {stage !== plan.stage && <p className={cx(tone.muted, "mt-2 text-[13px]")}>Saving moves the plan to stage {stage} ({STAGE_INFO[stage].goal.toLowerCase()}), with its usual tries and times unless you change them below.</p>}
+        {mark("stage")}
+        {stage !== base.stage && <p className={cx(tone.muted, "mt-2 text-[13px]")}>Saving moves the plan to stage {stage} ({STAGE_INFO[stage].goal.toLowerCase()}), with its usual tries and times unless you change them below.</p>}
       </div>
       <div>
         <Label>Tries a day</Label>
-        <Stepper ariaLabel="tries a day" value={tries} onChange={(n) => setTries(Math.max(1, Math.min(TRIES_PER_DAY_MAX, Math.round(n ?? 1))))} min={1} max={TRIES_PER_DAY_MAX} />
+        <Stepper ariaLabel="tries a day" value={tries} onChange={(n) => set({ tries: Math.max(1, Math.min(TRIES_PER_DAY_MAX, Math.round(n ?? 1))) })} min={1} max={TRIES_PER_DAY_MAX} />
+        {mark("tries")}
       </div>
       <div>
         <Label>Try times</Label>
-        <div className="flex flex-wrap gap-2">
+        <div role="group" aria-label="Try times" className="flex flex-wrap gap-2">
           {TRY_ANCHORS.map((a) => (
-            <Chip key={a} selected={times.includes(a)} onClick={() => setTimes(times.includes(a) ? (times.length > 1 ? times.filter((x) => x !== a) : times) : [...times, a])}>
+            <Chip key={a} selected={times.includes(a)} onClick={() => set({ times: times.includes(a) ? (times.length > 1 ? times.filter((x) => x !== a) : times) : [...times, a] })}>
               {slotLabel(a)}
             </Chip>
           ))}
         </div>
+        {mark("times")}
       </div>
       <div>
         <Label optional>Backup</Label>
-        <div className="flex flex-wrap gap-2">
+        <div role="group" aria-label="Backup" className="flex flex-wrap gap-2">
           {TRY_ANCHORS.map((a) => (
-            <Chip key={a} selected={backup === a} onClick={() => setBackup(backup === a ? null : a)}>
+            <Chip key={a} selected={backup === a} onClick={() => set({ backup: backup === a ? null : a })}>
               {slotLabel(a)}
             </Chip>
           ))}
         </div>
+        {mark("backup")}
       </div>
       <div>
         <Label>Where {v.they} mostly {v.verb("sleeps")} now</Label>
-        <div className="flex flex-wrap gap-2">
+        <div role="group" aria-label={`Where ${v.they} mostly ${v.verb("sleeps")} now`} className="flex flex-wrap gap-2">
           {SLEEP_PLACES.map((p) => (
-            <Chip key={p} selected={where === p} onClick={() => setWhere(where === p ? null : p)}>
+            <Chip key={p} selected={where === p} onClick={() => set({ where: where === p ? null : p })}>
               {SLEEP_PLACE_LABEL[p]}
             </Chip>
           ))}
         </div>
+        {mark("where")}
       </div>
       <div>
         <Label optional>Your goal</Label>
-        <input className={tone.input} value={goal} maxLength={PLAN_GOAL_MAX} placeholder={defaultGoal(v)} onChange={(e) => setGoal(e.target.value)} />
+        <input className={tone.input} aria-label="Your goal" value={goal} maxLength={PLAN_GOAL_MAX} placeholder={defaultGoal(v)} onChange={(e) => set({ goal: e.target.value })} />
+        {mark("goal")}
       </div>
       <div className="flex gap-2">
-        <Button variant="soft" className="flex-1" onClick={() => setOpen(false)}>
+        <Button variant="soft" className="flex-1" onClick={close}>
           Cancel
         </Button>
-        <Button className="flex-1" disabled={!dirty || s.busy} onClick={() => void s.updatePlan(patch).then((p) => p && setOpen(false))}>
+        <Button className="flex-1" disabled={!dirty || s.busy} onClick={() => void save()}>
           Save the plan
         </Button>
       </div>
@@ -280,9 +353,10 @@ function GuidancePart() {
           ))}
         </ol>
       )}
-      <p className="flex flex-wrap gap-x-3 text-[12px]">
+      <p className="-my-2 flex flex-wrap gap-x-3 text-[12px]">
         {x.sources.map((src) => (
-          <a key={src.url} href={src.url} target="_blank" rel="noreferrer" className="text-mp-accent-fg underline-offset-2 hover:underline">
+          // A 44px target, though the words are small.
+          <a key={src.url} href={src.url} target="_blank" rel="noreferrer" className="inline-flex min-h-[44px] items-center text-mp-accent-fg underline-offset-2 hover:underline">
             {src.label}
           </a>
         ))}
@@ -347,8 +421,8 @@ function ProgressPart() {
       <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
         <Row label="Tries" value={p.tries ? `${p.tries} on ${p.tryDays} ${p.tryDays === 1 ? "day" : "days"}` : "None yet"} />
         <Row label="Stayed asleep" value={p.finished ? `${p.stayedAsleep.n} of ${p.finished}` : "No finished tries yet"} />
-        <Row label="Longest in the bassinet" value={p.longestBassinet ? `${formatDuration(p.longestBassinet.sec)} · ${tryDayLabel(tryDayKey(Date.parse(p.longestBassinet.start), tz), tryDayKey(clock, tz))}` : "None yet"} />
-        {p.medianMinutesDown != null && <Row label="Typical time down" value={`${p.medianMinutesDown} min (the middle try)`} />}
+        <Row label="Longest in the bassinet" value={p.longestBassinet ? `${formatDuration(p.longestBassinet.sec)} · ${tryWhenLabel(p.longestBassinet.start, clock, tz)}` : "None yet"} />
+        {p.medianMinutesDown != null && <Row label="Typical time down" value={`${downWords(p.medianMinutesDown)} (the middle try)`} />}
       </div>
       {p.places.length > 0 && (
         <section className="space-y-2">

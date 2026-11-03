@@ -1,4 +1,8 @@
-const state = { baby: { name: "River", sex: "female", timezone: "UTC", settings: {} }, family: { id: 99 }, me: { email: "sam@example.test", role: "owner" }, entries: [] };
+// ?roster: Sam has a protected window, 10 PM–2 AM every night, on an active sleep goal's night roster.
+const roster = new URLSearchParams(location.search).has("roster")
+  ? { sleep: { plan: null, tries: [], shifts: [], goals: [{ id: 1, status: "active", roster: [{ id: "w1", member: "sam@example.test", from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] }] }] } }
+  : {};
+const state = { baby: { name: "River", sex: "female", timezone: "UTC", settings: {} }, family: { id: 99 }, me: { email: "sam@example.test", role: "owner" }, entries: [], ...roster };
 const fixture = window.notificationFixture = {
   deleted: false, unsubscribed: false, prefs: { nursing: true },
   mark: { member: "sam@example.test", endpoint: "https://push.example.test/synthetic" },

@@ -11,6 +11,8 @@ import {
   forHer,
   handoffNotice,
   liveSubs,
+  markHeld,
+  quietFor,
   retrySoon,
   runPushTick,
   sendOnce,
@@ -22,6 +24,7 @@ import {
   type PushSub,
   type Voice,
 } from "./push";
+import { holdsNursing } from "./push-quiet";
 import { DOSE_LOOKBACK_MS, anyPhoneOn, dueMoments, ensureSafetyNet, familyDoses, familyMembers, familyPlan, familySent } from "./push-wake";
 import { rowToEntry } from "./store";
 import { formatTime, parseDayKey, dayKey, zonedTimeToUtc } from "./time";
@@ -46,6 +49,15 @@ import type { CarePlan, DoseEntry, Entry, FeedData, Source } from "./types";
  * Both are one family's: the dose or feed is read in the writer's family,
  * and only that family's phones hear about it. A dose or feed id from
  * another family reads as missing and sends nothing.
+ *
+ * Quiet during my protected sleep (push-quiet.ts): a phone whose person is
+ * inside their own window on the night roster, not holding her and not in
+ * Maple in the last 15 minutes, holds "Logged" (her own phone too) and the
+ * nursing timer (unless its person started or changed that feed). Each is
+ * claimed as held, so no retry sends it after the window.
+ *
+ * "Handoff now" (below) goes only to the phones of the person asked, and is
+ * never held.
  */
 
 type Row = Record<string, unknown>;
@@ -180,12 +192,19 @@ export async function notifyDoseLogged(scope: FamilyScope, doseId: number, devic
   const out = { sent: 0, failed: 0 };
   const byMember = new Map<string, PushSub[]>();
   for (const sub of wanted) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
+  // Quiet during my protected sleep: "Logged" waits on a quiet phone (hers too), claimed as held so no retry sends it later.
+  const quiet = wanted.length ? await quietFor(scope, wanted, now) : new Map();
   for (const [email, phones] of byMember) {
     // Viewers never hear about her medicines.
     const v = voiceFor(audience, email, now);
     if (!v) continue;
     for (const phone of phones) {
-      const o = await sendOnce(phone, `log:${dose.id}`, plan ? `med:${plan.id}` : null, loggedNotice(dose, plan, v, phone.prefs.hide_names === true, next), { ttlS: HOUR / 1000 });
+      const ref = plan ? `med:${plan.id}` : null;
+      if (quiet.has(phone.id)) {
+        await markHeld(phone, `log:${dose.id}`, ref);
+        continue;
+      }
+      const o = await sendOnce(phone, `log:${dose.id}`, ref, loggedNotice(dose, plan, v, phone.prefs.hide_names === true, next), { ttlS: HOUR / 1000 });
       if (o === "sent") out.sent++;
       else if (o === "failed") out.failed++;
     }
@@ -249,9 +268,14 @@ export async function notifyNursing(scope: FamilyScope, entryId: number, now = n
   const key = `nurse:${e.id}:${Date.parse(e.updated_at)}${deleted ? ":x" : ""}`;
   const shown = state === "done" || state === "removed" ? await phonesShowing(scope, e.id) : null;
   const out = { sent: 0, failed: 0 };
-  for (const phone of subs) {
-    if (!members.some((m) => m.email === phone.member)) continue;
-    if (shown && !shown.has(phone.id)) continue;
+  const phones = subs.filter((phone) => members.some((m) => m.email === phone.member) && (!shown || shown.has(phone.id)));
+  // Quiet during my protected sleep: a quiet phone holds the feed, unless its person started or changed it.
+  const quiet = phones.length ? await quietFor(scope, phones, now) : new Map();
+  for (const phone of phones) {
+    if (holdsNursing(quiet, phone, e)) {
+      await markHeld(phone, key, `nurse:${e.id}`);
+      continue;
+    }
     const o = await sendOnce(phone, key, `nurse:${e.id}`, n, { ttlS: state === "done" ? HOUR / 1000 : (15 * MIN) / 1000 });
     if (o === "sent") out.sent++;
     else if (o === "failed") out.failed++;
@@ -298,23 +322,28 @@ export async function afterHoldingWrite(familyId: number, wake?: { shiftId: numb
 }
 
 /**
- * "Handoff now": the shift `shiftId` just began because the person holding
- * the baby asked for it. Every phone of the family that turned handoff
- * reminders on hears of it, except the phone that asked (`device`), once
- * per phone, while the shift is open and under 15 minutes old.
+ * "Handoff now": the person holding the baby asked someone to take over
+ * ("Wake [partner]", the turn `shiftId`'s ask: sleep/store.ts askHandoff).
+ * Only the phones of the person asked that turned handoff reminders on hear
+ * of it (never the phone that asked, `device`), once per phone per ask
+ * (asking again sounds again), while the turn is open, still asked, and the
+ * ask is under 15 minutes old. Nothing has changed hands: the notice names
+ * no one.
  */
 export async function notifyHandoffNow(scope: FamilyScope, shiftId: number, device: string | null, now = new Date(), opts: { retry?: boolean } = {}): Promise<Sends> {
   if (!vapidKeys()) return NONE;
-  const subs = (await liveSubs(scope)).filter((s) => s.prefs.handoff === true && (!device || s.device_id !== device));
+  const live = (await liveSubs(scope)).filter((s) => s.prefs.handoff === true && (!device || s.device_id !== device));
+  if (!live.length) return NONE;
+  const rows = await q(`SELECT id, asked_to, asked_at FROM maple_sleep_shifts WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL AND asked_to IS NOT NULL`, [shiftId, scope.familyId]);
+  if (!rows.length || rows[0].asked_at == null) return NONE;
+  const subs = live.filter((s) => s.member === String(rows[0].asked_to));
   if (!subs.length) return NONE;
-  const rows = await q(`SELECT id, started_at FROM maple_sleep_shifts WHERE id = $1 AND family_id = $2 AND ended_at IS NULL AND deleted_at IS NULL`, [shiftId, scope.familyId]);
-  if (!rows.length) return NONE;
-  const started = new Date(rows[0].started_at as string).getTime();
-  if (now.getTime() - started > 15 * MIN) return NONE;
-  const n = handoffNotice(shiftId, started, scope.tz, now, "now");
+  const asked = new Date(rows[0].asked_at as string).getTime();
+  if (now.getTime() - asked > 15 * MIN) return NONE;
+  const n = handoffNotice(shiftId, asked, scope.tz, now, "now");
   const out = { sent: 0, failed: 0 };
   for (const phone of subs) {
-    const o = await sendOnce(phone, `handoffnow:${shiftId}`, `handoff:${shiftId}`, n, { ttlS: (15 * MIN) / 1000 });
+    const o = await sendOnce(phone, `handoffnow:${shiftId}:${asked}`, `handoff:${shiftId}`, n, { ttlS: (15 * MIN) / 1000 });
     if (o === "sent") out.sent++;
     else if (o === "failed") out.failed++;
   }

@@ -84,17 +84,33 @@ export default function Privacy() {
       <p>
         If your family uses the sleep plan, Maple also keeps the plan (its stage, how many bassinet tries a day and when,
         where the baby sleeps now and your goal), each bassinet try (when the baby was laid down and when the try ended, how it
-        went, who laid the baby down, optional tags such as recently fed or swaddled, and a short note), and holding turns: who
-        held the baby awake, from when, the planned handoff and who was next. A try sits on the matching sleep entry, so that
-        sleep is counted once.
+        went, who laid the baby down, optional tags such as recently fed or swaddled, a short note and, when Siri suggested
+        pausing before another try, when it did), and holding turns: who
+        held the baby awake, from when, the planned handoff and who was next. A handoff can be asked for and accepted: the
+        holding turn keeps who was asked to take over and when they were asked, and taking over starts that person&rsquo;s own
+        turn. A sleep in someone&rsquo;s arms is saved as an ordinary sleep entry. A try sits on the matching sleep entry, so
+        that sleep is counted once.
       </p>
       <p>
         If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,
-        its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults, and the date
-        and short note of its last review. Each adult can check in the morning after with one answer about their own protected
-        window (yes, partly or no) and an optional short note. A check-in never records hours slept, mood or anyone&rsquo;s
-        health, and only the adult it&rsquo;s about can save or delete it. Goals stay, open or closed, until your family&rsquo;s
-        log is deleted.
+        its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults (and, if you
+        say, how the baby&rsquo;s feeds are covered during each: nursing, a bottle of expressed milk, or none planned), and the
+        date and short note of its last review. A goal set up for going back to work also keeps who goes back to work and on
+        what day, who nurses, how the baby is fed and the night its roster starts, so its notes fit; the setup&rsquo;s other
+        answers aren&rsquo;t kept beyond the goal itself. If you pick a goal back up after some quiet nights, or ease off for a
+        while, the goal keeps that date: the night counting starts again, or the night easing off ends. The card that offers
+        this shows once per quiet stretch, and that phone&rsquo;s browser remembers it was shown. Each adult can check in the morning after with one answer about their own protected
+        sleep (yes, partly or no) and an optional short note, and with it up to three one-tap answers about the baby&rsquo;s
+        night: where the baby spent most of it, a bassinet try that isn&rsquo;t in the log (and whether it was longer than the
+        goal&rsquo;s time), and whether a planned handoff happened as planned. A check-in never records hours slept, mood or
+        anyone&rsquo;s health, and only the adult it&rsquo;s about can save or delete it. Goals stay, open or closed, until your
+        family&rsquo;s log is deleted.
+      </p>
+      <p>
+        The morning&rsquo;s Last night card shows the night from what&rsquo;s already logged. If you tap that the baby slept
+        through a stretch with nothing logged, Maple saves a sleep entry for that stretch, like one you log yourself. Answering
+        that the baby was up, that you&rsquo;re not sure, or Not now saves nothing in Maple: that phone&rsquo;s browser remembers
+        it for that night so it doesn&rsquo;t ask again.
       </p>
       <p>
         Mom&rsquo;s page keeps her food and drinks, any amounts she records, optional food items and portions, nutrient values and food groups,
@@ -378,9 +394,14 @@ export default function Privacy() {
         Notifications are off until you turn them on, phone by phone. They go through your browser&rsquo;s push service (Apple,
         Google or Mozilla), encrypted so that service can&rsquo;t read them. Maple can send notices about mom&rsquo;s medicines
         (when one is OK again, her set times, and &ldquo;Logged&rdquo; when a dose is saved on another phone) and, if you turn it
-        on, the nursing timer on the lock screen. If you turn on handoff reminders, a phone also hears at a holding turn&rsquo;s
-        planned handoff and when someone asks for a handoff now; these name no one and say nothing about the baby&rsquo;s sleep.
-        By default a medicine notice names the medicine and says when it was last
+        on, the nursing timer on the lock screen. If you turn on handoff reminders, a phone hears a holding turn&rsquo;s planned
+        handoff when its person is holding the baby or is next to take over, and &ldquo;Handoff now&rdquo; when its person is the
+        one asked; these name no one and say nothing about the baby&rsquo;s sleep. If you&rsquo;re on a sleep goal&rsquo;s night
+        roster, your phone stays quiet in your own protected window unless you turn that off: Maple holds the nursing timer and
+        medicine notices there (a handoff to you still comes through, and mom&rsquo;s own reminders still reach her own phone),
+        and sends a medicine reminder that&rsquo;s still due when the window ends. To tell whether you&rsquo;re up, it checks
+        whether you&rsquo;re holding the baby or have opened or logged anything in Maple in the last 15 minutes, from what it
+        already keeps; nothing new is stored. By default a medicine notice names the medicine and says when it was last
         taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a dose amount. Signing
         out turns them off on that phone.
       </p>

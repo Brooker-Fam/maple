@@ -4,7 +4,7 @@ import SiteHeader from "./SiteHeader";
 
 export const LEGAL_UPDATED = "2026-11-02";
 export const LEGAL_UPDATED_TEXT = "November 2, 2026";
-export const LEGAL_VERSION = "1.26";
+export const LEGAL_VERSION = "1.29";
 export const CONTACT_EMAIL = "hello@maplebaby.app";
 
 export function LegalPage({

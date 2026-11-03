@@ -68,8 +68,8 @@ import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./car
 import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
-import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep } from "./sleep/mcp";
-import { deleteShift, deleteTry, getTry as getSleepTry } from "./sleep/store";
+import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
+import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, summarize, type Summary } from "./insights";
 import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
 import { milestoneLabel, milestonesFor, milestoneWordsOf, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
@@ -267,7 +267,7 @@ ${momWords} mean the mom tools below (add_mom_medicines too). "${v.They}" and "$
 
 ${v.Their} mom's own medicines and recovery: use mom_status, log_mom_medicine, set_mom_medicine, log_mom_temperature, add_mom_question and fix_mom_entry, never log_medicine (that's ${v.name}'s). Answer "can she take X yet?" only from mom_status, using its line and sentence (for example "Ibuprofen OK after 8:10 AM, by her schedule. Last: 2:10 AM${by}. 1 of 4 tablets in the last 24 hours."). Never say whether a medicine is safe while nursing; suggest her OB, ${v.name}'s pediatrician or a pharmacist. Never fill in a dose, interval, limit or how many to take. If anyone mentions thoughts of harming themselves or someone else, tell them: call 911 if anyone is in immediate danger; otherwise call or text 988, any time. The National Maternal Mental Health Hotline (call or text 1-833-852-6262, 24/7) is there too, but it isn't a crisis line.
 
-Sleep: for sleep questions call sleep_plan and answer from its guidance word for word. Never suggest leaving ${v.them} to cry it out (soothe ${v.them}, try once more, then pause until the next try), and never call sleep on an adult, or in a bed, couch or armchair with one, safe or an option. Someone holding ${v.them} who's getting sleepy: the bassinet now, on ${v.their} back, or wake their partner (holding hand_off, sleepy: true), nothing else. A bassinet try logs ${v.their} sleep itself, so never log that sleep too. Change the plan's stage only when they ask. Tries' notes are about ${v.name}'s sleep, never ${m}'s health. Sleep goals: coach as sleep_goal's description says.
+Sleep: for sleep questions call sleep_plan and answer from its guidance word for word, and goal questions from its counts and coach notes. Never suggest leaving ${v.them} to cry it out (soothe ${v.them}, try once more, then pause until the next try), and never call sleep on an adult, or in a bed, couch or armchair with one, safe or an option. Someone holding ${v.them} who's getting sleepy: the bassinet now, on ${v.their} back, or wake their partner (holding ask; nothing changes hands until the partner has ${v.them}), nothing else. A bassinet try logs ${v.their} sleep itself, so never log that sleep too. Change the plan's stage only when they ask. Tries' notes are about ${v.name}'s sleep, never ${m}'s health. Sleep goals: coach as sleep_goal's description says.
 
 ${m}'s label or discharge papers in a photo: when the user shares one, you may copy her medicines into her list. Copy each value exactly as printed (the name, the dose, how often, the most in 24 hours with its unit) and leave out anything that isn't printed. Read every medicine and number back to the user, and save (add_mom_medicines for several, set_mom_medicine for one) only after they say yes. Never invent, guess, suggest or fill in a number that isn't on the paper. A 24-hour limit needs its unit (tablets, caplets, capsules, doses or mL): with none printed, leave the limit out and say so.
 
@@ -1947,11 +1947,15 @@ function countedWhy(fed: NonNullable<Summary["lastFed"]>, vo: Voice): string | n
   return null;
 }
 
+/** Longer than a young baby usually goes between feeds, so a last feed this long ago may only be the last one logged. */
+const STALE_FEED_MIN = 6 * 60;
+
 /**
  * Her last feed as counted (feed.ts nursingRuns: Pauses and Dones under 10 minutes apart are one feed), from the
  * moment "last fed" counts from (lastFedAnchor): "Last feed: nursed at 3:10 AM today (2h 05m ago): L 12m, R 8m,
  * started on the left." After a cluster: "Maple cluster fed 6:02–8:40 PM today (4 feeds, 1h 52m nursing); her last
  * feed began at 8:00 PM, 45m ago." A long back-and-forth feed says it counts from 40 minutes before she finished.
+ * STALE_FEED_MIN or more ago, it's her last logged feed ("Last logged feed: …"): the gap may be in the log.
  */
 function lastFeedLine(s: Summary, ctx: Ctx): string {
   const vo = voiceOf(ctx);
@@ -1963,10 +1967,13 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   const fed = s.lastFed;
   if (!fed) return "No feeds logged yet.";
   const ago = s.minutesSinceFeed != null ? `${formatDuration(s.minutesSinceFeed * 60)} ago` : "";
+  // Long ago, it's the last one logged: the gap may be in the log, not in her feeds.
+  const logged = s.minutesSinceFeed != null && s.minutesSinceFeed >= STALE_FEED_MIN ? "logged " : "";
+  const label = logged ? "Last logged feed" : "Last feed";
   if (fed.kind === "bottle" || !fed.run) {
     const f = fed.entry;
     const milk = f.data.milk ? ` of ${f.data.milk === "breastmilk" ? "breast milk" : f.data.milk}` : "";
-    return `Last feed: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${milk} at ${whenText(f.started_at, ctx)} (${ago}).`;
+    return `${label}: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${milk} at ${whenText(f.started_at, ctx)} (${ago}).`;
   }
   const run = fed.run;
   // "Last fed" counts from 40 minutes before a long back-and-forth (or 3+ part) feed ended, or from when she went on a
@@ -1981,14 +1988,14 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   if (c) {
     const name = ctx.baby.nickname || vo.Name;
     const head = `${name} cluster fed ${spanText(c.start, c.end, ctx.tz)} ${dayWord(new Date(c.start), ctx)} (${plural(c.feeds, "feed")}, ${minutesShort(c.min.total)} nursing)`;
-    return `${head}; ${vo.their} last feed began at ${formatTime(run.start, ctx.tz)}${counted ? ` and ${counted}` : `, ${ago}`}.`;
+    return `${head}; ${vo.their} last ${logged}feed began at ${formatTime(run.start, ctx.tz)}${counted ? ` and ${counted}` : `, ${ago}`}.`;
   }
   const sides = sidesText(run.min);
   const started = run.firstSide ? `started on the ${sideWord(run.firstSide)}${run.backAndForth ? " and went back and forth" : ""}` : run.backAndForth ? "back and forth" : "";
   const how = [sides, started].filter(Boolean);
   const detail = how.length ? `: ${how.join(", ")}` : "";
-  if (counted) return `Last feed: nursed ${spanText(run.start, run.end, ctx.tz)} ${dayWord(new Date(run.start), ctx)}${detail}; ${counted}.`;
-  return `Last feed: nursed at ${whenText(new Date(run.start), ctx)} (${ago})${detail}.`;
+  if (counted) return `${label}: nursed ${spanText(run.start, run.end, ctx.tz)} ${dayWord(new Date(run.start), ctx)}${detail}; ${counted}.`;
+  return `${label}: nursed at ${whenText(new Date(run.start), ctx)} (${ago})${detail}.`;
 }
 
 /**
@@ -2038,14 +2045,30 @@ function lastSleepLine(s: Summary, ctx: Ctx): string | null {
   return `Last sleep: ${formatDuration((end - ts(e)) / 1000)}, ended ${formatDuration((ctx.now.getTime() - end) / 1000)} ago (${whenText(e.ended_at, ctx)}).`;
 }
 
-/** "Today so far: 6 feeds (4 in a cluster), 3 wet, 2 dirty, 4h 10m of sleep logged." Bottles and pumping only when there are some. */
+/**
+ * "Today so far: 6 feeds (4 in a cluster), 3 wet, 2 dirty, 4h 10m of sleep logged." Bottles and pumping only when
+ * there are some; a day with none of them logged says so ("no feeds, diapers or sleep logged"), never "0 feeds".
+ */
 function todayLine(s: Summary): string {
   const tb = s.today;
   const extra = [
     tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
     tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${tb.bottleMl ? `, ${formatVolumeBoth(tb.bottleMl)}` : ""}` : "",
   ].filter(Boolean);
-  return `Today so far: ${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged${tb.pumpSessions ? `, pumping ${pumpSummaryLabel(tb)}` : ""}.`;
+  const counts =
+    !tb.feeds && !tb.wet && !tb.dirty && tb.sleepSec < 60
+      ? "no feeds, diapers or sleep logged"
+      : `${plural(tb.feeds, "feed")}${extra.length ? ` (${extra.join("; ")})` : ""}, ${tb.wet} wet, ${tb.dirty} dirty, ${tb.sleepSec >= 60 ? `${formatDuration(tb.sleepSec)} of sleep` : "no sleep"} logged`;
+  return `Today so far: ${counts}${tb.pumpSessions ? `, pumping ${pumpSummaryLabel(tb)}` : ""}.`;
+}
+
+/**
+ * "Last 24 hours: 9 feeds, 7 wet, 3 dirty." Counts are only what was logged, so a zero says so ("0 feeds, 6 wet, 2
+ * dirty logged"), and with none of them logged it's "no feeds or diapers logged", never "0 feeds".
+ */
+function last24Words(d: Summary["last24h"]): string {
+  if (!d.feeds && !d.wet && !d.dirty) return "no feeds or diapers logged";
+  return `${plural(d.feeds, "feed")}, ${d.wet} wet, ${d.dirty} dirty${!d.feeds || !d.wet || !d.dirty ? " logged" : ""}`;
 }
 
 /**
@@ -2165,16 +2188,18 @@ async function recap(ctx: Ctx, since: Date, reason: string) {
       : clusters.length > 1
         ? `${inClusters} in ${clusters.length} clusters; `
         : "";
-  bits.push(feedStarts.length ? `${plural(feedStarts.length, "feed")} (${folded}last at ${formatTime(lastFeed, ctx.tz)})` : "no feeds");
+  // Only what was logged: a stretch with nothing logged is unknown, never "no feeds".
+  bits.push(feedStarts.length ? `${plural(feedStarts.length, "feed")} (${folded}last at ${formatTime(lastFeed, ctx.tz)})` : "no feeds logged");
   const wet = diapers.filter((d) => d.data.pee).length;
   const dirty = diapers.filter((d) => d.data.poop).length;
-  bits.push(diapers.length ? `${plural(diapers.length, "diaper")} (${wet} wet, ${dirty} dirty)` : "no diapers");
+  bits.push(diapers.length ? `${plural(diapers.length, "diaper")} (${wet} wet, ${dirty} dirty)` : "no diapers logged");
   const sleepBits = sleeps
     .filter((e) => Date.parse(e.ended_at!) > since.getTime())
     .map((e) => formatDuration((Date.parse(e.ended_at!) - Math.max(ts(e), since.getTime())) / 1000));
   if (sleepBits.length) bits.push(`slept ${sleepBits.join(" + ")}`);
   if (vitD) bits.push(`vitamin D ✓ (${formatTime(vitD.started_at, ctx.tz)})`);
   if (moments.length) bits.push(`${plural(moments.length, "new moment")}`);
+  if (!entries.some(after) && !sleepBits.length) bits.splice(0, bits.length, "nothing logged");
   const line = `${title} (${formatDuration((ctx.now.getTime() - since.getTime()) / 1000)}): ${bits.join(", ")}.${people.length ? ` Logged by ${people.join(" and ")}.` : ""}`;
   return {
     line,
@@ -2282,7 +2307,7 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   if (s.age) {
     // The aim only with warnings on (targets is null otherwise).
     const aim = t ? ` (${ctx.baby.settings.birth_time_approx ? "Estimated " : ""}Day ${s.age.dayOfLife} aim: ${t.feeds[0]}–${t.feeds[1]} feeds, ${t.wet}+ wet${t.dirty != null ? `, ${t.dirty}+ dirty` : ""})` : "";
-    lines.push(`Last 24 hours: ${plural(s.last24h.feeds, "feed")}, ${s.last24h.wet} wet, ${s.last24h.dirty} dirty${aim}.`);
+    lines.push(`Last 24 hours: ${last24Words(s.last24h)}${aim}.`);
   }
   Object.assign(json, talliesJson(s));
 
@@ -3447,6 +3472,8 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         side = s.nextSide ?? "L";
         suggested = !!s.nextSide;
       }
+      // A feed starting ends a sleep in arms then (a holding turn's), as the app's dock and Siri end a nap when nursing starts.
+      const armsEnded = kind === "feed" && !live ? await endArmsSleepForFeed(ctx.fam, { babyId: ctx.baby.id, at, by: ctx.who.id }) : null;
       const { entry, alreadyRunning } = await startTimer(ctx.fam, {
         babyId: ctx.baby.id,
         kind,
@@ -3471,6 +3498,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started.`
           : `Saved #${entry.id}: ${label} timer started${sideText} at ${whenText(entry.started_at, ctx)} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : ""}`,
         ...(goingBoth && !alreadyRunning ? [BOTH_NOTE] : []),
+        ...(armsEnded ? [`${vo.Name}'s sleep in arms (#${armsEnded.sleep.id}, since ${formatTime(armsEnded.sleep.started_at, ctx.tz)}) ended at ${formatTime(armsEnded.sleep.ended_at!, ctx.tz)}, when the feed began (if ${vo.they} ${vo.verb("is")} still asleep in arms, reopen_timer with id ${armsEnded.sleep.id} runs it again).`] : []),
       ];
       const others = (await activeTimers(ctx.fam, ctx.baby.id)).filter((x) => x.id !== entry.id);
       for (const o of others) lines.push(`Also running: ${timerLine(o, ctx)}`);
@@ -4708,6 +4736,8 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
             { removed: { try: ref, ...(r.sleepDeleted ? { sleep: r.sleepDeleted.id } : {}) }, undo: `bassinet_try {action:"restore", id:"${ref}"}` }
           );
         }
+        // "Wake [partner]" you asked: take back the ask, never the whole turn.
+        if (sleepMade.kind === "ask") return undoAsk(ctx, sleepMade.id, sleepMade.updatedAt ?? "");
         const shift = await deleteShift(ctx.fam, sleepMade.id, ctx.who.id);
         // A handoff you made: the shift handed over is open again.
         const prev = await query(

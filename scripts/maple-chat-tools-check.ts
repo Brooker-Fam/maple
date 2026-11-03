@@ -188,13 +188,115 @@ check("the sleep plan's words, typed or seeded by Ask about this, send the sleep
   ]) ok(route(ALEX, text).sel.groups.includes("sleep"), text);
 });
 
-check("the [App] lines' running try or holding turn sends sleep; a plan line alone doesn't", () => {
+check("the [App] lines' running try, holding turn, plan, goals or last night's check-ins send sleep: a family that uses the plan always has its tools", () => {
   const tryLine = "Bassinet try t12 running: laid down at 2:10 AM (5 min ago) by Alex; try 1 tonight.";
   const holding = "Holding: Alex is holding June awake since 1:50 AM (h7); planned handoff 3:00 AM (in 50m) to Sam.";
-  const plan = "Sleep plan: stage 1 (Held to sleep, then the bassinet); bassinet tries 0 of 2 tonight.";
+  const plan = "Sleep plan: stage 1 (Held to sleep, then the bassinet); bassinet tries tonight: 0 of 2.";
+  const goals = 'Sleep goals: g1 "Both of us get a protected stretch", 7 days left. sleep_plan has their progress and coach notes.';
+  const checkins = "Check-ins for last night: Alex yes; not yet: Sam.";
   eq(route(ALEX, "she woke up", { state: [tryLine] }).sel.groups, ["sleep"], "a running try");
   eq(route(ALEX, "I'm getting sleepy", { state: [holding] }).sel.groups, ["sleep"], "holding");
-  eq(route(ALEX, "she woke up", { state: [plan] }).sel.groups, [], "a plan alone");
+  for (const line of [plan, goals, checkins]) eq(route(ALEX, "yes, mine held", { state: [line] }).sel.groups, ["sleep"], line);
+  eq(route(ALEX, "she pooped", { state: ["Last feed: nursed at 7:10 AM today (2h 20m ago)."] }).sel.groups, [], "the log's own lines don't");
+});
+
+/**
+ * How parents talk about sleep, from the coach review's routing captures:
+ * these 38 load the sleep tools by their words alone; the 3 that don't
+ * ("she slept 4 hours straight last night", "yes, mine held", "partly, she
+ * was up at 2") load them through a plan's or goal's [App] lines, above.
+ * The 9 control phrases, plain logging and people, never do.
+ */
+const SLEEP_TALK = [
+  "back to work", "we both need sleep", "night shifts", "protected sleep", "how did last night go", "she only sleeps on me", "contact naps", "bassinet", "sleep plan", "night roster",
+  "I go back to work in 4 weeks and we're both exhausted", "I'm back at work Monday", "my leave ends next month", "we're so tired", "can you make us a schedule so we each get some sleep",
+  "how should we split the nights", "who's on tonight", "it's my turn to sleep", "Theo is taking the first shift tonight", "she won't sleep unless she's held", "she wakes up the second I put her down",
+  "she only naps on me", "she slept 3 hours in the crib!", "rough night", "last night was rough", "she was up all night", "how are we doing on our goal", "are we on track", "my window held last night",
+  "can my partner give her a bottle at night", "should I pump so he can do a night feed", "dream feed", "is it ok if she sleeps in the swing", "can she sleep in our bed", "can I let her cry for a few minutes",
+  "I keep nodding off while feeding her",
+  "Help us set a sleep goal: I go back to work in four weeks, we're breastfeeding, my partner's home, and we both need sleep",
+  "Let's review our sleep goal: Both of us get a protected stretch before Noor is back at work",
+];
+const SLEEP_BY_STATE = ["she slept 4 hours straight last night", "yes, mine held", "partly, she was up at 2"];
+const NOT_SLEEP = ["she pooped", "log a wet diaper", "she ate 3 oz", "start the left side", "how many diapers today", "she's on the left", "my mom is visiting", "who's in the family", "remove Theo's access"];
+
+check("parents' own words about the nights load the sleep tools; plain logging and people never do", () => {
+  eq(SLEEP_TALK.length, 38, "the review's 38");
+  for (const said of SLEEP_TALK) ok(predictGroups({ said }).includes("sleep"), `loads sleep: "${said}"`);
+  for (const said of NOT_SLEEP) ok(!predictGroups({ said }).includes("sleep"), `no sleep for a control phrase: "${said}"`);
+  const goalLines = ['Sleep goals: g1 "Both of us get a protected stretch before Noor is back at work", 7 days left. sleep_plan has their progress and coach notes.', "Check-ins for last night: Noor yes; not yet: Theo."];
+  for (const said of SLEEP_BY_STATE) {
+    ok(!predictGroups({ said }).includes("sleep"), `by its words alone, not: "${said}"`);
+    ok(predictGroups({ said, context: goalLines }).includes("sleep"), `with a goal's [App] lines: "${said}"`);
+  }
+  ok(!predictGroups({ said: "who's on tonight" }).includes("people") || predictGroups({ said: "who's on tonight" }).includes("sleep"), "who's on tonight is about the nights too");
+});
+
+/**
+ * Coach round 2's 15 phrases from families with no plan or goal yet (so no
+ * [App] lines to lean on): held naps on someone, waiting before going in,
+ * sleep gear, whose turn it is, being worn out. Each loads the sleep tools by
+ * its words alone; a feed's "swap sides" doesn't.
+ */
+const SLEEP_TALK_NO_PLAN = [
+  "is it ok that she naps on my chest while I watch TV",
+  "she fights the bassinet every time",
+  "can we do turns tonight? I'm wrecked",
+  "my husband goes back to work monday, how do we handle nights",
+  "she screams the second her back touches the mattress",
+  "how long should I wait before going in when she cries",
+  "is the snoo worth it",
+  "she sleeps better in the car seat, can she stay in it",
+  "can I put her down on her tummy if I'm watching",
+  "I fell asleep with her on the couch last night",
+  "whose turn is it to get up",
+  "I'm taking the 2am feed so he can sleep",
+  "remind me to swap with Theo at 1:30",
+  "did we hit our goal this week",
+  "white noise all night ok",
+];
+
+check("before any plan or goal, a family's own words about held naps, waiting to go in, sleep gear and whose turn it is load the sleep tools; swapping sides in a feed doesn't", () => {
+  eq(SLEEP_TALK_NO_PLAN.length, 15, "coach round 2's 15");
+  for (const said of SLEEP_TALK_NO_PLAN) ok(predictGroups({ said }).includes("sleep"), `loads sleep: "${said}"`);
+  for (const said of [...NOT_SLEEP, "swap sides", "swap to the right", "she's swapping breasts a lot", "swap breasts after 10 minutes", ...PLAIN]) ok(!predictGroups({ said }).includes("sleep"), `no sleep: "${said}"`);
+});
+
+/**
+ * Coach round 3's 30 phrases from families with no plan or goal yet: night
+ * wakings in plain words, sleep places and gear, splitting the night by the
+ * clock, going back to work in other words, and being worn out (a parent
+ * nodding off during a feed most of all, which sleep_plan's sourced words
+ * answer). Each loads the sleep tools by its words alone; the round's 10
+ * controls and plain logging with a clock or a feed don't.
+ */
+const SLEEP_TALK_R3 = [
+  "how do I get her to sleep longer than 2 hours at night", "she's been up every hour since midnight", "she only falls asleep nursing", "is it normal that she grunts all night in her bassinet",
+  "she wakes up screaming 20 min after I lay her down", "she was awake from 1 to 4 again", "she's up for the day at 4:30", "help, she won't go down tonight", "can she nap in the stroller",
+  "is it safe to let her sleep in a dock a tot", "can we set it up so he does the 2am and I do the 5am", "he takes the baby from 10 to 2 and I take 2 to 6", "let's change who does the late feed",
+  "my partner and I keep fighting about who gets up with her", "Alex has her till 2 so I can get some rest", "protected window for me tonight?", "I start back at the office on the 16th",
+  "my paid leave runs out in two weeks", "I have to go back to my job next month, what do we do about nights", "daycare starts in 3 weeks and I'm back the same day", "how do I pump at work and still get sleep",
+  "first week back was brutal", "we're running on fumes", "I can barely keep my eyes open", "I haven't slept more than 2 hours in a row in a week", "I nodded off feeding her at 3am, is that dangerous",
+  "I'm so tired I almost fell asleep driving", "we're both zombies, need a plan for nights", "I need a nap so badly", "I can't do another night like last night",
+];
+const NOT_SLEEP_R3 = [
+  "log a dirty diaper at 3", "she had 4 oz at 6", "start a feed on the right side", "she spit up after the bottle", "how many wet diapers yesterday", "show me this week's feeding chart", "log a 10 minute pump",
+  "she has a rash on her cheek", "add my sister to the family", "how much should she eat at 6 weeks",
+];
+/** The round's other plain logging: diapers, and a clock or a feed named. */
+const PLAIN_R3 = ["wet diaper at 2", "she had a dirty diaper", "log a poop", "she peed", "diaper change at 3am", "log the 2am feed", "she fed from 2 to 2:20", "bottle at 6", "she nursed at 3", "log the late feed 4 oz"];
+
+check("before any plan or goal, coach round 3's phrases load the sleep tools by their words alone: night wakings, sleep gear, the night split by the clock, back to work, worn out; the round's controls don't", () => {
+  eq([SLEEP_TALK_R3.length, NOT_SLEEP_R3.length], [30, 10], "coach round 3's 30 and 10");
+  // Coach round 3's 38: its 10, this check's 9, the feeds of PLAIN, the four swaps, and the round's plain logging.
+  const controls = [...NOT_SLEEP_R3, ...NOT_SLEEP, ...PLAIN.slice(DIAPERS.length), "swap sides", "swap to the right", "she's swapping breasts a lot", "swap breasts after 10 minutes", ...PLAIN_R3];
+  eq(controls.length, 38, "the 38 controls");
+  const loads = (said: string) => predictGroups({ said }).includes("sleep");
+  console.log(`  round 3 routing: ${SLEEP_TALK_R3.filter(loads).length} of ${SLEEP_TALK_R3.length} load sleep by their words alone; ${controls.filter(loads).length} of ${controls.length} controls do`);
+  for (const said of SLEEP_TALK_R3) ok(loads(said), `loads sleep: "${said}"`);
+  for (const said of controls) ok(!loads(said), `no sleep: "${said}"`);
+  // Through the chat's own selection, for a member: the sleep tools are sent on the first step.
+  for (const said of ["I nodded off feeding her at 3am, is that dangerous", "can she nap in the stroller", "I start back at the office on the 16th"]) ok(route(SAM, said).sel.groups.includes("sleep"), `sent: "${said}"`);
 });
 
 check("her name or her medicine sends her page's tools, only when the chat may see it", () => {

@@ -102,6 +102,14 @@ export type HoldingShift = {
   next_holder: string | null;
   ended_at: string | null;
   ended_how: ShiftEnding | null;
+  /**
+   * "Wake [partner]": who the holder asked to take over (a member id), and
+   * when. Nothing changes hands until that person has her (accept, or the
+   * holder's "Alex has her"); an ended turn keeps its ask as history. Absent
+   * from a server older than asks.
+   */
+  asked_to?: string | null;
+  asked_at?: string | null;
   created_by: string | null;
   updated_by: string | null;
   source: Source;
@@ -109,6 +117,9 @@ export type HoldingShift = {
   updated_at: string;
   pending?: boolean;
 };
+
+/** An ask nobody took up within this long shows the holder the two safe choices again (never "keep holding"). */
+export const ASK_STALE_MS = 10 * 60_000;
 
 // ── sleep goals and the adults' check-ins ───────────────────────────────
 
@@ -151,7 +162,37 @@ export type GoalStep = { id: string; title: string; week_of: string | null; done
  * midnight; a time before noon belongs to the morning after that evening,
  * as a try day does.
  */
-export type RosterWindow = { id: string; member: string; from: string; to: string; nights: number[] };
+export type RosterWindow = { id: string; member: string; from: string; to: string; nights: number[]; covers?: WindowCovers };
+
+/**
+ * How the baby's feeds inside a protected window are covered, so that adult
+ * can sleep (optional; absent on older windows): "nurse" (she nurses: the
+ * adult on duty brings her to the nursing parent, then settles her, or the
+ * nursing parent is the one on duty), "bottle" (the adult on duty gives a
+ * bottle of expressed milk, or what she usually has), or "none" (no feed is
+ * planned in it). goalCautions words its warnings by it and by her age.
+ */
+export const WINDOW_COVERS = ["nurse", "bottle", "none"] as const;
+export type WindowCovers = (typeof WINDOW_COVERS)[number];
+
+/**
+ * A goal made from a template keeps what the template's notes need later
+ * (absent on older goals, null on goals made by hand): for "back_to_work",
+ * the adult going back to work and the day they go back, and who nurses
+ * (null for a family that gives bottles only). The coach notes read it: a
+ * drowsy-driving note when that adult didn't get their window's sleep, and
+ * more night nursing to expect when the nursing parent is the one going back.
+ */
+export const GOAL_TEMPLATES = ["back_to_work"] as const;
+/** How the baby is fed, as the "Back to work" setup asked it. */
+export const GOAL_FEEDING = ["nursing", "bottles", "both"] as const;
+export type GoalFeeding = (typeof GOAL_FEEDING)[number];
+/**
+ * `roster_from` (added later, so absent on older goals): the night the night roster starts, with its rehearsal two
+ * weeks before the day back (or the night it was set, when that's sooner), so check-ins and counts start with it.
+ * `feeding` (added later): nursing, bottles or both, for the notes' words.
+ */
+export type GoalTemplate = { kind: (typeof GOAL_TEMPLATES)[number]; member: string; date: string; nursing: string | null; roster_from?: string | null; feeding?: GoalFeeding | null };
 
 export type SleepGoal = {
   id: number;
@@ -165,6 +206,19 @@ export type SleepGoal = {
   targets: GoalTarget[];
   steps: GoalStep[];
   roster: RosterWindow[];
+  /** The template it was made from, with what its notes need (GoalTemplate); null or absent for a goal made by hand. */
+  template?: GoalTemplate | null;
+  /**
+   * Picked up again (after a quiet stretch): the night counting starts from (YYYY-MM-DD, its evening), so the nights
+   * before it don't count and its weeks start then. Null or absent: from the night it was set. Only the family sets it.
+   */
+  counts_from?: string | null;
+  /**
+   * Easing off: the night counting picks up again (YYYY-MM-DD). Until then nothing is counted and the goal reads "Easing
+   * off until Tue, Nov 11", never as missed; steps and targets hold, and its weeks start again that night. Null or absent:
+   * not easing off. Only the family sets it.
+   */
+  paused_until?: string | null;
   /** The last review (sleep_goal review, or closing it), with its short note. */
   last_review_at: string | null;
   review_note: string | null;
@@ -178,7 +232,7 @@ export type SleepGoal = {
   updated_at: string;
 };
 
-/** Did your protected window hold last night? Nothing else: never hours slept, mood, or anything about anyone's health. */
+/** Did you get your protected sleep last night? Nothing else: never hours slept, mood, or anything about anyone's health. */
 export const PROTECTED_ANSWERS = ["yes", "partly", "no"] as const;
 export type ProtectedAnswer = (typeof PROTECTED_ANSWERS)[number];
 
@@ -194,9 +248,45 @@ export type SleepCheckin = {
   night: string;
   protected: ProtectedAnswer;
   note: string | null;
+  /**
+   * Optional one-tap answers about the baby's night (CheckinExtras), on the
+   * check-in of whoever answered first; absent from older rows, which an
+   * older release reads past.
+   */
+  place?: CheckinPlace | null;
+  untimed_try?: UntimedTry | null;
+  /** The minutes "long" meant when it was asked (the goal's bassinet-nights minutes). */
+  untimed_min?: number | null;
+  handoff?: HandoffAnswer | null;
   source: Source;
   created_at: string;
   updated_at: string;
+};
+
+// ── the morning's extra answers (nullable columns on maple_sleep_checkins) ──
+
+/** "Where did the baby spend most of last night?" Asked once a night: whoever answers first. */
+export const CHECKIN_PLACES = ["bassinet", "held", "mixed", "elsewhere", "unsure"] as const;
+export type CheckinPlace = (typeof CHECKIN_PLACES)[number];
+
+/**
+ * "Any bassinet try that isn't in the log?", asked only for a night with no
+ * try logged: none, one that stayed asleep `untimed_min` or more (it counts
+ * toward bassinet nights, shown apart as "from check-ins"), or a shorter one.
+ */
+export const UNTIMED_TRIES = ["no", "long", "short"] as const;
+export type UntimedTry = (typeof UNTIMED_TRIES)[number];
+
+/** "Did the handoff happen as planned?", asked only for a night with a planned handoff. */
+export const HANDOFF_ANSWERS = ["on_time", "early", "late", "none"] as const;
+export type HandoffAnswer = (typeof HANDOFF_ANSWERS)[number];
+
+/** The extra answers as a write sends them: undefined leaves one as it is, null clears it. */
+export type CheckinExtras = {
+  place?: CheckinPlace | null;
+  untimed_try?: UntimedTry | null;
+  untimed_min?: number | null;
+  handoff?: HandoffAnswer | null;
 };
 
 /** Goal limits, shared by the rules, the store, the route and the tool. */
@@ -219,8 +309,13 @@ export const WINDOW_MAX_MINUTES = 12 * 60;
 export const CHECKIN_NOTE_MAX = 200;
 /** A check-in can be for one of this many most recent nights. */
 export const CHECKIN_NIGHTS_BACK = 14;
-/** A goal is due a review once this many days pass since its last one (or since it was set). */
+/** A goal is due a review once this many days pass since its last one (or since it was set, or counting started again). */
 export const REVIEW_DUE_DAYS = 7;
+/** "Ease off a week": counting picks up again this many days from today; a write can ease off this far ahead at most. */
+export const EASE_OFF_DAYS = 7;
+export const EASE_OFF_MAX_DAYS = 28;
+/** An untimed try's "long" is at least this many minutes (the goal's bassinet-nights minutes, 15 to 720). */
+export const UNTIMED_MIN_RANGE = [15, 720] as const;
 
 /** MapleState.sleep: what every phone shows. */
 export type SleepState = {
@@ -263,7 +358,7 @@ export type GoalTargetInput = {
   text?: string | null;
 };
 export type GoalStepInput = { id?: string | null; title: string; week_of?: string | null };
-export type RosterWindowInput = { id?: string | null; member: string; from: string; to: string; nights: number[] };
+export type RosterWindowInput = { id?: string | null; member: string; from: string; to: string; nights: number[]; covers?: WindowCovers | null };
 export type GoalInput = {
   title?: string;
   why?: string | null;
@@ -274,4 +369,10 @@ export type GoalInput = {
   roster?: RosterWindowInput[];
   /** goal.update only: between active and paused (and back from met or dropped). Closing is goal.close. */
   status?: "active" | "paused";
+  /** The template's context (GoalTemplate, people as member ids), or null to clear it. */
+  template?: GoalTemplate | null;
+  /** goal.update only: "Pick up from tonight" (YYYY-MM-DD, today at the latest), or null for from the night it was set. */
+  counts_from?: string | null;
+  /** goal.update only: "Ease off a week" (YYYY-MM-DD, the night it counts again, EASE_OFF_MAX_DAYS ahead at most), or null. */
+  paused_until?: string | null;
 };

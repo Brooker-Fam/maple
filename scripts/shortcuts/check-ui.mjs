@@ -84,6 +84,32 @@ try {
     assert.equal(await page.getByRole("link", { name: /Maple pee/ }).getAttribute("href"), "/shortcuts/maple-pee.shortcut");
     assert.equal(await page.getByText("maple_synthetic_ui_check", { exact: true }).isVisible(), false, "The key is hidden until requested");
     console.log("PASS: setup creates one key, offers a safe installable starter, and hides manual configuration");
+    if (!baseline) {
+      // The sleep plan's phrases and the ways to run one without opening the app, folded away until asked for.
+      assert.equal(await page.getByRole("list", { name: "Sleep plan phrases" }).count(), 0, "Folded away");
+      await page.getByRole("button", { name: /^Sleep plan shortcuts/ }).click();
+      const phrases = page.getByRole("list", { name: "Sleep plan phrases" });
+      for (const [say, action] of [["Maple put down", "put_down"], ["Maple woke crying", "outcome"], ["Maple asleep in arms", "asleep_in_arms"], ["Maple handoff", "handoff"], ["Maple, what did I miss?", "recap"], ["Maple check in", "checkin"], ["Maple undo", "undo"]]) {
+        const row = phrases.getByRole("listitem").filter({ hasText: say });
+        assert.equal(await row.count(), 1, `${say} is listed once`);
+        await row.getByText(action, { exact: true }).first().waitFor();
+      }
+      await phrases.getByRole("listitem").filter({ hasText: "Maple woke crying" }).getByText("woke_crying", { exact: false }).waitFor();
+      // Maple handoff from whoever holds the baby (or with nobody on a turn) only asks, in the family's pronouns (this made-up baby has none set);
+      // Maple put down after a crying retry says to pause first; what did I miss changes nothing.
+      await phrases.getByRole("listitem").filter({ hasText: "Maple handoff" }).getByText("Holding them, or with nobody on a turn: asks the other adult to take over, and their phone only sounds if handoff reminders are on, so go wake them. Anyone else: you have them now, with a catch-up.", { exact: true }).waitFor();
+      await phrases.getByRole("listitem").filter({ hasText: "Maple, what did I miss?" }).getByText(/since your protected sleep began \(or since you last opened the app\).*It changes nothing\.$/).waitFor();
+      await phrases.getByRole("listitem").filter({ hasText: "Maple put down" }).getByText(/says the plan pauses until the next try; say it again to try anyway\.$/).waitFor();
+      await page.getByText("Settings → Accessibility → Touch → Back Tap", { exact: false }).waitFor();
+      await page.getByText("Settings → Action Button → Shortcut", { exact: false }).waitFor();
+      await page.getByText("Automation → New Automation → NFC", { exact: false }).waitFor();
+      await page.getByText("minutes_ago", { exact: true }).waitFor();
+      assert.equal(await page.getByText("maple_synthetic_ui_check", { exact: true }).isVisible(), false, "The guide never shows the key");
+      await page.setViewportSize({ width: 320, height: 844 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "No sideways scroll at 320px");
+      if (shots) await page.screenshot({ path: path.join(shots, "siri-sleep-guide.png"), fullPage: true });
+      console.log("PASS: the sleep plan shortcuts guide lists each phrase with its action, Back Tap, the Action Button and an NFC sticker, at 320px");
+    }
   }
 } finally {
   await browser.close();

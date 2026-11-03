@@ -14,8 +14,9 @@ import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
-import { SleepNow, SleepTimerExtra } from "./sleep/SleepCards";
-import { SleepCheckinCard } from "./sleep/SleepCheckin";
+import { SleepNow, useFoldedSleepId } from "./sleep/SleepCards";
+import { LastNightCard, LeftRunningAsk } from "./sleep/LastNight";
+import { GoalReturnToday } from "./sleep/SleepReturn";
 import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
@@ -33,6 +34,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const { state, summary, readOnly } = useMaple();
   const { open } = useSheets();
   const now = useNow(30_000);
+  // One sleep, one card: a bassinet try's card, or a holding turn's (her sleep in arms), is that sleep's card too, so its timer card steps aside.
+  const folded = useFoldedSleepId();
   if (!state || !summary) return null;
 
   const born = !!state.baby.born_at;
@@ -41,11 +44,10 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const timing = summary.active.length > 0;
   // A bassinet try or someone holding her awake: shown on every family phone, in Right now.
   const sleepNow = !!state.sleep && (state.sleep.tries.some((t) => !t.ended_at) || state.sleep.shifts.some((x) => !x.ended_at));
-  // Her sleep's timer card carries the try she's on, so the try isn't a second card beside it.
-  const sleeping = summary.active.filter((e) => e.kind === "sleep").map((e) => e.id);
 
   return (
-    <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
+    // data-today-page: what tapShield holds for a moment after the page moves under the thumb (a try card appearing).
+    <div data-today-page className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
       {timing && <TitleTicker />}
       {(!born || timing) && (
         <header className="flex min-h-[44px] items-center justify-between gap-3 px-1">
@@ -65,35 +67,36 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {readOnly && <LatestMoment />}
       <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
 
-      {/*
-        Right now, each thing once: running timers (her sleep's card carries a bassinet try), a holding turn or a try
-        whose sleep stopped, Maple's status, then Up next (her next medicine, the sleep plan's next step).
-      */}
-      {!nothingYet || timing || sleepNow ? (
+      {(!nothingYet || timing || sleepNow) && (
         <section aria-labelledby="right-now">
           <h2 id="right-now" className="sr-only">
             Right now
           </h2>
           <div className="space-y-3">
             <AnimatePresence initial={false}>
-              {summary.active.map((e) => (
+              {summary.active.filter((e) => e.id !== folded).map((e) => (
                 // Keyed by kind: only one of each runs, and the optimistic copy hands over to the saved one without a remount.
-                <TimerCard key={e.kind} entry={e}>
-                  {e.kind === "sleep" && <SleepTimerExtra entry={e} />}
-                </TimerCard>
+                // A sleep timer left running overnight asks "Woke at 6:30 AM?" on its own card (the Last night card's first question).
+                <TimerCard key={e.kind} entry={e} ask={e.kind === "sleep" ? <LeftRunningAsk entry={e} /> : undefined} />
               ))}
             </AnimatePresence>
-            <SleepNow attached={sleeping} />
+            <SleepNow />
             <StatusCard />
-            <UpNext />
           </div>
         </section>
-      ) : (
-        <UpNext />
       )}
-      {/* The morning after: an adult on a sleep goal's roster says whether their protected window held. */}
-      <SleepCheckinCard />
+      {/* While you slept, one line, above the morning's card: the partner who slept sees it without scrolling past the card. */}
       <WhileYouSlept />
+      {/* Back after a quiet stretch on a goal: one card, once, with a clean restart to choose. */}
+      <GoalReturnToday />
+      {/* The morning after (sleep plan or goal): last night from the log, its unlogged stretches, and the adult's own check-in,
+          straight after Right now, so its question clears the dock. */}
+      <LastNightCard />
+      {/*
+        Up next: her next medicine and the sleep plan (its everyday Put down, and the way into the plan and goals for every
+        role that reads the log), one row each. After Last night, so the morning's question still clears the dock.
+      */}
+      <UpNext />
       {nothingYet && born && <FreshPage readOnly={readOnly} />}
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
