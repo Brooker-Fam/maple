@@ -24,18 +24,22 @@ export type RosterSpan = { member: string; start: number; end: number };
  */
 export type HandoffWhy = { member: string; starts_at: string; ends_at: string; default_at: string; planned_at: string | null };
 
-type Goals = readonly Pick<SleepGoal, "status" | "roster">[];
+type Goals = readonly (Pick<SleepGoal, "status" | "roster"> & { template?: SleepGoal["template"] })[];
 
-/** The protected window of `member`, on an active goal's roster, that `t` falls in ([start, end), on the night it began), or null. */
+/**
+ * The protected window of `member`, on an active goal's roster, that `t` falls in ([start, end), on the night it began), or
+ * null. A Back to work roster starts on its own night (`template.roster_from`): before it, none of its windows is on.
+ */
 export function windowAt(goals: Goals, member: string, t: number, tz: string): RosterSpan | null {
   const night = tryDayKey(t, tz);
   for (const g of goals) {
     if (g.status !== "active") continue;
+    const from = g.template?.roster_from ?? null;
     for (const w of g.roster) {
       if (w.member !== member) continue;
       // A window belongs to the night it begins on (a try day, noon to noon), so one covering t began that night or the one before.
       for (const n of [addDays(night, -1), night]) {
-        if (!windowOnNight(w, n)) continue;
+        if (!windowOnNight(w, n) || (from && n < from)) continue;
         const [s, e] = windowOn(w, n, tz).map((d) => d.getTime());
         if (t >= s && t < e) return { member, start: s, end: e };
       }

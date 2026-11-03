@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { isDayKey } from "../time";
 import { isClock } from "./goals";
 import type { RosterGoals } from "./roster";
 import { WINDOW_COVERS, type GoalTemplate, type RosterWindow, type WindowCovers } from "./types";
@@ -33,9 +34,12 @@ function rosterOf(v: unknown): RosterWindow[] {
   });
 }
 
-/** Only who nurses matters here (the catch-up's feeding line): a template without a kind or member reads as none. */
+/**
+ * Who nurses (the catch-up's feeding line) and the night the roster starts (`roster_from`: before it, its windows
+ * protect no one yet): a template without a kind or member reads as none.
+ */
 function templateOf(v: unknown): GoalTemplate | null {
   const t = v as Partial<GoalTemplate> | null;
   if (!t || typeof t !== "object" || typeof t.kind !== "string" || typeof t.member !== "string" || typeof t.date !== "string") return null;
-  return { kind: t.kind as GoalTemplate["kind"], member: t.member, date: t.date, nursing: typeof t.nursing === "string" ? t.nursing : null };
+  return { kind: t.kind as GoalTemplate["kind"], member: t.member, date: t.date, nursing: typeof t.nursing === "string" ? t.nursing : null, ...(isDayKey(t.roster_from) ? { roster_from: t.roster_from } : {}) };
 }

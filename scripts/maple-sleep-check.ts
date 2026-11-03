@@ -39,6 +39,7 @@ import {
 } from "../src/lib/maple/sleep/engine";
 import { SleepInputError } from "../src/lib/maple/sleep/errors";
 import { handoffAroundRoster, handoffWhyWords, windowAt } from "../src/lib/maple/sleep/handoff";
+import { feedCover, windowsBetween } from "../src/lib/maple/sleep/roster";
 import {
   BOTTLE_SOURCE,
   checkinTryOn,
@@ -2067,6 +2068,22 @@ check("the plan's tally (app re-test #6): a try last night's check-in said happe
   const logged = planToday(p, [tryRow(at(2026, 11, 2, 22), at(2026, 11, 2, 23), "stayed_asleep")], morning, NY, { fromCheckins: 1 });
   eq([logged.done, logged.fromCheckins], [1, 0], "a try in the log is the one counted");
   eq([checkinTryOn([checkinRow(SAM, "2026-11-02", "yes", { untimed_try: "short", untimed_min: 60 })], "2026-11-02"), checkinTryOn([checkinRow(SAM, "2026-11-02", "yes", { untimed_try: "no" })], "2026-11-02"), checkinTryOn(null, "2026-11-02")], [1, 0, 0], "from the night's answers");
+});
+
+check("a Back to work roster starts on its own night (roster_from): before it no window is on, for quiet hours, the next handoff and the catch-up alike; an older template's roster is on from the start", () => {
+  const roster: RosterWindow[] = [{ id: "w1", member: SAM, from: "22:00", to: "02:00", nights: EVERY, covers: "nurse" }];
+  const g = goalRow({ roster, template: { kind: "back_to_work", member: ALEX, date: "2026-11-30", nursing: SAM, roster_from: "2026-11-16" } });
+  const before = at(2026, 11, 10, 23).getTime();
+  const after = at(2026, 11, 16, 23).getTime();
+  eq([windowAt([g], SAM, before, NY), windowAt([g], SAM, after, NY)?.start], [null, at(2026, 11, 16, 22).getTime()], "windowAt");
+  eq([windowsBetween([g], SAM, before - HOUR, before + HOUR, NY).length, windowsBetween([g], SAM, after - HOUR, after + HOUR, NY).length], [0, 1], "windowsBetween");
+  eq([feedCover([g], SAM, before, before + 2 * HOUR, NY), feedCover([g], SAM, after, after + 2 * HOUR, NY)?.covers], [null, "nurse"], "the catch-up's feeding line");
+  eq(handoffAroundRoster({ at: before, from: before - HOUR, nextHolder: SAM, goals: [g], tz: NY }).why, null, "a handoff isn't moved off a window that isn't on yet");
+  ok(handoffAroundRoster({ at: after, from: after - HOUR, nextHolder: SAM, goals: [g], tz: NY }).why != null, "and is once the roster starts");
+  // The night it starts on is on: a window that night (10 PM Nov 16) counts, the night before (Nov 15) doesn't.
+  eq([windowAt([g], SAM, at(2026, 11, 16, 1).getTime(), NY), windowAt([g], SAM, at(2026, 11, 17, 1).getTime(), NY)?.start], [null, at(2026, 11, 16, 22).getTime()], "after midnight, by the night it began");
+  const older = goalRow({ roster, template: { kind: "back_to_work", member: ALEX, date: "2026-11-30", nursing: SAM } });
+  ok(windowAt([older], SAM, before, NY) != null && windowsBetween([older], SAM, before - HOUR, before + HOUR, NY).length === 1, "without roster_from, as before");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);

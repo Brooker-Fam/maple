@@ -20,6 +20,9 @@ const HOUR = 60 * MIN;
 /** The goals as the roster reads them: status and roster, and the template (who nurses) where a goal has one. */
 export type RosterGoals = readonly (Pick<SleepGoal, "status" | "roster"> & { template?: SleepGoal["template"] })[];
 
+/** A goal whose roster starts after `night` (a Back to work template's `roster_from`): none of its windows is on that night. */
+export const rosterLater = (goal: { template?: SleepGoal["template"] }, night: string) => !!goal.template?.roster_from && night < goal.template.roster_from;
+
 /** `member`'s windows on the active goals' rosters (a paused, met or dropped goal's roster protects no one). */
 export function rosterWindowsOf(goals: RosterGoals, member: string): RosterWindow[] {
   return goals.filter((g) => g.status === "active").flatMap((g) => g.roster.filter((w) => w.member === member));
@@ -49,6 +52,8 @@ function spansOf(goals: RosterGoals, member: string, from: number, to: number, t
   let night = addDays(tryDayKey(from, tz), -1);
   for (let i = 0; i < 400 && night <= last; i++, night = addDays(night, 1)) {
     for (const goal of active) {
+      // A Back to work roster starts on its own night (`roster_from`, with its rehearsal): before it, no window is on.
+      if (rosterLater(goal, night)) continue;
       for (const w of goal.roster) {
         if (w.member !== member || !windowOnNight(w, night)) continue;
         const [start, end] = windowOn(w, night, tz).map((d) => d.getTime());
