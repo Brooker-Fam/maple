@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { sleepyBassinetLine, sleepyLine } from "@/lib/maple/guidelines/sleep";
 import { askState, nextHandoff } from "@/lib/maple/sleep/engine";
 import { catchUpLines } from "@/lib/maple/sleep/catchup";
@@ -14,6 +14,7 @@ import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { RecordedTimeField } from "../TimeField";
 import { ContextNote, Label, MoreDetails, SheetFooter } from "../sheets/parts";
+import { useTapGuard } from "../tapCooldown";
 import { Button, Chip, cx, Sheet, TextArea, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { GoalFormSheet } from "./GoalForm";
@@ -65,42 +66,79 @@ function TryNote({ value, onChange, placeholder, readOnly = false }: { value: st
 
 // ── How did it go? ───────────────────────────────────────────────────────
 
+/** The same tags, in any order. */
+const sameTags = (a: readonly TryTag[], b: readonly TryTag[]) => [...a].sort().join() === [...b].sort().join();
+
+/** Who changed a try on another phone (its last writer), for "Alex changed this try…". */
+const changedBy = (t: BassinetTry, name: (id: string) => string) => (t.updated_by ? name(t.updated_by) : "Someone");
+
 /**
  * The running try's end: the four outcomes first (one tap saves), and when
  * it ended, tags and a note under Add details, so a small screen opens on
- * the answer, not the extras.
+ * the answer, not the extras. The outcome names the try as the sheet opened
+ * on it and sends tags or a note only when they changed here, so another
+ * phone's edit since is a 409 shown above the outcomes (theirs, with this
+ * person's changes on top), never written over.
  */
 export function OutcomeSheet({ t, defaultAt, details = false, open = true, onClose }: { t: BassinetTry; defaultAt?: string; details?: boolean; open?: boolean; onClose: () => void }) {
-  const { state } = useMaple();
+  const { state, memberName } = useMaple();
   const s = useSleep();
   const v = useVoice();
   const now = useNow(30_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const sleep = t.sleep_entry_id ? state?.entries.find((e) => e.id === t.sleep_entry_id) : undefined;
   const wokeAt = defaultAt ?? (sleep && !sleep.active && sleep.ended_at ? sleep.ended_at : undefined);
+  const [base, setBase] = useState(t);
   const [tags, setTags] = useState<TryTag[]>(t.tags);
   const [note, setNote] = useState(t.note ?? "");
   const [ago, setAgo] = useState(0);
+  const [elsewhere, setElsewhere] = useState<string | null>(null);
   const end = wokeAt ? new Date(wokeAt) : new Date(now.getTime() - ago * MIN);
   const choices = [0, 2, 5, 10].filter((n) => now.getTime() - n * MIN > Date.parse(t.started_at));
+  const tagsChanged = !sameTags(tags, base.tags);
+  const noteChanged = (note.trim() || null) !== base.note;
+  // Changed on another phone since: theirs now, with this person's changes kept on top, for another tap.
+  const rebase = (cur: BassinetTry) => {
+    if (!tagsChanged) setTags(cur.tags);
+    if (!noteChanged) setNote(cur.note ?? "");
+    setBase(cur);
+    setElsewhere(changedBy(cur, memberName));
+  };
   const pick = async (o: TryOutcome) => {
-    const done = await s.finishTry(t, o, { at: wokeAt || ago ? end : undefined, tags, note: note.trim() || null });
+    const done = await s.finishTry(base, o, {
+      at: wokeAt || ago ? end : undefined,
+      ...(tagsChanged ? { tags } : {}),
+      ...(noteChanged ? { note: note.trim() || null } : {}),
+      onConflict: rebase,
+      done: onClose,
+    });
     if (done) onClose();
   };
   // What Add details holds, when it differs from the try as it is: "ended 2:05 AM · swaddled · a note".
   const summary = [
     !wokeAt && ago ? `ended ${formatTimeNear(end, now, tz)}` : null,
-    tags.join() !== t.tags.join() && tags.length ? tags.map((x) => TAG_LABEL[x].toLowerCase()).join(", ") : null,
-    (note.trim() || null) !== t.note && note.trim() ? "a note" : null,
+    tagsChanged && tags.length ? tags.map((x) => TAG_LABEL[x].toLowerCase()).join(", ") : null,
+    noteChanged && note.trim() ? "a note" : null,
   ]
     .filter(Boolean)
     .join(" · ");
   return (
-    <Sheet open={open} onClose={onClose} title="How did it go?" subtitle={`In the bassinet since ${formatTime(t.started_at, tz)} · ${formatDuration((end.getTime() - Date.parse(t.started_at)) / 1000)}${s.nth(t) ? ` · ${s.nth(t)}` : ""}`}>
+    <Sheet
+      open={open}
+      dirty={noteChanged || tagsChanged || (!wokeAt && ago > 0)}
+      onClose={onClose}
+      title="How did it go?"
+      subtitle={`In the bassinet since ${formatTime(t.started_at, tz)} · ${formatDuration((end.getTime() - Date.parse(t.started_at)) / 1000)}${s.nth(t) ? ` · ${s.nth(t)}` : ""}`}
+    >
       <div className="space-y-4">
         {wokeAt && (
           <p className={cx(tone.muted, "text-[15px]")}>
             {v.They} woke at {formatTime(wokeAt, tz)}. The try ends then.
+          </p>
+        )}
+        {elsewhere && (
+          <p role="alert" className={cx(tone.inset, "px-4 py-3 text-[15px] leading-relaxed text-mp-ink")}>
+            {elsewhere} changed this try on another phone just now, so nothing was saved yet. It shows as it is now{tagsChanged || noteChanged ? ", with your changes kept on top" : ""}. Tap how it went again.
           </p>
         )}
         <OutcomeGrid disabled={s.busy} onPick={(o) => void pick(o)} />
@@ -277,7 +315,9 @@ const planWords = (m: number) => (m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` :
  * Start a holding turn (who, the planned handoff, who's next, and whether
  * she's asleep in arms), or record a handoff: someone has her now. From the
  * holder's phone that's "Alex has her"; from anyone else's it's taking over
- * ("I've got her"), which shows the catch-up.
+ * ("I've got her"), which shows the catch-up. A handoff is about the turn
+ * the sheet opened on: taken over (or ended) on another phone meanwhile, the
+ * sheet says so, as Getting sleepy? does, instead of offering the turn after it.
  */
 export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start" | "handoff"; to?: string; open?: boolean; onClose: () => void }) {
   const { state, memberName, now } = useMaple();
@@ -286,7 +326,12 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
   const people = usePeople();
   const me = state?.me.email ?? "";
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const sh = s.shift;
+  const [opened] = useState(() => (mode === "handoff" ? (s.shift?.id ?? null) : null));
+  const turn = opened != null ? (s.data.shifts.find((x) => x.id === opened) ?? null) : null;
+  // This sheet's own handoff ends the turn too: it closes then, never showing Taken over for it.
+  const [sending, setSending] = useState(false);
+  const over = opened != null && (!turn || !!turn.ended_at) && !sending;
+  const sh = mode === "handoff" ? (turn && !turn.ended_at ? turn : null) : s.shift;
   const handing = mode === "handoff" && !!sh;
   // Taking over from someone else's phone: me; handing over from the holder's: the partner.
   const firstWho = handing
@@ -310,13 +355,33 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
 
   const go = async () => {
     const handoffAt = plan ? at : null;
-    const done = handing ? await s.handOff(sh!, { to: who, handoffAt }) : await s.startShift({ holder: who, handoffAt, nextHolder: next, asleep: asleep && !sleeping });
-    // Taking over opens the catch-up in this sheet's place; anything else just closes.
-    if (done && !(handing && who === me)) onClose();
+    // Taking over opens the catch-up in this sheet's place; anything else just closes (after Try again too).
+    const closes = !(handing && who === me);
+    const after = () => void (closes && onClose());
+    setSending(true);
+    const done = handing ? await s.handOff(sh!, { to: who, handoffAt, done: after }) : await s.startShift({ holder: who, handoffAt, nextHolder: next, asleep: asleep && !sleeping, done: after });
+    if (!done) setSending(false);
+    else after();
   };
   const name = (email: string) => (email === me ? "Me" : memberName(email));
   // The handoff is recorded as what it is: someone has her now.
   const label = handing ? (who === me ? `I've got ${v.them}` : who ? `${memberName(who)} has ${v.them}` : "…") : "Start";
+
+  if (over) {
+    const holding = s.shift;
+    return (
+      <Sheet open={open} onClose={onClose} title={turn?.ended_how === "handoff" ? "Taken over" : "That turn ended"}>
+        <div className="space-y-4">
+          <p role="status" className={cx(tone.body, "text-[17px] font-semibold")}>
+            {holding ? `${holding.holder === me ? "You have" : `${memberName(holding.holder)} has`} ${v.them} now, since ${formatTime(holding.started_at, tz)}.` : `Nobody is recorded holding ${v.them} now.`}
+          </p>
+          <Button size="lg" className="w-full" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </Sheet>
+    );
+  }
 
   return (
     <Sheet
@@ -425,7 +490,7 @@ export function CatchUpSheet({ started, ended, why = null, open = true, onClose 
   const cover = ended ? feedCover(s.goals, ended.holder, now.getTime(), started.handoff_at ? Date.parse(started.handoff_at) : now.getTime() + 12 * HOUR, tz) : null;
   const lines = catchUpLines({ summary, now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why, cover, careMember: state?.care?.person.member ?? null });
   const undo = async () => {
-    if (ended && (await s.undoTakeOver(started, ended))) onClose();
+    if (ended && (await s.undoTakeOver(started, ended, { done: onClose }))) onClose();
   };
   return (
     <Sheet
@@ -464,12 +529,29 @@ export function CatchUpSheet({ started, ended, why = null, open = true, onClose 
 
 // ── Edit a try ───────────────────────────────────────────────────────────
 
+type TryPatch = Parameters<SleepApi["fixTry"]>[1];
+const TRY_FIELDS = ["started_at", "ended_at", "outcome", "tags", "note", "put_down_by"] as const;
+
+/** What a try's fields are, in the words a notice names them by: "the laid-down time and the note". */
+function tryFieldWords(keys: readonly (keyof TryPatch)[], them: string): string {
+  const words: Record<keyof TryPatch, string> = { started_at: "the laid-down time", ended_at: "when it ended", outcome: "how it went", tags: "the tags", note: "the note", put_down_by: `who laid ${them} down` };
+  const w = keys.map((k) => words[k]);
+  return w.length > 1 ? `${w.slice(0, -1).join(", ")} and ${w[w.length - 1]}` : (w[0] ?? "");
+}
+
+/**
+ * A try's own edit. Save names the try as the sheet opened on it and sends
+ * only what this person changed, so another phone's edit since is a 409:
+ * the sheet then shows theirs, with this person's changes kept on top, and
+ * says what the other phone changed, for another Save.
+ */
 export function TrySheet({ t, open = true, onClose }: { t: BassinetTry; open?: boolean; onClose: () => void }) {
   const { state, memberName, readOnly } = useMaple();
   const s = useSleep();
   const v = useVoice();
   const people = usePeople();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const [base, setBase] = useState(t);
   const [start, setStart] = useState(new Date(t.started_at));
   const [end, setEnd] = useState<Date | null>(t.ended_at ? new Date(t.ended_at) : null);
   const [outcome, setOutcome] = useState<TryOutcome | null>(t.outcome);
@@ -479,27 +561,39 @@ export function TrySheet({ t, open = true, onClose }: { t: BassinetTry; open?: b
   // Booleans and stable setters: the time fields report on every render, so a fresh object here would loop.
   const [badStart, setBadStart] = useState(false);
   const [badEnd, setBadEnd] = useState(false);
-  const changed =
-    start.getTime() !== Date.parse(t.started_at) ||
-    (end?.getTime() ?? null) !== (t.ended_at ? Date.parse(t.ended_at) : null) ||
-    outcome !== t.outcome ||
-    tags.join() !== t.tags.join() ||
-    (note.trim() || null) !== t.note ||
-    by !== t.put_down_by;
+  const [elsewhere, setElsewhere] = useState<{ who: string; what: string } | null>(null);
+  const alert = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (elsewhere) alert.current?.scrollIntoView({ block: "center" });
+  }, [elsewhere]);
+  // Only what this person changed, from the try as the sheet opened on it.
+  const patch: TryPatch = {};
+  if (start.getTime() !== Date.parse(base.started_at)) patch.started_at = start.toISOString();
+  if (end && base.ended_at && end.getTime() !== Date.parse(base.ended_at)) patch.ended_at = end.toISOString();
+  if (outcome && outcome !== base.outcome && base.ended_at) patch.outcome = outcome;
+  if (!sameTags(tags, base.tags)) patch.tags = tags;
+  if ((note.trim() || null) !== base.note) patch.note = note.trim() || null;
+  if (by !== base.put_down_by) patch.put_down_by = by;
+  const changed = Object.keys(patch).length > 0;
   const bad = badStart || badEnd || (!!end && end.getTime() < start.getTime());
 
+  // Changed on another phone since: theirs now, with this person's changes kept on top, and what they changed.
+  const rebase = (cur: BassinetTry) => {
+    if (patch.started_at === undefined) setStart(new Date(cur.started_at));
+    if (patch.ended_at === undefined) setEnd(cur.ended_at ? new Date(cur.ended_at) : null);
+    if (patch.outcome === undefined) setOutcome(cur.outcome);
+    if (patch.tags === undefined) setTags(cur.tags);
+    if (patch.note === undefined) setNote(cur.note ?? "");
+    if (patch.put_down_by === undefined) setBy(cur.put_down_by);
+    const moved = TRY_FIELDS.filter((k) => (k === "tags" ? !sameTags(cur.tags, base.tags) : (cur[k] ?? null) !== (base[k] ?? null)));
+    setBase(cur);
+    setElsewhere({ who: changedBy(cur, memberName), what: tryFieldWords(moved, v.them) });
+  };
   const save = async () => {
-    const patch: Parameters<typeof s.fixTry>[1] = {};
-    if (start.getTime() !== Date.parse(t.started_at)) patch.started_at = start.toISOString();
-    if (end && t.ended_at && end.getTime() !== Date.parse(t.ended_at)) patch.ended_at = end.toISOString();
-    if (outcome && outcome !== t.outcome && t.ended_at) patch.outcome = outcome;
-    if (tags.join() !== t.tags.join()) patch.tags = tags;
-    if ((note.trim() || null) !== t.note) patch.note = note.trim() || null;
-    if (by !== t.put_down_by) patch.put_down_by = by;
-    if (await s.fixTry(t, patch)) onClose();
+    if (await s.fixTry(base, patch, { onConflict: rebase, done: onClose })) onClose();
   };
   const del = async () => {
-    if (await s.deleteTry(t)) onClose();
+    if (await s.deleteTry(t, { done: onClose })) onClose();
   };
 
   return (
@@ -512,9 +606,14 @@ export function TrySheet({ t, open = true, onClose }: { t: BassinetTry; open?: b
       footer={<SheetFooter onClose={onClose} onDelete={readOnly ? undefined : () => void del()} onPrimary={() => void save()} label="Save" disabled={!changed || bad} busy={s.busy} />}
     >
       <fieldset disabled={readOnly || s.busy} className="min-w-0 space-y-5">
+        {elsewhere && (
+          <p ref={alert} role="alert" className={cx(tone.inset, "px-4 py-3 text-[15px] leading-relaxed text-mp-ink")}>
+            {elsewhere.who} changed {elsewhere.what || "this try"} on another phone just now, so nothing was saved yet. This shows theirs{changed ? ", with your changes kept on top" : ""}. Look it over, then save again.
+          </p>
+        )}
         <RecordedTimeField label="Laid down" value={start} onChange={setStart} tz={tz} max={end ?? undefined} onInvalidChange={setBadStart} />
         {end && <RecordedTimeField label="Ended" value={end} onChange={setEnd} tz={tz} min={start} onInvalidChange={setBadEnd} />}
-        {t.ended_at && (
+        {base.ended_at && (
           <ChipGroup label="How it went">
             {TRY_OUTCOMES.map((o) => (
               <Chip key={o} selected={outcome === o} onClick={() => setOutcome(o)}>
@@ -532,7 +631,7 @@ export function TrySheet({ t, open = true, onClose }: { t: BassinetTry; open?: b
           ))}
         </ChipGroup>
         <TryNote value={note} onChange={setNote} placeholder={`About ${v.name}'s sleep`} readOnly={readOnly} />
-        {t.sleep_entry_id && <ContextNote>This try sits on {v.their} sleep in the log, so that sleep is counted once. Moving the laid-down time moves that sleep&apos;s start too when they matched.</ContextNote>}
+        {base.sleep_entry_id && <ContextNote>This try sits on {v.their} sleep in the log, so that sleep is counted once. Moving the laid-down time moves that sleep&apos;s start too when they matched.</ContextNote>}
       </fieldset>
     </Sheet>
   );
@@ -591,10 +690,10 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
   const bad = badStart || badEnd || end.getTime() <= start.getTime() || end.getTime() > t0 + MIN;
   const save = async (allowDuplicate = false) => {
     if (!outcome) return;
-    const r = await s.logTry({ start, end, outcome, tags, note: note.trim() || null, putDownBy: by, allowDuplicate });
-    if (!r) return;
-    if ("duplicate" in r) return setTwin(r.duplicate);
-    onClose();
+    // Saved (now or after Try again): the sheet closes; a likely twin asks first.
+    const settle = (r: { saved: BassinetTry } | { duplicate: BassinetTry }) => ("duplicate" in r ? setTwin(r.duplicate) : onClose());
+    const r = await s.logTry({ start, end, outcome, tags, note: note.trim() || null, putDownBy: by, allowDuplicate, done: settle });
+    if (r) settle(r);
   };
   const twinWords = twin ? `A try from ${formatTime(twin.started_at, tz)}${twin.outcome ? ` (${OUTCOME_LABEL[twin.outcome].toLowerCase()})` : ""} is already logged. Is this the same one? Nothing is saved yet.` : "";
   return (
@@ -687,13 +786,25 @@ export function LogTrySheet({ open = true, onClose }: { open?: boolean; onClose:
  * goal fresh from the shared state, and one whose try or shift another
  * phone already closed or deleted closes with a word. A goal's form and a
  * check-in opened from the plan's Goals go back there when they close.
+ *
+ * Each open is a sheet of its own (keyed by a count of opens), so a closed
+ * or discarded sheet's choices never come back with the next one. Its
+ * buttons wait out a double tap's second half (tapCooldown.ts: the tap that
+ * opened it), and Getting sleepy? and the holding sheet, whose buttons
+ * change with the turn or the try, wait a moment after another phone's change.
  */
 export function SleepSheetHost({ api }: { api: SleepApi }) {
   const { toast } = useMaple();
   const [last, setLast] = useState<SleepSheet | null>(api.sheet);
-  if (api.sheet && api.sheet !== last) setLast(api.sheet);
+  const [opens, setOpens] = useState(0);
+  if (api.sheet && api.sheet !== last) {
+    setLast(api.sheet);
+    setOpens((n) => n + 1);
+  }
   const shown = api.sheet ?? last;
   const open = !!api.sheet;
+  const turnKey = shown?.kind === "sleepy" || shown?.kind === "holding" ? [api.shift?.id, api.shift?.holder, api.shift?.asked_to, api.shift?.asked_at, api.running?.id].join(":") : "";
+  const guard = useTapGuard(`${opens}|${turnKey}`);
   const find = (id: number) => api.data.tries.find((t) => t.id === id) ?? null;
   const t = shown && (shown.kind === "outcome" || shown.kind === "try") ? find(shown.tryId) : null;
   const goal = shown?.kind === "goal" && shown.goalId != null ? (api.goals.find((g) => g.id === shown.goalId) ?? null) : null;
@@ -705,8 +816,13 @@ export function SleepSheetHost({ api }: { api: SleepApi }) {
       (shown.kind === "holding" && shown.mode === "handoff" && !api.shift) ||
       (shown.kind === "goal" && shown.goalId != null && !goal));
   const closeSheet = api.closeSheet;
-  const openSheet = api.openSheet;
-  const toGoals = useCallback(() => openSheet({ kind: "plan", tab: "goals" }), [openSheet]);
+  // This sheet's own way out, also after a save that took Try again: never another sheet opened since.
+  const closeThis = () => {
+    if (shown) api.leaveSheet(shown);
+  };
+  const toGoals = () => {
+    if (shown) api.leaveSheet(shown, { kind: "plan", tab: "goals" });
+  };
   // This phone's own Save, outcome or Delete closes its sheet itself: only a change from elsewhere says so.
   const quiet = !!shown && "tryId" in shown && api.endedHere(shown.tryId);
   useEffect(() => {
@@ -725,25 +841,33 @@ export function SleepSheetHost({ api }: { api: SleepApi }) {
     );
   }, [open, gone, quiet, closeSheet, shown?.kind, t?.ended_at, t?.outcome, toast]);
   if (!shown || (gone && open)) return null;
-  const key = (x: string) => `${x}-${shown.kind}-${"tryId" in shown ? shown.tryId : ""}`;
-  switch (shown.kind) {
-    case "plan":
-      return <SleepPlanSheet key={key("plan")} tab={shown.tab} open={open} onClose={closeSheet} />;
-    case "goal":
-      return shown.goalId != null && !goal ? null : <GoalFormSheet key={key(`g${shown.goalId ?? "new"}`)} goal={goal} open={open} onClose={toGoals} />;
-    case "checkin":
-      return <CheckinSheet key={key(`c${shown.night ?? ""}`)} night={shown.night} open={open} onClose={shown.back === "goals" ? toGoals : closeSheet} />;
-    case "outcome":
-      return t ? <OutcomeSheet key={key("o")} t={t} defaultAt={shown.at} details={shown.details} open={open} onClose={closeSheet} /> : null;
-    case "try":
-      return t ? <TrySheet key={key("t")} t={t} open={open} onClose={closeSheet} /> : null;
-    case "sleepy":
-      return <SleepySheet key={key("s")} open={open} onClose={closeSheet} />;
-    case "holding":
-      return <HoldingSheet key={key(`h-${shown.mode}`)} mode={shown.mode} to={shown.to} open={open} onClose={closeSheet} />;
-    case "log":
-      return <LogTrySheet key={key("l")} open={open} onClose={closeSheet} />;
-    case "catchup":
-      return <CatchUpSheet key={key(`cu-${shown.started.id}`)} started={shown.started} ended={shown.ended} why={shown.why ?? null} open={open} onClose={closeSheet} />;
-  }
+  const key = (x: string) => `${opens}-${x}-${shown.kind}-${"tryId" in shown ? shown.tryId : ""}`;
+  const sheet = (() => {
+    switch (shown.kind) {
+      case "plan":
+        return <SleepPlanSheet key={key("plan")} tab={shown.tab} open={open} onClose={closeThis} />;
+      case "goal":
+        return shown.goalId != null && !goal ? null : <GoalFormSheet key={key(`g${shown.goalId ?? "new"}`)} goal={goal} open={open} onClose={toGoals} />;
+      case "checkin":
+        return <CheckinSheet key={key(`c${shown.night ?? ""}`)} night={shown.night} open={open} onClose={shown.back === "goals" ? toGoals : closeThis} />;
+      case "outcome":
+        return t ? <OutcomeSheet key={key("o")} t={t} defaultAt={shown.at} details={shown.details} open={open} onClose={closeThis} /> : null;
+      case "try":
+        return t ? <TrySheet key={key("t")} t={t} open={open} onClose={closeThis} /> : null;
+      case "sleepy":
+        return <SleepySheet key={key("s")} open={open} onClose={closeThis} />;
+      case "holding":
+        return <HoldingSheet key={key(`h-${shown.mode}`)} mode={shown.mode} to={shown.to} open={open} onClose={closeThis} />;
+      case "log":
+        return <LogTrySheet key={key("l")} open={open} onClose={closeThis} />;
+      case "catchup":
+        return <CatchUpSheet key={key(`cu-${shown.started.id}`)} started={shown.started} ended={shown.ended} why={shown.why ?? null} open={open} onClose={closeThis} />;
+    }
+  })();
+  // display: contents, so the sheet sits as it always has; the guard sees every click in it (and in its discard question).
+  return (
+    <div className="contents" {...guard.props}>
+      {sheet}
+    </div>
+  );
 }

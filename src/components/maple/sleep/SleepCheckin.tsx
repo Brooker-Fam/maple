@@ -135,24 +135,28 @@ export function useCardReceipts(fn: (r: CardReceipt) => void): void {
 
 /** Every useNightValue on this page hears a change to its key (Today's card and the dock's strip read the same answers). */
 const NIGHT_VALUE_EVENT = "maple-night-value";
-/** With storage blocked, what this page set, until it reloads. */
+/** What this page set, until it reloads: it wins over storage, which may be blocked, or read but not write. */
 const nightValues = new Map<string, string>();
 
 /**
  * A value kept for one night on this phone (in this browser's storage; with
- * storage blocked, until the page reloads), like Not now: undefined until
- * read, so a hidden card never flashes in first. Every hook on the page with
- * the same key sees a change at once.
+ * storage blocked or full, until the page reloads), like Not now: undefined
+ * until read, so a hidden card never flashes in first. Every hook on the page
+ * with the same key sees a change at once. What this page set is read first:
+ * storage that reads but won't write (a full quota) still holds the value
+ * before it, which must never come back over a newer answer.
  */
 export function useNightValue(key: string | null): [string | null | undefined, (value: string) => void] {
   const [value, setValue] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     if (!key) return;
     const read = () => {
+      const kept = nightValues.get(key);
+      if (kept !== undefined) return setValue(kept);
       try {
-        setValue(localStorage.getItem(key) ?? nightValues.get(key) ?? null);
+        setValue(localStorage.getItem(key));
       } catch {
-        setValue(nightValues.get(key) ?? null);
+        setValue(null);
       }
     };
     read();
@@ -169,7 +173,7 @@ export function useNightValue(key: string | null): [string | null | undefined, (
     try {
       localStorage.setItem(key, next);
     } catch {
-      // storage blocked: kept until this page reloads
+      // storage blocked or full: kept (above) until this page reloads
     }
     window.dispatchEvent(new CustomEvent(NIGHT_VALUE_EVENT, { detail: key }));
   };
@@ -198,18 +202,21 @@ export function CheckinSheet({ night: given, open = true, onClose }: { night?: s
   const fromCard = s.sheet?.kind === "checkin" && !!s.sheet.card;
   const pick = async (a: ProtectedAnswer) => {
     if (fromCard) {
-      const r = await s.answerCheckin(a, night, { note: note.trim() || null });
-      if (!r) return;
-      const undo = r.undo;
-      if (!sendCardReceipt(r)) toast(r.said, { tone: "ok", ...(undo ? { undo: () => void undo().then((x) => x && toast("Undone", { tone: "info" })) } : {}) });
-      onClose();
+      // Saved (now, or after the refusal toast's Try again): the card shows the receipt, and the sheet closes.
+      const receipt = (r: CardReceipt) => {
+        const undo = r.undo;
+        if (!sendCardReceipt(r)) toast(r.said, { tone: "ok", ...(undo ? { undo: () => void undo().then((x) => x && toast("Undone", { tone: "info" })) } : {}) });
+        onClose();
+      };
+      const r = await s.answerCheckin(a, night, { note: note.trim() || null, done: receipt });
+      if (r) receipt(r);
       return;
     }
-    const saved = await s.saveCheckin(a, { night, note: note.trim() || null });
+    const saved = await s.saveCheckin(a, { night, note: note.trim() || null, done: onClose });
     if (saved) onClose();
   };
   const remove = async () => {
-    if (mine && (await s.deleteCheckin(mine))) onClose();
+    if (mine && (await s.deleteCheckin(mine, { done: onClose }))) onClose();
   };
   return (
     <Sheet

@@ -655,7 +655,25 @@ function makeServer(clock) {
     db.entries.push(e);
     return e;
   };
-  return { db, handle, snapshot, seeds, changeGoal, changePlan, startTimer, stopEntry, logEntry, stopSleep: () => {
+  /** Another phone edits a try: a new updated_at this phone hasn't seen. */
+  const changeTry = (id, patch) => {
+    const t = db.tries.find((x) => x.id === id);
+    Object.assign(t, patch, { updated_by: PARTNER });
+    stamp(t);
+    return { ...t };
+  };
+  /** Another phone changes a turn (an ask, say). */
+  const changeShift = (id, patch) => {
+    const s = db.shifts.find((x) => x.id === id);
+    Object.assign(s, patch);
+    stamp(s);
+    return { ...s };
+  };
+  /** Another phone's I've got her (`who` takes over the open turn), as shift.accept would. */
+  const acceptAs = (who) => handle(who, "/api/maple/sleep", { method: "POST", body: JSON.stringify({ action: "shift.accept", id: db.shifts.find((s) => !s.ended_at).id }) });
+  /** Another phone starts a turn with `holder` holding her, awake. */
+  const startShiftAs = (who, holder) => handle(who, "/api/maple/sleep", { method: "POST", body: JSON.stringify({ action: "shift.start", holder, handoff_at: null, next_holder: who }) });
+  return { db, handle, snapshot, seeds, changeGoal, changePlan, changeTry, changeShift, acceptAs, startShiftAs, startTimer, stopEntry, logEntry, stopSleep: () => {
     const live = runningSleep();
     return live ? { ...stopEntry(live.id) } : null;
   } };
@@ -677,6 +695,20 @@ function makeWorld(query) {
   const clock = () => BASE + offset.current;
   const server = makeServer(clock);
   for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing", "armsfeed", "roster", "mornings", "quiet"]) if (query.has(name)) server.seeds[name]();
+  // ?notry (with ?goals&morning): Wed night (Nov 4) has no try and no sleep under one, so the untimed-try question is asked.
+  // ?carrier: and its one sleep, 11 PM–1:20 AM, was in a carrier (never prefilled as held by someone awake).
+  if (query.has("notry") || query.has("carrier")) {
+    const from = Date.parse("2026-11-04T16:00:00Z");
+    const to = Date.parse("2026-11-05T16:00:00Z");
+    const on = (t) => Date.parse(t.started_at) >= from && Date.parse(t.started_at) < to;
+    const gone = new Set(server.db.tries.filter(on).map((t) => t.sleep_entry_id));
+    server.db.tries = server.db.tries.filter((t) => !on(t));
+    server.db.entries = server.db.entries.filter((e) => !gone.has(e.id));
+  }
+  if (query.has("carrier")) {
+    const [start, end] = [Date.parse("2026-11-05T04:00:00Z"), Date.parse("2026-11-05T06:20:00Z")];
+    server.db.entries.push({ id: 9001, kind: "sleep", started_at: new Date(start).toISOString(), ended_at: new Date(end).toISOString(), active: false, data: { place: "carrier" }, note: null, created_by: "sam@example.test", updated_at: new Date(end).toISOString(), source: "web", created_at: new Date(end).toISOString() });
+  }
   return {
     server,
     clock,
@@ -715,7 +747,22 @@ function Phone({ world }) {
   const [toasts, setToasts] = useState([]);
   // Minutes passing: the clock moves, and toasts that would have timed out on a phone are gone.
   useEffect(() => world.listen(() => (setTick((n) => n + 1), setToasts([]))), [world]);
-  const handle = useCallback((path, init) => server.handle(SIGNED_IN, path, init), [server]);
+  // ?slow=<ms>: each answer comes after that long (a phone's network at 3 AM). failNext(): the next write is lost on the way
+  // (a connection error before it reaches the route), as when the signal drops: the toast's Try again sends it again.
+  const slowMs = Number(params.get("slow") ?? 0);
+  const fail = useRef(0);
+  const handle = useCallback(
+    async (path, init) => {
+      if (slowMs) await new Promise((r) => setTimeout(r, slowMs));
+      if (init?.method === "POST" && fail.current > 0) {
+        fail.current -= 1;
+        server.db.calls.push({ action: "LOST", body: JSON.parse(init.body), who: SIGNED_IN });
+        throw new TypeError("Failed to fetch");
+      }
+      return server.handle(SIGNED_IN, path, init);
+    },
+    [server, slowMs]
+  );
   const [state, setState] = useState(() => {
     const snap = server.snapshot(SIGNED_IN);
     const any = !!snap.plan || snap.tries.length || snap.shifts.length || snap.goals.length || snap.checkins?.length;
@@ -840,6 +887,14 @@ function Phone({ world }) {
       // Another phone's edit, which this phone only learns of from a write's answer (or the next poll).
       changeGoal: (id, patch) => server.changeGoal(id, patch),
       changePlan: (patch) => server.changePlan(patch),
+      changeTry: (id, patch) => server.changeTry(id, patch),
+      changeShift: (id, patch) => server.changeShift(id, patch),
+      acceptAs: (who) => server.acceptAs(who),
+      startShiftAs: (who, holder) => server.startShiftAs(who, holder),
+      /** The next `n` writes are lost on the way (a connection error). */
+      failNext: (n = 1) => void (fail.current = n),
+      shifts: () => JSON.parse(JSON.stringify(server.db.shifts)),
+      goals: () => JSON.parse(JSON.stringify(server.db.goals)),
       goal: (id) => server.snapshot(SIGNED_IN).goals.find((g) => g.id === id) ?? null,
       db: () => JSON.parse(JSON.stringify({ plan: server.db.plan, tries: server.db.tries, shifts: server.db.shifts, entries: server.db.entries })),
       checkins: () => server.db.checkins.filter((c) => !c.deleted).map((c) => ({ member: c.member, night: c.night, protected: c.protected, note: c.note, place: c.place ?? null, untimed_try: c.untimed_try ?? null, handoff: c.handoff ?? null })),

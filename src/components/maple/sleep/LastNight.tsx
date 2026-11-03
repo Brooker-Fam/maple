@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SLEEP_GUIDES } from "@/lib/maple/guidelines/sleep";
 import { sleepByPlace, tryDayKey } from "@/lib/maple/sleep/engine";
 import { goalStartKey, lastNightKey, nightAnswers, nightPicture, plannedHandoff, windowOn, windowOnNight, type NightBar, type NightGap, type NightPicture } from "@/lib/maple/sleep/goals";
-import { CHECKIN_PLACES, HANDOFF_ANSWERS, UNTIMED_TRIES, type CheckinPlace, type HoldingShift, type ProtectedAnswer, type SleepGoal } from "@/lib/maple/sleep/types";
+import { CHECKIN_PLACES, HANDOFF_ANSWERS, UNTIMED_TRIES, type CheckinExtras, type CheckinPlace, type HoldingShift, type ProtectedAnswer, type SleepGoal } from "@/lib/maple/sleep/types";
 import { checkinQuestion, dateWords, HANDOFF_LABEL, handoffQuestion, PLACE_LABEL, placeQuestion, shortClock, UNTIMED_QUESTION, untimedLabels } from "@/lib/maple/sleep/words";
 import { dayKey, DEFAULT_TZ, formatDuration, formatTime, formatTimeNear, localParts } from "@/lib/maple/time";
 import type { Entry } from "@/lib/maple/types";
@@ -14,6 +14,7 @@ import { AskChatButton } from "../chat/AskChat";
 import { useVoice } from "../familyWords";
 import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
+import { focusNext, useTapGuard } from "../tapCooldown";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { AnswerButtons, checkinDue, morningOf, myWindows, useCardReceipts, useNightValue, type CheckinDue } from "./SleepCheckin";
@@ -65,7 +66,8 @@ function loggedWords(c: NightPicture["counts"]): string {
 /** Under the strip, between its ends: "2 sleeps · 3 feeds · 1 diaper", "Nothing logged". */
 const countsLine = (c: NightPicture["counts"]) => countParts(c).join(" · ") || "Nothing logged";
 
-const BAR_COLOR: Record<Bar["kind"], string> = { ...KIND_COLOR, try: KIND_COLOR.sleep, hold: "#7F8C6A" };
+/** Each kind's own color; a holding turn (not a kind) in the app's muted ink, dimmed to amber at night like the rest. */
+const BAR_COLOR: Record<Bar["kind"], string> = { ...KIND_COLOR, try: KIND_COLOR.sleep, hold: "var(--mp-ink-3)" };
 
 /**
  * The night as one bar: sleeps and feeds where they were logged, other
@@ -138,10 +140,30 @@ export type NightAsk =
   | { kind: "untimed"; minutes: number }
   | { kind: "handoff"; at: string };
 
+/** Which question it is (its kind and what it's about), so a new one is known as new. */
+const askId = (a: NightAsk | null): string => {
+  if (!a) return "";
+  switch (a.kind) {
+    case "running":
+      return `running:${a.sleep.id}:${a.next.id}`;
+    case "checkin":
+      return `checkin:${a.due.night}`;
+    case "gap":
+      return `gap:${a.gap.start}`;
+    case "place":
+      return `place:${a.prefill ?? ""}`;
+    case "untimed":
+      return `untimed:${a.minutes}`;
+    case "handoff":
+      return `handoff:${a.at}`;
+  }
+};
+
 /**
  * Where the baby spent the night, from the log, when every sleep in the
- * strip has a place: the bassinet (or crib), held (in arms or a carrier), or
- * some of each; nothing for anywhere else, which is the family's to say.
+ * strip has a place: the bassinet (or crib), held (in arms), or some of
+ * each; nothing for anywhere else, a carrier included (never prefilled as
+ * held by someone awake), which is the family's to say.
  */
 export function placeFromLog(entries: readonly Entry[], tries: Parameters<typeof sleepByPlace>[1], from: number, to: number, now: number): CheckinPlace | null {
   const r = sleepByPlace(entries, tries, from, to, now);
@@ -150,7 +172,7 @@ export function placeFromLog(entries: readonly Entry[], tries: Parameters<typeof
   let held = 0;
   for (const p of r.places) {
     if (p.place === "bassinet" || p.place === "crib") bassinet += p.sec;
-    else if (p.place === "arms" || p.place === "carrier") held += p.sec;
+    else if (p.place === "arms") held += p.sec;
     else if (p.sec > 0) return null;
   }
   const total = bassinet + held;
@@ -289,6 +311,9 @@ export function useLastNight(o: { keep?: boolean } = {}): LastNight | null {
   };
 }
 
+/** Where focus goes once an answer takes its button away: the next question, the look-back's, the card's heading, else Right now. */
+const AFTER_ANSWER = ["#last-night-ask", "#look-back-move", "#look-back", "#last-night", "#right-now", "#recent"];
+
 /** "A feed was logged at 6:30 AM": what came after a sleep that's still running. */
 export const nextWords = (next: Entry, tz: string) => `${next.kind === "feed" ? "A feed" : next.kind === "diaper" ? "A diaper" : "Something"} was logged at ${formatTime(next.started_at, tz)}`;
 
@@ -328,8 +353,10 @@ export function WokeAsk({ sleep, next, onWoke, onStill, busy }: { sleep: Entry; 
   const { state } = useMaple();
   const v = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  // It comes in above a card's buttons when something's logged (here or on another phone): a tap meant for them waits.
+  const guard = useTapGuard(`${sleep.id}:${next.id}`);
   return (
-    <div role="group" aria-label={`Did ${v.they} wake at ${formatTime(next.started_at, tz)}?`} data-woke-ask={sleep.id} className="space-y-2">
+    <div role="group" aria-label={`Did ${v.they} wake at ${formatTime(next.started_at, tz)}?`} data-woke-ask={sleep.id} {...guard.props} className="space-y-2">
       <p className="text-[14px] leading-snug font-medium text-mp-ink">
         {nextWords(next, tz)}. Did {v.they} wake then?
       </p>
@@ -344,7 +371,18 @@ export function LeftRunningAsk({ entry }: { entry: Entry }) {
   const { timerBusy } = useMaple();
   if (!ln || ln.ask?.kind !== "running" || ln.ask.sleep.id !== entry.id) return null;
   const { sleep, next } = ln.ask;
-  return <WokeAsk sleep={sleep} next={next} busy={timerBusy(sleep.id)} onWoke={() => void ln.wokeAt(sleep, next)} onStill={() => ln.stillAsleep(sleep, next)} />;
+  return (
+    <WokeAsk
+      sleep={sleep}
+      next={next}
+      busy={timerBusy(sleep.id)}
+      onWoke={() => void ln.wokeAt(sleep, next).then((ok) => ok && focusNext(...AFTER_ANSWER))}
+      onStill={() => {
+        ln.stillAsleep(sleep, next);
+        focusNext(...AFTER_ANSWER);
+      }}
+    />
+  );
 }
 
 /** Scroll Today to the Last night card (its question on screen, above the dock) and put focus on its first answer: the strip's Answer. */
@@ -413,19 +451,30 @@ export function LastNightCard() {
     m.toast(receipt.said, { tone: "ok", group: "last-night", ...(undo ? { undo: () => void undo().then((x) => x && m.toast("Undone", { tone: "info", group: "last-night" })) } : {}) });
     setKept(null);
   }, [done, receipt, m]);
+  // Each answer brings its next question in where the last one was (here, or another adult's answer on a poll): the card's
+  // buttons wait out a double tap's second half (tapCooldown.ts), so one tap never answers two questions.
+  const guard = useTapGuard(ln ? [night0, folded ? "folded" : askId(ln.ask), placeOpen, look ? `look-${look.goal.id}` : ""].join("|") : "");
   // (Rendering nothing keeps this card's state: a receipt arriving just after the last answer still reaches its toast.)
   if (!s || !ln || !state || done) return null;
   const { night, pic } = ln;
   // Folded after noon: the optional question waits behind its row.
   const ask = folded ? null : ln.ask;
 
+  // An answer that takes its own button away: focus goes to what came in its place.
+  const moved = () => focusNext(...AFTER_ANSWER);
   const show = (r: CardReceipt | null) => {
     if (r) setReceipt(r);
+  };
+  /** A saved answer's receipt, and focus on what's next (after Try again too, through `done`). */
+  const answered = (r: CardReceipt | null) => {
+    show(r);
+    if (r) moved();
   };
   /** Stretches answered without saving anything (remembered on this phone); `said` replaces the receipt. */
   const answerGap = (gs: Gap[], said?: string) => {
     ln.save({ ...ln.memo, gaps: [...(ln.memo.gaps ?? []), ...gs.map((g) => g.start)] });
     if (said) setReceipt({ said, undo: null });
+    moved();
   };
   const sleptThrough = async (g: Gap) => {
     const saved = await m.log({ kind: "sleep", client_id: `lastnight-${night}-${g.start}`, started_at: new Date(g.start).toISOString(), ended_at: new Date(g.end).toISOString(), data: {} }, { silent: true });
@@ -439,21 +488,31 @@ export function LastNightCard() {
       return gone;
     };
     setReceipt({ said: `Logged: asleep ${formatTimeNear(g.start, g.end, tz)}–${formatTime(g.end, tz)}`, undo });
+    moved();
   };
-  const place = async (p: CheckinPlace) => show(await s.answerExtras(night, { place: p }, `Saved: ${PLACE_LABEL[p].toLowerCase()}`));
+  const extras = async (x: CheckinExtras, said: string) => answered(await s.answerExtras(night, x, said, { done: answered }));
+  const place = (p: CheckinPlace) => extras({ place: p }, `Saved: ${PLACE_LABEL[p].toLowerCase()}`);
 
   let body: ReactNode = null;
   if (ask?.kind === "running") {
     const { sleep, next } = ask;
     body = (
       <Ask id="last-night-ask" title={`The sleep timer is still running from ${formatTime(sleep.started_at, tz)}`} sub={`${nextWords(next, tz)}.`}>
-        <WokeButtons at={formatTime(next.started_at, tz)} busy={timerBusy(sleep.id)} onWoke={() => void ln.wokeAt(sleep, next)} onStill={() => ln.stillAsleep(sleep, next)} />
+        <WokeButtons
+          at={formatTime(next.started_at, tz)}
+          busy={timerBusy(sleep.id)}
+          onWoke={() => void ln.wokeAt(sleep, next).then((ok) => ok && moved())}
+          onStill={() => {
+            ln.stillAsleep(sleep, next);
+            moved();
+          }}
+        />
       </Ask>
     );
   } else if (ask?.kind === "checkin") {
     body = (
       <Ask id="last-night-ask" title={ask.question}>
-        <AnswerButtons row question={ask.question} disabled={s.busy} onPick={(a: ProtectedAnswer) => void s.answerCheckin(a, ask.due.night).then(show)} />
+        <AnswerButtons row question={ask.question} disabled={s.busy} onPick={(a: ProtectedAnswer) => void s.answerCheckin(a, ask.due.night, { done: answered }).then(answered)} />
       </Ask>
     );
   } else if (ask?.kind === "gap") {
@@ -488,7 +547,14 @@ export function LastNightCard() {
             <GridAnswer disabled={s.busy} onClick={() => void place(ask.prefill!)}>
               {pre.yes}
             </GridAnswer>
-            <GridAnswer onClick={() => setPlaceOpen(true)}>Something else</GridAnswer>
+            <GridAnswer
+              onClick={() => {
+                setPlaceOpen(true);
+                moved();
+              }}
+            >
+              Something else
+            </GridAnswer>
           </div>
         </Ask>
       ) : (
@@ -508,7 +574,7 @@ export function LastNightCard() {
       <Ask id="last-night-ask" title={UNTIMED_QUESTION} sub="No try is in the log for last night.">
         <div className="grid grid-cols-2 gap-2">
           {UNTIMED_TRIES.map((u) => (
-            <GridAnswer key={u} disabled={s.busy} onClick={() => void s.answerExtras(night, { untimed_try: u, untimed_min: u === "no" ? null : ask.minutes }, `Saved: ${labels[u].toLowerCase()}`).then(show)}>
+            <GridAnswer key={u} disabled={s.busy} onClick={() => void extras({ untimed_try: u, untimed_min: u === "no" ? null : ask.minutes }, `Saved: ${labels[u].toLowerCase()}`)}>
               {labels[u]}
             </GridAnswer>
           ))}
@@ -520,7 +586,7 @@ export function LastNightCard() {
       <Ask id="last-night-ask" title={handoffQuestion(formatTime(ask.at, tz))}>
         <div className="grid grid-cols-2 gap-2">
           {HANDOFF_ANSWERS.map((h) => (
-            <GridAnswer key={h} disabled={s.busy} onClick={() => void s.answerExtras(night, { handoff: h }, `Saved: ${HANDOFF_LABEL[h].toLowerCase()}`).then(show)}>
+            <GridAnswer key={h} disabled={s.busy} onClick={() => void extras({ handoff: h }, `Saved: ${HANDOFF_LABEL[h].toLowerCase()}`)}>
               {HANDOFF_LABEL[h]}
             </GridAnswer>
           ))}
@@ -537,6 +603,7 @@ export function LastNightCard() {
       exit={{ opacity: 0 }}
       aria-labelledby="last-night"
       data-last-night
+      {...guard.props}
       className={cx(tone.card, "space-y-3 px-4 py-3.5")}
     >
       {/* Not now sits by the title, so the card's question, its answers and a way out fit above the dock on a 320 × 568 phone. */}
@@ -557,7 +624,13 @@ export function LastNightCard() {
                 <button
                   type="button"
                   disabled={s.busy}
-                  onClick={() => void undo().then((x) => x && setReceipt(null))}
+                  onClick={() =>
+                    void undo().then((x) => {
+                      if (!x) return;
+                      setReceipt(null);
+                      moved();
+                    })
+                  }
                   className="-my-3 inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center font-semibold text-mp-accent-fg disabled:opacity-40"
                 >
                   Undo
@@ -568,7 +641,15 @@ export function LastNightCard() {
             <p className={cx(tone.muted, "truncate text-[13px] leading-snug")}>{dateWords(night, dayKey(now, tz))}</p>
           )}
         </div>
-        <Button variant="ghost" size="sm" className="-mr-2 shrink-0" onClick={() => ln.save({ ...ln.memo, hidden: true })}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-mr-2 shrink-0"
+          onClick={() => {
+            ln.save({ ...ln.memo, hidden: true });
+            focusNext("#right-now", "#recent");
+          }}
+        >
           Not now
         </Button>
       </div>
@@ -576,7 +657,15 @@ export function LastNightCard() {
       {folded ? (
         <div className="flex items-center justify-between gap-3">
           <p className={cx(tone.muted, "min-w-0 text-[14px] leading-snug")}>More about last night, if you&apos;d like.</p>
-          <Button variant="soft" size="sm" className="shrink-0" onClick={() => setUnfolded(night)}>
+          <Button
+            variant="soft"
+            size="sm"
+            className="shrink-0"
+            onClick={() => {
+              setUnfolded(night);
+              moved();
+            }}
+          >
             Answer
           </Button>
         </div>
@@ -590,7 +679,17 @@ export function LastNightCard() {
         </p>
       )}
       {/* The weekly look-back ends the card, once the night's own questions are answered (or folded). */}
-      {look && !ask && <LookBackPart key={look.goal.id} due={look} onReceipt={setReceipt} onHold={(on) => setHeld(on ? look : null)} />}
+      {look && !ask && (
+        <LookBackPart
+          key={look.goal.id}
+          due={look}
+          onReceipt={(r) => {
+            setReceipt(r);
+            moved();
+          }}
+          onHold={(on) => setHeld(on ? look : null)}
+        />
+      )}
       <div className="-mx-1 flex flex-wrap items-center gap-x-1">
         <AskChatButton prompt="Last night: " label="Last night">
           Tell Maple

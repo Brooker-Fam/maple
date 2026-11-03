@@ -57,7 +57,7 @@ import { Icon } from "../icons";
 import { Label } from "../sheets/parts";
 import { Button, Chip, cx, TextArea, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { useSleep, useSleepMaybe } from "./useSleep";
+import { useSleep, useSleepMaybe, type GoalSave } from "./useSleep";
 
 /**
  * The plan sheet's Goals: each open sleep goal with its target date and
@@ -480,7 +480,8 @@ function CautionNote({ c }: { c: GoalCaution }) {
         {c.source && (
           <>
             {" "}
-            <a href={c.source.url} target="_blank" rel="noreferrer" className="font-medium text-mp-accent-fg underline underline-offset-2">
+            {/* A 44px target in the line of text, as the guidance's sources are: the box grows, the line doesn't. */}
+            <a href={c.source.url} target="_blank" rel="noreferrer" className="-my-3.5 inline-flex min-h-[44px] min-w-[44px] items-center justify-center align-middle font-medium text-mp-accent-fg underline underline-offset-2">
               Source
             </a>
           </>
@@ -655,17 +656,20 @@ function GoalMenu({ goal, span, quiet, onDone }: { goal: SleepGoal; span: GoalSp
   const today = dayKey(now(), tz);
   const until = addDays(today, EASE_OFF_DAYS);
   const write = async (patch: Pick<GoalInput, "counts_from" | "paused_until">, said: string) => {
-    const r = await s.goalCall({ action: "goal.update", id: goal.id, revision: goal.revision, patch });
-    if (!r || !("saved" in r)) return;
-    const saved = r.saved;
-    const back: Pick<GoalInput, "counts_from" | "paused_until"> = {};
-    if (patch.counts_from !== undefined) back.counts_from = goal.counts_from ?? null;
-    if (patch.paused_until !== undefined) back.paused_until = goal.paused_until ?? null;
-    onDone();
-    toast(said, {
-      tone: "ok",
-      undo: () => void s.goalCall({ action: "goal.update", id: goal.id, revision: saved.revision, patch: back }).then((x) => x && "saved" in x && toast("Undone", { tone: "info" })),
-    });
+    // Once it saves (now, or after the refusal toast's Try again): the menu closes, and the toast says so with Undo.
+    const settle = (r: GoalSave) => {
+      if (!r || !("saved" in r)) return;
+      const saved = r.saved;
+      const back: Pick<GoalInput, "counts_from" | "paused_until"> = {};
+      if (patch.counts_from !== undefined) back.counts_from = goal.counts_from ?? null;
+      if (patch.paused_until !== undefined) back.paused_until = goal.paused_until ?? null;
+      onDone();
+      toast(said, {
+        tone: "ok",
+        undo: () => void s.goalCall({ action: "goal.update", id: goal.id, revision: saved.revision, patch: back }).then((x) => x && "saved" in x && toast("Undone", { tone: "info" })),
+      });
+    };
+    settle(await s.goalCall({ action: "goal.update", id: goal.id, revision: goal.revision, patch }, { done: settle }));
   };
   const pickUp = () => void write({ counts_from: tonightKey(now(), tz), ...(easing ? { paused_until: null } : {}) }, "Picked up: counting from tonight");
   const easeOff = () => void write({ paused_until: until }, `${easingWords(until, today)}. The steps and targets hold.`);
@@ -971,7 +975,7 @@ function CloseGoal({ goal, onCancel }: { goal: SleepGoal; onCancel: () => void }
   const s = useSleep();
   const [note, setNote] = useState("");
   const close = async (status: "met" | "dropped") => {
-    if (await s.closeGoal(goal, status, note.trim() || null)) onCancel();
+    if (await s.closeGoal(goal, status, note.trim() || null, { done: onCancel })) onCancel();
   };
   return (
     <div role="group" aria-label="Close this goal" className={cx(tone.inset, "space-y-3 px-3.5 py-3")}>

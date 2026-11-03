@@ -8,11 +8,12 @@ import { easingWords, nightsRange } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
+import { focusNext, useTapGuard } from "../tapCooldown";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { useNightValue } from "./SleepCheckin";
 import { useGoalsView } from "./SleepGoals";
-import { useSleepMaybe, type CardReceipt } from "./useSleep";
+import { useSleepMaybe, type CardReceipt, type GoalSave } from "./useSleep";
 
 /**
  * Back after a quiet stretch (goals.ts QuietStretch: QUIET_NIGHTS nights in
@@ -121,49 +122,59 @@ export function GoalReturnCard({ r }: { r: Shown }) {
   const s = useSleepMaybe();
   const { state, now } = useMaple();
   const [receipt, setReceipt] = useState<CardReceipt | null>(null);
+  // Its choices turn into a receipt with Undo and Done in their place: a double tap's second half waits (tapCooldown.ts).
+  const guard = useTapGuard(`${r.key}:${receipt ? "done" : "ask"}`);
   if (!s || !state) return null;
   const tz = state.baby.timezone ?? DEFAULT_TZ;
   const today = dayKey(now(), tz);
   // The goal as it is now (another phone may have moved it on), for each write's revision.
   const goal = s.goals.find((g) => g.id === r.goal.id) ?? r.goal;
   const write = s.goalCall;
-  const done = (said: string, undo: CardReceipt["undo"]) => setReceipt({ said, undo });
+  // The receipt in the choices' place, and focus on the card's heading (the button tapped is gone).
+  const done = (said: string, undo: CardReceipt["undo"]) => {
+    setReceipt({ said, undo });
+    focusNext("#goal-return");
+  };
+  /** One choice's write, and its receipt once it saves: now, or after the refusal toast's Try again. */
+  const choose = async (body: Record<string, unknown>, receiptOf: (saved: SleepGoal) => void) => {
+    const settle = (w: GoalSave) => void (w && "saved" in w && receiptOf(w.saved));
+    settle(await write(body, { done: settle }));
+  };
 
-  const pickUp = async () => {
+  const pickUp = () => {
     const from = tonightKey(now(), tz);
     const easing = !!goal.paused_until && today < goal.paused_until;
-    const w = await write({ action: "goal.update", id: goal.id, revision: goal.revision, patch: { counts_from: from, ...(easing ? { paused_until: null } : {}) } });
-    if (!w || !("saved" in w)) return;
-    const saved = w.saved;
-    done("Picked up: counting from tonight", async () => {
-      const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { counts_from: goal.counts_from ?? null, ...(easing ? { paused_until: goal.paused_until } : {}) } });
-      return !!u && "saved" in u;
-    });
+    return choose({ action: "goal.update", id: goal.id, revision: goal.revision, patch: { counts_from: from, ...(easing ? { paused_until: null } : {}) } }, (saved) =>
+      done("Picked up: counting from tonight", async () => {
+        const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { counts_from: goal.counts_from ?? null, ...(easing ? { paused_until: goal.paused_until } : {}) } });
+        return !!u && "saved" in u;
+      })
+    );
   };
-  const easeOff = async () => {
+  const easeOff = () => {
     const until = addDays(today, EASE_OFF_DAYS);
-    const w = await write({ action: "goal.update", id: goal.id, revision: goal.revision, patch: { paused_until: until } });
-    if (!w || !("saved" in w)) return;
-    const saved = w.saved;
-    done(easingWords(until, today), async () => {
-      const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { paused_until: goal.paused_until ?? null } });
-      return !!u && "saved" in u;
-    });
+    return choose({ action: "goal.update", id: goal.id, revision: goal.revision, patch: { paused_until: until } }, (saved) =>
+      done(easingWords(until, today), async () => {
+        const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { paused_until: goal.paused_until ?? null } });
+        return !!u && "saved" in u;
+      })
+    );
   };
-  const setAside = async () => {
-    // The goal's own close path: Closed recently keeps it, with Open again; Undo opens it again as it was.
-    const w = await write({ action: "goal.close", id: goal.id, status: "dropped" });
-    if (!w || !("saved" in w)) return;
-    const saved = w.saved;
-    done(`Set aside: ${goal.title}`, async () => {
-      const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { status: goal.status === "paused" ? "paused" : "active" } });
-      return !!u && "saved" in u;
-    });
+  // The goal's own close path: Closed recently keeps it, with Open again; Undo opens it again as it was.
+  const setAside = () =>
+    choose({ action: "goal.close", id: goal.id, status: "dropped" }, (saved) =>
+      done(`Set aside: ${goal.title}`, async () => {
+        const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { status: goal.status === "paused" ? "paused" : "active" } });
+        return !!u && "saved" in u;
+      })
+    );
+  const dismiss = () => {
+    setShown(null);
+    focusNext("#last-night", "#right-now", "#recent");
   };
-  const dismiss = () => setShown(null);
   const undo = receipt?.undo;
   return (
-    <section aria-labelledby="goal-return" data-goal-return className={cx(tone.card, "space-y-3 px-4 py-3.5")}>
+    <section aria-labelledby="goal-return" data-goal-return {...guard.props} className={cx(tone.card, "space-y-3 px-4 py-3.5")}>
       <div className="flex items-start gap-3">
         <KindBadge icon="moon" color={KIND_COLOR.sleep} size={36} />
         <div className="min-w-0 flex-1">
@@ -182,7 +193,13 @@ export function GoalReturnCard({ r }: { r: Shown }) {
             <button
               type="button"
               disabled={s.busy}
-              onClick={() => void undo().then((x) => x && setReceipt(null))}
+              onClick={() =>
+                void undo().then((x) => {
+                  if (!x) return;
+                  setReceipt(null);
+                  focusNext("#goal-return");
+                })
+              }
               className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center px-2 text-[14px] font-semibold text-mp-accent-fg disabled:opacity-40"
             >
               Undo

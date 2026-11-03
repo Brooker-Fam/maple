@@ -27,7 +27,7 @@ import { Icon } from "../icons";
 import { ContextNote, Label, SheetFooter } from "../sheets/parts";
 import { Chip, cx, Segmented, Sheet, Stepper, TextArea, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { useSleep } from "./useSleep";
+import { useSleep, type GoalSave } from "./useSleep";
 
 /**
  * A sleep goal by hand, for a family that would rather not set one in the
@@ -337,7 +337,9 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
       return;
     }
     if (editing && !dirty) return onClose();
-    const r = base ? await s.updateGoal(base, input, { form: true }) : await s.createGoal(input);
+    // Saved after the refusal toast's Try again (this answer was null by then): the form closes then.
+    const later = (x: GoalSave) => void (x && "saved" in x && onClose());
+    const r = base ? await s.updateGoal(base, input, { form: true, done: later }) : await s.createGoal(input, { done: later });
     if (!r) return;
     if ("saved" in r) return onClose();
     if ("problem" in r) {
@@ -607,7 +609,8 @@ export function GoalFormSheet({ goal, open = true, onClose }: { goal: SleepGoal 
                     {nightsLabel(w.nights).replace(/^./, (c) => c.toUpperCase())}
                     {len ? ` · ${minutesWords(len)} on the clock` : ""}
                   </p>
-                  <p className={cx(tone.faint, "mt-1 text-[13px] leading-snug")}>{nightWords(w)}</p>
+                  {/* ink-2, not ink-3: this card is sunken, where ink-3 reads under 4.5:1. */}
+                  <p className={cx(tone.muted, "mt-1 text-[13px] leading-snug")}>{nightWords(w)}</p>
                 </div>
                 <div>
                   <Label optional>Feeds in this window</Label>

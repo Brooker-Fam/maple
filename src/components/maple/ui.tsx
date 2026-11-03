@@ -9,6 +9,7 @@ export { Sheet, useSheetArmed } from "./Sheet";
 import { subscribeSlots, topSlot, noSlot } from "./sheetSlots";
 import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
+import { doubleTap, noteTap } from "./tapCooldown";
 import { useMaple, type Toast } from "./useMaple";
 
 /**
@@ -368,6 +369,8 @@ const toastLook = (t: Toast) =>
  * a start's [Back and forth]) appears where that toast was, often with its own first chip right under the finger.
  * Its chips wait CHIP_ARM_MS once it shows, so a late second tap on "Left" never lands on "2 min earlier" (the
  * dock's cooldowns don't cover a chip-to-chip chain). Its Undo, and any toast not raised by a chip, answer at once.
+ * A chip or Undo tap counts as a tap (tapCooldown.ts), so a sleep card the toast was over waits out a double tap's second
+ * half; and a toast that came in under the thumb (a card's button at the dock's edge) ignores that second half too.
  */
 const CHIP_CHAIN_MS = 3000;
 const CHIP_ARM_MS = 600;
@@ -385,6 +388,9 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
     <button
       type="button"
       onClick={() => {
+        // Raised by a tap just below it (a card's button at the dock's edge): its second half lands here, and does nothing.
+        if (doubleTap()) return;
+        noteTap();
         t.undo?.();
         dismiss(t.id);
       }}
@@ -411,8 +417,9 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
               onClick={() => {
                 const tapped = performance.now();
                 const s = shown.current;
-                if (s?.chained && tapped - s.at < CHIP_ARM_MS) return;
+                if ((s?.chained && tapped - s.at < CHIP_ARM_MS) || doubleTap(tapped)) return;
                 lastChipTap = tapped;
+                noteTap(tapped);
                 a.onClick();
                 dismiss(t.id);
               }}

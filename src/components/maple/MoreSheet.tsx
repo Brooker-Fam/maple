@@ -14,6 +14,7 @@ import { useCare } from "./care/useCare";
 import { Icon, type IconName } from "./icons";
 import { CARE_COLOR, KIND_COLOR, SKIN_COLOR } from "./palette";
 import { useSheets } from "./sheets";
+import { noteTap } from "./tapCooldown";
 import { useTimerActions } from "./TimerCard";
 import { Sheet, cx, tone } from "./ui";
 import { babyFirstName, useVoice } from "./familyWords";
@@ -329,8 +330,10 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
     onHold: earlier("med", { ...VITAMIN_D_DEFAULT }),
   };
   // The sleep plan: putting her down now (never a way to log last night's), an earlier try, holding her awake, the plan itself,
-  // and the family's sleep goals.
+  // and the family's sleep goals. Each tap is noted (tapCooldown.ts): what it brings in where More was (a sheet, the try's
+  // card, the strip's next button) waits out a double tap's second half.
   const later = (fn: () => void) => {
+    noteTap();
     onClose();
     window.setTimeout(fn, 120);
   };
@@ -358,6 +361,7 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
             onTap: () => {
               const t = sp.running;
               if (t) return later(() => sp.openSheet({ kind: "outcome", tryId: t.id }));
+              noteTap();
               onClose();
               void sp.startTry();
             },
@@ -382,6 +386,7 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
             color: KIND_COLOR.sleep,
             onTap: () => {
               if (askedMe && holding) {
+                noteTap();
                 onClose();
                 void sp.acceptHandoff(holding);
                 return;

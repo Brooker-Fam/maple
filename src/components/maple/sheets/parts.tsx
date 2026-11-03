@@ -295,7 +295,8 @@ export function Label({ children, optional, className }: { children: ReactNode; 
   return (
     <span className={cx(tone.label, "block", className ?? "mb-1.5")}>
       {children}
-      {optional && <span className="ml-1 font-normal text-mp-ink-3">(optional)</span>}
+      {/* On a sunken well (a roster window, Close goal) ink-3 reads under 4.5:1: ink-2 there. */}
+      {optional && <span className="ml-1 font-normal text-mp-ink-3 in-[.bg-mp-sunken]:text-mp-ink-2">(optional)</span>}
     </span>
   );
 }
