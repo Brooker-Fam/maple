@@ -24,14 +24,16 @@ import { activeRosters } from "./sleep/roster-read";
  *     Someone awake and using Maple hears everything as usual.
  *
  * What a quiet phone holds (push.ts and notify.ts ask): the nursing timer,
- * unless its person started or changed that feed; "Logged"; and her
- * medicines' reminders (OK again, set times), except on her own phone,
- * which always gets her own. A handoff is never held: it only ever goes to
- * the people it's about (the holder and the next holder, or the person
- * asked). A held reminder stays unclaimed, so it goes once the phone isn't
- * quiet (the window's end, which push-wake.ts wakes for) while it's still
- * due and inside its 3-hour cutoff; a held "Logged" or nursing update is
- * claimed as held, so a retry never sends it later.
+ * unless its person started or changed that feed, and her medicines'
+ * reminders (OK again, set times), except on her own phone, which always
+ * gets her own. A handoff is never held: it only ever goes to the people
+ * it's about (the holder and the next holder, or the person asked). Nor is
+ * "Logged": it replaces the reminder (or the last "Logged") on the lock
+ * screen, and held, that older notice would read as a dose not taken. A
+ * held reminder stays unclaimed, so it goes once the phone isn't quiet (the
+ * window's end, which push-wake.ts wakes for) while it's still due and
+ * inside its 3-hour cutoff; a held nursing update is claimed as held, so a
+ * retry never sends it later.
  *
  * Nothing new is stored about anyone: the window comes from the roster, and
  * "awake" from rows Maple already keeps.

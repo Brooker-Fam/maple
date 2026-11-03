@@ -52,9 +52,12 @@ import type { CarePlan, DoseEntry, Entry, FeedData, Source } from "./types";
  *
  * Quiet during my protected sleep (push-quiet.ts): a phone whose person is
  * inside their own window on the night roster, not holding her and not in
- * Maple in the last 15 minutes, holds "Logged" (her own phone too) and the
- * nursing timer (unless its person started or changed that feed). Each is
- * claimed as held, so no retry sends it after the window.
+ * Maple in the last 15 minutes, holds the nursing timer (unless its person
+ * started or changed that feed), claimed as held, so no retry sends it after
+ * the window. "Logged" is never held, on any phone: it replaces the reminder
+ * the phone was sent (or the last "Logged", with its "OK after"), and held,
+ * that older notice would stay on the lock screen reading as a dose not
+ * taken.
  *
  * "Handoff now" (below) goes only to the phones of the person asked, and is
  * never held.
@@ -192,18 +195,13 @@ export async function notifyDoseLogged(scope: FamilyScope, doseId: number, devic
   const out = { sent: 0, failed: 0 };
   const byMember = new Map<string, PushSub[]>();
   for (const sub of wanted) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
-  // Quiet during my protected sleep: "Logged" waits on a quiet phone (hers too), claimed as held so no retry sends it later.
-  const quiet = wanted.length ? await quietFor(scope, wanted, now) : new Map();
+  // Never held, quiet phone or not (see above): the lock screen always shows the newest dose.
   for (const [email, phones] of byMember) {
     // Viewers never hear about her medicines.
     const v = voiceFor(audience, email, now);
     if (!v) continue;
     for (const phone of phones) {
       const ref = plan ? `med:${plan.id}` : null;
-      if (quiet.has(phone.id)) {
-        await markHeld(phone, `log:${dose.id}`, ref);
-        continue;
-      }
       const o = await sendOnce(phone, `log:${dose.id}`, ref, loggedNotice(dose, plan, v, phone.prefs.hide_names === true, next), { ttlS: HOUR / 1000 });
       if (o === "sent") out.sent++;
       else if (o === "failed") out.failed++;

@@ -128,7 +128,7 @@ try {
     const quiet = page.getByRole("switch", { name: /^Quiet during my protected sleep \(10\sPM–⁠?2\sAM\)$/ });
     await quiet.waitFor();
     assert.equal(await quiet.getAttribute("aria-checked"), "true", "Unset is on");
-    await page.getByText("Only a handoff to you comes through; nursing and medicine notices wait.", { exact: true }).waitFor();
+    await page.getByText("A handoff to you and “Logged” still come through; nursing updates and medicine reminders wait.", { exact: true }).waitFor();
     if (extraShots) {
       for (const [width, height] of [[390, 844], [320, 568]]) {
         await page.setViewportSize({ width, height });

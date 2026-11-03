@@ -195,7 +195,7 @@ function Body() {
             {on && quietWords && (
               <SwitchRow
                 label={`Quiet during my protected sleep (${quietWords})`}
-                note="Only a handoff to you comes through; nursing and medicine notices wait."
+                note="A handoff to you and “Logged” still come through; nursing updates and medicine reminders wait."
                 checked={prefs.quiet_window !== false}
                 disabled={busy}
                 onChange={(v) => set({ quiet_window: v })}

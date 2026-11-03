@@ -398,8 +398,8 @@ export default function Privacy() {
         handoff when its person is holding the baby or is next to take over, and &ldquo;Handoff now&rdquo; when its person is the
         one asked; these name no one and say nothing about the baby&rsquo;s sleep. If you&rsquo;re on a sleep goal&rsquo;s night
         roster, your phone stays quiet in your own protected window unless you turn that off: Maple holds the nursing timer and
-        medicine notices there (a handoff to you still comes through, and mom&rsquo;s own reminders still reach her own phone),
-        and sends a medicine reminder that&rsquo;s still due when the window ends. To tell whether you&rsquo;re up, it checks
+        medicine reminders there (a handoff to you and &ldquo;Logged&rdquo; still come through, and mom&rsquo;s own reminders
+        still reach her own phone), and sends a medicine reminder that&rsquo;s still due when the window ends. To tell whether you&rsquo;re up, it checks
         whether you&rsquo;re holding the baby or have opened or logged anything in Maple in the last 15 minutes, from what it
         already keeps; nothing new is stored. By default a medicine notice names the medicine and says when it was last
         taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a dose amount. Signing
