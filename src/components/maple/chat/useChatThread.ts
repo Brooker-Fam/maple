@@ -18,6 +18,14 @@ import { CHAT_QUEUE_LIMIT, emptyQueue, queueScope, readChatQueue, replyFailed, w
 /** After an answer stops early, the server's copy is looked for this often, for about as long as a turn can hold the thread. */
 const RESYNC_MS = 5_000;
 const RESYNC_TRIES = 16;
+/**
+ * Longer than a turn can run on the server (the route's 60 seconds, a second
+ * try included): an answer with no news for this long is on a connection that
+ * died quietly, so it's stopped here and checked against the saved copy.
+ */
+const STALL_MS = 90_000;
+/** An answer with no news for this long says it's taking longer (TAKING_LONGER); the server may be asking the model again. */
+const SLOW_MS = 15_000;
 type Delivery = { requestId: string; state: "missing" | "received" | "completed" | "cancelled"; threadId: string | null; busy: boolean };
 type Stream = { current: { id: string; busy: boolean } | null; items: StreamItem[]; more: boolean; delivery?: Delivery };
 
@@ -109,9 +117,11 @@ export function useChatThread(active: boolean) {
     onData: (part) => {
       if (part.type === "data-help") helpArrived.current = true;
     },
-    onFinish: ({ isError, isAbort, isDisconnect, messages }) => {
-      // An answer that stopped early refreshes once the server has saved it (resync).
-      if (!isError && !isAbort && !isDisconnect) {
+    onFinish: ({ isError, isAbort, isDisconnect, messages, finishReason }) => {
+      // An answer that stopped early refreshes once the server has saved it (resync). The server always ends
+      // with a finish reason, so one that ended without it was cut off on the way, as a dropped connection is.
+      const cutOff = !isError && !isAbort && !isDisconnect && finishReason == null;
+      if (!isError && !isAbort && !isDisconnect && !cutOff) {
         setResponding(false);
         const requestId = inflightRequest.current;
         inflightRequest.current = null;
@@ -119,6 +129,8 @@ export function useChatThread(active: boolean) {
         questionSent.current = null;
         void refresh();
       } else if (!isError && thread) {
+        // Cut off, or stopped here after STALL_MS with no news (nothing else stops an answer on this phone).
+        setProblem(DROPPED);
         updateQueue((q) => ({ ...q, paused: true, items: q.items.map((item) => item.requestId === inflightRequest.current ? { ...item, state: "uncertain" } : item) }));
         void resync(thread.id);
       }
@@ -169,6 +181,24 @@ export function useChatThread(active: boolean) {
 
   const streaming = chat.status === "submitted" || chat.status === "streaming";
   const busy = streaming || responding || recoveryId != null || loadingHistory || outbox.items.some((item) => item.state === "sending" || item.state === "uncertain" || item.state === "cancelling");
+  // Any chunk, or a change of status, is news. With none for SLOW_MS the status says so; with none for STALL_MS the
+  // request is stopped, and onFinish checks the saved reply.
+  const news = useRef(0);
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    news.current = Date.now();
+    setSlow(false);
+  }, [chat.messages, chat.status]);
+  const stop = chat.stop;
+  useEffect(() => {
+    if (!streaming) return;
+    const watch = window.setInterval(() => {
+      const quiet = Date.now() - news.current;
+      if (quiet >= SLOW_MS) setSlow(true);
+      if (quiet >= STALL_MS) void stop();
+    }, 1_000);
+    return () => window.clearInterval(watch);
+  }, [streaming, stop]);
   useEffect(() => {
     shown.current = { id: thread?.id ?? null, busy: streaming };
   }, [thread, streaming]);
@@ -337,9 +367,10 @@ export function useChatThread(active: boolean) {
   }, [active]);
 
   const send = useCallback(
-    (raw: string, options: { clearDraft?: boolean } = {}) => {
+    /** `images` and `submittedAt`: a message sent again as it was (sendAgain), with its photos and the time it was first sent. */
+    (raw: string, options: { clearDraft?: boolean; images?: ChatImage[]; submittedAt?: string } = {}) => {
       const text = raw.trim();
-      const images = options.clearDraft ? outboxRef.current.draftImages ?? [] : [];
+      const images = options.images ?? (options.clearDraft ? outboxRef.current.draftImages ?? [] : []);
       if ((!text && !images.length) || (options.clearDraft && outboxRef.current.imageProblem)) return;
       const crisis = mentionsCrisis(text, names);
       if (text.length > CHAT_MAX_CHARS) {
@@ -354,10 +385,25 @@ export function useChatThread(active: boolean) {
       }
       setProblem(null);
       setHelp(crisis);
-      const item: QueuedMessage = { requestId: crypto.randomUUID(), text, ...(images.length ? { images } : {}), submittedAt: new Date().toISOString(), state: "queued" };
+      const item: QueuedMessage = { requestId: crypto.randomUUID(), text, ...(images.length ? { images } : {}), submittedAt: options.submittedAt ?? new Date().toISOString(), state: "queued" };
       updateQueue((q) => ({ ...q, draft: options.clearDraft && q.draft.trim() === text ? "" : q.draft, draftImages: options.clearDraft ? undefined : q.draftImages, items: [...q.items, item], paused: q.paused || !online }));
     },
     [online, names, updateQueue]
+  );
+
+  /**
+   * The message before a reply that says nothing was saved (CHAT_NO_ANSWER),
+   * sent again as a new message with the same words and photos and the time it
+   * was first sent, so "five minutes ago" still means then.
+   */
+  const sendAgain = useCallback(
+    (message: ChatMessage) => {
+      if (message.role !== "user") return;
+      const first = message.parts.find((p) => p.type === "data-delivery");
+      const at = first?.type === "data-delivery" ? first.data.submittedAt : undefined;
+      send(textOf(message), { images: message.parts.filter(isChatImage), ...(at && Number.isFinite(Date.parse(at)) ? { submittedAt: at } : {}) });
+    },
+    [send]
   );
 
   const awaitingAnswer = waitingForAnswer(chat.messages);
@@ -521,6 +567,7 @@ export function useChatThread(active: boolean) {
     messages: chat.messages,
     status: chat.status,
     busy,
+    slow: streaming && slow,
     problem,
     help,
     clearProblem: () => setProblem(null),
@@ -533,6 +580,7 @@ export function useChatThread(active: boolean) {
     removeDraftImage,
     setDraft,
     send,
+    sendAgain,
     queue: outbox.items,
     queuePaused: outbox.paused,
     queueLimit: CHAT_QUEUE_LIMIT,

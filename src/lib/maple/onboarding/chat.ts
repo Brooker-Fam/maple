@@ -209,6 +209,12 @@ function stream(
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        // A time limit (CHAT_TIMEOUT) ended the answer: the setup page says it stopped, as for an error, rather than showing nothing.
+        if (value.type === "abort") {
+          deps.report(Object.assign(new Error("chat_timeout"), { name: "chat_timeout" }));
+          writer.write({ type: "error", errorText: friendlyError(null) });
+          continue;
+        }
         writer.write(value);
       }
       const unfinished = inFlight as { step: number; prompt: number } | null;

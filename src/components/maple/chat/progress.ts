@@ -17,14 +17,18 @@ export function hasQuestionAnswer({ messages }: { messages: ChatMessage[] }): bo
   return submitted;
 }
 
-/** One truthful status for the whole turn, including invisible reasoning and read results. */
-export function chatActivity(messages: ChatMessage[], state: { busy: boolean; recovering: boolean; recoveryPaused: boolean; checkingDelivery?: boolean; cancellingDelivery?: boolean }): string | null {
+/** What the status says once an answer has gone quiet for a while (`slow`): the server may be asking the model again. */
+export const TAKING_LONGER = "Taking longer than usual…";
+
+/** One truthful status for the whole turn, including invisible reasoning and read results. `slow`: no news for a while. */
+export function chatActivity(messages: ChatMessage[], state: { busy: boolean; recovering: boolean; recoveryPaused: boolean; checkingDelivery?: boolean; cancellingDelivery?: boolean; slow?: boolean }): string | null {
   if (state.cancellingDelivery) return "Checking whether the message can be cancelled…";
   if (state.checkingDelivery) return state.recoveryPaused ? "Waiting to reconnect…" : "Checking whether your message was received…";
   if (state.recovering) return state.recoveryPaused ? "Waiting to reconnect…" : "Finishing your previous reply…";
   if (!state.busy) return null;
   const last = messages.at(-1);
-  if (last?.role !== "assistant") return "Thinking…";
+  const waitingWord = (word: string) => (state.slow ? TAKING_LONGER : word);
+  if (last?.role !== "assistant") return waitingWord("Thinking…");
   const pending = last.parts.filter(isToolUIPart).findLast((p) =>
     p.state === "input-streaming" || p.state === "input-available" || (p.state === "approval-responded" && p.approval.approved)
   );
@@ -38,7 +42,7 @@ export function chatActivity(messages: ChatMessage[], state: { busy: boolean; re
     if (/^(update_|delete_|restore_|fix_|undo_|reopen_|switch_side$|pause_nursing$)/.test(name)) return "Updating the log…";
     return "Checking the log…";
   }
-  return last.parts.some((p) => (p.type === "text" && p.text.trim()) || isToolUIPart(p)) ? "Finishing your reply…" : "Thinking…";
+  return waitingWord(last.parts.some((p) => (p.type === "text" && p.text.trim()) || isToolUIPart(p)) ? "Finishing your reply…" : "Thinking…");
 }
 
 /** Hidden reasoning need not move the scroll position or trigger a live announcement. */

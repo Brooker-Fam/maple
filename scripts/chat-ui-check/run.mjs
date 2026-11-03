@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkLiveThread, liveServer } from "./live-thread-checks.mjs";
+import { checkLiveThread, checkStall, checkStoppedReplies, liveServer } from "./live-thread-checks.mjs";
 import { checkQueue } from "./queue-checks.mjs";
 
 const require = createRequire(import.meta.url);
@@ -50,13 +50,14 @@ const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 const server = liveServer();
 const origin = "https://maple-chat-ui.example.test";
-await page.route("**/*", async (route) => {
+const serveAll = async (route) => {
   const url = new URL(route.request().url());
   assert.equal(url.origin, origin, "The fixture must never contact an outside service");
   if (url.pathname === "/api/maple/chat") return server.serve(route);
   const file = ["/app.js", "/live-app.js", "/live.html", "/app.css"].includes(url.pathname) ? url.pathname.slice(1) : "index.html";
   await route.fulfill({ status: 200, contentType: file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html", body: await readFile(path.join(output, file)) });
-});
+};
+await page.route("**/*", serveAll);
 const fixture = async (name) => {
   await page.evaluate((value) => window.__chatFixture.scenario(value), name);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -75,6 +76,15 @@ const tapTarget = async (locator) => {
 
 try {
   await checkLiveThread({ page, server, url: origin });
+  await checkStoppedReplies({ page, server, url: origin });
+  // Its own page, so its fake clock never reaches the other checks.
+  const clocked = await context.newPage();
+  const clockErrors = [];
+  clocked.on("pageerror", (error) => clockErrors.push(error.message));
+  await clocked.route("**/*", serveAll);
+  await checkStall({ page: clocked, server, url: origin });
+  await clocked.close();
+  assert.deepEqual(clockErrors, [], "No uncaught browser errors on the clocked page");
   await checkQueue({ page, url: origin });
   await page.goto(origin);
   await page.waitForFunction(() => !!window.__chatFixture);

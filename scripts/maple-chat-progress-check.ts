@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chatActivity, hasQuestionAnswer, visibleRevision } from "../src/components/maple/chat/progress";
+import { chatActivity, hasQuestionAnswer, TAKING_LONGER, visibleRevision } from "../src/components/maple/chat/progress";
 import type { ChatMessage } from "../src/lib/maple/chat/types";
 
 const message = (parts: unknown[], role = "assistant") => ({ id: "synthetic-chat-message", role, parts }) as ChatMessage;
@@ -18,6 +18,9 @@ assert.equal(chatActivity([message([tool("sleep_plan")])], busy), "Checking the 
 assert.equal(chatActivity([message([tool("show_chart")])], busy), "Preparing your chart…");
 assert.equal(chatActivity([message([tool("load_tools")])], busy), "Thinking…", "loading more of the chat's tools isn't reading the log");
 assert.equal(chatActivity([message([tool("ask_user")])], { ...busy, busy: false }), null, "a ready question waits for the person without a spinner");
+assert.equal(chatActivity([message([{ type: "text", text: "A made-up question" }], "user")], { ...busy, slow: true }), TAKING_LONGER, "a quiet wait says it's taking longer");
+assert.equal(chatActivity([message([tool("maple_status", "output-available", { output: { ok: true, write: false, text: "Synthetic log" } })])], { ...busy, slow: true }), TAKING_LONGER);
+assert.equal(chatActivity([message([tool("log_feed")])], { ...busy, slow: true }), "Saving…", "a tool at work still says what it's doing");
 assert.equal(chatActivity([], { ...busy, recovering: true }), "Finishing your previous reply…");
 assert.equal(chatActivity([], { ...busy, recovering: true, recoveryPaused: true }), "Waiting to reconnect…");
 

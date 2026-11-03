@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { CHAT_QUEUE_LIMIT, emptyQueue, queueScope, readChatQueue, waitingForAnswer, writeChatQueue, type ChatQueue } from "../src/components/maple/chat/queue";
-import type { ChatMessage } from "../src/lib/maple/chat/types";
+import { CHAT_QUEUE_LIMIT, emptyQueue, queueScope, readChatQueue, replyFailed, safeToSendAgain, waitingForAnswer, writeChatQueue, type ChatQueue } from "../src/components/maple/chat/queue";
+import { LIMIT_MESSAGE } from "../src/lib/maple/chat/caps";
+import { CHAT_FAILED, CHAT_NO_ANSWER, CHAT_OFF, type ChatMessage } from "../src/lib/maple/chat/types";
 
 const values = new Map<string, string>();
 const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
@@ -25,4 +26,11 @@ const message = (part: unknown) => [{ id: "synthetic-message", role: "assistant"
 assert(waitingForAnswer(message({ type: "tool-ask_user", state: "input-available" })));
 assert(waitingForAnswer(message({ type: "tool-delete_entry", state: "approval-requested" })));
 assert(!waitingForAnswer(message({ type: "tool-ask_user", state: "output-available" })));
-console.log("PASS chat queue: scoped drafts, bounded storage, interrupted sends, age limits and question pauses");
+const said = (...texts: string[]) => message({ type: "text", text: texts[0] }).map((m) => ({ ...m, parts: texts.map((text) => ({ type: "text", text })) })) as ChatMessage[];
+for (const line of [CHAT_FAILED, CHAT_NO_ANSWER, CHAT_OFF, LIMIT_MESSAGE]) assert(replyFailed(said("Partway through.", line)), `the queue waits after "${line}"`);
+assert(!replyFailed(said("Logged the right side.")), "an answer lets the queue go on");
+assert(safeToSendAgain(said(CHAT_NO_ANSWER)[0]), "a reply that saved nothing offers Send again");
+assert(!safeToSendAgain(said(CHAT_FAILED)[0]), "never one that may have saved something");
+assert(!safeToSendAgain(said(CHAT_NO_ANSWER, "Logged it after all.")[0]), "only when it's the reply's last word");
+assert(!safeToSendAgain({ id: "synthetic-user", role: "user", parts: [{ type: "text", text: CHAT_NO_ANSWER }] }), "never the person's own words");
+console.log("PASS chat queue: scoped drafts, bounded storage, interrupted sends, age limits, question pauses and stopped replies");
