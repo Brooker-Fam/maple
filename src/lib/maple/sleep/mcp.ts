@@ -34,7 +34,9 @@ import {
   backToWorkGoal,
   backToWorkQuestions,
   checkinTryOn,
+  checkinMorning,
   checkinWords,
+  cleanCheckinNight,
   cleanGoalInput,
   coachGuardrails,
   coachNotes,
@@ -44,11 +46,13 @@ import {
   goalRef,
   goalsByUrgency,
   goalSpan,
+  goalStartKey,
   lastNightKey,
   lastNightLine,
   nextStep,
+  NIGHT_OVER_HOUR,
   nightWords,
-  owedCheckins,
+  owedNow,
   QUICK_FEEDING,
   QUICK_OFF_DUTY,
   QUICK_SLEEPS,
@@ -57,6 +61,8 @@ import {
   targetsWords,
   tonightKey,
   windowLine,
+  windowOn,
+  windowOnNight,
   writesGoals,
   type CoachNotes,
   type GoalFields,
@@ -127,7 +133,7 @@ import {
   type SleepPlan,
   type TryOutcome,
 } from "./types";
-import { dateWords, defaultGoal, ENOUGH_NIGHTS_LINE, GOAL_STATUS_LABEL, HANDOFF_LABEL, OUTCOME_LABEL, PLACE_LABEL, PROTECTED_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, targetWords } from "./words";
+import { dateWords, defaultGoal, ENOUGH_NIGHTS_LINE, GOAL_STATUS_LABEL, HANDOFF_LABEL, OUTCOME_LABEL, PLACE_LABEL, PROTECTED_LABEL, SLEEP_PLACE_LABEL, slotLabel, STAGE_INFO, TAG_LABEL, targetWords, windowTimes } from "./words";
 import { windowRange, type HandoffWhy } from "./handoff";
 
 /**
@@ -722,9 +728,10 @@ export async function sleepStatus(ctx: Ctx): Promise<{ lines: string[]; json: Re
     lines.push(`Sleep goals: ${active.map((g) => `${goalRef(g.id)} "${g.title}"${left(g)}`).join("; ")}. sleep_plan has their progress and coach notes.`);
     json.goals = active.map((g) => ({ id: goalRef(g.id), title: g.title, days_left: goalSpan(g, ctx.now, ctx.tz).daysLeft, more: "sleep_plan" }));
     // Last night's check-ins, only for someone who may read them (owners and members), from the adults whose window was on
-    // last night (and counting by then), never someone whose window was off.
+    // last night (and counting by then), never someone whose window was off. As Today asks: from 5 AM the morning after
+    // (never between midnight and the morning, while the night is still going), each adult once their own window is over.
     const last = lastNightKey(ctx.now, ctx.tz);
-    const adults = [...new Set(active.filter((g) => goalSpan(g, ctx.now, ctx.tz).startsOn <= last).flatMap((g) => owedCheckins(g, last)))];
+    const adults = [...new Set(active.filter((g) => goalSpan(g, ctx.now, ctx.tz).startsOn <= last).flatMap((g) => owedNow(g, ctx.now, ctx.tz)?.adults ?? []))];
     if (adults.length && seesCheckins(ctx.who.role)) {
       const checkins = await listCheckins(ctx.fam, ctx.baby.id, { from: last, to: last });
       lines.push(`Check-ins for last night: ${lastNightLine(adults, checkins, ctx.now, ctx.tz, (id) => who(id, ctx))}.`);
@@ -1449,7 +1456,22 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           case "check_in": {
             if (!a.protected) throw new ToolError("Say whether they got their protected sleep: protected yes, partly or no.");
             const raw = a.night?.trim() ?? "";
-            const night = !raw || /^(last night|last_night|yesterday)$/i.test(raw) ? undefined : raw;
+            const given = !raw || /^(last night|last_night|yesterday)$/i.test(raw) ? undefined : raw;
+            // Before 5 AM the night still going can't be checked in, and "last night" would be the one before it, which isn't
+            // what someone checking in at 2 AM is likely to mean: so no default then, only a night they name.
+            if (!given && !checkinMorning(ctx.now, ctx.tz)) {
+              throw new ToolError(`Nothing was saved: it's still the night (${formatTime(ctx.now, ctx.tz)}), and a check-in is for a night that's over, from ${NIGHT_OVER_HOUR} AM the morning after. Ask them to check in then; for an earlier night, pass its date (the latest that's over began ${lastNightKey(ctx.now, ctx.tz)}).`);
+            }
+            // The night it's for, checked first: never one still going, and never before the caller's own window that night is
+            // over, as Today asks.
+            const night = cleanCheckinNight(given, ctx.now, ctx.tz);
+            const going = (await listGoals(ctx.fam, ctx.baby.id))
+              .filter((g) => g.status === "active" && goalStartKey(g, ctx.tz) <= night)
+              .flatMap((g) => g.roster.filter((w) => w.member === by && windowOnNight(w, night)))
+              .map((w) => ({ w, end: windowOn(w, night, ctx.tz)[1] }))
+              .filter((x) => x.end.getTime() > ctx.now.getTime())
+              .sort((x, y) => y.end.getTime() - x.end.getTime())[0];
+            if (going) throw new ToolError(`Nothing was saved: your protected window that night (${windowTimes(going.w)}) isn't over until ${formatTime(going.end, ctx.tz)}. Check in once it ends.`);
             // The night's other answers, only those they gave (each once a night: the first one given counts).
             const extras = {
               ...(a.place != null ? { place: a.place } : {}),

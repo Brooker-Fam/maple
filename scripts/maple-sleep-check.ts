@@ -79,10 +79,14 @@ import {
   goalSpan,
   goalsByUrgency,
   goalWeekLabel,
+  checkinMorning,
   lastNightKey,
   lastNightLine,
   loggedSpans,
   nextStep,
+  nightNowKey,
+  nightWords,
+  owedNow,
   nextStepNow,
   nightAnswers,
   nightLog,
@@ -103,6 +107,7 @@ import {
   windowMinutes,
   windowOn,
   windowOnNight,
+  windowsOver,
   type BackToWorkAnswers,
   type GoalData,
   type GoalRules,
@@ -2496,6 +2501,57 @@ check("left running (coach review P1 #1): a timer or try past 12 hours, or a hol
   // A turn handed off on time, even a long one, counts whole.
   const handed: HoldingShift = { ...shiftRow(SAM, at(2026, 10, 31, 22), at(2026, 11, 1, 5)), ended_how: "handoff", handoff_at: iso(at(2026, 11, 1, 2)) };
   eq(goalProgress(g, data({ shifts: [handed] }), now, NY).coverage[0].logged, 1, "a 7-hour turn ended in a handoff logs its night");
+});
+
+check("last night (coach review P1 #4): a night is over from 5 AM the morning after, as Today asks; before then it's tonight, nothing is owed and a check-in has no default; each adult owes theirs once their own window ends", () => {
+  // Mon, Nov 2's night, with Sam's window 10 PM–4 AM and Alex's 4–9 AM; both checked in for every night before it.
+  const roster = [{ id: "w1", member: SAM, from: "22:00", to: "04:00", nights: EVERY }, { id: "w2", member: ALEX, from: "04:00", to: "09:00", nights: EVERY }];
+  const g = goalRow({ created_at: iso(at(2026, 10, 27, 9)), updated_at: iso(at(2026, 10, 27, 9)), targets: [{ id: "a1", kind: "protected_window", member: SAM, per_week: 4 }, { id: "a2", kind: "protected_window", member: ALEX, per_week: 4 }], roster });
+  const checkins = ["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01"].flatMap((n) => [checkinRow(SAM, n, "yes"), checkinRow(ALEX, n, "yes")]);
+  const feeds = lateFeeds("2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02");
+  const times: [string, Date][] = [["11:30 PM", at(2026, 11, 2, 23, 30)], ["12:30 AM", at(2026, 11, 3, 0, 30)], ["4:59 AM", at(2026, 11, 3, 4, 59)], ["5:00 AM", at(2026, 11, 3, 5)], ["7:00 AM", at(2026, 11, 3, 7)], ["9:00 AM", at(2026, 11, 3, 9)], ["12:30 PM", at(2026, 11, 3, 12, 30)]];
+  const read = times.map(([label, now]) => {
+    const p = goalProgress(g, data({ entries: feeds, checkins }), now, NY);
+    const c = coachNotes(g, p, words(SHE, now));
+    // Week 1 is the nights of Oct 27 to Nov 2.
+    const planned = p.targets.map((t) => (t as Extract<(typeof p.targets)[number], { kind: "protected_window" }>).weeks![0].planned);
+    return [label, lastNightKey(now, NY), c.notCheckedIn, planned, c.notes.some((n) => n.startsWith("Not checked in for last night"))];
+  });
+  eq(read, [
+    ["11:30 PM", "2026-11-01", [], [6, 6], false],
+    ["12:30 AM", "2026-11-01", [], [6, 6], false],
+    ["4:59 AM", "2026-11-01", [], [6, 6], false],
+    ["5:00 AM", "2026-11-02", [SAM], [7, 6], true],
+    ["7:00 AM", "2026-11-02", [SAM], [7, 6], true],
+    ["9:00 AM", "2026-11-02", [SAM, ALEX], [7, 7], true],
+    ["12:30 PM", "2026-11-02", [SAM, ALEX], [7, 7], true],
+  ], "last night, who owes a check-in and the roster nights counted, from 11:30 PM to the next noon (it read the night still going from midnight)");
+  // A check-in's night: the night still going refused; by default the latest night that's over (the chat's check_in asks for a date before 5 AM).
+  const small = at(2026, 11, 3, 0, 31);
+  throwsInput(() => cleanCheckinNight("2026-11-02", small, NY), /isn't over yet: check in from 5 AM the morning after \(the latest night that's over is 2026-11-01\)/, "the night still going");
+  eq([cleanCheckinNight(undefined, small, NY), cleanCheckinNight("2026-11-01", small, NY), cleanCheckinNight(undefined, at(2026, 11, 3, 5), NY), checkinNights(small, NY).last], ["2026-11-01", "2026-11-01", "2026-11-02", "2026-11-01"], "the latest night that's over, by default and named, and from 5 AM the one just over");
+  // Its words follow: before 5 AM the night still going is tonight.
+  eq([nightWords("2026-11-02", small, NY), nightWords("2026-11-01", small, NY), nightWords("2026-11-02", at(2026, 11, 3, 7), NY), nightWords("2026-11-02", at(2026, 11, 2, 23), NY)], ["tonight", "last night", "last night", "tonight"], "night words");
+  eq([nightNowKey(small, NY), checkinMorning(small, NY), checkinMorning(at(2026, 11, 3, 5), NY)], ["2026-11-02", false, true], "the night now");
+  // owedNow is the rule the [App] line and maple_status read.
+  eq([owedNow(g, small, NY), owedNow(g, at(2026, 11, 3, 6), NY)], [null, { night: "2026-11-02", adults: [SAM] }], "owed");
+  ok(windowsOver(roster, ALEX, "2026-11-02", at(2026, 11, 3, 9), NY) && !windowsOver(roster, ALEX, "2026-11-02", at(2026, 11, 3, 8, 59), NY), "Alex's window ends at 9");
+  // A check-in already saved for a night not over for them still counts, never "1 of 0".
+  const early = goalProgress(g, data({ entries: feeds, checkins: [...checkins, checkinRow(ALEX, "2026-11-02", "partly")] }), at(2026, 11, 3, 7), NY);
+  const alex = (early.targets[1] as Extract<(typeof early.targets)[number], { kind: "protected_window" }>).weeks!.at(-1)!;
+  eq([alex.planned, alex.checkedIn], [7, 7], "Alex's early check-in");
+});
+
+check("last night (coach review P1 #4): a week's last night isn't 'ended last night' until 5 AM, its step stays this week's until then, and the look-back waits for the morning", () => {
+  const g = goalRow({ target_date: "2026-11-30", targets: [{ id: "a1", kind: "bassinet_nights", per_week: 3, min_minutes: 60 }], steps: [{ id: "s1", title: "Bassinet after the 10 PM feed", week_of: "2026-11-02", done_at: null, done_by: null }, { id: "s2", title: "Run the work-week roster", week_of: "2026-11-09", done_at: null, done_by: null }] });
+  // Week 1 is the nights of Nov 2–8: at 12:30 AM on Mon, Nov 9 its last night is still going.
+  const small = at(2026, 11, 9, 0, 30);
+  const p = goalProgress(g, data(), small, NY);
+  eq([weekEndedLastNight(p), goalWeekLabel(p.weeks.at(-1)!, p), stepsByWeek(g.steps, p).thisWeek.map((s) => s.id)], [false, "This week", ["s1"]], "12:30 AM: still week 1");
+  const morning = at(2026, 11, 9, 5, 30);
+  const q = goalProgress(g, data(), morning, NY);
+  eq([weekEndedLastNight(q), goalWeekLabel(q.weeks.at(-1)!, q), stepsByWeek(g.steps, q).thisWeek.map((s) => s.id)], [true, "Week 1 (ended last night)", ["s2"]], "5:30 AM: week 1 ended last night, and week 2's step");
+  eq([reviewWeek(g, goalSpan(g, small, NY), small, NY), reviewWeek(g, goalSpan(g, morning, NY), morning, NY)?.n], [null, 1], "the look-back: from the morning");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);
