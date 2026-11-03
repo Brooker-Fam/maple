@@ -140,8 +140,9 @@ export type NightAsk =
 
 /**
  * Where the baby spent the night, from the log, when every sleep in the
- * strip has a place: the bassinet (or crib), held (in arms or a carrier), or
- * some of each; nothing for anywhere else, which is the family's to say.
+ * strip has a place: the bassinet (or crib), held (in arms), or some of
+ * each; nothing for anywhere else, a carrier included (never prefilled as
+ * held by someone awake), which is the family's to say.
  */
 export function placeFromLog(entries: readonly Entry[], tries: Parameters<typeof sleepByPlace>[1], from: number, to: number, now: number): CheckinPlace | null {
   const r = sleepByPlace(entries, tries, from, to, now);
@@ -150,7 +151,7 @@ export function placeFromLog(entries: readonly Entry[], tries: Parameters<typeof
   let held = 0;
   for (const p of r.places) {
     if (p.place === "bassinet" || p.place === "crib") bassinet += p.sec;
-    else if (p.place === "arms" || p.place === "carrier") held += p.sec;
+    else if (p.place === "arms") held += p.sec;
     else if (p.sec > 0) return null;
   }
   const total = bassinet + held;
