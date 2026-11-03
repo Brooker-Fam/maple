@@ -5,9 +5,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SLEEP_GUIDES } from "@/lib/maple/guidelines/sleep";
 import { sleepByPlace, tryDayKey } from "@/lib/maple/sleep/engine";
 import { goalStartKey, lastNightKey, nightAnswers, nightPicture, plannedHandoff, windowOn, windowOnNight, type NightBar, type NightGap, type NightPicture } from "@/lib/maple/sleep/goals";
-import { CHECKIN_PLACES, HANDOFF_ANSWERS, UNTIMED_TRIES, type CheckinPlace, type ProtectedAnswer, type SleepGoal } from "@/lib/maple/sleep/types";
+import { CHECKIN_PLACES, HANDOFF_ANSWERS, UNTIMED_TRIES, type CheckinPlace, type HoldingShift, type ProtectedAnswer, type SleepGoal } from "@/lib/maple/sleep/types";
 import { checkinQuestion, dateWords, HANDOFF_LABEL, handoffQuestion, PLACE_LABEL, placeQuestion, shortClock, UNTIMED_QUESTION, untimedLabels } from "@/lib/maple/sleep/words";
-import { dayKey, DEFAULT_TZ, formatDuration, formatTime, formatTimeNear } from "@/lib/maple/time";
+import { dayKey, DEFAULT_TZ, formatDuration, formatTime, formatTimeNear, localParts } from "@/lib/maple/time";
 import type { Entry } from "@/lib/maple/types";
 import type { Voice } from "@/lib/maple/voice";
 import { AskChatButton } from "../chat/AskChat";
@@ -16,7 +16,8 @@ import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
-import { AnswerButtons, checkinDue, morningOf, myWindows, useNightValue, type CheckinDue } from "./SleepCheckin";
+import { AnswerButtons, checkinDue, morningOf, myWindows, useCardReceipts, useNightValue, type CheckinDue } from "./SleepCheckin";
+import { LookBackPart, useLookBackDue, type LookBackDue } from "./SleepReview";
 import { useSleepMaybe, useTryAfterWake, type CardReceipt } from "./useSleep";
 
 /**
@@ -25,17 +26,21 @@ import { useSleepMaybe, useTryAfterWake, type CardReceipt } from "./useSleep";
  * a sleep timer left running past something logged later, with "Woke at"
  * that moment (or Still asleep); the adult's own check-in ("Did you get your
  * 10 PM–2 AM sleep?"); the two longest stretches over 90 minutes with
- * nothing logged between two things that were, each named by whose
- * protected window it was in, with Not sure first ("Up or feeding" and
+ * nothing logged between two things that were, asked only of whoever was on
+ * duty then (its protected window's other adult, or a holding turn's
+ * holder; anyone when nobody was), with Not sure first ("Up or feeding" and
  * "Not sure" save nothing and the night stays partly logged; "She slept
  * through" logs a sleep for it; Skip the rest); then the night's other
  * one-tap questions, each once a night, the place prefilled from the log
- * when every sleep has one. One thing at a time, so it stays small on a
- * 320 × 568 phone, and an answer's receipt (with its Undo) shows in the
- * card, never as a toast over the next question. Tell Maple opens the chat
- * with "Last night: " typed (a photo of a paper log is read back before
- * anything saves). Not now hides it for that night on this phone. For
- * owners and members of a family with a sleep plan or goal.
+ * when every sleep has one, folded into one "More about last night" row
+ * after noon. One thing at a time, so it stays small on a 320 × 568 phone,
+ * and an answer's one-line receipt (with its Undo, for that night only)
+ * shows in the card, never as a toast over the next question; a note from
+ * Add a note comes back here too. On a goal's review morning it ends with
+ * the week's look-back (SleepReview.tsx). Tell Maple opens the chat with
+ * "Last night: " typed (a photo of a paper log is read back before anything
+ * saves). Not now hides it for that night on this phone. For owners and
+ * members of a family with a sleep plan or goal.
  *
  * useLastNight is the card's one question, shared: the dock's strip carries
  * it in the morning, and a sleep timer's card (or the holding turn's, for a
@@ -169,10 +174,31 @@ function gapWindow(goals: readonly SleepGoal[], night: string, gap: Gap, tz: str
   return best;
 }
 
+/** The questions a card can leave for later: after noon, a half-answered card folds them behind one row. */
+const OPTIONAL: readonly NightAsk["kind"][] = ["gap", "place", "untimed", "handoff"];
+
+/**
+ * Who was on duty during a stretch: the holder of a holding turn across most of it, else, when it was mostly someone's
+ * protected window, not them (they were asleep in it); null when nothing says (then anyone can answer it).
+ */
+function onDuty(gap: Gap, w: GapWindow | null, shifts: readonly HoldingShift[], now: number): { member: string } | { notMember: string } | null {
+  const span = Math.max(1, gap.end - gap.start);
+  const held = shifts
+    .filter((x) => !(x as { deleted_at?: unknown }).deleted_at)
+    .map((x) => ({ member: x.holder, share: (Math.min(gap.end, x.ended_at ? Date.parse(x.ended_at) : now) - Math.max(gap.start, Date.parse(x.started_at))) / span }))
+    .filter((x) => x.share > 0)
+    .sort((a, b) => b.share - a.share)[0];
+  if (held && held.share >= 0.5) return { member: held.member };
+  if (w && w.share >= 0.5) return { notMember: w.member };
+  return null;
+}
+
 export type LastNight = {
   night: string;
   pic: NightPicture;
   ask: NightAsk | null;
+  /** After noon, the night's optional questions (stretches, place, an untimed try, the handoff) wait behind one row. */
+  folded: boolean;
   /** "Somewhere else" was answered: the card stays for the safe-sleep line. */
   elsewhere: boolean;
   /** Their windows that night, and their check-in for it (Add a note). */
@@ -190,9 +216,11 @@ export type LastNight = {
 /**
  * The Last night card's state and its one question, for the card, the
  * strip and a timer's card: null when the card wouldn't show (not an owner
- * or member, no plan or active goal, before 5 AM, or Not now).
+ * or member, no plan or active goal, before 5 AM, or Not now). `keep`: the
+ * card itself, while it holds a receipt or the look-back's second tap, so
+ * easing off the only goal (no longer counting) doesn't take them away.
  */
-export function useLastNight(): LastNight | null {
+export function useLastNight(o: { keep?: boolean } = {}): LastNight | null {
   const s = useSleepMaybe();
   const m = useMaple();
   const { state } = m;
@@ -203,7 +231,7 @@ export function useLastNight(): LastNight | null {
   const [raw, setRaw] = useNightValue(state && s?.canWrite ? memoKey(state.family?.id ?? 1, s.me) : null);
   if (!s || !state || !s.canWrite || raw === undefined) return null;
   const active = s.goals.filter((g) => g.status === "active" && goalStartKey(g, tz) <= night);
-  if (!s.plan && !active.length) return null;
+  if (!s.plan && !active.length && !o.keep) return null;
   if (now.getTime() < morningOf(now, tz)) return null;
   const memo = readMemo(raw, night);
   if (memo.hidden) return null;
@@ -217,8 +245,14 @@ export function useLastNight(): LastNight | null {
   // (a stretch "She slept through" filled counts as asked, so a shorter one never takes its place).
   const answered = memo.gaps ?? [];
   const budget = Math.max(0, GAPS_ASKED - answered.length);
+  // Only whoever was on duty is asked about a stretch (the holder then, or not the adult asleep in their own window), so
+  // one answer settles it: nobody is asked about a stretch they slept through.
+  const mineToAnswer = (g: Gap) => {
+    const d = onDuty(g, gapWindow(active, night, g, tz), s.data.shifts, now.getTime());
+    return !d || ("member" in d ? d.member === s.me : d.notMember !== s.me);
+  };
   const open = pic.gaps
-    .filter((g) => !answered.includes(g.start))
+    .filter((g) => !answered.includes(g.start) && mineToAnswer(g))
     .sort((a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start)
     .slice(0, budget)
     .sort((a, b) => a.start - b.start);
@@ -239,6 +273,7 @@ export function useLastNight(): LastNight | null {
     night,
     pic,
     ask,
+    folded: !!ask && OPTIONAL.includes(ask.kind) && localParts(now, tz).hour >= 12,
     elsewhere: said?.place === "elsewhere",
     windows: myWindows(s.goals, s.me, night),
     due,
@@ -341,31 +376,48 @@ const PREFILL_WORDS: Partial<Record<CheckinPlace, { line: string; yes: string }>
 
 export function LastNightCard() {
   const s = useSleepMaybe();
-  const ln = useLastNight();
+  // An answer's receipt with its Undo, in the card (a toast here would sit on the next question at 320px), for its own
+  // night only: the next morning never shows yesterday's receipt, whose Undo would take back yesterday's check-in.
+  const [kept, setKept] = useState<(CardReceipt & { night: string }) | null>(null);
+  // The weekly look-back, held in the card after Ease off for its second tap (see below).
+  const [held, setHeld] = useState<LookBackDue | null>(null);
+  const ln = useLastNight({ keep: !!kept || !!held });
   const m = useMaple();
   const { state, timerBusy } = m;
   const v = useVoice();
   const now = useNow(60_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  // An answer's receipt with its Undo, in the card (a toast here would sit on the next question at 320px).
-  const [receipt, setReceipt] = useState<CardReceipt | null>(null);
+  const night0 = ln?.night ?? "";
+  const receipt = kept && kept.night === night0 ? kept : null;
+  const setReceipt = (r: CardReceipt | null) => setKept(r ? { ...r, night: night0 } : null);
+  // A note saved from this card's Add a note sheet: its receipt lands here too.
+  useCardReceipts((r) => setKept({ ...r, night: night0 }));
   const [placeOpen, setPlaceOpen] = useState(false);
+  // After noon, a half-answered card folds its optional questions: Answer opens them again, on this phone, for that night.
+  const [unfolded, setUnfolded] = useState<string | null>(null);
+  // The weekly look-back, on a goal's review day: after the night's questions, at the card's end; held there after Ease off for its second tap.
+  const lookDue = useLookBackDue();
+  const look = lookDue ?? held;
   // The card's state as it is when an Undo runs (answers since then included).
   const latest = useRef(ln);
   useEffect(() => {
     latest.current = ln;
   });
-  const done = !!ln && !ln.ask && !ln.elsewhere;
-  // The last answer leaves nothing to ask: the card goes, and its receipt rides a toast instead (nothing left under it).
+  const folded = !!ln?.folded && unfolded !== night0;
+  const done = !!ln && !ln.ask && !ln.elsewhere && !look;
+  // The last answer leaves nothing to ask: the card goes, and its receipt rides one toast instead (nothing left under it),
+  // replacing any earlier one of the card's.
   useEffect(() => {
     if (!done || !receipt) return;
     const undo = receipt.undo;
-    m.toast(receipt.said, { tone: "ok", ...(undo ? { undo: () => void undo().then((x) => x && m.toast("Undone", { tone: "info" })) } : {}) });
-    setReceipt(null);
+    m.toast(receipt.said, { tone: "ok", group: "last-night", ...(undo ? { undo: () => void undo().then((x) => x && m.toast("Undone", { tone: "info", group: "last-night" })) } : {}) });
+    setKept(null);
   }, [done, receipt, m]);
   // (Rendering nothing keeps this card's state: a receipt arriving just after the last answer still reaches its toast.)
   if (!s || !ln || !state || done) return null;
-  const { night, pic, ask } = ln;
+  const { night, pic } = ln;
+  // Folded after noon: the optional question waits behind its row.
+  const ask = folded ? null : ln.ask;
 
   const show = (r: CardReceipt | null) => {
     if (r) setReceipt(r);
@@ -414,13 +466,13 @@ export function LastNightCard() {
       <Ask id="last-night-ask" title={`Nothing logged ${formatTimeNear(gap.start, gap.end, tz)}–${formatTime(gap.end, tz)}`} sub={whose ? `${dur} · ${whose}` : `${dur} between two logged things`}>
         {/* Not sure first: nobody has to guess about a stretch they slept through. Two rows at most, so it fits above the dock at 320px. */}
         <div className="grid grid-cols-2 gap-2" aria-label={whose ? `${dur} with nothing logged, ${whose} (${range})` : undefined} role="group">
-          <GridAnswer onClick={() => answerGap([gap], "Left as not logged: that stretch stays out of the counts.")}>Not sure</GridAnswer>
+          <GridAnswer onClick={() => answerGap([gap], "Left out of the counts")}>Not sure</GridAnswer>
           <GridAnswer onClick={() => answerGap([gap])}>Up or feeding</GridAnswer>
           <GridAnswer disabled={s.busy} onClick={() => void sleptThrough(gap)}>
             {v.They} slept through
           </GridAnswer>
           {left > 1 && (
-            <GridAnswer aria-label="Skip the rest of the stretches" onClick={() => answerGap(pic.gaps, "Skipped: those stretches stay out of the counts.")}>
+            <GridAnswer aria-label="Skip the rest of the stretches" onClick={() => answerGap(pic.gaps, "Skipped: left out of the counts")}>
               Skip the rest
             </GridAnswer>
           )}
@@ -489,27 +541,27 @@ export function LastNightCard() {
     >
       {/* Not now sits by the title, so the card's question, its answers and a way out fit above the dock on a 320 × 568 phone. */}
       <div className="flex items-center gap-3">
-        <KindBadge icon="moon" color={KIND_COLOR.sleep} size={36} />
+        {/* Under 360px the badge steps aside, so the line under the title (a receipt) has room to read in full. */}
+        <span className="shrink-0 max-[359px]:hidden">
+          <KindBadge icon="moon" color={KIND_COLOR.sleep} size={36} />
+        </span>
         <div className="min-w-0 flex-1">
           <h3 id="last-night" className={cx(tone.heading, "text-[17px] leading-tight")}>
             Last night
           </h3>
-          {/* The last answer's receipt takes the date's line (the strip says the night), its Undo a 44px target that keeps the line short. */}
+          {/* The last answer's receipt takes the date's line, on one line (the strip says the night), its Undo a 44px target. */}
           {receipt ? (
-            <p role="status" data-last-night-receipt className="text-[13px] leading-snug text-mp-ink-2">
-              {receipt.said}
+            <p role="status" data-last-night-receipt className="flex min-w-0 items-center gap-1 text-[13px] leading-snug text-mp-ink-2">
+              <span className="min-w-0 truncate">{receipt.said}</span>
               {undo && (
-                <>
-                  {" · "}
-                  <button
-                    type="button"
-                    disabled={s.busy}
-                    onClick={() => void undo().then((x) => x && setReceipt(null))}
-                    className="-my-3 inline-flex min-h-[44px] items-center px-1 align-middle font-semibold text-mp-accent-fg disabled:opacity-40"
-                  >
-                    Undo
-                  </button>
-                </>
+                <button
+                  type="button"
+                  disabled={s.busy}
+                  onClick={() => void undo().then((x) => x && setReceipt(null))}
+                  className="-my-3 inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center font-semibold text-mp-accent-fg disabled:opacity-40"
+                >
+                  Undo
+                </button>
               )}
             </p>
           ) : (
@@ -520,19 +572,31 @@ export function LastNightCard() {
           Not now
         </Button>
       </div>
-      <NightStrip pic={pic} tz={tz} ask={ask?.kind === "gap" ? ask.gap : null} />
+      {/* Folded after noon: no strip, one row for the rest of last night's questions. */}
+      {folded ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className={cx(tone.muted, "min-w-0 text-[14px] leading-snug")}>More about last night, if you&apos;d like.</p>
+          <Button variant="soft" size="sm" className="shrink-0" onClick={() => setUnfolded(night)}>
+            Answer
+          </Button>
+        </div>
+      ) : (
+        <NightStrip pic={pic} tz={tz} ask={ask?.kind === "gap" ? ask.gap : null} />
+      )}
       {body}
       {ln.elsewhere && (
         <p role="note" data-safe-sleep className={cx(tone.inset, "px-3 py-2.5 text-[13px] leading-snug text-mp-ink")}>
           {safeSleepLine(v)}
         </p>
       )}
+      {/* The weekly look-back ends the card, once the night's own questions are answered (or folded). */}
+      {look && !ask && <LookBackPart key={look.goal.id} due={look} onReceipt={setReceipt} onHold={(on) => setHeld(on ? look : null)} />}
       <div className="-mx-1 flex flex-wrap items-center gap-x-1">
         <AskChatButton prompt="Last night: " label="Last night">
           Tell Maple
         </AskChatButton>
         {(ln.due || ln.checkedIn) && ln.windows.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => s.openSheet({ kind: "checkin", night })}>
+          <Button variant="ghost" size="sm" onClick={() => s.openSheet({ kind: "checkin", night, card: true })}>
             Add a note
           </Button>
         )}
