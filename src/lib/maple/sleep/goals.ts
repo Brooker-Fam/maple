@@ -300,10 +300,14 @@ export function cleanCheckinNight(raw: unknown, now: Date, tz: string): string {
 // same sentence names (the AAP: never a couch, and dozing off there is
 // especially dangerous), and the transfer never with a nap there ("let her
 // nap on the sofa, then the crib"). Crying while someone holds her ("let her
-// cry in my arms"), fussing "a little", and an overwhelmed adult laying her
-// down safely to step away for a few minutes (the AAP's own advice, and the
-// call-help guidance) aren't leaving her to cry as a plan; a method by name
-// still is. In "why it matters", how things are now, or what happened ("Alex
+// cry in my arms"), fussing "a little", and an overwhelmed adult's one-off
+// break (oneOffBreak: laying her on her back in her own sleep space, stepping
+// away for 15 minutes or less and coming back to check on her, the AAP's own
+// advice and the call-help guidance) aren't leaving her to cry as a plan; a
+// routine, an "until" or a longer time makes it one, and so does a method by
+// name. Leaving the room or shutting the door for longer than that while she
+// cries, or when it's too much, is leaving her to cry, unless someone else has
+// her. In "why it matters", how things are now, or what happened ("Alex
 // dozed off holding her on the sofa and it scared us"), is the reason for the
 // goal, not its plan, unless the same part plans it ("so she can …", "let
 // her keep …"). Feeding words (formula, bottles, pumping, weaning) are never
@@ -373,12 +377,38 @@ const NUM = String.raw`(?:\d+|a\s+few|a\s+couple(?:\s+of)?|several|two|three|fou
 const MINUTES = String.raw`${NUM}(?:\s*(?:-|–|to)\s*\d+)?\s*(?:minutes?|mins?)`;
 /** Minutes past a one-minute pause ("give her 1 minute" is the pause "for a minute" is). */
 const MINUTES_PAST_ONE = String.raw`(?!1\b)${MINUTES}`;
-/**
- * An overwhelmed adult setting her down safely and stepping away: the AAP's own advice for a frustrated caregiver
- * (HealthyChildren's shaken baby page: a crib with nothing soft in it, then leave the room for about 10 to 15
- * minutes), and guidelines/sleep.ts call-help's. Not leaving her to cry as a plan; a method by name still is.
- */
+/** An adult saying it's too much: the words that make crying words a question of a break (oneOffBreak). */
 const OVERWHELMED = /\b(?:overwhelm\w*|too\s+much|frustrat\w*|angry|losing\s+(?:it|my\s+temper|control)|can'?t\s+(?:cope|handle\s+it|take\s+it)|at\s+(?:my|our)\s+wits'?\s+end|step(?:s|ping)?\s+away|calm\s+down|take\s+a\s+(?:break|breather|breath)|need\w*\s+a\s+break)\b/i;
+/** Laid on her back ("on her back", "on June's back"). */
+const ON_BACK = /\bon\s+(?:her|his|their|the\s+baby'?s|[\p{L}][\p{L}'-]*'s)\s+back\b/iu;
+/** Fifteen minutes or less: "a few minutes", "a minute", "5 minutes", "10 to 15 minutes". */
+const BREAK_SHORT = /\b(?:a\s+(?:few|couple(?:\s+of)?)\s+(?:minutes?|mins?|moments?)|a\s+(?:minute|moment)|(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen)\s+(?:minutes?|mins?)|(?:(?:[1-9]|1[0-5])\s*(?:-|–|to|or)\s*)?(?:[1-9]|1[0-5])\s*(?:minutes?|mins?)|(?:five|ten)\s+(?:to|or)\s+(?:ten|fifteen)\s+(?:minutes?|mins?))\b/i;
+/** Longer than that, or open-ended: "20 minutes", "10 to 20 minutes", "an hour", "all night", "as long as it takes". */
+const BREAK_LONG = /\b(?:(?:\d+\s*(?:-|–|to|or)\s*)?(?:1[6-9]|[2-9]\d|\d{3,})\s*(?:minutes?|mins?)|(?:sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|ninety)(?:[\s-]\w+)?\s+(?:minutes?|mins?)|(?:half\s+)?an?\s+hours?|(?:\d+(?:\.\d+)?|one|two|three|four|several|a\s+few|a\s+couple(?:\s+of)?)\s+hours?|hours|all\s+(?:night|evening|day|afternoon)|the\s+(?:whole|entire|rest\s+of\s+the)\s+(?:night|evening|day|nap)|overnight|for\s+the\s+night|as\s+long\s+as|however\s+long|no\s+matter\s+how\s+long)\b/i;
+/** A routine, never a one-off: "every night", "nightly", "whenever she …", "on work nights". */
+const ROUTINE = /\b(?:(?:every|each)\s+(?:single\s+|other\s+)?(?:night|evening|morning|afternoon|day|time|nap|sleep|bedtime|wak\w*|feed\w*|week\w*|hour)s?|nightly|daily|whenever|always|routinely|regularly|usually|from\s+now\s+on|as\s+a\s+(?:rule|routine|habit)|(?:most|all)\s+(?:nights|naps|evenings|days)|on\s+(?:mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays|weeknights|weekends|work\s+nights))\b/i;
+/** A clock time, which plans it for then: "at 2 AM", "10:30", "by midnight". */
+const CLOCK_TIME = /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)(?!\w)|\b\d{1,2}:\d{2}\b|\b(?:at|by|around)\s+(?:midnight|noon|\d{1,2})\b(?!\s*(?:-|–|to)?\s*\d*\s*(?:minutes?|mins?|hours?|h)\b)/i;
+const UNTIL = /\b(?:until|till|til)\b|'til\b/i;
+/** Coming back to her: "then check on her", "come back in 10 minutes", "go back in". */
+const CHECK_BACK = /\b(?:check(?:s|ing)?\s+(?:back\s+)?(?:in\s+)?on|check\s+back|look\s+in\s+on|(?:come|comes|coming|go|goes|going|head|heads|heading|get|gets|getting)\s+back|return(?:s|ing)?\s+to|(?:then|and)\s+go(?:es|ing)?\s+in)\b/i;
+/**
+ * An overwhelmed adult's one-off break, the only way crying words pass: the AAP's own advice for a frustrated
+ * caregiver (HealthyChildren's shaken baby page: "Place your baby in a safe place, such as a crib or playpen",
+ * "leave the room and let your baby cry alone for about 10 to 15 minutes", then "check on your baby"), and
+ * guidelines/sleep.ts call-help's. The text says it's too much, lays her on her back in her own sleep space, steps
+ * away for 15 minutes or less and comes back to check on her, with no routine ("every night", "nightly", "at 2 AM",
+ * "whenever she …"), no "until …" and nothing longer ("an hour", "all night"). A method by name never passes.
+ */
+function oneOffBreak(text: string): boolean {
+  return OVERWHELMED.test(text) && ON_BACK.test(text) && SAFE_SURFACE.test(text) && BREAK_SHORT.test(text) && CHECK_BACK.test(text) && !BREAK_LONG.test(text) && !ROUTINE.test(text) && !CLOCK_TIME.test(text) && !UNTIL.test(text);
+}
+/** Her crying, or an adult saying it's too much: what makes leaving the room for a long time about leaving her to cry. */
+const CRY_OR_OVERWHELMED = new RegExp(String.raw`\b(?:cr(?:y|ies|ied|ying)|fuss\w*|grizzl\w*|scream\w*|wail\w*|sob(?:s|bing)?|protest\w*)\b|${OVERWHELMED.source}`, "i");
+/** Away from her for longer than a break, open-ended, or as a routine. */
+const AWAY_TOO_LONG = new RegExp(`${BREAK_LONG.source}|${UNTIL.source}|${ROUTINE.source}|${CLOCK_TIME.source}`, "i");
+/** Someone else has her while the adult is away ("while Alex has her", "hand her to Sam"). */
+const HANDED_OFF = /\b(?:has|have|having|holds?|holding|takes?|taking|watch(?:es|ing)?|minds?|minding|looks?\s+after|is\s+with|stays?\s+with)\s+(?:her|him|them|the\s+baby)\b|\bhand\w*\s+(?:her|him|them|the\s+baby)\s+(?:to|over)\b/i;
 /** Staying out while she cries: going (back) in, coming back, crying words, "on her own". */
 const STAYING_OUT = /\b(?:go(?:ing)?\s+(?:back\s+)?in|come\s+(?:back\s+)?in|coming\s+(?:back\s+)?in|rush(?:ing)?\s+in|come\s+back|check(?:ing)?\s+on|before\s+(?:\w+\s+)?pick\w*|on\s+(?:her|his|their)\s+own|by\s+(?:her|him|them)sel(?:f|ves)|self[\s-]?sooth\w*|cr(?:y|ies|ied|ying)|fuss\w*|grizzl\w*|scream\w*|wail\w*)\b/i;
 /** Leaving the room, a shut door, or her crying: what makes "don't come back until 6" about her. */
@@ -406,8 +436,12 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** What a refusal is about, for its words: crying it out, an adult, a bed, a couch or chair, a sitting device, a product not made for sleep, a position, bedding, weights or a tilt. */
 export type UnsafeKind = "cry" | "adult" | "bed" | "couch" | "seat" | "product" | "position" | "bedding" | "weighted" | "incline";
 
-/** The phrase that made a text unsafe, its kind, and what it names (for the refusal: "a couch", "a car seat"); `awake` when an adult said they're awake, which a couch, chair or adult bed doesn't change. */
-export type UnsafeFind = { kind: UnsafeKind; phrase: string; what: string | null; awake?: true };
+/**
+ * The phrase that made a text unsafe, its kind, and what it names (for the refusal: "a couch", "a car seat"); `awake`
+ * when an adult said they're awake, which a couch, chair or adult bed doesn't change; `overwhelmed` when crying words
+ * come with an adult saying it's too much, so the refusal offers the one-off break instead.
+ */
+export type UnsafeFind = { kind: UnsafeKind; phrase: string; what: string | null; awake?: true; overwhelmed?: true };
 
 type Rule = {
   re: RegExp;
@@ -438,6 +472,8 @@ type Rule = {
   needsText?: RegExp;
   /** The sentence saying this makes it something else ("gentle sleep training"). */
   unless?: RegExp;
+  /** Crying words an overwhelmed adult's one-off break may carry (oneOffBreak): only that passes. */
+  breakOk?: boolean;
   /** The words right after the phrase making it something else ("let her cry in my arms"). */
   unlessAfter?: RegExp;
   /** The part names her sleep space (a bassinet, a mattress), or has a sleep word (or "at night") and the baby: soft things and tilts are about where she sleeps. */
@@ -535,10 +571,10 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
     { re: /\binterval[\s-]+(?:sooth\w*|check\w*|method|training|crying|waits?|waiting)\b/gi, kind: "cry" },
     { re: /\bcr(?:y|ies|ying)\s+(?:her|him|them)sel(?:f|ves)\s+to\s+sleep\b/gi, kind: "cry" },
     { re: /\bsleep[\s-]?train\w*/gi, kind: "cry", unless: /\b(?:gentle|no[\s-]?cry|without\s+(?:any\s+)?(?:crying|tears))\b/i },
-    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:cry|cri|cries|crying|scream|screams|screaming|wail|wailing|sob|sobbing)\\b`, "gi"), kind: "cry", unless: OVERWHELMED, unlessAfter: heldCrying },
-    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:fuss|fusses|fussing|grizzle|grizzles|grizzling|whinge|whinges|whinging)\\b`, "gi"), kind: "cry", brief: true, unless: OVERWHELMED, unlessAfter: heldCrying },
+    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:cry|cri|cries|crying|scream|screams|screaming|wail|wailing|sob|sobbing)\\b`, "gi"), kind: "cry", breakOk: true, unlessAfter: heldCrying },
+    { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:fuss|fusses|fussing|grizzle|grizzles|grizzling|whinge|whinges|whinging)\\b`, "gi"), kind: "cry", brief: true, breakOk: true, unlessAfter: heldCrying },
     { re: new RegExp(`\\blet(?:s|ting)?\\s+${someone}\\s+(?:work|figure|sort|tough)\\s+(?:it|this|things)\\s+out\\b`, "gi"), kind: "cry" },
-    { re: new RegExp(`\\bleav(?:e|es|ing)\\s+${someone}\\b[^,;:]{0,40}?\\b(?:cry|cries|crying|fuss|fussing|grizzl\\w*|scream|screaming|wail|wailing)\\b`, "gi"), kind: "cry", unless: OVERWHELMED },
+    { re: new RegExp(`\\bleav(?:e|es|ing)\\s+${someone}\\b[^,;:]{0,40}?\\b(?:cry|cries|crying|fuss|fussing|grizzl\\w*|scream|screaming|wail|wailing)\\b`, "gi"), kind: "cry", breakOk: true },
     { re: new RegExp(`\\bignor(?:e|es|ing)\\s+(?:${someone}(?:'s)?\\s+)?(?:cry|cries|crying|fussing|screaming|wailing)\\b`, "gi"), kind: "cry" },
     // Timed waiting before going in: "Wait 10 minutes before picking her up", "Don't go in until 3 AM".
     {
@@ -548,15 +584,25 @@ function unsafeRules(o: { v?: Voiceish; adults?: readonly string[] }): { rules: 
       ),
       kind: "cry",
       sentence: true,
-      unless: OVERWHELMED,
+      breakOk: true,
     },
-    { re: new RegExp(`\\b(?:don'?t|do\\s+not|never|no)\\s+(?:go(?:ing)?\\s+(?:back\\s+)?in|come\\s+back\\s+in|coming\\s+back\\s+in|pick(?:ing)?\\s+(?:${someone}\\s+)?up|respond(?:ing)?|comfort(?:ing)?)\\s+(?:to\\s+${someone}\\s+)?(?:until|till|before|for\\s+${NUM}\\s*(?:minutes?|mins?|hours?))\\b`, "gi"), kind: "cry", sentence: true, unless: OVERWHELMED },
+    { re: new RegExp(`\\b(?:don'?t|do\\s+not|never|no)\\s+(?:go(?:ing)?\\s+(?:back\\s+)?in|come\\s+back\\s+in|coming\\s+back\\s+in|pick(?:ing)?\\s+(?:${someone}\\s+)?up|respond(?:ing)?|comfort(?:ing)?)\\s+(?:to\\s+${someone}\\s+)?(?:until|till|before|for\\s+${NUM}\\s*(?:minutes?|mins?|hours?))\\b`, "gi"), kind: "cry", sentence: true, breakOk: true },
     // …and without the word "wait": "give her 10 minutes before going in", "self-soothe for 15 minutes", "don't come back until 6" after shutting the door, "come back if she's still crying after 10 minutes".
-    { re: new RegExp(`\\b(?:give|gives|giving|allow|allows|allowing)\\s+(?:${someone}|it|things)\\s+(?:at\\s+least\\s+|another\\s+|a\\s+full\\s+)?${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", needsText: STAYING_OUT, unless: OVERWHELMED },
+    { re: new RegExp(`\\b(?:give|gives|giving|allow|allows|allowing)\\s+(?:${someone}|it|things)\\s+(?:at\\s+least\\s+|another\\s+|a\\s+full\\s+)?${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", needsText: STAYING_OUT, breakOk: true },
     { re: new RegExp(`\\bself[\\s-]?sooth\\w*\\s+(?:for\\s+)?(?:at\\s+least\\s+)?${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry" },
-    { re: /\b(?:don'?t|do\s+not|never|no)\s+(?:come|coming|go|going)\s+back\s+(?:until|till|til|before)\b/gi, kind: "cry", sentence: true, needs: LEFT_TO_CRY, unless: OVERWHELMED },
-    { re: new RegExp(`\\b(?:cr(?:y|ies|ied|ying)|fuss\\w*|scream\\w*|wail\\w*|grizzl\\w*)\\s+(?:for\\s+)?(?:after|past|beyond|longer\\s+than|more\\s+than|at\\s+least)\\s+${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", sentence: true, needs: COMING_BACK, unless: OVERWHELMED, unlessAfter: WITH_HER },
-    { re: new RegExp(`\\b(?:come|comes|coming|go|goes|going|check\\w*)\\s+back(?:\\s+in)?\\s+(?:in|after)\\s+${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", sentence: true, needs: CRYING_OR_DOOR, unless: OVERWHELMED },
+    { re: /\b(?:don'?t|do\s+not|never|no)\s+(?:come|coming|go|going)\s+back\s+(?:until|till|til|before)\b/gi, kind: "cry", sentence: true, needs: LEFT_TO_CRY, breakOk: true },
+    { re: new RegExp(`\\b(?:cr(?:y|ies|ied|ying)|fuss\\w*|scream\\w*|wail\\w*|grizzl\\w*)\\s+(?:for\\s+)?(?:after|past|beyond|longer\\s+than|more\\s+than|at\\s+least)\\s+${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", sentence: true, needs: COMING_BACK, breakOk: true, unlessAfter: WITH_HER },
+    { re: new RegExp(`\\b(?:come|comes|coming|go|goes|going|check\\w*)\\s+back(?:\\s+in)?\\s+(?:in|after)\\s+${MINUTES_PAST_ONE}\\b`, "gi"), kind: "cry", sentence: true, needs: CRYING_OR_DOOR, breakOk: true },
+    // Away from her for longer than a break, open-ended or as a routine, while she cries or it's too much: "when frustrated, put her in the crib and shut the door for an hour", "leave the room until morning".
+    {
+      re: /\b(?:shut|shuts|shutting|close|closes|closing)\s+(?:the|her|his|their)\s+door\b|\bleav(?:e|es|ing)\s+the\s+room\b|\bleft\s+the\s+room\b|\b(?:step|steps|stepping|walk|walks|walking)\s+(?:away|out)\b|\bgo(?:es|ing)?\s+(?:out(?:side)?|for\s+a\s+walk)\b/gi,
+      kind: "cry",
+      sentence: true,
+      needs: AWAY_TOO_LONG,
+      needsText: CRY_OR_OVERWHELMED,
+      baby: "sentence",
+      unless: HANDED_OFF,
+    },
     { re: /\b\d{1,2}\s*[-–/,]\s*\d{1,2}\s*[-–/,]\s*\d{1,2}\b/g, kind: "cry", sentence: true, needs: /\b(?:check\w*|method|methode|metodo|minutes?|mins?|wait\w*|intervals?|cry\w*|go(?:ing)?\s+in)\b/i },
     { re: /\b(?:dejar(?:la|lo|le)?|d[ée]ja(?:la|lo)|dejamos)\s+llorar\b|\bllorar\s+hasta\b|\b(?:dejar|deja|dejen|dejamos|dejarla|dejarlo|dejarle)\s+que\s+llore\b|\bque\s+llore\b/gi, kind: "cry" },
     { re: /\blaisser[\s-]+(?:la[\s-]+|le[\s-]+|l')?pleurer\b|\blaiss(?:e|ez|ons)[\s-]+(?:la|le)[\s-]+pleurer\b/gi, kind: "cry" },
@@ -697,7 +743,7 @@ function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; 
   const places = rules.filter((r) => r.place);
   // Read without accents and with straight apostrophes, so "sofá", "côté" and a phone's "Don’t" meet the rules' plain letters.
   const plainText = text.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[‘’ʼ`]/g, "'");
-  const found = (rule: Rule, m: RegExpMatchArray): UnsafeFind => ({ kind: rule.kind, phrase: m[0], what: rule.what?.(m) ?? null });
+  const found = (rule: Rule, m: RegExpMatchArray): UnsafeFind => ({ kind: rule.kind, phrase: m[0], what: rule.what?.(m) ?? null, ...(rule.kind === "cry" && OVERWHELMED.test(plainText) ? { overwhelmed: true as const } : {}) });
   for (const sentence of plainText.split(SENTENCES)) {
     if (!sentence.trim()) continue;
     const parts = partsOf(sentence);
@@ -740,6 +786,8 @@ function scanSleep(text: string, o: { v?: Voiceish; adults?: readonly string[]; 
       if (rule.needs && !rule.needs.test(sentence)) return null;
       if (rule.needsText && !rule.needsText.test(plainText)) return null;
       if (rule.unless && rule.unless.test(sentence)) return null;
+      // An overwhelmed adult's one-off break, read across the whole text: its routine, an "until" or a longer time anywhere undoes it.
+      if (rule.breakOk && oneOffBreak(plainText)) return null;
       const scope = rule.sentence ? sentence : part.text;
       const abs = part.start + at;
       const ownSleep = (SLEEPING.test(scope) || (rule.sleep === "down" && LAID_DOWN.test(scope))) && !(rule.borrow && !rule.sentence && onlyByTheBassinet(scope, at, SLEEPING));
@@ -827,7 +875,7 @@ export function sleepExemptions(text: string, o: { v?: Voiceish; adults?: readon
  * no voice. Every suggestion passes unsafeSleep itself (the check holds it to
  * that).
  */
-export function unsafeWords(label: string, v?: Pick<Voice, "name" | "them" | "their" | "they" | "verb" | "named">, find?: Pick<UnsafeFind, "kind" | "what" | "awake"> | null): string {
+export function unsafeWords(label: string, v?: Pick<Voice, "name" | "them" | "their" | "they" | "verb" | "named">, find?: Pick<UnsafeFind, "kind" | "what" | "awake" | "overwhelmed"> | null): string {
   const who = v?.name ?? "the baby";
   const them = v?.them ?? "the baby";
   const their = v ? v.their : "the baby's";
@@ -839,7 +887,10 @@ export function unsafeWords(label: string, v?: Pick<Voice, "name" | "them" | "th
     return `${label}: Maple won't plan ${where}, even with someone awake; try "Hold ${them} while I'm awake, then the bassinet".`;
   }
   const words: Record<UnsafeKind, string> = {
-    cry: `Maple won't plan leaving ${who} to cry; if this is about settling ${them}, try "Soothe ${them}, then try the bassinet once more".`,
+    // When it's too much: the AAP's one-off break (oneOffBreak), never a wait while she cries.
+    cry: find?.overwhelmed
+      ? `Maple won't plan leaving ${who} to cry; for a break when it's too much, try "If I'm overwhelmed, lay ${them} on ${v ? v.their : "their"} back in the bassinet and step away for a few minutes".`
+      : `Maple won't plan leaving ${who} to cry; if this is about settling ${them}, try "Soothe ${them}, then try the bassinet once more".`,
     adult: `Maple won't plan ${who} sleeping on or with an adult; if this is a step away from it, try "Hold ${them} only while I'm awake, then the bassinet".`,
     bed: `Maple won't plan ${who} sleeping in an adult bed; if this is a step away from it, try "Move ${them} from our bed to the bassinet".`,
     couch: `Maple won't plan sleep ${find?.what ?? "on a couch"}; if this is a step away from it, try "Bassinet before I get sleepy".`,

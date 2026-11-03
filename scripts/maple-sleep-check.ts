@@ -1725,7 +1725,8 @@ const OWN_ALLOWED = [
   "Sam, go to the guest room at 10 and don't come back until 6",
   "Leave the room for a shower and come back in 10 minutes",
   "When it's too much, put her in the crib, leave the room and come back in 10 minutes",
-  "If she cries and it's too much, lay her in the bassinet, leave the room and come back in 10 minutes",
+  // Round 4 (the safety review's P0 #2): the one-off break lays her on her back; without it, this is in BREAK_REFUSED.
+  "If she cries and it's too much, lay her on her back in the bassinet, leave the room and come back in 10 minutes",
   "If I'm overwhelmed, lay her in the bassinet and step away for a few minutes",
   "Alex sleeps in our bed with earplugs while Sam has her in the bassinet",
   "We sleep in our bed, she sleeps in the bassinet",
@@ -2450,6 +2451,78 @@ check("sleepy (safety P0 #1): I'm getting sleepy, then the bassinet, says one th
   const sleepy = sheet.slice(sheet.indexOf("export function SleepySheet"), sheet.indexOf("export function HoldingSheet"));
   ok(sleepy.length > 0 && sleepy.includes("sleepyBassinetLine(v)") && !/transferSteps\s*\(/.test(sleepy) && !/import[^;]*\btransferSteps\b/.test(sheet), "the sleepy sheet shows the one line, never the steps");
   ok(transferSteps(SHE).some((x) => /until she's deeply asleep/.test(x)), "the transfer steps stay as they are everywhere else");
+});
+
+/** Safety P0 #2: crying it out worded as a break (the review's probes and more): every one refused. */
+const BREAK_REFUSED = [
+  // the review's
+  "Let her cry while I take a break",
+  "Every night at 2 AM, let her cry for 20 minutes so I can take a break",
+  "When I need a break, let her cry for 30 minutes",
+  "Let her cry until she falls asleep, so I can calm down",
+  "Wait 15 minutes before going in when she cries, so I can calm down",
+  "Don't go in until 3 AM, I need a break",
+  "Leave her crying in the bassinet if it's too much",
+  "If I feel angry, leave her in the bassinet crying and leave the room until morning",
+  "When frustrated, put her in the crib and shut the door for an hour",
+  "Take a break: let her cry for an hour in the bassinet every night",
+  "Step away for an hour and let her cry",
+  "When it's too much, let her scream in the bassinet",
+  "Let her cry for 15 minutes when I'm frustrated",
+  "If I'm losing it, let her cry in the crib and go for a walk",
+  // a one-off break that isn't one: too long, a routine, an "until", a clock time, no sleep space or back, no check
+  "If I'm overwhelmed, lay her on her back in the bassinet and let her cry for 20 minutes, then check on her",
+  "If I need a break, let her cry for 10 to 20 minutes in the bassinet on her back, then check on her",
+  "Every night when it's too much, lay her on her back in the crib, let her cry for 10 minutes, then check on her",
+  "Whenever I'm overwhelmed, lay her on her back in the bassinet, let her cry for 10 minutes, then check on her",
+  "If I'm frustrated, lay her on her back in the bassinet and let her cry until I calm down, then check on her",
+  "If it's too much at 3 AM, lay her on her back in the crib, let her cry for 10 minutes and check on her",
+  "If I'm overwhelmed, let her cry for 10 minutes, then check on her",
+  "If I'm overwhelmed, lay her on her back in the bassinet and let her cry for 10 minutes",
+  "If she cries and it's too much, lay her in the bassinet, leave the room and come back in 10 minutes",
+  "When I'm angry, shut the door and leave her crying for half an hour",
+  "If I can't cope, leave the room for an hour while she cries in the crib",
+  "If it's too much, close the door and don't come back until she's asleep",
+  "When it's too much, step away for the rest of the night and let her cry",
+];
+/** …and the AAP's one-off break, in the family's words: every one passes. */
+const BREAK_ALLOWED = [
+  "If I'm overwhelmed, lay her on her back in the bassinet and step away for a few minutes",
+  "If I'm overwhelmed, lay her on her back in the bassinet, let her cry for 10 minutes, then check on her",
+  "If it's too much, lay her on her back in the crib, leave the room for 10 to 15 minutes and let her cry, then check on her",
+  "When I'm frustrated, put her on her back in the crib, step away for 5 minutes and let her fuss, then come back",
+  "If I'm losing it, lay her on her back in her crib, take a breather for a couple of minutes and go back in",
+  "Lay her down and leave the room for 10 to 15 minutes when frustrated",
+  "When it's too much, put her in the crib, leave the room and come back in 10 minutes",
+  "Hand her to Alex and step away for an hour when it's too much",
+  "When it's too much, Alex takes her and I go for a walk for an hour",
+];
+
+check("safety (P0 #2): an overwhelmed adult's one-off break passes, never a routine, an 'until' or a longer time; the refusal offers the break, which passes in each voice", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  const refused = BREAK_REFUSED.filter((t) => unsafeSleep(t, o));
+  const passed = BREAK_ALLOWED.filter((t) => !unsafeSleep(t, o));
+  console.log(`  break lists: ${refused.length} of ${BREAK_REFUSED.length} unsafe refused, ${passed.length} of ${BREAK_ALLOWED.length} safe passed`);
+  for (const t of BREAK_REFUSED) ok(refused.includes(t), `refused: "${t}"`);
+  for (const t of BREAK_ALLOWED) ok(passed.includes(t), `passed: "${t}" (matched "${unsafeSleep(t, o)?.phrase}")`);
+  // In his and their families' words too.
+  ok(!unsafeSleep("If I'm overwhelmed, lay him on his back in the bassinet, let him cry for 10 minutes, then check on him", { v: HE, adults: R3_ADULTS }), "his words");
+  ok(!unsafeSleep("If I'm overwhelmed, lay them on their back in the bassinet, let them cry for 10 minutes, then check on them", { v: THEY, adults: R3_ADULTS }), "their words");
+  ok(unsafeSleep("If I'm overwhelmed, lay them on their back in the bassinet, let them cry for an hour, then check on them", { v: THEY, adults: R3_ADULTS }), "their words, an hour");
+  // What happened, in why it matters, is the reason for the goal.
+  ok(!unsafeSleep("Last week I let her cry for an hour because I was overwhelmed, and it scared us", { ...o, describing: true }), "a why");
+  // The refusal offers the break (its suggestion passes in each voice and without one); a method by name too.
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Let her cry while I take a break", o)), `Step 1: Maple won't plan leaving June to cry; for a break when it's too much, try "If I'm overwhelmed, lay her on her back in the bassinet and step away for a few minutes".`, "the break");
+  eq(unsafeWords("Step 1", undefined, unsafeSleep("Let her cry it out when it's too much", o)), `Step 1: Maple won't plan leaving the baby to cry; for a break when it's too much, try "If I'm overwhelmed, lay the baby on their back in the bassinet and step away for a few minutes".`, "without a voice");
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Let her cry it out", o)), `Step 1: Maple won't plan leaving June to cry; if this is about settling her, try "Soothe her, then try the bassinet once more".`, "no break asked for: soothe and retry");
+  for (const text of BREAK_REFUSED) {
+    const find = unsafeSleep(text, o)!;
+    for (const v of [...VOICES, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis, { adults: R3_ADULTS }), `the suggestion passes: ${words}`);
+    }
+  }
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);
