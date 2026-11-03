@@ -39,6 +39,7 @@ import {
   GOAL_TITLE_MAX,
   GOAL_WHY_MAX,
   HANDOFF_ANSWERS,
+  MAX_SPAN_MS,
   PROTECTED_ANSWERS,
   REVIEW_DUE_DAYS,
   ROSTER_MAX,
@@ -1589,18 +1590,76 @@ export type NightLog = "logged" | "partly" | "none";
 
 type Span = [number, number];
 
-/** Everything logged, as spans of time (a diaper is a moment): entries of any kind, bassinet tries and holding turns. */
-export function loggedSpans(data: Pick<GoalData, "entries" | "tries" | "shifts">, now: number): Span[] {
-  const out: Span[] = [];
-  for (const e of live(data.entries)) {
-    const s = ms(e.started_at);
-    const end = e.ended_at ? ms(e.ended_at) : e.active ? now : s;
-    out.push([s, Math.max(s, end)]);
-  }
-  for (const t of live(data.tries)) out.push([ms(t.started_at), t.ended_at ? ms(t.ended_at) : now]);
-  for (const s of live(data.shifts)) out.push([ms(s.started_at), s.ended_at ? ms(s.ended_at) : now]);
-  return out;
+/**
+ * A timer or a bassinet try this long was left running (the store holds a try and a holding turn to the same 12
+ * hours): its end is unknown, so it counts as its start alone, a moment like a diaper. It never makes a night logged,
+ * a sleep on the nights after it or a bassinet stretch, so a quiet stretch still reads as one.
+ */
+export const LEFT_RUNNING_MS = MAX_SPAN_MS;
+
+const pastSane = (start: number, end: number) => end - start > LEFT_RUNNING_MS;
+
+/** An entry as counted: its start to its end (a running timer's to now); a moment, or one past LEFT_RUNNING_MS, its start alone. */
+export function entrySpan(e: Pick<Entry, "started_at" | "ended_at" | "active">, now: number): Span {
+  const s = ms(e.started_at);
+  const end = e.ended_at ? ms(e.ended_at) : e.active ? now : s;
+  return end <= s || pastSane(s, end) ? [s, s] : [s, end];
 }
+
+/** A bassinet try as counted: to its end, a running one to now; one past LEFT_RUNNING_MS its start alone. */
+function trySpan(t: Pick<BassinetTry, "started_at" | "ended_at">, now: number): Span {
+  const s = ms(t.started_at);
+  const end = t.ended_at ? ms(t.ended_at) : now;
+  return end <= s || pastSane(s, end) ? [s, s] : [s, end];
+}
+
+/** A holding turn as counted: to its end, an open one to now; one likely left open (turnLeftOpen), or past LEFT_RUNNING_MS, its start alone. */
+function turnSpan(sh: Pick<HoldingShift, "started_at" | "ended_at" | "ended_how" | "handoff_at">, now: number): Span {
+  const s = ms(sh.started_at);
+  const end = sh.ended_at ? ms(sh.ended_at) : now;
+  return end <= s || turnLeftOpen(sh, now) || pastSane(s, end) ? [s, s] : [s, end];
+}
+
+/**
+ * Everything logged, as spans of time (a diaper is a moment): entries of any kind, bassinet tries and holding turns,
+ * each as counted (entrySpan): what was left running counts as its start alone.
+ */
+export function loggedSpans(data: Pick<GoalData, "entries" | "tries" | "shifts">, now: number): Span[] {
+  return [...live(data.entries).map((e) => entrySpan(e, now)), ...live(data.tries).map((t) => trySpan(t, now)), ...live(data.shifts).map((s) => turnSpan(s, now))];
+}
+
+/** Something still running past its sane length: a timer or a try past LEFT_RUNNING_MS, or a holding turn likely left open. */
+export type LeftRunning = { kind: "timer"; entryKind: Entry["kind"]; id: number; since: string } | { kind: "try"; id: number; since: string } | { kind: "turn"; id: number; since: string; member: string };
+
+/** What's still running past its sane length now, oldest first: said once, so the family can stop it or fix when it ended. */
+export function leftRunning(data: Pick<GoalData, "entries" | "tries" | "shifts">, now: number): LeftRunning[] {
+  const out: LeftRunning[] = [
+    ...live(data.entries)
+      .filter((e) => e.active && !e.ended_at && pastSane(ms(e.started_at), now))
+      .map((e): LeftRunning => ({ kind: "timer", entryKind: e.kind, id: e.id, since: e.started_at })),
+    ...live(data.tries)
+      .filter((t) => !t.ended_at && pastSane(ms(t.started_at), now))
+      .map((t): LeftRunning => ({ kind: "try", id: t.id, since: t.started_at })),
+    ...live(data.shifts)
+      .filter((s) => !s.ended_at && turnLeftOpen(s, now))
+      .map((s): LeftRunning => ({ kind: "turn", id: s.id, since: s.started_at, member: s.holder })),
+  ];
+  return out.sort((a, b) => ms(a.since) - ms(b.since));
+}
+
+const TIMER_WORD: Partial<Record<Entry["kind"], string>> = { sleep: "sleep timer", feed: "feed timer", pump: "pumping timer", tummy: "tummy time timer" };
+
+/** "the sleep timer running since Fri, Oct 30, 9:00 PM (#1)", "bassinet try t3, running since …", "Sam's holding turn (h9), open since …". */
+export function leftRunningWords(x: LeftRunning, o: { name: (id: string) => string; tz: string; today: string }): string {
+  const when = `${dateWords(dayKey(ms(x.since), o.tz), o.today)}, ${formatTime(x.since, o.tz)}`;
+  if (x.kind === "timer") return `the ${TIMER_WORD[x.entryKind] ?? `${x.entryKind} timer`} running since ${when} (#${x.id})`;
+  if (x.kind === "try") return `bassinet try t${x.id}, running since ${when}`;
+  return `${o.name(x.member)}'s holding turn (h${x.id}), open since ${when}`;
+}
+
+/** What to do about each: stop it or fix when it ended, with the tool that does it. */
+const leftRunningFix = (x: LeftRunning) =>
+  x.kind === "timer" ? `stop_timer, or update_entry on #${x.id} for when it really ended` : x.kind === "try" ? `bassinet_try finish or fix on t${x.id}` : `holding end, or hand_off`;
 
 /**
  * A night as logged, with its core's (NIGHT_CORE) stretches of nothing:
@@ -1973,6 +2032,8 @@ export type GoalProgress = GoalSpan & {
   quiet: QuietStretch | null;
   /** Each goal adult's check-ins by week; null for a reader who can't see check-ins. */
   checkinWeeks: CheckinWeek[] | null;
+  /** Timers, tries and holding turns still running past their sane length (leftRunning): each counts as its start alone. */
+  leftRunning: LeftRunning[];
 };
 
 /** The week the coach and the goal card read: the newest one with a night over (on a review morning, the week that just ended). */
@@ -2082,7 +2143,11 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
         log: nl ? (nl.log === "none" && byNight.has(k) ? "partly" : nl.log) : null,
         feed: feeds.some((e) => ms(e.started_at) >= a && ms(e.started_at) < b),
         tried: byNight.has(k),
-        slept: sleeps.some((e) => ms(e.started_at) < b && (e.ended_at ? ms(e.ended_at) : e.active ? t : ms(e.started_at)) > a),
+        // A sleep timer left running counts as its start alone (entrySpan): it never makes the nights after it "slept".
+        slept: sleeps.some((e) => {
+          const [s, en] = entrySpan(e, t);
+          return s < b && en > a;
+        }),
         checkedIn: ans ? ans.checkedIn : null,
         place: ans?.place ?? null,
         untimed: ans?.untimed ?? null,
@@ -2381,6 +2446,7 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
     observations,
     quiet,
     checkinWeeks,
+    leftRunning: leftRunning(data, t),
   };
 }
 
@@ -2593,6 +2659,11 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
   }
   const cov = shown.map((w) => ({ w, c: p.coverage.find((c) => c.week === w.n) })).filter((x) => x.c && x.c.over > 0);
   if (cov.length && !p.easingUntil && !quiet) lines.push(`Logged: ${cov.map(({ w, c }) => `${label(w).toLowerCase()} ${coverageWords(c!)}`).join("; ")}.`);
+  // A timer, try or holding turn left running counts as its start alone: how the nights since it read.
+  if (p.leftRunning.length) {
+    const said = p.leftRunning.map((x) => leftRunningWords(x, { name, tz: words.tz, today: p.today }));
+    lines.push(`Left running: ${said.join("; ")}. Only ${said.length > 1 ? "each one's" : "its"} start counts (a timer or try past 12 hours, a holding turn once it's likely left open), so the nights since read as nothing logged: unknown, never a night that went well or badly.`);
+  }
   if (p.answers) {
     const said = shown
       .map((w) => ({ w, a: p.answers!.find((x) => x.week === w.n)! }))
@@ -2729,14 +2800,20 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
     notes.push(`${easingWords(p.easingUntil, p.today)}, as the family chose: nothing is counted until then, and the steps and targets hold. Don't coach on counts or steps unless they ask; if it comes up, ask how they're doing.`);
     return done(null);
   }
+  // A timer, try or holding turn left running: once, with what stops it or fixes when it ended.
+  const running = open && p.leftRunning.length
+    ? `Left running: ${p.leftRunning.map((x) => `${leftRunningWords(x, { name: words.name, tz: words.tz, today: p.today })}, fixed with ${leftRunningFix(x)}`).join("; ")}. Only its start counts. Ask once whether to stop it or fix when it ended, and don't ask about the nights since or count them.`
+    : null;
   // A quiet stretch: said once, then how they are, before anything about the goal. Never a tally of the nights.
   const quiet = open ? quietNow(p) : null;
   if (quiet) {
     notes.push(
       `${quietWords(quiet, p.today)}. Before anything about the goal, ask how they're doing. Don't ask about those nights or count them. If they'd like a clean restart, it's their choice: pick it up from tonight (update with counts_from "tonight"), ease off a week (paused_until "in 1 week"), or set it aside (close as dropped), each after a read-back and a yes.`
     );
+    if (running) notes.push(running);
     return done(null);
   }
+  if (running) notes.push(running);
   // Most of the last week empty: how they are comes first, and those nights are left out, never asked about.
   const over = p.nights.filter((n) => n.log != null).slice(-7);
   const empty = p.checkins ? over.filter(emptyNight).length : 0;

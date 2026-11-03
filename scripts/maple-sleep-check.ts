@@ -2439,5 +2439,64 @@ check("a Back to work roster starts on its own night (roster_from): before it no
   ok(windowAt([older], SAM, before, NY) != null && windowsBetween([older], SAM, before - HOUR, before + HOUR, NY).length === 1, "without roster_from, as before");
 });
 
+// ── round 4 (the coach review): what was left running, last night once it's over, the target date and the roster ──
+
+check("left running (coach review P1 #1): a timer or try past 12 hours, or a holding turn likely left open, counts as its start alone: never a logged night or a bassinet stretch, and a quiet stretch still reads", () => {
+  const g = goalRow({
+    created_at: iso(at(2026, 10, 26, 9)),
+    updated_at: iso(at(2026, 10, 26, 9)),
+    targets: [{ id: "a1", kind: "bassinet_stretch", minutes: 180 }, { id: "a2", kind: "bassinet_nights", per_week: 4, min_minutes: 60 }],
+  });
+  // Laid in the bassinet asleep at 9 PM on Fri, Oct 30, and the sleep timer never stopped; nothing else logged.
+  const sleep = sleepRow(at(2026, 10, 30, 21), null, "bassinet");
+  const now = at(2026, 11, 3, 10);
+  const p = goalProgress(g, data({ entries: [sleep] }), now, NY);
+  const stretch = p.targets[0] as Extract<(typeof p.targets)[number], { kind: "bassinet_stretch" }>;
+  eq([stretch.longest, stretch.weeks.map((w) => w.stretches)], [null, [0, 0]], "no bassinet stretch from a timer left running (it read 3d 13h)");
+  const nights = (p.targets[1] as Extract<(typeof p.targets)[number], { kind: "bassinet_nights" }>).weeks;
+  eq(nights.map((w) => w.known), [1, 0], "only the night it began says something about her sleep");
+  eq(p.coverage.map((c) => [c.logged, c.partly, c.none]), [[0, 1, 6], [0, 0, 1]], "its night partly logged (a start alone), the nights after it not logged");
+  eq(p.leftRunning, [{ kind: "timer", entryKind: "sleep", id: sleep.id, since: sleep.started_at }], "said as left running");
+  const lines = goalProgressLines(g, p, words(SHE, now)).map((l) => plain(l) as string);
+  ok(lines.includes(`Left running: the sleep timer running since Fri, Oct 30, 9:00 PM (#${sleep.id}). Only its start counts (a timer or try past 12 hours, a holding turn once it's likely left open), so the nights since read as nothing logged: unknown, never a night that went well or badly.`), lines.join("\n"));
+  ok(!lines.some((l) => /longest|stretch(es)? (was|were)|aimed for/.test(l)), lines.join("\n"));
+  const notes = coachNotes(g, p, words(SHE, now)).notes.map((n) => plain(n) as string);
+  ok(notes.includes(`Left running: the sleep timer running since Fri, Oct 30, 9:00 PM (#${sleep.id}), fixed with stop_timer, or update_entry on #${sleep.id} for when it really ended. Only its start counts. Ask once whether to stop it or fix when it ended, and don't ask about the nights since or count them.`), notes.join("\n"));
+  // The plan's own progress (sleep_plan progress_days) agrees: no stretch, no hours by place.
+  const sp = sleepProgress({ tries: [], entries: [sleep], now, tz: NY, days: 7 });
+  eq([sp.longestBassinet, sp.places], [null, []], "sleepProgress");
+
+  // A week of it with nothing else logged is a quiet stretch, said once, the timer's start the last thing logged.
+  const g2 = goalRow({ created_at: iso(at(2026, 10, 19, 9)), updated_at: iso(at(2026, 10, 19, 9)), targets: [{ id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 }] });
+  const early = sleepRow(at(2026, 10, 25, 21), null, "bassinet");
+  const q = goalProgress(g2, data({ entries: [early] }), now, NY);
+  eq([q.quiet?.from, q.quiet?.going], ["2026-10-26", true], "a quiet stretch (none at all while the timer counted to now)");
+  ok(goalProgressLines(g2, q, words(SHE, now)).some((l) => l === "Nothing logged since Mon, Oct 26."), "said once");
+  const qn = coachNotes(g2, q, words(SHE, now)).notes;
+  ok(/^Nothing logged since Mon, Oct 26\. Before anything about the goal, ask how they're doing/.test(qn[0]) && /^Left running: /.test(qn[1]), JSON.stringify(qn));
+
+  // Under 12 hours it still counts to now: a real night's sleep isn't cut short.
+  const fresh = sleepRow(at(2026, 11, 2, 22), null, "bassinet");
+  const pf = goalProgress(g, data({ entries: [fresh] }), at(2026, 11, 3, 7), NY);
+  const sf = pf.targets[0] as Extract<(typeof pf.targets)[number], { kind: "bassinet_stretch" }>;
+  eq([sf.longest?.sec, pf.leftRunning.length, pf.coverage.at(-1)?.logged], [9 * 3600, 0, 1], "9 hours so far, the night logged, nothing left running");
+  // Stopped after 13 hours without fixing when it ended: its start alone too.
+  const late = sleepRow(at(2026, 10, 30, 21), at(2026, 10, 31, 10), "bassinet");
+  const pl = goalProgress(g, data({ entries: [late] }), now, NY);
+  eq([(pl.targets[0] as typeof stretch).longest, pl.coverage[0].logged, pl.leftRunning.length], [null, 0, 0], "a 13-hour sleep is a start, and nothing is running");
+
+  // A try left running, and a holding turn left open: the same, and said with what fixes each.
+  const tr = tryRow(at(2026, 10, 30, 21), null, null);
+  const turn: HoldingShift = { ...shiftRow(SAM, at(2026, 10, 31, 21), at(2026, 10, 31, 21)), ended_at: null, ended_how: null };
+  const pt = goalProgress(g, data({ tries: [tr], shifts: [turn] }), now, NY);
+  eq(pt.coverage.map((c) => c.logged), [0, 0], "neither covers a night");
+  eq(pt.leftRunning.map((x) => x.kind), ["try", "turn"], "both listed, oldest first");
+  const tn = coachNotes(g, pt, words(SHE, now)).notes.find((n) => n.startsWith("Left running:"))!;
+  ok(plain(tn) === `Left running: bassinet try t${tr.id}, running since Fri, Oct 30, 9:00 PM, fixed with bassinet_try finish or fix on t${tr.id}; Sam's holding turn (h${turn.id}), open since Sat, Oct 31, 9:00 PM, fixed with holding end, or hand_off. Only its start counts. Ask once whether to stop it or fix when it ended, and don't ask about the nights since or count them.`, tn);
+  // A turn handed off on time, even a long one, counts whole.
+  const handed: HoldingShift = { ...shiftRow(SAM, at(2026, 10, 31, 22), at(2026, 11, 1, 5)), ended_how: "handoff", handoff_at: iso(at(2026, 11, 1, 2)) };
+  eq(goalProgress(g, data({ shifts: [handed] }), now, NY).coverage[0].logged, 1, "a 7-hour turn ended in a handoff logs its night");
+});
+
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

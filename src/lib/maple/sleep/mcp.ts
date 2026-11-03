@@ -643,9 +643,9 @@ function safetyLines(guidance: SleepGuidance): { line: string } {
 }
 
 /** Lines goals on one roster share (its hints, the family's nights): said once. */
-const SHARED_LINE = /^(Roster|Hint from the log|Caution|Logged|Check-ins since [^:]+): /;
+const SHARED_LINE = /^(Roster|Hint from the log|Caution|Logged|Left running|Check-ins since [^:]+): /;
 /** Coach notes about the family's nights or the roster, not one goal: said once, whichever goal says it first. */
-const SHARED_NOTE = /^Coach note \(g\d+\): ((?:Nothing logged on|Nothing logged since|Only feeds or other entries were logged on|Not checked in for last night yet|Focus:)[\s\S]*)$/;
+const SHARED_NOTE = /^Coach note \(g\d+\): ((?:Nothing logged on|Nothing logged since|Only feeds or other entries were logged on|Not checked in for last night yet|Focus:|Left running:)[\s\S]*)$/;
 /** The key a line is said once by, or null for a goal's own line (its head, its counts, its own coach notes). */
 function sharedLineKey(l: string): string | null {
   if (SHARED_LINE.test(l)) return l;

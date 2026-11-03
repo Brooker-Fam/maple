@@ -228,7 +228,7 @@ export function sleepByPlace(entries: readonly Entry[], tries: readonly Bassinet
     if (!isSleep(e)) continue;
     const s = ms(e.started_at);
     const en = endOf(e, now);
-    if (en <= s) continue;
+    if (en <= s || en - s > MAX_SPAN_MS) continue;
     const span = clip([s, en], from, to);
     if (span[1] <= span[0]) continue;
     total += span[1] - span[0];
