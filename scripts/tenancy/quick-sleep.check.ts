@@ -19,7 +19,7 @@ import { numberTries, tryDayKey, tryDayLabel } from "../../src/lib/maple/sleep/e
 import { lastNightKey } from "../../src/lib/maple/sleep/goals";
 import { getShift, getTry, listTries, openShift, runningTry, startShift } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, RosterWindow, SleepCheckin, SleepGoal } from "../../src/lib/maple/sleep/types";
-import { activeTimers, getEntry, startTimer } from "../../src/lib/maple/store";
+import { activeTimers, getEntry, startTimer, stopTimer, updateEntry } from "../../src/lib/maple/store";
 import { addDays, dayKey, formatTime, localParts, zonedTimeToUtc } from "../../src/lib/maple/time";
 import type { FeedData, Role } from "../../src/lib/maple/types";
 import { done, eq, freshDb, ok, seedFamilies, sha256, sql, test, type FamilySeed } from "./harness";
@@ -80,11 +80,12 @@ async function addToken(familyId: number, email: string, tag: string): Promise<s
   return token;
 }
 
-/** Each case starts from a family with nothing but its seed: no tries, turns, check-ins, goals or new entries. */
+/** Each case starts from a family with nothing but its seed: no tries, turns, check-ins, goals or new entries, and no Siri action kept for Undo. */
 async function reset(f: FamilySeed) {
   for (const t of ["maple_sleep_tries", "maple_sleep_shifts", "maple_sleep_checkins", "maple_sleep_goals", "maple_sleep_plans"]) await sql(`DELETE FROM ${t} WHERE family_id = $1`, [f.familyId]);
   await sql(`DELETE FROM maple_entries WHERE family_id = $1 AND id <> ALL($2::bigint[])`, [f.familyId, [f.entries.diaper, f.entries.feed, f.entries.moment]]);
   await sql(`DELETE FROM maple_care_entries WHERE family_id = $1 AND source = 'shortcut'`, [f.familyId]);
+  await sql(`UPDATE maple_tokens SET last_act = NULL WHERE family_id = $1`, [f.familyId]);
 }
 
 const clock = (at: string | number | Date, tz: string) => formatTime(at, tz).replace(/\s*[AP]M$/i, "");
@@ -796,6 +797,81 @@ async function main() {
     const u = await siri(T(alpha).owner, { action: "undo" });
     ok(u.speak.startsWith("Undone: the bassinet try"), `the owner's own, not the member's newer diaper: ${u.speak}`);
     eq((await sql(`SELECT deleted_at FROM maple_entries WHERE family_id = 1 AND kind = 'diaper' AND source = 'shortcut'`))[0].deleted_at, null, "the member's diaper stays");
+  });
+
+  // Undo acts on the speaker's newest Siri action as Siri kept it (quick/acts.ts), never on a change read off the log.
+  await test("undo never reaches past a newer change by anyone to its action's row: a feed Siri stopped and someone fixed since stays, and the older sleep stop is never taken back", async () => {
+    await reset(alpha);
+    const sleep = await runningSleep(alpha, alpha.member, 60);
+    ok((await siri(T(alpha).owner, { action: "wake" })).speak.startsWith("Stopped."), "Maple awake");
+    const feed = await runningFeed(alpha, alpha.member, 8);
+    ok((await siri(T(alpha).owner, { action: "stop" })).speak.startsWith("Stopped."), "Maple stop: the feed");
+    // Blake fixes that feed in the app.
+    const f = (await getEntry(1, feed.id))!;
+    await updateEntry(1, feed.id, { note: "made-up fix on the other phone" }, alpha.member, { expectUpdatedAt: f.updated_at });
+    const u = await siri(T(alpha).owner, { action: "undo" });
+    eq([u.status, u.ok, u.speak], [409, false, "The nursing timer changed since, so nothing was undone. Fix it in the app."], "said, nothing undone");
+    eq([(await getEntry(1, sleep.id))?.active, (await activeTimers(1, alpha.babyId)).length], [false, 0], "the sleep stays stopped, and nothing runs");
+  });
+
+  await test("undo never takes an app edit for a Siri stop: a finished nap, tummy time or pumping edited in the app never runs again", async () => {
+    for (const kind of ["sleep", "tummy", "pump"] as const) {
+      await reset(alpha);
+      const start = new Date(Date.now() - 20 * HOUR);
+      const [row] = await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, active, data, created_by, source) VALUES (1, $1, $2, $3, $4, FALSE, '{}', $5, 'web') RETURNING id, updated_at`, [
+        alpha.babyId,
+        kind,
+        start,
+        new Date(start.getTime() + HOUR),
+        alpha.owner,
+      ]);
+      // Yesterday's, edited now in the app (its note) by the one who then says Maple undo.
+      await updateEntry(1, Number(row.id), { note: "made-up note" }, alpha.owner, { expectUpdatedAt: new Date(row.updated_at as string).toISOString() });
+      const u = await siri(T(alpha).owner, { action: "undo" });
+      eq([u.ok, (await getEntry(1, Number(row.id)))?.active], [false, false], `${kind}: still finished (${u.speak})`);
+    }
+    // With an older Siri action kept (a diaper), the edit is a newer change of theirs: said, and nothing is undone.
+    await reset(alpha);
+    await siri(T(alpha).owner, { action: "pee" });
+    const start = new Date(Date.now() - 20 * HOUR);
+    const [nap] = await sql(`INSERT INTO maple_entries (family_id, baby_id, kind, started_at, ended_at, active, data, created_by, source) VALUES (1, $1, 'sleep', $2, $3, FALSE, '{"place":"crib"}', $4, 'web') RETURNING id, updated_at`, [
+      alpha.babyId,
+      start,
+      new Date(start.getTime() + HOUR),
+      alpha.owner,
+    ]);
+    await updateEntry(1, Number(nap.id), { note: "nap in the crib" }, alpha.owner, { expectUpdatedAt: new Date(nap.updated_at as string).toISOString() });
+    const u = await siri(T(alpha).owner, { action: "undo" });
+    eq([u.ok, u.speak], [false, "Your newest change was to the sleep timer, so nothing was undone. Fix it in the app."], "the newer change is said");
+    eq((await getEntry(1, Number(nap.id)))?.active, false, "the nap stays finished");
+    eq((await sql(`SELECT deleted_at FROM maple_entries WHERE family_id = 1 AND kind = 'diaper' AND source = 'shortcut'`))[0].deleted_at, null, "and the diaper stays");
+  });
+
+  await test("undo never takes back a timer stopped in the app; a stop Siri made with a time said (woke 10 minutes ago) it does", async () => {
+    await reset(alpha);
+    const inApp = await runningSleep(alpha, alpha.owner, 40);
+    await stopTimer(1, inApp.id, undefined, alpha.owner);
+    const u = await siri(T(alpha).owner, { action: "undo" });
+    eq([u.ok, (await getEntry(1, inApp.id))?.active], [false, false], `the app's Done stays (${u.speak})`);
+    await reset(alpha);
+    const bySiri = await runningSleep(alpha, alpha.owner, 40);
+    await siri(T(alpha).owner, { action: "wake", minutes_ago: 10 });
+    const u2 = await siri(T(alpha).owner, { action: "undo" });
+    eq([u2.speak, (await getEntry(1, bySiri.id))?.active], ["Undone: the sleep timer is running again.", true], "Siri's own stop");
+  });
+
+  await test("undo is the speaker's whichever of their Siri keys said it; the action kept names rows, never what's in them", async () => {
+    await reset(beta);
+    const pee = await siri(T(beta).owner, { action: "pee" });
+    const [kept] = await sql(`SELECT last_act FROM maple_tokens WHERE family_id = 2 AND member = $1 AND revoked_at IS NULL`, [beta.owner]);
+    const act = kept.last_act as { kind: string; rows: { t: string; id: number; u: string }[] };
+    eq([act.kind, act.rows.map((r) => [r.t, r.id])], ["entry", [["entry", (pee.entry as { id: number }).id]]], "the diaper's row, as it left it");
+    ok(!/pee|poop|wet|diaper/i.test(JSON.stringify(act)), JSON.stringify(act));
+    const second = await addToken(2, beta.owner, "betaOwnerSecondKey");
+    const u = await siri(second, { action: "undo" });
+    eq(u.speak, `Undone: the wet diaper at ${clock((pee.entry as { started_at: string }).started_at, beta.tz)} is gone.`, "taken back with their other key");
+    eq((await siri(T(beta).owner, { action: "undo" })).ok, false, "and with the first, nothing more");
+    await reset(beta);
   });
 
   // ── "Maple status" ─────────────────────────────────────────────────────

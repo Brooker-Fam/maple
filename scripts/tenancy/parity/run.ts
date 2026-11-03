@@ -31,6 +31,7 @@ const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
   { path: /^db\.maple_push_sent\.\[cleanup:[^\]]+\]$/, added: true, why: "the daily cleanup of abandoned onboarding families claims its day" },
   { path: /^db\.maple_members\.\[[^\]]+\]\.accepted_at$/, why: "new code records when someone took up a membership; old code leaves it null" },
   { path: /^out\.mcp\.(maple_status|admin)\.sc\.family_memories$/, added: true, why: "maple_status carries the family's memories (none in this scenario) for a connected app" },
+  { path: /^db\.maple_tokens\.\[[^\]]+\]\.last_act$/, why: "a Siri key keeps its member's newest Siri write (the rows it wrote, as it left them), so Maple undo takes back only that" },
   {
     path: /^out\.mcp\.(stranger|removed)\.(isError|sc|text)$/,
     why: "the scenario calls tools without the MCP route, which turned these callers away (401) before; now the tools refuse them too",

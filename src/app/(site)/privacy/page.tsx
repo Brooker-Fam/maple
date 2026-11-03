@@ -385,7 +385,9 @@ export default function Privacy() {
       <h3>Siri</h3>
       <p>
         A Siri shortcut uses a personal key you make in Maple and sends short actions such as &ldquo;pee&rdquo; or
-        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. Remove the key in Maple (avatar &rarr; Settings &rarr;
+        &ldquo;status&rdquo;. Apple handles what you say to Siri, under Apple&rsquo;s terms. So that &ldquo;Maple undo&rdquo; takes back
+        only your own newest Siri action, Maple keeps a note with your key of which entries that action saved or changed (never
+        what&rsquo;s in them); your next Siri action replaces it. Remove the key in Maple (avatar &rarr; Settings &rarr;
         Siri &amp; assistants &rarr; Your Siri keys) to stop it.
       </p>
 
