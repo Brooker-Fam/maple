@@ -405,7 +405,7 @@ export default function Privacy() {
         &ldquo;Logged&rdquo; still come through, and mom&rsquo;s own reminders always reach her own phone. To tell whether
         you&rsquo;re up, it checks whether you&rsquo;re holding the baby or have opened or logged anything in Maple in the last
         15 minutes, from what it already keeps. For each notice it holds, it keeps a small note for that phone (which notice,
-        and until when), deleted after 3 days. By default a medicine notice names the medicine and says when it was last
+        and when), deleted after 3 days. By default a medicine notice names the medicine and says when it was last
         taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a dose amount. Signing
         out turns them off on that phone.
       </p>
