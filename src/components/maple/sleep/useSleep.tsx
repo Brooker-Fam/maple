@@ -3,8 +3,8 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { tick } from "@/components/atlas/haptics";
 import { ApiError } from "@/lib/maple/client-request";
-import { numberTries, planToday, sleepAge, sleepSignals, stageSuggestion, tryDayNowLabel, tryWhenLabel, type PlanToday, type StageSuggestion } from "@/lib/maple/sleep/engine";
-import { nightWords, seesCheckins } from "@/lib/maple/sleep/goals";
+import { numberTries, planToday, sleepAge, sleepSignals, stageSuggestion, tryDayKey, tryDayNowLabel, tryWhenLabel, type PlanToday, type StageSuggestion } from "@/lib/maple/sleep/engine";
+import { checkinTryOn, nightWords, seesCheckins } from "@/lib/maple/sleep/goals";
 import { handoffWhyWords, type HandoffWhy } from "@/lib/maple/sleep/handoff";
 import type { BassinetTry, CheckinExtras, GoalInput, GoalStep, HoldingShift, PlanPatch, ProtectedAnswer, SleepCheckin, SleepGoal, SleepPlan, SleepState, TryOutcome, TryTag } from "@/lib/maple/sleep/types";
 import { cryingLine, downWords, OUTCOME_LABEL, PROTECTED_LABEL } from "@/lib/maple/sleep/words";
@@ -39,8 +39,8 @@ export type SleepSheet =
   | { kind: "log" }
   /** A sleep goal's form: a new one, or `goalId` to change. It goes back to the plan's Goals when it closes. */
   | { kind: "goal"; goalId?: number }
-  /** "How did last night go?": the signed-in adult's own check-in (last night unless `night`); `back` returns to Goals. */
-  | { kind: "checkin"; night?: string; back?: "goals" }
+  /** "How did last night go?": the signed-in adult's own check-in (last night unless `night`); `back` returns to Goals; `card`: opened from Today's Last night card, whose receipt it shows. */
+  | { kind: "checkin"; night?: string; back?: "goals"; card?: boolean }
   /** "I've got her": a short catch-up for the person who just took over, with Undo (the turn they took and the one handed over). */
   | { kind: "catchup"; started: HoldingShift; ended: HoldingShift | null; why?: HandoffWhy | null };
 
@@ -164,10 +164,15 @@ export type SleepApi = {
   saveCheckinExtras: (night: string, extras: CheckinExtras, said: string) => Promise<SleepCheckin | null>;
 
   // ── the Last night card's own answers: no toast (at 320px it would sit on the next question); the card shows the receipt ──
-  /** saveCheckin for the card: the words to show and an Undo (null when nothing changed). */
-  answerCheckin: (answer: ProtectedAnswer, night: string) => Promise<CardReceipt | null>;
+  /** saveCheckin for the card (with a note from its Add a note sheet): the words to show and an Undo (null when nothing changed). */
+  answerCheckin: (answer: ProtectedAnswer, night: string, opts?: { note?: string | null }) => Promise<CardReceipt | null>;
   /** saveCheckinExtras for the card. */
   answerExtras: (night: string, extras: CheckinExtras, said: string) => Promise<CardReceipt | null>;
+  /**
+   * A goal write with no toast of its own (the card's look-back and return card show their receipts): the goal as saved,
+   * a 409's goal as it is now (applied here, with a toast saying so), or null when refused (the toast says why).
+   */
+  goalCall: (body: Record<string, unknown>) => Promise<GoalSave>;
 };
 
 /** What the Last night card shows after an answer it saved: the words, and its Undo (true once undone). */
@@ -203,7 +208,8 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
   const running = data.tries.find((t) => !t.ended_at) ?? null;
   const shift = data.shifts.find((s) => !s.ended_at) ?? null;
   const t0 = state ? now() : new Date();
-  const today = data.plan ? todayOnPhone(data.plan, data.tries, t0, tz) : null;
+  // A try last night's check-in said happened counts toward today's, shown apart (only on a phone that reads check-ins).
+  const today = data.plan ? todayOnPhone(data.plan, data.tries, t0, tz, checkinTryOn(adult ? data.checkins : null, tryDayKey(t0, tz))) : null;
   const suggestion = stageSuggestion(data.plan, data.tries, t0, tz);
 
   const nth = useCallback(
@@ -742,12 +748,14 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
       saveCheckinExtras,
       answerCheckin,
       answerExtras,
+      goalCall: goalWrite,
     }),
     [
       acceptHandoff,
       adult,
       answerCheckin,
       answerExtras,
+      goalWrite,
       askHandoff,
       asleepInArms,
       busy,
@@ -842,9 +850,10 @@ function useCardAnswers(o: {
 }) {
   const { checkins, me, post, now, tz } = o;
   const answerCheckin = useCallback(
-    async (answer: ProtectedAnswer, night: string): Promise<CardReceipt | null> => {
+    async (answer: ProtectedAnswer, night: string, opts: { note?: string | null } = {}): Promise<CardReceipt | null> => {
       tick();
-      const r = await post({ action: "checkin.save", protected: answer, night, client_id: `checkin-${crypto.randomUUID()}` });
+      // Left out (one tap on the card), the note already there stays; the Add a note sheet sends its note.
+      const r = await post({ action: "checkin.save", protected: answer, night, client_id: `checkin-${crypto.randomUUID()}`, ...(opts.note !== undefined ? { note: opts.note } : {}) });
       const w = r?.result as CheckinResult | undefined;
       if (!w) return null;
       const c = w.checkin;
@@ -855,9 +864,11 @@ function useCardAnswers(o: {
           : w.status === "updated" && before
             ? async () => !!(await post({ action: "checkin.save", night: before.night, protected: before.protected, note: before.note, client_id: `checkin-${crypto.randomUUID()}` }))
             : null;
-      // The card is about last night already; any other night is named.
+      // The card is about last night already; any other night is named. One short line, so it never pushes the next question down.
       const when = nightWords(c.night, now(), tz);
-      return { said: `Checked in${when === "last night" ? "" : ` for ${when}`}: ${PROTECTED_LABEL[c.protected].toLowerCase()}`, undo };
+      const noteOnly = w.status === "updated" && before?.protected === c.protected && before.note !== c.note;
+      const head = noteOnly ? "Note saved" : `Checked in${when === "last night" ? "" : ` for ${when}`}: ${PROTECTED_LABEL[c.protected].toLowerCase()}${opts.note ? ", with a note" : ""}`;
+      return { said: head, undo };
     },
     [now, post, tz]
   );
@@ -888,8 +899,8 @@ function nextHandoffToast(w: Pick<ShiftResult, "shift" | "handoffWhy">, me: stri
 }
 
 /** Today against the plan, in a phone's words: the try day runs noon to noon, so at 7:30 AM it's "since last night", not "tonight". */
-function todayOnPhone(plan: SleepPlan, tries: readonly BassinetTry[], now: Date, tz: string): PlanToday {
-  return { ...planToday(plan, tries, now, tz), label: tryDayNowLabel(now, tz) };
+function todayOnPhone(plan: SleepPlan, tries: readonly BassinetTry[], now: Date, tz: string, fromCheckins = 0): PlanToday {
+  return { ...planToday(plan, tries, now, tz, { fromCheckins }), label: tryDayNowLabel(now, tz) };
 }
 
 function nthOf(t: BassinetTry, tries: BassinetTry[], tz: string, now: Date): string {

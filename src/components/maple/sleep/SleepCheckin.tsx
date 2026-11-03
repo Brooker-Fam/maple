@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { goalStartKey, lastNightKey, nightWords, seesCheckins, windowOn, windowOnNight } from "@/lib/maple/sleep/goals";
 import { CHECKIN_NOTE_MAX, PROTECTED_ANSWERS, type ProtectedAnswer, type RosterWindow, type SleepCheckin, type SleepGoal } from "@/lib/maple/sleep/types";
 import { checkinQuestion, dateWords, PROTECTED_LABEL, windowTimes } from "@/lib/maple/sleep/words";
@@ -9,7 +9,7 @@ import type { Role } from "@/lib/maple/types";
 import { ContextNote, Label } from "../sheets/parts";
 import { Button, cx, Sheet, TextArea, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
-import { useSleep, useSleepMaybe } from "./useSleep";
+import { useSleep, useSleepMaybe, type CardReceipt } from "./useSleep";
 
 /**
  * The adults' morning check-in: one question about their own protected
@@ -108,6 +108,31 @@ export function AnswerButtons({ question, onPick, selected, disabled, row }: { q
   );
 }
 
+/**
+ * A receipt for Today's Last night card from a sheet it opened (Add a note): the card shows it in its date's place,
+ * with its Undo, never as a toast over its next question. False when no card is listening (the sheet toasts instead).
+ */
+const cardInbox = new Set<(r: CardReceipt) => void>();
+export function sendCardReceipt(r: CardReceipt): boolean {
+  if (!cardInbox.size) return false;
+  for (const fn of cardInbox) fn(r);
+  return true;
+}
+/** The Last night card's side of sendCardReceipt. */
+export function useCardReceipts(fn: (r: CardReceipt) => void): void {
+  const latest = useRef(fn);
+  useEffect(() => {
+    latest.current = fn;
+  });
+  useEffect(() => {
+    const on = (r: CardReceipt) => latest.current(r);
+    cardInbox.add(on);
+    return () => {
+      cardInbox.delete(on);
+    };
+  }, []);
+}
+
 /** Every useNightValue on this page hears a change to its key (Today's card and the dock's strip read the same answers). */
 const NIGHT_VALUE_EVENT = "maple-night-value";
 /** With storage blocked, what this page set, until it reloads. */
@@ -159,7 +184,7 @@ export function useNightValue(key: string | null): [string | null | undefined, (
  * An answer already saved shows selected; tapping another changes it.
  */
 export function CheckinSheet({ night: given, open = true, onClose }: { night?: string; open?: boolean; onClose: () => void }) {
-  const { state, now } = useMaple();
+  const { state, now, toast } = useMaple();
   const s = useSleep();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const t = now();
@@ -169,7 +194,17 @@ export function CheckinSheet({ night: given, open = true, onClose }: { night?: s
   const windows = myWindows(s.goals, s.me, night);
   const question = checkinQuestion(windows);
   const when = nightWords(night, t, tz);
+  // Opened from Today's Last night card: its receipt and Undo show in the card (a toast at 320px would cover its next question).
+  const fromCard = s.sheet?.kind === "checkin" && !!s.sheet.card;
   const pick = async (a: ProtectedAnswer) => {
+    if (fromCard) {
+      const r = await s.answerCheckin(a, night, { note: note.trim() || null });
+      if (!r) return;
+      const undo = r.undo;
+      if (!sendCardReceipt(r)) toast(r.said, { tone: "ok", ...(undo ? { undo: () => void undo().then((x) => x && toast("Undone", { tone: "info" })) } : {}) });
+      onClose();
+      return;
+    }
     const saved = await s.saveCheckin(a, { night, note: note.trim() || null });
     if (saved) onClose();
   };

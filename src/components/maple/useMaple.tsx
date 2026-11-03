@@ -99,8 +99,8 @@ export type Toast = {
   actions?: ToastAction[];
   /** Milliseconds; default 3.5s, or longer with undo/actions (8s by day, 12s at night). */
   duration?: number;
-  /** One toast per group: a new timer toast replaces the one showing. */
-  group?: "timer";
+  /** One toast per group: a new timer toast replaces the one showing (and the Last night card's last receipt, its earlier one). */
+  group?: "timer" | "last-night";
   /** Close early once this entry is newer than the version the toast was built from (someone else changed it). */
   watch?: { entryId: number; updatedAt: string; /** Historical records are omitted by recent-state polls. */ allowMissing?: boolean };
   /** The mark in place of the check: a saved diaper wears its drop or pile (toastIcon). */
