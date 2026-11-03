@@ -239,15 +239,19 @@ export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts:
 
 /**
  * The only calls that wait for a tap: delete_entry, fix_mom_entry deleting
- * one of hers, and inviting, changing the access of or removing a person
- * (people-mcp.ts). undo_last (her doses too), restore_entry, update_entry and
- * fix_mom_entry's update (a dose's time, or skipped) run on the model's word,
- * and can move her next "OK after" time; so does cancel_invite, which only
- * stops a link nobody has used.
+ * one of hers, bassinet_try deleting a try (and the sleep entry it started),
+ * and inviting, changing the access of or removing a person (people-mcp.ts).
+ * undo_last (her doses too), restore_entry, update_entry and fix_mom_entry's
+ * update (a dose's time, or skipped) run on the model's word, and can move
+ * her next "OK after" time; so does cancel_invite, which only stops a link
+ * nobody has used. The sleep tools delete nothing else: holding's end and
+ * hand_off change hands as stop_timer does, and sleep_goal's close keeps the
+ * goal (update opens it again) behind its own read-back.
  */
 export const TOOL_APPROVAL = {
   delete_entry: "user-approval" as const,
   fix_mom_entry: (input: { action?: unknown } | undefined) => (input?.action === "delete" ? ("user-approval" as const) : undefined),
+  bassinet_try: (input: { action?: unknown } | undefined) => (input?.action === "delete" ? ("user-approval" as const) : undefined),
   invite_person: "user-approval" as const,
   change_access: "user-approval" as const,
   remove_person: "user-approval" as const,

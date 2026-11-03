@@ -80,10 +80,14 @@ import {
   goalSpan,
   goalsByUrgency,
   goalWeekLabel,
+  checkinMorning,
   lastNightKey,
   lastNightLine,
   loggedSpans,
   nextStep,
+  nightNowKey,
+  nightWords,
+  owedNow,
   nextStepNow,
   nightAnswers,
   nightLog,
@@ -104,6 +108,7 @@ import {
   windowMinutes,
   windowOn,
   windowOnNight,
+  windowsOver,
   type BackToWorkAnswers,
   type GoalData,
   type GoalRules,
@@ -948,7 +953,7 @@ check("coach notes: days left, a review once 7 days pass, the next undone step b
   const at6 = at(2026, 11, 8, 21);
   const c6 = coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-07", "yes")] }), at6, NY), words(SHE, at6));
   eq([c6.reviewDue, c6.daysSinceReview, c6.daysLeft, c6.nextStep?.id, c6.notCheckedIn], [false, 6, 22, "s4", [ALEX]], "six days in");
-  ok(c6.notes.includes("22 days to the target date (Mon, Nov 30).") && c6.notes.includes("Not checked in for last night yet: Alex.") && c6.notes.includes(`This week's step: "Bassinet after the 10 PM feed" (s4).`), JSON.stringify(c6.notes));
+  ok(c6.notes.includes("22 days to the target date (Mon, Nov 30).") && c6.notes.includes("Not checked in for last night yet: Alex.") && c6.notes.includes(`This week's step, in the family's words: "Bassinet after the 10 PM feed" (s4).`), JSON.stringify(c6.notes));
   // Nothing was logged on five of those six nights (one has Sam's check-in): how they are comes first, and those nights are never asked about.
   eq(c6.notes[0], "Nothing logged on 5 of the last 6 nights: before anything about the goal, ask how they're doing. Leave those nights out of the counts, and don't ask about them.", "how they are, first");
   ok(!c6.notes.some((n) => /ask about it|before counting/.test(n)), JSON.stringify(c6.notes));
@@ -1299,14 +1304,14 @@ check("steps: this week's step by its week (the calendar day), still open from e
   // Three nights logged in the week just ended (feeds), so it reads, and it's no quiet stretch.
   const busy = data({ entries: lateFeeds("2026-11-13", "2026-11-14", "2026-11-15") });
   const c = coachNotes(g, goalProgress(g, busy, now, NY), words(WREN, now));
-  ok(c.notes.includes(`This week's step: "Run the work-week roster 3 nights in a row" (s4).`), JSON.stringify(c.notes));
-  ok(c.notes.includes(`Still open from earlier: "One bassinet try a night" (s1, week of Mon, Nov 2); "Ask the lactation consultant about a pumped bottle" (s3, week of Mon, Nov 9).`), JSON.stringify(c.notes));
+  ok(c.notes.includes(`This week's step, in the family's words: "Run the work-week roster 3 nights in a row" (s4).`), JSON.stringify(c.notes));
+  ok(c.notes.includes(`Still open from earlier, in the family's words: "One bassinet try a night" (s1, week of Mon, Nov 2); "Ask the lactation consultant about a pumped bottle" (s3, week of Mon, Nov 9).`), JSON.stringify(c.notes));
   // No step planned for this week: the one still open carries on, never "No step for this week yet" beside it.
   const carried = coachNotes(goalRow({ steps: [steps[0]] }), goalProgress(goalRow({ steps: [steps[0]] }), busy, now, NY), words(WREN, now));
-  ok(carried.notes.includes(`This week's step: carry on with "One bassinet try a night" (s1, week of Mon, Nov 2), unless they'd like another.`) && !carried.notes.some((n) => /No step for this week/.test(n)), JSON.stringify(carried.notes));
+  ok(carried.notes.includes(`This week's step: carry on with the one still open from earlier, in the family's words: "One bassinet try a night" (s1, week of Mon, Nov 2), unless they'd like another.`) && !carried.notes.some((n) => /No step for this week/.test(n)), JSON.stringify(carried.notes));
   const ahead = goalRow({ steps: [{ ...steps[3], week_of: "2026-11-30" }] });
   const none = coachNotes(ahead, goalProgress(ahead, busy, now, NY), words(WREN, now));
-  ok(none.notes.some((n) => /^No step for this week yet; next planned: "Run the work-week roster 3 nights in a row" \(s4, week of Mon, Nov 30\)\. End the review with one small step they choose for this week, saved as a step\.$/.test(n)), JSON.stringify(none.notes));
+  ok(none.notes.some((n) => /^No step for this week yet; next planned, in the family's words: "Run the work-week roster 3 nights in a row" \(s4, week of Mon, Nov 30\)\. End the review with one small step they choose for this week, saved as a step\.$/.test(n)), JSON.stringify(none.notes));
   const lines = goalProgressLines(g, goalProgress(g, busy, now, NY), words(WREN, now)).join("\n");
   ok(lines.includes("Steps: 1 of 4 done; this week: s4; still open from earlier: s1, s3."), lines);
 });
@@ -2019,7 +2024,7 @@ check("week labels: the morning after a week's last night its counts read 'Week 
   ok(weekEndedLastNight(p) && goalWeekLabel(p.weeks[p.weeks.length - 1], p) === "Week 1 (ended last night)", "the morning after");
   const lines = goalProgressLines(g, p, words(WREN, morning)).join("\n");
   ok(lines.includes("Week 1 (ended last night): 1 of the 3 nights aimed for (tries logged on 3 of 7 nights).") && !/This week:/.test(lines), lines);
-  ok(coachNotes(g, p, words(WREN, morning)).notes.includes(`This week's step: "Run the work-week roster" (s2).`), "the step is week 2's");
+  ok(coachNotes(g, p, words(WREN, morning)).notes.includes(`This week's step, in the family's words: "Run the work-week roster" (s2).`), "the step is week 2's");
   const noon = at(2026, 11, 9, 13);
   const q = goalProgress(g, data(), noon, NY);
   eq([weekEndedLastNight(q), q.weeks.map((w) => goalWeekLabel(w, q))], [false, ["Last week", "This week"]], "from noon");
@@ -2412,7 +2417,7 @@ check("steps carry on (coach P2 #11): an open step carries into a week with none
   const g = goalRow({ target_date: "2026-11-30", steps, roster: [{ id: "w3", member: SAM, from: "22:00", to: "02:00", nights: EVERY }], template: { kind: "back_to_work", member: SAM, date: "2026-11-16", nursing: ALEX } });
   const busy = (now: Date) => coachNotes(g, goalProgress(g, data({ entries: lateFeeds("2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17") }), now, NY), words(WREN, now));
   const back = busy(at(2026, 11, 18, 10));
-  ok(back.notes.includes(`Sam is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update): "Ask the lactation consultant about a pumped bottle" (s1, week of Mon, Nov 2); "Rehearse the work-week roster on 2 or 3 nights" (s2, week of Mon, Nov 9).`), JSON.stringify(back.notes));
+  ok(back.notes.includes(`Sam is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update). In the family's words: "Ask the lactation consultant about a pumped bottle" (s1, week of Mon, Nov 2); "Rehearse the work-week roster on 2 or 3 nights" (s2, week of Mon, Nov 9).`), JSON.stringify(back.notes));
   ok(!back.notes.some((n) => /carry on with/.test(n)), "never carried on after the day back");
   ok(!busy(at(2026, 11, 24, 10)).notes.some((n) => /ask once whether these steps/.test(n)), "only the first week back");
 });
@@ -2834,6 +2839,136 @@ check("safety (P1 #10, coach review #5 and #6): swaddling once she's rolling is 
       ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis), `${kind} in ${v?.pronoun ?? "no"} voice: ${tryThis}`);
     }
   }
+});
+
+// ── round 4 (the coach review): what was left running, last night once it's over, the target date and the roster ──
+
+check("left running (coach review P1 #1): a timer or try past 12 hours, or a holding turn likely left open, counts as its start alone: never a logged night or a bassinet stretch, and a quiet stretch still reads", () => {
+  const g = goalRow({
+    created_at: iso(at(2026, 10, 26, 9)),
+    updated_at: iso(at(2026, 10, 26, 9)),
+    targets: [{ id: "a1", kind: "bassinet_stretch", minutes: 180 }, { id: "a2", kind: "bassinet_nights", per_week: 4, min_minutes: 60 }],
+  });
+  // Laid in the bassinet asleep at 9 PM on Fri, Oct 30, and the sleep timer never stopped; nothing else logged.
+  const sleep = sleepRow(at(2026, 10, 30, 21), null, "bassinet");
+  const now = at(2026, 11, 3, 10);
+  const p = goalProgress(g, data({ entries: [sleep] }), now, NY);
+  const stretch = p.targets[0] as Extract<(typeof p.targets)[number], { kind: "bassinet_stretch" }>;
+  eq([stretch.longest, stretch.weeks.map((w) => w.stretches)], [null, [0, 0]], "no bassinet stretch from a timer left running (it read 3d 13h)");
+  const nights = (p.targets[1] as Extract<(typeof p.targets)[number], { kind: "bassinet_nights" }>).weeks;
+  eq(nights.map((w) => w.known), [1, 0], "only the night it began says something about her sleep");
+  eq(p.coverage.map((c) => [c.logged, c.partly, c.none]), [[0, 1, 6], [0, 0, 1]], "its night partly logged (a start alone), the nights after it not logged");
+  eq(p.leftRunning, [{ kind: "timer", entryKind: "sleep", id: sleep.id, since: sleep.started_at }], "said as left running");
+  const lines = goalProgressLines(g, p, words(SHE, now)).map((l) => plain(l) as string);
+  ok(lines.includes(`Left running: the sleep timer running since Fri, Oct 30, 9:00 PM (#${sleep.id}). Only its start counts (a timer or try past 12 hours, a holding turn once it's likely left open), so the nights since read as nothing logged: unknown, never a night that went well or badly.`), lines.join("\n"));
+  ok(!lines.some((l) => /longest|stretch(es)? (was|were)|aimed for/.test(l)), lines.join("\n"));
+  const notes = coachNotes(g, p, words(SHE, now)).notes.map((n) => plain(n) as string);
+  ok(notes.includes(`Left running: the sleep timer running since Fri, Oct 30, 9:00 PM (#${sleep.id}), fixed with stop_timer, or update_entry on #${sleep.id} for when it really ended. Only its start counts. Ask once whether to stop it or fix when it ended, and don't ask about the nights since or count them.`), notes.join("\n"));
+  // The plan's own progress (sleep_plan progress_days) agrees: no stretch, no hours by place.
+  const sp = sleepProgress({ tries: [], entries: [sleep], now, tz: NY, days: 7 });
+  eq([sp.longestBassinet, sp.places], [null, []], "sleepProgress");
+
+  // A week of it with nothing else logged is a quiet stretch, said once, the timer's start the last thing logged.
+  const g2 = goalRow({ created_at: iso(at(2026, 10, 19, 9)), updated_at: iso(at(2026, 10, 19, 9)), targets: [{ id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 }] });
+  const early = sleepRow(at(2026, 10, 25, 21), null, "bassinet");
+  const q = goalProgress(g2, data({ entries: [early] }), now, NY);
+  eq([q.quiet?.from, q.quiet?.going], ["2026-10-26", true], "a quiet stretch (none at all while the timer counted to now)");
+  ok(goalProgressLines(g2, q, words(SHE, now)).some((l) => l === "Nothing logged since Mon, Oct 26."), "said once");
+  const qn = coachNotes(g2, q, words(SHE, now)).notes;
+  ok(/^Nothing logged since Mon, Oct 26\. Before anything about the goal, ask how they're doing/.test(qn[0]) && /^Left running: /.test(qn[1]), JSON.stringify(qn));
+
+  // Under 12 hours it still counts to now: a real night's sleep isn't cut short.
+  const fresh = sleepRow(at(2026, 11, 2, 22), null, "bassinet");
+  const pf = goalProgress(g, data({ entries: [fresh] }), at(2026, 11, 3, 7), NY);
+  const sf = pf.targets[0] as Extract<(typeof pf.targets)[number], { kind: "bassinet_stretch" }>;
+  eq([sf.longest?.sec, pf.leftRunning.length, pf.coverage.at(-1)?.logged], [9 * 3600, 0, 1], "9 hours so far, the night logged, nothing left running");
+  // Stopped after 13 hours without fixing when it ended: its start alone too.
+  const late = sleepRow(at(2026, 10, 30, 21), at(2026, 10, 31, 10), "bassinet");
+  const pl = goalProgress(g, data({ entries: [late] }), now, NY);
+  eq([(pl.targets[0] as typeof stretch).longest, pl.coverage[0].logged, pl.leftRunning.length], [null, 0, 0], "a 13-hour sleep is a start, and nothing is running");
+
+  // A try left running, and a holding turn left open: the same, and said with what fixes each.
+  const tr = tryRow(at(2026, 10, 30, 21), null, null);
+  const turn: HoldingShift = { ...shiftRow(SAM, at(2026, 10, 31, 21), at(2026, 10, 31, 21)), ended_at: null, ended_how: null };
+  const pt = goalProgress(g, data({ tries: [tr], shifts: [turn] }), now, NY);
+  eq(pt.coverage.map((c) => c.logged), [0, 0], "neither covers a night");
+  eq(pt.leftRunning.map((x) => x.kind), ["try", "turn"], "both listed, oldest first");
+  const tn = coachNotes(g, pt, words(SHE, now)).notes.find((n) => n.startsWith("Left running:"))!;
+  ok(plain(tn) === `Left running: bassinet try t${tr.id}, running since Fri, Oct 30, 9:00 PM, fixed with bassinet_try finish or fix on t${tr.id}; Sam's holding turn (h${turn.id}), open since Sat, Oct 31, 9:00 PM, fixed with holding end, or hand_off. Only its start counts. Ask once whether to stop it or fix when it ended, and don't ask about the nights since or count them.`, tn);
+  // A turn handed off on time, even a long one, counts whole.
+  const handed: HoldingShift = { ...shiftRow(SAM, at(2026, 10, 31, 22), at(2026, 11, 1, 5)), ended_how: "handoff", handoff_at: iso(at(2026, 11, 1, 2)) };
+  eq(goalProgress(g, data({ shifts: [handed] }), now, NY).coverage[0].logged, 1, "a 7-hour turn ended in a handoff logs its night");
+});
+
+check("last night (coach review P1 #4): a night is over from 5 AM the morning after, as Today asks; before then it's tonight, nothing is owed and a check-in has no default; each adult owes theirs once their own window ends", () => {
+  // Mon, Nov 2's night, with Sam's window 10 PM–4 AM and Alex's 4–9 AM; both checked in for every night before it.
+  const roster = [{ id: "w1", member: SAM, from: "22:00", to: "04:00", nights: EVERY }, { id: "w2", member: ALEX, from: "04:00", to: "09:00", nights: EVERY }];
+  const g = goalRow({ created_at: iso(at(2026, 10, 27, 9)), updated_at: iso(at(2026, 10, 27, 9)), targets: [{ id: "a1", kind: "protected_window", member: SAM, per_week: 4 }, { id: "a2", kind: "protected_window", member: ALEX, per_week: 4 }], roster });
+  const checkins = ["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01"].flatMap((n) => [checkinRow(SAM, n, "yes"), checkinRow(ALEX, n, "yes")]);
+  const feeds = lateFeeds("2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02");
+  const times: [string, Date][] = [["11:30 PM", at(2026, 11, 2, 23, 30)], ["12:30 AM", at(2026, 11, 3, 0, 30)], ["4:59 AM", at(2026, 11, 3, 4, 59)], ["5:00 AM", at(2026, 11, 3, 5)], ["7:00 AM", at(2026, 11, 3, 7)], ["9:00 AM", at(2026, 11, 3, 9)], ["12:30 PM", at(2026, 11, 3, 12, 30)]];
+  const read = times.map(([label, now]) => {
+    const p = goalProgress(g, data({ entries: feeds, checkins }), now, NY);
+    const c = coachNotes(g, p, words(SHE, now));
+    // Week 1 is the nights of Oct 27 to Nov 2.
+    const planned = p.targets.map((t) => (t as Extract<(typeof p.targets)[number], { kind: "protected_window" }>).weeks![0].planned);
+    return [label, lastNightKey(now, NY), c.notCheckedIn, planned, c.notes.some((n) => n.startsWith("Not checked in for last night"))];
+  });
+  eq(read, [
+    ["11:30 PM", "2026-11-01", [], [6, 6], false],
+    ["12:30 AM", "2026-11-01", [], [6, 6], false],
+    ["4:59 AM", "2026-11-01", [], [6, 6], false],
+    ["5:00 AM", "2026-11-02", [SAM], [7, 6], true],
+    ["7:00 AM", "2026-11-02", [SAM], [7, 6], true],
+    ["9:00 AM", "2026-11-02", [SAM, ALEX], [7, 7], true],
+    ["12:30 PM", "2026-11-02", [SAM, ALEX], [7, 7], true],
+  ], "last night, who owes a check-in and the roster nights counted, from 11:30 PM to the next noon (it read the night still going from midnight)");
+  // A check-in's night: the night still going refused; by default the latest night that's over (the chat's check_in asks for a date before 5 AM).
+  const small = at(2026, 11, 3, 0, 31);
+  throwsInput(() => cleanCheckinNight("2026-11-02", small, NY), /isn't over yet: check in from 5 AM the morning after \(the latest night that's over is 2026-11-01\)/, "the night still going");
+  eq([cleanCheckinNight(undefined, small, NY), cleanCheckinNight("2026-11-01", small, NY), cleanCheckinNight(undefined, at(2026, 11, 3, 5), NY), checkinNights(small, NY).last], ["2026-11-01", "2026-11-01", "2026-11-02", "2026-11-01"], "the latest night that's over, by default and named, and from 5 AM the one just over");
+  // Its words follow: before 5 AM the night still going is tonight.
+  eq([nightWords("2026-11-02", small, NY), nightWords("2026-11-01", small, NY), nightWords("2026-11-02", at(2026, 11, 3, 7), NY), nightWords("2026-11-02", at(2026, 11, 2, 23), NY)], ["tonight", "last night", "last night", "tonight"], "night words");
+  eq([nightNowKey(small, NY), checkinMorning(small, NY), checkinMorning(at(2026, 11, 3, 5), NY)], ["2026-11-02", false, true], "the night now");
+  // owedNow is the rule the [App] line and maple_status read.
+  eq([owedNow(g, small, NY), owedNow(g, at(2026, 11, 3, 6), NY)], [null, { night: "2026-11-02", adults: [SAM] }], "owed");
+  ok(windowsOver(roster, ALEX, "2026-11-02", at(2026, 11, 3, 9), NY) && !windowsOver(roster, ALEX, "2026-11-02", at(2026, 11, 3, 8, 59), NY), "Alex's window ends at 9");
+  // A check-in already saved for a night not over for them still counts, never "1 of 0".
+  const early = goalProgress(g, data({ entries: feeds, checkins: [...checkins, checkinRow(ALEX, "2026-11-02", "partly")] }), at(2026, 11, 3, 7), NY);
+  const alex = (early.targets[1] as Extract<(typeof early.targets)[number], { kind: "protected_window" }>).weeks!.at(-1)!;
+  eq([alex.planned, alex.checkedIn], [7, 7], "Alex's early check-in");
+});
+
+check("last night (coach review P1 #4): a week's last night isn't 'ended last night' until 5 AM, its step stays this week's until then, and the look-back waits for the morning", () => {
+  const g = goalRow({ target_date: "2026-11-30", targets: [{ id: "a1", kind: "bassinet_nights", per_week: 3, min_minutes: 60 }], steps: [{ id: "s1", title: "Bassinet after the 10 PM feed", week_of: "2026-11-02", done_at: null, done_by: null }, { id: "s2", title: "Run the work-week roster", week_of: "2026-11-09", done_at: null, done_by: null }] });
+  // Week 1 is the nights of Nov 2–8: at 12:30 AM on Mon, Nov 9 its last night is still going.
+  const small = at(2026, 11, 9, 0, 30);
+  const p = goalProgress(g, data(), small, NY);
+  eq([weekEndedLastNight(p), goalWeekLabel(p.weeks.at(-1)!, p), stepsByWeek(g.steps, p).thisWeek.map((s) => s.id)], [false, "This week", ["s1"]], "12:30 AM: still week 1");
+  const morning = at(2026, 11, 9, 5, 30);
+  const q = goalProgress(g, data(), morning, NY);
+  eq([weekEndedLastNight(q), goalWeekLabel(q.weeks.at(-1)!, q), stepsByWeek(g.steps, q).thisWeek.map((s) => s.id)], [true, "Week 1 (ended last night)", ["s2"]], "5:30 AM: week 1 ended last night, and week 2's step");
+  eq([reviewWeek(g, goalSpan(g, small, NY), small, NY), reviewWeek(g, goalSpan(g, morning, NY), morning, NY)?.n], [null, 1], "the look-back: from the morning");
+});
+
+check("target date (coach review P2 #9): a Back to work goal's target date can't come before its roster starts, so it always has nights to count", () => {
+  const o = { v: WREN, name: nameOf, today: "2026-11-03", adults: new Set([SAM, ALEX]) };
+  // Back Tue, Dec 8: the roster starts with its rehearsal on Tue, Nov 24.
+  const base: BackToWorkAnswers = { returning: SAM, return_date: "2026-12-08", feeding: "nursing", nursing: SAM, sleeps: "bassinet", first_half: ALEX, second_half: SAM, off_duty: "other_room" };
+  const rules = { ...RULES, today: "2026-11-03", v: WREN };
+  const early = backToWorkGoal({ ...base, target_date: "2026-11-20" }, o);
+  eq(early.goal.template?.roster_from, "2026-11-24", "the roster's start");
+  throwsInput(() => cleanGoalInput(early.goal, rules, "create"), /^The target date, Fri, Nov 20, is before the roster starts on Tue, Nov 24 \(its rehearsal, two weeks before the day back\), so no night would count\. Pick that day or a later one\.$/, "a target date before it (it saved with 0 weeks)");
+  eq(cleanGoalInput(backToWorkGoal({ ...base, target_date: "2026-11-24" }, o).goal, rules, "create").fields.target_date, "2026-11-24", "the day it starts is fine");
+  const { fields } = cleanGoalInput(backToWorkGoal(base, o).goal, rules, "create");
+  const g = goalRow({ ...fields, steps: fields.steps!, roster: fields.roster!, targets: fields.targets!, template: fields.template ?? null, target_date: fields.target_date ?? null });
+  eq(goalSpan(g, at(2026, 11, 25, 10), NY).weeksTotal, 4, "by default, two weeks after the day back: four weeks counted");
+  // Moving it, or the roster's start, the wrong way on an update is refused the same way.
+  const cur = { ...rules, current: g };
+  throwsInput(() => cleanGoalInput({ target_date: "2026-11-22" }, cur, "update"), /is before the roster starts on Tue, Nov 24/, "an update's target date");
+  throwsInput(() => cleanGoalInput({ template: { ...g.template!, roster_from: "2026-12-08" }, target_date: "2026-12-01" }, cur, "update"), /^The target date, Tue, Dec 1, is before the roster starts on Tue, Dec 8/, "a later roster start");
+  // Without a template it's as before: any date from today.
+  eq(cleanGoalInput({ title: "Rest", target_date: "2026-11-04" }, rules, "create").fields.target_date, "2026-11-04", "a goal made by hand");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);

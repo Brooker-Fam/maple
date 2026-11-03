@@ -163,13 +163,16 @@ check("every tool has a description and a JSON object schema", () => {
   }
 });
 
-check("approvals: delete_entry always, fix_mom_entry only for a delete", () => {
+check("approvals: delete_entry always, fix_mom_entry and bassinet_try only for a delete", () => {
   eq(TOOL_APPROVAL.delete_entry, "user-approval", "delete_entry");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "delete" }), "user-approval", "fix_mom_entry delete");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "update" }), undefined, "fix_mom_entry update");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "restore" }), undefined, "fix_mom_entry restore");
   eq(TOOL_APPROVAL.fix_mom_entry(undefined), undefined, "no input");
-  eq(Object.keys(TOOL_APPROVAL).sort(), ["change_access", "delete_entry", "fix_mom_entry", "invite_person", "remove_person"], "nothing else asks");
+  // A try's delete takes the sleep entry it started with it (coach review P1 #3).
+  eq(TOOL_APPROVAL.bassinet_try({ action: "delete" }), "user-approval", "bassinet_try delete");
+  for (const action of ["start", "finish", "log", "fix", "restore", "reopen"]) eq(TOOL_APPROVAL.bassinet_try({ action }), undefined, `bassinet_try ${action}`);
+  eq(Object.keys(TOOL_APPROVAL).sort(), ["bassinet_try", "change_access", "delete_entry", "fix_mom_entry", "invite_person", "remove_person"], "nothing else asks");
 });
 
 check("people: every change to who's in the family waits for a tap, and only owners get those tools", () => {
@@ -708,24 +711,36 @@ check("the window leaves room under the step cap for the instructions, the tools
   const instructions = Math.max(...[FAMILY_ONE_COPY, long].flatMap((copy) => variants.map((v) => Math.ceil(JSON.stringify(systemBlocks({ ...v, model: GLM, copy })).length / 3))));
   // A first step sends core and the groups it needs, never past TOOL_CEILING with nothing used yet (scripts/maple-chat-tools-check.ts); core always fits.
   const search = { model: {} as never, modelKey: GLM, price: priceFor(GLM)!, names: { baby: [], mom: [], people: [] } };
-  const sizesFor = (copy: typeof FAMILY_ONE_COPY, born: boolean) => toolDisclosure(chatTools(ALEX, { fam: 2, copy, born, care: true, device: null, search }), { window: [], vo: copy.v, lastStep: 5 }).sizes;
+  const disclosureFor = (copy: typeof FAMILY_ONE_COPY, born: boolean) => toolDisclosure(chatTools(ALEX, { fam: 2, copy, born, care: true, device: null, search }), { window: [], vo: copy.v, lastStep: 5 });
+  const sizesFor = (copy: typeof FAMILY_ONE_COPY, born: boolean) => disclosureFor(copy, born).sizes;
+  // A later step of a turn that loaded every group and called one from each (coach review P2 #8: it sent every tool).
+  let later = 0;
   for (const copy of [FAMILY_ONE_COPY, long]) {
     for (const born of [true, false]) {
-      const sizes = sizesFor(copy, born);
+      const d = disclosureFor(copy, born);
+      const sizes = d.sizes;
       const core = definitionTokens(sizes, TOOL_GROUPS.core.filter((n) => n in sizes));
       ok(core <= TOOL_CEILING - 5_500, `core ${core} leaves room under the ceiling for her page's group`);
+      const steps = [
+        { content: [{ type: "tool-call", toolName: "load_tools", input: { groups: Object.keys(TOOL_GROUPS).filter((g) => g !== "core") } }] },
+        ...Object.entries(TOOL_GROUPS).filter(([g]) => g !== "core").map(([, names]) => ({ content: [{ type: "tool-call", toolName: names.find((n) => n in sizes) ?? names[0], input: {} }] })),
+      ];
+      for (let k = 1; k <= steps.length; k++) later = Math.max(later, d.select(k, steps.slice(0, k)).tokens);
     }
   }
+  ok(later <= TOOL_CEILING, `a later step sends ${later} tokens of definitions, over the ceiling`);
   // The family's memories at the most a prompt carries (MEMORY_PROMPT_MAX_CHARS) ride on the newest message.
   const memories = "m".repeat(MEMORY_PROMPT_MAX_CHARS + 600);
   const newest = messageTokens(withMemoryLines([userMessage("msg_u", "x".repeat(CHAT_MAX_CHARS), LINE, Array.from({ length: 12 }, () => "A made-up line of the log as it stands now, as long as most."))], memories)[0]);
   const result = Math.ceil(MODEL_TEXT_MAX / 3);
-  const first = instructions + TOOL_CEILING + WINDOW_TOKENS + newest;
+  // The tools a step sends are at most the ceiling on every step now, the first and every later one.
+  const tools = Math.max(TOOL_CEILING, later);
+  const first = instructions + tools + WINDOW_TOKENS + newest;
   const worst = first + result;
-  ok(worst <= STEP_PROMPT_LIMIT, `instructions ${instructions} + tools ${TOOL_CEILING} + window ${WINDOW_TOKENS} + message ${newest} + a cut result ${result} = ${worst}, over ${STEP_PROMPT_LIMIT}`);
+  ok(worst <= STEP_PROMPT_LIMIT, `instructions ${instructions} + tools ${tools} + window ${WINDOW_TOKENS} + message ${newest} + a cut result ${result} = ${worst}, over ${STEP_PROMPT_LIMIT}`);
   const all = sizesFor(FAMILY_ONE_COPY, true);
   const every = definitionTokens(all, Object.keys(all));
-  console.log(`  worst case: instructions ${instructions} + tools ${TOOL_CEILING} + window ${WINDOW_TOKENS} + message ${newest} + a cut result ${result} = ${worst} of ${STEP_PROMPT_LIMIT}, ${STEP_PROMPT_LIMIT - worst} to spare (every tool at once would be ${every}, not ${TOOL_CEILING})`);
+  console.log(`  worst case, any step: instructions ${instructions} + tools ${tools} + window ${WINDOW_TOKENS} + message ${newest} + a cut result ${result} = ${worst} of ${STEP_PROMPT_LIMIT}, ${STEP_PROMPT_LIMIT - worst} to spare (a later step that used every group sends ${later}; every tool at once would be ${every}, ${instructions + every + WINDOW_TOKENS + newest + result} in all)`);
   const cost = costMicro(GLM, priceFor(GLM)!, { prompt: first, fresh: first, cacheRead: 0, cacheWrite: 0, output: 1500, reasoning: 0 }).micro;
   ok(cost * BigInt(50) <= DAILY_BUDGET_DEFAULT, `a first step with nothing cached costs ${dollars(cost)}, over a fiftieth of the day's budget`);
 });

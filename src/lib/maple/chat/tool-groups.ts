@@ -12,8 +12,9 @@ import type { Voice } from "../voice";
  * prefix, stays the same from turn to turn), and whatever the model loads
  * with load_tools or calls without it (a miss loads that tool's group for
  * the next step). The definitions sent
- * stay under TOOL_CEILING; past it, the least recently used group goes,
- * never core and never one used this turn. Gating stays where it was
+ * stay under TOOL_CEILING on every step of a turn; past it, the least
+ * recently used group goes: first those only wanted, then those this turn
+ * used, never core and never the one used last. Gating stays where it was
  * (`allowed` in tools.ts): this only picks from the person's own tools.
  * Connected apps over MCP still get every tool. No server imports: the
  * checks run this.
@@ -62,9 +63,10 @@ export const TOOL_ORDER: readonly string[] = Object.values(TOOL_GROUPS).flat();
 /**
  * The most the definitions sent in one step may be, in tokens by the chars/3
  * measure (definitionTokens): core is about 14K, so this leaves room for the
- * largest group with another or two. The chat's check proves a first step
- * at this ceiling, with the instructions, the window, the newest message and
- * a whole cut tool result, stays under STEP_PROMPT_LIMIT.
+ * largest group with another or two. It holds on every step of a turn, a
+ * later one that used every group too (selectTools), and the chat's check
+ * proves a step at it, with the instructions, the window, the newest message
+ * and a whole cut tool result, stays under STEP_PROMPT_LIMIT.
  */
 export const TOOL_CEILING = 24_000;
 
@@ -218,7 +220,7 @@ export type WindowShape = {
    * cached.
    */
   recent: Map<ToolGroup, number>;
-  /** Groups called earlier in this turn (an approval's or a question's continuation). */
+  /** Groups called earlier in this turn (an approval's or a question's continuation), the one used last last. */
   turn: Set<ToolGroup>;
 };
 
@@ -263,8 +265,11 @@ export function readWindow(window: readonly ChatMessage[], opts: { carePerson?: 
       const name = calledName(part);
       if (!name) continue;
       for (const group of groupsOfCall(name, part.input)) {
-        if (i > last) turn.add(group);
-        else recent.set(group, i);
+        if (i > last) {
+          // In the order they were used, the latest use last.
+          turn.delete(group);
+          turn.add(group);
+        } else recent.set(group, i);
       }
       const out = part.output as { status?: unknown; answer?: unknown } | null | undefined;
       if (i > last && name === "ask_user" && out?.status === "answered" && typeof out.answer === "string") answers.push(out.answer);
@@ -294,17 +299,20 @@ const byOrder = (a: string, b: string) => (orderIndex.get(a) ?? Infinity) - (ord
 /**
  * One step's tools, from the person's own (`sizes`: every tool they may have
  * this turn, by name, with its definition's size): core always; then the
- * groups used this turn (`kept`: called, loaded or missed), which never go;
- * then the groups the newest message points to (`predicted`, surest first)
- * and those still in the window (`recent`, newest first), while the
- * definitions stay under `ceiling`; past it the least recently used goes
+ * groups used this turn (`kept`: called, loaded or missed, each with when it
+ * was last used, or in the order used); then the groups the newest message
+ * points to (`predicted`, surest first) and those still in the window
+ * (`recent`, newest first), while the definitions stay under `ceiling`. Past
+ * it the least recently used goes first: those only wanted, then those this
+ * turn used (a call to one again loads it for the next step), never the one
+ * used last. So the ceiling holds on every step of a turn, not only its
  * first. When all of them fit, all of them go, so nothing can miss.
  */
 export function selectTools(input: {
   sizes: Readonly<Record<string, number>>;
   predicted?: readonly ToolGroup[];
   recent?: ReadonlyMap<ToolGroup, number>;
-  kept?: Iterable<ToolGroup>;
+  kept?: Iterable<ToolGroup> | ReadonlyMap<ToolGroup, number>;
   ceiling?: number;
 }): Selection {
   const { sizes } = input;
@@ -316,7 +324,10 @@ export function selectTools(input: {
   if (all <= ceiling) return { active: names, groups: offered, dropped: [], tokens: all };
 
   const core = names.filter((n) => { const g = groupOf(n); return g === "core" || g === null; });
-  const kept = new Set([...(input.kept ?? [])].filter((g) => offered.includes(g)));
+  // This turn's groups, the least recently used first (a plain list is in the order used).
+  const usedAt = input.kept instanceof Map ? (input.kept as ReadonlyMap<ToolGroup, number>) : new Map([...((input.kept ?? []) as Iterable<ToolGroup>)].map((g, i) => [g, i] as const));
+  const used = [...usedAt.entries()].filter(([g]) => offered.includes(g)).sort((a, b) => a[1] - b[1]).map(([g]) => g);
+  const kept = new Set(used);
   const predicted = (input.predicted ?? []).filter((g) => offered.includes(g) && !kept.has(g));
   const recent = input.recent ?? new Map<ToolGroup, number>();
   // This message's groups (surest first) are newer than anything in the window, whose newest calls come next.
@@ -325,9 +336,13 @@ export function selectTools(input: {
     .filter((g) => !kept.has(g) && (predicted.includes(g) || recent.has(g)))
     .sort((a, b) => rank(b) - rank(a) || GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b));
   const dropped: ToolGroup[] = [];
-  const pick = () => new Set<ToolGroup>([...kept, ...wanted]);
+  const droppedUsed: ToolGroup[] = [];
+  const pick = () => new Set<ToolGroup>([...used, ...wanted]);
   const tokensOf = (groups: Set<ToolGroup>) => definitionTokens(sizes, [...core, ...[...groups].flatMap(inGroup)]);
   while (wanted.length && tokensOf(pick()) > ceiling) dropped.unshift(wanted.pop()!);
+  // Still past it: what this turn used goes too, the least recently used first, never the one used last.
+  while (used.length > 1 && tokensOf(pick()) > ceiling) droppedUsed.unshift(used.shift()!);
+  dropped.unshift(...droppedUsed);
   const groups = offered.filter((g) => pick().has(g));
   const active = [...core, ...groups.flatMap(inGroup)].sort(byOrder);
   return { active, groups, dropped, tokens: definitionTokens(sizes, active) };
@@ -435,17 +450,22 @@ export function toolDisclosure(tools: ToolSet, opts: { window: readonly ChatMess
     tools: all,
     sizes,
     predicted,
-    /** This step's tools. `steps`: the steps so far, whose calls (and misses) keep their groups. */
+    /**
+     * This step's tools. `steps`: the steps so far, whose calls (and misses) keep their groups, each ranked by the step
+     * that used it last (an earlier request of this turn before them), so past the ceiling the least recently used goes.
+     */
     select(stepNumber: number, steps: readonly { content: readonly unknown[] }[]): Selection {
       step = stepNumber;
-      const used = new Set<ToolGroup>([...shape.turn, ...loaded]);
-      for (const s of steps) {
+      const used = new Map<ToolGroup, number>();
+      [...shape.turn].forEach((group, i) => used.set(group, i - shape.turn.size - 1));
+      for (const group of loaded) if (!used.has(group)) used.set(group, steps.length);
+      steps.forEach((s, i) => {
         for (const raw of s.content) {
           const part = raw as StepCall;
           if (part.type !== "tool-call" || typeof part.toolName !== "string" || !(part.toolName in sizes)) continue;
-          for (const group of groupsOfCall(part.toolName, part.input)) used.add(group);
+          for (const group of groupsOfCall(part.toolName, part.input)) used.set(group, i);
         }
-      }
+      });
       return selectTools({ sizes, predicted, recent: shape.recent, kept: used, ceiling: opts.ceiling });
     },
     /**

@@ -399,7 +399,7 @@ check("a continuation keeps what its own turn already used", () => {
 
 // ── the ceiling ──────────────────────────────────────────────────────────
 
-check("past the ceiling the least recently used group goes, never core and never one used this turn", () => {
+check("past the ceiling the least recently used group goes: those only wanted first, then those this turn used, never core and never the one used last", () => {
   const sizes = definitionSizes(toolDisclosure(toolsFor(ALEX), { window: [], vo: COPY.v, lastStep: 5 }).tools);
   const core = groupNames("core").filter((n) => n in sizes);
   const three = selectTools({ sizes, predicted: ["mom", "health", "log_more"] });
@@ -409,11 +409,46 @@ check("past the ceiling the least recently used group goes, never core and never
   eq([older.groups, older.dropped], [["mom", "app", "memory_admin"], ["log_more"]], "the oldest goes first");
   const newer = selectTools({ sizes, predicted: ["mom"], recent: new Map<ToolGroup, number>([["app", 0], ["log_more", 2], ["memory_admin", 4]]) });
   eq([newer.groups, newer.dropped], [["mom", "log_more", "memory_admin"], ["app"]], "by when, not by size");
+  // Every group used this turn, in group order (mom first, memory_admin last): the ceiling still holds (coach review P2 #8:
+  // they all stayed, 35,439 tokens), the least recently used going first, never the one used last.
   const kept = selectTools({ sizes, kept: GROUP_ORDER, predicted: ["mom"] });
-  eq([kept.active.length, kept.dropped], [Object.keys(sizes).length, []], "used this turn: all of them stay, even past the ceiling");
+  ok(kept.tokens <= TOOL_CEILING, `every group used this turn: ${kept.tokens} under the ceiling`);
+  eq([kept.groups, kept.dropped], [["log_more", "app", "people", "memory_admin"], ["sleep", "health", "mom"]], "the least recently used go, most recent kept");
   ok(core.every((n) => kept.active.includes(n) && three.active.includes(n) && older.active.includes(n)), "core always");
   const kept2 = selectTools({ sizes, kept: ["mom", "health"], predicted: ["log_more", "app"] });
   eq([kept2.groups, kept2.dropped], [["mom", "health"], ["log_more", "app"]], "what was used this turn wins over what's predicted");
+  // By when each was used, not the order given: the one used last always stays.
+  const byStep = selectTools({ sizes, kept: new Map<ToolGroup, number>([["sleep", 4], ["mom", 0], ["health", 2], ["log_more", 1]]) });
+  ok(byStep.tokens <= TOOL_CEILING && byStep.groups.includes("sleep") && byStep.dropped.includes("mom"), JSON.stringify(byStep.groups));
+});
+
+check("on every step of a turn the definitions stay under the ceiling, whatever the turn has used, whoever is signed in (coach review P2 #8)", () => {
+  const subsets = (1 << GROUP_ORDER.length) - 1;
+  for (const [label, tools] of [
+    ["owner", toolsFor(ALEX)],
+    ["owner, before the birth", toolsFor(ALEX, { born: false })],
+    ["member", toolsFor(SAM)],
+    ["her own account", toolsFor(SAM, { self: true })],
+    ["viewer", toolsFor(VI)],
+  ] as const) {
+    const d = toolDisclosure(tools, { window: [], vo: COPY.v, lastStep: CHAT_MAX_STEPS - 1 });
+    // Core and any one group fit, so the one used last can always stay.
+    const core = definitionTokens(d.sizes, groupNames("core").filter((n) => n in d.sizes));
+    for (const g of GROUP_ORDER) ok(core + definitionTokens(d.sizes, groupNames(g).filter((n) => n in d.sizes)) <= TOOL_CEILING, `${label}: core and ${g}`);
+    // Every subset of groups used over a turn's steps (each step calling one group's first tool), at every later step.
+    for (let mask = 1; mask <= subsets; mask += 7) {
+      const groups = GROUP_ORDER.filter((_, i) => mask & (1 << i)).filter((g) => groupNames(g).some((n) => n in d.sizes));
+      const steps = groups.map((g) => ({ content: [{ type: "tool-call", toolName: groupNames(g).find((n) => n in d.sizes)!, input: {} }] }));
+      for (let k = 1; k <= steps.length; k++) {
+        const sel = d.select(k, steps.slice(0, k));
+        ok(sel.tokens <= TOOL_CEILING, `${label}, step ${k} after ${groups.slice(0, k)}: ${sel.tokens}`);
+        if (k) ok(sel.groups.includes(groups[k - 1]), `${label}, step ${k}: the group used last stays (${groups[k - 1]})`);
+      }
+    }
+    // load_tools with every group at once: the next step still sends no more than the ceiling.
+    const all = d.select(1, [{ content: [{ type: "tool-call", toolName: LOAD_TOOLS, input: { groups: GROUP_ORDER } }] }]);
+    ok(all.tokens <= TOOL_CEILING, `${label}: every group loaded at once: ${all.tokens}`);
+  }
 });
 
 check("with nothing used this turn, a first step never passes the ceiling, whoever is signed in", () => {
@@ -568,6 +603,22 @@ async function e2e() {
     ok(!t.sent(0).includes("ask_user") && t.sent(0).includes(LOAD_TOOLS), "the last step drops ask_user, keeps load_tools");
     const part = partsOf(t.saved[0]).find((p) => p.toolCallId === "call_late");
     eq(part?.state, "output-error", "the error card: that step didn't finish");
+  });
+
+  await checkAsync("a bassinet try's delete waits for a tap, as delete_entry does (coach review P1 #3); its other actions run on the model's word", async () => {
+    const ran: string[] = [];
+    const del = await turn(stubbed(toolsFor(ALEX), ran, "bassinet_try"), [callOf("call_del", "bassinet_try", { action: "delete", id: "t3" }), say("Deleted it.")], { text: "delete that bassinet try" });
+    eq(ran, [], "nothing ran before the tap");
+    eq(partsOf(del.saved[0]).find((p) => p.toolCallId === "call_del")?.state, "approval-requested", "asks first");
+    const start = await turn(stubbed(toolsFor(ALEX), ran, "bassinet_try"), [callOf("call_start", "bassinet_try", { action: "start" }), say("Started.")], { text: "she's in the bassinet now" });
+    eq([ran, partsOf(start.saved[0]).find((p) => p.toolCallId === "call_start")?.state], [["bassinet_try"], "output-available"], "a start runs at once");
+  });
+
+  await checkAsync("a turn that loads every group still sends no more than the ceiling on its next step (coach review P2 #8)", async () => {
+    const t = await turn(toolsFor(ALEX), [callOf("call_load", LOAD_TOOLS, { groups: GROUP_ORDER }), say("Loaded.")]);
+    const sizes = definitionSizes(toolDisclosure(toolsFor(ALEX), { window: [], vo: COPY.v, lastStep: 5 }).tools);
+    const sent = definitionTokens(sizes, t.sent(1));
+    ok(sent <= TOOL_CEILING && sent < definitionTokens(sizes, Object.keys(sizes)), `step 2 sent ${sent} tokens of definitions (every tool would be ${definitionTokens(sizes, Object.keys(sizes))})`);
   });
 
   await checkAsync("the prefix and in-flight estimates count only the tools a step sends", async () => {

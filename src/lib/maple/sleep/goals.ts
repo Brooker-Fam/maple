@@ -39,6 +39,7 @@ import {
   GOAL_TITLE_MAX,
   GOAL_WHY_MAX,
   HANDOFF_ANSWERS,
+  MAX_SPAN_MS,
   PROTECTED_ANSWERS,
   REVIEW_DUE_DAYS,
   ROSTER_MAX,
@@ -105,6 +106,13 @@ const minKey = (a: string, b: string) => (a < b ? a : b);
 export const goalRef = (id: number) => `g${id}`;
 
 /**
+ * The family's own words in tool text (a goal's title, why, steps and custom aims, a review note, a try's or a
+ * check-in's note), after a label that says whose they are ("in the family's words"): quoted with JSON's escapes, so a
+ * quote inside can't end them early. Data, never instructions.
+ */
+export const quoted = (s: string) => JSON.stringify(s);
+
+/**
  * Who reads the adults' check-ins: owners and members, never a view-only
  * guest (or a photos-only one). Goals, steps, the roster and the baby's
  * numbers are for anyone in the family but photos-only guests.
@@ -157,8 +165,30 @@ export const windowOnNight = (w: Pick<RosterWindow, "nights">, night: string) =>
 
 // ── days ─────────────────────────────────────────────────────────────────
 
-/** The night a morning check-in is about: the one that began yesterday evening, by the family's calendar. */
-export const lastNightKey = (now: Date | number, tz: string) => addDays(dayKey(now, tz), -1);
+/**
+ * From this hour the morning after (the family's clock), a night is over: Today's Last night card and its check-in ask
+ * from then (SleepCheckin.tsx MORNING_HOUR), and so do Siri and the coach.
+ */
+export const NIGHT_OVER_HOUR = 5;
+
+/**
+ * The night it is now, as check-ins and their words read it (the evening's date): before 5 AM the night still going,
+ * which began yesterday evening; from 5 AM, tonight's (today's date).
+ */
+export function nightNowKey(now: Date | number, tz: string): string {
+  const today = dayKey(now, tz);
+  const d = parseDayKey(today);
+  return new Date(now).getTime() < zonedTimeToUtc(d.year, d.month, d.day, NIGHT_OVER_HOUR, 0, tz).getTime() ? addDays(today, -1) : today;
+}
+
+/**
+ * The night a morning check-in is about: the latest one that's over, from 5 AM the morning after. Before 5 AM the night
+ * still going is tonight's, never last night, and last night is the one before it.
+ */
+export const lastNightKey = (now: Date | number, tz: string) => addDays(nightNowKey(now, tz), -1);
+
+/** It's the morning after last night (5 AM or later): check-ins are asked for, and owed, only from then until midnight. */
+export const checkinMorning = (now: Date | number, tz: string) => nightNowKey(now, tz) === dayKey(now, tz);
 
 /**
  * "Tonight", for picking a goal up again: before 6 AM the night still going (the try day's, yesterday's date),
@@ -247,12 +277,16 @@ export function cleanCheckinExtras(raw: unknown): CheckinExtras {
   return out;
 }
 
-/** A check-in's night: one of the last CHECKIN_NIGHTS_BACK, ending with last night (a night still going can't be checked in yet). */
+/**
+ * A check-in's night: one of the last CHECKIN_NIGHTS_BACK, ending with last night (lastNightKey, the latest night
+ * that's over), the default. A night still going can't be checked in: before 5 AM that's the night that began
+ * yesterday evening, and last night is the one before it (the chat's check_in asks for a date then instead).
+ */
 export function cleanCheckinNight(raw: unknown, now: Date, tz: string): string {
   const { first, last } = checkinNights(now, tz);
   if (raw == null || raw === "") return last;
   if (!isRealDay(raw)) throw new SleepInputError("The night must be a date like 2026-11-01 (the evening it began).");
-  if (raw > last) throw new SleepInputError(`That night isn't over yet: check in the morning after (last night is ${last}).`);
+  if (raw > last) throw new SleepInputError(`That night isn't over yet: check in from ${NIGHT_OVER_HOUR} AM the morning after (the latest night that's over is ${last}).`);
   if (raw < first) throw new SleepInputError(`That night is too long ago (the last ${CHECKIN_NIGHTS_BACK} nights at most).`);
   return raw;
 }
@@ -1347,6 +1381,14 @@ export function cleanGoalInput(raw: GoalInput, rules: GoalRules, mode: "create" 
   }
 
   if (raw.template !== undefined) out.template = cleanTemplate(raw.template, rules);
+  // A "Back to work" goal counts from its roster's start (its rehearsal): a target date before it would leave no night to count.
+  if (out.target_date !== undefined || out.template !== undefined) {
+    const end = out.target_date !== undefined ? out.target_date : (rules.current?.target_date ?? null);
+    const from = (out.template !== undefined ? out.template : rules.current?.template)?.roster_from ?? null;
+    if (end && from && end < from) {
+      throw new SleepInputError(`The target date, ${dateWords(end, rules.today)}, is before the roster starts on ${dateWords(from, rules.today)} (its rehearsal, two weeks before the day back), so no night would count. Pick that day or a later one.`);
+    }
+  }
 
   // Picking up again and easing off: the family's own clean restart, on a goal that's already going.
   for (const k of ["counts_from", "paused_until"] as const) {
@@ -1649,6 +1691,8 @@ export type GoalSpan = {
   weeksHidden: number;
   /** The last night counted: tonight's, or the target date or the night it closed when earlier. */
   lastNight: string;
+  /** The night it is now for check-ins and the week's words (nightNowKey): before 5 AM the night still going, else today's date. */
+  nightNow: string;
 };
 
 const isOpen = (s: GoalStatus) => s === "active" || s === "paused";
@@ -1711,6 +1755,7 @@ export function goalSpan(goal: Pick<SleepGoal, "created_at" | "target_date" | "c
     weeks,
     weeksHidden: first,
     lastNight: last,
+    nightNow: nightNowKey(now, tz),
   };
 }
 
@@ -1764,18 +1809,76 @@ export type NightLog = "logged" | "partly" | "none";
 
 type Span = [number, number];
 
-/** Everything logged, as spans of time (a diaper is a moment): entries of any kind, bassinet tries and holding turns. */
-export function loggedSpans(data: Pick<GoalData, "entries" | "tries" | "shifts">, now: number): Span[] {
-  const out: Span[] = [];
-  for (const e of live(data.entries)) {
-    const s = ms(e.started_at);
-    const end = e.ended_at ? ms(e.ended_at) : e.active ? now : s;
-    out.push([s, Math.max(s, end)]);
-  }
-  for (const t of live(data.tries)) out.push([ms(t.started_at), t.ended_at ? ms(t.ended_at) : now]);
-  for (const s of live(data.shifts)) out.push([ms(s.started_at), s.ended_at ? ms(s.ended_at) : now]);
-  return out;
+/**
+ * A timer or a bassinet try this long was left running (the store holds a try and a holding turn to the same 12
+ * hours): its end is unknown, so it counts as its start alone, a moment like a diaper. It never makes a night logged,
+ * a sleep on the nights after it or a bassinet stretch, so a quiet stretch still reads as one.
+ */
+export const LEFT_RUNNING_MS = MAX_SPAN_MS;
+
+const pastSane = (start: number, end: number) => end - start > LEFT_RUNNING_MS;
+
+/** An entry as counted: its start to its end (a running timer's to now); a moment, or one past LEFT_RUNNING_MS, its start alone. */
+export function entrySpan(e: Pick<Entry, "started_at" | "ended_at" | "active">, now: number): Span {
+  const s = ms(e.started_at);
+  const end = e.ended_at ? ms(e.ended_at) : e.active ? now : s;
+  return end <= s || pastSane(s, end) ? [s, s] : [s, end];
 }
+
+/** A bassinet try as counted: to its end, a running one to now; one past LEFT_RUNNING_MS its start alone. */
+function trySpan(t: Pick<BassinetTry, "started_at" | "ended_at">, now: number): Span {
+  const s = ms(t.started_at);
+  const end = t.ended_at ? ms(t.ended_at) : now;
+  return end <= s || pastSane(s, end) ? [s, s] : [s, end];
+}
+
+/** A holding turn as counted: to its end, an open one to now; one likely left open (turnLeftOpen), or past LEFT_RUNNING_MS, its start alone. */
+function turnSpan(sh: Pick<HoldingShift, "started_at" | "ended_at" | "ended_how" | "handoff_at">, now: number): Span {
+  const s = ms(sh.started_at);
+  const end = sh.ended_at ? ms(sh.ended_at) : now;
+  return end <= s || turnLeftOpen(sh, now) || pastSane(s, end) ? [s, s] : [s, end];
+}
+
+/**
+ * Everything logged, as spans of time (a diaper is a moment): entries of any kind, bassinet tries and holding turns,
+ * each as counted (entrySpan): what was left running counts as its start alone.
+ */
+export function loggedSpans(data: Pick<GoalData, "entries" | "tries" | "shifts">, now: number): Span[] {
+  return [...live(data.entries).map((e) => entrySpan(e, now)), ...live(data.tries).map((t) => trySpan(t, now)), ...live(data.shifts).map((s) => turnSpan(s, now))];
+}
+
+/** Something still running past its sane length: a timer or a try past LEFT_RUNNING_MS, or a holding turn likely left open. */
+export type LeftRunning = { kind: "timer"; entryKind: Entry["kind"]; id: number; since: string } | { kind: "try"; id: number; since: string } | { kind: "turn"; id: number; since: string; member: string };
+
+/** What's still running past its sane length now, oldest first: said once, so the family can stop it or fix when it ended. */
+export function leftRunning(data: Pick<GoalData, "entries" | "tries" | "shifts">, now: number): LeftRunning[] {
+  const out: LeftRunning[] = [
+    ...live(data.entries)
+      .filter((e) => e.active && !e.ended_at && pastSane(ms(e.started_at), now))
+      .map((e): LeftRunning => ({ kind: "timer", entryKind: e.kind, id: e.id, since: e.started_at })),
+    ...live(data.tries)
+      .filter((t) => !t.ended_at && pastSane(ms(t.started_at), now))
+      .map((t): LeftRunning => ({ kind: "try", id: t.id, since: t.started_at })),
+    ...live(data.shifts)
+      .filter((s) => !s.ended_at && turnLeftOpen(s, now))
+      .map((s): LeftRunning => ({ kind: "turn", id: s.id, since: s.started_at, member: s.holder })),
+  ];
+  return out.sort((a, b) => ms(a.since) - ms(b.since));
+}
+
+const TIMER_WORD: Partial<Record<Entry["kind"], string>> = { sleep: "sleep timer", feed: "feed timer", pump: "pumping timer", tummy: "tummy time timer" };
+
+/** "the sleep timer running since Fri, Oct 30, 9:00 PM (#1)", "bassinet try t3, running since …", "Sam's holding turn (h9), open since …". */
+export function leftRunningWords(x: LeftRunning, o: { name: (id: string) => string; tz: string; today: string }): string {
+  const when = `${dateWords(dayKey(ms(x.since), o.tz), o.today)}, ${formatTime(x.since, o.tz)}`;
+  if (x.kind === "timer") return `the ${TIMER_WORD[x.entryKind] ?? `${x.entryKind} timer`} running since ${when} (#${x.id})`;
+  if (x.kind === "try") return `bassinet try t${x.id}, running since ${when}`;
+  return `${o.name(x.member)}'s holding turn (h${x.id}), open since ${when}`;
+}
+
+/** What to do about each: stop it or fix when it ended, with the tool that does it. */
+const leftRunningFix = (x: LeftRunning) =>
+  x.kind === "timer" ? `stop_timer, or update_entry on #${x.id} for when it really ended` : x.kind === "try" ? `bassinet_try finish or fix on t${x.id}` : `holding end, or hand_off`;
 
 /**
  * A night as logged, with its core's (NIGHT_CORE) stretches of nothing:
@@ -2148,6 +2251,8 @@ export type GoalProgress = GoalSpan & {
   quiet: QuietStretch | null;
   /** Each goal adult's check-ins by week; null for a reader who can't see check-ins. */
   checkinWeeks: CheckinWeek[] | null;
+  /** Timers, tries and holding turns still running past their sane length (leftRunning): each counts as its start alone. */
+  leftRunning: LeftRunning[];
 };
 
 /** The week the coach and the goal card read: the newest one with a night over (on a review morning, the week that just ended). */
@@ -2197,12 +2302,14 @@ const HINT_NIGHTS = 7;
 
 /**
  * A goal's undone steps by when they're planned, against the goal's week
- * that today (the family's calendar day) is in: so on the morning a week
- * begins, its step is this week's.
+ * the night now is in (nightNowKey, from 5 AM today's date; `today` for a
+ * span without it): so on the morning a week begins, its step is this
+ * week's, and until 5 AM the week still going keeps its own.
  */
-export function stepsByWeek(steps: readonly GoalStep[], span: Pick<GoalSpan, "startsOn" | "weeksTotal" | "today">): { thisWeek: GoalStep[]; earlier: GoalStep[]; anyTime: GoalStep[]; later: GoalStep[] } {
+export function stepsByWeek(steps: readonly GoalStep[], span: Pick<GoalSpan, "startsOn" | "weeksTotal" | "today"> & { nightNow?: string }): { thisWeek: GoalStep[]; earlier: GoalStep[]; anyTime: GoalStep[]; later: GoalStep[] } {
+  const today = span.nightNow ?? span.today;
   // Before counting starts (a roster that starts later, or easing off), the steps planned before it are this week's.
-  const now = span.today < span.startsOn ? 0 : weekNumber(span.startsOn, span.today, span.weeksTotal);
+  const now = today < span.startsOn ? 0 : weekNumber(span.startsOn, today, span.weeksTotal);
   const open = steps.filter((s) => !s.done_at);
   const weekOfStep = (s: GoalStep) => (s.week_of! < span.startsOn ? 0 : weekNumber(span.startsOn, s.week_of!, span.weeksTotal));
   const byWeek = (xs: GoalStep[]) => xs.slice().sort((a, b) => a.week_of!.localeCompare(b.week_of!));
@@ -2215,7 +2322,7 @@ export function stepsByWeek(steps: readonly GoalStep[], span: Pick<GoalSpan, "st
 }
 
 /** The step to do next: this week's, else the latest still open from earlier, else one for any week, else the next planned. */
-export function nextStepNow(steps: readonly GoalStep[], span: Pick<GoalSpan, "startsOn" | "weeksTotal" | "today">): GoalStep | null {
+export function nextStepNow(steps: readonly GoalStep[], span: Pick<GoalSpan, "startsOn" | "weeksTotal" | "today"> & { nightNow?: string }): GoalStep | null {
   const s = stepsByWeek(steps, span);
   return s.thisWeek[0] ?? s.earlier[s.earlier.length - 1] ?? s.anyTime[0] ?? s.later[0] ?? null;
 }
@@ -2257,7 +2364,11 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
         log: nl ? (nl.log === "none" && byNight.has(k) ? "partly" : nl.log) : null,
         feed: feeds.some((e) => ms(e.started_at) >= a && ms(e.started_at) < b),
         tried: byNight.has(k),
-        slept: sleeps.some((e) => ms(e.started_at) < b && (e.ended_at ? ms(e.ended_at) : e.active ? t : ms(e.started_at)) > a),
+        // A sleep timer left running counts as its start alone (entrySpan): it never makes the nights after it "slept".
+        slept: sleeps.some((e) => {
+          const [s, en] = entrySpan(e, t);
+          return s < b && en > a;
+        }),
         checkedIn: ans ? ans.checkedIn : null,
         place: ans?.place ?? null,
         untimed: ans?.untimed ?? null,
@@ -2336,8 +2447,10 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
           target,
           weeks: span.weeks.map((w) => {
             const nights = new Set(nightsIn(w, checkedTo));
-            // Only the nights their window was on count (every night, without a window on the roster): never "6 of 5".
-            const roster = new Set([...nights].filter((k) => !windows.length || windows.some((x) => windowOnNight(x, k))));
+            // Only the nights their window was on count (every night, without a window on the roster): never "6 of 5". A
+            // night is theirs to check in once it's over for them (their own window that night ended) or they have.
+            const over = (k: string) => windowsOver(goal.roster, target.member, k, t, tz) || theirs.some((c) => c.night === k);
+            const roster = new Set([...nights].filter((k) => (!windows.length || windows.some((x) => windowOnNight(x, k))) && over(k)));
             const here = theirs.filter((c) => roster.has(c.night));
             const count = (a: ProtectedAnswer) => here.filter((c) => c.protected === a).length;
             const planned = windows.length ? roster.size : 0;
@@ -2532,7 +2645,9 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
         const ks = nightsIn(w, checkedTo);
         return goalAdults(goal).map((member) => {
           const windows = windowsOf(member);
-          const could = windows.length ? ks.filter((k) => windows.some((x) => windowOnNight(x, k))) : ks;
+          const on = windows.length ? ks.filter((k) => windows.some((x) => windowOnNight(x, k))) : ks;
+          // Their nights once over for them (their own window ended), or checked in.
+          const could = on.filter((k) => windowsOver(goal.roster, member, k, t, tz) || checkins.some((c) => c.member === member && c.night === k));
           const theirs = checkins.filter((c) => c.member === member && could.includes(c.night));
           const n = (a: ProtectedAnswer) => theirs.filter((c) => c.protected === a).length;
           return { week: w.n, member, checkedIn: theirs.length, nights: could.length, yes: n("yes"), partly: n("partly"), no: n("no") };
@@ -2556,6 +2671,7 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
     observations,
     quiet,
     checkinWeeks,
+    leftRunning: leftRunning(data, t),
   };
 }
 
@@ -2593,13 +2709,16 @@ const tally = <K extends string>(m: Partial<Record<K, number>>, label: Record<K,
     .map(([k, n]) => `${label[k].toLowerCase()} ${n}`)
     .join(", ");
 
-/** The morning after a goal week's last night: the try day is still that night's, while the calendar day is already the next week's. */
-export function weekEndedLastNight(p: Pick<GoalSpan, "weekNow" | "weeksTotal" | "startsOn" | "today">): boolean {
-  return p.weekNow != null && weekNumber(p.startsOn, maxKey(p.today, p.startsOn), p.weeksTotal) > p.weekNow;
+/**
+ * The morning after a goal week's last night (from 5 AM, nightNowKey): the try day is still that night's, while the
+ * night now is already the next week's. Before 5 AM the night is still going, so its week hasn't ended.
+ */
+export function weekEndedLastNight(p: Pick<GoalSpan, "weekNow" | "weeksTotal" | "startsOn" | "today"> & { nightNow?: string }): boolean {
+  return p.weekNow != null && weekNumber(p.startsOn, maxKey(p.nightNow ?? p.today, p.startsOn), p.weeksTotal) > p.weekNow;
 }
 
 /** A week still under way ("so far"): the current one, unless it ended last night. */
-export const weekOngoing = (w: GoalWeek, p: Pick<GoalSpan, "weekNow" | "weeksTotal" | "startsOn" | "today">) => w.current && !weekEndedLastNight(p);
+export const weekOngoing = (w: GoalWeek, p: Pick<GoalSpan, "weekNow" | "weeksTotal" | "startsOn" | "today"> & { nightNow?: string }) => w.current && !weekEndedLastNight(p);
 
 /**
  * A goal week's name in the counts: "This week", "Last week", "Week 2", and
@@ -2608,7 +2727,7 @@ export const weekOngoing = (w: GoalWeek, p: Pick<GoalSpan, "weekNow" | "weeksTot
  * the next week's) "Week 1 (ended last night)", so "this week" never means
  * two weeks at once. `of`: "Week 2 of 4" for a week further back.
  */
-export function goalWeekLabel(w: GoalWeek, p: Pick<GoalSpan, "weeks" | "weekNow" | "weeksTotal" | "startsOn" | "today">, o: { of?: boolean } = {}): string {
+export function goalWeekLabel(w: GoalWeek, p: Pick<GoalSpan, "weeks" | "weekNow" | "weeksTotal" | "startsOn" | "today"> & { nightNow?: string }, o: { of?: boolean } = {}): string {
   const ended = weekEndedLastNight(p);
   if (w.current) return ended ? `Week ${w.n} (ended last night)` : "This week";
   if (!ended && p.weekNow && w.n === p.weekNow - 1) return "Last week";
@@ -2618,8 +2737,8 @@ export function goalWeekLabel(w: GoalWeek, p: Pick<GoalSpan, "weeks" | "weekNow"
 /** The goal's header line: "Sleep goal g3 (Active): "Both of us get a 4-hour stretch". Target date Mon, Nov 30 (28 days left); week 1 of 4." */
 export function goalHeadLine(goal: SleepGoal, p: GoalSpan, words: Pick<GoalWords, "tz">): string {
   const status = goal.status === "met" || goal.status === "dropped" ? `${GOAL_STATUS_LABEL[goal.status]}${goal.closed_at ? ` on ${dateWords(dayKey(ms(goal.closed_at), words.tz), p.today)}` : ""}` : GOAL_STATUS_LABEL[goal.status];
-  const parts = [`Sleep goal ${goalRef(goal.id)} (${status}): "${goal.title}".`];
-  if (goal.why) parts.push(`Why: "${goal.why}".`);
+  const parts = [`Sleep goal ${goalRef(goal.id)} (${status}), in the family's words: ${quoted(goal.title)}.`];
+  if (goal.why) parts.push(`Why, in the family's words: ${quoted(goal.why)}.`);
   // While easing off there's no week to name: counting picks up again on its night.
   const week = p.easingUntil ? null : p.weekNow;
   if (p.endsOn) {
@@ -2693,11 +2812,16 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
   const label = (w: GoalWeek) => goalWeekLabel(w, p, { of: true });
   const shown = [cur, prev].filter((w): w is GoalWeek => !!w);
   const sentence = (head: string, parts: string[]) => lines.push(`${head}. ${parts.join(" ")}`);
-  if (goal.last_review_at) lines.push(`Last review (${dateWords(dayKey(ms(goal.last_review_at), words.tz), p.today)}): ${goal.review_note ? `"${goal.review_note}"` : "no note"}.`);
+  if (goal.last_review_at) {
+    const when = dateWords(dayKey(ms(goal.last_review_at), words.tz), p.today);
+    lines.push(goal.review_note ? `Last review (${when}), its note in the family's words: ${quoted(goal.review_note)}.` : `Last review (${when}): no note.`);
+  }
+  // A custom aim is the family's own words; the others are Maple's.
+  const aim = (t: GoalTarget) => (t.kind === "custom" ? `Aim, in the family's words: ${quoted(t.text)}` : `Aim: ${targetWords(t, name)}`);
   // Easing off, or nothing logged for a stretch: the aims, and that fact once, with no week-by-week tally.
   const quiet = quietNow(p);
   if (p.easingUntil || quiet) {
-    for (const tp of p.targets) lines.push(`Aim: ${targetWords(tp.target, name)}.`);
+    for (const tp of p.targets) lines.push(`${aim(tp.target)}.`);
     lines.push(p.easingUntil ? `${easingWords(p.easingUntil, p.today)}: nothing is counted until then.` : `${quietWords(quiet!, p.today)}.`);
   }
   // A week too thin to read (ENOUGH_NIGHTS logged nights) says so, never a count against the aim from a night or two.
@@ -2709,7 +2833,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
     return `${label(w)}: ${c.read > nightsLogged(c) ? `${readWords(c)}${ongoing ? " so far" : ""}, too few to tell${ongoing ? " yet" : ""}` : tooFewWords(nightsLogged(c), { ongoing })}.`;
   };
   for (const tp of p.easingUntil || quiet ? [] : p.targets) {
-    const head = `Aim: ${targetWords(tp.target, name)}`;
+    const head = aim(tp.target);
     switch (tp.kind) {
       case "bassinet_nights":
         sentence(
@@ -2757,7 +2881,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
             const of = x.planned ? `checked in on ${x.checkedIn} of ${plural(x.planned, "roster night")}${soFar}` : `checked in on ${plural(x.checkedIn, "night")}${soFar}`;
             // Its own sample is the adult's check-ins: under ENOUGH_NIGHTS of them, too few to tell.
             if (x.checkedIn && x.checkedIn < ENOUGH_NIGHTS) return `${label(w)}: ${of}, too few to tell${soFar ? " yet" : ""}.`;
-            return x.checkedIn ? `${label(w)}: yes on ${againstAim(x.yes, tp.target.per_week)} (${of}${other ? `; ${other}` : ""}).` : `${label(w)}: no check-ins yet; ${noCheckinWords(x, { ongoing: weekOngoing(w, p), today: p.today, hasWindow: goal.roster.some((r) => r.member === tp.target.member) })}.`;
+            return x.checkedIn ? `${label(w)}: yes on ${againstAim(x.yes, tp.target.per_week)} (${of}${other ? `; ${other}` : ""}).` : `${label(w)}: no check-ins yet; ${noCheckinWords(x, { ongoing: weekOngoing(w, p), today: p.nightNow, hasWindow: goal.roster.some((r) => r.member === tp.target.member) })}.`;
           })
         );
         break;
@@ -2768,6 +2892,11 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
   }
   const cov = shown.map((w) => ({ w, c: p.coverage.find((c) => c.week === w.n) })).filter((x) => x.c && x.c.over > 0);
   if (cov.length && !p.easingUntil && !quiet) lines.push(`Logged: ${cov.map(({ w, c }) => `${label(w).toLowerCase()} ${coverageWords(c!)}`).join("; ")}.`);
+  // A timer, try or holding turn left running counts as its start alone: how the nights since it read.
+  if (p.leftRunning.length) {
+    const said = p.leftRunning.map((x) => leftRunningWords(x, { name, tz: words.tz, today: p.today }));
+    lines.push(`Left running: ${said.join("; ")}. Only ${said.length > 1 ? "each one's" : "its"} start counts (a timer or try past 12 hours, a holding turn once it's likely left open), so the nights since read as nothing logged: unknown, never a night that went well or badly.`);
+  }
   if (p.answers) {
     const said = shown
       .map((w) => ({ w, a: p.answers!.find((x) => x.week === w.n)! }))
@@ -2788,7 +2917,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
       ...(p.steps.earlier.length ? [`still open from earlier: ${p.steps.earlier.map((s) => s.id).join(", ")}`] : []),
     ];
     const n = p.steps.next;
-    const rest = plan.length ? `; ${plan.join("; ")}` : n ? `; next: "${n.title}" (${n.id}${n.week_of ? `, week of ${dateWords(n.week_of, p.today)}` : ", any week"})` : p.steps.done === p.steps.of ? "; all done" : "";
+    const rest = plan.length ? `; ${plan.join("; ")}` : n ? `; next, in the family's words: ${quoted(n.title)} (${n.id}${n.week_of ? `, week of ${dateWords(n.week_of, p.today)}` : ", any week"})` : p.steps.done === p.steps.of ? "; all done" : "";
     lines.push(`Steps: ${p.steps.done} of ${p.steps.of} done${rest}.`);
   }
   if (p.checkins) {
@@ -2884,6 +3013,20 @@ export function owedCheckins(goal: Pick<SleepGoal, "roster" | "targets">, night:
   });
 }
 
+/** Whether an adult's own windows on a night have all ended by `now` (none on it: yes). */
+export const windowsOver = (roster: readonly RosterWindow[], member: string, night: string, now: Date | number, tz: string) =>
+  roster.filter((w) => w.member === member && windowOnNight(w, night)).every((w) => windowOn(w, night, tz)[1].getTime() <= new Date(now).getTime());
+
+/**
+ * Who owes a check-in for last night now (owedCheckins), as Today asks: only from 5 AM the morning after (never between
+ * midnight and the morning, when "last night" is still going), and each adult once their own windows that night are over.
+ */
+export function owedNow(goal: Pick<SleepGoal, "roster" | "targets">, now: Date, tz: string): { night: string; adults: string[] } | null {
+  if (!checkinMorning(now, tz)) return null;
+  const night = lastNightKey(now, tz);
+  return { night, adults: owedCheckins(goal, night).filter((m) => windowsOver(goal.roster, m, night, now, tz)) };
+}
+
 export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWords, "name" | "tz" | "now"> & { v?: Voice }): CoachNotes {
   const open = isOpen(goal.status);
   const since = daysBetween(dayKey(ms(goal.last_review_at ?? goal.created_at), words.tz), p.today);
@@ -2894,8 +3037,10 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
   const last = lastNightKey(words.now, words.tz);
   let notCheckedIn: string[] | null = null;
   if (p.checkins) {
-    // Nobody owes a check-in for a night before the goal's counting starts, or one their window wasn't on.
-    notCheckedIn = last >= p.startsOn ? owedCheckins(goal, last).filter((m) => !p.checkins!.some((c) => c.member === m && c.lastNight)) : [];
+    // Nobody owes a check-in for a night before the goal's counting starts, one their window wasn't on, one still going
+    // (before 5 AM), or before their own window that night is over.
+    const owed = owedNow(goal, words.now, words.tz);
+    notCheckedIn = owed && owed.night >= p.startsOn ? owed.adults.filter((m) => !p.checkins!.some((c) => c.member === m && c.lastNight)) : [];
   }
   const done = (focus: string | null): CoachNotes => ({ goalId: goal.id, daysLeft: p.daysLeft, reviewDue, daysSinceReview: since, nextStep: next, thisWeek: plan.thisWeek, earlier: plan.earlier, focus, notCheckedIn, notes });
   if (goal.status === "paused") notes.push("Paused: ask whether they want to pick it back up before coaching on it.");
@@ -2904,14 +3049,20 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
     notes.push(`${easingWords(p.easingUntil, p.today)}, as the family chose: nothing is counted until then, and the steps and targets hold. Don't coach on counts or steps unless they ask; if it comes up, ask how they're doing.`);
     return done(null);
   }
+  // A timer, try or holding turn left running: once, with what stops it or fixes when it ended.
+  const running = open && p.leftRunning.length
+    ? `Left running: ${p.leftRunning.map((x) => `${leftRunningWords(x, { name: words.name, tz: words.tz, today: p.today })}, fixed with ${leftRunningFix(x)}`).join("; ")}. Only its start counts. Ask once whether to stop it or fix when it ended, and don't ask about the nights since or count them.`
+    : null;
   // A quiet stretch: said once, then how they are, before anything about the goal. Never a tally of the nights.
   const quiet = open ? quietNow(p) : null;
   if (quiet) {
     notes.push(
       `${quietWords(quiet, p.today)}. Before anything about the goal, ask how they're doing. Don't ask about those nights or count them. If they'd like a clean restart, it's their choice: pick it up from tonight (update with counts_from "tonight"), ease off a week (paused_until "in 1 week"), or set it aside (close as dropped), each after a read-back and a yes.`
     );
+    if (running) notes.push(running);
     return done(null);
   }
+  if (running) notes.push(running);
   // Most of the last week empty: how they are comes first, and those nights are left out, never asked about.
   const over = p.nights.filter((n) => n.log != null).slice(-7);
   const empty = p.checkins ? over.filter(emptyNight).length : 0;
@@ -2931,18 +3082,19 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
   const t = goal.template;
   const back = !!t && t.kind === "back_to_work" && p.today >= t.date;
   if (open) {
-    const listed = (xs: GoalStep[], week: boolean) => xs.map((s) => `"${s.title}" (${s.id}${week && s.week_of ? `, week of ${dateWords(s.week_of, p.today)}` : ""})`).join("; ");
+    // Steps are the family's own words: each list of them says so once.
+    const listed = (xs: GoalStep[], week: boolean) => xs.map((s) => `${quoted(s.title)} (${s.id}${week && s.week_of ? `, week of ${dateWords(s.week_of, p.today)}` : ""})`).join("; ");
     // Once the day back has come, the steps meant for before it are asked about once (the first week back), never carried on.
     const preReturn = back ? plan.earlier.filter((s) => s.week_of! < t!.date) : [];
     const earlier = plan.earlier.filter((s) => !preReturn.includes(s));
     // No step planned for this week: the latest one still open carries on.
     const carry = !plan.thisWeek.length ? (earlier[earlier.length - 1] ?? null) : null;
-    if (plan.thisWeek.length) notes.push(`This week's step: ${listed(plan.thisWeek, false)}.`);
-    else if (carry) notes.push(`This week's step: carry on with ${listed([carry], true)}, unless they'd like another.`);
+    if (plan.thisWeek.length) notes.push(`This week's step, in the family's words: ${listed(plan.thisWeek, false)}.`);
+    else if (carry) notes.push(`This week's step: carry on with the one still open from earlier, in the family's words: ${listed([carry], true)}, unless they'd like another.`);
     const rest = earlier.filter((s) => s !== carry);
-    if (rest.length) notes.push(`${carry ? "Also still open" : "Still open"} from earlier: ${listed(rest, true)}.`);
+    if (rest.length) notes.push(`${carry ? "Also still open" : "Still open"} from earlier, in the family's words: ${listed(rest, true)}.`);
     if (preReturn.length && daysBetween(t!.date, p.today) < 7) {
-      notes.push(`${words.name(t!.member)} is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update): ${listed(preReturn, true)}.`);
+      notes.push(`${words.name(t!.member)} is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update). In the family's words: ${listed(preReturn, true)}.`);
     }
     // Too few nights to read (ENOUGH_NIGHTS): no next step and no stage change from a night or two.
     const read = readWeek(p);
@@ -2956,7 +3108,7 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
       if (!goal.steps.length) notes.push("No weekly steps yet: suggest one small step for this week.");
       else if (goal.steps.every((s) => s.done_at)) notes.push("Every step is done: ask whether to plan the next one.");
       else {
-        const other = plan.anyTime[0] ? `; one for any week: "${plan.anyTime[0].title}" (${plan.anyTime[0].id})` : plan.later[0] ? `; next planned: "${plan.later[0].title}" (${plan.later[0].id}, week of ${dateWords(plan.later[0].week_of!, p.today)})` : "";
+        const other = plan.anyTime[0] ? `; one for any week, in the family's words: ${quoted(plan.anyTime[0].title)} (${plan.anyTime[0].id})` : plan.later[0] ? `; next planned, in the family's words: ${quoted(plan.later[0].title)} (${plan.later[0].id}, week of ${dateWords(plan.later[0].week_of!, p.today)})` : "";
         notes.push(`No step for this week yet${other}. End the review with one small step they choose for this week, saved as a step.`);
       }
     }
@@ -2999,7 +3151,7 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
  */
 export function reviewWeek(goal: SleepGoal, span: GoalSpan, now: Date, tz: string): GoalWeek | null {
   if (goal.status !== "active" || !goal.steps.length || span.easingUntil || !reviewIsDue(goal, span, tz)) return null;
-  if (span.daysLeft != null && span.daysLeft < 0) return null;
+  if ((span.daysLeft != null && span.daysLeft < 0) || !checkinMorning(now, tz)) return null;
   const last = lastNightKey(now, tz);
   return span.weeks.find((w) => w.to === last && w.nights > 0) ?? null;
 }
@@ -3114,8 +3266,11 @@ export function goalsByUrgency<T extends Pick<SleepGoal, "id" | "status" | "crea
   });
 }
 
-/** A check-in's night in a sentence, by the calendar (as lastNightKey): "last night" all day after it, then "Sat night". */
-export const nightWords = (night: string, now: Date, tz: string) => tryDayLabel(night, dayKey(now, tz));
+/**
+ * A check-in's night in a sentence, by the night it is now (nightNowKey, as lastNightKey): "last night" from 5 AM the
+ * morning after until 5 AM the next, then "Sat night"; the night still going is "tonight".
+ */
+export const nightWords = (night: string, now: Date, tz: string) => tryDayLabel(night, nightNowKey(now, tz));
 
 /** "Sam yes, Alex partly; not yet: Robin": last night's check-ins for these adults. */
 export function lastNightLine(adults: readonly string[], checkins: readonly SleepCheckin[], now: Date, tz: string, name: (id: string) => string): string {
