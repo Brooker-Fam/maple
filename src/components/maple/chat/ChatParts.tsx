@@ -19,6 +19,8 @@ import { Icon, KindBadge } from "../icons";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { chatToolErrorText } from "@/lib/maple/chat/receipts";
+import { outcomeWords } from "@/lib/maple/sleep/words";
+import { useSleepMaybe } from "../sleep/useSleep";
 import ChatImages from "./ChatImages";
 import ChatChart from "./ChatChart";
 import ChatReceipt, { CareReceipt } from "./ChatReceipt";
@@ -158,14 +160,29 @@ function OutputView({ output, busy, onAsk, threadId, messageId, toolCallId }: { 
   return <Muted icon="check">{first}</Muted>;
 }
 
-/** Delete / Keep before delete_entry or one of her entries is deleted. */
+/** Delete / Keep before delete_entry, a bassinet try's delete, or one of her entries is deleted. */
 function ApprovalCard({ name, input, onAnswer }: { name: string; input: unknown; onAnswer: (approved: boolean) => void }) {
   const { state, units, now } = useMaple();
+  const sleep = useSleepMaybe();
   const [answered, setAnswered] = useState(false);
   const raw = (input ?? {}) as { id?: unknown };
   const tz = state?.baby.timezone ?? "America/New_York";
   let what: React.ReactNode;
-  if (name === "delete_entry") {
+  if (name === "bassinet_try") {
+    // "t12", "#12" or 12, as the tool reads it; the try from this phone's last 8 days, and the sleep it started goes with it.
+    const id = Number(String(raw.id ?? "").trim().replace(/^#/, "").replace(/^t/i, ""));
+    const t = Number.isSafeInteger(id) ? sleep?.data.tries.find((x) => x.id === id) : undefined;
+    what = (
+      <p className={cx(tone.body, "text-[15px] leading-snug font-medium")}>
+        {t ? `Bassinet try t${t.id}` : "The selected bassinet try"}
+        {t && (
+          <span className={cx(tone.muted, "block text-[13px] font-normal")}>
+            {[`Laid down ${formatTime(t.started_at, tz)}`, t.outcome ? outcomeWords(t.outcome) : "still going", t.made_sleep && t.sleep_entry_id ? "and the sleep it started" : null].filter(Boolean).join(" · ")}
+          </span>
+        )}
+      </p>
+    );
+  } else if (name === "delete_entry") {
     const entry = typeof raw.id === "number" ? state?.entries.find((e) => e.id === raw.id) : undefined;
     const d = entry ? describeEntry(entry, { units, now: now() }) : null;
     what = entry ? (
@@ -201,8 +218,8 @@ function ApprovalCard({ name, input, onAnswer }: { name: string; input: unknown;
     onAnswer(ok);
   };
   return (
-    <section className={cx(tone.card, "space-y-3 p-4")} aria-label="Delete this entry?">
-      <p className="text-[13px] font-semibold text-mp-ink-2">Delete this entry?</p>
+    <section className={cx(tone.card, "space-y-3 p-4")} aria-label={name === "bassinet_try" ? "Delete this bassinet try?" : "Delete this entry?"}>
+      <p className="text-[13px] font-semibold text-mp-ink-2">{name === "bassinet_try" ? "Delete this bassinet try?" : "Delete this entry?"}</p>
       {what}
       <div className="grid grid-cols-2 gap-2">
         <Button variant="soft" onClick={() => answer(false)} disabled={answered}>

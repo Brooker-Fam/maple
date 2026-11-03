@@ -570,6 +570,15 @@ async function e2e() {
     eq(part?.state, "output-error", "the error card: that step didn't finish");
   });
 
+  await checkAsync("a bassinet try's delete waits for a tap, as delete_entry does (coach review P1 #3); its other actions run on the model's word", async () => {
+    const ran: string[] = [];
+    const del = await turn(stubbed(toolsFor(ALEX), ran, "bassinet_try"), [callOf("call_del", "bassinet_try", { action: "delete", id: "t3" }), say("Deleted it.")], { text: "delete that bassinet try" });
+    eq(ran, [], "nothing ran before the tap");
+    eq(partsOf(del.saved[0]).find((p) => p.toolCallId === "call_del")?.state, "approval-requested", "asks first");
+    const start = await turn(stubbed(toolsFor(ALEX), ran, "bassinet_try"), [callOf("call_start", "bassinet_try", { action: "start" }), say("Started.")], { text: "she's in the bassinet now" });
+    eq([ran, partsOf(start.saved[0]).find((p) => p.toolCallId === "call_start")?.state], [["bassinet_try"], "output-available"], "a start runs at once");
+  });
+
   await checkAsync("the prefix and in-flight estimates count only the tools a step sends", async () => {
     let n = 0;
     const model = new MockLanguageModelV4({

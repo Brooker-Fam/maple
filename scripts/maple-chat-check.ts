@@ -163,13 +163,16 @@ check("every tool has a description and a JSON object schema", () => {
   }
 });
 
-check("approvals: delete_entry always, fix_mom_entry only for a delete", () => {
+check("approvals: delete_entry always, fix_mom_entry and bassinet_try only for a delete", () => {
   eq(TOOL_APPROVAL.delete_entry, "user-approval", "delete_entry");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "delete" }), "user-approval", "fix_mom_entry delete");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "update" }), undefined, "fix_mom_entry update");
   eq(TOOL_APPROVAL.fix_mom_entry({ action: "restore" }), undefined, "fix_mom_entry restore");
   eq(TOOL_APPROVAL.fix_mom_entry(undefined), undefined, "no input");
-  eq(Object.keys(TOOL_APPROVAL).sort(), ["change_access", "delete_entry", "fix_mom_entry", "invite_person", "remove_person"], "nothing else asks");
+  // A try's delete takes the sleep entry it started with it (coach review P1 #3).
+  eq(TOOL_APPROVAL.bassinet_try({ action: "delete" }), "user-approval", "bassinet_try delete");
+  for (const action of ["start", "finish", "log", "fix", "restore", "reopen"]) eq(TOOL_APPROVAL.bassinet_try({ action }), undefined, `bassinet_try ${action}`);
+  eq(Object.keys(TOOL_APPROVAL).sort(), ["bassinet_try", "change_access", "delete_entry", "fix_mom_entry", "invite_person", "remove_person"], "nothing else asks");
 });
 
 check("people: every change to who's in the family waits for a tap, and only owners get those tools", () => {
