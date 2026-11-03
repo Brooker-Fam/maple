@@ -31,7 +31,7 @@ const assets = {
 };
 const browser = await browsers[browserName].launch({ headless: true });
 let failed = 0;
-async function scenario(name, run) {
+async function scenario(name, run, path = "/") {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -45,7 +45,7 @@ async function scenario(name, run) {
     });
   });
   try {
-    await page.goto("https://notifications.example.test/");
+    await page.goto(`https://notifications.example.test${path}`);
     await page.getByRole("button", { name: "Open notifications" }).click();
     await page.waitForFunction(() => window.notificationFixture.current.status === "on");
     await run(page);
@@ -119,6 +119,48 @@ try {
       await page.waitForFunction(() => !window.notificationFixture.current.busy);
       assert.equal(await page.evaluate(() => window.notificationFixture.prefs.nursing), expected);
     }
+  });
+  // Quiet during my protected sleep: only for an adult on a night roster, with their own window's times; a per-phone pref, on unless turned off.
+  const extraShots = process.env.MAPLE_NOTIFY_SHOTS;
+  if (extraShots) await mkdir(extraShots, { recursive: true });
+  await scenario("quiet-window-switch", async page => {
+    // The time range is kept on one line (a no-break space in each clock, a word joiner after the dash).
+    const quiet = page.getByRole("switch", { name: /^Quiet during my protected sleep \(10\sPM–⁠?2\sAM\)$/ });
+    await quiet.waitFor();
+    assert.equal(await quiet.getAttribute("aria-checked"), "true", "Unset is on");
+    await page.getByText("Only a handoff to you comes through; nursing and medicine notices wait.", { exact: true }).waitFor();
+    if (extraShots) {
+      for (const [width, height] of [[390, 844], [320, 568]]) {
+        await page.setViewportSize({ width, height });
+        await page.waitForTimeout(150);
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `No sideways scroll at ${width}px`);
+        await page.screenshot({ path: path.join(extraShots, `notifications-quiet-${width}x${height}.png`) });
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+    }
+    await quiet.click();
+    await page.waitForFunction(() => !window.notificationFixture.current.busy);
+    assert.equal(await page.evaluate(() => window.notificationFixture.prefs.quiet_window), false, "Saved as this phone's pref");
+    assert.equal(await page.evaluate(() => window.notificationFixture.prefs.nursing), true, "The other prefs are kept");
+    assert.equal(await quiet.getAttribute("aria-checked"), "false");
+    // Phone settings that help: the Focus you sleep with, Scheduled Summary and repeated calls.
+    await page.getByRole("button", { name: "Phone settings that help" }).click();
+    for (const text of ["Let Maple through the Focus you sleep with", "Keep Maple out of Scheduled Summary, or a handoff would wait", "Allow repeated calls, so a second call from the same person within 3 minutes rings through"]) {
+      await page.getByText(text, { exact: false }).waitFor();
+    }
+    if (extraShots) {
+      for (const [width, height] of [[390, 844], [320, 568]]) {
+        await page.setViewportSize({ width, height });
+        await page.getByText("Allow repeated calls", { exact: false }).scrollIntoViewIfNeeded();
+        await page.waitForTimeout(150);
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `No sideways scroll at ${width}px`);
+        await page.screenshot({ path: path.join(extraShots, `notifications-phone-settings-${width}x${height}.png`) });
+      }
+    }
+  }, "/?roster");
+  await scenario("quiet-window-hidden-off-roster", async page => {
+    await page.getByRole("switch", { name: "Nursing timer on the lock screen", exact: true }).waitFor();
+    assert.equal(await page.getByRole("switch", { name: /^Quiet during my protected sleep/ }).count(), 0, "Not on a roster: no switch");
   });
 } finally {
   await browser.close();

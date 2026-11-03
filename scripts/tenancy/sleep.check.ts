@@ -657,30 +657,38 @@ async function main() {
 
   // ── the handoff reminder ───────────────────────────────────────────────
 
-  await test("push: a planned handoff reaches the phones that turned handoff reminders on, once, naming no one; beta hears nothing", async () => {
+  await test("push: a planned handoff reaches the holder's and the next holder's phones with handoff reminders on, once, naming no one; nobody else's, and beta hears nothing", async () => {
     await clean(alpha);
     await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"handoff":true}'::jsonb, device_id = 'made-up-phone-a1' WHERE id = $1`, [alpha.pushSubId]);
     await sql(
       `INSERT INTO maple_push_subs (family_id, member, endpoint, p256dh, auth, prefs, device_id, receipt_token) VALUES (1, $1, 'https://push.example.test/alpha-phone-2', 'k', 'a', '{"handoff":true}', 'made-up-phone-a2', $2)`,
       [alpha.owner, "b".repeat(32)]
     );
+    // Casey (view-only) turned handoff reminders on too: a handoff between Blake and Avery isn't Casey's to hear.
+    await sql(
+      `INSERT INTO maple_push_subs (family_id, member, endpoint, p256dh, auth, prefs, device_id, receipt_token) VALUES (1, $1, 'https://push.example.test/alpha-viewer-phone', 'k', 'a', '{"handoff":true}', 'made-up-phone-a3', $2)`,
+      [alpha.viewer, "d".repeat(32)]
+    );
     await sql(`UPDATE maple_push_subs SET prefs = '{"meds":true,"handoff":true}'::jsonb WHERE id = $1`, [beta.pushSubId]);
     const plannedFor = new Date(Date.now() + MIN);
+    // Blake holds her with nobody planned next: the next holder is the only other adult, Avery.
     const s = await startShift(1, { babyId: alpha.babyId, holder: alpha.member, handoffAt: plannedFor, by: alpha.member, source: "web" });
     sent.length = 0;
     const at = new Date(plannedFor.getTime() + 30_000);
     await runPushTick(at, { via: "wake", trusted: true, familyId: 1 });
     const mine = sent.filter((x) => x.kind === "handoff");
-    eq(mine.map((x) => [x.tag, x.title]).sort(), [[`handoff:${s.shift.id}`, "Handoff time"], [`handoff:${s.shift.id}`, "Handoff time"]], "both of alpha's phones");
+    eq(mine.map((x) => [x.tag, x.title]).sort(), [[`handoff:${s.shift.id}`, "Handoff time"], [`handoff:${s.shift.id}`, "Handoff time"]], "both of Avery's phones");
+    ok(!sent.some((x) => x.endpoint.endsWith("alpha-viewer-phone")), "not Casey's");
     ok(mine.every((x) => !/Avery|Blake|Casey|June|Juniper|Dana/.test(`${x.title} ${x.body}`)), JSON.stringify(mine));
     sent.length = 0;
     await runPushTick(new Date(at.getTime() + MIN), { via: "wake", trusted: true, familyId: 1 });
     eq(sent.filter((x) => x.kind === "handoff").length, 0, "once per phone");
     await runPushTick(at, { via: "wake", trusted: true, familyId: 2 });
     eq(sent.filter((x) => x.kind === "handoff").length, 0, "beta has no shift");
+    await sql(`DELETE FROM maple_push_subs WHERE endpoint = 'https://push.example.test/alpha-viewer-phone'`);
   });
 
-  await test("push: an ask (Wake [partner]) tells the family's other phones now, never the phone that asked; once per ask, and asking again sounds again", async () => {
+  await test("push: an ask (Wake [partner]) tells the asked person's phones now, never the phone that asked; once per ask, and asking again sounds again", async () => {
     await clean(alpha);
     const t = (await startShift(1, { babyId: alpha.babyId, holder: alpha.member, by: alpha.member, source: "web" })).shift;
     const scope = (await familyScope(1))!;

@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { planTitle } from "@/lib/maple/care";
 import { isNativeApp } from "@/lib/maple/native";
+import { quietWindowWords } from "@/lib/maple/sleep/roster";
 import { DEFAULT_TZ } from "@/lib/maple/time";
 import { Icon } from "../icons";
 import { Button, Sheet, cx, tone } from "../ui";
@@ -15,13 +16,18 @@ import { healthLines, medicineNote, testView, type PushPrefs } from "./words";
 
 /**
  * "Notifications" for this phone, top to bottom: what's in the way (Home
- * Screen first, off in Settings, Stopped), the switch, her medicines (each
- * kind of notice, names hidden, each medicine, honest rows for the ones that
- * can't notify), Maple's nursing timer on the lock screen, "Check it works"
- * (the server's clock, the last delivery, "Send a test in 1 minute"), and
- * what a phone's own settings decide (Silent, Focus). Inside the iOS or
- * Android app, only that its notifications come later. Rendered by
- * NotificationsProvider; open it with useNotifications().open().
+ * Screen first, off in Settings, Stopped), the switch, and for an adult on
+ * a sleep goal's night roster "Quiet during my protected sleep (10 PM–2 AM)"
+ * (prefs.quiet_window, on unless turned off: Maple's server holds this
+ * phone's nursing and medicine notices in their window, push-quiet.ts), her
+ * medicines (each kind of notice, names hidden, each medicine, honest rows
+ * for the ones that can't notify), Maple's nursing timer on the lock screen
+ * and handoff reminders, "Check it works" (the server's clock, the last
+ * delivery, "Send a test in 1 minute"), and what a phone's own settings
+ * decide (Silent, the Focus you sleep with, Scheduled Summary, repeated
+ * calls). Inside the iOS or Android app, only that its notifications come
+ * later. Rendered by NotificationsProvider; open it with
+ * useNotifications().open().
  */
 
 const TEST_POLL_MS = 5000;
@@ -78,6 +84,8 @@ function Body() {
       : [];
   const showMeds = !!care && facts !== null;
   const meds = prefs.meds !== false;
+  // This person's own protected windows on the night roster ("10 PM–2 AM"), or null off it; a time range stays on one line.
+  const quietWords = quietWindowWords(state?.sleep?.goals ?? [], state?.me.email ?? "")?.replace(/ ([AP]M)/g, " $1").replace(/–/g, "–⁠") ?? null;
   const muted = new Set(prefs.muted ?? []);
   const set = (patch: Partial<PushPrefs>) => void n.setPrefs({ ...prefs, ...patch });
   const mute = (id: number, remind: boolean) => {
@@ -183,6 +191,16 @@ function Body() {
               disabled={busy || status === "denied"}
               onChange={(v) => void (v ? n.turnOn() : n.turnOff())}
             />
+            {/* Only for an adult on an active goal's night roster: Maple's server holds this phone's notices in their own window. */}
+            {on && quietWords && (
+              <SwitchRow
+                label={`Quiet during my protected sleep (${quietWords})`}
+                note="Only a handoff to you comes through; nursing and medicine notices wait."
+                checked={prefs.quiet_window !== false}
+                disabled={busy}
+                onChange={(v) => set({ quiet_window: v })}
+              />
+            )}
           </div>
           <Problem className="px-1">{n.problem}</Problem>
         </section>
@@ -292,7 +310,7 @@ function Body() {
             />
             <SwitchRow
               label="Handoff reminders"
-              note="When someone is holding the baby: at the planned handoff time, and when a handoff is asked for from another phone. They name no one."
+              note={`When you're holding ${w.name} or next to take over: at the planned handoff time, and when you're asked to take over now. They name no one.`}
               checked={prefs.handoff === true}
               disabled={busy}
               onChange={(v) => set({ handoff: v })}
@@ -366,8 +384,16 @@ function Body() {
                   <Strong>Settings › Notifications › Maple</Strong>: Allow Notifications, with Lock Screen, Notification Center, Banners and Sounds.
                 </li>
                 <li>
-                  <Strong>Settings › Focus › Sleep › Apps › Add › Maple</Strong>, and the same for any Focus you use at night. Maple shows up there once it has
-                  been opened from its Home Screen icon.
+                  Let Maple through the Focus you sleep with: <Strong>Settings › Focus › Sleep › Apps › Allow Notifications From › Add › Maple</Strong>, and the
+                  same for any Focus you use at night. Maple shows up there once it has been opened from its Home Screen icon.
+                </li>
+                <li>
+                  Keep Maple out of Scheduled Summary, or a handoff would wait: <Strong>Settings › Notifications › Maple › Notification Delivery › Immediate
+                  Delivery</Strong>.
+                </li>
+                <li>
+                  Allow repeated calls, so a second call from the same person within 3 minutes rings through: <Strong>Settings › Focus › Sleep › People</Strong>,
+                  then turn on Allow Repeated Calls.
                 </li>
                 <li>
                   With an Apple Watch: <Strong>Watch app › Notifications › Mirror iPhone Alerts From › Maple</Strong>. A tap on the wrist won&apos;t wake the

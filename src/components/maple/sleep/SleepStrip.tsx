@@ -15,6 +15,12 @@ import { partnerOf, usePeople, useSleepMaybe } from "./useSleep";
 
 type Action = { label: string; onClick: () => void; strong?: boolean };
 
+/** " · 25m" after "since 2:10 AM": how long so far, and nothing under a minute (never "· 0s"). */
+const forSoFar = (since: string, now: Date, say: (sec: number) => string) => {
+  const sec = (now.getTime() - Date.parse(since)) / 1000;
+  return sec < 60 ? "" : ` · ${say(sec)}`;
+};
+
 /** The try day's morning (5 AM to noon, the family's zone): the Last night card's hours on the strip. */
 const isMorning = (now: Date, tz: string) => {
   const h = localParts(now, tz).hour;
@@ -96,7 +102,7 @@ export function SleepStrip() {
   const morning = !s.running && !sh && !signals.has("after_crying") && !signals.has("retry_done") && ln && isMorning(now, tz) ? morningAsk(ln, tz, v.name) : null;
   if (s.running) {
     words = woke ? `${v.They} woke at ${formatTime(sleep!.ended_at!, tz)}` : "In the bassinet";
-    sub = woke ? "the try is still open" : `since ${formatTime(s.running.started_at, tz)} · ${formatDuration(Math.max(0, (now.getTime() - Date.parse(s.running.started_at)) / 1000))}`;
+    sub = woke ? "the try is still open" : `since ${formatTime(s.running.started_at, tz)}${forSoFar(s.running.started_at, now, formatDuration)}`;
     // The strong button while she's down: its sheet's outcomes sit low, in thumb reach (the card's are at the top of the screen).
     action = { label: "How did it go?", onClick: () => s.openSheet({ kind: "outcome", tryId: s.running!.id }), strong: true };
   } else if (sh) {
@@ -127,7 +133,7 @@ export function SleepStrip() {
       } else if (asleep) {
         // Asleep in their arms: the safe choice in thumb reach is the bassinet (I'm getting sleepy is on the turn's card).
         words = `Asleep in your arms`;
-        sub = `since ${formatTime(asleep.started_at, tz)} · ${downWords((now.getTime() - Date.parse(asleep.started_at)) / 60_000)}`;
+        sub = `since ${formatTime(asleep.started_at, tz)}${forSoFar(asleep.started_at, now, (sec) => downWords(sec / 60))}`;
         action = { label: `Put ${v.them} down`, onClick: () => void s.startTry(), strong: true };
         urgent = due;
       } else {

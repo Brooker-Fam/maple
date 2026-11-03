@@ -29,6 +29,7 @@ import { ozToMl } from "@/lib/maple/units";
 import type { Baby, Entry, FeedData, Member } from "@/lib/maple/types";
 import { runningTry } from "@/lib/maple/sleep/store";
 import { captureServerException } from "@/lib/posthog-server";
+import { recap } from "./recap";
 import { asleepInArms, badMinutes, checkin, clock, entryByClient, handoff, minutesAgo, outcome, putDown, sleepStatusLine, sleptWords, stopFeedForSleep, undo, type QuickCtx } from "./sleep";
 
 export const dynamic = "force-dynamic";
@@ -63,12 +64,18 @@ export const dynamic = "force-dynamic";
  * stayed_asleep | woke_calm | woke_crying | picked_up } finishes the running
  * one, asleep_in_arms starts a sleep in arms, handoff from the person
  * holding her only asks the partner to take over (anyone else saying it has
- * her now), checkin { answer: yes | partly | no } is the speaker's own
+ * her now, with the catch-up; with nobody on a turn, the speaker's own
+ * starts with the ask on it), checkin { answer: yes | partly | no } is the speaker's own
  * check-in for last night, and undo takes back their newest Siri action
  * with the app's own Undo. sleep and wake take minutes_ago too (up to 4
- * hours). "Maple status" adds one sleep line while a try or a turn runs, or
- * while the speaker's check-in is due. Retries carry client_id; a second
- * tap on a try, an outcome or a handoff answers with what's there.
+ * hours). "Maple status" adds one sleep line while a try or a turn runs
+ * (telling the person asked to take over that it's them), or while the
+ * speaker's check-in is due. Retries carry client_id; a second tap on a
+ * try, an outcome or a handoff answers with what's there.
+ *
+ * recap ("Maple, what did I miss?", ./recap.ts) is a read, for viewers too:
+ * what was logged since the speaker's protected window began (in it, or
+ * just out of it), else since their last visit, never moving that visit.
  */
 
 const ACTIONS = [
@@ -93,6 +100,7 @@ const ACTIONS = [
   "handoff",
   "checkin",
   "undo",
+  "recap",
 ] as const;
 type Action = (typeof ACTIONS)[number];
 
@@ -114,8 +122,8 @@ export async function POST(request: NextRequest) {
       return json({ error: `action must be one of ${ACTIONS.join(", ")}`, speak: "I didn't catch what to log." }, 400);
     }
     const mom = action === "mom_status" || action === "mom_dose";
-    // Her status is a read: a viewer an owner let see her page hears it (momAction checks it again).
-    if (me.role === "viewer" && action !== "status" && !(action === "mom_status" && careLevelOf(me) !== "none")) {
+    // Status and the recap are reads; her status too, for a viewer an owner let see her page (momAction checks it again).
+    if (me.role === "viewer" && action !== "status" && action !== "recap" && !(action === "mom_status" && careLevelOf(me) !== "none")) {
       return json({ error: "View-only", speak: "You have view-only access to Maple's log.", ...(mom ? { help_now: MOM_HELP.now } : {}) }, 403);
     }
     if (mom) return momAction(action, me, fam, body);
@@ -141,6 +149,8 @@ export async function POST(request: NextRequest) {
         return await handoff(qc, await listMembers(fam));
       case "undo":
         return await undo(qc, await listMembers(fam));
+      case "recap":
+        return await recap(qc, await listMembers(fam));
     }
     const running = await activeTimers(fam, baby.id);
     const runningFeed = running.find((e) => e.kind === "feed");
@@ -302,7 +312,8 @@ export async function POST(request: NextRequest) {
         // The sleep plan's one line: a try running, else who's holding her, else this adult's check-in when it's due.
         const sleep = await sleepStatusLine({ fam, baby, me, members, vo, name, now });
         if (sleep.line) bits.push(sleep.line);
-        bits.push(`${s.last24h.wet} wet and ${s.last24h.dirty} dirty diapers in the last 24 hours.`);
+        // Only what was logged: none is "no diapers logged", never "0 wet and 0 dirty".
+        bits.push(s.last24h.diapers ? `${s.last24h.wet} wet and ${s.last24h.dirty} dirty diapers in the last 24 hours.` : "No diapers logged in the last 24 hours.");
         // The try's line already says she's asleep.
         const others = s.active.filter((e) => e.kind !== "feed" && e.id !== sleep.trySleepId);
         if (others.length) bits.push(`A ${others.map((e) => (e.kind === "tummy" ? "tummy time" : e.kind)).join(" and ")} timer is running.`);

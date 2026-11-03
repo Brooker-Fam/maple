@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import type { Voice } from "@/lib/maple/voice";
+import { useVoice } from "../familyWords";
 import { cx, tone } from "../ui";
 import { Code, Disclosure } from "./parts";
 
@@ -9,18 +11,24 @@ import { Code, Disclosure } from "./parts";
  * POST /api/maple/quick, and three ways to run one without opening the app
  * (Back Tap, the Action Button, an NFC sticker on the bassinet). Shortcuts
  * are built by duplicating Maple status and changing its action, so the
- * key stays the one already pasted there.
+ * key stays the one already pasted there. The words use the family's own
+ * pronouns for the baby.
  */
 
 /** What to say, the action, the second Text field (key: value) where there is one, and what it does when that isn't plain. */
-const PHRASES: { say: string; action: string; field?: string; or?: string; does?: string }[] = [
+const phrases = (v: Voice): { say: string; action: string; field?: string; or?: string; does?: string }[] => [
   { say: "Maple put down", action: "put_down", does: "Right after a retry that ended awake, it says the plan pauses until the next try; say it again to try anyway." },
   { say: "Maple stayed asleep", action: "outcome", field: "outcome: stayed_asleep" },
   { say: "Maple woke calm", action: "outcome", field: "outcome: woke_calm" },
   { say: "Maple woke crying", action: "outcome", field: "outcome: woke_crying" },
   { say: "Maple picked up", action: "outcome", field: "outcome: picked_up" },
   { say: "Maple asleep in arms", action: "asleep_in_arms" },
-  { say: "Maple handoff", action: "handoff", does: "Holding her: asks the other adult to take over, and their phone only sounds if handoff reminders are on, so go wake them. Anyone else: you have her now." },
+  {
+    say: "Maple handoff",
+    action: "handoff",
+    does: `Holding ${v.them}, or with nobody on a turn: asks the other adult to take over, and their phone only sounds if handoff reminders are on, so go wake them. Anyone else: you have ${v.them} now, with a catch-up.`,
+  },
+  { say: "Maple, what did I miss?", action: "recap", does: "What was logged since your protected sleep began (or since you last opened the app), what's going on now, and the next side. It changes nothing." },
   { say: "Maple check in", action: "checkin", field: "answer: yes", or: "or partly, no" },
   { say: "Maple undo", action: "undo" },
 ];
@@ -33,13 +41,14 @@ const WAYS: { label: string; how: string }[] = [
 
 export default function SiriSleepGuide() {
   const [open, setOpen] = useState(false);
+  const v = useVoice();
   return (
-    <Disclosure label="Sleep plan shortcuts" summary="Back Tap, Action Button, NFC" open={open} onToggle={() => setOpen((v) => !v)}>
+    <Disclosure label="Sleep plan shortcuts" summary="Back Tap, Action Button, NFC" open={open} onToggle={() => setOpen((x) => !x)}>
       <p className={cx(tone.body, "text-sm leading-relaxed")}>
         Make one shortcut per phrase: in Shortcuts, duplicate Maple status, rename it to what you&apos;ll say, and change <Code>action</Code>. Outcomes and check-ins add a second Text field.
       </p>
       <ul className={cx(tone.divide, "mt-2")} aria-label="Sleep plan phrases">
-        {PHRASES.map((p) => (
+        {phrases(v).map((p) => (
           <li key={p.say} className="py-2 text-sm">
             <span className={cx(tone.body, "block")}>{p.say}</span>
             {p.does && <span className={cx(tone.muted, "mt-0.5 block text-[13px] leading-snug")}>{p.does}</span>}

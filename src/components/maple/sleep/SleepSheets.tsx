@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { sleepyLine, transferSteps } from "@/lib/maple/guidelines/sleep";
-import { nextSideText } from "@/lib/maple/feed";
 import { askState, nextHandoff } from "@/lib/maple/sleep/engine";
-import { handoffAroundRoster, handoffWhyWords, windowAt, windowRange, type HandoffWhy } from "@/lib/maple/sleep/handoff";
+import { catchUpLines } from "@/lib/maple/sleep/catchup";
+import { feedCover } from "@/lib/maple/sleep/roster";
+import { handoffAroundRoster, windowAt, windowRange, type HandoffWhy } from "@/lib/maple/sleep/handoff";
 import { TRY_NOTE_MAX, TRY_OUTCOMES, TRY_TAGS, type BassinetTry, type HoldingShift, type TryOutcome, type TryTag } from "@/lib/maple/sleep/types";
-import { downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
-import { DEFAULT_TZ, formatDuration, formatRelative, formatTime, formatTimeNear } from "@/lib/maple/time";
+import { OUTCOME_LABEL, SLEEP_PLACE_LABEL, sleepyChoices, TAG_LABEL } from "@/lib/maple/sleep/words";
+import { DEFAULT_TZ, formatDuration, formatTime, formatTimeNear } from "@/lib/maple/time";
 import type { Entry, SleepPlace } from "@/lib/maple/types";
 import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
@@ -220,6 +221,8 @@ export function SleepySheet({ open = true, onClose }: { open?: boolean; onClose:
           <p role="status" className={cx(tone.body, "text-[15px] leading-relaxed")}>
             {asked}&apos;s phone only sounds if handoff reminders are on. Go wake {asked}.
           </p>
+          {/* A second call within 3 minutes rings through a Focus that allows repeated calls (Notifications › Phone settings that help). */}
+          <p className={cx(tone.muted, "-mt-1 text-[13px] leading-snug")}>In another room? Call {asked} twice.</p>
           {big("bassinet", choices[0].label, choices[0].hint, () => void bassinet())}
           <Button variant="soft" size="lg" className="w-full" disabled={s.busy} onClick={() => void hasHer()}>
             {asked} has {v.them}
@@ -397,7 +400,7 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
           </p>
         )}
         <ContextNote>
-          Every phone shows who&apos;s holding {v.them}, and phones with handoff reminders on (Notifications) hear at the planned time, though a notice can be late. If you start to feel sleepy before then, lay {v.them} in the bassinet or wake someone.
+          Every phone shows who&apos;s holding {v.them}. At the planned time, the holder&apos;s and the next person&apos;s phones hear it if their handoff reminders are on (Notifications), though a notice can be late. If you start to feel sleepy before then, lay {v.them} in the bassinet or wake someone.
         </ContextNote>
       </div>
     </Sheet>
@@ -417,7 +420,9 @@ export function CatchUpSheet({ started, ended, why = null, open = true, onClose 
   const v = useVoice();
   const now = useNow(30_000);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const lines = catchUpLines({ summary, entries: state?.entries ?? [], now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why });
+  // How her feeds are covered in the protected window of the one going off duty (the roster's covers).
+  const cover = ended ? feedCover(s.goals, ended.holder, now.getTime(), started.handoff_at ? Date.parse(started.handoff_at) : now.getTime() + 12 * HOUR, tz) : null;
+  const lines = catchUpLines({ summary, now, tz, v, me: state?.me.email ?? "", memberName, next: started.handoff_at, nextHolder: started.next_holder, why, cover, careMember: state?.care?.person.member ?? null });
   const undo = async () => {
     if (ended && (await s.undoTakeOver(started, ended))) onClose();
   };
@@ -454,53 +459,6 @@ export function CatchUpSheet({ started, ended, why = null, open = true, onClose 
       </div>
     </Sheet>
   );
-}
-
-type CatchUpLine = { label: string; text: string };
-
-/** The catch-up's lines, from the log as this phone has it (summary: feed.ts and insights.ts, as Today's Right now). */
-export function catchUpLines(input: {
-  summary: ReturnType<typeof useMaple>["summary"];
-  entries: readonly Entry[];
-  now: Date;
-  tz: string;
-  v: ReturnType<typeof useVoice>;
-  me: string;
-  memberName: (email: string | null | undefined) => string;
-  next: string | null;
-  nextHolder: string | null;
-  /** The next handoff moved off the next holder's protected window (sleep/handoff.ts). */
-  why?: HandoffWhy | null;
-}): CatchUpLine[] {
-  const { summary, now, tz, v } = input;
-  const out: CatchUpLine[] = [];
-  const nursing = summary?.active.find((e) => e.kind === "feed") ?? null;
-  const fed = summary?.lastFed ?? null;
-  const side = summary?.next ? `next side ${nextSideText(summary.next)}` : null;
-  if (nursing) out.push({ label: "Feed", text: `Nursing now, since ${formatTime(nursing.started_at, tz)}` });
-  else if (fed) out.push({ label: "Feed", text: `Last fed ${formatTime(fed.at, tz)} (${formatRelative(fed.at, now)})${side ? ` · ${side}` : ""}` });
-  else out.push({ label: "Feed", text: "No feed logged lately" });
-  const diaper = summary?.lastDiaper ?? null;
-  if (diaper) {
-    const d = diaper.data;
-    const what = d.pee && d.poop ? "wet and dirty" : d.poop ? "dirty" : "wet";
-    out.push({ label: "Diaper", text: `Last changed ${formatTime(diaper.started_at, tz)} (${formatRelative(diaper.started_at, now)}) · ${what}` });
-  } else out.push({ label: "Diaper", text: "No diaper logged lately" });
-  const running = (summary?.active ?? []).filter((e) => e.kind !== "feed");
-  const sleep = running.find((e) => e.kind === "sleep");
-  const place = sleep ? (sleep.data as { place?: SleepPlace }).place : undefined;
-  const others = running.filter((e) => e.kind !== "sleep").map((e) => (e.kind === "tummy" ? "tummy time" : e.kind === "pump" ? "pumping" : e.kind));
-  const parts = [
-    ...(sleep ? [`asleep since ${formatTime(sleep.started_at, tz)}${place ? ` (${SLEEP_PLACE_LABEL[place].toLowerCase()})` : ""}, ${downWords((now.getTime() - Date.parse(sleep.started_at)) / MIN)}`] : []),
-    ...others,
-  ];
-  out.push({ label: "Running", text: parts.length ? parts.join(" · ").replace(/^./, (c) => c.toUpperCase()) : nursing ? "The nursing timer" : `Nothing else; ${v.they}${v.verb("'s")} awake by the log` });
-  const why = input.why ? handoffWhyWords(input.why, input.why.member === input.me ? "your" : input.memberName(input.why.member), tz) : null;
-  if (input.next) {
-    const who = input.nextHolder ? (input.nextHolder === input.me ? "you" : input.memberName(input.nextHolder)) : null;
-    out.push({ label: "Handoff", text: `Next planned for ${formatTime(input.next, tz)}${who ? `, to ${who}` : ""}${why ? `, ${why}` : ""}` });
-  } else if (why) out.push({ label: "Handoff", text: `${why.charAt(0).toUpperCase()}${why.slice(1)}` });
-  return out;
 }
 
 // ── Edit a try ───────────────────────────────────────────────────────────
