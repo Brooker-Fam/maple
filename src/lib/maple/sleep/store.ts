@@ -627,21 +627,28 @@ export async function finishTry(
     throw new SleepConflict("Someone changed this try just now.", "changed", cur);
   }
   const t = rowToTry(rows[0]);
-  let sleep = sleepBefore;
-  if (sleepBefore && sleepBefore.kind === "sleep" && sleepBefore.active) {
-    try {
-      if (endsSleep(outcome)) sleep = await stopTimer(fam, sleepBefore.id, end, input.by);
-      else if (before.made_sleep && (sleepBefore as EntryOf<"sleep">).data.place === "bassinet") {
-        // Picked up still asleep: the rest of this sleep is in arms (the try's own window stays the bassinet's).
-        sleep = await updateEntry(fam, sleepBefore.id, { data: { place: "arms" } }, input.by, { expectUpdatedAt: sleepBefore.updated_at });
-      }
-    } catch (err) {
-      // The sleep changed meanwhile (the other phone's Woke up): the try is finished either way, and the sleep stays as they left it.
-      sleep = (await getEntry(fam, sleepBefore.id)) ?? null;
-      if (!(err instanceof Error)) throw err;
-    }
-  }
+  const sleep = await endTrySleep(fam, before, sleepBefore, outcome, end, input.by);
   return { try: t, before, sleep, sleepBefore, status: "finished" };
+}
+
+/**
+ * The sleep's half of ending a running try (finishTry, and updateTry when a
+ * fix ends one): a wake ends the running sleep it sits on at the try's end;
+ * picked up while still asleep, the sleep runs on, and a bassinet sleep the
+ * try made carries on as in arms. A sleep no longer running is left as it is.
+ */
+async function endTrySleep(fam: FamilyRef, before: BassinetTry, sleepBefore: Entry | null, outcome: TryOutcome, end: Date, by: string): Promise<Entry | null> {
+  if (!sleepBefore || sleepBefore.kind !== "sleep" || !sleepBefore.active) return sleepBefore;
+  try {
+    if (endsSleep(outcome)) return await stopTimer(fam, sleepBefore.id, end, by);
+    // Picked up still asleep: the rest of this sleep is in arms (the try's own window stays the bassinet's).
+    if (before.made_sleep && (sleepBefore as EntryOf<"sleep">).data.place === "bassinet") return await updateEntry(fam, sleepBefore.id, { data: { place: "arms" } }, by, { expectUpdatedAt: sleepBefore.updated_at });
+    return sleepBefore;
+  } catch (err) {
+    // The sleep changed meanwhile (the other phone's Woke up): the try is finished either way, and the sleep stays as they left it.
+    if (!(err instanceof Error)) throw err;
+    return (await getEntry(fam, sleepBefore.id)) ?? null;
+  }
 }
 
 /**
@@ -698,7 +705,11 @@ export type TryPatch = { started_at?: Date; ended_at?: Date; outcome?: TryOutcom
  * Correct a try (Edit time, a later fix): only the try this phone saw. The
  * linked sleep's start or end moves with it where it matched the try's
  * (followSleep), with the sleep's own check; when the sleep changed
- * meanwhile, the try still saves and `sleep` says where the sleep is.
+ * meanwhile, the try still saves and `sleep` says where the sleep is. A fix
+ * that ends a running try is a finish (finishTry): her running sleep ends
+ * with it on a wake (or carries on in arms, picked up still asleep), and its
+ * Undo puts back what was there. `sleepMoved`: the sleep's start or end
+ * followed the try (moved, or stopped with it).
  */
 export async function updateTry(fam: FamilyRef, id: number, patch: TryPatch, opts: { by: string; expectUpdatedAt?: string }): Promise<TryWrite & { sleepMoved: boolean }> {
   const now = new Date();
@@ -711,8 +722,9 @@ export async function updateTry(fam: FamilyRef, id: number, patch: TryPatch, opt
   const end = patch.ended_at ? pastTime(patch.ended_at, now, "When the try ended") : before.ended_at ? new Date(before.ended_at) : null;
   if (end && end.getTime() < start.getTime()) throw new SleepInputError("The end is before the start.");
   span(start, end);
+  const ending = !before.ended_at && end !== null;
   const params: unknown[] = [id, famId(fam), opts.by, before.updated_at, start.toISOString(), end ? end.toISOString() : null];
-  const sets = ["started_at = $5", "ended_at = $6", "updated_by = $3", "updated_at = NOW()"];
+  const sets = ["started_at = $5", "ended_at = $6", "updated_by = $3", "updated_at = NOW()", ...(ending ? [FINISH_BEFORE] : [])];
   if (patch.outcome !== undefined) {
     params.push(asOutcome(patch.outcome));
     sets.push(`outcome = $${params.length}`);
@@ -755,6 +767,11 @@ export async function updateTry(fam: FamilyRef, id: number, patch: TryPatch, opt
         sleep = (await getEntry(fam, sleepBefore.id)) ?? null;
       }
     }
+  }
+  if (ending && end && t.outcome) {
+    const ended = await endTrySleep(fam, before, sleep, t.outcome, end, opts.by);
+    if (sleep?.active && ended && !ended.active) sleepMoved = true;
+    sleep = ended;
   }
   return { try: t, before, sleep, sleepBefore, status: "updated", sleepMoved };
 }

@@ -374,6 +374,32 @@ async function main() {
     ok(sleepState(await route(alpha.member, 1)).tries.every((t) => !("finish_before" in t)), "not in the state");
   });
 
+  await test("a fix that ends a running try (try.update with an end and how it went, the tool's fix) ends her sleep as a finish does; picked up still asleep, the sleep it made runs on in arms; its Undo runs both again", async () => {
+    await clean(alpha);
+    const w = await startTry(1, { babyId: alpha.babyId, at: new Date(Date.now() - 10 * MIN), putDownBy: alpha.member, tags: [], note: null, by: alpha.member, source: "web", clientId: "alpha-try-fix-end-1" });
+    eq([w.link, w.try.made_sleep], ["create", true], "a running bassinet sleep");
+    const end = new Date(Date.now() - MIN).toISOString();
+    const r = await route(alpha.member, 1, { action: "try.update", id: w.try.id, ended_at: end, outcome: "stayed_asleep", expect_updated_at: w.try.updated_at });
+    eq(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+    const s = (await getEntry(1, w.try.sleep_entry_id!))!;
+    eq([s.active, Math.abs(Date.parse(s.ended_at!) - Date.parse(end)) <= 1500], [false, true], "her sleep stopped when the try ended");
+    eq((r.json.entries as Entry[]).map((e) => [e.id, e.active]), [[s.id, false]], "the answer carries the sleep it stopped");
+    // The finish's Undo there (the tool's reopen): both run again.
+    const re = await call("bassinet_try", { action: "reopen", id: `t${w.try.id}` }, alpha);
+    ok(!re.isError, re.text);
+    eq([(await getTry(1, w.try.id))?.ended_at, (await getEntry(1, s.id))?.active], [null, true], "both running again");
+    // The tool's fix, picked up still asleep: the try ends, and the sleep it made runs on, in arms.
+    const fix = await call("bassinet_try", { action: "fix", id: `t${w.try.id}`, outcome: "picked_up", ended_minutes_ago: 0 }, alpha);
+    ok(!fix.isError, fix.text);
+    const arms = (await getEntry(1, s.id))!;
+    eq([(await getTry(1, w.try.id))?.outcome, arms.active, (arms.data as { place?: string }).place], ["picked_up", true, "arms"], "picked up still asleep");
+    // A wake through the tool's fix stops it then.
+    await sql(`UPDATE maple_sleep_tries SET ended_at = NULL, outcome = NULL WHERE id = $1`, [w.try.id]);
+    const woke = await call("bassinet_try", { action: "fix", id: `t${w.try.id}`, outcome: "woke_calm", ended_minutes_ago: 0 }, alpha);
+    ok(!woke.isError, woke.text);
+    eq((await getEntry(1, s.id))?.active, false, "a wake ends it");
+  });
+
   await test("finish: How did it go? with no time ends when her sleep stopped after the try began (Woke up on another phone); a sleep that had already ended when an older release laid the try on it is never the end", async () => {
     await clean(alpha);
     const w = await startTry(1, { babyId: alpha.babyId, at: new Date(Date.now() - 20 * MIN), putDownBy: alpha.member, tags: [], note: null, by: alpha.member, source: "web" });
