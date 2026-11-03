@@ -481,8 +481,15 @@ const LIST_CUE = /\b(?:no(?:\s+more)?|without|nor|instead\s+of|rather\s+than|oth
 /** "…, never for sleep", "not before naps": words saying a thing isn't for sleep, which never make it about sleep. */
 const NOT_FOR_SLEEP = /\b(?:never|not|no)\s+(?:(?:for|during|at|in|before|while)\s+)?(?:(?:her|his|their|the|any|a)\s+)?(?:sle{1,2}p{1,2}\w*|asleep|naps?|napping|nap\s*time|bedtime|the\s+night|nights?|overnight|bed)\b/gi;
 const unsaid = (s: string) => s.replace(NOT_FOR_SLEEP, " ");
-/** What the refusal names ("melatonin", "Tylenol"), as the family wrote it; alcohol as "alcohol". */
-const medName = (m: RegExpMatchArray) => (/whisk|brandy|\brum\b|bourbon|vodka|liquor|alcohol|wine|beer/i.test(m[0]) ? "alcohol" : m[0].replace(/\s+/g, " ").trim());
+/** Brand names as they're written; every other name in lowercase ("melatonin", "gripe water"). */
+const MED_BRANDS = new Map(
+  ["Benadryl", "Tylenol", "Motrin", "Advil", "Zyrtec", "Claritin", "Calpol", "Panadol", "Nurofen", "Tempra", "Mylicon", "Infacol", "Colief", "Unisom", "Phenergan", "Dramamine", "Atarax", "Piriton", "Vallergan", "NyQuil", "Dimetapp", "Robitussin", "Orajel", "Anbesol", "Hyland's"].map((b) => [b.toLowerCase(), b])
+);
+/** What the refusal names ("melatonin", "Tylenol"); alcohol as "alcohol". */
+const medName = (m: RegExpMatchArray) => {
+  const name = m[0].replace(/\s+/g, " ").trim().toLowerCase();
+  return /whisk|brandy|\brum\b|bourbon|vodka|liquor|alcohol|wine|beer/.test(name) ? "alcohol" : (MED_BRANDS.get(name) ?? name);
+};
 
 /**
  * The phrase that made a text unsafe, its kind, and what it names (for the refusal: "a couch", "a car seat"); `awake`
