@@ -15,11 +15,11 @@ import { POST as SLEEP_POST } from "../../src/app/api/maple/sleep/route";
 import { checkinDue } from "../../src/components/maple/sleep/SleepCheckin";
 import { sealSession, SESSION_COOKIE } from "../../src/lib/maple/auth";
 import { setLaterRunner } from "../../src/lib/maple/push-hooks";
-import { catchUpLines, catchUpSpoken, moveWords } from "../../src/lib/maple/sleep/catchup";
+import { catchUpLines, catchUpSpoken, moveWords, recapWords } from "../../src/lib/maple/sleep/catchup";
 import { numberTries, tryDayKey, tryDayLabel } from "../../src/lib/maple/sleep/engine";
 import { lastNightKey } from "../../src/lib/maple/sleep/goals";
 import { getShift, getTry, listTries, openShift, runningTry, startShift } from "../../src/lib/maple/sleep/store";
-import type { BassinetTry, RosterWindow, SleepCheckin, SleepGoal } from "../../src/lib/maple/sleep/types";
+import type { BassinetTry, HoldingShift, RosterWindow, SleepCheckin, SleepGoal } from "../../src/lib/maple/sleep/types";
 import { downWords } from "../../src/lib/maple/sleep/words";
 import { activeTimers, getEntry, startTimer, stopTimer, updateEntry } from "../../src/lib/maple/store";
 import { addDays, dayKey, formatTime, localParts, zonedTimeToUtc } from "../../src/lib/maple/time";
@@ -1080,10 +1080,10 @@ async function main() {
     const sleep = (place: string | null, active: boolean): Entry =>
       ({ id: 1, kind: "sleep", started_at: at, ended_at: active ? null : now.toISOString(), active, data: place ? { place } : {}, note: null, created_by: null, updated_by: null, source: "web", created_at: at, updated_at: at }) as Entry;
     const voices = [
-      { v: makeVoice({ name: "Wren", pronoun: "she" }), they: "she", them: "her", their: "her", falls: "falls" },
-      { v: makeVoice({ name: "Ro", pronoun: "he" }), they: "he", them: "him", their: "his", falls: "falls" },
-      { v: makeVoice({ name: "Sky", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall" },
-      { v: makeVoice({ name: "the baby", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall" },
+      { v: makeVoice({ name: "Wren", pronoun: "she" }), they: "she", them: "her", their: "her", falls: "falls", is: "She's", been: "she's been" },
+      { v: makeVoice({ name: "Ro", pronoun: "he" }), they: "he", them: "him", their: "his", falls: "falls", is: "He's", been: "he's been" },
+      { v: makeVoice({ name: "Sky", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall", is: "They're", been: "they've been" },
+      { v: makeVoice({ name: "the baby", pronoun: "they" }), they: "they", them: "them", their: "their", falls: "fall", is: "They're", been: "they've been" },
     ];
     const Cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
     for (const x of voices) {
@@ -1115,6 +1115,28 @@ async function main() {
       eq(sheet("car"), `Asleep since 1:45 AM (car seat), ${downWords(25)}. ${toBassinet}`, `${who}: the sheet, car seat`);
       eq(sheet("bed"), `Asleep since 1:45 AM (grown-up bed), ${downWords(25)}. ${toOwn}`, `${who}: the sheet, bed`);
       eq(sheet("arms"), `Asleep since 1:45 AM (in arms), ${downWords(25)}`, `${who}: the sheet, in arms: nothing more`);
+      // And in "what did I miss?" (recapWords): the same next step after what's going on now, with the holding turn too; nothing
+      // more from her own sleep space or in arms, or while a try is running.
+      const recap = (place: string, more: { shift?: boolean; tryNow?: boolean } = {}) =>
+        recapWords({
+          since: Date.parse("2026-11-03T07:00:00.000Z"),
+          head: "Since 1 AM",
+          entries: [sleep(place, true)],
+          tries: more.tryNow ? [{ id: 1, started_at: at, ended_at: null, outcome: null, sleep_entry_id: 1 } as BassinetTry] : [],
+          shift: more.shift ? ({ id: 1, holder: "made-up@example.com", started_at: "2026-11-03T07:30:00.000Z", ended_at: null } as HoldingShift) : null,
+          now,
+          tz,
+          vo: x.v,
+          me: "made-up@example.com",
+          name: () => "Sam",
+        });
+      for (const [place, words] of [["car", "in the car seat"], ["stroller", "in the stroller"], ["carrier", "in the carrier"]]) {
+        eq(recap(place), `Since 1 AM, nothing was logged. ${x.is} asleep now, since 1:45 AM, ${words}. ${toBassinet}`, `${who}: recap, ${place}`);
+      }
+      eq(recap("bed"), `Since 1 AM, nothing was logged. ${x.is} asleep now, since 1:45 AM, in a grown-up bed. ${toOwn}`, `${who}: recap, bed`);
+      eq(recap("car", { shift: true }), `Since 1 AM, nothing was logged. You've been holding ${x.them} since 1:30 AM; ${x.been} asleep since 1:45 AM. ${toBassinet}`, `${who}: recap, holding turn, car seat`);
+      for (const place of ["bassinet", "crib", "arms"]) ok(!/Move /.test(recap(place)), `${who}: recap, ${place}: nothing more (${recap(place)})`);
+      eq(recap("car", { tryNow: true }), `Since 1 AM, nothing was logged. ${x.is} in the bassinet now, since 1:45 AM.`, `${who}: recap, a try running: nothing more`);
     }
   });
 

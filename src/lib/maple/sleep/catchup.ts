@@ -259,7 +259,9 @@ function diapersSaid(diapers: readonly EntryOf<"diaper">[]): string | null {
  * last at 1:10 AM on the left; 1 wet diaper; a bassinet try that stayed
  * asleep 1 hour 50 minutes."), what's going on now (a try, a feed, a
  * holding turn, a sleep or another timer), and the next side when no feed
- * is running. Feeds are counted as Today counts them (feed.ts nursingRuns:
+ * is running. A sleep still running in a car seat, stroller, carrier or
+ * grown-up bed adds moveWords after what's going on now, the one sentence
+ * past three. Feeds are counted as Today counts them (feed.ts nursingRuns:
  * a stop and a start under 10 minutes apart are one feed), a bottle each;
  * a feed still running is said as going on now, not counted. `entries`:
  * the log from a little before `since` (so a feed that began then reads as
@@ -324,6 +326,9 @@ export function recapWords(o: {
     const other = running.find((e) => e.kind === "tummy" || e.kind === "pump");
     if (other) out.push(`${other.kind === "tummy" ? "Tummy time" : "Pumping"} is running, since ${t(other.started_at)}.`);
   }
+  // Asleep in a car seat, stroller, carrier or grown-up bed (said with the turn or on its own): the take-over catch-up's next step.
+  const move = !tryNow && !feed && sleep ? moveWords(placeOf(sleep), vo) : null;
+  if (move) out.push(move);
   // The next side, as Today has it, when no feed is running.
   const next = feed ? null : nextSideFor(runs, now);
   if (next) out.push(`Start on the ${SIDE_SAID[next.side]} next${next.fuller ? ", or whichever side feels fuller" : ""}.`);

@@ -15,12 +15,15 @@ import type { QuickCtx } from "./sleep";
  * was logged while the speaker was away, in at most three sentences
  * (sleep/catchup.ts recapWords): "Since 10 PM: 2 feeds, the last at 1:10 AM
  * on the left; 1 wet diaper; a bassinet try that stayed asleep 1 hour 50
- * minutes." It counts from the start of the speaker's protected window on
- * the night roster when they're in it or just came out of it (this try day,
- * so last night's until noon: sleep/roster.ts recapSpan), else from their
- * last visit to the app (maple_members.last_seen_at, only read: a recap never
- * moves it, so the app's While you slept still counts from that visit), at
- * most 24 hours back (the last 8 hours with no visit on record).
+ * minutes." A sleep still running in a car seat, stroller, carrier or
+ * grown-up bed adds one more, the take-over catch-up's "Move her to …, on
+ * her back, as soon as you can." It counts from the start of the speaker's
+ * protected window on the night roster when they're in it or just came out
+ * of it (this try day, so last night's until noon: sleep/roster.ts
+ * recapSpan), else from their last visit to the app
+ * (maple_members.last_seen_at, only read: a recap never moves it, so the
+ * app's While you slept still counts from that visit), at most 24 hours back
+ * (the last 8 hours with no visit on record).
  *
  * Read only, for anyone who can read the log (viewers too; the route turns
  * photos-only guests away): Maple's log, the bassinet tries and the holding
