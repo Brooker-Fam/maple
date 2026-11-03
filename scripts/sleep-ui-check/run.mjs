@@ -1284,6 +1284,7 @@ try {
   await lastNight.getByRole("group", { name: "Did you get your 10 PM–2 AM sleep?" }).getByRole("button", { name: "Yes", exact: true }).click();
   await lastNight.getByText("More about last night, if you'd like.", { exact: true }).waitFor();
   assert.equal(await lastNight.getByRole("button", { name: "Answer", exact: true }).count(), 1, "One row for the rest, after noon");
+  assert.equal(await page.locator("[data-last-night-row]").count(), 0, "With its receipt and the look-back, the folded card stays above Up next (no row there)");
   await look.getByRole("heading", { name: "Week 2 look-back", exact: true }).waitFor();
   text = await neutral(look, "Week 2's look-back");
   for (const line of ["Bassinet nights: 2 of the 4 aimed for · 5 nights logged", "This week's step: White noise on for every try", "Calmer bedtimes: not counted from the log", "Check-ins: Sam 5 of 7 nights · Alex 3 of 7 nights"]) {
@@ -1334,6 +1335,85 @@ try {
   await page.keyboard.press("Escape");
   await plan.waitFor({ state: "hidden" });
   console.log("PASS Look-back: on week 2's review day it follows the check-in (the optional questions folded after noon); Ease off a week, then Move the target date a week later, each with its receipt in the card; the goal card while easing shows the aims and when counting picks up again, no tally, and its menu's Pick up from tonight has Undo");
+
+  // ── After noon, a folded card with nothing else to show is Up next's last row; its Answer opens the card again above ──
+  // Alex checked in for last night already, and its stretch with nothing logged was mostly Alex's window (Sam's to answer):
+  // only where River spent the night, a question that can wait, is left for Alex.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("https://sleep.example.test/?goals&morning&as=alex");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  const alexMemo = "maple-last-night:99:alex@example.test";
+  const nightRow = page.locator("[data-up-next] [data-last-night-row]");
+  const placeAsk = lastNight.getByRole("region", { name: "Where did River spend most of last night?" });
+  const placeAnswers = async (label) => {
+    for (const b of await placeAsk.getByRole("button").all()) assert(await aboveDock(b), `${label}: the place answers clear the dock at 390 × 844`);
+  };
+  // The morning as before: the card above Up next with its question (the dock's strip carries it too), no row.
+  await placeAsk.waitFor();
+  assert((await lastNight.boundingBox()).y < (await sam.nextRow.boundingBox()).y, "Mornings: the card comes before Up next");
+  assert.match(await strip.innerText(), /Where did River spend most of last night\?/, "Mornings: the strip carries the question");
+  assert.equal(await page.locator("[data-last-night-row]").count(), 0, "Mornings: no Last night row in Up next");
+  // 12:30 PM: the question folds, and with no receipt, look-back or safe-sleep line the card is one row, at the end of Up next.
+  await advance(5 * 60);
+  await nightRow.waitFor();
+  assert.equal(await page.locator("[data-last-night]").count(), 0, "After noon, no Last night card above Up next");
+  const upNextRows = () => page.locator("[data-up-next] > *").evaluateAll((els) => els.map((el) => (el.hasAttribute("data-sleep-row") ? "sleep plan" : el.hasAttribute("data-last-night-row") ? "last night" : "other")));
+  assert.deepEqual(await upNextRows(), ["sleep plan", "last night"], "The Last night row comes after the Sleep plan row");
+  text = await clean(nightRow, "Up next's Last night row");
+  // (No break inside "last night": its space is a no-break one, read here as a space.)
+  assert.deepEqual(text.split("\n").map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean), ["Last night", "More about last night, if you'd like.", "Answer"], `The fold's own words: ${text}`);
+  const rowAnswer = nightRow.getByRole("button", { name: "Answer: more about last night", exact: true });
+  assert((await height(rowAnswer)) >= 44, "Answer is a 44px target");
+  assert.doesNotMatch(await rowAnswer.locator("span").getAttribute("class"), /bg-mp-accent/, "Answer is quiet, never the accent");
+  // Drawn like the Sleep plan row: the same badge, title size and Answer's pill as its Put down.
+  const drawn = (row, pill) => row.evaluate((el, p) => {
+    const badge = el.querySelector(".mp-kind").getBoundingClientRect();
+    const title = el.querySelector("span.block");
+    const pillBox = [...el.querySelectorAll("button span")].find((s) => s.textContent === p)?.getBoundingClientRect();
+    return [Math.round(badge.width), Math.round(badge.height), getComputedStyle(title).fontSize, pillBox ? Math.round(pillBox.height) : null, Math.round(el.getBoundingClientRect().height) >= 60];
+  }, pill);
+  assert.deepEqual(await drawn(nightRow, "Answer"), await drawn(sam.nextRow, "Put down"), "The row is drawn like the Sleep plan row");
+  for (const b of [rowAnswer, sam.nextRow.getByRole("button", { name: "Put down", exact: true })]) assert(await aboveDock(b), "After noon, Up next's buttons clear the dock at 390 × 844");
+  await shot("last-night-row-390");
+  // 320 × 568, by day and at night: the words wrap, never cut, nothing scrolls sideways.
+  await page.setViewportSize({ width: 320, height: 568 });
+  for (const on of [false, true]) {
+    await page.evaluate((x) => document.documentElement.classList.toggle("maple-night", x), on);
+    await nightRow.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await noHorizontalScroll(`The Last night row at 320px${on ? " at night" : ""}`);
+    assert(await nightRow.evaluate((el) => [...el.querySelectorAll("span")].every((s) => s.scrollWidth <= s.clientWidth + 1)), "The row's words aren't cut at 320");
+    assert((await height(rowAnswer)) >= 44, "Answer stays a 44px target at 320");
+    await shot(`last-night-row-320x568-${on ? "night" : "day"}`);
+  }
+  await page.evaluate(() => document.documentElement.classList.remove("maple-night"));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  // Answer: the card is back above Up next, unfolded, with focus on its first answer (as the morning strip's Answer); the row steps aside.
+  await rowAnswer.click();
+  await page.waitForFunction(() => document.activeElement?.textContent === "Yes, the bassinet" && !!document.activeElement.closest("[data-last-night]"));
+  await nightRow.waitFor({ state: "detached" });
+  assert.deepEqual(await upNextRows(), ["sleep plan"], "Only the Sleep plan row is left in Up next");
+  await page.waitForTimeout(600);
+  assert((await lastNight.boundingBox()).y < (await sam.nextRow.boundingBox()).y, "Answer: the card is back above Up next");
+  await placeAnswers("Answer");
+  assert.deepEqual(JSON.parse(await page.evaluate((k) => localStorage.getItem(k), alexMemo)), { night: "2026-11-04", open: true }, "Opened for that night, on this phone");
+  await shot("last-night-row-answer-390");
+  // Open holds for that night on this phone (a reload starts the stand-in clock at 7:30 AM again): past noon, the card, no row.
+  await page.reload();
+  await placeAsk.waitFor();
+  await advance(5 * 60);
+  await strip.waitFor({ state: "detached" }); // the clock is past noon: the morning's question is off the strip
+  await placeAsk.getByRole("button", { name: "Yes, the bassinet", exact: true }).waitFor();
+  assert.equal(await page.locator("[data-last-night-row]").count(), 0, "Opened, it stays a card that night");
+  // A memo saved before there was `open` reads as folded: the row again.
+  await page.evaluate((k) => localStorage.setItem(k, JSON.stringify({ night: "2026-11-04", gaps: [] })), alexMemo);
+  await page.reload();
+  await placeAsk.waitFor();
+  await advance(5 * 60);
+  await nightRow.waitFor();
+  assert.equal(await page.locator("[data-last-night]").count(), 0, "An older memo: folded, so the row");
+  console.log("PASS After noon: a folded Last night card with nothing else to show is one row at the end of Up next (after the Sleep plan row, drawn like it, Answer quiet and a 44px target, clear of the dock at 390 × 844, whole at 320 by day and night); Answer brings the card back above Up next with focus on its first answer, open on this phone for that night; mornings unchanged");
 
   // A quiet stretch: one card, once, on Today; the goal never pauses, closes or re-dates itself. (Its first showing marks it
   // seen on this phone, so it's waited for before the storage is cleared, or that mark could land after the clear.)

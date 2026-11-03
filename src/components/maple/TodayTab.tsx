@@ -90,11 +90,13 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {/* Back after a quiet stretch on a goal: one card, once, with a clean restart to choose. */}
       <GoalReturnToday />
       {/* The morning after (sleep plan or goal): last night from the log, its unlogged stretches, and the adult's own check-in,
-          straight after Right now, so its question clears the dock. */}
+          straight after Right now, so its question clears the dock. After noon, folded to its one "More about last night"
+          row with nothing else to show, it stands at the end of Up next instead, and that row's Answer brings it back here. */}
       <LastNightCard />
       {/*
         Up next: her next medicine and the sleep plan (its everyday Put down, and the way into the plan and goals for every
-        role that reads the log), one row each. After Last night, so the morning's question still clears the dock.
+        role that reads the log), one row each, then after noon the folded Last night row. After Last night, so the
+        morning's question still clears the dock.
       */}
       <UpNext />
       {nothingYet && born && <FreshPage readOnly={readOnly} />}
