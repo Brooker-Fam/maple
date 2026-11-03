@@ -29,6 +29,8 @@ import { useMaple, useNow } from "./useMaple";
 const ts = (e: { started_at: string }) => Date.parse(e.started_at);
 /** Like formatDuration, but "<1m" instead of a ticking "12s". */
 const since = (sec: number) => (sec < 60 ? "<1m" : formatDuration(sec));
+/** Awake longer than this since the last logged sleep is a sleep nobody logged: the tile says "Not logged", never "Awake 44h". */
+const AWAKE_MAX_MS = 6 * 3600_000;
 
 /**
  * The sides of her last feed (a run: Pauses and Dones under 10 minutes
@@ -143,7 +145,8 @@ export default function StatusCard() {
   // Gaps inside a cluster are skipped, so an evening of clustering doesn't read "usually every ~45m".
   const gap = typicalFeedGapMin(state.entries, now);
   const cluster = fed?.kind === "breast" && fed.run?.cluster != null ? summary.cluster : null;
-  const lastSleepEnd = summary.lastSleep && !summary.lastSleep.active ? summary.lastSleep.ended_at : null;
+  // Past AWAKE_MAX_MS since the last logged sleep, the gap is a sleep nobody logged, not hours awake: "Not logged".
+  const lastSleepEnd = summary.lastSleep && !summary.lastSleep.active && summary.lastSleep.ended_at && now.getTime() - Date.parse(summary.lastSleep.ended_at) <= AWAKE_MAX_MS ? summary.lastSleep.ended_at : null;
   const hasAnything = state.entries.length > 0;
 
   // Nothing of Maple's logged yet (her mom's medicines ride on the dock's strip).
