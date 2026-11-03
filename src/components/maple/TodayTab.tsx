@@ -101,30 +101,34 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
 
-      {recent.length > 0 && (
-        <section aria-labelledby="recent">
-          <div className="mb-1 flex items-center justify-between px-1">
-            <h2 id="recent" className={cx(tone.heading, "text-[17px]")}>
-              Recently logged
-            </h2>
-            <button
-              type="button"
-              onClick={() => onNavigate("log")}
-              className="-mr-2 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-medium text-mp-accent-fg"
-            >
-              See all
-              <Icon name="chevron-right" size={16} />
-            </button>
-          </div>
-          <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
-            {recent.map((e) => (
-              <EntryRow key={e.id} entry={e} now={now} showRelative onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
-            ))}
-          </div>
-        </section>
+      {/* Recently logged, and today's totals as its footnote: one group, not two cards. The totals show even with no finished row. */}
+      {!nothingYet && (
+        <div className="space-y-1">
+          {recent.length > 0 && (
+            <section aria-labelledby="recent">
+              <div className="mb-1 flex items-center justify-between px-1">
+                <h2 id="recent" className={cx(tone.heading, "text-[17px]")}>
+                  Recently logged
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate("log")}
+                  className="-mr-2 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-medium text-mp-accent-fg"
+                >
+                  See all
+                  <Icon name="chevron-right" size={16} />
+                </button>
+              </div>
+              <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
+                {recent.map((e) => (
+                  <EntryRow key={e.id} entry={e} now={now} showRelative quietAction onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
+                ))}
+              </div>
+            </section>
+          )}
+          <LoggedToday onDetails={() => onNavigate("patterns")} />
+        </div>
       )}
-
-      {!nothingYet && <LoggedToday onDetails={() => onNavigate("patterns")} />}
       <DailyDiscovery />
       <Celebrations />
 
@@ -137,29 +141,40 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   );
 }
 
+/**
+ * Today's totals, one line under Recently logged ("Today: 3 feeds · 4 wet · 2 dirty · 4h 00m sleep logged"), which
+ * opens History → Patterns; under it, one quiet line that missing entries aren't counted, and Ask about today.
+ */
 function LoggedToday({ onDetails }: { onDetails: () => void }) {
   const { summary, state } = useMaple();
   const now = useNow(60_000);
   if (!summary || !state) return null;
   const s = summary.today;
   const today = dayKey(now, state.baby.timezone);
+  const num = (value: string | number) => <strong className="font-semibold text-mp-ink tabular-nums">{value}</strong>;
   return (
-    <section aria-labelledby="logged-today" className={cx(tone.card, "mp-day-summary px-4 py-3")}>
-      <div className="flex flex-wrap items-center justify-between gap-x-2">
-        {/* A section heading like Recently logged's: the display serif is for her name only. */}
-        <h2 id="logged-today" className={cx(tone.heading, "text-[17px] leading-tight")}>Logged today</h2>
-        <button type="button" onClick={onDetails} className="mp-explore-today -my-1 -mr-1 inline-flex min-h-[44px] items-center gap-1 px-1 text-[13px] font-semibold text-mp-accent-fg">
-          <Icon name="clock-3" size={16} /> Explore patterns <Icon name="chevron-right" size={15} />
-        </button>
-      </div>
-      <p className="mp-day-summary-values">
-        <span><strong>{s.feeds}</strong> {s.feeds === 1 ? "feed" : "feeds"}</span>
-        <span><strong>{s.wet}</strong> wet</span>
-        <span><strong>{s.dirty}</strong> dirty</span>
-      </p>
-      <p className={cx(tone.muted, "mt-0.5 text-[13px]")}>{s.sleepSec > 0 ? `${formatDuration(s.sleepSec)} sleep logged` : "No sleep logged today"}. Missing entries are not counted.</p>
+    <section aria-labelledby="logged-today" className="px-1">
+      {/* Named for screen readers and the page's outline; on screen the line says "Today:" itself. */}
+      <h2 id="logged-today" className="sr-only">
+        Logged today
+      </h2>
+      <button type="button" onClick={onDetails} className="mp-explore-today flex min-h-[44px] w-full items-center py-2 text-left text-[13px] leading-snug text-mp-ink-2">
+        {/* Wraps between the totals, never inside one, and the chevron stays with the last. */}
+        <span>
+          <span className="whitespace-nowrap">Today: {num(s.feeds)} {s.feeds === 1 ? "feed" : "feeds"} ·</span>{" "}
+          <span className="whitespace-nowrap">{num(s.wet)} wet ·</span>{" "}
+          <span className="whitespace-nowrap">{num(s.dirty)} dirty ·</span>{" "}
+          <span className="whitespace-nowrap">
+            {s.sleepSec > 0 ? <>{num(formatDuration(s.sleepSec))} sleep logged</> : "No sleep logged today"}
+            {/* Says where the line goes, for screen readers too. */}
+            <Icon name="chevron-right" size={15} label="Explore patterns" className="ml-0.5 inline-block align-[-3px] text-mp-ink-3" />
+          </span>
+        </span>
+      </button>
+      <p className={cx(tone.faint, "text-[13px] leading-snug")}>Missing entries are not counted.</p>
+      {/* Its negative margin lines the icon up with the text above. */}
       <AskChatButton
-        className="mt-2"
+        className="-ml-1.5 gap-1.5! px-1.5! text-[13px]!"
         label="Today's log"
         prompt={`Can you summarize ${babyFirstName(state.baby)}'s feeds, diapers and sleep logged on ${today} (${state.baby.timezone}) so far? Keep it brief and distinguish missing logs from recorded activity.`}
       >

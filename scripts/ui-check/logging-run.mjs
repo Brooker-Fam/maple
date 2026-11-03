@@ -544,7 +544,9 @@ try {
     const recent = page.getByRole("region", { name: "Recently logged", exact: true });
     await recent.waitFor();
     assert.equal(await recent.getByRole("button").count(), 4, "Today keeps three entries and See all");
-    assert(await page.getByRole("region", { name: "Logged today", exact: true }).count(), "Today keeps compact logged totals");
+    assert.equal(await recent.getByRole("button", { name: /^Edit: / }).count(), 3, "Today's rows keep saying what a tap does");
+    assert.equal(await recent.getByText(/^Edit/).count(), 0, "Today's rows show no Edit label");
+    assert(await page.getByRole("region", { name: "Logged today", exact: true }).count(), "Today keeps its totals line under the recent entries");
     assert.equal(await page.getByRole("region", { name: "Day dial", exact: true }).count(), 0);
     await page.goto(`${url}?mode=patterns`);
     await page.getByRole("region", { name: "Day dial", exact: true }).waitFor();
