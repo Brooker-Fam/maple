@@ -19,7 +19,7 @@ import { runPushTick } from "../../src/lib/maple/push";
 import { askState, chooseSleepLink, nextHandoff } from "../../src/lib/maple/sleep/engine";
 import { windowAt } from "../../src/lib/maple/sleep/handoff";
 import { activeRosters } from "../../src/lib/maple/sleep/roster-read";
-import { askHandoff, deleteTry, endShift, finishTry, getTry, handOff, listShifts, logTry, openShift, startShift, startTry, undoFinish, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
+import { askHandoff, deleteTry, endShift, finishTry, getTry, handOff, listShifts, logTry, openShift, saveCheckin, startShift, startTry, undoFinish, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
 import { createEntryOnce, getEntry, listEntries, startTimer, stopTimer } from "../../src/lib/maple/store";
 import { addDays, dayKey, localParts } from "../../src/lib/maple/time";
@@ -856,6 +856,33 @@ async function main() {
     const plan = (await sql(`EXPLAIN (ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF) ${stmt.sql}`, stmt.params)).map((r) => String(r["QUERY PLAN"])).join("\n");
     ok(/idx_maple_sleep_shifts_ended/.test(plan) && !/Rows Removed by Filter: \d{3,}/.test(plan), plan);
     await sql(`DELETE FROM maple_sleep_shifts WHERE family_id = 1`);
+  });
+
+  await test("load: a full state reads the sleep tables only when the reader's token has a sleep part (a family with none reads as before); ?view=goals and ?view=progress answer with their view alone", async () => {
+    await clean(beta);
+    for (const t of ["maple_sleep_plans", "maple_sleep_goals", "maple_sleep_checkins"]) await sql(`DELETE FROM ${t} WHERE family_id = 2`);
+    // What the state reads of the sleep tables, past the change token's one counting query.
+    const sleepReads = (xs: { sql: string }[]) => xs.filter((x) => /FROM maple_sleep_(plans|tries|shifts|goals|checkins)\b/.test(x.sql) && !/COUNT\(\*\)/.test(x.sql));
+    let seen = await captureQueries();
+    const b = await state(beta.owner, 2);
+    eq([sleepReads(seen.stop()).length, "sleep" in b, String(b.rev).includes(",")], [0, false, false], "beta: no sleep reads, no sleep key, the token it had before");
+    // A check-in alone counts in an owner's or member's token and state, never in a view-only guest's, who reads none of it.
+    await saveCheckin(2, { babyId: beta.babyId, member: beta.member, protected: "yes", tz: beta.tz, source: "web" });
+    seen = await captureQueries();
+    const v = await state(beta.viewer, 2);
+    eq([sleepReads(seen.stop()).length, "sleep" in v], [0, false], "beta's viewer");
+    eq(((await state(beta.owner, 2)).sleep as SleepState | undefined)?.checkins?.length, 1, "beta's owner sees it");
+    // Alpha has a plan: its state reads the sleep tables.
+    seen = await captureQueries();
+    const a = await state(alpha.member, 1);
+    ok(sleepReads(seen.stop()).length > 0 && "sleep" in a, "alpha reads its sleep state");
+    // The views answer with their view alone, without reading the whole sleep state again.
+    for (const q of ["?view=goals", "?view=progress&days=7"]) {
+      seen = await captureQueries();
+      const r = await route(alpha.member, 1, undefined, q);
+      eq([r.status, "sleep" in r.json, seen.stop().filter((x) => /FROM maple_sleep_plans/.test(x.sql)).length], [200, false, 0], q);
+    }
+    await sql(`DELETE FROM maple_sleep_checkins WHERE family_id = 2`);
   });
 
   // ── the handoff reminder ───────────────────────────────────────────────

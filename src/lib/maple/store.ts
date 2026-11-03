@@ -1358,6 +1358,16 @@ export async function memberForPersonalToken(token: string): Promise<FamilyMembe
  * never moves a view-only guest's state.
  */
 export async function rev(fam: FamilyRef, babyId: number, opts: { checkins?: boolean } = {}): Promise<string> {
+  return (await revParts(fam, babyId, opts)).rev;
+}
+
+/**
+ * The change token (rev), and `sleep`: whether its sleep part is there, that
+ * is, whether this family has any rows in the sleep tables this reader's
+ * token counts (deleted ones too). Without, the sleep state is empty, so the
+ * full state skips its reads and reads exactly as before the sleep plan.
+ */
+export async function revParts(fam: FamilyRef, babyId: number, opts: { checkins?: boolean } = {}): Promise<{ rev: string; sleep: boolean }> {
   const rows = await q(
     `SELECT
        (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_entries WHERE family_id = $2 AND baby_id = $1) AS e,
@@ -1379,5 +1389,5 @@ export async function rev(fam: FamilyRef, babyId: number, opts: { checkins?: boo
   const sleep = parts.length ? `|${parts.join(",")}` : "";
   // The hour too: a full state at least hourly, so the server's older-week diaper count (lifetime.week) never goes
   // stale while nobody logs anything.
-  return `${r.e}|${r.b}|${r.m}${sleep}|${Math.floor(Date.now() / 3600_000)}`;
+  return { rev: `${r.e}|${r.b}|${r.m}${sleep}|${Math.floor(Date.now() / 3600_000)}`, sleep: parts.length > 0 };
 }

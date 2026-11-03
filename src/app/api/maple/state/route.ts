@@ -2,7 +2,7 @@ import { photoState } from "@/lib/maple/photo-access";
 import { listMembers } from "@/lib/maple/auth";
 import { json, withMember } from "@/lib/maple/api";
 import { careRev, careSession, careStateFor, viewerFor } from "@/lib/maple/care-store";
-import { getBaby, lifetimeCounts, listEntries, rev, toClientEntry, touchLastSeen } from "@/lib/maple/store";
+import { getBaby, lifetimeCounts, listEntries, revParts, toClientEntry, touchLastSeen } from "@/lib/maple/store";
 import { familyInfo } from "@/lib/maple/family-info";
 import { pushTickQuietly } from "@/lib/maple/push";
 import { seesCheckins } from "@/lib/maple/sleep/goals";
@@ -24,6 +24,7 @@ const WINDOW_HOURS = 72;
  * only the care rows this reader can read. A reader with no access gets the
  * base rev alone, so nothing about her (an Only me dose, a check-in, any
  * write at all for someone she doesn't share with) ever changes their token.
+ * The sleep reads run only when the base rev has a sleep part (revParts).
  */
 export const GET = withMember("GET /api/maple/state", async (request, me, ctx) => {
   const now = new Date();
@@ -45,7 +46,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
   const care = await careSession(viewerFor(me, baby, members), { familyId: ctx.familyId, members, baby });
   // The adults' sleep check-ins reach owners and members only, so they're in no one else's token either.
   const checkins = seesCheckins(me.role);
-  const [base, cRev] = await Promise.all([rev(ctx, baby.id, { checkins }), careRev(care)]);
+  const [{ rev: base, sleep: hasSleep }, cRev] = await Promise.all([revParts(ctx, baby.id, { checkins }), careRev(care)]);
   const current = cRev === null ? base : `${base}|c:${cRev}`;
   if (new URL(request.url).searchParams.get("rev") === current) {
     return json({ unchanged: true, now: now.toISOString(), rev: current } satisfies MapleStateUnchanged);
@@ -61,7 +62,8 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     listEntries(ctx, { babyId: baby.id, kinds: ["growth"], ascending: true, limit: 2000 }),
     lifetimeCounts(ctx, baby.id),
     careStateFor(care),
-    sleepStateFor(ctx, baby.id, now, { checkins, tz: baby.timezone }),
+    // No sleep rows this reader's token counts (its sleep part is empty): nothing to read, and no `sleep` key.
+    hasSleep ? sleepStateFor(ctx, baby.id, now, { checkins, tz: baby.timezone }) : null,
   ]);
 
   const body: MapleState = {
@@ -76,7 +78,7 @@ export const GET = withMember("GET /api/maple/state", async (request, me, ctx) =
     seen_at: seenAt,
     ...(careState ? { care: careState } : {}),
     // Only once there's something: a family that hasn't set up a sleep plan reads as before.
-    ...(sleep.plan || sleep.tries.length || sleep.shifts.length || sleep.goals.length || sleep.checkins?.length ? { sleep } : {}),
+    ...(sleep && (sleep.plan || sleep.tries.length || sleep.shifts.length || sleep.goals.length || sleep.checkins?.length) ? { sleep } : {}),
     family: familyInfo(ctx, members),
   };
   return json(body);

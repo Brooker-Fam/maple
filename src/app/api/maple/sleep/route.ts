@@ -66,10 +66,10 @@ export const dynamic = "force-dynamic";
  *
  * GET (anyone in the family but photos-only guests): the plan, tries,
  * shifts and goals as the state carries them, and the check-ins for owners
- * and members only; `?view=progress&days=7` adds the progress view, worked
- * out from the log on the server, and `?view=goals` (`&id=3` for one goal,
- * any status) adds each open goal with its progress, coach notes and lines
- * (a view-only guest's carry no check-in counts).
+ * and members only; `?view=progress&days=7` answers with the progress view
+ * alone, worked out from the log on the server, and `?view=goals` (`&id=3`
+ * for one goal, any status) with each open goal's progress, coach notes and
+ * lines alone (a view-only guest's carry no check-in counts).
  *
  * POST { action, … } (owners and members): every write answers with the
  * fresh sleep state and the sleep entry it touched (`entries`), so the
@@ -170,26 +170,27 @@ export const GET = withMember("GET /api/maple/sleep", async (request, me, ctx) =
   const sp = new URL(request.url).searchParams;
   const checkins = seesCheckins(me.role);
   const now = new Date();
-  const body: Record<string, unknown> = { sleep: await sleepStateFor(ctx, baby.id, now, { checkins, tz: baby.timezone }) };
+  // A view answers with that view alone: the app holds the sleep state already (from /api/maple/state and every write).
   if (sp.get("view") === "progress") {
     const raw = Number(sp.get("days") ?? 7);
     const days = Number.isInteger(raw) && raw >= 1 && raw <= 31 ? raw : 7;
     const progress = await progressFor(ctx, baby.id, baby.timezone, now, days);
-    body.progress = progress;
-    body.lines = progressLines(progress, baby.timezone, now);
+    return json({ progress, lines: progressLines(progress, baby.timezone, now) });
   }
   if (sp.get("view") === "goals") {
     const one = sp.get("id");
     const goals = one ? [await getGoal(ctx, goalId(one))].filter((g): g is SleepGoal => g !== null && g.baby_id === baby.id) : await listGoals(ctx, baby.id);
-    const members = await listMembers(ctx);
+    if (!goals.length) return json({ goals: [] });
+    const [members, progress] = await Promise.all([listMembers(ctx), goalProgressFor(ctx, baby.id, goals, { tz: baby.timezone, now, checkins })]);
     const words: GoalWords = { v: voiceFor(ctx.familyId, baby), name: (m) => memberName(m, members), tz: baby.timezone, now };
-    const progress = await goalProgressFor(ctx, baby.id, goals, { tz: baby.timezone, now, checkins });
-    body.goals = goals.map((goal) => {
-      const p = progress.get(goal.id)!;
-      return { goal, progress: p, coach: coachNotes(goal, p, words), lines: goalProgressLines(goal, p, words) };
+    return json({
+      goals: goals.map((goal) => {
+        const p = progress.get(goal.id)!;
+        return { goal, progress: p, coach: coachNotes(goal, p, words), lines: goalProgressLines(goal, p, words) };
+      }),
     });
   }
-  return json(body);
+  return json({ sleep: await sleepStateFor(ctx, baby.id, now, { checkins, tz: baby.timezone }) });
 });
 
 export const POST = withMember(
