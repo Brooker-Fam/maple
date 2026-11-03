@@ -2682,5 +2682,146 @@ check("guidance (safety P2 #17, #19, P1 #8 in the app): the plan editor's place 
   ok(goals.includes("cautions={cautions} onSave=") && /cautions: GoalCaution\[\]/.test(goals) && (goals.match(/<CautionNote /g) ?? []).length === 2, "the quick setup's read-back shows each caution with its source, as the goal card does");
 });
 
+/** Safety P1 #10 and this round's: swaddling once she's rolling, or so tight she can't move (the AAP's swaddling page). */
+const SWADDLE_REFUSED = [
+  "Keep swaddling after she starts rolling",
+  "Swaddle her arms in even though she's rolling",
+  "Keep the swaddle on even once she rolls",
+  "Still swaddle her at night now that she rolls over",
+  "She rolls now, but keep swaddling for naps",
+  "When she starts rolling, swaddle her arms out",
+  "Swaddle her tight so she can't move",
+  "Swaddle her as tight as possible so she stays asleep",
+];
+const SWADDLE_ALLOWED = [
+  "Swaddle her until she rolls",
+  "Stop swaddling once she rolls",
+  "Once she rolls, a sleep sack instead of the swaddle",
+  "Since she's rolling now, stop swaddling",
+  "She's rolling, so no more swaddle",
+  "Now that she rolls over, stop the swaddle",
+  "Swaddle her snugly with room for her hips",
+  "Swaddle her for naps; she isn't rolling yet",
+  "Once she starts rolling, switch from the swaddle to a sleep sack",
+];
+/** Coach review #6 (t10): common unsafe phrasings that got through, and this round's more of each. */
+const COACH_MISSES = [
+  "If she cries, wait 10 minutes",
+  "It's okay if she cries for 10 minutes",
+  "She can cry for 10 minutes",
+  "Don't respond to her cries at night",
+  "Don't go to her when she cries",
+  "Leave the room even if she cries",
+  "Put her down awake and walk out, even if she cries",
+  "Let her self-settle for 20 minutes",
+  "Hold off on going in for 10 minutes",
+  "Let her spend the night in our bed",
+  "Let her finish the night in our bed",
+  "Keep her in our bed for the rest of the night",
+  "Bring her into bed with us at 4am",
+  "Let her nap in the Snuggle Me",
+  "Naps in the Snuggle Me",
+  "Put her in the DockATot at night",
+  "Put her in the Dock-a-Tot overnight",
+  "Prop the bassinet up for reflux",
+  "Leave her in the swing after she falls asleep",
+  // more of each
+  "If she fusses, wait 5 minutes",
+  "When she cries at night, wait 10 minutes",
+  "Hold off 10 minutes before going in when she cries",
+  "She can cry for 15 minutes before we go in",
+  "It's fine if she cries for 20 minutes",
+  "Don't go in to her when she cries at night",
+  "Stop comforting her when she wakes at night",
+  "Don't pick her up or soothe her when she cries",
+  "Don't check on her when she cries after midnight",
+  "Shut the door and leave even if she screams",
+  "Let her self-settle for 15 minutes before picking her up",
+  "Teach her to self-soothe by walking out",
+  "Let her protest cry before the bassinet",
+  "Bring her into our bed after the 3am feed",
+  "She sleeps the rest of the night with us",
+  "Use the DockATot in the crib",
+  "Put her in the lounger at night",
+  "Use a positioner in the bassinet",
+  "Prop the head of the crib up a little",
+  "Naps in the Ergo",
+];
+/** Coach review #5 (t10, t11): plainly safe steps that were refused, and this round's more of each. */
+const COACH_FALSE_REFUSALS = [
+  "No blankets, pillows or bumpers in the crib, ever",
+  "Use a nursing pillow for feeds, never for sleep",
+  "Swing only while she's awake, never for naps",
+  "Car seat only in the car, never for naps at home",
+  "A stroller walk to help her fall asleep, then the crib",
+  "Walk her to sleep in the carrier, then lay her in the bassinet",
+  "Bassinet only: no swing, car seat or couch naps",
+  // more of each
+  "Without pillows, blankets or bumpers in the bassinet",
+  "Nursing pillow for feeds at night, then the bassinet",
+  "No DockATot in the crib",
+  "Take the Snuggle Me out of the crib",
+  "Snuggle Me for supervised play on the floor, never for sleep",
+  "Walk her in the stroller until she's asleep, then move her to the crib",
+  "Ergo for walks, bassinet for naps",
+  "Bring her into our bed to nurse, then back to the bassinet",
+  "Bring her into our bed in the morning for cuddles",
+  "If she cries, pick her up right away",
+  "When she cries, wait a minute, then go in",
+  "If she wakes, wait 2 minutes to see if she's hungry",
+  "She can cry in my arms while I rock her",
+  "It's fine if she cries a little while I change her",
+  "Don't respond to every cry with a feed; soothe her first",
+  "Never stop responding to her cries",
+  "Don't pick her up when she cries, pat and shush her in the crib instead",
+  "Don't pick her up at every stir; just a hand on her chest",
+  "Sam can leave the room even if she cries, because Alex is holding her",
+  "Give her a minute to self-settle in the bassinet",
+  "Hold off on the pacifier for 10 minutes after feeds",
+];
+
+check("safety (P1 #10, coach review #5 and #6): swaddling once she's rolling is refused; the coach review's misses are refused and its false refusals pass; every refusal's suggestion passes in each voice and without one", () => {
+  const o = { v: SHE, adults: R3_ADULTS };
+  const lists: [string, string[], boolean][] = [
+    ["swaddling refused", SWADDLE_REFUSED, true],
+    ["swaddling done safely", SWADDLE_ALLOWED, false],
+    ["the coach review's misses", COACH_MISSES, true],
+    ["the coach review's false refusals", COACH_FALSE_REFUSALS, false],
+  ];
+  for (const [label, xs, refuse] of lists) {
+    const right = xs.filter((t) => !!unsafeSleep(t, o) === refuse);
+    console.log(`  ${label}: ${right.length} of ${xs.length} as wanted`);
+    for (const t of xs) ok(right.includes(t), `${refuse ? "refused" : "passed"}: "${t}" (${unsafeSleep(t, o)?.phrase ?? "passed"})`);
+  }
+  eq(SWADDLE_REFUSED.map((t) => unsafeSleep(t, o)?.kind), SWADDLE_REFUSED.map(() => "swaddle"), "swaddling, by its kind");
+  eq(unsafeWords("Step 1", SHE, unsafeSleep("Keep swaddling after she starts rolling", o)), `Step 1: Maple won't plan swaddling once she shows signs of trying to roll; try "Stop swaddling once she shows any signs of trying to roll".`, "past rolling");
+  eq(unsafeWords("Step 1", THEY, unsafeSleep("Swaddle them tight so they can't move", { v: THEY })), `Step 1: Maple won't plan a swaddle so tight they can't move; try "Swaddle them loose enough that their hips can move".`, "too tight, their words");
+  // His family's words: "he" is the baby there.
+  ok(unsafeSleep("He can cry for 15 minutes before we go in", { v: HE, adults: R3_ADULTS }) && unsafeSleep("Keep swaddling him after he starts rolling", { v: HE, adults: R3_ADULTS })?.kind === "swaddle", "his words");
+  // A step away from a sitting device's transfer passes with the AAP's words for it, and its source.
+  const c = goalCautions({ steps: [{ id: "s1", title: "Walk her to sleep in the carrier, then lay her in the bassinet", week_of: null, done_at: null, done_by: null }] }, { v: SHE, name: nameOf, adults: R3_ADULTS });
+  ok(c.length === 1 && c[0].kind === "transfer" && c[0].text.endsWith(`say this with it: "${SLEEP_GUIDES.find((g) => g.id === "safe-seats")!.body(SHE)}"`) && c[0].guide === "safe-seats" && !!c[0].source, JSON.stringify(c));
+  eq(goalCautions({ steps: [{ id: "s1", title: "If she falls asleep in the car seat, move her to the bassinet", week_of: null, done_at: null, done_by: null }] }, { v: SHE, name: nameOf, adults: R3_ADULTS }), [], "the AAP's own words need nothing said");
+  // Every refusal's wording to try passes the filter, in each family's words and without a voice (the form).
+  for (const text of [...SWADDLE_REFUSED, ...COACH_MISSES]) {
+    const find = unsafeSleep(text, o)!;
+    for (const v of [...VOICES, undefined]) {
+      const words = unsafeWords("Step 1", v, find);
+      const tryThis = /try "([^"]+)"/.exec(words)?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis, { adults: R3_ADULTS }), `the suggestion passes: ${words}`);
+    }
+  }
+  // Every refusal kind's suggestion passes in each voice, whatever found it.
+  const kinds: [string, string][] = [["cry", "Let her cry it out"], ["adult", "She naps on my chest"], ["bed", "Co-sleep after the late feed"], ["couch", "She naps on the couch"], ["seat", "Naps in the car seat"], ["product", "Naps on the nursing pillow"], ["position", "Put her down on her tummy"], ["bedding", "Bumpers in the crib"], ["weighted", "A weighted sleep sack"], ["incline", "Raise the head of the crib"], ["medicine", "Melatonin at bedtime"], ["swaddle", "Keep swaddling after she starts rolling"]];
+  for (const [kind, text] of kinds) {
+    const find = unsafeSleep(text, o);
+    eq(find?.kind, kind, text);
+    for (const v of [...VOICES, undefined]) {
+      const tryThis = /try "([^"]+)"/.exec(unsafeWords("Step 1", v, find))?.[1];
+      ok(tryThis && !unsafeSleep(tryThis, { v, adults: R3_ADULTS }) && !unsafeSleep(tryThis), `${kind} in ${v?.pronoun ?? "no"} voice: ${tryThis}`);
+    }
+  }
+});
+
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
