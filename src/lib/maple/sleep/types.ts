@@ -184,7 +184,15 @@ export type WindowCovers = (typeof WINDOW_COVERS)[number];
  * more night nursing to expect when the nursing parent is the one going back.
  */
 export const GOAL_TEMPLATES = ["back_to_work"] as const;
-export type GoalTemplate = { kind: (typeof GOAL_TEMPLATES)[number]; member: string; date: string; nursing: string | null };
+/** How the baby is fed, as the "Back to work" setup asked it. */
+export const GOAL_FEEDING = ["nursing", "bottles", "both"] as const;
+export type GoalFeeding = (typeof GOAL_FEEDING)[number];
+/**
+ * `roster_from` (added later, so absent on older goals): the night the night roster starts, with its rehearsal two
+ * weeks before the day back (or the night it was set, when that's sooner), so check-ins and counts start with it.
+ * `feeding` (added later): nursing, bottles or both, for the notes' words.
+ */
+export type GoalTemplate = { kind: (typeof GOAL_TEMPLATES)[number]; member: string; date: string; nursing: string | null; roster_from?: string | null; feeding?: GoalFeeding | null };
 
 export type SleepGoal = {
   id: number;
@@ -200,6 +208,17 @@ export type SleepGoal = {
   roster: RosterWindow[];
   /** The template it was made from, with what its notes need (GoalTemplate); null or absent for a goal made by hand. */
   template?: GoalTemplate | null;
+  /**
+   * Picked up again (after a quiet stretch): the night counting starts from (YYYY-MM-DD, its evening), so the nights
+   * before it don't count and its weeks start then. Null or absent: from the night it was set. Only the family sets it.
+   */
+  counts_from?: string | null;
+  /**
+   * Easing off: the night counting picks up again (YYYY-MM-DD). Until then nothing is counted and the goal reads "Easing
+   * off until Tue, Nov 11", never as missed; steps and targets hold, and its weeks start again that night. Null or absent:
+   * not easing off. Only the family sets it.
+   */
+  paused_until?: string | null;
   /** The last review (sleep_goal review, or closing it), with its short note. */
   last_review_at: string | null;
   review_note: string | null;
@@ -290,8 +309,11 @@ export const WINDOW_MAX_MINUTES = 12 * 60;
 export const CHECKIN_NOTE_MAX = 200;
 /** A check-in can be for one of this many most recent nights. */
 export const CHECKIN_NIGHTS_BACK = 14;
-/** A goal is due a review once this many days pass since its last one (or since it was set). */
+/** A goal is due a review once this many days pass since its last one (or since it was set, or counting started again). */
 export const REVIEW_DUE_DAYS = 7;
+/** "Ease off a week": counting picks up again this many days from today; a write can ease off this far ahead at most. */
+export const EASE_OFF_DAYS = 7;
+export const EASE_OFF_MAX_DAYS = 28;
 /** An untimed try's "long" is at least this many minutes (the goal's bassinet-nights minutes, 15 to 720). */
 export const UNTIMED_MIN_RANGE = [15, 720] as const;
 
@@ -349,4 +371,8 @@ export type GoalInput = {
   status?: "active" | "paused";
   /** The template's context (GoalTemplate, people as member ids), or null to clear it. */
   template?: GoalTemplate | null;
+  /** goal.update only: "Pick up from tonight" (YYYY-MM-DD, today at the latest), or null for from the night it was set. */
+  counts_from?: string | null;
+  /** goal.update only: "Ease off a week" (YYYY-MM-DD, the night it counts again, EASE_OFF_MAX_DAYS ahead at most), or null. */
+  paused_until?: string | null;
 };

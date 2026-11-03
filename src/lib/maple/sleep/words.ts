@@ -236,6 +236,35 @@ export function dateWords(key: string, todayKey: string): string {
   return `${WEEKDAY_SHORT[weekdayOf(key)]}, ${MONTH_SHORT[month - 1]} ${day}${todayKey.slice(0, 4) === key.slice(0, 4) ? "" : `, ${year}`}`;
 }
 
+/** "Oct 20–27", "Oct 28–Nov 3" ("Dec 28, 2026–Jan 3, 2027" across years, or outside today's): a run of nights by their evenings. */
+export function nightsRange(from: string, to: string, todayKey: string): string {
+  const a = parseDayKey(from);
+  const b = parseDayKey(to);
+  const start = `${MONTH_SHORT[a.month - 1]} ${a.day}`;
+  const end = a.month === b.month && a.year === b.year ? `${b.day}` : `${MONTH_SHORT[b.month - 1]} ${b.day}`;
+  if (a.year !== b.year) return `${start}, ${a.year}–${end}, ${b.year}`;
+  const year = String(a.year) === todayKey.slice(0, 4) ? "" : `, ${a.year}`;
+  return from === to ? `${start}${year}` : `${start}–${end}${year}`;
+}
+
+// ── light logging, quiet stretches and easing off (goals.ts ENOUGH_NIGHTS, QUIET_NIGHTS) ──
+
+/** Said in the Goals tab and in sleep_goal's description: logging some nights is plenty. */
+export const ENOUGH_NIGHTS_LINE = "Three logged nights a week is enough; on the other nights, the morning check-in is plenty.";
+
+/**
+ * A target's line when its week has too few nights to read: "2 nights logged, too few to tell yet" (a week still going
+ * says "so far"; one that's over, "too few to tell"). Never a verdict about the nights nobody logged.
+ */
+export function tooFewWords(n: number, o: { ongoing: boolean; what?: "night" | "check-in" }): string {
+  const what = o.what ?? "night";
+  const count = n === 0 ? `no ${what}s` : `${n} ${n === 1 ? what : `${what}s`}`;
+  return `${count}${what === "night" ? " logged" : ""}${o.ongoing ? " so far" : ""}, too few to tell${o.ongoing ? " yet" : ""}`;
+}
+
+/** "Easing off until Tue, Nov 11": the night counting picks up again, never "paused" or "missed". */
+export const easingWords = (until: string, todayKey: string) => `Easing off until ${dateWords(until, todayKey)}`;
+
 /** "10:00 PM" for a stored "22:00". */
 export function clockLabel(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);

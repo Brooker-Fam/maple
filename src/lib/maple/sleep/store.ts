@@ -38,7 +38,9 @@ import {
   TRY_OUTCOMES,
   TRY_TAGS,
   TRY_TIMES_MAX,
+  GOAL_FEEDING,
   GOAL_TEMPLATES,
+  type GoalFeeding,
   type GoalTemplate,
   type BassinetTry,
   type HoldingShift,
@@ -1284,6 +1286,8 @@ export function rowToGoal(r: Row): SleepGoal {
     steps: list<GoalStep>(r.steps, (x) => typeof x.id === "string" && typeof x.title === "string"),
     roster: list<RosterWindow>(r.roster, (x) => typeof x.id === "string" && typeof x.member === "string" && Array.isArray(x.nights)),
     template: goalTemplateOf(r.template),
+    counts_from: isDayKey(r.counts_from) ? r.counts_from : null,
+    paused_until: isDayKey(r.paused_until) ? r.paused_until : null,
     last_review_at: isoOrNull(r.last_review_at),
     review_note: textOrNull(r.review_note),
     closed_at: isoOrNull(r.closed_at),
@@ -1299,7 +1303,15 @@ export function rowToGoal(r: Row): SleepGoal {
 /** A goal's template context as stored (sleep/types.ts GoalTemplate), or null: one this release doesn't know is read past. */
 function goalTemplateOf(v: unknown): GoalTemplate | null {
   if (!isObj(v) || !(GOAL_TEMPLATES as readonly unknown[]).includes(v.kind) || typeof v.member !== "string" || !isDayKey(v.date)) return null;
-  return { kind: v.kind as GoalTemplate["kind"], member: v.member, date: v.date, nursing: typeof v.nursing === "string" ? v.nursing : null };
+  return {
+    kind: v.kind as GoalTemplate["kind"],
+    member: v.member,
+    date: v.date,
+    nursing: typeof v.nursing === "string" ? v.nursing : null,
+    // Added later: an older goal has neither, and counts from the night it was set.
+    ...(isDayKey(v.roster_from) ? { roster_from: v.roster_from } : {}),
+    ...((GOAL_FEEDING as readonly unknown[]).includes(v.feeding) ? { feeding: v.feeding as GoalFeeding } : {}),
+  };
 }
 
 /** The people and day a goal write is checked against (goals.ts cleanGoalInput). */
@@ -1420,9 +1432,13 @@ type GoalChange = {
   steps?: GoalStep[];
   roster?: RosterWindow[];
   template?: GoalTemplate | null;
+  counts_from?: string | null;
+  paused_until?: string | null;
   status?: GoalStatus;
   seq?: number;
   review?: { note: string | null };
+  /** Undo of a review: the stamp and note it replaced, put back as they were. */
+  reviewBack?: { at: string | null; note: string | null };
   closed?: "now" | null;
 };
 
@@ -1459,11 +1475,16 @@ async function mutateGoal(
     if (c.steps !== undefined) set("steps", JSON.stringify(c.steps), "::jsonb");
     if (c.roster !== undefined) set("roster", JSON.stringify(c.roster), "::jsonb");
     if (c.template !== undefined) set("template", c.template ? JSON.stringify(c.template) : null, "::jsonb");
+    if (c.counts_from !== undefined) set("counts_from", c.counts_from);
+    if (c.paused_until !== undefined) set("paused_until", c.paused_until);
     if (c.seq !== undefined && c.seq !== row.seq) set("item_seq", c.seq);
     if (c.status !== undefined) set("status", c.status);
     if (c.review) {
       sets.push("last_review_at = NOW()");
       set("review_note", c.review.note);
+    } else if (c.reviewBack) {
+      set("last_review_at", c.reviewBack.at, "::timestamptz");
+      set("review_note", c.reviewBack.note);
     }
     if (c.closed === "now") sets.push("closed_at = NOW()");
     else if (c.closed === null) sets.push("closed_at = NULL");
@@ -1514,8 +1535,18 @@ export async function setGoalStep(fam: FamilyRef, id: number, input: { step: str
   });
 }
 
-/** A review: stamps last_review_at now, with the short note (or none). */
-export async function reviewGoal(fam: FamilyRef, id: number, input: { note: unknown; by: string; source: Source; revision?: number }): Promise<GoalWrite> {
+/**
+ * A review: stamps last_review_at now, with the short note (or none). `back` is its Undo (the look-back's Keep it and
+ * Next step): the stamp and note it replaced, put back only on the revision the review made.
+ */
+export async function reviewGoal(fam: FamilyRef, id: number, input: { note: unknown; by: string; source: Source; revision?: number; back?: { at: unknown; note: unknown } }): Promise<GoalWrite> {
+  if (input.back) {
+    const at = input.back.at;
+    if (at !== null && (typeof at !== "string" || Number.isNaN(Date.parse(at)) || Date.parse(at) > Date.now() + 60_000)) throw new SleepInputError("The review to put back needs the time it was, or none.");
+    if (input.revision === undefined) throw new SleepInputError("Putting a review back needs the goal's revision.");
+    const back = { at: at === null ? null : new Date(at).toISOString(), note: cleanGoalNote(input.back.note, GOAL_NOTE_MAX) };
+    return mutateGoal(fam, id, input, () => ({ reviewBack: back }));
+  }
   const note = cleanGoalNote(input.note, GOAL_NOTE_MAX);
   return mutateGoal(fam, id, input, () => ({ review: { note } }));
 }

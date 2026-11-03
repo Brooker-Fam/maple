@@ -490,7 +490,7 @@ async function main() {
     const s = await call("holding", { action: "start", handoff_in_minutes: 120, next_holder: "Avery" }, alpha);
     ok(!s.isError && /Blake is holding June awake/.test(s.text), s.text);
     const asked = await call("holding", { action: "hand_off", to: "Avery", sleepy: true }, alpha);
-    ok(!asked.isError && /^Asked Avery to take over/.test(asked.text) && /Nothing has changed hands: Blake is still holding June/.test(asked.text) && /get a notice now/.test(asked.text) && /bassinet now/.test(asked.text), asked.text);
+    ok(!asked.isError && /^Asked Avery to take over/.test(asked.text) && /Nothing has changed hands: Blake is still holding June/.test(asked.text) && /Avery's phone gets a notice now if handoff reminders are on there/.test(asked.text) && /bassinet now/.test(asked.text), asked.text);
     eq([(await openShift(1, alpha.babyId))?.holder, (await openShift(1, alpha.babyId))?.asked_to], [alpha.member, alpha.owner], "still Blake's turn, Avery asked");
     const st = await call("maple_status", {}, alpha, "owner");
     ok(/Blake asked Avery to take over at/.test(st.text) && /until Avery has her/.test(st.text), st.text);

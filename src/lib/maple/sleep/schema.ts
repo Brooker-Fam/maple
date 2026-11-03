@@ -200,6 +200,17 @@ async function migrateShiftAsks(): Promise<void> {
  */
 async function migrateGoalTemplate(): Promise<void> {
   await query(`ALTER TABLE maple_sleep_goals ADD COLUMN IF NOT EXISTS template JSONB`);
+  await migrateGoalRestarts();
+}
+
+/**
+ * The family's own clean restart of a goal (sleep/types.ts SleepGoal): `counts_from`, the night it was picked up again
+ * after a quiet stretch, and `paused_until`, the night it counts again after easing off. Both nullable dates, so an
+ * older release reads past them and counts the goal from the night it was set, as before.
+ */
+async function migrateGoalRestarts(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_goals ADD COLUMN IF NOT EXISTS counts_from TEXT CHECK (counts_from ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')`);
+  await query(`ALTER TABLE maple_sleep_goals ADD COLUMN IF NOT EXISTS paused_until TEXT CHECK (paused_until ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')`);
 }
 
 /**

@@ -13,6 +13,11 @@
  *   view-only guest) gets null where their counts would be, never zeros.
  * - Roster hints read the log inside each adult's protected window (feeds,
  *   holding turns, tries): hints for the family, not verdicts.
+ * - Light logging is enough: a week with ENOUGH_NIGHTS logged nights reads;
+ *   below it each target says "too few to tell yet" and the coach suggests no
+ *   next step or stage change. A quiet stretch (QUIET_NIGHTS empty nights in
+ *   a row) is said once, with no tally; picking up again (`counts_from`) and
+ *   easing off (`paused_until`) are only ever the family's choice.
  * - Nothing here is about anyone's health or recovery, and nothing here
  *   changes a goal: the family and the coach do that through the tools.
  */
@@ -25,6 +30,7 @@ import { SleepInputError } from "./errors";
 import {
   CHECKIN_NIGHTS_BACK,
   CHECKIN_PLACES,
+  EASE_OFF_MAX_DAYS,
   GOAL_AHEAD_DAYS,
   GOAL_CUSTOM_MAX,
   GOAL_STEP_TITLE_MAX,
@@ -42,7 +48,9 @@ import {
   WINDOW_MAX_MINUTES,
   WINDOW_MIN_MINUTES,
   WINDOW_COVERS,
+  GOAL_FEEDING,
   GOAL_TEMPLATES,
+  type GoalFeeding,
   type GoalTemplate,
   type WindowCovers,
   type BassinetNightsTarget,
@@ -64,7 +72,25 @@ import {
   type SleepGoal,
   type UntimedTry,
 } from "./types";
-import { coversWords, dateWords, GOAL_STATUS_LABEL, HANDOFF_LABEL, minutesWords, nightsLabel, PLACE_LABEL, PROTECTED_LABEL, targetWords, WEEKDAY_SHORT, weekdayOf, windowTimes, windowWords } from "./words";
+import {
+  coversWords,
+  dateWords,
+  easingWords,
+  ENOUGH_NIGHTS_LINE,
+  GOAL_STATUS_LABEL,
+  HANDOFF_LABEL,
+  minutesWords,
+  nightsLabel,
+  PLACE_LABEL,
+  PROTECTED_LABEL,
+  TARGET_KIND_LABEL,
+  targetWords,
+  tooFewWords,
+  WEEKDAY_SHORT,
+  weekdayOf,
+  windowTimes,
+  windowWords,
+} from "./words";
 
 const MIN = 60_000;
 const DAY_MIN = 24 * 60;
@@ -134,8 +160,27 @@ export const windowOnNight = (w: Pick<RosterWindow, "nights">, night: string) =>
 /** The night a morning check-in is about: the one that began yesterday evening, by the family's calendar. */
 export const lastNightKey = (now: Date | number, tz: string) => addDays(dayKey(now, tz), -1);
 
-/** The family's calendar date a goal was set: its weeks start with that evening's night. */
-export const goalStartKey = (g: Pick<SleepGoal, "created_at">, tz: string) => dayKey(ms(g.created_at), tz);
+/**
+ * "Tonight", for picking a goal up again: before 6 AM the night still going (the try day's, yesterday's date),
+ * else the one this evening begins (today's date).
+ */
+export function tonightKey(now: Date | number, tz: string): string {
+  const today = dayKey(now, tz);
+  const d = parseDayKey(today);
+  return new Date(now).getTime() < zonedTimeToUtc(d.year, d.month, d.day, 6, 0, tz).getTime() ? addDays(today, -1) : today;
+}
+
+/** The family's calendar date a goal was set. */
+export const goalSetKey = (g: Pick<SleepGoal, "created_at">, tz: string) => dayKey(ms(g.created_at), tz);
+
+/**
+ * The night a goal's counting starts (the evening's date, by the family's calendar): the night it was set, or a later
+ * one: a "Back to work" goal's roster start (`template.roster_from`, its rehearsal two weeks before the day back), or
+ * one the family chose: picked up again after a quiet stretch (`counts_from`), or the night it counts again after
+ * easing off (`paused_until`). Its weeks start then, and nobody owes a check-in for a night before it.
+ */
+export const goalStartKey = (g: Pick<SleepGoal, "created_at" | "counts_from" | "paused_until" | "template">, tz: string) =>
+  [g.counts_from, g.paused_until, g.template?.roster_from].reduce<string>((a, k) => (isDayKey(k) ? maxKey(a, k) : a), goalSetKey(g, tz));
 
 /** A YYYY-MM-DD that names a real day (not 2026-02-30). */
 export const isRealDay = (key: unknown): key is string => isDayKey(key) && addDays(key, 0) === key;
@@ -632,7 +677,17 @@ const FEEDING = /\b(?:formula|bottles?|bottle-?f\w*|pump\w*|express(?:ed|ing)?\s
 /** Already a question for them: "Ask the lactation consultant whether …". */
 const ASKING = /^(?:ask|check\s+with|talk\s+(?:to|with)|call|find\s+out|see\s+if|raise|bring\s+up)\b|\b(?:ask|check\s+with|talk\s+(?:to|with)|question\s+for)\s+(?:the\s+|our\s+|her\s+|his\s+|their\s+)?(?:pediatrician|paediatrician|doctor|lactation|lc|ibclc|midwife|nurse|consultant)\b/i;
 
-export type GoalCaution = { kind: "feeds_first" | "long_window" | "bottle" | "feeding" | "awake" | "transfer"; text: string };
+/** A source a caution's words come from, shown with it. */
+export type CautionSource = { title: string; url: string };
+export type GoalCaution = { kind: "feeds_first" | "long_window" | "bottle" | "feeding" | "awake" | "transfer"; text: string; source?: CautionSource };
+
+/**
+ * When to start a bottle for a nursing baby, by Texas HHS's Breastmilk Counts: "Bottles can be introduced when your
+ * baby is 4 weeks old or two weeks before you return to work or school, whichever is sooner."
+ */
+export const BOTTLE_SOURCE: CautionSource = { title: "Texas HHS, Breastmilk Counts: Bottle feeding your baby", url: "https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/" };
+/** Two weeks before the day back, a bottle can start sooner than 4 weeks old (BOTTLE_SOURCE). */
+export const BOTTLE_BEFORE_RETURN_DAYS = 14;
 
 /** "the step "A" and the step "B"" with its verb agreeing: the texts a caution is about. */
 function aboutTexts(xs: readonly { label: string; text: string }[], one: string, many: string): { what: string; verb: string; it: string } {
@@ -647,11 +702,14 @@ function aboutTexts(xs: readonly { label: string; text: string }[], one: string,
  *   under 4 weeks old (`ageDays` today; null before she's born; undefined:
  *   not known, so not said).
  * - Each protected window by how its feeds are covered (`covers`) and her
- *   age: nursing in it needs nothing said; a bottle in it is a question for
- *   their pediatrician or lactation consultant before about 4 weeks, and
- *   after that a reminder to plan pumping around that feed (only when she
- *   nurses, or might); with no feed planned in it (or nothing said), a window
- *   over 5 hours (4 in her first weeks) says who could cover one.
+ *   age: nursing in it needs nothing said; a bottle in it, before about 4
+ *   weeks, says when one can start (Texas HHS: at about 4 weeks old, or two
+ *   weeks before the return to work if that's sooner, dated for a "Back to
+ *   work" goal when `today` is given; BOTTLE_SOURCE) and to ask their
+ *   pediatrician or lactation consultant first, and after that a reminder to
+ *   plan pumping around that feed (only when she nurses, or might); with no
+ *   feed planned in it (or nothing said), a window over 5 hours (4 in her
+ *   first weeks) says who could cover one (a bottle, for a baby on bottles only).
  * - A step or aim that changes how the baby is fed: save it only with their
  *   clinician's yes.
  * - Held sleep that's fine because an adult stays awake (Maple's sleepy
@@ -660,7 +718,7 @@ function aboutTexts(xs: readonly { label: string; text: string }[], one: string,
  */
 export function goalCautions(
   f: Pick<GoalFields, "title" | "why" | "targets" | "steps" | "roster" | "template">,
-  o: { v: Voice; name: (id: string) => string; ageDays?: number | null; adults?: readonly string[] }
+  o: { v: Voice; name: (id: string) => string; ageDays?: number | null; adults?: readonly string[]; today?: string }
 ): GoalCaution[] {
   const out: GoalCaution[] = [];
   const v = o.v;
@@ -682,21 +740,33 @@ export function goalCautions(
     if (w.covers === "nurse") continue;
     if (w.covers === "bottle") {
       if (nurser === null) continue;
-      out.push({
-        kind: "bottle",
-        text: young
-          ? `A bottle in ${who}'s window (${times}): ${nurser ? "" : `if ${v.name} nurses, `}bottles are a question for their pediatrician or lactation consultant first, usually not before about 4 weeks old; until then, whoever's on duty can bring ${v.them} to nurse and settle ${v.them} after.`
-          : `A bottle in ${who}'s window (${times}): ${nurser ? `plan when ${o.name(nurser)} pumps` : `if ${v.name} nurses, plan when the nursing parent pumps`} around that feed, as their lactation consultant advises.`,
-      });
+      if (young) {
+        // The sooner of about 4 weeks old and two weeks before the day back (BOTTLE_SOURCE), dated when both are known.
+        const back = f.template?.date ? addDays(f.template.date, -BOTTLE_BEFORE_RETURN_DAYS) : null;
+        const fourWeeks = o.today && typeof o.ageDays === "number" ? addDays(o.today, FEEDS_FIRST_DAYS - o.ageDays) : null;
+        const from = back && fourWeeks ? minKey(back, fourWeeks) : null;
+        const here = from && o.today ? (from <= o.today ? "; for this plan, that's now" : `; for this plan, ${dateWords(from, o.today)}`) : "";
+        out.push({
+          kind: "bottle",
+          text: `A bottle in ${who}'s window (${times}): ${nurser ? "" : `if ${v.name} nurses, `}Texas HHS says a bottle can start at about 4 weeks old, or two weeks before ${back ? "the return to work" : "a return to work or school"} if that's sooner${here}. Ask their pediatrician or lactation consultant first; until then, whoever's on duty can bring ${v.them} to nurse and settle ${v.them} after.`,
+          source: BOTTLE_SOURCE,
+        });
+      } else {
+        out.push({ kind: "bottle", text: `A bottle in ${who}'s window (${times}): ${nurser ? `plan when ${o.name(nurser)} pumps` : `if ${v.name} nurses, plan when the nursing parent pumps`} around that feed, as their lactation consultant advises.` });
+      }
       continue;
     }
     // No feed planned in it, or nothing said about one: only a window long enough to need one.
     if (windowMinutes(w.from, w.to) <= (young ? FEEDS_FIRST_MINUTES : LONG_WINDOW_MINUTES)) continue;
+    // A baby on bottles only is never brought to nurse.
+    const bottlesOnly = nurser === null;
     out.push({
       kind: "long_window",
       text: young
-        ? `${who}'s window, ${times}, is longer than 4 hours with no feed planned in it: in ${v.name}'s first weeks feeds come first, so whoever's on duty can bring ${v.them} to nurse in it and settle ${v.them} after (a bottle for a nursing baby waits for their pediatrician's or lactation consultant's yes).`
-        : `${who}'s window, ${times}, is longer than 5 hours with no feed planned in it: say who covers a feed then (bringing ${v.them} to nurse, or a bottle), and ask their pediatrician or lactation consultant before starting bottles for a nursing baby.`,
+        ? `${who}'s window, ${times}, is longer than 4 hours with no feed planned in it: in ${v.name}'s first weeks feeds come first, so whoever's on duty can ${bottlesOnly ? `give ${v.them} a bottle in it` : `bring ${v.them} to nurse in it and settle ${v.them} after (a bottle for a nursing baby waits for their pediatrician's or lactation consultant's yes)`}.`
+        : bottlesOnly
+          ? `${who}'s window, ${times}, is longer than 5 hours with no feed planned in it: say who gives ${v.them} a bottle then.`
+          : `${who}'s window, ${times}, is longer than 5 hours with no feed planned in it: say who covers a feed then (bringing ${v.them} to nurse, or a bottle), and ask their pediatrician or lactation consultant before starting bottles for a nursing baby.`,
     });
   }
   const texts: { label: string; text: string }[] = [
@@ -744,11 +814,13 @@ export type GoalFields = {
   roster?: RosterWindow[];
   status?: GoalStatus;
   template?: GoalTemplate | null;
+  counts_from?: string | null;
+  paused_until?: string | null;
 };
 
 export type GoalRules = {
   /** The goal being changed, or null for a new one. */
-  current: Pick<SleepGoal, "targets" | "steps" | "roster" | "target_date" | "template"> | null;
+  current: Pick<SleepGoal, "targets" | "steps" | "roster" | "target_date" | "template" | "counts_from" | "paused_until"> | null;
   /** The adults who check in (owners and members), by member id. */
   adults: ReadonlySet<string>;
   /** Their names, for the error words. */
@@ -886,6 +958,29 @@ export function cleanGoalInput(raw: GoalInput, rules: GoalRules, mode: "create" 
 
   if (raw.template !== undefined) out.template = cleanTemplate(raw.template, rules);
 
+  // Picking up again and easing off: the family's own clean restart, on a goal that's already going.
+  for (const k of ["counts_from", "paused_until"] as const) {
+    const d = raw[k];
+    if (d === undefined) continue;
+    if (mode === "create") throw new SleepInputError("A new goal counts from the night it's set. Picking it up again, or easing off, is for a goal that's already going.");
+    if (d == null || d === "") {
+      out[k] = null;
+      continue;
+    }
+    if (!isRealDay(d)) throw new SleepInputError(`${k === "counts_from" ? "Picking up again" : "Easing off"} needs a date like 2026-11-30.`);
+    // A date it already has stays (an Undo puts one back); a new one is checked against today.
+    if (d !== rules.current?.[k]) {
+      if (k === "counts_from") {
+        if (d > rules.today) throw new SleepInputError("Counting can start again from tonight at the latest.");
+        const end = out.target_date !== undefined ? out.target_date : (rules.current?.target_date ?? null);
+        if (end && d > end) throw new SleepInputError("Counting can't start again after the target date. Move the target date first, or set the goal aside.");
+      } else if (daysBetween(rules.today, d) > EASE_OFF_MAX_DAYS) {
+        throw new SleepInputError(`Easing off can last up to ${EASE_OFF_MAX_DAYS / 7} weeks.`);
+      }
+    }
+    out[k] = d;
+  }
+
   if (raw.status !== undefined) {
     if (mode === "create") throw new SleepInputError("A new goal starts active.");
     if (raw.status !== "active" && raw.status !== "paused") throw new SleepInputError("A goal's status changes to active or paused here; closing it as met or dropped is its own step.");
@@ -902,13 +997,27 @@ function cleanTemplate(raw: unknown, rules: GoalRules): GoalTemplate | null {
   if (!(GOAL_TEMPLATES as readonly unknown[]).includes(t.kind)) throw new SleepInputError(`The goal's template must be one of ${GOAL_TEMPLATES.join(", ")}.`);
   const member = adult(t.member, rules, "Who goes back to work");
   if (!isRealDay(t.date)) throw new SleepInputError("The day back at work must be a date like 2026-11-30.");
-  // A day it already has stays, even once it's passed; a new one is from today on.
-  if (t.date !== rules.current?.template?.date) {
-    if (t.date < rules.today) throw new SleepInputError("The day back at work has already passed. This plans ahead of it; for the nights now, set a goal by hand or with Maple.");
-    if (daysBetween(rules.today, t.date) > GOAL_AHEAD_DAYS) throw new SleepInputError("The day back at work can be up to a year away.");
-  }
+  // A day it already has stays, even once it's passed; a new one is from BACK_TO_WORK_PAST_DAYS ago on.
+  if (t.date !== rules.current?.template?.date) checkDayBack(t.date, rules.today);
   const nursing = t.nursing == null || t.nursing === "" ? null : adult(t.nursing, rules, "Who nurses");
-  return { kind: "back_to_work", member, date: t.date, nursing };
+  // When the roster starts (check-ins and counts with it), and how the baby is fed: both added later, both optional.
+  const from = t.roster_from == null || t.roster_from === "" ? null : t.roster_from;
+  if (from !== null && !isRealDay(from)) throw new SleepInputError("When the roster starts must be a date like 2026-11-16.");
+  // From two weeks ago to the day back (or tonight, for a day back already past).
+  if (from !== null && from !== rules.current?.template?.roster_from && (from < addDays(rules.today, -BACK_TO_WORK_PAST_DAYS) || from > maxKey(t.date, rules.today))) {
+    throw new SleepInputError("The roster starts between two weeks ago and the day back at work.");
+  }
+  const feeding = t.feeding == null || t.feeding === "" ? null : t.feeding;
+  if (feeding !== null && !(GOAL_FEEDING as readonly unknown[]).includes(feeding)) throw new SleepInputError(`How the baby is fed must be one of ${GOAL_FEEDING.join(", ")}.`);
+  return { kind: "back_to_work", member, date: t.date, nursing, ...(from ? { roster_from: from } : {}), ...(feeding ? { feeding: feeding as GoalFeeding } : {}) };
+}
+
+/** A day back at work up to this many days ago is still planned for (the first two weeks back); further back, set a goal by hand. */
+export const BACK_TO_WORK_PAST_DAYS = 14;
+
+function checkDayBack(date: string, today: string): void {
+  if (date < addDays(today, -BACK_TO_WORK_PAST_DAYS)) throw new SleepInputError("The day back at work was more than two weeks ago. This plans the first weeks back; for the nights now, set a goal by hand or with Maple.");
+  if (daysBetween(today, date) > GOAL_AHEAD_DAYS) throw new SleepInputError("The day back at work can be up to a year away.");
 }
 
 function keepId<T>(raw: unknown, have: Map<string, T>, seen: Set<string>, what: string, label: string): string | null {
@@ -934,16 +1043,18 @@ export function nextStep(steps: readonly GoalStep[]): GoalStep | null {
 // From those answers comes one goal to read back and save on a yes, with no
 // logs needed first: a protected window for each adult (the returning
 // adult's on work nights), each window's feeds covered by how she's fed, and
-// three steps timed from the day back: bottles as a question for their
-// pediatrician or lactation consultant, not before about 4 weeks old (OWH,
-// Texas HHS), the work-week roster rehearsed on 2 or 3 nights two weeks
-// before (Cedars-Sinai, MSU Extension), and a short first week back (AAFP);
-// with a note to expect more night nursing when the nursing parent is the
-// one going back (OWH). Feeding stays the family's and their clinicians':
-// the template never changes how she's fed.
+// up to three steps timed from the day back, each left out when there's no
+// time for it before then: the night feeds (for a bottle, pumping as a
+// question for their lactation consultant), the work-week roster rehearsed
+// on 2 or 3 nights two weeks before (Cedars-Sinai, MSU Extension), and a
+// short first week back (AAFP); with a note to expect more night nursing
+// when the nursing parent is the one going back (OWH). The roster, and with
+// it the check-ins and counts, starts with its rehearsal. A day back up to
+// two weeks ago is planned for too. Feeding stays the family's and their
+// clinicians': the template never changes how she's fed.
 
-export const QUICK_FEEDING = ["nursing", "bottles", "both"] as const;
-export type QuickFeeding = (typeof QUICK_FEEDING)[number];
+export const QUICK_FEEDING = GOAL_FEEDING;
+export type QuickFeeding = GoalFeeding;
 export const QUICK_SLEEPS = ["bassinet", "crib", "arms", "bed", "mixed"] as const;
 export type QuickSleeps = (typeof QUICK_SLEEPS)[number];
 export const QUICK_OFF_DUTY = ["other_room", "same_room"] as const;
@@ -993,8 +1104,9 @@ export const BACK_TO_WORK_AFTER_DAYS = 13;
  * The quick setup's goal (BackToWorkAnswers): a title and why, the target
  * date, a protected-window target and window for each half's adult (the
  * returning adult's on work nights), each window's feeds covered by how the
- * baby is fed, and three steps timed back from the day back (none earlier
- * than this week), with the read-back's notes. Checked by cleanGoalInput
+ * baby is fed, and up to three steps timed back from the day back (none
+ * earlier than this week, none without time left before it), the template
+ * with when the roster starts, and the read-back's notes. Checked by cleanGoalInput
  * when it's saved, like any goal; throws SleepInputError for an answer it
  * can't use.
  */
@@ -1019,8 +1131,7 @@ export function backToWorkGoal(a: BackToWorkAnswers, o: { v: Voice; name: (id: s
   if (returning !== first && returning !== second) throw new SleepInputError(`${o.name(returning)} goes back to work, so ${o.name(returning)} takes one half of the night here.`);
   const nursing = feeding === "bottles" ? null : person(a.nursing, "Who nurses");
   if (!isRealDay(a.return_date)) throw new SleepInputError("The day back at work must be a date like 2026-11-30.");
-  if (a.return_date < o.today) throw new SleepInputError("The day back at work has already passed. This plans ahead of it; for the nights now, set a goal by hand or with Maple.");
-  if (daysBetween(o.today, a.return_date) > GOAL_AHEAD_DAYS) throw new SleepInputError("The day back at work can be up to a year away.");
+  checkDayBack(a.return_date, o.today);
   const from = a.night_from ?? QUICK_NIGHT.from;
   const split = a.split ?? QUICK_NIGHT.split;
   const to = a.night_to ?? QUICK_NIGHT.to;
@@ -1035,37 +1146,73 @@ export function backToWorkGoal(a: BackToWorkAnswers, o: { v: Voice; name: (id: s
     { member: second, from, to: split, nights: nightsFor(second), covers: coversFor(second) },
     { member: first, from: split, to, nights: nightsFor(first), covers: coversFor(first) },
   ];
-  // Each step's week: so many days before the day back, never before this week.
-  const weekBefore = (days: number) => maxKey(o.today, addDays(a.return_date, -days));
-  const steps =
-    feeding === "bottles"
-      ? [{ title: `Set out what the night feeds need, so whoever's on duty can feed ${v.them} alone`, week_of: weekBefore(21) }]
-      : feeding === "both"
-        ? [{ title: `Ask the lactation consultant when ${o.name(nursing!)} should pump around the night bottle`, week_of: weekBefore(28) }]
-        : [{ title: "Ask the pediatrician or lactation consultant when to start a bottle of expressed milk (not before about 4 weeks)", week_of: weekBefore(28) }];
-  steps.push({ title: "Rehearse the work-week roster on 2 or 3 nights", week_of: weekBefore(14) }, { title: "Plan a short first week back (a Wednesday or Thursday start, if work allows)", week_of: weekBefore(7) });
+  const days = daysBetween(o.today, a.return_date);
+  // Each step's week: so many days before the day back, never before this week; a step with no time left before the day back is left out.
+  const weekBefore = (before: number) => maxKey(o.today, addDays(a.return_date, -before));
+  const N = nursing ? o.name(nursing) : "";
+  const wd = weekdayOf(a.return_date);
+  const plan = [
+    {
+      title:
+        feeding === "bottles"
+          ? `Set out what the night feeds need, so whoever's on duty can feed ${v.them} alone`
+          : feeding === "both"
+            ? `Ask the lactation consultant when ${N} should pump around the night bottle`
+            : `Plan the night feeds: whoever's on duty brings ${v.them} to ${N} to nurse, then settles ${v.them}`,
+      before: feeding === "bottles" ? 21 : 28,
+      need: 1,
+      what: "the night feeds' step",
+    },
+    { title: "Rehearse the work-week roster on 2 or 3 nights", before: 14, need: 2, what: "the rehearsal" },
+    {
+      title: wd === 3 || wd === 4 ? `Plan a short first week back (it starts on a ${wd === 3 ? "Wednesday" : "Thursday"})` : "Plan a short first week back (a Wednesday or Thursday start, if work allows)",
+      before: 7,
+      need: 3,
+      what: "the short first week",
+    },
+  ];
+  const kept = plan.filter((s) => days >= s.need);
+  const left = plan.filter((s) => days < s.need);
+  const steps = kept.map((s) => ({ title: s.title, week_of: weekBefore(s.before) }));
+  // The roster starts with its rehearsal, two weeks before the day back (tonight when that's sooner): check-ins and counts with it.
+  const rosterFrom = weekBefore(14);
   const goal: GoalInput = {
     title: `Back to work: protected sleep for ${R} and ${o.name(other)}`,
     why: `${R} goes back to work on ${dateWords(a.return_date, o.today)}.`,
-    target_date: a.target_date ?? addDays(a.return_date, BACK_TO_WORK_AFTER_DAYS),
+    // Two weeks after the day back, and at least a week of nights from tonight.
+    target_date: a.target_date ?? maxKey(addDays(a.return_date, BACK_TO_WORK_AFTER_DAYS), addDays(o.today, 6)),
     targets: [
       { kind: "protected_window", member: returning, per_week: Math.min(5, nightsFor(returning).length) },
       { kind: "protected_window", member: other, per_week: 4 },
     ],
     steps,
     roster,
-    template: { kind: "back_to_work", member: returning, date: a.return_date, nursing },
+    template: { kind: "back_to_work", member: returning, date: a.return_date, nursing, roster_from: rosterFrom, feeding },
   };
   const notes: string[] = [];
-  const days = daysBetween(o.today, a.return_date);
+  const when = days < 0 ? `has been back since ${dateWords(a.return_date, o.today)}` : `is back ${days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`}`;
   const now = steps.filter((x) => x.week_of === o.today).length;
-  if (now) notes.push(`${R} is back ${days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`}, so ${now === steps.length ? "every step starts" : now === 1 ? "the first step starts" : `the first ${now} steps start`} this week.`);
+  const starts = now === steps.length ? (now === 1 ? "its step starts" : "every step starts") : now === 1 ? "the first step starts" : `the first ${now} steps start`;
+  if (left.length) {
+    const what = left.map((s) => s.what);
+    const list = what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what[what.length - 1]} are` : `${what[0]} is`;
+    const rest = now === steps.length ? (now === 1 ? "the other step starts" : "the other steps start") : starts;
+    notes.push(`${R} ${when}, so ${list} left out, with no time for ${what.length > 1 ? "them" : "it"} before the day back${now ? `, and ${rest} this week` : ""}.`);
+  } else if (now) {
+    notes.push(`${R} ${when}, so ${starts} this week.`);
+  }
+  if (rosterFrom > o.today) notes.push(`The roster starts on ${dateWords(rosterFrom, o.today)}, two weeks before the day back, with its rehearsal: the morning check-ins and the counts begin then.`);
   if (sleeps === "bed") notes.push(`${v.Name} sleeps in your bed now: Maple's plans keep ${v.them} in ${v.their} own sleep space, the bassinet in your room, close to your bed but not in it. The Plan tab's first stage is one bassinet try a day.`);
   else if (sleeps === "arms" || sleeps === "mixed") notes.push(`${v.Name} sleeps ${sleeps === "arms" ? "in arms" : "in a mix of places"} now: holding ${v.them} is fine while you're awake, and the Plan tab's first stage is one bassinet try a day.`);
+  // Each window's feeds in words, from how they're covered: whoever's on duty is the adult not asleep in it.
+  const feeds = roster.map((w) => {
+    const duty = w.member === first ? second : first;
+    const where = `in ${o.name(w.member)}'s window`;
+    if (w.covers === "bottle") return `${where}, ${o.name(duty)} gives ${v.them} a bottle${feeding === "bottles" ? "" : " of expressed milk"}`;
+    return duty === nursing ? `${where}, ${o.name(duty)} nurses ${v.them}` : `${where}, ${o.name(duty)} brings ${v.them} to ${N} to nurse, then settles ${v.them}`;
+  });
   notes.push(
-    offDuty === "same_room"
-      ? "The adult who's off sleeps in the same room: one clinician's approach is two sleep spaces, so whoever's off isn't woken by every sound. That's your call."
-      : `The adult who's off sleeps in another room: whoever's on duty ${feeding === "bottles" ? "does the feeds" : `brings ${v.them} to nurse`} in the other's window.`
+    `${offDuty === "same_room" ? "The adult who's off sleeps in the same room: one clinician's approach is two sleep spaces, so whoever's off isn't woken by every sound. That's your call." : "The adult who's off sleeps in another room."} Night feeds: ${feeds.join("; ")}.`
   );
   if (nursing === returning) notes.push(`Once ${R} is back at work, some babies nurse more often at night (sometimes called reverse cycling): the morning check-ins will show how the nights go, and the roster can change.`);
   return { goal, notes };
@@ -1089,7 +1236,12 @@ export type GoalWeek = {
 };
 
 export type GoalSpan = {
+  /** The night counting starts (goalStartKey): the night it was set, or later once picked up again or back from easing off. */
   startsOn: string;
+  /** The night it was set (the family's calendar date). */
+  setOn: string;
+  /** While easing off: the night counting picks up again (`paused_until`, still ahead of today); else null. */
+  easingUntil: string | null;
   /** The target date, or null. */
   endsOn: string | null;
   today: string;
@@ -1127,22 +1279,27 @@ const weekNumber = (startsOn: string, night: string, weeksTotal: number | null) 
   return weeksTotal ? Math.min(n, weeksTotal) : n;
 };
 
-export function goalSpan(goal: Pick<SleepGoal, "created_at" | "target_date" | "closed_at" | "status">, now: Date, tz: string): GoalSpan {
+export function goalSpan(goal: Pick<SleepGoal, "created_at" | "target_date" | "closed_at" | "status" | "counts_from" | "paused_until" | "template">, now: Date, tz: string): GoalSpan {
   const startsOn = goalStartKey(goal, tz);
+  const setOn = goalSetKey(goal, tz);
   const today = dayKey(now, tz);
   const cur = tryDayKey(now, tz);
-  const endsOn = goal.target_date ? maxKey(goal.target_date, startsOn) : null;
-  const weeksTotal = endsOn ? weeksThrough(startsOn, endsOn).total : null;
+  const endsOn = goal.target_date ?? null;
+  const open = isOpen(goal.status) && !goal.closed_at;
+  const easingUntil = open && goal.paused_until && today < goal.paused_until ? goal.paused_until : null;
+  // Counting that starts again after the target date has no nights to count.
+  const none = !!endsOn && endsOn < startsOn;
+  const weeksTotal = endsOn ? (none ? 0 : weeksThrough(startsOn, endsOn).total) : null;
   let last = cur;
   if (endsOn) last = minKey(last, endsOn);
   if (goal.closed_at) last = minKey(last, tryDayKey(ms(goal.closed_at), tz));
   // The week a night is in; the current week shows from the moment the goal is set, before its first night begins.
   const shownTo = maxKey(last, startsOn);
-  const begun = weekNumber(startsOn, shownTo, weeksTotal);
+  const begun = none ? 0 : weekNumber(startsOn, shownTo, weeksTotal);
   const max = endsOn ? GOAL_WEEKS_SHOWN : GOAL_WEEKS_NO_DATE;
   const first = Math.max(0, begun - max);
   const inSpan = !endsOn || cur <= endsOn;
-  const weekNow = isOpen(goal.status) && !goal.closed_at && inSpan ? weekNumber(startsOn, maxKey(cur, startsOn), weeksTotal) : null;
+  const weekNow = open && inSpan && !none ? weekNumber(startsOn, maxKey(cur, startsOn), weeksTotal) : null;
   const weeks: GoalWeek[] = [];
   for (let i = first; i < begun; i++) {
     const from = addDays(startsOn, 7 * i);
@@ -1152,6 +1309,8 @@ export function goalSpan(goal: Pick<SleepGoal, "created_at" | "target_date" | "c
   }
   return {
     startsOn,
+    setOn,
+    easingUntil,
     endsOn,
     today,
     daysLeft: endsOn ? daysBetween(today, endsOn) : null,
@@ -1161,6 +1320,15 @@ export function goalSpan(goal: Pick<SleepGoal, "created_at" | "target_date" | "c
     weeksHidden: first,
     lastNight: last,
   };
+}
+
+/**
+ * A review is due (the coach's and the look-back's): an active goal that isn't easing off, REVIEW_DUE_DAYS or more
+ * after its last review, or after it was set (or counting started again), whichever is later.
+ */
+export function reviewIsDue(goal: Pick<SleepGoal, "status" | "last_review_at" | "created_at">, span: Pick<GoalSpan, "startsOn" | "today" | "easingUntil">, tz: string): boolean {
+  if (goal.status !== "active" || span.easingUntil) return false;
+  return daysBetween(maxKey(dayKey(ms(goal.last_review_at ?? goal.created_at), tz), span.startsOn), span.today) >= REVIEW_DUE_DAYS;
 }
 
 /** The shown week a night falls in, or null. */
@@ -1262,6 +1430,12 @@ export function nightAnswers(checkins: readonly SleepCheckin[], night: string): 
   };
 }
 
+/** A bassinet try for that night that an adult's check-in said happened (an untimed try, long or short): 1, else 0 (engine.ts planToday's fromCheckins). */
+export const checkinTryOn = (checkins: readonly SleepCheckin[] | null | undefined, night: string) => {
+  const u = checkins ? nightAnswers(checkins, night).untimed : null;
+  return u && u.answer !== "no" ? 1 : 0;
+};
+
 /**
  * The night's planned handoff, if there was one: on the roster, one adult's
  * window ending within 30 minutes of another adult's starting, or a holding
@@ -1362,6 +1536,8 @@ export type NightsWeek = {
   counted: number;
   /** Nights with a finished try in the log: the sample "counted" is out of. */
   tried: number;
+  /** Nights with no try in the log but one an adult's check-in said happened (long or short): tried, from check-ins. */
+  checkinTries: number;
   /** Nights of the week begun so far. */
   nights: number;
   /** Of `counted`, nights counted from a check-in's untimed try (no try in the log that night): shown apart. */
@@ -1470,7 +1646,69 @@ export type WeekCoverage = {
   feedNights: number;
   tryNights: number;
   checkinNights: number | null;
+  /**
+   * Nights that can be read (ENOUGH_NIGHTS): logged or partly logged, or answered in the morning about the baby's night
+   * (an untimed try, or where she spent it). For a reader who can't see check-ins, the logged ones only.
+   */
+  read: number;
 };
+
+/**
+ * A goal week with this many logged or partly logged nights (nightLog) is enough to read: Maple's own rule (after the
+ * three diary nights that measured infant sleep reliably), not guidance. Below it, each target's line says so plainly
+ * ("2 nights logged, too few to tell yet"), and the coach suggests no next step and no stage change.
+ */
+export const ENOUGH_NIGHTS = 3;
+/** This many nights in a row with nothing in them (emptyNight) is a quiet stretch: said once, plainly, and the family chooses what's next. */
+export const QUIET_NIGHTS = 7;
+
+/** A week's logged or partly logged nights (a try that try day counts): the sample ENOUGH_NIGHTS reads. */
+export const nightsLogged = (c: Pick<WeekCoverage, "logged" | "partly">) => c.logged + c.partly;
+
+/** A goal with a target counted from the log (bassinet nights, the bassinet stretch); protected windows count the adults' check-ins. */
+const countsTheLog = (goal: Pick<SleepGoal, "targets">) => goal.targets.some((t) => t.kind === "bassinet_nights" || t.kind === "bassinet_stretch");
+
+/**
+ * Whether a goal week is enough to read (ENOUGH_NIGHTS): its nights logged or partly logged, or answered in the
+ * morning about the baby's night (WeekCoverage.read: the morning check-in is plenty on the other nights); or, for a goal
+ * counted only from the adults' check-ins (protected windows and no bassinet target), its nights with a check-in.
+ */
+export function weekEnough(goal: Pick<SleepGoal, "targets">, c: WeekCoverage | null | undefined): boolean {
+  if (!c) return false;
+  if (c.read >= ENOUGH_NIGHTS) return true;
+  return !countsTheLog(goal) && goal.targets.some((t) => t.kind === "protected_window") && (c.checkinNights ?? 0) >= ENOUGH_NIGHTS;
+}
+
+/** "4 nights logged", "2 nights logged, 3 answered in the morning": what a week's read is out of. */
+export function readWords(c: Pick<WeekCoverage, "logged" | "partly" | "read">): string {
+  const logged = nightsLogged(c);
+  const answered = c.read - logged;
+  return answered > 0 ? `${logged ? `${plural(logged, "night")} logged, ` : ""}${plural(answered, "night")} answered in the morning` : `${plural(logged, "night")} logged`;
+}
+
+/** A night with nothing in it, for a quiet stretch: nothing logged (nightLog "none", and no try that try day) and no adult's check-in for it. */
+export const emptyNight = (n: Pick<NightInfo, "log" | "checkedIn">) => n.log === "none" && !n.checkedIn;
+
+/** The latest stretch of QUIET_NIGHTS or more empty nights in a row, inside the goal's counted nights. */
+export type QuietStretch = {
+  /** Its first and last nights (the evenings). */
+  from: string;
+  to: string;
+  nights: number;
+  /** It runs through the last night that's over: nothing has been logged since it began. */
+  going: boolean;
+  /** It reaches back past the nights read (a goal's earlier weeks, not shown): "since before" its first. */
+  before: boolean;
+};
+
+/** A quiet stretch still going on a goal that isn't past its target date (nor easing off): said once, with a clean restart to choose. */
+export const quietNow = (p: Pick<GoalProgress, "quiet" | "daysLeft" | "easingUntil">): QuietStretch | null => (p.quiet?.going && !p.easingUntil && !(p.daysLeft != null && p.daysLeft < 0) ? p.quiet : null);
+
+/** "Nothing logged since Sun, Oct 20": the stretch said once, with no tally of the nights. */
+export const quietWords = (q: Pick<QuietStretch, "from" | "before">, todayKey: string) => `Nothing logged since ${q.before ? "before " : ""}${dateWords(q.from, todayKey)}`;
+
+/** Each goal adult's check-ins in a week, against the nights they could check in (their roster nights that are over, or every night over without a window). */
+export type CheckinWeek = { week: number; member: string; checkedIn: number; nights: number; yes: number; partly: number; no: number };
 
 /** The adults' extra answers about the baby's nights, each week (owners and members only). */
 export type WeekAnswers = {
@@ -1514,7 +1752,20 @@ export type GoalProgress = GoalSpan & {
   feedGap: { longestMin: number; nights: number } | null;
   /** Check-in patterns with enough nights on each side (CHECKIN_PATTERN_NIGHTS); null for a reader who can't see check-ins. */
   observations: CheckinObservation[] | null;
+  /** The latest stretch of QUIET_NIGHTS or more empty nights in a row, or null (always for a reader who can't see check-ins). */
+  quiet: QuietStretch | null;
+  /** Each goal adult's check-ins by week; null for a reader who can't see check-ins. */
+  checkinWeeks: CheckinWeek[] | null;
 };
+
+/** The week the coach and the goal card read: the newest one with a night over (on a review morning, the week that just ended). */
+export function readWeek(p: Pick<GoalProgress, "weeks" | "coverage">): { w: GoalWeek; c: WeekCoverage } | null {
+  for (const w of [...p.weeks].reverse()) {
+    const c = p.coverage.find((x) => x.week === w.n);
+    if (c && c.over > 0) return { w, c };
+  }
+  return null;
+}
 
 /** A check-in pattern shows only with this many nights on each side, and a difference this big between them (as the try patterns' 30 points). */
 export const CHECKIN_PATTERN_NIGHTS = 5;
@@ -1558,7 +1809,8 @@ const HINT_NIGHTS = 7;
  * begins, its step is this week's.
  */
 export function stepsByWeek(steps: readonly GoalStep[], span: Pick<GoalSpan, "startsOn" | "weeksTotal" | "today">): { thisWeek: GoalStep[]; earlier: GoalStep[]; anyTime: GoalStep[]; later: GoalStep[] } {
-  const now = weekNumber(span.startsOn, maxKey(span.today, span.startsOn), span.weeksTotal);
+  // Before counting starts (a roster that starts later, or easing off), the steps planned before it are this week's.
+  const now = span.today < span.startsOn ? 0 : weekNumber(span.startsOn, span.today, span.weeksTotal);
   const open = steps.filter((s) => !s.done_at);
   const weekOfStep = (s: GoalStep) => (s.week_of! < span.startsOn ? 0 : weekNumber(span.startsOn, s.week_of!, span.weeksTotal));
   const byWeek = (xs: GoalStep[]) => xs.slice().sort((a, b) => a.week_of!.localeCompare(b.week_of!));
@@ -1622,11 +1874,12 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
     }
   }
   const info = (k: string) => nightInfo.get(k)!;
-  // For a bassinet aim, a night is known by what says something about her sleep: a try, a sleep, a check-in or an untimed try.
-  // A night with only feeds logged is unknown for it: whether she tried the bassinet isn't in the log.
+  // For a bassinet aim, a night is known by what says something about her sleep: a try, a sleep, or a morning answer about
+  // her night (an untimed try, where she spent it). A check-in alone is about the adult's own sleep, and a night with only
+  // feeds logged is unknown for it: whether she tried the bassinet isn't in the log.
   const knownNight = (k: string) => {
     const n = info(k);
-    return n.tried || tryNights.has(k) || n.slept || !!n.checkedIn || n.untimed != null;
+    return n.tried || tryNights.has(k) || n.slept || n.untimed != null || n.place != null;
   };
   const unknownNight = (k: string) => info(k).log != null && !knownNight(k);
   const feedsOnlyNight = (k: string) => unknownNight(k) && info(k).log !== "none";
@@ -1657,6 +1910,7 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
               week: w.n,
               counted: timed.length + fromCheckins.length,
               tried: tried.length,
+              checkinTries: nights.filter((k) => !byNight.has(k) && (info(k).untimed?.answer === "long" || info(k).untimed?.answer === "short")).length,
               nights: nights.length,
               fromCheckins: fromCheckins.length,
               known: nights.filter(knownNight).length,
@@ -1690,9 +1944,11 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
           target,
           weeks: span.weeks.map((w) => {
             const nights = new Set(nightsIn(w, checkedTo));
-            const here = theirs.filter((c) => nights.has(c.night));
+            // Only the nights their window was on count (every night, without a window on the roster): never "6 of 5".
+            const roster = new Set([...nights].filter((k) => !windows.length || windows.some((x) => windowOnNight(x, k))));
+            const here = theirs.filter((c) => roster.has(c.night));
             const count = (a: ProtectedAnswer) => here.filter((c) => c.protected === a).length;
-            const planned = [...nights].filter((k) => windows.some((x) => windowOnNight(x, k))).length;
+            const planned = windows.length ? roster.size : 0;
             // None over yet this week: the next night the window is on, from tonight, within the goal.
             let nextNight: string | null = null;
             for (let i = 1; !planned && w.current && !nextNight && i <= 7; i++) {
@@ -1715,7 +1971,9 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
     const inShown = checkins.filter((c) => c.night >= shownFrom && c.night <= checkedTo);
     const people = new Set<string>([...inShown.map((c) => c.member), ...goalAdults(goal)]);
     checkinCounts = [...people].map((member) => {
-      const theirs = inShown.filter((c) => c.member === member);
+      // Their nights on the roster only (every night, for an adult with no window on it).
+      const windows = windowsOf(member);
+      const theirs = inShown.filter((c) => c.member === member && (!windows.length || windows.some((w) => windowOnNight(w, c.night))));
       const count = (a: ProtectedAnswer) => theirs.filter((c) => c.protected === a).length;
       const lastOne = checkins.find((c) => c.member === member && c.night === last);
       return { member, nights: theirs.length, yes: count("yes"), partly: count("partly"), no: count("no"), lastNight: lastOne?.protected ?? null };
@@ -1737,6 +1995,7 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
       feedNights: n((x) => x.feed),
       tryNights: n((x) => x.tried),
       checkinNights: checkins ? n((x) => !!x.checkedIn) : null,
+      read: n((x) => x.log === "logged" || x.log === "partly" || x.untimed != null || x.place != null),
     };
   });
   const answers: WeekAnswers[] | null = checkins
@@ -1841,15 +2100,16 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
         .flatMap((c) => {
           const on = windows.filter((w) => windowOnNight(w, c.night));
           if (!on.length) return [];
-          const fedByOther = on.some((w) => {
-            const [a, b] = windowOn(w, c.night, tz).map((d) => d.getTime());
-            return feeds.some((e) => e.created_by !== member && ms(e.started_at) >= a && ms(e.started_at) < b);
-          });
-          return [{ yes: c.protected === "yes", fed_by_other: fedByOther, try: byNight.has(c.night) }];
+          const inside = on.map((w) => windowOn(w, c.night, tz).map((d) => d.getTime()));
+          const fedByOther = inside.some(([a, b]) => feeds.some((e) => e.created_by !== member && ms(e.started_at) >= a && ms(e.started_at) < b));
+          // Something logged inside the window that night: only then does a night "without" say anything.
+          const logged = inside.some(([a, b]) => spans.some(([s, e]) => e >= a && s < b));
+          return [{ yes: c.protected === "yes", fed_by_other: fedByOther, try: byNight.has(c.night), logged }];
         });
       for (const factor of ["fed_by_other", "try"] as const) {
         const w = rows.filter((r) => r[factor]);
-        const wo = rows.filter((r) => !r[factor]);
+        // A night with nothing logged inside the window is unknown, never a night "without".
+        const wo = rows.filter((r) => !r[factor] && r.logged);
         if (w.length < CHECKIN_PATTERN_NIGHTS || wo.length < CHECKIN_PATTERN_NIGHTS) continue;
         const a = w.filter((r) => r.yes).length;
         const b = wo.filter((r) => r.yes).length;
@@ -1858,6 +2118,35 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
       }
     }
   }
+
+  // The latest stretch of QUIET_NIGHTS or more empty nights in a row, over the counted nights that are over. Only for a
+  // reader who sees check-ins: a night with only a check-in in it isn't empty, and a view-only guest can't tell.
+  const over = checkins ? [...nightInfo.values()].filter((n) => n.log != null).sort((a, b) => a.night.localeCompare(b.night)) : [];
+  let quiet: QuietStretch | null = null;
+  for (let i = 0, start = -1; i <= over.length; i++) {
+    if (i < over.length && emptyNight(over[i])) {
+      if (start < 0) start = i;
+      continue;
+    }
+    if (start >= 0 && i - start >= QUIET_NIGHTS) {
+      quiet = { from: over[start].night, to: over[i - 1].night, nights: i - start, going: i === over.length, before: over[start].night === shownFrom && span.weeksHidden > 0 };
+    }
+    start = -1;
+  }
+
+  // Each goal adult's check-ins week by week, against the nights they could check in.
+  const checkinWeeks: CheckinWeek[] | null = checkins
+    ? span.weeks.flatMap((w) => {
+        const ks = nightsIn(w, checkedTo);
+        return goalAdults(goal).map((member) => {
+          const windows = windowsOf(member);
+          const could = windows.length ? ks.filter((k) => windows.some((x) => windowOnNight(x, k))) : ks;
+          const theirs = checkins.filter((c) => c.member === member && could.includes(c.night));
+          const n = (a: ProtectedAnswer) => theirs.filter((c) => c.protected === a).length;
+          return { week: w.n, member, checkedIn: theirs.length, nights: could.length, yes: n("yes"), partly: n("partly"), no: n("no") };
+        });
+      })
+    : null;
 
   const plan = stepsByWeek(goal.steps, span);
   const recent = new Set(span.weeks.slice(-2).map((w) => w.n));
@@ -1873,6 +2162,8 @@ export function goalProgress(goal: SleepGoal, data: GoalData, now: Date, tz: str
     nights: [...nightInfo.values()].filter((n) => recent.has(n.week)),
     feedGap,
     observations,
+    quiet,
+    checkinWeeks,
   };
 }
 
@@ -1937,13 +2228,18 @@ export function goalHeadLine(goal: SleepGoal, p: GoalSpan, words: Pick<GoalWords
   const status = goal.status === "met" || goal.status === "dropped" ? `${GOAL_STATUS_LABEL[goal.status]}${goal.closed_at ? ` on ${dateWords(dayKey(ms(goal.closed_at), words.tz), p.today)}` : ""}` : GOAL_STATUS_LABEL[goal.status];
   const parts = [`Sleep goal ${goalRef(goal.id)} (${status}): "${goal.title}".`];
   if (goal.why) parts.push(`Why: "${goal.why}".`);
+  // While easing off there's no week to name: counting picks up again on its night.
+  const week = p.easingUntil ? null : p.weekNow;
   if (p.endsOn) {
     const left = p.daysLeft ?? 0;
     const when = left > 1 ? `${left} days left` : left === 1 ? "tomorrow" : left === 0 ? "today" : `${plural(-left, "day")} ago`;
-    parts.push(`Target date ${dateWords(p.endsOn, p.today)} (${when})${p.weekNow ? `; week ${p.weekNow} of ${p.weeksTotal}` : ""}.`);
+    parts.push(`Target date ${dateWords(p.endsOn, p.today)} (${when})${week ? `; week ${week} of ${p.weeksTotal}` : ""}.`);
   } else {
-    parts.push(`No target date${p.weekNow ? `; week ${p.weekNow}` : ""}.`);
+    parts.push(`No target date${week ? `; week ${week}` : ""}.`);
   }
+  if (p.easingUntil) parts.push(`${easingWords(p.easingUntil, p.today)}, as the family chose: nothing is counted until then, and the steps and targets hold.`);
+  else if (p.startsOn > p.today) parts.push(`Counting starts ${dateWords(p.startsOn, p.today)} (set ${dateWords(p.setOn, p.today)}): nothing is counted before then.`);
+  else if (p.startsOn > p.setOn) parts.push(`Counting since ${dateWords(p.startsOn, p.today)} (set ${dateWords(p.setOn, p.today)}): the nights before it don't count.`);
   return parts.join(" ");
 }
 
@@ -2006,14 +2302,35 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
   const shown = [cur, prev].filter((w): w is GoalWeek => !!w);
   const sentence = (head: string, parts: string[]) => lines.push(`${head}. ${parts.join(" ")}`);
   if (goal.last_review_at) lines.push(`Last review (${dateWords(dayKey(ms(goal.last_review_at), words.tz), p.today)}): ${goal.review_note ? `"${goal.review_note}"` : "no note"}.`);
-  for (const tp of p.targets) {
+  // Easing off, or nothing logged for a stretch: the aims, and that fact once, with no week-by-week tally.
+  const quiet = quietNow(p);
+  if (p.easingUntil || quiet) {
+    for (const tp of p.targets) lines.push(`Aim: ${targetWords(tp.target, name)}.`);
+    lines.push(p.easingUntil ? `${easingWords(p.easingUntil, p.today)}: nothing is counted until then.` : `${quietWords(quiet!, p.today)}.`);
+  }
+  // A week too thin to read (ENOUGH_NIGHTS logged nights) says so, never a count against the aim from a night or two.
+  const thin = (w: GoalWeek): string | null => {
+    const c = p.coverage.find((y) => y.week === w.n);
+    if (!c?.over) return `${label(w)}: no night is over yet.`;
+    if (c.read >= ENOUGH_NIGHTS) return null;
+    const ongoing = weekOngoing(w, p);
+    return `${label(w)}: ${c.read > nightsLogged(c) ? `${readWords(c)}${ongoing ? " so far" : ""}, too few to tell${ongoing ? " yet" : ""}` : tooFewWords(nightsLogged(c), { ongoing })}.`;
+  };
+  for (const tp of p.easingUntil || quiet ? [] : p.targets) {
     const head = `Aim: ${targetWords(tp.target, name)}`;
     switch (tp.kind) {
       case "bassinet_nights":
         sentence(
           head,
           shown.map((w) => {
+            const few = thin(w);
+            if (few) return few;
             const x = tp.weeks.find((y) => y.week === w.n)!;
+            // Under ENOUGH_NIGHTS nights that say anything about her sleep: the sample first, never a count against the aim.
+            if (x.known < ENOUGH_NIGHTS) {
+              const soFar = weekOngoing(w, p);
+              return `${label(w)}: a try, a sleep or a morning answer about ${v.their} night on ${x.known} of ${plural(x.nights, "night")}${soFar ? " so far" : ""}, too few to tell${soFar ? " yet" : ""}.`;
+            }
             const apart = x.fromCheckins ? `${x.counted - x.fromCheckins} timed, ${x.fromCheckins} from check-ins; ` : "";
             // Nights with only feeds logged: whether she tried the bassinet isn't in the log, so never "no tries".
             const only = x.feedsOnly ? `; ${x.feedsOnly} of them with only feeds or other entries logged, no try, sleep or check-in` : "";
@@ -2025,6 +2342,8 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
         sentence(
           head,
           shown.map((w) => {
+            const few = thin(w);
+            if (few) return few;
             const x = tp.weeks.find((y) => y.week === w.n)!;
             return x.stretches
               ? `${label(w)}: longest ${formatDuration(x.longestSec ?? 0)}; ${x.atLeast} of ${plural(x.stretches, "stretch", "stretches")} ${x.atLeast === 1 ? "was" : "were"} ${minutesWords(tp.target.minutes)} or more.`
@@ -2044,6 +2363,8 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
             const other = answers({ yes: 0, partly: x.partly, no: x.no });
             const soFar = weekOngoing(w, p) ? " so far" : "";
             const of = x.planned ? `checked in on ${x.checkedIn} of ${plural(x.planned, "roster night")}${soFar}` : `checked in on ${plural(x.checkedIn, "night")}${soFar}`;
+            // Its own sample is the adult's check-ins: under ENOUGH_NIGHTS of them, too few to tell.
+            if (x.checkedIn && x.checkedIn < ENOUGH_NIGHTS) return `${label(w)}: ${of}, too few to tell${soFar ? " yet" : ""}.`;
             return x.checkedIn ? `${label(w)}: yes on ${againstAim(x.yes, tp.target.per_week)} (${of}${other ? `; ${other}` : ""}).` : `${label(w)}: no check-ins yet; ${noCheckinWords(x, { ongoing: weekOngoing(w, p), today: p.today, hasWindow: goal.roster.some((r) => r.member === tp.target.member) })}.`;
           })
         );
@@ -2054,7 +2375,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
     }
   }
   const cov = shown.map((w) => ({ w, c: p.coverage.find((c) => c.week === w.n) })).filter((x) => x.c && x.c.over > 0);
-  if (cov.length) lines.push(`Logged: ${cov.map(({ w, c }) => `${label(w).toLowerCase()} ${coverageWords(c!)}`).join("; ")}.`);
+  if (cov.length && !p.easingUntil && !quiet) lines.push(`Logged: ${cov.map(({ w, c }) => `${label(w).toLowerCase()} ${coverageWords(c!)}`).join("; ")}.`);
   if (p.answers) {
     const said = shown
       .map((w) => ({ w, a: p.answers!.find((x) => x.week === w.n)! }))
@@ -2089,7 +2410,7 @@ export function goalProgressLines(goal: SleepGoal, p: GoalProgress, words: GoalW
   }
   if (goal.roster.length) {
     lines.push(`Roster: ${rosterWords(goal.roster, name)}.`);
-    for (const h of p.roster) {
+    for (const h of p.easingUntil || quiet ? [] : p.roster) {
       if (!h.nights) continue;
       const w = goal.roster.find((x) => x.id === h.windowId)!;
       lines.push(`Hint from the log, ${name(h.member)}'s window ${windowTimes(w)} (the last ${plural(h.nights, "night")} it was on): ${rosterHintBody(h, name, v, words.tz)}.`);
@@ -2126,10 +2447,15 @@ const FOCUS_MIN_NIGHTS = 3;
  * The focus: the roster window whose own adult logged a feed inside it on
  * the most nights (at least FOCUS_MIN_NIGHTS, and three of every four nights
  * anything was logged inside it), with when those feeds began, and one step
- * to talk over. Feeding changes stay a question for their clinicians.
+ * to talk over, by how the window's feeds are covered: nothing for nursing
+ * (that's the plan), what got in the way for a planned bottle, else a later
+ * window or someone else settling or feeding the baby. Feeding changes stay a
+ * question for their clinicians.
  */
 function focusNote(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWords, "name" | "tz"> & { v?: Voice }): string | null {
+  // Nursing planned in a window: the nursing parent being woken to nurse is the plan, so there's nothing to talk over.
   const best = p.roster
+    .filter((h) => goal.roster.find((x) => x.id === h.windowId)?.covers !== "nurse")
     .filter((h) => h.ownFeedSpan && h.ownFeedNights >= FOCUS_MIN_NIGHTS && h.ownFeedNights * 4 >= h.loggedNights * 3)
     .sort((a, b) => b.ownFeedNights - a.ownFeedNights)[0];
   if (!best) return null;
@@ -2140,6 +2466,10 @@ function focusNote(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWords, "nam
   const [a, b] = [formatTime(best.ownFeedSpan!.first, words.tz), formatTime(best.ownFeedSpan!.last, words.tz)];
   const baby = words.v?.name ?? "the baby";
   const head = `Focus: ${who} logged a feed inside ${who}'s window (${windowTimes(w)}) on ${best.ownFeedNights} of the ${plural(best.loggedNights, "night")} anything was logged inside it, ${a === b ? `at ${a}` : `${a}–${b}`}.`;
+  // A bottle planned in it: the roster already has the answer, so ask what got in the way.
+  if (w.covers === "bottle") {
+    return `${head} The roster has ${other ? words.name(other) : "someone else"} giving a bottle then: ask gently what got in the way, with no blame. Feeding changes stay a question for their pediatrician or lactation consultant.`;
+  }
   // Feeds closer together than the window is long: any window that long catches one, so moving it won't help.
   const len = windowMinutes(w.from, w.to);
   if (p.feedGap && p.feedGap.longestMin < len) {
@@ -2148,12 +2478,56 @@ function focusNote(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWords, "nam
   return `${head} One step to talk over: start ${who}'s window after that feed, or have ${other ? words.name(other) : "someone else"} settle ${baby} then. Bottles or pumping only as a question for their pediatrician or lactation consultant.`;
 }
 
+/** With this many of the last 7 nights empty (emptyNight), the coach asks how they're doing before anything else. */
+export const HOW_ARE_YOU_NIGHTS = 5;
+
+/**
+ * Who owes a check-in for a night: the adults with a window on it on the roster, and those with a protected-window
+ * target and no window on the roster at all. Never someone whose window wasn't on that night.
+ */
+export function owedCheckins(goal: Pick<SleepGoal, "roster" | "targets">, night: string): string[] {
+  return goalAdults(goal).filter((m) => {
+    const windows = goal.roster.filter((w) => w.member === m);
+    return windows.length ? windows.some((w) => windowOnNight(w, night)) : goal.targets.some((t) => t.kind === "protected_window" && t.member === m);
+  });
+}
+
 export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWords, "name" | "tz" | "now"> & { v?: Voice }): CoachNotes {
   const open = isOpen(goal.status);
   const since = daysBetween(dayKey(ms(goal.last_review_at ?? goal.created_at), words.tz), p.today);
-  const reviewDue = goal.status === "active" && since >= REVIEW_DUE_DAYS;
+  const reviewDue = reviewIsDue(goal, p, words.tz);
   const notes: string[] = [];
+  const plan = stepsByWeek(goal.steps, p);
+  const next = nextStepNow(goal.steps, p);
+  const last = lastNightKey(words.now, words.tz);
+  let notCheckedIn: string[] | null = null;
+  if (p.checkins) {
+    // Nobody owes a check-in for a night before the goal's counting starts, or one their window wasn't on.
+    notCheckedIn = last >= p.startsOn ? owedCheckins(goal, last).filter((m) => !p.checkins!.some((c) => c.member === m && c.lastNight)) : [];
+  }
+  const done = (focus: string | null): CoachNotes => ({ goalId: goal.id, daysLeft: p.daysLeft, reviewDue, daysSinceReview: since, nextStep: next, thisWeek: plan.thisWeek, earlier: plan.earlier, focus, notCheckedIn, notes });
   if (goal.status === "paused") notes.push("Paused: ask whether they want to pick it back up before coaching on it.");
+  // The family chose to ease off: nothing to coach on until counting picks up again.
+  if (open && p.easingUntil) {
+    notes.push(`${easingWords(p.easingUntil, p.today)}, as the family chose: nothing is counted until then, and the steps and targets hold. Don't coach on counts or steps unless they ask; if it comes up, ask how they're doing.`);
+    return done(null);
+  }
+  // A quiet stretch: said once, then how they are, before anything about the goal. Never a tally of the nights.
+  const quiet = open ? quietNow(p) : null;
+  if (quiet) {
+    notes.push(
+      `${quietWords(quiet, p.today)}. Before anything about the goal, ask how they're doing. Don't ask about those nights or count them. If they'd like a clean restart, it's their choice: pick it up from tonight (update with counts_from "tonight"), ease off a week (paused_until "in 1 week"), or set it aside (close as dropped), each after a read-back and a yes.`
+    );
+    return done(null);
+  }
+  // Most of the last week empty: how they are comes first, and those nights are left out, never asked about.
+  const over = p.nights.filter((n) => n.log != null).slice(-7);
+  const empty = p.checkins ? over.filter(emptyNight).length : 0;
+  const hard = open && empty >= HOW_ARE_YOU_NIGHTS;
+  if (hard) notes.push(`Nothing logged on ${empty} of the last ${plural(over.length, "night")}: before anything about the goal, ask how they're doing. Leave those nights out of the counts, and don't ask about them.`);
+  // Counting starts later (a roster that starts with its rehearsal): nothing to read or owe before then.
+  const before = open && p.today < p.startsOn;
+  if (before) notes.push(`Counting starts ${dateWords(p.startsOn, p.today)}${goal.template?.roster_from === p.startsOn ? ", with the roster (its rehearsal, two weeks before the day back)" : ""}: no check-ins or counts before then.`);
   if (open && p.endsOn && p.daysLeft != null) {
     const d = dateWords(p.endsOn, p.today);
     if (p.daysLeft > 1) notes.push(`${p.daysLeft} days to the target date (${d}).`);
@@ -2162,13 +2536,31 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
     else notes.push(`The target date (${d}) was ${plural(-p.daysLeft, "day")} ago: ask whether to close it as met, set a new date, or keep going.`);
   }
   if (reviewDue) notes.push(goal.last_review_at ? `Review due: the last one was ${plural(since, "day")} ago.` : `Review due: it was set ${plural(since, "day")} ago and hasn't had one yet.`);
-  const plan = stepsByWeek(goal.steps, p);
-  const next = nextStepNow(goal.steps, p);
+  const t = goal.template;
+  const back = !!t && t.kind === "back_to_work" && p.today >= t.date;
   if (open) {
     const listed = (xs: GoalStep[], week: boolean) => xs.map((s) => `"${s.title}" (${s.id}${week && s.week_of ? `, week of ${dateWords(s.week_of, p.today)}` : ""})`).join("; ");
+    // Once the day back has come, the steps meant for before it are asked about once (the first week back), never carried on.
+    const preReturn = back ? plan.earlier.filter((s) => s.week_of! < t!.date) : [];
+    const earlier = plan.earlier.filter((s) => !preReturn.includes(s));
+    // No step planned for this week: the latest one still open carries on.
+    const carry = !plan.thisWeek.length ? (earlier[earlier.length - 1] ?? null) : null;
     if (plan.thisWeek.length) notes.push(`This week's step: ${listed(plan.thisWeek, false)}.`);
-    if (plan.earlier.length) notes.push(`Still open from earlier: ${listed(plan.earlier, true)}.`);
-    if (!plan.thisWeek.length) {
+    else if (carry) notes.push(`This week's step: carry on with ${listed([carry], true)}, unless they'd like another.`);
+    const rest = earlier.filter((s) => s !== carry);
+    if (rest.length) notes.push(`${carry ? "Also still open" : "Still open"} from earlier: ${listed(rest, true)}.`);
+    if (preReturn.length && daysBetween(t!.date, p.today) < 7) {
+      notes.push(`${words.name(t!.member)} is back at work: ask once whether these steps for before the day back happened, then mark them done (step) or drop them (update): ${listed(preReturn, true)}.`);
+    }
+    // Too few nights to read (ENOUGH_NIGHTS): no next step and no stage change from a night or two.
+    const read = readWeek(p);
+    if (before) {
+      // Nothing to read yet: counting starts later.
+    } else if (!read || !weekEnough(goal, read.c)) {
+      const label = read ? goalWeekLabel(read.w, p) : "";
+      const few = read ? `${label.charAt(0).toLowerCase()}${label.slice(1)} has ${read.c.read} of its ${plural(read.c.over, "night")} logged or answered in the morning${weekOngoing(read.w, p) ? " so far" : ""}` : "no night of it is over yet";
+      notes.push(`Too few nights to read yet: ${few}. Suggest no next step and no stage change, and keep this week's step as it is. ${ENOUGH_NIGHTS_LINE}`);
+    } else if (!plan.thisWeek.length && !carry) {
       if (!goal.steps.length) notes.push("No weekly steps yet: suggest one small step for this week.");
       else if (goal.steps.every((s) => s.done_at)) notes.push("Every step is done: ask whether to plan the next one.");
       else {
@@ -2176,43 +2568,122 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
         notes.push(`No step for this week yet${other}. End the review with one small step they choose for this week, saved as a step.`);
       }
     }
-    // Nights with nothing logged are unknown: ask about them before counting them.
-    const over = p.nights.filter((n) => n.log != null).slice(-7);
+    // Nights with nothing logged are unknown: left out of the counts, never asked about.
     const unknown = over.filter((n) => n.log === "none" && !n.tried && !n.untimed);
-    if (unknown.length) {
-      notes.push(
-        `Nothing logged on ${unknown.length} of the last ${plural(over.length, "night")} (${unknown.map((n) => tryDayLabel(n.night, p.today)).join(", ")}): a night with nothing logged is unknown, not a night that went well or badly; ask about it before counting it.`
-      );
+    if (unknown.length && !hard) {
+      notes.push(`Nothing logged on ${unknown.length} of the last ${plural(over.length, "night")}: leave those nights out of the counts, and don't ask about them. A night with nothing logged is unknown, not a night that went well or badly.`);
     }
     // Nights with only feeds logged say nothing about the bassinet: never "no tries".
     if (goal.targets.some((x) => x.kind === "bassinet_nights" || x.kind === "bassinet_stretch")) {
-      const only = over.filter((n) => n.log !== "none" && !n.tried && !n.slept && !n.checkedIn && !n.untimed);
-      if (only.length) notes.push(`Only feeds or other entries were logged on ${only.length} of the last ${plural(over.length, "night")}, with no try, sleep or check-in: whether ${words.v?.name ?? "the baby"} tried the bassinet then isn't in the log, so ask.`);
+      const baby = words.v?.name ?? "the baby";
+      const only = over.filter((n) => n.log !== "none" && !n.tried && !n.slept && !n.untimed && !n.place);
+      if (only.length) notes.push(`Only feeds or other entries were logged on ${only.length} of the last ${plural(over.length, "night")}, with no try, sleep or answer about ${baby}'s night: whether ${baby} tried the bassinet then isn't in the log, so those nights stay out of the bassinet count; don't ask about each one.`);
     }
   }
   const focus = open ? focusNote(goal, p, words) : null;
   if (focus) notes.push(focus);
   // A "Back to work" goal: drowsy driving after a short night, and more night nursing to expect when the nursing parent goes back.
-  const t = goal.template;
-  if (open && t?.kind === "back_to_work" && p.today >= t.date) {
-    const R = words.name(t.member);
-    const last = lastNightKey(words.now, words.tz);
-    const said = p.checkins?.find((c) => c.member === t.member)?.lastNight ?? null;
-    if ((said === "no" || said === "partly") && goal.roster.some((w) => w.member === t.member && windowOnNight(w, last))) {
+  if (open && back) {
+    const R = words.name(t!.member);
+    const said = p.checkins?.find((c) => c.member === t!.member)?.lastNight ?? null;
+    if ((said === "no" || said === "partly") && goal.roster.some((w) => w.member === t!.member && windowOnNight(w, last))) {
       notes.push(`${R} said "${PROTECTED_LABEL[said].toLowerCase()}" about last night's window and is back at work: mention drowsy driving gently. If ${R} is very sleepy, a ride, transit or a short nap before driving is safer; in one small study, new parents who slept poorly had more near misses on the road.`);
     }
-    if (t.nursing === t.member && daysBetween(t.date, p.today) <= 14) {
-      notes.push(`${R} has been back at work since ${dateWords(t.date, p.today)}: some babies nurse more often at night once the nursing parent is back (sometimes called reverse cycling), so read the check-ins and hints with that in mind, and offer to change the roster if it helps.`);
+    if (t!.nursing === t!.member && daysBetween(t!.date, p.today) <= 14) {
+      notes.push(`${R} has been back at work since ${dateWords(t!.date, p.today)}: some babies nurse more often at night once the nursing parent is back (sometimes called reverse cycling), so read the check-ins and hints with that in mind, and offer to change the roster if it helps.`);
     }
   }
-  let notCheckedIn: string[] | null = null;
-  if (p.checkins) {
-    // Nobody owes a check-in for a night before the goal's first one.
-    const owed = lastNightKey(words.now, words.tz) >= p.startsOn;
-    notCheckedIn = owed ? goalAdults(goal).filter((m) => !p.checkins!.some((c) => c.member === m && c.lastNight)) : [];
-    if (open && notCheckedIn.length) notes.push(`Not checked in for last night yet: ${notCheckedIn.map(words.name).join(", ")}.`);
-  }
-  return { goalId: goal.id, daysLeft: p.daysLeft, reviewDue, daysSinceReview: since, nextStep: next, thisWeek: plan.thisWeek, earlier: plan.earlier, focus, notCheckedIn, notes };
+  if (open && notCheckedIn?.length) notes.push(`Not checked in for last night yet: ${notCheckedIn.map(words.name).join(", ")}.`);
+  return done(focus);
+}
+
+// ── the weekly look-back (Today's Last night card, SleepReview.tsx) ──────
+
+/**
+ * The counted week a look-back reads, on its review day (the calendar day after that week's last night, while the
+ * Last night card shows): an active goal with steps, not easing off, its review due (reviewIsDue) and its target date
+ * not passed. Null on any other day: no push, never "overdue".
+ */
+export function reviewWeek(goal: SleepGoal, span: GoalSpan, now: Date, tz: string): GoalWeek | null {
+  if (goal.status !== "active" || !goal.steps.length || span.easingUntil || !reviewIsDue(goal, span, tz)) return null;
+  if (span.daysLeft != null && span.daysLeft < 0) return null;
+  const last = lastNightKey(now, tz);
+  return span.weeks.find((w) => w.to === last && w.nights > 0) ?? null;
+}
+
+/**
+ * The look-back's step: the first one not done in plan order (nextStep), and the one after it, which Next step moves
+ * to (brought into this week, `bringTo` today, when it was planned for a later week). Keep it keeps `current`.
+ */
+export function lookBackStep(steps: readonly GoalStep[], span: Pick<GoalSpan, "startsOn" | "weeksTotal" | "today">): { current: GoalStep | null; following: GoalStep | null; bringTo: string | null } {
+  const current = nextStep(steps);
+  const following = current ? nextStep(steps.filter((s) => s.id !== current.id)) : null;
+  const later = !!following?.week_of && stepsByWeek([following], span).later.length > 0;
+  return { current, following, bringTo: later ? span.today : null };
+}
+
+export type LookBack = {
+  week: GoalWeek;
+  /** "Week 2 look-back". */
+  title: string;
+  /** The week's nights logged, partly logged or answered in the morning, and whether that's enough to read (ENOUGH_NIGHTS): Next step waits for it. */
+  logged: number;
+  enough: boolean;
+  /** Each target with what it's out of: "Bassinet nights" · "2 of the 3 aimed for · 4 nights logged". */
+  targets: { id: string; label: string; line: string }[];
+  /** Each goal adult's check-ins that week ("5 of 7 nights"); null for a reader who can't see them. */
+  checkins: { member: string; line: string }[] | null;
+  step: ReturnType<typeof lookBackStep>;
+  /** The chat's seeded message when no step is planned after this one. */
+  prompt: string;
+};
+
+/** "2 of the 3 aimed for", "4, past the 3 aimed for": a count against its aim, where the label names what's counted. */
+const ofAim = (n: number, aim: number) => (n > aim ? `${n}, past the ${aim} aimed for` : `${n} of the ${aim} aimed for`);
+
+/**
+ * The look-back for one counted week (reviewWeek), from its progress: each target with what it's out of, the step,
+ * and each adult's check-ins (owners and members only). A week too thin to read says so ("2 nights logged, too few to
+ * tell"), and then Next step isn't offered. Counts only, no scores or streaks.
+ */
+export function lookBack(goal: SleepGoal, p: GoalProgress, week: GoalWeek, words: Pick<GoalWords, "name">): LookBack {
+  const { name } = words;
+  const c = p.coverage.find((x) => x.week === week.n);
+  const logged = c?.read ?? 0;
+  const enough = weekEnough(goal, c);
+  const nightsWord = c ? readWords(c) : "no nights logged";
+  const few = c && c.read > nightsLogged(c) ? `${readWords(c)}, too few to tell` : tooFewWords(logged, { ongoing: false });
+  const targets = goal.targets.map((t) => {
+    const tp = p.targets.find((x) => x.id === t.id && x.kind === t.kind);
+    let label: string = TARGET_KIND_LABEL[t.kind];
+    let line = "not counted from the log";
+    if (tp?.kind === "bassinet_nights") {
+      const x = tp.weeks.find((y) => y.week === week.n);
+      line =
+        logged < ENOUGH_NIGHTS || !x
+          ? few
+          : x.known < ENOUGH_NIGHTS
+            ? `a try, a sleep or a morning answer on ${x.known} of ${plural(x.nights, "night")}, too few to tell`
+            : `${ofAim(x.counted, tp.target.per_week)}${x.fromCheckins ? ` (${x.fromCheckins} from check-ins)` : ""} · ${nightsWord}`;
+    } else if (tp?.kind === "bassinet_stretch") {
+      const x = tp.weeks.find((y) => y.week === week.n);
+      line =
+        logged < ENOUGH_NIGHTS || !x
+          ? few
+          : x.stretches
+            ? `longest ${formatDuration(x.longestSec ?? 0)} · ${x.atLeast} of ${plural(x.stretches, "stretch", "stretches")} ${minutesWords(tp.target.minutes)} or more · ${nightsWord}`
+            : `no bassinet stretches logged · ${nightsWord}`;
+    } else if (t.kind === "protected_window") {
+      label = `${name(t.member)}'s protected sleep`;
+      const x = tp?.kind === "protected_window" ? tp.weeks?.find((y) => y.week === week.n) : undefined;
+      line = !x ? "counted from the adults' own check-ins" : !x.checkedIn ? "no check-ins" : x.checkedIn < ENOUGH_NIGHTS ? tooFewWords(x.checkedIn, { ongoing: false, what: "check-in" }) : `yes on ${ofAim(x.yes, t.per_week)}`;
+    } else if (t.kind === "custom") {
+      label = t.text;
+    }
+    return { id: t.id, label, line };
+  });
+  const checkins = p.checkinWeeks ? p.checkinWeeks.filter((x) => x.week === week.n && x.nights > 0).map((x) => ({ member: x.member, line: `${x.checkedIn} of ${plural(x.nights, "night")}` })) : null;
+  return { week, title: `Week ${week.n} look-back`, logged, enough, targets, checkins, step: lookBackStep(goal.steps, p), prompt: `Week ${week.n} look-back: what's a good next step?` };
 }
 
 /**
@@ -2224,7 +2695,7 @@ export const coachGuardrails = (v: Voice): string[] => [
   "Ask one question at a time (in Maple chat, with ask_user).",
   "Propose a goal with its steps, read it back, and save it only after they say yes.",
   "Use the family's memories for their constraints (work dates, feeding, who's home), and the log for what happened.",
-  "Counts are only what was logged: a night with nothing logged is unknown, so say it wasn't logged and ask, never that something didn't happen.",
+  "Counts are only what was logged: a night with nothing logged is unknown, so leave it out of the counts and don't ask about it, and never say something didn't happen.",
   "No medical advice: questions about health go to their pediatrician.",
   "Feeding changes (bottles, pumping, formula) only as options to raise with their pediatrician or lactation consultant.",
   `Never crying it out, and never ${v.name} sleeping on an adult, or in a bed, couch or armchair with one, as a plan.`,
@@ -2237,12 +2708,10 @@ export const coachGuardrails = (v: Voice): string[] => [
  * then closed; then the nearest target date (one already past first); then a
  * review due; then the newest.
  */
-export function goalsByUrgency<T extends Pick<SleepGoal, "id" | "status" | "created_at" | "target_date" | "closed_at" | "last_review_at">>(goals: readonly T[], now: Date, tz: string): T[] {
-  const today = dayKey(now, tz);
+export function goalsByUrgency<T extends Pick<SleepGoal, "id" | "status" | "created_at" | "target_date" | "closed_at" | "last_review_at" | "counts_from" | "paused_until" | "template">>(goals: readonly T[], now: Date, tz: string): T[] {
   const key = (g: T) => {
     const span = goalSpan(g, now, tz);
-    const since = daysBetween(dayKey(ms(g.last_review_at ?? g.created_at), tz), today);
-    return { rank: g.status === "active" ? 0 : g.status === "paused" ? 1 : 2, left: span.daysLeft ?? Infinity, due: g.status === "active" && since >= REVIEW_DUE_DAYS ? 0 : 1, made: ms(g.created_at) };
+    return { rank: g.status === "active" ? 0 : g.status === "paused" ? 1 : 2, left: span.daysLeft ?? Infinity, due: reviewIsDue(g, span, tz) ? 0 : 1, made: ms(g.created_at) };
   };
   const keys = new Map(goals.map((g) => [g.id, key(g)]));
   return [...goals].sort((a, b) => {

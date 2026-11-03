@@ -76,7 +76,10 @@ export const dynamic = "force-dynamic";
  * revision it was made against) answers 409 with the record as it is now
  * (`current`, `code`: changed, finished, running or open); nothing is saved.
  * A check-in is always the signed-in adult's own: nothing in the request
- * can say whose it is. A holding turn's "Wake [partner]" is shift.ask,
+ * can say whose it is. A goal's clean restart is goal.update with its
+ * revision: `counts_from` (Pick up from tonight), `paused_until` (Ease off a
+ * week) and `target_date`; Set it aside is goal.close as dropped, which
+ * goal.update with status active opens again. A holding turn's "Wake [partner]" is shift.ask,
  * never a handoff: the handoff is recorded only by shift.accept ("I've got
  * her", the signed-in person) or the holder's shift.handoff.
  */
@@ -141,7 +144,7 @@ function goalVoiceOf(baby: Baby, familyId: number): { v: Voice; ageDays: number 
 function goalCautionsOf(goal: SleepGoal, members: Member[], baby: Baby, familyId: number): string[] {
   const { v, ageDays } = goalVoiceOf(baby, familyId);
   const adults = members.filter((m) => m.role === "owner" || m.role === "member").map((m) => memberName(m.email, members));
-  return goalCautions(goal, { v, name: (id) => memberName(id, members), ageDays, adults }).map((c) => c.text);
+  return goalCautions(goal, { v, name: (id) => memberName(id, members), ageDays, adults, today: dayKey(new Date(), baby.timezone) }).map((c) => (c.source ? `${c.text} (source: ${c.source.title}, ${c.source.url})` : c.text));
 }
 
 /** checkin.save's extra answers about the night: only the keys the request has (goals.ts cleanCheckinExtras checks them). */
@@ -430,7 +433,9 @@ export const POST = withMember(
           return stateBody(ctx, baby.id, { result: w });
         }
         case "goal.review": {
-          const w = await reviewGoal(ctx, goalId(body.id), { note: body.note ?? null, by, source: src, revision: optionalRevision(body.revision) });
+          // `back`: the look-back's Undo, the review stamp and note it replaced, on the revision that review made.
+          const back = body.back && typeof body.back === "object" ? (body.back as Body) : null;
+          const w = await reviewGoal(ctx, goalId(body.id), { note: body.note ?? null, by, source: src, revision: optionalRevision(body.revision), ...(back ? { back: { at: back.at ?? null, note: back.note ?? null } } : {}) });
           return stateBody(ctx, baby.id, { result: w });
         }
         case "goal.close": {
