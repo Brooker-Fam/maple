@@ -903,7 +903,7 @@ async function main() {
   /** Under the cap, never cut, the safety line second (the 911 line and a sleepy adult's word for word), and never a try note whole. */
   const fits = (r: Awaited<ReturnType<typeof readPlan>>, label: string, note: string) => {
     ok(r.out.ok && r.out.text.length <= ALL_VIEW_MAX && forModel(r.out.text) === r.out.text, `${label}: ${r.out.text.length} characters`);
-    ok(/^Safety \((every item word for word, with its sources, is in guidance below|sleep_plan with view "guidance" has every item word for word, with its sources)\): Safe sleep: .*If you feel yourself dozing.*Call 911: Call 911 if/.test(r.lines[1]), `${label}: ${r.lines[1]}`);
+    ok(/^Safety \((every item word for word, with its sources, is in guidance below|sleep_plan with view "guidance" has every item word for word, with its sources)\): Safe sleep: .*If you start to feel sleepy while holding her, lay her on her back in the bassinet.*Call 911: Call 911 if/.test(r.lines[1]), `${label}: ${r.lines[1]}`);
     ok(!r.out.text.includes(note), `${label}: a whole try note`);
   };
   /**

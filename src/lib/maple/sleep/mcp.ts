@@ -968,6 +968,30 @@ async function refuseHerPage(texts: readonly { label: string; text: string | nul
   }
 }
 
+/**
+ * The words of a goal write as it came in, each with its label, for refuseHerPage when cleaning it refused them: words
+ * that are hers (a medicine on her list, her health) get her page's refusal, "leave that part out", never one about
+ * the baby ("ask her pediatrician about …", whose own suggestion her page would then refuse).
+ */
+function inputTexts(input: GoalInput): { label: string; text: string | null | undefined }[] {
+  return [
+    { label: "The goal's title", text: input.title },
+    { label: "Why it matters", text: input.why },
+    ...(input.steps ?? []).map((x, i) => ({ label: `Step ${i + 1}`, text: x.title })),
+    ...(input.targets ?? []).flatMap((x, i) => (x.kind === "custom" ? [{ label: `Target ${i + 1}`, text: x.text }] : [])),
+  ];
+}
+
+/** cleanGoalInput, with her page's refusal first for words that are hers (inputTexts). */
+async function cleanHers(input: GoalInput, rules: Parameters<typeof cleanGoalInput>[1], mode: Parameters<typeof cleanGoalInput>[2], ctx: Ctx): Promise<ReturnType<typeof cleanGoalInput>> {
+  try {
+    return cleanGoalInput(input, rules, mode);
+  } catch (err) {
+    if (err instanceof SleepInputError) await refuseHerPage(inputTexts(input), ctx);
+    throw err;
+  }
+}
+
 /** A goal write's words as refuseHerPage reads them, each with its label: only what's new or changed on an update. */
 function goalTexts(f: GoalFields, cur: SleepGoal | null): { label: string; text: string | null | undefined }[] {
   const was = <T extends { id: string }>(xs: readonly T[] | undefined, x: T) => xs?.find((y) => y.id === x.id);
@@ -1671,7 +1695,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
             if (!quick && !a.title?.trim()) throw new ToolError("Give the goal a short title in their words (title), or pass back_to_work with the quick setup's answers.");
             const input = quick ? quick.goal : goalInputFrom(a, ctx, "add");
             // Checked now, so what they say yes to is what saves; what it needs said with it comes with the read-back.
-            const { fields } = cleanGoalInput(input, { ...gc, current: null, seq: 0 }, "create");
+            const { fields } = await cleanHers(input, { ...gc, current: null, seq: 0 }, "create", ctx);
             await refuseHerPage(goalTexts(fields, null), ctx);
             const what = ["add", fields];
             if (a.confirmed !== true || !readBackMatches(ctx, what, a.read_back)) {
@@ -1719,7 +1743,7 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
             if (a.revision == null) throw new ToolError(`Pass the goal's revision (${cur.revision} now, from sleep_plan) so a change made meanwhile isn't overwritten.`);
             if (a.revision !== cur.revision) throw new SleepConflict("Someone changed this sleep goal just now.", "changed", cur);
             // New items take ids past any the goal has, so the read-back never mistakes one for an item it keeps.
-            const { fields } = cleanGoalInput(input, { ...gc, current: cur, seq: 1_000_000 }, "update");
+            const { fields } = await cleanHers(input, { ...gc, current: cur, seq: 1_000_000 }, "update", ctx);
             await refuseHerPage(goalTexts(fields, cur), ctx);
             const what = ["update", id, cur.revision, fields];
             if (a.confirmed !== true || !readBackMatches(ctx, what, a.read_back)) {
