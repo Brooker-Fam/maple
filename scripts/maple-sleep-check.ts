@@ -4,8 +4,9 @@
  * The second half (scripts/tenancy/sleep.check.ts) runs the store, the
  * route and the MCP tools on an in-memory Postgres.
  */
+import { readFileSync } from "node:fs";
 import { emergencySigns } from "../src/lib/maple/guidelines";
-import { feedingSleepyWords, nightFeedLine, SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
+import { feedingSleepyWords, nightFeedLine, SLEEP_GUIDES, SLEEP_SECTIONS, pendingReview, sleepyBassinetLine, sleepyLine, transferSteps, type SleepSection } from "../src/lib/maple/guidelines/sleep";
 import { WORK_BOTTLES, WORK_DROWSY_DRIVING, WORK_GUIDES, WORK_NIGHT_NURSING, workGuide } from "../src/lib/maple/guidelines/sleep";
 import {
   AGE_BANDS,
@@ -2437,6 +2438,18 @@ check("a Back to work roster starts on its own night (roster_from): before it no
   eq([windowAt([g], SAM, at(2026, 11, 16, 1).getTime(), NY), windowAt([g], SAM, at(2026, 11, 17, 1).getTime(), NY)?.start], [null, at(2026, 11, 16, 22).getTime()], "after midnight, by the night it began");
   const older = goalRow({ roster, template: { kind: "back_to_work", member: ALEX, date: "2026-11-30", nursing: SAM } });
   ok(windowAt([older], SAM, before, NY) != null && windowsBetween([older], SAM, before - HOUR, before + HOUR, NY).length === 1, "without roster_from, as before");
+});
+
+// ── round 4: the health and safety review (2026-11-03) ───────────────────
+
+check("sleepy (safety P0 #1): I'm getting sleepy, then the bassinet, says one thing in the family's words, never the transfer steps", () => {
+  eq(sleepyBassinetLine(SHE), "Lay her on her back in the bassinet now, even if she's awake.", "she");
+  eq(sleepyBassinetLine(HE), "Lay him on his back in the bassinet now, even if he's awake.", "he");
+  eq(sleepyBassinetLine(THEY), "Lay them on their back in the bassinet now, even if they're awake.", "they");
+  const sheet = readFileSync("src/components/maple/sleep/SleepSheets.tsx", "utf8");
+  const sleepy = sheet.slice(sheet.indexOf("export function SleepySheet"), sheet.indexOf("export function HoldingSheet"));
+  ok(sleepy.length > 0 && sleepy.includes("sleepyBassinetLine(v)") && !/transferSteps\s*\(/.test(sleepy) && !/import[^;]*\btransferSteps\b/.test(sheet), "the sleepy sheet shows the one line, never the steps");
+  ok(transferSteps(SHE).some((x) => /until she's deeply asleep/.test(x)), "the transfer steps stay as they are everywhere else");
 });
 
 console.log(`\nmaple-sleep-check: ${passed} passed, ${failed} failed`);

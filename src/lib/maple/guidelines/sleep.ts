@@ -410,6 +410,14 @@ export const SLEEP_GUIDES: readonly SleepGuide[] = [
 export const sleepyLine = (v: Voice): string => sleepyActions(v);
 
 /**
+ * After "I'm getting sleepy" → the bassinet: this one line, never the
+ * transfer steps (they hold her until she's deeply asleep, which is no step
+ * for a sleepy adult). NICHD: "Be mindful of how tired you are", and "place
+ * the baby into a safe sleep area"; the AAP: on the back, every sleep.
+ */
+export const sleepyBassinetLine = (v: Voice): string => `Lay ${v.them} on ${v.their} back in the bassinet now, even if ${v.they}${v.verb("'s")} awake.`;
+
+/**
  * The feed card's quiet line during a nursing feed at night (10 PM to 6 AM in
  * the family's timezone): NICHD's two options, from the safe-feeding-sleepy
  * item ("ask someone to stay with you … or to place the baby into a safe
