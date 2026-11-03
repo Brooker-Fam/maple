@@ -43,6 +43,7 @@ import { handoffAroundRoster, handoffWhyWords, windowAt } from "../src/lib/maple
 import { feedCover, windowsBetween } from "../src/lib/maple/sleep/roster";
 import {
   BOTTLE_SOURCE,
+  citeWork,
   checkinTryOn,
   emptyNight,
   ENOUGH_NIGHTS,
@@ -1912,7 +1913,7 @@ check("cautions by how a window's feeds are covered and her age: nursing says no
   eq(kinds([w(undefined, "22:00", "02:30")], 40), [], "4h 30m from 4 weeks: under 5 hours");
   eq(kinds([w("none", "22:00", "03:30")], 40), ["long_window"], "5h 30m with no feed planned");
   const young = goalCautions({ roster: [w("bottle")] }, { v: WREN, name: nameOf, ageDays: 20 })[0].text;
-  ok((plain(young) as string).startsWith("A bottle in Sam's window (10:00 PM–3:00 AM): if Wren nurses, Texas HHS says a bottle can start at about 4 weeks old, or two weeks before a return to work or school if that's sooner."), young);
+  eq(plain(young), "A bottle in Sam's window (10:00 PM–3:00 AM): If Wren nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. Ask her pediatrician or lactation consultant first. Until then, whoever's on duty can bring her to nurse and settle her after.", "WORK_BOTTLES's words, undated without a day");
   const older = goalCautions({ roster: [w("bottle", "22:00", "03:00", ALEX)], template: { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 40 })[0].text;
   eq(plain(older), "A bottle in Alex's window (10:00 PM–3:00 AM): plan when Alex pumps around that feed, as their lactation consultant advises.", "after 4 weeks, the research's reminder, naming who nurses");
   eq(kinds([w("bottle")], 20, { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: null }), [], "a baby on bottles only: nothing to say");
@@ -1948,7 +1949,7 @@ check("template: five answers make a goal, a night roster with its feeds covered
   for (const t of [goal.title!, ...goal.steps!.map((x) => x.title)]) ok(!unsafeSleep(t, { v: WREN }), t);
   // The nursing parent going back: more night nursing to expect. Both: a bottle in the nursing parent's window, after a question.
   const back = backToWorkGoal({ ...answers, returning: ALEX, first_half: ALEX, second_half: SAM, feeding: "both" }, o);
-  ok(back.notes.some((n) => /^Once Alex is back at work, some babies nurse more often at night \(sometimes called reverse cycling\)/.test(n)), JSON.stringify(back.notes));
+  ok(back.notes.some((n) => n === "When the nursing parent goes back to work, some babies eat less during the day and nurse more often at night, which is called reverse cycling. Others eat well during the day and still nurse more at night, maybe for the closeness. (Source: Office on Women's Health: Breastfeeding and going back to work.) Once Alex is back, the morning check-ins will show how the nights go, and the roster can change."), JSON.stringify(back.notes));
   eq(back.goal.roster!.map((x) => [nameOf(x.member), x.covers]), [["Sam", "nurse"], ["Alex", "bottle"]], "Alex nurses: a bottle in Alex's window");
   eq(back.goal.steps![0].title, "Ask the lactation consultant when Alex should pump around the night bottle", "both: the pumping question");
   const bottles = backToWorkGoal({ ...answers, feeding: "bottles", nursing: null, off_duty: "same_room" }, o);
@@ -2059,8 +2060,20 @@ check("back to work: a coach note on drowsy driving when the adult back at work 
   const now = at(2026, 11, 10, 8);
   const p = goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-09", "partly")] }), now, NY);
   const notes = coachNotes(g, p, words(WREN, now)).notes;
-  ok(notes.some((n) => /^Sam said "partly" about last night's window and is back at work: mention drowsy driving gently\. If Sam is very sleepy, a ride, transit or a short nap before driving is safer/.test(n)), JSON.stringify(notes));
-  ok(notes.some((n) => /^Sam has been back at work since Mon, Nov 9: some babies nurse more often at night once the nursing parent is back \(sometimes called reverse cycling\)/.test(n)), JSON.stringify(notes));
+  // In WORK_DROWSY_DRIVING's and WORK_NIGHT_NURSING's words, each cited by id with its sources.
+  ok(
+    notes.includes(
+      `Sam said "partly" about last night's window and is back at work: mention drowsy driving gently, in Maple's sourced words (work-drowsy-driving: Malish, Arastu and O'Brien: A preliminary study of new parents, sleep disruption, and driving (Maternal and Child Health Journal, 2016); CDC NIOSH: Training for nurses on shift work and long work hours, module 11 (driving)): "In one small, early survey of 72 new parents, poor sleep quality went with a sixfold increase in near misses on the road. If you're very sleepy, plan how to avoid driving drowsy: a ride from family or a friend, other transportation, or a nap first."`
+    ),
+    JSON.stringify(notes)
+  );
+  ok(
+    notes.includes(
+      `Sam has been back at work since Mon, Nov 9. In Maple's sourced words (work-night-nursing: Office on Women's Health: Breastfeeding and going back to work): "When the nursing parent goes back to work, some babies eat less during the day and nurse more often at night, which is called reverse cycling. Others eat well during the day and still nurse more at night, maybe for the closeness." Read the check-ins and hints with that in mind, and offer to change the roster if it helps.`
+    ),
+    JSON.stringify(notes)
+  );
+  eq(citeWork(WORK_BOTTLES), "(work-bottles: Texas HHS, Breastmilk Counts (Texas WIC): Bottle feeding your baby)", "a citation names the item and its sources");
   const rested = coachNotes(g, goalProgress(g, data({ checkins: [checkinRow(SAM, "2026-11-09", "yes")] }), now, NY), words(WREN, now)).notes;
   ok(!rested.some((n) => /drowsy/.test(n)), "a yes: nothing about driving");
   const before = at(2026, 11, 6, 8);
@@ -2330,13 +2343,17 @@ check("feeds wording (coach P1 #4, P2 #13): each window's feeds from how they're
   const bottles = backToWorkGoal({ returning: SAM, return_date: "2026-11-30", feeding: "bottles", nursing: null, sleeps: "crib", first_half: SAM, second_half: ALEX, off_duty: "same_room" }, o);
   ok(bottles.notes.some((n) => n.endsWith("Night feeds: in Alex's window, Sam gives her a bottle; in Sam's window, Alex gives her a bottle.")) && !bottles.notes.some((n) => /to nurse/.test(n)), JSON.stringify(bottles.notes));
   const w = (covers: RosterWindow["covers"] | undefined, to = "02:00"): RosterWindow => ({ id: "w1", member: SAM, from: "21:00", to, nights: EVERY, ...(covers ? { covers } : {}) });
-  // Ten days old, back in 18 days: two weeks before the day back comes before 4 weeks old.
-  const soon = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: SAM, date: "2026-11-20", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
-  eq(plain(soon.text), "A bottle in Sam's window (9:00 PM–2:00 AM): Texas HHS says a bottle can start at about 4 weeks old, or two weeks before the return to work if that's sooner; for this plan, Fri, Nov 6. Ask their pediatrician or lactation consultant first; until then, whoever's on duty can bring her to nurse and settle her after.", "dated by the sooner of the two");
-  eq(soon.source, BOTTLE_SOURCE, "its source");
+  // Ten days old, the nursing parent back in 18 days: two weeks before that day back comes before 4 weeks old.
+  const soon = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: ALEX, date: "2026-11-20", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
+  eq(plain(soon.text), "A bottle in Sam's window (9:00 PM–2:00 AM): If Wren nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner. For this plan, that's Fri, Nov 6. Ask her pediatrician or lactation consultant first. Until then, whoever's on duty can bring her to nurse and settle her after.", "WORK_BOTTLES's words, dated by the sooner of the two");
+  eq([soon.source, soon.guide], [BOTTLE_SOURCE, WORK_BOTTLES], "its source, and the item it cites");
+  eq(BOTTLE_SOURCE, { title: workGuide(WORK_BOTTLES)!.sources[0].label, url: workGuide(WORK_BOTTLES)!.sources[0].url }, "the item's own source");
   ok(BOTTLE_SOURCE.url.startsWith("https://breastmilkcounts.com/"), "Texas HHS's Breastmilk Counts");
-  const now = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: SAM, date: "2026-11-10", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
-  ok(plain(now.text)!.toString().includes("for this plan, that's now."), now.text);
+  const now = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: ALEX, date: "2026-11-10", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
+  ok(plain(now.text)!.toString().includes("For this plan, that's now."), now.text);
+  // The other adult going back: the nursing parent stays home, so only 4 weeks old dates it.
+  const other = goalCautions({ roster: [w("bottle")], template: { kind: "back_to_work", member: SAM, date: "2026-11-10", nursing: ALEX } }, { v: WREN, name: nameOf, ageDays: 10, today: "2026-11-02" })[0];
+  ok(plain(other.text)!.toString().includes("For this plan, that's Fri, Nov 20."), other.text);
   // On bottles only: a long window says who gives a bottle, never "bring her to nurse".
   const young = goalCautions({ roster: [w("none", "02:30")], template: { kind: "back_to_work", member: SAM, date: "2026-11-30", nursing: null } }, { v: WREN, name: nameOf, ageDays: 10 })[0];
   ok(young.kind === "long_window" && young.text.includes("whoever's on duty can give her a bottle in it.") && !/nurse/.test(young.text), young.text);

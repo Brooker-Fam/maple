@@ -21,10 +21,10 @@
  * - Nothing here is about anyone's health or recovery, and nothing here
  *   changes a goal: the family and the coach do that through the tools.
  */
-import { feedingSleepyWords, SLEEP_GUIDES, sleepyLine } from "../guidelines/sleep";
+import { feedingSleepyWords, SLEEP_GUIDES, sleepyLine, WORK_BOTTLES, WORK_DROWSY_DRIVING, WORK_NIGHT_NURSING, workGuide } from "../guidelines/sleep";
 import { addDays, dayKey, daysBetween, formatDuration, formatTime, isDayKey, parseDayKey, zonedTimeToUtc } from "../time";
 import type { Entry, Role } from "../types";
-import type { Voice } from "../voice";
+import { makeVoice, type Voice } from "../voice";
 import { sleepByPlace, tryDayBounds, tryDayKey, tryDayLabel } from "./engine";
 import { SleepInputError } from "./errors";
 import {
@@ -874,14 +874,31 @@ const ASKING = /^(?:ask|check\s+with|talk\s+(?:to|with)|call|find\s+out|see\s+if
 
 /** A source a caution's words come from, shown with it. */
 export type CautionSource = { title: string; url: string };
-export type GoalCaution = { kind: "feeds_first" | "long_window" | "bottle" | "feeding" | "awake" | "transfer"; text: string; source?: CautionSource };
+/** `guide`: the sourced item (guidelines/sleep.ts) whose words it says, by id. */
+export type GoalCaution = { kind: "feeds_first" | "long_window" | "bottle" | "feeding" | "awake" | "transfer"; text: string; source?: CautionSource; guide?: string };
+
+/** The words for a baby with no voice given (a coach note read without one): "the baby", they. */
+const THEY_VOICE = makeVoice({ name: "the baby", pronoun: "they" });
+
+/** A going-back-to-work item (guidelines/sleep.ts WORK_GUIDES): the coach copy says its words and cites it by id. */
+function workItem(id: string) {
+  const g = workGuide(id);
+  if (!g) throw new Error(`No going-back-to-work guidance "${id}"`);
+  return g;
+}
+/** Its first source, as a caution shows it. */
+const workSource = (id: string): CautionSource => ({ title: workItem(id).sources[0].label, url: workItem(id).sources[0].url });
+/** What an item's words come from, for the coach: "(work-bottles: Texas HHS, Breastmilk Counts (Texas WIC): Bottle feeding your baby)". */
+export const citeWork = (id: string) => `(${id}: ${workItem(id).sources.map((s) => s.label).join("; ")})`;
+/** For the family's read-back: "(Source: Office on Women's Health: Breastfeeding and going back to work.)". */
+const sourceWords = (id: string) => `(Source: ${workItem(id).sources.map((s) => s.label).join("; ")}.)`;
 
 /**
- * When to start a bottle for a nursing baby, by Texas HHS's Breastmilk Counts: "Bottles can be introduced when your
- * baby is 4 weeks old or two weeks before you return to work or school, whichever is sooner."
+ * When to start a bottle for a nursing baby (WORK_BOTTLES, by Texas HHS's Breastmilk Counts: "Bottles can be introduced
+ * when your baby is 4 weeks old or two weeks before you return to work or school, whichever is sooner").
  */
-export const BOTTLE_SOURCE: CautionSource = { title: "Texas HHS, Breastmilk Counts: Bottle feeding your baby", url: "https://breastmilkcounts.com/breastfeeding-basics/bottle-feeding-your-baby/" };
-/** Two weeks before the day back, a bottle can start sooner than 4 weeks old (BOTTLE_SOURCE). */
+export const BOTTLE_SOURCE: CautionSource = workSource(WORK_BOTTLES);
+/** Two weeks before the nursing parent's day back, a bottle can start sooner than 4 weeks old (WORK_BOTTLES). */
 export const BOTTLE_BEFORE_RETURN_DAYS = 14;
 
 /** "the step "A" and the step "B"" with its verb agreeing: the texts a caution is about. */
@@ -898,10 +915,11 @@ function aboutTexts(xs: readonly { label: string; text: string }[], one: string,
  *   not known, so not said).
  * - Each protected window by how its feeds are covered (`covers`) and her
  *   age: nursing in it needs nothing said; a bottle in it, before about 4
- *   weeks, says when one can start (Texas HHS: at about 4 weeks old, or two
- *   weeks before the return to work if that's sooner, dated for a "Back to
- *   work" goal when `today` is given; BOTTLE_SOURCE) and to ask their
- *   pediatrician or lactation consultant first, and after that a reminder to
+ *   weeks, says when one can start in WORK_BOTTLES's words (Texas HHS: at
+ *   about 4 weeks old, or two weeks before the nursing parent goes back to
+ *   work or school if that's sooner, dated for the plan when `today` is
+ *   given; BOTTLE_SOURCE) and to ask their pediatrician or lactation
+ *   consultant first, and after that a reminder to
  *   plan pumping around that feed (only when she nurses, or might); with no
  *   feed planned in it (or nothing said), a window over 5 hours (4 in her
  *   first weeks) says who could cover one (a bottle, for a baby on bottles only).
@@ -936,15 +954,18 @@ export function goalCautions(
     if (w.covers === "bottle") {
       if (nurser === null) continue;
       if (young) {
-        // The sooner of about 4 weeks old and two weeks before the day back (BOTTLE_SOURCE), dated when both are known.
-        const back = f.template?.date ? addDays(f.template.date, -BOTTLE_BEFORE_RETURN_DAYS) : null;
+        // WORK_BOTTLES's words: the sooner of about 4 weeks old and two weeks before the nursing parent's day back, dated
+        // for this plan when the day is known (the day back counts only when the one going back is the one who nurses).
+        const back = f.template?.date && nurser && f.template.member === nurser ? addDays(f.template.date, -BOTTLE_BEFORE_RETURN_DAYS) : null;
         const fourWeeks = o.today && typeof o.ageDays === "number" ? addDays(o.today, FEEDS_FIRST_DAYS - o.ageDays) : null;
-        const from = back && fourWeeks ? minKey(back, fourWeeks) : null;
-        const here = from && o.today ? (from <= o.today ? "; for this plan, that's now" : `; for this plan, ${dateWords(from, o.today)}`) : "";
+        const from = back && fourWeeks ? minKey(back, fourWeeks) : (back ?? fourWeeks);
+        const when = from && o.today ? (from <= o.today ? " For this plan, that's now." : ` For this plan, that's ${dateWords(from, o.today)}.`) : "";
+        const [can, ...ask] = workItem(WORK_BOTTLES).body(v).split(/(?<=\.)\s+/);
         out.push({
           kind: "bottle",
-          text: `A bottle in ${who}'s window (${times}): ${nurser ? "" : `if ${v.name} nurses, `}Texas HHS says a bottle can start at about 4 weeks old, or two weeks before ${back ? "the return to work" : "a return to work or school"} if that's sooner${here}. Ask their pediatrician or lactation consultant first; until then, whoever's on duty can bring ${v.them} to nurse and settle ${v.them} after.`,
+          text: `A bottle in ${who}'s window (${times}): ${can}${when} ${ask.join(" ")} Until then, whoever's on duty can bring ${v.them} to nurse and settle ${v.them} after.`,
           source: BOTTLE_SOURCE,
+          guide: WORK_BOTTLES,
         });
       } else {
         out.push({ kind: "bottle", text: `A bottle in ${who}'s window (${times}): ${nurser ? `plan when ${o.name(nurser)} pumps` : `if ${v.name} nurses, plan when the nursing parent pumps`} around that feed, as their lactation consultant advises.` });
@@ -1409,7 +1430,8 @@ export function backToWorkGoal(a: BackToWorkAnswers, o: { v: Voice; name: (id: s
   notes.push(
     `${offDuty === "same_room" ? "The adult who's off sleeps in the same room: one clinician's approach is two sleep spaces, so whoever's off isn't woken by every sound. That's your call." : "The adult who's off sleeps in another room."} Night feeds: ${feeds.join("; ")}.`
   );
-  if (nursing === returning) notes.push(`Once ${R} is back at work, some babies nurse more often at night (sometimes called reverse cycling): the morning check-ins will show how the nights go, and the roster can change.`);
+  // The nursing parent going back: more night nursing to expect, in WORK_NIGHT_NURSING's words, with its source.
+  if (nursing === returning) notes.push(`${workItem(WORK_NIGHT_NURSING).body(o.v)} ${sourceWords(WORK_NIGHT_NURSING)} Once ${R} is back, the morning check-ins will show how the nights go, and the roster can change.`);
   return { goal, notes };
 }
 
@@ -2782,10 +2804,11 @@ export function coachNotes(goal: SleepGoal, p: GoalProgress, words: Pick<GoalWor
     const R = words.name(t!.member);
     const said = p.checkins?.find((c) => c.member === t!.member)?.lastNight ?? null;
     if ((said === "no" || said === "partly") && goal.roster.some((w) => w.member === t!.member && windowOnNight(w, last))) {
-      notes.push(`${R} said "${PROTECTED_LABEL[said].toLowerCase()}" about last night's window and is back at work: mention drowsy driving gently. If ${R} is very sleepy, a ride, transit or a short nap before driving is safer; in one small study, new parents who slept poorly had more near misses on the road.`);
+      // WORK_DROWSY_DRIVING's words and sources, for the coach to say gently.
+      notes.push(`${R} said "${PROTECTED_LABEL[said].toLowerCase()}" about last night's window and is back at work: mention drowsy driving gently, in Maple's sourced words ${citeWork(WORK_DROWSY_DRIVING)}: "${workItem(WORK_DROWSY_DRIVING).body(words.v ?? THEY_VOICE)}"`);
     }
     if (t!.nursing === t!.member && daysBetween(t!.date, p.today) <= 14) {
-      notes.push(`${R} has been back at work since ${dateWords(t!.date, p.today)}: some babies nurse more often at night once the nursing parent is back (sometimes called reverse cycling), so read the check-ins and hints with that in mind, and offer to change the roster if it helps.`);
+      notes.push(`${R} has been back at work since ${dateWords(t!.date, p.today)}. In Maple's sourced words ${citeWork(WORK_NIGHT_NURSING)}: "${workItem(WORK_NIGHT_NURSING).body(words.v ?? THEY_VOICE)}" Read the check-ins and hints with that in mind, and offer to change the roster if it helps.`);
     }
   }
   if (open && notCheckedIn?.length) notes.push(`Not checked in for last night yet: ${notCheckedIn.map(words.name).join(", ")}.`);

@@ -472,8 +472,8 @@ async function main() {
       const nursed = await call("sleep_goal", { ...args, roster: [{ member: "Blake", from: "19:30", to: "07:30", nights: EVERY, covers: "nurse" }] }, alpha);
       ok(!/Blake's window/.test(nursed.text), nursed.text);
       const bottled = await call("sleep_goal", { ...args, roster: [{ member: "Blake", from: "19:30", to: "07:30", nights: EVERY, covers: "bottle" }] }, alpha);
-      // Texas HHS's sooner-of rule, with its source (the coach re-test's #4).
-      ok(/Say this too: A bottle in Blake's window \(7:30 PM–7:30 AM\): if June nurses, Texas HHS says a bottle can start at about 4 weeks old, or two weeks before a return to work or school if that's sooner\. .* \(source: Texas HHS, Breastmilk Counts: Bottle feeding your baby, https:\/\/breastmilkcounts\.com\/breastfeeding-basics\/bottle-feeding-your-baby\/\)/.test(bottled.text.replace(/[  ]/g, " ")), bottled.text);
+      // Texas HHS's sooner-of rule in WORK_BOTTLES's words, with its source (the coach re-test's #4).
+      ok(/Say this too: A bottle in Blake's window \(7:30 PM–7:30 AM\): If June nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner\. .* \(source: Texas HHS, Breastmilk Counts \(Texas WIC\): Bottle feeding your baby, https:\/\/breastmilkcounts\.com\/breastfeeding-basics\/bottle-feeding-your-baby\/\)/.test(bottled.text.replace(/[  ]/g, " ")), bottled.text);
       ok(text.includes(`Say this too: The step "Switch the 2 AM feed to formula" changes how June is fed: save it only if their pediatrician or lactation consultant agreed`) && !text.includes(`The step "Ask the lactation`), text);
       // Saved through the route, the answer carries them for the app.
       const saved = await route(alpha.owner, 1, { action: "goal.create", goal: { title: "Six hours", targets: [{ kind: "bassinet_stretch", minutes: 360 }] } });
@@ -616,7 +616,7 @@ async function main() {
     eq(rr.status, 200, JSON.stringify(rr.json));
     const made = goalOf(rr);
     eq([made.template?.nursing, made.roster.map((w) => w.covers), made.steps[0].title], [alpha.owner, ["bottle", "nurse"], "Ask the lactation consultant when Avery should pump around the night bottle"], "saved as built");
-    ok((rr.json.cautions as string[]).some((c) => /^A bottle in Avery's window \(10:00 PM–2:00 AM\): (Texas HHS says a bottle can start at about 4 weeks old, or two weeks before the return to work if that's sooner|plan when Avery pumps around that feed)/.test(c.replace(/[  ]/g, " "))), JSON.stringify(rr.json.cautions));
+    ok((rr.json.cautions as string[]).some((c) => /^A bottle in Avery's window \(10:00 PM–2:00 AM\): (If June nurses, a bottle of expressed milk can start at about 4 weeks old or two weeks before the nursing parent goes back to work or school, whichever is sooner|plan when Avery pumps around that feed)/.test(c.replace(/[  ]/g, " "))), JSON.stringify(rr.json.cautions));
     // What the quick setup can't use, in words, through the tool and the route.
     const same = await call("sleep_goal", { action: "add", back_to_work: { ...answers, second_half: "Blake" } }, alpha);
     ok(same.isError && /The two halves of the night need two different adults/.test(same.text), same.text);
