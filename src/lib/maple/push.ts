@@ -856,8 +856,14 @@ async function tickFamily(scope: FamilyScope, now: Date, run: FamilyRun): Promis
       for (const sub of subs) byMember.set(sub.member, [...(byMember.get(sub.member) ?? []), sub]);
       // The phones quiet for their person's protected sleep, read once and only when a reminder is due to go.
       let quiet: Promise<QuietPhones> | null = null;
-      // The reminders quiet phones held, each with its window's end (markWaiting), read once.
-      const waits = plans.some((p) => p.moments.some((m) => m.at <= t && t - m.at >= CUTOFF_MS)) ? await waitingReminders(scope.familyId, t) : new Map<string, number>();
+      // The reminders quiet phones held, each with its window's end (markWaiting), read once. If they can't be read, the
+      // ones past the cutoff wait for the next tick, and the rest go as usual.
+      const waits = plans.some((p) => p.moments.some((m) => m.at <= t && t - m.at >= CUTOFF_MS))
+        ? await waitingReminders(scope.familyId, t).catch((err) => {
+            void captureServerException(new Error(errCode(err)), { route: "maple push waiting" });
+            return new Map<string, number>();
+          })
+        : new Map<string, number>();
       for (const [email, phones] of byMember) {
         try {
           const v = voiceFor(audience, email, now);
