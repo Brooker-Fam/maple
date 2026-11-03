@@ -6,10 +6,11 @@ import { EASE_OFF_DAYS, type SleepGoal } from "@/lib/maple/sleep/types";
 import { dateWords } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import { useChatNav } from "../chat/ChatNav";
+import { focusNext } from "../tapCooldown";
 import { cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { useGoalsView, type GoalView } from "./SleepGoals";
-import { useSleepMaybe, type CardReceipt } from "./useSleep";
+import { useSleepMaybe, type CardReceipt, type GoalSave } from "./useSleep";
 
 /**
  * The weekly look-back at the end of Today's Last night card, on a goal's
@@ -86,67 +87,81 @@ export function LookBackPart({ due, onReceipt, onHold }: { due: LookBackDue; onR
   const lb: LookBack = lookBack(goal, due.view.progress, due.week, { name: memberName });
   const write = s.goalCall;
 
+  // Each choice's receipt, once its write saves: now, or after the refusal toast's Try again (`done`).
   const keep = async () => {
-    const r = await write({ action: "goal.review", id: goal.id, revision: goal.revision, note: null });
-    if (!r || !("saved" in r)) return;
-    const saved = r.saved;
-    // Short, so the card's one-line receipt reads in full beside its Undo (the step was named just above the tap).
-    onReceipt({
-      said: lb.step.current ? "Keeping this week's step" : "Looked back on the week",
-      undo: async () => {
-        const u = await write({ action: "goal.review", id: goal.id, revision: saved.revision, back: { at: goal.last_review_at, note: goal.review_note } });
-        return !!u && "saved" in u;
-      },
-    });
+    const settle = (r: GoalSave) => {
+      if (!r || !("saved" in r)) return;
+      const saved = r.saved;
+      // Short, so the card's one-line receipt reads in full beside its Undo (the step was named just above the tap).
+      onReceipt({
+        said: lb.step.current ? "Keeping this week's step" : "Looked back on the week",
+        undo: async () => {
+          const u = await write({ action: "goal.review", id: goal.id, revision: saved.revision, back: { at: goal.last_review_at, note: goal.review_note } });
+          return !!u && "saved" in u;
+        },
+      });
+    };
+    settle(await write({ action: "goal.review", id: goal.id, revision: goal.revision, note: null }, { done: settle }));
   };
 
   const easeOff = async () => {
     const until = addDays(today, EASE_OFF_DAYS);
+    const settle = (r: GoalSave) => {
+      if (!r || !("saved" in r)) return onHold(false);
+      const saved = r.saved;
+      if (saved.target_date) {
+        onHold(true);
+        setEased(saved);
+      } else onHold(false);
+      onReceipt({
+        // The date shows on the goal card; the card's one-line receipt keeps to the action.
+        said: "Easing off a week",
+        // Its own revision: a later write (the target date moved) has its own receipt and Undo, which replace this one.
+        undo: async () => {
+          setEased(null);
+          onHold(false);
+          const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { paused_until: goal.paused_until ?? null } });
+          return !!u && "saved" in u;
+        },
+      });
+    };
     // Held first: once the goal is easing off its look-back isn't due, and this part must stay for the second tap.
     onHold(true);
-    const r = await write({ action: "goal.update", id: goal.id, revision: goal.revision, patch: { paused_until: until } });
-    if (!r || !("saved" in r)) return onHold(false);
-    const saved = r.saved;
-    if (saved.target_date) setEased(saved);
-    else onHold(false);
-    onReceipt({
-      // The date shows on the goal card; the card's one-line receipt keeps to the action.
-      said: "Easing off a week",
-      // Its own revision: a later write (the target date moved) has its own receipt and Undo, which replace this one.
-      undo: async () => {
-        setEased(null);
-        onHold(false);
-        const u = await write({ action: "goal.update", id: goal.id, revision: saved.revision, patch: { paused_until: goal.paused_until ?? null } });
-        return !!u && "saved" in u;
-      },
-    });
+    settle(await write({ action: "goal.update", id: goal.id, revision: goal.revision, patch: { paused_until: until } }, { done: settle }));
   };
 
   const moveDate = async (g: SleepGoal) => {
     const to = addDays(g.target_date!, 7);
-    const r = await write({ action: "goal.update", id: g.id, revision: g.revision, patch: { target_date: to } });
-    setEased(null);
-    onHold(false);
-    if (!r || !("saved" in r)) return;
-    const saved = r.saved;
-    onReceipt({
-      said: `Target date ${dateWords(to, today)}`,
-      undo: async () => {
-        const u = await write({ action: "goal.update", id: g.id, revision: saved.revision, patch: { target_date: g.target_date } });
-        return !!u && "saved" in u;
-      },
-    });
+    const settle = (r: GoalSave) => {
+      setEased(null);
+      onHold(false);
+      if (!r || !("saved" in r)) return;
+      const saved = r.saved;
+      onReceipt({
+        said: `Target date ${dateWords(to, today)}`,
+        undo: async () => {
+          const u = await write({ action: "goal.update", id: g.id, revision: saved.revision, patch: { target_date: g.target_date } });
+          return !!u && "saved" in u;
+        },
+      });
+    };
+    settle(await write({ action: "goal.update", id: g.id, revision: g.revision, patch: { target_date: to } }, { done: settle }));
   };
 
   const nextStep = async () => {
-    const { current, following, bringTo } = lb.step;
+    const { current, following } = lb.step;
     // No step planned after this one: the chat helps choose it (its sleep tools load for a family with a goal).
     if (!current || !following) {
       chat.ask({ prompt: lb.prompt, label: "Sleep goal" });
       return;
     }
-    const done = await write({ action: "goal.step", id: goal.id, step: current.id, done: true });
-    if (!done || !("saved" in done)) return;
+    const stepped = await write({ action: "goal.step", id: goal.id, step: current.id, done: true }, { done: (r) => void rest(r) });
+    await rest(stepped);
+  };
+  /** Next step after its step is marked done (now, or after Try again): the next one comes into this week, the review, the receipt. */
+  const rest = async (done: GoalSave) => {
+    const { current, following, bringTo } = lb.step;
+    if (!current || !following || !done || !("saved" in done)) return;
     let at = done.saved;
     // The next planned step comes into this week.
     if (bringTo) {
@@ -189,6 +204,8 @@ export function LookBackPart({ due, onReceipt, onHold }: { due: LookBackDue; onR
             onClick={() => {
               setEased(null);
               onHold(false);
+              // Its question goes: focus on the card's heading, not the top of the page.
+              focusNext("#look-back", "#last-night");
             }}
           >{`Keep ${dateWords(eased.target_date!, today)}`}</Choice>
         </div>

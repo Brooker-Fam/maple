@@ -12,6 +12,7 @@ import { fixPreset } from "../FeedParts";
 import { Icon, KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
 import { useSheets } from "../sheets";
+import { focusNext, useTapGuard } from "../tapCooldown";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { LeftRunningAsk, useLastNight, WokeAsk } from "./LastNight";
@@ -29,6 +30,12 @@ import { partnerOf, usePeople, useSleep, useSleepMaybe, useTryAfterWake } from "
 
 const SLEEP = KIND_COLOR.sleep;
 const OUTCOMES: TryOutcome[] = ["stayed_asleep", "woke_calm", "woke_crying", "picked_up"];
+
+/** Where focus goes after a one-tap answer takes its card away (tapCooldown.ts focusNext): Right now's heading. */
+const AFTER_CARD = ["#right-now", "#recent"];
+/** A card's heading button, after an answer changes the card in place or brings in the other card. */
+const TRY_HEAD = "[data-sleep-card=try] button";
+const SHIFT_HEAD = "[data-sleep-card=shift] button";
 
 /**
  * The four outcomes, big, two by two: one tap saves (Undo in its toast). On a
@@ -88,14 +95,27 @@ export function TryCard({ t }: { t: BassinetTry }) {
   const sleep = t.sleep_entry_id ? state?.entries.find((e) => e.id === t.sleep_entry_id) : undefined;
   // Woke up was tapped elsewhere (the dock, Siri): the try is waiting for how it went, ending when she woke.
   const woke = !!sleep && !sleep.active && !!sleep.ended_at;
+  // In the turn card's place (Put her down), or changed by Woke up elsewhere: its buttons wait out a double tap's second half.
+  const guard = useTapGuard(`${t.id}:${woke}`);
   const down = Math.max(0, (now.getTime() - Date.parse(t.started_at)) / 1000);
   const nth = s.nth(t);
   // Asleep before the transfer (in arms, a feed): when that sleep began, so the folded sleep card's start isn't lost.
   const earlier = sleep && !woke && Date.parse(t.started_at) - Date.parse(sleep.started_at) > 90_000 ? sleep : null;
   const place = earlier ? (earlier.data as { place?: SleepPlace }).place : undefined;
   const title = woke ? `${v.They} woke at ${formatTime(sleep!.ended_at!, tz)}` : "In the bassinet";
+  // The card goes with its outcome: Right now keeps a screen reader's place.
+  const finish = (o: TryOutcome) => void s.finishTry(t, o, woke ? { at: new Date(sleep!.ended_at!) } : {}).then((x) => x && focusNext(...AFTER_CARD));
   return (
-    <motion.section layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} aria-label={title} className={cx(tone.card, "space-y-3 px-4 py-3.5 [@media(max-height:640px)]:space-y-2 [@media(max-height:640px)]:py-3")}>
+    <motion.section
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      aria-label={title}
+      data-sleep-card="try"
+      {...guard.props}
+      className={cx(tone.card, "space-y-3 px-4 py-3.5 [@media(max-height:640px)]:space-y-2 [@media(max-height:640px)]:py-3")}
+    >
       <CardHead icon="bassinet" title={title}>
         <span className={cx(tone.muted, "block text-[14px] leading-snug [@media(max-height:640px)]:text-[13px]")}>
           Since {formatTime(t.started_at, tz)} · {formatDuration(down)}
@@ -113,7 +133,7 @@ export function TryCard({ t }: { t: BassinetTry }) {
       {s.canWrite && (
         <>
           <p className={cx(tone.label, "[@media(max-height:640px)]:sr-only")}>{woke ? "How did the try go?" : "When it ends, how did it go?"}</p>
-          <OutcomeGrid disabled={s.busy} onPick={(o) => void s.finishTry(t, o, woke ? { at: new Date(sleep!.ended_at!) } : {})} />
+          <OutcomeGrid disabled={s.busy} onPick={finish} />
           <div className="flex flex-wrap gap-x-1">
             <Button variant="ghost" size="sm" onClick={() => s.openSheet({ kind: "outcome", tryId: t.id, details: true })}>
               Tags, note or an earlier end
@@ -180,8 +200,13 @@ function ArmsWokeAsk({ sleep }: { sleep: Entry }) {
   const woke = async () => {
     const done = await m.timerCall({ action: "stop", id: sleep.id, at: next.started_at, expect_updated_at: sleep.updated_at });
     if (done) afterWake(sleep.id, new Date(next.started_at));
+    if (done) focusNext(SHIFT_HEAD, ...AFTER_CARD);
   };
-  return <WokeAsk sleep={sleep} next={next} busy={m.timerBusy(sleep.id)} onWoke={() => void woke()} onStill={() => setRaw(JSON.stringify({ ...still, [sleep.id]: next.id }))} />;
+  const stillAsleep = () => {
+    setRaw(JSON.stringify({ ...still, [sleep.id]: next.id }));
+    focusNext(SHIFT_HEAD, ...AFTER_CARD);
+  };
+  return <WokeAsk sleep={sleep} next={next} busy={m.timerBusy(sleep.id)} onWoke={() => void woke()} onStill={stillAsleep} />;
 }
 
 /**
@@ -212,6 +237,12 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
   const partner = holderIsMe ? partnerOf(sh, people, me) : null;
   const sleeping = (state?.entries ?? []).find((e) => e.kind === "sleep" && e.active) ?? null;
   const choices = sleepyChoices(v, partner ? memberName(partner.email) : null);
+  // Its buttons change with who holds her, an ask (and ten minutes on), her sleep in arms and a feed logged after it began
+  // (the Woke at question above them): each change, from a tap here or another phone, waits out a double tap's second half.
+  const fedSince = sleeping && state ? (feedAfter(sleeping, state.entries, now)?.id ?? "") : "";
+  const guard = useTapGuard([sh.id, holderIsMe, ask.asked, ask.stale, ask.to === me, sleeping?.id ?? "", fedSince].join(":"));
+  // One tap that changes this card, or brings in the try's: focus stays on the card that's there.
+  const andFocus = (p: Promise<unknown>, next = SHIFT_HEAD) => void p.then((x) => x && focusNext(next, ...AFTER_CARD));
   const title =
     holderIsMe && ask.asked
       ? ask.stale
@@ -240,6 +271,8 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       aria-label={title}
+      data-sleep-card="shift"
+      {...guard.props}
       className={cx(tone.card, "space-y-3 px-4 py-3.5", (st.due || ask.stale || (ask.asked && ask.to === me)) && "ring-2 ring-mp-accent")}
     >
       <CardHead icon="hold" title={title}>
@@ -256,15 +289,15 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
             ask.asked ? (
               <>
                 {/* Asked, not handed over: the bassinet stays the big, safe choice; past ten minutes, waking them again is the other. */}
-                <Button className="w-full" size="lg" disabled={s.busy} onClick={() => void s.startTry()}>
+                <Button className="w-full" size="lg" disabled={s.busy} onClick={() => andFocus(s.startTry(), TRY_HEAD)}>
                   <Icon name="bassinet" size={18} /> {choices[0].label}
                 </Button>
                 {ask.stale ? (
-                  <Button variant="soft" className="w-full" size="lg" disabled={s.busy} onClick={() => void s.askHandoff(sh, ask.to!)}>
+                  <Button variant="soft" className="w-full" size="lg" disabled={s.busy} onClick={() => andFocus(s.askHandoff(sh, ask.to!))}>
                     <Icon name="bell" size={18} /> Wake {asked} again
                   </Button>
                 ) : (
-                  <Button variant="soft" className="w-full" size="lg" disabled={s.busy} onClick={() => void s.handOff(sh, { to: ask.to! })}>
+                  <Button variant="soft" className="w-full" size="lg" disabled={s.busy} onClick={() => andFocus(s.handOff(sh, { to: ask.to! }))}>
                     {asked} has {v.them}
                   </Button>
                 )}
@@ -279,7 +312,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
                     Hand off
                   </Button>
                   {/* Asleep in arms: laying her down is the try on that sleep (the strip offers it too, in thumb reach). */}
-                  <Button variant="soft" onClick={() => void s.startTry()}>
+                  <Button variant="soft" onClick={() => andFocus(s.startTry(), TRY_HEAD)}>
                     {sleeping ? `Put ${v.them} down` : "Into the bassinet"}
                   </Button>
                 </div>
@@ -301,7 +334,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
               </Button>
             )}
             {!sleeping && (
-              <Button variant="ghost" size="sm" disabled={s.busy} onClick={() => void s.asleepInArms()}>
+              <Button variant="ghost" size="sm" disabled={s.busy} onClick={() => andFocus(s.asleepInArms())}>
                 Asleep in arms
               </Button>
             )}
@@ -311,7 +344,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
                 Edit sleep
               </Button>
             )}
-            <Button variant="ghost" size="sm" onClick={() => void s.endShift(sh)}>
+            <Button variant="ghost" size="sm" onClick={() => andFocus(s.endShift(sh), "#right-now")}>
               End
             </Button>
           </div>
@@ -341,6 +374,8 @@ export function SleepNow() {
 export function SleepPlanRow() {
   const s = useSleepMaybe();
   const { state } = useMaple();
+  // The cards above it come and go with a tap (an outcome, the Last night card's last answer): a second tap waits.
+  const guard = useTapGuard();
   if (!s || !state) return null;
   const open = s.goals.filter((g) => g.status === "active" || g.status === "paused").length;
   if (!s.plan && !open && !s.data.tries.length && !s.data.shifts.length) return null;
@@ -352,7 +387,7 @@ export function SleepPlanRow() {
     .filter(Boolean)
     .join(" · ");
   return (
-    <button type="button" onClick={() => s.openSheet({ kind: "plan" })} className={cx(tone.card, "flex min-h-[56px] w-full items-center gap-3 px-4 py-2.5 text-left transition active:bg-mp-ink/[0.04]")}>
+    <button type="button" onClick={guard.tap(() => s.openSheet({ kind: "plan" }))} className={cx(tone.card, "flex min-h-[56px] w-full items-center gap-3 px-4 py-2.5 text-left transition active:bg-mp-ink/[0.04]")}>
       <KindBadge icon="moon" color={SLEEP} size={32} />
       <span className="min-w-0 flex-1">
         <span className={cx(tone.heading, "block text-[15px]")}>Sleep plan</span>
