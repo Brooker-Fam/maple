@@ -33,6 +33,11 @@ const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
   { path: /^out\.mcp\.(maple_status|admin)\.sc\.family_memories$/, added: true, why: "maple_status carries the family's memories (none in this scenario) for a connected app" },
   { path: /^db\.maple_tokens\.\[[^\]]+\]\.last_act$/, why: "a Siri key keeps its member's newest Siri write (the rows it wrote, as it left them), so Maple undo takes back only that" },
   {
+    path: /^out\.care\.dose\.updates\.sent$|^db\.maple_push_sent\.\[s4\|log:<care id 3>\]$/,
+    why: "Phone C (default settings) was shown a Logged two hours before, so it hears the next dose too, with no reminder since: its OK after is never left stale",
+  },
+  { path: /^db\.maple_push_subs\.\[4\]\.(last_sent_at|undelivered)$/, why: "Phone C's last send and its sends with no receipt yet count that Logged" },
+  {
     path: /^out\.mcp\.(stranger|removed)\.(isError|sc|text)$/,
     why: "the scenario calls tools without the MCP route, which turned these callers away (401) before; now the tools refuse them too",
   },
@@ -87,8 +92,9 @@ try {
 
 /**
  * Random values (her page's 8-digit ids, invite and receipt tokens) read as
- * the order they first appear in, so the two runs compare. Rows are keyed by
- * their own key or id, so one added row doesn't shift every row after it.
+ * the order they first appear in (her page's entries by their own times), so
+ * the two runs compare. Rows are keyed by their own key or id, so one added
+ * row doesn't shift every row after it.
  */
 function steady(run: unknown): unknown {
   const seen = new Map<string, string>();
@@ -106,6 +112,9 @@ function steady(run: unknown): unknown {
     return v;
   };
   const { out, db } = run as { out: unknown; db: Record<string, Record<string, unknown>[]> };
+  // Her page's entries first, by their own times: rows keyed by random ids sort differently each run.
+  const byTime = [...(db.maple_care_entries ?? [])].sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.created_at).localeCompare(String(b.created_at)));
+  for (const r of byTime) if (!SEEDED.has(String(r.id)) && /^[1-9]\d{7}$/.test(String(r.id))) mark(String(r.id), "care id");
   const keyed = Object.fromEntries(
     Object.entries(db).map(([table, rows]) => [table, Object.fromEntries(rows.map((r, i) => [`[${String(r.key ?? r.email ?? r.id ?? i)}]`, r]))])
   );
