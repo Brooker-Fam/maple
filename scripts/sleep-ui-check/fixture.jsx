@@ -23,7 +23,9 @@ import { FixtureContext } from "./mocks";
 // ?morning 7:30 AM on Thu, Nov 5 (after the clocks went back), the morning after a night on a sleep goal's roster.
 // Each page is one phone showing the real Today tab (Right now, the dock with its sleep strip, More, the toasts and every
 // sleep sheet). ?as=alex signs in as Alex, ?role=viewer as Pat. ?sparse (with ?goals&morning) makes Wed night a sparse log
-// for Today's Last night card. ?nursing has a nursing feed running for the feed card's night line. ?phones puts Sam's phone and Alex's side by side in two
+// for Today's Last night card; ?review (with ?goals) leaves the goal unreviewed, so its week 2 look-back is due. With
+// ?morning, ?mornings is a family who answers only in the morning, and ?quiet a goal with nothing logged for nine nights.
+// ?nursing has a nursing feed running for the feed card's night line. ?phones puts Sam's phone and Alex's side by side in two
 // frames that share one stand-in route and one clock, so one phone's write reaches the other at its next poll.
 const ME = "sam@example.test";
 const PARTNER = "alex@example.test";
@@ -387,6 +389,16 @@ function makeServer(clock) {
         bump(g);
         return answer({ result: { goal: goalOut(g), before, status: "updated" } });
       }
+      // The look-back's Keep it and Next step record a review on the revision; its Undo (`back`) puts the one before back.
+      case "goal.review": {
+        const g = goalOf(body.id);
+        if (body.revision !== undefined && body.revision !== g.revision) throw new ApiError("conflict", 409, { error: "Someone changed this sleep goal just now.", code: "changed", current: goalOut(g), sleep: snapshot(who) });
+        const before = goalOut(g);
+        if (body.back) Object.assign(g, { last_review_at: body.back.at ?? null, review_note: body.back.note ?? null });
+        else Object.assign(g, { last_review_at: iso(now()), review_note: body.note == null ? null : ruled(() => cleanGoalNote(body.note, GOAL_NOTE_MAX)) });
+        bump(g);
+        return answer({ result: { goal: goalOut(g), before, status: "updated" } });
+      }
       case "goal.close": {
         const g = goalOf(body.id);
         const before = goalOut(g);
@@ -496,7 +508,8 @@ function makeServer(clock) {
           { id: "w8", member: ME, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] },
           { id: "w9", member: PARTNER, from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4, 5, 6] },
         ],
-        last_review_at: null, review_note: null, closed_at: null, revision: 4, created_by: ME, updated_by: PARTNER, source: "web",
+        // Looked back on last Friday, so no look-back is due this Thursday; with ?review, never, so week 2's is.
+        last_review_at: params.has("review") ? null : iso(at("2026-10-30", 9)), review_note: null, closed_at: null, revision: 4, created_by: ME, updated_by: PARTNER, source: "web",
         created_at: iso(created), updated_at: iso(at("2026-10-24", 9)), client_id: null, item_seq: 9,
       });
       // Tries, each on a bassinet sleep: [night, start hour, start minute, minutes, outcome].
@@ -546,6 +559,70 @@ function makeServer(clock) {
       entry("diaper", at(nextDay(wed), 3, 0), null, { pee: true, poop: false });
       entry("sleep", at(nextDay(wed), 4, 45), undefined, {});
       entry("feed", at(nextDay(wed), 6, 30), at(nextDay(wed), 6, 45), { method: "breast", first_side: "R", last_side: "R", segments: [] }, PARTNER);
+    },
+    /**
+     * With ?morning: a family who answers only in the morning. A goal set last Thursday (Oct 29), nothing logged at night
+     * all week, and every morning's check-ins: Sam's say where River slept and any try that isn't in the log; Alex's,
+     * last night's too (Sam hasn't checked in for it yet). Week 1 ended last night, so its look-back is due.
+     */
+    mornings: () => {
+      db.entries.length = 0;
+      const set = at("2026-10-29", 20, 0);
+      db.goals.push({
+        id: 330, baby_id: 1, title: "Bassinet nights, and sleep for both of us", why: null, target_date: "2026-11-26", status: "active",
+        targets: [
+          { id: "a1", kind: "bassinet_nights", per_week: 4, min_minutes: 60 },
+          { id: "a2", kind: "protected_window", member: ME, per_week: 5 },
+        ],
+        steps: [{ id: "s1", title: "Bassinet for the first stretch after the 10 PM feed", week_of: "2026-10-29", done_at: null, done_by: null }],
+        roster: [
+          { id: "w1", member: ME, from: "22:00", to: "02:00", nights: [0, 1, 2, 3, 4, 5, 6] },
+          { id: "w2", member: PARTNER, from: "02:00", to: "06:00", nights: [0, 1, 2, 3, 4, 5, 6] },
+        ],
+        last_review_at: null, review_note: null, closed_at: null, revision: 2, created_by: ME, updated_by: ME, source: "web", created_at: iso(set), updated_at: iso(set), client_id: null, item_seq: 4,
+      });
+      const checkin = (member, night, said, extras = {}) =>
+        db.checkins.push({ id: ++seq, member, night, protected: said, note: null, place: null, untimed_try: null, untimed_min: null, handoff: null, ...extras, source: "web", created_at: iso(at(nextDay(night), 7)), updated_at: iso(at(nextDay(night), 7)), client_id: null });
+      // [night, Sam's answer, where River slept, any try not in the log]: three long enough, two short, one none.
+      for (const [night, said, place, untimed] of [
+        ["2026-10-29", "yes", "bassinet", "long"],
+        ["2026-10-30", "partly", "mixed", "short"],
+        ["2026-10-31", "yes", "bassinet", "long"],
+        ["2026-11-01", "no", "held", "no"],
+        ["2026-11-02", "yes", "bassinet", "long"],
+        ["2026-11-03", "yes", "mixed", "short"],
+      ]) {
+        checkin(ME, night, said, { place, untimed_try: untimed, untimed_min: untimed === "no" ? null : 60, handoff: "on_time" });
+        checkin(PARTNER, night, "yes");
+      }
+      checkin(PARTNER, "2026-11-04", "yes", { place: "mixed", untimed_try: "short", untimed_min: 60, handoff: "on_time" });
+    },
+    /**
+     * With ?morning: "Bassinet by Dec 1", set Oct 15 and logged most nights at first, then nothing from Tue, Oct 27 through
+     * last night (nine nights, and no check-ins): a quiet stretch, still going.
+     */
+    quiet: () => {
+      db.entries.length = 0;
+      const set = at("2026-10-15", 20, 0);
+      db.goals.push({
+        id: 320, baby_id: 1, title: "Bassinet by Dec 1", why: null, target_date: "2026-12-01", status: "active",
+        targets: [{ id: "a1", kind: "bassinet_nights", per_week: 3, min_minutes: 60 }],
+        steps: [
+          { id: "s1", title: "Bassinet after the 10 PM feed", week_of: "2026-10-15", done_at: iso(at("2026-10-17", 9)), done_by: ME },
+          { id: "s2", title: "White noise on for every try", week_of: "2026-10-22", done_at: null, done_by: null },
+        ],
+        roster: [],
+        last_review_at: iso(at("2026-10-22", 9)), review_note: null, closed_at: null, revision: 3, created_by: ME, updated_by: ME, source: "web", created_at: iso(set), updated_at: iso(at("2026-10-22", 9)), client_id: null, item_seq: 3,
+      });
+      for (let night = "2026-10-15"; night <= "2026-10-26"; night = nextDay(night)) {
+        const feed = at(night, 21, 40);
+        db.entries.push({ id: ++seq, kind: "feed", started_at: iso(feed), ended_at: iso(feed + 20 * MIN), active: false, data: { method: "breast", first_side: "L", last_side: "R", segments: [] }, note: null, created_by: ME, updated_at: iso(feed + 20 * MIN), source: "web", created_at: iso(feed) });
+        const down = at(night, 22, 15);
+        const up = at(nextDay(night), 1, 30);
+        db.entries.push({ id: ++seq, kind: "sleep", started_at: iso(down), ended_at: iso(up), active: false, data: { place: "bassinet" }, note: null, created_by: ME, updated_at: iso(up), source: "web", created_at: iso(up) });
+        const feed2 = at(nextDay(night), 1, 40);
+        db.entries.push({ id: ++seq, kind: "feed", started_at: iso(feed2), ended_at: iso(feed2 + 20 * MIN), active: false, data: { method: "breast", first_side: "R", last_side: "R", segments: [] }, note: null, created_by: PARTNER, updated_at: iso(feed2 + 20 * MIN), source: "web", created_at: iso(feed2) });
+      }
     },
   };
   /** The app's own log write (useMaple's log), against the same in-memory log. */
@@ -597,7 +674,7 @@ function makeWorld(query) {
   const listeners = new Set();
   const clock = () => BASE + offset.current;
   const server = makeServer(clock);
-  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing", "armsfeed", "roster"]) if (query.has(name)) server.seeds[name]();
+  for (const name of ["running", "holding", "goals", "lastnight", "sparse", "nursing", "armsfeed", "roster", "mornings", "quiet"]) if (query.has(name)) server.seeds[name]();
   return {
     server,
     clock,

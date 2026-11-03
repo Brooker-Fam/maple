@@ -773,7 +773,9 @@ try {
   await sheet.waitFor({ state: "hidden" });
   wrote = await sam.last();
   assert.deepEqual([wrote.action, wrote.protected, wrote.night, wrote.note], ["checkin.save", "yes", "2026-11-04", "Up once, back down quickly"]);
-  await toast("Checked in for last night: yes").waitFor();
+  // Its receipt comes back to the card (with its Undo), never a toast over the next question.
+  await receipt.filter({ hasText: "Checked in: yes, with a note" }).waitFor();
+  assert.equal(await toast("Checked in").count(), 0, "No toast for the note saved from the card");
   console.log("PASS Check-in sheet: a note, then one tap on a big answer saves both; Not now hides the card for that night on this phone");
 
   // The stretch with nothing logged: Up or feeding saves nothing; then the night's other questions, one tap each, on Sam's own
@@ -826,8 +828,9 @@ try {
     "Back to work on the 30th",
     "Target date Wed, Nov 25 · 20 days left · week 2 of 5",
     "4 nights a week with a bassinet try asleep 1 hour or more",
-    "Week 2 (ended last night): 2 of the 4 nights aimed for · 2 of 5 logged nights · 2 not logged",
-    "Week 1: 2 of the 4 nights aimed for · 2 of 3 logged nights · 4 not logged",
+    // Monday night has only a holding turn and check-ins about the adults' own sleep: nothing about the bassinet, so not known.
+    "Week 2 (ended last night): 2 of the 4 nights aimed for · 2 of 4 nights logged or answered · 3 not logged (1 with only feeds or other entries)",
+    "Week 1: 2 of the 4 nights aimed for · 2 of 3 nights logged or answered · 4 not logged",
     "A bassinet stretch of 3 hours or more",
     "Week 2 (ended last night): longest 3h 00m · 1 of 4 stretches 3 hours or more",
     "Week 1: longest 2h 30m · 0 of 3 stretches 3 hours or more",
@@ -1045,7 +1048,7 @@ try {
   await shot("last-night-gap-320");
   const beforeGaps = (await sam.calls()).length;
   await gap.getByRole("button", { name: "Not sure", exact: true }).click();
-  await sparseReceipt.filter({ hasText: "Left as not logged: that stretch stays out of the counts." }).waitFor();
+  await sparseReceipt.filter({ hasText: "Left out of the counts" }).waitFor();
   assert.equal((await sam.calls()).length, beforeGaps, "Not sure saves nothing");
   // 1:20–3:00 AM (1h 40m) is the shortest of three: not asked.
   await gap.getByRole("heading", { name: "Nothing logged 3:00–4:45 AM" }).waitFor();
@@ -1096,7 +1099,7 @@ try {
   const beforeSkip = (await sam.calls()).length;
   await gap.getByRole("button", { name: "Skip the rest of the stretches", exact: true }).click();
   await night.getByRole("region", { name: "Where did River spend most of last night?" }).waitFor();
-  await sparseReceipt.filter({ hasText: "Skipped: those stretches stay out of the counts." }).waitFor();
+  await sparseReceipt.filter({ hasText: "Skipped: left out of the counts" }).waitFor();
   assert.equal((await sam.calls()).length, beforeSkip, "Skip the rest saves nothing");
   await page.setViewportSize({ width: 390, height: 844 });
   console.log("PASS Last night: a timer left running asks on its own card and the strip (one tap stops it at the next thing logged); only the two longest stretches are asked, each naming whose window it was, Not sure first, with Skip the rest; receipts and Undo stay in the card, never a toast over the next question at 320; the place question lists all five when a sleep has no place; Somewhere else shows the safe-sleep line; Tell Maple seeds the chat; essentials fit above the dock at 320 × 568");
@@ -1129,18 +1132,263 @@ try {
   await viewerGoal.getByText(/^Week 2 \(ended last night\):/).first().waitFor();
   text = await neutral(plan, "Goals for a view-only guest");
   // Without the adults' check-ins, Sunday night (a holding turn, no try or sleep) says nothing about the bassinet: one more night not logged.
-  for (const line of ["Week 2 (ended last night): 2 of the 4 nights aimed for · 2 of 4 logged nights · 3 not logged (1 with only feeds or other entries)", "Logged week 2 (ended last night): something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4", "Week 2 (ended last night): longest 3h 00m", "White noise on for every try", "Sam 10:00 PM–2:00 AM", "Hint from the log", "Counted from each adult's own morning check-ins."]) {
+  for (const line of ["Week 2 (ended last night): 2 of the 4 nights aimed for · 2 of 4 nights logged · 3 not logged (1 with only feeds or other entries)", "Logged week 2 (ended last night): something on 5 of 7 nights (5 with a gap of 4 hours or more) · feeds on 2 · tries on 4", "Week 2 (ended last night): longest 3h 00m", "White noise on for every try", "Sam 10:00 PM–2:00 AM", "Hint from the log", "Counted from each adult's own morning check-ins."]) {
     assert(text.includes(line), `A view-only guest sees "${line}"`);
   }
   assert.doesNotMatch(text, /Check-ins|checked in|last night:|\bpartly\b|not this time|held \d/, "Never a check-in, a count of them or an answer");
   assert.equal(await viewerGoal.getByRole("checkbox").count(), 0, "Steps aren't buttons for a view-only guest");
-  for (const name of ["Edit", "Close goal", "Talk it through with Maple", "Set one yourself", "Set another with Maple", "Check in", "Change", "Open again"]) {
+  for (const name of ["Edit", "Close goal", "Talk it through with Maple", "Set one yourself", "Set another with Maple", "Check in", "Change", "Open again", "More for this goal"]) {
     assert.equal(await plan.getByRole("button", { name, exact: true }).count(), 0, `No ${name} for a view-only guest`);
   }
   assert.equal(await viewerGoal.getByRole("button", { name: "Ask Maple about it", exact: true }).count(), 1, "Asking about it only reads");
   assert.deepEqual((await sam.calls()).map((x) => x.action), [], "A view-only guest's phone sent no writes");
   await shot("goals-viewer-night");
   console.log("PASS Viewer: goals, steps, the roster and the baby's numbers through the Sleep plan row (night look); no check-ins anywhere and nothing that writes");
+
+  // ── Round 3: light logging, a quiet stretch's clean restart, and the weekly look-back ──
+  const lastNight = page.getByRole("region", { name: "Last night", exact: true });
+  const cardReceipt = lastNight.locator("[data-last-night-receipt]");
+  /** A new card's screens for review: 390 × 844 and 320 × 568, by day and in the night look (its colors), then back as it was. */
+  const screens = async (name, locator) => {
+    const wasNight = await page.evaluate(() => document.documentElement.classList.contains("maple-night"));
+    for (const [width, h] of [[390, 844], [320, 568]]) {
+      await page.setViewportSize({ width, height: h });
+      for (const night of [false, true]) {
+        await page.evaluate((on) => document.documentElement.classList.toggle("maple-night", on), night);
+        await locator.evaluate((el) => el.scrollIntoView({ block: "start" }));
+        await noHorizontalScroll(`${name} at ${width}px`);
+        await shot(`r3-${name}-${width}x${h}-${night ? "night" : "day"}`);
+      }
+    }
+    await page.evaluate((on) => document.documentElement.classList.toggle("maple-night", on), wasNight);
+    await page.setViewportSize({ width: 390, height: 844 });
+  };
+
+  // A family who answers only in the morning: their answers are the counts' sample, never "nothing logged" or "Only".
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("https://sleep.example.test/?mornings&morning");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await sam.row.click();
+  await plan.waitFor();
+  await plan.getByRole("radio", { name: "Goals", exact: true }).click();
+  const morningGoal = plan.getByRole("region", { name: "Bassinet nights, and sleep for both of us" });
+  await morningGoal.locator("[data-goal-coverage]").waitFor();
+  text = await neutral(morningGoal, "A goal counted from morning check-ins");
+  for (const line of [
+    "Week 1 (ended last night): 3 of the 4 nights aimed for (3 from check-ins) · tried on 6 of 7 nights",
+    "Week 1 (ended last night): yes on 4 of the 5 nights aimed for · checked in 6 of 7 roster nights (partly 1, not this time 1)",
+    "Week 1 (ended last night): no overnight logs; these come from morning check-ins on 7 nights",
+  ]) assert(text.includes(line), `The goal card shows "${line}"\n---\n${text}`);
+  assert.doesNotMatch(text, /\bOnly\b|anything logged|too few/, "The morning answers are plenty: no \"Only\", nothing too few");
+  assert((await neutral(plan, "Goals")).includes("Three logged nights a week is enough; on the other nights, the morning check-in is plenty."), "The coverage note says how little is enough");
+  await shot("goal-card-mornings");
+  await screens("goal-card-mornings", morningGoal);
+  await page.keyboard.press("Escape");
+  await plan.waitFor({ state: "hidden" });
+
+  // Its review morning: after Sam's check-in, Week 1's look-back ends the Last night card, every count with what it's out of.
+  await lastNight.getByRole("group", { name: "Did you get your 10 PM–2 AM sleep?" }).getByRole("button", { name: "Yes", exact: true }).click();
+  await cardReceipt.filter({ hasText: "Checked in: yes" }).waitFor();
+  const look = lastNight.locator("[data-look-back]");
+  await look.getByRole("heading", { name: "Week 1 look-back", exact: true }).waitFor();
+  text = await neutral(look, "The look-back");
+  for (const line of [
+    "Bassinet nights: 3 of the 4 aimed for (3 from check-ins) · 7 nights answered in the morning",
+    "Sam's protected sleep: yes on 5 of the 5 aimed for",
+    "This week's step: Bassinet for the first stretch after the 10 PM feed",
+    "Check-ins: Sam 7 of 7 nights · Alex 7 of 7 nights",
+  ]) assert(text.includes(line), `The look-back shows "${line}"\n---\n${text}`);
+  assert.doesNotMatch(text, /overdue/i);
+  const lookChoices = look.getByRole("region", { name: "This week's step?" }).getByRole("button");
+  assert.deepEqual(await lookChoices.allInnerTexts(), ["Keep it", "Ease off a week", "Next step"]);
+  for (let i = 0; i < 3; i++) assert((await height(lookChoices.nth(i))) >= 44, "The look-back's choices are 44px targets");
+  await shot("look-back-390");
+  await screens("look-back", lastNight);
+  // Keep it: the review, from the revision this phone has; the card has nothing left, so its receipt rides a toast with Undo.
+  await look.getByRole("button", { name: "Keep it", exact: true }).click();
+  await toast("Keeping this week's step").waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.id, wrote.revision, wrote.note], ["goal.review", 330, 2, null], "Keep it records the review");
+  await lastNight.waitFor({ state: "detached" });
+  await tapToast("Keeping this week's step", "Undo");
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.revision, wrote.back], ["goal.review", 3, { at: null, note: null }], "Undo puts back the review before it");
+  await look.getByRole("heading", { name: "Week 1 look-back", exact: true }).waitFor();
+  // Next step with no step planned after this one: the chat, seeded with the look-back.
+  await look.getByRole("button", { name: "Next step: ask Maple", exact: true }).click();
+  ask = await sam.last();
+  assert.deepEqual([ask.action, ask.prompt], ["ask", "Week 1 look-back: what's a good next step?"]);
+  console.log("PASS Light logging: a family who only answers in the morning reads \"no overnight logs; these come from morning check-ins on 7 nights\", counts its tries, never \"Only\"; its review morning ends the Last night card with Week 1's look-back (each count with what it's out of), Keep it records the review with Undo, and Next step with nothing planned opens the chat");
+
+  // At 320 × 568 in the night look: the look-back's choices fit without sideways scroll.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("https://sleep.example.test/?mornings&morning&night");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await lastNight.getByRole("button", { name: "Yes", exact: true }).click();
+  await look.getByRole("heading", { name: "Week 1 look-back", exact: true }).waitFor();
+  // Scrolled to, as a person would: its heading at the top, its choices above the dock.
+  await look.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await page.waitForTimeout(200);
+  await noHorizontalScroll("The look-back at 320px");
+  for (const name of ["Keep it", "Ease off a week"]) assert(await aboveDock(look.getByRole("button", { name, exact: true })), `${name} clears the dock at 320 × 568`);
+  await shot("look-back-320x568-night");
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  // A receipt is for its own night: left open overnight, the next morning's card asks afresh, with no Undo for yesterday.
+  await page.goto("https://sleep.example.test/?goals&morning");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await lastNight.getByRole("group", { name: "Did you get your 10 PM–2 AM sleep?" }).getByRole("button", { name: "Yes", exact: true }).click();
+  await cardReceipt.filter({ hasText: "Checked in: yes" }).waitFor();
+  await advance(24 * 60);
+  await lastNight.getByText("Thu, Nov 5", { exact: true }).waitFor();
+  await lastNight.getByRole("group", { name: "Did you get your 10 PM–2 AM sleep?" }).waitFor();
+  assert.equal(await cardReceipt.count(), 0, "Yesterday's receipt (and its Undo) stays with yesterday");
+  console.log("PASS Receipts: a receipt left on the card overnight doesn't carry into the next morning's question");
+
+  // Week 2's look-back on the goal's review day. After noon the night's optional questions fold behind one row.
+  await page.goto("https://sleep.example.test/?goals&morning&review");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await lastNight.waitFor();
+  await advance(5 * 60);
+  await lastNight.getByRole("group", { name: "Did you get your 10 PM–2 AM sleep?" }).getByRole("button", { name: "Yes", exact: true }).click();
+  await lastNight.getByText("More about last night, if you'd like.", { exact: true }).waitFor();
+  assert.equal(await lastNight.getByRole("button", { name: "Answer", exact: true }).count(), 1, "One row for the rest, after noon");
+  await look.getByRole("heading", { name: "Week 2 look-back", exact: true }).waitFor();
+  text = await neutral(look, "Week 2's look-back");
+  for (const line of ["Bassinet nights: 2 of the 4 aimed for · 5 nights logged", "This week's step: White noise on for every try", "Calmer bedtimes: not counted from the log", "Check-ins: Sam 5 of 7 nights · Alex 3 of 7 nights"]) {
+    assert(text.includes(line), `Week 2's look-back shows "${line}"\n---\n${text}`);
+  }
+  await shot("look-back-folded-390");
+  // Ease off a week: counting picks up again in a week; then, as a second tap, the target date a week later.
+  await look.getByRole("button", { name: "Ease off a week", exact: true }).click();
+  await lastNight.getByRole("heading", { name: "Move the target date a week later?", exact: true }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.id, wrote.patch], ["goal.update", 301, { paused_until: "2026-11-12" }]);
+  await cardReceipt.filter({ hasText: "Easing off a week" }).waitFor();
+  assert.deepEqual(await look.getByRole("button").allInnerTexts(), ["Yes, to Wed, Dec 2", "Keep Wed, Nov 25"]);
+  await shot("look-back-move-date-390");
+  await screens("look-back-move-date", lastNight);
+  await look.getByRole("button", { name: "Yes, to Wed, Dec 2", exact: true }).click();
+  await cardReceipt.filter({ hasText: "Target date Wed, Dec 2" }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.patch], ["goal.update", { target_date: "2026-12-02" }]);
+  assert.equal(await look.count(), 0, "No look-back while easing off");
+  server = await page.evaluate(() => window.__sleep.goal(301));
+  assert.deepEqual([server.paused_until, server.target_date, server.status], ["2026-11-12", "2026-12-02", "active"], "Easing off never pauses or closes the goal");
+  // The goal card while easing off: the aims, when counting picks up again, and no tally; its menu picks it up from tonight.
+  await sam.row.click();
+  await plan.waitFor();
+  await plan.getByRole("radio", { name: "Goals", exact: true }).click();
+  const easing = plan.getByRole("region", { name: "Both of us get one long stretch" });
+  await easing.getByText("Easing off", { exact: true }).waitFor();
+  text = await neutral(easing, "The goal card, easing off");
+  for (const line of ["Target date Wed, Dec 2 · 27 days left", "Easing off until Thu, Nov 12: nothing is counted until then, and the steps and targets hold.", "4 nights a week with a bassinet try asleep 1 hour or more", "White noise on for every try"]) {
+    assert(text.includes(line), `The easing card shows "${line}"\n---\n${text}`);
+  }
+  assert.doesNotMatch(text, /aimed for|week \d of|Hint from the log|Check-ins/, "No tally while easing off");
+  await shot("goal-card-easing-390");
+  await screens("goal-card-easing", easing);
+  await easing.getByRole("button", { name: "More for this goal", exact: true }).click();
+  const goalMenu = easing.getByRole("group", { name: "More for this goal" });
+  assert.deepEqual((await goalMenu.getByRole("button").allInnerTexts()).map((t) => t.split("\n")[0]), ["Pick up from tonight"]);
+  await goalMenu.getByRole("button", { name: /^Pick up from tonight/ }).click();
+  await toast("Picked up: counting from tonight").waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.patch], ["goal.update", { counts_from: "2026-11-05", paused_until: null }]);
+  await easing.getByText("Counting since Thu, Nov 5: the nights before it don't count.", { exact: true }).waitFor();
+  await tapToast("Picked up: counting from tonight", "Undo");
+  await easing.getByText("Easing off", { exact: true }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.patch], ["goal.update", { counts_from: null, paused_until: "2026-11-12" }], "Undo puts back exactly what it changed");
+  await page.keyboard.press("Escape");
+  await plan.waitFor({ state: "hidden" });
+  console.log("PASS Look-back: on week 2's review day it follows the check-in (the optional questions folded after noon); Ease off a week, then Move the target date a week later, each with its receipt in the card; the goal card while easing shows the aims and when counting picks up again, no tally, and its menu's Pick up from tonight has Undo");
+
+  // A quiet stretch: one card, once, on Today; the goal never pauses, closes or re-dates itself. (Its first showing marks it
+  // seen on this phone, so it's waited for before the storage is cleared, or that mark could land after the clear.)
+  await page.goto("https://sleep.example.test/?quiet&morning");
+  const back = page.getByRole("region", { name: "Back to “Bassinet by Dec 1”?" });
+  await back.waitFor();
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await back.waitFor();
+  text = await neutral(back, "The return card");
+  assert(text.includes("Nothing was logged Oct 27–Nov 4, so those nights don't count."), text);
+  assert.deepEqual(await back.getByRole("group", { name: "What's next for this goal" }).getByRole("button").allInnerTexts(), ["Pick up from tonight", "Ease off a week", "Set it aside"]);
+  assert.equal(await lastNight.count(), 0, "No look-back or questions on top of it");
+  await shot("goal-return-390");
+  await screens("goal-return", back);
+  const backReceipt = back.locator("[data-goal-return-receipt]");
+  // Set it aside: the goal's own close path, and its Undo opens it again.
+  await back.getByRole("button", { name: "Set it aside", exact: true }).click();
+  await backReceipt.filter({ hasText: "Set aside: Bassinet by Dec 1" }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.id, wrote.status], ["goal.close", 320, "dropped"]);
+  const undoBox = await back.getByRole("button", { name: "Undo", exact: true }).boundingBox();
+  assert(undoBox && undoBox.width >= 44 && undoBox.height >= 44, `Undo is a 44px target (${JSON.stringify(undoBox)})`);
+  await back.getByRole("button", { name: "Undo", exact: true }).click();
+  await back.getByRole("button", { name: "Pick up from tonight", exact: true }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.patch], ["goal.update", { status: "active" }]);
+  // Pick up from tonight: counting starts again tonight; Undo puts it back.
+  await back.getByRole("button", { name: "Pick up from tonight", exact: true }).click();
+  await backReceipt.filter({ hasText: "Picked up: counting from tonight" }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.patch], ["goal.update", { counts_from: "2026-11-05" }]);
+  await back.getByRole("button", { name: "Undo", exact: true }).click();
+  await back.getByRole("button", { name: "Pick up from tonight", exact: true }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.patch], ["goal.update", { counts_from: null }]);
+  // Once per stretch on this phone: after a reload it doesn't come back, and the goal card says it once, with no tally.
+  await page.reload();
+  await sam.dock.waitFor();
+  await page.waitForTimeout(500);
+  assert.equal(await back.count(), 0, "Once per stretch on this phone");
+  await sam.row.click();
+  await plan.waitFor();
+  assert.equal(await plan.locator("[data-goal-return]").count(), 0, "Nor in the plan");
+  await plan.getByRole("radio", { name: "Goals", exact: true }).click();
+  const quietGoal = plan.getByRole("region", { name: "Bassinet by Dec 1" });
+  await quietGoal.locator("[data-goal-quiet]").filter({ hasText: "Nothing logged since Tue, Oct 27." }).waitFor();
+  text = await neutral(quietGoal, "The goal card in a quiet stretch");
+  assert.doesNotMatch(text, /aimed for|too few|not logged|Logged /, "Said once, with no tally");
+  await shot("goal-card-quiet-390");
+  await screens("goal-card-quiet", quietGoal);
+  await page.keyboard.press("Escape");
+  await plan.waitFor({ state: "hidden" });
+  // Changed on another phone first: a 409 saves nothing over it; the next tap, on the goal as it is now, saves.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await back.waitFor();
+  await page.evaluate(() => window.__sleep.changeGoal(320, { why: "For the move to the crib" }));
+  await back.getByRole("button", { name: "Ease off a week", exact: true }).click();
+  await toast("Someone changed this goal on another phone just now").waitFor();
+  assert.equal((await page.evaluate(() => window.__sleep.goal(320))).paused_until ?? null, null, "Nothing saved over the other phone's change");
+  await back.getByRole("button", { name: "Ease off a week", exact: true }).click();
+  await backReceipt.filter({ hasText: "Easing off until Thu, Nov 12" }).waitFor();
+  wrote = await sam.last();
+  assert.deepEqual([wrote.action, wrote.patch], ["goal.update", { paused_until: "2026-11-12" }]);
+  await back.getByRole("button", { name: "Done", exact: true }).click();
+  await back.waitFor({ state: "detached" });
+  console.log("PASS Quiet stretch: one return card, once per stretch, says nothing was logged Oct 27–Nov 4 and offers Pick up from tonight, Ease off a week and Set it aside, each with its receipt and a 44px Undo in the card; the goal card says it once with no tally; a 409 saves nothing over another phone's change");
+
+  // The return card at 320 × 568 in the night look.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("https://sleep.example.test/?quiet&morning&night");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await back.waitFor();
+  await back.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await page.waitForTimeout(200);
+  await noHorizontalScroll("The return card at 320px");
+  for (const name of ["Pick up from tonight", "Ease off a week", "Set it aside"]) assert(await aboveDock(back.getByRole("button", { name, exact: true })), `${name} clears the dock at 320 × 568`);
+  await shot("goal-return-320x568-night");
+  await page.setViewportSize({ width: 390, height: 844 });
+  console.log("PASS 320 × 568: the return card's choices clear the dock with no sideways scroll, in the night look");
 
   // ── Two phones: Sam asks, Alex says I've got her and sees the catch-up; Sam's sheet says Taken over ──
   await page.setViewportSize({ width: 820, height: 870 });
@@ -1267,12 +1515,14 @@ try {
     "Alex 2:00 AM–6:00 AM",
     "Sun–Thu nights",
     "She nurses: whoever's on duty brings her to nurse, then settles her.",
-    "Ask the pediatrician or lactation consultant when to start a bottle of expressed milk (not before about 4 weeks)",
+    // Nursing only: the feeds step plans the night feeds (no bottle step), and the roster starts with its rehearsal.
+    "Plan the night feeds: whoever's on duty brings her to Sam to nurse, then settles her",
+    "The roster starts on Mon, Nov 16, two weeks before the day back, with its rehearsal: the morning check-ins and the counts begin then.",
     "Week of Mon, Nov 2",
     "Rehearse the work-week roster on 2 or 3 nights",
     "Plan a short first week back (a Wednesday or Thursday start, if work allows)",
     "River sleeps in arms now: holding her is fine while you're awake, and the Plan tab's first stage is one bassinet try a day.",
-    "The adult who's off sleeps in another room: whoever's on duty brings her to nurse in the other's window.",
+    "The adult who's off sleeps in another room. Night feeds: in Sam's window, Alex brings her to Sam to nurse, then settles her; in Alex's window, Sam nurses her.",
   ]) assert(text.includes(line), `The read-back shows "${line}"\n---\n${text}`);
   assert.equal((await sam.calls()).length, sent, "Reading it over sends nothing");
   await shot("quick-setup-readback");
@@ -1281,7 +1531,7 @@ try {
   await plan.getByRole("region", { name: "Back to work: protected sleep for Alex and Sam" }).waitFor();
   wrote = await sam.last();
   assert.equal(wrote.action, "goal.create");
-  assert.deepEqual(wrote.goal.template, { kind: "back_to_work", member: "alex@example.test", date: "2026-11-30", nursing: "sam@example.test" }, "who goes back and when, and who nurses");
+  assert.deepEqual(wrote.goal.template, { kind: "back_to_work", member: "alex@example.test", date: "2026-11-30", nursing: "sam@example.test", roster_from: "2026-11-16", feeding: "nursing" }, "who goes back and when, who nurses, how she is fed, and when the roster starts");
   assert.deepEqual(wrote.goal.roster.map((w) => [w.member, w.from, w.to, w.nights.length, w.covers]), [["sam@example.test", "22:00", "02:00", 7, "nurse"], ["alex@example.test", "02:00", "06:00", 5, "nurse"]], "a window each, Alex's on work nights");
   assert.deepEqual(wrote.goal.steps.map((x) => x.week_of), ["2026-11-02", "2026-11-16", "2026-11-23"], "three steps timed from the day back");
   // At 320px it fits without sideways scroll.
