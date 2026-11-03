@@ -2775,6 +2775,7 @@ const COACH_FALSE_REFUSALS = [
   "Never stop responding to her cries",
   "Don't pick her up when she cries, pat and shush her in the crib instead",
   "Don't pick her up at every stir; just a hand on her chest",
+  "Don't rush to her when she stirs; give her a moment to resettle",
   "Sam can leave the room even if she cries, because Alex is holding her",
   "Give her a minute to self-settle in the bassinet",
   "Hold off on the pacifier for 10 minutes after feeds",
