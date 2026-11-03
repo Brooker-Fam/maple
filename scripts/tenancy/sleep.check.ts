@@ -19,7 +19,7 @@ import { runPushTick } from "../../src/lib/maple/push";
 import { askState, chooseSleepLink, nextHandoff } from "../../src/lib/maple/sleep/engine";
 import { windowAt } from "../../src/lib/maple/sleep/handoff";
 import { activeRosters } from "../../src/lib/maple/sleep/roster-read";
-import { askHandoff, deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, undoFinish, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
+import { askHandoff, deleteTry, endShift, finishTry, getTry, handOff, listShifts, logTry, openShift, startShift, startTry, undoFinish, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
 import { createEntryOnce, getEntry, listEntries, startTimer, stopTimer } from "../../src/lib/maple/store";
 import { addDays, dayKey, localParts } from "../../src/lib/maple/time";
@@ -106,6 +106,29 @@ async function clean(f: FamilySeed) {
 }
 
 const sleeps = (f: FamilySeed) => sql(`SELECT id, active, ended_at, deleted_at, data FROM maple_entries WHERE family_id = $1 AND kind = 'sleep' ORDER BY id`, [f.familyId]);
+
+/**
+ * The statements the code sends to the in-memory Postgres until stop(), exactly as sent, so a check can EXPLAIN the
+ * store's own SQL. Imported the way src/lib/db.ts imports it, so it's the same PGlite.
+ */
+async function captureQueries(): Promise<{ stop: () => { sql: string; params: unknown[] }[] }> {
+  const { PGlite } = await import("@electric-sql/pglite");
+  const proto = PGlite.prototype as unknown as { query: (...args: unknown[]) => unknown };
+  const own = Object.prototype.hasOwnProperty.call(proto, "query");
+  const real = proto.query;
+  const out: { sql: string; params: unknown[] }[] = [];
+  proto.query = function (this: unknown, ...args: unknown[]) {
+    out.push({ sql: String(args[0]), params: (args[1] as unknown[] | undefined) ?? [] });
+    return real.apply(this, args);
+  };
+  return {
+    stop: () => {
+      if (own) proto.query = real;
+      else delete (proto as { query?: unknown }).query;
+      return out;
+    },
+  };
+}
 
 async function main() {
   await freshDb();
@@ -812,6 +835,27 @@ async function main() {
     ok(!("sleep" in beta2), "a family with nothing reads as before");
     // The sleep segment is the only part of the token with commas: none for a family without any sleep rows.
     ok(String(before.rev).includes(",") && !String(beta2.rev).includes(","), `beta's rev keeps its old shape: ${beta2.rev}`);
+  });
+
+  await test("load: the state's and goals' read of holding turns is bounded by when they ended, so an index serves it instead of every turn the baby ever had", async () => {
+    await clean(alpha);
+    // A year of a busy family's turns, all over a month ago, then one that ended an hour ago and the open one.
+    await sql(
+      `INSERT INTO maple_sleep_shifts (family_id, baby_id, holder, started_at, ended_at, ended_how, created_by)
+       SELECT 1, $1, $2, NOW() - INTERVAL '30 days' - (g || ' hours')::interval, NOW() - INTERVAL '30 days' - (g || ' hours')::interval + INTERVAL '20 minutes', 'ended', $2 FROM generate_series(1, 3000) g`,
+      [alpha.babyId, alpha.owner]
+    );
+    const recent = (await startShift(1, { babyId: alpha.babyId, holder: alpha.member, at: new Date(Date.now() - 2 * HOUR), by: alpha.member, source: "web" })).shift;
+    await endShift(1, recent.id, { at: new Date(Date.now() - HOUR), by: alpha.member });
+    const open = (await startShift(1, { babyId: alpha.babyId, holder: alpha.owner, by: alpha.owner, source: "web" })).shift;
+    await sql(`ANALYZE maple_sleep_shifts`);
+    const seen = await captureQueries();
+    const got = await listShifts(1, alpha.babyId, { from: new Date(Date.now() - 2 * 24 * HOUR), limit: 100 });
+    const stmt = seen.stop().find((s) => /FROM maple_sleep_shifts/.test(s.sql))!;
+    eq(got.map((s) => s.id), [open.id, recent.id], "the open turn and the one that ended an hour ago, nothing older");
+    const plan = (await sql(`EXPLAIN (ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF) ${stmt.sql}`, stmt.params)).map((r) => String(r["QUERY PLAN"])).join("\n");
+    ok(/idx_maple_sleep_shifts_ended/.test(plan) && !/Rows Removed by Filter: \d{3,}/.test(plan), plan);
+    await sql(`DELETE FROM maple_sleep_shifts WHERE family_id = 1`);
   });
 
   // ── the handoff reminder ───────────────────────────────────────────────

@@ -832,10 +832,11 @@ export async function openShift(fam: FamilyRef, babyId: number): Promise<Holding
   return rows.length ? rowToShift(rows[0]) : null;
 }
 
+/** Shifts that ended at or after `from`, plus the open one, newest first (bounded by ended_at, so idx_maple_sleep_shifts_ended serves it). */
 export async function listShifts(fam: FamilyRef, babyId: number, opts: { from?: Date; limit?: number } = {}): Promise<HoldingShift[]> {
   const rows = await q(
     `SELECT * FROM maple_sleep_shifts WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL
-       AND ($3::timestamptz IS NULL OR COALESCE(ended_at, NOW()) >= $3::timestamptz OR ended_at IS NULL)
+       AND ($3::timestamptz IS NULL OR ended_at >= $3::timestamptz OR ended_at IS NULL)
      ORDER BY started_at DESC, id DESC LIMIT $4`,
     [famId(fam), babyId, opts.from?.toISOString() ?? null, Math.min(Math.max(opts.limit ?? 100, 1), 500)]
   );

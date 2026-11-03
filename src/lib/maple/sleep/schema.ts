@@ -107,6 +107,8 @@ export async function migrateSleep(): Promise<void> {
   )`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_shifts_time ON maple_sleep_shifts (family_id, baby_id, started_at DESC) WHERE deleted_at IS NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_shifts_updated ON maple_sleep_shifts (family_id, baby_id, updated_at DESC)`);
+  // The state's and goals' read of recent turns (store.ts listShifts: ended since a moment, or still open), without every turn ever.
+  await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_shifts_ended ON maple_sleep_shifts (family_id, baby_id, ended_at) WHERE deleted_at IS NULL`);
   // The push tick finds families with a handoff coming up without reading every shift.
   await query(`CREATE INDEX IF NOT EXISTS idx_maple_sleep_shifts_handoff ON maple_sleep_shifts (handoff_at) WHERE ended_at IS NULL AND deleted_at IS NULL AND handoff_at IS NOT NULL`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_open ON maple_sleep_shifts (family_id, baby_id) WHERE ended_at IS NULL AND deleted_at IS NULL`);
