@@ -2560,6 +2560,14 @@ const MED_REFUSED = [
   "A little medicine to help her sleep",
   "Give her something to help her sleep",
   "Ask her pediatrician, then give her melatonin at bedtime",
+  // the integrator's fresh probes: a brand, a homeopathic brand, and "a dose of" anything for sleep
+  "Give her a dose of Zarbee's so she sleeps longer",
+  "Zarbee’s at bedtime",
+  "Camilia before her night sleep",
+  "Boiron drops before naps",
+  "Colic Calm before bed",
+  "Give her a dose of something so she sleeps longer",
+  "A supplement so she stays asleep",
 ];
 /** …and what passes: a question for her pediatrician, a step away, an adult's own medicine, medicine that isn't for sleep. */
 const MED_ALLOWED = [
@@ -2581,6 +2589,9 @@ const MED_ALLOWED = [
   "Sam takes melatonin, so Alex does the first half of the night",
   "I take ibuprofen before bed, so Sam does the 2 AM feed",
   "Mom takes Benadryl for allergies, so Dad does nights",
+  "Her vitamin D dose with the morning feed",
+  "A dose of vitamin D before bed",
+  "Alex takes melatonin on work nights",
 ];
 
 check("safety (P0 #3): medicine or supplements for her sleep, or at her sleep times, are refused as her pediatrician's call; an 'Ask her pediatrician about …' step passes, and so does each refusal's suggestion, in each voice", () => {
