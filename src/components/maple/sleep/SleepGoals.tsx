@@ -6,9 +6,11 @@ import { SleepInputError } from "@/lib/maple/sleep/errors";
 import {
   againstAim,
   BACK_TO_WORK_AFTER_DAYS,
+  BACK_TO_WORK_PAST_DAYS,
   backToWorkGoal,
   backToWorkQuestions,
   cleanGoalInput,
+  ENOUGH_NIGHTS,
   goalAdults,
   goalCautions,
   goalsByUrgency,
@@ -17,13 +19,19 @@ import {
   goalWeekLabel,
   lastNightKey,
   nextStepNow,
+  nightsLogged,
   noCheckinWords,
   observationWords,
   QUICK_FEEDING,
   QUICK_NIGHT,
   QUICK_OFF_DUTY,
   QUICK_SLEEPS,
+  quietNow,
+  quietWords,
+  readWeek,
+  readWords,
   rosterHintBody,
+  tonightKey,
   weekOngoing,
   type CoachNotes,
   type GoalFields,
@@ -38,16 +46,17 @@ import {
   type WeekCoverage,
   type WindowWeek,
 } from "@/lib/maple/sleep/goals";
-import { GOAL_AHEAD_DAYS, GOAL_NOTE_MAX, GOALS_OPEN_MAX, type BassinetNightsTarget, type BassinetStretchTarget, type GoalInput, type GoalStep, type ProtectedWindowTarget, type SleepGoal } from "@/lib/maple/sleep/types";
-import { coversHint, dateWords, GOAL_STATUS_LABEL, minutesWords, nightsLabel, PROTECTED_LABEL, shortClock, TARGET_KIND_LABEL, targetWords, windowTimes } from "@/lib/maple/sleep/words";
+import { EASE_OFF_DAYS, GOAL_AHEAD_DAYS, GOAL_NOTE_MAX, GOALS_OPEN_MAX, type BassinetNightsTarget, type BassinetStretchTarget, type GoalInput, type GoalStep, type ProtectedWindowTarget, type SleepGoal } from "@/lib/maple/sleep/types";
+import { coversHint, dateWords, easingWords, ENOUGH_NIGHTS_LINE, GOAL_STATUS_LABEL, minutesWords, nightsLabel, PROTECTED_LABEL, shortClock, TARGET_KIND_LABEL, targetWords, tooFewWords, windowTimes } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, DEFAULT_TZ, formatDuration, isDayKey } from "@/lib/maple/time";
+import type { Voice } from "@/lib/maple/voice";
 import { AskChatButton } from "../chat/AskChat";
 import { useVoice } from "../familyWords";
 import { Icon } from "../icons";
 import { Label } from "../sheets/parts";
 import { Button, Chip, cx, TextArea, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { useSleep } from "./useSleep";
+import { useSleep, useSleepMaybe } from "./useSleep";
 
 /**
  * The plan sheet's Goals: each open sleep goal with its target date and
@@ -59,13 +68,18 @@ import { useSleep } from "./useSleep";
  * else reads the shared state, so a step or a check-in shows at once.
  *
  * Neutral words throughout: a count and its sample, never a score, a
- * streak, a grade or a "best"; a hard night is just counted. View-only
- * guests see the goals, steps, roster and the baby's numbers, never a
- * check-in, and nothing that writes. With no goal yet, a family with two
- * adults can plan for going back to work in five questions (QuickSetup).
+ * streak, a grade or a "best"; a hard night is just counted. A week with
+ * fewer than three nights logged or answered in the morning (goals.ts
+ * ENOUGH_NIGHTS) says "too few to tell" instead of a count against the aim;
+ * a quiet stretch says "Nothing logged since …" once, with no tally; easing
+ * off (the card's menu) shows the aims and when counting picks up again.
+ * View-only guests see the goals, steps, roster and the baby's numbers,
+ * never a check-in, and nothing that writes. With no goal yet, a family with
+ * two adults who log can plan for going back to work in five questions
+ * (QuickSetup).
  */
 
-type GoalView = { goal: SleepGoal; progress: GoalProgress; coach: CoachNotes; lines: string[] };
+export type GoalView = { goal: SleepGoal; progress: GoalProgress; coach: CoachNotes; lines: string[] };
 
 /** The chat's sleep tools load on words like "sleep goal" (chat/tool-groups.ts), so both seeded messages say it. */
 const SET_PROMPT = "Help us set a sleep goal: what we're working toward, a few small weekly steps, and who sleeps when.";
@@ -81,21 +95,31 @@ const answers = (c: { yes: number; partly: number; no: number }) =>
     .map((a) => `${PROTECTED_LABEL[a].toLowerCase()} ${c[a]}`)
     .join(", ");
 
-/** Each open goal's progress from the server, read again whenever a goal, a check-in, a try or the state moves on. */
-function useGoalsView(wanted: boolean): { views: GoalView[] | null; failed: boolean } {
+/**
+ * Each open goal's progress from the server (or one goal's, with `id`), read again whenever a goal, a check-in, a try
+ * or the state moves on, and the night (`night`, for a card that's about one).
+ */
+export function useGoalsView(wanted: boolean, opts: { id?: number; night?: string } = {}): { views: GoalView[] | null; failed: boolean } {
   const { api, state } = useMaple();
-  const s = useSleep();
+  // Outside a SleepProvider (a fixture's Today without one), nothing is read.
+  const s = useSleepMaybe();
+  const goals = s?.goals;
+  const checkins = s?.checkins;
+  const tries = s?.data.tries;
+  const rev = state?.rev;
+  const night = opts.night;
   const key = useMemo(
-    () =>
-      [state?.rev ?? "", ...s.goals.map((g) => `g${g.id}:${g.revision}`), ...(s.checkins ?? []).map((c) => `c${c.id}:${c.updated_at}`), ...s.data.tries.map((t) => `t${t.id}:${t.updated_at}`)].join("|"),
-    [s.checkins, s.data.tries, s.goals, state?.rev]
+    () => [rev ?? "", night ?? "", ...(goals ?? []).map((g) => `g${g.id}:${g.revision}`), ...(checkins ?? []).map((c) => `c${c.id}:${c.updated_at}`), ...(tries ?? []).map((t) => `t${t.id}:${t.updated_at}`)].join("|"),
+    [checkins, goals, night, rev, tries]
   );
   const [views, setViews] = useState<GoalView[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const id = opts.id;
+  const on = wanted && !!s;
   useEffect(() => {
-    if (!wanted) return;
+    if (!on) return;
     let live = true;
-    api<{ goals?: GoalView[] }>("/api/maple/sleep?view=goals")
+    api<{ goals?: GoalView[] }>(`/api/maple/sleep?view=goals${id ? `&id=${id}` : ""}`)
       .then((r) => {
         if (!live) return;
         setViews(r.goals ?? []);
@@ -105,7 +129,7 @@ function useGoalsView(wanted: boolean): { views: GoalView[] | null; failed: bool
     return () => {
       live = false;
     };
-  }, [api, key, wanted]);
+  }, [api, id, key, on]);
   return { views, failed };
 }
 
@@ -134,7 +158,10 @@ export function GoalsPart() {
         </div>
       )}
       {closed.length > 0 && <ClosedGoals goals={closed} />}
-      <p className={cx(tone.faint, "px-1 text-[12px] leading-relaxed")}>Every night is different. These are counts of what was logged, so a night nobody logged isn&apos;t in them.</p>
+      {/* The coverage note: what the counts are, and how little logging they need. */}
+      <p data-goals-coverage-note className={cx(tone.muted, "px-1 text-[12px] leading-relaxed")}>
+        Every night is different. These are counts of what was logged, so a night nobody logged isn&apos;t in them. {ENOUGH_NIGHTS_LINE}
+      </p>
     </div>
   );
 }
@@ -258,9 +285,14 @@ function QuickSetup({ onClose }: { onClose: () => void }) {
   ];
   const questions = backToWorkQuestions(v);
   const next = () => {
-    // Defaults for what comes next: the one going back is on first, so they sleep the second half; two weeks after the day back.
+    // Defaults for what comes next: the one going back is on first, so they sleep the second half; two weeks after the day
+    // back, and at least a week of nights from tonight (a day back already past is planned for too).
     if (step === 0 && !a.first_half) set({ first_half: a.returning, second_half: other(a.returning) });
-    if (step === 0 && !a.target_date && isDayKey(a.return_date)) set({ target_date: addDays(a.return_date, BACK_TO_WORK_AFTER_DAYS) });
+    if (step === 0 && !a.target_date && isDayKey(a.return_date)) {
+      const after = addDays(a.return_date, BACK_TO_WORK_AFTER_DAYS);
+      const week = addDays(today, 6);
+      set({ target_date: after > week ? after : week });
+    }
     setStep((n) => n + 1);
   };
   let built: { goal: GoalInput; notes: string[] } | null = null;
@@ -293,7 +325,7 @@ function QuickSetup({ onClose }: { onClose: () => void }) {
       {step < 5 ? (
         <>
           <div className="space-y-1">
-            <p className={cx(tone.faint, "text-[12px] font-medium tabular-nums")}>Question {step + 1} of 5</p>
+            <p className={cx(tone.muted, "text-[12px] font-medium tabular-nums")}>Question {step + 1} of 5</p>
             <p className={cx(tone.heading, "text-[16px] leading-snug")}>{questions[step]}</p>
           </div>
           {step === 0 && (
@@ -301,7 +333,8 @@ function QuickSetup({ onClose }: { onClose: () => void }) {
               <Choices label="Who goes back to work" options={people.map((p) => ({ value: p.email, label: label(p.email) }))} value={a.returning} onPick={(x) => set({ returning: x })} />
               <label className="block">
                 <span className={cx(tone.label, "mb-1.5 block")}>The day back</span>
-                <input type="date" aria-label="The day back at work" value={a.return_date} min={today} max={addDays(today, GOAL_AHEAD_DAYS)} onChange={(e) => set({ return_date: e.target.value })} className={tone.input} />
+                {/* Up to two weeks ago: the first weeks back are planned for too. */}
+                <input type="date" aria-label="The day back at work" value={a.return_date} min={addDays(today, -BACK_TO_WORK_PAST_DAYS)} max={addDays(today, GOAL_AHEAD_DAYS)} onChange={(e) => set({ return_date: e.target.value })} className={tone.input} />
               </label>
             </div>
           )}
@@ -366,7 +399,7 @@ function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, 
   return (
     <div className="space-y-4" aria-label="The plan, to read over">
       <div className="space-y-1">
-        <p className={cx(tone.faint, "text-[12px] font-medium")}>Here&apos;s the plan. Nothing is saved until you save it.</p>
+        <p className={cx(tone.muted, "text-[12px] font-medium")}>Here&apos;s the plan. Nothing is saved until you save it.</p>
         {fields?.title && <p className={cx(tone.heading, "text-[17px] leading-snug break-words")}>{fields.title}</p>}
         {fields?.why && <p className={cx(tone.muted, "text-[14px] leading-snug")}>{fields.why}</p>}
         {fields?.target_date && <p className={cx(tone.body, "text-[14px]")}>Target date {dateWords(fields.target_date, today)}</p>}
@@ -418,7 +451,7 @@ function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, 
           {error}
         </p>
       )}
-      <p className={cx(tone.faint, "text-[12px] leading-relaxed")}>You can change any of it after saving, with Edit.</p>
+      <p className={cx(tone.muted, "text-[12px] leading-relaxed")}>You can change any of it after saving, with Edit.</p>
       <div className="flex flex-wrap items-center gap-2">
         <Button disabled={!built || !fields || busy} onClick={onSave}>
           Save the goal
@@ -435,27 +468,35 @@ function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, 
 /** No break inside "Thu, Nov 26", "21 days left" or "week 2 of 5" on a narrow phone. */
 const keep = (s: string) => s.replace(/ /g, "\u00a0");
 
-/** "Target date Thu, Nov 26 · 21 days left · week 2 of 5", "No target date · week 2". */
+/** "Target date Thu, Nov 26 · 21 days left · week 2 of 5", "No target date · week 2"; no week while easing off (nothing is counted). */
 function whenWords(p: GoalSpan): string {
-  if (!p.endsOn) return `No target date${p.weekNow ? ` · ${keep(`week ${p.weekNow}`)}` : ""}`;
+  const week = p.easingUntil ? null : p.weekNow;
+  if (!p.endsOn) return `No target date${week ? ` · ${keep(`week ${week}`)}` : ""}`;
   const d = keep(dateWords(p.endsOn, p.today));
   const left = p.daysLeft ?? 0;
   const head = left > 0 ? `Target date ${d} · ${keep(`${plural(left, "day")} left`)}` : left === 0 ? `Target date today, ${d}` : `Target date ${d}, ${keep(`${plural(-left, "day")} ago`)}`;
-  return `${head}${p.weekNow ? ` · ${keep(`week ${p.weekNow} of ${p.weeksTotal}`)}` : ""}`;
+  return `${head}${week ? ` · ${keep(`week ${week} of ${p.weeksTotal}`)}` : ""}`;
 }
 
-/** The week whose coverage the card shows: this week once one of its nights is over, else the one before. */
-function shownCoverage(p: GoalProgress): { c: WeekCoverage; w: GoalWeek } | null {
-  for (const w of [...p.weeks].reverse()) {
-    const c = p.coverage.find((x) => x.week === w.n);
-    if (c && c.over > 0) return { c, w };
-  }
+/**
+ * When counting runs from, said only when it isn't the night the goal was set: "Easing off until Thu, Nov 19: …", "Counting
+ * starts Mon, Nov 16: …" (a roster that starts later), "Counting since Mon, Nov 2: …" (picked up again).
+ */
+function countingWords(p: GoalSpan): string | null {
+  if (p.easingUntil) return `${easingWords(p.easingUntil, p.today)}: nothing is counted until then, and the steps and targets hold.`;
+  if (p.startsOn > p.today) return `Counting starts ${dateWords(p.startsOn, p.today)}: the check-ins and counts begin then.`;
+  if (p.startsOn > p.setOn) return `Counting since ${dateWords(p.startsOn, p.today)}: the nights before it don't count.`;
   return null;
 }
 
-/** "Logged this week: something on 5 of 7 nights (2 partly) · feeds on 4 · tries on 2 · check-ins on 4". */
+/**
+ * "Logged this week: something on 5 of 7 nights (2 partly) · feeds on 4 · tries on 2 · check-ins on 4", and for a family
+ * who answers only in the morning, "Week 1 (ended last night): no overnight logs; these come from morning check-ins on 7
+ * nights", never "nothing logged".
+ */
 function coverageLine(c: WeekCoverage, w: GoalWeek, p: GoalProgress): string {
-  const some = c.logged + c.partly;
+  const some = nightsLogged(c);
+  if (!some && c.checkinNights) return `${weekLabel(w, p)}: no overnight logs; these come from morning check-ins on ${plural(c.checkinNights, "night")}`;
   return [
     // Never "partly" here: that's a check-in's answer.
     `Logged ${weekLabel(w, p).toLowerCase()}: something on ${some} of ${plural(c.over, "night")}${c.partly ? ` (${c.partly} with a gap of 4 hours or more)` : ""}`,
@@ -473,14 +514,23 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
   const span = goalSpan(goal, now(), tz);
   const p = view?.progress ?? null;
   const [closing, setClosing] = useState(false);
-  const cov = p?.coverage ? shownCoverage(p) : null;
-  // Fewer than half the nights logged: the counts are from those few, said first.
-  const sparse = !!cov && (cov.c.logged + cov.c.partly) * 2 < cov.c.over;
+  const [menu, setMenu] = useState(false);
+  // Easing off, or nothing logged for a stretch (still going): the aims, and that fact once, with no tally of the nights.
+  const easing = span.easingUntil;
+  const quiet = p && !easing ? quietNow(p) : null;
+  const still = !!easing || !!quiet;
+  // Counting starts later (a roster that starts before the day back): the aims only until then.
+  const before = span.startsOn > span.today;
+  // The week the counts are read from: this week once one of its nights is over, else the one before.
+  const read = p && !still ? readWeek(p) : null;
+  const counting = countingWords(span);
   // What the targets and the roster need said with them: feeds first in the first 4 weeks, and a long window's feeds.
   const age = state ? sleepAge(state.baby, now()) : null;
   // The adults' names, as the server's rules read them ("while Theo is awake"), so the card says the same cautions.
   const adults = (state?.members ?? []).filter((m) => m.role === "owner" || m.role === "member").map((m) => memberName(m.email));
-  const cautions = goal.status === "active" ? goalCautions(goal, { v, name: memberName, ageDays: state?.baby.born_at ? (age?.days ?? null) : null, adults }).filter((c) => c.kind !== "feeding") : [];
+  const cautions = goal.status === "active" ? goalCautions(goal, { v, name: memberName, ageDays: state?.baby.born_at ? (age?.days ?? null) : null, adults, today: span.today }).filter((c) => c.kind !== "feeding") : [];
+  const badge = goal.status === "paused" ? GOAL_STATUS_LABEL.paused : easing ? "Easing off" : null;
+  const menuOn = s.canWrite && goal.status === "active";
   return (
     <section aria-labelledby={`goal-${goal.id}`} className={cx(tone.card, "space-y-5 px-4 py-4")}>
       <header className="space-y-1">
@@ -488,21 +538,50 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
           <h3 id={`goal-${goal.id}`} className={cx(tone.heading, "min-w-0 text-[18px] leading-snug break-words")}>
             {goal.title}
           </h3>
-          {goal.status === "paused" && <span className="mt-0.5 shrink-0 rounded-full bg-mp-sunken px-2.5 py-0.5 text-[12px] font-medium text-mp-ink-2">{GOAL_STATUS_LABEL.paused}</span>}
+          <div className="flex shrink-0 items-start gap-1">
+            {badge && <span className="mt-0.5 rounded-full bg-mp-sunken px-2.5 py-0.5 text-[12px] font-medium text-mp-ink-2">{badge}</span>}
+            {menuOn && (
+              <button
+                type="button"
+                aria-label="More for this goal"
+                aria-expanded={menu}
+                onClick={() => setMenu((x) => !x)}
+                className={cx("-mt-2 -mr-2 flex h-11 w-11 items-center justify-center rounded-full text-mp-ink-3 transition active:scale-95", menu && "bg-mp-sunken text-mp-ink")}
+              >
+                <Icon name="ellipsis" size={20} strokeWidth={2.25} />
+              </button>
+            )}
+          </div>
         </div>
         {goal.why && <p className={cx(tone.muted, "text-[15px] leading-snug break-words")}>{goal.why}</p>}
         <p className={cx(tone.body, "text-[14px] tabular-nums")}>{whenWords(span)}</p>
+        {counting && (
+          <p data-goal-counting className={cx(tone.muted, "text-[14px] leading-snug")}>
+            {counting}
+          </p>
+        )}
       </header>
+      {menu && menuOn && <GoalMenu goal={goal} span={span} quiet={!!quiet} onDone={() => setMenu(false)} />}
 
-      {sparse && cov && (
-        <p role="note" data-goal-coverage className={cx(tone.inset, "px-3.5 py-3 text-[14px] leading-snug text-mp-ink")}>
-          Only {cov.c.logged + cov.c.partly} of the {plural(cov.c.over, "night")} {weekLabel(cov.w, p!).toLowerCase()} {cov.c.logged + cov.c.partly === 1 ? "has" : "have"} anything logged, so the counts below come from {cov.c.logged + cov.c.partly === 1 ? "that night" : "those"}. A night with nothing logged isn&apos;t counted either way.
+      {quiet && (
+        <p role="note" data-goal-quiet className={cx(tone.inset, "px-3.5 py-3 text-[14px] leading-snug text-mp-ink")}>
+          {quietWords(quiet, span.today)}.
         </p>
       )}
       {cautions.map((c) => (
         <p key={c.kind + c.text} role="note" className={cx(tone.muted, "flex gap-2 text-[13px] leading-relaxed")}>
           <Icon name="info" size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
-          <span>{c.text}</span>
+          <span>
+            {c.text}
+            {c.source && (
+              <>
+                {" "}
+                <a href={c.source.url} target="_blank" rel="noreferrer" className="font-medium text-mp-accent-fg underline underline-offset-2">
+                  Source
+                </a>
+              </>
+            )}
+          </span>
         </p>
       ))}
 
@@ -510,22 +589,22 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
         {goal.targets.length ? (
           <div className="space-y-4">
             {goal.targets.map((t) => (
-              <TargetRow key={t.id} goal={goal} id={t.id} p={p} failed={failed} />
+              <TargetRow key={t.id} goal={goal} id={t.id} p={p} failed={failed} aimOnly={still || before} />
             ))}
           </div>
         ) : (
           <p className={cx(tone.muted, "text-[14px]")}>No targets yet.</p>
         )}
-        {cov && !sparse && (
+        {read && p && (
           <p data-goal-coverage className="pt-1 text-[13px] leading-snug text-mp-ink-2 tabular-nums">
-            {coverageLine(cov.c, cov.w, p!)}
+            {coverageLine(read.c, read.w, p)}
           </p>
         )}
       </Block>
 
       <Steps goal={goal} />
-      <Roster goal={goal} p={p} />
-      {s.seesCheckins && <Checkins goal={goal} p={p} />}
+      <Roster goal={goal} p={still ? null : p} />
+      {s.seesCheckins && !still && !before && <Checkins goal={goal} p={p} />}
 
       <div className="-mx-1 flex flex-wrap items-center gap-x-1 border-t border-mp-line pt-2">
         {s.canWrite ? (
@@ -548,6 +627,50 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
       </div>
       {closing && s.canWrite && <CloseGoal goal={goal} onCancel={() => setClosing(false)} />}
     </section>
+  );
+}
+
+/**
+ * The goal card's menu: Ease off a week (paused_until: nothing is counted until then, and the steps and targets hold), or,
+ * while easing off or in a quiet stretch, Pick up from tonight (counts_from). Each names the goal's revision, so another
+ * phone's change since is a 409 shown as it is now, and its toast's Undo puts back exactly what it changed.
+ */
+function GoalMenu({ goal, span, quiet, onDone }: { goal: SleepGoal; span: GoalSpan; quiet: boolean; onDone: () => void }) {
+  const s = useSleep();
+  const { state, now, toast } = useMaple();
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  const easing = !!span.easingUntil;
+  const today = dayKey(now(), tz);
+  const until = addDays(today, EASE_OFF_DAYS);
+  const write = async (patch: Pick<GoalInput, "counts_from" | "paused_until">, said: string) => {
+    const r = await s.goalCall({ action: "goal.update", id: goal.id, revision: goal.revision, patch });
+    if (!r || !("saved" in r)) return;
+    const saved = r.saved;
+    const back: Pick<GoalInput, "counts_from" | "paused_until"> = {};
+    if (patch.counts_from !== undefined) back.counts_from = goal.counts_from ?? null;
+    if (patch.paused_until !== undefined) back.paused_until = goal.paused_until ?? null;
+    onDone();
+    toast(said, {
+      tone: "ok",
+      undo: () => void s.goalCall({ action: "goal.update", id: goal.id, revision: saved.revision, patch: back }).then((x) => x && "saved" in x && toast("Undone", { tone: "info" })),
+    });
+  };
+  const pickUp = () => void write({ counts_from: tonightKey(now(), tz), ...(easing ? { paused_until: null } : {}) }, "Picked up: counting from tonight");
+  const easeOff = () => void write({ paused_until: until }, `${easingWords(until, today)}. The steps and targets hold.`);
+  return (
+    <div role="group" aria-label="More for this goal" className={cx(tone.inset, "divide-y divide-mp-line overflow-hidden")}>
+      {(easing || quiet) && <MenuRow disabled={s.busy} onClick={pickUp} title="Pick up from tonight" sub={easing ? "Stop easing off: counting starts again tonight." : "The quiet nights stay out of the counts."} />}
+      {!easing && <MenuRow disabled={s.busy} onClick={easeOff} title="Ease off a week" sub={`Nothing is counted until ${dateWords(until, today)}; the steps and targets hold.`} />}
+    </div>
+  );
+}
+
+function MenuRow({ title, sub, onClick, disabled }: { title: string; sub: string; onClick: () => void; disabled: boolean }) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick} className="flex min-h-[52px] w-full flex-col justify-center px-3.5 py-2 text-left transition active:bg-mp-ink/[0.04] disabled:opacity-60">
+      <span className="text-[15px] leading-snug font-semibold text-mp-ink">{title}</span>
+      <span className="text-[13px] leading-snug text-mp-ink-2">{sub}</span>
+    </button>
   );
 }
 
@@ -599,40 +722,72 @@ function Weeks<T extends { week: number }>({ p, rows, line }: { p: GoalProgress;
 }
 
 /**
- * "2 of the 4 nights aimed for · 2 of 2 logged nights · 5 not logged": the
- * aim, then what the count is out of, never a night nobody logged; with every
- * night logged, "· tried on 4 of 7 nights so far".
+ * A week too thin to read (goals.ts ENOUGH_NIGHTS), as the tools say it: "2 nights logged so far, too few to tell yet",
+ * "1 night logged, 2 nights answered in the morning, too few to tell", or before a night of it is over, "no night is over
+ * yet". Null once it's enough: then the counts show against the aim.
  */
-const nightsLine = (t: BassinetNightsTarget) => (x: NightsWeek, w: GoalWeek, p: GoalProgress) => {
+function thinWords(w: GoalWeek, p: GoalProgress): string | null {
+  const c = p.coverage.find((y) => y.week === w.n);
+  if (!c?.over) return "no night is over yet";
+  if (c.read >= ENOUGH_NIGHTS) return null;
+  const ongoing = weekOngoing(w, p);
+  return c.read > nightsLogged(c) ? `${readWords(c)}${ongoing ? " so far" : ""}, too few to tell${ongoing ? " yet" : ""}` : tooFewWords(nightsLogged(c), { ongoing });
+}
+
+/**
+ * "2 of the 4 nights aimed for · 2 of 5 nights logged or answered · 2 not
+ * logged": the aim, then what the count is out of, never a night nobody
+ * logged; with every night known, "· tried on 4 of 7 nights so far" (a try
+ * the morning check-in told of counts as tried). A week too thin to read says
+ * so instead (thinWords), and so does one with under ENOUGH_NIGHTS nights
+ * that say anything about her sleep.
+ */
+const nightsLine = (t: BassinetNightsTarget, v: Pick<Voice, "their">) => (x: NightsWeek, w: GoalWeek, p: GoalProgress) => {
   if (!x.nights) return "counting starts with the goal's first night";
+  const few = thinWords(w, p);
+  if (few) return few;
+  const soFar = weekOngoing(w, p);
+  if (x.known < ENOUGH_NIGHTS) return `a try, a sleep or a morning answer about ${v.their} night on ${x.known} of ${plural(x.nights, "night")}${soFar ? " so far" : ""}, too few to tell${soFar ? " yet" : ""}`;
   const counted = `${againstAim(x.counted, t.per_week)}${x.fromCheckins ? ` (${x.fromCheckins} from check-ins)` : ""}`;
   // A night with only feeds logged says nothing about the bassinet: it's among the nights not logged, and said so.
-  if (x.unknown) return `${counted} · ${x.counted} of ${x.known} logged ${x.known === 1 ? "night" : "nights"} · ${x.unknown} not logged${x.feedsOnly ? ` (${x.feedsOnly} with only feeds or other entries)` : ""}`;
-  return `${counted} · tried on ${x.tried} of ${plural(x.nights, "night")}${weekOngoing(w, p) ? " so far" : ""}`;
+  // (A view-only guest has no morning answers in the counts: their nights are only logged ones.)
+  if (x.unknown) return `${counted} · ${x.counted} of ${plural(x.known, "night")} ${p.checkins ? "logged or answered" : "logged"} · ${x.unknown} not logged${x.feedsOnly ? ` (${x.feedsOnly} with only feeds or other entries)` : ""}`;
+  return `${counted} · tried on ${x.tried + x.checkinTries} of ${plural(x.nights, "night")}${soFar ? " so far" : ""}`;
 };
 
-const stretchLine = (t: BassinetStretchTarget) => (x: StretchWeek, w: GoalWeek, p: GoalProgress) =>
-  x.stretches
+const stretchLine = (t: BassinetStretchTarget) => (x: StretchWeek, w: GoalWeek, p: GoalProgress) => {
+  const few = thinWords(w, p);
+  if (few) return few;
+  return x.stretches
     ? `longest ${formatDuration(x.longestSec ?? 0)} · ${x.atLeast} of ${plural(x.stretches, "stretch", "stretches")} ${minutesWords(t.minutes)} or more`
     : `no bassinet stretches logged${weekOngoing(w, p) ? " yet" : ""}`;
+};
 
-/** "yes on 4 of the 5 nights aimed for · checked in 5 of 7 roster nights so far (not this time 1)": never "held", which is a holding turn's word. */
+/**
+ * "yes on 4 of the 5 nights aimed for · checked in 5 of 7 roster nights so far (not this time 1)": never "held", which is
+ * a holding turn's word. Its own sample is the adult's check-ins: one or two of them are too few to tell.
+ */
 const windowLine = (t: ProtectedWindowTarget, hasWindow: boolean) => (x: WindowWeek, w: GoalWeek, p: GoalProgress): string => {
   const other = [x.partly ? `partly ${x.partly}` : "", x.no ? `not this time ${x.no}` : ""].filter(Boolean).join(", ");
-  const soFar = weekOngoing(w, p) ? " so far" : "";
-  if (!x.checkedIn) return `no check-ins${weekOngoing(w, p) ? " yet" : ""} · ${noCheckinWords(x, { ongoing: weekOngoing(w, p), today: p.today, hasWindow: hasWindow })}`;
+  const ongoing = weekOngoing(w, p);
+  const soFar = ongoing ? " so far" : "";
+  if (!x.checkedIn) return `no check-ins${ongoing ? " yet" : ""} · ${noCheckinWords(x, { ongoing, today: p.today, hasWindow: hasWindow })}`;
   const of = x.planned ? `checked in ${x.checkedIn} of ${plural(x.planned, "roster night")}${soFar}` : `checked in ${plural(x.checkedIn, "night")}${soFar}`;
+  if (x.checkedIn < ENOUGH_NIGHTS) return `${of}, too few to tell${ongoing ? " yet" : ""}`;
   return `yes on ${againstAim(x.yes, t.per_week)} · ${of}${other ? ` (${other})` : ""}`;
 };
 
-function TargetRow({ goal, id, p, failed }: { goal: SleepGoal; id: string; p: GoalProgress | null; failed: boolean }) {
+function TargetRow({ goal, id, p, failed, aimOnly }: { goal: SleepGoal; id: string; p: GoalProgress | null; failed: boolean; aimOnly: boolean }) {
   const { memberName } = useMaple();
+  const v = useVoice();
   const t = goal.targets.find((x) => x.id === id)!;
   const tp = p?.targets.find((x) => x.id === id && x.kind === t.kind) ?? null;
   let counts: ReactNode = null;
-  if (t.kind === "custom") counts = <p className={cx(tone.muted, "text-[13px]")}>Not counted from the log.</p>;
-  else if (!p) counts = <p className={cx(tone.faint, "text-[13px]")}>{failed ? "Couldn't load the counts. They'll try again on the next refresh." : "Counting…"}</p>;
-  else if (tp?.kind === "bassinet_nights") counts = <Weeks p={p} rows={tp.weeks} line={nightsLine(tp.target)} />;
+  // Easing off, a quiet stretch or before counting starts: the aim alone (the card says why once, above).
+  if (aimOnly) counts = null;
+  else if (t.kind === "custom") counts = <p className={cx(tone.muted, "text-[13px]")}>Not counted from the log.</p>;
+  else if (!p) counts = <p className={cx(tone.muted, "text-[13px]")}>{failed ? "Couldn't load the counts. They'll try again on the next refresh." : "Counting…"}</p>;
+  else if (tp?.kind === "bassinet_nights") counts = <Weeks p={p} rows={tp.weeks} line={nightsLine(tp.target, v)} />;
   else if (tp?.kind === "bassinet_stretch")
     counts = (
       <>
