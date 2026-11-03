@@ -401,7 +401,7 @@ export function HoldingSheet({ mode, to, open = true, onClose }: { mode: "start"
           </p>
         )}
         <ContextNote>
-          Every phone shows who&apos;s holding {v.them}. At the planned time, the holder&apos;s and the next person&apos;s phones hear it if their handoff reminders are on (Notifications), though a notice can be late. If you start to feel sleepy before then, lay {v.them} in the bassinet or wake someone.
+          Every phone shows who&apos;s holding {v.them}. At the planned time, the holder&apos;s and the next person&apos;s phones hear it if their handoff reminders are on (Notifications), though a notice can be late. If you start to feel sleepy before then, lay {v.them} on {v.their} back in the bassinet or wake someone.
         </ContextNote>
       </div>
     </Sheet>

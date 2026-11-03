@@ -21,7 +21,7 @@
  * - Nothing here is about anyone's health or recovery, and nothing here
  *   changes a goal: the family and the coach do that through the tools.
  */
-import { feedingSleepyWords, SLEEP_GUIDES, sleepyLine, WORK_BOTTLES, WORK_DROWSY_DRIVING, WORK_NIGHT_NURSING, workGuide } from "../guidelines/sleep";
+import { feedingSleepyWords, HELD_SLEEP_SOURCE, mightFallAsleep, SLEEP_GUIDES, sleepyLine, WORK_BOTTLES, WORK_DROWSY_DRIVING, WORK_NIGHT_NURSING, workGuide } from "../guidelines/sleep";
 import { addDays, dayKey, daysBetween, formatDuration, formatTime, isDayKey, parseDayKey, zonedTimeToUtc } from "../time";
 import type { Entry, Role } from "../types";
 import { makeVoice, type Voice } from "../voice";
@@ -986,12 +986,16 @@ export const citeWork = (id: string) => `(${id}: ${workItem(id).sources.map((s) 
 const sourceWords = (id: string) => `(Source: ${workItem(id).sources.map((s) => s.label).join("; ")}.)`;
 
 /**
- * When to start a bottle for a nursing baby (WORK_BOTTLES, by Texas HHS's Breastmilk Counts: "Bottles can be introduced
- * when your baby is 4 weeks old or two weeks before you return to work or school, whichever is sooner").
+ * When a bottle can start for a nursing baby (WORK_BOTTLES): at about 4 weeks old, never earlier (the Office on
+ * Women's Health: "Wait at least a month after birth before introducing a bottle"); a day back sooner than that is a
+ * question for their pediatrician or lactation consultant, never "now".
  */
 export const BOTTLE_SOURCE: CautionSource = workSource(WORK_BOTTLES);
-/** Two weeks before the nursing parent's day back, a bottle can start sooner than 4 weeks old (WORK_BOTTLES). */
-export const BOTTLE_BEFORE_RETURN_DAYS = 14;
+/** A sleep guidance item's source, as a caution shows it: its first, or the one at `i`. */
+function guideSource(id: string, i = 0): CautionSource | undefined {
+  const s = SLEEP_GUIDES.find((g) => g.id === id)?.sources[i];
+  return s ? { title: s.label, url: s.url } : undefined;
+}
 
 /** "the step "A" and the step "B"" with its verb agreeing: the texts a caution is about. */
 function aboutTexts(xs: readonly { label: string; text: string }[], one: string, many: string): { what: string; verb: string; it: string } {
@@ -1007,19 +1011,19 @@ function aboutTexts(xs: readonly { label: string; text: string }[], one: string,
  *   not known, so not said).
  * - Each protected window by how its feeds are covered (`covers`) and her
  *   age: nursing in it needs nothing said; a bottle in it, before about 4
- *   weeks, says when one can start in WORK_BOTTLES's words (Texas HHS: at
- *   about 4 weeks old, or two weeks before the nursing parent goes back to
- *   work or school if that's sooner, dated for the plan when `today` is
- *   given; BOTTLE_SOURCE) and to ask their pediatrician or lactation
- *   consultant first, and after that a reminder to
- *   plan pumping around that feed (only when she nurses, or might); with no
- *   feed planned in it (or nothing said), a window over 5 hours (4 in her
+ *   weeks, says in WORK_BOTTLES's words that one usually waits until about
+ *   4 weeks old, never earlier (dated for the plan when `today` and her age
+ *   are given; BOTTLE_SOURCE), and that a day back sooner is a question for
+ *   their pediatrician or lactation consultant first; after that, a reminder
+ *   to plan pumping around that feed (only when she nurses, or might); with
+ *   no feed planned in it (or nothing said), a window over 5 hours (4 in her
  *   first weeks) says who could cover one (a bottle, for a baby on bottles only).
  * - A step or aim that changes how the baby is fed: save it only with their
  *   clinician's yes.
  * - Held sleep that's fine because an adult stays awake (Maple's sleepy
- *   line), and the transfer from an adult bed or a chair (the AAP's and
- *   NICHD's words for it). `adults`: their names, as the rules read them.
+ *   line), and the transfer from an adult bed, a chair or a sitting device
+ *   (the AAP's and NICHD's words for it), each with its source. `adults`:
+ *   their names, as the rules read them.
  */
 export function goalCautions(
   f: Pick<GoalFields, "title" | "why" | "targets" | "steps" | "roster" | "template">,
@@ -1035,6 +1039,8 @@ export function goalCautions(
     out.push({
       kind: "feeds_first",
       text: `${aims.join(" and ")} ${aims.length > 1 ? "ask" : "asks"} for more than 4 hours in ${v.name}'s first 4 weeks. Maple's guidance for ${v.their} age: "${guide ? guide.body(v) : `If ${v.name} sleeps longer than 4 hours at night, wake ${v.them} to feed.`}"`,
+      source: guideSource("normal-feeds-first"),
+      guide: "normal-feeds-first",
     });
   }
   // Who nurses, when a template said (null: bottles only, so a bottle changes nothing); undefined: not known.
@@ -1046,12 +1052,10 @@ export function goalCautions(
     if (w.covers === "bottle") {
       if (nurser === null) continue;
       if (young) {
-        // WORK_BOTTLES's words: the sooner of about 4 weeks old and two weeks before the nursing parent's day back, dated
-        // for this plan when the day is known (the day back counts only when the one going back is the one who nurses).
-        const back = f.template?.date && nurser && f.template.member === nurser ? addDays(f.template.date, -BOTTLE_BEFORE_RETURN_DAYS) : null;
+        // WORK_BOTTLES's words: about 4 weeks old, never earlier, dated for this plan when her age is known (a day back
+        // sooner is a question for their clinicians, in the item's own words; never "that's now" for a baby this young).
         const fourWeeks = o.today && typeof o.ageDays === "number" ? addDays(o.today, FEEDS_FIRST_DAYS - o.ageDays) : null;
-        const from = back && fourWeeks ? minKey(back, fourWeeks) : (back ?? fourWeeks);
-        const when = from && o.today ? (from <= o.today ? " For this plan, that's now." : ` For this plan, that's ${dateWords(from, o.today)}.`) : "";
+        const when = fourWeeks && o.today && fourWeeks > o.today ? ` For this plan, that's ${dateWords(fourWeeks, o.today)}.` : "";
         const [can, ...ask] = workItem(WORK_BOTTLES).body(v).split(/(?<=\.)\s+/);
         out.push({
           kind: "bottle",
@@ -1096,18 +1100,20 @@ export function goalCautions(
   const held = ex.filter((x) => x.e.held);
   if (held.length) {
     const a = aboutTexts(held, "has", "have");
-    out.push({ kind: "awake", text: `${a.what} ${a.verb} ${v.name} asleep on an adult only while they stay awake: say Maple's line with ${a.it}: "${sleepyLine(v).split(/(?<=\.)\s+/)[0]}"` });
+    // Held sleep only in an awake adult's arms (the AAP's technical report), with what to do once sleep might come.
+    out.push({ kind: "awake", text: `${a.what} ${a.verb} ${v.name} asleep on an adult only while they stay awake: say Maple's line with ${a.it}: "${sleepyLine(v).split(/(?<=\.)\s+/)[0]}"`, source: { title: HELD_SLEEP_SOURCE.label, url: HELD_SLEEP_SOURCE.url }, guide: "safe-sleepy" });
   }
   const words = feedingSleepyWords(v);
   const bed = ex.filter((x) => x.e.transfer.includes("bed"));
   if (bed.length) {
     const a = aboutTexts(bed, "has", "have");
-    out.push({ kind: "transfer", text: `${a.what} ${a.verb} ${v.name} in an adult bed before the bassinet: say this with ${a.it}: "${words.bed}"` });
+    // The adult bed's whole passage, which begins with the AAP's "against bed sharing under any circumstances": never its comparison alone.
+    out.push({ kind: "transfer", text: `${a.what} ${a.verb} ${v.name} in an adult bed before the bassinet: say this with ${a.it}: "${words.bed}"`, source: guideSource("safe-feeding-sleepy", 1), guide: "safe-feeding-sleepy" });
   }
   const chair = ex.filter((x) => x.e.transfer.includes("couch"));
   if (chair.length) {
     const a = aboutTexts(chair, "has", "have");
-    out.push({ kind: "transfer", text: `${a.what} ${a.verb} ${v.name} on a couch or chair before the bassinet: say this with ${a.it}: "${words.mindful} ${words.someone}"` });
+    out.push({ kind: "transfer", text: `${a.what} ${a.verb} ${v.name} on a couch or chair before the bassinet: say this with ${a.it}: "${words.mindful} ${words.someone}"`, source: guideSource("safe-feeding-sleepy", 0), guide: "safe-feeding-sleepy" });
   }
   return out;
 }
@@ -1511,7 +1517,8 @@ export function backToWorkGoal(a: BackToWorkAnswers, o: { v: Voice; name: (id: s
   }
   if (rosterFrom > o.today) notes.push(`The roster starts on ${dateWords(rosterFrom, o.today)}, two weeks before the day back, with its rehearsal: the morning check-ins and the counts begin then.`);
   if (sleeps === "bed") notes.push(`${v.Name} sleeps in your bed now: Maple's plans keep ${v.them} in ${v.their} own sleep space, the bassinet in your room, close to your bed but not in it. The Plan tab's first stage is one bassinet try a day.`);
-  else if (sleeps === "arms" || sleeps === "mixed") notes.push(`${v.Name} sleeps ${sleeps === "arms" ? "in arms" : "in a mix of places"} now: holding ${v.them} is fine while you're awake, and the Plan tab's first stage is one bassinet try a day.`);
+  // Held sleep only while the adult is awake (the AAP's technical report), with what to do if they might fall asleep.
+  else if (sleeps === "arms" || sleeps === "mixed") notes.push(`${v.Name} sleeps ${sleeps === "arms" ? "in arms" : "in a mix of places"} now: holding ${v.them} is fine while you're awake. ${mightFallAsleep(v)} The Plan tab's first stage is one bassinet try a day.`);
   // Each window's feeds in words, from how they're covered: whoever's on duty is the adult not asleep in it.
   const feeds = roster.map((w) => {
     const duty = w.member === first ? second : first;
@@ -1520,7 +1527,7 @@ export function backToWorkGoal(a: BackToWorkAnswers, o: { v: Voice; name: (id: s
     return duty === nursing ? `${where}, ${o.name(duty)} nurses ${v.them}` : `${where}, ${o.name(duty)} brings ${v.them} to ${N} to nurse, then settles ${v.them}`;
   });
   notes.push(
-    `${offDuty === "same_room" ? "The adult who's off sleeps in the same room: one clinician's approach is two sleep spaces, so whoever's off isn't woken by every sound. That's your call." : "The adult who's off sleeps in another room."} Night feeds: ${feeds.join("; ")}.`
+    `${offDuty === "same_room" ? "The adult who's off sleeps in the same room." : "The adult who's off sleeps in another room."} Night feeds: ${feeds.join("; ")}.`
   );
   // The nursing parent going back: more night nursing to expect, in WORK_NIGHT_NURSING's words, with its source.
   if (nursing === returning) notes.push(`${workItem(WORK_NIGHT_NURSING).body(o.v)} ${sourceWords(WORK_NIGHT_NURSING)} Once ${R} is back, the morning check-ins will show how the nights go, and the roster can change.`);

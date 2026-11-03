@@ -34,6 +34,7 @@ import {
   tonightKey,
   weekOngoing,
   type CoachNotes,
+  type GoalCaution,
   type GoalFields,
   type GoalProgress,
   type GoalSpan,
@@ -387,13 +388,13 @@ function QuickSetup({ onClose }: { onClose: () => void }) {
           </div>
         </>
       ) : (
-        <QuickReadBack built={built} fields={fields} error={error ?? problem} notes={built?.notes ?? []} cautions={cautions.map((c) => c.text)} onSave={() => void save()} onBack={() => setStep(4)} busy={s.busy} today={today} />
+        <QuickReadBack built={built} fields={fields} error={error ?? problem} notes={built?.notes ?? []} cautions={cautions} onSave={() => void save()} onBack={() => setStep(4)} busy={s.busy} today={today} />
       )}
     </section>
   );
 }
 
-function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, busy, today }: { built: { goal: GoalInput } | null; fields: GoalFields | null; error: string | null; notes: string[]; cautions: string[]; onSave: () => void; onBack: () => void; busy: boolean; today: string }) {
+function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, busy, today }: { built: { goal: GoalInput } | null; fields: GoalFields | null; error: string | null; notes: string[]; cautions: GoalCaution[]; onSave: () => void; onBack: () => void; busy: boolean; today: string }) {
   const { memberName } = useMaple();
   const v = useVoice();
   return (
@@ -440,11 +441,15 @@ function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, 
           </Block>
         </>
       )}
-      {[...notes, ...cautions].map((n) => (
+      {notes.map((n) => (
         <p key={n} role="note" className={cx(tone.muted, "flex gap-2 text-[13px] leading-relaxed")}>
           <Icon name="info" size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
           <span>{n}</span>
         </p>
+      ))}
+      {/* Each caution with its source, as the goal card shows it. */}
+      {cautions.map((c) => (
+        <CautionNote key={c.kind + c.text} c={c} />
       ))}
       {error && (
         <p role="alert" data-goal-problem className="text-[13px] font-semibold text-mp-danger">
@@ -464,6 +469,26 @@ function QuickReadBack({ built, fields, error, notes, cautions, onSave, onBack, 
   );
 }
 
+
+/** A caution a goal needs said with it (goalCautions), with a link to its source when it has one. */
+function CautionNote({ c }: { c: GoalCaution }) {
+  return (
+    <p role="note" className={cx(tone.muted, "flex gap-2 text-[13px] leading-relaxed")}>
+      <Icon name="info" size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
+      <span>
+        {c.text}
+        {c.source && (
+          <>
+            {" "}
+            <a href={c.source.url} target="_blank" rel="noreferrer" className="font-medium text-mp-accent-fg underline underline-offset-2">
+              Source
+            </a>
+          </>
+        )}
+      </span>
+    </p>
+  );
+}
 
 /** No break inside "Thu, Nov 26", "21 days left" or "week 2 of 5" on a narrow phone. */
 const keep = (s: string) => s.replace(/ /g, "\u00a0");
@@ -569,20 +594,7 @@ function GoalCard({ goal, view, failed }: { goal: SleepGoal; view: GoalView | nu
         </p>
       )}
       {cautions.map((c) => (
-        <p key={c.kind + c.text} role="note" className={cx(tone.muted, "flex gap-2 text-[13px] leading-relaxed")}>
-          <Icon name="info" size={16} className="mt-[2px] shrink-0 text-mp-ink-3" />
-          <span>
-            {c.text}
-            {c.source && (
-              <>
-                {" "}
-                <a href={c.source.url} target="_blank" rel="noreferrer" className="font-medium text-mp-accent-fg underline underline-offset-2">
-                  Source
-                </a>
-              </>
-            )}
-          </span>
-        </p>
+        <CautionNote key={c.kind + c.text} c={c} />
       ))}
 
       <Block title="Targets">
