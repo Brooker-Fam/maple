@@ -163,7 +163,7 @@ try {
   // her own (nothing about her medicines is held on it).
   await scenario("quiet-window-note-partner", async page => {
     await page.getByRole("switch", { name: /^Quiet during my protected sleep/ }).waitFor();
-    await page.getByText("Medicine reminders wait until it ends, if still due; nursing updates in it never come later. A handoff to you and “Logged” still come through. Maple keeps a note of what it held for 3 days.", { exact: true }).waitFor();
+    await page.getByText("Medicine reminders wait until it ends, if still due. “Logged” comes only to update a medicine notice already on this phone, and nursing updates never come later. A handoff to you still comes through. Maple keeps a note of what it held for 3 days.", { exact: true }).waitFor();
     await page.getByRole("heading", { name: "Dana's medicines" }).waitFor();
     if (extraShots) {
       for (const [width, height] of [[390, 844], [320, 568]]) {

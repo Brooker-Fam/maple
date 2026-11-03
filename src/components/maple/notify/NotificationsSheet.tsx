@@ -36,15 +36,16 @@ const TEST_WINDOW_MS = 3 * 60_000;
 
 /**
  * What Quiet during my protected sleep does on this phone (push-quiet.ts):
- * her reminders wait for the window's end (never on her own phone), nursing
- * updates in it are dropped, a handoff and "Logged" come through, and the
+ * her reminders wait for the window's end, "Logged" comes only to update a
+ * medicine notice the phone shows (both never held on her own phone),
+ * nursing updates in it are dropped, a handoff comes through, and the
  * server's note of what it held goes after 3 days.
  */
 function quietNote(meds: boolean, self: boolean): string {
   const kept = "Maple keeps a note of what it held for 3 days.";
   if (!meds) return `Nursing updates in it never come later; a handoff to you still comes through. ${kept}`;
   if (self) return `Nursing updates in it never come later. Your own medicine reminders, “Logged” and a handoff to you still come through. ${kept}`;
-  return `Medicine reminders wait until it ends, if still due; nursing updates in it never come later. A handoff to you and “Logged” still come through. ${kept}`;
+  return `Medicine reminders wait until it ends, if still due. “Logged” comes only to update a medicine notice already on this phone, and nursing updates never come later. A handoff to you still comes through. ${kept}`;
 }
 
 export default function NotificationsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {

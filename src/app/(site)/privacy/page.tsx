@@ -401,13 +401,14 @@ export default function Privacy() {
         one asked; these name no one and say nothing about the baby&rsquo;s sleep. If you&rsquo;re on a sleep goal&rsquo;s night
         roster, your phone stays quiet in your own protected window unless you turn that off. A medicine reminder due in it
         waits: Maple sends it once when the window ends (or sooner, if you&rsquo;re up and using Maple), if it&rsquo;s still
-        due, however long the window is. Nursing timer updates in the window are never sent later. A handoff to you and
-        &ldquo;Logged&rdquo; still come through, and mom&rsquo;s own reminders always reach her own phone. To tell whether
-        you&rsquo;re up, it checks whether you&rsquo;re holding the baby or have opened or logged anything in Maple in the last
-        15 minutes, from what it already keeps. For each notice it holds, it keeps a small note for that phone (which notice,
-        and when), deleted after 3 days. By default a medicine notice names the medicine and says when it was last
-        taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a dose amount. Signing
-        out turns them off on that phone.
+        due, however long the window is. &ldquo;Logged&rdquo; comes through only when it updates a medicine notice already on
+        your phone; any other &ldquo;Logged&rdquo;, and nursing timer updates, in the window are never sent later. A handoff to
+        you still comes through, and mom&rsquo;s own reminders and &ldquo;Logged&rdquo; notices are never held on her own
+        phone. To tell whether you&rsquo;re up, it checks whether you&rsquo;re holding the baby or have opened or logged
+        anything in Maple in the last 15 minutes, from what it already keeps. For each notice it holds, it keeps a small note
+        for that phone (which notice, and when), deleted after 3 days. By default a medicine notice names the medicine and
+        says when it was last taken, on the lock screen; turn on Hide medicine names to keep it generic. No notice ever gives a
+        dose amount. Signing out turns them off on that phone.
       </p>
 
       <h2>Children</h2>
