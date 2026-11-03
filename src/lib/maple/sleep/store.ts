@@ -567,6 +567,15 @@ export async function logTry(
 const sameMs = (a: string | null, b: string | null) => a != null && b != null && Math.abs(Date.parse(a) - Date.parse(b)) <= SAME_MS;
 
 /**
+ * The finish_before a finish writes (sleep/schema.ts migrateTryFinishBefore):
+ * the try's tags, note and who put her down as they were, and `at`, the
+ * finish's own updated_at, so its Undo knows the try is still as it left it.
+ */
+const FINISH_BEFORE = "finish_before = jsonb_build_object('at', NOW(), 'tags', to_jsonb(tags), 'note', note, 'put_down_by', put_down_by)";
+/** The try is still as the finish that wrote finish_before left it. */
+const AS_FINISHED = "(finish_before->>'at')::timestamptz = updated_at";
+
+/**
  * How it went. A wake (stayed asleep, woke calm, woke crying) ends a running
  * linked sleep at the try's end; picked up while still asleep, the sleep
  * runs on, and a bassinet sleep the try made carries on as in arms. Asked of
@@ -596,7 +605,8 @@ export async function finishTry(
   if (end.getTime() < start.getTime()) throw new SleepInputError("That's before she was laid down.");
   span(start, end);
   const params: unknown[] = [id, famId(fam), end.toISOString(), outcome, input.by, before.updated_at];
-  const sets = ["ended_at = $3", "outcome = $4", "updated_by = $5", "updated_at = NOW()"];
+  // What this finish replaces, for its Undo (undoFinish): SET reads the row as it was, and `at` is this write's updated_at.
+  const sets = ["ended_at = $3", "outcome = $4", "updated_by = $5", "updated_at = NOW()", FINISH_BEFORE];
   if (input.tags !== undefined) {
     params.push(input.tags);
     sets.push(`tags = $${params.length}::text[]`);
@@ -635,8 +645,10 @@ export async function finishTry(
 }
 
 /**
- * Undo a finish: the try runs again, and a sleep the finish stopped (or put
- * in arms) goes back as it was, each only if nobody changed it since.
+ * Undo a finish: the try runs again with the tags, note and who put her down
+ * that the finish replaced (only while nobody has changed the try since that
+ * finish), and a sleep the finish stopped (or put in arms) goes back as it
+ * was, each only if nobody changed it since.
  */
 export async function undoFinish(
   fam: FamilyRef,
@@ -649,7 +661,10 @@ export async function undoFinish(
   let rows: Row[];
   try {
     rows = await q(
-      `UPDATE maple_sleep_tries SET ended_at = NULL, outcome = NULL, updated_by = $3, updated_at = NOW()
+      `UPDATE maple_sleep_tries SET ended_at = NULL, outcome = NULL, updated_by = $3, updated_at = NOW(), finish_before = NULL,
+         tags = CASE WHEN ${AS_FINISHED} THEN ARRAY(SELECT jsonb_array_elements_text(finish_before->'tags')) ELSE tags END,
+         note = CASE WHEN ${AS_FINISHED} THEN finish_before->>'note' ELSE note END,
+         put_down_by = CASE WHEN ${AS_FINISHED} THEN finish_before->>'put_down_by' ELSE put_down_by END
        WHERE id = $1 AND family_id = $2 AND deleted_at IS NULL AND ${updatedAtMatches(4)} RETURNING *`,
       [id, famId(fam), input.by, cur.updated_at]
     );

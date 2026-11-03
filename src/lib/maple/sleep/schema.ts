@@ -113,6 +113,7 @@ export async function migrateSleep(): Promise<void> {
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_maple_sleep_shifts_client ON maple_sleep_shifts (family_id, client_id) WHERE client_id IS NOT NULL`);
   await migrateShiftAsks();
   await migrateTryPauses();
+  await migrateTryFinishBefore();
 
   await query(`CREATE TABLE IF NOT EXISTS maple_sleep_goals (
     id BIGSERIAL PRIMARY KEY,
@@ -221,4 +222,16 @@ async function migrateGoalRestarts(): Promise<void> {
  */
 async function migrateTryPauses(): Promise<void> {
   await query(`ALTER TABLE maple_sleep_tries ADD COLUMN IF NOT EXISTS pause_said_at TIMESTAMPTZ`);
+}
+
+/**
+ * What a finish (How did it go?) replaced on its try: the tags, note and who
+ * put her down before it, and the moment it finished (`at`, its updated_at),
+ * so its Undo puts back exactly what was there while nobody has changed the
+ * try since (store.ts undoFinish). Nullable JSONB, never in the app's state;
+ * an older release reads past it, and its writes leave `at` behind, so a
+ * stale one is never used.
+ */
+async function migrateTryFinishBefore(): Promise<void> {
+  await query(`ALTER TABLE maple_sleep_tries ADD COLUMN IF NOT EXISTS finish_before JSONB`);
 }

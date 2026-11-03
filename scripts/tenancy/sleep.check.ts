@@ -19,7 +19,7 @@ import { runPushTick } from "../../src/lib/maple/push";
 import { askState, chooseSleepLink, nextHandoff } from "../../src/lib/maple/sleep/engine";
 import { windowAt } from "../../src/lib/maple/sleep/handoff";
 import { activeRosters } from "../../src/lib/maple/sleep/roster-read";
-import { askHandoff, deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
+import { askHandoff, deleteTry, finishTry, getTry, handOff, logTry, openShift, startShift, startTry, undoFinish, updateTry, undoHandOff } from "../../src/lib/maple/sleep/store";
 import type { BassinetTry, HoldingShift, SleepState } from "../../src/lib/maple/sleep/types";
 import { createEntryOnce, getEntry, listEntries, startTimer, stopTimer } from "../../src/lib/maple/store";
 import { addDays, dayKey, localParts } from "../../src/lib/maple/time";
@@ -339,6 +339,39 @@ async function main() {
     const ended = { ...woke, started_at: new Date(Date.now() - HOUR).toISOString() } as Entry;
     eq(chooseSleepLink(Date.now() - 20 * MIN, null, [ended], Date.now()).kind, "create", "running try, ended sleep");
     eq(chooseSleepLink(Date.now() - 20 * MIN, Date.now() - 5 * MIN, [ended], Date.now()).kind, "overlap", "a try that already happened still sits on the sleep it overlaps");
+  });
+
+  await test("undo a finish puts back exactly what was there: the tags, note and who put her down that How did it go? replaced (the route, the tool's reopen); a try changed since keeps the newer details", async () => {
+    await clean(alpha);
+    const w = await startTry(1, { babyId: alpha.babyId, putDownBy: alpha.owner, tags: ["fed"], note: null, by: alpha.owner, source: "web", clientId: "alpha-try-undo-details-1" });
+    // How did it go? with Add details: other tags, a note and who put her down.
+    const f = await finishTry(1, w.try.id, { outcome: "woke_calm", tags: ["swaddled", "white_noise"], note: "Made-up note", putDownBy: alpha.member, by: alpha.owner, expectUpdatedAt: w.try.updated_at });
+    const s = f.sleep!;
+    const u = await route(alpha.owner, 1, { action: "try.undo_finish", id: w.try.id, expect_updated_at: f.try.updated_at, sleep: { id: s.id, expect_updated_at: s.updated_at, was_active: true } });
+    eq(u.status, 200, JSON.stringify(u.json).slice(0, 300));
+    const back = (await getTry(1, w.try.id))!;
+    eq([back.ended_at, back.outcome, back.tags, back.note, back.put_down_by], [null, null, ["fed"], null, alpha.owner], "as before the finish");
+    eq((await getEntry(1, s.id))?.active, true, "and her sleep runs again");
+    // The tool's finish with details, then its reopen (the finish's Undo there).
+    const tf = await call("bassinet_try", { action: "finish", outcome: "woke_crying", tags: ["swaddled"], note: "Made-up tool note" }, alpha, "owner");
+    ok(!tf.isError, tf.text);
+    const re = await call("bassinet_try", { action: "reopen", id: `t${w.try.id}` }, alpha, "owner");
+    ok(!re.isError, re.text);
+    const again = (await getTry(1, w.try.id))!;
+    eq([again.ended_at, again.tags, again.note], [null, ["fed"], null], "the tool's reopen too");
+    // A fix after the finish is someone's newer change: reopening then keeps it.
+    const f2 = await finishTry(1, w.try.id, { outcome: "woke_calm", note: "Made-up finish note", by: alpha.owner });
+    const fixed = await updateTry(1, w.try.id, { note: "Made-up fix" }, { by: alpha.member, expectUpdatedAt: f2.try.updated_at });
+    await undoFinish(1, w.try.id, { expectUpdatedAt: fixed.try.updated_at, by: alpha.owner });
+    eq([(await getTry(1, w.try.id))?.ended_at, (await getTry(1, w.try.id))?.note], [null, "Made-up fix"], "the fix since stays");
+    // Rollback: an additive, nullable column that migrates twice and never reaches the app's state.
+    const cols = await sql(`SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = 'maple_sleep_tries' AND column_name = 'finish_before'`);
+    eq(cols.map((c) => [c.data_type, c.is_nullable]), [["jsonb", "YES"]], "nullable JSONB");
+    const { migrateSleep } = await import("../../src/lib/maple/sleep/schema");
+    await migrateSleep();
+    await migrateSleep();
+    await finishTry(1, w.try.id, { outcome: "woke_calm", by: alpha.owner });
+    ok(sleepState(await route(alpha.member, 1)).tries.every((t) => !("finish_before" in t)), "not in the state");
   });
 
   await test("finish: How did it go? with no time ends when her sleep stopped after the try began (Woke up on another phone); a sleep that had already ended when an older release laid the try on it is never the end", async () => {
