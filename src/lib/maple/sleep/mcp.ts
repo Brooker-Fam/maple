@@ -231,7 +231,12 @@ function personArg(raw: string | null | undefined, ctx: Ctx, label: string): str
   throw new ToolError(found.length > 1 ? `More than one person in the family is called "${raw}" (${label}). Say which: ${names}.` : `"${raw}" isn't someone in this family (${label}). The family is: ${names}.`);
 }
 
-function tryJson(t: BassinetTry, ctx: Ctx, nums = numberTries([t], ctx.tz)) {
+/** A try's note as sleep_plan reads it: the family's words, at most TRY_NOTE_READ characters (cut at a word), so ten tries stay short. */
+export const TRY_NOTE_READ = 80;
+const shortNote = (note: string, max: number) => (note.length <= max ? note : `${note.slice(0, max).replace(/\s+\S*$/, "")}…`);
+
+/** `noteMax`: how much of its note to give (0 leaves it out); all of it by default. */
+function tryJson(t: BassinetTry, ctx: Ctx, nums = numberTries([t], ctx.tz), noteMax = Infinity) {
   const n = nums.get(t.id);
   const down = (t.ended_at ? Date.parse(t.ended_at) : ctx.now.getTime()) - Date.parse(t.started_at);
   return {
@@ -243,7 +248,7 @@ function tryJson(t: BassinetTry, ctx: Ctx, nums = numberTries([t], ctx.tz)) {
     ...(n ? { try_number: n.n, of_today: n.of, try_day: tryDayLabel(n.day, tryDayKey(ctx.now, ctx.tz)), ...(n.retry ? { retry: true } : {}) } : {}),
     put_down_by: t.put_down_by ? who(t.put_down_by, ctx) : null,
     tags: t.tags,
-    ...(t.note ? { note: t.note } : {}),
+    ...(t.note && noteMax > 0 ? { note: shortNote(t.note, noteMax) } : {}),
     sleep_entry: t.sleep_entry_id,
     by: who(t.created_by, ctx),
     via: t.source,
@@ -644,14 +649,20 @@ function goalJsonCompact(g: SleepGoal, ctx: Ctx) {
   };
 }
 
-/** Safe sleep, when to call and the emergency line, as titles, with the two that need doing at once word for word. */
-function safetyLines(guidance: SleepGuidance): { line: string } {
-  const keep = ["safe", "call", "emergency"];
-  const sections = guidance.sections.filter((s) => keep.includes(s.section));
-  const full = new Set(["safe-sleepy", "emergency-911"]);
+/** The guidance sections every read puts first (the safety line, and the JSON's guidance): safe sleep, when to call, the emergency line. */
+const SAFETY_SECTIONS = ["safe", "call", "emergency"];
+
+/**
+ * Safe sleep, when to call and the emergency line, as titles, with the two that need doing at once word for word (the
+ * 911 line and a sleepy adult's): the second line of every sleep_plan read, so a cut can never reach it. `full`: the
+ * read carries the guidance word for word too.
+ */
+function safetyLine(guidance: SleepGuidance, full: boolean): string {
+  const sections = guidance.sections.filter((s) => SAFETY_SECTIONS.includes(s.section));
+  const whole = new Set(["safe-sleepy", "emergency-911"]);
   // An item said in full ends with its own period (the 911 line's "… or is limp."): one period between sections, never two.
-  const titles = sections.map((s) => `${s.title}: ${s.items.map((g) => (full.has(g.id) ? guideText(g) : g.title)).join("; ")}`.replace(/\.$/, ""));
-  return { line: `Safety (sleep_plan with view "guidance" has every item word for word, with its sources): ${titles.join(". ")}.` };
+  const titles = sections.map((s) => `${s.title}: ${s.items.map((g) => (whole.has(g.id) ? guideText(g) : g.title)).join("; ")}`.replace(/\.$/, ""));
+  return `Safety (${full ? "every item word for word, with its sources, is in guidance below" : 'sleep_plan with view "guidance" has every item word for word, with its sources'}): ${titles.join(". ")}.`;
 }
 
 /** Lines goals on one roster share (its hints, the family's nights): said once. */
@@ -974,39 +985,45 @@ export function registerSleepTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         // One adult who logs: the quick setup splits the night between two, so a goal made by hand instead.
         lines.push(`Sleep goals: none yet. If they'd like one, set it by hand with sleep_goal add (a title, its targets and a step or two for this week), read back and saved on a yes. The back-to-work quick setup needs two adults who log, to split the night.`);
       }
-      const safety = fullGuidance ? null : safetyLines(guidance);
-      const tail = safety ? `${safety.line} ${DISCLAIMER}` : `Guidance for ${v.their} age is in guidance (word for word, with its sources). ${DISCLAIMER}`;
-      // `lean`: the last resort when even the most urgent goal alone is too long (every limit at once): no check-in notes, fewer tries.
+      // Safe sleep, when to call and the emergency line, right after her age in every view: whatever the read carries, they come first.
+      lines.splice(1, 0, safetyLine(guidance, fullGuidance));
+      // The guidance word for word, its safety sections first.
+      const sections = [...guidance.sections].sort((x, y) => (SAFETY_SECTIONS.includes(x.section) ? 0 : 1) - (SAFETY_SECTIONS.includes(y.section) ? 0 : 1));
+      // `lean`: when even the most urgent goal is too long (every limit at once): no check-in notes, three tries, no try notes.
       const textWith = (n: number, lean = false) => {
         const left = blocks.slice(n);
         const more = left.length
-          ? [`To stay under the chat's length, this read leaves out ${plural(left.length, "less urgent goal")}: ${left.map((b) => `${b.ref} ${quoted(b.title)}`).join("; ")} (titles in the family's words). sleep_plan with goal "${left[0].ref}" (and so on) reads each one.`]
+          ? [`To stay under the chat's length, this read leaves out ${n ? plural(left.length, "less urgent goal") : `the goals' progress (${plural(left.length, "goal")})`}: ${left.map((b) => `${b.ref} ${quoted(b.title)}`).join("; ")} (titles in the family's words). sleep_plan with goal "${left[0].ref}" (and so on) reads each one.`]
           : [];
-        return [...lines, ...blocks.slice(0, n).flatMap((b) => b.lines), ...more, ...after.filter((l) => !lean || !l.startsWith("Check-in notes")), tail].join("\n");
+        return [...lines, ...blocks.slice(0, n).flatMap((b) => b.lines), ...more, ...after.filter((l) => !lean || !l.startsWith("Check-in notes")), DISCLAIMER].join("\n");
       };
-      const dataWith = (n: number, lean = false) => ({
+      // `brief`: past even that (never at the limits checked), the guidance word for word gives way to where it is; the safety line stays.
+      const dataWith = (n: number, lean = false, brief = false) => ({
         family_words: FAMILY_WORDS_JSON,
         // The goals first: their ids, revisions and step ids are what a write needs, and the lines carry their progress.
         ...(blocks.length ? { goals: blocks.slice(0, n).map((b) => b.json) } : {}),
         age: age ? { days: age.days, label: age.label, stage: age.band.label } : null,
         plan: plan ? planJson(plan, v) : null,
         today: today && todayWords ? { ...today, label: todayWords.when } : null,
-        running_try: running ? tryJson(running, ctx, nums) : null,
+        running_try: running ? tryJson(running, ctx, nums, lean ? 0 : TRY_NOTE_READ) : null,
         holding: shift ? shiftJson(shift, ctx) : null,
         suggestion: suggestion && !suggestion.snoozed ? { to_stage: suggestion.to, tries: suggestion.tries, days: suggestion.days, stayed_30_plus_of_last: `${suggestion.stayed} of ${suggestion.recent}` } : null,
-        recent_tries: tries.slice(0, lean || (view === "goals" && goals.length) ? 3 : 10).map((t) => tryJson(t, ctx, nums)),
+        recent_tries: tries.slice(0, lean || (view === "goals" && goals.length) ? 3 : 10).map((t) => tryJson(t, ctx, nums, lean ? 0 : TRY_NOTE_READ)),
         ...(progress ? { progress } : {}),
         // The compact read's safety titles are in its lines; the guidance word for word is a view away.
-        ...(safety
+        ...(!fullGuidance || brief
           ? { guidance: `sleep_plan {view: "guidance"} has it word for word, with its sources` }
-          : { guidance: { now: guidance.now.map(guideJson), sections: guidance.sections.map((s) => ({ section: s.title, items: s.items.map(guideJson) })) } }),
+          : { guidance: { now: guidance.now.map(guideJson), sections: sections.map((s) => ({ section: s.title, items: s.items.map(guideJson) })) } }),
       });
-      // Every goal, most urgent first, while the read stays under the chat's cut; past it, the least urgent ones say where they are.
-      const size = (n: number, lean = false) => textWith(n, lean).length + JSON.stringify(dataWith(n, lean)).length + 1;
+      // Every goal, most urgent first, while the read stays under the chat's cut; past it, the least urgent ones say where they
+      // are, then the lean read, then (view "all", whose guidance is the point) the last goal too, then the guidance's pointer.
+      const size = (n: number, lean = false, brief = false) => textWith(n, lean).length + JSON.stringify(dataWith(n, lean, brief)).length + 1;
       let shown = blocks.length;
       while (shown > 1 && size(shown) > ALL_VIEW_MAX) shown--;
       const lean = size(shown) > ALL_VIEW_MAX;
-      return ok(textWith(shown, lean), dataWith(shown, lean));
+      if (lean && view === "all") while (shown > 0 && size(shown, true) > ALL_VIEW_MAX) shown--;
+      const brief = lean && size(shown, true) > ALL_VIEW_MAX;
+      return ok(textWith(shown, lean), dataWith(shown, lean, brief));
     }
   );
 
