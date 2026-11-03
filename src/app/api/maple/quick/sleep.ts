@@ -201,7 +201,11 @@ async function pauseFirst(c: QuickCtx): Promise<Response | null> {
   const said = rows[0]?.pause_said_at ? new Date(rows[0].pause_said_at as string).getTime() : NaN;
   if (Number.isFinite(said) && c.now.getTime() - said <= AGAIN_MS) return null;
   if ((await query(`UPDATE maple_sleep_tries SET pause_said_at = NOW() WHERE id = $1 AND family_id = $2`, [retry.id, c.fam.familyId])) === null) throw new StoreUnavailable();
-  return notDone("The plan says pause until the next try. Say it again to try anyway.", { pause: true, try: { id: `t${retry.id}` } });
+  // Holding her through the pause is for an adult who's awake: sleepy, the bassinet comes first.
+  return notDone(`The plan says pause until the next try, unless you're getting sleepy: then lay ${c.vo.them} on ${c.vo.their} back in the bassinet. Say it again to try anyway.`, {
+    pause: true,
+    try: { id: `t${retry.id}` },
+  });
 }
 
 /**
@@ -329,7 +333,7 @@ export async function asleepInArms(c: QuickCtx): Promise<Response> {
   if (!when) return badMinutes(c.body.minutes_ago);
   // A retry gets its first answer; a client id another kind of entry already has saves this one without it.
   const prior = await entryByClient(c.fam, c.clientId);
-  if (prior?.kind === "sleep") return say(armsLine(prior, c.tz, false), { deduped: true, entry: toClientEntry(prior) });
+  if (prior?.kind === "sleep") return say(armsLine(prior, c.tz, false, c.vo), { deduped: true, entry: toClientEntry(prior) });
   const clientId = prior ? null : c.clientId;
   const [timers, tryNow] = await Promise.all([activeTimers(c.fam, c.baby.id), runningTry(c.fam, c.baby.id)]);
   if (tryNow) {
@@ -341,10 +345,12 @@ export async function asleepInArms(c: QuickCtx): Promise<Response> {
   if (already) return say(`${feed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(already.started_at, c.tz)}.`, { already_running: true, entry: toClientEntry(already) });
   const r = await startSleepInArms(c, when.at, clientId);
   if (r.running) return say(`${feed ? "Feed stopped. " : ""}A sleep timer is already running, since ${clock(r.entry.started_at, c.tz)}.`, { already_running: true, entry: toClientEntry(r.entry) });
-  return say(armsLine(r.entry, c.tz, !!feed), { entry: toClientEntry(r.entry) });
+  return say(armsLine(r.entry, c.tz, !!feed, c.vo), { entry: toClientEntry(r.entry) });
 }
 
-const armsLine = (e: Entry, tz: string, feedStopped: boolean) => `${feedStopped ? "Feed stopped and sleep" : "Sleep"} timer started at ${clock(e.started_at, tz)}, in arms.`;
+/** "Sleep timer started at 9:42, in arms.", and what to do if the one holding her gets sleepy (never anything that sounds like they may doze too). */
+const armsLine = (e: Entry, tz: string, feedStopped: boolean, vo: Voice) =>
+  `${feedStopped ? "Feed stopped and sleep" : "Sleep"} timer started at ${clock(e.started_at, tz)}, in arms. If you start to feel sleepy, lay ${vo.them} on ${vo.their} back in the bassinet.`;
 
 // ── handoff ──────────────────────────────────────────────────────────────
 

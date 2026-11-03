@@ -289,7 +289,12 @@ async function main() {
     const c2 = await siri(T(beta).member, { action: "outcome", outcome: "woke_crying" });
     eq(c2.speak, "Woke crying after 10 minutes. Sleep timer stopped. Pause until the next try.", "after the retry: pause");
     const third = await siri(T(beta).member, { action: "put_down" });
-    eq([third.ok, third.speak, third.pause], [false, "The plan says pause until the next try. Say it again to try anyway.", true], "the plan's pause first");
+    // Holding him through the pause is for an adult who's awake: sleepy, the bassinet comes first (in the family's words).
+    eq(
+      [third.ok, third.speak, third.pause],
+      [false, "The plan says pause until the next try, unless you're getting sleepy: then lay him on his back in the bassinet. Say it again to try anyway.", true],
+      "the plan's pause first"
+    );
     eq((await tries(beta)).length, 2, "nothing saved");
     // Said again within two minutes (by anyone): it goes ahead, a retry like the app's soft Put down.
     const anyway = await siri(T(beta).owner, { action: "put_down" });
@@ -359,7 +364,7 @@ async function main() {
     const r = await siri(T(alpha).member, { action: "asleep_in_arms", client_id: "made-up-arms-1" });
     const [s] = await sleepsOf(alpha);
     eq([s.active, (s.data as { place?: string }).place, s.source, s.created_by], [true, "arms", "shortcut", alpha.member], "in arms");
-    eq(r.speak, `Sleep timer started at ${clock(s.started_at as string, alpha.tz)}, in arms.`, "said, with no sweet dreams");
+    eq(r.speak, `Sleep timer started at ${clock(s.started_at as string, alpha.tz)}, in arms. If you start to feel sleepy, lay her on her back in the bassinet.`, "said, with no sweet dreams, and the bassinet if sleepy");
     const again = await siri(T(alpha).member, { action: "asleep_in_arms", client_id: "made-up-arms-1" });
     eq([again.speak, again.deduped, (await sleepsOf(alpha)).length], [r.speak, true, 1], "the retry");
     const other = await siri(T(alpha).owner, { action: "asleep_in_arms" });
@@ -370,7 +375,11 @@ async function main() {
     const fe = (await getEntry(1, feed.id))!;
     const [s2] = await sleepsOf(alpha);
     eq([fe.active, near(fe.ended_at, Date.now() - 5 * MIN), near((await getEntry(1, Number(s2.id)))!.started_at, Date.now() - 5 * MIN)], [false, true, true], "the feed ended when she fell asleep");
-    ok(f.speak.startsWith("Feed stopped and sleep timer started at "), f.speak);
+    ok(f.speak.startsWith("Feed stopped and sleep timer started at ") && f.speak.endsWith(", in arms. If you start to feel sleepy, lay her on her back in the bassinet."), f.speak);
+    // Beta's words: his name and pronouns.
+    await reset(beta);
+    ok((await siri(T(beta).owner, { action: "asleep_in_arms" })).speak.endsWith("If you start to feel sleepy, lay him on his back in the bassinet."), "beta's pronouns");
+    await reset(beta);
   });
 
   await test("asleep_in_arms: while a try runs she's in the bassinet, so it points to picked up and saves nothing", async () => {
