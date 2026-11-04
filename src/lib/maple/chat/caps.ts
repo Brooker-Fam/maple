@@ -14,14 +14,29 @@ export function chatModel(env: Record<string, string | undefined> = process.env)
 /** Applied to every chat request, so no call can reach a provider that keeps prompts or trains on them. */
 export const GATEWAY_PRIVACY = { zeroDataRetention: true, disallowPromptTraining: true } as const;
 
-/** `providers`: the model's price row's (prices.ts), the only ones the Gateway may route to. */
-export function chatProviderOptions(providers: readonly string[]) {
-  return { gateway: { tags: ["maple-chat"], only: [...providers], ...GATEWAY_PRIVACY } };
+/**
+ * `providers`: the model's price row's (prices.ts), the only ones the Gateway
+ * may route to. `fastest`: a second try (CHAT_RETRIES) goes to whichever of
+ * those same providers is answering fastest right now, since the first one
+ * just stalled or failed.
+ */
+export function chatProviderOptions(providers: readonly string[], opts: { fastest?: boolean } = {}) {
+  return { gateway: { tags: ["maple-chat"], only: [...providers], ...GATEWAY_PRIVACY, ...(opts.fastest ? { sort: "tps" as const } : {}) } };
 }
 
 export const CHAT_MAX_STEPS = 6;
 export const CHAT_MAX_OUTPUT_TOKENS = 1500;
 export const CHAT_TIMEOUT = { totalMs: 55_000, stepMs: 25_000, toolMs: 15_000 };
+
+/**
+ * A model call that times out, fails or comes back with nothing to show,
+ * before anything in its step ran or showed, is asked once more. The second
+ * try shares the first one's CHAT_TIMEOUT.totalMs (the route's 60 seconds and
+ * the thread's 70-second lease still hold), so it only starts with at least
+ * CHAT_RETRY_MIN_MS of that left.
+ */
+export const CHAT_RETRIES = 1;
+export const CHAT_RETRY_MIN_MS = 15_000;
 
 /** A step whose prompt passed this ends the turn, even with its tool results unread. */
 export const STEP_PROMPT_LIMIT = 60_000;

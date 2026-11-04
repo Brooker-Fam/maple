@@ -7,6 +7,7 @@ import { EASE_OFF_DAYS, type SleepGoal } from "@/lib/maple/sleep/types";
 import { easingWords, nightsRange } from "@/lib/maple/sleep/words";
 import { addDays, dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import { KindBadge } from "../icons";
+import { holdTodayTaps } from "../tapShield";
 import { KIND_COLOR } from "../palette";
 import { focusNext, useTapGuard } from "../tapCooldown";
 import { Button, cx, tone } from "../ui";
@@ -168,7 +169,9 @@ export function GoalReturnCard({ r }: { r: Shown }) {
         return !!u && "saved" in u;
       })
     );
+  // The card goes and the page slides up under the thumb (Up next's Took it and Put down): taps on the page wait.
   const dismiss = () => {
+    holdTodayTaps();
     setShown(null);
     focusNext("#last-night", "#right-now", "#recent");
   };

@@ -19,7 +19,7 @@ import { useCare } from "./useCare";
  * a medicine", the photo hint, and a full row to her page.
  *
  * The picker is a launcher, so it closes on the way to anything else: a
- * saved "Took it" leaves its toast on the screen underneath (and the strip
+ * saved "Took it" leaves its toast on the screen underneath (and Today's row
  * holds that medicine with "Logged 6:56 AM"), and an ask opens the Dose
  * sheet with the reason on top.
  */

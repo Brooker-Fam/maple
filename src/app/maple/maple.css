@@ -210,29 +210,7 @@ html.maple-night {
   outline: 2px solid var(--mp-focus);
   outline-offset: 3px;
 }
-.mp-day-summary {
-  background: linear-gradient(125deg, color-mix(in srgb, var(--mp-accent) 4%, var(--mp-surface)), var(--mp-surface) 72%);
-}
-.mp-day-summary-values {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px 22px;
-  margin-top: 6px;
-  margin-bottom: 5px;
-  color: var(--mp-ink-2);
-  font-size: 13px;
-  line-height: 1.5;
-}
-.mp-day-summary-values > span { white-space: nowrap; }
-.mp-day-summary-values strong {
-  margin-right: 2px;
-  color: var(--mp-ink);
-  font-size: 21px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.maple-night .mp-today-intro,
-.maple-night .mp-day-summary { background: var(--mp-surface); }
+.maple-night .mp-today-intro { background: var(--mp-surface); }
 .maple-night .mp-today-age { background: var(--mp-sunken); }
 .maple-night .mp-tree-portrait::before,
 .maple-night .mp-tree-portrait::after { border-color: var(--mp-line); background: none; }

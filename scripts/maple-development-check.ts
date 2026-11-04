@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { applicableMilestones, dailyDiscovery, developmentAge } from "../src/lib/maple/development";
-import { DEVELOPMENT_TOPICS, DISCOVERIES } from "../src/lib/maple/guidelines/development";
+import { applicableMilestones, dailyDiscovery, developmentAge, eligibleDiscoveries } from "../src/lib/maple/development";
+import { DEVELOPMENT_STAGE_STARTS, DEVELOPMENT_TOPICS, DISCOVERIES } from "../src/lib/maple/guidelines/development";
 import type { Baby } from "../src/lib/maple/types";
 
 const baby = (overrides: Partial<Baby> = {}): Baby => ({
@@ -85,10 +85,46 @@ check("interests-filter-and-order", () => {
 
 check("feeding-keeps-chronological-age", () => {
   const profile = baby({ born_at: "2026-03-29T12:00:00Z", settings: { gestational_age_weeks: 32 } });
-  const card = dailyDiscovery(profile, new Date("2026-09-30T12:00:00Z"), ["feeding"]);
+  const date = new Date("2026-09-30T12:00:00Z");
+  assert.equal(developmentAge(profile, date)?.months, 4);
+  const card = dailyDiscovery(profile, date, ["feeding"]);
   assert.ok(card);
   assert.equal(card.ageBasis, "chronological");
-  assert.ok(card.minMonths >= 6);
+  const feeding = eligibleDiscoveries(profile, date, ["feeding"]);
+  assert.ok(feeding.every((item) => item.ageBasis === "chronological" && item.minMonths <= 6 && item.maxMonths > 6));
+  assert.ok(feeding.some((item) => item.minMonths === 6), "Six months since birth reaches the feeding ideas that start at 6 months");
+});
+
+check("discoveries-stay-inside-their-stage", () => {
+  assert.deepEqual([...DEVELOPMENT_STAGE_STARTS].sort((a, b) => a - b), [...DEVELOPMENT_STAGE_STARTS]);
+  assert.equal(DEVELOPMENT_STAGE_STARTS[0], 0);
+  const stage = (months: number) => DEVELOPMENT_STAGE_STARTS.findLastIndex((start) => start <= months);
+  const ids = new Set<string>();
+  for (const item of DISCOVERIES) {
+    assert.ok(!ids.has(item.id), `${item.id} is listed twice`);
+    ids.add(item.id);
+    assert.ok(Number.isInteger(item.minMonths) && Number.isInteger(item.maxMonths), `${item.id} needs whole months`);
+    assert.ok(item.minMonths >= 0 && item.minMonths < item.maxMonths && item.maxMonths <= 25, `${item.id} has an empty or out-of-range window`);
+    assert.ok(stage(item.maxMonths - 1) - stage(item.minMonths) <= 1, `${item.id} (${item.minMonths} to ${item.maxMonths} months) reaches past two neighboring stages`);
+  }
+});
+
+check("words-fit-the-age", () => {
+  for (const item of DISCOVERIES) {
+    const words = [item.title, item.body, item.activity ?? ""].join(" ");
+    if (item.minMonths < 4) assert.doesNotMatch(words, /\b(child|children|toddlers?)\b/i, `${item.id} reaches young babies, so it talks about a baby`);
+    if (item.minMonths >= 12) assert.doesNotMatch(words, /\bnewborns?\b/i, `${item.id} is for toddlers`);
+  }
+});
+
+check("newborns-get-newborn-ideas", () => {
+  const newborn = eligibleDiscoveries(baby(), now);
+  assert.ok(newborn.length >= DEVELOPMENT_TOPICS.length);
+  assert.ok(newborn.every((item) => item.minMonths === 0 && item.maxMonths <= 4), "Day 9 sees only ideas written for the first months");
+  assert.equal(newborn.some((item) => item.id === "time-to-respond"), false);
+  const toddler = eligibleDiscoveries(baby({ born_at: "2025-06-20T12:00:00Z" }), now);
+  assert.ok(toddler.some((item) => item.id === "time-to-respond"));
+  assert.ok(toddler.every((item) => item.minMonths >= 9), "A 16-month-old sees nothing written for younger babies");
 });
 
 check("before-corrected-due-date", () => {
@@ -142,6 +178,10 @@ check("single-interest-changes-next-day", () => {
 });
 
 check("tummy-action-is-explicit", () => {
+  assert.deepEqual(
+    DISCOVERIES.filter((item) => item.action === "tummy").map((item) => [item.id, item.topic, item.minMonths, item.maxMonths]),
+    [["little-tummy-time", "movement", 0, 2], ["reasons-to-reach", "movement", 2, 6]],
+  );
   const tummy = dailyDiscovery(baby(), now, ["movement"]);
   assert.equal(tummy?.id, "little-tummy-time");
   assert.equal(tummy.action, "tummy");

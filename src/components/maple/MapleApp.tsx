@@ -35,7 +35,7 @@ import AppAnalytics from "./AppAnalytics";
  *
  * Tabs: Today, hers (Brittany's page, for anyone who can read it), History
  * (Timeline | Patterns), Moments, Chat and Family. Which one shows lives in
- * AppNav, so her strip, a reminder's link or More can switch it. Chat loads
+ * AppNav, so her row on Today, a reminder's link or More can switch it. Chat loads
  * on first visit (Today's bundle doesn't carry the AI SDK) and then stays
  * mounted behind the others, so its draft and a reply still coming survive.
  *

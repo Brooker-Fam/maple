@@ -34,12 +34,18 @@ export default function EntryRow({
   entry,
   onClick,
   showRelative = false,
+  quietAction = false,
   now,
 }: {
   entry: Entry;
   onClick?: () => void;
   /** "2h ago" under the clock time (Today screen). */
   showRelative?: boolean;
+  /**
+   * Today's short list: no "Edit" / "Edit time" word on the right, only a faint chevron after the time, which sits on
+   * the title's line. The whole row is still the tap, and its accessible name still says what the tap does.
+   */
+  quietAction?: boolean;
   now: Date;
 }) {
   const { units, state, member, readOnly } = useMaple();
@@ -83,14 +89,15 @@ export default function EntryRow({
             </span>
           )}
         </span>
-        <span className="col-start-2 row-start-1 flex min-w-0 flex-col items-end gap-0.5 text-right @min-[18rem]/entry:col-start-3">
+        <span className={cx("col-start-2 row-start-1 flex min-w-0 flex-col items-end gap-0.5 text-right @min-[18rem]/entry:col-start-3", quietAction && "@min-[18rem]/entry:self-start")}>
           {entryDay !== today && entry.source !== "epic" && <span className={cx(tone.muted, "text-[12px]")}>{formatDayLabel(entryDay, today)}</span>}
           <span className={cx(tone.body, "inline-flex items-center gap-1.5 text-sm tabular-nums")}>
             {entry.id < 0 && <Icon name="refresh-cw" size={12} label="Not synced yet" className="text-mp-ink-3" />}
             {entry.created_by && entry.created_by !== state?.me.email && <Avatar member={who} size={16} />}
             {entry.source === "epic" ? formatDayLabel(entryDay, today) : formatTime(entry.started_at, tz)}
+            {canEdit && quietAction && <Icon name="chevron-right" size={15} className="-mx-0.5 shrink-0 text-mp-ink-3" />}
           </span>
-          {canEdit && <span className="text-[13px] font-medium text-mp-accent-fg">{editLabel}</span>}
+          {canEdit && !quietAction && <span className="text-[13px] font-medium text-mp-accent-fg">{editLabel}</span>}
         </span>
       </span>
     </button>

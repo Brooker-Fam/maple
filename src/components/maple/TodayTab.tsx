@@ -14,12 +14,13 @@ import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
-import { SleepNow, SleepPlanRow, useFoldedSleepId } from "./sleep/SleepCards";
+import { SleepNow, useFoldedSleepId } from "./sleep/SleepCards";
 import { LastNightCard, LeftRunningAsk } from "./sleep/LastNight";
 import { GoalReturnToday } from "./sleep/SleepReturn";
 import StatusCard from "./StatusCard";
 import { SIDE_NAME, timerNumbers } from "./FeedParts";
 import TimerCard from "./TimerCard";
+import UpNext from "./UpNext";
 import Waiting from "./Waiting";
 import WhileYouSlept from "./WhileYouSlept";
 import { useSheets } from "./sheets";
@@ -45,7 +46,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const sleepNow = !!state.sleep && (state.sleep.tries.some((t) => !t.ended_at) || state.sleep.shifts.some((x) => !x.ended_at));
 
   return (
-    <div className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
+    // data-today-page: what tapShield holds for a moment after the page moves under the thumb (a try card appearing).
+    <div data-today-page className="space-y-6 px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4">
       {timing && <TitleTicker />}
       {(!born || timing) && (
         <header className="flex min-h-[44px] items-center justify-between gap-3 px-1">
@@ -88,38 +90,47 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {/* Back after a quiet stretch on a goal: one card, once, with a clean restart to choose. */}
       <GoalReturnToday />
       {/* The morning after (sleep plan or goal): last night from the log, its unlogged stretches, and the adult's own check-in,
-          straight after Right now, so its question clears the dock. */}
+          straight after Right now, so its question clears the dock. After noon, folded to its one "More about last night"
+          row with nothing else to show, it stands at the end of Up next instead, and that row's Answer brings it back here. */}
       <LastNightCard />
-      {/* The sleep plan and goals, for every role that reads the log (view-only guests have no strip or More). */}
-      <SleepPlanRow />
+      {/*
+        Up next: her next medicine and the sleep plan (its everyday Put down, and the way into the plan and goals for every
+        role that reads the log), one row each, then after noon the folded Last night row. After Last night, so the
+        morning's question still clears the dock.
+      */}
+      <UpNext />
       {nothingYet && born && <FreshPage readOnly={readOnly} />}
 
       <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
 
-      {recent.length > 0 && (
-        <section aria-labelledby="recent">
-          <div className="mb-1 flex items-center justify-between px-1">
-            <h2 id="recent" className={cx(tone.heading, "text-[17px]")}>
-              Recently logged
-            </h2>
-            <button
-              type="button"
-              onClick={() => onNavigate("log")}
-              className="-mr-2 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-medium text-mp-accent-fg"
-            >
-              See all
-              <Icon name="chevron-right" size={16} />
-            </button>
-          </div>
-          <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
-            {recent.map((e) => (
-              <EntryRow key={e.id} entry={e} now={now} showRelative onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
-            ))}
-          </div>
-        </section>
+      {/* Recently logged, and today's totals as its footnote: one group, not two cards. The totals show even with no finished row. */}
+      {!nothingYet && (
+        <div className="space-y-1">
+          {recent.length > 0 && (
+            <section aria-labelledby="recent">
+              <div className="mb-1 flex items-center justify-between px-1">
+                <h2 id="recent" className={cx(tone.heading, "text-[17px]")}>
+                  Recently logged
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate("log")}
+                  className="-mr-2 inline-flex min-h-[44px] items-center gap-0.5 px-2 text-[15px] font-medium text-mp-accent-fg"
+                >
+                  See all
+                  <Icon name="chevron-right" size={16} />
+                </button>
+              </div>
+              <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
+                {recent.map((e) => (
+                  <EntryRow key={e.id} entry={e} now={now} showRelative quietAction onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
+                ))}
+              </div>
+            </section>
+          )}
+          <LoggedToday onDetails={() => onNavigate("patterns")} />
+        </div>
       )}
-
-      {!nothingYet && <LoggedToday onDetails={() => onNavigate("patterns")} />}
       <DailyDiscovery />
       <Celebrations />
 
@@ -132,28 +143,40 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   );
 }
 
+/**
+ * Today's totals, one line under Recently logged ("Today: 3 feeds · 4 wet · 2 dirty · 4h 00m sleep logged"), which
+ * opens History → Patterns; under it, one quiet line that missing entries aren't counted, and Ask about today.
+ */
 function LoggedToday({ onDetails }: { onDetails: () => void }) {
   const { summary, state } = useMaple();
   const now = useNow(60_000);
   if (!summary || !state) return null;
   const s = summary.today;
   const today = dayKey(now, state.baby.timezone);
+  const num = (value: string | number) => <strong className="font-semibold text-mp-ink tabular-nums">{value}</strong>;
   return (
-    <section aria-labelledby="logged-today" className={cx(tone.card, "mp-day-summary px-4 py-3")}>
-      <div className="flex flex-wrap items-center justify-between gap-x-2">
-        <h2 id="logged-today" className={cx(tone.display, "text-[25px] leading-tight")}>Logged today</h2>
-        <button type="button" onClick={onDetails} className="mp-explore-today -my-1 -mr-1 inline-flex min-h-[44px] items-center gap-1 px-1 text-[13px] font-semibold text-mp-accent-fg">
-          <Icon name="clock-3" size={16} /> Explore patterns <Icon name="chevron-right" size={15} />
-        </button>
-      </div>
-      <p className="mp-day-summary-values">
-        <span><strong>{s.feeds}</strong> {s.feeds === 1 ? "feed" : "feeds"}</span>
-        <span><strong>{s.wet}</strong> wet</span>
-        <span><strong>{s.dirty}</strong> dirty</span>
-      </p>
-      <p className={cx(tone.muted, "mt-0.5 text-[13px]")}>{s.sleepSec > 0 ? `${formatDuration(s.sleepSec)} sleep logged` : "No sleep logged today"}. Missing entries are not counted.</p>
+    <section aria-labelledby="logged-today" className="px-1">
+      {/* Named for screen readers and the page's outline; on screen the line says "Today:" itself. */}
+      <h2 id="logged-today" className="sr-only">
+        Logged today
+      </h2>
+      <button type="button" onClick={onDetails} className="mp-explore-today flex min-h-[44px] w-full items-center py-2 text-left text-[13px] leading-snug text-mp-ink-2">
+        {/* Wraps between the totals, never inside one, and the chevron stays with the last. */}
+        <span>
+          <span className="whitespace-nowrap">Today: {num(s.feeds)} {s.feeds === 1 ? "feed" : "feeds"} ·</span>{" "}
+          <span className="whitespace-nowrap">{num(s.wet)} wet ·</span>{" "}
+          <span className="whitespace-nowrap">{num(s.dirty)} dirty ·</span>{" "}
+          <span className="whitespace-nowrap">
+            {s.sleepSec > 0 ? <>{num(formatDuration(s.sleepSec))} sleep logged</> : "No sleep logged today"}
+            {/* Says where the line goes, for screen readers too. */}
+            <Icon name="chevron-right" size={15} label="Explore patterns" className="ml-0.5 inline-block align-[-3px] text-mp-ink-3" />
+          </span>
+        </span>
+      </button>
+      <p className={cx(tone.faint, "text-[13px] leading-snug")}>Missing entries are not counted.</p>
+      {/* Its negative margin lines the icon up with the text above. */}
       <AskChatButton
-        className="mt-2"
+        className="-ml-1.5 gap-1.5! px-1.5! text-[13px]!"
         label="Today's log"
         prompt={`Can you summarize ${babyFirstName(state.baby)}'s feeds, diapers and sleep logged on ${today} (${state.baby.timezone}) so far? Keep it brief and distinguish missing logs from recorded activity.`}
       >

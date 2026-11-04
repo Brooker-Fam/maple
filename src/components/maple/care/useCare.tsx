@@ -73,7 +73,7 @@ export type CareActions = {
    * The one-tap: "saved" (its toast is up), { ask } (open the Dose sheet with
    * the reason on top), or "ignored" when it came within the tap cooldown
    * after a care save (a double tap), so nothing happens at all. The cooldown
-   * is for a slot whose medicine can change under the thumb (the strip, the
+   * is for a slot whose medicine can change under the thumb (Today's row, the
    * Lantern); a list that keeps its order passes `cool: false`, so two
    * medicines taken together are two quick taps.
    */
@@ -116,7 +116,7 @@ export type CareActions = {
 
 /**
  * A medicine just logged on this phone: for a minute its Took it everywhere
- * (Today's strip, the picker, her cards, the Lantern) reads "Logged 6:56 AM"
+ * (Today's row, the picker, her cards, the Lantern) reads "Logged 6:56 AM"
  * and can't be tapped, so a second tap never lands on it or on another
  * medicine that moved into its place. Undo stays in the toast. `at` is the
  * dose's time as it now stands (a "5 min earlier" fix moves it).
@@ -135,7 +135,7 @@ export type UseCare = {
   rows: PlanView[];
   finished: PlanView[];
   /**
-   * Her line on Today's strip and the Lantern: the medicine just logged on
+   * Her row in Today's Up next and her line on the Lantern: the medicine just logged on
    * this phone while it's held, else her most pressing one (pressingPlan, the
    * one rule), with how many others are active.
    */
@@ -187,7 +187,7 @@ const moodRejected = new Set<number>();
 /** "Call Poison Help now: Ibuprofen: over your daily limit" (a note, in one toast line). */
 const noteLine = (n: Assessment) => `${n.label ?? MOM_TIER_LABEL[n.tier]}: ${n.title}`;
 
-// Took-it safety, shared by every useCare() on the page (the strip, the
+// Took-it safety, shared by every useCare() on the page (Today's row, the
 // picker, her cards and the Lantern each call it). A save re-sorts what's
 // pressing, so a second tap could land on a different medicine: every care
 // Took it ignores taps while a dose is saving and for 1.5 s after (only

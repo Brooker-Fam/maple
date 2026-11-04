@@ -1,3 +1,5 @@
+import type { ChatToolOutput } from "./types";
+
 /**
  * Internal entry references (#123, her c123, a memory's m12, a bassinet try's t12, a holding shift's h7, a sleep
  * goal's g3) stay in the conversation and tool results for follow-up edits and Undo. Only the words
@@ -23,6 +25,18 @@ export function chatDisplayText(text: string): string {
     .replace(new RegExp(ENTRY_ID, "g"), (_id, at: number, whole: string) =>
       /(?:^|[.!?\n])[ \t]*$/.test(whole.slice(0, at)) ? "This entry" : "this entry"
     );
+}
+
+/**
+ * Whether the Chat tab shows anything for a tool's result (OutputView in
+ * ChatParts.tsx): every write and every error does, and a read only with its
+ * chart, list, setting, screen, help, invite or web card. A plain read
+ * (maple_status, load_tools) shows nothing.
+ */
+export function outputShows(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const o = output as Partial<ChatToolOutput>;
+  return o.ok !== true || o.write === true || !!(o.setting || o.settings || o.navigation || o.entries || o.chart || o.about || o.invite || o.web);
 }
 
 /** The app already supplies the attribution and Undo next to each receipt. */

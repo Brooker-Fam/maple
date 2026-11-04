@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dock from "../../src/components/maple/Dock";
+import UpNext from "../../src/components/maple/UpNext";
 import { CareNavProvider } from "../../src/components/maple/care/CareNav";
 import { ToastHost } from "../../src/components/maple/ui";
 import { ApiError, CareFixtureContext } from "./care-mocks";
@@ -122,6 +123,10 @@ function App() {
           <h2 className="font-semibold text-mp-ink">A quiet morning</h2>
           <p className="mt-1 text-sm text-mp-ink-2">Synthetic family. No real records are used.</p>
         </section>
+        {/* Today's Up next card, right under the status: her next medicine's row (the dock below is the baby's buttons only). */}
+        <div className="mt-3">
+          <UpNext />
+        </div>
       </main>
       <Dock />
       <nav aria-label="Example tabs" className="fixed inset-x-0 bottom-0 flex h-[57px] items-center justify-around border-t border-mp-line bg-mp-bg text-sm text-mp-ink-2"><span className="font-semibold text-mp-accent-fg">Today</span><span>Log</span><span>Family</span></nav>

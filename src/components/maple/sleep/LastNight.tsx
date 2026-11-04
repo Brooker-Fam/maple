@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { SLEEP_GUIDES } from "@/lib/maple/guidelines/sleep";
 import { sleepByPlace, tryDayKey } from "@/lib/maple/sleep/engine";
 import { goalStartKey, lastNightKey, nightAnswers, nightPicture, plannedHandoff, windowOn, windowOnNight, type NightBar, type NightGap, type NightPicture } from "@/lib/maple/sleep/goals";
@@ -15,6 +15,7 @@ import { useVoice } from "../familyWords";
 import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
 import { focusNext, useTapGuard } from "../tapCooldown";
+import { holdTodayTaps } from "../tapShield";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { AnswerButtons, checkinDue, morningOf, myWindows, useCardReceipts, useNightValue, type CheckinDue } from "./SleepCheckin";
@@ -34,8 +35,13 @@ import { useSleepMaybe, useTryAfterWake, type CardReceipt } from "./useSleep";
  * through" logs a sleep for it; Skip the rest); then the night's other
  * one-tap questions, each once a night, the place prefilled from the log
  * when every sleep has one, folded into one "More about last night" row
- * after noon. One thing at a time, so it stays small on a 320 × 568 phone,
- * and an answer's one-line receipt (with its Undo, for that night only)
+ * after noon. Folded with nothing else to show (no receipt, look-back or
+ * safe-sleep line), the card is that row alone and stands at the end of Up
+ * next instead (LastNightRow), so it no longer pushes her Took it and the
+ * plan's Put down under the dock all afternoon and evening; its Answer
+ * opens the card again above Up next, on this phone, for that night (the
+ * memo's `open`). One thing at a time, so it stays small on a 320 × 568
+ * phone, and an answer's one-line receipt (with its Undo, for that night only)
  * shows in the card, never as a toast over the next question; a note from
  * Add a note comes back here too. On a goal's review morning it ends with
  * the week's look-back (SleepReview.tsx). Tell Maple opens the chat with
@@ -107,8 +113,12 @@ function NightStrip({ pic, tz, ask }: { pic: NightPicture; tz: string; ask: Gap 
   );
 }
 
-/** This phone's answers that save nothing, for one night: Not now, the stretches answered or skipped, a timer said to be still asleep ("sleepId:nextId"). */
-type Memo = { night: string; hidden?: boolean; gaps?: number[]; still?: string[] };
+/**
+ * This phone's answers that save nothing, for one night: Not now, the stretches answered or skipped, a timer said to be
+ * still asleep ("sleepId:nextId"), and Answer on the folded card or Up next's row (`open`: the night's optional questions
+ * show again after noon; a memo saved before there was `open` reads as folded).
+ */
+type Memo = { night: string; hidden?: boolean; open?: true; gaps?: number[]; still?: string[] };
 const memoKey = (family: number, me: string) => `maple-last-night:${family}:${me}`;
 const readMemo = (raw: string | null | undefined, night: string): Memo => {
   try {
@@ -196,8 +206,14 @@ function gapWindow(goals: readonly SleepGoal[], night: string, gap: Gap, tz: str
   return best;
 }
 
-/** The questions a card can leave for later: after noon, a half-answered card folds them behind one row. */
+/**
+ * The questions a card can leave for later: after noon, a half-answered card folds them behind one row (with nothing else
+ * on the card, that row stands at the end of Up next instead: LastNightRow).
+ */
 const OPTIONAL: readonly NightAsk["kind"][] = ["gap", "place", "untimed", "handoff"];
+
+/** The folded card's one row, in the card and as Up next's row (no break inside "last night"). */
+const FOLD_WORDS = "More about last\u00a0night, if you'd like.";
 
 /**
  * Who was on duty during a stretch: the holder of a holding turn across most of it, else, when it was mostly someone's
@@ -219,8 +235,13 @@ export type LastNight = {
   night: string;
   pic: NightPicture;
   ask: NightAsk | null;
-  /** After noon, the night's optional questions (stretches, place, an untimed try, the handoff) wait behind one row. */
+  /**
+   * After noon, the night's optional questions (stretches, place, an untimed try, the handoff) wait behind one row, until
+   * Answer opens them again on this phone for that night (`unfold`).
+   */
   folded: boolean;
+  /** Answer on the fold (the card's row, or Up next's): the night's optional questions show again, on this phone, for that night. */
+  unfold: () => void;
   /** "Somewhere else" was answered: the card stays for the safe-sleep line. */
   elsewhere: boolean;
   /** Their windows that night, and their check-in for it (Add a note). */
@@ -295,7 +316,8 @@ export function useLastNight(o: { keep?: boolean } = {}): LastNight | null {
     night,
     pic,
     ask,
-    folded: !!ask && OPTIONAL.includes(ask.kind) && localParts(now, tz).hour >= 12,
+    folded: !!ask && OPTIONAL.includes(ask.kind) && localParts(now, tz).hour >= 12 && !memo.open,
+    unfold: () => save({ ...memo, open: true }),
     elsewhere: said?.place === "elsewhere",
     windows: myWindows(s.goals, s.me, night),
     due,
@@ -393,6 +415,25 @@ export function showLastNight(): void {
   card.querySelector<HTMLElement>("[aria-labelledby='last-night-ask'] button")?.focus({ preventScroll: true });
 }
 
+/**
+ * The night whose folded card stands as Up next's row (LastNightRow), or null. The card says, since only it knows its
+ * receipt and a look-back held for its second tap; it says so in a layout effect, so the row follows before the paint.
+ */
+let rowNight: string | null = null;
+const rowListeners = new Set<() => void>();
+const setRowNight = (night: string | null) => {
+  if (rowNight === night) return;
+  rowNight = night;
+  for (const l of rowListeners) l();
+};
+const subscribeRow = (l: () => void) => {
+  rowListeners.add(l);
+  return () => {
+    rowListeners.delete(l);
+  };
+};
+const useRowNight = () => useSyncExternalStore(subscribeRow, () => rowNight, () => null);
+
 /** The card's one thing to answer: a title and its choices. */
 function Ask({ id, title, sub, children }: { id: string; title: string; sub?: string; children: ReactNode }) {
   return (
@@ -431,8 +472,6 @@ export function LastNightCard() {
   // A note saved from this card's Add a note sheet: its receipt lands here too.
   useCardReceipts((r) => setKept({ ...r, night: night0 }));
   const [placeOpen, setPlaceOpen] = useState(false);
-  // After noon, a half-answered card folds its optional questions: Answer opens them again, on this phone, for that night.
-  const [unfolded, setUnfolded] = useState<string | null>(null);
   // The weekly look-back, on a goal's review day: after the night's questions, at the card's end; held there after Ease off for its second tap.
   const lookDue = useLookBackDue();
   const look = lookDue ?? held;
@@ -441,7 +480,17 @@ export function LastNightCard() {
   useEffect(() => {
     latest.current = ln;
   });
-  const folded = !!ln?.folded && unfolded !== night0;
+  // After noon, a half-answered card folds its optional questions behind one row: Answer opens them again, on this phone,
+  // for that night (the memo's `open`, which Up next's row reads too).
+  const folded = !!ln?.folded;
+  // Folded with nothing else to show (no receipt, look-back or safe-sleep line), the card would be that row alone: it
+  // stands at the end of Up next instead (LastNightRow), so it doesn't push her Took it and Put down under the dock.
+  const rowed = folded && !receipt && !look && !ln?.elsewhere;
+  useLayoutEffect(() => {
+    if (!rowed) return;
+    setRowNight(night0);
+    return () => setRowNight(null);
+  }, [rowed, night0]);
   const done = !!ln && !ln.ask && !ln.elsewhere && !look;
   // The last answer leaves nothing to ask: the card goes, and its receipt rides one toast instead (nothing left under it),
   // replacing any earlier one of the card's.
@@ -454,8 +503,16 @@ export function LastNightCard() {
   // Each answer brings its next question in where the last one was (here, or another adult's answer on a poll): the card's
   // buttons wait out a double tap's second half (tapCooldown.ts), so one tap never answers two questions.
   const guard = useTapGuard(ln ? [night0, folded ? "folded" : askId(ln.ask), placeOpen, look ? `look-${look.goal.id}` : ""].join("|") : "");
+  // The card going (Not now, its last answer, folding into Up next's row) moves Up next up under the thumb, her Took it
+  // where an answer was: taps on the page wait out the cooldown, so a double tap's second half lands on nothing.
+  const showing = !!s && !!ln && !!state && !done && !rowed;
+  const wasShowing = useRef(showing);
+  useEffect(() => {
+    if (wasShowing.current && !showing) holdTodayTaps();
+    wasShowing.current = showing;
+  }, [showing]);
   // (Rendering nothing keeps this card's state: a receipt arriving just after the last answer still reaches its toast.)
-  if (!s || !ln || !state || done) return null;
+  if (!s || !ln || !state || done || rowed) return null;
   const { night, pic } = ln;
   // Folded after noon: the optional question waits behind its row.
   const ask = folded ? null : ln.ask;
@@ -598,7 +655,9 @@ export function LastNightCard() {
   return (
     <motion.section
       layout
-      initial={{ opacity: 0, y: 8 }}
+      // Opened again after noon (Up next's Answer scrolls to it as it comes in), it only fades in: the scroll is measured
+      // mid-slide, which would leave its top 8px off the screen.
+      initial={ln.memo.open ? { opacity: 0 } : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       aria-labelledby="last-night"
@@ -641,11 +700,13 @@ export function LastNightCard() {
             <p className={cx(tone.muted, "truncate text-[13px] leading-snug")}>{dateWords(night, dayKey(now, tz))}</p>
           )}
         </div>
+        {/* The card goes at once and Up next slides up into its place (her Took it under the thumb): taps on the page wait. */}
         <Button
           variant="ghost"
           size="sm"
           className="-mr-2 shrink-0"
           onClick={() => {
+            holdTodayTaps();
             ln.save({ ...ln.memo, hidden: true });
             focusNext("#right-now", "#recent");
           }}
@@ -656,13 +717,13 @@ export function LastNightCard() {
       {/* Folded after noon: no strip, one row for the rest of last night's questions. */}
       {folded ? (
         <div className="flex items-center justify-between gap-3">
-          <p className={cx(tone.muted, "min-w-0 text-[14px] leading-snug")}>More about last night, if you&apos;d like.</p>
+          <p className={cx(tone.muted, "min-w-0 text-[14px] leading-snug")}>{FOLD_WORDS}</p>
           <Button
             variant="soft"
             size="sm"
             className="shrink-0"
             onClick={() => {
-              setUnfolded(night);
+              ln.unfold();
               moved();
             }}
           >
@@ -701,5 +762,46 @@ export function LastNightCard() {
         )}
       </div>
     </motion.section>
+  );
+}
+
+/**
+ * After noon, the folded Last night card with nothing else to show, as one
+ * row at the end of Today's Up next card (UpNext.tsx), after the Sleep plan
+ * row and drawn like it: the card no longer stands above her Took it and the
+ * plan's Put down all afternoon and evening. The fold's own words, and
+ * Answer, quiet: it opens the card again in its place above Up next, on this
+ * phone, for that night (the memo's `open`), and brings its first answer
+ * into view. For whoever sees the card (owners and members of a family with
+ * a sleep plan or goal); its Not now is the card's.
+ */
+export function LastNightRow() {
+  const ln = useLastNight();
+  const night = useRowNight();
+  // The card says when it stands here; once Answer opens it (the memo, read by both at once), the row steps aside with it.
+  if (!ln || ln.memo.open || night !== ln.night) return null;
+  const answer = () => {
+    // The card comes in above this card, moving the page under the thumb: for the tap cooldown a tap on the page does
+    // nothing (tapShield), so a double tap's second half never lands on what slid under it.
+    holdTodayTaps();
+    ln.unfold();
+    // The card renders with this tap; on the next frame it's there to scroll to, with focus on its first answer.
+    requestAnimationFrame(showLastNight);
+  };
+  return (
+    <div data-last-night-row className="flex min-h-[60px] items-center gap-1 pr-3">
+      <div className="flex min-h-[60px] min-w-0 flex-1 items-center gap-2.5 py-2 pl-3.5">
+        <KindBadge icon="moon" color={KIND_COLOR.sleep} size={32} />
+        <span className="min-w-0 flex-1 leading-[18px]">
+          <span className={cx(tone.heading, "block text-[15px] leading-[20px]")}>Last night</span>
+          {/* Balanced, so it wraps at its comma ("More about last night, / if you'd like."), never leaving "like." alone. */}
+          <span className={cx(tone.muted, "block text-[13px] leading-snug text-balance")}>{FOLD_WORDS}</span>
+        </span>
+      </div>
+      {/* A 44px target around a 36px pill, as the Sleep plan row's Put down above it; quiet, since it can wait. */}
+      <button type="button" onClick={answer} aria-label="Answer: more about last night" className="-my-1 flex min-h-[44px] shrink-0 items-center">
+        <span className="inline-flex min-h-[36px] items-center rounded-[10px] bg-mp-sunken px-3.5 text-sm font-semibold whitespace-nowrap text-mp-ink active:scale-[0.97]">Answer</span>
+      </button>
+    </div>
   );
 }

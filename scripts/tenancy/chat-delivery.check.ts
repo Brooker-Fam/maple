@@ -5,7 +5,7 @@ import { listMembers } from "../../src/lib/maple/auth";
 import { getBaby } from "../../src/lib/maple/store";
 import { formatTime } from "../../src/lib/maple/time";
 import { chatTools } from "../../src/lib/maple/chat/tools";
-import type { ChatToolOutput } from "../../src/lib/maple/chat/types";
+import { CHAT_NO_ANSWER, type ChatToolOutput } from "../../src/lib/maple/chat/types";
 import { FAMILY_ONE_COPY } from "../../src/lib/maple/mcp-tools";
 import { answerPost, type PostDeps } from "../../src/lib/maple/chat/post";
 import { acceptDelivery, cancelDelivery, deliveryStatus, findDelivery } from "../../src/lib/maple/chat/delivery-store";
@@ -236,6 +236,25 @@ await test("actual mom temperature writes preserve the original queued event clo
   await execute("log_mom_temperature", { temp_c: 36.6, minutes_ago: 2, client_ref: "timed_delivery_care_temp" });
   const row = (await sql(`SELECT at FROM maple_care_entries WHERE family_id = 1 AND kind = 'temp' ORDER BY id DESC LIMIT 1`))[0];
   eq(new Date(String(row.at)).toISOString(), new Date(Date.parse(sentAt) - 2 * 60_000).toISOString());
+});
+
+await test("a reply that comes back with nothing, twice, is saved with its line and completes its delivery, so the phone isn't left waiting", async () => {
+  let asked = 0;
+  const empty = new MockLanguageModelV4({ doStream: async () => {
+    asked++;
+    const chunks = [{ type: "reasoning-start", id: "r" }, { type: "reasoning-delta", id: "r", delta: "Synthetic thinking that never answers." }, { type: "reasoning-end", id: "r" }, finish("stop")];
+    return { stream: simulateReadableStream({ chunks: [{ type: "stream-start", warnings: [] }, ...chunks] as never[] }) };
+  } });
+  const reported: Error[] = [];
+  const response = await answerPost(body("delivery_no_answer", "A made-up question.", sentAt, "thread_delivery_empty"), member(alpha.owner), { ...deps(1), model: empty, report: (error) => { reported.push(error); } });
+  eq(response.status, 200);
+  await response.text();
+  await Promise.all(waits.splice(0));
+  eq(asked, 2, "asked once more");
+  const reply = (await loadRecentMessages(A, "thread_delivery_empty")).at(-1);
+  eq([reply?.role, reply?.parts.flatMap((part) => (part.type === "text" ? [part.text] : []))], ["assistant", [CHAT_NO_ANSWER]], "saved with the line that says nothing was saved");
+  eq(await deliveryStatus(A, alpha.owner, false, "delivery_no_answer"), { requestId: "delivery_no_answer", state: "completed", threadId: "thread_delivery_empty", busy: false });
+  eq(reported.map((error) => error.message), ["chat_no_answer", "chat_no_answer"], "reported by name only");
 });
 
 await test("the queue additions produced no reported server errors", () => eq(errors, []));

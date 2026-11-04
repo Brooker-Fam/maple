@@ -1,5 +1,6 @@
+import { LIMIT_MESSAGE } from "@/lib/maple/chat/caps";
 import { CHAT_MAX_IMAGES, parseChatImage, type ChatImage } from "@/lib/maple/chat/images";
-import { CHAT_MAX_CHARS, type ChatMessage } from "@/lib/maple/chat/types";
+import { CHAT_FAILED, CHAT_MAX_CHARS, CHAT_NO_ANSWER, CHAT_OFF, type ChatMessage } from "@/lib/maple/chat/types";
 
 export const CHAT_QUEUE_LIMIT = 10;
 const PREFIX = "maple-chat-drafts-v1:";
@@ -88,11 +89,21 @@ export function waitingForAnswer(messages: ChatMessage[]): boolean {
   );
 }
 
+/** The server's own last lines for a reply that stopped (chat/turn.ts stoppedLine). */
+const STOPPED_LINES = new Set([CHAT_FAILED, CHAT_NO_ANSWER, CHAT_OFF, LIMIT_MESSAGE]);
+
 /** A saved interrupted reply is an acknowledgement, not permission to run the next queued instruction. */
 export function replyFailed(messages: ChatMessage[]): boolean {
   const last = messages.at(-1);
   return last?.role === "assistant" && last.parts.some((p) =>
     ("state" in p && p.state === "output-error") ||
-    (p.type === "text" && /answer stopped|connection dropped|didn't finish|couldn't finish|temporarily unavailable|try again later/i.test(p.text))
+    (p.type === "text" && (STOPPED_LINES.has(p.text.trim()) || /answer stopped|connection dropped|didn't finish|couldn't finish|temporarily unavailable|try again later/i.test(p.text)))
   );
+}
+
+/** A reply whose last words say nothing was saved (CHAT_NO_ANSWER), so the message before it can be sent again as it was. */
+export function safeToSendAgain(message: ChatMessage | undefined): boolean {
+  if (message?.role !== "assistant") return false;
+  const texts = message.parts.flatMap((p) => (p.type === "text" && p.text.trim() ? [p.text.trim()] : []));
+  return texts.at(-1) === CHAT_NO_ANSWER;
 }

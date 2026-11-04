@@ -1,18 +1,29 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { askState, shiftStatus, sleepSignals } from "@/lib/maple/sleep/engine";
 import { cryingLine, downWords, slotShort } from "@/lib/maple/sleep/words";
 import { DEFAULT_TZ, formatDuration, formatTime, formatTimeNear, localParts } from "@/lib/maple/time";
 import { useVoice } from "../familyWords";
 import { KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
-import { useTapGuard } from "../tapCooldown";
+import { TAP_COOLDOWN_MS, useTapGuard } from "../tapCooldown";
+import { holdTodayTaps } from "../tapShield";
 import { cx } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { showLastNight, useLastNight, type LastNight } from "./LastNight";
 import { partnerOf, usePeople, useSleepMaybe } from "./useSleep";
 
 type Action = { label: string; onClick: () => void; strong?: boolean };
+
+/**
+ * What the sleep plan says right now to someone who can log: the words, the
+ * one action, its badge, and whether it's urgent. `idle`: nothing is going on
+ * (no try, no turn, no crying aftermath, no morning question), so the plan's
+ * next step is Put down, which rides in Today's Up next card (SleepPlanRow);
+ * every other moment rides on the dock's strip.
+ */
+export type SleepMoment = { idle: boolean; words: string; sub: string; action: Action; icon: "bassinet" | "hold" | "moon"; urgent: boolean };
 
 /** " · 25m" after "since 2:10 AM": how long so far, and nothing under a minute (never "· 0s"). */
 const forSoFar = (since: string, now: Date, say: (sec: number) => string) => {
@@ -59,11 +70,13 @@ function morningAsk(ln: LastNight, tz: string, name: string): { words: string; s
 
 /**
  * The sleep plan's strip on top of Today's dock, where a thumb lands at 3am,
- * for people who can log, once there's a plan (or a try or a turn going).
- * One tap does what the moment needs:
- * - Put down; after a crying wake, Try again with "soothe her; try once more
- *   when she's deeply asleep"; after the retry, "pause until the next try",
- *   with Put down quiet; quiet too once the plan's tries for the day are done.
+ * for people who can log, only while something is going on: the dock is the
+ * baby's buttons otherwise, and the plan's everyday Put down (with the day's
+ * count) sits in Today's Up next card (SleepPlanRow), so it isn't there all
+ * day. One tap does what the moment needs:
+ * - After a crying wake, Try again with "soothe her; try once more when
+ *   she's deeply asleep"; after the retry, "pause until the next try", with
+ *   Put down quiet.
  * - How did it go? while she's down, the strong button: its sheet's four
  *   outcomes sit in thumb reach.
  * - For the person holding her: I'm getting sleepy (two safe choices), or,
@@ -79,6 +92,77 @@ function morningAsk(ln: LastNight, tz: string, name: string): { words: string; s
  * or the clock. Up to three lines of words, so nothing is cut at 320px.
  */
 export function SleepStrip() {
+  const s = useSleepMaybe();
+  const m = useSleepMoment();
+  // When the strip's button last did something (StripButton): its moment ending right after takes the strip away.
+  const cool = useRef(Number.NEGATIVE_INFINITY);
+  const shown = !!s && !!m && !m.idle;
+  // A tap on the strip that ends its moment (Woke at, the last answer) takes the strip away and the dock gets shorter: the
+  // page that was under it is under the thumb now, so taps on the page wait out the cooldown. Only after a tap here (the
+  // morning's question ending at noon moves nothing under a thumb).
+  const was = useRef(shown);
+  useEffect(() => {
+    if (was.current && !shown && performance.now() - cool.current < 2 * TAP_COOLDOWN_MS) holdTodayTaps();
+    was.current = shown;
+  }, [shown]);
+  // The everyday Put down is Up next's (SleepPlanRow): the strip is only for a moment.
+  if (!s || !m || m.idle) return null;
+  const { words, sub, action, icon, urgent } = m;
+
+  return (
+    // A ring, not a border, so the words' button is the strip's full 44px.
+    <div role="group" aria-label="Sleep plan" className="-mt-0.5 mb-1.5 flex min-h-11 items-stretch gap-1 rounded-2xl bg-mp-surface pr-1 shadow-[0_1px_2px_rgb(28_38_25/0.06)] ring-1 ring-(--mp-edge)">
+      <button
+        type="button"
+        onClick={() => s.openSheet({ kind: "plan" })}
+        aria-label={`${words}${sub ? `, ${sub}` : ""}. Open the sleep plan.`}
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-2xl py-0.5 pl-2 text-left transition active:bg-mp-ink/[0.04]"
+      >
+        <KindBadge icon={icon} color={KIND_COLOR.sleep} size={28} />
+        {/* Up to three lines when it needs them, so the crying line is never cut at 320px. */}
+        <span className="line-clamp-3 min-w-0 flex-1 text-[13px] leading-[17px]">
+          <span className={cx("font-semibold text-mp-ink", urgent && "text-mp-accent-fg")}>{words}</span>
+          {sub && <span className="text-mp-ink-2"> · {sub}</span>}
+        </span>
+      </button>
+      <StripButton action={action} disabled={s.busy} onTap={() => (cool.current = performance.now())} />
+    </div>
+  );
+}
+
+/**
+ * The strip's one action: a 44px target around a 36px pill. A new label is a new button under the thumb (Put down →
+ * How did it go?), so it arms again (useTapGuard); `onTap` hears each tap that did something.
+ */
+function StripButton({ action, disabled, onTap }: { action: Action; disabled: boolean; onTap: () => void }) {
+  const guard = useTapGuard(action.label);
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={guard.tap(() => {
+        onTap();
+        action.onClick();
+      })}
+      className="flex min-h-[44px] max-w-[52%] shrink-0 items-center disabled:opacity-40"
+    >
+      <span
+        className={cx(
+          "inline-flex min-h-[36px] items-center rounded-[10px] px-3.5 text-left text-sm leading-tight font-semibold active:scale-[0.97]",
+          action.strong ? "bg-mp-accent text-mp-on-accent" : "bg-mp-sunken text-mp-ink"
+        )}
+      >
+        {action.label}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The moment the strip (or, when idle, Up next's Sleep plan row) shows: null
+ * for a reader, or before there's a plan, a try or a turn.
+ */
+export function useSleepMoment(): SleepMoment | null {
   const s = useSleepMaybe();
   const { state, memberName } = useMaple();
   const v = useVoice();
@@ -165,51 +249,13 @@ export function SleepStrip() {
     icon = "moon";
     ({ words, sub, action } = morning);
   } else {
+    // Nothing going on: the plan's next step, Put down, in Up next (the strip steps aside).
     const t = s.today;
     const tally = t ? `${t.done} of ${t.planned} ${t.label}` : "";
-    words = "Bassinet try";
-    sub = t ? `${tally}${t.next ? ` · ${slotShort(t.next)}` : ""}` : "";
-    // Once the plan's tries for the day are done ("1 of 1"), Put down is still there, but quiet.
-    action = { label: "Put down", onClick: () => void s.startTry(), strong: !t || t.done < t.planned };
+    const asleep = (state?.entries ?? []).some((e) => e.kind === "sleep" && e.active);
+    // Filled only when it's the moment: she's asleep and the plan's tries for the day aren't done ("1 of 1" is quiet).
+    const strong = asleep && (!t || t.done < t.planned);
+    return { idle: true, words: "Bassinet try", sub: t ? `${tally}${t.next ? ` · ${slotShort(t.next)}` : ""}` : "", action: { label: "Put down", onClick: () => void s.startTry(), strong }, icon: "bassinet", urgent: false };
   }
-
-  return (
-    // A ring, not a border, so the words' button is the strip's full 44px.
-    <div role="group" aria-label="Sleep plan" className="-mt-0.5 mb-1.5 flex min-h-11 items-stretch gap-1 rounded-2xl bg-mp-surface pr-1 shadow-[0_1px_2px_rgb(28_38_25/0.06)] ring-1 ring-(--mp-edge)">
-      <button
-        type="button"
-        onClick={() => s.openSheet({ kind: "plan" })}
-        aria-label={`${words}${sub ? `, ${sub}` : ""}. Open the sleep plan.`}
-        className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-2xl py-0.5 pl-2 text-left transition active:bg-mp-ink/[0.04]"
-      >
-        <KindBadge icon={icon} color={KIND_COLOR.sleep} size={28} />
-        {/* Up to three lines when it needs them, so "0 of 1 tonight" or the crying line is never cut at 320px. */}
-        <span className="line-clamp-3 min-w-0 flex-1 text-[13px] leading-[17px]">
-          <span className={cx("font-semibold text-mp-ink", urgent && "text-mp-accent-fg")}>{words}</span>
-          {sub && <span className="text-mp-ink-2"> · {sub}</span>}
-        </span>
-      </button>
-      <StripButton action={action} disabled={s.busy} />
-    </div>
-  );
-}
-
-/**
- * The strip's one action: a 44px target around a 36px pill, as her strip's Took it. A new label is a new button under the
- * thumb (Put down → How did it go?), so it arms again.
- */
-function StripButton({ action, disabled }: { action: Action; disabled: boolean }) {
-  const guard = useTapGuard(action.label);
-  return (
-    <button type="button" disabled={disabled} onClick={guard.tap(action.onClick)} className="flex min-h-[44px] max-w-[52%] shrink-0 items-center disabled:opacity-40">
-      <span
-        className={cx(
-          "inline-flex min-h-[36px] items-center rounded-[10px] px-3.5 text-left text-sm leading-tight font-semibold active:scale-[0.97]",
-          action.strong ? "bg-mp-accent text-mp-on-accent" : "bg-mp-sunken text-mp-ink"
-        )}
-      >
-        {action.label}
-      </span>
-    </button>
-  );
+  return { idle: false, words, sub, action, icon, urgent };
 }

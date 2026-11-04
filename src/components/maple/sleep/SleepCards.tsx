@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { askState, shiftStatus } from "@/lib/maple/sleep/engine";
 import type { BassinetTry, HoldingShift, TryOutcome } from "@/lib/maple/sleep/types";
 import { downWords, OUTCOME_LABEL, SLEEP_PLACE_LABEL, STAGE_INFO, TAG_LABEL, outcomeHint, sleepyChoices } from "@/lib/maple/sleep/words";
@@ -12,11 +12,13 @@ import { fixPreset } from "../FeedParts";
 import { Icon, KindBadge } from "../icons";
 import { KIND_COLOR } from "../palette";
 import { useSheets } from "../sheets";
-import { focusNext, useTapGuard } from "../tapCooldown";
+import { focusNext, TAP_COOLDOWN_MS, useTapGuard } from "../tapCooldown";
+import { holdTodayTaps, holdTodayTapsWhenItMoves, todayPageMoved } from "../tapShield";
 import { Button, cx, tone } from "../ui";
 import { useMaple, useNow } from "../useMaple";
 import { LeftRunningAsk, useLastNight, WokeAsk } from "./LastNight";
 import { useNightValue } from "./SleepCheckin";
+import { useSleepMoment } from "./SleepStrip";
 import { partnerOf, usePeople, useSleep, useSleepMaybe, useTryAfterWake } from "./useSleep";
 
 /**
@@ -105,8 +107,18 @@ export function TryCard({ t }: { t: BassinetTry }) {
   const title = woke ? `${v.They} woke at ${formatTime(sleep!.ended_at!, tz)}` : "In the bassinet";
   // The card goes with its outcome: Right now keeps a screen reader's place.
   const finish = (o: TryOutcome) => void s.finishTry(t, o, woke ? { at: new Date(sleep!.ended_at!) } : {}).then((x) => x && focusNext(...AFTER_CARD));
+  // Coming in for a Put down tapped on the page (Up next, the holding card): it moved the page under the thumb, so taps on
+  // the page wait out the cooldown from now (the server's answer can be slow), and focus comes here, since the button
+  // tapped is gone.
+  // Going (an outcome, a finish from another phone), it moves the page below it up under the thumb: taps wait then too.
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (todayPageMoved()) section.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    return () => holdTodayTaps();
+  }, []);
   return (
     <motion.section
+      ref={section}
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
@@ -243,6 +255,15 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
   const guard = useTapGuard([sh.id, holderIsMe, ask.asked, ask.stale, ask.to === me, sleeping?.id ?? "", fedSince].join(":"));
   // One tap that changes this card, or brings in the try's: focus stays on the card that's there.
   const andFocus = (p: Promise<unknown>, next = SHIFT_HEAD) => void p.then((x) => x && focusNext(next, ...AFTER_CARD));
+  // The turn ending (End, a handoff on another phone) moves the page below this card up under the thumb: taps wait.
+  useEffect(() => () => holdTodayTaps(), []);
+  // Into the bassinet swaps this card for the try's in its place, an outcome under the thumb: taps on the page wait out the
+  // cooldown, now and again when the try card comes in with the server's answer.
+  const bassinet = () => {
+    holdTodayTaps();
+    holdTodayTapsWhenItMoves();
+    andFocus(s.startTry(), TRY_HEAD);
+  };
   const title =
     holderIsMe && ask.asked
       ? ask.stale
@@ -289,7 +310,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
             ask.asked ? (
               <>
                 {/* Asked, not handed over: the bassinet stays the big, safe choice; past ten minutes, waking them again is the other. */}
-                <Button className="w-full" size="lg" disabled={s.busy} onClick={() => andFocus(s.startTry(), TRY_HEAD)}>
+                <Button className="w-full" size="lg" disabled={s.busy} onClick={bassinet}>
                   <Icon name="bassinet" size={18} /> {choices[0].label}
                 </Button>
                 {ask.stale ? (
@@ -312,7 +333,7 @@ export function ShiftCard({ sh }: { sh: HoldingShift }) {
                     Hand off
                   </Button>
                   {/* Asleep in arms: laying her down is the try on that sleep (the strip offers it too, in thumb reach). */}
-                  <Button variant="soft" onClick={() => andFocus(s.startTry(), TRY_HEAD)}>
+                  <Button variant="soft" onClick={bassinet}>
                     {sleeping ? `Put ${v.them} down` : "Into the bassinet"}
                   </Button>
                 </div>
@@ -367,33 +388,67 @@ export function SleepNow() {
 }
 
 /**
- * The way into the sleep plan and goals from Today, for everyone who reads
- * the log (view-only guests too, who have no strip or More): under Right
- * now, once the family has a plan, a goal, a try or a turn.
+ * The sleep plan's row in Today's Up next card (UpNext.tsx), for everyone who
+ * reads the log (view-only guests too, who have no strip or More), once the
+ * family has a plan, a goal, a try or a turn. Its words open the plan. With
+ * nothing going on, someone who can log gets the plan's next step here, Put
+ * down, with the day's count ("0 of 1 tonight · first night stretch"); every
+ * other moment (a try, a turn, after a crying wake, the morning's question)
+ * rides on the dock's strip, so this row only says where the plan stands.
  */
 export function SleepPlanRow() {
   const s = useSleepMaybe();
   const { state } = useMaple();
   // The cards above it come and go with a tap (an outcome, the Last night card's last answer): a second tap waits.
   const guard = useTapGuard();
+  const m = useSleepMoment();
+  const cool = useRef(Number.NEGATIVE_INFINITY);
   if (!s || !state) return null;
   const open = s.goals.filter((g) => g.status === "active" || g.status === "paused").length;
   if (!s.plan && !open && !s.data.tries.length && !s.data.shifts.length) return null;
-  const sub = [
-    s.plan ? `Stage ${s.plan.stage} · ${STAGE_INFO[s.plan.stage].title}` : null,
-    s.today ? `${s.today.done} of ${s.today.planned} ${s.today.label}` : null,
-    open ? `${open} ${open === 1 ? "goal" : "goals"}` : null,
-  ]
+  const idle = m?.idle ? m : null;
+  const goals = open ? `${open} ${open === 1 ? "goal" : "goals"}` : null;
+  const sub = (
+    idle
+      ? [idle.sub, goals]
+      : [s.plan ? `Stage ${s.plan.stage} · ${STAGE_INFO[s.plan.stage].title}` : null, s.today ? `${s.today.done} of ${s.today.planned} ${s.today.label}` : null, goals]
+  )
     .filter(Boolean)
     .join(" · ");
+  // Put down brings the try's card in above this row, moving the page under the thumb: for the tap cooldown a tap on
+  // the page does nothing (tapShield), so a double tap's second half never lands on an outcome, Edit time or the Last fed
+  // block that slid under it, and this button waits it out too.
+  const putDown = () => {
+    const t = performance.now();
+    if (!idle || t - cool.current < TAP_COOLDOWN_MS) return;
+    cool.current = t;
+    holdTodayTaps();
+    holdTodayTapsWhenItMoves();
+    idle.action.onClick();
+  };
   return (
-    <button type="button" onClick={guard.tap(() => s.openSheet({ kind: "plan" }))} className={cx(tone.card, "flex min-h-[56px] w-full items-center gap-3 px-4 py-2.5 text-left transition active:bg-mp-ink/[0.04]")}>
-      <KindBadge icon="moon" color={SLEEP} size={32} />
-      <span className="min-w-0 flex-1">
-        <span className={cx(tone.heading, "block text-[15px]")}>Sleep plan</span>
-        {sub && <span className={cx(tone.muted, "block text-[13px] leading-snug")}>{sub}</span>}
-      </span>
-      <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
-    </button>
+    <div data-sleep-row {...guard.props} className="flex min-h-[60px] items-center gap-1 pr-3">
+      <button
+        type="button"
+        onClick={() => s.openSheet({ kind: "plan" })}
+        aria-label={`Sleep plan${sub ? `: ${sub}` : ""}. Open the sleep plan.`}
+        className={cx("flex min-h-[60px] min-w-0 flex-1 items-center gap-2.5 py-2 pl-3.5 text-left transition active:bg-mp-ink/[0.04]", !idle && "pr-1")}
+      >
+        <KindBadge icon={idle ? "bassinet" : "moon"} color={SLEEP} size={32} />
+        <span className="min-w-0 flex-1 leading-[18px]">
+          <span className={cx(tone.heading, "block text-[15px] leading-[20px]")}>Sleep plan</span>
+          {sub && <span className={cx(tone.muted, "block text-[13px] leading-snug")}>{sub}</span>}
+        </span>
+        {!idle && <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />}
+      </button>
+      {idle && (
+        // A 44px target around a 36px pill, as her Took it beside it in Up next; filled only when she's asleep and a try is still to do.
+        <button type="button" disabled={s.busy} onClick={putDown} className="-my-1 flex min-h-[44px] shrink-0 items-center disabled:opacity-40">
+          <span className={cx("inline-flex min-h-[36px] items-center rounded-[10px] px-3.5 text-sm font-semibold whitespace-nowrap active:scale-[0.97]", idle.action.strong ? "bg-mp-accent text-mp-on-accent" : "bg-mp-sunken text-mp-ink")}>
+            {idle.action.label}
+          </span>
+        </button>
+      )}
+    </div>
   );
 }

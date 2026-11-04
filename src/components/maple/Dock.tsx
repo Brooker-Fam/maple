@@ -9,7 +9,6 @@ import { isTracked, other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, FeedData, Side, StoolColor, StretchSide } from "@/lib/maple/types";
-import { CareStrip } from "./care/CareLine";
 import { SleepStrip } from "./sleep/SleepStrip";
 import { useTryAfterWake } from "./sleep/useSleep";
 import { fixPreset, useStillGoing } from "./FeedParts";
@@ -26,7 +25,12 @@ import { useHoldTimerToasts, useMaple, useNow, type ToastAction } from "./useMap
 
 /**
  * The logging dock on Today: two rows of big buttons fixed just above the tab
- * bar, where a thumb lands at 3am. One tap does the common thing right away
+ * bar, where a thumb lands at 3am. The baby's own logging lives here: her
+ * next medicine and the sleep plan's everyday Put down sit in Today's Up next
+ * card (UpNext.tsx), so the dock is only these eight buttons, plus the sleep
+ * plan's strip on top while something is going on (a try, a turn, after a
+ * crying wake, the morning's question; sleep/SleepStrip). One tap does the
+ * common thing right away
  * (start the timer, log the diaper now); holding a button opens the full form
  * for one from earlier. The top row turns into the feed's controls while she
  * nurses, and they are the only ones on screen: Switch and Pause while she's
@@ -174,7 +178,9 @@ export default function Dock() {
   const sleepPending = !!sleep && sleep.id < 0;
   const next = summary.nextSide;
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
-  const showHint = (!entries.length || !summary.age || summary.age.dayOfLife <= 3) && !summary.active.length;
+  // The first days (or an empty log): the tap hint while no timer runs, and "Start timer" under the side and Sleep tiles. After that the family knows which tiles start timers.
+  const firstDays = !entries.length || !summary.age || summary.age.dayOfLife <= 3;
+  const showHint = firstDays && !summary.active.length;
   const { nursing: nursingOn, bottles } = logSwitches(state.baby);
   // The part she's on (or came off) goes back and forth; the side the paused tiles count from is the last one tracked.
   const both = !!feedN?.both;
@@ -379,9 +385,7 @@ export default function Dock() {
       >
         {/* Opaque at night: through the blur, the page's amber text ghosted under the tiles. */}
         <div className="rounded-t-[22px] border-t border-mp-line bg-mp-bg/95 px-3 pt-2.5 pb-2.5 shadow-[0_-6px_20px_rgba(0,0,0,0.05)] backdrop-blur-xl [.maple-night_&]:bg-mp-bg [.maple-night_&]:backdrop-blur-none">
-          {/* Her strip (her next medicine, 44px) rides on top; Maple's eight tiles stay exactly where they were. */}
-          <CareStrip />
-          {/* The sleep plan's strip (a bassinet try, who's holding her), only once the family has a plan. */}
+          {/* The sleep plan's strip, only for a moment (a try, a turn, after a crying wake, the morning's question). */}
           <SleepStrip />
           {showHint && <p className="mb-2 text-center text-[11px] text-mp-ink-3">Tap to start or log now. Hold a button for earlier.</p>}
           {/* Eight columns, each tile two of them (four abreast), so Left and Right can take three each when Bottles is off. */}
@@ -542,7 +546,7 @@ export default function Dock() {
                     key={s}
                     id={s}
                     label={SIDE_NAME[s]}
-                    sub={next === s ? "Next side" : "Start timer"}
+                    sub={next === s ? "Next side" : firstDays ? "Start timer" : undefined}
                     aria={`Start nursing timer on ${SIDE_NAME[s]}`}
                     letter={s}
                     color={SIDE_COLOR[s]}
@@ -617,9 +621,10 @@ export default function Dock() {
               <Tile
                 id="sleep"
                 label="Sleep"
-                sub="Start timer"
+                sub={firstDays ? "Start timer" : undefined}
                 aria="Start sleep timer"
-                inline
+                // Without its subline it stacks like Pee, Poop and Both (the moon over "Sleep").
+                inline={firstDays}
                 icon="moon"
                 color={TILE.sleep}
                 done={done.sleep}
@@ -696,7 +701,7 @@ function Tile({
   disabled?: boolean;
   /** The accessible name, when the label alone doesn't say it ("Switch to Right", "Pause the feed"). */
   aria?: string;
-  /** Icon and label on one line, over the subline (Done and Bottle when they have one), so every tile with a subline fits the same height. */
+  /** Icon and label on one line, over the subline (Done, Bottle and Sleep when they have one), so every tile with a subline fits the same height. */
   inline?: boolean;
   /** A bigger side letter that never hides (the paused sides, whose columns follow the feed rather than Left/Right). */
   bigLetter?: boolean;

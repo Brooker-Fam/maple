@@ -143,7 +143,7 @@ export function NavRow({
 /**
  * The trailing "Took it": a 36px pill inside a 44px target. Filled accent
  * when it's OK by her schedule (or there's no gap to keep); `quiet` while
- * it isn't yet, the sunken pill of vitamin D's "Log" on Today, so the state
+ * it isn't yet (a sunken pill, not the accent fill), so the state
  * shows without reading. Quiet still saves at once (an early dose gets its
  * note). `busy` holds it while the tap is out. `aria-label` names the
  * medicine ("Took it: Brittany's Ibuprofen").
@@ -193,7 +193,7 @@ export function LoggedSlot({ held, care, className }: { held: CareHeld; care: Us
   const recordedAt = entry?.at ?? held.at;
   const at = careTime(recordedAt, now(), tz);
   // Keep the day on the second line so an overnight correction leaves room
-  // for the medicine's name in Today's strip. careTime preserves DST zones.
+  // for the medicine's name in Today's row. careTime preserves DST zones.
   const clock = careTime(recordedAt, new Date(recordedAt), tz);
   const day = at.slice(clock.length).trim();
   const dayLabel = day ? day[0].toUpperCase() + day.slice(1) : "";
@@ -213,9 +213,9 @@ export function tookItLabel(care: UseCare, plan: CarePlan, label = "Took it"): s
 }
 
 /**
- * One medicine's Took it, with the safety rules (the strip, the picker, her
+ * One medicine's Took it, with the safety rules (Today's row, the picker, her
  * tab): quiet while it isn't OK yet, "Logged 6:56 AM" for a minute after a
- * save on this phone, and in the strip nothing at all for a tap inside the
+ * save on this phone, and on Today's row nothing at all for a tap inside the
  * cooldown after any care save. `fixed`: a list whose rows keep their order
  * (her tab, the picker), where a tap on another medicine just after is meant.
  * `onAsk` opens the Dose sheet with the reason (a likely duplicate);

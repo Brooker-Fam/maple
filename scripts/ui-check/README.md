@@ -18,9 +18,9 @@ recovery, and one complete save.
 checks through the timer API against synthetic in-memory Postgres.
 
 The first fixture uses synthetic actions for focused field and nursing tests.
-The production-care fixture runs the actual `Dock`, `CareStrip`, `useCare`,
-`CareNavProvider`, `PlanPicker`, and toast actions, with only the app store and HTTP
-boundary replaced by synthetic data. It checks Took it → confirmation Edit time,
+The production-care fixture runs the actual `Dock`, Today's `UpNext` card (her
+`CareRow`), `useCare`, `CareNavProvider`, `PlanPicker`, and toast actions, with
+only the app store and HTTP boundary replaced by synthetic data. It checks Took it → confirmation Edit time,
 Cancel/Save, the persistent held control, the picker after a reload, exact dose
 identity when timestamps collide, and version-guarded time-only PATCH requests.
 It does not test the server's authorization or persistence. Existing care/feed

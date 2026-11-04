@@ -2,15 +2,13 @@
 
 import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
-import { tick } from "@/components/atlas/haptics";
-import { VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
+import { Fragment, useState } from "react";
 import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
-import { alertsOn, type DayStats, type Summary } from "@/lib/maple/insights";
+import type { DayStats, Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { Side, StretchSide } from "@/lib/maple/types";
-import { Icon, KindBadge, type IconName } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
 import { useSheets } from "./sheets";
@@ -21,9 +19,10 @@ import { useMaple, useNow } from "./useMaple";
 
 /**
  * "Right now": the 3am answers (when she last ate and which side is next, the
- * last wet and dirty diaper, how long she's been awake, vitamin D) plus "The
- * day so far" tallies and the diaper brigade. Descriptive only: nothing here
- * says "due" or "should".
+ * last wet and dirty diaper, how long she's been awake) plus "The day so far"
+ * tallies and the diaper brigade. Vitamin D lives in More's first row (and the
+ * evening reminder, with warnings on), not here. Descriptive only: nothing
+ * here says "due" or "should".
  */
 
 const ts = (e: { started_at: string }) => Date.parse(e.started_at);
@@ -62,15 +61,6 @@ export function sidesLabel(run: Pick<NursingRun, "order" | "firstSide">): string
 }
 
 const isSide = (s: StretchSide | null | undefined): s is Side => s === "L" || s === "R";
-
-/** A typical gap, rounded the way you'd say it: to 15 minutes under two hours, then to the half hour ("~3h", "~1h 45m"). */
-function roughGap(min: number): string {
-  const step = min < 120 ? 15 : 30;
-  const r = Math.max(step, Math.round(min / step) * step);
-  const h = Math.floor(r / 60);
-  const m = r % 60;
-  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
-}
 
 /** One of the three "how long since" numbers: the value, with its label underneath. */
 function Since({ label, value, mark }: { label: string; value: string | null; mark: React.ReactNode }) {
@@ -120,10 +110,14 @@ function NextSide({ next }: { next: NextSideInfo }) {
  * The "Right now" card. While she nurses, the timer card above it already has
  * the side, the start and the running clock, so the feed block steps aside
  * and this card keeps only what the timer doesn't say. Her mom's medicines
- * aren't here: they're on the strip on top of the dock (care/CareLine).
+ * aren't here: her next one is a row in Up next, right under this card
+ * (UpNext.tsx, care/CareLine). Nor is vitamin D, a once-a-day chore: More's
+ * first row says whether and when it was given and opens that dose
+ * (MoreSheet's `vitaminD`), and with warnings on the evening reminder has
+ * Log Vitamin D (AlertCard).
  */
 export default function StatusCard() {
-  const { state, summary, log, memberLabel, readOnly, units, isNight } = useMaple();
+  const { state, summary, readOnly, units } = useMaple();
   const vo = useVoice();
   const { open } = useSheets();
   const now = useNow(20_000);
@@ -142,59 +136,65 @@ export default function StatusCard() {
   const feedLabel = fed?.rule === "start" ? "Last feed started" : "Last fed";
   const finished = fed?.end ? `Finished ${formatRelative(fed.end, now)}` : null;
   const grouped = (fed?.run?.entries.length ?? 0) > 1;
-  // Gaps inside a cluster are skipped, so an evening of clustering doesn't read "usually every ~45m".
+  // Gaps inside a cluster are skipped, so an evening of clustering doesn't read "about every 45m".
   const gap = typicalFeedGapMin(state.entries, now);
   const cluster = fed?.kind === "breast" && fed.run?.cluster != null ? summary.cluster : null;
   // Past AWAKE_MAX_MS since the last logged sleep, the gap is a sleep nobody logged, not hours awake: "Not logged".
   const lastSleepEnd = summary.lastSleep && !summary.lastSleep.active && summary.lastSleep.ended_at && now.getTime() - Date.parse(summary.lastSleep.ended_at) <= AWAKE_MAX_MS ? summary.lastSleep.ended_at : null;
   const hasAnything = state.entries.length > 0;
 
-  // Nothing of Maple's logged yet (her mom's medicines ride on the dock's strip).
+  // Nothing of Maple's logged yet (her mom's medicines are in Up next, below).
   if (!hasAnything) return null;
 
-  // The big answer: how long since she last ate.
+  // The big answer: how long since she last ate. Under it, one line that starts with the finish, then what that feed
+  // was: its length and sides, a bottle's amount, or the cluster it closed. Its clock times and the usual gap are under ⓘ.
   let feedSub: string[] | null = null;
   if (!nursing && last) {
     const bits: string[] = [];
     if (cluster) {
       // "Cluster 6:02–8:40 PM · 4 feeds · nursed 1h 52m" ("Cluster" opens the Cluster feeding sheet).
-      bits.push(`${spanText(cluster.start, cluster.end, tz)}`, `${cluster.feeds} feeds`, `nursed ${minutesShort(cluster.min.total)}`);
-    } else if (last.data.method === "bottle" || !fed?.run) {
-      bits.push(`started ${formatTime(last.started_at, tz)}`);
-      if (last.data.method === "bottle") bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
-    } else {
+      bits.push(spanText(cluster.start, cluster.end, tz), `${cluster.feeds} feeds`, `nursed ${minutesShort(cluster.min.total)}`);
+    } else if (last.data.method === "bottle") {
+      bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
+    } else if (fed?.run) {
       const run = fed.run;
-      bits.push(`started ${formatTime(run.start, tz)}`);
       if (run.min.total) bits.push(minutesShort(run.min.total));
       const sides = sidesLabel(run);
       if (sides) bits.push(sides);
     }
-    if (gap != null) bits.push(`usually every ~${roughGap(gap)}`);
     feedSub = bits;
   }
+  const started = last ? formatTime(fed?.start ?? last.started_at, tz) : null;
+  // ⓘ's first sentence: the clock times the line leaves to the big number ("Started 5:30 PM, finished 6:00 PM.").
+  const clock = started ? `Started ${started}${fed?.end ? `, finished ${formatTime(fed.end, tz)}` : ""}.` : null;
 
   const next = !nursing ? summary.next : null;
-  // A sleep (or tummy or pump) timer above this card on a short phone: the Last fed block keeps its answer and the next
-  // side but folds its details, so the Since tiles still clear the dock (and her strip on it) at 375x667.
+  // A sleep (or tummy or pump) timer above this card on a short phone: the Last fed block keeps its answer, the finish
+  // and the next side but folds the rest of the finish's line, so the Since tiles still clear the dock at 375x667.
   const fold = summary.active.length > 0;
-
-  const logVitD = () => {
-    tick();
-    void log({ kind: "med", data: { ...VITAMIN_D_DEFAULT } }, { toast: "Vitamin D drops logged" });
-  };
-
-  // Drops not given yet is a daytime thing; at 3am it's just clutter (More → Vitamin D still works).
-  const showVitD = summary.born && (summary.vitaminD || (!isNight() && alertsOn(state.baby)));
-  const vitD = summary.vitaminD;
-  // Never "Admin": the name only when it's someone else we can name.
-  const vitDBy = vitD ? (vitD.by === state.me.email ? "you" : memberLabel(vitD.by)) : null;
-  const vitDText = (
-    <span className="min-w-0 flex-1">
-      <span className="block text-[15px] font-medium text-mp-ink">Vitamin D</span>
-      <span className="block text-[13px] text-mp-ink-2">
-        {vitD ? `Given ${formatTime(vitD.givenAt, tz)}${vitDBy ? ` · ${vitDBy}` : ""}` : "Not yet today"}
-      </span>
-    </span>
+  const foldAway = fold && "[@media(max-height:719px)]:hidden";
+  // Both sit above the block's button: "Cluster" opens what cluster feeding is, and ⓘ opens the line's clock times and
+  // how it's counted, not the last feed.
+  const clusterButton = cluster && (
+    <button
+      type="button"
+      onClick={() => clusterInfo.open(cluster)}
+      aria-label="Cluster feeding: what it is"
+      className="relative -my-3 inline-flex min-h-[44px] items-center font-semibold text-mp-ink underline decoration-mp-ink-3 decoration-dotted underline-offset-[3px] active:text-mp-ink-2"
+    >
+      Cluster
+    </button>
+  );
+  const infoButton = (
+    <button
+      type="button"
+      onClick={() => setInfo((v) => !v)}
+      aria-expanded={info}
+      aria-label="How this is counted"
+      className="relative -my-3 -mr-3 inline-flex h-11 w-11 items-center justify-center rounded-full align-middle text-mp-ink-3 active:text-mp-ink-2"
+    >
+      <Icon name="info" size={15} />
+    </button>
   );
 
   return (
@@ -208,7 +208,7 @@ export default function StatusCard() {
             <button
               type="button"
               onClick={() => open({ kind: "feed", entry: last })}
-              aria-label={`${feedLabel} ${formatRelative(fedAt ?? last.started_at, now)}, started ${formatTime(fed?.start ?? last.started_at, tz)}.${finished ? ` ${finished}.` : ""} ${readOnly ? "Open that feed." : "Open that feed to fix it."}`}
+              aria-label={`${feedLabel} ${formatRelative(fedAt ?? last.started_at, now)}, started ${started}.${finished ? ` ${finished}.` : ""} ${readOnly ? "Open that feed." : "Open that feed to fix it."}`}
               className="absolute inset-0 transition active:bg-mp-ink/[0.04]"
             />
           )}
@@ -225,41 +225,53 @@ export default function StatusCard() {
               ) : (
                 <p className="mt-0.5 text-[17px] text-mp-ink-2">No feeds logged yet</p>
               )}
-              {finished && <p className="mt-0.5 text-[13px] leading-snug text-mp-ink-2">{finished}</p>}
             </div>
             {next && <NextSide next={next} />}
           </div>
-          {feedSub && (
-            <p className={cx("mt-0.5 text-[13px] leading-snug text-mp-ink-2", fold && "[@media(max-height:719px)]:hidden")}>
-              {cluster && (
-                // Above the block's button: "Cluster" opens what cluster feeding is, not the last feed.
-                <>
-                  <button
-                    type="button"
-                    onClick={() => clusterInfo.open(cluster)}
-                    aria-label="Cluster feeding: what it is"
-                    className="relative -my-3 inline-flex min-h-[44px] items-center font-semibold text-mp-ink underline decoration-mp-ink-3 decoration-dotted underline-offset-[3px] active:text-mp-ink-2"
-                  >
-                    Cluster
-                  </button>{" "}
-                </>
+          {finished || feedSub?.length ? (
+            // One line: "Finished 1h 10m ago · 30m · Left then Right". Folded, only the finish stays (with none, nothing).
+            <p className={cx("mt-0.5 text-[13px] leading-snug text-mp-ink-2", !finished && foldAway)}>
+              {finished && (
+                <span className="whitespace-nowrap">
+                  {finished}
+                  {!feedSub?.length && <span className={cx(foldAway)}>{infoButton}</span>}
+                </span>
               )}
-              {feedSub.slice(0, -1).map((b) => `${b} · `).join("")}
-              {/* The info button rides with the last bit, so a wrap never leaves it alone on a line. */}
-              <span className="whitespace-nowrap">
-                {feedSub[feedSub.length - 1]}
-                <button
-                  type="button"
-                  onClick={() => setInfo((v) => !v)}
-                  aria-expanded={info}
-                  aria-label="How this is counted"
-                  className="relative -my-3 -mr-3 inline-flex h-11 w-11 items-center justify-center rounded-full align-middle text-mp-ink-3 active:text-mp-ink-2"
-                >
-                  <Icon name="info" size={15} />
-                </button>
-              </span>
+              {feedSub?.length ? (
+                <span className={cx(foldAway)}>
+                  {finished && "\u00a0· "}
+                  {feedSub.map((bit, i) => {
+                    const lead = i === 0 && clusterButton ? <>{clusterButton} </> : null;
+                    if (i < feedSub.length - 1) {
+                      // A wrap falls between bits, each "·" staying with the bit before it.
+                      return (
+                        <Fragment key={i}>
+                          <span className="whitespace-nowrap">
+                            {lead}
+                            {bit}
+                            {"\u00a0·"}
+                          </span>{" "}
+                        </Fragment>
+                      );
+                    }
+                    // The last bit wraps whole (inside only when it's wider than the line), and its last word keeps the info
+                    // button, so a wrap never leaves the button alone on a line.
+                    const cut = bit.lastIndexOf(" ") + 1;
+                    return (
+                      <span key={i} className="inline-block">
+                        {lead}
+                        {bit.slice(0, cut)}
+                        <span className="whitespace-nowrap">
+                          {bit.slice(cut)}
+                          {infoButton}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </span>
+              ) : null}
             </p>
-          )}
+          ) : null}
           {grouped && <p className={cx("mt-1 text-[12px] leading-4 text-mp-ink-2", fold && "[@media(max-height:719px)]:mt-0")}>Short breaks under 10m count as one feed.</p>}
           <AnimatePresence>
             {info && (
@@ -269,6 +281,7 @@ export default function StatusCard() {
                 exit={{ height: 0, opacity: 0 }}
                 className="overflow-hidden text-[13px] text-mp-ink-3"
               >
+                {clock && `${clock} `}
                 {lastFedRule(vo)}
                 {gap != null && <> Feeds lately: about every {formatDuration(gap * 60)} (start to start).</>}
               </motion.p>
@@ -303,8 +316,8 @@ export default function StatusCard() {
         </div>
         {/*
           While she nurses the "Last fed" line (which carries this) steps aside, so it rides under the tiles as one slim
-          line, in the tiles' own bottom padding: at 375x667 with a feed of several parts it still clears the dock (and
-          her strip on it) without pushing the tiles down.
+          line, in the tiles' own bottom padding: at 375x667 with a feed of several parts it still clears the dock
+          without pushing the tiles down.
         */}
         {nursing && gap != null && (
           <p className="-mt-1.5 flex items-center gap-1.5 px-4 pb-2.5 text-[12px] leading-4 text-mp-ink-2">
@@ -315,20 +328,6 @@ export default function StatusCard() {
           </p>
         )}
       </div>
-
-      {showVitD &&
-        (vitD || readOnly ? (
-          <div className="flex items-center gap-3 px-4 py-3">
-            <KindBadge icon="sun" color={KIND_COLOR.med} size={32} />
-            {vitDText}
-          </div>
-        ) : (
-          <button type="button" onClick={logVitD} aria-label="Vitamin D not given yet today. Log it now" className={cx(tone.row, "py-3")}>
-            <KindBadge icon="sun" color={KIND_COLOR.med} size={32} />
-            {vitDText}
-            <span className="inline-flex min-h-[36px] shrink-0 items-center rounded-[10px] bg-mp-sunken px-3.5 text-sm font-semibold text-mp-ink">Log</span>
-          </button>
-        ))}
       {clusterInfo.sheet}
     </div>
   );

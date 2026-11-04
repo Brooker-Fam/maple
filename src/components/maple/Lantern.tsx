@@ -452,8 +452,8 @@ export default function Lantern({ entry, onClose, dim }: { entry: Entry; onClose
 }
 
 /**
- * Her mom's line in the Lantern (the one rule's medicine, as on Today's
- * strip). When her Took it would just save ("save" by the one-tap: nothing
+ * Her mom's line in the Lantern (the one rule's medicine, as in Today's
+ * Up next). When her Took it would just save ("save" by the one-tap: nothing
  * to ask), it's a hold-to-log row behind the same half-second hold as the
  * feed buttons, and what happened shows in the Lantern's own hint line,
  * since toasts draw under it: "Ibuprofen logged 2:58 AM · Undo". Otherwise
