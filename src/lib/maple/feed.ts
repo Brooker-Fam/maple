@@ -1699,6 +1699,113 @@ export function typicalFeedGapMin(entries: readonly Entry[], now: Date, runs: re
   return Math.round(gaps[Math.floor(gaps.length / 2)]);
 }
 
+// ── time between feeds ───────────────────────────────────────────────────
+
+/**
+ * Over this from one feed's start to the next, the time between two logged
+ * feeds is a gap in the log, not in her feeds: it isn't counted (Patterns and
+ * daily_summary alike).
+ */
+export const FEED_GAP_MAX_MS = 12 * HOUR;
+/** "About every" waits for this many gaps outside clusters, so two feeds an hour apart aren't "about every hour". */
+export const USUAL_GAP_MIN_GAPS = 3;
+
+/** One feed as it's counted (a nursing run or a bottle), with the time since the feed before it, start to start. */
+export type FeedStep = {
+  feed: { kind: "breast"; run: NursingRun } | { kind: "bottle"; entry: EntryOf<"feed"> };
+  /** Epoch ms. A bottle with no duration ends where it began; end is null while she's still on the breast. */
+  start: number;
+  end: number | null;
+  /** Since the feed before began; null for the first feed, or one logged at the same moment as the one before. */
+  sinceMs: number | null;
+  /**
+   * The counted gap in whole clock minutes (spanMinutes, so 6:00 to 8:45 AM is 2h 45m whatever the seconds); null
+   * with no feed before, or over 12 hours (FEED_GAP_MAX_MS).
+   */
+  gapMin: number | null;
+  /** This feed and the one before are runs of the same cluster. */
+  inCluster: boolean;
+};
+
+/**
+ * Her feeds, oldest first, each with the time since the one before: every
+ * nursing run (under 10 minutes off the breast is one feed, Pause or Done
+ * alike) and every bottle, as feeds are counted everywhere, measured start to
+ * start as "Last feed started" and the feed-gap checks measure. A gap over 12
+ * hours isn't counted (gapMin null), though sinceMs still says how long it
+ * was. Pass `runs` when you already have them.
+ */
+export function feedSteps(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): FeedStep[] {
+  const feeds: Pick<FeedStep, "feed" | "start" | "end">[] = [
+    ...runs.map((run) => ({ feed: { kind: "breast" as const, run }, start: run.start, end: run.end })),
+    ...entries.filter(isBottleFeed).map((entry) => {
+      const start = Date.parse(entry.started_at);
+      const ended = entry.ended_at ? Date.parse(entry.ended_at) : NaN;
+      return { feed: { kind: "bottle" as const, entry }, start, end: entry.active ? null : Number.isNaN(ended) ? start : Math.max(start, ended) };
+    }),
+  ]
+    .filter((f) => !Number.isNaN(f.start))
+    .sort((a, b) => a.start - b.start);
+  const clusterOfStep = (f: Pick<FeedStep, "feed">) => (f.feed.kind === "breast" ? f.feed.run.cluster : null);
+  return feeds.map((f, i) => {
+    const prev = i > 0 ? feeds[i - 1] : null;
+    const sinceMs = prev && f.start > prev.start ? f.start - prev.start : null;
+    const counted = prev !== null && sinceMs !== null && sinceMs <= FEED_GAP_MAX_MS;
+    const cluster = clusterOfStep(f);
+    return {
+      ...f,
+      sinceMs,
+      gapMin: counted ? spanMinutes(prev.start, f.start) : null,
+      inCluster: counted && cluster !== null && cluster === clusterOfStep(prev),
+    };
+  });
+}
+
+/** The feeds that began in [from, to), each with its gap from the feed before, which may be before the window. */
+export function stepsIn(steps: readonly FeedStep[], from: number, to: number): FeedStep[] {
+  return steps.filter((s) => s.start >= from && s.start < to);
+}
+
+/** A window's gaps at a glance. */
+export type GapSummary = {
+  /** How many gaps were counted. */
+  gaps: number;
+  /**
+   * "About every": the middle gap outside clusters (the later of the two middle ones, as typicalFeedGapMin), in
+   * whole minutes, once there are USUAL_GAP_MIN_GAPS of them; null before.
+   */
+  usualMin: number | null;
+  /** The longest counted gap (in a cluster too), and the feed it led to; null with none. */
+  longestMin: number | null;
+  longest: FeedStep | null;
+};
+
+export function gapSummary(steps: readonly FeedStep[]): GapSummary {
+  let longest: FeedStep | null = null;
+  let longestMin: number | null = null;
+  let gaps = 0;
+  const outside: number[] = [];
+  for (const s of steps) {
+    if (s.gapMin === null) continue;
+    gaps++;
+    if (longestMin === null || s.gapMin > longestMin) {
+      longest = s;
+      longestMin = s.gapMin;
+    }
+    if (!s.inCluster) outside.push(s.gapMin);
+  }
+  outside.sort((a, b) => a - b);
+  return { gaps, usualMin: outside.length >= USUAL_GAP_MIN_GAPS ? outside[Math.floor(outside.length / 2)] : null, longestMin, longest };
+}
+
+/** "about every 2h 35m", "longest gap 3h 15m": a window's gaps in the same words on ribbons, circles and tables. */
+export function gapWords(g: GapSummary): string[] {
+  const words: string[] = [];
+  if (g.usualMin !== null) words.push(`about every ${minutesShort(g.usualMin)}`);
+  if (g.longestMin !== null) words.push(`longest gap ${minutesShort(g.longestMin)}`);
+  return words;
+}
+
 /** "6:02–8:40 PM" ("11:02 PM–1:40 AM" across noon or midnight), or "since 6:02 PM" while it's going. */
 export function spanText(start: number | string, end: number | string | null, tz: string = DEFAULT_TZ): string {
   return formatRange(start, end, tz).replace(" – ", "–");

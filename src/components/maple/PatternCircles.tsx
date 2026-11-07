@@ -1,5 +1,6 @@
 "use client";
 
+import { gapWords } from "@/lib/maple/feed";
 import { formatDuration } from "@/lib/maple/time";
 import type { UnitSystem } from "@/lib/maple/types";
 import { formatVolume } from "@/lib/maple/units";
@@ -63,6 +64,7 @@ function Circle({ row, mode, units, night, activity, onPickDay }: Omit<Props, "r
   const summary = [
     showFeeds && `${s.feeds} feed${s.feeds === 1 ? "" : "s"}`,
     showFeeds && s.breastFeeds === 0 && row.feeds.some((feed) => !feed.bottle) && "Nursing continued from earlier",
+    ...(activity === "feeds" ? gapWords(row.gaps) : []),
     showSleep && `${formatDuration(s.sleepSec)} sleep`,
     showDiapers && `${s.wet} wet · ${s.dirty} dirty`,
     showFeeds && s.bottleMl > 0 && `${formatVolume(s.bottleMl, units)} by bottle`,

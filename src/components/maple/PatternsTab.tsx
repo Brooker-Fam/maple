@@ -5,7 +5,20 @@ import AccountMenu from "./AccountMenu";
 import dynamic from "next/dynamic";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { clockFraction, clockSpans } from "@/lib/maple/clock-spans";
-import { feedClusters, feedTotals, nursingRuns, spanText, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
+import {
+  feedClusters,
+  feedSteps,
+  feedTotals,
+  gapSummary,
+  gapWords,
+  minutesShort,
+  nursingRuns,
+  spanText,
+  stepsIn,
+  type FeedCluster,
+  type GapSummary,
+  type NursingRun,
+} from "@/lib/maple/feed";
 import {
   DISCLAIMER,
   FEEDS_PER_DAY,
@@ -79,7 +92,9 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  * Left and right nursing wear the side colors (rust and honey, as on the
  * dial and the side discs), so "L" is the same color on every screen.
  * Ribbon lanes (feeds on top, sleep/tummy middle, diapers bottom) separate
- * classes by position as well as hue.
+ * classes by position as well as hue. The time between feeds is a quiet sage
+ * (--v-gap, 3.7:1 on the light card and 6.5:1 on the dark), on its own chart
+ * and on Between feeds' bars, so a gap never reads as a feed.
  *
  * The chrome (grid, track, axis, the halo around diaper dots) comes from the
  * mp-* tokens, so it follows dark mode and the night look on its own.
@@ -96,11 +111,11 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const VIZ_VARS =
   "[--v-grid:var(--mp-line)] [--v-track:var(--mp-sunken)] [--v-axis:color-mix(in_srgb,var(--mp-ink)_28%,transparent)] [--v-surface:var(--mp-surface)] " +
   "[--v-sleep:#9077BC] [--v-nurse:#C55F1D] [--v-bottle:#E0A93B] [--v-pee:#4F8FAE] [--v-poop:#905718] [--v-tummy:#69863E] [--v-pump:#CA805D] " +
-  "[--v-left:#B5452B] [--v-right:#E0A93B] [--v-both:#8C7C6B] [--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
+  "[--v-left:#B5452B] [--v-right:#E0A93B] [--v-both:#8C7C6B] [--v-gap:#7D8A70] [--v-band:rgba(92,122,74,0.13)] [--v-target:#7A5A12] [--v-dot-edge:rgba(29,68,32,0.35)] [--v-now:#C55F1D] " +
   "dark:[--v-sleep:#9E85CB] dark:[--v-nurse:#BF4213] dark:[--v-bottle:#B88C06] dark:[--v-pee:#3CA1C4] dark:[--v-poop:#985E22] dark:[--v-pump:#C97E5B] " +
-  "dark:[--v-left:#CF5B3E] dark:[--v-right:#D9A23A] dark:[--v-both:#A99A88] dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
+  "dark:[--v-left:#CF5B3E] dark:[--v-right:#D9A23A] dark:[--v-both:#A99A88] dark:[--v-gap:#97A389] dark:[--v-band:rgba(169,192,143,0.13)] dark:[--v-target:#E0C27A] dark:[--v-dot-edge:rgba(245,237,223,0.5)] dark:[--v-now:#E0A93B] " +
   "[.maple-night_&]:[--v-sleep:rgb(224_169_59/0.35)] [.maple-night_&]:[--v-nurse:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-bottle:rgb(224_169_59/0.55)] " +
-  "[.maple-night_&]:[--v-left:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-right:rgb(224_169_59/0.55)] [.maple-night_&]:[--v-both:rgb(224_169_59/0.3)] " +
+  "[.maple-night_&]:[--v-left:rgb(224_169_59/0.85)] [.maple-night_&]:[--v-right:rgb(224_169_59/0.55)] [.maple-night_&]:[--v-both:rgb(224_169_59/0.3)] [.maple-night_&]:[--v-gap:rgb(224_169_59/0.55)] " +
   "[.maple-night_&]:[--v-pee:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-poop:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-tummy:rgb(224_169_59/0.45)] [.maple-night_&]:[--v-pump:rgb(224_169_59/0.45)] " +
   "[.maple-night_&]:[--v-band:rgb(224_169_59/0.08)] [.maple-night_&]:[--v-target:rgb(224_169_59/0.7)] [.maple-night_&]:[--v-dot-edge:rgb(224_169_59/0.3)] [.maple-night_&]:[--v-now:#D9772B]";
 
@@ -464,6 +479,8 @@ export type RibbonRow = TimeWindow & {
   feeds: FeedMark[];
   diapers: DiaperMark[];
   clusters: (Span & { count: number })[];
+  /** The time between feeds that began in the row, start to start (feed.ts feedSteps), for the Feeds summaries. */
+  gaps: GapSummary;
   nowX: number | null;
 };
 
@@ -514,6 +531,7 @@ export function buildRibbon(
   // Feeds and clusters by the one rule (feed.ts), worked out once from everything loaded.
   const runs: NursingRun[] = nursingRuns(recorded, now);
   const clusters: FeedCluster[] = feedClusters(runs);
+  const steps = feedSteps(recorded, now, runs);
   // Keep each actual stretch, including those whose entry began before the
   // row. Bucketing an entry by its start alone would lose nursing after midnight.
   const nursing = recorded.flatMap((entry) => entry.kind === "feed" && entry.data.method !== "bottle"
@@ -555,6 +573,7 @@ export function buildRibbon(
       feeds: [],
       diapers: [],
       clusters: [],
+      gaps: gapSummary(stepsIn(steps, start, Math.min(end, nowMs + 1))),
       nowX: nowMs >= start && nowMs < end ? wallFrac(nowMs, start, end, wallStartMin, tz) : null,
     };
     const hours = Math.round((end - start) / H);
@@ -816,14 +835,14 @@ function RibbonLegend({ night, activity = "all" }: { night: boolean; activity?: 
 function RibbonRowView({ row, W, units, night, activity, onPick }: { row: RibbonRow; W: number; units: UnitSystem; night: boolean; activity: PatternActivity; onPick?: () => void }) {
   const s = row.stats;
   const noMarks = row.feeds.length + row.sleeps.length + row.diapers.length + row.tummies.length === 0;
-  const summary = noMarks ? (activity === "all" ? "No activity logged" : `No ${activity} logged`) : [
+  const parts = noMarks ? [activity === "all" ? "No activity logged" : `No ${activity} logged`] : [
     activity === "all" || activity === "feeds" ? `${s.feeds} feed${s.feeds === 1 ? "" : "s"}${s.breastFeeds === 0 && row.feeds.some((feed) => !feed.bottle) ? " started · nursing continued from earlier" : ""}` : null,
+    ...(activity === "feeds" ? gapWords(row.gaps) : []),
     activity === "all" || activity === "diapers" ? `${s.wet} wet · ${s.dirty} dirty` : null,
     activity === "all" || activity === "sleep" ? (s.sleepSec > 0 ? `${formatDuration(s.sleepSec)} sleep` : "No sleep logged") : null,
     activity === "all" && s.tummySec > 0 ? `${formatDuration(s.tummySec)} tummy time` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  ].filter((part): part is string => !!part);
+  const summary = parts.join(" · ");
   const x = (f: number) => f * W;
   const aria = `${row.label}${row.nowX != null ? ", so far" : ""}: ${summary}${row.clusters.length ? `; ${row.clusters.map((c) => c.title).join("; ")}` : ""}${
     (activity === "all" || activity === "feeds") && s.bottleMl ? `; ${formatVolume(s.bottleMl, units)} by bottle` : ""
@@ -842,7 +861,17 @@ function RibbonRowView({ row, W, units, night, activity, onPick }: { row: Ribbon
             </span>
           )}
         </span>
-        <span className={cx(tone.muted, "text-[11px] tabular-nums")}>{summary}</span>
+        <span className={cx(tone.muted, "text-[11px] tabular-nums")}>
+          {parts.map((part, i) => (
+            <Fragment key={i}>
+              <span className="whitespace-nowrap">
+                {part}
+                {i < parts.length - 1 && " ·"}
+              </span>
+              {i < parts.length - 1 && " "}
+            </Fragment>
+          ))}
+        </span>
       </span>
       <svg width={W} height={ROW_H} className="block overflow-visible" aria-hidden>
         <rect x={0} y={7} width={W} height={16} rx={4} fill="var(--v-track)" />
@@ -1528,6 +1557,18 @@ function DailyCharts({
     return m;
   }, [entries, tz]);
 
+  // The time between feeds, start to start (feed.ts feedSteps), on the day the later feed began: its first gap reaches
+  // back to the evening before, which is loaded too.
+  const gaps = useMemo(() => {
+    const nowMs = now.getTime();
+    const steps = feedSteps(entries.filter((e) => Date.parse(e.started_at) <= nowMs), now);
+    return days.map((d) => {
+      const [a, b] = dayBounds(d.key, tz);
+      return gapSummary(stepsIn(steps, a.getTime(), Math.min(b.getTime(), nowMs + 1)));
+    });
+  }, [days, entries, tz, now]);
+  const anyGap = gaps.some((g) => g.gaps > 0);
+
   const vol = (ml: number) => (units === "us" ? mlToOz(ml) : ml);
   const volumeLabel = (value: number) => formatVolume(units === "us" ? ozToMl(value) : value, units);
   const volUnit = units === "us" ? "oz" : "ml";
@@ -1563,7 +1604,7 @@ function DailyCharts({
       </SectionTitle>
 
       {asTable ? (
-        <DailyTable days={days} todayKey={todayKey} units={units} />
+        <DailyTable days={days} gaps={anyGap ? gaps : null} todayKey={todayKey} units={units} />
       ) : (
         <>
           {/* One card, hairlines between charts. Not overflow-hidden: the first chart's tooltip may rise above its top edge. */}
@@ -1601,6 +1642,34 @@ function DailyCharts({
                 )}
               />
             </ChartBlock>
+
+            {anyGap && (
+              <ChartBlock
+                title="Longest gap between feeds"
+                subtitle="Start to start, from what was logged."
+                how={<p>Each column is the day&apos;s longest time from the start of one feed to the start of the next. Over 12 hours between two logged feeds is left out, in case a feed wasn&apos;t logged.</p>}
+              >
+                <Columns
+                  keys={keys}
+                  todayKey={todayKey}
+                  night={night}
+                  series={[{ id: "gap", label: "Longest gap", color: "var(--v-gap)", values: gaps.map((g) => (g.longestMin ?? 0) / 60) }]}
+                  yLabel={(v) => (v ? `${v}h` : "0")}
+                  valueLabel={(v) => formatDuration(v * 3600)}
+                  ariaLabel={`Longest gap between feeds per day: ${days.map((d, i) => `${shortDate(d.key)} ${gaps[i].longestMin === null ? "none counted" : minutesShort(gaps[i].longestMin!)}`).join(", ")}`}
+                  tooltip={(i) =>
+                    gaps[i].longestMin === null ? (
+                      <span className="block opacity-80">No gap between two logged feeds</span>
+                    ) : (
+                      <>
+                        <TipRow color="var(--v-gap)" value={minutesShort(gaps[i].longestMin!)} label={`longest gap${so(i)}`} />
+                        {gaps[i].usualMin !== null && <span className="block opacity-80">Feeds about every {minutesShort(gaps[i].usualMin!)}</span>}
+                      </>
+                    )
+                  }
+                />
+              </ChartBlock>
+            )}
 
             <ChartBlock
               title="Diapers"
@@ -1784,7 +1853,7 @@ function DailyCharts({
 }
 
 /** The charts' accessible twin: every number, one row per day. */
-function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: string; units: UnitSystem }) {
+function DailyTable({ days, gaps, todayKey, units }: { days: DayStats[]; gaps: GapSummary[] | null; todayKey: string; units: UnitSystem }) {
   const anyBottle = days.some((d) => d.bottleMl > 0);
   const anyBoth = days.some((d) => d.bothSec > 0);
   const anyPump = days.some((d) => d.pumpSessions > 0);
@@ -1823,6 +1892,8 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
             <th scope="col" className={th}>Sleep</th>
             <th scope="col" className={th}>Wet</th>
             <th scope="col" className={th}>Dirty</th>
+            {gaps && <th scope="col" className={th}>Feeds about every</th>}
+            {gaps && <th scope="col" className={th}>Longest feed gap</th>}
             <th scope="col" className={th}>{anyBoth ? "Nursing L / R / both" : "Nursing L / R"}</th>
             {anyBottle && <th scope="col" className={th}>Bottle</th>}
             {anyPump && <th scope="col" className={th}>Pumped</th>}
@@ -1830,16 +1901,18 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
           </tr>
         </thead>
         <tbody>
-          {[...days].reverse().map((d) => (
+          {[...days].map((d, i) => ({ d, g: gaps?.[i] ?? null })).reverse().map(({ d, g }) => (
             <tr key={d.key} className="border-b border-mp-line last:border-0">
               <th scope="row" className={cx(td, "text-left font-medium")}>
                 {formatDayLabel(d.key, todayKey)}
               </th>
-              {!hasDailyTotals(d) ? <td colSpan={5 + Number(anyBottle) + Number(anyPump) + Number(anyTummy)} className={cx(td, tone.muted)}>Nothing logged</td> : <>
+              {!hasDailyTotals(d) ? <td colSpan={5 + 2 * Number(!!gaps) + Number(anyBottle) + Number(anyPump) + Number(anyTummy)} className={cx(td, tone.muted)}>Nothing logged</td> : <>
               <td className={td}>{d.feeds}</td>
               <td className={td}>{formatDuration(d.sleepSec)}</td>
               <td className={td}>{d.wet}</td>
               <td className={td}>{d.dirty}</td>
+              {gaps && <td className={td}>{g?.usualMin != null ? minutesShort(g.usualMin) : <span className={tone.faint}>—</span>}</td>}
+              {gaps && <td className={td}>{g?.longestMin != null ? minutesShort(g.longestMin) : <span className={tone.faint}>—</span>}</td>}
               <td className={td}>
                 {formatDuration(d.leftSec)} / {formatDuration(d.rightSec)}
                 {anyBoth && ` / ${formatDuration(d.bothSec)}`}

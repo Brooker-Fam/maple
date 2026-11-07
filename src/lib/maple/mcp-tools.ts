@@ -17,6 +17,7 @@ import {
   feedEditCopy,
   FeedEditError,
   feedParts,
+  feedSteps,
   feedTotals,
   isTracked,
   minutesShort,
@@ -2449,15 +2450,13 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
   }
 
   // Feeding intervals: start to start between feeds as counted (a feed paused or stopped for under 10 minutes is
-  // one), credited to the day of the later one. Over 12 hours is a missing log, not a stretch.
-  const runs = nursingRuns(entries, ctx.now);
-  const feedStarts = [...runs.map((r) => r.start), ...entries.filter((e) => e.kind === "feed" && e.data.method === "bottle").map(ts)].sort((x, y) => x - y);
+  // one), credited to the day of the later one, by feed.ts feedSteps (the gaps Patterns lists). Over 12 hours is a
+  // missing log, not a stretch.
   const gapsByDay = new Map<string, number[]>();
-  for (let i = 1; i < feedStarts.length; i++) {
-    const gap = (feedStarts[i] - feedStarts[i - 1]) / MIN;
-    if (gap <= 0 || gap > 12 * 60 || feedStarts[i] < windowFrom.getTime()) continue;
-    const k = dayKey(new Date(feedStarts[i]), ctx.tz);
-    gapsByDay.set(k, [...(gapsByDay.get(k) ?? []), gap]);
+  for (const step of feedSteps(entries, ctx.now)) {
+    if (step.gapMin === null || step.sinceMs === null || step.start < windowFrom.getTime()) continue;
+    const k = dayKey(new Date(step.start), ctx.tz);
+    gapsByDay.set(k, [...(gapsByDay.get(k) ?? []), step.sinceMs / MIN]);
   }
 
   const anyBottle = stats.some((d) => d.bottleFeeds > 0);

@@ -76,3 +76,25 @@ assert.equal(current.feeds[0].x1, current.feeds[0].x2);
 assert.equal(current.stats.bottleMl, 60);
 assert.equal(buildDayDialMarks([future], +start, +end, +now, tz).dots.length, 0);
 console.log("PASS future events are not plotted and bottles without duration remain point marks");
+
+const feedAt = (id: number, start: string, end: string) =>
+  ({ ...base, id, kind: "feed", started_at: start, ended_at: end, data: { method: "breast", segments: [{ side: "L", start, end }] } }) as EntryOf<"feed">;
+const evening = [
+  feedAt(20, "2026-10-28T13:00:00-04:00", "2026-10-28T13:20:00-04:00"),
+  feedAt(21, "2026-10-28T22:00:00-04:00", "2026-10-28T22:20:00-04:00"),
+  feedAt(22, "2026-10-29T01:15:00-04:00", "2026-10-29T01:35:00-04:00"),
+  feedAt(23, "2026-10-29T04:00:00-04:00", "2026-10-29T04:20:00-04:00"),
+  feedAt(24, "2026-10-29T07:00:00-04:00", "2026-10-29T07:15:00-04:00"),
+];
+const gapsOf = (rows: ReturnType<typeof buildRibbon>) => rows.map((r) => [r.key, r.gaps.gaps, r.gaps.usualMin, r.gaps.longestMin]);
+// By day, each gap goes to the day its later feed began: 10 PM → 1:15 AM is the 29th's.
+assert.deepEqual(gapsOf(buildRibbon(evening, "2026-10-28", "2026-10-29", "days", tz, now, null, "us")), [
+  ["2026-10-29", 3, 180, 195],
+  ["2026-10-28", 1, null, 540],
+]);
+// By night (noon to noon), the evening and the small hours are one window, so all four gaps are the 28th's night.
+assert.deepEqual(gapsOf(buildRibbon(evening, "2026-10-29", "2026-10-29", "nights", tz, now, null, "us")), [
+  ["2026-10-29", 0, null, null],
+  ["2026-10-28", 4, 195, 540],
+]);
+console.log("PASS ribbon rows count each gap between feeds in the window where the later feed began, by day and by night");

@@ -56,6 +56,45 @@ if (query.has("sleepCarry") || query.has("nurseCarry")) {
   entries[0].ended_at = end;
 }
 if (query.has("empty")) entries.splice(0);
+// A made-up cluster across midnight: two of its three feeds yesterday evening, the third just after midnight.
+if (query.has("lateCluster")) {
+  entries.splice(0);
+  const at = (date, clock) => { const { year, month, day } = parseDayKey(date); const [hour, minute] = clock.split(":").map(Number); return zonedTimeToUtc(year, month, day, hour, minute, TZ).toISOString(); };
+  for (const [offset, side, a, b] of [[-1, "R", "20:00", "20:20"], [-1, "L", "23:00", "23:15"], [-1, "R", "23:35", "23:45"], [0, "L", "00:10", "00:20"], [0, "R", "03:00", "03:20"]]) {
+    const date = addDays(TODAY, offset);
+    const segments = [{ side, start: at(date, a), end: at(date, b) }];
+    entries.push({ id: ++nextId, kind: "feed", started_at: segments[0].start, ended_at: segments[0].end, active: false, data: { method: "breast", segments },
+      note: null, source: "app", created_by: MEMBER.email, updated_by: null, created_at: NOW, updated_at: NOW });
+  }
+}
+// An ordinary newborn feeding day, made up: a relatch 6 minutes after coming off (one feed), back and forth, a bottle,
+// and an evening cluster of four. Every day from two days back, up to now.
+if (query.has("feedingDay")) {
+  entries.splice(0);
+  const at = (date, clock) => { const { year, month, day } = parseDayKey(date); const [hour, minute] = clock.split(":").map(Number); return zonedTimeToUtc(year, month, day, hour, minute, TZ).toISOString(); };
+  const feedDay = [
+    ["L 00:40-00:58"], ["R 03:35-03:50, L 03:52-04:05"], ["B 06:50-07:25", "L"], ["L 09:30-09:50"], ["R 09:56-10:04"], ["R 12:15-12:35"],
+    ["bottle 14:40"], ["L 16:30-16:45"], ["R 17:05-17:15"], ["L 17:35-17:50"], ["R 18:10-18:20"], ["L 20:45-21:10"], ["R 23:20-23:40"],
+  ];
+  for (const offset of [-2, -1, 0]) {
+    const date = addDays(TODAY, offset);
+    for (const [spec, first] of feedDay) {
+      if (spec.startsWith("bottle")) {
+        const start = at(date, spec.split(" ")[1]);
+        if (Date.parse(start) <= Date.parse(NOW)) entries.push({ id: ++nextId, kind: "feed", started_at: start, ended_at: start, active: false, data: { method: "bottle", amount_ml: 60 }, note: null, source: "app", created_by: MEMBER.email, updated_by: null, created_at: NOW, updated_at: NOW });
+        continue;
+      }
+      const segments = spec.split(",").map((part) => { const [side, range] = part.trim().split(" "); const [a, b] = range.split("-"); return { side, start: at(date, a), end: at(date, b) }; });
+      if (Date.parse(segments.at(-1).end) > Date.parse(NOW)) continue;
+      entries.push({ id: ++nextId, kind: "feed", started_at: segments[0].start, ended_at: segments.at(-1).end, active: false,
+        data: { method: "breast", segments, ...(first ? { first_side: first } : {}) }, note: null, source: "app", created_by: MEMBER.email,
+        updated_by: null, created_at: NOW, updated_at: NOW });
+    }
+    for (const [clock, data] of [["04:10", { pee: true, poop: false }], ["10:10", { pee: true, poop: true, color: "mustard" }], ["18:25", { pee: true, poop: false }]]) {
+      if (Date.parse(at(date, clock)) <= Date.parse(NOW)) add("diaper", date, clock, null, data);
+    }
+  }
+}
 
 function HistoryShell() {
   const nav = useAppNav();
