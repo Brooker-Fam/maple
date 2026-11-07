@@ -3,13 +3,15 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { publicOrigin, verifyAccessToken, verifyBasicAuthHeader } from "@/lib/mcp/auth";
 import { isRemoved } from "@/lib/maple/auth";
 import { ADMIN_MEMBER_ID, adminFamilyId, carrierFamily, familyForAuth, FAMILY_ONE, memberIdFromSub } from "@/lib/maple/family";
+import { registerMapleApps } from "@/lib/maple/mcp-apps/activity";
 import { copyForFamily, mapleInstructions, registerMapleTools, unknownFamilyCopy, type ToolCopy } from "@/lib/maple/mcp-tools";
 import { captureServerException } from "@/lib/posthog-server";
 
 /**
  * MCP server for Maple's Log, the family newborn tracker, so a parent can say
  * "she just nursed 12 min left, 8 right" to Claude or ChatGPT. Tools live in
- * src/lib/maple/mcp-tools.ts.
+ * src/lib/maple/mcp-tools.ts, and daily_summary's chart for hosts that draw
+ * MCP Apps (a ui:// resource) in src/lib/maple/mcp-apps/.
  *
  * Transport: Streamable HTTP only, at /api/maple/mcp. SSE is off (it needs
  * Redis). Every POST gets a fresh stateless server, so tool registration must
@@ -31,6 +33,8 @@ function buildHandler(copy: ToolCopy): Handler {
   return createMcpHandler(
     (server) => {
       registerMapleTools(server, copy);
+      // daily_summary's chart for hosts that draw MCP Apps: one static page, the same for every family.
+      registerMapleApps(server);
     },
     {
       serverInfo: { name: "maples-log", version: "1.0.0" },

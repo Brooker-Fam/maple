@@ -153,6 +153,7 @@ import {
 } from "./units";
 import { cleanData } from "./validate";
 import { MAPLE_HOST } from "./origin";
+import { ACTIVITY_VIEW_TOOL_META } from "./mcp-apps/activity";
 
 /**
  * Maple's Log as MCP tools, for Claude and ChatGPT custom connectors (served
@@ -174,6 +175,9 @@ import { MAPLE_HOST } from "./origin";
  *   word for word. Nothing here suggests a dose.
  * - Notes, titles and medicine names are family-written data: they only ever
  *   appear quoted or as values, never as instructions.
+ * - daily_summary's `_meta` names an MCP App view (mcp-apps/activity.ts,
+ *   registered beside these by the route), which hosts that draw one fill
+ *   from its structuredContent; its result is the same either way.
  */
 
 // ── server instructions ─────────────────────────────────────────────────
@@ -1484,6 +1488,8 @@ function addTool<S extends ZodRawShapeCompat>(
     invoking: string;
     invoked: string;
     write?: boolean;
+    /** More of the tool's `_meta`, such as the MCP App view it opens (mcp-apps/). */
+    meta?: Record<string, unknown>;
   },
   run: (args: ShapeOutput<S>, ctx: Ctx) => Promise<CallToolResult>
 ) {
@@ -1507,6 +1513,7 @@ function addTool<S extends ZodRawShapeCompat>(
       _meta: {
         "openai/toolInvocation/invoking": cfg.invoking,
         "openai/toolInvocation/invoked": cfg.invoked,
+        ...cfg.meta,
       },
     },
     handler as unknown as ToolCallback<S>
@@ -3128,6 +3135,8 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       annotations: READ_ANN,
       invoking: "Gathering the week's leaves…",
       invoked: "Summary ready 🍂",
+      // Claude and ChatGPT draw its per_day as the in-app chat's activity chart; the result itself is unchanged.
+      meta: ACTIVITY_VIEW_TOOL_META,
     },
     async (a, ctx) => dailySummaryResult(ctx, a.days ?? 7)
   );
