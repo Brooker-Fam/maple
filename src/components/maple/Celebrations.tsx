@@ -28,7 +28,7 @@ const seenKey = (me: string) => `maple-celebrated:${me}`;
 const milestoneId = (c: Celebration) => (c.milestone && /^[a-z0-9-]+$/.test(c.milestone) ? c.milestone : c.id);
 
 /** Her age is the title of these ("One whole week of Maple", "2 months old today"): their date line skips it. */
-const AGE_TITLED = /^(born|week-\d+|month-\d+|day-100)$/;
+const AGE_TITLED = /^(born|week-\d+|month-\d+|day-(40|100))$/;
 
 function readSeen(me: string): string[] {
   try {

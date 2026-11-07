@@ -14,6 +14,7 @@
     "check:maple-feed": "tsx scripts/maple-feed-check.ts",
     "check:maple-care": "tsx scripts/maple-care-check.ts",
     "check:maple-nutrition": "tsx scripts/maple-nutrition-check.ts",
+    "check:maple-forty-days": "tsx scripts/maple-forty-days-check.ts",
     "check:maple-nutrition-ui": "node scripts/nutrition-ui-check/run.mjs",
     "check:maple-nutrition-chat-ui": "node scripts/nutrition-chat-ui/run.mjs",
     "check:maple-native": "tsx scripts/maple-native-check.ts",

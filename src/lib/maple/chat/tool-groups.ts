@@ -101,6 +101,8 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(can|could|should|may|when can)\s+i\s+(take|have|eat|drink)\b/i,
     /\bmy\s+(meds?|medicines?|medications?|pills?|doses?|pain\w*|temp|temperature|fever|incision|stitches|bleeding|recovery|ob|doctor|lunch|breakfast|dinner|snack|meal|food|drinks?|water|nutrition|protein|fiber)\b/i,
     /\b(nutrition|protein|fiber|fibre|calories|hydrat\w*|breakfast|lunch|dinner|snacks?|meals?|smoothie|oatmeal|salad|sandwich)\b/i,
+    // Warm, soft food and drinks, and the forty days after a birth (guidelines/forty-days.ts).
+    /\b(soups?|broths?|stews?|congee|jook|porridge|teas?|first forty|forty days|40 days|heng ou|confinement|cuarentena|zuo yuezi|sitting the month|lying[- ]in|fourth trimester)\b/i,
   ],
   health: [
     /\b(weigh\w*|weight|lbs?|pounds?|kilos?|kg|grams?|length|height|inches|head (size|circumference)|percentiles?|growth|growing|grew|measure\w*|scale)\b/i,

@@ -5,6 +5,7 @@ import AccountMenu from "../AccountMenu";
 import { useState } from "react";
 import { listNotes, planTitle, type PlanView } from "@/lib/maple/care";
 import { MOM_DISCLAIMER } from "@/lib/maple/guidelines";
+import { FORTY_DAYS } from "@/lib/maple/guidelines/forty-days";
 import type { DoseEntry } from "@/lib/maple/types";
 import { ChatCareRow } from "../chat/ChatTerms";
 import { Icon, KindBadge, type IconName } from "../icons";
@@ -17,6 +18,7 @@ import CareSettingsSheet from "./CareSettingsSheet";
 import CareHistorySheet from "./CareHistorySheet";
 import CareTeam from "./CareTeam";
 import { useCareNav } from "./CareNav";
+import FortyDays, { FortyDaysRow } from "./FortyDays";
 import { CheckInSection } from "./CheckIn";
 import { CrisisStrip } from "./CrisisSheet";
 import MedPlanSheet from "./MedPlanSheet";
@@ -51,9 +53,10 @@ function Page({ care }: { care: UseCare }) {
   const write = care.access.write;
   const baby = state?.baby;
   const babyName = baby ? (baby.nickname || baby.name).split(" ")[0] : "";
-  // The same fact as Today's hero ("Day 6" for her first two weeks), so the two never disagree.
+  // The same fact as Today's hero ("Day 6" for her first two weeks), so the two never disagree; through day 40
+  // it carries the forty days many traditions keep for her rest (guidelines/forty-days.ts).
   const age = summary?.age ?? null;
-  const day = age ? (age.days < 14 ? `Day ${age.dayOfLife}` : `${babyName} is ${age.label}`) : null;
+  const day = age ? (age.dayOfLife <= FORTY_DAYS ? `Day ${age.dayOfLife} of the first forty` : `${babyName} is ${age.label}`) : null;
   const notes = listNotes(
     care.plans.map((v) => v.plan),
     ctx
@@ -109,6 +112,8 @@ function Page({ care }: { care: UseCare }) {
           </button>
         ))}
       </div>
+
+      <FortyDays care={care} />
 
       <NutritionSection key={`${state?.family?.id}:${state?.me.email}:${care.state.person.member}`} care={care} />
 
@@ -216,6 +221,7 @@ function Page({ care }: { care: UseCare }) {
         <div className={GROUP}>
           <NotificationsRow />
           <ChatCareRow />
+          <FortyDaysRow />
           {write && <NavRow icon="pencil" label="Settings for this page" note="Care team, nursing, early doses, next OB visit" onClick={() => setSub({ kind: "settings" })} />}
         </div>
         <Footnote>

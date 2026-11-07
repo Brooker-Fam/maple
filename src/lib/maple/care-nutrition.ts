@@ -1,12 +1,24 @@
 import { CLUSTER_GAP_MS, clusterOf, nursingRuns, openSegment, staleFeed, typicalFeedGapMin, type TapFeedData } from "./feed";
 import { foodNutritionSummary } from "./care-nutrition-summary";
 import type { FoodNutritionSummary } from "./care-nutrition-types";
+import { fortyDay } from "./forty-days";
 import { MOM_NUTRITION_SUGGESTIONS } from "./guidelines";
 import { dayBounds, dayKey, formatMinutes, formatTime } from "./time";
 import type { CareEntry, CareNutritionEntry, Entry, EntryOf } from "./types";
 
-type NutritionOptions = { now: Date; tz: string; feeding?: "yes" | "no" | null };
+/** `bornAt`: the baby's birth, so the first forty days can offer their warm, simple versions (guidelines/forty-days.ts). */
+type NutritionOptions = { now: Date; tz: string; feeding?: "yes" | "no" | null; bornAt?: string | null };
 type SuggestionKey = keyof typeof MOM_NUTRITION_SUGGESTIONS;
+
+/** In the first forty days, the general and between-feeds ideas come in their warm, simple versions; the rest stay as they are. */
+const FORTY_DAYS_KEYS: Partial<Record<SuggestionKey, SuggestionKey>> = { general: "forty_general", prepared: "forty_prepared" };
+
+export type NutritionSuggestion = (typeof MOM_NUTRITION_SUGGESTIONS)[SuggestionKey];
+
+/** The other sources a suggestion's words lean on (the forty days' ones), after its own. */
+export function alsoSources(suggestion: NutritionSuggestion): readonly { url: string; label: string }[] {
+  return "also" in suggestion ? suggestion.also : [];
+}
 
 function foodSuggestion(nutrition: FoodNutritionSummary): SuggestionKey | null {
   if (!nutrition.assessedGroupItems || nutrition.unassessedEntries || nutrition.unknownGroupItems) return null;
@@ -85,9 +97,11 @@ export function careNutritionSummary(
     }
   }
   const { line: nursingLine, situation } = nursingContext(babyEntries, options);
-  const suggestionKey: SuggestionKey = situation === "running"
+  const plainKey: SuggestionKey = situation === "running"
     ? drinkCount === 0 ? "drink" : foodCount === 0 ? "snack" : "prepared"
     : situation;
+  const forty = fortyDay(options.bornAt, options.now, options.tz) !== null;
+  const suggestionKey: SuggestionKey = forty ? FORTY_DAYS_KEYS[plainKey] ?? plainKey : plainKey;
   const nutrition = foodNutritionSummary(dayEntries);
   const foodKey = foodSuggestion(nutrition);
   const suggestion = MOM_NUTRITION_SUGGESTIONS[suggestionKey];

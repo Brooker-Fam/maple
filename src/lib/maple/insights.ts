@@ -816,6 +816,8 @@ function milestonesReached(o: {
     if (at > nowMs) break;
     add({ id: `month-${m}`, emoji: "🌳", title: `${m} month${m === 1 ? "" : "s"} old today`, milestone: `monthly-${m}` }, at);
   }
+  // Forty days: the stretch many traditions set aside for the new family to rest and be cared for (guidelines/forty-days.ts).
+  add({ id: "day-40", emoji: "🌳", title: `Forty days of ${name}`, milestone: "40 days" }, bornMs + 40 * 24 * 3600_000);
   add({ id: "day-100", emoji: "💯", title: `100 days of ${name}`, milestone: "100 days" }, bornMs + 100 * 24 * 3600_000);
 
   /**

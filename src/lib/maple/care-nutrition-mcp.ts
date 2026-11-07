@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CareToolRegistrar } from "./care-mcp";
-import { careNutritionSummary } from "./care-nutrition";
+import { alsoSources, careNutritionSummary } from "./care-nutrition";
 import { FOOD_GROUPS, type NutrientTotal } from "./care-nutrition-types";
 import { cleanCareFoodItems, FOOD_ITEM_LIMITS, NUTRIENT_LIMITS } from "./care-nutrition-validation";
 import { careDayRange, createCareEntry, listCareEntries, type CareSession } from "./care-store";
@@ -60,7 +60,7 @@ async function nutritionStatus(ctx: Ctx, session: CareSession) {
     listCareEntries(session, { ...careDayRange(today, today, ctx.tz), kinds: ["food", "drink"] }),
     listEntries(ctx.fam, { babyId: ctx.baby.id, kinds: ["feed"], from: new Date(ctx.now.getTime() - 7 * 86400_000), to: ctx.now, includeActive: true, limit: 1000 }),
   ]);
-  return careNutritionSummary(entries, feeds, { now: ctx.now, tz: ctx.tz, feeding: session.person?.settings.feeding });
+  return careNutritionSummary(entries, feeds, { now: ctx.now, tz: ctx.tz, feeding: session.person?.settings.feeding, bornAt: ctx.baby.born_at });
 }
 
 export function registerNutritionTools(server: McpServer, copy: ToolCopy, add: CareToolRegistrar, clientId: ClientId) {
@@ -121,7 +121,10 @@ export function registerNutritionTools(server: McpServer, copy: ToolCopy, add: C
       `Food detail coverage: ${nutrition.itemCount} foods; ${nutrition.unassessedEntries} food entries without details; ${nutrition.unknownGroupItems} foods with unknown groups.`,
       "This is a record of what was logged, not a complete measure of intake.",
       summary.nursingLine,
-      ...summary.suggestions.flatMap((suggestion) => [`${suggestion.title}: ${suggestion.body}`, `Source: ${suggestion.sourceLabel} (${suggestion.sourceUrl}).`]),
+      ...summary.suggestions.flatMap((suggestion) => {
+        const also = alsoSources(suggestion);
+        return [`${suggestion.title}: ${suggestion.body}`, `Source: ${suggestion.sourceLabel} (${suggestion.sourceUrl}).${also.length ? ` Also: ${also.map((a) => `${a.label} (${a.url})`).join("; ")}.` : ""}`];
+      }),
       ...summary.dayEntries.flatMap((entry) => [`c${entry.id}: ${nutritionEntryText(entry)} at ${whenText(entry.at, ctx)}.`, ...foodDetailsText(entry)]),
     ].filter(Boolean).join("\n"), summary);
   });

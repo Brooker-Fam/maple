@@ -69,7 +69,7 @@ export default function Home() {
                 <span className="home-mom-star">✧</span>
               </div>
               <h3>Because mom<br />matters, too.</h3>
-              <p>A place for your recovery, medicines, and daily check-ins.</p>
+              <p>A place for your recovery, from the first forty days on: medicines, food and drink, and daily check-ins.</p>
             </article>
           </div>
         </section>

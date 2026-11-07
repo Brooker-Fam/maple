@@ -11,6 +11,8 @@
 import { cToF } from "./units";
 import type { JaundiceLevel, StoolColor, TempMethod } from "./types";
 import { FAMILY_ONE_VOICE, type Voice } from "./voice";
+// The forty days' book and scald sources: guidelines/forty-days.ts imports nothing from here, so there is no cycle.
+import { CAPT_SCALDS, FORTY_DAYS_BOOK } from "./guidelines/forty-days";
 
 // Copy about the baby takes a Voice (voice.ts): the family's own name and
 // pronouns. Each UPPER_CASE constant is the same copy in family 1's words.
@@ -606,6 +608,23 @@ export const MOM_NUTRITION_SUGGESTIONS = {
     title: "A little variety",
     body: "A fruit or vegetable you enjoy could go alongside your next meal or snack. Fresh, frozen or canned options can all fit.",
     ...VARIED_FOOD_SOURCE,
+  },
+  // The first forty days (care-nutrition.ts swaps these in for general and prepared through day 40): the warm,
+  // simple food of Heng Ou's The First Forty Days ("Fill your cup" nods to its chapter "Filling Your Cup: What to
+  // Eat"), kept to what the NHS says about eating while breastfeeding. Hot food waits for someone else to hold the
+  // baby (CAPT). `also` names the other sources the words lean on.
+  forty_general: {
+    title: "Fill your cup",
+    body: "Soups, stews, congee and porridge are gentle on a tired body and easy to make in one pot. Choose a variety of foods you enjoy, keep a drink handy, and let someone else do the cooking when they can.",
+    sourceUrl: FORTY_DAYS_BOOK.url,
+    sourceLabel: FORTY_DAYS_BOOK.label,
+    also: [{ url: VARIED_FOOD_SOURCE.sourceUrl, label: VARIED_FOOD_SOURCE.sourceLabel }],
+  },
+  forty_prepared: {
+    title: "Warm food between feeds",
+    body: "Have a drink beside you when you settle in to feed, and something warm and simple, like soup or congee, between feeds or while someone else holds the baby. You don't need a special diet for breastfeeding.",
+    ...NURSING_NUTRITION_SOURCE,
+    also: [{ url: FORTY_DAYS_BOOK.url, label: FORTY_DAYS_BOOK.label }, { url: CAPT_SCALDS.url, label: CAPT_SCALDS.label }],
   },
 } as const;
 

@@ -15,6 +15,7 @@ import { CallButton, OnTop, smsHref, telHref } from "./CrisisSheet";
 import { GROUP, NavRow } from "./parts";
 import { useCare } from "./useCare";
 import { WarningSignsCard } from "./WarningSigns";
+import { FortyDaysHelp } from "./FortyDays";
 
 /**
  * Support (§8.2): help lines, warning signs and the partner section, as a
@@ -83,6 +84,7 @@ export default function SupportScreen({ open, onClose }: SupportScreenProps) {
                   <p className={cx(tone.faint, "mt-2 px-1 text-[13px] leading-snug")}>{supportCopy.wellVisit}</p>
                 </div>
               )}
+              <FortyDaysHelp self />
               <Common />
               <div className={GROUP}>
                 <NavRow icon="users" label={family} note="What to watch for, how to help, and when to call" onClick={() => setPartner(true)} />
@@ -92,6 +94,7 @@ export default function SupportScreen({ open, onClose }: SupportScreenProps) {
           ) : (
             <>
               <PartnerGuide />
+              <FortyDaysHelp self={false} />
               <section>
                 <SectionTitle>If you need help now</SectionTitle>
                 <HelpLines lines={help.now} />

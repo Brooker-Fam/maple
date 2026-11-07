@@ -103,6 +103,7 @@ export function milestoneLabel(id: string | null | undefined, w: MilestoneWords)
   if (id === "born") return "Hello, world";
   if ((m = /^week-(\d+)$/.exec(id))) return `${plural(Number(m[1]), "week")} old`;
   if ((m = /^month-(\d+)$/.exec(id))) return `${plural(Number(m[1]), "month")} old`;
+  if (id === "day-40") return w.name === "the baby" ? "Forty days old" : `Forty days of ${w.name}`;
   if ((m = /^day-(\d+)$/.exec(id))) return w.name === "the baby" ? `${m[1]} days old` : `${m[1]} days of ${w.name}`;
   if ((m = /^diapers-(\d+)$/.exec(id))) return `Diaper #${m[1]}`;
   if ((m = /^feeds-(\d+)$/.exec(id))) return `Feed #${m[1]}`;

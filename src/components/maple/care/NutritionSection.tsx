@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { careNutritionSummary } from "@/lib/maple/care-nutrition";
+import { alsoSources, careNutritionSummary } from "@/lib/maple/care-nutrition";
 import { addDays, dayKey, DEFAULT_TZ, formatDayLabel } from "@/lib/maple/time";
 import type { CareNutritionEntry, CareNutritionInput } from "@/lib/maple/types";
 import { Button, SectionTitle, cx, tone } from "../ui";
@@ -25,7 +25,7 @@ export default function NutritionSection({ care }: { care: UseCare }) {
   const [sheet, setSheet] = useState<{ kind: "food" | "drink"; entry?: CareNutritionEntry } | null>(null);
   const { save, saving } = useNutrition(care);
   const history = useNutritionHistory(day, today);
-  const summary = careNutritionSummary(care.state.entries, state?.entries ?? [], { now, tz, feeding: care.state.settings.feeding });
+  const summary = careNutritionSummary(care.state.entries, state?.entries ?? [], { now, tz, feeding: care.state.settings.feeding, bornAt: state?.baby.born_at });
   const entries = day === today ? summary.dayEntries : history.entries;
   const saveEntry = async (input: CareNutritionInput, existing?: CareNutritionEntry) => {
     await save(input, existing);
@@ -47,7 +47,9 @@ export default function NutritionSection({ care }: { care: UseCare }) {
       {summary.suggestions.map((suggestion) => <div key={suggestion.title} className="space-y-1">
         <p className={cx(tone.body, "text-[15px] font-medium")}>{suggestion.title}</p>
         <p className={cx(tone.muted, "text-[14px] leading-relaxed")}>{suggestion.body}</p>
-        <a href={suggestion.sourceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-[44px] items-center text-[13px] font-medium text-mp-accent-fg underline underline-offset-2">{suggestion.sourceLabel}</a>
+        <div className="flex flex-wrap gap-x-4">
+          {[{ url: suggestion.sourceUrl, label: suggestion.sourceLabel }, ...alsoSources(suggestion)].map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-[44px] items-center text-[13px] font-medium text-mp-accent-fg underline underline-offset-2">{source.label}</a>)}
+        </div>
       </div>)}
     </div>
     <label className="flex items-center gap-3 px-1"><span className={cx(tone.label, "shrink-0")}>Last 7 days</span>
