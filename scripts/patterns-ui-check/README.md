@@ -35,9 +35,11 @@ the Edit action is focused or its sheet is open. Sparse-log checks cover pump-on
 and tummy-only days, a thirty-second sleep, sleep/nursing carried across midnight,
 unlogged table rows, and the stated limits of the All date range. A fresh-snapshot
 case keeps the minute clock fixed while the accepted server time advances, proving
-newly logged activity appears immediately and true future events stay excluded. A made-up feeding day (`feedingDay=1`: a relatch under
-10 minutes, back and forth, a bottle and an evening cluster) checks Between feeds under the clock, its
-numbers in Compare days and Daily totals, and the card at 320 pixels by day and at night.
+newly logged activity appears immediately and true future events stay excluded. A made-up feeding day (`feedingDay=1`: sides switched a
+minute apart, back on 6 minutes after coming off, back and forth, a bottle and an evening cluster) checks
+Between feeds under the clock (every gap, the ranges, the cluster's band), the gaps in Daily totals' table
+and charts, and the card at 320 pixels by day and at night; `lateCluster=1` checks a cluster across
+midnight on both days.
 
 Screenshots in `test-results/maple-patterns-ui` contain example records only and
 are ignored by Git. These component checks do not exercise server persistence,

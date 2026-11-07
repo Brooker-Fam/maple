@@ -508,22 +508,24 @@ try {
     });
   }
 
-  await scenario("between feeds lists each feed and the time to the next, start to start, as Today counts feeds", "feedingDay=1", 375, async (page) => {
+  await scenario("between feeds shows every gap, start to start, with how many fell in each range", "feedingDay=1", 375, async (page) => {
     const card = page.getByRole("region", { name: "Between feeds", exact: true });
     await card.waitFor();
     const list = card.getByRole("list", { name: "Feeds and the time between them", exact: true });
-    // Today so far (noon): yesterday's last feed leads, so the gap across midnight shows; the 9:56 relatch is the 9:30 feed.
-    const today = (await list.innerText()).replace(/\s+/g, " ");
-    assert.match(today, /^Yesterday 11:20 PM Nursed 20m Right only 1h 20m until the next feed Today 12:40 AM Nursed 18m Left only 2h 55m/);
-    assert.match(today, /3:35 AM Nursed 28m Right then Left 3h 15m until the next feed 6:50 AM Nursed 35m Left first, then back and forth 2h 40m until the next feed 9:30 AM Nursed 28m Left then Right · on and off until 10:04 AM$/);
-    assert.equal(await card.getByRole("definition").first().innerText(), "2h 55m", "About every: the middle of the day's gaps");
-    assert.match((await card.locator("dl").innerText()).replace(/\s+/g, " "), /Longest gap 3h 15m 3:35–6:50 AM/);
+    const text = async (locator) => (await locator.innerText()).replace(/\s+/g, " ").trim();
+    // Today so far (noon): yesterday's last feed leads, so the gap across midnight shows. A side switched a minute
+    // later stays on its row; back on 6 minutes after coming off is its own row, with its gap, though Today counts one feed.
+    assert.equal(await text(list), "Yesterday 11:20 PM Nursed 20m · Right 1h 20m until the next start Today 12:40 AM Nursed 18m · Left 2h 55m until the next start "
+      + "3:35 AM Nursed 29m · L 14 · R 15 3h 15m until the next start 6:50 AM Nursed 35m · Back and forth 2h 40m until the next start "
+      + "9:30 AM Nursed 20m · Left 26m until the next start 9:56 AM Nursed 8m · Right · back on after 6m");
+    assert.equal(await text(card.locator("p").first()), "5 gaps · longest 3h 15m, 3:35–6:50 AM");
+    assert.equal(await text(card.locator("dl")), "Under 1 hour 1 1 to 2 hours 1 2 to 3 hours 2 3 to 4 hours 1 4 hours or more 0");
     await page.screenshot({ path: path.join(screenshots, "between-feeds-375-today.png"), fullPage: true });
 
+    // Yesterday, whole: a cluster is a shaded band with every one of its gaps, never folded.
     await page.getByRole("radio", { name: "Yesterday", exact: true }).click();
-    const yesterday = (await list.innerText()).replace(/\s+/g, " ");
-    assert.match(yesterday, /2h 25m until the next feed 2:40 PM Bottle · 2\.03 oz 1h 50m until the next feed 4:30 PM Cluster · 4 feeds 4:30, 5:05, 5:35, 6:10 PM 30m–35m apart · nursed 50m 2h 35m until the next feed 8:45 PM/);
-    assert.match((await card.locator("dl").innerText()).replace(/\s+/g, " "), /About every 2h 35m outside clusters Longest gap 3h 15m/);
+    assert.match(await text(list), /2h 25m until the next start 2:40 PM Bottle · 2\.03 oz 1h 50m until the next start Cluster 4:30–6:20 PM · 4 feeds 4:30 PM Nursed 15m · Left 35m until the next start 5:05 PM Nursed 10m · Right 30m until the next start 5:35 PM Nursed 15m · Left 35m until the next start 6:10 PM Nursed 10m · Right 2h 35m until the next start 8:45 PM/);
+    assert.equal(await text(card.locator("dl")), "Under 1 hour 4 1 to 2 hours 2 2 to 3 hours 6 3 to 4 hours 1 4 hours or more 0");
     await card.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(screenshots, "between-feeds-375-yesterday.png"), fullPage: true });
 
@@ -542,45 +544,31 @@ try {
     await page.screenshot({ path: path.join(screenshots, "between-feeds-320-night.png"), fullPage: true });
     await page.evaluate(() => window.__patterns.night(false));
 
-    // The last 24 hours' about every is Today's "Feeds lately" (typicalFeedGapMin), word for word.
-    await page.getByRole("radio", { name: /24h$/ }).click();
-    assert.equal(await card.getByRole("definition").first().innerText(), "2h 35m");
-
-    // Comparing days with Feeds alone: each day's gaps, in the same words on ribbons and circles.
-    await page.getByRole("radio", { name: "Compare days", exact: true }).click();
-    const ribbon = page.getByRole("button", { name: /^Yesterday.*Open in the Timeline$/ });
-    await ribbon.waitFor();
-    assert.match(await ribbon.getAttribute("aria-label"), /12 feeds · about every 2h 35m · longest gap 3h 15m/);
-    await ribbon.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(screenshots, "feed-gaps-ribbons-320.png"), fullPage: false });
-    await page.getByRole("radio", { name: "Circles", exact: true }).click();
-    assert.match(await page.getByRole("button", { name: /^Yesterday.*Open this day in the Timeline/ }).getAttribute("aria-label"), /12 feeds; about every 2h 35m; longest gap 3h 15m/);
-    await activity.getByRole("radio", { name: "All", exact: true }).click();
-    assert(!(await page.getByRole("button", { name: /^Yesterday.*Open this day in the Timeline/ }).getAttribute("aria-label")).includes("longest gap"), "All keeps its everyday summary");
-
-    // Daily totals: the table has both numbers per day, and the chart its longest gap.
+    // Daily totals: each day's gaps under an hour (of all of them) and its longest, in the table and two charts.
     await page.getByRole("radio", { name: "Daily totals", exact: true }).click();
     const table = page.getByRole("table", { name: "Daily totals", exact: true });
     await table.waitFor();
     const headers = await table.getByRole("columnheader").allTextContents();
-    assert.deepEqual(headers.slice(0, 7), ["Day", "Feeds", "Sleep", "Wet", "Dirty", "Feeds about every", "Longest feed gap"]);
+    assert.deepEqual(headers.slice(0, 7), ["Day", "Feeds", "Sleep", "Wet", "Dirty", "Gaps under 1 hour", "Longest gap"]);
     const cells = async (day) => table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: day, exact: true }) }).locator("th,td").allTextContents();
-    assert.deepEqual((await cells("Yesterday")).slice(5, 7), ["2h 35m", "3h 15m"]);
-    assert.deepEqual((await cells("Today")).slice(5, 7), ["2h 55m", "3h 15m"]);
+    assert.deepEqual((await cells("Yesterday")).slice(5, 7), ["4 of 13", "3h 15m"]);
+    assert.deepEqual((await cells("Today")).slice(5, 7), ["1 of 5", "3h 15m"]);
     await page.getByRole("button", { name: "Charts", exact: true }).click();
-    await page.getByRole("img", { name: /^Longest gap between feeds per day:.*10\/28 3h 15m, 10\/29 3h 15m$/ }).waitFor();
+    await page.getByRole("img", { name: "Gaps under an hour per day: 10/27 4 of 12, 10/28 4 of 13, 10/29 1 of 5", exact: true }).waitFor();
+    await page.getByRole("img", { name: "Longest gap between feeds per day: 10/27 3h 15m, 10/28 3h 15m, 10/29 3h 15m", exact: true }).waitFor();
     await noOverflow(page);
-    await page.screenshot({ path: path.join(screenshots, "feed-gaps-chart-320.png"), fullPage: true });
+    await page.screenshot({ path: path.join(screenshots, "feed-gaps-charts-320.png"), fullPage: true });
   });
 
-  await scenario("between feeds says how much of a cluster across midnight each day shows", "lateCluster=1", 375, async (page) => {
+  await scenario("between feeds bands a cluster across midnight with its whole span on each day", "lateCluster=1", 375, async (page) => {
     const card = page.getByRole("region", { name: "Between feeds", exact: true });
     const list = card.getByRole("list", { name: "Feeds and the time between them", exact: true });
     await card.waitFor();
-    // Today: the cluster's feed from last night leads, folded with today's, and says it's two of three.
-    assert.match((await list.innerText()).replace(/\s+/g, " "), /^Yesterday 11:35 PM Cluster · 2 of its 3 feeds 11:35 PM, 12:10 AM 35m apart · nursed 20m 2h 50m until the next feed Today 3:00 AM Nursed 20m Right only$/);
+    const text = async () => (await list.innerText()).replace(/\s+/g, " ").trim();
+    // Today: the cluster's feed from last night leads, inside the band, with the cluster's own span.
+    assert.equal(await text(), "Cluster 11:00 PM–12:20 AM · 3 feeds Yesterday 11:35 PM Nursed 10m · Right 35m until the next start Today 12:10 AM Nursed 10m · Left 2h 50m until the next start 3:00 AM Nursed 20m · Right");
     await page.getByRole("radio", { name: "Yesterday", exact: true }).click();
-    assert.match((await list.innerText()).replace(/\s+/g, " "), /^8:00 PM Nursed 20m Right only 3h 00m until the next feed 11:00 PM Cluster · 2 of its 3 feeds 11:00, 11:35 PM 35m apart · nursed 25m$/);
+    assert.equal(await text(), "8:00 PM Nursed 20m · Right 3h 00m until the next start Cluster 11:00 PM–12:20 AM · 3 feeds 11:00 PM Nursed 15m · Left 35m until the next start 11:35 PM Nursed 10m · Right");
   });
 
   await scenario("fresh snapshots appear before the minute tick while true future entries stay hidden", "empty=1", 375, async (page) => {

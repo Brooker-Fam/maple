@@ -67,13 +67,13 @@ if (query.has("lateCluster")) {
       note: null, source: "app", created_by: MEMBER.email, updated_by: null, created_at: NOW, updated_at: NOW });
   }
 }
-// An ordinary newborn feeding day, made up: a relatch 6 minutes after coming off (one feed), back and forth, a bottle,
-// and an evening cluster of four. Every day from two days back, up to now.
+// An ordinary newborn feeding day, made up: sides switched a minute apart, back on 6 minutes after coming off (one
+// feed as counted, two rows in Between feeds), back and forth, a bottle, and an evening cluster of four. Every day from two days back, up to now.
 if (query.has("feedingDay")) {
   entries.splice(0);
   const at = (date, clock) => { const { year, month, day } = parseDayKey(date); const [hour, minute] = clock.split(":").map(Number); return zonedTimeToUtc(year, month, day, hour, minute, TZ).toISOString(); };
   const feedDay = [
-    ["L 00:40-00:58"], ["R 03:35-03:50, L 03:52-04:05"], ["B 06:50-07:25", "L"], ["L 09:30-09:50"], ["R 09:56-10:04"], ["R 12:15-12:35"],
+    ["L 00:40-00:58"], ["R 03:35-03:50, L 03:51-04:05"], ["B 06:50-07:25", "L"], ["L 09:30-09:50"], ["R 09:56-10:04"], ["R 12:15-12:35"],
     ["bottle 14:40"], ["L 16:30-16:45"], ["R 17:05-17:15"], ["L 17:35-17:50"], ["R 18:10-18:20"], ["L 20:45-21:10"], ["R 23:20-23:40"],
   ];
   for (const offset of [-2, -1, 0]) {

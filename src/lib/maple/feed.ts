@@ -1481,6 +1481,37 @@ function startSideOf(p: RunPart): Side | null {
   return p.first ? p.entry.data.first_side ?? null : null;
 }
 
+/** What runs and latches share about a group of stretches: whole minutes, the end, the sides in order, the first side. */
+function partsSummary(g: RunPart[], nowMs: number): { min: FeedMinutes; end: number | null; order: StretchSide[]; firstSide: Side | null; entries: EntryOf<"feed">[] } {
+  const min = noMinutes();
+  for (const p of g) addMinutes(min, partMinutes(p, nowMs));
+  let end: number | null = -Infinity;
+  for (const p of g) end = end === null || p.end === null ? null : Math.max(end, p.end);
+  const order: StretchSide[] = [];
+  for (const p of g) {
+    const d = p.entry.data;
+    const sides: StretchSide[] = p.side !== null ? [p.side] : [d.first_side ?? minutesSide(d), d.last_side].filter((x): x is Side => !!x);
+    if (p.side === null && (d.both_sec ?? 0) > 0) sides.push("B");
+    for (const x of sides) if (order[order.length - 1] !== x) order.push(x);
+  }
+  const tracked = g.find((p) => isTracked(p.side));
+  return {
+    min,
+    end,
+    order,
+    firstSide: startSideOf(g[0]) ?? (isTracked(tracked?.side) ? tracked.side : null),
+    entries: [...new Map(g.map((p) => [p.entry.id, p.entry])).values()],
+  };
+}
+
+/** Her stretches on the breast in order (a feed logged by minutes is one), the way runs and latches read them. */
+function breastParts(entries: readonly Entry[]): RunPart[] {
+  return entries
+    .filter(isBreastFeed)
+    .flatMap(runParts)
+    .sort((a, b) => a.start - b.start || a.entry.id - b.entry.id);
+}
+
 /**
  * Her nursing as feeds (runs), oldest first, each tagged with its cluster:
  * off the breast under 10 minutes is the same feed (Pause or Done alike);
@@ -1490,10 +1521,7 @@ function startSideOf(p: RunPart): Side | null {
  */
 export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] {
   const nowMs = now.getTime();
-  const parts = entries
-    .filter(isBreastFeed)
-    .flatMap(runParts)
-    .sort((a, b) => a.start - b.start || a.entry.id - b.entry.id);
+  const parts = breastParts(entries);
   const groups: RunPart[][] = [];
   let end: number | null = -Infinity;
   for (const p of parts) {
@@ -1507,12 +1535,7 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
     }
   }
   const runs: NursingRun[] = groups.map((g) => {
-    const min = noMinutes();
-    for (const p of g) addMinutes(min, partMinutes(p, nowMs));
-    const entriesIn = [...new Map(g.map((p) => [p.entry.id, p.entry])).values()];
-    let runEnd: number | null = -Infinity;
-    for (const p of g) runEnd = runEnd === null || p.end === null ? null : Math.max(runEnd, p.end);
-    const tracked = g.find((p) => isTracked(p.side));
+    const { min, end: runEnd, order, firstSide, entries: entriesIn } = partsSummary(g, nowMs);
     let lastSide: Side | null = null;
     for (let i = g.length - 1; i >= 0 && !lastSide; i--) {
       const p = g[i];
@@ -1520,20 +1543,13 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
       else if (p.side === null) lastSide = p.entry.data.last_side ?? minutesSide(p.entry.data);
     }
     const lastPart = g[g.length - 1];
-    const order: StretchSide[] = [];
-    for (const p of g) {
-      const d = p.entry.data;
-      const sides: StretchSide[] = p.side !== null ? [p.side] : [d.first_side ?? minutesSide(d), d.last_side].filter((x): x is Side => !!x);
-      if (p.side === null && (d.both_sec ?? 0) > 0) sides.push("B");
-      for (const x of sides) if (order[order.length - 1] !== x) order.push(x);
-    }
     return {
       start: g[0].start,
       end: runEnd,
       entries: entriesIn,
       parts: g.length,
       min,
-      firstSide: startSideOf(g[0]) ?? (isTracked(tracked?.side) ? tracked.side : null),
+      firstSide,
       lastSide,
       // Back and forth by minutes comes last (as in `order`), so it never sets the next side either.
       endSide: lastPart.side ?? ((lastPart.entry.data.both_sec ?? 0) > 0 ? "B" : lastPart.entry.data.last_side ?? null),
@@ -1700,44 +1716,90 @@ export function typicalFeedGapMin(entries: readonly Entry[], now: Date, runs: re
 }
 
 // ── time between feeds ───────────────────────────────────────────────────
+//
+// Patterns' Between feeds lists every time she went on the breast and every
+// bottle, with the time from each start to the next, so each gap can be read
+// on its own, the way a lactation consultant reads a feeding log: a run of
+// short ones, a few long ones. That's finer than feeds as counted: back on
+// within 10 minutes is one feed on Today and in the counts (nursingRuns), but
+// here it's its own row, with how long she was off, so its gap shows. Pause
+// and Done read the same, as everywhere.
 
-/**
- * Over this from one feed's start to the next, the time between two logged
- * feeds is a gap in the log, not in her feeds: it isn't counted (Patterns and
- * daily_summary alike).
- */
+/** Under this off the breast is the same time on the breast (switching sides, a quick burp), Pause or Done alike. */
+export const RELATCH_MS = 2 * MIN;
+/** Over this from one start to the next is a gap in the log, not in her feeds: it isn't counted. */
 export const FEED_GAP_MAX_MS = 12 * HOUR;
-/** "About every" waits for this many gaps outside clusters, so two feeds an hour apart aren't "about every hour". */
-export const USUAL_GAP_MIN_GAPS = 3;
+/** The breakdown's edges in minutes: under 1 hour, 1 to 2, 2 to 3, 3 to 4, and 4 hours or more. */
+export const GAP_BUCKETS_MIN = [60, 120, 180, 240] as const;
 
-/** One feed as it's counted (a nursing run or a bottle), with the time since the feed before it, start to start. */
-export type FeedStep = {
-  feed: { kind: "breast"; run: NursingRun } | { kind: "bottle"; entry: EntryOf<"feed"> };
-  /** Epoch ms. A bottle with no duration ends where it began; end is null while she's still on the breast. */
+/** One time on the breast: stretches with under 2 minutes off between them, from one feed entry or several. */
+export type Latch = {
+  start: number;
+  /** Null while she's on the breast. */
+  end: number | null;
+  /** Whole minutes per side, the rows' rule, so a feed's latches add up to the feed. */
+  min: FeedMinutes;
+  /** The sides in the order she was on them, and the side she started on, as a run's. */
+  order: StretchSide[];
+  firstSide: Side | null;
+  entries: EntryOf<"feed">[];
+  /** The feed as counted (the 10-minute rule) this is part of. */
+  run: NursingRun;
+};
+
+/** A time on the breast or a bottle, with the time since the one before, start to start. */
+export type GapStep = {
+  feed: { kind: "breast"; latch: Latch } | { kind: "bottle"; entry: EntryOf<"feed"> };
+  /** Epoch ms. A bottle with no duration ends where it began. */
   start: number;
   end: number | null;
-  /** Since the feed before began; null for the first feed, or one logged at the same moment as the one before. */
+  /** Since the one before began; null for the first, or one logged at the same moment as the one before. */
   sinceMs: number | null;
   /**
-   * The counted gap in whole clock minutes (spanMinutes, so 6:00 to 8:45 AM is 2h 45m whatever the seconds); null
-   * with no feed before, or over 12 hours (FEED_GAP_MAX_MS).
+   * The counted gap in whole clock minutes (spanMinutes, so 6:00 to 8:45 AM is 2h 45m whatever the seconds); null with
+   * none before, or over 12 hours (FEED_GAP_MAX_MS).
    */
   gapMin: number | null;
-  /** This feed and the one before are runs of the same cluster. */
-  inCluster: boolean;
+  /** Back on the breast under 10 minutes after the time before, so the same feed as counted: the minutes she was off. */
+  backOnMin: number | null;
+  /** Its feed's cluster (an index into feedClusters(runs)), null outside one and for a bottle. */
+  cluster: number | null;
 };
 
 /**
- * Her feeds, oldest first, each with the time since the one before: every
- * nursing run (under 10 minutes off the breast is one feed, Pause or Done
- * alike) and every bottle, as feeds are counted everywhere, measured start to
- * start as "Last feed started" and the feed-gap checks measure. A gap over 12
- * hours isn't counted (gapMin null), though sinceMs still says how long it
- * was. Pass `runs` when you already have them.
+ * Every time on the breast and every bottle, oldest first, each with the
+ * time since the one before, start to start. Coming off for under 2 minutes
+ * is the same time on the breast; any longer and going back on is a new one,
+ * whatever was tapped. A gap over 12 hours isn't counted (gapMin null), though
+ * sinceMs still says how long it was. Pass `runs` (nursingRuns of the same
+ * entries) when you already have them.
  */
-export function feedSteps(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): FeedStep[] {
-  const feeds: Pick<FeedStep, "feed" | "start" | "end">[] = [
-    ...runs.map((run) => ({ feed: { kind: "breast" as const, run }, start: run.start, end: run.end })),
+export function feedGaps(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): GapStep[] {
+  const nowMs = now.getTime();
+  const groups: RunPart[][] = [];
+  let end: number | null = -Infinity;
+  for (const p of breastParts(entries)) {
+    const cur = groups[groups.length - 1];
+    if (cur && (end === null || p.start - end < RELATCH_MS)) {
+      cur.push(p);
+      end = end === null || p.end === null ? null : Math.max(end, p.end);
+    } else {
+      groups.push([p]);
+      end = p.end;
+    }
+  }
+  // Each latch sits inside one run (2 minutes is under the runs' 10): the run that started last by its start.
+  let r = 0;
+  const latches: Latch[] = [];
+  for (const g of groups) {
+    while (r + 1 < runs.length && runs[r + 1].start <= g[0].start) r++;
+    const run = runs[r];
+    if (!run) continue;
+    const { min, end: latchEnd, order, firstSide, entries: entriesIn } = partsSummary(g, nowMs);
+    latches.push({ start: g[0].start, end: latchEnd, min, order, firstSide, entries: entriesIn, run });
+  }
+  const feeds: Pick<GapStep, "feed" | "start" | "end">[] = [
+    ...latches.map((latch) => ({ feed: { kind: "breast" as const, latch }, start: latch.start, end: latch.end })),
     ...entries.filter(isBottleFeed).map((entry) => {
       const start = Date.parse(entry.started_at);
       const ended = entry.ended_at ? Date.parse(entry.ended_at) : NaN;
@@ -1746,64 +1808,58 @@ export function feedSteps(entries: readonly Entry[], now: Date, runs: readonly N
   ]
     .filter((f) => !Number.isNaN(f.start))
     .sort((a, b) => a.start - b.start);
-  const clusterOfStep = (f: Pick<FeedStep, "feed">) => (f.feed.kind === "breast" ? f.feed.run.cluster : null);
   return feeds.map((f, i) => {
     const prev = i > 0 ? feeds[i - 1] : null;
     const sinceMs = prev && f.start > prev.start ? f.start - prev.start : null;
     const counted = prev !== null && sinceMs !== null && sinceMs <= FEED_GAP_MAX_MS;
-    const cluster = clusterOfStep(f);
+    const run = f.feed.kind === "breast" ? f.feed.latch.run : null;
+    const sameFeed = run !== null && prev?.feed.kind === "breast" && prev.feed.latch.run === run && prev.end !== null;
     return {
       ...f,
       sinceMs,
       gapMin: counted ? spanMinutes(prev.start, f.start) : null,
-      inCluster: counted && cluster !== null && cluster === clusterOfStep(prev),
+      backOnMin: sameFeed ? spanMinutes(prev.end!, f.start) : null,
+      cluster: run?.cluster ?? null,
     };
   });
 }
 
-/** The feeds that began in [from, to), each with its gap from the feed before, which may be before the window. */
-export function stepsIn(steps: readonly FeedStep[], from: number, to: number): FeedStep[] {
+/** The ones that began in [from, to), each with its gap from the one before, which may be before the window. */
+export function stepsIn(steps: readonly GapStep[], from: number, to: number): GapStep[] {
   return steps.filter((s) => s.start >= from && s.start < to);
 }
 
-/** A window's gaps at a glance. */
+/** Which of GAP_BUCKETS_MIN's ranges a gap falls in: 0 for under an hour up to 4 for 4 hours or more. */
+export function gapBucket(min: number): number {
+  const i = GAP_BUCKETS_MIN.findIndex((edge) => min < edge);
+  return i === -1 ? GAP_BUCKETS_MIN.length : i;
+}
+
+/** A window's gaps at a glance: how many, the longest, and how many in each range. */
 export type GapSummary = {
-  /** How many gaps were counted. */
   gaps: number;
-  /**
-   * "About every": the middle gap outside clusters (the later of the two middle ones, as typicalFeedGapMin), in
-   * whole minutes, once there are USUAL_GAP_MIN_GAPS of them; null before.
-   */
-  usualMin: number | null;
-  /** The longest counted gap (in a cluster too), and the feed it led to; null with none. */
+  /** The longest counted gap, and the time on the breast (or bottle) it led to; null with none. */
   longestMin: number | null;
-  longest: FeedStep | null;
+  longest: GapStep | null;
+  /** Counts per range: under 1 hour, 1 to 2, 2 to 3, 3 to 4, 4 hours or more. */
+  buckets: number[];
 };
 
-export function gapSummary(steps: readonly FeedStep[]): GapSummary {
-  let longest: FeedStep | null = null;
+export function gapSummary(steps: readonly GapStep[]): GapSummary {
+  const buckets: number[] = new Array(GAP_BUCKETS_MIN.length + 1).fill(0);
+  let longest: GapStep | null = null;
   let longestMin: number | null = null;
   let gaps = 0;
-  const outside: number[] = [];
   for (const s of steps) {
     if (s.gapMin === null) continue;
     gaps++;
+    buckets[gapBucket(s.gapMin)]++;
     if (longestMin === null || s.gapMin > longestMin) {
       longest = s;
       longestMin = s.gapMin;
     }
-    if (!s.inCluster) outside.push(s.gapMin);
   }
-  outside.sort((a, b) => a - b);
-  return { gaps, usualMin: outside.length >= USUAL_GAP_MIN_GAPS ? outside[Math.floor(outside.length / 2)] : null, longestMin, longest };
-}
-
-/** "about every 2h 35m", "longest gap 3h 15m": a window's gaps in the same words on ribbons, circles and tables. */
-export function gapWords(g: GapSummary): string[] {
-  const words: string[] = [];
-  if (g.usualMin !== null) words.push(`about every ${minutesShort(g.usualMin)}`);
-  if (g.longestMin !== null) words.push(`longest gap ${minutesShort(g.longestMin)}`);
-  return words;
+  return { gaps, longestMin, longest, buckets };
 }
 
 /** "6:02–8:40 PM" ("11:02 PM–1:40 AM" across noon or midnight), or "since 6:02 PM" while it's going. */

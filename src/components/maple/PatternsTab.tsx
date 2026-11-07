@@ -7,10 +7,9 @@ import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, typ
 import { clockFraction, clockSpans } from "@/lib/maple/clock-spans";
 import {
   feedClusters,
-  feedSteps,
+  feedGaps,
   feedTotals,
   gapSummary,
-  gapWords,
   minutesShort,
   nursingRuns,
   spanText,
@@ -479,8 +478,6 @@ export type RibbonRow = TimeWindow & {
   feeds: FeedMark[];
   diapers: DiaperMark[];
   clusters: (Span & { count: number })[];
-  /** The time between feeds that began in the row, start to start (feed.ts feedSteps), for the Feeds summaries. */
-  gaps: GapSummary;
   nowX: number | null;
 };
 
@@ -531,7 +528,6 @@ export function buildRibbon(
   // Feeds and clusters by the one rule (feed.ts), worked out once from everything loaded.
   const runs: NursingRun[] = nursingRuns(recorded, now);
   const clusters: FeedCluster[] = feedClusters(runs);
-  const steps = feedSteps(recorded, now, runs);
   // Keep each actual stretch, including those whose entry began before the
   // row. Bucketing an entry by its start alone would lose nursing after midnight.
   const nursing = recorded.flatMap((entry) => entry.kind === "feed" && entry.data.method !== "bottle"
@@ -573,7 +569,6 @@ export function buildRibbon(
       feeds: [],
       diapers: [],
       clusters: [],
-      gaps: gapSummary(stepsIn(steps, start, Math.min(end, nowMs + 1))),
       nowX: nowMs >= start && nowMs < end ? wallFrac(nowMs, start, end, wallStartMin, tz) : null,
     };
     const hours = Math.round((end - start) / H);
@@ -835,14 +830,14 @@ function RibbonLegend({ night, activity = "all" }: { night: boolean; activity?: 
 function RibbonRowView({ row, W, units, night, activity, onPick }: { row: RibbonRow; W: number; units: UnitSystem; night: boolean; activity: PatternActivity; onPick?: () => void }) {
   const s = row.stats;
   const noMarks = row.feeds.length + row.sleeps.length + row.diapers.length + row.tummies.length === 0;
-  const parts = noMarks ? [activity === "all" ? "No activity logged" : `No ${activity} logged`] : [
+  const summary = noMarks ? (activity === "all" ? "No activity logged" : `No ${activity} logged`) : [
     activity === "all" || activity === "feeds" ? `${s.feeds} feed${s.feeds === 1 ? "" : "s"}${s.breastFeeds === 0 && row.feeds.some((feed) => !feed.bottle) ? " started · nursing continued from earlier" : ""}` : null,
-    ...(activity === "feeds" ? gapWords(row.gaps) : []),
     activity === "all" || activity === "diapers" ? `${s.wet} wet · ${s.dirty} dirty` : null,
     activity === "all" || activity === "sleep" ? (s.sleepSec > 0 ? `${formatDuration(s.sleepSec)} sleep` : "No sleep logged") : null,
     activity === "all" && s.tummySec > 0 ? `${formatDuration(s.tummySec)} tummy time` : null,
-  ].filter((part): part is string => !!part);
-  const summary = parts.join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const x = (f: number) => f * W;
   const aria = `${row.label}${row.nowX != null ? ", so far" : ""}: ${summary}${row.clusters.length ? `; ${row.clusters.map((c) => c.title).join("; ")}` : ""}${
     (activity === "all" || activity === "feeds") && s.bottleMl ? `; ${formatVolume(s.bottleMl, units)} by bottle` : ""
@@ -861,17 +856,7 @@ function RibbonRowView({ row, W, units, night, activity, onPick }: { row: Ribbon
             </span>
           )}
         </span>
-        <span className={cx(tone.muted, "text-[11px] tabular-nums")}>
-          {parts.map((part, i) => (
-            <Fragment key={i}>
-              <span className="whitespace-nowrap">
-                {part}
-                {i < parts.length - 1 && " ·"}
-              </span>
-              {i < parts.length - 1 && " "}
-            </Fragment>
-          ))}
-        </span>
+        <span className={cx(tone.muted, "text-[11px] tabular-nums")}>{summary}</span>
       </span>
       <svg width={W} height={ROW_H} className="block overflow-visible" aria-hidden>
         <rect x={0} y={7} width={W} height={16} rx={4} fill="var(--v-track)" />
@@ -1557,11 +1542,11 @@ function DailyCharts({
     return m;
   }, [entries, tz]);
 
-  // The time between feeds, start to start (feed.ts feedSteps), on the day the later feed began: its first gap reaches
-  // back to the evening before, which is loaded too.
+  // The time between feeds per day: every time on the breast and every bottle, start to start (feed.ts feedGaps), on the
+  // day the later one began, so a day's first gap reaches back to the evening before (loaded too).
   const gaps = useMemo(() => {
     const nowMs = now.getTime();
-    const steps = feedSteps(entries.filter((e) => Date.parse(e.started_at) <= nowMs), now);
+    const steps = feedGaps(entries.filter((e) => Date.parse(e.started_at) <= nowMs), now);
     return days.map((d) => {
       const [a, b] = dayBounds(d.key, tz);
       return gapSummary(stepsIn(steps, a.getTime(), Math.min(b.getTime(), nowMs + 1)));
@@ -1645,9 +1630,34 @@ function DailyCharts({
 
             {anyGap && (
               <ChartBlock
+                title="Gaps under an hour"
+                subtitle="From each time on the breast, or a bottle, to the next start."
+                how={<p>Each column counts the day&apos;s gaps under an hour, start to start. Back on the breast after a few minutes counts too. Between feeds, under the Day clock, lists every gap.</p>}
+              >
+                <Columns
+                  keys={keys}
+                  todayKey={todayKey}
+                  integer
+                  night={night}
+                  series={[{ id: "short", label: "Gaps under an hour", color: "var(--v-gap)", values: gaps.map((g) => g.buckets[0]) }]}
+                  yLabel={String}
+                  valueLabel={String}
+                  ariaLabel={`Gaps under an hour per day: ${days.map((d, i) => `${shortDate(d.key)} ${gaps[i].buckets[0]} of ${gaps[i].gaps}`).join(", ")}`}
+                  tooltip={(i) => (
+                    <>
+                      <TipRow color="var(--v-gap)" value={String(gaps[i].buckets[0])} label={`under an hour${so(i)}`} />
+                      <span className="block opacity-80">of {gaps[i].gaps} gap{gaps[i].gaps === 1 ? "" : "s"} between feeds</span>
+                    </>
+                  )}
+                />
+              </ChartBlock>
+            )}
+
+            {anyGap && (
+              <ChartBlock
                 title="Longest gap between feeds"
                 subtitle="Start to start, from what was logged."
-                how={<p>Each column is the day&apos;s longest time from the start of one feed to the start of the next. Over 12 hours between two logged feeds is left out, in case a feed wasn&apos;t logged.</p>}
+                how={<p>Each column is the day&apos;s longest time from one start to the next. Over 12 hours between two logged feeds is left out, in case a feed wasn&apos;t logged.</p>}
               >
                 <Columns
                   keys={keys}
@@ -1657,16 +1667,16 @@ function DailyCharts({
                   yLabel={(v) => (v ? `${v}h` : "0")}
                   valueLabel={(v) => formatDuration(v * 3600)}
                   ariaLabel={`Longest gap between feeds per day: ${days.map((d, i) => `${shortDate(d.key)} ${gaps[i].longestMin === null ? "none counted" : minutesShort(gaps[i].longestMin!)}`).join(", ")}`}
-                  tooltip={(i) =>
-                    gaps[i].longestMin === null ? (
-                      <span className="block opacity-80">No gap between two logged feeds</span>
-                    ) : (
+                  tooltip={(i) => {
+                    const g = gaps[i];
+                    if (g.longestMin === null || !g.longest || g.longest.sinceMs === null) return <span className="block opacity-80">No gap between two logged feeds</span>;
+                    return (
                       <>
-                        <TipRow color="var(--v-gap)" value={minutesShort(gaps[i].longestMin!)} label={`longest gap${so(i)}`} />
-                        {gaps[i].usualMin !== null && <span className="block opacity-80">Feeds about every {minutesShort(gaps[i].usualMin!)}</span>}
+                        <TipRow color="var(--v-gap)" value={minutesShort(g.longestMin)} label={`longest gap${so(i)}`} />
+                        <span className="block opacity-80 tabular-nums">{spanText(g.longest.start - g.longest.sinceMs, g.longest.start, tz)}</span>
                       </>
-                    )
-                  }
+                    );
+                  }}
                 />
               </ChartBlock>
             )}
@@ -1892,8 +1902,8 @@ function DailyTable({ days, gaps, todayKey, units }: { days: DayStats[]; gaps: G
             <th scope="col" className={th}>Sleep</th>
             <th scope="col" className={th}>Wet</th>
             <th scope="col" className={th}>Dirty</th>
-            {gaps && <th scope="col" className={th}>Feeds about every</th>}
-            {gaps && <th scope="col" className={th}>Longest feed gap</th>}
+            {gaps && <th scope="col" className={th}>Gaps under 1 hour</th>}
+            {gaps && <th scope="col" className={th}>Longest gap</th>}
             <th scope="col" className={th}>{anyBoth ? "Nursing L / R / both" : "Nursing L / R"}</th>
             {anyBottle && <th scope="col" className={th}>Bottle</th>}
             {anyPump && <th scope="col" className={th}>Pumped</th>}
@@ -1911,7 +1921,7 @@ function DailyTable({ days, gaps, todayKey, units }: { days: DayStats[]; gaps: G
               <td className={td}>{formatDuration(d.sleepSec)}</td>
               <td className={td}>{d.wet}</td>
               <td className={td}>{d.dirty}</td>
-              {gaps && <td className={td}>{g?.usualMin != null ? minutesShort(g.usualMin) : <span className={tone.faint}>—</span>}</td>}
+              {gaps && <td className={td}>{g?.gaps ? `${g.buckets[0]} of ${g.gaps}` : <span className={tone.faint}>—</span>}</td>}
               {gaps && <td className={td}>{g?.longestMin != null ? minutesShort(g.longestMin) : <span className={tone.faint}>—</span>}</td>}
               <td className={td}>
                 {formatDuration(d.leftSec)} / {formatDuration(d.rightSec)}

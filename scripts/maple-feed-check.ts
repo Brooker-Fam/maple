@@ -21,9 +21,10 @@ import {
   feedEditCopy,
   FeedEditError,
   feedMinutes,
+  feedGaps,
   feedParts,
-  feedSteps,
   finalizeBreast,
+  gapBucket,
   gapSummary,
   lastFedAnchor,
   minutesShort,
@@ -58,6 +59,7 @@ import {
   undoLastTap,
   type FeedCtx,
   type FeedEditCode,
+  type GapStep,
   type LastTap,
   type Part,
   type TapFeedData,
@@ -1862,35 +1864,46 @@ check("describeEntry: back and forth reads as such", () => {
     ];
     eq(typicalFeedGapMin(entries, D("21:00")), 240);
   });
-  check("feedSteps: start to start between feeds as counted, a relatch under 10 minutes being the same feed", () => {
-    const steps = feedSteps([
-      fe("L 00:03-00:20, R 00:20-00:32", { first: "L" }),
-      // Back on 6 minutes after coming off: the same feed, so no gap of its own.
-      fe("R 00:38-00:45"),
-      fe("B 03:26-04:11", { first: "L" }),
-      bottle("06:26"),
-      fe("R 07:02-07:10"),
-    ], D("09:00"));
-    eq(steps.map((s) => [clock(new Date(s.start).toISOString()), s.feed.kind, s.gapMin]), [
-      ["00:03", "breast", null],
-      ["03:26", "breast", 203],
-      ["06:26", "bottle", 180],
-      ["07:02", "breast", 36],
+  const row = (s: GapStep) => [clock(new Date(s.start).toISOString()), s.feed.kind, s.feed.kind === "breast" ? s.feed.latch.min.total : null, s.gapMin, s.backOnMin];
+  check("feedGaps: every time on the breast and every bottle, start to start, the same whether Done or Pause was tapped", () => {
+    const tail = [fe("B 03:26-04:11", { first: "L" }), bottle("06:26"), fe("R 07:02-07:10")];
+    // Off 6 minutes, then back on: a new start after Done, or Back on after Pause.
+    const done = [fe("L 00:03-00:20, R 00:20-00:32", { first: "L" }), fe("R 00:38-00:45"), ...tail];
+    const paused = [fe("L 00:03-00:20, R 00:20-00:32, R 00:38-00:45", { first: "L" }), ...tail];
+    const expected = [
+      ["00:03", "breast", 29, null, null],
+      ["00:38", "breast", 7, 35, 6],
+      ["03:26", "breast", 45, 168, null],
+      ["06:26", "bottle", null, 180, null],
+      ["07:02", "breast", 8, 36, null],
+    ];
+    eq(feedGaps(done, D("09:00")).map(row), expected, "Done and a new start");
+    eq(feedGaps(paused, D("09:00")).map(row), expected, "Pause and Back on");
+    // The feed counts keep the 10-minute rule: 12:03 and 12:38 are one feed, and the rows know it.
+    const runs = nursingRuns(done, D("09:00"));
+    const steps = feedGaps(done, D("09:00"), runs);
+    eq(runs.length, 3);
+    ok(steps[0].feed.kind === "breast" && steps[1].feed.kind === "breast" && steps[0].feed.latch.run === runs[0] && steps[1].feed.latch.run === runs[0], "both rows are the first feed");
+  });
+  check("feedGaps: under 2 minutes off is the same time on the breast; 2 or more is a new one, back on after it", () => {
+    const one = feedGaps([fe("L 10:00-10:10, R 10:11-10:20", { first: "L" })], D("11:00"));
+    eq(one.map((s) => [row(s), s.feed.kind === "breast" ? sideMinutesText(s.feed.latch.min) : null]), [[["10:00", "breast", 19, null, null], "L 10 · R 9"]]);
+    eq(feedGaps([fe("L 10:00-10:10, R 10:12-10:20", { first: "L" })], D("11:00")).map(row), [["10:00", "breast", 10, null, null], ["10:12", "breast", 8, 12, 2]]);
+    // Ten minutes or more off is another feed as counted too: its gap shows, with no "back on after".
+    eq(feedGaps([fe("L 10:00-10:10"), fe("R 10:20-10:30")], D("11:00")).map(row), [["10:00", "breast", 10, null, null], ["10:20", "breast", 10, 20, null]]);
+  });
+  check("feedGaps: whole clock minutes; over 12 hours is a gap in the log; the same moment has no gap; a bottle never joins nursing", () => {
+    eq(feedGaps([fe("L 02:27:50-02:40"), fe("R 05:12:10-05:20")], D("09:00"))[1].gapMin, 165, "2:27 to 5:12 is 2h 45m, as the times read");
+    eq(feedGaps([fe("L 01:00-01:20"), fe("L 13:00-13:20")], D("23:55"))[1].gapMin, 720, "12 hours exactly still counts");
+    const over = feedGaps([fe("L 01:00-01:20"), fe("L 13:01-13:20")], D("23:55"))[1];
+    eq([over.sinceMs! / 60_000, over.gapMin], [721, null]);
+    eq(feedGaps([fe("L 16:00-16:10"), bottle("16:00"), fe("R 18:30-18:40")], D("19:00")).map((s) => [s.feed.kind, s.sinceMs === null ? null : s.sinceMs / 60_000, s.backOnMin]), [
+      ["breast", null, null],
+      ["bottle", null, null],
+      ["breast", 150, null],
     ]);
-    const first = steps[0].feed;
-    eq(first.kind === "breast" ? [first.run.entries.length, first.run.min.total, clock(new Date(steps[0].end!).toISOString())] : null, [2, 36, "00:45"]);
-    eq(steps[2].end, steps[2].start, "a bottle with no duration ends where it began");
   });
-  check("feedSteps: whole clock minutes whatever the seconds; over 12 hours is a gap in the log; the same moment has no gap", () => {
-    eq(feedSteps([fe("L 02:27:50-02:40"), fe("R 05:12:10-05:20")], D("09:00"))[1].gapMin, 165, "2:27 to 5:12 is 2h 45m, as the times read");
-    const long = feedSteps([fe("L 01:00-01:20"), fe("L 13:00-13:20"), fe("R 13:40-13:50"), fe("L 23:41-23:50")], D("23:55"));
-    eq(long.map((s) => [s.sinceMs! / 60_000 || null, s.gapMin]), [[null, null], [720, 720], [40, 40], [601, 601]], "12 hours exactly still counts");
-    const over = feedSteps([fe("L 01:00-01:20"), fe("L 13:01-13:20")], D("23:55"))[1];
-    eq([over.sinceMs! / 60_000, over.gapMin, over.inCluster], [721, null, false]);
-    const same = feedSteps([fe("L 16:00-16:10"), bottle("16:00"), fe("R 18:30-18:40")], D("19:00"));
-    eq(same.map((s) => [s.sinceMs === null ? null : s.sinceMs / 60_000, s.gapMin]), [[null, null], [null, null], [150, 150]]);
-  });
-  check("feedSteps marks the gaps inside a cluster; gapSummary's about every leaves them out, its longest doesn't", () => {
+  check("gapSummary: how many gaps in each range and the longest; a cluster's rows carry it, the day's first gap reaching back", () => {
     const entries = [
       fe("L 20:00-20:20", { day: -1 }),
       fe("L 22:00-22:20", { day: -1 }),
@@ -1902,40 +1915,14 @@ check("describeEntry: back and forth reads as such", () => {
       fe("L 18:30-18:40"),
       fe("R 19:00-19:10"),
     ];
-    const steps = feedSteps(entries, D("21:00"));
-    eq(steps.map((s) => [s.gapMin, s.inCluster]), [[null, false], [120, false], [240, false], [240, false], [660, false], [30, true], [30, true], [30, true], [30, true]]);
+    const steps = feedGaps(entries, D("21:00"));
+    eq(steps.map((s) => [s.gapMin, s.cluster]), [[null, null], [120, null], [240, null], [240, null], [660, 0], [30, 0], [30, 0], [30, 0], [30, 0]]);
     const all = gapSummary(steps);
-    eq([all.gaps, all.usualMin, all.longestMin, clock(new Date(all.longest!.start).toISOString())], [8, 240, 660, "17:00"]);
-    // The test day's own feeds, the first one's gap reaching back to the evening before.
+    eq([all.gaps, all.buckets, all.longestMin, clock(new Date(all.longest!.start).toISOString())], [8, [4, 0, 1, 0, 3], 660, "17:00"]);
     const today = stepsIn(steps, Date.parse(T("00:00")), Date.parse(T("23:59:59.999")) + 1);
-    eq(today.map((s) => s.gapMin), [240, 240, 660, 30, 30, 30, 30]);
-    eq(gapSummary(today).usualMin, typicalFeedGapMin(entries, D("21:00")), "the day's about every matches Today's Feeds lately here");
-    eq(gapSummary(today.slice(0, 2)), { gaps: 2, usualMin: null, longestMin: 240, longest: today[0] }, "about every waits for 3 gaps outside clusters");
-    eq(gapSummary([]), { gaps: 0, usualMin: null, longestMin: null, longest: null });
-  });
-  check("feedSteps gives daily_summary's feeding intervals: start to start between runs and bottles, over 0 and at most 12 hours", () => {
-    const entries = [
-      fe("L 20:00-20:20", { day: -1 }),
-      bottle("22:15"),
-      fe("R 02:00-02:20, L 02:24-02:31"),
-      bottle("02:10"),
-      fe("L 06:00-06:20"),
-      bottle("06:00"),
-      fe("R 17:00-17:10"),
-      fe("L 17:30-17:40"),
-      fe("R 18:00-18:10", { active: true }),
-    ];
-    const now = D("18:05");
-    const runs = nursingRuns(entries, now);
-    // What daily_summary did before it read feedSteps.
-    const starts = [...runs.map((r) => r.start), ...entries.filter((e) => e.data.method === "bottle").map((e) => Date.parse(e.started_at))].sort((x, y) => x - y);
-    const before: [number, number][] = [];
-    for (let i = 1; i < starts.length; i++) {
-      const gap = (starts[i] - starts[i - 1]) / 60_000;
-      if (gap <= 0 || gap > 12 * 60) continue;
-      before.push([starts[i], gap]);
-    }
-    eq(feedSteps(entries, now, runs).filter((s) => s.gapMin !== null).map((s) => [s.start, s.sinceMs! / 60_000]), before);
+    eq([today.length, today[0].gapMin, gapSummary(today).buckets], [7, 240, [4, 0, 0, 0, 3]], "2 AM's gap is from 10 PM the day before");
+    eq(gapSummary([]), { gaps: 0, longestMin: null, longest: null, buckets: [0, 0, 0, 0, 0] });
+    eq([59, 60, 119, 120, 179, 180, 239, 240, 600].map(gapBucket), [0, 1, 1, 2, 2, 3, 3, 4, 4], "under an hour, 1 to 2, 2 to 3, 3 to 4, 4 or more");
   });
 }
 

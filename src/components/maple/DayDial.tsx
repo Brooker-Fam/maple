@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { clockContains, clockFraction, clockSpans } from "@/lib/maple/clock-spans";
-import { clusterLine, feedClusters, feedSteps, nursingRuns, typicalFeedGapMin, type FeedCluster } from "@/lib/maple/feed";
+import { clusterLine, feedClusters, feedGaps, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
 import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from "@/lib/maple/guidelines";
 import { statsFor } from "@/lib/maple/insights";
 import { nursingSpans } from "@/lib/maple/nursing-spans";
@@ -299,9 +299,8 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
   // One set of numbers for the dial's label and the tallies below, from the same entries and window.
   const runs = useMemo(() => nursingRuns(source, now), [source, now]);
   const stats = useMemo(() => statsFor(source, new Date(lo), new Date(hi), dayView ?? "last24h", now, runs), [source, lo, hi, dayView, now, runs]);
-  // The time between feeds (start to start) for Between feeds; the last 24 hours' "about every" is Today's Feeds lately.
-  const steps = useMemo(() => feedSteps(source, now, runs), [source, now, runs]);
-  const lately = useMemo(() => (rolling ? typicalFeedGapMin(source, now, runs) : null), [rolling, source, now, runs]);
+  // Every time on the breast and every bottle, with the time since the one before (start to start), for Between feeds.
+  const steps = useMemo(() => feedGaps(source, now, runs), [source, now, runs]);
   // A bracket outside the feed ring for each cluster that reaches into the view.
   const brackets = useMemo(
     () =>
@@ -755,7 +754,7 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
           </AnimatePresence>
 
           {(activity === "all" || activity === "feeds") && !loading && (
-            <BetweenFeeds steps={steps} lo={lo} hi={hi} nowMs={nowMs} tz={tz} todayKey={todayKey} units={units} usualMin={lately} />
+            <BetweenFeeds steps={steps} lo={lo} hi={hi} nowMs={nowMs} tz={tz} todayKey={todayKey} units={units} />
           )}
 
           <details className="mp-dial-log">

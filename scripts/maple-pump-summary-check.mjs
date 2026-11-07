@@ -15,7 +15,7 @@ const pumpImports = source.statements.filter((node) => ts.isImportDeclaration(no
 const compiled = await build({
   stdin: { loader: "ts", resolveDir: path.join(root, "src/lib/maple"), contents: `
     import { statsFor, dailyStats, isVitaminD } from "./insights";
-    import { feedSteps, nursingRuns } from "./feed";
+    import { nursingRuns } from "./feed";
     import { addDays, babyAge, dayBounds, dayKey, startOfDay, formatDayLabel, formatDuration } from "./time";
     import { formatVolumeBoth } from "./units";
     import { voiceFor } from "./voice";
