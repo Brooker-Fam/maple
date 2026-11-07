@@ -73,8 +73,10 @@ export function typicalBottle(ageDays: number): string {
   return "about 4–5 oz (120–150 ml) per feed";
 }
 
-export const bottleCues = (v: Voice) =>
-  `Typical, not a target. Follow ${v.their} hunger cues (rooting, hands to mouth) and fullness cues (turning away, relaxed hands).`;
+export const bottleCues = (v: Voice) => `Typical, not a target. ${feedCues(v)}`;
+/** The cues alone, after a target per feed from the family's care team (settings.feed_target_ml) instead of the typical amount. */
+export const feedCues = (v: Voice) =>
+  `Follow ${v.their} hunger cues (rooting, hands to mouth) and fullness cues (turning away, relaxed hands).`;
 export const BOTTLE_CUES = bottleCues(FAMILY_ONE_VOICE);
 
 // ── Cluster feeding and going back and forth ─────────────────────────────

@@ -323,7 +323,7 @@ export function dstNote(key: string, tz: string): string | null {
   return null;
 }
 
-/** "11 feeds (one cluster) · 2h 05m nursing · 2 oz bottle (1 top-up) · 6 wet · 3 dirty · 14h 20m sleep" */
+/** "11 feeds (one cluster) · 2h 05m nursing · 2 oz bottle (1 top-up) · 1 oz formula · 6 wet · 3 dirty · 14h 20m sleep" */
 export function daySummaryParts(s: DayStats, units: UnitSystem): string[] {
   const clusters = s.clusters === 1 ? " (one cluster)" : s.clusters > 1 ? ` (${s.clusters} clusters)` : "";
   const parts = [`${s.feeds} feed${s.feeds === 1 ? "" : "s"}${clusters}`];
@@ -332,6 +332,8 @@ export function daySummaryParts(s: DayStats, units: UnitSystem): string[] {
   const topUps = s.topUps ? ` (${s.topUps} top-up${s.topUps === 1 ? "" : "s"})` : "";
   if (s.bottleMl > 0) parts.push(`${formatVolume(s.bottleMl, units)} bottle${topUps}`);
   else if (s.topUps) parts.push(`${s.topUps} top-up${s.topUps === 1 ? "" : "s"}`);
+  // Of the bottles, the formula (feed.ts milkSplit): what a supplementing plan watches.
+  if (s.formulaMl > 0) parts.push(`${formatVolume(s.formulaMl, units)} formula`);
   parts.push(`${s.wet} wet`, `${s.dirty} dirty`);
   if (s.sleepSec >= 60) parts.push(`${formatDuration(s.sleepSec)} sleep`);
   return parts;

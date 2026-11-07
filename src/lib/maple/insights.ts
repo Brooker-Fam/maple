@@ -11,7 +11,9 @@
 import {
   feedClusters,
   feedMinutes,
+  bottleAmount,
   lastFedAnchor,
+  milkSplit,
   nextSideFor,
   nursingRuns,
   topUpIds,
@@ -84,6 +86,13 @@ export type DayStats = {
   bottleMl: number;
   /** Of bottleMl, the top-ups'. */
   topUpMl: number;
+  /**
+   * Of bottleMl, what was formula and what breast milk (feed.ts milkSplit): a
+   * formula or breast milk bottle's amount, a Mixed bottle's parts; the rest
+   * wasn't said.
+   */
+  formulaMl: number;
+  breastMilkMl: number;
   pumpMl: number;
   pumpSessions: number;
   pumpMeasuredSessions: number;
@@ -193,6 +202,8 @@ function emptyStats(key: string): DayStats {
     bothSec: 0,
     bottleMl: 0,
     topUpMl: 0,
+    formulaMl: 0,
+    breastMilkMl: 0,
     pumpMl: 0,
     pumpSessions: 0,
     pumpMeasuredSessions: 0,
@@ -258,7 +269,10 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
         if (!inWindow) break;
         // Nursing is counted above, as runs (a top-up with its feed).
         if (e.data.method === "bottle") {
-          const ml = e.data.amount_ml ?? 0;
+          const ml = bottleAmount(e.data) ?? 0;
+          const milk = milkSplit(e.data);
+          s.formulaMl += milk.formula;
+          s.breastMilkMl += milk.breastmilk;
           if (topUp.has(e.id)) {
             s.topUps++;
             s.topUpMl += ml;

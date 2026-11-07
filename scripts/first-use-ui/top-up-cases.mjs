@@ -68,5 +68,54 @@ export function topUpCases({ fixture, freshState, record, writes, assert }) {
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["The visit summary keeps the care team's target, the top-ups apart from bottles, and what the bottles held", async () => {
+      const state = freshState();
+      state.baby.settings = { ...state.baby.settings, feed_target_ml: { min: 45, max: 60 } };
+      state.entries = [
+        record(45, "feed", { method: "bottle", amount_ml: 35, milk: "breastmilk", via: "paced" }, "2026-10-28T13:20:00.000Z"),
+        nursing(46, "2026-10-28T12:45:00.000Z", "2026-10-28T13:00:00.000Z", "2026-10-28T13:15:00.000Z"),
+        record(47, "feed", { method: "bottle", amount_ml: 60, milk: "formula" }, "2026-10-28T10:00:00.000Z"),
+      ];
+      const f = await fixture({ state, records: state.entries });
+      try {
+        await f.page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { get: () => undefined }));
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("button", { name: "More", exact: true }).click();
+        await f.page.getByRole("button", { name: /^For the doctor/ }).click();
+        const dialog = f.page.getByRole("dialog", { name: "For the doctor", exact: true });
+        await dialog.getByRole("button", { name: "Copy summary", exact: true }).click();
+        const text = await dialog.getByRole("textbox", { name: "Visit summary", exact: true }).inputValue();
+        assert.match(text, /Target per feed from our care team: 1\.52–2\.03 oz \(45–60 ml\)\./);
+        const today = text.split("\n").find((line) => line.includes("(so far):")) ?? "";
+        assert.match(today, /: 2 feeds \(/, today);
+        assert.match(today, /1 bottle, 2\.03 oz \(60 ml\); 1 top-up with nursing, 1\.18 oz \(35 ml\); by bottle: formula 2\.03 oz \(60 ml\), breast milk 1\.18 oz \(35 ml\)/, today);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Settings keeps a target per feed from the care team, in the units shown", async () => {
+      const state = freshState();
+      const patches = [];
+      const f = await fixture({
+        state,
+        apiResponse: ({ route, req, url }) => {
+          if (url.pathname === "/api/maple/baby" && req.method() === "PATCH") {
+            patches.push(req.postDataJSON());
+            return route.fulfill({ json: { baby: state.baby } });
+          }
+          return route.fulfill({ status: 500, json: { error: "Unexpected synthetic endpoint" } });
+        },
+      });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#family/doctor");
+        const from = f.page.getByRole("textbox", { name: /^Target per feed, from \(ml\)/ });
+        await from.fill("45");
+        await f.page.getByRole("textbox", { name: "Up to (ml)", exact: true }).fill("60");
+        await f.page.getByRole("button", { name: "Save changes", exact: true }).click();
+        for (let i = 0; i < 20 && !patches.length; i++) await f.page.waitForTimeout(100);
+        assert.deepEqual(patches.at(-1)?.settings?.feed_target_ml, { min: 45, max: 60 });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
   ];
 }

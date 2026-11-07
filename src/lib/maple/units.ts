@@ -83,3 +83,50 @@ export function formatTempBoth(c: number): string {
 export function formatVolumeBoth(ml: number): string {
   return `${formatVolume(ml, "us")} (${formatVolume(ml, "metric")})`;
 }
+
+// ── a feed's target, from the family's care team ─────────────────────────
+
+/** A target per feed in ml (settings.feed_target_ml): typed by the family from their care team, never Maple's own number. */
+export type FeedTarget = { min: number; max: number };
+
+/** The saved target per feed, when it's a well-formed one (validate.ts checkFeedTarget keeps it so); null otherwise. */
+export function feedTargetOf(settings: Record<string, unknown> | null | undefined): FeedTarget | null {
+  const t = settings?.feed_target_ml as { min?: unknown; max?: unknown } | null | undefined;
+  if (!t || typeof t !== "object") return null;
+  const { min, max } = t;
+  if (typeof min !== "number" || typeof max !== "number" || !Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max < min) return null;
+  return { min, max };
+}
+
+/** "45–60 ml", "1.5–2 oz", or one amount ("50 ml") when the range is one number. */
+export function formatVolumeRange(t: FeedTarget, units: UnitSystem = "us"): string {
+  if (t.min === t.max) return formatVolume(t.min, units);
+  if (units === "metric") return `${trim(t.min)}–${trim(t.max)} ml`;
+  return `${trim(mlToOz(t.min), 2)}–${trim(mlToOz(t.max), 2)} oz`;
+}
+
+/** Both systems, for Claude: "45–60 ml (1.5–2 oz)". */
+export function formatVolumeRangeBoth(t: FeedTarget): string {
+  return `${formatVolumeRange(t, "metric")} (${formatVolumeRange(t, "us")})`;
+}
+
+/**
+ * The target per feed the family typed, from and up to, in the shown unit:
+ * ml, or null when both are blank. One alone is the whole target ("50").
+ * Throws a message for a typo.
+ */
+export function feedTargetFrom(from: string, to: string, units: UnitSystem): FeedTarget | null {
+  const read = (text: string) => {
+    const t = text.trim().replace(",", ".");
+    if (!t) return null;
+    const n = Number(t);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`Enter the target per feed as ${units === "metric" ? "ml, like 45 and 60" : "oz, like 1.5 and 2"}`);
+    return Math.round((units === "metric" ? n : ozToMl(n)) * 10) / 10;
+  };
+  const a = read(from);
+  const b = read(to);
+  if (a == null && b == null) return null;
+  const lo = a ?? b!;
+  const hi = b ?? a!;
+  return { min: Math.min(lo, hi), max: Math.max(lo, hi) };
+}

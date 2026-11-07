@@ -38,6 +38,10 @@ const EXPECTED: { path: RegExp; added?: true; why: string }[] = [
   },
   { path: /^db\.maple_push_subs\.\[4\]\.(last_sent_at|undelivered)$/, why: "Phone C's last send and its sends with no receipt yet count that Logged" },
   {
+    path: /^out\.mcp\.daily_summary\.(text|sc\.paragraph|sc\.summary)$/,
+    why: "the daily summary's paragraph says what went by bottle over the days (top-ups among them, and what the bottles held when that was said)",
+  },
+  {
     path: /^out\.mcp\.(stranger|removed)\.(isError|sc|text)$/,
     why: "the scenario calls tools without the MCP route, which turned these callers away (401) before; now the tools refuse them too",
   },

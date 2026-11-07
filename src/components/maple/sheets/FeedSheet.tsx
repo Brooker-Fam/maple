@@ -22,9 +22,9 @@ import {
   topUpRunFor,
   type Part,
 } from "@/lib/maple/feed";
-import { bottleCues, typicalBottle } from "@/lib/maple/guidelines";
+import { bottleCues, feedCues, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
-import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
+import { feedTargetOf, formatVolume, formatVolumeRange, mlToOz, ozToMl } from "@/lib/maple/units";
 import { BOTTLE_VIAS, type BottleVia, type Entry, type EntryOf, type FeedData, type Side, type StretchSide, type UpdateEntryInput } from "@/lib/maple/types";
 import { BreakMark, MomentEditor, partAria, ROW_NAME, SIDE_NAME, SideFixRow, SideMark, type MomentEdge } from "../FeedParts";
 import { logSwitches } from "../MoreSheet";
@@ -402,6 +402,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   );
   const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now()) : null;
   const bottleWord = topUpOf ? "top-up" : "bottle";
+  const target = feedTargetOf(state?.baby.settings);
 
   // ── Save ──
   const save = async () => {
@@ -912,8 +913,17 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 )}
               </section>
               <ContextNote>
-                {age ? <>Typical at {w.his} age: {typicalBottle(ageDays)}. </> : null}
-                {bottleCues(voice)}
+                {/* A target from their care team replaces the typical amount (it counts what's taken at the breast too). */}
+                {target ? (
+                  <>
+                    Target from your care team: {formatVolumeRange(target, units)} a feed, counting what {voice.they} {voice.verb("takes")} at the breast. {feedCues(voice)}
+                  </>
+                ) : (
+                  <>
+                    {age ? <>Typical at {w.his} age: {typicalBottle(ageDays)}. </> : null}
+                    {bottleCues(voice)}
+                  </>
+                )}
               </ContextNote>
             </>
           )}

@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { alertsOn } from "@/lib/maple/insights";
 import { dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
-import { formatLength, formatWeight } from "@/lib/maple/units";
+import { feedTargetFrom, feedTargetOf, formatLength, formatVolume, formatWeight } from "@/lib/maple/units";
 import BirthSheet from "../BirthSheet";
 import { useBabyWords, useFamilyOne } from "../familyWords";
 import { Icon } from "../icons";
@@ -14,7 +14,7 @@ import { GROUP, InputRow, SaveBar, Section, Toggle, telHref } from "./parts";
 import { useSettingsDraft } from "./DraftContext";
 
 type Profile = { name: string; nickname: string; due: string };
-type Doctor = { pedName: string; pedPhone: string; afterHours: string; gaWeeks: string; feedHours: string };
+type Doctor = { pedName: string; pedPhone: string; afterHours: string; gaWeeks: string; feedHours: string; feedFrom: string; feedTo: string };
 
 const numOrNull = (s: string) => {
   const t = s.trim();
@@ -39,6 +39,15 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
     afterHours: str(settings.after_hours_phone),
     gaWeeks: str(settings.gestational_age_weeks),
     feedHours: str(settings.feed_interval_hours),
+    // The numbers alone, in the units shown; the rows say which unit.
+    feedFrom: (() => {
+      const t = feedTargetOf(settings);
+      return t ? formatVolume(t.min, units).replace(/ (ml|oz)$/, "") : "";
+    })(),
+    feedTo: (() => {
+      const t = feedTargetOf(settings);
+      return t && t.max !== t.min ? formatVolume(t.max, units).replace(/ (ml|oz)$/, "") : "";
+    })(),
   };
   const [pEdits, setPEdits] = useState<Partial<Profile>>({});
   const [dEdits, setDEdits] = useState<Partial<Doctor>>({});
@@ -64,6 +73,12 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
       const fh = numOrNull(d.feedHours);
       if (ga !== null && (Number.isNaN(ga) || ga < 22 || ga > 44)) return toast("Gestational age should be in weeks, like 39", { tone: "error" });
       if (fh !== null && (Number.isNaN(fh) || fh < 1 || fh > 8)) return toast("Feed interval should be in hours, like 3", { tone: "error" });
+      let target: ReturnType<typeof feedTargetFrom>;
+      try {
+        target = feedTargetFrom(d.feedFrom, d.feedTo, units);
+      } catch (e) {
+        return toast(e instanceof Error ? e.message : "Check the target per feed", { tone: "error" });
+      }
       body = {
         settings: {
           pediatrician_name: d.pedName.trim().slice(0, 80) || null,
@@ -71,6 +86,7 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
           after_hours_phone: d.afterHours.trim().slice(0, 30) || null,
           gestational_age_weeks: ga,
           feed_interval_hours: fh,
+          feed_target_ml: target,
         },
       };
     }
@@ -214,6 +230,22 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
           <InputRow label="Pediatrician name" value={d.pedName} maxLength={80} onChange={(e) => setDEdits((x) => ({ ...x, pedName: e.target.value }))} />
           <PhoneRow label="Pediatrician" value={d.pedPhone} saved={doctorSrc.pedPhone} onChange={(v) => setDEdits((x) => ({ ...x, pedPhone: v }))} />
           <PhoneRow label="After-hours line" value={d.afterHours} saved={doctorSrc.afterHours} onChange={(v) => setDEdits((x) => ({ ...x, afterHours: v }))} />
+          {/* Context next to bottles and in summaries, never a warning: shown whether or not warnings are on. */}
+          <InputRow
+            label={`Target per feed, from (${units === "metric" ? "ml" : "oz"})`}
+            note={`Optional: only if ${w.his} care team gave you one. Maple shows it next to bottles and in the visit summary; it never warns.`}
+            inputMode="decimal"
+            placeholder={units === "metric" ? "e.g. 45" : "e.g. 1.5"}
+            value={d.feedFrom}
+            onChange={(e) => setDEdits((x) => ({ ...x, feedFrom: e.target.value.replace(/[^\d.,]/g, "") }))}
+          />
+          <InputRow
+            label={`Up to (${units === "metric" ? "ml" : "oz"})`}
+            inputMode="decimal"
+            placeholder={units === "metric" ? "e.g. 60" : "e.g. 2"}
+            value={d.feedTo}
+            onChange={(e) => setDEdits((x) => ({ ...x, feedTo: e.target.value.replace(/[^\d.,]/g, "") }))}
+          />
           {/* These only tune the reminders. */}
           {warnings && (
             <>

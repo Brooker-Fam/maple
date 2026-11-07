@@ -2,7 +2,7 @@ import { BadRequest, familyName, Forbidden, json, readJson, withMember } from "@
 import { FAMILY_ONE } from "@/lib/maple/family";
 import { getBaby, updateBaby, type BabyPatch } from "@/lib/maple/store";
 import { isDayKey } from "@/lib/maple/time";
-import { checkLogSwitches } from "@/lib/maple/validate";
+import { checkFeedTarget, checkLogSwitches } from "@/lib/maple/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +73,7 @@ export const PATCH = withMember("PATCH /api/maple/baby", async (request, me, ctx
     // Bottles and Pumping (Family → On Today) are switches: true, false, or null for the default.
     try {
       checkLogSwitches(incoming);
+      checkFeedTarget(incoming);
     } catch (e) {
       throw new BadRequest(e instanceof Error ? e.message : "settings look off");
     }

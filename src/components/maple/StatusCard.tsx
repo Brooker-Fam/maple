@@ -6,7 +6,7 @@ import { Fragment, useState } from "react";
 import { lastFedRule, minutesShort, spanText, topUpMl, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import type { DayStats, Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
-import { formatVolume } from "@/lib/maple/units";
+import { feedTargetOf, formatVolume, formatVolumeRange } from "@/lib/maple/units";
 import type { Side, StretchSide } from "@/lib/maple/types";
 import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
@@ -156,6 +156,9 @@ export default function StatusCard() {
       bits.push(spanText(cluster.start, cluster.end, tz), `${cluster.feeds} feeds`, `nursed ${minutesShort(cluster.min.total)}`);
     } else if (last.data.method === "bottle") {
       bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
+      // A bottle on its own is the whole feed: its care team's target, when they gave one, sits beside it.
+      const target = feedTargetOf(state.baby.settings);
+      if (target) bits.push(`target ${formatVolumeRange(target, units)}`);
     } else if (fed?.run) {
       const run = fed.run;
       if (run.min.total) bits.push(minutesShort(run.min.total));
@@ -413,7 +416,8 @@ export function Tallies({
       below: both ? [split, both].filter(Boolean).join(" · ") : null,
       value: formatDuration(s.nursingSec),
     },
-    s.bottleMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: null, value: formatVolume(s.bottleMl, units) },
+    // Every bottle's amount, top-ups too, with the formula in it when any was logged.
+    s.bottleMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: s.formulaMl > 0 ? `${formatVolume(s.formulaMl, units)} formula` : null, value: formatVolume(s.bottleMl, units) },
     s.pumpMl > 0 && { icon: "milk", color: KIND_COLOR.pump, label: "Pumped", detail: null, value: formatVolume(s.pumpMl, units) },
   ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; below?: string | null; value: string }[];
 

@@ -14,6 +14,7 @@
 import {
   addPart,
   CLUSTER_GAP_MS,
+  bottleAmount,
   clusterLine,
   countedFeeds,
   describeChange,
@@ -25,6 +26,7 @@ import {
   feedParts,
   finalizeBreast,
   lastFedAnchor,
+  milkSplit,
   minutesShort,
   minutesText,
   momentQuestion,
@@ -78,7 +80,8 @@ import { makeVoice } from "../src/lib/maple/voice";
 const TEST_VOICE = makeVoice({ name: "Juniper", pronoun: "she" });
 const summarizeDay = (o: Omit<Parameters<typeof summarizeWith>[0], "vo">) => summarizeWith({ ...o, vo: TEST_VOICE });
 import { CLUSTER_CALL, clusterCall, clusterCallOnToday } from "../src/lib/maple/guidelines";
-import { cleanData } from "../src/lib/maple/validate";
+import { checkFeedTarget, cleanData } from "../src/lib/maple/validate";
+import { feedTargetFrom, feedTargetOf, formatVolumeRange, formatVolumeRangeBoth } from "../src/lib/maple/units";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Baby, EntryOf, FeedData, Member, Segment, Side, StretchSide } from "../src/lib/maple/types";
 
@@ -1952,6 +1955,51 @@ check("describeEntry: back and forth reads as such", () => {
     eq(of({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "bottle" }, true), "Top-up · 50 ml · 30 ml breast milk + 20 ml formula · bottle");
     eq(of({ milk: "mixed", formula_ml: 20 }), "Bottle · mixed, 20 ml formula");
     eq(of({ amount_ml: 50, milk: "mixed" }), "Bottle · 50 ml · mixed");
+  });
+  check("milk by bottle: formula and breast milk from each bottle's milk and a Mixed one's parts", () => {
+    const d = (x: Partial<FeedData>): FeedData => ({ method: "bottle", ...x });
+    eq([bottleAmount(d({ amount_ml: 50 })), bottleAmount(d({ milk: "mixed", formula_ml: 20 })), bottleAmount(d({}))], [50, 20, null]);
+    eq(milkSplit(d({ amount_ml: 30, milk: "formula" })), { formula: 30, breastmilk: 0 });
+    eq(milkSplit(d({ amount_ml: 35, milk: "breastmilk" })), { formula: 0, breastmilk: 35 });
+    eq(milkSplit(d({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20 })), { formula: 20, breastmilk: 30 });
+    eq(milkSplit(d({ amount_ml: 50, milk: "mixed" })), { formula: 0, breastmilk: 0 }, "a Mixed bottle with no split: not said");
+    eq(milkSplit(d({ amount_ml: 50 })), { formula: 0, breastmilk: 0 }, "no milk said");
+    eq(topUpMl({ topUps: [{ ...given("10:30"), data: d({ milk: "mixed", formula_ml: 20 }) }] }), 20, "a top-up of parts only counts its parts");
+  });
+  check("a plan day's milk: formula and breast milk by bottle, top-ups included, and the day line", () => {
+    const day = [
+      fe("L 07:00-07:08, R 07:08-07:15"), given("07:15", 30, { milk: "formula" }),
+      fe("L 09:45-10:00, R 10:00-10:15"), given("10:30", 35, { milk: "breastmilk" }),
+      { ...given("13:05"), data: { method: "bottle", milk: "mixed", amount_ml: 50, breastmilk_ml: 30, formula_ml: 20 } } as EntryOf<"feed">,
+      given("16:00", 40),
+    ];
+    const s = statsFor(day, D("00:00"), D("23:59"), "day", D("23:59"));
+    eq([s.feeds, s.topUps, s.bottleMl, s.formulaMl, s.breastMilkMl], [4, 2, 155, 50, 65]);
+    eq(daySummaryParts(s, "metric").slice(2, 4), ["155 ml bottle (2 top-ups)", "50 ml formula"]);
+  });
+  check("a target per feed: only the family's own number, read, shown, typed and checked", () => {
+    eq(feedTargetOf({ feed_target_ml: { min: 45, max: 60 } }), { min: 45, max: 60 });
+    eq([feedTargetOf({}), feedTargetOf(null), feedTargetOf({ feed_target_ml: { min: 60, max: 45 } }), feedTargetOf({ feed_target_ml: "45-60" })], [null, null, null, null]);
+    eq([formatVolumeRange({ min: 45, max: 60 }, "metric"), formatVolumeRange({ min: 45, max: 60 }, "us"), formatVolumeRange({ min: 50, max: 50 }, "metric")], ["45–60 ml", "1.52–2.03 oz", "50 ml"]);
+    eq(formatVolumeRangeBoth({ min: 45, max: 60 }), "45–60 ml (1.52–2.03 oz)");
+    eq(feedTargetFrom("45", "60", "metric"), { min: 45, max: 60 });
+    eq(feedTargetFrom("60", "45", "metric"), { min: 45, max: 60 }, "either order");
+    eq(feedTargetFrom("50", "", "metric"), { min: 50, max: 50 }, "one amount is the whole target");
+    eq(feedTargetFrom("1.5", "2", "us"), { min: 44.4, max: 59.1 });
+    eq(feedTargetFrom(" ", "", "metric"), null);
+    let threw = "";
+    try { feedTargetFrom("4a", "", "metric"); } catch (e) { threw = (e as Error).message; }
+    eq(threw, "Enter the target per feed as ml, like 45 and 60");
+    const patch: Record<string, unknown> = { feed_target_ml: { min: 44.44, max: 59.15 } };
+    checkFeedTarget(patch);
+    eq(patch.feed_target_ml, { min: 44.4, max: 59.2 });
+    checkFeedTarget({ feed_target_ml: null });
+    checkFeedTarget({ other: 1 });
+    for (const bad of [{ min: 60, max: 45 }, { min: 2, max: 60 }, { min: 45, max: 400 }, { min: "45", max: 60 }, [45, 60], "45-60"]) {
+      let refused = false;
+      try { checkFeedTarget({ feed_target_ml: bad }); } catch { refused = true; }
+      ok(refused, `refused ${JSON.stringify(bad)}`);
+    }
   });
   check("cleanData: a Mixed bottle's split adds up; how it was given only on a bottle", () => {
     const bottle = (d: Record<string, unknown>) => cleanData("feed", { method: "bottle", ...d });

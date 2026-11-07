@@ -146,9 +146,11 @@ import {
 } from "./types";
 import {
   cToF,
+  feedTargetOf,
   formatLengthBoth,
   formatTempBoth,
   formatVolumeBoth,
+  formatVolumeRangeBoth,
   formatWeightBoth,
   fToC,
   inToCm,
@@ -1035,6 +1037,9 @@ function talliesJson(s: Summary) {
       ...(t.bottleFeeds ? { bottles: t.bottleFeeds, ...(soloBottleMl(t) ? { bottle_total: formatVolumeBoth(soloBottleMl(t)) } : {}) } : {}),
       // Bottles given with nursing: part of those feeds (feed.ts), never counted as feeds.
       ...(t.topUps ? { top_ups: t.topUps, ...(t.topUpMl ? { top_up_total: formatVolumeBoth(t.topUpMl) } : {}) } : {}),
+      // What the bottles held (feed.ts milkSplit), when it was said.
+      ...(t.formulaMl ? { formula_total: formatVolumeBoth(t.formulaMl) } : {}),
+      ...(t.breastMilkMl ? { breast_milk_by_bottle_total: formatVolumeBoth(t.breastMilkMl) } : {}),
       wet: t.wet,
       dirty: t.dirty,
       sleep: durText(t.sleepSec),
@@ -2116,6 +2121,7 @@ function todayLine(s: Summary): string {
     tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
     tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${bottleMl ? `, ${formatVolumeBoth(bottleMl)}` : ""}` : "",
     tb.topUps ? `${plural(tb.topUps, "top-up")} with nursing${tb.topUpMl ? `, ${formatVolumeBoth(tb.topUpMl)}` : ""}` : "",
+    tb.formulaMl ? `${formatVolumeBoth(tb.formulaMl)} of formula by bottle` : "",
   ].filter(Boolean);
   const counts =
     !tb.feeds && !tb.wet && !tb.dirty && tb.sleepSec < 60
@@ -2344,6 +2350,9 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   const next = nextLine(s, vo);
   if (next) lines.push(next);
   json.last_feed = lastFeedJson(s, ctx);
+  // The family's own target per feed from their care team, only when they typed one.
+  const target = feedTargetOf(ctx.baby.settings);
+  if (target) json.feed_target = `${formatVolumeRangeBoth(target)}, from their care team, counting what's taken at the breast`;
   // The cluster her last feed is in: 3+ feeds, each starting under 30 minutes after the last one ended.
   const cluster = lastCluster(s);
   json.cluster = cluster ? clusterJson(cluster, ctx) : null;
@@ -2526,6 +2535,10 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
   const anyBottle = stats.some((d) => d.bottleFeeds > 0);
   // Top-ups (bottles given with nursing, part of those feeds), only for a log that has any.
   const anyTopUp = stats.some((d) => d.topUps > 0);
+  // What the bottles held (feed.ts milkSplit), only for a log where it was said.
+  const anyFormula = stats.some((d) => d.formulaMl > 0);
+  const target = feedTargetOf(ctx.baby.settings);
+  const anyBreastMilk = stats.some((d) => d.breastMilkMl > 0);
   const anyPump = stats.some((d) => d.pumpSessions > 0);
   const anyBoth = stats.some((d) => d.bothSec > 0);
   const dayRows = stats.map((d) => {
@@ -2556,6 +2569,8 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       ...gapStats(gapsByDay.get(d.key) ?? []),
       ...(anyBottle ? { bottle: soloBottleMl(d) ? formatVolumeBoth(soloBottleMl(d)) : null } : {}),
       ...(anyTopUp ? { top_ups: d.topUps, top_up: d.topUpMl ? formatVolumeBoth(d.topUpMl) : null } : {}),
+      ...(anyFormula ? { formula: d.formulaMl ? formatVolumeBoth(d.formulaMl) : null } : {}),
+      ...(anyBreastMilk ? { breast_milk_by_bottle: d.breastMilkMl ? formatVolumeBoth(d.breastMilkMl) : null } : {}),
       ...(anyPump ? pumpTalliesJson(d) : {}),
       wet: d.wet,
       dirty: d.dirty,
@@ -2658,6 +2673,17 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       const sleepH = round1(dayRows.reduce((n, r) => n + r.sleep_hours, 0));
       p.push(`So far ${vo.they}${vo.verb("'s had")} ${plural(f, "feed")}${perSession}, ${wet} wet and ${dirty} dirty diapers, and about ${sleepH} hours of logged sleep.`);
     }
+    // Bottles, top-ups included, and what they held, over the days in the summary.
+    if (anyBottle || anyTopUp) {
+      const total = (f: (d: (typeof stats)[number]) => number) => stats.reduce((n, d) => n + f(d), 0);
+      const bottleMl = total((d) => d.bottleMl);
+      const formulaMl = total((d) => d.formulaMl);
+      const breastMl = total((d) => d.breastMilkMl);
+      const tops = total((d) => d.topUps);
+      const held = [formulaMl ? `${formatVolumeBoth(formulaMl)} formula` : "", breastMl ? `${formatVolumeBoth(breastMl)} breast milk` : ""].filter(Boolean);
+      if (bottleMl) p.push(`By bottle: ${formatVolumeBoth(bottleMl)} in all${tops ? `, ${plural(tops, "top-up")} with nursing among them` : ""}${held.length ? ` (${held.join(", ")})` : ""}.`);
+    }
+    if (target) p.push(`The family's target per feed from their care team: ${formatVolumeRangeBoth(target)}, counting what's taken at the breast.`);
     if (anyPump) {
       const pumping = stats.reduce((total, day) => ({
         pumpSessions: total.pumpSessions + day.pumpSessions,
@@ -2705,6 +2731,7 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
     flagged,
     open_doctor_questions: questions,
     last_night: night.json,
+    ...(target ? { feed_target: formatVolumeRangeBoth(target) } : {}),
     ...(mom ? { mom: mom.json } : {}),
   });
 }

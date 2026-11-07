@@ -1616,8 +1616,34 @@ export function topUpIds(runs: readonly NursingRun[]): Set<number> {
 /** What a feed's top-ups added up to (ml), or null when none of them had an amount. */
 export function topUpMl(r: Pick<NursingRun, "topUps">): number | null {
   let ml: number | null = null;
-  for (const b of r.topUps) if (b.data.amount_ml != null) ml = (ml ?? 0) + b.data.amount_ml;
+  for (const b of r.topUps) {
+    const a = bottleAmount(b.data);
+    if (a != null) ml = (ml ?? 0) + a;
+  }
   return ml;
+}
+
+/**
+ * A bottle's amount (ml): its amount, or a Mixed bottle's parts when only
+ * they were given ("20 ml of it was formula"); null when nothing was said.
+ */
+export function bottleAmount(d: FeedData): number | null {
+  if (d.amount_ml != null) return d.amount_ml;
+  if (d.breastmilk_ml == null && d.formula_ml == null) return null;
+  return (d.breastmilk_ml ?? 0) + (d.formula_ml ?? 0);
+}
+
+/**
+ * How much of a bottle was formula and how much breast milk (ml), by its
+ * milk: all of a formula or breast milk bottle, a Mixed bottle's parts (only
+ * what was said), nothing for a bottle whose milk wasn't said.
+ */
+export function milkSplit(d: FeedData): { formula: number; breastmilk: number } {
+  const amount = bottleAmount(d) ?? 0;
+  if (d.milk === "formula") return { formula: amount, breastmilk: 0 };
+  if (d.milk === "breastmilk") return { formula: 0, breastmilk: amount };
+  if (d.milk === "mixed") return { formula: d.formula_ml ?? 0, breastmilk: d.breastmilk_ml ?? 0 };
+  return { formula: 0, breastmilk: 0 };
 }
 
 /**

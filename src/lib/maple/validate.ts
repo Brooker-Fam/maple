@@ -569,3 +569,17 @@ export function checkLogSwitches(patch: Record<string, unknown>): void {
     if (v !== null && typeof v !== "boolean") throw new Error(`${k} must be true or false`);
   }
 }
+
+/**
+ * A target per feed from the family's care team (settings.feed_target_ml):
+ * null removes it; otherwise { min, max } in ml, 5 to 300, min first. It's
+ * shown as context next to bottles and in summaries, never a warning.
+ */
+export function checkFeedTarget(patch: Record<string, unknown>): void {
+  if (!("feed_target_ml" in patch) || patch.feed_target_ml === null) return;
+  const t = patch.feed_target_ml as { min?: unknown; max?: unknown };
+  const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 5 && v <= 300;
+  if (!t || typeof t !== "object" || Array.isArray(t) || !ok(t.min) || !ok(t.max)) throw new Error("A target per feed is between 5 and 300 ml");
+  if (t.min > t.max) throw new Error("A target per feed starts with the smaller amount");
+  patch.feed_target_ml = { min: Math.round(t.min * 10) / 10, max: Math.round(t.max * 10) / 10 };
+}

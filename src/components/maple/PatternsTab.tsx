@@ -31,7 +31,7 @@ import {
   parseDayKey,
   zonedTimeToUtc,
 } from "@/lib/maple/time";
-import { formatTempBoth, formatVolume, formatWeightBoth, formatLengthBoth, mlToOz, ozToMl } from "@/lib/maple/units";
+import { feedTargetOf, formatTempBoth, formatVolume, formatVolumeRange, formatWeightBoth, formatLengthBoth, mlToOz, ozToMl } from "@/lib/maple/units";
 import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/maple/types";
 import type { NavTarget } from "./AppNav";
 import { useCareNav } from "./care/CareNav";
@@ -1718,7 +1718,14 @@ function DailyCharts({
                       yLabel={(v) => String(v)}
                       valueLabel={volumeLabel}
                       ariaLabel={`Bottle volume per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.bottleMl, units)}`).join(", ")}`}
-                      tooltip={(i) => <TipRow color="var(--v-bottle)" hollow={night} value={formatVolume(days[i].bottleMl, units)} label={`by bottle${so(i)}`} />}
+                      tooltip={(i) => (
+                        <>
+                          <TipRow color="var(--v-bottle)" hollow={night} value={formatVolume(days[i].bottleMl, units)} label={`by bottle${so(i)}`} />
+                          {/* Of it, the formula and the breast milk (feed.ts milkSplit); the rest wasn't said. */}
+                          {days[i].formulaMl > 0 && <TipRow color="var(--v-bottle)" hollow value={formatVolume(days[i].formulaMl, units)} label="formula" />}
+                          {days[i].breastMilkMl > 0 && <TipRow color="var(--v-bottle)" hollow value={formatVolume(days[i].breastMilkMl, units)} label="breast milk" />}
+                        </>
+                      )}
                     />
                   </ChartBlock>
                 )}
@@ -1788,6 +1795,7 @@ function DailyCharts({
 /** The charts' accessible twin: every number, one row per day. */
 function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: string; units: UnitSystem }) {
   const anyBottle = days.some((d) => d.bottleMl > 0);
+  const anyFormula = days.some((d) => d.formulaMl > 0);
   const anyBoth = days.some((d) => d.bothSec > 0);
   const anyPump = days.some((d) => d.pumpSessions > 0);
   const anyTummy = days.some((d) => d.tummySec > 0);
@@ -1827,6 +1835,7 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
             <th scope="col" className={th}>Dirty</th>
             <th scope="col" className={th}>{anyBoth ? "Nursing L / R / both" : "Nursing L / R"}</th>
             {anyBottle && <th scope="col" className={th}>Bottle</th>}
+            {anyFormula && <th scope="col" className={th}>Formula</th>}
             {anyPump && <th scope="col" className={th}>Pumped</th>}
             {anyTummy && <th scope="col" className={th}>Tummy time</th>}
           </tr>
@@ -1837,7 +1846,7 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
               <th scope="row" className={cx(td, "text-left font-medium")}>
                 {formatDayLabel(d.key, todayKey)}
               </th>
-              {!hasDailyTotals(d) ? <td colSpan={5 + Number(anyBottle) + Number(anyPump) + Number(anyTummy)} className={cx(td, tone.muted)}>Nothing logged</td> : <>
+              {!hasDailyTotals(d) ? <td colSpan={5 + Number(anyBottle) + Number(anyFormula) + Number(anyPump) + Number(anyTummy)} className={cx(td, tone.muted)}>Nothing logged</td> : <>
               <td className={td}>{d.feeds}</td>
               <td className={td}>{formatDuration(d.sleepSec)}</td>
               <td className={td}>{d.wet}</td>
@@ -1847,6 +1856,7 @@ function DailyTable({ days, todayKey, units }: { days: DayStats[]; todayKey: str
                 {anyBoth && ` / ${formatDuration(d.bothSec)}`}
               </td>
               {anyBottle && <td className={td}>{d.bottleMl ? formatVolume(d.bottleMl, units) : <span className={tone.faint}>—</span>}</td>}
+              {anyFormula && <td className={td}>{d.formulaMl ? formatVolume(d.formulaMl, units) : <span className={tone.faint}>—</span>}</td>}
               {anyPump && <td className={td}><PumpSummary day={d} units={units} /></td>}
               {anyTummy && <td className={td}>{formatDuration(d.tummySec)}</td>}
               </>}
@@ -1924,6 +1934,9 @@ export async function buildVisitSummary(opts: {
   ].filter(Boolean);
   if (birthBits.length) out.push(`At birth: ${birthBits.join(", ")}`);
   out.push(`From what we logged at home in Maple's Log. Times are ${tz.replace("_", " ")}.`);
+  // The family's own number from their care team, as they typed it (never Maple's).
+  const target = feedTargetOf(baby.settings);
+  if (target) out.push(`Target per feed from our care team: ${formatVolumeRange(target, "us")} (${formatVolumeRange(target, "metric")}).`);
 
   const questions = opts.notes
     .filter((e) => e.kind === "note" && e.data.for_doctor && !e.data.done)
@@ -1947,6 +1960,9 @@ export async function buildVisitSummary(opts: {
     const both = (ml: number) => (ml ? `, ${formatVolume(ml, "us")} (${formatVolume(ml, "metric")})` : "");
     if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${both(soloBottleMl(d))}`);
     if (d.topUps) feedBits.push(`${d.topUps} top-up${d.topUps === 1 ? "" : "s"} with nursing${both(d.topUpMl)}`);
+    // What the bottles held (feed.ts milkSplit): formula and breast milk, when they were said.
+    const milk = [d.formulaMl ? `formula${both(d.formulaMl).replace(/^,/, "")}` : "", d.breastMilkMl ? `breast milk${both(d.breastMilkMl).replace(/^,/, "")}` : ""].filter(Boolean);
+    if (milk.length) feedBits.push(`by bottle: ${milk.join(", ")}`);
     const parts = [
       `${d.feeds} feed${d.feeds === 1 ? "" : "s"}${feedBits.length ? ` (${feedBits.join("; ")})` : ""}`,
       `${d.wet} wet / ${d.dirty} dirty`,
