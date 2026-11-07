@@ -122,6 +122,7 @@ import {
   zonedTimeToUtc,
 } from "./time";
 import {
+  BOTTLE_VIAS,
   DIAPER_SIZES,
   JAUNDICE_LEVELS,
   NOTE_TAGS,
@@ -129,6 +130,7 @@ import {
   STOOL_COLORS,
   STOOL_TEXTURES,
   type Baby,
+  type BottleVia,
   type Entry,
   type EntryKind,
   type EntryOf,
@@ -615,7 +617,8 @@ function phrase(e: Entry, ctx: Pick<Ctx, "now" | "fam" | "baby">): string {
   if (e.active) return `${TIMER_LABEL[e.kind as TimerKind] ?? e.kind} timer${d}`;
   switch (e.kind) {
     case "feed":
-      return e.data.method === "bottle" ? `bottle${d}` : `breastfeed${d}`;
+      // describeEntry titles a bottle given through a supplementer "SNS" (its detail then leaves it out).
+      return e.data.method === "bottle" ? `${title === "SNS" ? "SNS" : "bottle"}${d}` : `breastfeed${d}`;
     case "diaper":
       return `${title.toLowerCase()}${d}`;
     case "sleep":
@@ -1574,6 +1577,11 @@ type FeedArgs = TimeArgs & {
   amount?: number | null;
   unit?: "oz" | "ml" | "F" | "C" | null;
   milk?: "breastmilk" | "formula" | "mixed" | null;
+  /** A mixed bottle's split, in `unit`. */
+  breastmilk_amount?: number | null;
+  formula_amount?: number | null;
+  /** How it was given (BOTTLE_VIAS). */
+  via?: BottleVia | null;
   note?: string | null;
 };
 
@@ -1612,12 +1620,20 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
         );
       }
     }
+    // A split is a mixed bottle's; validate.ts makes it add up (both parts give the amount, one and the amount the other).
+    const breastmilk_ml = a.breastmilk_amount != null ? volumeMl(a.breastmilk_amount, a.unit ?? "oz", "bottle") : undefined;
+    const formula_ml = a.formula_amount != null ? volumeMl(a.formula_amount, a.unit ?? "oz", "bottle") : undefined;
+    const split = breastmilk_ml != null || formula_ml != null;
+    if (split && a.milk && a.milk !== "mixed") {
+      throw new ToolError(`breastmilk_amount and formula_amount split a mixed bottle, but milk is ${a.milk}. Give milk "mixed" (or leave it out), or drop the split.`);
+    }
+    const milk = split ? "mixed" : a.milk ?? undefined;
     const { start } = resolveSpan({ at: a.at, minutes_ago: a.minutes_ago, ended_at: a.ended_at, ended_minutes_ago: a.ended_minutes_ago }, null, ctx, assumed);
     const core = await save(ctx, {
       kind: "feed",
       start,
       end: null,
-      data: { method: "bottle", amount_ml, milk: a.milk ?? undefined },
+      data: { method: "bottle", amount_ml, milk, via: a.via ?? undefined, breastmilk_ml, formula_ml },
       note: a.note,
       ...w,
     });
@@ -1633,7 +1649,9 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     });
   }
 
-  if (a.amount != null || a.milk) throw new ToolError("amount and milk are for bottles. For breastfeeding give left_minutes, right_minutes and/or both_minutes.");
+  if (a.amount != null || a.milk || a.via || a.breastmilk_amount != null || a.formula_amount != null) {
+    throw new ToolError("amount, milk, the split and via are for bottles (an SNS amount is a bottle with via \"sns\"). For breastfeeding give left_minutes, right_minutes and/or both_minutes.");
+  }
   const left = a.left_minutes ?? 0;
   const right = a.right_minutes ?? 0;
   const both = a.both_minutes ?? 0;
@@ -2008,7 +2026,11 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   if (fed.kind === "bottle" || !fed.run) {
     const f = fed.entry;
     const milk = f.data.milk ? ` of ${f.data.milk === "breastmilk" ? "breast milk" : f.data.milk}` : "";
-    return `${label}: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}bottle${milk} at ${whenText(f.started_at, ctx)} (${ago}).`;
+    // A Mixed bottle's split when it's known: "(30 ml (1 oz) breast milk + 20 ml (0.7 oz) formula)".
+    const parts = [f.data.breastmilk_ml != null ? `${formatVolumeBoth(f.data.breastmilk_ml)} breast milk` : "", f.data.formula_ml != null ? `${formatVolumeBoth(f.data.formula_ml)} formula` : ""].filter(Boolean);
+    const split = f.data.milk === "mixed" && parts.length ? ` (${parts.join(" + ")})` : "";
+    const how = f.data.via === "paced" ? "paced bottle" : f.data.via === "sns" ? "SNS feed" : "bottle";
+    return `${label}: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}${how}${milk}${split} at ${whenText(f.started_at, ctx)} (${ago}).`;
   }
   const run = fed.run;
   // "Last fed" counts from 40 minutes before a long back-and-forth (or 3+ part) feed ended, or from when she went on a
@@ -3370,6 +3392,9 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     amount: z.number().min(0).max(1000).nullish().describe(`Bottle: how much ${vo.they} drank, in \`unit\`.`),
     unit: z.enum(["oz", "ml"]).nullish().describe("Bottle: fl oz (default) or ml."),
     milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe('Bottle: what was in it, from the user\'s words ("of formula" → formula, "pumped" or "breast milk" → breastmilk). When they didn\'t say, leave it out: never guess it or copy it from an earlier bottle.'),
+    breastmilk_amount: z.number().min(0).max(1000).nullish().describe("Bottle, mixed: the breast milk part, in `unit`."),
+    formula_amount: z.number().min(0).max(1000).nullish().describe("Bottle, mixed: the formula part, in `unit`."),
+    via: z.enum(BOTTLE_VIAS).nullish().describe("Bottle: how it was given, only if said (sns: a supplementer at the breast). Never guess."),
     at: fields.at("When the feed STARTED"),
     minutes_ago: fields.minutesAgo("How many minutes ago the feed STARTED"),
     ended_minutes_ago: fields.endedMinutesAgo(),
@@ -3382,7 +3407,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     {
       title: "Log a feed",
       description:
-        `Use this to record a feed that already finished: breastfeeding (minutes on each side, and both_minutes for going back and forth between sides) or a bottle (amount). For a feed happening right now use start_timer (timer: nursing) instead. Timing: give nothing for a feed that just finished (it ends now and starts total-minutes earlier); at / minutes_ago give when it STARTED; ended_minutes_ago gives when it ended. Returns the next side to offer. E.g. "${vo.they} nursed 12 min left then 8 right, finished 10 minutes ago", "2 oz bottle of formula at 3:10", "fed 15 min on the right at 2am", "nursed about an hour going back and forth, started on the right" → {method:"breast", both_minutes:60, first_side:"right"}.`,
+        `Use this to record a feed that already finished: breastfeeding (minutes on each side, and both_minutes for going back and forth between sides) or a bottle (amount). For a feed happening right now use start_timer (timer: nursing) instead. Timing: give nothing for a feed that just finished (it ends now and starts total-minutes earlier); at / minutes_ago give when it STARTED; ended_minutes_ago gives when it ended. Returns the next side to offer. E.g. "${vo.they} nursed 12 min left then 8 right, finished 10 minutes ago", "2 oz bottle of formula at 3:10", "fed 15 min on the right at 2am", "nursed about an hour going back and forth, started on the right" → {method:"breast", both_minutes:60, first_side:"right"}. An SNS or a top-up is a bottle, saved as that feed's top-up: "30 ml formula in the SNS" → {method:"bottle", via:"sns", amount:30, unit:"ml", milk:"formula"}; "50 ml, 30 pumped and 20 formula" → {milk:"mixed", breastmilk_amount:30, formula_amount:20}.`,
       inputSchema: feedShape,
       annotations: WRITE_ANN,
       invoking: "Warming the milk…",
@@ -4367,6 +4392,9 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     amount: z.number().min(0).max(2000).nullish().describe("bottle / pump: amount in `unit`."),
     unit: z.enum(["oz", "ml", "F", "C"]).nullish().describe("oz or ml for bottle/pump (default oz); F or C for temperature."),
     milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe("bottle: what was in it, from the user's words; when they didn't say, leave it out."),
+    breastmilk_amount: z.number().min(0).max(1000).nullish().describe("bottle, mixed: the breast milk part."),
+    formula_amount: z.number().min(0).max(1000).nullish().describe("bottle, mixed: the formula part."),
+    via: z.enum(BOTTLE_VIAS).nullish().describe("bottle: how it was given, only if said."),
     diaper: z.enum(["wet", "dirty", "both", "dry"]).nullish().describe("diaper: wet, dirty, both or dry (required for diapers)."),
     color: z.enum(STOOL_COLORS).nullish().describe("diaper: poop color (see log_diaper)."),
     texture: z.enum(STOOL_TEXTURES).nullish().describe("diaper: poop texture."),
@@ -4388,7 +4416,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     {
       title: "Log several things at once",
       description:
-        `Use this when one message describes several events, e.g. "${vo.they} nursed 15 min on the left at 2, pooped, and slept until 4:30" → [{kind: breastfeed, at: "2:00", left_minutes: 15, first_side: left}, {kind: diaper, diaper: dirty, at: "2:20"}, {kind: sleep, at: "2:30", ended_at: "4:30"}]. Each item uses the same fields as the single log_* tools. Items are saved in order; each comes back as Saved / Already saved / Not saved (possible duplicate), with one combined summary.`,
+        `Use this when one message describes several events, e.g. "${vo.they} nursed 15 min on the left at 2, pooped, and slept until 4:30" → [{kind: breastfeed, at: "2:00", left_minutes: 15, first_side: left}, {kind: diaper, diaper: dirty, at: "2:20"}, {kind: sleep, at: "2:30", ended_at: "4:30"}]. A top-up after nursing is a bottle item (saved as part of that feed). Each item uses the same fields as the single log_* tools. Items are saved in order; each comes back as Saved / Already saved / Not saved (possible duplicate), with one combined summary.`,
       inputSchema: {
         entries: z.array(manyItem).min(1).max(20).describe("The events, in the order they happened."),
         client_ref: fields.clientRef(),
@@ -4411,7 +4439,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           let sv: Saved;
           switch (item.kind) {
             case "breastfeed":
-              sv = await doFeed({ ...item, method: "breast", amount: null, milk: null }, ctx, opts);
+              sv = await doFeed({ ...item, method: "breast", amount: null, milk: null, via: null, breastmilk_amount: null, formula_amount: null }, ctx, opts);
               break;
             case "bottle":
               sv = await doFeed({ ...item, method: "bottle", left_minutes: null, right_minutes: null, both_minutes: null, first_side: null }, ctx, opts);
@@ -4509,7 +4537,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     {
       title: "Fix a logged entry",
       description: `Use this to fix an entry by id (from a log result or list_entries): its time (at / minutes_ago), end (ended_at / ended_minutes_ago / duration_minutes), note, or details. details holds kind-specific fields in STORAGE units; set a field to null to remove it:
-feed: method (breast|bottle), left_sec, right_sec, both_sec (seconds; both = going back and forth, sides not tracked), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed)
+feed: method (breast|bottle), left_sec, right_sec, both_sec (seconds; both = going back and forth, sides not tracked), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed), breastmilk_ml/formula_ml (mixed split), via (bottle|paced|sns)
 diaper: pee, poop (true/false), color (${STOOL_COLORS.join("|")}), texture, size, rash
 sleep: place · growth: weight_g, length_cm, head_cm, at (home|doctor) · temperature: temp_c (°C), method
 vitals: heart_bpm, resp_rate, spo2, jaundice · medicine: name, dose · pump: left_ml, right_ml, total_ml

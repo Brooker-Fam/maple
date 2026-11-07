@@ -8,7 +8,7 @@ import { JAUNDICE_LABEL, STOOL_COLOR_INFO } from "./guidelines";
 import { milestoneLabel, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import { formatDuration } from "./time";
 import { formatLength, formatTemp, formatVolume, formatWeight } from "./units";
-import type { Entry, EntryKind, UnitSystem } from "./types";
+import type { Entry, EntryKind, FeedData, UnitSystem } from "./types";
 
 export const KIND_LABELS: Record<EntryKind, string> = {
   feed: "Feed",
@@ -65,6 +65,21 @@ export function entryEmoji(e: Entry): string {
   return KIND_EMOJI[e.kind];
 }
 
+/**
+ * What was in a bottle: "breast milk", "formula", "mixed", or a Mixed one's
+ * split when it's known ("30 ml breast milk + 20 ml formula", "mixed, 20 ml
+ * formula"). Null when the milk wasn't said.
+ */
+export function milkWords(d: FeedData, units: UnitSystem = "us"): string | null {
+  if (!d.milk) return null;
+  if (d.milk !== "mixed") return d.milk === "breastmilk" ? "breast milk" : d.milk;
+  const parts = [
+    d.breastmilk_ml != null ? `${formatVolume(d.breastmilk_ml, units)} breast milk` : null,
+    d.formula_ml != null ? `${formatVolume(d.formula_ml, units)} formula` : null,
+  ].filter((x): x is string => !!x);
+  return parts.length === 2 ? parts.join(" + ") : parts.length ? `mixed, ${parts[0]}` : "mixed";
+}
+
 function durationOf(e: Entry, now: Date): number | null {
   if (!e.ended_at && !e.active) return null;
   const end = e.ended_at ? Date.parse(e.ended_at) : now.getTime();
@@ -93,9 +108,14 @@ export function describeEntry(
   switch (e.kind) {
     case "feed": {
       if (e.data.method === "bottle") {
-        title = opts.topUp ? "Top-up" : "Bottle";
+        // "Top-up · 35 ml · breast milk · paced bottle", "SNS · 30 ml · formula", "Bottle · 50 ml · 30 ml breast milk + 20 ml formula".
+        const via = e.data.via;
+        title = opts.topUp ? "Top-up" : via === "sns" ? "SNS" : "Bottle";
         if (e.data.amount_ml != null) bits.push(formatVolume(e.data.amount_ml, units));
-        if (e.data.milk) bits.push(e.data.milk === "breastmilk" ? "breast milk" : e.data.milk);
+        const milk = milkWords(e.data, units);
+        if (milk) bits.push(milk);
+        const how = via === "paced" ? "paced bottle" : via === "sns" && title !== "SNS" ? "SNS" : via === "bottle" && title !== "Bottle" ? "bottle" : null;
+        if (how) bits.push(how);
       } else {
         title = live ? "Nursing now" : stopped ? "Nursing timer" : "Nursed";
         // The card's rows added up (feedMinutes), so lists, the day's totals and toasts agree.

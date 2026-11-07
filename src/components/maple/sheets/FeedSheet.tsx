@@ -25,7 +25,7 @@ import {
 import { bottleCues, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
-import type { Entry, EntryOf, FeedData, Side, StretchSide, UpdateEntryInput } from "@/lib/maple/types";
+import { BOTTLE_VIAS, type BottleVia, type Entry, type EntryOf, type FeedData, type Side, type StretchSide, type UpdateEntryInput } from "@/lib/maple/types";
 import { BreakMark, MomentEditor, partAria, ROW_NAME, SIDE_NAME, SideFixRow, SideMark, type MomentEdge } from "../FeedParts";
 import { logSwitches } from "../MoreSheet";
 import { Icon } from "../icons";
@@ -87,6 +87,8 @@ import {
 
 type Milk = NonNullable<FeedData["milk"]>;
 const MILK_LABEL: Record<Milk, string> = { breastmilk: "Breast milk", formula: "Formula", mixed: "Mixed" };
+/** How the milk was given (FeedData.via). */
+const VIA_LABEL: Record<BottleVia, string> = { bottle: "Bottle", paced: "Paced bottle", sns: "SNS at the breast" };
 const MIN = 60_000;
 /** The id of a feed being logged, not saved yet (its toast is worded from it). */
 const DRAFT_ID = Number.MIN_SAFE_INTEGER;
@@ -107,6 +109,7 @@ function discardedText(err: unknown, what: string, label: (id: string | null | u
 }
 const ADD_BLOCKED = "Fix the side you're adding, or tap Don't add it.";
 const ZERO_BOTTLE_HINT = "Enter more than 0, or leave blank if the amount is unknown.";
+const PART_OVER_HINT = "One part is more than the whole bottle. Check the amounts.";
 
 type FeedEntry = EntryOf<"feed">;
 type SidePart = Extract<Part, { kind: "side" }>;
@@ -344,9 +347,46 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [milk, setMilk] = useState<Milk | undefined>(() =>
     e?.data.method === "bottle" ? e.data.milk : ((pstr(preset, "milk") as Milk | undefined) ?? lastBottle?.data.milk)
   );
+  // How it was given: never copied from the last bottle (a plan can alternate an SNS and a paced bottle).
+  const [via, setVia] = useState<BottleVia | undefined>(() =>
+    e?.data.method === "bottle" ? e.data.via : (BOTTLE_VIAS as readonly string[]).includes(pstr(preset, "via") ?? "") ? (pstr(preset, "via") as BottleVia) : undefined
+  );
+  // A Mixed bottle's split, in the units shown: both parts set the amount; a new amount clears them (as the pump's sides).
+  const shownMl = (ml: number | undefined) => (ml == null ? null : units === "metric" ? ml : Number(mlToOz(ml).toFixed(2)));
+  const [breastPart, setBreastPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.breastmilk_ml) : null));
+  const [formulaPart, setFormulaPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.formula_ml) : null));
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
-  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, left, right, both, first, range, invalid: checks.invalid });
+  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, invalid: checks.invalid });
   const amountMl = !touched.amount ? initialAmountMl : amount == null ? undefined : Math.round((units === "metric" ? amount : ozToMl(amount)) * 10) / 10;
+  const partMl = (v: number | null) => (v == null ? undefined : Math.round((units === "metric" ? v : ozToMl(v)) * 10) / 10);
+  const hadSplit = e?.data.method === "bottle" && (e.data.breastmilk_ml != null || e.data.formula_ml != null);
+  const splitShown = milk === "mixed";
+  /** A part typed: with both, the amount is their sum. */
+  const editPart = (which: "breast" | "formula", v: number | null) => {
+    touch("split");
+    const b = which === "breast" ? v : breastPart;
+    const f = which === "formula" ? v : formulaPart;
+    (which === "breast" ? setBreastPart : setFormulaPart)(v);
+    if (b != null && f != null) {
+      touch("amount");
+      setAmount(units === "metric" ? Math.round((b + f) * 10) / 10 : Number((b + f).toFixed(3)));
+    }
+  };
+  /** The amount typed (or a chip): an old split no longer describes it. */
+  const editAmount = (v: number | null) => {
+    touch("amount");
+    setAmount(v);
+    if (breastPart != null || formulaPart != null) {
+      touch("split");
+      setBreastPart(null);
+      setFormulaPart(null);
+    }
+  };
+  // One part and the amount give the other (the server works it out the same way): said under the parts.
+  const knownTotal = amountMl ?? null;
+  const restMl =
+    splitShown && knownTotal != null && (breastPart == null) !== (formulaPart == null) ? Math.max(0, Math.round((knownTotal - (partMl(breastPart ?? formulaPart) ?? 0)) * 10) / 10) : null;
+  const partOver = restMl != null && (partMl(breastPart ?? formulaPart) ?? 0) > (knownTotal ?? 0) + 0.05;
   const bottleLimit = units === "metric" ? 500 : Math.floor(mlToOz(500) * 1000) / 1000;
   const maxAmount = Math.max(bottleLimit, !touched.amount && initialAmountMl != null && initialAmountMl <= 500 ? amount ?? 0 : 0);
   const amountOverLimit = method === "bottle" && !!touched.amount && amount != null && (units === "metric" ? amount : ozToMl(amount)) > 500;
@@ -365,7 +405,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
 
   // ── Save ──
   const save = async () => {
-    if (busy || manualTimeInvalid || timeInvalid || addBlocked || savedChanged || zeroBottle || amountOverLimit || (!running && checks.invalid)) return;
+    if (busy || manualTimeInvalid || timeInvalid || addBlocked || savedChanged || zeroBottle || amountOverLimit || partOver || (!running && checks.invalid)) return;
     if (e) {
       const patch = editPatch();
       // Nothing changed: close without a write (a bare write would bump the version under the other phone's edit).
@@ -384,8 +424,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       const at = when ?? now();
       setBusy(true);
       try {
+        const split = splitShown ? { breastmilk_ml: partMl(breastPart), formula_ml: partMl(formulaPart) } : {};
         const saved = await log(
-          { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk }, note: note.trim() || null },
+          { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk, via, ...split }, note: note.trim() || null },
           { toast: `${amountLabel ? `${amountLabel} ${bottleWord}` : topUpOf ? "Top-up" : "Bottle"} · ${clock(at)}` }
         );
         if (saved) onClose();
@@ -449,6 +490,12 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       const data: Record<string, unknown> = {};
       if (touched.amount) data.amount_ml = amountMl ?? null;
       if (touched.milk) data.milk = milk ?? null;
+      if (touched.via) data.via = via ?? null;
+      // The split goes whenever it, the amount or the milk changed on a bottle that has one (so Undo can put it back).
+      if (touched.split || ((touched.amount || touched.milk) && hadSplit)) {
+        data.breastmilk_ml = splitShown ? partMl(breastPart) ?? null : null;
+        data.formula_ml = splitShown ? partMl(formulaPart) ?? null : null;
+      }
       return {
         data: Object.keys(data).length ? data : undefined,
         started_at: !when || when.getTime() !== Date.parse(e.started_at) ? (when ?? now()).toISOString() : undefined,
@@ -654,7 +701,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={savedChanged || manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly || zeroBottle || amountOverLimit}
+              disabled={savedChanged || manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly || zeroBottle || amountOverLimit || partOver}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
@@ -662,6 +709,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   ? CHECK_NUMBER_HINT
                   : zeroBottle
                     ? ZERO_BOTTLE_HINT
+                  : partOver
+                    ? PART_OVER_HINT
                   : empty
                     ? `Add how long ${w.he} nursed.`
                     : addOnly
@@ -779,10 +828,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   unit={units === "metric" ? "ml" : "oz"}
                   ariaLabel={units === "metric" ? "millilitres" : "ounces"}
                   value={amount}
-                  onChange={(v) => {
-                    touch("amount");
-                    setAmount(v);
-                  }}
+                  onChange={editAmount}
                   onInvalid={checks.watch("amount")}
                   step={units === "metric" ? 5 : 0.5}
                   decimals={units === "metric" ? 1 : 3}
@@ -795,10 +841,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     <Chip
                       key={c}
                       selected={amount === c}
-                      onClick={() => {
-                        touch("amount");
-                        setAmount(c);
-                      }}
+                      onClick={() => editAmount(c)}
                     >
                       {c} {units === "metric" ? "ml" : "oz"}
                     </Chip>
@@ -817,6 +860,23 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   A top-up for the {clock(new Date(topUpOf.start).toISOString())} feed: part of that feed, not a feed of its own.
                 </p>
               )}
+              <section aria-label="How it was given">
+                <Label>How</Label>
+                <div className="flex flex-wrap gap-2">
+                  {BOTTLE_VIAS.map((v) => (
+                    <Chip
+                      key={v}
+                      selected={via === v}
+                      onClick={() => {
+                        touch("via");
+                        setVia(via === v ? undefined : v);
+                      }}
+                    >
+                      {VIA_LABEL[v]}
+                    </Chip>
+                  ))}
+                </div>
+              </section>
               <section aria-label="Milk">
                 <Label>Milk</Label>
                 <div className="flex flex-wrap gap-2">
@@ -833,6 +893,23 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     </Chip>
                   ))}
                 </div>
+                {splitShown && (
+                  // Mixed: how much of each (optional). Both set the amount; one and the amount give the other.
+                  <div className="mt-3">
+                    <p className={cx(tone.muted, "mb-1.5 text-[13px]")}>How much of each (optional)</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <MiniStepper key="breast-part" label="Breast milk" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`breast milk, ${units === "metric" ? "millilitres" : "ounces"}`} value={breastPart} onChange={(v) => editPart("breast", v)} onInvalid={checks.watch("breast-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
+                      <MiniStepper key="formula-part" label="Formula" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`formula, ${units === "metric" ? "millilitres" : "ounces"}`} value={formulaPart} onChange={(v) => editPart("formula", v)} onInvalid={checks.watch("formula-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
+                    </div>
+                    {partOver ? (
+                      <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{PART_OVER_HINT}</p>
+                    ) : restMl != null ? (
+                      <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>
+                        The rest, {formatVolume(restMl, units)}, is {breastPart != null ? "formula" : "breast milk"}.
+                      </p>
+                    ) : null}
+                  </div>
+                )}
               </section>
               <ContextNote>
                 {age ? <>Typical at {w.his} age: {typicalBottle(ageDays)}. </> : null}

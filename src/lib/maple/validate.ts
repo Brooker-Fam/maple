@@ -7,6 +7,7 @@ import { z } from "zod";
 import { cleanCareNutritionData } from "./care-nutrition-validation";
 import { ACETAMINOPHEN_NAMES, EARLY_GRACE_CHOICES, MOOD_TAGS, type MoodTag } from "./guidelines";
 import {
+  BOTTLE_VIAS,
   DIAPER_SIZES,
   ENTRY_KINDS,
   JAUNDICE_LEVELS,
@@ -56,6 +57,42 @@ const photo = z.object({
   access: z.enum(["public", "private"]).optional(),
 });
 
+const tenth = (ml: number) => Math.round(ml * 10) / 10;
+
+/**
+ * A bottle's milk split and how it was given only mean something on a
+ * bottle, and the split only on a Mixed one: they're dropped anywhere else.
+ * Both parts set the amount to their sum (a total more than 1 ml off is
+ * refused, so a slip never saves); one part and the amount give the other.
+ */
+function bottleParts<T extends { method: "breast" | "bottle"; amount_ml?: number; milk?: string; breastmilk_ml?: number; formula_ml?: number; via?: string }>(d: T, ctx: z.RefinementCtx): T {
+  const out = { ...d };
+  if (out.method !== "bottle") delete out.via;
+  if (out.method !== "bottle" || out.milk !== "mixed") {
+    delete out.breastmilk_ml;
+    delete out.formula_ml;
+    return out;
+  }
+  const { breastmilk_ml: b, formula_ml: f, amount_ml: total } = out;
+  if (b != null && f != null) {
+    const sum = tenth(b + f);
+    if (total != null && Math.abs(total - sum) > 1) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["amount_ml"], message: `The breast milk and formula add up to ${sum} ml, not the ${total} ml total` });
+      return z.NEVER;
+    }
+    out.amount_ml = sum;
+  } else if (total != null && (b != null || f != null)) {
+    const part = (b ?? f)!;
+    if (part > total + 0.05) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [b != null ? "breastmilk_ml" : "formula_ml"], message: `The ${b != null ? "breast milk" : "formula"} is more than the whole ${total} ml bottle` });
+      return z.NEVER;
+    }
+    if (b != null) out.formula_ml = tenth(Math.max(0, total - b));
+    else out.breastmilk_ml = tenth(Math.max(0, total - f!));
+  }
+  return out;
+}
+
 export const dataSchemas = {
   feed: z
     .object({
@@ -69,6 +106,10 @@ export const dataSchemas = {
       last_side: side.optional(),
       amount_ml: optNum(0, 500, "Bottle amount"),
       milk: z.enum(["breastmilk", "formula", "mixed"]).optional(),
+      // A Mixed bottle's split (bottleParts keeps it adding up), and how the milk was given.
+      breastmilk_ml: optNum(0, 500, "Breast milk amount"),
+      formula_ml: optNum(0, 500, "Formula amount"),
+      via: z.enum(BOTTLE_VIAS).optional(),
       // Listed so .strip() keeps it: a stopped-while-paused feed must stay one through later edits.
       paused_at_stop: z.boolean().optional(),
       stopped_at: iso.optional(),
@@ -92,7 +133,8 @@ export const dataSchemas = {
         .strip()
         .optional(),
     })
-    .strip(),
+    .strip()
+    .transform((d, ctx) => bottleParts(d, ctx)),
   pump: z
     .object({
       left_ml: optNum(0, 600, "Left amount"),

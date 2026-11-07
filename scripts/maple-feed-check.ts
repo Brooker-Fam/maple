@@ -1943,6 +1943,33 @@ check("describeEntry: back and forth reads as such", () => {
     eq(describeEntry(b, { units: "metric", topUp: true }).text, "Top-up · 35 ml · breast milk");
     eq(describeEntry(b, { units: "metric" }).text, "Bottle · 35 ml · breast milk");
   });
+  check("describeEntry: how a bottle was given and a Mixed bottle's split", () => {
+    const of = (data: Partial<FeedData>, topUp = false) => describeEntry({ ...given("10:30"), data: { method: "bottle", ...data } }, { units: "metric", topUp }).text;
+    eq(of({ amount_ml: 30, milk: "formula", via: "sns" }), "SNS · 30 ml · formula");
+    eq(of({ amount_ml: 30, milk: "formula", via: "sns" }, true), "Top-up · 30 ml · formula · SNS");
+    eq(of({ amount_ml: 35, milk: "breastmilk", via: "paced" }, true), "Top-up · 35 ml · breast milk · paced bottle");
+    eq(of({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "bottle" }), "Bottle · 50 ml · 30 ml breast milk + 20 ml formula");
+    eq(of({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "bottle" }, true), "Top-up · 50 ml · 30 ml breast milk + 20 ml formula · bottle");
+    eq(of({ milk: "mixed", formula_ml: 20 }), "Bottle · mixed, 20 ml formula");
+    eq(of({ amount_ml: 50, milk: "mixed" }), "Bottle · 50 ml · mixed");
+  });
+  check("cleanData: a Mixed bottle's split adds up; how it was given only on a bottle", () => {
+    const bottle = (d: Record<string, unknown>) => cleanData("feed", { method: "bottle", ...d });
+    eq(bottle({ milk: "mixed", breastmilk_ml: 30, formula_ml: 20 }), { method: "bottle", milk: "mixed", breastmilk_ml: 30, formula_ml: 20, amount_ml: 50 });
+    eq(bottle({ milk: "mixed", amount_ml: 50.4, breastmilk_ml: 29.6, formula_ml: 20.7 }).amount_ml, 50.3, "within a ml (oz rounding), the parts win");
+    eq(bottle({ milk: "mixed", amount_ml: 50, formula_ml: 20 }), { method: "bottle", amount_ml: 50, milk: "mixed", formula_ml: 20, breastmilk_ml: 30 });
+    eq(bottle({ milk: "mixed", amount_ml: 50, breastmilk_ml: 50 }).formula_ml, 0);
+    eq(bottle({ milk: "mixed", formula_ml: 20 }), { method: "bottle", milk: "mixed", formula_ml: 20 }, "no amount: the part alone");
+    eq(bottle({ milk: "formula", amount_ml: 50, formula_ml: 20, via: "paced" }), { method: "bottle", amount_ml: 50, milk: "formula", via: "paced" }, "only a Mixed bottle has a split");
+    eq(cleanData("feed", { method: "breast", left_sec: 60, via: "sns", breastmilk_ml: 10 }), { method: "breast", left_sec: 60 });
+    let threw = "";
+    try { bottle({ milk: "mixed", amount_ml: 60, breastmilk_ml: 30, formula_ml: 20 }); } catch (e) { threw = (e as Error).message; }
+    eq(threw, "amount_ml: The breast milk and formula add up to 50 ml, not the 60 ml total");
+    try { bottle({ milk: "mixed", amount_ml: 30, formula_ml: 40 }); } catch (e) { threw = (e as Error).message; }
+    eq(threw, "formula_ml: The formula is more than the whole 30 ml bottle");
+    try { bottle({ via: "spoon" }); } catch (e) { threw = (e as Error).message; }
+    ok(threw.startsWith("via: "), threw);
+  });
 }
 
 // ── one-tap times: usual lengths and the presets each question shows ─────
