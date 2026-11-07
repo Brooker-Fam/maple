@@ -47,7 +47,9 @@
  * breastfeeding and diet, MedlinePlus on going home after a C-section, the
  * CDC on food safety and on vaccines for family and caregivers, the AAP on
  * cocooning a newborn and on safe sleep, the Child Accident Prevention Trust
- * on scalds, and Wong and Fisher's 2009 review of confinement and mood.
+ * on scalds, Wong and Fisher's 2009 review of confinement and mood, and,
+ * for the caution paragraph, the CDC on alcohol and breastfeeding, the USDA's
+ * table of how much alcohol cooking leaves, and LactMed on herbs and bleeding.
  * Recheck them when this file changes.
  */
 import type { Voice } from "../voice";
@@ -342,7 +344,7 @@ export const FORTY_DAY_NOTES: readonly FortyDaysNote[] = [
     id: "fortieth",
     stage: "fortieth",
     title: "Day forty",
-    you: "Many traditions mark this day with a meal, a blessing or a first outing. However these weeks went, they counted, and none of it was about bouncing back. Healing goes on after today, so keep the help that's helping, and your full postpartum visit if it's still ahead.",
+    you: "Many traditions mark this day with a meal, a blessing or a first outing. It's a marker, not a finish line, and none of it was about bouncing back. Healing goes on, so keep the help that's helping, and your full postpartum visit, any time up to twelve weeks after the birth, if it's still ahead.",
     othersTitle: (v) => `Mark day forty with ${v.mom}`,
     others: (v) => `Many traditions mark the fortieth day with a meal, a blessing or a first outing. Mark it with ${v.mom} however she'd like, and keep the help coming: healing doesn't end today.`,
     sources: [FORTY_DAYS_BOOK, ACOG_736],
@@ -354,7 +356,7 @@ export const FORTY_DAY_NOTES: readonly FortyDaysNote[] = [
 export const FORTY_DAYS_ABOUT: readonly string[] = [
   "In many cultures the weeks after a birth belong to the new mother: in Chinese tradition, zuo yuezi, sitting the month; across Latin America, la cuarentena, the forty days. How long it lasts and what it involves varies from place to place and family to family.",
   "These notes borrow from The First Forty Days: The Essential Art of Nourishing the New Mother, by Heng Ou with Amely Greeven and Marisa Belger (2016). Heng Ou learned sitting the month from her aunt, and her book carries it into forty days, about the six weeks doctors call the postpartum period, built on rest, warmth, warm food made by others, a circle of help and a quiet home. The words here are ours.",
-  "They're comforts, not rules: keep what feels good and leave the rest. Where a note touches your health, it follows ACOG, the WHO, the CDC, the AAP or the NHS and links to them. Nothing here suggests herbs, supplements, tonics or medicines; before trying a traditional remedy, ask your OB, the baby's pediatrician or a pharmacist.",
+  "They're comforts, not rules: keep what feels good and leave the rest. Where a note touches your health, it follows ACOG, the WHO, the CDC, the AAP or the NHS and links to them. Nothing here suggests herbs, supplements, tonics or medicines. Some traditional dishes are cooked with rice wine, which simmering doesn't fully cook off, and some herbs can affect bleeding, so before trying a traditional remedy, ask your OB, the baby's pediatrician or a pharmacist.",
 ];
 
 /** Support's forty days card: how to let people help (hers) and how to help (everyone else's). The book is credited beside it. */
@@ -371,6 +373,7 @@ export const fortyDaysHelp = (v: Voice) => ({
     `Each time ${v.mom} sits down to feed, bring her a drink and a snack she can eat with one hand.`,
     "Save hot drinks and bowls for when someone else is holding the baby. A hot drink can scald a baby even 15 minutes after it's made.",
     "Take the jobs before she asks: dishes, laundry, meals, the door, the group chat.",
+    "Agree on a simple signal she can give when she needs a hand, a break or the room cleared.",
     "Keep visits short. Ask visitors to wash their hands, to come another day if they're unwell, and to bring a meal if they'd like to help.",
     `Mark day forty with ${v.mom}, however she'd like.`,
   ],
@@ -381,11 +384,12 @@ export const fortyDaysHelp = (v: Voice) => ({
  * A note the family can send to anyone planning a visit (Share, or Copy where
  * there's no share sheet). It names no one: whoever sends it adds their own
  * words. AAP's cocooning page and the CDC: hands, staying away when sick,
- * whooping cough and flu shots at least two weeks before meeting the baby.
+ * whooping cough and flu shots at least two weeks before meeting the baby, and
+ * no kisses for the baby.
  */
 export const visitorNote = (v: Voice): string => {
   void v;
-  return "We're taking these first weeks slowly, and we'd love to see you. Please text before you come, keep visits short, wash your hands when you arrive, and come another day if you're feeling unwell. If you can, be up to date on your whooping cough and flu shots at least two weeks before. And if you'd like to help, a meal we can heat up is the best gift.";
+  return "We're taking these first weeks slowly, and we'd love to see you. Please text before you come, keep visits short, wash your hands when you arrive, and save the baby kisses for later. If you're feeling unwell, come another day. If you can, be up to date on your whooping cough and flu shots at least two weeks before. And if you'd like to help, a meal we can heat up is the best gift.";
 };
 
 /** Notes waiting for a person's sign-off, newest check first. */

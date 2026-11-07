@@ -168,7 +168,7 @@ const SCALD_SAFE = /out of (the baby's|their) reach|where the baby can't reach|s
 
 check("a hot drink or bowl is only for when someone else holds the baby, and the baby is never kept warm", () => {
   for (const t of ALL_TEXT()) {
-    if (/\b(hot|warm) (drinks?|tea|water|milk|broth|cup|mugs?|bowls?)\b|\btea\b|\bsomething warm (to drink|and simple)\b/i.test(t)) ok(SCALD_SAFE.test(t), `scald-safe: "${t}"`);
+    if (/\b(hot|warm) (drinks?|tea|water|milk|broth|cup|mugs?|bowls?|soup|porridge|congee)\b|\btea\b|\bsomething warm (to drink|and simple)\b/i.test(t)) ok(SCALD_SAFE.test(t), `scald-safe: "${t}"`);
     ok(!/\bwarm (room|house|home)\b|\b(keep|make) the (room|house) warm\b|\bbundle (her|him|them|the baby)\b/i.test(t), `never overheating the baby: "${t}"`);
   }
 });
@@ -183,6 +183,7 @@ check("the visitor note asks for clean hands, staying away when sick, and food o
   for (const v of VOICES) {
     const t = visitorNote(v);
     ok(/wash (your )?hands/i.test(t), "hands");
+    ok(/kiss/i.test(t), "no kisses for the baby");
     ok(/(unwell|sick|ill)\b/i.test(t), "sick visitors");
     ok(/\bmeal\b/i.test(t), "food");
     ok(t.length <= 480, `short enough for a text (${t.length})`);
