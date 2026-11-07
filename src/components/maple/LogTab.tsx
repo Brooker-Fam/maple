@@ -5,7 +5,7 @@ import AccountMenu from "./AccountMenu";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { feedClusters, nursingRuns, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
+import { feedClusters, nursingRuns, topUpIds, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
 import { statsFor, type DayStats } from "@/lib/maple/insights";
 import {
   DEFAULT_TZ,
@@ -323,12 +323,15 @@ export function dstNote(key: string, tz: string): string | null {
   return null;
 }
 
-/** "11 feeds (one cluster) · 2h 05m nursing · 2 oz bottle · 6 wet · 3 dirty · 14h 20m sleep" */
+/** "11 feeds (one cluster) · 2h 05m nursing · 2 oz bottle (1 top-up) · 6 wet · 3 dirty · 14h 20m sleep" */
 export function daySummaryParts(s: DayStats, units: UnitSystem): string[] {
   const clusters = s.clusters === 1 ? " (one cluster)" : s.clusters > 1 ? ` (${s.clusters} clusters)` : "";
   const parts = [`${s.feeds} feed${s.feeds === 1 ? "" : "s"}${clusters}`];
   if (s.nursingSec >= 60) parts.push(`${formatDuration(s.nursingSec)} nursing`);
-  if (s.bottleMl > 0) parts.push(`${formatVolume(s.bottleMl, units)} bottle`);
+  // The amount is every bottle's; the top-ups among them are part of nursing feeds, not feeds of their own.
+  const topUps = s.topUps ? ` (${s.topUps} top-up${s.topUps === 1 ? "" : "s"})` : "";
+  if (s.bottleMl > 0) parts.push(`${formatVolume(s.bottleMl, units)} bottle${topUps}`);
+  else if (s.topUps) parts.push(`${s.topUps} top-up${s.topUps === 1 ? "" : "s"}`);
   parts.push(`${s.wet} wet`, `${s.dirty} dirty`);
   if (s.sleepSec >= 60) parts.push(`${formatDuration(s.sleepSec)} sleep`);
   return parts;
@@ -441,9 +444,12 @@ export default function LogTab({
   }, [entries, tz]);
 
   const stats = useMemo(() => statsByDay(entries, oldestKey, todayKey, now, tz), [entries, oldestKey, todayKey, now, tz]);
-  // The clusters (3+ feeds, each under 30 minutes after the last), worked out once from every loaded entry, and which
-  // one each feed is in, so a day shows one Cluster row with the cluster's own feeds (never recounted from that row's).
-  const clusters = useMemo(() => feedClusters(nursingRuns(entries, now)), [entries, now]);
+  // The feeds (runs) worked out once from every loaded entry: the clusters (3+ feeds, each under 30 minutes after the
+  // last) and which one each feed is in, so a day shows one Cluster row with the cluster's own feeds (never recounted
+  // from that row's), and the bottles given with a feed, which read "Top-up".
+  const runs = useMemo(() => nursingRuns(entries, now), [entries, now]);
+  const clusters = useMemo(() => feedClusters(runs), [runs]);
+  const topUps = useMemo(() => topUpIds(runs), [runs]);
   const clusterOf = useMemo(() => {
     const m = new Map<number, number>();
     clusters.forEach((c, i) => {
@@ -599,6 +605,7 @@ export default function LogTab({
               highlighted={d.key === flash}
               clusters={clusters}
               clusterOf={clusterOf}
+              topUps={topUps}
               onClusterInfo={clusterInfo.open}
               onAdd={() => addOnDay(d.key)}
             />
@@ -648,6 +655,7 @@ function DaySection({
   onOpen,
   clusters,
   clusterOf,
+  topUps,
   onClusterInfo,
   onAdd,
 }: {
@@ -667,6 +675,8 @@ function DaySection({
   /** The clusters LogTab worked out from every loaded entry, and feed id → its cluster's index. */
   clusters: FeedCluster[];
   clusterOf: Map<number, number>;
+  /** Bottles given with a feed (feed.ts topUpIds, from every loaded entry): they read "Top-up". */
+  topUps: Set<number>;
   onClusterInfo: (c?: FeedCluster | null) => void;
   onAdd: () => void;
 }) {
@@ -796,6 +806,7 @@ function DaySection({
               <EntryRow
                 entry={e}
                 now={now}
+                topUp={topUps.has(e.id)}
                 onClick={() => {
                   onOpen(e);
                   open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) });

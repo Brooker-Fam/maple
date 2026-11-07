@@ -14,10 +14,12 @@ import {
   isTracked,
   minutesText,
   moveEdge,
+  nursingRuns,
   other,
   partTotals,
   setSide,
   spanMinutes,
+  topUpRunFor,
   type Part,
 } from "@/lib/maple/feed";
 import { bottleCues, typicalBottle } from "@/lib/maple/guidelines";
@@ -351,6 +353,15 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const zeroBottle = method === "bottle" && amountMl === 0 && (!e || !!touched.amount);
   const amountLabel = amountMl != null ? formatVolume(amountMl, units) : null;
   const chips = units === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
+  // Given with a nursing feed (during it, just before, or under 30 minutes after), a bottle is that feed's top-up
+  // (feed.ts topUpRunFor): the form says so before it's saved, from the loaded feeds without this one.
+  const otherRuns = useMemo(
+    () => (method === "bottle" ? nursingRuns((state?.entries ?? []).filter((x) => x.id !== e?.id), now()) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a clock; the feeds and this entry decide it.
+    [method, state?.entries, e?.id]
+  );
+  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now()) : null;
+  const bottleWord = topUpOf ? "top-up" : "bottle";
 
   // ── Save ──
   const save = async () => {
@@ -375,7 +386,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       try {
         const saved = await log(
           { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk }, note: note.trim() || null },
-          { toast: `${amountLabel ? `${amountLabel} bottle` : "Bottle"} · ${clock(at)}` }
+          { toast: `${amountLabel ? `${amountLabel} ${bottleWord}` : topUpOf ? "Top-up" : "Bottle"} · ${clock(at)}` }
         );
         if (saved) onClose();
       } finally {
@@ -801,6 +812,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 )}
               </div>
               <WhenField value={when} onChange={setWhen} onInvalidChange={setManualTimeInvalid} tz={tz} />
+              {topUpOf && (
+                <p className={cx(tone.muted, "-mt-2 text-[13px] leading-snug")}>
+                  A top-up for the {clock(new Date(topUpOf.start).toISOString())} feed: part of that feed, not a feed of its own.
+                </p>
+              )}
               <section aria-label="Milk">
                 <Label>Milk</Label>
                 <div className="flex flex-wrap gap-2">

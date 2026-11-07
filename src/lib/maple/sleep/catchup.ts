@@ -18,7 +18,7 @@
  * Every time is the family's (`tz`), and the baby is the family's own
  * (`Voice`): never a hard-coded name or pronoun.
  */
-import { nextSideFor, nextSideText, nursingRuns, openSegment, type LastFed, type NextSide, type NursingRun } from "../feed";
+import { countedFeeds, nextSideFor, nextSideText, nursingRuns, openSegment, type LastFed, type NextSide, type NursingRun } from "../feed";
 import type { Summary } from "../insights";
 import { formatRelative, formatTime } from "../time";
 import type { Entry, EntryOf, FeedData, SleepPlace, StretchSide } from "../types";
@@ -284,12 +284,10 @@ export function recapWords(o: {
   const t = (at: string | number) => formatTime(at, tz);
   const after = (at: string) => ms(at) >= since && ms(at) <= now.getTime() + MIN;
   const runs = nursingRuns(o.entries, now);
-  const feeds: { start: number; said: string }[] = [
-    ...runs.filter((r) => !r.live && r.start >= since).map((r) => ({ start: r.start, said: sidesSaid(r, false) })),
-    ...o.entries
-      .filter((e): e is EntryOf<"feed"> => e.kind === "feed" && (e.data as FeedData).method === "bottle" && after(e.started_at))
-      .map((e) => ({ start: ms(e.started_at), said: ", a bottle" })),
-  ].sort((a, b) => a.start - b.start);
+  // A bottle given with a feed is that feed's top-up (feed.ts countedFeeds), never a feed of its own.
+  const feeds: { start: number; said: string }[] = countedFeeds(o.entries, now, runs)
+    .filter((f) => (f.run ? !f.run.live && f.run.start >= since : after(f.bottle.started_at)))
+    .map((f) => ({ start: f.start, said: f.run ? `${sidesSaid(f.run, false)}${f.run.topUps.length ? ", with a top-up" : ""}` : ", a bottle" }));
   const diapers = o.entries.filter((e): e is EntryOf<"diaper"> => e.kind === "diaper" && after(e.started_at));
   const tries = o.tries.filter((x) => ms(x.started_at) >= since);
   const sleeps = o.entries.filter((e) => e.kind === "sleep" && !e.active && !!e.ended_at && ms(e.ended_at) > since);

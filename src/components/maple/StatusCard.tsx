@@ -3,7 +3,7 @@
 import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
 import { Fragment, useState } from "react";
-import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
+import { lastFedRule, minutesShort, spanText, topUpMl, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import type { DayStats, Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
@@ -161,6 +161,11 @@ export default function StatusCard() {
       if (run.min.total) bits.push(minutesShort(run.min.total));
       const sides = sidesLabel(run);
       if (sides) bits.push(sides);
+      // A bottle given with it is part of this feed: "+ 35 ml top-up".
+      if (run.topUps.length) {
+        const ml = topUpMl(run);
+        bits.push(ml != null ? `+ ${formatVolume(ml, units)} top-up` : "+ top-up");
+      }
     }
     feedSub = bits;
   }
@@ -365,7 +370,9 @@ export function Tallies({
   const both = s.bothSec >= 60 ? `both ${formatDuration(s.bothSec)}` : null;
 
   // Each count's bar fills toward the usual number for her day of life (the footnote says what that is).
-  // Feeds count each feed in a cluster (split by 10+ minutes off the breast): "11 · 4 in a cluster".
+  // Feeds count each feed in a cluster (split by 10+ minutes off the breast): "11 · 4 in a cluster". A top-up is part of
+  // its feed, never one of its own: "8 · 6 top-ups".
+  const topUps = s.topUps ? `${s.topUps} top-up${s.topUps === 1 ? "" : "s"}` : null;
   const tiles: { key: string; label: string; value: string; goal: number | null; have: number; color: string; note?: string; aria?: string }[] = [
     {
       key: "feeds",
@@ -374,8 +381,8 @@ export function Tallies({
       have: s.feeds,
       goal: t ? t.feeds[0] : null,
       color: DETAIL_COLOR.nursing,
-      note: s.clusterFeeds ? `${s.clusterFeeds} in a cluster` : undefined,
-      aria: s.clusterFeeds ? `${s.feeds} feeds, ${s.clusterFeeds} in a cluster` : undefined,
+      note: s.clusterFeeds ? `${s.clusterFeeds} in a cluster` : topUps ?? undefined,
+      aria: s.clusterFeeds ? `${s.feeds} feeds, ${s.clusterFeeds} in a cluster` : topUps ? `${s.feeds} feeds, with ${topUps}` : undefined,
     },
     { key: "wet", label: "Wet", value: String(s.wet), have: s.wet, goal: t?.wet ?? null, color: DETAIL_COLOR.pee },
     { key: "dirty", label: "Dirty", value: String(s.dirty), have: s.dirty, goal: t?.dirty ?? null, color: DETAIL_COLOR.poop },

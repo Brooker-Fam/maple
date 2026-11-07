@@ -5,7 +5,7 @@ import AccountMenu from "./AccountMenu";
 import dynamic from "next/dynamic";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { clockFraction, clockSpans } from "@/lib/maple/clock-spans";
-import { feedClusters, feedTotals, nursingRuns, spanText, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
+import { feedClusters, feedTotals, nursingRuns, spanText, topUpIds, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
 import {
   DISCLAIMER,
   FEEDS_PER_DAY,
@@ -14,7 +14,7 @@ import {
   diaperTargets,
   tummyGoalMinutes,
 } from "@/lib/maple/guidelines";
-import { isVitaminD, statsFor, type DayStats } from "@/lib/maple/insights";
+import { isVitaminD, soloBottleMl, statsFor, type DayStats } from "@/lib/maple/insights";
 import { nursingSpans } from "@/lib/maple/nursing-spans";
 import { pumpAmountLabel, pumpSessionLabel, pumpSummaryLabel } from "@/lib/maple/pump-summary";
 import {
@@ -514,6 +514,8 @@ export function buildRibbon(
   // Feeds and clusters by the one rule (feed.ts), worked out once from everything loaded.
   const runs: NursingRun[] = nursingRuns(recorded, now);
   const clusters: FeedCluster[] = feedClusters(runs);
+  // Bottles given with a feed are its top-ups (part of it), and say so.
+  const topUps = topUpIds(runs);
   // Keep each actual stretch, including those whose entry began before the
   // row. Bucketing an entry by its start alone would lose nursing after midnight.
   const nursing = recorded.flatMap((entry) => entry.kind === "feed" && entry.data.method !== "bottle"
@@ -573,7 +575,7 @@ export function buildRibbon(
       } else if (e.kind === "feed" && e.data.method === "bottle") {
         if (s < start || s >= end) continue;
         const eEnd = Math.min(entryEnd(e, now), nowMs);
-        const title = `Bottle${e.data.amount_ml ? ` ${formatVolume(e.data.amount_ml, units)}` : ""} · ${when(s, eEnd)}`;
+        const title = `${topUps.has(e.id) ? "Top-up" : "Bottle"}${e.data.amount_ml ? ` ${formatVolume(e.data.amount_ml, units)}` : ""} · ${when(s, eEnd)}`;
         const pieces = spans(s, eEnd);
         // A bottle without a duration is a point, not an invented ten minutes.
         if (eEnd === s) {
@@ -1941,7 +1943,10 @@ export async function buildVisitSummary(opts: {
       feedBits.push(`nursing ${formatDuration(d.nursingSec)}: L ${formatDuration(d.leftSec)} / R ${formatDuration(d.rightSec)}${both}`);
     }
     if (d.clusters) feedBits.push(d.clusters === 1 ? "one cluster" : `${d.clusters} clusters`);
-    if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${d.bottleMl ? `, ${formatVolume(d.bottleMl, "us")} (${formatVolume(d.bottleMl, "metric")})` : ""}`);
+    // Bottles on their own are feeds; top-ups were given with nursing feeds (feed.ts), each with its own amount.
+    const both = (ml: number) => (ml ? `, ${formatVolume(ml, "us")} (${formatVolume(ml, "metric")})` : "");
+    if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${both(soloBottleMl(d))}`);
+    if (d.topUps) feedBits.push(`${d.topUps} top-up${d.topUps === 1 ? "" : "s"} with nursing${both(d.topUpMl)}`);
     const parts = [
       `${d.feeds} feed${d.feeds === 1 ? "" : "s"}${feedBits.length ? ` (${feedBits.join("; ")})` : ""}`,
       `${d.wet} wet / ${d.dirty} dirty`,

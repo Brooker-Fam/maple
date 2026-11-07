@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { feedClusters, lastFedAnchor, lastFedRule, minutesShort, nursingRuns, spanText, typicalFeedGapMin } from "../src/lib/maple/feed";
+import { feedClusters, lastFedAnchor, lastFedRule, minutesShort, nursingRuns, spanText, topUpMl, typicalFeedGapMin } from "../src/lib/maple/feed";
 import { formatDuration, formatRelative, formatTime } from "../src/lib/maple/time";
 import { formatVolume } from "../src/lib/maple/units";
 import { makeVoice } from "../src/lib/maple/voice";
@@ -78,7 +78,7 @@ function render(entries: EntryOf<"feed">[], clock: string, sleeping = false, { i
     useMaple: () => ({ state: { entries, baby: { timezone: "UTC" }, me: { email: "synthetic@example.test" } }, summary, log: noop, memberLabel: noop, readOnly: false, units: "metric", isNight: () => false }),
     // The info button's state: open for this one render when `info`.
     useVoice: () => voice, useSheets: () => ({ open: noop }), useNow: () => now, useState: () => [info, noop], useClusterInfo: () => ({ open: noop, sheet: null }),
-    DEFAULT_TZ: "UTC", typicalFeedGapMin, formatRelative, formatTime, formatDuration, formatVolume, minutesShort, spanText, lastFedRule,
+    DEFAULT_TZ: "UTC", typicalFeedGapMin, topUpMl, formatRelative, formatTime, formatDuration, formatVolume, minutesShort, spanText, lastFedRule,
     ts: (entry: { started_at: string }) => Date.parse(entry.started_at), since: String, sidesLabel: fn("sidesLabel", helpers),
     cx: (...classes: unknown[]) => classes.filter(Boolean).join(" "), tone: {}, DETAIL_COLOR: {}, KIND_COLOR: {},
     Icon: "Icon", NextSide: "NextSide", Since: "Since", AnimatePresence: "AnimatePresence", motion: { p: "p" },
