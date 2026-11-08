@@ -53,8 +53,9 @@ import { usePlanLog, usePlanNow, withFeedAt, type PlanRow } from "./usePlanNow";
  * line's place, never "Due since", until the day's due comes back at the
  * night's end. A night by the clock says the turn's hours beside its name
  * ("Partner's bottle  until 2 AM"). The breast offered only if she wants to
- * has small Left and Right with a quiet "Not this time" above the bottle's big
- * button. With the plan's feeds and milk in 24 hours, one quiet line says
+ * is Start Left and Right with a quiet "Not this time" under them; once she's
+ * had her chance, the bottle after it is the big button, a bottle of its own.
+ * With the plan's feeds and milk in 24 hours, one quiet line says
  * what was logged beside them ("7 feeds in the last 24 hours · plan: at least
  * 8"): context, never a warning.
  *
@@ -295,8 +296,8 @@ export default function NextFeedCard() {
     if (a.kind === "nurse") {
       const shield = a.shield ? ", with the nipple shield" : "";
       if (!big) {
-        // Beside a row (the breast offered only if she wants to, the bottle's the big button): each side small, Left then
-        // Right as the dock has them, or the plan's one side.
+        // Beside a row, never the card's big one (the breast offered only if she wants to, while another step has it):
+        // each side small, Left then Right as the dock has them, or the plan's one side.
         const sides: Side[] = a.side ? [a.side] : ["L", "R"];
         return (
           <div className="flex flex-wrap items-center gap-2">
@@ -463,8 +464,8 @@ export default function NextFeedCard() {
   const laterSteps = later.filter((r) => r.state !== "note").map((r) => lowerFirst(r.text));
   // "Then pump 15 min; then top up 25–35 ml, …", then the plan's notes ("Burp halfway").
   const laterWords = [laterSteps.length ? `Then ${laterSteps.join("; then ")}` : null, ...later.filter((r) => r.state === "note").map((r) => r.text)].filter(Boolean).join(" · ");
-  // Before a feed, a step's quiet action beside the big one, in the steps' order: the night's bottle under Start pumping
-  // (for whoever gives it), the breast offered only if she wants to above the bottle's button, with its Not this time.
+  // Before a feed, a step's quiet action beside the big one, in the steps' order (the night's bottle under Start pumping,
+  // for whoever gives it), with its quiet close when it has one.
   const besideRow = !underway ? (rows.find((r) => r.secondary) ?? null) : null;
   const besideFirst = !!besideRow && !!primary && rows.indexOf(besideRow) < rows.indexOf(primary.row);
   const beside =

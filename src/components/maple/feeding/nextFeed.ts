@@ -26,13 +26,12 @@
  * Left and Right, with a quiet "Not this time". Once she's had her chance (she
  * nursed, Not this time, or anything after it is logged), the bottle after it
  * is the big button ("Log bottle", never a top-up: afterNursing). A bottle
- * step given other than by bottle (by
- * cup, spoon or finger) is "Log feed", the bottle form with no way of giving;
- * one with an amount it must reach at least ("Gave 40 ml · at least 60 ml")
- * stays open as one up to the target does; one up to an amount (a cap) leaves
- * how much she took to the family. The card's due, a night when she's hungry
- * (no time to show), the night's turn by the clock ("until 2 AM") and the
- * plan's feeds in 24 hours are worked out here too (cardDue, whenHungry,
+ * step given by cup, spoon or finger is "Log feed", the bottle form with no
+ * way of giving; one she must take at least of ("Gave 40 ml · at least
+ * 60 ml") stays open as one up to the target does; one up to an amount (a
+ * cap) leaves how much she took to the family. The card's due, a night when she's
+ * hungry (no time to show), the night's turn by the clock ("until 2 AM") and
+ * the plan's feeds in 24 hours are worked out here too (cardDue, whenHungry,
  * clockTurnText, perDayLine).
  *
  * Every amount and minute here is the plan's or the log's, in the plan's
@@ -489,7 +488,7 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
         const fix = milkAction(s, c);
         return row({ state: "todo", status: `Nursed ${minutes}`, ...(primary === null ? { action: fix } : { secondary: fix }) });
       }
-      // On one side only: that side's Start alone. The breast offered only if she wants to: beside its row, with Not this time.
+      // On one side only: that side's Start alone. The breast offered only if she wants to: with Not this time.
       return row({ state: "todo", ...acts({ kind: "nurse", shield: !!s.shield, ...(s.side ? { side: s.side } : {}) }) });
     }
     if (v.step.do === "pump") {
