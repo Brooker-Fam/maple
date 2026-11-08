@@ -1,11 +1,14 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { feedingPlanOf } from "@/lib/maple/feeding-plan";
 import { alertsOn } from "@/lib/maple/insights";
 import { dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
 import { feedTargetFrom, feedTargetOf, formatLength, formatVolume, formatWeight } from "@/lib/maple/units";
 import BirthSheet from "../BirthSheet";
 import { useBabyWords, useFamilyOne } from "../familyWords";
+import { useFeedingPlanNav } from "../feeding/FeedingPlanNav";
+import { planShortLine } from "../feeding/planDraft";
 import { Icon } from "../icons";
 import { logSwitches } from "../MoreSheet";
 import { Button, Segmented, cx, tone } from "../ui";
@@ -49,6 +52,18 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
       return t && t.max !== t.min ? formatVolume(t.max, units).replace(/ (ml|oz)$/, "") : "";
     })(),
   };
+  const plans = useFeedingPlanNav();
+  const plan = feedingPlanOf(settings);
+  // The care team's feeding plan (its own sheet, saved on its own), beside the target per feed it shares.
+  const planRow = (
+    <button type="button" onClick={() => plans.openPlan()} className={cx(tone.row, "min-h-[60px] py-2.5")}>
+      <span className="min-w-0 flex-1">
+        <span className={cx(tone.body, "block text-[15px]")}>Feeding plan</span>
+        <span className={cx(tone.muted, "mt-0.5 block text-[13px] leading-snug [overflow-wrap:anywhere]")}>{planShortLine(plan)}</span>
+      </span>
+      <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
+    </button>
+  );
   const [pEdits, setPEdits] = useState<Partial<Profile>>({});
   const [dEdits, setDEdits] = useState<Partial<Doctor>>({});
   const [busy, setBusy] = useState<"profile" | "doctor" | null>(null);
@@ -184,6 +199,8 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
                 <span className="text-[15px] font-medium text-mp-accent-fg tabular-nums">{phone}</span>
               </a>
             )}
+            {/* View-only guests read the plan here (the Doctor page isn't theirs); there's nothing to add for them. */}
+            {plan && planRow}
           </div>
         </Section>
       </>
@@ -246,6 +263,7 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
             value={d.feedTo}
             onChange={(e) => setDEdits((x) => ({ ...x, feedTo: e.target.value.replace(/[^\d.,]/g, "") }))}
           />
+          {planRow}
           {/* These only tune the reminders. */}
           {warnings && (
             <>
