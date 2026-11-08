@@ -62,7 +62,7 @@ function feedWords(step: GapStep, units: UnitSystem, planUnits: UnitSystem | nul
   if (step.feed.kind === "bottle") {
     // A bottle feed's later bottles ride on its row, never a row or a gap of their own (feed.ts's `more`: a feeding
     // plan's formula to finish), each amount said: "Bottle · 30 ml + 20 ml" (an amount not said: "+ 1 more bottle").
-    const bottles = [step.feed.entry, ...((step.feed as { more?: readonly EntryOf<"feed">[] }).more ?? [])];
+    const bottles = [step.feed.entry, ...((step as GapStep & { more?: readonly EntryOf<"feed">[] }).more ?? [])];
     const amounts = bottles.map((b) => bottleAmount(b.data)).filter((ml): ml is number => !!ml);
     const unsaid = bottles.length - amounts.length;
     if (!amounts.length) return { main: bottles.length > 1 ? `${bottles.length} bottles` : "Bottle", more: [] };
