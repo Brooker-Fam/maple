@@ -14,6 +14,7 @@ import {
   feedingPlanOf,
   feedPlanNow,
   feedText,
+  PLAN_LATE_TOP_UP_MS,
   PlanConflict,
   PlanError,
   planLines,
@@ -558,6 +559,49 @@ export function planFeedArg(ctx: Pick<Ctx, "baby">, raw: string | null | undefin
 
 /** Whether the plan feed's nursing uses the nipple shield (a start or log from it records the shield unless told otherwise). */
 export const planShield = (f: PlanFeed | null): boolean => !!f?.steps.some((s) => s.do === "nurse" && s.shield);
+
+/** A bottle the plan takes as an earlier feed's late part: that feed (its first nursing entry, for top_up_of) and which part. */
+export type OwedPart = { id: number; view: PlanFeedView; part: "top-up" | "milk at the breast" };
+
+/**
+ * The nursing feed a bottle given at `at`, with no feed named for it, is the
+ * late part of, by the feeding plan (log_feed's and Siri's bottle; Today's
+ * card links its own): the plan's last feed nursed, ended no more than
+ * PLAN_LATE_TOP_UP_MS before the bottle with no feed since, and still owes its
+ * bottle step or its milk at the breast, as the plan itself reads such a
+ * bottle. Null otherwise, and for a bottle started as another of the plan's
+ * feeds (`tag`). `atBreast` (a syringe or an SNS) says which part it is when
+ * the feed owes both. The link keeps Last fed, the day's count and the plan's
+ * next feed on that feed, as the card's own Log top-up does. A family without
+ * a plan never gets one: a syringe can be a feed by finger.
+ */
+export function owedPart(plan: FeedingPlan, entries: readonly Entry[], at: Date, opts: { tz: string; target: FeedTarget | null; atBreast: boolean; tag?: string | null }): OwedPart | null {
+  const atMs = at.getTime();
+  // The log as it stood when the bottle was given.
+  const before = entries.filter((e) => Date.parse(e.started_at) <= atMs);
+  const n = feedPlanNow(plan, before, at, { tz: opts.tz, target: opts.target });
+  const view = n.focus.state === "underway" ? n.focus : n.missed?.view ?? null;
+  const run = view?.group?.run;
+  if (!view || view.offPlan || !run || run.end === null || atMs < run.end || atMs - run.end > PLAN_LATE_TOP_UP_MS) return null;
+  if (opts.tag && opts.tag !== view.feed.id) return null;
+  const bottle = view.steps.some((s) => s.step.do === "bottle" && s.status === "todo");
+  const breast = view.steps.some((s) => s.milkMissing);
+  if (!bottle && !breast) return null;
+  return { id: run.entries[0].id, view, part: breast && (opts.atBreast || !bottle) ? "milk at the breast" : "top-up" };
+}
+
+/** owedPart for an MCP call, from the log as Today reads it; null with no plan. */
+export async function planOwedPart(ctx: Ctx, at: Date, opts: { atBreast: boolean; tag?: string | null }): Promise<OwedPart | null> {
+  const plan = feedingPlanOf(ctx.baby.settings);
+  if (!plan) return null;
+  return owedPart(plan, await recentLog(ctx), at, { tz: ctx.tz, target: feedTargetOf(ctx.baby.settings), ...opts });
+}
+
+/** What log_feed says after linking a bottle to the feed the plan owed it to (owedPart), with how to undo the link. */
+export function owedPartLine(o: OwedPart, tz: string): string {
+  const at = o.view.start ?? o.view.group?.start ?? null;
+  return `The feeding plan's ${at != null ? `${formatTime(at, tz)} ` : ""}feed (${named(o.view.feed)}) still had its ${o.part} to log, so this was saved with that feed [entry #${o.id}]. If it was a feed of its own, update_entry it with details {top_up_of: null}.`;
+}
 
 /** Dashes said aloud: "12–18 min" reads "12 to 18 min", any other dash a pause. */
 const spokenRange = (s: string) => s.replace(/(\d)\s*[–—]\s*(\d)/g, "$1 to $2").replace(/\s*[–—]\s*/g, ", ");

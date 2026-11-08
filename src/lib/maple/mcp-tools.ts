@@ -71,7 +71,7 @@ import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./car
 import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
-import { feedingPlanStatus, planFeedArg, planShield, registerFeedingPlanTools } from "./feeding-plan-mcp";
+import { feedingPlanStatus, owedPartLine, planFeedArg, planOwedPart, planShield, registerFeedingPlanTools, type OwedPart } from "./feeding-plan-mcp";
 import { feedingPlanOf } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
@@ -1634,9 +1634,17 @@ async function toppedUpFeed(ctx: Ctx, e: Entry): Promise<NursingRun | null> {
   return nursingRuns(near, ctx.now).find((r) => r.topUps.some((b) => b.id === e.id)) ?? null;
 }
 
-/** "Counted as a top-up to the feed that began at 9:45 AM today: part of that feed, not a feed of its own." */
-function topUpLine(run: NursingRun, ctx: Ctx): string {
-  return `Counted as a top-up to the feed that began at ${whenText(new Date(run.start), ctx)}: part of that feed, not a feed of its own.`;
+/**
+ * "Counted as a top-up to the feed that began at 9:45 AM today: part of that feed, not a feed of its own." Milk given
+ * at the breast (a syringe, an SNS) is said as that, never as a top-up: in a feeding plan the top-up is another step.
+ * `part`: what the feeding plan took the bottle as (planOwedPart), so a bottle taken as the milk at the breast it owed
+ * isn't called a top-up either.
+ */
+function topUpLine(run: NursingRun, ctx: Ctx, e: Entry, part: OwedPart["part"] | null = null): string {
+  const when = whenText(new Date(run.start), ctx);
+  if (e.kind === "feed" && atBreast(e as FeedEntry)) return `Counted with the feed that began at ${when}: milk at the breast, part of that feed, not a feed of its own.`;
+  if (part === "milk at the breast") return `Counted with the feed that began at ${when}: part of that feed, not a feed of its own.`;
+  return `Counted as a top-up to the feed that began at ${when}: part of that feed, not a feed of its own.`;
 }
 
 async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
@@ -1666,8 +1674,12 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
       throw new ToolError(`breastmilk_amount and formula_amount split a mixed bottle, but milk is ${a.milk}. Give milk "mixed" (or leave it out), or drop the split.`);
     }
     const milk = split ? "mixed" : a.milk ?? undefined;
-    const topUpOf = await topUpTarget(a.top_up_of, ctx);
+    const named = await topUpTarget(a.top_up_of, ctx);
     const { start } = resolveSpan({ at: a.at, minutes_ago: a.minutes_ago, ended_at: a.ended_at, ended_minutes_ago: a.ended_minutes_ago }, null, ctx, assumed);
+    // With no feed named: the late top-up (or milk at the breast) the feeding plan still owes the feed just before, saved
+    // with that feed as Today's card saves it, so Last fed, the day's count and the plan's next feed stay on it.
+    const owed = named == null ? await planOwedPart(ctx, start, { atBreast: a.via === "syringe" || a.via === "sns", tag: planFeed?.id }) : null;
+    const topUpOf = named ?? owed?.id;
     const core = await save(ctx, {
       kind: "feed",
       start,
@@ -1688,8 +1700,9 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     const age = ctx.baby.born_at ? babyAge(ctx.baby.born_at, ctx.now, ctx.tz) : null;
     // Given with a nursing feed, it's that feed's top-up: part of it, so the day's feeds don't go up.
     const fed = core.status === "duplicate" ? null : await toppedUpFeed(ctx, core.entry);
+    const linked = !!owed && !!fed && fed.entries.some((e) => e.id === owed.id);
     return finish(ctx, core, assumed, {
-      lines: fed ? [topUpLine(fed, ctx)] : [],
+      lines: fed ? [topUpLine(fed, ctx, core.entry, linked ? owed!.part : null), ...(linked ? [owedPartLine(owed!, ctx.tz)] : [])] : [],
       extra: {
         ...(age ? { typical_bottle: `${typicalBottle(age.days)}. ${bottleCues(vo)}` } : {}),
         ...(fed ? { top_up_of: { id: fed.entries[0].id, started_local: localWhen(new Date(fed.start), ctx) } } : {}),

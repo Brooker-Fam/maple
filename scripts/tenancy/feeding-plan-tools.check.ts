@@ -328,6 +328,34 @@ async function main() {
       ok(shieldBottle.error && /shield is for nursing/.test(shieldBottle.text), shieldBottle.text);
     });
 
+    await test(`${shape}: a bottle with no feed named is the late top-up the plan still owes the feed before, from log_feed and Siri; not past 90 minutes`, async () => {
+      const wipe = () => sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE family_id = $1 AND deleted_at IS NULL`, [A]);
+      await wipe();
+      // "Nurse, top up" from 10:40 to 11:00, its top-up not given: a paced bottle at noon, an hour on (past 30 minutes by its time).
+      const fed = await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", plan: "Nurse, top up", minutes_ago: 80 });
+      const nursingId = Number(fed.json.id);
+      const late = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
+      ok(late.text.includes("Counted as a top-up to the feed that began at 10:40 AM today: part of that feed, not a feed of its own."), late.text);
+      ok(late.text.includes(`The feeding plan's 10:40 AM feed ("Nurse, top up") still had its top-up to log, so this was saved with that feed [entry #${nursingId}]. If it was a feed of its own, update_entry it with details {top_up_of: null}.`), late.text);
+      eq((await sql(`SELECT (data->>'top_up_of')::int AS of FROM maple_entries WHERE id = $1`, [Number(late.json.id)]))[0].of, nursingId, "saved with that feed");
+      const status = await tool(alpha.owner, A, "maple_status");
+      ok(/^Last feed: nursed at 10:40 AM today \(1h 20m ago\): L 10m, R 10m, started on the left, with a 1\.01 oz \(30 ml\) top-up\.$/m.test(status.text), status.text);
+      // Undone with update_entry, it's a feed of its own again.
+      const undo = await tool(alpha.owner, A, "update_entry", { id: Number(late.json.id), details: { top_up_of: null } });
+      ok(!undo.error && (await sql(`SELECT data ? 'top_up_of' AS has FROM maple_entries WHERE id = $1`, [Number(late.json.id)]))[0].has === false, undo.text);
+      await sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE id = $1`, [Number(late.json.id)]);
+      // Siri's bottle in the same spot says whose top-up it is, and saves it so.
+      const spoken = await siri(alpha.token, { action: "bottle", amount_oz: 1 });
+      ok(spoken.speak === "Logged a 1 ounce bottle at 12:00 PM, a top-up for the 10:40 AM feed.", spoken.speak ?? "");
+      eq((await sql(`SELECT (data->>'top_up_of')::int AS of FROM maple_entries WHERE family_id = $1 AND deleted_at IS NULL AND data->>'method' = 'bottle'`, [A]))[0]?.of, nursingId, "Siri's too");
+      // Over 90 minutes after the nursing ended, a bottle is a feed of its own.
+      await wipe();
+      await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", plan: "Nurse, top up", minutes_ago: 115 });
+      const later = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
+      ok(!/still had its/.test(later.text) && !/Counted as a top-up/.test(later.text), later.text);
+      await wipe();
+    });
+
     await test(`${shape}: two phones saying yes at once to changes from the same revision: one saves, the other is told it changed`, async () => {
       const read = await tool(alpha.owner, A, "feeding_plan");
       const p = read.json.plan as Record<string, unknown>;
@@ -387,6 +415,10 @@ async function main() {
       ok(cross.json.confirm_needed === true, "another family's token reads back again");
       ok(cross.text.includes("Day: every 2.5–3.5 hours, waking him if he's asleep") && cross.text.includes("Night (11 PM–5 AM): every 3 hours, waking him: Pump + bottle"), "Beta's boy is him");
       eq(feedingPlanOf(await settings(B))?.feeds.map((f) => f.name), ["Shield, then pump"], "Beta's plan unchanged");
+      // With no plan saved, a bottle after nursing is never linked by one: a syringe can be a feed by finger.
+      await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", minutes_ago: 80 });
+      const own = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", via: "syringe" });
+      ok(!/Counted with the feed|still had its/.test(own.text) && !(await sql(`SELECT data ? 'top_up_of' AS has FROM maple_entries WHERE id = $1`, [Number(own.json.id)]))[0].has, own.text);
     });
 
     await test(`${shape}: ounces as the care team wrote them, read back in ounces, and sent back without drift`, async () => {

@@ -12,7 +12,7 @@ import { LABEL_NOT_WHILE_NURSING, MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_
 import { memberName, summarize } from "@/lib/maple/insights";
 import { lastFedSpeak } from "@/lib/maple/mcp-tools";
 import { feedingPlanOf, feedPlanNow } from "@/lib/maple/feeding-plan";
-import { planSpeak } from "@/lib/maple/feeding-plan-mcp";
+import { owedPart, planSpeak } from "@/lib/maple/feeding-plan-mcp";
 import {
   activeTimers,
   createEntryOnce,
@@ -300,7 +300,17 @@ export async function POST(request: NextRequest) {
       }
       case "bottle": {
         const oz = Number(body.amount_oz);
-        const data = Number.isFinite(oz) && oz > 0 && oz <= 12 ? { method: "bottle", amount_ml: Math.round(ozToMl(oz)) } : { method: "bottle" };
+        // A top-up the feeding plan still owes the feed just before (log_feed's rule): saved with that feed, so Last fed,
+        // the day's count and the plan's next feed stay on it.
+        const plan = feedingPlanOf(baby.settings);
+        const owed = plan
+          ? owedPart(plan, await listEntries(fam, { babyId: baby.id, from: new Date(now.getTime() - 72 * 3600_000), includeActive: true, limit: 2000 }), now, { tz, target: feedTargetOf(baby.settings), atBreast: false })
+          : null;
+        const data = {
+          method: "bottle" as const,
+          ...(Number.isFinite(oz) && oz > 0 && oz <= 12 ? { amount_ml: Math.round(ozToMl(oz)) } : {}),
+          ...(owed ? { top_up_of: owed.id } : {}),
+        };
         const r = await createEntryOnce(fam, { ...base, kind: "feed", startedAt: now, data, clientId });
         entry = r.entry;
         if (!r.deduped) await rememberAct(qc, "entry", [wrote("entry", r.entry)]);
