@@ -382,6 +382,58 @@ check("the care team's feeding plan: its words send set_feeding_plan; a sleep pl
   ok(route(ALEX, "yes", { before: earlier(1, "set_feeding_plan", { plan: { feeds: [] } }) }).sel.groups.includes("feeding"), "the read-back keeps it for the yes");
 });
 
+/** A check-in's changes to a saved plan, in plain words that name nothing of a plan: the plan's [App] line sends the tool. */
+const PLAN_EDITS = [
+  "night now starts at 11",
+  "stop waking her at night",
+  "make the night bottle 60 ml",
+  "the night feed is now 2 hours apart",
+  "add a third feed: just a bottle of 60 ml",
+  "every 2 and a half to 3 and a half hours now",
+  "she doesn't need the pump step anymore",
+  "we don't wake her at night anymore",
+  "change the goal to 60-75",
+];
+const PLAN_LINE = 'Feeding plan: next is "Nurse + SNS": nurse 12 to 18 min, 20 ml of formula in the SNS; then pump 15 min. Next feed 2:20 PM to 3:20 PM, in 2h 20m.';
+const SLEEP_LINE = "Sleep plan: stage 1 (Held to sleep, then the bassinet); bassinet tries tonight: 0 of 2.";
+
+check("a saved feeding plan's [App] line sends set_feeding_plan with every message, as a sleep plan's lines send its tools, and fits beside them", () => {
+  for (const said of PLAN_EDITS) {
+    ok(!predictGroups({ said }).includes("feeding"), `by its words alone, not: "${said}"`);
+    ok(route(ALEX, said, { state: [PLAN_LINE] }).sel.active.includes("set_feeding_plan"), `with the plan's line: "${said}"`);
+  }
+  eq(route(ALEX, "she pooped", { state: [PLAN_LINE] }).sel.groups, ["feeding"], "a plain log carries it too: the group is one tool");
+  eq(predictGroups({ said: "Robin said hi", context: [PLAN_LINE, SLEEP_LINE], carePerson: "Robin" }), ["mom", "feeding", "sleep"], "in group order, the plan's one tool ahead of the sleep plan's five");
+  eq(predictGroups({ said: "pumped 3 oz", context: [PLAN_LINE] }), ["feeding", "log_more"], "a group the plan's line sends ranks as if its words had named it");
+  ok(!route(VI, "night now starts at 11", { state: [PLAN_LINE] }).sel.active.includes("set_feeding_plan"), "a viewer still never has it");
+  // Both plans' lines on a plain message: core, the sleep tools and the plan's, under the ceiling.
+  const both = route(ALEX, "she pooped", { state: [PLAN_LINE, SLEEP_LINE] }).sel;
+  eq([both.groups, both.dropped], [["sleep", "feeding"], []], "both plans' tools");
+  ok(both.tokens <= TOOL_CEILING, `${both.tokens} under the ceiling`);
+  console.log(`  a family with both plans, a plain message: ${both.tokens} tokens of tools (ceiling ${TOOL_CEILING})`);
+  // Her name beside both: past the ceiling the sleep plan's five go, and the plan's one stays.
+  const named = route(ALEX, "Robin said hi", { state: [PLAN_LINE, SLEEP_LINE] }).sel;
+  eq([named.groups, named.dropped], [["mom", "feeding"], ["sleep"]], "the bigger goes first");
+  ok(named.tokens <= TOOL_CEILING, `${named.tokens} under the ceiling`);
+});
+
+check("a plan sheet's shorthand and a routine send set_feeding_plan by their words alone; a bedtime, nap or sleep routine doesn't", () => {
+  for (const said of ["here's our s&s routine", "S & S 20 ml at each feed", "LC says q2-3h by day", "q3h at night, wake her", "every feed q 2.5 hrs", "the morning routine from the clinic", "change the night routine"]) {
+    ok(predictGroups({ said }).includes("feeding"), `loads feeding: "${said}"`);
+  }
+  for (const said of ["what's her bedtime routine", "our nap routine is a mess", "a sleep routine for the evenings", "this & such", "Robin's and Sam's turns"]) {
+    ok(!predictGroups({ said }).includes("feeding"), `no feeding: "${said}"`);
+  }
+});
+
+check("past the ceiling, a smaller group that went before a bigger one comes back once the bigger one is out", () => {
+  const sizes = definitionSizes(toolDisclosure(toolsFor(ALEX), { window: [], vo: COPY.v, lastStep: 5 }).tools);
+  // Ranked mom, sleep, feeding: feeding goes first, then sleep, and then feeding fits again.
+  const sel = selectTools({ sizes, predicted: ["mom", "sleep", "feeding"] });
+  eq([sel.groups, sel.dropped], [["mom", "feeding"], ["sleep"]], "feeding back, sleep out");
+  ok(sel.tokens <= TOOL_CEILING, `${sel.tokens} under the ceiling`);
+});
+
 // ── what the window already holds ────────────────────────────────────────
 
 check("groups called in the window stay: a growth log earlier keeps health for a diaper", () => {
