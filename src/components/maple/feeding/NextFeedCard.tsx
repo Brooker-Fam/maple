@@ -17,7 +17,7 @@ import { Button, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
 import { useTimerActions } from "../useTimerActions";
 import { useFeedingPlanNav } from "./FeedingPlanNav";
-import { cardDueWords, keepTogether, listWords, namedAt, nursedOnly, type StepAction } from "./nextFeed";
+import { cardDueWords, keepTogether, listWords, namedAt, nursedOnly, nursedWords, type StepAction } from "./nextFeed";
 import { usePlanLog, usePlanNow, withFeedAt, type PlanRow } from "./usePlanNow";
 
 /**
@@ -420,7 +420,7 @@ export default function NextFeedCard() {
   // Before a feed that pumps first: its bottle as a quiet second action under Start pumping, for whoever gives it.
   const besides = !underway ? (rows.find((r) => r.secondary)?.secondary ?? null) : null;
   // What happened, when she only nursed: "She nursed 20m at 12:30 AM" (while she's on, "She's nursing now · 12m").
-  const happened = quiet && run ? (run.live ? `${w.Hes} nursing now · ${minutesShort(run.min.total)}` : `${w.He} nursed ${minutesShort(run.min.total)} at ${formatTime(run.start, tz)}`) : null;
+  const happened = nursedWords(focus, w, tz);
 
   return (
     <section data-next-feed aria-label={`${eyebrow}: ${focus.feed.name}`} {...guard.props} className={cx(tone.card, "px-4 pt-2.5", canOther || canWas ? "pb-1" : "pb-3.5")}>

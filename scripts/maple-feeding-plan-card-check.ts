@@ -14,7 +14,7 @@
  * Times are wall clock in America/New_York.
  */
 import { dueFromWords } from "../src/components/maple/feeding/NextFeedCard";
-import { keepTogether, missedItems, namedAt, nursedOnly, stepRows, type StepAction, type StepRow } from "../src/components/maple/feeding/nextFeed";
+import { keepTogether, missedItems, namedAt, nursedOnly, nursedWords, stepRows, type StepAction, type StepRow } from "../src/components/maple/feeding/nextFeed";
 import { planReading } from "../src/components/maple/feeding/usePlanNow";
 import { pause, startBreast, stopBreast, switchTo } from "../src/lib/maple/feed";
 import { bottleNeed, feedPlanNow, parseFeedingPlan, type BottleStep, type FeedingPlan } from "../src/lib/maple/feeding-plan";
@@ -609,7 +609,13 @@ check("she only nursed in a plan feed with no nursing: the plan's words, nothing
   // The engine's word decides once it says (PlanFeedView.nursedOnly beside .named).
   const said = { ...fp, focus: { ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: false } };
   eq([nursedOnly(said.focus), carry(stepRows(said, said.focus, SHE))[0][0]], [false, "pump"]);
-  eq(nursedOnly({ ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: true }), true);
+  const told = { ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: true };
+  eq(nursedOnly(told), true);
+  // What happened, in the baby's words: once she's off, and while she's on.
+  eq(plain(nursedWords(fp.focus, { He: "She", Hes: "She's" }, TZ)), "She nursed 20m at 12:30 AM");
+  const on = at(PLAN, [...firstNight(), nurse("L +1 00:30-")], "+1 00:42");
+  eq([nursedOnly(on.focus), nursedWords(on.focus, { He: "She", Hes: "She's" }, TZ)], [true, "She's nursing now · 12m"]);
+  eq(nursedWords(at(PLAN, [nurse("L 09:00-09:15", { plan: SNS.id })], "09:20").focus, { He: "She", Hes: "She's" }, TZ), null, "a feed that nurses: none");
   // Nursing with the night's bottle given isn't only nursing: she nursed too, the rest to do.
   const both = at(PLAN, [...evening(), bottle("23:20", 30, { milk: "breastmilk", plan: NIGHT.id }), nurse("L 23:30-23:45")], "23:50");
   eq([both.focus.feed.id, both.focus.extraNursing, nursedOnly(both.focus)], [NIGHT.id, true, false]);
@@ -673,7 +679,8 @@ check("a feed's parts name the plan feed only when the log or the family said it
   eq(form(stepRows(fp, fp.focus, SHE)[1].action), { label: "Log top-up", aria: "Log top-up: opens the bottle form", preset: { method: "bottle", amount_ml: 25, milk: null, via: "paced", top_up_of: fed.id } });
   eq(form(missedItems(at(PLAN, [...sns, fed], "10:30"))[0].fix), { label: "Log top-up", aria: "Log top-up: opens the bottle form", preset: { method: "bottle", amount_ml: 25, milk: null, via: "paced", top_up_of: fed.id } });
   // A bottle feed's own bottle keeps the plan feed (the night's second bottle joins its first by it).
-  eq(form(stepRows(at(PLAN, [...evening(), pump("23:20-")], "23:30"))[1].action)?.preset, { method: "bottle", amount_ml: null, milk: "breastmilk", plan: NIGHT.id });
+  const own = stepRows(at(PLAN, [...evening(), pump("23:20-")], "23:30"))[1].action;
+  eq(own?.kind === "form" ? own.preset : own, { method: "bottle", amount_ml: null, milk: "breastmilk", plan: NIGHT.id });
 });
 
 // ── the card's words ─────────────────────────────────────────────────────

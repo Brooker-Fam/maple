@@ -51,6 +51,7 @@ import {
   type Range,
   type StepView,
 } from "@/lib/maple/feeding-plan";
+import { formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf, FeedData, Side } from "@/lib/maple/types";
 import type { FeedTarget } from "@/lib/maple/units";
 
@@ -83,6 +84,16 @@ export function nursedOnly(view: PlanFeedView | null | undefined): boolean {
   if (!view) return false;
   if (hasNamed(view)) return !!(view as ViewWith).nursedOnly;
   return view.extraNursing && !view.group?.bottles.length && !view.group?.pumps.length && view.steps.every((s) => s.entries.length === 0);
+}
+
+/**
+ * What happened, for a feed where she only nursed in a plan feed with no nursing (nursedOnly): "She nursed 20m at
+ * 12:30 AM", or while she's on, "She's nursing now · 12m". Null for any other feed. `words`: the baby's (BabyWords).
+ */
+export function nursedWords(view: PlanFeedView, words: { He: string; Hes: string }, tz: string): string | null {
+  const run = view.group?.run;
+  if (!run || !nursedOnly(view)) return null;
+  return run.live ? `${words.Hes} nursing now · ${minutesShort(run.min.total)}` : `${words.He} nursed ${minutesShort(run.min.total)} at ${formatTime(run.start, tz)}`;
 }
 
 const MILK_WORD: Record<"formula" | "breastmilk", string> = { formula: "formula", breastmilk: "breast milk" };

@@ -90,6 +90,13 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
       },
     };
   };
+  /** Text as a phone shows it, its narrow and no-break spaces plain. */
+  const plain = (t) => t.replace(/[\u202f\u00a0]/g, " ");
+  const dock = (f) => f.page.getByRole("region", { name: "Log something", exact: true });
+  /** The evening before the night: Nurse + SNS at 8:30 PM from the plan, its SNS milk, its pump. */
+  const evening = () => [nursing(71, 28, [["L", "20:30", "20:45"]], { plan: "p1f1" }), bottle(72, 28, "20:44", 20, { via: "sns", milk: "formula" }), pump(73, 28, "20:50", "21:05")];
+  /** The night's first feed: pumped 11:20–11:40 PM, then 55 ml of pumped milk at 11:45, from the plan. */
+  const firstNight = () => [...evening(), pump(74, 28, "23:20", "23:40"), bottle(75, 28, "23:45", 55, { milk: "breastmilk", plan: "p1f3" })];
   const waitFor = async (f, fn, what) => {
     for (let i = 0; i < 40; i++) {
       if (fn()) return;
@@ -755,6 +762,315 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         assert.deepEqual(f.errors, []);
       } finally {
         await f.close();
+      }
+    }],
+
+    ["Feeding plan: a night bottle feed left short is named by its bottle, and the dock's Bottle opens its formula to finish", async () => {
+      // Pumped from 11:20 PM, 40 ml of pumped milk at 11:45, no formula to finish. It's 12:40 AM.
+      const entries = [...evening(), pump(74, 28, "23:20", "23:40"), bottle(75, 28, "23:45", 40, { milk: "breastmilk", plan: "p1f3" })];
+      const f = await fixture({ state: planned({ now: at(29, "00:40"), entries }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        const missed = c.getByRole("group", { name: "Not logged", exact: true });
+        assert.match(plain(await missed.textContent()), /11:45 PM feed: formula to finish not logged/, "named by its bottle, never its 11:20 PM pump");
+        assert.match(plain(await c.textContent()), /3 h after the 11:45 PM feed/, "the due line names the same moment");
+        // The dock's Bottle is the missed line's own fix, saying whose it is.
+        const tile = dock(f).getByRole("button", { name: /^Bottle: Log formula to finish/ });
+        assert.equal(plain(await tile.textContent()), "Bottle11:45 PM feed");
+        assert.doesNotMatch(await tile.getAttribute("aria-label"), /next step/);
+        await tile.click();
+        const form = f.page.getByRole("dialog", { name: "Feed", exact: true });
+        await form.waitFor();
+        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "10", "the rest of the target's smaller amount");
+        assert.equal(await form.getByRole("region", { name: "Milk" }).getByRole("button", { name: "Formula", exact: true }).getAttribute("aria-pressed"), "true");
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    }],
+
+    ["Feeding plan: the running nursing card counts the milk given across a break and a re-latch, and stops offering the plan's", async () => {
+      // On the Left 9:00–9:10 from the plan as Nurse + SNS, a 12-minute break, back on from 9:22; its SNS milk at 9:25.
+      const on = nursing(51, 28, [["L", "09:00", "09:10"], ["L", "09:22", null]], { plan: "p1f1" });
+      const f = await fixture({ state: planned({ entries: [on, bottle(52, 28, "09:25", 20, { via: "sns", milk: "formula", plan: "p1f1", top_up_of: 51 })] }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        assert.match(await c.textContent(), /20 ml in the SNS/, "the card counts it");
+        const timer = f.page.getByRole("region", { name: "Nursing timer", exact: true });
+        await timer.getByRole("button", { name: /^Edit: 20 ml in the SNS · formula, at 9:25/ }).waitFor();
+        assert.equal(await timer.getByRole("button", { name: /^Log 20 ml in the SNS/ }).count(), 0, "never offered again");
+        assert.equal(await timer.getByRole("button", { name: /SNS: opens the bottle form$/ }).count(), 0);
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      // The feed and its pump done, she latched again 16 minutes on (from the dock): the plan's same feed, its SNS in.
+      const fed = nursing(61, 28, [["L", "08:40", "08:52"]], { plan: "p1f1" });
+      const entries = [fed, bottle(62, 28, "08:45", 20, { via: "sns", milk: "formula", plan: "p1f1", top_up_of: 61 }), pump(63, 28, "08:54", "09:04"), nursing(64, 28, [["R", "09:20", null]])];
+      const g = await fixture({ state: planned({ entries }) });
+      try {
+        await metric(g);
+        await today(g);
+        const timer = g.page.getByRole("region", { name: "Nursing timer", exact: true });
+        await timer.getByRole("button", { name: /^Edit: 20 ml in the SNS · formula, at 8:45/ }).waitFor();
+        assert.equal(await timer.getByRole("button", { name: /^Log 20 ml in the SNS/ }).count(), 0);
+        assert.equal(await timer.getByRole("button", { name: "Milk at the breast", exact: true }).count(), 0);
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+    }],
+
+    ["Feeding plan: started from the dock, a feed's parts say what was logged: no plan feed on its own Milk at the breast, and Shield? asks", async () => {
+      // Nurse, top up's turn after the 8:00 AM feed, started from the dock at 9:22 (no plan feed named).
+      const state = planned({ entries: [...morning(), nursing(51, 28, [["R", "09:22", null]])] });
+      const posts = [];
+      const f = await fixture({
+        state,
+        entryResponse: ({ route, req }) => {
+          const body = req.postDataJSON();
+          posts.push(body);
+          const entry = record(90 + posts.length, "feed", body.data, body.started_at ?? state.now);
+          state.entries = [entry, ...state.entries];
+          state.rev = `parts-${posts.length}`;
+          return route.fulfill({ json: { entry } });
+        },
+      });
+      try {
+        await metric(f);
+        const c = await today(f);
+        assert.equal(await c.getByRole("heading").textContent(), "Nurse, top up");
+        const timer = f.page.getByRole("region", { name: "Nursing timer", exact: true });
+        await timer.getByRole("button", { name: "Milk at the breast", exact: true }).click();
+        const form = f.page.getByRole("dialog", { name: "Milk at the breast", exact: true });
+        await form.waitFor();
+        assert.match(plain(await form.textContent()), /With the 9:22 AM feed: part of it, not a feed of its own\./);
+        // As last time (the 8:00 AM feed's 20 ml of formula in the SNS), tied to this feed, never to a plan feed.
+        await form.getByRole("button", { name: "Log 20 ml in the SNS", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        await waitFor(f, () => posts.length > 0, "the milk at the breast");
+        assert.deepEqual(posts[0].data, { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", top_up_of: 51 }, "what was logged decides which plan feed it was");
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      // The plan's first feed nurses with the nipple shield, started from the dock: the card's chip asks, until it's
+      // tapped either way (off is saved as no shield, so it isn't asked again).
+      const plan = structuredClone(PLAN);
+      plan.feeds[0].steps[0].shield = true;
+      const shieldState = planned({ plan, entries: [nursing(51, 28, [["L", "09:22", null]])] });
+      const sent = [];
+      const g = await fixture({
+        state: shieldState,
+        entryResponse: ({ route, req, url }) => {
+          const body = req.postDataJSON();
+          sent.push(body);
+          const cur = shieldState.entries.find((e) => e.id === Number(url.searchParams.get("id")));
+          const entry = { ...cur, data: { ...cur.data, ...body.data }, updated_at: `2026-10-28T13:30:0${sent.length}.000Z` };
+          shieldState.entries = shieldState.entries.map((e) => (e.id === entry.id ? entry : e));
+          shieldState.rev = `shield-${sent.length}`;
+          return route.fulfill({ json: { entry } });
+        },
+      });
+      try {
+        await metric(g);
+        await today(g);
+        const timer = g.page.getByRole("region", { name: "Nursing timer", exact: true });
+        const asked = timer.getByRole("button", { name: "Nipple shield? The plan's nursing uses one", exact: true });
+        assert.equal(await asked.textContent(), "Shield?");
+        assert.equal(await asked.getAttribute("aria-pressed"), "false");
+        await asked.click();
+        await waitFor(g, () => sent.length > 0, "the shield on");
+        assert.deepEqual(sent[0].data, { shield: true });
+        const chip = timer.getByRole("button", { name: "Nipple shield", exact: true });
+        await g.page.waitForFunction(() => document.querySelector('[aria-label="Nipple shield"]')?.getAttribute("aria-pressed") === "true");
+        await chip.click();
+        await waitFor(g, () => sent.length > 1, "the shield off");
+        assert.deepEqual(sent[1].data, { shield: false }, "said: no shield this feed");
+        await g.page.waitForFunction(() => document.querySelector('[aria-label="Nipple shield"]')?.getAttribute("aria-pressed") === "false");
+        assert.equal(await chip.textContent(), "Shield", "answered: not asked again");
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+    }],
+
+    ["Feeding plan: a feed she latched again for keeps its first nursing's name, in the missed line and its top-up's form", async () => {
+      // Nurse, top up 10:40–11:00 AM from the plan, then she latched again 11:20–11:28 (from the dock); no top-up. 12:20 PM.
+      const s = server();
+      const entries = [...morning(), nursing(61, 28, [["R", "10:40", "10:50"], ["L", "10:50", "11:00"]], { plan: "p1f2" }), nursing(62, 28, [["L", "11:20", "11:28"]])];
+      const f = await fixture({ state: planned({ now: at(28, "12:20"), entries }), entryResponse: s.entryResponse });
+      try {
+        await metric(f);
+        const c = await today(f);
+        const missed = c.getByRole("group", { name: "Not logged", exact: true });
+        assert.match(plain(await missed.textContent()), /10:40 AM feed: top-up not logged/);
+        await missed.getByRole("button", { name: "Fix", exact: true }).click();
+        await f.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
+        await missed.getByRole("button", { name: /^Log top-up/ }).click();
+        const form = f.page.getByRole("dialog", { name: /^Top-up · 10:40\sAM feed$/ });
+        await form.waitFor();
+        assert.match(await form.textContent(), /Part of that feed, not a feed of its own\./);
+        await form.getByRole("button", { name: /^Log 25 ml/ }).click();
+        await form.waitFor({ state: "hidden" });
+        await waitFor(f, () => writes(f).length > 0, "the top-up");
+        const { top_up_of, plan } = writes(f)[0].body.data;
+        assert.deepEqual({ top_up_of, plan }, { top_up_of: 62, plan: "p1f2" }, "it tops up her newest nursing, as that plan feed's");
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    }],
+
+    ["Feeding plan: Not …? says which feed it was on every entry of it: the night's bottle and the nursing after it", async () => {
+      // The night's first feed, then she nursed from 12:05 AM (from the dock): one feed. It's 12:10 AM.
+      const state = planned({ now: at(29, "00:10"), entries: [...firstNight(), nursing(76, 29, [["L", "00:05", null]])] });
+      const sent = [];
+      const f = await fixture({
+        state,
+        entryResponse: ({ route, req, url }) => {
+          const id = Number(url.searchParams.get("id"));
+          sent.push({ id, data: req.postDataJSON().data });
+          const cur = state.entries.find((e) => e.id === id);
+          const entry = { ...cur, data: { ...cur.data, ...req.postDataJSON().data }, updated_at: `2026-10-29T04:10:0${sent.length}.000Z` };
+          state.entries = state.entries.map((e) => (e.id === id ? entry : e));
+          state.rev = `retag-${sent.length}`;
+          return route.fulfill({ json: { entry } });
+        },
+      });
+      try {
+        await metric(f);
+        const c = await today(f);
+        assert.match(plain(await c.textContent()), /^Now.*Pump \+ bottle.*River nursed too/);
+        await c.getByRole("button", { name: "Not Pump + bottle?", exact: true }).click();
+        await f.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
+        await c.getByRole("group", { name: "Which feed it was", exact: true }).getByRole("button", { name: "It was Nurse, top up", exact: true }).click();
+        await waitFor(f, () => sent.length >= 2, "the corrections");
+        assert.deepEqual(sent.map((x) => [x.id, x.data]).sort((a, b) => a[0] - b[0]), [[75, { plan: "p1f2" }], [76, { plan: "p1f2" }]], "the bottle and the nursing, one feed");
+        await f.page.getByText("This feed is Nurse, top up now", { exact: true }).waitFor();
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    }],
+
+    ["Feeding plan: when she only nursed in the night feed's place, the card says so with the plan's words and nothing to do", async () => {
+      // The night's first feed, then she nursed from 12:30 AM (from the dock). It's 12:50 AM, still on.
+      const entries = [...firstNight(), nursing(76, 29, [["L", "00:30", null]])];
+      const f = await fixture({ state: planned({ now: at(29, "00:50"), entries }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        const text = plain(await c.textContent());
+        assert.match(text, /^Night feed/, "not Now: the plan's routine isn't what's happening");
+        assert.match(text, /River's nursing now · 20m/);
+        assert.match(text, /Pump 20 min\. Then bottle up to 50–70 ml, pumped milk first, then formula to finish/);
+        assert.equal(await c.locator("[data-plan-primary]").count(), 0, "nothing to do");
+        assert.equal(await c.getByRole("button", { name: /^(?:Start pumping|Log bottle)/ }).count(), 0);
+        assert.doesNotMatch(plain(await f.page.getByRole("region", { name: "Nursing timer", exact: true }).textContent()), /then pump/, "the timer card doesn't push the routine");
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      // Off at 12:50 AM; an hour on, nothing of it reads as not logged.
+      const later = [...firstNight(), nursing(76, 29, [["L", "00:30", "00:50"]])];
+      const g = await fixture({ state: planned({ now: at(29, "01:45"), entries: later }) });
+      try {
+        await metric(g);
+        const c = await today(g);
+        assert.equal(await c.getByRole("group", { name: "Not logged", exact: true }).count(), 0);
+        assert.doesNotMatch(await c.textContent(), /not logged/);
+        // The dock's Bottle owes nothing for it: the last bottle, as ever.
+        const tile = dock(g).getByRole("button", { name: /^Bottle/ });
+        assert.equal(plain(await tile.textContent()), "Bottle55 ml last");
+        assert.doesNotMatch((await tile.getAttribute("aria-label")) ?? "", /next step/);
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+    }],
+
+    ["Feeding plan: a call-today warning folds above the card, which keeps its action above the dock, its sides as the dock's and its numbers whole", async () => {
+      // Warnings on, red in this morning's diaper; after the 8:00 AM feed the plan's turn is Nurse, top up, Right suggested.
+      const warned = planned({ entries: [...morning(), record(44, "diaper", { pee: false, poop: true, color: "red" }, at(28, "08:50"))] });
+      warned.baby.settings.show_alerts = true;
+      const f = await fixture({ state: warned });
+      try {
+        await metric(f);
+        for (const [width, height] of [[375, 667], [375, 812], [320, 568]]) {
+          await f.page.setViewportSize({ width, height });
+          await f.page.goto("https://first-use.example.test/#today");
+          const c = card(f);
+          await c.waitFor();
+          await f.page.waitForTimeout(250);
+          const folded = f.page.getByRole("button", { name: "Red in the diaper: call your pediatrician today. Show all of it", exact: true });
+          const [fb, cb] = await Promise.all([folded.boundingBox(), c.boundingBox()]);
+          assert(fb && cb && fb.height <= 52 && fb.y < cb.y, `${width}x${height}: one line (${fb?.height}) above the card`);
+          const start = c.getByRole("button", { name: "Start Right: Nurse, top up", exact: true });
+          const left = c.getByRole("button", { name: /^Left: start on the Left/ });
+          const [sb, lb, db] = await Promise.all([start.boundingBox(), left.boundingBox(), dock(f).boundingBox()]);
+          if (height >= 667) assert(sb && db && sb.y + sb.height <= db.y, `${width}x${height}: Start Right (${sb && sb.y + sb.height}) clears the dock (${db?.y})`);
+          assert(sb && lb && lb.x < sb.x && sb.width > lb.width && Math.abs(sb.y - lb.y) < 1, `${width}x${height}: Left then Right, as the dock has them, the suggested one wide`);
+          // Each number stays on one line with its unit.
+          const split = await c.evaluate((el) => [...el.querySelectorAll("span.whitespace-nowrap")].filter((n) => n.getClientRects().length > 1).map((n) => n.textContent));
+          assert.deepEqual(split, [], `${width}x${height}: an amount split across lines`);
+          assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), width, "no sideways scroll");
+        }
+        // A tap opens the full card, with who to call and We called.
+        await f.page.getByRole("button", { name: "Red in the diaper: call your pediatrician today. Show all of it", exact: true }).click();
+        await f.page.getByRole("button", { name: "We called", exact: true }).waitFor();
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    }],
+
+    ["Feeding plan: She's done and Got it are kept on the phone when the app is closed and opened again, for a day", async () => {
+      // Pumped 11:20–11:40 PM, 40 ml at 11:45 PM; at 11:55 PM She's done.
+      const entries = [...evening(), pump(74, 28, "23:20", "23:40"), bottle(75, 28, "23:45", 40, { milk: "breastmilk", plan: "p1f3" })];
+      const f = await fixture({ state: planned({ now: at(28, "23:55"), entries }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        await c.getByRole("button", { name: "River's done", exact: true }).click();
+        await c.getByRole("button", { name: /^Log formula to finish/ }).waitFor({ state: "hidden" });
+        // Closed and opened again: this tab's memory is gone, the phone's isn't.
+        await f.page.evaluate(() => sessionStorage.clear());
+        await f.page.reload();
+        await card(f).waitFor();
+        assert.equal(await card(f).getByRole("button", { name: /^Log formula to finish/ }).count(), 0, "still set aside");
+        assert.equal(await card(f).getByRole("button", { name: "River's done", exact: true }).count(), 0);
+        // What was set aside for a feed over a day ago is cleared when the app opens.
+        const stale = `maple-plan-close:99:${Date.parse("2026-10-26T12:00:00.000Z")}:p1f3:1`;
+        await f.page.evaluate((k) => localStorage.setItem(k, "1"), stale);
+        await f.page.reload();
+        await card(f).waitFor();
+        assert.equal(await f.page.evaluate((k) => localStorage.getItem(k), stale), null);
+        assert.equal(await f.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("maple-plan-close:")).length), 1, "today's kept");
+        assert.equal(writes(f).length, 0, "nothing is logged");
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      // Got it: gone after the app is closed and opened again too.
+      const g = await fixture({ state: planned({ now: at(28, "12:20"), entries: [...morning(), nursing(61, 28, [["R", "10:40", "10:50"], ["L", "10:50", "11:00"]], { plan: "p1f2" })] }) });
+      try {
+        await metric(g);
+        const c = await today(g);
+        await c.getByRole("group", { name: "Not logged", exact: true }).getByRole("button", { name: "Fix", exact: true }).click();
+        await g.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
+        await c.getByRole("group", { name: "Not logged", exact: true }).getByRole("button", { name: /^Got it/ }).click();
+        await c.getByRole("group", { name: "Not logged", exact: true }).waitFor({ state: "hidden" });
+        await g.page.evaluate(() => sessionStorage.clear());
+        await g.page.reload();
+        await card(g).waitFor();
+        assert.equal(await card(g).getByRole("group", { name: "Not logged", exact: true }).count(), 0);
+        assert.equal(writes(g).length, 0);
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
       }
     }],
   ];
