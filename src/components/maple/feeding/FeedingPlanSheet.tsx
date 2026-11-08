@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { amountText, checkInText, clockWords, everyText, feedById, feedingPlanOf, PLAN_LIMITS, stepText, type FeedingPlan, type PlanFeed } from "@/lib/maple/feeding-plan";
+import { amountText, checkInText, clockWords, feedById, feedingPlanOf, intervalText, nightTurns, PLAN_LIMITS, stepText, type FeedingPlan, type PlanFeed } from "@/lib/maple/feeding-plan";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import type { Baby } from "@/lib/maple/types";
 import { feedTargetOf, type FeedTarget } from "@/lib/maple/units";
@@ -328,15 +328,20 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** The feeds in the order a family meets them: the day's turns, then the night's, then any other. */
 function feedsInOrder(plan: FeedingPlan): { feed: PlanFeed; badge: string | null }[] {
-  const night = plan.night?.feed ?? null;
+  const atNight = nightTurns(plan);
+  // "night", or with turns at night its place in them ("night 2").
+  const nightWord = (f: PlanFeed) => (atNight.length > 1 ? `night ${atNight.indexOf(f.id) + 1}` : "night");
   const turns = plan.order.map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f);
   const rest = plan.feeds.filter((f) => !turns.includes(f));
-  const nightFeed = rest.find((f) => f.id === night);
-  const others = rest.filter((f) => f !== nightFeed);
+  const nights = atNight.map((id) => rest.find((f) => f.id === id)).filter((f): f is PlanFeed => !!f);
+  const others = rest.filter((f) => !nights.includes(f));
   const one = plan.feeds.length === 1;
   return [
-    ...turns.map((feed, i) => ({ feed, badge: one ? null : turns.length > 1 ? `Turn ${i + 1}${feed.id === night ? " · night" : ""}` : feed.id === night ? "By day · night" : "By day" })),
-    ...(nightFeed ? [{ feed: nightFeed, badge: "At night" }] : []),
+    ...turns.map((feed, i) => {
+      const night = atNight.includes(feed.id) ? nightWord(feed) : null;
+      return { feed, badge: one ? null : turns.length > 1 ? `Turn ${i + 1}${night ? ` · ${night}` : ""}` : night ? `By day · ${night}` : "By day" };
+    }),
+    ...nights.map((feed) => ({ feed, badge: atNight.length > 1 ? `Night turn ${atNight.indexOf(feed.id) + 1}` : "At night" })),
     ...others.map((feed) => ({ feed, badge: "Not in the turns" })),
   ];
 }
@@ -345,12 +350,16 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
   const w = useBabyWords();
   const turns = plan.order.map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f);
   const night = plan.night;
-  const nightFeed = night ? feedById(plan, night.feed) : null;
+  const nightFeeds = night ? nightTurns(plan).map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f) : [];
   // When to wake her, in hours: the window's end (with no time between feeds, there's no time to wake her at).
   const nightEvery = night?.every ?? plan.day.every;
   const nightHow = night
     ? [
-        night.every ? cap(everyText(night.every)) : plan.day.every ? `${cap(everyText(plan.day.every))}, as by day` : "No set time between feeds",
+        night.every
+          ? cap(intervalText(night.every, night.on_demand))
+          : plan.day.every
+            ? `${cap(intervalText(plan.day.every, plan.day.on_demand))}, as by day`
+            : "No set time between feeds",
         night.wake && nightEvery ? wakeText(nightEvery, w) : null,
       ]
         .filter(Boolean)
@@ -366,7 +375,7 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
           </Fact>
         )}
         <Fact label={night ? "By day" : "How often"} sub={dayHow}>
-          {plan.day.every ? cap(everyText(plan.day.every)) : "No set time between feeds"}
+          {plan.day.every ? cap(intervalText(plan.day.every, plan.day.on_demand)) : "No set time between feeds"}
         </Fact>
         {turns.length > 1 && (
           <Fact label="Taking turns by day">
@@ -386,7 +395,17 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
               {clockWords(night.from)} to {clockWords(night.to)}
             </span>
             <span className="text-mp-ink-2"> · </span>
-            <span className="[overflow-wrap:anywhere]">{nightFeed ? nightFeed.name : "same turns as by day"}</span>
+            <span className="[overflow-wrap:anywhere]">{nightFeeds.length > 1 ? "taking turns" : nightFeeds.length ? nightFeeds[0].name : "same turns as by day"}</span>
+            {nightFeeds.length > 1 && (
+              <ol aria-label="Taking turns at night" className="mt-0.5 space-y-0.5">
+                {nightFeeds.map((f, i) => (
+                  <li key={f.id} className="flex gap-2 [overflow-wrap:anywhere]">
+                    <span className="w-4 shrink-0 text-mp-ink-2 tabular-nums">{i + 1}</span>
+                    <span className="min-w-0">{f.name}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
           </Fact>
         )}
       </dl>

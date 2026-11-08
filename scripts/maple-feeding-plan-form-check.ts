@@ -27,6 +27,7 @@ import {
   removeFeed,
   samePlan,
   setNightFeed,
+  setNightTurns,
   shownAmount,
   staleNameWords,
   takeOutFeed,
@@ -165,14 +166,14 @@ check("starting shapes: the kinds of step only, no numbers, the feeds taking tur
 check("taking a feed out keeps the turns and the night whole; the night's feed leaves the day's turns", () => {
   let d = draftOf(PLAN, null, "ml");
   const [sns, topUp, night] = d.feeds.map((f) => f.key);
-  eq(removeFeed(d, night).night.feed, null);
+  eq(removeFeed(d, night).night.order, []);
   eq(removeFeed(d, sns).order, [topUp]);
   // The last feed in the turns out: the turns take another (not the night's).
   const one = { ...d, order: [sns] };
   eq(removeFeed(one, sns).order, [topUp]);
   // A feed made the night's leaves the turns, unless it's the only one there.
   d = setNightFeed(d, topUp);
-  eq([d.night.feed, d.order], [topUp, [sns]]);
+  eq([d.night.order, d.order], [[topUp], [sns]]);
   eq(setNightFeed(d, sns).order, [sns]);
   // A new feed takes a turn.
   const added = addFeed(draftOf(PLAN, null, "ml"), newFeed("Paced bottle", ["bottle"]));
@@ -198,7 +199,7 @@ check("Put it back: a feed taken out comes back exactly, with its turn and the n
   const n = takeOutFeed(d, d.feeds[2].key);
   const added = addFeed(n.next, newFeed("Paced bottle", ["bottle"]));
   const back = n.putBack(added);
-  eq([back.night.feed, inputOf(back).plan.order], [d.feeds[2].key, [1, 2, 4]]);
+  eq([back.night.order, inputOf(back).plan.order], [[d.feeds[2].key], [1, 2, 4]]);
 });
 
 check("Put it back: on the form as it is now, so turns moved, taken out or given to the night meanwhile stay that way", () => {
@@ -216,7 +217,7 @@ check("Put it back: on the form as it is now, so turns moved, taken out or given
   const nightOn = setNightFeed({ ...out.next, night: { ...out.next.night, on: true, from: "23:00", to: "05:00" } }, pump);
   eq(nightOn.order, [sns]);
   const atNight = out.putBack(nightOn);
-  eq([atNight.order, atNight.night.feed], [[sns, topUp], pump]);
+  eq([atNight.order, atNight.night.order], [[sns, topUp], [pump]]);
   eq(inputOf(atNight).plan.night, { from: "23:00", to: "05:00", feed: 3 });
   // A turn taken out meanwhile stays out.
   const dropped = out.putBack({ ...out.next, order: [sns] });
@@ -234,7 +235,7 @@ check("Put it back: on the form as it is now, so turns moved, taken out or given
   const n = takeOutFeed(d, d.feeds[2].key);
   const picked = setNightFeed(n.next, d.feeds[1].key);
   const kept = n.putBack(picked);
-  eq([kept.feeds.length, kept.night.feed, kept.order], [3, d.feeds[1].key, [d.feeds[0].key]]);
+  eq([kept.feeds.length, kept.night.order, kept.order], [3, [d.feeds[1].key], [d.feeds[0].key]]);
 });
 
 check("Save checks the draft as the server will, in its words: a feed that only pumps is refused on that feed before anything is sent", () => {
@@ -328,6 +329,95 @@ check("when to wake her, plainly: at the time between feeds' longer end, in hour
   eq(wakeText(PLAN.day.every!, her, { from: true }), "wake her if she's still asleep at 3.5 hours from the start of the last feed");
   // No sex set: the baby's name stands in.
   eq(wakeText({ max: 180 }, { him: "River", hes: "River's" }), "wake River if River's still asleep at 3 hours");
+});
+
+/**
+ * An invented plan with this wave's options: on demand by day (at least every 3 hours, waking her), "Left, pump the
+ * right" (15–20 min on the left, then pump 15), "Nurse, top up if hungry" (8–12 min each side, then a 25–35 ml top-up
+ * only if she's still hungry, then pump 10 only if still full); at night (11 PM–5 AM) on demand at least every 3.5
+ * hours, the night's feeds taking turns: "Pump + bottle", then "Left, pump the right".
+ */
+const MORE = parseFeedingPlan(
+  {
+    from: "Feeding clinic",
+    day: { every: { max: 180 }, wake: true },
+    night: { from: "23:00", to: "05:00", every: [0, 210], order: ["Pump + bottle", "Left, pump the right"] },
+    feeds: [
+      { name: "Left, pump the right", steps: [{ do: "nurse", minutes: [15, 20], side: "left" }, { do: "pump", minutes: 15 }] },
+      { name: "Nurse, top up if hungry", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], via: "paced", if_needed: true }, { do: "pump", minutes: 10, if_needed: true }] },
+      { name: "Pump + bottle", steps: [{ do: "pump", minutes: 20 }, { do: "bottle", milk: "breastmilk_first", to_target: true }] },
+    ],
+    order: ["Nurse, top up if hungry"],
+  },
+  null,
+  NOW
+);
+
+check("round trip: on demand, one side, only if needed and the night's turns come back the same plan, in ml or oz", () => {
+  eq(roundTrip(MORE), same(MORE));
+  eq(roundTrip(MORE, "oz"), same(MORE));
+  const d = draftOf(MORE, null, "ml");
+  eq([d.onDemand, d.every, d.night.onDemand, d.night.every], [true, { min: null, max: 180 }, true, { min: null, max: 210 }], "on demand: its most in the Up to box");
+  const [left, hungry, night] = d.feeds;
+  eq(d.night.order, [night.key, left.key]);
+  const s = (f: typeof left, i: number) => f.steps[i] as StepDraft & Record<string, unknown>;
+  eq([s(left, 0).side, s(left, 0).each_side, s(hungry, 0).side, s(hungry, 1).if_needed, s(hungry, 2).if_needed, s(night, 0).if_needed], ["L", false, null, true, true, false]);
+  const { plan } = inputOf(d);
+  eq(plan.day, { every: { min: 180, max: 180 }, on_demand: true, wake: true });
+  eq(plan.night, { from: "23:00", to: "05:00", every: { min: 210, max: 210 }, on_demand: true, order: [3, 1] });
+  eq(plan.feeds[1].steps, [
+    { do: "nurse", minutes: { min: 8, max: 12 }, each_side: true },
+    { do: "bottle", ml: { min: 25, max: 35 }, via: "paced", if_needed: true },
+    { do: "pump", minutes: { min: 10, max: 10 }, if_needed: true },
+  ]);
+  eq(feedSummary(left, "ml", null), "Nurse 15–20 min on the left; then pump 15 min");
+  eq(feedSummary(hungry, "ml", null), "Nurse 8–12 min each side; then top up 25–35 ml if still hungry, paced bottle; then pump 10 min if needed");
+});
+
+check("one side and each side are never both: each side wins, and either side sends neither", () => {
+  const nurse = { ...newStep("nurse"), minutes: { min: 15, max: null } } as StepDraft;
+  const feed = (step: StepDraft) => inputOf({ ...draftOf(BARE, null, "ml"), feeds: [{ ...draftOf(BARE, null, "ml").feeds[0], steps: [step] }] }).plan.feeds[0].steps[0];
+  eq([feed({ ...nurse, side: "R" } as StepDraft), feed({ ...nurse, side: "R", each_side: true } as StepDraft), feed(nurse)], [
+    { do: "nurse", minutes: { min: 15, max: 15 }, side: "R" },
+    { do: "nurse", minutes: { min: 15, max: 15 }, each_side: true },
+    { do: "nurse", minutes: { min: 15, max: 15 } },
+  ]);
+});
+
+check("on demand: only its most goes, switching keeps what was typed, and Save checks the most alone", () => {
+  const d = draftOf(PLAN, null, "ml");
+  // Every 2.5–3.5 hours; switched to on demand, the most is the To box.
+  const od: PlanDraft = { ...d, onDemand: true };
+  eq(inputOf(od).plan.day, { every: { min: 210, max: 210 }, on_demand: true, wake: true });
+  eq(inputOf({ ...od, every: { min: 150, max: null } }).plan.day, { every: { min: 150, max: 150 }, on_demand: true, wake: true }, "a From typed alone is the most");
+  eq(inputOf({ ...od, every: { min: null, max: null } }).plan.day, { wake: true }, "nothing typed: when she's hungry");
+  eq(inputOf({ ...od, onDemand: false }).plan.day, inputOf(d).plan.day, "switched back, the range as it was");
+  eq(draftProblem({ ...od, every: { min: 10, max: 180 } }, PLAN, LATER), null, "a From left from before isn't sent, so isn't checked");
+  eq(draftProblem({ ...od, every: { min: null, max: 20 } }, PLAN, LATER), "The time between feeds is half an hour or more.");
+  // The server reads what's sent as on demand at least every 3.5 hours.
+  const saved = parseFeedingPlan({ ...inputOf(od).plan, base_rev: PLAN.rev }, PLAN, LATER);
+  eq([saved.day, samePlan(od, draftOf(saved, null, "ml"))], [{ every: { min: 210, max: 210 }, on_demand: true, wake: true }, true]);
+});
+
+check("the night's turns: in order, each out of the day's turns (one left there), one is the night's feed, and a feed taken out comes back to its place", () => {
+  const d = draftOf(PLAN, null, "ml");
+  const [sns, topUp, pump] = d.feeds.map((f) => f.key);
+  const two = setNightTurns(d, [pump, topUp]);
+  eq([two.night.order, two.order, inputOf(two).plan.night], [[pump, topUp], [sns], { from: "23:00", to: "05:00", every: { min: 180, max: 180 }, wake: true, order: [3, 2] }]);
+  // Every day turn to the night: the day keeps one.
+  eq(setNightTurns(two, [pump, topUp, sns]).order, [sns]);
+  // None: the same turns as by day; one: the night's feed.
+  eq([inputOf(setNightTurns(two, [])).plan.night?.order, inputOf(setNightTurns(two, [])).plan.night?.feed], [undefined, undefined]);
+  eq(inputOf(setNightTurns(two, [topUp])).plan.night, { from: "23:00", to: "05:00", every: { min: 180, max: 180 }, wake: true, feed: 2 });
+  // A feed taken out leaves the night's turns, and Put it back puts it back where it was, while they're as it left them.
+  const out = takeOutFeed(two, pump);
+  eq(out.next.night.order, [topUp]);
+  eq(out.putBack(out.next).night.order, [pump, topUp]);
+  eq(out.putBack(setNightTurns(out.next, [topUp, sns])).night.order, [topUp, sns], "changed since: as they are now");
+  // The server reads the night's turns as sent: its first, the night's feed.
+  const saved = parseFeedingPlan({ ...inputOf(two).plan, base_rev: PLAN.rev }, PLAN, LATER);
+  eq([saved.night?.feed, saved.night?.order, saved.order], [PLAN.feeds[2].id, [PLAN.feeds[2].id, PLAN.feeds[1].id], [PLAN.feeds[0].id]]);
+  eq(draftOf(saved, null, "ml").night.order, [pump, topUp]);
 });
 
 check("the way in's line: who it's from and how many feeds, or the invitation", () => {

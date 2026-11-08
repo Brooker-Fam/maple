@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk, type Range } from "@/lib/maple/feeding-plan";
+import type { Side } from "@/lib/maple/types";
+import { Switch } from "../care/parts";
 import { useBabyWords } from "../familyWords";
 import { Icon, type IconName } from "../icons";
 import { GROUP, Toggle } from "../settings/parts";
@@ -17,17 +19,19 @@ import {
   newStep,
   quotedList,
   rangeOut,
-  setNightFeed,
+  setNightTurns,
   shownAmount,
   staleNameWords,
   stepTitle,
   takeOutFeed,
   typedAmount,
+  upToOf,
   wakeText,
   type BottleDraft,
   type FeedDraft,
   type NurseDraft,
   type PlanDraft,
+  type PumpDraft,
   type RangeDraft,
   type StepDraft,
   type StepKind,
@@ -36,9 +40,11 @@ import {
 /**
  * The feeding plan's form (FeedingPlanSheet's edit mode), drawn from a draft
  * (planDraft.ts): who it's from and the check-in, the unit its amounts are
- * written in, the target per feed, how often by day, each feed's steps, the
- * day's turns, the night and notes. Every field has its name for a screen
- * reader; a number typed wrong says so by its field and holds Save; a
+ * written in, the target per feed, how often by day (every so often, or on
+ * demand up to a time), each feed's steps (a nursing step on either side, one
+ * side or each; a pump or bottle only if needed), the day's turns, the night
+ * (its own feeds taking turns too) and notes. Every field has its name for a
+ * screen reader; a number typed wrong says so by its field and holds Save; a
  * refusal from the plan's check marks the feed and step it's about.
  */
 
@@ -72,6 +78,21 @@ const wakeHint = (every: Range | undefined, w: { him: string; hes: string }) => 
   const words = every ? wakeText(every, w, { from: true }) : `wake ${w.him} if ${w.hes} still asleep when the time's up`;
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
 };
+
+/** The time between feeds as the wake switch's hint reads it: the range, or on demand its most. */
+const intervalShown = (r: RangeDraft, onDemand: boolean): Range | undefined => {
+  if (!onDemand) return rangeOut(r);
+  const most = upToOf(r);
+  return most == null ? undefined : { min: most, max: most };
+};
+
+/** A nursing step's sides: either (the usual turns), one side only, or each side. */
+const SIDES: { value: "either" | Side | "each"; label: string }[] = [
+  { value: "either", label: "Either" },
+  { value: "L", label: "Left" },
+  { value: "R", label: "Right" },
+  { value: "each", label: "Each side" },
+];
 
 /** A compact number box (a range's end): 44px tall, 16px type so iOS doesn't zoom. */
 const BOX =
@@ -141,10 +162,21 @@ export function PlanForm({ draft, initial, change, watch, invalid, mark, onRemov
       <FormSection title="By day">
         <div className={GROUP}>
           <div className="space-y-2 px-4 py-4">
-            <HoursRange title="Time between feeds, in hours" aria="hours between feeds by day" value={draft.every} onChange={(every) => set({ every })} watch={watch} wkey="every" />
-            <p className={cx(tone.muted, "text-[13px] leading-snug")}>From the start of one feed to the next. Leave empty if the plan doesn&apos;t say.</p>
+            <IntervalField
+              title="Time between feeds, in hours"
+              aria="hours between feeds by day"
+              value={draft.every}
+              onDemand={draft.onDemand}
+              onChange={(every) => set({ every })}
+              onDemandChange={(onDemand) => set({ onDemand })}
+              watch={watch}
+              wkey="every"
+            />
+            <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+              {draft.onDemand ? `When ${w.hes} hungry, and at least this often.` : "From the start of one feed to the next. Leave empty if the plan doesn't say."}
+            </p>
           </div>
-          <Toggle label="Wake to feed" hint={wakeHint(rangeOut(draft.every), w)} checked={draft.wake} onChange={(wake) => set({ wake })} />
+          <Toggle label="Wake to feed" hint={wakeHint(intervalShown(draft.every, draft.onDemand), w)} checked={draft.wake} onChange={(wake) => set({ wake })} />
         </div>
       </FormSection>
 
@@ -348,10 +380,8 @@ function StepEditor({ step, index, count, feedName, afterNurse, unit, hasTarget,
         <IconButton icon="x" label={`Take out step ${n}`} onClick={onRemove} />
       </div>
       {step.do === "nurse" && <NurseFields step={step} name={name} unit={unit} watch={watch} onChange={onChange} />}
-      {step.do === "pump" && (
-        <NumberRange label="Minutes" word="min" aria={`${name}, pump minutes`} value={step.minutes} max={MAX_MINUTES} onChange={(minutes) => onChange({ ...step, minutes })} watch={watch} wkey={`${step.key}:min`} />
-      )}
-      {step.do === "bottle" && <BottleFields step={step} name={name} unit={unit} hasTarget={hasTarget} watch={watch} onChange={onChange} />}
+      {step.do === "pump" && <PumpFields step={step} name={name} watch={watch} onChange={onChange} />}
+      {step.do === "bottle" && <BottleFields step={step} name={name} unit={unit} hasTarget={hasTarget} afterNurse={afterNurse} watch={watch} onChange={onChange} />}
       {step.do === "note" && <TextArea ariaLabel={`${name}, note`} value={step.text} maxLength={PLAN_LIMITS.note} placeholder="Like “Burp halfway”" onChange={(text) => onChange({ ...step, text })} />}
       <Problem>{problem}</Problem>
     </li>
@@ -360,13 +390,23 @@ function StepEditor({ step, index, count, feedName, afterNurse, unit, hasTarget,
 
 function NurseFields({ step, name, unit, watch, onChange }: { step: NurseDraft; name: string; unit: PlanDraft["unit"]; watch: Watch; onChange: (s: NurseDraft) => void }) {
   const via = step.atBreast;
+  // Either side, one side only, or each side: one choice, so each side and a single side are never both set.
+  const sides = step.each_side ? "each" : (step.side ?? "either");
+  const setSides = (v: (typeof SIDES)[number]["value"]) => onChange({ ...step, each_side: v === "each", side: v === "L" || v === "R" ? v : null });
   return (
     <>
       <NumberRange label={step.each_side ? "Minutes on each side" : "Minutes"} word="min" aria={`${name}, nursing minutes`} value={step.minutes} max={MAX_MINUTES} onChange={(minutes) => onChange({ ...step, minutes })} watch={watch} wkey={`${step.key}:min`} />
+      <div>
+        <Label>Side</Label>
+        <div role="group" aria-label={`${name}: side`} className="flex flex-wrap gap-2">
+          {SIDES.map((o) => (
+            <Chip key={o.value} raised selected={sides === o.value} onClick={() => setSides(o.value)}>
+              {o.label}
+            </Chip>
+          ))}
+        </div>
+      </div>
       <div role="group" aria-label={`${name}: how`} className="flex flex-wrap gap-2">
-        <Chip raised selected={step.each_side} onClick={() => onChange({ ...step, each_side: !step.each_side })}>
-          Each side
-        </Chip>
         <Chip raised selected={step.shield} onClick={() => onChange({ ...step, shield: !step.shield })}>
           Nipple shield
         </Chip>
@@ -391,7 +431,38 @@ function NurseFields({ step, name, unit, watch, onChange }: { step: NurseDraft; 
   );
 }
 
-function BottleFields({ step, name, unit, hasTarget, watch, onChange }: { step: BottleDraft; name: string; unit: PlanDraft["unit"]; hasTarget: boolean; watch: Watch; onChange: (s: BottleDraft) => void }) {
+function PumpFields({ step, name, watch, onChange }: { step: PumpDraft; name: string; watch: Watch; onChange: (s: PumpDraft) => void }) {
+  return (
+    <>
+      <NumberRange label="Minutes" word="min" aria={`${name}, pump minutes`} value={step.minutes} max={MAX_MINUTES} onChange={(minutes) => onChange({ ...step, minutes })} watch={watch} wkey={`${step.key}:min`} />
+      <IfNeeded name={name} hint="If still full after the feed" checked={step.if_needed} onChange={(if_needed) => onChange({ ...step, if_needed })} />
+    </>
+  );
+}
+
+/** "Only if needed" on a pump or bottle step: said "if needed" or "if still hungry" in the plan's words, and never missed on Today. */
+function IfNeeded({ name, hint, checked, onChange }: { name: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex min-h-[44px] items-center justify-between gap-4">
+      <span className="min-w-0">
+        <Label className="mb-0">Only if needed</Label>
+        <span className={cx(tone.muted, "block text-[13px] leading-snug")}>{hint}</span>
+      </span>
+      <Switch checked={checked} onChange={onChange} label={`${name}: only if needed`} />
+    </div>
+  );
+}
+
+function BottleFields({ step, name, unit, hasTarget, afterNurse, watch, onChange }: {
+  step: BottleDraft;
+  name: string;
+  unit: PlanDraft["unit"];
+  hasTarget: boolean;
+  afterNurse: boolean;
+  watch: Watch;
+  onChange: (s: BottleDraft) => void;
+}) {
+  const w = useBabyWords();
   return (
     <>
       <div>
@@ -421,6 +492,7 @@ function BottleFields({ step, name, unit, hasTarget, watch, onChange }: { step: 
           ))}
         </div>
       </div>
+      <IfNeeded name={name} hint={`If ${w.hes} still hungry${afterNurse ? " after nursing" : ""}`} checked={step.if_needed} onChange={(if_needed) => onChange({ ...step, if_needed })} />
     </>
   );
 }
@@ -443,7 +515,7 @@ function MilkChoice({ name, value, options, onChange }: { name: string; value: P
 // ── the day's turns and the night ──────────────────────────────────────────
 
 function TurnsEditor({ draft, change }: { draft: PlanDraft; change: Change }) {
-  const addable = draft.feeds.filter((f) => !draft.order.includes(f.key) && f.key !== draft.night.feed);
+  const addable = draft.feeds.filter((f) => !draft.order.includes(f.key) && !draft.night.order.includes(f.key));
   const setOrder = (order: string[]) => change((d) => ({ ...d, order }));
   return (
     <FormSection title="Taking turns by day">
@@ -499,31 +571,87 @@ function NightEditor({ draft, change, watch }: { draft: PlanDraft; change: Chang
                 </label>
               </div>
               <div className="space-y-2">
-                <HoursRange title="Time between feeds at night, in hours" aria="hours between feeds at night" value={n.every} onChange={(every) => setNight({ every })} watch={watch} wkey="night-every" />
-                <p className={cx(tone.muted, "text-[13px] leading-snug")}>Leave empty to keep the day&apos;s.</p>
+                <IntervalField
+                  title="Time between feeds at night, in hours"
+                  aria="hours between feeds at night"
+                  value={n.every}
+                  onDemand={n.onDemand}
+                  onChange={(every) => setNight({ every })}
+                  onDemandChange={(onDemand) => setNight({ onDemand })}
+                  watch={watch}
+                  wkey="night-every"
+                />
+                <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+                  {n.onDemand ? `When ${w.hes} hungry, and at least this often. Leave empty to keep the day's.` : "Leave empty to keep the day's."}
+                </p>
               </div>
             </div>
-            <Toggle label="Wake to feed at night" hint={wakeHint(rangeOut(n.every) ?? rangeOut(draft.every), w)} checked={n.wake} onChange={(wake) => setNight({ wake })} />
-            {draft.feeds.length > 1 && (
-              <div className="px-4 py-4">
-                <Label>The night&apos;s feed</Label>
-                <div role="group" aria-label="The night's feed" className="flex flex-wrap gap-2">
-                  <Chip selected={!n.feed} onClick={() => change((d) => setNightFeed(d, null))}>
-                    Same turns as by day
-                  </Chip>
-                  {draft.feeds.map((f) => (
-                    <Chip key={f.key} selected={n.feed === f.key} onClick={() => change((d) => setNightFeed(d, f.key))}>
-                      {feedLabel(draft, f.key)}
-                    </Chip>
-                  ))}
-                </div>
-                {n.feed && <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>Every feed at night is this one. It doesn&apos;t take a turn by day.</p>}
-              </div>
-            )}
+            <Toggle
+              label="Wake to feed at night"
+              hint={wakeHint(intervalShown(n.every, n.onDemand) ?? intervalShown(draft.every, draft.onDemand), w)}
+              checked={n.wake}
+              onChange={(wake) => setNight({ wake })}
+            />
+            {draft.feeds.length > 1 && <NightTurns draft={draft} change={change} />}
           </>
         )}
       </div>
     </FormSection>
+  );
+}
+
+/**
+ * The night's own feeds, taking turns in this order like the day's (none: the same turns as by day; one: every night
+ * feed is that one). Each leaves the day's turns, unless it's the only one there.
+ */
+function NightTurns({ draft, change }: { draft: PlanDraft; change: Change }) {
+  const turns = draft.night.order;
+  const set = (keys: string[]) => change((d) => setNightTurns(d, keys));
+  const addable = draft.feeds.filter((f) => !turns.includes(f.key));
+  return (
+    <div className="space-y-2.5 px-4 py-4">
+      <Label>The night&apos;s feeds</Label>
+      {turns.length === 0 ? (
+        <p className="text-[15px] leading-snug text-mp-ink">Same turns as by day</p>
+      ) : (
+        <ol aria-label="The night's feeds" className={cx(tone.inset, tone.divide, "overflow-hidden")}>
+          {turns.map((k, i) => (
+            <li key={k} className="flex min-h-[52px] items-center gap-1 py-1 pr-1.5 pl-4">
+              <span className="w-5 shrink-0 text-[15px] font-semibold text-mp-ink-2 tabular-nums">{i + 1}</span>
+              <span className="min-w-0 flex-1 text-[15px] text-mp-ink [overflow-wrap:anywhere]">{feedLabel(draft, k)}</span>
+              {turns.length > 1 && (
+                <>
+                  <IconButton icon="chevron-up" label={`Move ${feedLabel(draft, k)} earlier at night`} disabled={i === 0} onClick={() => set(move(turns, i, -1))} />
+                  <IconButton icon="chevron-down" label={`Move ${feedLabel(draft, k)} later at night`} disabled={i === turns.length - 1} onClick={() => set(move(turns, i, 1))} />
+                </>
+              )}
+              <IconButton icon="x" label={`Take ${feedLabel(draft, k)} out of the night's feeds`} onClick={() => set(turns.filter((x) => x !== k))} />
+            </li>
+          ))}
+        </ol>
+      )}
+      {addable.length > 0 && (
+        <div>
+          <p className={cx(tone.label, "mb-1.5")}>{turns.length ? "Add to the night's turns" : "A feed of its own at night"}</p>
+          <div className="flex flex-wrap gap-2">
+            {addable.map((f) => (
+              <Chip
+                key={f.key}
+                onClick={() => set([...turns, f.key])}
+                aria-label={turns.length ? `Add ${feedLabel(draft, f.key)} to the night's turns` : `Make ${feedLabel(draft, f.key)} the night's feed`}
+              >
+                <Icon name="plus" size={16} /> {feedLabel(draft, f.key)}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
+      {turns.length > 0 && (
+        <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+          {turns.length > 1 ? "At night they take turns in this order, then start again. They don't take a turn by day." : "Every feed at night is this one. It doesn't take a turn by day."}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -633,16 +761,60 @@ function AmountRange({ label, aria, value, unit, onChange, watch, wkey }: { labe
 }
 
 /** Hours from–to in half-hour steps, kept in minutes; two steppers abreast where they fit, else one above the other. */
-function HoursRange({ title, aria, value, onChange, watch, wkey }: { title: string; aria: string; value: RangeDraft; onChange: (r: RangeDraft) => void; watch: Watch; wkey: string }) {
-  const hours = (m: number | null) => (m == null ? null : Math.round((m / 60) * 100) / 100);
-  const minutes = (h: number | null) => (h == null ? null : Math.round(h * 600) / 10);
+const toHours = (m: number | null) => (m == null ? null : Math.round((m / 60) * 100) / 100);
+const toMinutes = (h: number | null) => (h == null ? null : Math.round(h * 600) / 10);
+
+function HoursRange({ title, aria, value, onChange, watch, wkey }: { title?: string; aria: string; value: RangeDraft; onChange: (r: RangeDraft) => void; watch: Watch; wkey: string }) {
   return (
     <div role="group" aria-label={aria} className="@container/hours">
-      <p className={cx(tone.label, "mb-2")}>{title}</p>
+      {title && <p className={cx(tone.label, "mb-2")}>{title}</p>}
       <div className="grid grid-cols-1 gap-3 @min-[18rem]/hours:grid-cols-2">
-        <HalfHours label="From" ariaLabel={`${aria}, from`} value={hours(value.min)} other={hours(value.max)} onChange={(h) => onChange({ ...value, min: minutes(h) })} onInvalid={watch(`${wkey}:min`)} />
-        <HalfHours label="To" ariaLabel={`${aria}, to`} value={hours(value.max)} other={hours(value.min)} onChange={(h) => onChange({ ...value, max: minutes(h) })} onInvalid={watch(`${wkey}:max`)} />
+        <HalfHours label="From" ariaLabel={`${aria}, from`} value={toHours(value.min)} other={toHours(value.max)} onChange={(h) => onChange({ ...value, min: toMinutes(h) })} onInvalid={watch(`${wkey}:min`)} />
+        <HalfHours label="To" ariaLabel={`${aria}, to`} value={toHours(value.max)} other={toHours(value.min)} onChange={(h) => onChange({ ...value, max: toMinutes(h) })} onInvalid={watch(`${wkey}:max`)} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * The time between feeds: every so often (From–To hours), or on demand up to a time ("feed on demand, at least every
+ * 3 hours": one Up to box, its most). Switching keeps what's typed in each.
+ */
+function IntervalField({ title, aria, value, onDemand, onChange, onDemandChange, watch, wkey }: {
+  title: string;
+  aria: string;
+  value: RangeDraft;
+  onDemand: boolean;
+  onChange: (r: RangeDraft) => void;
+  onDemandChange: (v: boolean) => void;
+  watch: Watch;
+  wkey: string;
+}) {
+  return (
+    <div className="space-y-2.5">
+      <p className={tone.label}>{title}</p>
+      <div role="group" aria-label={`${aria}: how`} className="flex flex-wrap gap-2">
+        <Chip selected={!onDemand} onClick={() => onDemandChange(false)}>
+          Every
+        </Chip>
+        <Chip selected={onDemand} onClick={() => onDemandChange(true)}>
+          On demand, up to
+        </Chip>
+      </div>
+      {onDemand ? (
+        <div role="group" aria-label={`${aria}, on demand`} className="max-w-[15rem]">
+          <HalfHours
+            label="Up to"
+            ariaLabel={`${aria}, up to`}
+            value={toHours(upToOf(value))}
+            other={null}
+            onChange={(h) => onChange({ ...value, max: toMinutes(h) })}
+            onInvalid={watch(`${wkey}:max`)}
+          />
+        </div>
+      ) : (
+        <HoursRange aria={aria} value={value} onChange={onChange} watch={watch} wkey={wkey} />
+      )}
     </div>
   );
 }
