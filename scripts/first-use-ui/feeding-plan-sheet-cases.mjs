@@ -128,8 +128,9 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.match(text, /Target per feed 50–70 ml/);
         assert.match(text, /By day Every 2\.5–3\.5 hours From the start of one feed to the next/);
         assert.match(text, /Taking turns by day 1 Nurse \+ SNS 2 Nurse, top up/);
-        // No sex set: the baby's name stands in for "her".
-        assert.match(text, /At night 11 PM to 5 AM · Pump \+ bottle Every 3 hours · wake River to feed by the end/);
+        // No sex set: the baby's name stands in for "her". When to wake is said in hours, never "by the end".
+        assert.match(text, /At night 11 PM to 5 AM · Pump \+ bottle Every 3 hours · wake River if River's still asleep at 3 hours/);
+        assert.doesNotMatch(text, /by the end/);
         assert.deepEqual(await sheet.getByRole("article").evaluateAll((list) => list.map((a) => a.getAttribute("aria-label"))), ["Nurse + SNS", "Nurse, top up", "Pump + bottle"]);
         const steps = async (name) => (await sheet.getByRole("article", { name, exact: true }).getByRole("listitem").allTextContents()).map((s) => s.replace(/\s+/g, " ").trim());
         assert.deepEqual(await steps("Nurse + SNS"), ["1Step 1: Nurse 12–18 min with the nipple shield, 20 ml of formula in the SNS", "2Step 2: Pump 15 min"]);
@@ -140,6 +141,28 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.match(text, /Notes Weigh at the clinic on Friday\./);
         for (const name of ["Edit the plan", "Change it in the chat", "Remove plan"]) assert(await sheet.getByRole("button", { name, exact: true }).isVisible(), `${name} is offered`);
         assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), 390, "nothing scrolls sideways");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: says when to wake her in hours, by day from the start of the last feed, and the form's switches say the same", async () => {
+      const plan = structuredClone(PLAN);
+      plan.day.wake = true;
+      const state = planned({ plan });
+      state.baby = { ...state.baby, sex: "female" };
+      const f = await fixture({ state, apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        const text = (await sheet.innerText()).replace(/\s+/g, " ");
+        assert.match(text, /By day Every 2\.5–3\.5 hours Wake her if she's still asleep at 3\.5 hours from the start of the last feed/);
+        assert.match(text, /At night 11 PM to 5 AM · Pump \+ bottle Every 3 hours · wake her if she's still asleep at 3 hours/);
+        const form = await edit(f, sheet);
+        const said = (await form.innerText()).replace(/\s+/g, " ");
+        assert.match(said, /Wake to feed Wake her if she's still asleep at 3\.5 hours from the start of the last feed\./);
+        assert.match(said, /Wake to feed at night Wake her if she's still asleep at 3 hours from the start of the last feed\./);
+        // The hint follows the hours as they change.
+        await box(form, "hours between feeds by day, to").fill("4");
+        assert.match((await form.innerText()).replace(/\s+/g, " "), /Wake to feed Wake her if she's still asleep at 4 hours from the start of the last feed\./);
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],

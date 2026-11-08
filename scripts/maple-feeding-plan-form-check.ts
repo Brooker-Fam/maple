@@ -15,6 +15,7 @@ import {
   draftOf,
   draftProblem,
   feedSummary,
+  hoursText,
   inputOf,
   move,
   newFeed,
@@ -28,6 +29,7 @@ import {
   shownAmount,
   takeOutFeed,
   typedAmount,
+  wakeText,
   type PlanDraft,
   type StepDraft,
 } from "../src/components/maple/feeding/planDraft";
@@ -289,6 +291,15 @@ check("a folded feed reads in the plan's words, and a note is a sentence of its 
   eq(feedSummary({ ...d.feeds[0], steps: [sns, d.feeds[0].steps[1]] }, "ml", null), "Nurse; then pump 15 min");
   eq(feedSummary({ ...d.feeds[0], steps: [d.feeds[0].steps[1], note("")] }, "ml", null), "Pump 15 min. Note.");
   eq(feedSummary({ ...d.feeds[0], steps: [] }, "ml", null), "No steps yet");
+});
+
+check("when to wake her, plainly: at the time between feeds' longer end, in hours, counted from the start of the last feed", () => {
+  eq([180, 210, 60, 90, 135, 179.6].map(hoursText), ["3 hours", "3.5 hours", "1 hour", "1.5 hours", "2h 15m", "3 hours"]);
+  const her = { him: "her", hes: "she's" };
+  eq(wakeText({ max: 180 }, her), "wake her if she's still asleep at 3 hours");
+  eq(wakeText(PLAN.day.every!, her, { from: true }), "wake her if she's still asleep at 3.5 hours from the start of the last feed");
+  // No sex set: the baby's name stands in.
+  eq(wakeText({ max: 180 }, { him: "River", hes: "River's" }), "wake River if River's still asleep at 3 hours");
 });
 
 check("the way in's line: who it's from and how many feeds, or the invitation", () => {

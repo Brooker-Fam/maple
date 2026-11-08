@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk } from "@/lib/maple/feeding-plan";
+import { AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk, type Range } from "@/lib/maple/feeding-plan";
 import { useBabyWords } from "../familyWords";
 import { Icon, type IconName } from "../icons";
 import { GROUP, Toggle } from "../settings/parts";
@@ -21,6 +21,7 @@ import {
   stepTitle,
   takeOutFeed,
   typedAmount,
+  wakeText,
   type BottleDraft,
   type FeedDraft,
   type NurseDraft,
@@ -63,6 +64,12 @@ const ADD: { kind: StepKind; label: string; icon: IconName }[] = [
   { kind: "bottle", label: "Bottle or top-up", icon: "bottle" },
   { kind: "note", label: "Note", icon: "sticky-note" },
 ];
+
+/** A wake switch's hint: when, in hours, once the time between feeds says ("Wake her if she's still asleep at 3.5 hours from the start of the last feed."). */
+const wakeHint = (every: Range | undefined, w: { him: string; hes: string }) => {
+  const words = every ? wakeText(every, w, { from: true }) : `wake ${w.him} if ${w.hes} still asleep when the time's up`;
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
+};
 
 /** A compact number box (a range's end): 44px tall, 16px type so iOS doesn't zoom. */
 const BOX =
@@ -133,7 +140,7 @@ export function PlanForm({ draft, change, watch, invalid, mark, onRemoved }: {
             <HoursRange title="Time between feeds, in hours" aria="hours between feeds by day" value={draft.every} onChange={(every) => set({ every })} watch={watch} wkey="every" />
             <p className={cx(tone.muted, "text-[13px] leading-snug")}>From the start of one feed to the next. Leave empty if the plan doesn&apos;t say.</p>
           </div>
-          <Toggle label="Wake to feed by the end" hint={`Wake ${w.him} if ${w.hes} still asleep when the time's up.`} checked={draft.wake} onChange={(wake) => set({ wake })} />
+          <Toggle label="Wake to feed" hint={wakeHint(rangeOut(draft.every), w)} checked={draft.wake} onChange={(wake) => set({ wake })} />
         </div>
       </FormSection>
 
@@ -456,7 +463,7 @@ function NightEditor({ draft, change, watch }: { draft: PlanDraft; change: Chang
                 <p className={cx(tone.muted, "text-[13px] leading-snug")}>Leave empty to keep the day&apos;s.</p>
               </div>
             </div>
-            <Toggle label="Wake to feed at night" hint={`Wake ${w.him} if ${w.hes} still asleep when the time's up.`} checked={n.wake} onChange={(wake) => setNight({ wake })} />
+            <Toggle label="Wake to feed at night" hint={wakeHint(rangeOut(n.every) ?? rangeOut(draft.every), w)} checked={n.wake} onChange={(wake) => setNight({ wake })} />
             {draft.feeds.length > 1 && (
               <div className="px-4 py-4">
                 <Label>The night&apos;s feed</Label>

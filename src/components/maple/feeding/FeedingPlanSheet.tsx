@@ -12,7 +12,7 @@ import { ContextNote, useNumberChecks } from "../sheets/parts";
 import { Button, cx, Sheet, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
 import { PlanForm, type PlanMark } from "./FeedingPlanForm";
-import { draftFromShape, draftOf, draftProblem, inputOf, PLAN_SHAPES, problemPlace, samePlan, sameTarget, type PlanDraft, type PlanShape } from "./planDraft";
+import { draftFromShape, draftOf, draftProblem, inputOf, PLAN_SHAPES, problemPlace, samePlan, sameTarget, wakeText, type PlanDraft, type PlanShape } from "./planDraft";
 
 /**
  * The feeding plan's sheet: the family's plan from their care team
@@ -345,12 +345,17 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
   const turns = plan.order.map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f);
   const night = plan.night;
   const nightFeed = night ? feedById(plan, night.feed) : null;
-  const wake = `wake ${w.him} to feed by the end`;
+  // When to wake her, in hours: the window's end (with no time between feeds, there's no time to wake her at).
+  const nightEvery = night?.every ?? plan.day.every;
   const nightHow = night
-    ? [night.every ? cap(everyText(night.every)) : plan.day.every ? `${cap(everyText(plan.day.every))}, as by day` : "No set time between feeds", night.wake ? wake : null]
+    ? [
+        night.every ? cap(everyText(night.every)) : plan.day.every ? `${cap(everyText(plan.day.every))}, as by day` : "No set time between feeds",
+        night.wake && nightEvery ? wakeText(nightEvery, w) : null,
+      ]
         .filter(Boolean)
         .join(" · ")
     : "";
+  const dayHow = plan.day.every ? (plan.day.wake ? cap(wakeText(plan.day.every, w, { from: true })) : "From the start of one feed to the next") : undefined;
   return (
     <div className="space-y-5">
       <dl className={cx(tone.card, tone.divide, "overflow-hidden")}>
@@ -359,7 +364,7 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
             <span className="font-semibold">{amountText(target, plan.unit)}</span>
           </Fact>
         )}
-        <Fact label={night ? "By day" : "How often"} sub={plan.day.every ? ["From the start of one feed to the next", plan.day.wake ? wake : null].filter(Boolean).join(" · ") : undefined}>
+        <Fact label={night ? "By day" : "How often"} sub={dayHow}>
           {plan.day.every ? cap(everyText(plan.day.every)) : "No set time between feeds"}
         </Fact>
         {turns.length > 1 && (

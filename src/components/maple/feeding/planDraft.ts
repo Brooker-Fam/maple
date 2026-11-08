@@ -363,6 +363,23 @@ export function planShortLine(plan: FeedingPlan | null): string {
   return [plan.from ? `From ${plan.from}` : null, `${n} ${n === 1 ? "feed" : "feeds"}`].filter(Boolean).join(" · ");
 }
 
+/** A time between feeds' end, in hours the way everyText says them: "3 hours", "3.5 hours", "1 hour", "2h 15m". */
+export function hoursText(minutes: number): string {
+  const m = Math.round(minutes);
+  if (m % 30 === 0) return `${m / 60} ${m === 60 ? "hour" : "hours"}`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * When the plan says to wake her, plainly: "wake her if she's still asleep at
+ * 3.5 hours", the time between feeds' longer end (the end of the window
+ * Today's card shows, counted from the start of the last feed; `from` says
+ * so). `w`: the baby's words ("him", "he's"; the name with no sex set).
+ */
+export function wakeText(every: Pick<Range, "max">, w: { him: string; hes: string }, opts: { from?: boolean } = {}): string {
+  return `wake ${w.him} if ${w.hes} still asleep at ${hoursText(every.max)}${opts.from ? " from the start of the last feed" : ""}`;
+}
+
 /** A note as a sentence of its own: a capital first letter, and a full stop unless it ends with one. */
 const sentence = (s: string) => {
   const t = s.replace(/[\s,;:]+$/, "");
