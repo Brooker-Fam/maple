@@ -404,13 +404,19 @@ check("a saved feeding plan's [App] line sends set_feeding_plan with every messa
   }
   eq(route(ALEX, "she pooped", { state: [PLAN_LINE] }).sel.groups, ["feeding"], "a plain log carries it too: the group is one tool");
   eq(predictGroups({ said: "Robin said hi", context: [PLAN_LINE, SLEEP_LINE], carePerson: "Robin" }), ["mom", "feeding", "sleep"], "in group order, the plan's one tool ahead of the sleep plan's five");
-  eq(predictGroups({ said: "pumped 3 oz", context: [PLAN_LINE] }), ["feeding", "log_more"], "a group the plan's line sends ranks as if its words had named it");
+  eq(predictGroups({ said: "pumped 3 oz", context: [PLAN_LINE] }), ["log_more", "feeding"], "the message's own group first, then the one the plan's line sends");
   ok(!route(VI, "night now starts at 11", { state: [PLAN_LINE] }).sel.active.includes("set_feeding_plan"), "a viewer still never has it");
   // Both plans' lines on a plain message: core, the sleep tools and the plan's, under the ceiling.
   const both = route(ALEX, "she pooped", { state: [PLAN_LINE, SLEEP_LINE] }).sel;
   eq([both.groups, both.dropped], [["sleep", "feeding"], []], "both plans' tools");
   ok(both.tokens <= TOOL_CEILING, `${both.tokens} under the ceiling`);
   console.log(`  a family with both plans, a plain message: ${both.tokens} tokens of tools (ceiling ${TOOL_CEILING})`);
+  // A message about pumping beside both plans' lines: the pumping tools it asks for stay, and past the ceiling the sleep
+  // plan's five, which only its lines imply, go first.
+  eq(predictGroups({ said: "I pumped 40 ml", context: [PLAN_LINE, SLEEP_LINE] }), ["log_more", "feeding", "sleep"], "its own group first, then the lines' (feeding before sleep)");
+  const pumped = route(ALEX, "I pumped 40 ml", { state: [PLAN_LINE, SLEEP_LINE] }).sel;
+  eq([pumped.groups, pumped.dropped], [["feeding", "log_more"], ["sleep"]], "log_more stays, sleep goes");
+  ok(pumped.active.includes("log_pump") && pumped.tokens <= TOOL_CEILING, `${pumped.tokens} under the ceiling, with log_pump`);
   // Her name beside both: past the ceiling the sleep plan's five go, and the plan's one stays.
   const named = route(ALEX, "Robin said hi", { state: [PLAN_LINE, SLEEP_LINE] }).sel;
   eq([named.groups, named.dropped], [["mom", "feeding"], ["sleep"]], "the bigger goes first");

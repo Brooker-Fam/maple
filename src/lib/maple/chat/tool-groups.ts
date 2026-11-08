@@ -204,30 +204,34 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const wordIn = (text: string, word: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${escape(word)}(?![\\p{L}\\p{N}])`, "iu").test(text);
 
 /**
- * The groups the newest message points to, surest first: what its own words
- * name (`said`, never the [App] lines' names) and the [App] state lines
- * stored with it (`context`) say (a sleep plan's, a feeding plan's), in
- * PREDICT_ORDER, then her page when a medicine word only implies it (a
- * medicine is the baby's or hers until someone says whose). `carePerson`:
- * her name, when the family has a care page (Voice.hasMom). Groups this
- * person has no tools in come to nothing later.
+ * The groups the newest message points to, surest first: what it names
+ * itself (`said`: its words, her name, a medicine of hers the [App] lines
+ * name, never the lines' other names), in PREDICT_ORDER; then those only the
+ * [App] state lines stored with it (`context`) imply (a feeding plan's, then
+ * a sleep plan's), so past the ceiling a group the message asks for never
+ * goes before one it was only near ("I pumped 40 ml" beside both plans'
+ * lines keeps the pumping tools); then her page when a medicine word only
+ * implies it (a medicine is the baby's or hers until someone says whose).
+ * `carePerson`: her name, when the family has a care page (Voice.hasMom).
+ * Groups this person has no tools in come to nothing later.
  */
 export function predictGroups(input: { said: string; context?: readonly string[]; carePerson?: string | null }): ToolGroup[] {
   const { said } = input;
   const named = new Set<ToolGroup>();
+  const near = new Set<ToolGroup>();
   for (const group of GROUP_ORDER) if (GROUP_WORDS[group].some((re) => re.test(said))) named.add(group);
   if (SLEEP_WORD.test(said) && QUESTION.test(said)) named.add("sleep");
   if (input.carePerson && wordIn(said, input.carePerson)) named.add("mom");
   for (const line of input.context ?? []) {
-    if (SLEEP_STATE.test(line)) named.add("sleep");
-    if (FEEDING_STATE.test(line)) named.add("feeding");
+    if (SLEEP_STATE.test(line)) near.add("sleep");
+    if (FEEDING_STATE.test(line)) near.add("feeding");
     const medicine = NEXT_MEDICINE.exec(line)?.[1];
     if (medicine) {
       const names = (medicine.match(/\p{L}[\p{L}'-]{3,}/gu) ?? []).filter((w) => !NOT_A_MEDICINE.has(w.toLowerCase()));
       if (names.some((name) => wordIn(said, name))) named.add("mom");
     }
   }
-  const out = PREDICT_ORDER.filter((g) => named.has(g));
+  const out = [...PREDICT_ORDER.filter((g) => named.has(g)), ...PREDICT_ORDER.filter((g) => near.has(g) && !named.has(g))];
   if (MEDICINE.test(said) && !named.has("mom")) out.push("mom");
   return out;
 }

@@ -272,7 +272,7 @@ check("toOutput: a read-back waiting for their yes is pending (its line shows wi
 check("the feeding plan in the instructions: build it only from what's written, a read-back and a clear yes, the plan not a memory, its own words for what's next", () => {
   const mcp = mapleInstructions(FAMILY_ONE_COPY);
   const chat = mapleInstructions(FAMILY_ONE_COPY, { entryNumbers: false, memories: "chat" });
-  for (const want of ["build it with set_feeding_plan", "never fill in a number that isn't there", "which feeds take turns, when night starts and ends", "save only on a clear yes", "the plan is the source, not a memory", "offer to turn it into the plan", "never a schedule of your own", "never suggest changing the plan"]) {
+  for (const want of ["build it with set_feeding_plan", "never fill in a number that isn't there", "which feeds take turns, when night starts and ends", "save only on a clear yes", "the plan is the source, not a memory", "offer to turn it into the plan", "never a schedule of your own", "never suggest changing the plan", "update_entry its nursing entry with details {plan: that feed} (and shield if they say so)", "never answer only in words"]) {
     ok(mcp.includes(want) && chat.includes(want), `says "${want}"`);
   }
   ok(mcp.includes("maple_status's feeding_plan") && !mcp.includes("[App] lines' Feeding plan line"), "a connector reads maple_status's");

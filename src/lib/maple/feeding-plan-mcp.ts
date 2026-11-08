@@ -3,6 +3,7 @@ import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/m
 import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
+import { nursingRuns } from "./feed";
 import {
   amountText,
   AT_BREAST_WORDS,
@@ -14,14 +15,17 @@ import {
   feedingPlanOf,
   feedPlanNow,
   feedText,
+  minutesRangeText,
   nightTurns,
   PLAN_LATE_TOP_UP_MS,
   PlanConflict,
   PlanError,
   planLines,
   stepText,
+  type BottleStep,
   type FeedingPlan,
   type FeedPlanNow,
+  type NurseStep,
   type PlanDue,
   type PlanFeed,
   type PlanFeedView,
@@ -105,6 +109,13 @@ function breastMilkLogged(s: StepView, plan: FeedingPlan, tz: string): string | 
   return `${amountText({ min: s.ml, max: s.ml }, plan.unit)} ${how} at ${formatTime(Math.max(...given.map((e) => Date.parse(e.started_at))), tz)}`;
 }
 
+/**
+ * A nursing step going now (on the breast, or on a break) whose plan gives milk at the breast and none is logged yet:
+ * it's still to give while she's on, which is the card's one action then.
+ */
+const breastMilkOwedNow = (s: StepView) =>
+  s.status === "running" && s.step.do === "nurse" && !!s.step.supplement && !s.entries.some((e) => e.kind === "feed" && e.data.method === "bottle");
+
 /** What the log holds for a step: "20 min", "30 ml", "12 min so far", "12 min so far, 20 ml in the SNS at 11:56 AM". */
 function logged(s: StepView, plan: FeedingPlan, tz: string): string[] {
   if (s.status === "running") {
@@ -142,7 +153,7 @@ function finishWords(s: StepView, short: { given: number; need: Range }, plan: F
 /** One step with what the log says about it: "Pump 15 min (done, 14 min)", "Top up 25–35 ml (not logged yet)". */
 function statusWords(s: StepView, text: string, plan: FeedingPlan, tz: string): string {
   if (s.status === "info") return text;
-  if (s.status === "running") return withLogged(text, ["going now", ...logged(s, plan, tz)]);
+  if (s.status === "running") return withLogged(text, ["going now", ...logged(s, plan, tz), ...(breastMilkOwedNow(s) ? [`${breastMilkWords(s, plan)} not logged yet`] : [])]);
   const short = shortBottle(s);
   if (short) return `${text} (${soFarWords(short, plan)}; next: ${finishWords(s, short, plan)})`;
   if (s.status === "todo") return `${text} (not logged yet)`;
@@ -176,7 +187,8 @@ function missedWords(n: FeedPlanNow, w: Words): string | null {
   const m = n.missed;
   if (!m) return null;
   const words = stepWords(m.view.feed, n.plan, n.target);
-  const at = m.view.start ?? m.view.group?.start ?? null;
+  // Named by its first nursing or bottle, as Today's card and its due line name it (never the night's pump before it).
+  const at = namedAt(m.view);
   // A bottle short of its amount says what's in it, then what it still needs: "bottle up to 50–70 ml (40 ml so far); not logged: formula to finish, 10–30 ml more".
   const short = m.steps.flatMap((s) => {
     const b = shortBottle(s);
@@ -222,7 +234,10 @@ export function planNowLine(n: FeedPlanNow, w: Words): string {
       done.length ? `Done: ${done.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))).join("; ")}.` : "",
       // Nursed, with the milk at the breast not logged: the nursing is done, the milk is what's missing.
       ...unlogged.map((s) => `Nursed${s.minutes != null ? ` ${s.minutes} min` : ""}; not logged yet: ${breastMilkWords(s, n.plan)}.`),
-      now.length ? `Going now: ${now.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))).join("; ")}.` : "",
+      // While she's on, milk at the breast not given yet is said with it: the card's one action then.
+      now.length
+        ? `Going now: ${now.map((s) => `${withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))}${breastMilkOwedNow(s) ? `; not logged yet: ${breastMilkWords(s, n.plan)}` : ""}`).join("; ")}.`
+        : "",
       // A bottle short of its amount: what's in it so far, and next what it still needs ("formula to finish").
       short.length ? `So far: ${short.map((s) => `${lower(words[s.i])} (${soFarWords(shortBottle(s)!, n.plan)})`).join("; ")}.` : "",
       left.length ? `Next: ${left.map((s) => (shortBottle(s) ? finishWords(s, shortBottle(s)!, n.plan) : lower(words[s.i]))).join("; then ")}.` : "",
@@ -250,7 +265,7 @@ function planNowJson(n: FeedPlanNow, w: Words): Record<string, unknown> {
       const short = shortBottle(s);
       if (s.milkMissing) return `${breastMilkWords(s, n.plan)}, not logged`;
       if (short) return `${words[s.i]} (${soFarWords(short, n.plan)}; next: ${finishWords(s, short, n.plan)})`;
-      return s.status === "running" ? `${words[s.i]} (going now)` : words[s.i];
+      return s.status === "running" ? `${words[s.i]} (going now${breastMilkOwedNow(s) ? `; ${breastMilkWords(s, n.plan)} not logged yet` : ""})` : words[s.i];
     }),
     ...(n.after ? { after: n.after.feed.name, after_id: n.after.feed.id } : {}),
     ...(missed ? { missed, ...(topUpOf != null ? { top_up_of: topUpOf } : {}) } : {}),
@@ -318,10 +333,93 @@ function keyedLines(plan: FeedingPlan, target: FeedTarget | null, words: PlanWor
 
 const unbulleted = (line: string) => line.replace(/^• /, "");
 
+/** One plan, its unit and target, as a step's parts are said in it. */
+type Said = { plan: FeedingPlan; target: FeedTarget | null };
+
+/** A bottle step's milk in the plan's words ("formula or breast milk"), as stepText says it; null with none named. */
+const milkSaid = (milk: BottleStep["milk"], s: Said) => (milk ? stepText({ do: "bottle", milk }, s.plan, s.target).split(", ").slice(1).join(", ") : null);
+
+/**
+ * Each part of a step an edit changes, in stepText's words with what it was:
+ * "nurse 10–15 min (was 12–18 min)", "no nipple shield (was with it)", "25 ml
+ * of formula in the SNS (was 20 ml)", "top up 35–45 ml (was 25–35 ml)", "pump
+ * only if needed (was every time)". Null when a change in its words isn't
+ * one of these (the read-back then says the whole step as it was and is).
+ */
+function stepChanges(a: PlanStep, b: PlanStep, was: Said, now: Said, afterNurse: boolean): string[] | null {
+  if (a.do !== b.do) return null;
+  const out: string[] = [];
+  const changed = (x: string | null, y: string | null) => x !== y;
+  const time = (r: Range | undefined) => (r ? minutesRangeText(r) : "with no time given");
+  if (a.do === "nurse" && b.do === "nurse") {
+    // As stepText says it: "10–15 min each side", "on each side" with no time given.
+    const length = (s: NurseStep) => (s.minutes ? `${minutesRangeText(s.minutes)}${s.each_side ? " each side" : ""}` : s.each_side ? "on each side" : time(undefined));
+    if (changed(length(a), length(b))) out.push(`nurse ${length(b)} (was ${length(a)})`);
+    const side = (s: NurseStep) => (s.side ? `on the ${s.side === "L" ? "left" : "right"}` : "either side");
+    if (changed(side(a), side(b))) out.push(`${side(b)} (was ${side(a)})`);
+    if (!!a.shield !== !!b.shield) out.push(b.shield ? "with the nipple shield (was without it)" : "no nipple shield (was with it)");
+    // Milk at the breast: stepText's own words for it ("20 ml of formula in the SNS"), each in its plan's unit.
+    const milk = (s: NurseStep, in_: Said) => (s.supplement ? stepText({ do: "nurse", supplement: s.supplement }, in_.plan, in_.target).replace(/^Nurse, /, "") : null);
+    const [x, y] = [milk(a, was), milk(b, now)];
+    if (changed(x, y)) {
+      if (!x) out.push(`${y} (was none)`);
+      else if (!y) out.push(`no milk at the breast (was ${x})`);
+      else {
+        // Only its amount changed: say only the amount it was.
+        const amountOnly = a.supplement!.via === b.supplement!.via && (a.supplement!.milk ?? null) === (b.supplement!.milk ?? null);
+        out.push(`${y} (was ${amountOnly ? amountText(a.supplement!.ml, was.plan.unit) : x})`);
+      }
+    }
+  } else if (a.do === "pump" && b.do === "pump") {
+    if (changed(time(a.minutes), time(b.minutes))) out.push(`pump ${time(b.minutes)} (was ${time(a.minutes)})`);
+    if (!!a.if_needed !== !!b.if_needed) out.push(b.if_needed ? "pump only if needed (was every time)" : "pump every time (was only if needed)");
+  } else if (a.do === "bottle" && b.do === "bottle") {
+    const label = afterNurse ? "top up" : "bottle";
+    // Its amount as stepText says it: its own, else up to the target per feed (so a changed target shows here too).
+    const amount = (s: BottleStep, in_: Said) =>
+      s.ml ? amountText(s.ml, in_.plan.unit) : s.to_target ? (in_.target ? `up to ${amountText(in_.target, in_.plan.unit)}` : "up to the target") : "no amount given";
+    if (changed(amount(a, was), amount(b, now))) out.push(`${label} ${amount(b, now)} (was ${amount(a, was)})`);
+    const [x, y] = [milkSaid(a.milk, was), milkSaid(b.milk, now)];
+    if (changed(x, y)) out.push(`${y ?? "no milk named"} (was ${x ?? "no milk named"})`);
+    if ((a.via === "paced") !== (b.via === "paced")) out.push(b.via === "paced" ? "paced bottle (was not paced)" : "not paced (was a paced bottle)");
+    if (!!a.if_needed !== !!b.if_needed) out.push(b.if_needed ? `${label} only if still hungry (was every time)` : `${label} every time (was only if still hungry)`);
+  } else if (a.do === "note" && b.do === "note") {
+    if (a.text !== b.text) out.push(`note ${JSON.stringify(b.text)} (was ${JSON.stringify(a.text)})`);
+  }
+  return out;
+}
+
+/**
+ * Each part of a feed an edit changes ("no nipple shield (was with it); 20 ml
+ * of formula in the SNS (was 25 ml)"), so a second change in the same feed
+ * (a value a stale copy of the plan puts back) is said on its own beside the
+ * one that was asked for. Null when its steps were added, taken out or moved,
+ * or a change can't be named part by part: the read-back then says the whole
+ * feed as it was and as it would be.
+ */
+function feedChanges(was: PlanFeed, now: PlanFeed, before: Said, after: Said): string[] | null {
+  if (was.steps.length !== now.steps.length || was.steps.some((s, i) => s.do !== now.steps[i].do)) return null;
+  const out: string[] = [];
+  let nursed = false;
+  for (const [i, a] of was.steps.entries()) {
+    const b = now.steps[i];
+    const afterNurse = nursed;
+    if (a.do === "nurse") nursed = true;
+    if (stepText(a, before.plan, before.target, { afterNurse }) === stepText(b, after.plan, after.target, { afterNurse })) continue;
+    const parts = stepChanges(a, b, before, after, afterNurse);
+    if (!parts?.length) return null;
+    // A feed with two steps of a kind says which ("step 3: bottle 40 ml (was 30 ml)").
+    const many = now.steps.filter((s) => s.do === b.do).length > 1;
+    out.push(...parts.map((p) => (many ? `step ${i + 1}: ${p}` : p)));
+  }
+  return out.length ? out : null;
+}
+
 /**
  * What an edit changes on the saved plan, in the read-back's own words: a
  * renamed feed once (feeds pair by id, so the turns and the night that name
- * it read the same), each line that reads differently as it was and as it
+ * it read the same), each part of a feed that changes with what it was
+ * (feedChanges), each other line that reads differently as it was and as it
  * would be, then the lines added and removed. `kept`: how many lines stay as
  * they are.
  */
@@ -341,8 +439,15 @@ export function planChanges(saved: FeedingPlan, savedTarget: FeedTarget | null, 
   for (const [key, line] of after) {
     const was = before.get(key);
     if (was === undefined) lines.push(`Added: ${unbulleted(line)}`);
-    else if (!same(key, was, line)) lines.push(`Was: ${unbulleted(was)}`, `Now: ${unbulleted(line)}`);
-    else kept++;
+    else if (!same(key, was, line)) {
+      // A feed's line: each part that changes, with what it was, when they can be named that way.
+      const id = key.startsWith("feed ") ? key.slice(5) : null;
+      const a = id ? saved.feeds.find((f) => f.id === id) : undefined;
+      const b = id ? plan.feeds.find((f) => f.id === id) : undefined;
+      const parts = a && b ? feedChanges(a, b, { plan: saved, target: savedTarget }, { plan, target }) : null;
+      if (parts) lines.push(`Changed in ${JSON.stringify(b!.name)}: ${parts.join("; ")}.`);
+      else lines.push(`Was: ${unbulleted(was)}`, `Now: ${unbulleted(line)}`);
+    } else kept++;
   }
   for (const [key, line] of before) if (!after.has(key)) lines.push(`Removed: ${unbulleted(line)}`);
   return { lines, kept };
@@ -381,6 +486,51 @@ export function planCautions(plan: FeedingPlan): string[] {
         ? "If it's one of the night's feeds, add it to night.order; if it takes a turn by day, add it to order."
         : "If it's the night's feed, set night.feed to it; if it takes a turn by day, add it to order.";
     out.push(`Ask with it: ${named(f)} isn't in the day's turns${n ? ` or the night's ${atNight.length > 1 ? "turns" : "feed"}` : ""}, so Today only offers it as another choice. ${fix}`);
+  }
+  return out;
+}
+
+/**
+ * Words a feed's name can say about its steps, with what they mean there (the
+ * form's own list, planDraft.ts NAME_WORDS, on the plan as saved): kept in
+ * step with it, so the chat and the form ask about the same names.
+ */
+const NAME_WORDS: { word: RegExp; has: (f: PlanFeed) => boolean; what: string }[] = [
+  { word: /\bshields?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && !!s.shield), what: "the nipple shield" },
+  { word: /\bsyringes?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.supplement?.via === "syringe"), what: "a syringe" },
+  { word: /\bsns\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.supplement?.via === "sns"), what: "an SNS" },
+  { word: /\btop[\s-]?ups?\b/i, has: (f) => f.steps.some((s) => s.do === "bottle"), what: "a top-up" },
+  { word: /\bpump(?:s|ing)?\b/i, has: (f) => f.steps.some((s) => s.do === "pump"), what: "a pump" },
+];
+
+/** The word as the name says it, unless it says it's without it ("no shield", "without SNS"). */
+function nameSays(name: string, word: RegExp): string | null {
+  const m = word.exec(name);
+  if (!m) return null;
+  return /\b(?:no|not|without|w\/o)\s+$/i.test(name.slice(0, m.index)) ? null : m[0];
+}
+
+/**
+ * Questions to ask with an edit's read-back about a feed whose name still
+ * says what the edit takes out of its steps ("Shield, then pump" with the
+ * nipple shield taken out), as the form says it: the feeds paired by id, the
+ * name as it would be saved. Today shows the name as the feed's title, so a
+ * stale one tells the other parent to use what the plan no longer does.
+ */
+export function staleNames(saved: FeedingPlan, plan: FeedingPlan): string[] {
+  const out: string[] = [];
+  for (const f of plan.feeds) {
+    const was = saved.feeds.find((x) => x.id === f.id);
+    if (!was) continue;
+    const stale = NAME_WORDS.flatMap(({ word, has, what }) => {
+      const said = nameSays(f.name, word);
+      return said && has(was) && !has(f) ? [{ said: said === said.toUpperCase() ? said : said.toLowerCase(), what }] : [];
+    });
+    if (!stale.length) continue;
+    const list = (xs: string[], and: string) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} ${and} ${xs[xs.length - 1]}` : xs[0]);
+    out.push(
+      `Ask with it: ${named(f)} still says ${list(stale.map((x) => JSON.stringify(x.said)), "and")}, and its steps no longer use ${list(stale.map((x) => x.what), "or")}; Today shows that name as the feed's title. Ask if they'd like to rename it.`
+    );
   }
   return out;
 }
@@ -664,24 +814,43 @@ export type OwedPart = { id: number; view: PlanFeedView; part: "top-up" | "milk 
  * bottle step or its milk at the breast, as the plan itself reads such a
  * bottle. Null otherwise, and for a bottle started as another of the plan's
  * feeds (`tag`). `atBreast` (a syringe or an SNS) says which part it is when
- * the feed owes both. The link keeps Last fed, the day's count and the plan's
+ * the feed owes both. With `data` (the bottle as it will be saved), only when
+ * the plan, reading the log with that bottle and no link, takes it as part of
+ * that feed too: a bottle more than the feed still wants (a full bottle an
+ * hour after a feed whose top-up wasn't logged) is a feed of its own, by the
+ * plan's own rule. The link keeps Last fed, the day's count and the plan's
  * next feed on that feed, as the card's own Log top-up does. A family without
- * a plan never gets one: a syringe can be a feed by finger.
+ * a plan never gets one: a syringe can be a feed by finger. Never for a feed
+ * where she only nursed in the place of a feed with no nursing step
+ * (PlanFeedView.nursedOnly, read through a wider type): its steps aren't owed.
  */
-export function owedPart(plan: FeedingPlan, entries: readonly Entry[], at: Date, opts: { tz: string; target: FeedTarget | null; atBreast: boolean; tag?: string | null }): OwedPart | null {
+export function owedPart(
+  plan: FeedingPlan,
+  entries: readonly Entry[],
+  at: Date,
+  opts: { tz: string; target: FeedTarget | null; atBreast: boolean; tag?: string | null; data?: Record<string, unknown> }
+): OwedPart | null {
   const atMs = at.getTime();
   // The log as it stood when the bottle was given.
   const before = entries.filter((e) => Date.parse(e.started_at) <= atMs);
-  const n = feedPlanNow(plan, before, at, { tz: opts.tz, target: opts.target });
+  const read = (log: readonly Entry[]) => feedPlanNow(plan, log, at, { tz: opts.tz, target: opts.target });
+  const n = read(before);
   const view = n.focus.state === "underway" ? n.focus : n.missed?.view ?? null;
   const run = view?.group?.run;
-  if (!view || view.offPlan || !run || run.end === null || atMs < run.end || atMs - run.end > PLAN_LATE_TOP_UP_MS) return null;
+  if (!view || view.offPlan || (view as PlanFeedView & { nursedOnly?: boolean }).nursedOnly) return null;
+  if (!run || run.end === null || atMs < run.end || atMs - run.end > PLAN_LATE_TOP_UP_MS) return null;
   if (opts.tag && opts.tag !== view.feed.id) return null;
   const bottle = view.steps.some((s) => s.step.do === "bottle" && s.status === "todo");
   const breast = view.steps.some((s) => s.milkMissing);
   if (!bottle && !breast) return null;
   const id = newestNursingId(run);
   if (id == null) return null;
+  if (opts.data) {
+    // Read with the bottle and no link, it's part of this very feed (a bottle on its own never reads as a nursing feed,
+    // so the same plan feed with its anchor unknown is this one).
+    const home = probeHome(read([...before, probeBottle(at, { ...opts.data, ...(opts.tag ? { plan: opts.tag } : {}) })]));
+    if (!home || home.feed.id !== view.feed.id || (home.anchor !== null && home.anchor !== view.group!.anchor)) return null;
+  }
   return { id, view, part: breast && (opts.atBreast || !bottle) ? "milk at the breast" : "top-up" };
 }
 
@@ -696,17 +865,229 @@ function newestNursingId(run: { entries: readonly Entry[] } | null | undefined):
   return newest?.id ?? null;
 }
 
-/** owedPart for an MCP call, from the log as Today reads it; null with no plan. */
-export async function planOwedPart(ctx: Ctx, at: Date, opts: { atBreast: boolean; tag?: string | null }): Promise<OwedPart | null> {
+/**
+ * The moment a plan feed is named by in words ("the 2:22 AM feed"): its first
+ * nursing or first bottle, never a pump's start (feeding-plan.ts
+ * PlanFeedView.named, read through a wider type so these words hold on a
+ * release whose view doesn't carry it yet: then its group's start, which is
+ * the same moment). Null for a feed with only its pump logged.
+ */
+export function namedAt(v: PlanFeedView): number | null {
+  const n = (v as PlanFeedView & { named?: number | null }).named;
+  return n !== undefined ? n : v.group?.start ?? null;
+}
+
+/** "2:22 AM feed", or "feed" before it has a moment of its own. */
+const feedWord = (v: PlanFeedView, tz: string) => {
+  const at = namedAt(v);
+  return `${at != null ? `${formatTime(at, tz)} ` : ""}feed`;
+};
+
+// ── a bottle a bottle-led plan feed still wants ──────────────────────────
+
+/** The would-be bottle's id while the plan reads the log with it: never a saved entry's. */
+const PROBE_ID = -1;
+
+/** A plan feed fed by bottle: no nursing step, a bottle step (the night's "pump, then bottle"). */
+const bottleLed = (f: PlanFeed) => !f.steps.some((s) => s.do === "nurse") && f.steps.some((s) => s.do === "bottle");
+
+/**
+ * A bottle the feeding plan reads as a bottle-led plan feed's (one with no
+ * nursing: the night's pump, then its bottle, with formula to finish), given
+ * with no feed named for it: saved with that plan feed (data.plan), as Today's
+ * card saves its own, so the log's count (feed.ts sameFeedBottleIds) takes a
+ * later bottle of that feed as part of it, not a feed of its own.
+ */
+export type LedBottle = {
+  /** The plan feed it's saved with. */
+  feed: PlanFeed;
+  /**
+   * How the plan read that feed before the bottle: underway (its pump logged, or a bottle of it short of its
+   * amount), missed (a finished feed's bottle not logged or short), or the next feed, which this bottle begins.
+   */
+  how: "underway" | "missed" | "begins";
+  /** The bottle is the feed's first: it begins it (after its pump, or on its own). */
+  first: boolean;
+  /** When the feed it's part of began: its first bottle (this one when `first`), the moment it's named by. */
+  start: number;
+  /** What it is for that feed: "its bottle", "its formula to finish", "the rest of its bottle". */
+  part: string;
+};
+
+/** The words for what a bottle is to a bottle-led feed's step: its bottle, or what a bottle short of its amount still needs. */
+function ledPartWords(s: StepView | null): string {
+  if (!s || !shortBottle(s)) return "its bottle";
+  return s.step.do === "bottle" && s.step.milk === "breastmilk_first" ? "its formula to finish" : "the rest of its bottle";
+}
+
+/** A reading of the plan as every surface shows it: each feed's place, steps and times, the due, what's missed; never which rule placed a feed. */
+function readingKey(n: FeedPlanNow): string {
+  const view = (v: PlanFeedView | null | undefined) =>
+    v ? [v.feed.id, v.night, v.start, v.done, v.live, v.lastAt, !!v.offPlan, v.steps.map((s) => [s.status, s.ml, s.minutes, s.milkMissing])] : null;
+  return JSON.stringify([
+    n.focus.state,
+    view(n.focus),
+    n.due ? [n.due.from, n.due.to, n.due.base, n.due.night, n.due.for, n.due.wake] : null,
+    n.after ? [n.after.feed.id, n.after.night] : null,
+    n.missed ? [view(n.missed.view), n.missed.steps.map((s) => s.i)] : null,
+    n.relatch ? [n.relatch.feed.id, n.relatch.until] : null,
+  ]);
+}
+
+/** The would-be bottle, given at `at` with `data`, for a reading of the log with it. */
+function probeBottle(at: Date, data: Record<string, unknown>): EntryOf<"feed"> {
+  const iso = at.toISOString();
+  return {
+    id: PROBE_ID,
+    kind: "feed",
+    started_at: iso,
+    ended_at: null,
+    active: false,
+    note: null,
+    created_by: null,
+    updated_by: null,
+    source: "mcp",
+    created_at: iso,
+    updated_at: iso,
+    data: { ...data, method: "bottle" },
+  } as unknown as EntryOf<"feed">;
+}
+
+/**
+ * The feed the would-be bottle is read as part of: its plan feed and what it
+ * counts from (PlanGroup.anchor: a bottle feed's first bottle, a nursing
+ * feed's nursing), which tells one feed from another of the same plan feed;
+ * null when no reading shows it. A feed the bottle finished is shown nowhere:
+ * it's the plan's last feed (relatch), whose anchor is what the next feed is
+ * due from, or null (unknown) with no interval in the plan.
+ */
+function probeHome(n: FeedPlanNow): { feed: PlanFeed; anchor: number | null } | null {
+  const holds = (v: PlanFeedView) => !!v.group && [...v.group.bottles, ...(v.group.run?.topUps ?? [])].some((b) => b.id === PROBE_ID);
+  if (n.focus.state === "underway" && holds(n.focus)) return { feed: n.focus.feed, anchor: n.focus.group!.anchor };
+  if (n.missed && holds(n.missed.view)) return { feed: n.missed.view.feed, anchor: n.missed.view.group!.anchor };
+  if (!n.relatch) return null;
+  if (n.due?.for === "focus") return { feed: n.relatch.feed, anchor: n.due.base };
+  return n.due ? null : { feed: n.relatch.feed, anchor: null };
+}
+
+/**
+ * The bottle-led plan feed a bottle given at `at` (with `data`, and no feed
+ * named for it) is part of, as the plan reads it: one underway (its pump
+ * logged, or a bottle of it short of its amount), a finished one whose
+ * bottle wasn't logged or is short (missed), or the plan's next feed, which
+ * this bottle begins. Only while that feed still wants its bottle (to give,
+ * or short: formula to finish), and only when saving it with that feed
+ * changes nothing in how the plan reads the log, so the tag only lets the
+ * log's count agree with the plan. Null otherwise: a feed that nurses (a
+ * bottle after it is owedPart's), a bottle feed's bottle already given, a
+ * bottle feed.ts takes as a nursing feed's top-up, or no plan.
+ */
+export function ledBottle(plan: FeedingPlan, entries: readonly Entry[], at: Date, opts: { tz: string; target: FeedTarget | null; data: Record<string, unknown> }): LedBottle | null {
+  const atMs = at.getTime();
+  // The log as it stood when the bottle was given.
+  const before = entries.filter((e) => Date.parse(e.started_at) <= atMs);
+  const read = (log: readonly Entry[]) => feedPlanNow(plan, log, at, { tz: opts.tz, target: opts.target });
+  const n = read(before);
+  const f = n.focus;
+  const owes = (v: PlanFeedView) => v.steps.find((s) => s.step.do === "bottle" && s.status === "todo") ?? null;
+  const tries: { view: PlanFeedView; how: LedBottle["how"]; step: StepView | null }[] = [];
+  if (f.state === "underway" && bottleLed(f.feed) && !f.offPlan && !f.group?.run) {
+    const step = owes(f);
+    if (step) tries.push({ view: f, how: "underway", step });
+  }
+  const m = n.missed;
+  if (f.state === "upcoming" && m && bottleLed(m.view.feed) && !m.view.group?.run) {
+    const step = m.steps.find((s) => s.step.do === "bottle") ?? null;
+    if (step) tries.push({ view: m.view, how: "missed", step });
+  }
+  if (f.state === "upcoming" && bottleLed(f.feed)) tries.push({ view: f, how: "begins", step: null });
+  if (!tries.length) return null;
+
+  const plain = [...before, probeBottle(at, opts.data)];
+  // A bottle the log takes as a nursing feed's top-up (given during it, or soon after) is that feed's, not a bottle feed's.
+  if (nursingRuns(plain, at).some((r) => r.topUps.some((b) => b.id === PROBE_ID))) return null;
+  const untagged = readingKey(read(plain));
+  for (const t of tries) {
+    const tagged = read([...before, probeBottle(at, { ...opts.data, plan: t.view.feed.id })]);
+    if (readingKey(tagged) !== untagged) continue;
+    const home = probeHome(tagged);
+    if (!home || home.feed.id !== t.view.feed.id) continue;
+    // More of that very feed (underway, missed), or the start of it: after its pump (underway), or on its own (begins).
+    // A feed underway always takes the bottle it still wants, so with no interval to tell (the anchor unknown) it's that.
+    const anchor = home.anchor ?? (t.how === "underway" ? (t.view.group?.anchor ?? atMs) : null);
+    if (anchor === null) continue;
+    const joined = !!t.view.group && anchor === t.view.group.anchor;
+    const first = !t.view.group && anchor === atMs;
+    if (!joined && !first) continue;
+    return { feed: t.view.feed, how: t.how, first, start: anchor, part: ledPartWords(t.step) };
+  }
+  return null;
+}
+
+/** What the plan takes a bottle given with no feed named for it as: a nursing feed's late part (owedPart), or a bottle-led feed's (ledBottle). */
+export type PlanBottle = { owed: OwedPart | null; led: LedBottle | null };
+
+/**
+ * owedPart, else ledBottle, from one log (`entries`), for log_feed's and
+ * Siri's bottle. `tag`: a plan feed named for it (owedPart's rule for that;
+ * a bottle-led feed isn't looked for, it's named). `data`: the bottle as it
+ * will be saved, so its amount is read as the plan reads it.
+ */
+export function planBottle(
+  plan: FeedingPlan,
+  entries: readonly Entry[],
+  at: Date,
+  opts: { tz: string; target: FeedTarget | null; atBreast: boolean; tag?: string | null; data: Record<string, unknown> }
+): PlanBottle {
+  const owed = owedPart(plan, entries, at, opts);
+  const led = owed || opts.tag ? null : ledBottle(plan, entries, at, opts);
+  return { owed, led };
+}
+
+/**
+ * planBottle for an MCP call, from the log as Today reads it; nothing with no
+ * plan. `skip`: entries the plan reads without (by id), the bottle's own
+ * earlier save (a retry, the same bottle sent again), so a retry is read as
+ * the first save was and gets the same link.
+ */
+export async function planBottleFor(ctx: Ctx, at: Date, opts: { atBreast: boolean; tag?: string | null; data: Record<string, unknown>; skip?: ReadonlySet<number> }): Promise<PlanBottle> {
   const plan = feedingPlanOf(ctx.baby.settings);
-  if (!plan) return null;
-  return owedPart(plan, await recentLog(ctx), at, { tz: ctx.tz, target: feedTargetOf(ctx.baby.settings), ...opts });
+  if (!plan) return { owed: null, led: null };
+  const log = (await recentLog(ctx)).filter((e) => !opts.skip?.has(e.id));
+  return planBottle(plan, log, at, { tz: ctx.tz, target: feedTargetOf(ctx.baby.settings), atBreast: opts.atBreast, tag: opts.tag, data: opts.data });
 }
 
 /** What log_feed says after linking a bottle to the feed the plan owed it to (owedPart), with how to undo the link. */
 export function owedPartLine(o: OwedPart, tz: string): string {
-  const at = o.view.start ?? o.view.group?.start ?? null;
-  return `The feeding plan's ${at != null ? `${formatTime(at, tz)} ` : ""}feed (${named(o.view.feed)}) still had its ${o.part} to log, so this was saved with that feed [entry #${o.id}]. If it was a feed of its own, update_entry it with details {top_up_of: null}.`;
+  return `The feeding plan's ${feedWord(o.view, tz)} (${named(o.view.feed)}) still had its ${o.part} to log, so this was saved with that feed [entry #${o.id}]. If it was a feed of its own, update_entry it with details {top_up_of: null}.`;
+}
+
+/**
+ * What log_feed says after saving a bottle with the bottle-led plan feed it's
+ * part of (ledBottle), with how to undo it. `joined`: the log's count took it
+ * as part of the bottle feed begun before it (feed.ts sameFeedBottleIds), so
+ * it isn't a feed of its own; one the log still counts as a feed (a missed
+ * feed's bottle given long after the rest of it) says so.
+ */
+export function ledBottleLine(l: LedBottle, joined: boolean, tz: string): string {
+  const name = named(l.feed);
+  if (l.first) {
+    const what =
+      l.how === "underway"
+        ? `The feeding plan's ${name} was underway (its pump logged), so this was saved as that feed's bottle`
+        : `The feeding plan reads this as its next feed, ${name}, so it was saved as that feed`;
+    return `${what}. If it wasn't, update_entry it with details {plan: null}.`;
+  }
+  const counted = joined ? ": part of it, not a feed of its own" : ", though the log still counts it as a feed of its own";
+  return `The feeding plan's ${formatTime(l.start, tz)} feed (${name}) still had ${l.part} to give, so this was saved with that feed${counted}. If it was a feed of its own, update_entry it with details {plan: null}.`;
+}
+
+/** Siri's words for a bottle the plan took as a feed's (owedPart, ledBottle): ", a top-up for the 9:00 AM feed", ", for the feeding plan's Pump + bottle". */
+export function planBottleSpeak(b: PlanBottle, tz: string): string {
+  // Milk the plan counts as a feed's milk at the breast is never called a top-up: in a plan the top-up is another step.
+  if (b.owed) return `, ${b.owed.part === "top-up" ? "a top-up " : ""}for the ${feedWord(b.owed.view, tz)}`;
+  if (b.led) return b.led.first ? `, for the feeding plan's ${b.led.feed.name}` : `, for the ${formatTime(b.led.start, tz)} feed`;
+  return "";
 }
 
 /** Dashes said aloud: "12–18 min" reads "12 to 18 min", any other dash a pause. */
@@ -721,9 +1102,11 @@ export function planSpeak(n: FeedPlanNow, w: Words): string {
   const f = n.focus;
   if (f.state === "underway") {
     const words = stepWords(f.feed, n.plan, n.target);
-    const left = f.steps.filter((s) => s.status === "todo" || s.milkMissing);
+    // While she's on, milk at the breast not given yet comes first ("the 20 ml in the SNS, then pump 15 min").
+    const left = f.steps.filter((s) => s.status === "todo" || s.milkMissing || breastMilkOwedNow(s));
     const todo = left.map((s) => {
       const short = shortBottle(s);
+      if (breastMilkOwedNow(s)) return breastMilkWords(s, n.plan);
       if (s.milkMissing) return `log ${breastMilkWords(s, n.plan)}`;
       // A bottle short of its amount: what it still needs, with what's in it ("formula to finish, 10 to 30 ml more (40 ml so far)").
       return short ? `${finishWords(s, short, n.plan)} (${soFarWords(short, n.plan)})` : lower(words[s.i]);
@@ -833,7 +1216,7 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
     "set_feeding_plan",
     {
       title: "Save the feeding plan",
-      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Everyone in the family reads it, so leave out ${vo.mom}'s own medicines and health (her page keeps those). It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan (feeding_plan gives it in this shape) with base_rev, the rev it started from.`,
+      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Everyone in the family reads it, so leave out ${vo.mom}'s own medicines and health (her page keeps those). It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan with base_rev, the rev it started from: start it from feeding_plan, or from the last save's answer (the plan as saved, in this shape, with its base_rev), never an older copy.`,
       inputSchema: {
         plan: planShape
           .nullish()
@@ -926,7 +1309,9 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
       if (same(current) && JSON.stringify(target) === JSON.stringify(savedTarget)) {
         return ok("Nothing to change: that's the feeding plan as it's saved.\nIt reads the same as the saved one, target included, so nothing was saved.", { unchanged: true, rev: current!.rev });
       }
-      const what = ["feeding_plan", "set", stable, target, sets];
+      // Its target is the one it would save (sent, else the saved one), so a yes that leaves out the saved target it was
+      // read back with (or sends it again) is the same plan and target.
+      const what = ["feeding_plan", "set", stable, target];
       // An edit is read back as what it changes on the saved plan (the re-read after a changed resend too, so a slip shows).
       const changes = current ? planChanges(current, savedTarget, plan, target, words) : null;
       if (a.confirmed !== true || !readBackMatches(ctx, what, a.read_back)) {
@@ -936,7 +1321,8 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
           : [];
         // An edit asks only what it brings: a caution the saved plan already had was asked when it was saved.
         const had = current ? planCautions(current) : [];
-        const cautions = planCautions(plan).filter((c) => !had.includes(c));
+        // And a feed whose name still says what the edit takes out of it ("Shield, then pump" with no shield now).
+        const cautions = [...planCautions(plan).filter((c) => !had.includes(c)), ...(current ? staleNames(current, plan) : [])];
         const yes = `Only if they say yes, call set_feeding_plan again with the same plan${sets ? " and target" : ""}, confirmed: true and read_back: "${token}". To change something first, change it and read the plan back again. ${PLAN_WORDS_JSON}`;
         const body = changes
           ? [
@@ -969,6 +1355,7 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
       }
       // What Today's Next feed card shows now, from the plan just saved.
       const n = feedPlanNow(plan, await recentLog(ctx), ctx.now, { tz: ctx.tz, target });
+      const saved = planInput(plan, target);
       return ok(
         [
           "Saved the feeding plan.",
@@ -976,7 +1363,9 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
           // An edit's answer says what it changed, as its read-back did.
           ...(changes?.lines.length ? ["What changed:", ...changes.lines, ...(changes.kept ? ["Everything else stayed as it was."] : [])] : []),
         ].join("\n"),
-        { saved: true, rev: plan.rev, feeds: plan.feeds.map((f) => ({ id: f.id, name: f.name })), family_words: PLAN_WORDS_JSON }
+        // The plan as saved, in this tool's own shape with the rev a later change starts from, so an older copy of it in
+        // the chat is never what the next change is built on.
+        { saved: true, rev: plan.rev, base_rev: plan.rev, plan: saved.plan, ...(saved.target != null ? { target: saved.target } : {}), family_words: PLAN_WORDS_JSON }
       );
     }
   );

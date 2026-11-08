@@ -12,7 +12,7 @@ import { LABEL_NOT_WHILE_NURSING, MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_
 import { memberName, summarize } from "@/lib/maple/insights";
 import { lastFedSpeak } from "@/lib/maple/mcp-tools";
 import { feedingPlanOf, feedPlanNow } from "@/lib/maple/feeding-plan";
-import { owedPart, planNextSide, planSpeak } from "@/lib/maple/feeding-plan-mcp";
+import { planBottle, planBottleSpeak, planNextSide, planSpeak } from "@/lib/maple/feeding-plan-mcp";
 import {
   activeTimers,
   createEntryOnce,
@@ -300,24 +300,37 @@ export async function POST(request: NextRequest) {
       }
       case "bottle": {
         const oz = Number(body.amount_oz);
-        // A top-up the feeding plan still owes the feed just before (log_feed's rule): saved with that feed, so Last fed,
-        // the day's count and the plan's next feed stay on it.
+        const amount = Number.isFinite(oz) && oz > 0 && oz <= 12 ? { amount_ml: Math.round(ozToMl(oz)) } : {};
+        // What the feeding plan takes it as (log_feed's rule), saved with that feed, so Last fed, the day's count and the
+        // plan's next feed stay on it: the late top-up a nursing feed just before still owes (top_up_of), else a bottle-led
+        // feed's bottle still to give or short (the night's pump, then its bottle, and formula to finish: plan). Read without
+        // this bottle's own earlier save, so a retry gets the same link.
         const plan = feedingPlanOf(baby.settings);
-        const owed = plan
-          ? owedPart(plan, await listEntries(fam, { babyId: baby.id, from: new Date(now.getTime() - 72 * 3600_000), includeActive: true, limit: 2000 }), now, { tz, target: feedTargetOf(baby.settings), atBreast: false })
-          : null;
+        const prior = plan ? await entryByClient(fam, clientId) : null;
+        const link = plan
+          ? planBottle(
+              plan,
+              (await listEntries(fam, { babyId: baby.id, from: new Date(now.getTime() - 72 * 3600_000), includeActive: true, limit: 2000 })).filter((e) => e.id !== prior?.id),
+              now,
+              { tz, target: feedTargetOf(baby.settings), atBreast: false, data: { method: "bottle", ...amount } }
+            )
+          : { owed: null, led: null };
         const data = {
           method: "bottle" as const,
-          ...(Number.isFinite(oz) && oz > 0 && oz <= 12 ? { amount_ml: Math.round(ozToMl(oz)) } : {}),
-          ...(owed ? { top_up_of: owed.id } : {}),
+          ...amount,
+          ...(link.owed ? { top_up_of: link.owed.id } : {}),
+          ...(link.led ? { plan: link.led.feed.id } : {}),
         };
         const r = await createEntryOnce(fam, { ...base, kind: "feed", startedAt: now, data, clientId });
         entry = r.entry;
         if (!r.deduped) await rememberAct(qc, "entry", [wrote("entry", r.entry)]);
-        // Given with a nursing feed, it's that feed's top-up (feed.ts), and Siri says so.
+        // Given with a nursing feed, it's that feed's top-up (feed.ts), and Siri says so, in the plan's words when the plan
+        // took it as a feed's: whose feed by the moment the plan names it by, and never "a top-up" for milk the plan counts
+        // as that feed's milk at the breast.
         const near = await listEntries(fam, { babyId: baby.id, kinds: ["feed"], from: new Date(now.getTime() - 12 * 3600_000), to: new Date(now.getTime() + 60_000), includeActive: true, limit: 500 });
         const fed = nursingRuns(near, now).find((x) => x.topUps.some((b) => b.id === r.entry.id));
-        speak = `Logged a ${"amount_ml" in data ? `${oz} ounce ` : ""}bottle at ${at}${fed ? `, a top-up for the ${formatTime(fed.start, tz)} feed` : ""}.`;
+        const whose = link.owed ? (fed ? planBottleSpeak(link, tz) : "") : link.led ? planBottleSpeak(link, tz) : fed ? `, a top-up for the ${formatTime(fed.start, tz)} feed` : "";
+        speak = `Logged a ${"amount_ml" in data ? `${oz} ounce ` : ""}bottle at ${at}${whose}.`;
         break;
       }
       case "status": {
