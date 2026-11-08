@@ -4,7 +4,7 @@
  * words things the same way.
  */
 import { bottleAmount, feedMinutes, minutesShort } from "./feed";
-import { AT_BREAST_WORDS, type AtBreastVia } from "./feeding-plan";
+import { AT_BREAST_VIAS, AT_BREAST_WORDS, feedingPlanOf, type AtBreastVia } from "./feeding-plan";
 import { JAUNDICE_LABEL, STOOL_COLOR_INFO } from "./guidelines";
 import { milestoneLabel, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import { formatDuration } from "./time";
@@ -99,16 +99,64 @@ export function feedPartWords(b: EntryOf<"feed">, units: UnitSystem = "us"): str
   return vol ? `+ ${vol} top-up` : "+ top-up";
 }
 
-/** Several parts in one line (a cluster's): one part's own words, else "+ 60 ml in 2 top-ups" ("+ 2 top-ups" with no amounts said). */
-export function feedPartsSummary(parts: readonly EntryOf<"feed">[], units: UnitSystem = "us"): string | null {
-  if (!parts.length) return null;
-  if (parts.length === 1) return feedPartWords(parts[0], units);
+/** What several bottles added up to (ml), or null when none of them had an amount. */
+function sumMl(list: readonly EntryOf<"feed">[]): number | null {
   let ml: number | null = null;
-  for (const b of parts) {
+  for (const b of list) {
     const a = bottleAmount(b.data);
     if (a != null) ml = (ml ?? 0) + a;
   }
-  return ml != null ? `+ ${formatVolume(ml, units)} in ${parts.length} top-ups` : `+ ${parts.length} top-ups`;
+  return ml;
+}
+
+/**
+ * A feed's parts in words, each kind once, in the order a feed goes: milk at
+ * the breast by how it went in ("+ 20 ml in the syringe", "+ milk in the
+ * SNS"), then its top-ups by bottle ("+ 30 ml top-up", "+ 60 ml in 2
+ * top-ups", "+ 2 top-ups"). Several of one kind add up (the amounts said).
+ * Milk at the breast is never called a top-up: in a plan, a top-up is its own
+ * step. Last fed, Between feeds and the Timeline's clusters say a feed's parts
+ * this way.
+ */
+export function feedPartsList(parts: readonly EntryOf<"feed">[], units: UnitSystem = "us"): string[] {
+  const out: string[] = [];
+  for (const via of AT_BREAST_VIAS) {
+    const given = parts.filter((b) => atBreastOf(b.data) === via);
+    if (!given.length) continue;
+    const ml = sumMl(given);
+    out.push(`+ ${ml != null ? formatVolume(ml, units) : "milk"} ${AT_BREAST_WORDS[via].inThe}`);
+  }
+  const tops = parts.filter((b) => !atBreastOf(b.data));
+  if (tops.length === 1) out.push(feedPartWords(tops[0], units));
+  else if (tops.length > 1) {
+    const ml = sumMl(tops);
+    out.push(ml != null ? `+ ${formatVolume(ml, units)} in ${tops.length} top-ups` : `+ ${tops.length} top-ups`);
+  }
+  return out;
+}
+
+/** feedPartsList in one line ("+ 20 ml in the syringe · + 30 ml top-up"), or null for a feed with no parts. */
+export function feedPartsSummary(parts: readonly EntryOf<"feed">[], units: UnitSystem = "us"): string | null {
+  const list = feedPartsList(parts, units);
+  return list.length ? list.join(" · ") : null;
+}
+
+const planUnitsSeen = new WeakMap<object, UnitSystem | null>();
+
+/**
+ * The units a feed's parts are said in: the feeding plan's, when one is saved,
+ * so the syringe its card calls "20 ml" is "20 ml" on the feed's row and in
+ * Last fed too, never "0.68 oz"; else the app's. Day totals keep the app's.
+ */
+export function partUnits(settings: Record<string, unknown> | null | undefined, units: UnitSystem): UnitSystem {
+  if (!settings) return units;
+  let u = planUnitsSeen.get(settings);
+  if (u === undefined) {
+    const plan = feedingPlanOf(settings);
+    u = plan ? (plan.unit === "ml" ? "metric" : "us") : null;
+    planUnitsSeen.set(settings, u);
+  }
+  return u ?? units;
 }
 
 function durationOf(e: Entry, now: Date): number | null {

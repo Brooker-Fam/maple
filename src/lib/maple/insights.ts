@@ -93,6 +93,17 @@ export type DayStats = {
    */
   formulaMl: number;
   breastMilkMl: number;
+  /**
+   * Of topUps, the milk given at the breast while she nursed (a syringe or an
+   * SNS), and of topUpMl (so of bottleMl too) its amount, and of formulaMl and
+   * breastMilkMl what went in that way. It's part of the nursing feed, never
+   * "by bottle": the day's words take it out of the bottles and say it on its
+   * own ("20 ml at the breast · 30 ml bottle (1 top-up)").
+   */
+  atBreast: number;
+  atBreastMl: number;
+  atBreastFormulaMl: number;
+  atBreastBreastMilkMl: number;
   pumpMl: number;
   pumpSessions: number;
   pumpMeasuredSessions: number;
@@ -187,6 +198,17 @@ export const isVitaminD = (name: string) =>
 /** Of a day's bottle amount, the bottles given on their own (not top-ups), to the tenth of a ml. */
 export const soloBottleMl = (d: Pick<DayStats, "bottleMl" | "topUpMl">): number => Math.max(0, Math.round((d.bottleMl - d.topUpMl) * 10) / 10);
 
+/**
+ * What went by bottle in a day (to the tenth of a ml): every bottle's milk but
+ * what was given at the breast (a syringe or an SNS, DayStats.atBreastMl),
+ * and of it the formula and the breast milk. Every surface that says "by
+ * bottle" says this, never the syringe's milk.
+ */
+export function byBottle(d: Pick<DayStats, "bottleMl" | "formulaMl" | "breastMilkMl" | "atBreastMl" | "atBreastFormulaMl" | "atBreastBreastMilkMl">): { ml: number; formulaMl: number; breastMilkMl: number } {
+  const less = (a: number, b: number) => Math.max(0, Math.round((a - b) * 10) / 10);
+  return { ml: less(d.bottleMl, d.atBreastMl), formulaMl: less(d.formulaMl, d.atBreastFormulaMl), breastMilkMl: less(d.breastMilkMl, d.atBreastBreastMilkMl) };
+}
+
 function emptyStats(key: string): DayStats {
   return {
     key,
@@ -204,6 +226,10 @@ function emptyStats(key: string): DayStats {
     topUpMl: 0,
     formulaMl: 0,
     breastMilkMl: 0,
+    atBreast: 0,
+    atBreastMl: 0,
+    atBreastFormulaMl: 0,
+    atBreastBreastMilkMl: 0,
     pumpMl: 0,
     pumpSessions: 0,
     pumpMeasuredSessions: 0,
@@ -276,6 +302,13 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
           if (topUp.has(e.id)) {
             s.topUps++;
             s.topUpMl += ml;
+            // Milk given at the breast: counted with the top-ups, said apart from them (never "by bottle").
+            if (e.data.via === "syringe" || e.data.via === "sns") {
+              s.atBreast++;
+              s.atBreastMl += ml;
+              s.atBreastFormulaMl += milk.formula;
+              s.atBreastBreastMilkMl += milk.breastmilk;
+            }
           } else {
             s.feeds++;
             s.bottleFeeds++;

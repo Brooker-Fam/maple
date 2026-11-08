@@ -80,6 +80,9 @@ import { daySummaryParts } from "../src/components/maple/LogTab";
 import { describeEntry, feedPartsSummary, feedPartWords } from "../src/lib/maple/describe";
 import { feedRowParts, partsShown, recentRows } from "../src/lib/maple/feed-rows";
 import { dailyStats, memberLabel, statsFor, summarize as summarizeWith } from "../src/lib/maple/insights";
+// A feed's parts said apart (the cases at the end).
+import { feedPartsList, partUnits } from "../src/lib/maple/describe";
+import { byBottle } from "../src/lib/maple/insights";
 import { makeVoice } from "../src/lib/maple/voice";
 
 // This scenario's saved profile uses she/her; it does not rely on the app's unnamed fallback.
@@ -2058,7 +2061,7 @@ check("describeEntry: back and forth reads as such", () => {
     eq(feedPartWords(b({ amount_ml: 29.6, via: "sns" }), "us"), "+ 1 oz in the SNS");
     eq(
       [feedPartsSummary([], "metric"), feedPartsSummary([b({ amount_ml: 20, via: "sns" })], "metric"), feedPartsSummary([b({ amount_ml: 20, via: "sns" }), b({ amount_ml: 30 })], "metric"), feedPartsSummary([b({}), b({})], "metric")],
-      [null, "+ 20 ml in the SNS", "+ 50 ml in 2 top-ups", "+ 2 top-ups"]
+      [null, "+ 20 ml in the SNS", "+ 20 ml in the SNS · + 30 ml top-up", "+ 2 top-ups"]
     );
   });
   {
@@ -2334,6 +2337,79 @@ check("describeEntry: back and forth reads as such", () => {
     const p = backOnPresets({ pauseAt: at("01:10"), now: at("04:00"), latest: at("04:00"), withNow: true, usualMin: null });
     eq(ids(p).slice(0, 4), ["back-now", "back-floor", "back-10", "back-30"]);
     for (const x of p) ok(!switchTo(data, "L", new Date(x.at ?? at("04:00")), { resume: true, now: ctx.now }).clamped, `${x.id} clamped`);
+  });
+}
+
+// ── a feed's parts said apart: milk at the breast is never a top-up, and never "by bottle" ──
+
+{
+  let nid = 9000;
+  const made = (at: string, data: FeedData, o: { end?: string; active?: boolean } = {}): EntryOf<"feed"> => ({
+    id: nid++, kind: "feed", started_at: T(at), ended_at: o.active ? null : o.end ? T(o.end) : null, active: !!o.active, data, note: null,
+    created_by: null, updated_by: null, source: "web", created_at: T(at), updated_at: T(at),
+  });
+  const nursed = (spec: string, extra: Partial<FeedData> = {}, active = false): EntryOf<"feed"> => {
+    const list = segs(spec);
+    return made(clock(list[0].start), { method: "breast", segments: list, ...extra }, active ? { active } : { end: clock(list[list.length - 1].end!) });
+  };
+  const bottleAt = (at: string, data: Partial<FeedData> = {}) => made(at, { method: "bottle", ...data });
+  // The invented plan's "Nurse + SNS" (20 ml in the SNS), in ml or in oz.
+  const planIn = (unit: "ml" | "oz") => ({
+    feeding_plan: {
+      v: 1, unit, day: { every: { min: 150, max: 210 } }, rev: 1, order: ["p1f1"],
+      feeds: [{ id: "p1f1", name: "Nurse + SNS", steps: [{ do: "nurse", minutes: { min: 12, max: 18 }, supplement: { via: "sns", ml: { min: 20, max: 20 }, milk: "formula" } }] }],
+    },
+  });
+
+  check("a feed's parts in words: milk at the breast apart from its top-ups, each kind once and added up, as a feed goes", () => {
+    const b = (data: Partial<FeedData>) => bottleAt("10:30", data);
+    eq(feedPartsList([b({ amount_ml: 30, via: "paced" }), b({ amount_ml: 20, via: "syringe" })], "metric"), ["+ 20 ml in the syringe", "+ 30 ml top-up"]);
+    eq(feedPartsSummary([b({ amount_ml: 20, via: "syringe" }), b({ amount_ml: 20, via: "syringe" })], "metric"), "+ 40 ml in the syringe", "never '2 top-ups'");
+    eq(feedPartsSummary([b({ via: "syringe" }), b({ amount_ml: 30 }), b({ amount_ml: 25, via: "paced" })], "metric"), "+ milk in the syringe · + 55 ml in 2 top-ups");
+    eq(feedPartsSummary([b({ amount_ml: 20, via: "sns" }), b({ amount_ml: 10, via: "syringe" })], "metric"), "+ 10 ml in the syringe · + 20 ml in the SNS");
+    eq(feedPartsList([], "metric"), []);
+  });
+
+  check("a feed's parts in the plan's unit when one is saved (its card says 20 ml), else the app's", () => {
+    eq([partUnits(planIn("ml"), "us"), partUnits(planIn("oz"), "metric"), partUnits({}, "us"), partUnits(null, "metric"), partUnits({ feeding_plan: { v: 2 } }, "us")], ["metric", "us", "us", "metric", "us"]);
+    const sns = bottleAt("10:30", { amount_ml: 20, via: "sns" });
+    eq([feedPartWords(sns, partUnits(planIn("ml"), "us")), feedPartWords(sns, "us")], ["+ 20 ml in the SNS", "+ 0.68 oz in the SNS"], "the plan's 20 ml, not 0.68 oz");
+  });
+
+  check("a day's milk at the breast: counted with its feed's top-ups, said apart from them and from the bottles", () => {
+    // Nurse + SNS at 7:00 with 20 ml of formula in the SNS (naming its feed); Nurse, top up at 9:45 with a 30 ml paced
+    // top-up of formula; a 60 ml bottle of breast milk on its own at 13:00.
+    const sns = nursed("L 07:00-07:15", { plan: "p1f1" });
+    const day = [
+      sns, bottleAt("07:10", { amount_ml: 20, milk: "formula", via: "sns", top_up_of: sns.id }),
+      nursed("L 09:45-09:55, R 09:55-10:05"), bottleAt("10:15", { amount_ml: 30, milk: "formula", via: "paced" }),
+      bottleAt("13:00", { amount_ml: 60, milk: "breastmilk" }),
+    ];
+    const s = statsFor(day, D("00:00"), D("23:59"), "day", D("23:59"));
+    eq([s.feeds, s.topUps, s.atBreast, s.atBreastMl, s.atBreastFormulaMl, s.atBreastBreastMilkMl], [3, 2, 1, 20, 20, 0]);
+    eq([s.bottleMl, s.topUpMl, s.formulaMl, s.breastMilkMl], [110, 50, 50, 60], "the old totals are as they were: every bottle entry's");
+    eq(byBottle(s), { ml: 90, formulaMl: 30, breastMilkMl: 60 });
+    eq(daySummaryParts(s, "metric").slice(0, 5), ["3 feeds", "35m nursing", "20 ml at the breast", "90 ml bottle (1 top-up)", "50 ml formula"]);
+  });
+
+  check("a day's milk at the breast with no amount says so; a day without any reads as it did", () => {
+    const sns = nursed("L 07:00-07:15");
+    const s = statsFor([sns, bottleAt("07:10", { via: "syringe", top_up_of: sns.id })], D("00:00"), D("23:59"), "day", D("23:59"));
+    eq([s.topUps, s.atBreast, s.atBreastMl], [1, 1, 0]);
+    eq(daySummaryParts(s, "metric").slice(0, 3), ["1 feed", "15m nursing", "milk at the breast"]);
+    const plain = nursed("L 09:00-09:15");
+    const t = statsFor([plain, bottleAt("09:20", { amount_ml: 30 })], D("00:00"), D("23:59"), "day", D("23:59"));
+    eq([t.atBreast, t.atBreastMl], [0, 0]);
+    eq(daySummaryParts(t, "metric").slice(0, 3), ["1 feed", "15m nursing", "30 ml bottle (1 top-up)"]);
+  });
+
+  check("milk at the breast during a feed still going is part of it, never a feed: counted from every feed, the running one too", () => {
+    // Nursing on the left since 2:30 AM (still going), 20 ml in the SNS at 2:38 naming it.
+    const on = nursed("L 02:30-", {}, true);
+    const all = [on, bottleAt("02:38", { amount_ml: 20, via: "sns", top_up_of: on.id })];
+    const now = D("02:45");
+    eq(countedFeeds(all, now).map((f) => (f.run ? `nursing${f.run.live ? " now" : ""} + ${f.run.topUps.length}` : "bottle")), ["nursing now + 1"]);
+    eq(countedFeeds(all.filter((e) => !e.active), now).map((f) => (f.run ? "nursing" : "bottle")), ["bottle"], "leaving the running feed out makes its syringe a feed");
   });
 }
 

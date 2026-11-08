@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { describeEntry } from "@/lib/maple/describe";
+import { describeEntry, feedPartsList, partUnits } from "@/lib/maple/describe";
 import { countedFeeds } from "@/lib/maple/feed";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
@@ -68,14 +68,18 @@ export default function WhileYouSlept() {
 
   // Finished feeds as the family counts them (countedFeeds: Done and a side again under 10 minutes apart is one feed,
   // as on Today's tally and in Claude's recap), plus each bottle on its own; one still going is "Nursing now", not
-  // counted as done. A bottle given with a feed is its top-up whoever logged the feed, so feeds are worked out from
-  // every finished one, then kept when the others logged them.
+  // counted as done. A bottle given with a feed is its top-up (or its milk at the breast) whoever logged the feed, so
+  // feeds are worked out from every feed, the one still going too (its syringe is part of it, never a feed of its
+  // own), then the finished ones kept when the others logged them.
   const theirs = new Set(fresh.map((e) => e.id));
-  const feedStarts = countedFeeds(state.entries.filter((e) => e.kind === "feed" && !e.active && e.id > 0), now())
-    .filter((f) => f.start >= since && (f.run ? f.run.entries.some((e) => theirs.has(e.id)) : theirs.has(f.bottle.id)))
+  const counted = countedFeeds(state.entries.filter((e) => e.kind === "feed" && e.id > 0), now());
+  const feedStarts = counted
+    .filter((f) => f.start >= since && (f.run ? !f.run.live && f.run.entries.some((e) => theirs.has(e.id)) : theirs.has(f.bottle.id)))
     .map((f) => f.start)
     .sort((a, b) => b - a);
   const nursing = fresh.find((e) => e.kind === "feed" && e.active);
+  // What was given with the feed still going ("20 ml in the syringe"), in the plan's unit when one is saved.
+  const nursingParts = nursing ? feedPartsList(counted.find((f) => f.run?.live && f.run.entries.some((e) => e.id === nursing.id))?.run?.topUps ?? [], partUnits(state.baby.settings, units)) : [];
   const diapers = fresh.filter((e) => e.kind === "diaper").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const wet = diapers.filter((e) => e.kind === "diaper" && e.data.pee).length;
   const dirty = diapers.filter((e) => e.kind === "diaper" && e.data.poop);
@@ -98,7 +102,7 @@ export default function WhileYouSlept() {
     const last = formatTime(feedStarts[0], tz);
     lines.push(`${feedStarts.length === 1 ? `1 feed, at ${last}` : `${feedStarts.length} feeds, the last at ${last}`}.${next}`);
   }
-  if (nursing) lines.push(`Nursing now, since ${formatTime(nursing.started_at, tz)}.`);
+  if (nursing) lines.push(`Nursing now, since ${formatTime(nursing.started_at, tz)}${nursingParts.length ? `, ${nursingParts.map((p) => p.slice(2)).join(" and ")}` : ""}.`);
   if (diapers.length) {
     // Count diapers once (a wet + dirty one is one diaper), and say the color of the latest poop.
     const latest = dirty[0];
