@@ -425,6 +425,21 @@ check("the morning: day feeds take turns from the last day feed, not the night's
   eq([n.focus.feed.id, n.focus.night, clock(n.due!.from)], [SNS.id, false, "05:30"]);
 });
 
+check("the night's end mid-feed: a night feed whose pump began before 5 AM is still the night's until its bottle, formula to finish too", () => {
+  const night1 = [pump("+1d01:30-+1d01:45"), bottle("+1 01:50", 60, { milk: "breastmilk", plan: NIGHT.id })];
+  // Due at 4:50; the pump starts at 4:45 and runs past 5 AM, when the night ends.
+  const pumping = [...night1, pump("+1d04:45-")];
+  const at = feedPlanNow(PLAN, pumping, D("+1 05:01"), { tz: TZ, target: TARGET });
+  eq([at.focus.feed.id, at.focus.state, at.focus.night], [NIGHT.id, "underway", true], "still the night feed, its pump going");
+  // The pump done at 5:05 and a 40 ml bottle from the dock (no plan feed on it) at 5:08: the night feed's bottle, short.
+  const given = [...night1, pump("+1d04:45-+1d05:05"), bottle("+1 05:08", 40, { milk: "breastmilk" })];
+  const after = feedPlanNow(PLAN, given, D("+1 05:10"), { tz: TZ, target: TARGET });
+  eq([after.focus.feed.id, after.focus.state, after.focus.steps[1].status, after.focus.steps[1].ml], [NIGHT.id, "underway", "todo", 40], "its bottle is short of the target: formula to finish");
+  // A pump left from hours ago never keeps the night going into the day.
+  const stale = feedPlanNow(PLAN, [...night1, pump("+1d03:00-+1d03:20")], D("+1 07:00"), { tz: TZ, target: TARGET });
+  eq([stale.focus.feed.id, stale.focus.night], [SNS.id, false], "an old pump doesn't hold the night");
+});
+
 check("the morning: a night feed late enough that the night's 3 hours reach past 5 AM makes the next one the day's, from 5", () => {
   const evening = [nurse("L 20:40-20:55", { plan: TOPUP.id }), bottle("21:00", 30, { via: "paced" }), pump("23:30-23:50"), bottle("23:55", 55, { milk: "breastmilk" })];
   // 2:10 AM + 2.5 h is 4:40, still night, but the night's own 3 hours reach 5:10: the next feed is the day's.

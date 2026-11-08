@@ -1107,9 +1107,22 @@ export function feedPlanNow(
   for (const found of groups) {
     const g: PlanGroup = { ...found, runs: [...found.runs], bottles: [...found.bottles], pumps: [] };
     const k = views.length - 1;
+    // A bottle given after a pump no feed before it takes (the night's pump, then its bottle) began at that pump: read
+    // it there, so a night feed whose pump began before the night ended is still the night's when its bottle comes after.
+    let begun = g.start;
+    if (!g.run) {
+      for (let i = nextPump; i < pumps.length && t(pumps[i].started_at) + PUMP_SLACK_MS < g.start; i++) {
+        const at = t(pumps[i].started_at);
+        const taken = k >= 0 && at - lastPartStart(views[k].group!) <= PLAN_PUMP_AFTER_MS && room(views[k]) > 0;
+        if (!taken && g.start - at <= PLAN_PUMP_BEFORE_MS) {
+          begun = at;
+          break;
+        }
+      }
+    }
     // Read on its own: the night's when the card would have said so as it began (the due rule from the feed before
     // it, at its start; with none before it, its own start), and which plan feed it was.
-    const night = nightAt(k >= 0 ? views[k].group!.anchor : null, g.start);
+    const night = nightAt(k >= 0 ? views[k].group!.anchor : null, begun);
     const nightFeed = night ? feedById(plan, plan.night?.feed) : null;
     const own = identify(plan, g, nightFeed ?? nextInOrder(plan, lastDay), nightFeed);
 
@@ -1199,7 +1212,11 @@ export function feedPlanNow(
     after = { feed: nextFeed(night, lastDay).feed, night };
     due = dueNext ? { ...dueNext, for: "after" } : null;
   } else {
-    const night = nightNow(dueNext);
+    // A pump going or just done that no feed has taken yet began the next feed then: still the night's feed when that
+    // pump began in the night, though the night has ended since (its bottle, and formula to finish, still to come).
+    const pumpNow = pending.find((p) => p.active || nowMs - t(p.ended_at ?? p.started_at) <= PLAN_OPEN_MS);
+    const pumpedAt = pumpNow ? t(pumpNow.started_at) : null;
+    const night = nightNow(dueNext) || (pumpedAt !== null && nightAt(base, pumpedAt));
     const pick = nextFeed(night, lastDay);
     const chosen = feedById(plan, opts.choose);
     const feed = chosen ?? pick.feed;
@@ -1209,7 +1226,8 @@ export function feedPlanNow(
       // bottle is logged from the pump's start, or from when this feed is due if they pumped early (the baby asleep).
       const v = read(feed, why, night, null, pending.slice(0, pumpSteps(feed)));
       focus = { ...v, state: "underway" };
-      const d = dueAt(Math.max(v.start ?? nowMs, dueNext?.from ?? -Infinity), nowMs);
+      const dueThis = pumpedAt !== null ? dueAt(base, pumpedAt) : dueNext;
+      const d = dueAt(Math.max(v.start ?? nowMs, dueThis?.from ?? -Infinity), nowMs);
       const nightAfter = nightNow(d);
       const turn = plan.order.includes(feed.id) && feed !== (night ? feedById(plan, plan.night?.feed) : null) ? feed.id : lastDay;
       after = { feed: nextFeed(nightAfter, turn).feed, night: nightAfter };
