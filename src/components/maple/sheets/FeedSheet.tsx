@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { atBreastOf, describeEntry, feedPartWords, milkWords, partUnits } from "@/lib/maple/describe";
+import { atBreastOf, describeEntry, feedPartWords, milkWords, planUnitsOf } from "@/lib/maple/describe";
 import { feedRowParts } from "@/lib/maple/feed-rows";
 import { AT_BREAST_WORDS, feedById, feedingPlanOf, type AtBreastVia, type FeedingPlan, type Range } from "@/lib/maple/feeding-plan";
 import {
@@ -202,8 +202,10 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data) === forBreast) ?? null,
     [state, e?.id, forBreast]
   );
-  // A feed's parts as its row says them: in the plan's unit when one is saved ("20 ml in the syringe", as its card).
-  const pu = partUnits(state?.baby.settings, units);
+  // The plan's unit when one is saved: a feed's part's amount is typed in it ("20 ml in the syringe", as its card), and
+  // said with the app's beside it (partVolume).
+  const planUnits = planUnitsOf(state?.baby.settings);
+  const pu = planUnits ?? units;
   // This form's amounts: a feed's part (milk at the breast, a top-up) or a plan step's bottle in the plan's unit, so
   // they read as the plan has them; any other bottle in the app's. Fixed when it opens, so a typed amount keeps its unit.
   const [vu] = useState<UnitSystem>(() => {
@@ -643,7 +645,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     // The side words go last, as on the Done toast.
     const tail = next ? ` · ${next}` : "";
     const head = tail && feedText.endsWith(tail) ? feedText.slice(0, -tail.length) : feedText;
-    toast(`${head} ${feedPartWords(given, pu)}${head === feedText ? "" : tail}`, {
+    toast(`${head} ${feedPartWords(given, units, planUnits)}${head === feedText ? "" : tail}`, {
       undo: () => {
         void remove(given.id, { toast: "Undone" }).then((ok) => ok && remove(feed.id, { toast: "Undone" }));
       },
@@ -953,8 +955,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
             <Label>{feedPartsHere.length && !allAtBreast ? "With this feed" : "Milk at the breast"}</Label>
             <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
               {feedPartsHere.map((b) => {
-                const part = feedPartWords(b, pu).slice(2);
-                const more = [milkWords(b.data, pu), b.data.via === "paced" ? "paced bottle" : null, clock(b.started_at)].filter(Boolean).join(" · ");
+                const part = feedPartWords(b, units, planUnits).slice(2);
+                const more = [milkWords(b.data, units), b.data.via === "paced" ? "paced bottle" : null, clock(b.started_at)].filter(Boolean).join(" · ");
                 return (
                   <button
                     key={b.id}

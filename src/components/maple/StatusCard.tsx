@@ -3,7 +3,7 @@
 import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
 import { Fragment, useState } from "react";
-import { feedPartsList, partUnits } from "@/lib/maple/describe";
+import { feedPartsList, planUnitsOf } from "@/lib/maple/describe";
 import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import { byBottle, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
@@ -165,9 +165,9 @@ export default function StatusCard() {
       if (run.min.total) bits.push(minutesShort(run.min.total));
       const sides = sidesLabel(run);
       if (sides) bits.push(sides);
-      // What was given with it is part of this feed, in its row's words (and the plan's unit, as its card says them):
-      // "+ 20 ml in the syringe", "+ 35 ml top-up". Milk at the breast is never a top-up.
-      bits.push(...feedPartsList(run.topUps, partUnits(state.baby.settings, units)));
+      // What was given with it is part of this feed, in its row's words (with a plan in the other unit, the plan's beside
+      // the app's, as its card says them): "+ 20 ml in the syringe", "+ 35 ml top-up". Milk at the breast is never a top-up.
+      bits.push(...feedPartsList(run.topUps, units, planUnitsOf(state.baby.settings)));
     }
     feedSub = bits;
   }

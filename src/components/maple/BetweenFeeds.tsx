@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
-import { feedPartsList, partUnits } from "@/lib/maple/describe";
+import { feedPartsList, planUnitsOf } from "@/lib/maple/describe";
 import { bottleAmount, gapSummary, minutesShort, sideMinutesText, spanText, stepsIn, type GapStep, type Latch } from "@/lib/maple/feed";
 import { dayKey, formatDayLabel, formatDuration, formatTime } from "@/lib/maple/time";
 import type { UnitSystem } from "@/lib/maple/types";
@@ -51,16 +51,16 @@ function sidesText(latch: Latch): string {
 
 /**
  * A row's words: what it was, then its sides, what was given with it (as Today says it: "+ 20 ml in the syringe",
- * "+ 30 ml top-up", in `partUnits`), and how soon she was back on.
+ * "+ 30 ml top-up", with the plan's unit beside the app's, planUnits), and how soon she was back on.
  */
-function feedWords(step: GapStep, units: UnitSystem, partUnits: UnitSystem): { main: string; more: string[] } {
+function feedWords(step: GapStep, units: UnitSystem, planUnits: UnitSystem | null): { main: string; more: string[] } {
   if (step.feed.kind === "bottle") {
     const ml = bottleAmount(step.feed.entry.data);
     return { main: ml ? `Bottle · ${formatVolume(ml, units)}` : "Bottle", more: [] };
   }
   const latch = step.feed.latch;
   const total = minutesShort(latch.min.total);
-  const more = [sidesText(latch), ...feedPartsList(latch.topUps, partUnits), step.backOnMin !== null ? `back on after ${minutesShort(step.backOnMin)}` : ""].filter(Boolean);
+  const more = [sidesText(latch), ...feedPartsList(latch.topUps, units, planUnits), step.backOnMin !== null ? `back on after ${minutesShort(step.backOnMin)}` : ""].filter(Boolean);
   return { main: latch.end === null ? `Nursing · ${total} so far` : `Nursed ${total}`, more };
 }
 
@@ -103,8 +103,8 @@ export default function BetweenFeeds({
   units: UnitSystem;
 }) {
   const id = useId();
-  // A feed's parts in the plan's unit when one is saved, as Today and the feed's row say them.
-  const pu = partUnits(useMaple().state?.baby.settings, units);
+  // With a plan saved in the other unit, a feed's parts say the plan's too, as Today and the feed's row do.
+  const planUnits = planUnitsOf(useMaple().state?.baby.settings);
   const inWindow = stepsIn(steps, lo, Math.min(hi, nowMs + 1));
   const summary = gapSummary(inWindow);
   if (!inWindow.length || !summary.gaps || !summary.longest) return null;
@@ -203,7 +203,7 @@ export default function BetweenFeeds({
         </li>
       );
     }
-    const words = feedWords(step, units, pu);
+    const words = feedWords(step, units, planUnits);
     rows.push(
       <li key={`row-${stepKey(step)}`} className={cx(GRID, band && BAND, band?.last === i && "rounded-b-xl pb-1")}>
         <span className={cx("pt-px text-right text-[13px] leading-[18px] tabular-nums", context ? "text-mp-ink-3" : "text-mp-ink-2")}>{formatTime(step.start, tz)}</span>

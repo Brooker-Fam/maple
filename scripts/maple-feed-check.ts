@@ -81,7 +81,7 @@ import { describeEntry, feedPartsSummary, feedPartWords } from "../src/lib/maple
 import { feedRowParts, partsShown, recentRows } from "../src/lib/maple/feed-rows";
 import { dailyStats, memberLabel, statsFor, summarize as summarizeWith } from "../src/lib/maple/insights";
 // A feed's parts said apart (the cases at the end).
-import { feedPartsList, partUnits } from "../src/lib/maple/describe";
+import { feedPartsList, partUnits, planUnitsOf } from "../src/lib/maple/describe";
 import { byBottle } from "../src/lib/maple/insights";
 import { makeVoice } from "../src/lib/maple/voice";
 
@@ -2370,10 +2370,13 @@ check("describeEntry: back and forth reads as such", () => {
     eq(feedPartsList([], "metric"), []);
   });
 
-  check("a feed's parts in the plan's unit when one is saved (its card says 20 ml), else the app's", () => {
-    eq([partUnits(planIn("ml"), "us"), partUnits(planIn("oz"), "metric"), partUnits({}, "us"), partUnits(null, "metric"), partUnits({ feeding_plan: { v: 2 } }, "us")], ["metric", "us", "us", "metric", "us"]);
+  check("a feed's parts with a plan saved in the other unit say the plan's (its card says 20 ml) beside the app's", () => {
+    eq([planUnitsOf(planIn("ml")), planUnitsOf(planIn("oz")), planUnitsOf({}), planUnitsOf(null), planUnitsOf({ feeding_plan: { v: 2 } })], ["metric", "us", null, null, null]);
+    eq([partUnits(planIn("ml"), "us"), partUnits({}, "us")], ["metric", "us"], "a form's amounts: the plan's unit, else the app's");
     const sns = bottleAt("10:30", { amount_ml: 20, via: "sns" });
-    eq([feedPartWords(sns, partUnits(planIn("ml"), "us")), feedPartWords(sns, "us")], ["+ 20 ml in the SNS", "+ 0.68 oz in the SNS"], "the plan's 20 ml, not 0.68 oz");
+    const top = bottleAt("10:40", { amount_ml: 30, via: "paced" });
+    eq([feedPartWords(sns, "us", planUnitsOf(planIn("ml"))), feedPartWords(sns, "metric", planUnitsOf(planIn("ml"))), feedPartWords(sns, "us")], ["+ 20 ml (0.68 oz) in the SNS", "+ 20 ml in the SNS", "+ 0.68 oz in the SNS"]);
+    eq(feedPartsSummary([sns, top], "us", "metric"), "+ 20 ml (0.68 oz) in the SNS · + 30 ml (1.01 oz) top-up");
   });
 
   check("a day's milk at the breast: counted with its feed's top-ups, said apart from them and from the bottles", () => {

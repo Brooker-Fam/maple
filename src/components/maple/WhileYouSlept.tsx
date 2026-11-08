@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { describeEntry, feedPartsList, partUnits } from "@/lib/maple/describe";
+import { describeEntry, feedPartsList, planUnitsOf } from "@/lib/maple/describe";
 import { countedFeeds } from "@/lib/maple/feed";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
@@ -79,7 +79,7 @@ export default function WhileYouSlept() {
     .sort((a, b) => b - a);
   const nursing = fresh.find((e) => e.kind === "feed" && e.active);
   // What was given with the feed still going ("20 ml in the syringe"), in the plan's unit when one is saved.
-  const nursingParts = nursing ? feedPartsList(counted.find((f) => f.run?.live && f.run.entries.some((e) => e.id === nursing.id))?.run?.topUps ?? [], partUnits(state.baby.settings, units)) : [];
+  const nursingParts = nursing ? feedPartsList(counted.find((f) => f.run?.live && f.run.entries.some((e) => e.id === nursing.id))?.run?.topUps ?? [], units, planUnitsOf(state.baby.settings)) : [];
   const diapers = fresh.filter((e) => e.kind === "diaper").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const wet = diapers.filter((e) => e.kind === "diaper" && e.data.pee).length;
   const dirty = diapers.filter((e) => e.kind === "diaper" && e.data.poop);

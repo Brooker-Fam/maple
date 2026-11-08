@@ -1,6 +1,6 @@
 "use client";
 
-import { describeEntry, feedPartsList, feedPartWords, milkWords, partUnits } from "@/lib/maple/describe";
+import { describeEntry, feedPartsList, feedPartWords, milkWords, planUnitsOf } from "@/lib/maple/describe";
 import { minutesShort, nursingRuns, sideMinutesText, spanText, type NursingRun } from "@/lib/maple/feed";
 import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
@@ -164,8 +164,8 @@ export function FeedPartsLine({
   const { units, state, readOnly } = useMaple();
   const tz = state?.baby.timezone ?? "America/New_York";
   const today = dayKey(now, tz);
-  // In the plan's unit when one is saved: the syringe its card calls "20 ml" reads "20 ml" here too.
-  const pu = partUnits(state?.baby.settings, units);
+  // With a plan saved in the other unit, the plan's beside the app's: the syringe its card calls "20 ml" reads "20 ml" here too.
+  const planUnits = planUnitsOf(state?.baby.settings);
   return (
     <div className="pointer-events-none relative -mt-2.5 pb-1.5 @container/parts">
       {thread && <span aria-hidden className={cx(THREAD, "top-0 bottom-0")} />}
@@ -173,9 +173,9 @@ export function FeedPartsLine({
           18rem is measured inside the row's 1rem padding on each side, so here, across the whole row, it's 20rem. */}
       <div className="flex flex-wrap gap-x-1.5 pr-4 pl-4 @min-[20rem]/parts:pl-16">
         {parts.map((b) => {
-          const words = feedPartWords(b, pu);
+          const words = feedPartWords(b, units, planUnits);
           // Its name holds what the pill says (what a voice-control user says to tap it), then the rest of it.
-          const more = [milkWords(b.data, pu), b.data.via === "paced" ? "paced bottle" : null].filter(Boolean).join(" · ");
+          const more = [milkWords(b.data, units), b.data.via === "paced" ? "paced bottle" : null].filter(Boolean).join(" · ");
           const day = dayKey(new Date(b.started_at), tz);
           const when = `${formatDayLabel(day, today)} at ${formatTime(b.started_at, tz)}`;
           return (
@@ -250,7 +250,7 @@ export function ClusterRow({
   const tz = state?.baby.timezone ?? "America/New_York";
   const allParts = entries.flatMap((e) => parts?.get(e.id) ?? []);
   // Milk at the breast and top-ups each said once, added up ("+ 40 ml in the syringe · + 30 ml top-up").
-  const partsLine = feedPartsList(allParts, partUnits(state?.baby.settings, units));
+  const partsLine = feedPartsList(allParts, units, planUnitsOf(state?.baby.settings));
   const runs = given?.length ? given : nursingRuns(entries, now);
   const start = runs[0]?.start ?? Date.parse(entries[entries.length - 1].started_at);
   const last = runs[runs.length - 1];
