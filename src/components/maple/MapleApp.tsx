@@ -8,6 +8,7 @@ import { AppNavProvider, useAppNav, type NavTarget, type TabId } from "./AppNav"
 import { WelcomeHost } from "./BirthSheet";
 import CareScreen from "./care/CareScreen";
 import { CareNavProvider } from "./care/CareNav";
+import { FeedingPlanNavProvider } from "./feeding/FeedingPlanNav";
 import { ChatNavProvider } from "./chat/ChatNav";
 import { useCare } from "./care/useCare";
 import FamilyTab from "./FamilyTab";
@@ -80,9 +81,12 @@ function MapleSession() {
             <NotificationsProvider>
               <CareNavProvider>
                 <SheetProvider>
-                  <SleepProvider sheets={sleepSheets}>
-                    <Shell />
-                  </SleepProvider>
+                  {/* Inside SheetProvider: the feeding plan's card opens the bottle form, and the plan sheet opens from it. */}
+                  <FeedingPlanNavProvider>
+                    <SleepProvider sheets={sleepSheets}>
+                      <Shell />
+                    </SleepProvider>
+                  </FeedingPlanNavProvider>
                 </SheetProvider>
               </CareNavProvider>
             </NotificationsProvider>
