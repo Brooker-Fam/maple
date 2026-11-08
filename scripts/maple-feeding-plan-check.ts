@@ -422,6 +422,25 @@ check("a late top-up names its feed: it's that feed's, not a feed of its own, an
   eq(topUpRunFor(nursingRuns([n1, next], D("22:40")), ms("22:30"), D("22:40"), n1.id)?.start, ms("22:00"), "the feed she's on wins");
 });
 
+check("a late top-up from the dock (no link): the feed that wanted it takes it, within an hour and a half", () => {
+  const bare = nurse("L 21:00-21:10, R 21:10-21:20", { plan: TOPUP.id });
+  const late = bottle("22:10", 30, { via: "paced", milk: "formula" });
+  const n = feedPlanNow(PLAN, [bare, late], D("22:20"), { tz: TZ, target: TARGET });
+  // Its own feed by the log's rule (Last fed moves to it), but the plan's top-up step is done and nothing is missed.
+  eq([n.focus.state, n.focus.feed.id, n.missed, clock(n.due!.base), clock(n.due!.from)], ["upcoming", NIGHT.id, null, "22:10", "01:10"]);
+  // Over an hour and a half on, it's a feed of its own (by day, outside the plan), and after it nobody is asked for
+  // the 21:00 feed's top-up.
+  const later = bottle("22:55", 30, { via: "paced" });
+  const m = feedPlanNow(PLAN, [bare, later], D("23:00"), { tz: TZ, target: TARGET });
+  eq([m.focus.state, m.missed, clock(m.due!.base)], ["upcoming", null, "22:55"]);
+});
+
+check("a bottle by day that fits no day feed is outside the plan: no turn taken, nothing underway", () => {
+  const log = [nurse("L 08:00-08:15", { plan: SNS.id }), bottle("08:14", 20, { via: "sns" }), pump("08:20-08:35"), bottle("10:40", 60, { milk: "formula" })];
+  const n = now(PLAN, log, "10:50");
+  eq([n.focus.state, n.focus.feed.id, n.missed, clock(n.due!.base)], ["upcoming", TOPUP.id, null, "10:40"]);
+});
+
 check("in the night: across midnight, and on the clock the family keeps (a DST change)", () => {
   eq([inNight(PLAN, ms("22:59"), TZ), inNight(PLAN, ms("23:00"), TZ), inNight(PLAN, ms("+1 04:59"), TZ), inNight(PLAN, ms("+1 05:00"), TZ)], [false, true, true, false]);
   // Sunday Nov 1, 2026: 1:30 AM happens twice in New York, both in the night.

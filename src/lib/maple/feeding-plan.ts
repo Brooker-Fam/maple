@@ -500,6 +500,8 @@ export const PLAN_BOTTLE_JOIN_MS = 45 * MIN;
 export const PLAN_OPEN_MS = 45 * MIN;
 /** A finished feed's unlogged steps are mentioned until this long after it. */
 export const PLAN_MISSED_MS = 3 * HOUR;
+/** A bottle on its own up to this long after a nursing feed ended is its top-up, when that feed's plan wants one still. */
+export const PLAN_LATE_TOP_UP_MS = 90 * MIN;
 /** A pump started this soon before a feed begins is that feed's (pump, then the bottle). */
 export const PLAN_PUMP_BEFORE_MS = 60 * MIN;
 /** A pump started this soon after a feed began is that feed's, unless the next one starts soon after it. */
@@ -630,8 +632,9 @@ function identify(plan: FeedingPlan, g: PlanGroup, expected: PlanFeed | null, ni
   // In the night, a feed is the night's (the turns are the day's), however she was fed.
   if (nightFeed) return { feed: nightFeed, why: "night" };
   const ev = evidence(g);
-  // How she was fed decides the candidates: a nursing feed, or a bottle (no nursing step).
-  const fits = plan.feeds.filter((f) => (ev.nursed ? !!nurseStep(f) : !nurseStep(f) && hasBottle(f)));
+  // How she was fed decides the candidates: a nursing feed, or a bottle (no nursing step). By day the night's own
+  // feed isn't one: a bottle by day that fits no day feed (she wouldn't latch) is a feed outside the plan.
+  const fits = plan.feeds.filter((f) => (ev.nursed ? !!nurseStep(f) : !nurseStep(f) && hasBottle(f)) && f.id !== plan.night?.feed);
   if (fits.length === 0) return { feed: null, why: "matched" };
   if (ev.nursed && (ev.shield || ev.atBreast)) {
     const want = fits.filter((f) => {
@@ -691,7 +694,12 @@ export type PlanFeedView = {
   lastAt: number | null;
   /** She also nursed in a feed whose plan feed has no nursing (a bottle feed she ended up nursing for). */
   extraNursing: boolean;
+  /** A feed that fits none of the plan's feeds (a bottle by day when every day feed nurses): no steps, no turn. */
+  offPlan?: boolean;
 };
+
+/** What a feed outside the plan is viewed as: no name, no steps (never shown as a plan feed). */
+const OFF_PLAN: PlanFeed = { id: "", name: "", steps: [] };
 
 const sumMl = (list: readonly FeedEntry[]) => {
   let ml: number | null = null;
@@ -820,14 +828,29 @@ export function feedPlanNow(
   let lastDay: string | null = null;
   const views: PlanFeedView[] = [];
   for (const g of groups) {
+    const prev = views[views.length - 1];
+    // A bottle on its own soon after a nursing feed whose plan still wants its top-up is that top-up, given late
+    // (logged from the dock rather than the plan's card, which links it: data.top_up_of).
+    if (!g.run && prev?.group?.run && prev.group.run.end !== null && !prev.offPlan && (!g.tag || g.tag === prev.feed.id)) {
+      const owes = prev.steps.some((s) => s.step.do === "bottle" && s.status === "todo");
+      if (owes && g.start - prev.group.run.end <= PLAN_LATE_TOP_UP_MS) {
+        const joined: PlanGroup = { ...prev.group, bottles: [...prev.group.bottles, ...g.bottles], pumps: [...prev.group.pumps, ...g.pumps] };
+        views[views.length - 1] = viewFeed(prev.feed, prev.why, prev.night, joined, now);
+        continue;
+      }
+    }
     const night = inNight(plan, g.start, tz);
     const nightFeed: PlanFeed | null = night ? feedById(plan, plan.night?.feed) : null;
     const expected: PlanFeed = nightFeed ?? nextInOrder(plan, lastDay);
     const { feed, why } = identify(plan, g, expected, nightFeed);
-    const f: PlanFeed = feed ?? expected;
-    views.push(viewFeed(f, feed ? why : nightFeed ? "night" : "order", night, g, now));
+    if (!feed) {
+      // Outside the plan (a bottle by day when every day feed nurses): a feed, but no turn and no steps.
+      views.push({ ...viewFeed(OFF_PLAN, "matched", night, g, now), done: true, live: false, offPlan: true });
+      continue;
+    }
+    views.push(viewFeed(feed, why, night, g, now));
     // The night's feed never takes a day turn, unless it was started as one.
-    if (plan.order.includes(f.id) && (why === "tagged" || f !== nightFeed)) lastDay = f.id;
+    if (plan.order.includes(feed.id) && (why === "tagged" || feed !== nightFeed)) lastDay = feed.id;
   }
 
   const last = views[views.length - 1] ?? null;
@@ -854,7 +877,7 @@ export function feedPlanNow(
     return { feed: nextInOrder(plan, lastDay), why: "order" };
   };
 
-  const underway = !!last && (last.live || (!last.done && last.lastAt !== null && nowMs - last.lastAt < PLAN_OPEN_MS));
+  const underway = !!last && !last.offPlan && (last.live || (!last.done && last.lastAt !== null && nowMs - last.lastAt < PLAN_OPEN_MS));
   const dueNext = dueFor(base);
   let focus: FeedPlanNow["focus"];
   let after: FeedPlanNow["after"] = null;
@@ -881,7 +904,7 @@ export function feedPlanNow(
       focus = { ...viewFeed(feed, why, night, null, now, pending), state: "underway" };
     } else focus = { ...viewFeed(feed, why, night, null, now), state: "upcoming" };
     due = dueNext ? { ...dueNext, for: "focus" } : null;
-    if (last && !last.done && last.lastAt !== null && nowMs - last.lastAt < PLAN_MISSED_MS) {
+    if (last && !last.offPlan && !last.done && last.lastAt !== null && nowMs - last.lastAt < PLAN_MISSED_MS) {
       const steps = last.steps.filter((s) => s.status === "todo" || s.milkMissing);
       if (steps.length) missed = { view: last, steps };
     }
