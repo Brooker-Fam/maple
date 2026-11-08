@@ -2,6 +2,22 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* The display font, one family per script (src/app/fonts/cormorant.ts), checked in the order next/font/google's one
+   family checked its files, then a fallback sized to it with next/font's numbers, so the swap doesn't move a line. */
+:root {
+  --font-cormorant-garamond: var(--font-cormorant-latin), var(--font-cormorant-latin-ext), var(--font-cormorant-vietnamese),
+    var(--font-cormorant-cyrillic), var(--font-cormorant-cyrillic-ext), "Cormorant Garamond Fallback";
+}
+
+@font-face {
+  font-family: "Cormorant Garamond Fallback";
+  src: local("Times New Roman");
+  ascent-override: 95.27%;
+  descent-override: 29.59%;
+  line-gap-override: 0%;
+  size-adjust: 96.98%;
+}
+
 @theme inline {
   --font-display: var(--font-cormorant-garamond), "Georgia", serif;
 

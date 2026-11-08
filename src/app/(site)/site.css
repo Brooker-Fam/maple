@@ -7,6 +7,9 @@
 
 @layer components {
   .site {
+    /* Its italic, one family per script (src/app/fonts/cormorant-italic.ts), then the display font's fallback. */
+    --font-site-italic: var(--font-cormorant-italic-latin), var(--font-cormorant-italic-latin-ext), var(--font-cormorant-italic-vietnamese),
+      var(--font-cormorant-italic-cyrillic), var(--font-cormorant-italic-cyrillic-ext), "Cormorant Garamond Fallback";
     min-height: 100vh;
     font-family: var(--mp-font);
     font-size: 17px;

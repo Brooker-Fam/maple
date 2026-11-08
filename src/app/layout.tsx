@@ -1,16 +1,9 @@
 import type { Metadata } from "next";
-import { Cormorant_Garamond } from "next/font/google";
 import ThemeProvider from "@/components/ThemeProvider";
 import ClientErrors from "@/components/analytics/ClientErrors";
 import { MAPLE_ORIGIN } from "@/lib/maple/origin";
+import { cormorantVariables } from "./fonts/cormorant";
 import "./globals.css";
-
-const cormorantGaramond = Cormorant_Garamond({
-  variable: "--font-cormorant-garamond",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   metadataBase: new URL(MAPLE_ORIGIN),
@@ -27,7 +20,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={cormorantGaramond.variable} suppressHydrationWarning>
+    <html lang="en" className={cormorantVariables} suppressHydrationWarning>
       <head>
         <script
           dangerouslySetInnerHTML={{

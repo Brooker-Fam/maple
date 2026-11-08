@@ -1,19 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Cormorant_Garamond } from "next/font/google";
 import { siteOpenGraph } from "@/components/site/meta";
 import SiteAnalytics from "@/components/analytics/SiteAnalytics";
+import { cormorantItalicVariables } from "../fonts/cormorant-italic";
 import "../maple/maple.css";
 import "./site.css";
 import "./home.css";
 import "@/components/site/feature-explorer.css";
-
-const cormorantItalic = Cormorant_Garamond({
-  variable: "--font-site-italic",
-  subsets: ["latin"],
-  weight: ["500"],
-  style: "italic",
-  display: "swap",
-});
 
 const TITLE = "Maple Baby | Feeds, sleep, diapers & shared care";
 const DESCRIPTION = "Make sense of the early days. See patterns in feeds, sleep, and growth, share care with your family, and keep the moments you want to remember.";
@@ -36,7 +28,7 @@ export const viewport: Viewport = {
 
 export default function SiteLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className={`site ${cormorantItalic.variable}`}>
+    <div className={`site ${cormorantItalicVariables}`}>
       <SiteAnalytics />
       {children}
     </div>
