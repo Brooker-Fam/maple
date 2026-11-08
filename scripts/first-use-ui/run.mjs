@@ -9,6 +9,7 @@ import { handoffCases } from "./handoff-cases.mjs";
 import { amountCases } from "./amount-cases.mjs";
 import { bottleReviewCases } from "./bottle-review-cases.mjs";
 import { topUpCases } from "./top-up-cases.mjs";
+import { feedingPlanSheetCases } from "./feeding-plan-sheet-cases.mjs";
 import { bottleMethodCases } from "./bottle-method-cases.mjs";
 import { pumpReviewCases } from "./pump-review-cases.mjs";
 import { volumeBoundaryCases } from "./volume-boundary-cases.mjs";
@@ -21,7 +22,6 @@ import { medicinePlanCases } from "./medicine-plan-cases.mjs";
 import { checkinPrivacyCases } from "./checkin-privacy-cases.mjs";
 import { doctorReviewCases } from "./doctor-review-cases.mjs";
 import { accessibilityReviewCases } from "./accessibility-review-cases.mjs";
-import { feedingPlanSheetCases } from "./feeding-plan-sheet-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -99,6 +99,7 @@ const cases = [
   ...amountCases({ fixture, record, writes, assert }),
   ...bottleReviewCases({ fixture, freshState, record, writes, assert }),
   ...topUpCases({ fixture, freshState, record, writes, assert }),
+  ...feedingPlanSheetCases({ fixture, freshState, assert }),
   ...bottleMethodCases({ fixture, freshState, record, writes, assert }),
   ...pumpReviewCases({ fixture, freshState, record, writes, assert }),
   ...volumeBoundaryCases({ fixture, freshState, record, writes, assert }),
@@ -113,7 +114,6 @@ const cases = [
   ...accessibilityReviewCases({ fixture, freshState, record, assert }),
   ...timeCases({ fixture, freshState, record, writes, assert }),
   ...handoffCases({ fixture, freshState, record, writes, assert }),
-  ...feedingPlanSheetCases({ fixture, freshState, assert }),
   ["Every historical entry kind keeps an older family-local date", async () => {
     const kinds = [["Nursing", "feed"], ["Bottle", "feed"], ["Diaper", "diaper"], ["Sleep", "sleep"], ["Vitamin D", "med"], ["Tummy time", "tummy"], ["Bath", "bath"], ["Pump", "pump"], ["Temperature", "temp"], ["Skin check", "vitals"], ["Growth", "growth"], ["River's medicine", "med"], ["Other readings", "vitals"], ["Note", "note"], ["Moment", "moment"]];
     for (const [label, kind] of kinds) {

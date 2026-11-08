@@ -316,6 +316,7 @@ export default function FeedingPlanSheet({ open, edit: startEditing = false, onC
               draft={draft}
               change={change}
               watch={checks.watch}
+              invalid={checks.invalid}
               mark={problem?.mark ?? null}
               onRemoved={(what, undo) => toast(what, { undo, undoLabel: "Put it back" })}
             />

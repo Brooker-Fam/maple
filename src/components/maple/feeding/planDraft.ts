@@ -238,6 +238,27 @@ export function removeFeed(d: PlanDraft, key: string): PlanDraft {
   return { ...d, feeds, night, order };
 }
 
+/**
+ * A feed taken out (removeFeed), and Put it back: the feed in its place, the
+ * turns as they were (a turn handed to another feed only because the turns
+ * would otherwise be empty goes back; one given since stays), the night's
+ * feed again if it was. Anything else changed meanwhile stays changed.
+ */
+export function takeOutFeed(before: PlanDraft, key: string): { next: PlanDraft; putBack: (d: PlanDraft) => PlanDraft } {
+  const i = before.feeds.findIndex((f) => f.key === key);
+  const feed = before.feeds[i];
+  const next = removeFeed(before, key);
+  const filled = next.order.filter((k) => !before.order.includes(k));
+  const putBack = (d: PlanDraft): PlanDraft => {
+    if (!feed || d.feeds.some((f) => f.key === key)) return d;
+    const feeds = [...d.feeds.slice(0, i), feed, ...d.feeds.slice(i)];
+    const kept = new Set(feeds.map((f) => f.key));
+    const order = [...before.order.filter((k) => kept.has(k)), ...d.order.filter((k) => !before.order.includes(k) && !filled.includes(k))];
+    return { ...d, feeds, order, night: before.night.feed === key ? { ...d.night, feed: key } : d.night };
+  };
+  return { next, putBack };
+}
+
 /** The night's own feed: it leaves the day's turns (the night's feed doesn't take a day turn), unless it's the only one there. */
 export function setNightFeed(d: PlanDraft, key: string | null): PlanDraft {
   const order = key && d.order.length > 1 ? d.order.filter((k) => k !== key) : d.order;

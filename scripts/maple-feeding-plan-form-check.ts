@@ -22,6 +22,7 @@ import {
   samePlan,
   setNightFeed,
   shownAmount,
+  takeOutFeed,
   typedAmount,
   type PlanDraft,
 } from "../src/components/maple/feeding/planDraft";
@@ -171,6 +172,24 @@ check("taking a feed out keeps the turns and the night whole; the night's feed l
   eq(draftOf(PLAN, null, "oz").unit, "ml");
   eq(samePlan(draftOf(PLAN, null, "ml"), { ...draftOf(PLAN, null, "ml"), unit: "oz" }), false, "the unit is part of the plan");
   eq(samePlan(draftOf(PLAN, null, "ml"), draftOf(PLAN, { min: 1, max: 2 }, "ml")), true, "the target isn't");
+});
+
+check("Put it back: a feed taken out comes back exactly, with its turn and the night as they were", () => {
+  const d = draftOf(PLAN, null, "ml");
+  const [, topUp] = d.feeds.map((f) => f.key);
+  const out = takeOutFeed(d, topUp);
+  eq(inputOf(out.putBack(out.next)), inputOf(d));
+  // The only turn taken out hands it to the night's feed for now; Put it back hands it back.
+  const oneTurn = draftOf(parseFeedingPlan({ feeds: [{ name: "Day", steps: [{ do: "nurse" }] }, { name: "Night", steps: [{ do: "pump" }] }], order: ["Day"], night: { from: "23:00", to: "05:00", feed: "Night" } }, null, NOW), null, "ml");
+  const [day, night] = oneTurn.feeds.map((f) => f.key);
+  const gone = takeOutFeed(oneTurn, day);
+  eq(gone.next.order, [night]);
+  eq(inputOf(gone.putBack(gone.next)), inputOf(oneTurn));
+  // The night's feed taken out comes back as the night's; a feed given a turn meanwhile keeps it.
+  const n = takeOutFeed(d, d.feeds[2].key);
+  const added = addFeed(n.next, newFeed("Paced bottle", ["bottle"]));
+  const back = n.putBack(added);
+  eq([back.night.feed, inputOf(back).plan.order], [d.feeds[2].key, [1, 2, 4]]);
 });
 
 check("a refusal's words point at its feed and step", () => {

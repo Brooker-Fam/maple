@@ -16,10 +16,10 @@ import {
   move,
   newStep,
   rangeOut,
-  removeFeed,
   setNightFeed,
   shownAmount,
   stepTitle,
+  takeOutFeed,
   typedAmount,
   type BottleDraft,
   type FeedDraft,
@@ -69,10 +69,12 @@ const BOX =
   "h-11 w-[4.75rem] min-w-0 rounded-xl border border-mp-line bg-mp-surface px-2 text-center text-base font-semibold text-mp-ink tabular-nums outline-none transition focus:border-mp-focus focus:ring-2 focus:ring-mp-focus/25";
 const BAD = "border-mp-danger! ring-2! ring-mp-danger/25!";
 
-export function PlanForm({ draft, change, watch, mark, onRemoved }: {
+export function PlanForm({ draft, change, watch, invalid, mark, onRemoved }: {
   draft: PlanDraft;
   change: Change;
   watch: Watch;
+  /** A number somewhere reads wrong: nothing folds away until it's fixed (a folded field would lose the typo unseen). */
+  invalid: boolean;
   /** A refusal's feed and step, marked with its words. */
   mark: PlanMark | null;
   /** A feed or step taken out: say so, with a way to put it back. */
@@ -84,17 +86,9 @@ export function PlanForm({ draft, change, watch, mark, onRemoved }: {
   const hasTarget = !isEmptyRange(draft.target);
 
   const dropFeed = (f: FeedDraft, i: number) => {
-    const inOrder = draft.order.indexOf(f.key);
-    const night = draft.night.feed === f.key;
-    change((d) => removeFeed(d, f.key));
-    onRemoved(f.name.trim() ? `Took out “${f.name.trim()}”` : `Took out feed ${i + 1}`, () =>
-      change((d) => {
-        if (d.feeds.some((x) => x.key === f.key)) return d;
-        const feeds = [...d.feeds.slice(0, i), f, ...d.feeds.slice(i)];
-        const order = inOrder < 0 ? d.order : [...d.order.slice(0, inOrder), f.key, ...d.order.slice(inOrder)];
-        return { ...d, feeds, order, night: night ? { ...d.night, feed: f.key } : d.night };
-      })
-    );
+    const { putBack } = takeOutFeed(draft, f.key);
+    change((d) => takeOutFeed(d, f.key).next);
+    onRemoved(f.name.trim() ? `Took out “${f.name.trim()}”` : `Took out feed ${i + 1}`, () => change(putBack));
   };
 
   return (
@@ -122,14 +116,14 @@ export function PlanForm({ draft, change, watch, mark, onRemoved }: {
               { value: "oz", label: "oz" },
             ]}
           />
-          <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>As your plan writes them. Amounts already typed stay the same amount.</p>
+          <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>As your plan writes them. Switching shows the same amounts in the other unit.</p>
         </div>
       </div>
 
       <FormSection title="Target per feed">
         <div className={cx(tone.card, "space-y-2 px-4 py-4")}>
           <AmountRange aria="target per feed" value={draft.target} unit={unit} onChange={(target) => set({ target })} watch={watch} wkey="target" />
-          <p className={cx(tone.muted, "text-[13px] leading-snug")}>Only if your care team gave you one. It shows next to bottles, and a bottle can be up to it. Shared with Settings.</p>
+          <p className={cx(tone.muted, "text-[13px] leading-snug")}>Only if your care team gave you one. Maple shows it next to bottles, and a bottle step can go up to it. It&apos;s the same target as in Settings.</p>
         </div>
       </FormSection>
 
@@ -145,7 +139,7 @@ export function PlanForm({ draft, change, watch, mark, onRemoved }: {
 
       <FormSection title="Feeds" count={`${draft.feeds.length} of ${PLAN_LIMITS.feeds}`}>
         {draft.feeds.map((f, i) => (
-          <FeedEditor key={f.key} feed={f} index={i} draft={draft} change={change} watch={watch} mark={mark?.feed === f.key ? mark : null} hasTarget={hasTarget} onRemove={() => dropFeed(f, i)} onRemoved={onRemoved} />
+          <FeedEditor key={f.key} feed={f} index={i} draft={draft} change={change} watch={watch} canFold={!invalid} mark={mark?.feed === f.key ? mark : null} hasTarget={hasTarget} onRemove={() => dropFeed(f, i)} onRemoved={onRemoved} />
         ))}
         {draft.feeds.length < PLAN_LIMITS.feeds ? (
           <Chip onClick={() => change((d) => addFeed(d))}>
@@ -169,12 +163,13 @@ export function PlanForm({ draft, change, watch, mark, onRemoved }: {
 
 // ── a feed ─────────────────────────────────────────────────────────────────
 
-function FeedEditor({ feed, index, draft, change, watch, mark, hasTarget, onRemove, onRemoved }: {
+function FeedEditor({ feed, index, draft, change, watch, canFold, mark, hasTarget, onRemove, onRemoved }: {
   feed: FeedDraft;
   index: number;
   draft: PlanDraft;
   change: Change;
   watch: Watch;
+  canFold: boolean;
   mark: PlanMark | null;
   hasTarget: boolean;
   onRemove: () => void;
@@ -220,7 +215,7 @@ function FeedEditor({ feed, index, draft, change, watch, mark, hasTarget, onRemo
       <div className="flex min-h-[44px] items-center gap-1">
         <p className={cx(tone.label, "flex-1")}>Feed {index + 1}</p>
         {draft.feeds.length > 1 && <IconButton icon="trash-2" label={`Take out ${label}`} onClick={onRemove} />}
-        {feed.id && <IconButton icon="chevron-up" label={`Fold ${label} to one line`} onClick={() => setOpen(false)} />}
+        <IconButton icon="chevron-up" label={`Fold ${label} to one line`} disabled={!canFold || !!mark} onClick={() => setOpen(false)} />
       </div>
       <div className="-mt-2">
         <input
