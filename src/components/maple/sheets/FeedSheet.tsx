@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { atBreastOf, describeEntry, feedPartWords, milkWords } from "@/lib/maple/describe";
+import { atBreastOf, describeEntry, feedPartWords, milkWords, planUnitsOf } from "@/lib/maple/describe";
 import { feedRowParts } from "@/lib/maple/feed-rows";
-import { AT_BREAST_WORDS, type AtBreastVia } from "@/lib/maple/feeding-plan";
+import { AT_BREAST_WORDS, feedById, feedingPlanOf, type AtBreastVia, type FeedingPlan, type Range } from "@/lib/maple/feeding-plan";
 import {
   addPart,
   edgeBounds,
@@ -21,16 +21,28 @@ import {
   partTotals,
   setSide,
   spanMinutes,
+  topUpIds,
   topUpRunFor,
   type Part,
 } from "@/lib/maple/feed";
 import { bottleCues, feedCues, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
-import { feedTargetOf, formatVolume, formatVolumeRange, mlToOz, ozToMl } from "@/lib/maple/units";
-import { BOTTLE_VIAS, type BottleVia, type Entry, type EntryOf, type FeedData, type Side, type StretchSide, type UpdateEntryInput } from "@/lib/maple/types";
+import { feedTargetOf, formatVolume, formatVolumeRange, ML_PER_FL_OZ, mlToOz, ozToMl } from "@/lib/maple/units";
+import {
+  BOTTLE_VIAS,
+  type BottleVia,
+  type Entry,
+  type EntryOf,
+  type FeedData,
+  type Side,
+  type StretchSide,
+  type UnitSystem,
+  type UpdateEntryInput,
+} from "@/lib/maple/types";
 import { BreakMark, MomentEditor, partAria, ROW_NAME, SIDE_NAME, SideFixRow, SideMark, type MomentEdge } from "../FeedParts";
 import { logSwitches } from "../MoreSheet";
 import { Icon } from "../icons";
+import { DETAIL_COLOR } from "../palette";
 import { Button, Chip, Segmented, Sheet, TimeRange, TimeScrubber, WhenField, cx, tone } from "../ui";
 import { useBabyWords, useVoice } from "../familyWords";
 import type { Voice } from "@/lib/maple/voice";
@@ -84,10 +96,22 @@ import {
  * follows the live entry, so a time fix never wipes the other phone's note.
  *
  * Bottle: the amount (oz or ml, per the units setting) starts at the last
- * bottle's amount and milk, so the primary button reads "Log 2 oz now". With
- * Bottles off (Family → On Today) a new feed has no Breast/Bottle choice;
- * a bottle already logged still opens as one. Opened for milk at the breast
- * (a via preset of syringe or SNS), it starts at the last milk given that way.
+ * bottle's amount and milk, so the primary button reads "Log 2 oz now"; milk
+ * given at the breast is never "the last bottle". From a plan step (a preset
+ * naming the plan feed) it starts at the plan's amount and milk, and blank
+ * where the plan leaves them open (a preset's null), never the last bottle's.
+ * With Bottles off (Family → On Today) a new feed has no Breast/Bottle
+ * choice; a bottle already logged still opens as one.
+ *
+ * A feed's parts say what they are. Opened for milk at the breast (a via
+ * preset of syringe or SNS: the nursing card's chip, a plan's step, a feed's
+ * own form) it's "Milk at the breast": no Breast/Bottle choice, "With the
+ * 10:15 AM feed" on top, Syringe or SNS, small amounts (the plan's, or 5 to
+ * 20 ml), "Log 20 ml in the syringe", starting at the last milk given that
+ * way. Opened for a feed's top-up (a preset naming the feed, top_up_of) it's
+ * "Top-up · 12:20 PM feed", its quick amounts the plan's range. A saved part
+ * opens as "Syringe at the breast" or "Top-up". With a plan saved, a part's
+ * amounts (and a plan step's) are in the plan's unit, the app's beside them.
  *
  * A nursing feed's parts: "Nipple shield" (data.shield, on the feed itself;
  * an edit sends it against the version shown, as the other fields), and milk
@@ -96,6 +120,10 @@ import {
  * amount, syringe or SNS, which milk; saved as a bottle at the feed's start
  * naming the feed, top_up_of); a saved feed lists what was given with it, each
  * opening its own form, and offers to add milk at the breast if none was.
+ *
+ * With a plan saved, a nursing feed or a bottle on its own says which of the
+ * plan's feeds it was ("Plan feed", data.plan): a feed Maple read as the wrong
+ * kind is put right for every phone, since Today's card reads it first.
  */
 
 type Milk = NonNullable<FeedData["milk"]>;
@@ -163,13 +191,32 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // A finished timed session: its times are its parts (the Times section), not a start and an end.
   const timed = !!e && !running && e.data.method === "breast" && !!e.data.segments?.length;
 
+  // The care team's feeding plan, when one is saved: a plan feed's parts and steps are in its unit, with its amounts.
+  const plan = useMemo(() => feedingPlanOf(state?.baby.settings), [state?.baby.settings]);
   // Opened for milk at the breast (a via preset of syringe or SNS: the nursing card's chip, a plan's step), "last time"
-  // is the last milk given that way, never a bottle's 90 ml.
+  // is the last milk given that way, never a bottle's 90 ml; a bottle's "last bottle" is never milk given at the breast.
   const [forBreast] = useState(() => !e && (pstr(preset, "via") === "sns" || pstr(preset, "via") === "syringe"));
+  // Opened for a nursing feed's top-up by bottle (the plan's card names the feed it's for): titled for that feed.
+  const [forTopUp] = useState(() => !e && !forBreast && pstr(preset, "method") === "bottle" && pnum(preset, "top_up_of") != null);
   const lastBottle = useMemo(
-    () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && (!forBreast || !!atBreastOf(x.data))) ?? null,
+    () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data) === forBreast) ?? null,
     [state, e?.id, forBreast]
   );
+  // The plan's unit when one is saved: a feed's part's amount is typed in it ("20 ml in the syringe", as its card), and
+  // said with the app's beside it (partVolume).
+  const planUnits = planUnitsOf(state?.baby.settings);
+  const pu = planUnits ?? units;
+  // This form's amounts: a feed's part (milk at the breast, a top-up) or a plan step's bottle in the plan's unit, so
+  // they read as the plan has them; any other bottle in the app's. Fixed when it opens, so a typed amount keeps its unit.
+  const [vu] = useState<UnitSystem>(() => {
+    if (!plan) return units;
+    const planned =
+      forBreast ||
+      forTopUp ||
+      !!pstr(preset, "plan") ||
+      (e?.data.method === "bottle" && (!!atBreastOf(e.data) || e.data.top_up_of != null || !!e.data.plan || (!!state && topUpIds(nursingRuns(state.entries, now())).has(e.id))));
+    return planned ? pu : units;
+  });
   // The newest milk given at the breast, for a nursing feed's own "Milk at the breast" (how it went in, how much).
   const lastAtBreast = useMemo(
     () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data)) ?? null,
@@ -253,9 +300,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [milkAmount, setMilkAmount] = useState<number | null>(() => {
     const ml = lastAtBreast?.data.amount_ml;
     if (ml == null) return null;
-    return units === "metric" ? ml : Number(mlToOz(ml).toFixed(2));
+    return pu === "metric" ? ml : Number(mlToOz(ml).toFixed(2));
   });
   const [milkKind, setMilkKind] = useState<Milk | undefined>(() => lastAtBreast?.data.milk);
+  // Which of the plan's feeds this is (data.plan): from the plan's card, or picked here ("Plan feed"). Today's card,
+  // the chat and Siri read it first, so a feed read as the wrong kind is put right on every phone.
+  const [planPick, setPlanPick] = useState<string | undefined>(() => (e ? e.data.plan : pstr(preset, "plan")));
+  const planChanged = !!e && !running && (planPick ?? null) !== (e.data.plan ?? null);
   const origRange = (): [Date, Date] => {
     if (e) {
       const s = new Date(e.started_at);
@@ -275,7 +326,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   });
   // Typed minutes on a timed session replace its parts ("Type minutes instead").
   const [minutesTyped, setMinutesTyped] = useState(false);
-  const savedEntry = e && !running && (!timed || minutesTyped || first !== origFirst || shieldChanged) ? e : undefined;
+  const savedEntry = e && !running && (!timed || minutesTyped || first !== origFirst || shieldChanged || planChanged) ? e : undefined;
   const { changed: savedChanged, onConflict, notice: savedNotice } = useSavedEntryConflict(savedEntry);
 
   // ── Times (a finished timed session) ──
@@ -373,28 +424,40 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const close = useCallback(() => (guarded.current ? setConfirming(true) : onClose()), [onClose]);
 
   // ── Bottle ──
-  const [initialAmountMl] = useState(() => e?.data.method === "bottle" ? e.data.amount_ml : (pnum(preset, "amount_ml") ?? lastBottle?.data.amount_ml));
+  // A plan step's bottle (the preset names the plan feed) starts at the plan's amount and milk: what the plan leaves
+  // open (a preset's null, or nothing said) stays blank for the family to say, never the last bottle's.
+  const presetBlank = (k: string) => !!preset && Object.hasOwn(preset, k) && preset[k] === null;
+  const fromPlanStep = !e && !!pstr(preset, "plan");
+  const [initialAmountMl] = useState(() => {
+    if (e?.data.method === "bottle") return e.data.amount_ml;
+    const given = pnum(preset, "amount_ml");
+    if (given != null) return given;
+    return presetBlank("amount_ml") || fromPlanStep ? undefined : lastBottle?.data.amount_ml;
+  });
   const [amount, setAmount] = useState<number | null>(() => {
     if (initialAmountMl == null) return null;
-    if (units === "metric") return initialAmountMl;
+    if (vu === "metric") return initialAmountMl;
     const oz = mlToOz(initialAmountMl);
     return Number(oz > 0 && oz < 0.01 ? oz.toPrecision(3) : oz.toFixed(2));
   });
-  const [milk, setMilk] = useState<Milk | undefined>(() =>
-    e?.data.method === "bottle" ? e.data.milk : ((pstr(preset, "milk") as Milk | undefined) ?? lastBottle?.data.milk)
-  );
+  const [milk, setMilk] = useState<Milk | undefined>(() => {
+    if (e?.data.method === "bottle") return e.data.milk;
+    const given = pstr(preset, "milk");
+    if (given === "breastmilk" || given === "formula" || given === "mixed") return given;
+    return presetBlank("milk") || fromPlanStep ? undefined : lastBottle?.data.milk;
+  });
   // How it was given: never copied from the last bottle (a plan can alternate an SNS and a paced bottle).
   const [via, setVia] = useState<BottleVia | undefined>(() =>
     e?.data.method === "bottle" ? e.data.via : (BOTTLE_VIAS as readonly string[]).includes(pstr(preset, "via") ?? "") ? (pstr(preset, "via") as BottleVia) : undefined
   );
   // A Mixed bottle's split, in the units shown: both parts set the amount; a new amount clears them (as the pump's sides).
-  const shownMl = (ml: number | undefined) => (ml == null ? null : units === "metric" ? ml : Number(mlToOz(ml).toFixed(2)));
+  const shownMl = (ml: number | undefined) => (ml == null ? null : vu === "metric" ? ml : Number(mlToOz(ml).toFixed(2)));
   const [breastPart, setBreastPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.breastmilk_ml) : null));
   const [formulaPart, setFormulaPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.formula_ml) : null));
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
-  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, invalid: checks.invalid });
-  const amountMl = !touched.amount ? initialAmountMl : amount == null ? undefined : Math.round((units === "metric" ? amount : ozToMl(amount)) * 10) / 10;
-  const partMl = (v: number | null) => (v == null ? undefined : Math.round((units === "metric" ? v : ozToMl(v)) * 10) / 10);
+  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, planPick, invalid: checks.invalid });
+  const amountMl = !touched.amount ? initialAmountMl : amount == null ? undefined : Math.round((vu === "metric" ? amount : ozToMl(amount)) * 10) / 10;
+  const partMl = (v: number | null) => (v == null ? undefined : Math.round((vu === "metric" ? v : ozToMl(v)) * 10) / 10);
   const hadSplit = e?.data.method === "bottle" && (e.data.breastmilk_ml != null || e.data.formula_ml != null);
   const splitShown = milk === "mixed";
   /** A part typed: with both, the amount is their sum. */
@@ -405,7 +468,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     (which === "breast" ? setBreastPart : setFormulaPart)(v);
     if (b != null && f != null) {
       touch("amount");
-      setAmount(units === "metric" ? Math.round((b + f) * 10) / 10 : Number((b + f).toFixed(3)));
+      setAmount(vu === "metric" ? Math.round((b + f) * 10) / 10 : Number((b + f).toFixed(3)));
     }
   };
   /** The amount typed (or a chip): an old split no longer describes it. */
@@ -423,12 +486,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const restMl =
     splitShown && knownTotal != null && (breastPart == null) !== (formulaPart == null) ? Math.max(0, Math.round((knownTotal - (partMl(breastPart ?? formulaPart) ?? 0)) * 10) / 10) : null;
   const partOver = restMl != null && (partMl(breastPart ?? formulaPart) ?? 0) > (knownTotal ?? 0) + 0.05;
-  const bottleLimit = units === "metric" ? 500 : Math.floor(mlToOz(500) * 1000) / 1000;
+  const bottleLimit = limitIn(vu);
   const maxAmount = Math.max(bottleLimit, !touched.amount && initialAmountMl != null && initialAmountMl <= 500 ? amount ?? 0 : 0);
-  const amountOverLimit = method === "bottle" && !!touched.amount && amount != null && (units === "metric" ? amount : ozToMl(amount)) > 500;
+  const amountOverLimit = method === "bottle" && !!touched.amount && amount != null && (vu === "metric" ? amount : ozToMl(amount)) > 500;
   const zeroBottle = method === "bottle" && amountMl === 0 && (!e || !!touched.amount);
-  const amountLabel = amountMl != null ? formatVolume(amountMl, units) : null;
-  const chips = units === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
+  const amountLabel = amountMl != null ? formatVolume(amountMl, vu) : null;
   // Given with a nursing feed (during it, just before, or under 30 minutes after), a bottle is that feed's top-up
   // (feed.ts topUpRunFor): the form says so before it's saved, from the loaded feeds without this one.
   const otherRuns = useMemo(
@@ -436,16 +498,29 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a clock; the feeds and this entry decide it.
     [method, state?.entries, e?.id]
   );
-  // From the feeding plan's card: the feed this bottle tops up, even late (data.top_up_of), and the plan feed it's for.
-  const [linkTo] = useState(() => (e ? undefined : pnum(preset, "top_up_of")));
-  const [planFeed] = useState(() => (e ? undefined : pstr(preset, "plan")));
+  // The feed this bottle tops up, even late (data.top_up_of): named by the plan's card, or a saved one's own link (the
+  // log reads it the same way, feed.ts nursingRuns).
+  const [linkTo] = useState(() => (e ? (e.data.method === "bottle" ? e.data.top_up_of : undefined) : pnum(preset, "top_up_of")));
   const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now(), linkTo) : null;
   const bottleWord = topUpOf ? "top-up" : "bottle";
   const target = feedTargetOf(state?.baby.settings);
   // Milk given at the breast, by this bottle form: it reads as what it is ("20 ml in the SNS"), part of the feed.
   const breastVia = method === "bottle" && (via === "sns" || via === "syringe") ? via : null;
+  // Its amount, quick amounts and button said as milk at the breast ("In the syringe", "Log 20 ml in the syringe"):
+  // opened for it, or a saved one. Picked by hand in a bottle's own form, it stays that form (How and the line under
+  // When say the rest).
+  const atBreastShown = breastVia && (forBreast || !!e) ? breastVia : null;
+  // What a saved bottle was when it opened, for its title (kept while it's edited): milk at the breast, a top-up, or a bottle.
+  const [savedTopUp] = useState(() => e?.data.method === "bottle" && !!state && topUpIds(nursingRuns(state.entries, now())).has(e.id));
+  // The feed it goes with ("the 10:15 AM feed"), and the plan feed it's part of: the bottle's own, else its feed's.
+  const feedClock = topUpOf ? clock(topUpOf.start) : null;
+  const partPlan = planPick ?? topUpOf?.entries.find((x) => x.data.plan)?.data.plan;
+  // Quick amounts: a feed's part from the plan's own amount for it (its syringe's, its top-up's range), else small
+  // ones for milk at the breast and the usual bottle sizes for a bottle.
+  const planRange = method === "bottle" ? partRange(plan, partPlan, breastVia ? atBreastShown : topUpOf ? "top-up" : null) : null;
+  const chips = planRange ? rangeChips(planRange, vu) : atBreastShown ? (vu === "metric" ? [5, 10, 15, 20] : [0.25, 0.5, 0.75, 1]) : vu === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
   // A new nursing feed's own milk at the breast, in ml (blank: given, the amount not said).
-  const milkMl = milkAmount == null ? undefined : Math.round((units === "metric" ? milkAmount : ozToMl(milkAmount)) * 10) / 10;
+  const milkMl = milkAmount == null ? undefined : Math.round((pu === "metric" ? milkAmount : ozToMl(milkAmount)) * 10) / 10;
   const zeroMilk = method === "breast" && !e && milkOn && milkMl === 0;
 
   // A saved nursing feed's parts, as its row shows them (feed-rows.ts): its milk at the breast, its top-ups.
@@ -467,7 +542,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       const res = await update(e.id, { ...patch, ...(savedEntry ? { expect_updated_at: savedEntry.updated_at } : {}) }, { toast: "", onConflict });
       setBusy(false);
       if (res) {
-        savedToast(`${method === "bottle" ? "Bottle" : "Feed"} updated`, prev, patch, res);
+        // Said as what it is: milk at the breast and a top-up are part of a feed, not a bottle of their own.
+        savedToast(`${method === "bottle" ? (breastVia ? "Milk at the breast" : topUpOf ? "Top-up" : "Bottle") : "Feed"} updated`, prev, patch, res);
         onClose();
       }
       return;
@@ -489,7 +565,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               ...split,
               // Only while it still tops up that feed (a time moved past the next feed drops the link).
               ...(linkTo && topUpOf?.entries.some((x) => x.id === linkTo) ? { top_up_of: linkTo } : {}),
-              ...(planFeed ? { plan: planFeed } : {}),
+              ...(planPick ? { plan: planPick } : {}),
             },
             note: note.trim() || null,
           },
@@ -518,7 +594,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       ...(b > 0 ? { both_sec: b * 60 } : {}),
       ...sides,
       ...(shield ? { shield: true } : {}),
-      ...(planFeed ? { plan: planFeed } : {}),
+      ...(planPick ? { plan: planPick } : {}),
     };
     const endedAt = en.getTime() > s.getTime() ? en.toISOString() : undefined;
     // The next side as the card and the dock will show it once this is in the log (the Done toast's words): within
@@ -575,7 +651,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     // The side words go last, as on the Done toast.
     const tail = next ? ` · ${next}` : "";
     const head = tail && feedText.endsWith(tail) ? feedText.slice(0, -tail.length) : feedText;
-    toast(`${head} ${feedPartWords(given, units)}${head === feedText ? "" : tail}`, {
+    toast(`${head} ${feedPartWords(given, units, planUnits)}${head === feedText ? "" : tail}`, {
       undo: () => {
         void remove(given.id, { toast: "Undone" }).then((ok) => ok && remove(feed.id, { toast: "Undone" }));
       },
@@ -590,6 +666,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       if (touched.amount) data.amount_ml = amountMl ?? null;
       if (touched.milk) data.milk = milk ?? null;
       if (touched.via) data.via = via ?? null;
+      // Which of the plan's feeds it was (null: not said, read from what was logged).
+      if (planChanged) data.plan = planPick ?? null;
       // The split goes whenever it, the amount or the milk changed on a bottle that has one (so Undo can put it back).
       if (touched.split || ((touched.amount || touched.milk) && hadSplit)) {
         data.breastmilk_ml = splitShown ? partMl(breastPart) ?? null : null;
@@ -618,8 +696,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     } else if (first !== origFirst) {
       data.first_side = first;
     }
-    // The shield, on or off (null takes it off the feed).
+    // The shield, on or off (null takes it off the feed); the plan feed it was (null: not said).
     if (shieldChanged) data.shield = shield ? true : null;
+    if (planChanged) data.plan = planPick ?? null;
     const hasData = Object.keys(data).length > 0;
     // The store otherwise infers a manual feed's end after any start or data edit.
     const keepEnd = endMoved || minutesChanged || (!timed && (startMoved || hasData));
@@ -686,8 +765,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const data: Record<string, unknown> = { segments: draft.data.segments };
     // PATCH merges data: a flag the engine dropped (the end moved off the pause, a side added after it) has to be cleared by name.
     if (liveFeed.data.paused_at_stop && !draft.data.paused_at_stop) data.paused_at_stop = null;
-    // The shield switched too: it goes in the same save.
+    // The shield switched too, or the plan feed it was: they go in the same save.
     if (shieldChanged) data.shield = shield ? true : null;
+    if (planChanged) data.plan = planPick ?? null;
     // A newer version with the same times (not a conflict) is the one this saves on top of.
     const expect = liveKey === draft.baseKey ? liveFeed.updated_at : draft.base;
     const patch: UpdateEntryInput = { data, started_at: draft.startedAt, ended_at: draft.endedAt, expect_updated_at: expect, ...notePatch };
@@ -730,8 +810,39 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const empty = method === "breast" && !running && !gone && (timed ? minutesTyped && noMinutes : noMinutes && spanMinutes(range[0], range[1]) === 0);
 
   const addOnly = addPending && !dirty && !("note" in notePatch);
-  const title = e ? (running ? "Nursing now" : timed && preset?.editTime ? "Edit nursing times" : describeEntry(e).title) : "Feed";
-  const primary = e ? (timed && (dirty || preset?.editTime) ? "Save time" : "Save") : method === "bottle" ? (amountLabel ? `Log ${amountLabel}${when ? "" : " now"}` : "Log bottle") : "Log it";
+  // A bottle says what it is, and the title stays put while it's edited: a saved one as it opened ("Syringe at the
+  // breast", "Top-up", "Bottle"); a new one as it was opened ("Milk at the breast", "Top-up · 12:20 PM feed" for that
+  // feed's top-up, "Feed" while Breast or Bottle is a choice).
+  const savedAtBreast = e?.data.method === "bottle" ? atBreastOf(e.data) : null;
+  const bottleTitle = e
+    ? savedAtBreast
+      ? `${AT_BREAST_WORDS[savedAtBreast].name} at the breast`
+      : savedTopUp
+        ? "Top-up"
+        : "Bottle"
+    : forBreast
+      ? "Milk at the breast"
+      : forTopUp
+        ? feedClock
+          ? `Top-up · ${feedClock} feed`
+          : "Bottle"
+        : "Feed";
+  const title = e ? (running ? "Nursing now" : timed && preset?.editTime ? "Edit nursing times" : e.data.method === "bottle" ? bottleTitle : describeEntry(e).title) : method === "bottle" ? bottleTitle : "Feed";
+  // "Log 20 ml in the syringe", "Log 30 ml top-up", "Log 2 oz now".
+  const logBottle = atBreastShown
+    ? `Log ${amountLabel ?? "milk"} ${AT_BREAST_WORDS[atBreastShown].inThe}`
+    : forTopUp && topUpOf
+      ? amountLabel
+        ? `Log ${amountLabel} top-up`
+        : "Log top-up"
+      : amountLabel
+        ? `Log ${amountLabel}${when ? "" : " now"}`
+        : "Log bottle";
+  const primary = e ? (timed && (dirty || preset?.editTime) ? "Save time" : "Save") : method === "bottle" ? logBottle : "Log it";
+  // A feed's part opened for its feed: no Breast or Bottle to choose, and it says which feed it's with, on top.
+  const asPart = !e && method === "bottle" && (forBreast || forTopUp);
+  // Which of the plan's feeds it was: a nursing feed, or a bottle on its own (a feed's part goes with its feed).
+  const planFeedShown = !!plan && !running && (method === "breast" || (!breastVia && !topUpOf));
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
 
   // Full-width rows leave room for precise minutes and ±1/±5 controls on narrow phones.
@@ -776,21 +887,22 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     go();
   };
   const lastVia = (lastAtBreast && atBreastOf(lastAtBreast.data)) || "syringe";
-  // A saved feed's milk at the breast, added afterwards: a bottle at the feed's start that names it, as last time.
-  const addMilkTo = (f: Entry) =>
-    leaveFor(() =>
-      openSheet({
-        kind: "feed",
-        preset: {
-          method: "bottle",
+  // A saved feed's milk at the breast, added afterwards: a bottle at the feed's start that names it. A plan feed's is
+  // as its plan says (its way in, its amount when that's one number, its milk when named; the rest left to say), any
+  // other as last time.
+  const addMilkTo = (f: EntryOf<"feed">) => {
+    const sup = plan && f.data.plan ? feedById(plan, f.data.plan)?.steps.flatMap((s) => (s.do === "nurse" && s.supplement ? [s.supplement] : []))[0] : undefined;
+    const as = sup
+      ? { via: sup.via, amount_ml: sup.ml.min === sup.ml.max ? sup.ml.min : null, milk: sup.milk === "formula" || sup.milk === "breastmilk" ? sup.milk : null, plan: f.data.plan }
+      : {
           via: lastVia,
           ...(lastAtBreast?.data.amount_ml != null ? { amount_ml: lastAtBreast.data.amount_ml } : {}),
           ...(lastAtBreast?.data.milk ? { milk: lastAtBreast.data.milk } : {}),
-          started_at: f.started_at,
-          top_up_of: f.id,
-        },
-      })
-    );
+        };
+    leaveFor(() => openSheet({ kind: "feed", preset: { method: "bottle", ...as, started_at: f.started_at, top_up_of: f.id } }));
+  };
+  // Which of the plan's feeds this was: one chip each; the one picked, tapped again, clears it.
+  const planFeedPick = planFeedShown && plan ? <PlanFeedPick plan={plan} value={planPick} onChange={setPlanPick} disabled={readOnly} /> : null;
   const allAtBreast = feedPartsHere.length > 0 && feedPartsHere.every((b) => !!atBreastOf(b.data));
   // The feed's own parts: its shield, and its milk at the breast (a new feed's to say here; a saved one's to open).
   const feedOwnParts = (
@@ -821,14 +933,14 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 <MiniStepper
                   key="milk-amount"
                   label="Amount"
-                  unit={units === "metric" ? "ml" : "oz"}
-                  ariaLabel={`milk at the breast, ${units === "metric" ? "millilitres" : "ounces"}`}
+                  unit={pu === "metric" ? "ml" : "oz"}
+                  ariaLabel={`milk at the breast, ${pu === "metric" ? "millilitres" : "ounces"}`}
                   value={milkAmount}
                   onChange={setMilkAmount}
                   onInvalid={checks.watch("milk-amount")}
-                  step={units === "metric" ? 5 : 0.25}
-                  decimals={units === "metric" ? 1 : 3}
-                  max={bottleLimit}
+                  step={pu === "metric" ? 5 : 0.25}
+                  decimals={pu === "metric" ? 1 : 3}
+                  max={limitIn(pu)}
                 />
                 {zeroMilk && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{ZERO_BOTTLE_HINT}</p>}
               </div>
@@ -851,7 +963,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
             <Label>{feedPartsHere.length && !allAtBreast ? "With this feed" : "Milk at the breast"}</Label>
             <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
               {feedPartsHere.map((b) => {
-                const part = feedPartWords(b, units).slice(2);
+                const part = feedPartWords(b, units, planUnits).slice(2);
                 const more = [milkWords(b.data, units), b.data.via === "paced" ? "paced bottle" : null, clock(b.started_at)].filter(Boolean).join(" · ");
                 return (
                   <button
@@ -879,7 +991,99 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           </section>
         )
       )}
+      {planFeedPick}
     </>
+  );
+
+  // ── A bottle's fields (milk at the breast and a top-up are bottles too, each said as what it is) ──
+  const unitWord = vu === "metric" ? "ml" : "oz";
+  const unitName = vu === "metric" ? "millilitres" : "ounces";
+  // A feed's part opened for its feed: the feed it goes with, first (or, its time moved off any feed, what it is then).
+  const partLine = asPart ? (
+    <p className="flex items-start gap-2 text-[15px] leading-snug text-mp-ink">
+      <Icon name="baby" size={18} className="mp-kind-ink mt-px shrink-0" style={{ color: DETAIL_COLOR.nursing }} />
+      <span className="min-w-0">
+        {!topUpOf ? (
+          "No nursing feed then, so it counts as a feed of its own."
+        ) : forTopUp && !breastVia ? (
+          "Part of that feed, not a feed of its own."
+        ) : (
+          <>
+            With the <span className="font-semibold whitespace-nowrap">{feedClock}</span> feed: part of it, not a feed of its own.
+          </>
+        )}
+      </span>
+    </p>
+  ) : null;
+  const milkSection = (
+    <section aria-label="Milk">
+      <Label>Milk</Label>
+      <div className="flex flex-wrap gap-2">
+        {(Object.keys(MILK_LABEL) as Milk[]).map((m) => (
+          <Chip
+            key={m}
+            selected={milk === m}
+            onClick={() => {
+              touch("milk");
+              setMilk(milk === m ? undefined : m);
+            }}
+          >
+            {MILK_LABEL[m]}
+          </Chip>
+        ))}
+      </div>
+      {splitShown && (
+        // Mixed: how much of each (optional). Both set the amount; one and the amount give the other.
+        <div className="mt-3">
+          <p className={cx(tone.muted, "mb-1.5 text-[13px]")}>How much of each (optional)</p>
+          <div className="grid grid-cols-2 gap-3">
+            <MiniStepper key="breast-part" label="Breast milk" unit={unitWord} ariaLabel={`breast milk, ${unitName}`} value={breastPart} onChange={(v) => editPart("breast", v)} onInvalid={checks.watch("breast-part")} step={vu === "metric" ? 5 : 0.25} decimals={vu === "metric" ? 1 : 3} max={bottleLimit} />
+            <MiniStepper key="formula-part" label="Formula" unit={unitWord} ariaLabel={`formula, ${unitName}`} value={formulaPart} onChange={(v) => editPart("formula", v)} onInvalid={checks.watch("formula-part")} step={vu === "metric" ? 5 : 0.25} decimals={vu === "metric" ? 1 : 3} max={bottleLimit} />
+          </div>
+          {partOver ? (
+            <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{PART_OVER_HINT}</p>
+          ) : restMl != null ? (
+            <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>
+              The rest, {formatVolume(restMl, vu)}, is {breastPart != null ? "formula" : "breast milk"}.
+            </p>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+  const amountSection = (
+    <div>
+      <MiniStepper
+        key="amount"
+        // Milk at the breast: "In the syringe", "In the SNS".
+        label={atBreastShown ? AT_BREAST_WORDS[atBreastShown].inThe.replace(/^i/, "I") : "Amount consumed"}
+        unit={unitWord}
+        ariaLabel={atBreastShown ? `${AT_BREAST_WORDS[atBreastShown].inThe}, ${unitName}` : unitName}
+        value={amount}
+        onChange={editAmount}
+        onInvalid={checks.watch("amount")}
+        step={vu === "metric" ? 5 : atBreastShown ? 0.25 : 0.5}
+        decimals={vu === "metric" ? 1 : 3}
+        max={maxAmount}
+      />
+      {(checks.invalid || amountOverLimit) && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">Bottle amounts can be up to {vu === "metric" ? "500 ml" : `${bottleLimit} oz (500 ml)`}. Correct the amount, or leave it blank if unknown.</p>}
+      {zeroBottle && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{ZERO_BOTTLE_HINT}</p>}
+      <div className="mt-2 flex flex-wrap gap-2">
+        {chips.map((c) => (
+          <Chip key={c} selected={amount === c} onClick={() => editAmount(c)}>
+            {c} {unitWord}
+          </Chip>
+        ))}
+      </div>
+      {/* In the plan's unit while the app shows the other: the app's beside it, so it can be checked either way. */}
+      {vu !== units && amountMl != null && amountMl > 0 && <p className={cx(tone.muted, "mt-1.5 text-xs")}>That&apos;s {formatVolume(amountMl, units)}.</p>}
+      {lastBottle?.data.amount_ml != null && !e && (
+        <p className={cx(tone.muted, "mt-1.5 text-xs")}>
+          {forBreast ? "Last at the breast" : "Last bottle"}: {formatVolume(lastBottle.data.amount_ml, vu)}
+          {lastBottle.data.milk ? ` of ${MILK_LABEL[lastBottle.data.milk].toLowerCase()}` : ""} at {clock(lastBottle.started_at)}
+        </p>
+      )}
+    </div>
   );
 
   return (
@@ -961,8 +1165,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         <RunningNote kind="feed" />
       ) : (
         <>
-          {/* Bottles off (Family → On Today): a new feed is nursing, no choice to make. */}
-          {!e && (bottlesOn || method === "bottle") && (
+          {/* Bottles off (Family → On Today): a new feed is nursing, no choice to make. A feed's part is what it is. */}
+          {!e && !asPart && (bottlesOn || method === "bottle") && (
             <Segmented
               aria-label="Feed type"
               value={method}
@@ -1038,113 +1242,67 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
             )
           ) : (
             <>
-              {/* What's in the bottle first: formula, breast milk or both is the first thing to say, and on a phone the
-                  last thing in the form sits below the fold. It starts on the last bottle's milk. */}
-              <section aria-label="Milk">
-                <Label>Milk</Label>
-                <div className="flex flex-wrap gap-2">
-                  {(Object.keys(MILK_LABEL) as Milk[]).map((m) => (
-                    <Chip
-                      key={m}
-                      selected={milk === m}
-                      onClick={() => {
-                        touch("milk");
-                        setMilk(milk === m ? undefined : m);
-                      }}
-                    >
-                      {MILK_LABEL[m]}
-                    </Chip>
-                  ))}
-                </div>
-                {splitShown && (
-                  // Mixed: how much of each (optional). Both set the amount; one and the amount give the other.
-                  <div className="mt-3">
-                    <p className={cx(tone.muted, "mb-1.5 text-[13px]")}>How much of each (optional)</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <MiniStepper key="breast-part" label="Breast milk" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`breast milk, ${units === "metric" ? "millilitres" : "ounces"}`} value={breastPart} onChange={(v) => editPart("breast", v)} onInvalid={checks.watch("breast-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
-                      <MiniStepper key="formula-part" label="Formula" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`formula, ${units === "metric" ? "millilitres" : "ounces"}`} value={formulaPart} onChange={(v) => editPart("formula", v)} onInvalid={checks.watch("formula-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
-                    </div>
-                    {partOver ? (
-                      <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{PART_OVER_HINT}</p>
-                    ) : restMl != null ? (
-                      <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>
-                        The rest, {formatVolume(restMl, units)}, is {breastPart != null ? "formula" : "breast milk"}.
-                      </p>
-                    ) : null}
-                  </div>
-                )}
-              </section>
-              <div>
-                <MiniStepper
-                  key="amount"
-                  label="Amount consumed"
-                  unit={units === "metric" ? "ml" : "oz"}
-                  ariaLabel={units === "metric" ? "millilitres" : "ounces"}
-                  value={amount}
-                  onChange={editAmount}
-                  onInvalid={checks.watch("amount")}
-                  step={units === "metric" ? 5 : 0.5}
-                  decimals={units === "metric" ? 1 : 3}
-                  max={maxAmount}
+              {/* A feed's part says which feed it's with, on top. Milk at the breast: how it went in, then how much, then
+                  which milk. A bottle: what's in it first (formula, breast milk or both is the first thing to say, and
+                  on a phone the last thing in the form sits below the fold). */}
+              {partLine}
+              {asPart && atBreastShown && (
+                <Segmented<AtBreastVia>
+                  aria-label="How it was given"
+                  value={atBreastShown}
+                  onChange={setVia}
+                  options={[
+                    { value: "syringe", label: AT_BREAST_WORDS.syringe.name },
+                    { value: "sns", label: AT_BREAST_WORDS.sns.name },
+                  ]}
                 />
-                {(checks.invalid || amountOverLimit) && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">Bottle amounts can be up to {units === "metric" ? "500 ml" : `${bottleLimit} oz (500 ml)`}. Correct the amount, or leave it blank if unknown.</p>}
-                {zeroBottle && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{ZERO_BOTTLE_HINT}</p>}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {chips.map((c) => (
-                    <Chip
-                      key={c}
-                      selected={amount === c}
-                      onClick={() => editAmount(c)}
-                    >
-                      {c} {units === "metric" ? "ml" : "oz"}
-                    </Chip>
-                  ))}
-                </div>
-                {lastBottle?.data.amount_ml != null && !e && (
-                  <p className={cx(tone.muted, "mt-1.5 text-xs")}>
-                    {forBreast ? "Last at the breast" : "Last bottle"}: {formatVolume(lastBottle.data.amount_ml, units)}
-                    {lastBottle.data.milk ? ` of ${MILK_LABEL[lastBottle.data.milk].toLowerCase()}` : ""} at {clock(lastBottle.started_at)}
-                  </p>
-                )}
-              </div>
+              )}
+              {!atBreastShown && milkSection}
+              {amountSection}
+              {atBreastShown && milkSection}
               <WhenField value={when} onChange={setWhen} onInvalidChange={setManualTimeInvalid} tz={tz} />
-              {topUpOf && (
+              {!asPart && topUpOf && (
                 <p className={cx(tone.muted, "-mt-2 text-[13px] leading-snug")}>
                   {breastVia
-                    ? `Milk at the breast with the ${clock(new Date(topUpOf.start).toISOString())} feed: part of that feed, not a feed of its own.`
-                    : `A top-up for the ${clock(new Date(topUpOf.start).toISOString())} feed: part of that feed, not a feed of its own.`}
+                    ? `Milk at the breast with the ${feedClock} feed: part of that feed, not a feed of its own.`
+                    : `A top-up for the ${feedClock} feed: part of that feed, not a feed of its own.`}
                 </p>
               )}
-              <section aria-label="How it was given">
-                <Label>How</Label>
-                <div className="flex flex-wrap gap-2">
-                  {BOTTLE_VIAS.map((v) => (
-                    <Chip
-                      key={v}
-                      selected={via === v}
-                      onClick={() => {
-                        touch("via");
-                        setVia(via === v ? undefined : v);
-                      }}
-                    >
-                      {VIA_LABEL[v]}
-                    </Chip>
-                  ))}
-                </div>
-              </section>
-              <ContextNote>
-                {/* A target from their care team replaces the typical amount (it counts what's taken at the breast too). */}
-                {target ? (
-                  <>
-                    Target from your care team: {formatVolumeRange(target, units)} a feed, counting what {voice.they} {voice.verb("takes")} at the breast. {feedCues(voice)}
-                  </>
-                ) : (
-                  <>
-                    {age ? <>Typical at {w.his} age: {typicalBottle(ageDays)}. </> : null}
-                    {bottleCues(voice)}
-                  </>
-                )}
-              </ContextNote>
+              {!(asPart && atBreastShown) && (
+                <section aria-label="How it was given">
+                  <Label>How</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {BOTTLE_VIAS.map((v) => (
+                      <Chip
+                        key={v}
+                        selected={via === v}
+                        onClick={() => {
+                          touch("via");
+                          setVia(via === v ? undefined : v);
+                        }}
+                      >
+                        {VIA_LABEL[v]}
+                      </Chip>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {planFeedPick}
+              {!atBreastShown && (
+                <ContextNote>
+                  {/* A target from their care team replaces the typical amount (it counts what's taken at the breast too). */}
+                  {target ? (
+                    <>
+                      Target from your care team: {formatVolumeRange(target, vu)} a feed, counting what {voice.they} {voice.verb("takes")} at the breast. {feedCues(voice)}
+                    </>
+                  ) : (
+                    <>
+                      {age ? <>Typical at {w.his} age: {typicalBottle(ageDays)}. </> : null}
+                      {bottleCues(voice)}
+                    </>
+                  )}
+                </ContextNote>
+              )}
             </>
           )}
         </>
@@ -1153,6 +1311,65 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       <NoteField value={note} onChange={setNote} readOnly={readOnly} />
       </fieldset>
     </Sheet>
+  );
+}
+
+/** The most one bottle can hold, in the unit shown (500 ml). */
+const limitIn = (u: UnitSystem) => (u === "metric" ? 500 : Math.floor(mlToOz(500) * 1000) / 1000);
+
+/**
+ * A plan feed's own amount (ml) for one of a feed's parts: its milk at the
+ * breast (given that way, else any), or its top-up (a bottle step's amount,
+ * after the nursing). Null when the plan has none (a top-up "up to the
+ * target" is the target less what she took, so it has no amount of its own).
+ */
+function partRange(plan: FeedingPlan | null, feedId: string | undefined, part: AtBreastVia | "top-up" | null): Range | null {
+  const feed = plan && part ? feedById(plan, feedId) : null;
+  if (!feed) return null;
+  if (part !== "top-up") {
+    const given = feed.steps.flatMap((s) => (s.do === "nurse" && s.supplement ? [s.supplement] : []));
+    return (given.find((x) => x.via === part) ?? given[0])?.ml ?? null;
+  }
+  let nursed = false;
+  for (const s of feed.steps) {
+    if (s.do === "nurse") nursed = true;
+    else if (s.do === "bottle" && nursed && s.ml) return s.ml;
+  }
+  return null;
+}
+
+/** Quick amounts from a plan's range, in the unit shown: its ends, and the middle of a wide one ("25", "30", "35" ml). */
+function rangeChips(r: Range, u: UnitSystem): number[] {
+  const shown = (ml: number) => (u === "metric" ? Math.round(ml * 10) / 10 : Number((ml / ML_PER_FL_OZ).toFixed(2)));
+  const lo = shown(r.min);
+  const hi = shown(r.max);
+  const step = u === "metric" ? 5 : 0.25;
+  const mid = Math.round((lo + hi) / 2 / step) * step;
+  return [...new Set([lo, ...(hi - lo >= 2 * step && mid > lo && mid < hi ? [mid] : []), hi])];
+}
+
+/**
+ * Which of the plan's feeds this was (data.plan), one chip each: Today's card,
+ * the chat and Siri read it before anything logged with the feed, so a feed
+ * read as the wrong kind is put right here for every phone. The one picked,
+ * tapped again, clears it (then what was logged with it decides).
+ */
+function PlanFeedPick({ plan, value, onChange, disabled }: { plan: FeedingPlan; value: string | undefined; onChange: (id: string | undefined) => void; disabled?: boolean }) {
+  const known = !!value && plan.feeds.some((f) => f.id === value);
+  return (
+    <section aria-label="Plan feed">
+      <Label>Plan feed</Label>
+      <div className="flex flex-wrap gap-2">
+        {plan.feeds.map((f) => (
+          <Chip key={f.id} selected={value === f.id} disabled={disabled} onClick={() => onChange(value === f.id ? undefined : f.id)}>
+            {f.name}
+          </Chip>
+        ))}
+      </div>
+      <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>
+        {known ? "Every phone counts it as this feed of the plan." : "Not set: Maple goes by what was logged with it."}
+      </p>
+    </section>
   );
 }
 

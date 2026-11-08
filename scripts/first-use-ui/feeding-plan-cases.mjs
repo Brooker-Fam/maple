@@ -250,16 +250,19 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         await missed.getByRole("button", { name: "Fix", exact: true }).click();
         await f.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
         await missed.getByRole("button", { name: /^Log top-up/ }).click();
-        const form = f.page.getByRole("dialog", { name: "Feed", exact: true });
+        // The form says what it is: that feed's top-up, its quick amounts the plan's range.
+        const form = f.page.getByRole("dialog", { name: /^Top-up · 10:40\sAM feed$/ });
         await form.waitFor();
-        assert.match(await form.textContent(), /A top-up for the 10:40\sAM feed: part of that feed, not a feed of its own\./);
+        assert.match(await form.textContent(), /Part of that feed, not a feed of its own\./);
+        assert.equal(await form.getByRole("radiogroup", { name: "Feed type" }).count(), 0, "no Breast or Bottle to choose");
+        assert.deepEqual(await form.getByRole("button", { name: /^\d+ ml$/ }).allTextContents(), ["25 ml", "30 ml", "35 ml"]);
         assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "25", "the plan's amount, the smaller of its range");
         await form.getByRole("button", { name: /^Log 25 ml/ }).click();
         await form.waitFor({ state: "hidden" });
         await waitFor(f, () => writes(f).length > 0, "the top-up");
-        // The plan says formula or breast milk, so the form's own milk (the last bottle's) stands; the rest is the plan's.
-        const { method, amount_ml, via, top_up_of, plan } = writes(f)[0].body.data;
-        assert.deepEqual({ method, amount_ml, via, top_up_of, plan }, { method: "bottle", amount_ml: 25, via: "paced", top_up_of: 61, plan: "p1f2" });
+        // The plan says formula or breast milk, so the milk is the family's to say: never the last bottle's.
+        const { method, amount_ml, via, top_up_of, plan, milk } = writes(f)[0].body.data;
+        assert.deepEqual({ method, amount_ml, via, top_up_of, plan, milk }, { method: "bottle", amount_ml: 25, via: "paced", top_up_of: 61, plan: "p1f2", milk: undefined });
         await missed.waitFor({ state: "hidden" });
         assert.deepEqual(f.errors, []);
       } finally {

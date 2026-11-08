@@ -92,6 +92,46 @@ export function topUpCases({ fixture, freshState, record, writes, assert }) {
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["Milk at the breast is said apart from top-ups and bottles: Last fed, the day so far and the visit summary", async () => {
+      const state = freshState();
+      state.baby.settings = { ...state.baby.settings, feed_target_ml: { min: 50, max: 70 } };
+      // 8:45–9:15 AM with 20 ml of formula in the SNS at 8:50 and a 30 ml paced top-up of formula at 9:20; a 60 ml bottle
+      // of breast milk on its own at 6:00.
+      state.entries = [
+        record(48, "feed", { method: "bottle", amount_ml: 30, milk: "formula", via: "paced" }, "2026-10-28T13:20:00.000Z"),
+        nursing(46, "2026-10-28T12:45:00.000Z", "2026-10-28T13:00:00.000Z", "2026-10-28T13:15:00.000Z"),
+        record(47, "feed", { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", top_up_of: 46 }, "2026-10-28T12:50:00.000Z"),
+        record(49, "feed", { method: "bottle", amount_ml: 60, milk: "breastmilk" }, "2026-10-28T10:00:00.000Z"),
+      ];
+      const plain = (s) => s.replace(/[\u00a0\u202f]/g, " ");
+      const f = await fixture({ state, records: state.entries });
+      try {
+        await metric(f);
+        await f.page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { get: () => undefined }));
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("heading", { name: "Recently logged", exact: true }).waitFor();
+        // Last fed: the feed's parts in its row's words, the SNS milk never a top-up.
+        assert.match(plain(await f.page.locator("body").textContent()), /Left then Right · \+ 20 ml in the SNS · \+ 30 ml top-up/);
+        await f.page.goto("https://first-use.example.test/#patterns");
+        const tallies = f.page.locator('section[aria-labelledby="day-so-far"]');
+        await tallies.waitFor();
+        const counted = plain(await tallies.textContent());
+        assert.match(counted, /1 top-up(?!s)/, "one top-up by bottle, not two");
+        assert.match(counted, /At the breast · syringe or SNS20 ml formula20 ml/);
+        assert.match(counted, /By bottle · 30 ml formula90 ml/, "by bottle: the bottles, never the SNS milk");
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("button", { name: "More", exact: true }).click();
+        await f.page.getByRole("button", { name: /^For the doctor/ }).click();
+        const dialog = f.page.getByRole("dialog", { name: "For the doctor", exact: true });
+        await dialog.getByRole("button", { name: "Copy summary", exact: true }).click();
+        const text = await dialog.getByRole("textbox", { name: "Visit summary", exact: true }).inputValue();
+        const today = text.split("\n").find((line) => line.includes("(so far):")) ?? "";
+        assert.match(today, /: 2 feeds \(/, today);
+        assert.match(today, /1 bottle, 2\.03 oz \(60 ml\); 1 top-up with nursing, 1\.01 oz \(30 ml\); milk at the breast \(syringe or SNS\), 0\.68 oz \(20 ml\); in all: formula 1\.69 oz \(50 ml\), breast milk 2\.03 oz \(60 ml\)/, today);
+        assert.doesNotMatch(today, /by bottle/, "the SNS milk never went by bottle");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Settings keeps a target per feed from the care team, in the units shown", async () => {
       const state = freshState();
       const patches = [];

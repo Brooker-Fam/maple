@@ -1,12 +1,14 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
-import { bottleAmount, gapSummary, minutesShort, sideMinutesText, spanText, stepsIn, topUpMl, type GapStep, type Latch } from "@/lib/maple/feed";
+import { feedPartsList, planUnitsOf } from "@/lib/maple/describe";
+import { bottleAmount, gapSummary, minutesShort, sideMinutesText, spanText, stepsIn, type GapStep, type Latch } from "@/lib/maple/feed";
 import { dayKey, formatDayLabel, formatDuration, formatTime } from "@/lib/maple/time";
 import type { UnitSystem } from "@/lib/maple/types";
 import { formatVolume } from "@/lib/maple/units";
 import { DETAIL_COLOR } from "./palette";
 import { HowToRead, cx, tone } from "./ui";
+import { useMaple } from "./useMaple";
 
 /**
  * Between feeds, under the Day clock (History → Patterns): every time she
@@ -19,8 +21,9 @@ import { HowToRead, cx, tone } from "./ui";
  * Rows come from feed.ts feedGaps: coming off for under 2 minutes is the
  * same row, any longer and going back on is a new one, whatever was tapped.
  * Back on within 10 minutes is still one feed on Today and in the counts, so
- * its row says "back on after 6m"; a top-up is part of its feed, so it rides
- * on that row ("+ 35 ml top-up"), never a row or a gap of its own. A cluster is a shaded band, never folded,
+ * its row says "back on after 6m"; milk at the breast and a top-up are part
+ * of their feed, so they ride on that row ("+ 20 ml in the syringe", "+ 35 ml
+ * top-up"), never a row or a gap of their own. A cluster is a shaded band, never folded,
  * so its gaps show too. The time on the breast just before the window leads,
  * quieter, so a day's first gap (from the evening before) shows. It only
  * describes what was logged: no targets, no scores, and over 12 hours
@@ -46,20 +49,18 @@ function sidesText(latch: Latch): string {
   return sideMinutesText(latch.min);
 }
 
-/** A row's words: what it was, then its sides, a top-up given with it (as Today says it), and how soon she was back on. */
-function feedWords(step: GapStep, units: UnitSystem): { main: string; more: string[] } {
+/**
+ * A row's words: what it was, then its sides, what was given with it (as Today says it: "+ 20 ml in the syringe",
+ * "+ 30 ml top-up", with the plan's unit beside the app's, planUnits), and how soon she was back on.
+ */
+function feedWords(step: GapStep, units: UnitSystem, planUnits: UnitSystem | null): { main: string; more: string[] } {
   if (step.feed.kind === "bottle") {
     const ml = bottleAmount(step.feed.entry.data);
     return { main: ml ? `Bottle · ${formatVolume(ml, units)}` : "Bottle", more: [] };
   }
   const latch = step.feed.latch;
   const total = minutesShort(latch.min.total);
-  const topUp = latch.topUps.length ? topUpMl(latch) : undefined;
-  const more = [
-    sidesText(latch),
-    topUp === undefined ? "" : topUp !== null ? `+ ${formatVolume(topUp, units)} top-up` : "+ top-up",
-    step.backOnMin !== null ? `back on after ${minutesShort(step.backOnMin)}` : "",
-  ].filter(Boolean);
+  const more = [sidesText(latch), ...feedPartsList(latch.topUps, units, planUnits), step.backOnMin !== null ? `back on after ${minutesShort(step.backOnMin)}` : ""].filter(Boolean);
   return { main: latch.end === null ? `Nursing · ${total} so far` : `Nursed ${total}`, more };
 }
 
@@ -102,6 +103,8 @@ export default function BetweenFeeds({
   units: UnitSystem;
 }) {
   const id = useId();
+  // With a plan saved in the other unit, a feed's parts say the plan's too, as Today and the feed's row do.
+  const planUnits = planUnitsOf(useMaple().state?.baby.settings);
   const inWindow = stepsIn(steps, lo, Math.min(hi, nowMs + 1));
   const summary = gapSummary(inWindow);
   if (!inWindow.length || !summary.gaps || !summary.longest) return null;
@@ -200,7 +203,7 @@ export default function BetweenFeeds({
         </li>
       );
     }
-    const words = feedWords(step, units);
+    const words = feedWords(step, units, planUnits);
     rows.push(
       <li key={`row-${stepKey(step)}`} className={cx(GRID, band && BAND, band?.last === i && "rounded-b-xl pb-1")}>
         <span className={cx("pt-px text-right text-[13px] leading-[18px] tabular-nums", context ? "text-mp-ink-3" : "text-mp-ink-2")}>{formatTime(step.start, tz)}</span>
@@ -245,7 +248,7 @@ export default function BetweenFeeds({
         {rows}
       </ol>
       <HowToRead className="border-t border-mp-line px-4">
-        <p>Each row is a time on the breast, or a bottle on its own. Between rows is the time from one start to the next start. Coming off for under 2 minutes, like switching sides, stays on the same row, and a top-up given with nursing is on its row.</p>
+        <p>Each row is a time on the breast, or a bottle on its own. Between rows is the time from one start to the next start. Coming off for under 2 minutes, like switching sides, stays on the same row, and milk at the breast or a top-up given with nursing is on its row.</p>
         <p>Back on within 10 minutes counts as the same feed on Today and in the feed counts. Here it gets its own row, marked &ldquo;back on after&rdquo;, so that gap shows too.</p>
         <p>A shaded band is a cluster: 3 or more feeds, each starting less than 30 minutes after the last one ended.</p>
         <p>Only what was logged counts. Over 12 hours between two logged feeds is left out of the numbers, in case a feed wasn&apos;t logged.</p>

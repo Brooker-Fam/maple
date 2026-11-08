@@ -1168,8 +1168,16 @@ export async function discardedBy(fam: FamilyRef, id: number): Promise<string | 
  * `expectUpdatedAt`: only the finished feed this phone saw, else 409
  * "changed" and nothing is written. The answer's `before` is the finished
  * feed (with paused_at_stop), which a retime restore puts back exactly.
+ * `carry` (joinFeeds): what the start it takes the place of said about the
+ * feed, written in the same write: a nipple shield (on if either had it) and
+ * the plan feed (when this one has none).
  */
-export async function reopenTimerDetailed(fam: FamilyRef, id: number, by?: string, opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string } = {}): Promise<TimerResponse> {
+export async function reopenTimerDetailed(
+  fam: FamilyRef,
+  id: number,
+  by?: string,
+  opts: { side?: StretchSide; at?: Date; expectUpdatedAt?: string; carry?: Pick<FeedData, "shield" | "plan"> } = {}
+): Promise<TimerResponse> {
   const now = new Date();
   const t = tapTime(opts.at, now);
   try {
@@ -1195,6 +1203,9 @@ export async function reopenTimerDetailed(fam: FamilyRef, id: number, by?: strin
       delete rest.both_sec;
       delete rest.paused_at_stop;
       delete rest.stopped_at;
+      // What the joined start said about the feed: its shield stays on, its plan feed fills in one not said.
+      if (opts.carry?.shield) rest.shield = true;
+      if (opts.carry?.plan && !rest.plan) rest.plan = opts.carry.plan;
       const side = opts.side;
       const open = openSegment(segs);
       if (!side || open?.side === side) return { data: rest, active: true, endedAt: null };
@@ -1230,8 +1241,10 @@ export async function reopenTimerDetailed(fam: FamilyRef, id: number, by?: strin
  * ended (a Done by mistake, or she came back for more) is that feed going
  * on. One request: the new feed is set aside (only as this phone saw it,
  * marked joined_into so Recently removed doesn't offer it back as a stray)
- * and the old one is carried on, on `side`, from the new one's start. If
- * carrying on fails, the new one comes back as it was.
+ * and the old one is carried on, on `side`, from the new one's start, with
+ * what the new start said about the feed (its nipple shield, its plan feed
+ * when the old one has none) in the same write. If carrying on fails, the
+ * new one comes back as it was.
  */
 export async function joinFeeds(fam: FamilyRef, newId: number, intoId: number, side: StretchSide, by: string | undefined, opts: { expectNew?: string; expectInto?: string } = {}): Promise<TimerResponse & { joined: Entry }> {
   const familyId = famId(fam);
@@ -1256,7 +1269,13 @@ export async function joinFeeds(fam: FamilyRef, newId: number, intoId: number, s
   }
   const joined = rowToEntry(rows[0]);
   try {
-    const res = await reopenTimerDetailed(familyId, intoId, by, { side, at: new Date(cur.started_at), expectUpdatedAt: opts.expectInto });
+    const started = cur.data as FeedData;
+    const res = await reopenTimerDetailed(familyId, intoId, by, {
+      side,
+      at: new Date(cur.started_at),
+      expectUpdatedAt: opts.expectInto,
+      carry: { shield: started.shield, plan: started.plan },
+    });
     return { ...res, joined };
   } catch (err) {
     // Put the new one back exactly (still running), then say why.

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { describeEntry } from "@/lib/maple/describe";
 import { feedClusters, nursingRuns, topUpIds, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
 import { feedRowParts, partsShown, type FeedRowParts } from "@/lib/maple/feed-rows";
-import { statsFor, type DayStats } from "@/lib/maple/insights";
+import { byBottle, statsFor, type DayStats } from "@/lib/maple/insights";
 import {
   DEFAULT_TZ,
   addDays,
@@ -324,15 +324,23 @@ export function dstNote(key: string, tz: string): string | null {
   return null;
 }
 
-/** "11 feeds (one cluster) · 2h 05m nursing · 2 oz bottle (1 top-up) · 1 oz formula · 6 wet · 3 dirty · 14h 20m sleep" */
+/**
+ * "11 feeds (one cluster) · 2h 05m nursing · 20 ml at the breast · 2 oz bottle (1 top-up) · 1 oz formula · 6 wet ·
+ * 3 dirty · 14h 20m sleep"
+ */
 export function daySummaryParts(s: DayStats, units: UnitSystem): string[] {
   const clusters = s.clusters === 1 ? " (one cluster)" : s.clusters > 1 ? ` (${s.clusters} clusters)` : "";
   const parts = [`${s.feeds} feed${s.feeds === 1 ? "" : "s"}${clusters}`];
   if (s.nursingSec >= 60) parts.push(`${formatDuration(s.nursingSec)} nursing`);
-  // The amount is every bottle's; the top-ups among them are part of nursing feeds, not feeds of their own.
-  const topUps = s.topUps ? ` (${s.topUps} top-up${s.topUps === 1 ? "" : "s"})` : "";
-  if (s.bottleMl > 0) parts.push(`${formatVolume(s.bottleMl, units)} bottle${topUps}`);
-  else if (s.topUps) parts.push(`${s.topUps} top-up${s.topUps === 1 ? "" : "s"}`);
+  // Milk given at the breast (a syringe or an SNS) is part of its nursing feed, and never "bottle" or a top-up.
+  if (s.atBreastMl > 0) parts.push(`${formatVolume(s.atBreastMl, units)} at the breast`);
+  else if (s.atBreast) parts.push("milk at the breast");
+  // The bottles' amount; the top-ups among them are part of nursing feeds, not feeds of their own.
+  const bottleMl = byBottle(s).ml;
+  const tops = s.topUps - s.atBreast;
+  const topUps = tops ? ` (${tops} top-up${tops === 1 ? "" : "s"})` : "";
+  if (bottleMl > 0) parts.push(`${formatVolume(bottleMl, units)} bottle${topUps}`);
+  else if (tops) parts.push(`${tops} top-up${tops === 1 ? "" : "s"}`);
   // Of the bottles, the formula (feed.ts milkSplit): what a supplementing plan watches.
   if (s.formulaMl > 0) parts.push(`${formatVolume(s.formulaMl, units)} formula`);
   parts.push(`${s.wet} wet`, `${s.dirty} dirty`);

@@ -3,8 +3,9 @@
 import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
 import { Fragment, useState } from "react";
-import { lastFedRule, minutesShort, spanText, topUpMl, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
-import type { DayStats, Summary } from "@/lib/maple/insights";
+import { feedPartsList, planUnitsOf } from "@/lib/maple/describe";
+import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
+import { byBottle, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { feedTargetOf, formatVolume, formatVolumeRange } from "@/lib/maple/units";
 import type { Side, StretchSide } from "@/lib/maple/types";
@@ -164,11 +165,9 @@ export default function StatusCard() {
       if (run.min.total) bits.push(minutesShort(run.min.total));
       const sides = sidesLabel(run);
       if (sides) bits.push(sides);
-      // A bottle given with it is part of this feed: "+ 35 ml top-up".
-      if (run.topUps.length) {
-        const ml = topUpMl(run);
-        bits.push(ml != null ? `+ ${formatVolume(ml, units)} top-up` : "+ top-up");
-      }
+      // What was given with it is part of this feed, in its row's words (with a plan in the other unit, the plan's beside
+      // the app's, as its card says them): "+ 20 ml in the syringe", "+ 35 ml top-up". Milk at the breast is never a top-up.
+      bits.push(...feedPartsList(run.topUps, units, planUnitsOf(state.baby.settings)));
     }
     feedSub = bits;
   }
@@ -371,11 +370,14 @@ export function Tallies({
   const nursingSplit = s.leftSec + s.rightSec > 0 ? Math.round((s.leftSec / (s.leftSec + s.rightSec)) * 100) : null;
   const split = nursingSplit != null ? `L ${nursingSplit}% · R ${100 - nursingSplit}%` : null;
   const both = s.bothSec >= 60 ? `both ${formatDuration(s.bothSec)}` : null;
+  // By bottle: the bottles' milk, without what went in at the breast (DayStats counts that with the top-ups).
+  const { ml: bottleOnlyMl, formulaMl: bottleFormulaMl } = byBottle(s);
 
   // Each count's bar fills toward the usual number for her day of life (the footnote says what that is).
   // Feeds count each feed in a cluster (split by 10+ minutes off the breast): "11 · 4 in a cluster". A top-up is part of
-  // its feed, never one of its own: "8 · 6 top-ups".
-  const topUps = s.topUps ? `${s.topUps} top-up${s.topUps === 1 ? "" : "s"}` : null;
+  // its feed, never one of its own: "8 · 6 top-ups". Milk at the breast (syringe or SNS) isn't a top-up: its own row.
+  const bottleTopUps = s.topUps - s.atBreast;
+  const topUps = bottleTopUps ? `${bottleTopUps} top-up${bottleTopUps === 1 ? "" : "s"}` : null;
   const tiles: { key: string; label: string; value: string; goal: number | null; have: number; color: string; note?: string; aria?: string }[] = [
     {
       key: "feeds",
@@ -416,8 +418,17 @@ export function Tallies({
       below: both ? [split, both].filter(Boolean).join(" · ") : null,
       value: formatDuration(s.nursingSec),
     },
+    // Milk given at the breast while she nursed (a syringe or an SNS), part of those feeds: its own row, never "by bottle".
+    s.atBreast > 0 && {
+      icon: "baby",
+      color: DETAIL_COLOR.nursing,
+      label: "At the breast",
+      detail: "syringe or SNS",
+      below: s.atBreastFormulaMl > 0 ? `${formatVolume(s.atBreastFormulaMl, units)} formula` : null,
+      value: s.atBreastMl > 0 ? formatVolume(s.atBreastMl, units) : `${s.atBreast} time${s.atBreast === 1 ? "" : "s"}`,
+    },
     // Every bottle's amount, top-ups too, with the formula in it when any was logged.
-    s.bottleMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: s.formulaMl > 0 ? `${formatVolume(s.formulaMl, units)} formula` : null, value: formatVolume(s.bottleMl, units) },
+    bottleOnlyMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: bottleFormulaMl > 0 ? `${formatVolume(bottleFormulaMl, units)} formula` : null, value: formatVolume(bottleOnlyMl, units) },
     s.pumpMl > 0 && { icon: "milk", color: KIND_COLOR.pump, label: "Pumped", detail: null, value: formatVolume(s.pumpMl, units) },
   ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; below?: string | null; value: string }[];
 

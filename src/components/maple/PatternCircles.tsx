@@ -1,5 +1,6 @@
 "use client";
 
+import { byBottle } from "@/lib/maple/insights";
 import { formatDuration } from "@/lib/maple/time";
 import type { UnitSystem } from "@/lib/maple/types";
 import { formatVolume } from "@/lib/maple/units";
@@ -65,7 +66,9 @@ function Circle({ row, mode, units, night, activity, onPickDay }: Omit<Props, "r
     showFeeds && s.breastFeeds === 0 && row.feeds.some((feed) => !feed.bottle) && "Nursing continued from earlier",
     showSleep && `${formatDuration(s.sleepSec)} sleep`,
     showDiapers && `${s.wet} wet · ${s.dirty} dirty`,
-    showFeeds && s.bottleMl > 0 && `${formatVolume(s.bottleMl, units)} by bottle`,
+    // By bottle, and milk given at the breast apart from it (it never went by bottle).
+    showFeeds && byBottle(s).ml > 0 && `${formatVolume(byBottle(s).ml, units)} by bottle`,
+    showFeeds && s.atBreastMl > 0 && `${formatVolume(s.atBreastMl, units)} at the breast`,
     activity === "all" && s.tummySec > 0 && `${formatDuration(s.tummySec)} tummy time`,
   ].filter((part): part is string => typeof part === "string");
   const ticks = mode === "days" ? ["Midnight", "6 AM", "Noon", "6 PM"] : ["Noon", "6 PM", "Midnight", "6 AM"];

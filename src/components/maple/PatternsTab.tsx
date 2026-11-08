@@ -27,7 +27,7 @@ import {
   diaperTargets,
   tummyGoalMinutes,
 } from "@/lib/maple/guidelines";
-import { isVitaminD, soloBottleMl, statsFor, type DayStats } from "@/lib/maple/insights";
+import { byBottle, isVitaminD, soloBottleMl, statsFor, type DayStats } from "@/lib/maple/insights";
 import { nursingSpans } from "@/lib/maple/nursing-spans";
 import { pumpAmountLabel, pumpSessionLabel, pumpSummaryLabel } from "@/lib/maple/pump-summary";
 import {
@@ -842,9 +842,12 @@ function RibbonRowView({ row, W, units, night, activity, onPick }: { row: Ribbon
     .filter(Boolean)
     .join(" · ");
   const x = (f: number) => f * W;
+  // By bottle, and milk given at the breast apart from it (it never went by bottle).
+  const feedsShown = activity === "all" || activity === "feeds";
+  const bottleMl = byBottle(s).ml;
   const aria = `${row.label}${row.nowX != null ? ", so far" : ""}: ${summary}${row.clusters.length ? `; ${row.clusters.map((c) => c.title).join("; ")}` : ""}${
-    (activity === "all" || activity === "feeds") && s.bottleMl ? `; ${formatVolume(s.bottleMl, units)} by bottle` : ""
-  }`;
+    feedsShown && bottleMl ? `; ${formatVolume(bottleMl, units)} by bottle` : ""
+  }${feedsShown && s.atBreastMl ? `; ${formatVolume(s.atBreastMl, units)} at the breast` : ""}`;
 
   const body = (
     <>
@@ -1560,7 +1563,10 @@ function DailyCharts({
   const vol = (ml: number) => (units === "us" ? mlToOz(ml) : ml);
   const volumeLabel = (value: number) => formatVolume(units === "us" ? ozToMl(value) : value, units);
   const volUnit = units === "us" ? "oz" : "ml";
-  const anyBottle = days.some((d) => d.bottleMl > 0);
+  // By bottle, and apart from it, milk given at the breast (a syringe or an SNS): it never went by bottle.
+  const bottles = days.map(byBottle);
+  const anyBottle = bottles.some((b) => b.ml > 0);
+  const anyAtBreast = days.some((d) => d.atBreastMl > 0);
   const anyPump = days.some((d) => d.pumpSessions > 0);
   const anyPumpAmount = days.some((d) => d.pumpMeasuredSessions > 0);
   const anyBottleFeeds = days.some((d) => d.bottleFeeds > 0);
@@ -1571,7 +1577,7 @@ function DailyCharts({
   const anyBoth = days.some((d) => d.bothSec > 0);
   const lPct = totalL + totalR ? Math.round((totalL / (totalL + totalR)) * 100) : 0;
   const bornAge = bornAt ? babyAge(bornAt, now, tz) : null;
-  const more = [anyBottle && "bottle", anyPump && "pumped", anyTummy && "tummy time"].filter((m): m is string => !!m);
+  const more = [anyBottle && "bottle", anyAtBreast && "at the breast", anyPump && "pumped", anyTummy && "tummy time"].filter((m): m is string => !!m);
   const moreSummary = more.length ? more[0][0].toUpperCase() + more.join(", ").slice(1) : "";
 
   return (
@@ -1793,17 +1799,39 @@ function DailyCharts({
                       keys={keys}
                       todayKey={todayKey}
                       night={night}
-                      series={[{ id: "bottle", label: "Bottle", color: "var(--v-bottle)", values: days.map((d) => vol(d.bottleMl)), hollow: night }]}
+                      series={[{ id: "bottle", label: "Bottle", color: "var(--v-bottle)", values: bottles.map((b) => vol(b.ml)), hollow: night }]}
                       minPositiveHeight={2}
                       yLabel={(v) => String(v)}
                       valueLabel={volumeLabel}
-                      ariaLabel={`Bottle volume per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.bottleMl, units)}`).join(", ")}`}
+                      ariaLabel={`Bottle volume per day: ${days.map((d, i) => `${shortDate(d.key)} ${formatVolume(bottles[i].ml, units)}`).join(", ")}`}
                       tooltip={(i) => (
                         <>
-                          <TipRow color="var(--v-bottle)" hollow={night} value={formatVolume(days[i].bottleMl, units)} label={`by bottle${so(i)}`} />
+                          <TipRow color="var(--v-bottle)" hollow={night} value={formatVolume(bottles[i].ml, units)} label={`by bottle${so(i)}`} />
                           {/* Of it, the formula and the breast milk (feed.ts milkSplit); the rest wasn't said. */}
-                          {days[i].formulaMl > 0 && <TipRow color="var(--v-bottle)" hollow value={formatVolume(days[i].formulaMl, units)} label="formula" />}
-                          {days[i].breastMilkMl > 0 && <TipRow color="var(--v-bottle)" hollow value={formatVolume(days[i].breastMilkMl, units)} label="breast milk" />}
+                          {bottles[i].formulaMl > 0 && <TipRow color="var(--v-bottle)" hollow value={formatVolume(bottles[i].formulaMl, units)} label="formula" />}
+                          {bottles[i].breastMilkMl > 0 && <TipRow color="var(--v-bottle)" hollow value={formatVolume(bottles[i].breastMilkMl, units)} label="breast milk" />}
+                        </>
+                      )}
+                    />
+                  </ChartBlock>
+                )}
+
+                {anyAtBreast && (
+                  <ChartBlock title={`At the breast per day (${volUnit})`}>
+                    <Columns
+                      keys={keys}
+                      todayKey={todayKey}
+                      night={night}
+                      series={[{ id: "at-breast", label: "At the breast", color: "var(--v-nurse)", values: days.map((d) => vol(d.atBreastMl)), hollow: night }]}
+                      minPositiveHeight={2}
+                      yLabel={(v) => String(v)}
+                      valueLabel={volumeLabel}
+                      ariaLabel={`Milk at the breast (syringe or SNS) per day: ${days.map((d) => `${shortDate(d.key)} ${formatVolume(d.atBreastMl, units)}`).join(", ")}`}
+                      tooltip={(i) => (
+                        <>
+                          <TipRow color="var(--v-nurse)" hollow={night} value={formatVolume(days[i].atBreastMl, units)} label={`at the breast (syringe or SNS)${so(i)}`} />
+                          {days[i].atBreastFormulaMl > 0 && <TipRow color="var(--v-nurse)" hollow value={formatVolume(days[i].atBreastFormulaMl, units)} label="formula" />}
+                          {days[i].atBreastBreastMilkMl > 0 && <TipRow color="var(--v-nurse)" hollow value={formatVolume(days[i].atBreastBreastMilkMl, units)} label="breast milk" />}
                         </>
                       )}
                     />
@@ -1874,7 +1902,9 @@ function DailyCharts({
 
 /** The charts' accessible twin: every number, one row per day. */
 function DailyTable({ days, gaps, todayKey, units }: { days: DayStats[]; gaps: GapSummary[] | null; todayKey: string; units: UnitSystem }) {
-  const anyBottle = days.some((d) => d.bottleMl > 0);
+  // By bottle, and milk given at the breast (a syringe or an SNS) in its own column: it never went by bottle.
+  const anyBottle = days.some((d) => byBottle(d).ml > 0);
+  const anyAtBreast = days.some((d) => d.atBreastMl > 0);
   const anyFormula = days.some((d) => d.formulaMl > 0);
   const anyBoth = days.some((d) => d.bothSec > 0);
   const anyPump = days.some((d) => d.pumpSessions > 0);
@@ -1917,6 +1947,7 @@ function DailyTable({ days, gaps, todayKey, units }: { days: DayStats[]; gaps: G
             {gaps && <th scope="col" className={th}>Longest gap</th>}
             <th scope="col" className={th}>{anyBoth ? "Nursing L / R / both" : "Nursing L / R"}</th>
             {anyBottle && <th scope="col" className={th}>Bottle</th>}
+            {anyAtBreast && <th scope="col" className={th}>At the breast (syringe or SNS)</th>}
             {anyFormula && <th scope="col" className={th}>Formula</th>}
             {anyPump && <th scope="col" className={th}>Pumped</th>}
             {anyTummy && <th scope="col" className={th}>Tummy time</th>}
@@ -1928,7 +1959,7 @@ function DailyTable({ days, gaps, todayKey, units }: { days: DayStats[]; gaps: G
               <th scope="row" className={cx(td, "text-left font-medium")}>
                 {formatDayLabel(d.key, todayKey)}
               </th>
-              {!hasDailyTotals(d) ? <td colSpan={5 + 2 * Number(!!gaps) + Number(anyBottle) + Number(anyFormula) + Number(anyPump) + Number(anyTummy)} className={cx(td, tone.muted)}>Nothing logged</td> : <>
+              {!hasDailyTotals(d) ? <td colSpan={5 + 2 * Number(!!gaps) + Number(anyBottle) + Number(anyAtBreast) + Number(anyFormula) + Number(anyPump) + Number(anyTummy)} className={cx(td, tone.muted)}>Nothing logged</td> : <>
               <td className={td}>{d.feeds}</td>
               <td className={td}>{formatDuration(d.sleepSec)}</td>
               <td className={td}>{d.wet}</td>
@@ -1939,7 +1970,8 @@ function DailyTable({ days, gaps, todayKey, units }: { days: DayStats[]; gaps: G
                 {formatDuration(d.leftSec)} / {formatDuration(d.rightSec)}
                 {anyBoth && ` / ${formatDuration(d.bothSec)}`}
               </td>
-              {anyBottle && <td className={td}>{d.bottleMl ? formatVolume(d.bottleMl, units) : <span className={tone.faint}>—</span>}</td>}
+              {anyBottle && <td className={td}>{byBottle(d).ml ? formatVolume(byBottle(d).ml, units) : <span className={tone.faint}>—</span>}</td>}
+              {anyAtBreast && <td className={td}>{d.atBreastMl ? formatVolume(d.atBreastMl, units) : <span className={tone.faint}>—</span>}</td>}
               {anyFormula && <td className={td}>{d.formulaMl ? formatVolume(d.formulaMl, units) : <span className={tone.faint}>—</span>}</td>}
               {anyPump && <td className={td}><PumpSummary day={d} units={units} /></td>}
               {anyTummy && <td className={td}>{formatDuration(d.tummySec)}</td>}
@@ -2040,13 +2072,17 @@ export async function buildVisitSummary(opts: {
       feedBits.push(`nursing ${formatDuration(d.nursingSec)}: L ${formatDuration(d.leftSec)} / R ${formatDuration(d.rightSec)}${both}`);
     }
     if (d.clusters) feedBits.push(d.clusters === 1 ? "one cluster" : `${d.clusters} clusters`);
-    // Bottles on their own are feeds; top-ups were given with nursing feeds (feed.ts), each with its own amount.
+    // Bottles on their own are feeds; top-ups were given with nursing feeds (feed.ts), each with its own amount. Milk
+    // given at the breast (a syringe or an SNS) went with nursing too, and is said apart: it never went by bottle.
     const both = (ml: number) => (ml ? `, ${formatVolume(ml, "us")} (${formatVolume(ml, "metric")})` : "");
+    const tops = d.topUps - d.atBreast;
     if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${both(soloBottleMl(d))}`);
-    if (d.topUps) feedBits.push(`${d.topUps} top-up${d.topUps === 1 ? "" : "s"} with nursing${both(d.topUpMl)}`);
-    // What the bottles held (feed.ts milkSplit): formula and breast milk, when they were said.
+    if (tops) feedBits.push(`${tops} top-up${tops === 1 ? "" : "s"} with nursing${both(Math.max(0, Math.round((d.topUpMl - d.atBreastMl) * 10) / 10))}`);
+    if (d.atBreast) feedBits.push(`milk at the breast (syringe or SNS)${d.atBreast > 1 ? `, ${d.atBreast} times` : ""}${both(d.atBreastMl)}`);
+    // What the milk was (feed.ts milkSplit): formula and breast milk, when they were said; with milk at the breast in
+    // the day, in all ("by bottle" would say the syringe's went by bottle).
     const milk = [d.formulaMl ? `formula${both(d.formulaMl).replace(/^,/, "")}` : "", d.breastMilkMl ? `breast milk${both(d.breastMilkMl).replace(/^,/, "")}` : ""].filter(Boolean);
-    if (milk.length) feedBits.push(`by bottle: ${milk.join(", ")}`);
+    if (milk.length) feedBits.push(`${d.atBreast ? "in all" : "by bottle"}: ${milk.join(", ")}`);
     const parts = [
       `${d.feeds} feed${d.feeds === 1 ? "" : "s"}${feedBits.length ? ` (${feedBits.join("; ")})` : ""}`,
       `${d.wet} wet / ${d.dirty} dirty`,
