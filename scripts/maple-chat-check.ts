@@ -278,8 +278,27 @@ check("the feeding plan in the instructions: build it only from what's written, 
   ok(mcp.includes("maple_status's feeding_plan") && !mcp.includes("[App] lines' Feeding plan line"), "a connector reads maple_status's");
   ok(chat.includes("the [App] lines' Feeding plan line"), "the chat reads its [App] line");
   ok(CHAT_ADDENDUM.includes("the feeding plan's next feed when the family has saved one"), "the [App] lines say they carry it");
+  // Shorthand that could mean two things is asked about; her own medicines and health stay out of the plan; doing
+  // another of its feeds changes nothing; a phone's card may show its own pick; a late part names its feed.
+  for (const want of [
+    "Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick.",
+    "the supplements she takes herself and her health (everyone in the family reads the plan;",
+    "Read its read-back to them as it says (for a change, what changes)",
+    "A phone's Today card may show a feed picked on that phone instead: when they say which one they're doing, go by that.",
+    "Doing another of its feeds next changes nothing in the plan: start_timer with plan when it begins (log_feed with plan once it's over), and the turns go on from it.",
+    "A top-up or milk at the breast given late for an earlier feed: log_feed with top_up_of",
+  ]) ok(mcp.includes(want) && chat.includes(want), `says "${want}"`);
+  ok(chat.includes("the feed's [entry #…] in the Feeding plan line when it says a step wasn't logged") && mcp.includes("(feeding_plan's or maple_status's top_up_of)"), "where a late part's feed comes from");
+  // Her page, where the family has one: the chat sends them to the app (it can't add her medicines), a connector to add_mom_medicines.
+  const robin = toolCopy(2, { name: "June", nickname: null, sex: "female" }, "Robin", "America/New_York");
+  ok(mapleInstructions(robin, { entryNumbers: false, memories: "chat" }).includes("Leave out Robin's own medicines") && mapleInstructions(robin, { entryNumbers: false, memories: "chat" }).includes("put her medicines on her page instead (in the app)"), "the chat: her page in the app");
+  ok(mapleInstructions(robin).includes("put her medicines on her page instead (add_mom_medicines, after its own read-back)"), "a connector: add_mom_medicines");
+  ok(chat.includes("Leave out their mom's own medicines") && !chat.includes("put her medicines on her page instead"), "no page offered without one");
   const images = systemBlocks({ viewer: false, care: true, model: "zai/glm-5.3-flash", copy: FAMILY_ONE_COPY, images: true })[1].content as string;
   ok(/A photo of a feeding plan from their care team: build the plan from what's printed or written on it with set_feeding_plan/.test(images), "a photo of the plan sheet");
+  ok(images.includes("Leave out anything on it about their mom's own medicines, the supplements she takes herself or her health, and say you left it out: everyone in the family reads the plan."), "the photo leaves her own health out");
+  const robinImages = systemBlocks({ viewer: false, care: true, model: "zai/glm-5.3-flash", copy: robin, images: true })[1].content as string;
+  ok(robinImages.includes("about Robin's own medicines") && robinImages.includes("and her medicines go on her page in the app."), "with her page");
   ok(!/[–—]/.test(CHAT_ADDENDUM) && !/[–—]/.test(images), "no dashes");
 });
 
@@ -296,6 +315,7 @@ check("chat display hides old receipt, timer and care references while keeping t
   eq(chatDisplayText("Updated #244: bath. Deleted c245: Robin's question. Restored c245: question. Already saved c246: Examplex at 9:15 AM."), "Updated: bath. Deleted: Robin's question. Restored: question. Already saved: Examplex at 9:15 AM.", "other write results");
   eq(chatDisplayText("#247 was already deleted. Entry #248 is a feed. Nothing changed on #249. That #250 was stopped."), "This entry was already deleted. Entry is a feed. Nothing changed on this entry. That entry was stopped.", "standalone references");
   eq(chatDisplayText('Next is "Nurse + SNS" (p2f1), then "Nurse, top up".'), 'Next is "Nurse + SNS", then "Nurse, top up".', "a feeding plan feed's id");
+  eq(chatDisplayText('From the 5:00 PM feed ("Nurse, top up"), not logged: top up 25 to 35 ml [entry #16].'), 'From the 5:00 PM feed ("Nurse, top up"), not logged: top up 25 to 35 ml.', "the feed a step wasn't logged for");
   eq(chatDisplayText("The feed (started at 4:20 AM; timer #251) goes on. Use delete_entry id 252 or fix_mom_entry id c253."), "The feed (started at 4:20 AM) goes on. Use delete_entry this entry or fix_mom_entry this entry.", "trailing asides and explicit tool IDs");
   eq(chatDisplayText("Saved g12: the sleep goal (g12, 28 days left) is set."), "Saved: the sleep goal (28 days left) is set.", "a sleep goal's ref");
 });
@@ -610,6 +630,15 @@ check("no em or en dashes: commas, \"to\" between numbers, \"- \" at a line's st
   const f = dashFilter();
   const out = ["Got it ", "—", " ", "stopped at 3:21", "–", "3:22", " —"].map((d) => f.push(d)).join("") + f.end();
   eq(out, "Got it, stopped at 3:21 to 3:22", "split across deltas");
+  // A clock range reads as one: the feeding plan's night and its next feed's window.
+  eq(withoutDashes("Night (11 PM–5 AM): every 3 hours"), "Night (11 PM to 5 AM): every 3 hours", "a night's hours");
+  eq(withoutDashes("Next feed 2:20 PM–3:20 PM, in 2h 20m."), "Next feed 2:20 PM to 3:20 PM, in 2h 20m.", "a window between clock times");
+  eq(withoutDashes("from 11:50 pm – 12:50 am"), "from 11:50 pm to 12:50 am", "spaced, in lower case");
+  eq(withoutDashes("from 10 a.m.–2 p.m."), "from 10 a.m. to 2 p.m.", "with periods");
+  eq(withoutDashes("I am—2 weeks in"), "I am, 2 weeks in", "a word ending in am isn't a clock");
+  eq(withoutDashes("by 4 PM—then rest"), "by 4 PM, then rest", "a clock time before words is a pause");
+  const g = dashFilter();
+  eq(["Night (11 P", "M", "–", "5 AM)"].map((d) => g.push(d)).join("") + g.end(), "Night (11 PM to 5 AM)", "a clock range split across deltas");
 });
 
 check("the prompt: the log's lines and the tools before any question; a running timer that ended is stopped at the time said", () => {

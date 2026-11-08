@@ -14,7 +14,8 @@ import type { Voice } from "../voice";
  * the next step). The definitions sent
  * stay under TOOL_CEILING on every step of a turn; past it, the least
  * recently used group goes: first those only wanted, then those this turn
- * used, never core and never the one used last. Gating stays where it was
+ * used, never core and never the one used last, and a smaller one that fits
+ * again once a bigger one is out comes back. Gating stays where it was
  * (`allowed` in tools.ts): this only picks from the person's own tools.
  * Connected apps over MCP still get every tool. No server imports: the
  * checks run this.
@@ -139,6 +140,8 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(?<!\b(?:sleep|bassinet|nap|birth|back[- ]to[- ]work)\s)plans?\b|\b(lactation|consultants?|lc|ibclc|feeding (clinic|team|specialist|routine)|schedule|regimen)\b/i,
     // What such a plan holds.
     /\b(nipple )?shields?\b|\bsyringes?\b|\bsns\b|\bsupplement\w*|\btop[- ]?ups?\b|\btopping (her|him|them) up\b|\btriple[- ]feed\w*|\bpower[- ]pump\w*/i,
+    // A plan sheet's shorthand ("s&s", "q2-3h") and a routine that isn't bedtime's, a nap's or sleep's.
+    /\bs ?& ?s\b|\bq ?\d+(?:\.\d+)?(?: ?[-–—] ?\d+(?:\.\d+)?)? ?h(?:rs?|ours?)?\b|(?<!\b(?:bedtime|sleep|sleeping|nap|naptime)\s)\broutines?\b/i,
   ],
   log_more: [
     /\b(pump\w*|expressed|expressing|haakaa|let-?down|freezer stash|milk stash)\b/i,
@@ -177,6 +180,22 @@ const QUESTION = /\?|\b(how|why|what|should|tips?|advice|help|enough|longer|bett
  */
 const SLEEP_STATE = /^(Bassinet try \S+ running\b|Holding: |Sleep plan: |Sleep goals: |Check-ins for last night: )/;
 
+/**
+ * The [App] line of a saved feeding plan (feeding-plan-mcp.ts planNowLine):
+ * a family with one gets set_feeding_plan on every message, as SLEEP_STATE
+ * does for sleep, so a check-in's edit ("night now starts at 11", "stop
+ * waking her at night") never costs a load_tools step or lands in a memory.
+ */
+const FEEDING_STATE = /^Feeding plan: /;
+
+/**
+ * The order the groups a message points to are ranked in: GROUP_ORDER, with
+ * the feeding plan's one tool ahead of the sleep plan's five, so past the
+ * ceiling the bigger goes first (and selectTools puts a smaller one back
+ * once a bigger one is out).
+ */
+const PREDICT_ORDER: readonly ToolGroup[] = GROUP_ORDER.flatMap((g): ToolGroup[] => (g === "feeding" ? [] : g === "sleep" ? ["feeding", "sleep"] : [g]));
+
 /** Her next medicine's [App] line names it (logState in mcp-tools.ts), so a message naming it is about her page. */
 const NEXT_MEDICINE = /next medicine: (.+)$/;
 const NOT_A_MEDICINE = new Set(["after", "since", "last", "next", "today", "tonight", "until", "every", "hours", "minutes", "doses", "left", "time", "times", "taken"]);
@@ -187,11 +206,11 @@ const wordIn = (text: string, word: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${
 /**
  * The groups the newest message points to, surest first: what its own words
  * name (`said`, never the [App] lines' names) and the [App] state lines
- * stored with it (`context`) say, in GROUP_ORDER, then her page when a
- * medicine word only implies it (a medicine is the baby's or hers until
- * someone says whose). `carePerson`: her name, when the family has a care
- * page (Voice.hasMom). Groups this person has no tools in come to nothing
- * later.
+ * stored with it (`context`) say (a sleep plan's, a feeding plan's), in
+ * PREDICT_ORDER, then her page when a medicine word only implies it (a
+ * medicine is the baby's or hers until someone says whose). `carePerson`:
+ * her name, when the family has a care page (Voice.hasMom). Groups this
+ * person has no tools in come to nothing later.
  */
 export function predictGroups(input: { said: string; context?: readonly string[]; carePerson?: string | null }): ToolGroup[] {
   const { said } = input;
@@ -201,13 +220,14 @@ export function predictGroups(input: { said: string; context?: readonly string[]
   if (input.carePerson && wordIn(said, input.carePerson)) named.add("mom");
   for (const line of input.context ?? []) {
     if (SLEEP_STATE.test(line)) named.add("sleep");
+    if (FEEDING_STATE.test(line)) named.add("feeding");
     const medicine = NEXT_MEDICINE.exec(line)?.[1];
     if (medicine) {
       const names = (medicine.match(/\p{L}[\p{L}'-]{3,}/gu) ?? []).filter((w) => !NOT_A_MEDICINE.has(w.toLowerCase()));
       if (names.some((name) => wordIn(said, name))) named.add("mom");
     }
   }
-  const out = GROUP_ORDER.filter((g) => named.has(g));
+  const out = PREDICT_ORDER.filter((g) => named.has(g));
   if (MEDICINE.test(said) && !named.has("mom")) out.push("mom");
   return out;
 }
@@ -313,7 +333,9 @@ const byOrder = (a: string, b: string) => (orderIndex.get(a) ?? Infinity) - (ord
  * (`recent`, newest first), while the definitions stay under `ceiling`. Past
  * it the least recently used goes first: those only wanted, then those this
  * turn used (a call to one again loads it for the next step), never the one
- * used last. So the ceiling holds on every step of a turn, not only its
+ * used last; then any that went and fit again once a bigger one was out come
+ * back, the surest first (a feeding plan's one tool dropped before the sleep
+ * plan's five). So the ceiling holds on every step of a turn, not only its
  * first. When all of them fit, all of them go, so nothing can miss.
  */
 export function selectTools(input: {
@@ -351,9 +373,14 @@ export function selectTools(input: {
   // Still past it: what this turn used goes too, the least recently used first, never the one used last.
   while (used.length > 1 && tokensOf(pick()) > ceiling) droppedUsed.unshift(used.shift()!);
   dropped.unshift(...droppedUsed);
-  const groups = offered.filter((g) => pick().has(g));
+  // A smaller group that went before a bigger one fits again once that one's out: back it comes, the surest first.
+  const chosen = pick();
+  for (const g of dropped) {
+    if (tokensOf(new Set([...chosen, g])) <= ceiling) chosen.add(g);
+  }
+  const groups = offered.filter((g) => chosen.has(g));
   const active = [...core, ...groups.flatMap(inGroup)].sort(byOrder);
-  return { active, groups, dropped, tokens: definitionTokens(sizes, active) };
+  return { active, groups, dropped: dropped.filter((g) => !chosen.has(g)), tokens: definitionTokens(sizes, active) };
 }
 
 // ── load_tools, and a call to a tool that wasn't sent ────────────────────

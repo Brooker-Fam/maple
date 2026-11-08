@@ -85,6 +85,40 @@ async function main() {
     return tool(who, fam, "set_feeding_plan", { ...args, confirmed: true, read_back: first.json.read_back });
   };
 
+  await test("a bottle up to the target that's short of it reads what's in it and what it still needs: the plan's line, the missed line and Siri's", async () => {
+    // The engine's contract (feeding-plan.ts StepView.need): such a bottle stays to do while what's logged is under
+    // its amount. The night feed's view is built here as the engine gives it, so the words are checked on their own.
+    type Now = import("../../src/lib/maple/feeding-plan").FeedPlanNow;
+    const { feedPlanNow } = await import("../../src/lib/maple/feeding-plan");
+    const { planNowLine, planSpeak } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const { FAMILY_ONE_VOICE } = await import("../../src/lib/maple/voice");
+    const { zonedTimeToUtc } = await import("../../src/lib/maple/time");
+    const tz = "America/Chicago";
+    const T = (h: number, m: number) => zonedTimeToUtc(2026, 11, 4, h, m, tz).getTime();
+    const now = new Date(T(2, 5));
+    const plan = parseFeedingPlan(INPUT, null, now);
+    const target = { min: 50, max: 70 };
+    // The night's pump from 1:30 to 1:50 AM, then 40 ml of pumped milk by bottle at 1:55: the formula to finish not yet given.
+    const steps = plan.feeds[2].steps.map((step, i) =>
+      step.do === "pump"
+        ? { i, step, status: "done", minutes: 20, ml: null, need: null, milkMissing: false, entries: [] }
+        : step.do === "bottle"
+          ? { i, step, status: "todo", minutes: null, ml: 40, need: target, milkMissing: false, entries: [] }
+          : { i, step, status: "info", minutes: null, ml: null, need: null, milkMissing: false, entries: [] }
+    );
+    const short = { feed: plan.feeds[2], why: "night", night: true, start: T(1, 30), group: null, steps, done: false, live: false, lastAt: T(1, 55), extraNursing: false } as unknown as Now["focus"];
+    const base = feedPlanNow(plan, [], now, { tz, target });
+    const w = { now, tz, vo: FAMILY_ONE_VOICE };
+    const going: Now = { ...base, focus: { ...short, state: "underway" }, after: { feed: plan.feeds[0], night: true }, missed: null, others: [] };
+    const line = planNowLine(going, w);
+    ok(line.includes("So far: bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far). Next: formula to finish, 10–30 ml more; then burp halfway."), line);
+    eq(planSpeak(going, w), "From the feeding plan: Pump + bottle is underway; still to do: formula to finish, 10 to 30 ml more (40 ml so far).", "Siri");
+    // Left like that, the next feed's line says it, as a step the feed didn't finish.
+    const after: Now = { ...base, missed: { view: short, steps: short.steps.filter((s) => s.status === "todo") } };
+    const missed = planNowLine(after, w);
+    ok(missed.includes('From the 1:30 AM feed ("Pump + bottle"), bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far); not logged: formula to finish, 10–30 ml more.'), missed);
+  });
+
   for (const shape of ["production", "final"] as Shape[]) {
     await freshDb({ shape });
     const s: Seed = await seedFamilies();
@@ -150,7 +184,7 @@ async function main() {
       ok(!r.error, r.text);
       ok(r.text.startsWith("Feeding plan (revision 1), as the family saved it from their care team:"), r.text.slice(0, 120));
       ok(r.text.includes("Next: \"Nurse + SNS\" (its turn in the plan's order).") && r.text.includes("- Nurse 12–18 min, 20 ml of formula in the SNS") && r.text.includes("- Pump 15 min"), "the next feed, step by step");
-      ok(r.text.includes('The plan\'s other feeds, if they\'d rather do one of those: "Nurse, top up", "Pump + bottle".'), "the others");
+      ok(r.text.includes('The plan\'s other feeds, if they\'d rather do one of those (start_timer with plan when it begins; nothing in the plan changes): "Nurse, top up", "Pump + bottle".'), "the others, and how to do one");
       eq([r.json.rev, (r.json.now as { state?: string }).state], [1, "upcoming"], "rev and state");
       const plan = r.json.plan as { feeds: { id: string; steps: unknown[] }[]; order: string[]; amounts_in: string; day: unknown };
       eq([plan.amounts_in, plan.day, plan.feeds[1].steps[1], r.json.target], ["ml", { every: [150, 210] }, { do: "bottle", ml: [25, 35], milk: "either", via: "paced" }, [50, 70]], "the shape set_feeding_plan takes");
@@ -158,6 +192,13 @@ async function main() {
       const edit = { ...plan, feeds: plan.feeds.map((f, i) => (i === 1 ? { ...f, steps: [f.steps[0], { do: "bottle", ml: [35, 45], milk: "either", via: "paced" }] } : f)) };
       const two = await save(alpha.member, A, { plan: edit, target: r.json.target, base_rev: 1 });
       ok(two.json.saved === true && two.json.rev === 2, two.text);
+      // The save's answer says what it changed, as its read-back did.
+      ok(
+        two.text.includes(
+          "What changed:\nWas: Nurse, top up: Nurse 8–12 min each side; then top up 25–35 ml, formula or breast milk, paced bottle\nNow: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml, formula or breast milk, paced bottle\nEverything else stayed as it was."
+        ),
+        two.text
+      );
       const after = feedingPlanOf(await settings(A))!;
       eq([after.rev, after.feeds.map((f) => f.id), after.feeds[1].steps[1]], [2, plan.feeds.map((f) => f.id), { do: "bottle", ml: { min: 35, max: 45 }, milk: "either", via: "paced" }], "a member's edit, ids kept");
     });
@@ -169,6 +210,53 @@ async function main() {
       ok(stale.error && stale.text.startsWith("Nothing was saved: the feeding plan was changed since revision 1 (it's revision 2 now). It reads now:"), stale.text);
       ok(stale.text.includes("• Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml, formula or breast milk, paced bottle") && /Make the change again on this one/.test(stale.text), "the plan as it is now");
       eq(feedingPlanOf(await settings(A))?.rev, 2, "nothing saved");
+    });
+
+    await test(`${shape}: an edit reads back what it changes on the saved plan (feeds paired by id), then the whole plan; a resend that slips shows its slip`, async () => {
+      const read = await tool(alpha.owner, A, "feeding_plan");
+      const p = read.json.plan as { feeds: { id: string; name: string; steps: Record<string, unknown>[] }[]; night: Record<string, unknown> };
+      const base = { target: read.json.target, base_rev: read.json.rev };
+      const back = async (plan: unknown) => (await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan })).text.split("\n{")[0];
+      // One amount: one pair, everything else stays, and the whole plan after it, to read only if asked.
+      const one = { ...p, feeds: p.feeds.map((f, i) => (i === 0 ? { ...f, steps: [{ ...f.steps[0], supplement: { via: "sns", ml: 25, milk: "formula" } }, f.steps[1]] } : f)) };
+      const amount = await back(one);
+      ok(
+        amount.includes(
+          "Read what changes back to them as it is, then ask if that's right:\nWhat changes:\nWas: Nurse + SNS: Nurse 12–18 min, 20 ml of formula in the SNS; then pump 15 min\nNow: Nurse + SNS: Nurse 12–18 min, 25 ml of formula in the SNS; then pump 15 min\nEverything else stays as it is.\nThe whole plan with the change, to read them only if they ask:\nFrom: Feeding clinic"
+        ),
+        amount
+      );
+      eq((amount.match(/^Was: /gm) ?? []).length, 1, "exactly one change");
+      // The night left out reads as removed, and its feed, now in no turn, asks with it.
+      const night = await back({ ...p, night: null });
+      ok(night.includes("What changes:\nRemoved: Night (11 PM–5 AM): every 3 hours, waking her: Pump + bottle\nEverything else stays as it is."), night);
+      ok(night.includes('Ask with it: "Pump + bottle" isn\'t in the day\'s turns, so Today only offers it as another choice. If it takes a turn, add it to order.'), "the feed it leaves without a turn");
+      // A partial resend says everything it would take out.
+      const partial = await back({ feeds: [p.feeds[1]] });
+      ok(/Removed: From: Feeding clinic/.test(partial) && /Removed: Nurse \+ SNS: /.test(partial) && /Removed: Pump \+ bottle: /.test(partial) && /Removed: Night \(/.test(partial), partial);
+      // A rename reads once, never again in the turns that name it.
+      const renamed = await back({ ...p, feeds: p.feeds.map((f, i) => (i === 1 ? { ...f, name: "Nurse, then top up" } : f)) });
+      ok(renamed.includes('What changes:\nRenamed: "Nurse, top up" is now "Nurse, then top up".\nEverything else stays as it is.'), renamed);
+      // A yes sent with a plan that slipped from what was read back reads back again, the slip among the changes.
+      const rb = await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan: one });
+      const slipped = { ...one, feeds: one.feeds.map((f, i) => (i === 1 ? { ...f, steps: [{ do: "nurse", minutes: [8, 12] }, f.steps[1]] } : f)) };
+      const re = await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan: slipped, confirmed: true, read_back: rb.json.read_back });
+      ok(re.json.confirm_needed === true && /That read_back isn't for this plan/.test(re.text) && re.text.includes("Was: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml") && re.text.includes("Now: Nurse, top up: Nurse 8–12 min; then top up 35–45 ml"), re.text);
+      eq(feedingPlanOf(await settings(A))?.rev, 2, "nothing saved");
+    });
+
+    await test(`${shape}: a read-back asks with it about a night in the daytime, a long night and a feed nothing turns to; questions, never refusals`, async () => {
+      const ask = async (plan: unknown) => (await tool(beta.owner, B, "set_feeding_plan", { plan, target: [50, 70] })).text.split("\n{")[0];
+      // "11" and "1" read as 11 AM to 1 AM: 14 hours, so it isn't refused as too long, only asked about.
+      const day = await ask({ ...INPUT, night: { ...INPUT.night, from: "11:00", to: "1:00" } });
+      ok(day.includes('Ask with it: night would start at 11 AM, in the daytime. If they meant 11 PM, send night.from as "23:00".'), day);
+      const long = await ask({ ...INPUT, night: { ...INPUT.night, from: "18:00", to: "8 AM" } });
+      ok(long.includes("Ask with it: night would run 14 hours (6 PM to 8 AM). Check that's what their plan says."), long);
+      // The night's feed left out, with the day's turns given: it's in neither.
+      const left = await ask({ ...INPUT, order: ["Nurse + SNS", "Nurse, top up"], night: { ...INPUT.night, feed: null } });
+      ok(left.includes('Ask with it: "Pump + bottle" isn\'t in the day\'s turns or the night\'s feed, so Today only offers it as another choice. If it\'s the night\'s feed, set night.feed to it; if it takes a turn by day, add it to order.'), left);
+      ok(!/Ask with it/.test(await ask(INPUT)), "none for a plan without them");
+      ok(!("feeding_plan" in (await settings(B))), "nothing saved");
     });
 
     await test(`${shape}: a plan that can't be saved comes back in feeding-plan.ts's own words; a number in the wrong place is refused, never dropped`, async () => {
@@ -220,6 +308,18 @@ async function main() {
       const status = await tool(alpha.member, A, "maple_status");
       ok(status.text.includes('Feeding plan: "Nurse + SNS" is underway since 11:50 AM. Going now: nurse 12–18 min, 20 ml of formula in the SNS (10 min so far). Next: pump 15 min. After it: "Nurse, top up"; next feed 2:20 PM–3:20 PM, in 2h 20m.'), status.text);
       ok(/From the feeding plan: Nurse \+ SNS is underway; still to do: pump 15 min\./.test((await siri(alpha.token, { action: "status" })).speak ?? ""), "Siri: what's left");
+      // Its SNS milk logged while she's still on: milk at the breast, part of this feed, said as given, never a top-up or a feed.
+      const sns = await tool(alpha.member, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", via: "sns", milk: "formula", minutes_ago: 4 });
+      ok(sns.text.includes("Counted with the feed that began at 11:50 AM today: milk at the breast, part of that feed, not a feed of its own.") && sns.text.includes("(with 0.68 oz (20 ml) in the SNS)"), sns.text);
+      const lines = await chatLogState({ email: alpha.member }, { fam: A, care: true, now: new Date() });
+      // The day's line says it as milk at the breast, and its formula never "by bottle".
+      ok(lines.some((l) => l.startsWith("Today so far: 1 feed (0.68 oz (20 ml) in the SNS)")) && !lines.some((l) => /formula by bottle/.test(l)), lines.join(" | "));
+      ok(lines.some((l) => l.startsWith("Nursing on the left since 11:50 AM") && l.endsWith("Given with it so far: 0.68 oz (20 ml) in the SNS at 11:56 AM.")), lines.join(" | "));
+      ok(lines.some((l) => l.includes("Going now: nurse 12–18 min, 20 ml of formula in the SNS (10 min so far, 20 ml in the SNS at 11:56 AM).")), lines.join(" | "));
+      ok((await tool(alpha.member, A, "feeding_plan")).text.includes("- Nurse 12–18 min, 20 ml of formula in the SNS (going now, 10 min so far, 20 ml in the SNS at 11:56 AM)"), "feeding_plan says it was given");
+      const since = await tool(alpha.member, A, "maple_status", { since: "11:00am" });
+      ok(/^Since 11:00 AM today \(1h 00m\): no feeds logged/m.test(since.text), since.text);
+      await sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE id = $1`, [Number(sns.json.id)]);
       eq((await tool(alpha.member, A, "stop_timer", { timer: "nursing" })).error, false, "stopped");
       // Done nursing, the SNS milk not logged: said calmly, and the pump still to do.
       const done = await tool(alpha.member, A, "feeding_plan");
@@ -248,6 +348,9 @@ async function main() {
       eq((await sql(`SELECT data->>'plan' AS plan FROM maple_entries WHERE id = $1`, [nursingId]))[0].plan, feedingPlanOf(await settings(A))!.feeds[1].id, "tagged by its name");
       const owed = (await tool(alpha.owner, A, "feeding_plan")).json.now as { top_up_of?: number };
       eq(owed.top_up_of, nursingId, "feeding_plan names the feed a top-up given now is for");
+      // The chat's [App] line carries that feed's id with the step it says wasn't logged, as the timer line carries its own.
+      const line = (await chatLogState({ email: alpha.owner }, { fam: A, care: true, now: new Date() })).find((l) => l.startsWith("Feeding plan:")) ?? "";
+      ok(line.includes(`From the 10:00 AM feed ("Nurse, top up"), not logged: top up 35–45 ml, formula or breast milk, paced bottle [entry #${nursingId}].`), line);
       // An hour after it ended, past the 30 minutes a top-up is that feed's by its time: with top_up_of it still is.
       const late = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced", top_up_of: nursingId, minutes_ago: 40 });
       ok(!late.error && /Counted as a top-up to the feed that began at 10:00 AM today/.test(late.text), late.text);
@@ -269,6 +372,34 @@ async function main() {
       ok(bad.error && /top_up_of 999999 isn't a nursing feed in this log/.test(bad.text), bad.text);
       const shieldBottle = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", shield: true });
       ok(shieldBottle.error && /shield is for nursing/.test(shieldBottle.text), shieldBottle.text);
+    });
+
+    await test(`${shape}: a bottle with no feed named is the late top-up the plan still owes the feed before, from log_feed and Siri; not past 90 minutes`, async () => {
+      const wipe = () => sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE family_id = $1 AND deleted_at IS NULL`, [A]);
+      await wipe();
+      // "Nurse, top up" from 10:40 to 11:00, its top-up not given: a paced bottle at noon, an hour on (past 30 minutes by its time).
+      const fed = await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", plan: "Nurse, top up", minutes_ago: 80 });
+      const nursingId = Number(fed.json.id);
+      const late = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
+      ok(late.text.includes("Counted as a top-up to the feed that began at 10:40 AM today: part of that feed, not a feed of its own."), late.text);
+      ok(late.text.includes(`The feeding plan's 10:40 AM feed ("Nurse, top up") still had its top-up to log, so this was saved with that feed [entry #${nursingId}]. If it was a feed of its own, update_entry it with details {top_up_of: null}.`), late.text);
+      eq((await sql(`SELECT (data->>'top_up_of')::int AS of FROM maple_entries WHERE id = $1`, [Number(late.json.id)]))[0].of, nursingId, "saved with that feed");
+      const status = await tool(alpha.owner, A, "maple_status");
+      ok(/^Last feed: nursed at 10:40 AM today \(1h 20m ago\): L 10m, R 10m, started on the left, with a 1\.01 oz \(30 ml\) top-up\.$/m.test(status.text), status.text);
+      // Undone with update_entry, it's a feed of its own again.
+      const undo = await tool(alpha.owner, A, "update_entry", { id: Number(late.json.id), details: { top_up_of: null } });
+      ok(!undo.error && (await sql(`SELECT data ? 'top_up_of' AS has FROM maple_entries WHERE id = $1`, [Number(late.json.id)]))[0].has === false, undo.text);
+      await sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE id = $1`, [Number(late.json.id)]);
+      // Siri's bottle in the same spot says whose top-up it is, and saves it so.
+      const spoken = await siri(alpha.token, { action: "bottle", amount_oz: 1 });
+      ok(spoken.speak === "Logged a 1 ounce bottle at 12:00 PM, a top-up for the 10:40 AM feed.", spoken.speak ?? "");
+      eq((await sql(`SELECT (data->>'top_up_of')::int AS of FROM maple_entries WHERE family_id = $1 AND deleted_at IS NULL AND data->>'method' = 'bottle'`, [A]))[0]?.of, nursingId, "Siri's too");
+      // Over 90 minutes after the nursing ended, a bottle is a feed of its own.
+      await wipe();
+      await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", plan: "Nurse, top up", minutes_ago: 115 });
+      const later = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
+      ok(!/still had its/.test(later.text) && !/Counted as a top-up/.test(later.text), later.text);
+      await wipe();
     });
 
     await test(`${shape}: two phones saying yes at once to changes from the same revision: one saves, the other is told it changed`, async () => {
@@ -330,6 +461,10 @@ async function main() {
       ok(cross.json.confirm_needed === true, "another family's token reads back again");
       ok(cross.text.includes("Day: every 2.5–3.5 hours, waking him if he's asleep") && cross.text.includes("Night (11 PM–5 AM): every 3 hours, waking him: Pump + bottle"), "Beta's boy is him");
       eq(feedingPlanOf(await settings(B))?.feeds.map((f) => f.name), ["Shield, then pump"], "Beta's plan unchanged");
+      // With no plan saved, no plan links a bottle to the feed before it (how the log itself counts one is feed.ts's rule).
+      await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", minutes_ago: 80 });
+      const own = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
+      ok(!/still had its/.test(own.text) && !(await sql(`SELECT data ? 'top_up_of' AS has FROM maple_entries WHERE id = $1`, [Number(own.json.id)]))[0].has, own.text);
     });
 
     await test(`${shape}: ounces as the care team wrote them, read back in ounces, and sent back without drift`, async () => {
