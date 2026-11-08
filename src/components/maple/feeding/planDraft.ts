@@ -266,6 +266,13 @@ const NAME_WORDS: { word: RegExp; has: (f: FeedDraft) => boolean }[] = [
   { word: /\bpump(?:s|ing)?\b/i, has: (f) => f.steps.some((s) => s.do === "pump") },
 ];
 
+/** The word as the name says it, unless it says it's without it ("no shield", "without SNS"). */
+function nameSays(name: string, word: RegExp): string | null {
+  const m = word.exec(name);
+  if (!m) return null;
+  return /\b(?:no|not|without|w\/o)\s+$/i.test(name.slice(0, m.index)) ? null : m[0];
+}
+
 /**
  * What a feed's name still says that an edit took out of its steps: the name
  * says "shield", the shield was on when the edit began (`was`, the feed then)
@@ -276,7 +283,7 @@ export function staleNameWords(f: FeedDraft, was: FeedDraft | null | undefined):
   if (!was) return [];
   const out: string[] = [];
   for (const { word, has } of NAME_WORDS) {
-    const said = word.exec(f.name)?.[0];
+    const said = nameSays(f.name, word);
     if (said && has(was) && !has(f)) out.push(said === said.toUpperCase() ? said : said.toLowerCase());
   }
   return out;
@@ -411,18 +418,13 @@ export function wakeText(every: Pick<Range, "max">, w: { him: string; hes: strin
   return `wake ${w.him} if ${w.hes} still asleep at ${hoursText(every.max)}${opts.from ? " from the start of the last feed" : ""}`;
 }
 
-/** A note as a sentence of its own: a capital first letter, and a full stop unless it ends with one. */
-const sentence = (s: string) => {
-  const t = s.replace(/[\s,;:]+$/, "");
-  return `${t.charAt(0).toUpperCase()}${t.slice(1)}${/[.!?…]$/.test(t) ? "" : "."}`;
-};
-
 /**
  * A feed's steps in one line, for a folded feed on the form: the steps in the
  * plan's own words (feedText: "Pump 20 min; then bottle up to 50–70 ml"), then
- * each note as a sentence of its own ("Burp halfway."), never joined with
- * "then" as if it were another step. A step still missing what its words need
- * (an SNS with no amount yet) is just its name; an empty note is "Note".
+ * each note as a sentence of its own after them ("… 50–70 ml. Burp halfway"),
+ * as the plan's words read notes, never joined with "then" as if it were
+ * another step. A step still missing what its words need (an SNS with no
+ * amount yet) is just its name; an empty note is "Note".
  */
 export function feedSummary(f: FeedDraft, unit: PlanUnit, target: FeedTarget | null): string {
   if (!f.steps.length) return "No steps yet";
@@ -430,12 +432,12 @@ export function feedSummary(f: FeedDraft, unit: PlanUnit, target: FeedTarget | n
   const notes: string[] = [];
   for (const s of f.steps) {
     const out = stepOut(s);
-    if (out.do === "note") notes.push(sentence(out.text || "Note"));
+    if (out.do === "note") notes.push(out.text.replace(/[\s.;,]+$/, "") || "Note");
     else if (out.do === "nurse" && out.supplement && !out.supplement.ml) steps.push({ do: "nurse" });
     else steps.push(out as PlanStep);
   }
   const said = steps.length ? feedText({ id: f.id ?? f.key, name: f.name, steps }, { unit }, target) : "";
-  return notes.length ? [...(said ? [`${said}.`] : []), ...notes].join(" ") : said;
+  return [said, ...notes].filter(Boolean).join(". ");
 }
 
 /** A step's name on its card: a bottle after nursing is the top-up. */

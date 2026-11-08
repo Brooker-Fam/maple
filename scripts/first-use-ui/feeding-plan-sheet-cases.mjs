@@ -202,7 +202,7 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         const form = await edit(f, dialog(f, "Feeding plan"));
         // Saved feeds start folded to their steps in the plan's words; a note is its own sentence after them, never "then".
         const folded = form.getByRole("button", { name: /^Pump \+ bottle/, expanded: false });
-        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish\. Burp halfway\. Change/);
+        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish\. Burp halfway Change/);
         await unfold(form, "Nurse + SNS");
         await unfold(form, "Nurse, top up");
         // One number reads as one box: "15 to [ ] min".

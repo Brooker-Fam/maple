@@ -277,21 +277,21 @@ check("a folded feed reads in the plan's words, and a note is a sentence of its 
   const target = { min: 50, max: 70 };
   // Without notes, it's the plan's own line for the feed.
   for (const i of [0, 1]) eq(feedSummary(d.feeds[i], "ml", target), feedText(PLAN.feeds[i], PLAN, target), PLAN.feeds[i].name);
-  // "Pump + bottle" ends with a note: its steps, then the note.
+  // "Pump + bottle" ends with a note: its steps, then the note as a sentence of its own.
   const steps = PLAN.feeds[2].steps.filter((s) => s.do !== "note");
-  eq(feedSummary(d.feeds[2], "ml", target), `${feedText({ ...PLAN.feeds[2], steps }, PLAN, target)}. Burp halfway.`);
-  // A note between steps still reads after them, as its own sentence.
+  eq(feedSummary(d.feeds[2], "ml", target), `${feedText({ ...PLAN.feeds[2], steps }, PLAN, target)}. Burp halfway`);
+  // A note between steps still reads after them, never as "then …".
   const [nurse, topUp] = d.feeds[1].steps;
   const note = (text: string) => ({ ...newStep("note"), text }) as StepDraft;
-  const between = feedSummary({ ...d.feeds[1], steps: [nurse, note("only if still hungry"), topUp] }, "ml", target);
-  eq(between, `${feedText(PLAN.feeds[1], PLAN, target)}. Only if still hungry.`);
+  const between = feedSummary({ ...d.feeds[1], steps: [nurse, note("Only if still hungry."), topUp] }, "ml", target);
+  eq(between, `${feedText(PLAN.feeds[1], PLAN, target)}. Only if still hungry`);
   if (/then only/i.test(between)) throw new Error(`a note joined with "then": ${between}`);
   const nursing = feedText({ ...PLAN.feeds[1], steps: PLAN.feeds[1].steps.slice(0, 1) }, PLAN, target);
-  eq(feedSummary({ ...d.feeds[1], steps: [nurse, note("Burp halfway!"), note("pump the right side;")] }, "ml", target), `${nursing}. Burp halfway! Pump the right side.`);
+  eq(feedSummary({ ...d.feeds[1], steps: [nurse, note("Burp halfway"), note("Pump the right side;")] }, "ml", target), `${nursing}. Burp halfway. Pump the right side`);
   // Not finished yet: an SNS with no amount is just its name, an empty note is "Note", and no steps says so.
   const sns = { ...newStep("nurse"), atBreast: "sns" } as StepDraft;
   eq(feedSummary({ ...d.feeds[0], steps: [sns, d.feeds[0].steps[1]] }, "ml", null), "Nurse; then pump 15 min");
-  eq(feedSummary({ ...d.feeds[0], steps: [d.feeds[0].steps[1], note("")] }, "ml", null), "Pump 15 min. Note.");
+  eq(feedSummary({ ...d.feeds[0], steps: [d.feeds[0].steps[1], note("")] }, "ml", null), "Pump 15 min. Note");
   eq(feedSummary({ ...d.feeds[0], steps: [] }, "ml", null), "No steps yet");
 });
 
@@ -315,6 +315,9 @@ check("a feed's name that still says what an edit took out (the shield, a syring
   eq(staleNameWords(noSns, null), []);
   const nursing = { ...topUp, name: "Nurse, pumped milk top up later", steps: topUp.steps.filter((s) => s.do !== "bottle") };
   eq(staleNameWords(nursing, nursing), []);
+  // A name that says it's without one already fits.
+  eq(staleNameWords({ ...noSns, name: "Nurse, no SNS" }, sns), []);
+  eq(staleNameWords({ ...noSns, name: "Nurse without SNS, then pump" }, sns), []);
   eq([quotedList(["SNS"]), quotedList(["shield", "SNS"]), quotedList(["shield", "syringe", "pump"])], ["“SNS”", "“shield” and “SNS”", "“shield”, “syringe” and “pump”"]);
 });
 
