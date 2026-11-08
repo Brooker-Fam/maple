@@ -11,7 +11,7 @@
  * The plans here are invented examples, not any family's. One PASS/FAIL line
  * per case, exit 1 on any failure. Times are wall clock in America/New_York.
  */
-import { countedFeeds, lastFedAnchor, nursingRuns, sameFeedBottleIds, topUpRunFor, TOP_UP_LINK_MS } from "../src/lib/maple/feed";
+import { countedFeeds, feedGaps, lastFedAnchor, nursingRuns, sameFeedBottleIds, topUpRunFor, TOP_UP_LINK_MS } from "../src/lib/maple/feed";
 import {
   amountText,
   checkFeedingPlan,
@@ -30,6 +30,7 @@ import {
   planLines,
   PlanConflict,
   PlanError,
+  planSince,
   stepText,
   type FeedingPlan,
   type PlanFeed,
@@ -143,10 +144,13 @@ const INPUT = {
     { name: "Pump + bottle", steps: [{ do: "pump", minutes: 20 }, { do: "bottle", milk: "breastmilk_first", to_target: true }, { do: "note", text: "Burp halfway" }] },
   ],
 };
-const NOW0 = D("09:00");
+// The plans here were saved the day before the log they're read against: a plan reads the feeds logged since it began.
+const NOW0 = D("-1 09:00");
 const PLAN = parseFeedingPlan(INPUT, null, NOW0);
 const [SNS, TOPUP, NIGHT] = PLAN.feeds;
 const TARGET = { min: 50, max: 70 };
+/** A first save read back: it began when it was saved (since_rev), and reads that as when it began (`since`). */
+const readBack = (p: FeedingPlan) => ({ ...p, since: p.updated_at });
 
 // ── reading a plan ───────────────────────────────────────────────────────
 
@@ -237,7 +241,7 @@ check("checkFeedingPlan: a new revision; an edit from an older one is refused; n
 
 check("feedingPlanOf: what's saved, read back as saved; null for nothing or something unreadable", () => {
   const read = feedingPlanOf({ feeding_plan: PLAN });
-  eq(read, PLAN);
+  eq(read, readBack(PLAN));
   eq(feedingPlanOf({}), null);
   eq(feedingPlanOf({ feeding_plan: { v: 2, feeds: [] } }), null);
   eq(feedingPlanOf({ feeding_plan: { ...PLAN, feeds: [{ name: "A", steps: [{ do: "pump", minutes: 999 }] }] } }), null);
@@ -746,7 +750,7 @@ const [HUNGRY, FULL] = IF_NEEDED.feeds;
 
 check("only if needed: kept on a bottle and a pump step, and said as the plan says it", () => {
   eq([HUNGRY.steps[1], FULL.steps[1]], [{ do: "bottle", ml: { min: 25, max: 35 }, milk: "either", via: "paced", if_needed: true }, { do: "pump", minutes: { min: 15, max: 15 }, if_needed: true }]);
-  eq(feedingPlanOf({ feeding_plan: IF_NEEDED }), IF_NEEDED, "read back as saved");
+  eq(feedingPlanOf({ feeding_plan: IF_NEEDED }), readBack(IF_NEEDED), "read back as saved");
   eq(parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "pump", if_needed: false }, { do: "bottle" }] }] }, null, NOW0).feeds[0].steps[0], { do: "pump" }, "false is left out");
   throws(() => parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "bottle", if_needed: "yes" }] }] }, null, NOW0), PlanError, /^"A" step 1: only if needed must be true or false$/);
   eq(stepText({ do: "bottle", ml: { min: 25, max: 35 }, if_needed: true }, PLAN, TARGET, { afterNurse: true }), "Top up 25–35 ml if still hungry");
@@ -807,7 +811,7 @@ check("on demand: kept as its most, with on_demand, however it's sent; with no m
   throws(() => day(0), PlanError, /between 30 and 480/);
   const p = parseFeedingPlan({ ...INPUT, day: { every: { max: 210 }, wake: true }, night: { ...INPUT.night, every: [0, 180] } }, null, NOW0);
   eq([p.day, p.night?.every, p.night?.on_demand], [{ every: { min: 210, max: 210 }, on_demand: true, wake: true }, { min: 180, max: 180 }, true]);
-  eq(feedingPlanOf({ feeding_plan: p }), p, "read back as saved");
+  eq(feedingPlanOf({ feeding_plan: p }), readBack(p), "read back as saved");
 });
 
 check("on demand: in words, and the read-back says it by day and at night", () => {
@@ -873,7 +877,7 @@ check("one side: a nursing step on the left or right, never with each side, said
   eq(stepText({ do: "nurse", side: "R", shield: true }, PLAN, null), "Nurse on the right with the nipple shield");
   eq(stepText({ do: "nurse", minutes: { min: 12, max: 18 }, side: "L", supplement: { via: "sns", ml: { min: 20, max: 20 }, milk: "formula" } }, PLAN, null), "Nurse 12–18 min on the left, 20 ml of formula in the SNS");
   const p = parseFeedingPlan({ feeds: [{ name: "Left, pump the right", steps: [{ do: "nurse", minutes: [15, 20], side: "left" }, { do: "pump", minutes: 15 }] }] }, null, NOW0);
-  eq(feedingPlanOf({ feeding_plan: p }), p, "read back as saved");
+  eq(feedingPlanOf({ feeding_plan: p }), readBack(p), "read back as saved");
   eq(feedText(p.feeds[0], p, null), "Nurse 15–20 min on the left; then pump 15 min");
 });
 
@@ -897,7 +901,7 @@ const NURSE_PUMP = TURNS.feeds[3];
 
 check("turns at night: night.order by name or id, its first the night's feed; one turn is just the night's feed", () => {
   eq([TURNS.night?.feed, TURNS.night?.order, TURNS.order], [NIGHT.id, [NIGHT.id, NURSE_PUMP.id], [SNS.id, TOPUP.id]], "the night's turns stay out of the day's");
-  eq(feedingPlanOf({ feeding_plan: TURNS }), TURNS, "read back as saved");
+  eq(feedingPlanOf({ feeding_plan: TURNS }), readBack(TURNS), "read back as saved");
   const one = parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, feed: undefined, order: ["Pump + bottle"] } }, null, NOW0);
   eq([one.night?.feed, "order" in one.night!], [NIGHT.id, false]);
   // An older release reads the night's feed: its first turn.
@@ -964,6 +968,214 @@ check("turns at night: the last night feed's place sets the next, the next night
   // The day's turns went on from the day's own feeds all along.
   const morning = feedPlanNow(TURNS, night1, D("+1 06:00"), { tz: TZ, target: TARGET });
   eq([morning.focus.feed.id, morning.focus.night], [SNS.id, false]);
+});
+
+// ── round 3: the night's end, when the plan began, two bottles, parts and names ──
+
+check("the night's end mid-feed: the night's pump done before its bottle stays the night's; a pump begun when the card said the day's feed is the day's", () => {
+  // The night feed before at 1:40, so the next is due at 4:40: the pump 4:40-5:00, its bottle not given yet.
+  const night1 = [pump("+1d01:20-+1d01:38"), bottle("+1 01:40", 60, { milk: "breastmilk", plan: NIGHT.id })];
+  let n = feedPlanNow(PLAN, [...night1, pump("+1d04:40-")], D("+1 05:00"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, states(n.focus)], ["underway", NIGHT.id, ["running", "todo", "info"]], "at 5 AM, still pumping");
+  n = feedPlanNow(PLAN, [...night1, pump("+1d04:40-+1d05:00")], D("+1 05:06"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, states(n.focus), n.focus.named], ["underway", NIGHT.id, ["done", "todo", "info"], null], "pumped, its bottle still to give");
+  // The night feed before at 2:10: the night's 3 hours reach past 5, so the card said the day's feed (due from 5); a
+  // pump begun at 4:50 then is the day's, not a night feed.
+  const night2 = [pump("+1d01:50-+1d02:08"), bottle("+1 02:10", 60, { milk: "breastmilk", plan: NIGHT.id })];
+  eq(feedPlanNow(PLAN, night2, D("+1 04:49"), { tz: TZ, target: TARGET }).focus.feed.id, SNS.id);
+  n = feedPlanNow(PLAN, [...night2, pump("+1d04:50-")], D("+1 05:01"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, n.focus.night], ["upcoming", SNS.id, false]);
+});
+
+/** A nursing feed logged by its minutes (no timer), from `start` (epoch ms), with nothing else logged with it. */
+const plainFeed = (start: number, min: number): EntryOf<"feed"> => ({
+  ...base("feed", new Date(start).toISOString(), new Date(start + min * 60_000).toISOString(), false),
+  kind: "feed",
+  data: { method: "breast", left_sec: min * 30, right_sec: min * 30, first_side: "L", last_side: "R" },
+});
+
+check("when the plan began: a first save keeps its revision; read back, and on every edit, it says when that was", () => {
+  const saved = parseFeedingPlan(INPUT, null, D("14:00"));
+  eq([saved.since_rev, saved.since, planSince(saved)], [1, undefined, ms("14:00")]);
+  // Two first saves a minute apart (the chat's read-back, then the yes) are the same plan but for when it was saved.
+  const again = parseFeedingPlan(INPUT, null, D("14:01"));
+  eq({ ...again, updated_at: null }, { ...saved, updated_at: null }, "nothing in it moves between the read-back and the yes");
+  const read = feedingPlanOf({ feeding_plan: saved })!;
+  eq([read.since, planSince(read)], [T("14:00"), ms("14:00")], "read back, it says when it began");
+  const edit = parseFeedingPlan({ ...INPUT, notes: "Weigh on Friday" }, read, D("+1 10:00"));
+  eq([edit.rev, edit.since, edit.since_rev, planSince(edit)], [2, T("14:00"), 1, ms("14:00")], "an edit keeps when the plan began");
+  eq(planSince(feedingPlanOf({ feeding_plan: edit })!), ms("14:00"));
+  // Never what was sent: a plan can't be dated by its input.
+  eq(parseFeedingPlan({ ...INPUT, since: T("08:00"), since_rev: 9 }, null, D("14:00")).since_rev, 1);
+  // A plan saved before this was kept reads every feed as before; a new plan after a removal begins anew.
+  const { since_rev: _r, ...older } = saved;
+  void _r;
+  eq(planSince(older as FeedingPlan), null);
+  const fresh: Record<string, unknown> = { feeding_plan: { ...INPUT } };
+  checkFeedingPlan(fresh, { feeding_plan_last_rev: 4 }, D("16:00"));
+  eq([(fresh.feeding_plan as FeedingPlan).rev, (fresh.feeding_plan as FeedingPlan).since_rev, planSince(fresh.feeding_plan as FeedingPlan)], [5, 5, ms("16:00")]);
+});
+
+check("when the plan began: feeds logged before it take no turn and are never not logged, whether 8 or 9; they still set when the next is due", () => {
+  const saved = feedingPlanOf({ feeding_plan: parseFeedingPlan(INPUT, null, D("14:00")) })!;
+  // Plain feeds every 2.5 hours, 24 minutes each, the last ending at 1:15 PM, 45 minutes before the save.
+  for (const count of [8, 9]) {
+    const log = Array.from({ length: count }, (_, i) => plainFeed(ms("12:51") - (count - 1 - i) * 150 * 60_000, 24));
+    for (const at of ["14:00", "14:30"]) {
+      const n = feedPlanNow(saved, log, D(at), { tz: TZ, target: TARGET });
+      eq([n.focus.state, n.focus.feed.id, n.focus.why, n.missed, clock(n.due!.base), clock(n.due!.from), clock(n.due!.to)], ["upcoming", SNS.id, "order", null, "12:51", "15:21", "16:21"], `${count} feeds, ${at}`);
+    }
+  }
+  // Going when the plan was saved: the plan's own first feed, underway.
+  let n = feedPlanNow(saved, [plainFeed(ms("11:00"), 24), nurse("L 13:50-")], D("14:00"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, n.focus.why, n.focus.live], ["underway", SNS.id, "order", true]);
+  // One from before named as one of its feeds since (update_entry's plan) is that feed: its turn, its steps.
+  n = feedPlanNow(saved, [plainFeed(ms("11:00"), 24), nurse("L 12:51-13:15", { plan: TOPUP.id })], D("14:00"), { tz: TZ, target: TARGET });
+  eq([n.focus.feed.id, n.missed?.view.feed.id, n.missed?.steps.map((s) => s.step.do)], [SNS.id, TOPUP.id, ["bottle"]]);
+  // After the save the turns go on from the plan's first feed.
+  const first = nurse("L 14:30-14:45", { plan: SNS.id });
+  n = feedPlanNow(saved, [plainFeed(ms("12:51"), 24), first, bottle("14:40", 20, { via: "sns", milk: "formula", top_up_of: first.id }), pump("14:50-15:05")], D("15:10"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, clock(n.due!.base)], ["upcoming", TOPUP.id, "14:30"]);
+});
+
+check("two bottle steps share the bottles: each by its milk, done at its amount; one bottle step reads as before", () => {
+  const two = parseFeedingPlan(
+    { day: { every: [150, 210] }, feeds: [{ name: "Pump, then two bottles", steps: [{ do: "pump", minutes: 20 }, { do: "bottle", ml: 30, milk: "breastmilk" }, { do: "bottle", ml: 15, milk: "formula" }] }] },
+    null,
+    NOW0
+  );
+  const f = two.feeds[0].id;
+  const pumped = pump("10:00-10:20");
+  const at = (log: Entry[], when: string) => feedPlanNow(two, log, D(when), { tz: TZ, target: TARGET });
+  // Both given: the feed's done, and nothing reads as not logged.
+  const both = [pumped, bottle("10:25", 30, { milk: "breastmilk", plan: f }), bottle("10:35", 15, { milk: "formula", plan: f })];
+  eq([at(both, "10:40").focus.state, at(both, "10:40").missed, at(both, "11:40").missed], ["upcoming", null, null]);
+  // Only the pumped milk: the formula step is next. The formula first: the pumped milk is still to give.
+  let n = at([pumped, bottle("10:25", 30, { milk: "breastmilk", plan: f })], "10:40");
+  eq([n.focus.state, states(n.focus), n.focus.steps[1].ml], ["underway", ["done", "done", "todo"], 30]);
+  n = at([pumped, bottle("10:25", 15, { milk: "formula", plan: f })], "10:40");
+  eq([n.focus.state, states(n.focus), n.focus.steps[2].ml], ["underway", ["done", "todo", "done"], 15]);
+  eq(at([pumped, bottle("10:25", 15, { milk: "formula", plan: f })], "11:40").missed?.steps.map((s) => s.i), [1], "later, the pumped milk is the one not logged");
+  // Short of its amount, a step stays to do with what it has; a bottle whose milk wasn't said goes to the first open.
+  n = at([pumped, bottle("10:25", 20, { milk: "breastmilk", plan: f }), bottle("10:35", 15, { milk: "formula", plan: f })], "10:40");
+  eq([states(n.focus), n.focus.steps[1].ml], [["done", "todo", "done"], 20]);
+  n = at([pumped, bottle("10:25", 30, { plan: f }), bottle("10:35", 15, { plan: f })], "10:40");
+  eq([n.focus.state, n.missed], ["upcoming", null]);
+  // A Mixed bottle's parts each go to the step of their milk.
+  eq(at([pumped, bottle("10:25", 45, { milk: "mixed", breastmilk_ml: 30, formula_ml: 15, plan: f })], "10:40").focus.state, "upcoming");
+  // One bottle step, as before: done at its first bottle, whatever its amount.
+  const fed = nurse("L 13:00-13:10, R 13:10-13:20", { plan: TOPUP.id });
+  eq(now(PLAN, [fed, bottle("13:25", 10, { via: "paced", milk: "formula", plan: TOPUP.id, top_up_of: fed.id })], "13:30").missed, null);
+});
+
+check("a late bottle only up to what the feed still wants: over its step's amount, or at the target for a step with none, it's a feed of its own", () => {
+  const bare = nurse("L 13:00-13:10, R 13:10-13:20", { plan: TOPUP.id });
+  const at = (log: Entry[], when: string, target: { min: number; max: number } | null = TARGET) => feedPlanNow(PLAN, log, D(when), { tz: TZ, target });
+  // Up to the top-up's 35 ml it's the top-up; over it, a feed of its own (no turn by day), counted from as Last fed is.
+  eq(clock(at([bare, bottle("14:10", 35, { milk: "formula" })], "14:20").due!.base), "13:00");
+  for (const target of [TARGET, null]) {
+    const n = at([bare, bottle("14:10", 40, { milk: "formula" })], "14:20", target);
+    eq([n.focus.feed.id, n.missed, clock(n.due!.base), clock(n.due!.from)], [SNS.id, null, "14:10", "16:40"], `40 ml, ${target ? "with" : "without"} a target`);
+  }
+  // Milk at the breast logged as a plain bottle: up to its 20 ml.
+  const sns = [nurse("L 08:00-08:15", { plan: SNS.id }), pump("08:20-08:35")];
+  eq([clock(at([...sns, bottle("09:00", 20, { milk: "formula" })], "09:05").due!.base), clock(at([...sns, bottle("09:00", 60, { milk: "formula" })], "09:05").due!.base)], ["08:00", "09:00"]);
+  // A bottle step with no amount takes one under the target per feed's smaller end; with no target, any.
+  const loose = parseFeedingPlan({ day: { every: [150, 210] }, feeds: [{ name: "Nurse, then a bottle", steps: [{ do: "nurse", minutes: [8, 12] }, { do: "bottle" }] }] }, null, NOW0);
+  const fed = nurse("L 13:00-13:15", { plan: loose.feeds[0].id });
+  const base = (ml: number, target: { min: number; max: number } | null) => clock(feedPlanNow(loose, [fed, bottle("14:00", ml)], D("14:05"), { tz: TZ, target }).due!.base);
+  eq([base(40, TARGET), base(50, TARGET), base(120, null)], ["13:00", "14:00", "13:00"]);
+  // The night's formula to finish an hour on: up to what the bottle still needs (40 of 50-70 given, so 30).
+  const evening = [nurse("L 20:30-20:45", { plan: SNS.id }), bottle("20:44", 20, { via: "sns" }), pump("20:50-21:05"), pump("23:20-23:40"), bottle("23:45", 40, { milk: "breastmilk", plan: NIGHT.id })];
+  let n = at([...evening, bottle("+1 00:45", 30, { milk: "formula" })], "+1 00:50");
+  eq([n.focus.state, n.focus.feed.id, clock(n.due!.base), n.missed], ["upcoming", NIGHT.id, "23:45", null]);
+  n = at([...evening, bottle("+1 00:45", 40, { milk: "formula" })], "+1 00:50");
+  eq([n.focus.state, n.focus.feed.id, n.focus.named, clock(n.due!.base)], ["underway", NIGHT.id, ms("+1 00:45"), "00:45"], "40 more is a night feed of its own");
+});
+
+check("a pump in the hour before a feed that no feed took: that feed's pump is never not logged, though its pump after nursing stays to do", () => {
+  // The top-up feed has no pump step, so a pump at 10:40 is no one's; the SNS feed at 11:20 pumps after nursing.
+  const morning = [nurse("L 08:00-08:10, R 08:10-08:20", { plan: TOPUP.id }), bottle("08:22", 30, { via: "paced", milk: "formula", plan: TOPUP.id })];
+  const fed = nurse("L 11:20-11:35", { plan: SNS.id });
+  const milk = bottle("11:30", 20, { via: "sns", milk: "formula", top_up_of: fed.id });
+  let n = now(PLAN, [...morning, pump("10:40-10:50"), fed, milk], "11:36");
+  eq([n.focus.state, n.focus.feed.id, states(n.focus)], ["underway", SNS.id, ["done", "todo"]], "the plan's order: nurse, then pump");
+  n = now(PLAN, [...morning, pump("10:40-10:50"), fed, milk], "12:40");
+  eq([n.focus.feed.id, n.missed], [TOPUP.id, null]);
+  // More than an hour before, it's not that feed's: its pump reads as not logged.
+  eq(now(PLAN, [...morning, pump("10:10-10:20"), fed, milk], "12:40").missed?.steps.map((s) => s.step.do), ["pump"]);
+});
+
+check("a morning window the night's end squeezes under 15 minutes is one time, the night's end", () => {
+  // An invented plan whose day's most (3 hours) is the night's interval: a last night feed at 2:05 leaves 5:00-5:05.
+  const p = parseFeedingPlan({ ...INPUT, day: { every: [120, 180] } }, null, NOW0);
+  const last = (at: string) => [pump(`+1d${at === "02:05" ? "01:45" : "02:00"}-+1d${at === "02:05" ? "02:03" : "02:18"}`), bottle(`+1 ${at}`, 60, { milk: "breastmilk", plan: NIGHT.id })];
+  let n = feedPlanNow(p, last("02:05"), D("+1 02:30"), { tz: TZ, target: TARGET });
+  eq([n.focus.feed.id, n.due!.night, clock(n.due!.from), clock(n.due!.to)], [SNS.id, false, "05:00", "05:00"]);
+  eq(
+    [dueText(n.due!, D("+1 02:30"), TZ), dueText(n.due!, D("+1 05:05"), TZ), dueText(n.due!, D("+1 05:14"), TZ), dueText(n.due!, D("+1 05:16"), TZ)],
+    ["Next feed at 5:00 AM, in 2h 30m", "Due now (5:00 AM)", "Due now (5:00 AM)", "Due since 5:00 AM: 3h 11m since the last feed"]
+  );
+  // 20 minutes left is a window of its own.
+  n = feedPlanNow(p, last("02:20"), D("+1 02:30"), { tz: TZ, target: TARGET });
+  eq([clock(n.due!.from), clock(n.due!.to)], ["05:00", "05:20"]);
+});
+
+check("she nursed in the night feed's place: what happened is that she nursed; its steps are never owed, and no later bottle is joined to it", () => {
+  const full = [pump("23:15-23:35"), bottle("23:37", 40, { milk: "breastmilk", plan: NIGHT.id }), bottle("23:45", 15, { milk: "formula", plan: NIGHT.id })];
+  const comfort = nurse("L +1d00:40-+1d01:00");
+  let n = now(PLAN, [...full, nurse("L +1d00:40-")], "+1 00:50");
+  eq([n.focus.state, n.focus.feed.id, n.focus.nursedOnly, n.focus.extraNursing, n.focus.live], ["underway", NIGHT.id, true, true, true]);
+  n = now(PLAN, [...full, comfort], "+1 01:05");
+  eq([n.focus.state, n.focus.nursedOnly, n.missed, clock(n.due!.base)], ["underway", true, null, "00:40"]);
+  n = now(PLAN, [...full, comfort], "+1 01:50");
+  eq([n.focus.state, n.focus.feed.id, n.missed], ["upcoming", NIGHT.id, null], "never pump and bottle not logged");
+  // A bottle 50 minutes after she came off is a night feed of its own, as the log counts it.
+  n = now(PLAN, [...full, comfort, bottle("+1 01:50", 40, { milk: "breastmilk" })], "+1 01:52");
+  eq([n.focus.state, n.focus.named, n.focus.nursedOnly, clock(n.due!.base)], ["underway", ms("+1 01:50"), undefined, "01:50"]);
+  // Pumped after it: the night feed's routine after all, with its bottle to give.
+  n = now(PLAN, [...full, comfort, pump("+1d01:05-+1d01:20")], "+1 01:25");
+  eq([n.focus.state, n.focus.nursedOnly, states(n.focus)], ["underway", undefined, ["done", "todo", "info"]]);
+});
+
+check("named: a plan feed by its first nursing or first bottle, never a pump begun before it", () => {
+  let n = now(PLAN, [pump("+1d02:00-+1d02:20"), bottle("+1 02:22", 30, { milk: "breastmilk", plan: NIGHT.id })], "+1 02:30");
+  eq([n.focus.state, n.focus.start, n.focus.named], ["underway", ms("+1 02:00"), ms("+1 02:22")]);
+  n = now(PLAN, [pump("23:20-23:40"), bottle("23:45", 55, { milk: "breastmilk", plan: NIGHT.id }), pump("+1d02:30-")], "+1 02:35");
+  eq([n.focus.state, n.focus.feed.id, n.focus.named], ["underway", NIGHT.id, null], "pumping, no bottle yet");
+  n = now(PLAN, [nurse("L 10:40-10:50, R 10:50-11:00", { plan: TOPUP.id })], "12:00");
+  eq([n.missed?.view.named, n.focus.named], [ms("10:40"), null]);
+});
+
+check("the log: a top-up linked to a feed paused 10 minutes or more is still its part, and the count and Last fed stay", () => {
+  // One timer: on the left, a 12-minute pause for a diaper, then the right (two runs to the log).
+  const fed = nurse("L 09:00-09:10, R 09:22-09:34", { plan: TOPUP.id });
+  const runs = nursingRuns([fed], D("12:00"));
+  eq(runs.length, 2);
+  eq(["09:05", "10:08", "11:30"].map((at) => topUpRunFor(runs, ms(at), D("12:00"), fed.id)?.start), [ms("09:00"), ms("09:22"), ms("09:22")]);
+  const late = bottle("10:08", 25, { via: "paced", milk: "formula", plan: TOPUP.id, top_up_of: fed.id });
+  eq([countedFeeds([fed, late], D("10:10")).length, lastFedAnchor([fed, late], D("10:10"))!.at], [countedFeeds([fed], D("10:10")).length, lastFedAnchor([fed], D("10:10"))!.at]);
+  const n = now(PLAN, [fed, late], "10:10");
+  eq([n.focus.state, n.focus.feed.id, n.missed, clock(n.due!.base)], ["upcoming", SNS.id, null, "09:00"]);
+});
+
+check("the log: the night's formula to finish counts from the feed's last part, its pump going on too; Last fed and Between feeds carry it", () => {
+  // One parent pumps 2:00-2:22 while the other gives 30 ml at 2:05; the formula to finish at 2:52, 47 minutes on.
+  const pumped = pump("+1d02:00-+1d02:22");
+  const first = bottle("+1 02:05", 30, { milk: "breastmilk", plan: NIGHT.id });
+  const finish = bottle("+1 02:52", 20, { milk: "formula", plan: NIGHT.id });
+  const at = D("+1 03:00");
+  const fed = lastFedAnchor([pumped, first, finish], at)!;
+  eq([countedFeeds([pumped, first, finish], at).length, [...sameFeedBottleIds([pumped, first, finish], at)], clock(fed.at), fed.entry.id, fed.more?.map((b) => b.id)], [1, [finish.id], "02:05", first.id, [finish.id]]);
+  eq(countedFeeds([first, finish], at).length, 2, "with no pump logged, 47 minutes is a feed of its own");
+  // The next night feed's own pump never joins it to the one before.
+  eq(countedFeeds([bottle("23:45", 55, { milk: "breastmilk", plan: NIGHT.id }), pump("+1d02:00-+1d02:30"), bottle("+1 02:45", 50, { milk: "breastmilk", plan: NIGHT.id })], at).length, 2);
+  // Between feeds: one row for the night feed, its formula to finish on it, and no gap of its own.
+  const steps = feedGaps([pumped, first, finish, nurse("L +1d05:30-+1d05:45")], D("+1 06:00"));
+  eq(steps.map((s) => [s.feed.kind, clock(s.start), s.more?.map((b) => b.id) ?? null, s.gapMin]), [["bottle", "02:05", [finish.id], null], ["breast", "05:30", null, 205]]);
+  // A bottle on its own has no `more`, in Last fed or Between feeds.
+  const lone = bottle("+1 02:05", 30, { milk: "breastmilk" });
+  eq(["more" in lastFedAnchor([lone], at)!, "more" in feedGaps([lone], at)[0]], [false, false]);
 });
 
 // ── the log's own checks ─────────────────────────────────────────────────

@@ -104,6 +104,17 @@ export type FeedingPlan = {
   /** Bumped on every save; an edit names the one it started from (base_rev) so a stale one is refused. */
   rev: number;
   updated_at?: string;
+  /**
+   * When the plan began (ISO), kept on every edit: a feed logged before it, and never named as one of the plan's feeds,
+   * is read as a feed outside the plan (no turn, no steps, never missed), though it still sets when the next is due.
+   * A plan saved without it reads every feed as before. A first save keeps only `since_rev` (planSince).
+   */
+  since?: string;
+  /**
+   * The revision the plan began at: while it's still that one, the plan began when it was saved (`updated_at`), so a
+   * first save's read-back stays the same plan from one minute to the next (`since` comes with the first edit).
+   */
+  since_rev?: number;
 };
 
 export const PLAN_LIMITS = {
@@ -316,7 +327,9 @@ function nightLength(from: string, to: string): void {
  * feeding_plan_last_rev), which a new plan's revision, and so its new ids,
  * count on from. `stored`: re-reading a saved plan, which skips the checks
  * that only a save makes (a night over PLAN_NIGHT_MAX_MIN), so a plan saved
- * before still reads.
+ * before still reads. When the plan began (`since`, `since_rev`) is never
+ * taken from `input`: a new plan begins at its own revision, and an edit keeps
+ * the moment the plan it replaces began.
  */
 export function parseFeedingPlan(input: unknown, current: FeedingPlan | null, now: Date, opts: { lastRev?: number; stored?: boolean } = {}): FeedingPlan {
   if (!isObj(input)) throw new PlanError("A feeding plan must be an object");
@@ -420,7 +433,32 @@ export function parseFeedingPlan(input: unknown, current: FeedingPlan | null, no
   if (night) plan.night = night;
   const notes = text(input.notes, "The notes", PLAN_LIMITS.notes);
   if (notes) plan.notes = notes;
+  // When it began: an edit keeps the moment the plan it replaces began; a new plan began at this revision, which its
+  // save's moment says (planSince), so nothing in it moves between its read-back and the yes.
+  // (since_rev before since, as feedingPlanOf adds it, so the same plan reads as the same JSON.)
+  if (current) {
+    const at = revOf(current.since_rev);
+    if (at) plan.since_rev = at;
+    const since = planSince(current);
+    if (since !== null) plan.since = new Date(since).toISOString();
+  } else if (!opts.stored) plan.since_rev = rev;
   return plan;
+}
+
+const revOf = (v: unknown): number | undefined => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined);
+const isoMs = (v: unknown): number | null => {
+  const ms = typeof v === "string" ? Date.parse(v) : NaN;
+  return Number.isFinite(ms) ? ms : null;
+};
+
+/**
+ * When a plan began (epoch ms): its `since`, else, while it's still the revision it began at (`since_rev`), when that
+ * revision was saved; null for a plan saved before this was kept (every feed in the log reads as it always did).
+ */
+export function planSince(plan: Pick<FeedingPlan, "since" | "since_rev" | "rev" | "updated_at">): number | null {
+  const since = isoMs(plan.since);
+  if (since !== null) return since;
+  return revOf(plan.since_rev) !== undefined && plan.since_rev === plan.rev ? isoMs(plan.updated_at) : null;
 }
 
 /** The revision of the last plan removed (settings.feeding_plan_last_rev), which a new plan's revision counts on from. */
@@ -477,6 +515,9 @@ export function feedingPlanOf(settings: Record<string, unknown> | null | undefin
     plan.rev = Number.isFinite(Number(p.rev)) ? Number(p.rev) : 1;
     if (typeof p.updated_at === "string") plan.updated_at = p.updated_at;
     else delete plan.updated_at;
+    // A first save keeps the revision it began at; read, it says when that was (its save), as an edit keeps it.
+    const since = planSince(plan);
+    if (since !== null && !plan.since) plan.since = new Date(since).toISOString();
     return plan;
   } catch {
     return null;
@@ -752,6 +793,17 @@ function joinRuns(list: readonly NursingRun[]): NursingRun {
 /** When a feed's latest part began (its nursing, nursing again, a bottle). */
 const lastPartStart = (g: PlanGroup) => Math.max(g.start, ...g.runs.map((r) => r.start), ...g.bottles.map((b) => t(b.started_at)));
 
+/** When the last of a feed was logged: its nursing's end (never while it's going, paused too), a top-up, a bottle. */
+function lastLogged(g: PlanGroup): number {
+  let at = g.start;
+  for (const r of g.runs) {
+    if (r.live || r.end === null) return Infinity;
+    at = Math.max(at, r.end, ...r.topUps.map((b) => t(b.ended_at ?? b.started_at)));
+  }
+  for (const b of g.bottles) at = Math.max(at, t(b.ended_at ?? b.started_at));
+  return at;
+}
+
 /**
  * Every feed in the window, oldest first, as the log counts them
  * (countedFeeds, a plan's second bottle with its first), joined the way any
@@ -987,6 +1039,16 @@ export type PlanFeedView = {
   lastAt: number | null;
   /** She also nursed in a feed whose plan feed has no nursing (a bottle feed she ended up nursing for). */
   extraNursing: boolean;
+  /**
+   * Nursing is all that was logged, in a plan feed with no nursing step (she nursed in the night feed's place): what
+   * happened is that she nursed. Its steps aren't owed: never `missed`, and no bottle is joined to it as its step.
+   */
+  nursedOnly?: boolean;
+  /**
+   * The one moment the feed is named by in words ("the 2:00 AM feed"): its first nursing or first bottle (the group's
+   * start), never a pump begun before it; null before either is logged. `start` stays what this phone's notes key on.
+   */
+  named: number | null;
   /** A feed that fits none of the plan's feeds (a bottle by day when every day feed nurses): no steps, no turn. */
   offPlan?: boolean;
 };
@@ -1038,6 +1100,8 @@ export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolea
   const pumps = [...(g?.pumps ?? []), ...pending];
   let pumpIndex = 0;
   let bottleUsed = false;
+  // Two or more bottle steps share the bottles (shareBottles); one takes them all, as it always has.
+  const shared = bottleSteps > 1 ? shareBottles(feed.steps, bottleMilk, target) : null;
   const steps: StepView[] = feed.steps.map((s, i): StepView => {
     const base = { i, step: s, minutes: null, ml: null, need: null, milkMissing: false, entries: [] as Entry[] };
     if (s.do === "note") return { ...base, status: "info" };
@@ -1056,6 +1120,11 @@ export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolea
     // an amount stays to do while what's logged is short of it (the pumped milk given, the formula to finish not yet);
     // a bottle logged without an amount can't say, so it counts as reaching it.
     const need = bottleNeed(s, target);
+    if (shared) {
+      const got = shared.get(i)!;
+      if (!got.entries.length) return { ...base, need, status: "todo" };
+      return { ...base, need, status: got.reached ? "done" : "todo", ml: got.ml, entries: got.entries };
+    }
     if (bottleUsed || bottleMilk.length === 0) return { ...base, need, status: "todo" };
     bottleUsed = true;
     const ml = sumMl(bottleMilk);
@@ -1071,6 +1140,8 @@ export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolea
   for (const s of steps) for (const e of s.entries) ends.push(e.ended_at ? t(e.ended_at) : t(e.started_at));
   if (run) ends.push(run.end ?? nowMs);
   const firstStart = g ? Math.min(g.start, ...pumps.map((p) => t(p.started_at))) : pending.length ? Math.min(...pending.map((p) => t(p.started_at))) : null;
+  // Nursing alone in a plan feed with no nursing step (she nursed in the night feed's place): nothing of its own steps.
+  const nursedOnly = !!run && !nurse && milk.length === 0 && pumps.length === 0;
   return {
     feed,
     why,
@@ -1083,7 +1154,53 @@ export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolea
     live,
     lastAt: ends.length ? Math.max(...ends) : null,
     extraNursing: !!run && !nurse,
+    ...(nursedOnly ? { nursedOnly: true } : {}),
+    named: g ? g.start : null,
   };
+}
+
+/** One bottle step's share of a feed's bottles (shareBottles). */
+type BottleShare = { entries: FeedEntry[]; ml: number | null; reached: boolean };
+
+/**
+ * A feed's bottles among its two or more bottle steps ("pumped milk 30 ml, then formula 15 ml"), oldest first: each
+ * bottle (a Mixed bottle's parts each on their own) goes to the first step not yet done that asks for its milk, else
+ * to the first not yet done, else to the last. A step is done once what it got reaches its amount (StepView.need, else
+ * its own amount's smaller end; a bottle logged without an amount can't say, so it reaches it), or at its first bottle
+ * when it has no amount. Keyed by the step's place in the feed.
+ */
+function shareBottles(steps: readonly PlanStep[], bottles: readonly FeedEntry[], target: FeedTarget | null): Map<number, BottleShare> {
+  const at = steps.flatMap((s, i) => (s.do === "bottle" ? [{ i, s }] : []));
+  const share = new Map<number, BottleShare & { unknown: boolean }>(at.map(({ i }) => [i, { entries: [], ml: null, reached: false, unknown: false }]));
+  const amountOf = (s: BottleStep) => bottleNeed(s, target) ?? s.ml ?? null;
+  const reached = (s: BottleStep, x: BottleShare & { unknown: boolean }) => {
+    const amount = amountOf(s);
+    return x.entries.length > 0 && (!amount || x.unknown || (x.ml ?? 0) >= amount.min);
+  };
+  const give = (b: FeedEntry, milk: "breastmilk" | "formula" | null, ml: number | null) => {
+    const open = at.filter(({ i, s }) => !reached(s, share.get(i)!));
+    const to = (milk ? open.find(({ s }) => s.milk === milk) : undefined) ?? open[0] ?? at[at.length - 1];
+    const x = share.get(to.i)!;
+    if (!x.entries.includes(b)) x.entries.push(b);
+    if (ml === null) x.unknown = true;
+    else x.ml = (x.ml ?? 0) + ml;
+  };
+  for (const b of [...bottles].sort((a, c) => t(a.started_at) - t(c.started_at))) {
+    const d = b.data;
+    if (d.milk === "mixed" && (d.breastmilk_ml != null || d.formula_ml != null)) {
+      // A Mixed bottle's parts: each to a step of its milk, as two bottles would go.
+      if (d.breastmilk_ml != null) give(b, "breastmilk", d.breastmilk_ml);
+      if (d.formula_ml != null) give(b, "formula", d.formula_ml);
+      continue;
+    }
+    give(b, d.milk === "breastmilk" || d.milk === "formula" ? d.milk : null, bottleAmount(d));
+  }
+  const out = new Map<number, BottleShare>();
+  for (const { i, s } of at) {
+    const x = share.get(i)!;
+    out.set(i, { entries: x.entries, ml: x.ml, reached: reached(s, x) });
+  }
+  return out;
 }
 
 export type PlanDue = {
@@ -1157,9 +1274,29 @@ function bottleShort(v: StepView, target: FeedTarget | null): boolean {
   return v.entries.every((e) => e.kind !== "feed" || bottleAmount(e.data) != null) && (v.ml ?? 0) < need.min;
 }
 
-/** Whether a feed still wants what a bottle on its own could be: its top-up or bottle, formula to finish one, its milk at the breast. */
+/**
+ * Whether a feed still wants what a bottle on its own could be: its top-up or bottle, formula to finish one, its milk
+ * at the breast. Never one where she only nursed in the place of a feed with no nursing (its steps aren't owed).
+ */
 const wantsBottle = (v: PlanFeedView, target: FeedTarget | null) =>
-  v.steps.some((s) => s.milkMissing || (s.step.do === "bottle" && (s.status === "todo" || bottleShort(s, target))));
+  !v.nursedOnly && v.steps.some((s) => s.milkMissing || (s.step.do === "bottle" && (s.status === "todo" || bottleShort(s, target))));
+
+/**
+ * Whether a bottle of `ml` is no more than what a feed still wants of it (wantsBottle): up to the most of its milk at
+ * the breast, or of a bottle step's amount less what it already has (its own, or the target it's up to); a step with no
+ * amount takes one under the target per feed's smaller end (one at it is a feed's worth), and anything without a
+ * target. A bottle logged without an amount can't say, so it fits.
+ */
+function fitsWanted(v: PlanFeedView, ml: number | null, target: FeedTarget | null): boolean {
+  if (ml === null) return true;
+  return v.steps.some((s) => {
+    if (s.milkMissing && s.step.do === "nurse" && s.step.supplement) return ml <= s.step.supplement.ml.max;
+    if (s.step.do !== "bottle" || !(s.status === "todo" || bottleShort(s, target))) return false;
+    const amount = bottleNeed(s.step, target) ?? s.step.ml ?? null;
+    if (amount) return ml <= amount.max - (s.ml ?? 0);
+    return !target || ml < target.min;
+  });
+}
 
 /** Whether what was logged with a nursing feed (a nipple shield, milk at the breast) points to a plan feed other than `feed`. */
 function pointsElsewhere(plan: FeedingPlan, g: PlanGroup, feed: PlanFeed): boolean {
@@ -1224,6 +1361,9 @@ export function feedPlanNow(
       const end = nightEndAfter(plan.night, from, tz);
       from = end;
       to = Math.max(to, end);
+      // What's left of the window is minutes (a last night feed just after 2 AM, its 3 hours just past a 5 AM end): one
+      // time, the night's end, due now there for PLAN_DUE_NOW_MS as any feed due at one time is.
+      if (to - from < PLAN_DUE_NOW_MS) to = from;
     }
     // On demand, the interval is kept as its most (from == to): due then, so never "Due now" before it; only its words differ.
     const onDemand = onDemandAt(plan, night);
@@ -1261,6 +1401,10 @@ export function feedPlanNow(
     views[i] = read(v.feed, v.why, v.night, { ...v.group!, pumps: [...v.group!.pumps, p] });
   };
   let nextPump = 0;
+  // When the plan began: a feed logged before it (all of it) and never named as one of its feeds isn't a plan feed.
+  const since = planSince(plan);
+  // Pumps no feed took, begun in the hour before a feed (by the view's place): that feed's pump steps aren't missed.
+  const pumpedBefore = new Map<number, number>();
   for (const found of groups) {
     const g: PlanGroup = { ...found, runs: [...found.runs], bottles: [...found.bottles], pumps: [] };
     const k = views.length - 1;
@@ -1281,21 +1425,28 @@ export function feedPlanNow(
     // it, at its start; with none before it, its own start), and which plan feed it was.
     const night = nightAt(k >= 0 ? views[k].group!.anchor : null, begun);
     const nightFeed = night ? nextInNight(plan, lastNight) : null;
-    const own = identify(plan, g, nightFeed ?? nextInOrder(plan, lastDay), nightFeed);
+    // Logged before the plan began, and not named as one of its feeds since: a feed, but none of the plan's (no turn,
+    // no steps, never missed); it still sets when the next is due. One still going when the plan was saved is the plan's.
+    const before = since !== null && !feedById(plan, g.tag) && lastLogged(g) < since;
+    const own: { feed: PlanFeed | null; why: PlanFeedView["why"] } = before ? { feed: null, why: "matched" } : identify(plan, g, nightFeed ?? nextInOrder(plan, lastDay), nightFeed);
 
     // Pumps begun before it: the feed before it's while that one has a pump step left (pumping after a feed), this
     // one's if it pumps first (the night's pump, then its bottle) and the pump was well after the one before or that
     // one has no pump step left; anything else is a pump the plan has no step for.
     const mine: PumpEntry[] = [];
+    let orphans = 0;
     while (nextPump < pumps.length && t(pumps[nextPump].started_at) + PUMP_SLACK_MS < g.start) {
       const p = pumps[nextPump++];
       const at = t(p.started_at);
-      const since = k >= 0 ? at - lastPartStart(views[k].group!) : Infinity;
-      const prevTakes = k >= 0 && since <= PLAN_PUMP_AFTER_MS && room(views[k]) > 0;
+      const after = k >= 0 ? at - lastPartStart(views[k].group!) : Infinity;
+      const prevTakes = k >= 0 && after <= PLAN_PUMP_AFTER_MS && room(views[k]) > 0;
       const first = !!own.feed && pumpsFirst(own.feed) && mine.length < pumpSteps(own.feed);
       const near = g.start - at <= PLAN_PUMP_BEFORE_MS;
-      if (first && (near ? since > 30 * MIN || !prevTakes : k >= 0 && !prevTakes)) mine.push(p);
+      if (first && (near ? after > 30 * MIN || !prevTakes : k >= 0 && !prevTakes)) mine.push(p);
       else if (prevTakes) addPump(k, p);
+      // Pumped in the hour before it and no feed took it (the feed before already had its pump): never "pump not
+      // logged" for this one, though its pump step after the nursing stays the plan's to do while it's going.
+      else if (near) orphans++;
     }
 
     if (k >= 0 && !views[k].offPlan) {
@@ -1307,8 +1458,16 @@ export function feedPlanNow(
       // (which links it: data.top_up_of): up to PLAN_LATE_TOP_UP_MS after that feed ended, before the next is due.
       const ended = pg.run && !pg.run.live && pg.run.end !== null ? pg.run.end : prev.lastAt;
       const nextDue = dueAt(pg.anchor, g.start);
+      // Only up to what it still wants: a bottle over that (a full bottle an hour after a feed whose top-up wasn't
+      // logged) is a feed of its own.
       const late =
-        !g.run && asTagged && ended !== null && g.start - ended <= PLAN_LATE_TOP_UP_MS && (!nextDue || g.start < nextDue.from) && wantsBottle(prev, target);
+        !g.run &&
+        asTagged &&
+        ended !== null &&
+        g.start - ended <= PLAN_LATE_TOP_UP_MS &&
+        (!nextDue || g.start < nextDue.from) &&
+        wantsBottle(prev, target) &&
+        fitsWanted(prev, sumMl(g.bottles), target);
       // A bottle soon after anything of a feed that began with a bottle (the night's: its pump can end after the bottle,
       // one parent pumping while the other feeds): more of it, as a bottle soon after the bottle before is.
       const bottleLed = pg.bottles.length > 0 && (pg.runs.length === 0 || t(pg.bottles[0].started_at) <= pg.runs[0].start);
@@ -1331,6 +1490,7 @@ export function feedPlanNow(
       continue;
     }
     views.push(read(own.feed, own.why, night, { ...g, pumps: mine }));
+    if (orphans) pumpedBefore.set(views.length - 1, orphans);
     // A night feed takes the night's turn and never a day turn; a day feed (one picked at night too) takes the day's.
     if (nightFeed && atNight.includes(own.feed.id)) lastNight = own.feed.id;
     else if (plan.order.includes(own.feed.id)) lastDay = own.feed.id;
@@ -1399,9 +1559,17 @@ export function feedPlanNow(
       focus = { ...read(feed, why, night, null), state: "upcoming" };
       due = dueNext ? { ...dueNext, for: "focus" } : null;
     }
-    if (last && !last.offPlan && !last.done && last.lastAt !== null && nowMs - last.lastAt < PLAN_MISSED_MS) {
-      // Never a step only if needed: one nobody gave wasn't needed.
-      const steps = last.steps.filter((s) => (s.status === "todo" && !ifNeeded(s.step)) || s.milkMissing);
+    if (last && !last.offPlan && !last.nursedOnly && !last.done && last.lastAt !== null && nowMs - last.lastAt < PLAN_MISSED_MS) {
+      // Never a step only if needed: one nobody gave wasn't needed. Never a pump step while a pump no feed took was
+      // logged in the hour before the feed (one each).
+      let excused = pumpedBefore.get(views.length - 1) ?? 0;
+      const steps = last.steps.filter((s) => {
+        if (s.step.do === "pump" && s.status === "todo" && excused > 0) {
+          excused--;
+          return false;
+        }
+        return (s.status === "todo" && !ifNeeded(s.step)) || s.milkMissing;
+      });
       if (steps.length) missed = { view: last, steps };
     }
   }

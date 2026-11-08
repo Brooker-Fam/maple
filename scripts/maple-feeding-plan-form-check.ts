@@ -98,7 +98,8 @@ function roundTrip(plan: FeedingPlan, unit: "ml" | "oz" = "ml"): FeedingPlan {
   const { plan: input } = inputOf(draftOf(plan, null, unit));
   return parseFeedingPlan({ ...input, base_rev: plan.rev }, plan, LATER);
 }
-const same = (plan: FeedingPlan) => ({ ...plan, rev: plan.rev + 1, updated_at: LATER.toISOString() });
+/** The same plan as a new revision, still saying when it began (a first save's moment, kept on every edit). */
+const same = (plan: FeedingPlan) => ({ ...plan, rev: plan.rev + 1, updated_at: LATER.toISOString(), since: plan.since ?? plan.updated_at });
 
 check("round trip: a plan opened and saved untouched comes back the same plan, ids and all", () => {
   for (const [name, plan] of [["the full plan", PLAN], ["ounces", OZ], ["the bare plan", BARE]] as const) eq(roundTrip(plan), same(plan), name);
