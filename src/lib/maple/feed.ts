@@ -170,11 +170,12 @@ export const TOP_UP_LINK_MS = 3 * HOUR;
 export const TOP_UP_BEFORE_MS = SAME_FEED_MS;
 /**
  * A bottle that carries a feeding plan's feed (data.plan) given less than
- * this after the last bottle of a feed that began with a bottle of the same
- * plan feed, with no nursing between, is more of that feed (the plan's
- * pumped milk, then formula to finish): not a feed of its own, and "Last fed"
- * stays at its first bottle. Bottles without a plan feed are each a feed, as
- * they always were.
+ * this after the last part of a feed that began with a bottle of the same
+ * plan feed (its last bottle, or its pump that went on later: one parent
+ * pumping while the other gives the bottle), with no nursing between, is
+ * more of that feed (the plan's pumped milk, then formula to finish): not a
+ * feed of its own, and "Last fed" stays at its first bottle. Bottles without
+ * a plan feed are each a feed, as they always were.
  */
 export const SAME_BOTTLE_FEED_MS = 45 * MIN;
 
@@ -1633,18 +1634,21 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
  * `now`. The bottle form asks it before saving, so it says how a bottle will
  * count. `link` (data.top_up_of, a nursing entry's id): the feed it names, if
  * the bottle came after it began, under TOP_UP_LINK_MS after it ended, and
- * before the next feed; else the time rule. `via` (data.via): milk given at
- * the breast (a syringe or an SNS) is only ever given while she nurses, so
- * one the time rule leaves alone, logged late, is the latest feed's that
- * began before it, if that feed ended under TOP_UP_LINK_MS before it.
+ * before the next feed; else the time rule. A feed paused 10 minutes or more
+ * is two runs holding the same entry: the link names the last of them that
+ * began by the bottle, so a top-up after the second part is still its part.
+ * `via` (data.via): milk given at the breast (a syringe or an SNS) is only
+ * ever given while she nurses, so one the time rule leaves alone, logged
+ * late, is the latest feed's that began before it, if that feed ended under
+ * TOP_UP_LINK_MS before it.
  */
 export function topUpRunFor(runs: readonly NursingRun[], at: number, now: Date, link?: number | null, via?: FeedData["via"] | null): NursingRun | null {
   if (!Number.isFinite(at)) return null;
   if (link != null) {
-    const i = runs.findIndex((r) => r.entries.some((e) => e.id === link));
+    const i = runs.findLastIndex((r) => r.start <= at && r.entries.some((e) => e.id === link));
     const r = runs[i];
     const next = runs[i + 1];
-    if (r && at >= r.start && (r.end === null || at - r.end <= TOP_UP_LINK_MS) && (!next || next.start > at)) return r;
+    if (r && (r.end === null || at - r.end <= TOP_UP_LINK_MS) && (!next || next.start > at)) return r;
   }
   let after: NursingRun | null = null;
   let began: NursingRun | null = null;
@@ -1713,29 +1717,56 @@ export type CountedFeed =
   | { start: number; run: null; bottle: EntryOf<"feed">; more: EntryOf<"feed">[] };
 
 type BottleFeed = { start: number; bottle: EntryOf<"feed">; more: EntryOf<"feed">[] };
+type PumpSpan = { start: number; end: number };
+
+/**
+ * When the last part of a bottle feed was logged, as the bottle at `before`
+ * reads it: its last bottle, or a pump that went on later (one parent pumping
+ * while the other gives the bottle, or pumping between its bottles), to its
+ * end (its start while it runs, as the feeding plan reads a feed's parts). A
+ * pump counts when it began before that bottle, no more than
+ * SAME_BOTTLE_FEED_MS before the feed, and while the feed was still going
+ * (under SAME_BOTTLE_FEED_MS after its last part so far).
+ */
+function bottleFeedLastPart(f: BottleFeed, before: number, pumps: readonly PumpSpan[]): number {
+  let last = f.more.length ? Date.parse(f.more[f.more.length - 1].started_at) : f.start;
+  for (const p of pumps) {
+    if (p.start >= before) break;
+    if (p.start > f.start - SAME_BOTTLE_FEED_MS && p.start < last + SAME_BOTTLE_FEED_MS && p.end > last) last = p.end;
+  }
+  return last;
+}
 
 /**
  * Bottles given on their own (not top-ups), oldest first, as feeds: each is
  * a feed, except a bottle carrying a feeding plan's feed (data.plan) given
- * under SAME_BOTTLE_FEED_MS after the last bottle of a feed that began with a
- * bottle of that plan feed, with no nursing since it began: that's more of it.
+ * under SAME_BOTTLE_FEED_MS after the last part of a feed that began with a
+ * bottle of that plan feed (its last bottle, or its pump that went on later:
+ * bottleFeedLastPart), with no nursing since it began: that's more of it.
  */
 function bottleFeeds(entries: readonly Entry[], runs: readonly NursingRun[]): BottleFeed[] {
   const topUp = topUpIds(runs);
   const bottles: { e: EntryOf<"feed">; at: number }[] = [];
+  const pumps: PumpSpan[] = [];
   for (const e of entries) {
+    if (e.kind === "pump") {
+      const start = Date.parse(e.started_at);
+      const end = e.ended_at ? Date.parse(e.ended_at) : NaN;
+      if (!Number.isNaN(start)) pumps.push({ start, end: Number.isNaN(end) ? start : Math.max(start, end) });
+      continue;
+    }
     if (!isBottleFeed(e) || topUp.has(e.id)) continue;
     const at = Date.parse(e.started_at);
     if (!Number.isNaN(at)) bottles.push({ e, at });
   }
   bottles.sort((a, b) => a.at - b.at);
+  pumps.sort((a, b) => a.start - b.start);
   const out: BottleFeed[] = [];
   for (const { e, at } of bottles) {
     const prev = out[out.length - 1];
     if (prev && e.data.plan && prev.bottle.data.plan === e.data.plan) {
-      const lastAt = prev.more.length ? Date.parse(prev.more[prev.more.length - 1].started_at) : prev.start;
       const nursed = runs.some((r) => r.start >= prev.start && r.start <= at);
-      if (at - lastAt < SAME_BOTTLE_FEED_MS && !nursed) {
+      if (!nursed && at - bottleFeedLastPart(prev, at, pumps) < SAME_BOTTLE_FEED_MS) {
         prev.more.push(e);
         continue;
       }
@@ -1817,10 +1848,15 @@ export type LastFed = {
   /** The feed's start and end (ISO); end null while she's on the breast. */
   start: string;
   end: string | null;
-  /** The newest entry in it (the one to open). */
+  /** The newest entry in it (the one to open); a bottle feed's first bottle. */
   entry: EntryOf<"feed">;
   /** The run it is (null for a bottle). */
   run: NursingRun | null;
+  /**
+   * A bottle feed's later bottles, oldest first (a feeding plan's formula to finish: SAME_BOTTLE_FEED_MS), whose milk
+   * is this feed's too; only when it has some.
+   */
+  more?: EntryOf<"feed">[];
 };
 
 /**
@@ -1834,12 +1870,12 @@ export type LastFed = {
  */
 export function lastFedAnchor(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): LastFed | null {
   const run = runs[runs.length - 1] ?? null;
-  let bottle: EntryOf<"feed"> | null = null;
-  for (const f of bottleFeeds(entries, runs)) if (!bottle || f.start > Date.parse(bottle.started_at)) bottle = f.bottle;
+  let fed: BottleFeed | null = null;
+  for (const f of bottleFeeds(entries, runs)) if (!fed || f.start > fed.start) fed = f;
   const a = run ? runAnchor(run) : null;
-  const b = bottle ? Date.parse(bottle.started_at) : null;
-  if (bottle && b !== null && (!a || b > a.at)) {
-    return { kind: "bottle", at: iso(b), rule: "start", start: iso(b), end: bottle.ended_at, entry: bottle, run: null };
+  if (fed && (!a || fed.start > a.at)) {
+    const b = fed.start;
+    return { kind: "bottle", at: iso(b), rule: "start", start: iso(b), end: fed.bottle.ended_at, entry: fed.bottle, run: null, ...(fed.more.length ? { more: fed.more } : {}) };
   }
   if (!run || !a) return null;
   const entry = run.entries.reduce((x, y) => (Date.parse(y.started_at) >= Date.parse(x.started_at) ? y : x));
@@ -1906,7 +1942,8 @@ export function typicalFeedGapMin(entries: readonly Entry[], now: Date, runs: re
 // here it's its own row, with how long she was off, so its gap shows. Pause
 // and Done read the same, as everywhere. A top-up is part of its feed here
 // too: it rides on the time on the breast it was given with, never a row (or
-// a gap) of its own; a bottle on its own is a row.
+// a gap) of its own; a bottle on its own is a row, with a feeding plan's
+// later bottles of that feed (formula to finish) on it, as Today counts them.
 
 /** Under this off the breast is the same time on the breast (switching sides, a quick burp), Pause or Done alike. */
 export const RELATCH_MS = 2 * MIN;
@@ -1949,15 +1986,21 @@ export type GapStep = {
   backOnMin: number | null;
   /** Its feed's cluster (an index into feedClusters(runs)), null outside one and for a bottle. */
   cluster: number | null;
+  /**
+   * A bottle feed's later bottles (a feeding plan's formula to finish: SAME_BOTTLE_FEED_MS), oldest first: part of this
+   * row, never a row or a gap of their own; only when it has some.
+   */
+  more?: EntryOf<"feed">[];
 };
 
 /**
  * Every time on the breast and every bottle on its own, oldest first, each
  * with the time since the one before, start to start (a top-up rides on its
- * time on the breast). Coming off for under 2 minutes is the same time on the
- * breast; any longer and going back on is a new one, whatever was tapped. A gap over 12 hours isn't counted (gapMin null), though
- * sinceMs still says how long it was. Pass `runs` (nursingRuns of the same
- * entries) when you already have them.
+ * time on the breast, and a bottle feed's later bottles on it: `more`).
+ * Coming off for under 2 minutes is the same time on the breast; any longer
+ * and going back on is a new one, whatever was tapped. A gap over 12 hours
+ * isn't counted (gapMin null), though sinceMs still says how long it was.
+ * Pass `runs` (nursingRuns of the same entries) when you already have them.
  */
 export function feedGaps(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): GapStep[] {
   const nowMs = now.getTime();
@@ -1984,8 +2027,8 @@ export function feedGaps(entries: readonly Entry[], now: Date, runs: readonly Nu
     latches.push({ start: g[0].start, end: latchEnd, min, order, firstSide, entries: entriesIn, run, topUps: [] });
   }
   // A top-up rides on the time on the breast it was given with: the last of its feed's that began by then (during or
-  // after it), or its feed's first (an SNS readied before the latch). Any other bottle is a row of its own.
-  const topUp = topUpIds(runs);
+  // after it), or its feed's first (an SNS readied before the latch). Any other bottle is a row of its own, but a
+  // feeding plan's later bottle of a bottle feed (formula to finish) rides on that feed's row (bottleFeeds' `more`).
   for (const run of runs) {
     if (!run.topUps.length) continue;
     const mine = latches.filter((l) => l.run === run);
@@ -1995,16 +2038,22 @@ export function feedGaps(entries: readonly Entry[], now: Date, runs: readonly Nu
       latch?.topUps.push(b);
     }
   }
-  const feeds: Pick<GapStep, "feed" | "start" | "end">[] = [
+  // A bottle ends where it began unless it says when it ended; a bottle feed with later bottles ends with its last.
+  const bottleEnd = (e: EntryOf<"feed">): number | null => {
+    const start = Date.parse(e.started_at);
+    const ended = e.ended_at ? Date.parse(e.ended_at) : NaN;
+    return e.active ? null : Number.isNaN(ended) ? start : Math.max(start, ended);
+  };
+  const feeds: Pick<GapStep, "feed" | "start" | "end" | "more">[] = [
     ...latches.map((latch) => ({ feed: { kind: "breast" as const, latch }, start: latch.start, end: latch.end })),
-    ...entries
-      .filter(isBottleFeed)
-      .filter((e) => !topUp.has(e.id))
-      .map((entry) => {
-        const start = Date.parse(entry.started_at);
-        const ended = entry.ended_at ? Date.parse(entry.ended_at) : NaN;
-        return { feed: { kind: "bottle" as const, entry }, start, end: entry.active ? null : Number.isNaN(ended) ? start : Math.max(start, ended) };
-      }),
+    ...bottleFeeds(entries, runs).map((f) => {
+      let end: number | null = bottleEnd(f.bottle);
+      for (const b of f.more) {
+        const e = bottleEnd(b);
+        end = end === null || e === null ? null : Math.max(end, e);
+      }
+      return { feed: { kind: "bottle" as const, entry: f.bottle }, start: f.start, end, ...(f.more.length ? { more: f.more } : {}) };
+    }),
   ]
     .filter((f) => !Number.isNaN(f.start))
     .sort((a, b) => a.start - b.start);
