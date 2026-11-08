@@ -223,6 +223,22 @@ async function storeChecks(shape: Shape) {
     eq(await entryRow(aFeed.id), aBefore);
   });
 
+  await test(`${shape}: "Same feed as" carries the new start's nipple shield and plan feed onto the feed it joins, in the same write`, async () => {
+    // B's feed (left, 20 minutes ago) stops 8 minutes in; a new start 4 minutes later, from the plan's card: the shield
+    // and a plan feed. Joined, the first feed carries on with both; the new start is set aside.
+    const [bFeed] = await store.activeTimers(B, beta.babyId);
+    await store.stopTimer(B, bFeed.id, undefined, beta.owner);
+    const t0 = Date.now() - 20 * 60_000;
+    const older = (await store.startTimer(B, { babyId: beta.babyId, kind: "feed", side: "L", at: new Date(t0), createdBy: beta.owner, source: "web" })).entry;
+    await store.stopTimer(B, older.id, new Date(t0 + 8 * 60_000), beta.owner);
+    const newer = (await store.startTimer(B, { babyId: beta.babyId, kind: "feed", side: "R", at: new Date(t0 + 12 * 60_000), createdBy: beta.owner, source: "web", with: { shield: true, plan: "p1f1" } })).entry;
+    const res = await store.joinFeeds(B, newer.id, older.id, "R", beta.owner);
+    const carried = await entryRow(older.id);
+    eq([res.entry.id, carried.active, carried.data.shield, carried.data.plan], [older.id, true, true, "p1f1"]);
+    ok(!!(await entryRow(newer.id)).deleted_at, "the new start is set aside");
+    await store.stopTimer(B, older.id, undefined, beta.owner);
+  });
+
   await test(`${shape}: rev and touchLastSeen are per family: another family's writes never move the caller's token`, async () => {
     const before = [await store.rev(B, beta.babyId), await store.rev(B, alpha.babyId)];
     await store.createEntry(A, { babyId: alpha.babyId, kind: "note", startedAt: new Date(), data: { text: "made up" }, createdBy: alpha.owner, source: "web" });
