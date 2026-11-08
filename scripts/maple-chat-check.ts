@@ -610,6 +610,15 @@ check("no em or en dashes: commas, \"to\" between numbers, \"- \" at a line's st
   const f = dashFilter();
   const out = ["Got it ", "—", " ", "stopped at 3:21", "–", "3:22", " —"].map((d) => f.push(d)).join("") + f.end();
   eq(out, "Got it, stopped at 3:21 to 3:22", "split across deltas");
+  // A clock range reads as one: the feeding plan's night and its next feed's window.
+  eq(withoutDashes("Night (11 PM–5 AM): every 3 hours"), "Night (11 PM to 5 AM): every 3 hours", "a night's hours");
+  eq(withoutDashes("Next feed 2:20 PM–3:20 PM, in 2h 20m."), "Next feed 2:20 PM to 3:20 PM, in 2h 20m.", "a window between clock times");
+  eq(withoutDashes("from 11:50 pm – 12:50 am"), "from 11:50 pm to 12:50 am", "spaced, in lower case");
+  eq(withoutDashes("from 10 a.m.–2 p.m."), "from 10 a.m. to 2 p.m.", "with periods");
+  eq(withoutDashes("I am—2 weeks in"), "I am, 2 weeks in", "a word ending in am isn't a clock");
+  eq(withoutDashes("by 4 PM—then rest"), "by 4 PM, then rest", "a clock time before words is a pause");
+  const g = dashFilter();
+  eq(["Night (11 P", "M", "–", "5 AM)"].map((d) => g.push(d)).join("") + g.end(), "Night (11 PM to 5 AM)", "a clock range split across deltas");
 });
 
 check("the prompt: the log's lines and the tools before any question; a running timer that ended is stopped at the time said", () => {
