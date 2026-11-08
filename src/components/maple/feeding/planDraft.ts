@@ -257,6 +257,37 @@ export function draftProblem(d: PlanDraft, base: FeedingPlan | null, now: Date, 
 
 // ── changing the draft ────────────────────────────────────────────────────
 
+/** Things a feed's name can mention that its steps hold: the nipple shield, milk at the breast by syringe or SNS, a top-up, a pump. */
+const NAME_WORDS: { word: RegExp; has: (f: FeedDraft) => boolean }[] = [
+  { word: /\bshields?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.shield) },
+  { word: /\bsyringes?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.atBreast === "syringe") },
+  { word: /\bsns\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.atBreast === "sns") },
+  { word: /\btop[\s-]?ups?\b/i, has: (f) => f.steps.some((s) => s.do === "bottle") },
+  { word: /\bpump(?:s|ing)?\b/i, has: (f) => f.steps.some((s) => s.do === "pump") },
+];
+
+/**
+ * What a feed's name still says that an edit took out of its steps: the name
+ * says "shield", the shield was on when the edit began (`was`, the feed then)
+ * and isn't now. As the name writes it, lowercased unless it's in capitals
+ * ("SNS"); empty when the name still fits, or for a feed the edit added.
+ */
+export function staleNameWords(f: FeedDraft, was: FeedDraft | null | undefined): string[] {
+  if (!was) return [];
+  const out: string[] = [];
+  for (const { word, has } of NAME_WORDS) {
+    const said = word.exec(f.name)?.[0];
+    if (said && has(was) && !has(f)) out.push(said === said.toUpperCase() ? said : said.toLowerCase());
+  }
+  return out;
+}
+
+/** “shield”, “shield” and “syringe”, “a”, “b” and “c”. */
+export function quotedList(words: readonly string[]): string {
+  const q = words.map((w) => `“${w}”`);
+  return q.length > 1 ? `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}` : (q[0] ?? "");
+}
+
 /** A feed's name for lists, or its place when it has none yet ("Feed 2"). */
 export const feedLabel = (d: Pick<PlanDraft, "feeds">, key: string) => {
   const i = d.feeds.findIndex((f) => f.key === key);

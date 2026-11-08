@@ -458,6 +458,30 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["Feeding plan sheet: a feed whose name still says what an edit took out says so, folded too, and Rename goes to its name", async () => {
+      const f = await fixture({ state: planned(), apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        await unfold(form, "Nurse + SNS");
+        const feed = form.getByRole("group", { name: "Feed 1", exact: true });
+        assert.equal(await feed.getByText(/Its name still says/).count(), 0, "the name fits as saved");
+        await form.getByRole("group", { name: "Nurse + SNS, step 1: milk at the breast", exact: true }).getByRole("button", { name: "None", exact: true }).click();
+        await feed.getByText("Its name still says “SNS”.", { exact: true }).waitFor();
+        // Folded, it still says so.
+        await form.getByRole("button", { name: "Fold Nurse + SNS to one line", exact: true }).click();
+        assert.match((await form.getByRole("button", { name: /^Nurse \+ SNS/, expanded: false }).innerText()).replace(/\s+/g, " "), /Its name still says “SNS”\./);
+        await unfold(form, "Nurse + SNS");
+        await feed.getByRole("button", { name: "Rename Nurse + SNS", exact: true }).click();
+        const name = box(form, "Feed 1 name");
+        assert(await name.evaluate((el) => document.activeElement === el && el.selectionStart === 0 && el.selectionEnd === el.value.length), "the name is ready to type over");
+        await f.page.keyboard.type("Nurse with the shield");
+        assert.equal(await name.inputValue(), "Nurse with the shield");
+        assert.equal(await feed.getByText(/Its name still says/).count(), 0, "renamed: nothing to say");
+        assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), 390, "nothing scrolls sideways");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Feeding plan sheet: a viewer reads the plan from Baby details, with nothing to change", async () => {
       const f = await fixture({ state: planned({ role: "viewer" }), apiResponse: server().apiResponse });
       try {

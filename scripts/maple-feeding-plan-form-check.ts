@@ -23,10 +23,12 @@ import {
   PLAN_SHAPES,
   planShortLine,
   problemPlace,
+  quotedList,
   removeFeed,
   samePlan,
   setNightFeed,
   shownAmount,
+  staleNameWords,
   takeOutFeed,
   typedAmount,
   wakeText,
@@ -291,6 +293,29 @@ check("a folded feed reads in the plan's words, and a note is a sentence of its 
   eq(feedSummary({ ...d.feeds[0], steps: [sns, d.feeds[0].steps[1]] }, "ml", null), "Nurse; then pump 15 min");
   eq(feedSummary({ ...d.feeds[0], steps: [d.feeds[0].steps[1], note("")] }, "ml", null), "Pump 15 min. Note.");
   eq(feedSummary({ ...d.feeds[0], steps: [] }, "ml", null), "No steps yet");
+});
+
+check("a feed's name that still says what an edit took out (the shield, a syringe or SNS, a top-up, a pump) is pointed out", () => {
+  const d = draftOf(PLAN, null, "ml");
+  const [sns, topUp, pump] = d.feeds;
+  // Untouched, every name fits.
+  for (const f of d.feeds) eq(staleNameWords(f, f), [], f.name);
+  // "Nurse + SNS" with no milk at the breast any more.
+  const noSns = { ...sns, steps: sns.steps.map((s) => (s.do === "nurse" ? { ...s, atBreast: "none" as const } : s)) };
+  eq(staleNameWords(noSns, sns), ["SNS"]);
+  // A syringe instead: still not what the name says.
+  eq(staleNameWords({ ...sns, steps: sns.steps.map((s) => (s.do === "nurse" ? { ...s, atBreast: "syringe" as const } : s)) }, sns), ["SNS"]);
+  eq(staleNameWords({ ...topUp, steps: topUp.steps.filter((s) => s.do !== "bottle") }, topUp), ["top up"]);
+  eq(staleNameWords({ ...pump, steps: pump.steps.filter((s) => s.do !== "pump") }, pump), ["pump"]);
+  // Two at once, in the name's own words.
+  const both = { ...sns, name: "Nipple Shield and SNS" };
+  eq(staleNameWords({ ...noSns, name: both.name, steps: noSns.steps.map((s) => (s.do === "nurse" ? { ...s, shield: false } : s)) }, both), ["shield", "SNS"]);
+  // Renamed, or a feed this edit added, or a name that already said it of steps without it: not this edit's doing.
+  eq(staleNameWords({ ...noSns, name: "Nurse, then pump" }, sns), []);
+  eq(staleNameWords(noSns, null), []);
+  const nursing = { ...topUp, name: "Nurse, pumped milk top up later", steps: topUp.steps.filter((s) => s.do !== "bottle") };
+  eq(staleNameWords(nursing, nursing), []);
+  eq([quotedList(["SNS"]), quotedList(["shield", "SNS"]), quotedList(["shield", "syringe", "pump"])], ["“SNS”", "“shield” and “SNS”", "“shield”, “syringe” and “pump”"]);
 });
 
 check("when to wake her, plainly: at the time between feeds' longer end, in hours, counted from the start of the last feed", () => {

@@ -287,6 +287,7 @@ export default function FeedingPlanSheet({ open, edit: startEditing = false, onC
             )}
             <PlanForm
               draft={draft}
+              initial={editing?.initial ?? null}
               change={change}
               watch={checks.watch}
               invalid={checks.invalid}
